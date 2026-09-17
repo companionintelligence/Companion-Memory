@@ -38,6 +38,7 @@ import {
 } from '@ci/domains/asks';
 import { OutboundAskService, type PeerAskRequest, type PeerLink, PeerLinkService } from '@ci/domains/peers';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { AnswerFormEnum, AskAnswerType } from '../types/AskAnswerType';
 import { AskDisclosureHistoryInput, AskDisclosureSummaryInput } from '../types/AskDisclosureInputs';
 import {
@@ -161,6 +162,10 @@ export class AskResolver {
    * outcome returns `pending`.
    */
   @Mutation(() => CreateAskPayload)
+  // Creates a local ask; write-only and not destructive. The auto-answer branch can disclose
+  // immediately (see `autoAnswer`/`disclose`), but delivery stays on-appliance — the responder is a
+  // LOCAL user, unlike `runAsk`/`sendPeerAsk`, which can cross to a peer.
+  @GraphqlPrivacy({ destructive: false })
   async createAsk(
     @Context() context: RequestContext,
     @Args('input') input: CreateAskInput,
@@ -263,6 +268,9 @@ export class AskResolver {
   }
 
   @Mutation(() => AskPayload)
+  // Status transition only (delivered/answering -> approved-for-answer); the ask record and its
+  // history are unaffected.
+  @GraphqlPrivacy({ destructive: false })
   async approveAsk(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -279,6 +287,11 @@ export class AskResolver {
   }
 
   @Mutation(() => AskPayload)
+  // Terminal status transition (no un-decline in this schema), but nothing is deleted — the ask row
+  // and its audit trail stay intact and readable. Flagged in the PR as a borderline call:
+  // irreversible, but not data-destroying by this file's existing standard (mergePeople, deleteTag,
+  // etc., which all remove/tombstone a row).
+  @GraphqlPrivacy({ destructive: false })
   async declineAsk(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -322,6 +335,8 @@ export class AskResolver {
    * never raw node content or forwardable signed media URLs.
    */
   @Mutation(() => RunAskPayload)
+  // Emits a templated answer to the asker — data leaves the box.
+  @GraphqlPrivacy({ external: true })
   async runAsk(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -688,6 +703,9 @@ export class AskResolver {
    * outcome. A declined result is indistinguishable from an unreachable peer.
    */
   @Mutation(() => SendPeerAskPayload)
+  // Leaves the appliance for another Companion. `messaging.send` is labelled destructive for this
+  // exact reason; at minimum this is not local CRUD, and advertising openWorldHint:false was wrong.
+  @GraphqlPrivacy({ external: true })
   async sendPeerAsk(
     @Context() context: RequestContext,
     @Args('input') input: SendPeerAskInput,
@@ -720,6 +738,7 @@ export class AskResolver {
   }
 
   @Mutation(() => AskGrantPayload)
+  @GraphqlPrivacy({ destructive: false })
   async createAskGrant(
     @Context() context: RequestContext,
     @Args('input') input: CreateAskGrantInput,
@@ -774,6 +793,10 @@ export class AskResolver {
   }
 
   @Mutation(() => AskGrantPayload)
+  // Sets revoked_at; GrantService never deletes a grant row, and myAskGrantHistory still lists it.
+  // Revoking consent is also a privacy-PROTECTIVE action — gating it behind a destructive confirm
+  // would make withdrawing access harder than granting it.
+  @GraphqlPrivacy({ destructive: false })
   async revokeAskGrant(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -848,6 +871,8 @@ export class AskResolver {
    * used here to run the auto-answer pipeline and then dropped.
    */
   @Mutation(() => AskBroadcastType)
+  // Same shape as createAsk, fanned out to N local responders; no cross-appliance delivery.
+  @GraphqlPrivacy({ destructive: false })
   async createAskBroadcast(
     @Context() context: RequestContext,
     @Args('input') input: CreateAskBroadcastInput,
@@ -923,6 +948,10 @@ export class AskResolver {
    * this feature is least safe in, that would be the whole attack.
    */
   @Mutation(() => HouseholdTierType)
+  // Upserts a tier row for another local account; the previous tier is overwritten but can be set
+  // back, so not destructive. Governs consent/disclosure posture for that account (see the class
+  // comment on threat T1), which is more sensitive than ordinary personal memory data.
+  @GraphqlPrivacy({ destructive: false, sensitivity: 'sensitive' })
   async setHouseholdTier(
     @Context() context: RequestContext,
     @Args('input') input: SetHouseholdTierInput,
@@ -1016,6 +1045,9 @@ export class AskResolver {
    * user grant, or into a row naming both.
    */
   @Mutation(() => AskGrantPayload)
+  // Supersedes rather than overwrites: GrantService.supersede leaves the previous grant row in
+  // place (myAskGrantHistory shows both), so nothing is lost.
+  @GraphqlPrivacy({ destructive: false })
   async updateAskGrant(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,

@@ -138,7 +138,11 @@ describe('MobileNavigation', () => {
     // full "Companion Memory" used to ellipsize. Desktop keeps the long name.
     expect(within(wordmark).getByText('Memory')).toHaveAttribute('aria-hidden', 'false');
     expect(within(wordmark).queryByText('Companion Memory')).toBeNull();
-    expect(wordmark.querySelector('img[src*="logo"]')).not.toBeNull();
+    // The Companion Memory mark, not the old raster logo.png: the drawer, the
+    // splash hero and the app icons are one drawing now. Under jsdom this is
+    // the static SVG — `CompanionMark` only reaches for the Lottie player when
+    // something asks it to animate, which the drawer never does.
+    expect(wordmark.querySelector('img[src*="companion-memory-brain"]')).not.toBeNull();
     // Same inset as Capture / Planning — without it the 32px disc sat on the
     // pane edge while every row below had px-2 + a 2px active border.
     expect(wordmark.parentElement).toHaveClass('border-l-2', 'px-2', 'py-2');
@@ -205,7 +209,7 @@ describe('MobileNavigation', () => {
     expect(screen.getByRole('link', { name: 'Asks' })).toHaveAttribute('href', '/asks');
   });
 
-  it('puts Capture first in the drawer and Help, the user tile, and Settings at the foot', async () => {
+  it('puts Capture first in the drawer and Help and the user tile at the foot', async () => {
     renderMobileNav();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
@@ -223,6 +227,24 @@ describe('MobileNavigation', () => {
     expect(capture.compareDocumentPosition(plan) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(plan.compareDocumentPosition(help) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(help.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Settings' })).not.toBeInTheDocument();
+  });
+
+  it('puts Settings in the Self submenu, not as its own drawer row', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand Self sections' }));
+
+    const self = screen.getByTestId('self-submenu');
+
+    expect(within(self).getByRole('link', { name: 'Settings' })).toBeInTheDocument();
+    expect(within(self).getByRole('link', { name: 'Profile' })).toHaveAttribute('href', '/self');
+    expect(within(self).getByRole('link', { name: 'Stats' })).toHaveAttribute('href', '/self/stats');
+    expect(within(self).getByRole('link', { name: 'Reflections' })).toHaveAttribute(
+      'href',
+      '/self/reflections',
+    );
   });
 
   // D13: the phone drawer used to have no route to support or docs at all.

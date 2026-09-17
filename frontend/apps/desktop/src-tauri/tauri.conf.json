@@ -51,9 +51,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": [
-          "companion"
-        ]
+        "schemes": ["companion"]
       }
     }
   }

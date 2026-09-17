@@ -201,7 +201,21 @@ cd frontend/apps/ios && yarn install && npx cap sync ios
 
 ## Test coverage — what is and is not proven
 
-`android/src/androidTest/.../SpeechControllersTest.kt` runs via `connectedAndroidTest`.
+Two suites, split by whether a device is involved.
+
+**`android/src/test/` — 16 JVM tests, no device.** `SpeechRecognitionLogicTest` and
+`SpeechSynthesisLogicTest`, run from the repo root with `make test-android` (or
+`./gradlew :ci-capacitor-speech:testDebugUnitTest` from
+`frontend/apps/android/android`), and in CI by `mobile-build.yml` after the APK build.
+These cover the pure logic — tier selection, error mapping, BCP-47 matching, chunking —
+plus one cross-boundary check: `RecognitionTier`'s wire values must be members of the
+`SpeechRecognitionTier` union in [`../src/definitions.ts`](../src/definitions.ts). That
+file is on no classpath, so `build.gradle` declares it as a task input; without that
+Gradle reports the task UP-TO-DATE through exactly the TypeScript rename the test exists
+to catch (verified — it did).
+
+**`android/src/androidTest/.../SpeechControllersTest.kt` — needs a booted device.** Run
+via `connectedAndroidTest`; deliberately not in CI, which has no emulator.
 
 **Proven:**
 

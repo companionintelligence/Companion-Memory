@@ -100,6 +100,7 @@ export function MemoryPage() {
           hasLocation: searchParams.get('hasLocation') === '1' || undefined,
           bbox: parseBbox(searchParams.get('bbox')),
           semantic: searchParams.get('semantic') === '1' || undefined,
+          direction: searchParams.get('direction') || undefined,
         },
       ]}
     >

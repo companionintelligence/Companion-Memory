@@ -6,9 +6,10 @@ import { type Readable } from 'stream';
 
 import { Injectable } from '@nestjs/common';
 import ffmpeg from 'fluent-ffmpeg';
-import sharp from 'sharp';
 
 import { LoggerService } from '@ci/common/logging';
+
+import { VipsService, VipsUnavailableError } from './VipsService';
 
 /** Intrinsic, display-corrected pixel dimensions of an image or video. */
 export interface MediaDimensions {
@@ -29,14 +30,17 @@ const EXIF_ORIENTATION_SWAP_MIN = 5;
  *
  * Shared by the live preview pass ({@link FilePreviewGenerationListener}) and the
  * one-off dimensions backfill ({@link MediaDimensionsBackfillListener}) so both
- * derive dimensions identically. Images are probed from their header via sharp;
+ * derive dimensions identically. Images are probed from their header via libvips;
  * videos via ffprobe on a local (seekable) file. Every method is best-effort:
  * an unreadable/corrupt source returns `null` rather than throwing, so one bad
  * file never aborts a batch.
  */
 @Injectable()
 export class MediaDimensionsService {
-  constructor(private readonly logger: LoggerService) {
+  constructor(
+    private readonly vips: VipsService,
+    private readonly logger: LoggerService,
+  ) {
     this.logger.setContext(MediaDimensionsService.name);
   }
 
@@ -46,26 +50,25 @@ export class MediaDimensionsService {
    */
   async fromImageBuffer(buffer: Buffer): Promise<MediaDimensions | null> {
     try {
-      // Default failOn: rejects undecodable input promptly. (failOn: 'none' makes
-      // sharp spend ~9s before giving up on a truly garbage buffer — far worse
-      // than skipping the odd corrupt file.)
-      const { width, height, orientation } = await sharp(buffer).metadata();
+      // The same decoder the preview pass uses, so a file this can read is a
+      // file that can be previewed. (Under sharp the two disagreed: its probe
+      // returned no dimensions for ~18% of HEIC originals — HEIF box variants
+      // the bundled libheif could not parse — and they sat at NULL for good.)
+      const { width, height, orientation } = await this.vips.probe(buffer);
+      const swap = orientation >= EXIF_ORIENTATION_SWAP_MIN;
 
-      if (width == null || height == null) {
-        // Sharp didn't throw but came back with no usable dimensions — happens
-        // on HEIC files with HEIF box variants the bundled libheif can't
-        // parse. Log it so silent regressions are visible (we saw ~18% of HEIC
-        // originals stuck at NULL before this warning existed).
-        this.logger.warn('Image dimensions unavailable', { bytes: buffer.length });
+      return swap ? { width: height, height: width } : { width, height };
+    } catch (err) {
+      if (err instanceof VipsUnavailableError) {
+        // Not a property of the file. The best-effort contract still returns
+        // null, but at error level: every dimension on the box is about to be
+        // NULL until the tools are installed.
+        this.logger.error(err, 'libvips tools missing; image dimensions unavailable');
 
         return null;
       }
 
-      const swap = (orientation ?? 1) >= EXIF_ORIENTATION_SWAP_MIN;
-
-      return swap ? { width: height, height: width } : { width, height };
-    } catch (err) {
-      this.logger.warn('Failed to read image dimensions', { error: errorMessage(err) });
+      this.logger.warn('Failed to read image dimensions', { error: errorMessage(err), bytes: buffer.length });
 
       return null;
     }

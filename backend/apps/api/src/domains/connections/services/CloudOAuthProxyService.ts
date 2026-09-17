@@ -51,8 +51,10 @@ export interface PortalUserApplication {
  *
  * Auth model (mirrors CI Cloud):
  *  - authorize: sends box_id + device_key in the request body
- *  - token/refresh: self-authenticating via refresh_token
- *  - token/revoke:  self-authenticating via refresh_token
+ *  - token/refresh: the device's Basic credentials plus the proxy refresh token,
+ *    which CI Portal rotates on every use (store the one it returns)
+ *  - token/revoke:  the device's Basic credentials plus the proxy refresh token
+ *    and/or provider + user_provider_id
  */
 @Injectable()
 export class CloudOAuthProxyService {
@@ -156,8 +158,14 @@ export class CloudOAuthProxyService {
   /**
    * Refresh an access token using a proxy refresh token.
    * Returns a new access token and a rotated proxy refresh token.
+   *
+   * `signal` bounds the wait for a caller someone is waiting on: CI Portal calls the
+   * provider's token endpoint in turn, and neither request times out on its own.
    */
-  async refreshAccessToken(proxyRefreshToken: string): Promise<CloudTokenResponse> {
+  async refreshAccessToken(
+    proxyRefreshToken: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<CloudTokenResponse> {
     if (!config.ciPortal.deviceId) {
       this.logger.error('Missing Hub Device ID');
       throw new Error('HUB_DEVICE_ID is not configured');
@@ -177,6 +185,7 @@ export class CloudOAuthProxyService {
       body: JSON.stringify({
         refresh_token: proxyRefreshToken,
       }),
+      signal: options.signal,
     });
 
     if (!response.ok) {

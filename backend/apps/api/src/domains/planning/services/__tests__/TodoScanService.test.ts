@@ -5,7 +5,7 @@ import type { SearchService } from '@ci/domains/search-next';
 
 import type { PlannedBlockService } from '../PlannedBlockService';
 import type { ProposedTaskReconcileService } from '../ProposedTaskReconcileService';
-import type { TaskService } from '../TaskService';
+import { TaskService } from '../TaskService';
 import { SCAN_TIMEOUT_MS, TodoScanService } from '../TodoScanService';
 
 const USER_ID = 'user-1';
@@ -179,6 +179,49 @@ describe('TodoScanService stale proposed sweep', () => {
     expect(proposedReconcile.reconcileStaleProposed).not.toHaveBeenCalled();
   });
 
+  it('does not sweep when the search fails', async () => {
+    // The twin of the LLM case above, and the more dangerous one: memoryHits()
+    // returns `null` for a failure and `[]` for a genuinely empty corpus, and
+    // those two returns are one line apart. Collapse them and a single flaky
+    // SearchService call on the daily cron sweeps with an empty relevant set —
+    // which archives the user's whole proposed backlog.
+    const searchService = {
+      search: jest.fn(async () => {
+        throw new Error('vector index unavailable');
+      }),
+    } as unknown as SearchService;
+    const proposedReconcile = makeProposedReconcile();
+    const taskService = {
+      findAll: jest.fn(async () => []),
+      findBySourceRef: jest.fn(),
+      findByTitleMatch: jest.fn(),
+      create: jest.fn(),
+    } as unknown as TaskService;
+
+    const service = new TodoScanService(
+      taskService,
+      searchService,
+      makeOllamaService([]),
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeDataSource() as never,
+      proposedReconcile,
+      makeLogger(),
+    );
+
+    // The cron job must not fail either — a search outage is not a reason for
+    // pg-boss to redeliver the whole scan.
+    await expect(service.runForUser(USER_ID)).resolves.toEqual({
+      created: 0,
+      proposed: 0,
+      appended: 0,
+      redated: 0,
+      archived: 0,
+    });
+    expect(proposedReconcile.reconcileStaleProposed).not.toHaveBeenCalled();
+    expect(taskService.create).not.toHaveBeenCalled();
+  });
+
   it('stamps scheduledFor and dueAt on newly proposed tasks', async () => {
     const create = jest.fn(async (_ctx: unknown, dto: { title: string }) => ({
       id: `task-${dto.title}`,
@@ -244,6 +287,81 @@ describe('TodoScanService duplicate suppression', () => {
 
     expect(create).not.toHaveBeenCalled();
     expect(result.proposed).toBe(0);
+  });
+
+  // ═══ the same to-do, surfaced again tomorrow ═══
+  //
+  // This cron re-reads the same memory corpus every day, so the model surfaces
+  // the same item over and over. TaskService.memoryScanSourceRef exists so
+  // "same normalized title → same source_ref" makes that second sighting an
+  // append onto the row the user already has instead of a fresh copy. Break
+  // the lookup or the `existing` branch and the Plan page accretes a duplicate
+  // of every recurring to-do, one per day.
+  it('appends onto the task the source ref already points at instead of creating a second one', async () => {
+    const existing = { id: 'task-9', title: 'Call the vet', status: 'proposed' };
+    const findBySourceRef = jest.fn(async () => existing);
+    const appendNotes = jest.fn(async () => existing);
+    const create = jest.fn();
+
+    const service = new TodoScanService(
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef,
+        findByTitleMatch: jest.fn(async () => null),
+        appendNotes,
+        create,
+      } as unknown as TaskService,
+      makeSearchService(),
+      makeOllamaService([{ title: 'Call the vet', detail: 'Ask about the dental quote.', confidence: 0.9 }]),
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeDataSource() as never,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    const result = await service.runForUser(USER_ID);
+
+    expect(findBySourceRef).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID }),
+      'memory_scan',
+      TaskService.memoryScanSourceRef('Call the vet'),
+    );
+    expect(appendNotes).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID }),
+      'task-9',
+      'Ask about the dental quote.',
+    );
+    expect(create).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ appended: 1, created: 0, proposed: 0 }));
+  });
+
+  it('writes nothing at all when the re-surfaced item carries no new detail', async () => {
+    const appendNotes = jest.fn();
+    const create = jest.fn();
+
+    const service = new TodoScanService(
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => ({ id: 'task-9', title: 'Call the vet' })),
+        findByTitleMatch: jest.fn(async () => null),
+        appendNotes,
+        create,
+      } as unknown as TaskService,
+      makeSearchService(),
+      makeOllamaService([{ title: 'Call the vet', confidence: 0.9 }]),
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeDataSource() as never,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    const result = await service.runForUser(USER_ID);
+
+    expect(appendNotes).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ appended: 0, created: 0, proposed: 0 }));
   });
 });
 

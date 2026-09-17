@@ -75,61 +75,101 @@ function truncateStrings(value: unknown): unknown {
 }
 
 /**
+ * A result whose list lives under `items` next to scalar header fields — the
+ * shape the search intents return, where the header (`summary`,
+ * `totalMatches`, `truncated`) is the part the model must not lose.
+ */
+function isItemsEnvelope(value: unknown): value is Record<string, unknown> & { items: unknown[] } {
+  return (
+    value != null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Array.isArray((value as { items?: unknown }).items)
+  );
+}
+
+/**
+ * Keep whole leading `items` until `budgetBytes` is spent, then close with a
+ * marker element naming how many were dropped, so the text stays valid JSON
+ * and the model knows the list was cut rather than exhaustive.
+ *
+ * The first item alone can exceed the whole budget (one oversized result) —
+ * the loop then keeps nothing, and the caller used to get back only the
+ * omission marker: none of the data it asked for. Hard-truncate that first
+ * item instead, wrapped so the result stays valid, parseable JSON, so a
+ * partial version of the data reaches the model.
+ */
+function boundItems(items: unknown[], budgetBytes: number): unknown[] {
+  const kept: unknown[] = [];
+  // Reserve room for the closing marker element before spending the budget
+  // on items, so appending it can never itself overflow.
+  const markerReserve = 96;
+  let spent = 2; // '[' + ']'
+
+  for (const item of items) {
+    const serialized = JSON.stringify(item) ?? 'null';
+    const cost = serialized.length + (kept.length > 0 ? 1 : 0);
+
+    if (spent + cost > budgetBytes - markerReserve) {
+      break;
+    }
+
+    kept.push(item);
+    spent += cost;
+  }
+
+  let consumed = kept.length;
+
+  if (kept.length === 0 && items.length > 0) {
+    const firstSerialized = JSON.stringify(items[0]) ?? 'null';
+    const previewBudget = Math.max(0, budgetBytes - markerReserve - 40);
+
+    kept.push({ truncated: true, preview: `${firstSerialized.slice(0, previewBudget)}…[truncated]` });
+    consumed = 1;
+  }
+
+  const omitted = items.length - consumed;
+
+  if (omitted > 0) {
+    kept.push(`[${omitted} more results omitted — refine the query to narrow them down]`);
+  }
+
+  return kept;
+}
+
+/**
  * Serialize a tool result for the follow-up prompt, spending at most
  * `budgetBytes`.
  *
- * Arrays (the common shape — search results) keep whole leading items until
- * the budget is spent, then close with a marker element naming how many were
- * dropped, so the text stays valid JSON and the model knows the list was cut
- * rather than exhaustive. Anything else is string-capped and, as a last
- * resort, hard-truncated — a capped-but-broken tail beats an overflowed
- * window, which loses the WHOLE turn.
+ * Arrays (search results) go through {@link boundItems}. An object carrying
+ * an `items` array (the search envelope) keeps its header fields intact and
+ * bounds only the list: the header is where the match count lives, and
+ * hard-truncating the object as a whole is exactly what would cut it off.
+ * Anything else is string-capped and, as a last resort, hard-truncated — a
+ * capped-but-broken tail beats an overflowed window, which loses the WHOLE
+ * turn.
  */
 export function boundToolResultForPrompt(value: unknown, budgetBytes: number): string {
   const compact = truncateStrings(value);
 
   if (Array.isArray(compact)) {
-    const kept: unknown[] = [];
-    // Reserve room for the closing marker element before spending the budget
-    // on items, so appending it can never itself overflow.
-    const markerReserve = 96;
-    let spent = 2; // '[' + ']'
+    return JSON.stringify(boundItems(compact, budgetBytes));
+  }
 
-    for (const item of compact) {
-      const serialized = JSON.stringify(item) ?? 'null';
-      const cost = serialized.length + (kept.length > 0 ? 1 : 0);
+  if (isItemsEnvelope(compact)) {
+    const { items, ...header } = compact;
+    // The header is spent first; whatever remains is the list's budget. If the
+    // header alone overflows, `boundItems` keeps nothing but the marker and the
+    // hard-truncation fallback below still protects the window.
+    const headerCost = JSON.stringify({ ...header, items: [] }).length;
+    const bounded = { ...header, items: boundItems(items, Math.max(0, budgetBytes - headerCost)) };
+    const serialized = JSON.stringify(bounded);
 
-      if (spent + cost > budgetBytes - markerReserve) {
-        break;
-      }
-
-      kept.push(item);
-      spent += cost;
+    if (serialized.length <= budgetBytes) {
+      return serialized;
     }
 
-    let consumed = kept.length;
-
-    // The first item alone can exceed the whole budget (one oversized
-    // result) — the loop above then keeps nothing, and the caller used to
-    // get back only the omission marker: none of the data it asked for.
-    // Hard-truncate that first item the same way the non-array branch below
-    // does, wrapped so the result stays valid, parseable JSON, and push it
-    // instead so a partial version of the data reaches the model.
-    if (kept.length === 0 && compact.length > 0) {
-      const firstSerialized = JSON.stringify(compact[0]) ?? 'null';
-      const previewBudget = Math.max(0, budgetBytes - markerReserve - 40);
-
-      kept.push({ truncated: true, preview: `${firstSerialized.slice(0, previewBudget)}…[truncated]` });
-      consumed = 1;
-    }
-
-    const omitted = compact.length - consumed;
-
-    if (omitted > 0) {
-      kept.push(`[${omitted} more results omitted — refine the query to narrow them down]`);
-    }
-
-    return JSON.stringify(kept);
+    return `${serialized.slice(0, Math.max(0, budgetBytes - 12))}…[truncated]`;
   }
 
   const serialized = JSON.stringify(compact) ?? 'null';

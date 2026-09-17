@@ -113,6 +113,10 @@ describe('GraphIngestService self-entity provisioning', () => {
     // ci.users.entity_id was linked to the provisioned Person.
     expect(usersUpdate).toHaveBeenCalledTimes(1);
     expect(usersUpdate.mock.calls[0][0]).toEqual([USER, selfRow!.entityId]);
+    const selfMark = node.repo.manager.query.mock.calls.find(([sql]) =>
+      String(sql).includes('SET is_self = TRUE'),
+    );
+    expect(selfMark?.[1]).toEqual([selfRow!.entityId, USER]);
 
     // Owner identifiers are claimed onto the new self Person.
     expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith(
@@ -147,6 +151,10 @@ describe('GraphIngestService self-entity provisioning', () => {
     // No self Person provisioned, no relink.
     expect(node.inserted.some((row) => (row.properties as Record<string, unknown>)?.is_self)).toBe(false);
     expect(usersUpdate).not.toHaveBeenCalled();
+    const selfMark = node.repo.manager.query.mock.calls.find(([sql]) =>
+      String(sql).includes('SET is_self = TRUE'),
+    );
+    expect(selfMark?.[1]).toEqual([EXISTING_SELF, USER]);
 
     // Existing self still claims owner identifiers (idempotent heal on ingest).
     expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith(

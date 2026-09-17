@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaService';
+import { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
 
@@ -417,7 +417,7 @@ export class TodoScanService {
         .join('\n');
 
       const response = await this.ollamaService.chat(context as never, [{ role: 'user', content: prompt }], {
-        model: UTILITY_MODEL,
+        tier: 'utility',
         enableTools: false,
         format: RESPONSE_JSON_SCHEMA,
         signal: controller.signal,

@@ -101,6 +101,7 @@ import { ProviderResolver } from './resolvers/ProviderResolver';
 import { QuestionResolver } from './resolvers/QuestionResolver';
 import { ReceiptResolver } from './resolvers/ReceiptResolver';
 import { RelationshipResolver } from './resolvers/RelationshipResolver';
+import { ReminderResolver } from './resolvers/ReminderResolver';
 import { SavedSearchResolver } from './resolvers/SavedSearchResolver';
 import { ScheduleCandidateResolver } from './resolvers/ScheduleCandidateResolver';
 import { SearchResolver } from './resolvers/SearchResolver';
@@ -197,6 +198,7 @@ import { UserResolver } from './resolvers/UserResolver';
     NodeResolver,
     NoteResolver,
     TaskResolver,
+    ReminderResolver,
     AnswerResolver,
     AttachmentFileLoader,
     EventContentsLoader,

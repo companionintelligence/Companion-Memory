@@ -18,7 +18,7 @@ import {
   COLD_START_MIN_DAYS,
 } from '@ci/domains/daily-metrics';
 import { excludeForkedOriginsSql } from '@ci/domains/intelligence';
-import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaService';
+import { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import { UserContextService } from '@ci/domains/memory';
 
 import {
@@ -185,7 +185,7 @@ export class ContextPromptGenerateService {
 
     try {
       const response = await this.ollamaService.chat(llmContext, [{ role: 'user', content: prompt }], {
-        model: UTILITY_MODEL,
+        tier: 'utility',
         enableTools: false,
         format: GENERATED_PROMPT_JSON_SCHEMA,
       });

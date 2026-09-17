@@ -88,10 +88,7 @@ export class SyncWindowSweepCron {
 
       this.logger.log('Sync-window sweep complete', { events: swept.events, entities: swept.entities });
     } catch (err) {
-      this.logger.error(
-        'Sync-window sweep failed',
-        err instanceof Error ? err : new Error(String(err)),
-      );
+      this.logger.error('Sync-window sweep failed', err instanceof Error ? err : new Error(String(err)));
     } finally {
       this.running = false;
     }

@@ -232,7 +232,9 @@ into `ios/` with
 
 ```bash
 cd frontend/apps/ios
-# assets/ holds: icon-only.png, icon-foreground.png, icon-background.png (1024²)
+# assets/ holds: icon-only.png, icon-foreground.png, icon-background.png (1024²).
+# icon-only/-foreground are verified copies of @companionintelligence/assets logos/app-icon-source.png
+# (logo.app-icon) — regenerate them with `yarn workspace @ci/fe-web brand:sync`, never hand-edit.
 #                splash.png, splash-dark.png (2732²)
 npx @capacitor/assets generate \
   --iconBackgroundColor '#000000' --iconBackgroundColorDark '#000000' \

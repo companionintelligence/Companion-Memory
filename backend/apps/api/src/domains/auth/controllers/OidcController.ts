@@ -27,6 +27,8 @@ import { UserService } from '@ci/domains/user';
 
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
+import { FederatedIdentityService } from '../services/FederatedIdentityService';
+import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 import { OidcNativeCodeService } from '../services/OidcNativeCodeService';
 import { SignupCodeService } from '../services/SignupCodeService';
 import { ensureCsrfCookie, setCsrfCookie, setSessionCookie } from '../utils/authCookies';
@@ -145,6 +147,8 @@ export class OidcController {
     private readonly featureService: FeatureService,
     private readonly oidcNativeCodeService: OidcNativeCodeService,
     private readonly signupCodeService: SignupCodeService,
+    private readonly federatedIdentityService: FederatedIdentityService,
+    private readonly hubBridge: HubForwardAuthBridgeService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(OidcController.name);
@@ -220,6 +224,7 @@ export class OidcController {
       // Already bounced once — proceed here rather than risk a redirect loop.
       req.query[OIDC_ORIGIN_BOUNCE_PARAM] !== undefined,
       client,
+      signupCodeParam,
     );
 
     if (bounceUrl) {
@@ -429,16 +434,24 @@ export class OidcController {
 
       const userInfo = (await userInfoResponse.json()) as {
         sub: string;
+        iss?: string;
         email?: string;
         name?: string;
+        email_verified?: boolean;
       };
 
       if (!userInfo.email) {
         return failRedirect('no_email');
       }
 
-      // Existing account for this Portal identity → sign in.
-      const user = await this.userService.findByEmail(userInfo.email);
+      const issuer = this.resolveOidcIssuer(userInfo, tokens.id_token);
+      // (iss, sub) first; email is only a one-time link for unfederated rows.
+      const user = await this.resolvePortalUser({
+        subject: userInfo.sub,
+        issuer,
+        email: userInfo.email,
+        emailVerified: userInfo.email_verified === true,
+      });
 
       if (user) {
         // Native: return the credential via the deep link — no browser session cookie
@@ -470,10 +483,14 @@ export class OidcController {
       // identity was refused outright and a claimed appliance could never admit
       // a second person at all.
       const offeredCode = req.cookies?.[SIGNUP_CODE_COOKIE];
-      const invited =
+      const invitedByCode =
         typeof offeredCode === 'string' && offeredCode.length > 0
           ? Boolean(await this.signupCodeService.findOne(offeredCode))
           : false;
+      // Signed into this Hub (verified forward-auth) is an invitation: the
+      // person already passed the Hub org-member gate.
+      const invitedByHub = Boolean(this.hubBridge.verifyUsername(req));
+      const invited = invitedByCode || invitedByHub;
 
       res.clearCookie(SIGNUP_CODE_COOKIE, { path: '/' });
 
@@ -498,30 +515,41 @@ export class OidcController {
       // (it lives outside the deep-link flow), so surface it as an error the app can
       // handle rather than stranding the user on a web page.
       //
-      // Except on an unclaimed appliance, where that error is a dead end: the
-      // desktop app signs in as a native client, so this branch was the last
-      // door out of a box with no accounts on it. Claiming an empty appliance is
-      // exactly what the confirmation would ask about, and there is no other
-      // identity it could belong to, so the account is created directly.
-      if (isNative && !unclaimed) {
+      // Except where the question has already been answered. On an unclaimed
+      // appliance that error is a dead end: the desktop app signs in as a native
+      // client, so this branch was the last door out of a box with no accounts
+      // on it — and claiming an empty appliance is exactly what the confirmation
+      // would ask about. An invitation answers it too: the owner chose to issue
+      // it and this person chose to present it, which is the whole of what the
+      // confirmation asks. Refusing here anyway — as this did — meant the code
+      // was burned a few lines up and the person was still turned away, so every
+      // attempt an invited person made from the desktop cost the owner an
+      // invitation and admitted nobody.
+      if (isNative && !unclaimed && !invited) {
         return res.redirect(this.nativeRedirectUrl({ error: 'signup_required' }));
       }
 
       if (isNative) {
-        const claimed = await this.userService.create(
-          { userId: SYSTEM_USER },
-          {
-            name: userInfo.name || userInfo.email.split('@')[0],
-            email: userInfo.email,
-            // Random password — the account authenticates via OIDC, same as the
-            // web confirm-account path below.
-            password: randomBytes(32).toString('hex'),
-          },
+        const created = await this.createOidcUser(userInfo.email, userInfo.name);
+        await this.bindIfPossible(created.id, issuer, userInfo.sub, userInfo.email);
+
+        this.logger.log(
+          unclaimed
+            ? `Unclaimed appliance claimed by first OIDC sign-in: ${userInfo.email}`
+            : `Invited OIDC sign-in created Memory account for ${userInfo.email}`,
         );
 
-        this.logger.log(`Unclaimed appliance claimed by first OIDC sign-in: ${userInfo.email}`);
+        return res.redirect(this.nativeRedirectUrl({ code: this.oidcNativeCodeService.issue(created.id) }));
+      }
 
-        return res.redirect(this.nativeRedirectUrl({ code: this.oidcNativeCodeService.issue(claimed.id) }));
+      // Hub already admitted this person as an org member. Skip the Memory
+      // signup-code / confirm-account gates and give them an empty onboarding.
+      if (invitedByHub) {
+        const created = await this.createOidcUser(userInfo.email, userInfo.name);
+        await this.bindIfPossible(created.id, issuer, userInfo.sub, userInfo.email);
+        this.logger.log(`Hub-invited Memory account created for ${userInfo.email}`);
+
+        return this.finishLogin(req, res, created);
       }
 
       // First-time web sign-in: do NOT create the account silently. Stash the
@@ -699,6 +727,97 @@ export class OidcController {
     res.clearCookie(SIGNUP_INTENT_COOKIE, { path: '/' });
 
     await this.finishLogin(req, res, user);
+  }
+
+  private resolveOidcIssuer(userInfo: { iss?: string }, idToken?: string): string {
+    if (typeof userInfo.iss === 'string' && userInfo.iss.length > 0) {
+      return userInfo.iss;
+    }
+
+    if (idToken) {
+      try {
+        const payload = JSON.parse(Buffer.from(idToken.split('.')[1] ?? '', 'base64url').toString()) as {
+          iss?: string;
+        };
+        if (typeof payload.iss === 'string' && payload.iss.length > 0) {
+          return payload.iss;
+        }
+      } catch {
+        // Fall through to configured issuer.
+      }
+    }
+
+    return config.auth.portal.issuer || config.auth.oidc.issuerUrl;
+  }
+
+  /**
+   * Resolve a Portal person to a Memory user. `(issuer, subject)` wins;
+   * verified email is only a one-time link for accounts that pre-date the
+   * binding table and are not already federated.
+   */
+  private async resolvePortalUser(identity: {
+    subject?: string;
+    issuer: string;
+    email: string;
+    emailVerified: boolean;
+  }): Promise<{ id: string } | null> {
+    if (identity.subject && identity.issuer) {
+      const boundUserId = await this.federatedIdentityService.findUserId(identity.issuer, identity.subject);
+      if (boundUserId) {
+        return this.userService.findById({ userId: SYSTEM_USER }, boundUserId);
+      }
+    }
+
+    const existing = await this.userService.findByEmail(identity.email);
+    if (!existing) {
+      return null;
+    }
+
+    const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id);
+    if (alreadyFederated.length > 0) {
+      this.logger.warn(
+        `refusing email link for ${identity.issuer}#${identity.subject ?? '?'}: user already bound to another identity`,
+      );
+
+      return null;
+    }
+
+    if (identity.subject && identity.issuer && identity.emailVerified) {
+      await this.bindIfPossible(existing.id, identity.issuer, identity.subject, identity.email, 'email_link');
+    }
+
+    return existing;
+  }
+
+  private async createOidcUser(email: string, name?: string): Promise<{ id: string; email: string }> {
+    return this.userService.create(
+      { userId: SYSTEM_USER },
+      {
+        name: name || email.split('@')[0],
+        email,
+        password: randomBytes(32).toString('hex'),
+      },
+    );
+  }
+
+  private async bindIfPossible(
+    userId: string,
+    issuer: string,
+    subject: string | undefined,
+    email: string,
+    bindMethod: 'sub' | 'email_link' = 'sub',
+  ): Promise<void> {
+    if (!subject || !issuer) {
+      return;
+    }
+
+    await this.federatedIdentityService.bind({
+      userId,
+      issuer,
+      subject,
+      email,
+      bindMethod,
+    });
   }
 
   /**

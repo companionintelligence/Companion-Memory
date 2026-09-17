@@ -1,11 +1,15 @@
 import { type FormEvent, useState } from 'react';
 
-import { getApiBaseUrl, isLocalApplianceOrigin } from '@ci/common';
+import { getApiBaseUrl, isIosPlatform, isLocalApplianceOrigin } from '@ci/common';
 import { Button, Card, Input, Label, LoadingButton, PasswordInput } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
 import { useAuth } from '@/hooks';
-import { persistPortalUrl, readPersistedPortalUrl } from '@/pages/DeviceConnectPage/portal-client';
+import {
+  persistPortalUrl,
+  readPersistedPortalUrl,
+  DEFAULT_PORTAL_URL,
+} from '@/pages/DeviceConnectPage/portal-client';
 
 const TOUCH = 'min-h-[44px]';
 
@@ -73,7 +77,7 @@ export function ServerSettingsPage() {
         <Card.Content className="flex flex-col gap-6">
           <form onSubmit={handleSavePortal} className="flex flex-col gap-3">
             <div className="space-y-2">
-              <Label htmlFor="portal-url">Companion Portal</Label>
+              <Label htmlFor="portal-url">Companion URL</Label>
               <Input
                 id="portal-url"
                 type="url"
@@ -81,17 +85,18 @@ export function ServerSettingsPage() {
                 inputMode="url"
                 autoCapitalize="none"
                 autoCorrect="off"
-                placeholder="https://hub.companionintelligence.com"
+                placeholder={DEFAULT_PORTAL_URL}
                 value={portalUrl}
                 onChange={(e) => setPortalUrl(e.target.value)}
-                aria-label="Companion Portal URL"
+                aria-label="Companion URL"
               />
               <p className="text-muted-foreground text-xs">
-                Safari signs in here. Then the app lists Memory Servers on this account.
+                {isIosPlatform() ? 'Safari' : 'Your browser'} signs in here. Then the app lists Memory Servers
+                on this account.
               </p>
             </div>
             <LoadingButton type="submit" variant="outline" className={TOUCH}>
-              Save Portal URL
+              Save URL
             </LoadingButton>
           </form>
 

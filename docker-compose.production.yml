@@ -180,11 +180,22 @@ services:
     depends_on:
       generate-secrets:
         condition: service_completed_successfully
-    devices:
-      - /dev/kfd
-      - /dev/dri
-    group_add:
-      - video
+    # NO `devices:`/`group_add:` here on purpose. This file used to pass
+    # /dev/kfd + /dev/dri and group_add: [video] through unconditionally, which
+    # meant `make production` could only ever start on an AMD ROCm host: a
+    # `devices:` entry whose node does not exist is a hard start failure, not a
+    # graceful degradation, so every Intel/NVIDIA/macOS host was refused before
+    # the container ran. GPU passthrough lives in docker-compose.rocm.yml, the
+    # opt-in overlay built for exactly this (it carries the same two device
+    # nodes plus the numeric AMD_RENDER_GID/AMD_VIDEO_GID groups and
+    # seccomp:unconfined, which literal `video` never did):
+    #
+    #   docker compose -f docker-compose.yml -f docker-compose.production.yml \
+    #                  -f docker-compose.rocm.yml --profile production up -d
+    #
+    # Without the overlay hbpe-service still starts and still answers — it just
+    # finds no HSA agent and runs on the CPU. See the README's "GPU
+    # acceleration (HBPE)" section.
 
   object-store:
     volumes:

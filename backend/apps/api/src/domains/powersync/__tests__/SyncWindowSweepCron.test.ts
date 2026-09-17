@@ -14,7 +14,10 @@ const logger = () =>
 
 /** Both statements return `[{ count }]`; hand back the two counts in order. */
 const dataSource = (events: string, entities: string) => {
-  const query = jest.fn().mockResolvedValueOnce([{ count: events }]).mockResolvedValueOnce([{ count: entities }]);
+  const query = jest
+    .fn()
+    .mockResolvedValueOnce([{ count: events }])
+    .mockResolvedValueOnce([{ count: entities }]);
 
   return { query } as unknown as DataSource & { query: jest.Mock };
 };
@@ -72,9 +75,9 @@ describe('SyncWindowSweepCron', () => {
     // Every call parks until released — the sweep issues two statements, so
     // releasing only the first would leave the run hanging on the second.
     const pending: (() => void)[] = [];
-    const query = jest.fn().mockImplementation(
-      () => new Promise((resolve) => pending.push(() => resolve([{ count: '0' }]))),
-    );
+    const query = jest
+      .fn()
+      .mockImplementation(() => new Promise((resolve) => pending.push(() => resolve([{ count: '0' }]))));
     const cron = new SyncWindowSweepCron({ query } as unknown as DataSource, logger());
 
     const first = cron.sweepOnSchedule();
@@ -88,6 +91,7 @@ describe('SyncWindowSweepCron', () => {
       pending.shift()?.();
       await Promise.resolve();
     }
+
     await first;
   });
 

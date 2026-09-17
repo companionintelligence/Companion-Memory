@@ -23,7 +23,9 @@ import { JobsController } from '../controllers/JobsController';
  * without a capability fails this suite rather than quietly landing under the acting one.
  *
  * `AdminOnlyGuard` is deliberately not among the guards asserted here; see the controller's own
- * doc comment for why this appliance may have no admin account at all.
+ * doc comment for why `ApplianceAdminGuard` is the right one for an appliance-wide control plane
+ * (it degrades open on an appliance with no live admin, which the arbitrary-command-execution
+ * routes behind `AdminOnlyGuard` must not).
  */
 
 /** Nest's own metadata key for a handler's route path (`@nestjs/common` PATH_METADATA). */
@@ -88,16 +90,26 @@ describe('JobsController gating', () => {
     expect(Reflect.getMetadata(REQUIRE_SCOPES_KEY, JobsController)).toBeUndefined();
   });
 
-  it('gates the cron-firing route strictly above every other route', () => {
-    expect(handlers.find(({ name }) => name === 'runCrons')?.capability).toBe(FULL_CAPABILITY);
+  // The routes that ACT, as opposed to read. `runCrons` fires every cron;
+  // `clearTerminal` deletes the dead-letter/failed queues. Both are gated at
+  // `full`, and the invariant is that nothing else on the controller reaches
+  // that rung — not that `runCrons` is alone at the top, which is what this
+  // asserted before clearTerminal was added (it acts too, so it was correctly
+  // given the same floor, and this test failed for saying otherwise).
+  const ACTING_ROUTES = ['runCrons', 'clearTerminal'];
 
+  it.each(ACTING_ROUTES)('%s, which acts, is gated at the full capability', (name) => {
+    expect(handlers.find((handler) => handler.name === name)?.capability).toBe(FULL_CAPABILITY);
+  });
+
+  it('gates every read strictly below the acting routes', () => {
     // `isCapabilityPromotion(from, to)` is "to is strictly higher than from", so this reads as:
-    // reaching the cron route is a promotion from every other route on the controller.
-    const notBelowTheCronRoute = handlers
-      .filter(({ name }) => name !== 'runCrons')
+    // reaching an acting route is a promotion from every read on the controller.
+    const notBelowTheActingRoutes = handlers
+      .filter(({ name }) => !ACTING_ROUTES.includes(name))
       .filter(({ capability }) => capability == null || !isCapabilityPromotion(capability, FULL_CAPABILITY))
       .map(({ name }) => name);
 
-    expect(notBelowTheCronRoute).toEqual([]);
+    expect(notBelowTheActingRoutes).toEqual([]);
   });
 });

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+
+  // The BUILD project. `composite` is what lets @ci/be-api reference this
+  // package instead of resolving it as an opaque npm dependency: with a
+  // reference in place, `tsc --build` in the API builds this first and then
+  // compiles against `dist/*.d.ts`, so the API's own emit layout
+  // (dist/src/main.js, the path its Dockerfile's CMD names) is untouched —
+  // rather than these sources joining the API's program and moving the common
+  // source root out from under it.
+  //
+  // Separate from tsconfig.json for two reasons: a composite project may not
+  // set `noEmit`, and it emits everything it includes — so leaving the specs in
+  // would ship them into dist/.
+  "extends": "./tsconfig.json",
+
+  "compilerOptions": {
+    "noEmit": false,
+    "composite": true,
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
+
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+
+  "include": ["src"],
+  "exclude": ["dist", "node_modules", "**/__tests__/**"]
+}

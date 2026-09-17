@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-docker-downloads-command"
+description = "Enables the open_docker_downloads_command command without any pre-configured scope."
+commands.allow = ["open_docker_downloads_command"]
+
+[[permission]]
+identifier = "deny-open-docker-downloads-command"
+description = "Denies the open_docker_downloads_command command without any pre-configured scope."
+commands.deny = ["open_docker_downloads_command"]

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- styles.xml's AppTheme references these by name but never defined them, so the
+         AppCompat parent theme's own library defaults (indigo/pink) were filling in.
+         Canon phthalo, from @companionintelligence/tokens (styles/colors.md): --primary /
+         --ring (light) and --phthalo-deep. -->
+    <color name="colorPrimary">#0a6358</color>
+    <color name="colorPrimaryDark">#022c2b</color>
+    <color name="colorAccent">#0a6358</color>
+</resources>

@@ -133,7 +133,18 @@ describeWithDb('CandidateService — accept / returnToSlate lifecycle (integrati
     expect(returned.status).toBe('open');
     expect(returned.promotedEventId).toBeNull();
 
-    const gone = await dataSource.query('SELECT event_id FROM ci.events WHERE event_id = $1', [event.id]);
-    expect(gone).toHaveLength(0);
+    // `returnToSlate` takes the event off the calendar via
+    // `CalendarEventService.remove`. Events configure a `softDeleteFlag`, so
+    // that is a TOMBSTONE, not a physical delete: `CtiAggregate.remove` leaves
+    // BOTH the `ci.entities` base row and the `ci.events` detail row on disk
+    // and only sets `is_deleted`, so the delete-toast's Undo (`restore`) can
+    // bring the event back and nothing referencing it is cascaded away.
+    // Asserting the detail row is physically gone fails against a real
+    // database; the guarantee to pin is that the aggregate reads as absent.
+    const detail = await dataSource.query('SELECT is_deleted FROM ci.events WHERE event_id = $1', [event.id]);
+    expect(detail).toEqual([{ is_deleted: true }]);
+
+    // The user-visible half: a tombstoned event is no longer readable.
+    await expect(eventService.findById(ctx, event.id)).resolves.toBeNull();
   });
 });

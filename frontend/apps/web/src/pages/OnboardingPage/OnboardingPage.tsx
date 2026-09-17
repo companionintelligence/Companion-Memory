@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { LoadingPage, usePageTitle } from '@ci/common';
-import { Button, Form, formDataResolver, cn, formDataSchema as s, useForm } from '@ci/shadcn';
+import { Form, formDataResolver, cn, formDataSchema as s, useForm } from '@ci/shadcn';
 import { Navigate } from 'react-router-dom';
 
-import logo from '@/assets/logo.png';
 import { useFeatures } from '@/common/feature';
+import { CompanionMark } from '@/components/CompanionMark';
 import { ThemeToggle } from '@/components/ThemePicker';
+import { WizardNavProvider } from '@/components/WizardNav';
 import { useCurrentUser } from '@/hooks';
 import { appHomePath } from '@/lib/appHome';
 
@@ -24,7 +25,7 @@ import { IdentityStep } from './IdentityStep';
 import { ImportArchivesStep } from './ImportArchivesStep';
 import { Intro } from './Intro';
 import { MoviePreferences } from './MoviePreferences';
-import { OnboardingButton } from './OnboardingButton';
+import { OnboardingNav } from './OnboardingNav';
 import { RunFirstSyncStep } from './RunFirstSyncStep';
 import { SocialConnections } from './SocialConnections';
 import { TimeAndPlaceStep } from './TimeAndPlaceStep';
@@ -180,12 +181,31 @@ export function OnboardingPage() {
     });
   }, []);
 
+  /**
+   * Move first, save after.
+   *
+   * The save used to be awaited before the step changed, which made every
+   * footer press wait on a network write — and the footer is now the ONE
+   * control row, so a single failed PUT deadened Back, Skip and the primary at
+   * once with nothing on screen to say so. `saveProgress` no longer throws;
+   * the ref below keeps a slow write from clobbering a newer one, since two
+   * quick presses now put two PUTs in flight and they can land out of order.
+   */
+  const progressSeq = useRef(0);
+
   const goToStep = useCallback(
-    async (nextIndex: number) => {
+    (nextIndex: number) => {
       dismissWelcomeBackBanner();
-      await persistProgress(nextIndex);
       setStepIndex(nextIndex);
       scrollToTop();
+
+      const seq = ++progressSeq.current;
+
+      void persistProgress(nextIndex).then(() => {
+        if (seq !== progressSeq.current) {
+          return;
+        }
+      });
     },
     [dismissWelcomeBackBanner, persistProgress, scrollToTop],
   );
@@ -280,95 +300,82 @@ export function OnboardingPage() {
   // 037d0e9b0), which put Back/Skip/Next below the fold on any step tall
   // enough to scroll; the step content scrolls, the nav does not.
   const navRow = showNav ? (
-    <div data-testid="onboarding-nav" className="mb-5 flex items-center gap-2 px-4 sm:mb-6 sm:gap-3">
-      {stepIndex > 0 && (
-        <Button type="button" variant="ghost" size="lg" className="text-base" onClick={handleBack}>
-          Back
-        </Button>
-      )}
-      <Button type="button" variant="ghost" size="lg" className="text-base" onClick={handleSkip}>
-        Skip
-      </Button>
-      <OnboardingButton
-        type="button"
-        size="lg"
-        className="px-10 sm:px-14 text-base sm:text-lg h-12"
-        onClick={handleNext}
-      >
-        Next
-      </OnboardingButton>
-    </div>
+    <OnboardingNav canGoBack={stepIndex > 0} onBack={handleBack} onSkip={handleSkip} onNext={handleNext} />
   ) : null;
 
   return (
     <Form {...form}>
-      <form
-        className="relative h-lvh flex flex-col"
-        // Steps use type="button" CTAs; still block native submit so a mis-typed
-        // control (or label→control activation) cannot navigate off the wizard.
-        onSubmit={(event) => event.preventDefault()}
-      >
-        <div className="absolute top-0 left-0 h-[max(0.25rem,env(safe-area-inset-top))] w-full">
-          <div className="absolute top-full right-3 z-10 text-foreground">
-            <ThemeToggle />
-          </div>
-        </div>
-
-        <div className="flex flex-col items-center flex-1 w-full h-full gap-1.5">
-          <div className="self-start px-4 pt-[max(0.5rem,env(safe-area-inset-top))]">
-            <img src={logo} className="w-7 h-7" alt="" />
-          </div>
-
-          {showWelcomeBackBanner && (
-            <div
-              className={cn('w-full mx-auto px-5 md:px-8 -mt-1 mb-1 flex justify-center', contentMaxWidth)}
-            >
-              <div className="max-w-lg rounded-lg border border-green-800/30 bg-background/95 px-4 py-2.5 text-sm text-foreground text-center shadow-sm backdrop-blur-sm">
-                Welcome back. Everything you&apos;ve entered is saved.
-              </div>
+      {/* The provider wraps the form, not just the step area: the footer lives
+          inside it too, and the footer is the thing a nested flow is driving. */}
+      <WizardNavProvider>
+        <form
+          className="relative h-lvh flex flex-col"
+          // Steps use type="button" CTAs; still block native submit so a mis-typed
+          // control (or label→control activation) cannot navigate off the wizard.
+          onSubmit={(event) => event.preventDefault()}
+        >
+          <div className="absolute top-0 left-0 h-[max(0.25rem,var(--safe-area-top))] w-full">
+            <div className="absolute top-full right-3 z-10 text-foreground">
+              <ThemeToggle />
             </div>
-          )}
+          </div>
 
-          <div
-            ref={scrollRef}
-            data-testid="onboarding-scroll"
-            className={cn(
-              'relative flex-1 overflow-y-auto min-h-0 w-full mx-auto px-5 md:px-8',
-              contentMaxWidth,
+          <div className="flex flex-col items-center flex-1 w-full h-full gap-1.5">
+            <div className="self-start px-4 pt-[max(0.5rem,var(--safe-area-top))]">
+              <CompanionMark className="h-7 w-7 rounded-full" />
+            </div>
+
+            {showWelcomeBackBanner && (
+              <div
+                className={cn('w-full mx-auto px-5 md:px-8 -mt-1 mb-1 flex justify-center', contentMaxWidth)}
+              >
+                <div className="max-w-lg rounded-lg border border-green-800/30 bg-background/95 px-4 py-2.5 text-sm text-foreground text-center shadow-sm backdrop-blur-sm">
+                  Welcome back. Everything you&apos;ve entered is saved.
+                </div>
+              </div>
             )}
-          >
+
             <div
+              ref={scrollRef}
+              data-testid="onboarding-scroll"
               className={cn(
-                'flex flex-col items-center text-center w-full py-2',
-                verticallyCenterStep ? 'justify-center min-h-full' : 'justify-start',
+                'relative flex-1 overflow-y-auto min-h-0 w-full mx-auto px-5 md:px-8',
+                contentMaxWidth,
               )}
             >
-              {stepContent}
+              <div
+                className={cn(
+                  'flex flex-col items-center text-center w-full py-2',
+                  verticallyCenterStep ? 'justify-center min-h-full' : 'justify-start',
+                )}
+              >
+                {stepContent}
+              </div>
+            </div>
+
+            {navRow}
+
+            <div className="flex flex-col items-center gap-1 px-4 pb-[max(0.5rem,var(--safe-area-bottom))]">
+              <div className="flex justify-center items-center gap-1.5">
+                {stepKeys.map((key, i) => (
+                  <div
+                    key={key}
+                    className={cn(
+                      'h-1.5 w-1.5 rounded-full transition-all duration-500',
+                      i === stepIndex ? 'bg-foreground scale-125' : 'bg-muted-foreground/35',
+                    )}
+                  />
+                ))}
+              </div>
+              {stepIndex === 0 && (
+                <p className="text-xs sm:text-sm text-muted-foreground text-center">
+                  Step {stepIndex + 1} of {stepKeys.length} — every step is skippable
+                </p>
+              )}
             </div>
           </div>
-
-          {navRow}
-
-          <div className="flex flex-col items-center gap-1 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-            <div className="flex justify-center items-center gap-1.5">
-              {stepKeys.map((key, i) => (
-                <div
-                  key={key}
-                  className={cn(
-                    'h-1.5 w-1.5 rounded-full transition-all duration-500',
-                    i === stepIndex ? 'bg-foreground scale-125' : 'bg-muted-foreground/35',
-                  )}
-                />
-              ))}
-            </div>
-            {stepIndex === 0 && (
-              <p className="text-xs sm:text-sm text-muted-foreground text-center">
-                Step {stepIndex + 1} of {stepKeys.length} — every step is skippable
-              </p>
-            )}
-          </div>
-        </div>
-      </form>
+        </form>
+      </WizardNavProvider>
     </Form>
   );
 }

@@ -11,7 +11,9 @@ import { GET_PROVIDERS } from '@/queries';
 export interface ProviderKey {
   readonly id: string;
   readonly clientId: string;
-  readonly clientSecret: string;
+  /** The secret is write-only: the API never returns it, only whether one is stored and its last characters. */
+  readonly hasClientSecret: boolean;
+  readonly clientSecretHint: string | null;
   readonly providerId: string;
   readonly userId: string;
 }
@@ -22,7 +24,8 @@ const CREATE_PROVIDER_KEY = gql(`
       id
       providerId
       clientId
-      clientSecret
+      hasClientSecret
+      clientSecretHint
       userId
     }
   }
@@ -33,7 +36,8 @@ const UPDATE_PROVIDER_KEY = gql(`
     updateProviderKey(id: $id, input: $input) {
       id
       clientId
-      clientSecret
+      hasClientSecret
+      clientSecretHint
     }
   }
 `);
@@ -46,15 +50,29 @@ const DELETE_PROVIDER_KEY = gql(`
 
 type OAuthProvider = 'google' | 'microsoft' | 'facebook' | 'spotify' | 'github' | 'reddit' | 'slack';
 
+interface ProviderFields {
+  providerKeyId?: string;
+  clientId: string;
+  /** What the user has typed. Blank on an existing key means "keep the stored secret". */
+  clientSecret: string;
+  hasClientSecret: boolean;
+  clientSecretHint: string | null;
+}
+
 interface OAuthState {
-  oauth: Record<
-    string,
-    {
-      providerKeyId?: string;
-      clientId: string;
-      clientSecret: string;
-    }
-  >;
+  oauth: Record<string, ProviderFields>;
+}
+
+const EMPTY_FIELDS: ProviderFields = {
+  clientId: '',
+  clientSecret: '',
+  hasClientSecret: false,
+  clientSecretHint: null,
+};
+
+/** Trailing characters shown in the secret field's placeholder once a secret is stored. */
+function storedSecretPlaceholder(hint: string | null): string {
+  return `••••••••${hint ?? ''}`;
 }
 
 export function OAuthSection() {
@@ -62,13 +80,13 @@ export function OAuthSection() {
 
   const [settings, setSettings] = useState<OAuthState>({
     oauth: {
-      google: { clientId: '', clientSecret: '' },
-      microsoft: { clientId: '', clientSecret: '' },
-      facebook: { clientId: '', clientSecret: '' },
-      spotify: { clientId: '', clientSecret: '' },
-      github: { clientId: '', clientSecret: '' },
-      reddit: { clientId: '', clientSecret: '' },
-      slack: { clientId: '', clientSecret: '' },
+      google: { ...EMPTY_FIELDS },
+      microsoft: { ...EMPTY_FIELDS },
+      facebook: { ...EMPTY_FIELDS },
+      spotify: { ...EMPTY_FIELDS },
+      github: { ...EMPTY_FIELDS },
+      reddit: { ...EMPTY_FIELDS },
+      slack: { ...EMPTY_FIELDS },
     },
   });
 
@@ -89,16 +107,14 @@ export function OAuthSection() {
     slackClientSecret: false,
   });
 
-  const [originalValues, setOriginalValues] = useState<
-    Record<string, { clientId: string; clientSecret: string }>
-  >({
-    google: { clientId: '', clientSecret: '' },
-    microsoft: { clientId: '', clientSecret: '' },
-    facebook: { clientId: '', clientSecret: '' },
-    spotify: { clientId: '', clientSecret: '' },
-    github: { clientId: '', clientSecret: '' },
-    reddit: { clientId: '', clientSecret: '' },
-    slack: { clientId: '', clientSecret: '' },
+  const [originalValues, setOriginalValues] = useState<Record<string, { clientId: string }>>({
+    google: { clientId: '' },
+    microsoft: { clientId: '' },
+    facebook: { clientId: '' },
+    spotify: { clientId: '' },
+    github: { clientId: '' },
+    reddit: { clientId: '' },
+    slack: { clientId: '' },
   });
 
   const [validationErrors, setValidationErrors] = useState<
@@ -128,14 +144,14 @@ export function OAuthSection() {
 
     const providers: Provider[] = providersData.providers.edges.map((edge: { node: Provider }) => edge.node);
 
-    const newOriginalValues: Record<string, { clientId: string; clientSecret: string }> = {
-      google: { clientId: '', clientSecret: '' },
-      microsoft: { clientId: '', clientSecret: '' },
-      facebook: { clientId: '', clientSecret: '' },
-      spotify: { clientId: '', clientSecret: '' },
-      github: { clientId: '', clientSecret: '' },
-      reddit: { clientId: '', clientSecret: '' },
-      slack: { clientId: '', clientSecret: '' },
+    const newOriginalValues: Record<string, { clientId: string }> = {
+      google: { clientId: '' },
+      microsoft: { clientId: '' },
+      facebook: { clientId: '' },
+      spotify: { clientId: '' },
+      github: { clientId: '' },
+      reddit: { clientId: '' },
+      slack: { clientId: '' },
     };
 
     setSettings((prev) => {
@@ -151,12 +167,12 @@ export function OAuthSection() {
           newSettings.oauth[providerName as keyof typeof newSettings.oauth] = {
             providerKeyId: provider.providerKeys.id,
             clientId: provider.providerKeys.clientId,
-            clientSecret: provider.providerKeys.clientSecret,
+            // Never prefilled: the API does not return the secret.
+            clientSecret: '',
+            hasClientSecret: provider.providerKeys.hasClientSecret,
+            clientSecretHint: provider.providerKeys.clientSecretHint,
           };
-          newOriginalValues[providerName] = {
-            clientId: provider.providerKeys.clientId,
-            clientSecret: provider.providerKeys.clientSecret,
-          };
+          newOriginalValues[providerName] = { clientId: provider.providerKeys.clientId };
         }
       });
 
@@ -190,18 +206,19 @@ export function OAuthSection() {
       const parts = key.split('.');
       if (parts.length === 3) {
         const provider = parts[1] as OAuthProvider;
-        const { clientId, clientSecret, providerKeyId } = updatedSettings.oauth[provider];
+        const { clientId, clientSecret, providerKeyId, hasClientSecret } = updatedSettings.oauth[provider];
         const errors: { clientId?: string; clientSecret?: string } = {};
 
         const hasClientId = clientId && clientId.trim().length > 0;
-        const hasClientSecret = clientSecret && clientSecret.trim().length > 0;
+        const hasTypedSecret = clientSecret && clientSecret.trim().length > 0;
 
-        if (providerKeyId || hasClientId || hasClientSecret) {
+        if (providerKeyId || hasClientId || hasTypedSecret) {
           if (!hasClientId) {
             errors.clientId = 'Client ID is required';
           }
 
-          if (!hasClientSecret) {
+          // An existing key keeps its stored secret when the field is left blank.
+          if (!hasTypedSecret && !(providerKeyId && hasClientSecret)) {
             errors.clientSecret = 'Client Secret is required';
           }
         }
@@ -224,7 +241,8 @@ export function OAuthSection() {
       return current.clientId?.trim().length > 0 && current.clientSecret?.trim().length > 0;
     }
 
-    return current.clientId !== original.clientId || current.clientSecret !== original.clientSecret;
+    // A typed secret is a change; a blank one means "keep what is stored".
+    return current.clientId !== original.clientId || current.clientSecret.trim().length > 0;
   };
 
   const validateOAuthFields = (provider: string): boolean => {
@@ -232,20 +250,20 @@ export function OAuthSection() {
       return true;
     }
 
-    const { clientId, clientSecret, providerKeyId } = settings.oauth[provider];
+    const { clientId, clientSecret, providerKeyId, hasClientSecret } = settings.oauth[provider];
     const errors: { clientId?: string; clientSecret?: string } = {};
     let isValid = true;
 
     const hasClientId = clientId && clientId.trim().length > 0;
-    const hasClientSecret = clientSecret && clientSecret.trim().length > 0;
+    const hasTypedSecret = clientSecret && clientSecret.trim().length > 0;
 
-    if (providerKeyId || hasClientId || hasClientSecret) {
+    if (providerKeyId || hasClientId || hasTypedSecret) {
       if (!hasClientId) {
         errors.clientId = 'Client ID is required';
         isValid = false;
       }
 
-      if (!hasClientSecret) {
+      if (!hasTypedSecret && !(providerKeyId && hasClientSecret)) {
         errors.clientSecret = 'Client Secret is required';
         isValid = false;
       }
@@ -284,18 +302,46 @@ export function OAuthSection() {
           variables: { input: { providerId: providerEntity.id, clientId, clientSecret } },
         });
 
+        const created = result.data?.createProviderKey;
+
         setSettings((prev) => ({
           ...prev,
           oauth: {
             ...prev.oauth,
-            [provider]: { ...prev.oauth[provider], providerKeyId: result.data?.createProviderKey.id },
+            [provider]: {
+              ...prev.oauth[provider],
+              providerKeyId: created?.id,
+              clientSecret: '',
+              hasClientSecret: created?.hasClientSecret ?? true,
+              clientSecretHint: created?.clientSecretHint ?? null,
+            },
           },
         }));
       } else {
-        await updateProviderKey({ variables: { id: providerKeyId, input: { clientId, clientSecret } } });
+        const typedSecret = clientSecret.trim();
+        const result = await updateProviderKey({
+          variables: {
+            id: providerKeyId,
+            input: { clientId, ...(typedSecret ? { clientSecret: typedSecret } : {}) },
+          },
+        });
+        const updated = result.data?.updateProviderKey;
+
+        setSettings((prev) => ({
+          ...prev,
+          oauth: {
+            ...prev.oauth,
+            [provider]: {
+              ...prev.oauth[provider],
+              clientSecret: '',
+              hasClientSecret: updated?.hasClientSecret ?? prev.oauth[provider].hasClientSecret,
+              clientSecretHint: updated?.clientSecretHint ?? prev.oauth[provider].clientSecretHint,
+            },
+          },
+        }));
       }
 
-      setOriginalValues((prev) => ({ ...prev, [provider]: { clientId, clientSecret } }));
+      setOriginalValues((prev) => ({ ...prev, [provider]: { clientId } }));
       setValidationErrors((prev) => ({ ...prev, [provider]: {} }));
     } catch (error) {
       console.error('Failed to save provider key:', error);
@@ -315,10 +361,10 @@ export function OAuthSection() {
         ...prev,
         oauth: {
           ...prev.oauth,
-          [provider]: { providerKeyId: undefined, clientId: '', clientSecret: '' },
+          [provider]: { ...EMPTY_FIELDS },
         },
       }));
-      setOriginalValues((prev) => ({ ...prev, [provider]: { clientId: '', clientSecret: '' } }));
+      setOriginalValues((prev) => ({ ...prev, [provider]: { clientId: '' } }));
       setValidationErrors((prev) => ({ ...prev, [provider]: {} }));
       setDeleteModalOpen(false);
       setProviderToDelete(null);
@@ -357,10 +403,7 @@ export function OAuthSection() {
                 label={t('SETTINGS_OAUTH_SAVE')}
                 onClick={() => handleSaveOAuthField(provider)}
                 className="h-8 w-8 text-green-600 hover:text-green-700"
-                disabled={
-                  providerData.providerKeyId != null &&
-                  (!providerData.clientId?.trim() || !providerData.clientSecret?.trim())
-                }
+                disabled={providerData.providerKeyId != null && !providerData.clientId?.trim()}
               >
                 <Save className="h-4 w-4" />
               </IconButton>
@@ -407,6 +450,11 @@ export function OAuthSection() {
                 id={`${provider}ClientSecret`}
                 type={showKeys[`${provider}ClientSecret`] ? 'text' : 'password'}
                 value={providerData.clientSecret}
+                placeholder={
+                  providerData.hasClientSecret
+                    ? storedSecretPlaceholder(providerData.clientSecretHint)
+                    : undefined
+                }
                 onChange={(e) => updateSetting(`oauth.${provider}.clientSecret`, e.target.value)}
                 className="flex-1"
               />
@@ -426,6 +474,12 @@ export function OAuthSection() {
                 )}
               </IconButton>
             </div>
+            {providerData.hasClientSecret && !providerData.clientSecret && (
+              <p className="text-sm text-muted-foreground">
+                A secret is stored and is never shown. Leave blank to keep it, or enter a new one to replace
+                it.
+              </p>
+            )}
             {errors.clientSecret &&
               (providerData.providerKeyId || providerData.clientId?.trim().length > 0) && (
                 <p className="text-sm text-red-600">{errors.clientSecret}</p>

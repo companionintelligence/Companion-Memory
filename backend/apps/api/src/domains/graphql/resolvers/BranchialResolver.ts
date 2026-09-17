@@ -7,6 +7,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { BranchialForecastService } from '@ci/domains/agent';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { BranchialTreeType } from '../types/BranchialType';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -32,6 +33,9 @@ export class BranchialResolver {
     nullable: true,
     description: 'Name occupancy branches from memory via the LLM; falls back to occupancy labels on failure',
   })
+  // branchial.guess() only reads (occupancy/recall/persona context) and calls the on-appliance
+  // OllamaService to label branches; nothing is written or deleted, and no data leaves the box.
+  @GraphqlPrivacy({ destructive: false })
   async guessBranchialForecast(@Context() context: RequestContext): Promise<BranchialTreeType | null> {
     return this.run('Branchial guess failed', () => this.branchial.guess(context));
   }

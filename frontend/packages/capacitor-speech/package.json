@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "description": "Capacitor plugin for offline speech: on-device recognition (STT) and synthesis (TTS). Android uses android.speech.SpeechRecognizer across a three-tier strategy (API 33+ checkRecognitionSupport, 31-32 isOnDeviceRecognitionAvailable, 23-30 EXTRA_PREFER_OFFLINE hint) plus android.speech.tts.TextToSpeech; iOS uses SFSpeechRecognizer with requiresOnDeviceRecognition plus AVSpeechSynthesizer. Every result reports whether local processing was actually guaranteed -- see README.md. Like @ci/capacitor-local-hub (and unlike Android-only @ci/capacitor-local-llm), this plugin ships both native implementations.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "main": "src/index.ts",
   "types": "src/index.ts",
   "packageManager": "yarn@4.9.1",

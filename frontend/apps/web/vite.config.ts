@@ -1,8 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react-swc';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 function getAllowedHosts(): string[] {
@@ -24,6 +26,42 @@ function getAllowedHosts(): string[] {
   }
 }
 
+/**
+ * Publish the canon's vanilla stylesheet at a stable same-origin URL.
+ *
+ * `@companionintelligence/tokens/tokens.css` is the canon for pages that run no
+ * bundler. The API's GraphiQL page is one (`backend/apps/api/src/domains/
+ * graphql/controllers/graphiql.html.ts`): it is a string served by NestJS, and
+ * the API image cannot install the package — its Docker build has no GitHub
+ * Packages credential — so this build, which already has the package, serves
+ * the file and that page links `/brand/tokens.css`. The canon rule is consume,
+ * never copy (CI-Common UI-STYLE-GUIDE §11); reading it from the package here
+ * is what keeps a token change reaching that page with a version bump.
+ *
+ * Emitted as `brand/tokens.css` (not `assets/`) on purpose: the name is stable
+ * across releases, and the gateway's `/assets/` location marks everything
+ * under it immutable.
+ */
+const BRAND_TOKENS_PATH = 'brand/tokens.css';
+
+function brandTokens(): Plugin {
+  const tokensCss = () =>
+    readFileSync(createRequire(import.meta.url).resolve('@companionintelligence/tokens/tokens.css'), 'utf8');
+
+  return {
+    name: 'ci:brand-tokens',
+    configureServer(server) {
+      server.middlewares.use(`/${BRAND_TOKENS_PATH}`, (_req, res) => {
+        res.setHeader('Content-Type', 'text/css; charset=utf-8');
+        res.end(tokensCss());
+      });
+    },
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: BRAND_TOKENS_PATH, source: tokensCss() });
+    },
+  };
+}
+
 // In a Capacitor native build the web assets are served from the local app bundle,
 // where the Workbox service worker fights Capacitor's own asset serving and the
 // now cross-origin `/api` calls. The mobile build sets VITE_DISABLE_PWA=true to
@@ -35,6 +73,7 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    brandTokens(),
     !disablePwa &&
       VitePWA({
         registerType: 'autoUpdate',

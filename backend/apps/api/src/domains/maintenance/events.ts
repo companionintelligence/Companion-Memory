@@ -195,3 +195,46 @@ declare module '@ci/domains/events/registry' {
     [DerivationRunRequestEvent]: DerivationRunRequestPayload;
   }
 }
+
+/**
+ * Request a people-stub pass over a user's communications: create a stub
+ * Person (and its `ci.entity_identifiers` row) for every participant the
+ * identifier index does not yet know, so the person-link stage has someone to
+ * resolve against.
+ *
+ * The emitter that exists for: the import domain's `PushStage`, after a bulk
+ * push of communications. Bulk-created rows emit no per-row
+ * `CommunicationCreatedEvent`, so the inline listener never sees them, and the
+ * people they name used to exist only once an operator ran
+ * `POST /api/maintenance/extract-people-from-communications` by hand. Meanwhile
+ * the person-link stage had already swept the messages and recorded every
+ * name as resolving to nobody. Requesting the pass here puts the people in the
+ * index within minutes of the push; whatever the linker decided before they
+ * arrived is re-opened by `IdentifierArrivalService` on the next tick.
+ *
+ * Same wire shape as the sibling kicks: durable on pg-boss, no compile-time
+ * dependency from import on maintenance (the barrel would close the cycle
+ * maintenance → llm → tools → import).
+ *
+ * @see PersonStubBackfillRequestListener (this domain) - the consumer
+ */
+export const PersonStubBackfillRequestEvent = 'maintenance.person-stub-backfill-request';
+
+/** Dedicated PGBoss queue, like the other post-push kicks. */
+export const PERSON_STUB_BACKFILL_QUEUE = 'person-stub-backfill';
+
+/** Event payload of {@link PersonStubBackfillRequestEvent}. */
+export type PersonStubBackfillRequestPayload = {
+  /** The owner whose communications are walked. Refused without one. */
+  userId?: string;
+  /** Free-form provenance for the log line, e.g. `import-run:<uuid>`. */
+  requestedBy?: string;
+};
+
+defineEvent<PersonStubBackfillRequestPayload>(PersonStubBackfillRequestEvent);
+
+declare module '@ci/domains/events/registry' {
+  interface EventRegistry {
+    [PersonStubBackfillRequestEvent]: PersonStubBackfillRequestPayload;
+  }
+}

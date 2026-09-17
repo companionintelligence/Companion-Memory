@@ -1,0 +1,28 @@
+{
+  "extends": "../../../tsconfig.node.json",
+
+  "compilerOptions": {
+    // No `paths` block, deliberately. The whole point of this package is that
+    // it resolves without the monorepo: an alias here would be a way for a
+    // `@ci/...` import back into the server to compile in the workspace and
+    // fail after `npm i -g`.
+    "outDir": "./dist",
+    "noEmit": true,
+
+    // Both inherited from tsconfig.node.json for NestJS's sake and meaningless
+    // here — there is not a decorator in the package. Off rather than ignored
+    // because `emitDecoratorMetadata` makes tsup warn on every build that it
+    // is skipping the swc plugin it would need to honour it.
+    "emitDecoratorMetadata": false,
+    "experimentalDecorators": false,
+
+    // `vitest/globals` because the suite calls `describe`/`it`/`expect` without
+    // importing them (see vitest.config.ts). Enumerating `types` at all is what
+    // keeps a stray `@types/jest` hoisted from elsewhere in the monorepo from
+    // type-checking these files against a runner they do not run under.
+    "types": ["node", "vitest/globals"]
+  },
+
+  "include": ["src", "tsup.config.ts", "vitest.config.ts"],
+  "exclude": ["dist", "node_modules"]
+}

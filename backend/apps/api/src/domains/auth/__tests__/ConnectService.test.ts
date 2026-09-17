@@ -153,9 +153,13 @@ describe('ConnectService.exchange', () => {
     expect(data.name).toBe('app:ci-openclaw:ci-marketplace');
     // Scopes come from scopesForApp (the same source the consent page reads).
     expect(data.scopes).toEqual(['memory', 'intents', 'mcp']);
-    // Capability is CHOSEN at mint time, not inherited from the api-key default:
-    // a chat agent may remember as well as recall, but never delete.
-    expect(data.capability).toBe('write');
+    // Capability is CHOSEN at mint time, not inherited from the api-key default.
+    // `full` for the two paired harnesses, not because they are trusted with
+    // deletion but because the managed-app rule in `resolveToolGate` turns their
+    // destructive attempts into approval cards. `write` refused those calls
+    // BEFORE the gate could queue them, so the card was unreachable and a
+    // refusal the owner could not answer is an outage, not a policy.
+    expect(data.capability).toBe('full');
     const ttlDays = (new Date(data.expires_at).getTime() - Date.now()) / (24 * 60 * 60 * 1000);
     expect(ttlDays).toBeGreaterThan(89);
     expect(ttlDays).toBeLessThan(91);
@@ -249,7 +253,7 @@ describe('ConnectService.rotateByApp', () => {
     // A rotate re-derives scopes AND capability, so it also heals a key minted
     // under an older policy (including one minted before capability was chosen).
     expect(data.scopes).toEqual(['memory', 'intents', 'mcp']);
-    expect(data.capability).toBe('write');
+    expect(data.capability).toBe('full');
     expect(result?.key).toBe('rotated-key');
   });
 
@@ -263,9 +267,25 @@ describe('ConnectService.rotateByApp', () => {
 });
 
 describe('capabilityForApp (authority chosen per app, never inherited)', () => {
-  it('gives the chat agents write — enough to remember, never enough to delete', () => {
-    expect(capabilityForApp('ci-openclaw:ci-marketplace')).toBe('write');
-    expect(capabilityForApp('ci-hermes:ci-marketplace')).toBe('write');
+  /**
+   * The two harnesses whose destructive calls are queued as approval cards by
+   * `resolveToolGate`'s `managed-app` rule. Their `full` is only defensible
+   * BECAUSE of that rule, so this list and that rule must move together — see
+   * the invariant test at the bottom of this block.
+   */
+  const GATED_HARNESSES = ['ci-openclaw:ci-marketplace', 'ci-hermes:ci-marketplace'];
+
+  it('gives the gated harnesses full — the card is the control, not the capability', () => {
+    // This assertion was `write` until the managed-app gate landed, and the two
+    // changed together on purpose. `write` looked like the safer number and was
+    // strictly worse: `capabilityAllows` refuses a destructive intent below
+    // `full` BEFORE the gate runs, and a deny is never laundered into a queue —
+    // so the harness got a flat 403 and the owner never saw a card. The
+    // authority is wider; the reachable behaviour is narrower, because now the
+    // owner is asked instead of the agent being stonewalled.
+    for (const appUrn of GATED_HARNESSES) {
+      expect(capabilityForApp(appUrn)).toBe('full');
+    }
   });
 
   it('gives the bulk importer write, not full — full surface is not full authority', () => {
@@ -276,19 +296,27 @@ describe('capabilityForApp (authority chosen per app, never inherited)', () => {
     expect(capabilityForApp('some-third-party-app:ci-marketplace')).toBe('write');
   });
 
-  it('never mints a destructive key for any app URN', () => {
+  it('mints full ONLY for an app paired with the confirmation gate', () => {
+    // The surviving half of the old "never mints a destructive key for any app
+    // URN". That blanket claim is gone deliberately, but the narrow one is what
+    // actually protected anything and it is now load-bearing: an app added to
+    // this switch without a matching entry in the gate would hold real
+    // destructive authority with nothing asking the owner first.
     for (const appUrn of [
-      'ci-openclaw:ci-marketplace',
-      'ci-hermes:ci-marketplace',
       'ci-import-tools:ci-marketplace',
       'some-third-party-app:some-other-store',
+      'ci-openclaw-lookalike:ci-marketplace',
+      'not-ci-hermes:ci-marketplace',
     ]) {
       expect(capabilityForApp(appUrn)).not.toBe('full');
     }
   });
 
   it('keys on the app name segment, ignoring the store', () => {
-    expect(capabilityForApp('ci-openclaw:some-other-store')).toBe('write');
+    // Which also means a harness keeps its gated capability from any store —
+    // the pairing is with the APP, not with where it was installed from.
+    expect(capabilityForApp('ci-openclaw:some-other-store')).toBe('full');
+    expect(capabilityForApp('ci-import-tools:some-other-store')).toBe('write');
   });
 });
 

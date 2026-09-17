@@ -5,6 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { type FindProductModelsFilter, ObjectMergeService, ProductModelService } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { ContentLoader } from '../loaders/ContentLoader';
 import { ProductIdentifierLoader } from '../loaders/ItemIdentifierLoader';
 import { TagLoader } from '../loaders/TagLoader';
@@ -123,6 +124,8 @@ export class ProductModelResolver {
    * folds the fields, and tombstones the sources.
    */
   @Mutation(() => MergeProductModelsPayload)
+  // Same tombstone-and-drop-search-rows shape as mergePeople. One-way.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async mergeProductModels(
     @Context() context: RequestContext,
     @Args('input') input: MergeProductModelsInput,

@@ -64,6 +64,7 @@ import { StageArrivalListener } from './listeners/StageArrivalListener';
 import { UnfurlSweepRequestListener } from './listeners/UnfurlSweepRequestListener';
 import { BackpressureService } from './services/BackpressureService';
 import { EnrichmentWindowService } from './services/EnrichmentWindowService';
+import { IdentifierArrivalService } from './services/IdentifierArrivalService';
 import { PipelineControlService } from './services/PipelineControlService';
 import { PipelineDispatchService } from './services/PipelineDispatchService';
 import { PipelineRunService } from './services/PipelineRunService';
@@ -286,6 +287,9 @@ const stageProviders: Provider[] = [
     // `stageDueness` for every leg it judges. Declared and specced before
     // anything consumed it; the dueness gate is its first caller.
     EnrichmentWindowService,
+    // New evidence re-opens old person-link decisions. Consulted by the control
+    // tick per user, before the candidates are counted.
+    IdentifierArrivalService,
     PipelineControlService,
     PipelineSliceListener,
     // Rows are enriched AS THEY ARRIVE; the tick is the backstop, not the

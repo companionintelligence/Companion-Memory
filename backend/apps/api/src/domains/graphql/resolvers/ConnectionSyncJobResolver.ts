@@ -5,6 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ConnectionSyncJobService } from '@ci/domains/etl';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { ConnectionLoader } from '../loaders/ConnectionLoader';
 import { ConnectionSyncJobConnection } from '../types/ConnectionSyncJobConnection';
 import { ConnectionSyncJobEdge } from '../types/ConnectionSyncJobEdge';
@@ -29,6 +30,8 @@ export class ConnectionSyncJobResolver {
   ) {}
 
   @Mutation(() => CreateConnectionSyncJobPayload)
+  // Plain create: inserts one new sync-job row.
+  @GraphqlPrivacy({ destructive: false })
   async createConnectionSyncJob(
     @Context() context: RequestContext,
     @Args('input') input: CreateConnectionSyncJobInput,
@@ -66,6 +69,9 @@ export class ConnectionSyncJobResolver {
   }
 
   @Mutation(() => UpdateConnectionSyncJobPayload)
+  // Patches only this job's own status/cursor/data fields; the row stays
+  // intact throughout.
+  @GraphqlPrivacy({ destructive: false })
   async updateConnectionSyncJob(
     @Context() context: RequestContext,
     @Args('input') input: UpdateConnectionSyncJobInput,
@@ -100,6 +106,9 @@ export class ConnectionSyncJobResolver {
   }
 
   @Mutation(() => DeleteByIdPayload)
+  // ConnectionSyncJobService.delete does a HARD `repository.delete` — the row
+  // is gone with no restore path in the schema.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteConnectionSyncJob(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,

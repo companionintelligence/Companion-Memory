@@ -70,4 +70,10 @@ export class CreateEventInput {
   // Defaults to 'private' server-side when omitted.
   @Field(() => String, { nullable: true })
   sharingLevel?: string;
+
+  @Field(() => Boolean, {
+    nullable: true,
+    description: "CI-Planning's manually-locked-block flag; settable/readable only, not yet enforced.",
+  })
+  isLocked?: boolean;
 }

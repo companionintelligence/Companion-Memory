@@ -1,7 +1,12 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
-    "target": "ES2020",
+    // ES2022, not ES2020: `new Error(msg, { cause })` (scripts/dev-stack/caddy.ts)
+    // is an ES2022 signature, and under ES2020 it typechecked as a 2-argument
+    // call to a 1-argument constructor. Nothing ran this config until the root
+    // gained a `typecheck` script, so the error sat here unreported. The
+    // Node-side preset (tsconfig.node.json) has been on ES2023 throughout.
+    "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,

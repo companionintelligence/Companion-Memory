@@ -64,6 +64,22 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    healthcheck:
+      # python, not curl: only the hbpe image installs curl, and both sidecars
+      # should be probed the same way. urlopen raises on any non-2xx, so a
+      # 404 — the shape a sidecar built from older source has, serving /health
+      # but not the routes the API calls — fails the probe instead of passing it.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Generous: this process loads ONNX and a GGUF labeler before uvicorn
+      # serves anything, and a probe that fails a legitimately slow boot would
+      # make `up --wait` less honest, not more. start_interval keeps the long
+      # ceiling from costing every `make dev` a 30s wait for the first probe —
+      # `up --wait` moves on as soon as the sidecar answers.
+      start_period: 180s
+      start_interval: 5s
     # A ceiling, not a reservation. This process holds torch, ONNX Runtime and
     # a llama.cpp GGUF labeler at once, and an unbounded OOM here takes the
     # whole box down with it — including `database`, which is the one service
@@ -123,6 +139,20 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    healthcheck:
+      # Same probe as hbpe-service above, on this service's own port. /health
+      # answers 200 even when the LLM endpoint is unreachable (it reports
+      # `status: degraded` in the body) — a missing model is a degraded
+      # service, not a dead container, and only the container's liveness is
+      # this probe's business.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # The startup LLM probe runs before uvicorn serves, and a black-holed
+      # endpoint makes it spend its whole timeout.
+      start_period: 60s
+      start_interval: 5s
     # Same rationale as hbpe-service's limit above, smaller number: this
     # sidecar holds the document parser and short LLM requests, not model
     # weights. Also unmeasured — raise SUMMARY_MEM_LIMIT if a large PDF parse

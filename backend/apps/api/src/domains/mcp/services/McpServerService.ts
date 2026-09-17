@@ -6,6 +6,8 @@ import { isScopeLimitedApiKey } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { IntentCatalogService } from '@ci/domains/tools';
 
+import { ToolExecutionError } from '../types';
+
 import { McpToolService } from './McpToolService';
 
 @Injectable()
@@ -111,7 +113,16 @@ export class McpServerService {
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify({ error: error.message }),
+                // The other half of the structured-error fix. Serializing only
+                // `error.message` discarded what McpToolService had just taken
+                // care to preserve — in particular `TOOL_QUEUED` and the
+                // `pendingActionId` the harness is instructed to report.
+                //
+                // The shape matches what the REST intent path returns, because
+                // both harness plugins already read `error.code` and
+                // `error.details.pendingActionId` from that. A genuine
+                // unexpected throw still falls back to the bare message.
+                text: JSON.stringify({ error: serializeToolError(error) }),
               },
             ],
             isError: true,
@@ -141,4 +152,25 @@ export class McpServerService {
       count: tools.length,
     });
   }
+}
+
+/**
+ * Present a thrown tool failure the way the REST plane presents a returned one.
+ *
+ * A queued action is not an error in the sense the word usually carries here —
+ * nothing failed, the owner was asked — so the payload has to say which it was.
+ * `code` is what lets the harness tell "waiting on your owner" from "denied",
+ * and it is the difference between the agent reporting blocked and the agent
+ * retrying into a second approval card.
+ */
+function serializeToolError(error: Error): { code?: string; message: string; details?: unknown } {
+  if (error instanceof ToolExecutionError) {
+    return {
+      code: error.code,
+      message: error.message,
+      ...(error.details ? { details: error.details } : {}),
+    };
+  }
+
+  return { message: error.message };
 }

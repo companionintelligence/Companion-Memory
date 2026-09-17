@@ -720,7 +720,7 @@ describe('QuestionService.enqueueNextFeedQueueQuestion', () => {
 // which pg-boss queue/event to read past dispatches from, and how long a
 // tried question sits out. Values mirror AnswerInferenceCron's production call.
 const ATTEMPT_HISTORY = {
-  queue: 'llm',
+  queue: 'llm-background',
   eventName: 'infer.question.answer',
   cooldownHours: 6,
 } as const;
@@ -842,7 +842,7 @@ describe('QuestionService asks the functional questions first', () => {
 
     // The attempt history is read back from the same queue/event the caller
     // dispatches on, and the cooldown rides in as a bound parameter.
-    expect(params).toEqual(['llm', 'infer.question.answer', 6]);
+    expect(params).toEqual(['llm-background', 'infer.question.answer', 6]);
     expect(sql).toMatch(/pgboss\.job/);
     expect(sql).toMatch(/pgboss\.archive/);
     expect(sql).toMatch(/last_attempt_at IS NULL OR att\.last_attempt_at < NOW\(\)/);

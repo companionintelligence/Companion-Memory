@@ -10,6 +10,7 @@ import { useRescheduleEvent } from '@/api/useRescheduleEvent';
 import { type RhythmDay, type ScheduleEvent, useScheduleService } from '@/api/useScheduleService';
 import { useFeatures } from '@/common/feature';
 import { VerticalCalendar } from '@/components/HorizonGrid';
+import { addDays, startOfLocalDay } from '@/components/HorizonGrid/nowNext';
 import {
   type CalendarSlot,
   RHYTHM_NOISE_FLOOR,
@@ -18,8 +19,10 @@ import {
   slotForecastLine,
 } from '@/components/HorizonGrid/scheduleGeometry';
 import { TodayNowNext, WeekDayChips } from '@/components/HorizonGrid/TodayNowNext';
+import { resolveTimeZone } from '@/components/HorizonGrid/zonedClock';
 import { PageContent } from '@/components/layout';
 import { TaskSlateDrawer } from '@/components/TaskSlate';
+import { useCurrentUser } from '@/hooks';
 import {
   type ActivityClass,
   type ColorMode,
@@ -37,25 +40,17 @@ import { usePlanTasks } from '@/pages/PlanPage/usePlanTasks';
 const DAYS_IN_VIEW = 7;
 const NO_OCCUPANCY: ForecastBucket[] = [];
 
-function startOfLocalDay(date: Date): Date {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-
-  return d;
-}
-
-function addDays(date: Date, days: number): Date {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-
-  return d;
-}
+/**
+ * Chips minted by the planner, which own a task the calendar must keep in step.
+ * The same literal as `PLANNED_BLOCK` in `PlannedBlockService`.
+ */
+const PLANNED_BLOCK = 'planned_block';
 
 /** "Aug 3 – Aug 9" — the window, stated plainly. */
-function formatRange(start: Date, end: Date): string {
-  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+function formatRange(start: Date, end: Date, zone: string): string {
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', timeZone: zone };
 
-  return `${start.toLocaleDateString([], opts)} – ${addDays(end, -1).toLocaleDateString([], opts)}`;
+  return `${start.toLocaleDateString([], opts)} – ${addDays(end, -1, zone).toLocaleDateString([], opts)}`;
 }
 
 /**
@@ -235,7 +230,15 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   const { t } = useTranslation();
   const { isMobile } = useDeviceLayout();
   const { isFeatureEnabled } = useFeatures();
+  const { user } = useCurrentUser();
   const hbpeEnabled = isFeatureEnabled('hbpe');
+  /**
+   * The grid draws in the OWNER'S zone, not the browser's — the backend places
+   * planned blocks in `ci.users.timezone`, so a browser that disagrees with the
+   * profile would draw every block at the wrong hour. The browser zone is the
+   * fallback, never a second source of truth. See `HorizonGrid/zonedClock`.
+   */
+  const timeZone = resolveTimeZone(user?.timezone);
   const [weekOffset, setWeekOffset] = useState(0);
   const [colorMode, setColorMode] = useState<ColorMode>('type');
   const [slot, setSlot] = useState<CalendarSlot | null>(null);
@@ -243,10 +246,10 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   usePageTitle(embedded ? null : 'Schedule - Companion Memory');
 
   const { start, end } = useMemo(() => {
-    const from = addDays(startOfLocalDay(new Date()), weekOffset * DAYS_IN_VIEW);
+    const from = addDays(startOfLocalDay(new Date(), timeZone), weekOffset * DAYS_IN_VIEW, timeZone);
 
-    return { start: from, end: addDays(from, DAYS_IN_VIEW) };
-  }, [weekOffset]);
+    return { start: from, end: addDays(from, DAYS_IN_VIEW, timeZone) };
+  }, [timeZone, weekOffset]);
 
   const [selectedDay, setSelectedDay] = useState(start);
 
@@ -336,10 +339,10 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
         return;
       }
 
-      const at = slot.allDay ? startOfLocalDay(slot.instant) : slot.instant;
+      const at = slot.allDay ? startOfLocalDay(slot.instant, timeZone) : slot.instant;
       run(placeOnDay(taskId, at), 'Could not put that on the calendar. Try again shortly.');
     },
-    [placeOnDay, run, slot],
+    [placeOnDay, run, slot, timeZone],
   );
 
   const slotInsight = useMemo(() => {
@@ -349,16 +352,46 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
 
     const lookup = (key: string) => rhythm.find((day) => day.date === key);
 
-    return slotForecastLine(slot, lookup);
-  }, [hbpeEnabled, rhythm, rhythmCoversWindow, slot]);
+    return slotForecastLine(slot, lookup, timeZone);
+  }, [hbpeEnabled, rhythm, rhythmCoversWindow, slot, timeZone]);
 
   const rescheduleEvent = useRescheduleEvent(refetch);
 
+  /**
+   * Move a chip — and, for a planner chip, the task it stands for.
+   *
+   * ═══ WHAT THIS USED TO DO ═══
+   * Send EVERY chip through `rescheduleEvent`, which writes the event's start
+   * and end and nothing else. A planned block owns a task whose `scheduledFor`
+   * is what `taskSections` files the card by, so dragging Tuesday's block to
+   * Friday moved the block and left the card in Overdue — and the stale past
+   * date later made `proposedTimeIsPast` strip the task's `dueAt`. `placeOnDay`
+   * goes through `scheduleTask(startTime:)`, whose `scheduleTaskAt` reschedules
+   * the SAME block and mirrors `scheduledFor` onto the task; the Plan page's
+   * drag has always used it. Two entry points for one gesture, now one write.
+   */
   const handleMove = useCallback(
     (eventId: string, startTime: Date) => {
+      const moved = events.find((entry) => entry.id === eventId);
+
+      // An expanded occurrence has no row behind it, so `rescheduleEvent`'s
+      // findOne misses, the mutation resolves null, the refetch puts the chip
+      // back where it was and nothing explains why. Say so instead.
+      if (moved?.seriesMasterId) {
+        setActionError("Recurring occurrences can't be moved yet.");
+
+        return;
+      }
+
+      if (moved?.eventType === PLANNED_BLOCK && moved.taskId) {
+        run(placeOnDay(moved.taskId, startTime), 'Could not move that. Try again shortly.');
+
+        return;
+      }
+
       run(rescheduleEvent(eventId, startTime), 'Could not move that. Try again shortly.');
     },
-    [rescheduleEvent, run],
+    [events, placeOnDay, rescheduleEvent, run],
   );
 
   const handleDismissProposed = useCallback(
@@ -451,7 +484,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
           <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
         </IconButton>
         <h2 className="min-w-[9rem] text-center text-base font-semibold leading-none text-foreground tabular-nums">
-          {formatRange(start, end)}
+          {formatRange(start, end, timeZone)}
         </h2>
         <IconButton variant="ghost" label={t('SCHEDULE_NEXT_WEEK')} onClick={goForward}>
           <ChevronRight className="h-4 w-4" strokeWidth={1.5} />
@@ -511,7 +544,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                         <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
                       </IconButton>
                       <h2 className="min-w-[8rem] text-center text-sm font-semibold text-foreground tabular-nums">
-                        {formatRange(start, end)}
+                        {formatRange(start, end, timeZone)}
                       </h2>
                       <IconButton variant="ghost" label={t('SCHEDULE_NEXT_WEEK')} onClick={goForward}>
                         <ChevronRight className="h-4 w-4" strokeWidth={1.5} />
@@ -530,6 +563,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                     days={DAYS_IN_VIEW}
                     selectedDay={selectedDay}
                     onSelectDay={handleSelectDay}
+                    timeZone={timeZone}
                   />
 
                   {colorChrome}
@@ -538,7 +572,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                 weekChrome
               )}
 
-              {isMobile && <TodayNowNext events={events} day={selectedDay} />}
+              {isMobile && <TodayNowNext events={events} day={selectedDay} timeZone={timeZone} />}
 
               <VerticalCalendar
                 className="min-h-0 flex-1"
@@ -549,6 +583,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                 occupancy={occupancyBuckets}
                 colorMode={colorMode}
                 pipelineRunning={pipelineRunning}
+                timeZone={timeZone}
                 selectedDay={selectedDay}
                 onSelectDay={handleSelectDay}
                 selectedSlot={slot}

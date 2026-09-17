@@ -36,6 +36,7 @@ export const GET_SAVED_SEARCH = gql(`
         places
         hasLocation
         semantic
+        direction
       }
     }
   }
@@ -75,6 +76,7 @@ export function applySavedSearchToParams(
     'places',
     'hasLocation',
     'semantic',
+    'direction',
   ]) {
     next.delete(key);
   }
@@ -150,6 +152,10 @@ export function applySavedSearchToParams(
 
     if (filters.semantic) {
       next.set('semantic', '1');
+    }
+
+    if (filters.direction) {
+      next.set('direction', filters.direction);
     }
   }
 

@@ -20,17 +20,15 @@ jest.mock('@ci/configuration', () => {
   };
 });
 
-import { UnauthorizedException, type INestApplication } from '@nestjs/common';
+import { Global, Module, UnauthorizedException, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { getDataSourceToken } from '@nestjs/typeorm';
 import { type Request, type Response, type NextFunction } from 'express';
 import request from 'supertest';
 
 import { ContextService } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggingModule } from '@ci/common/logging';
-
-import { Global, Module } from '@nestjs/common';
-import { getDataSourceToken } from '@nestjs/typeorm';
 
 import { PowerSyncModule } from '..';
 
@@ -46,7 +44,9 @@ import { PowerSyncModule } from '..';
  */
 @Global()
 @Module({
-  providers: [{ provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([{ count: '0' }]) } }],
+  providers: [
+    { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([{ count: '0' }]) } },
+  ],
   exports: [getDataSourceToken()],
 })
 class StubDataSourceModule {}

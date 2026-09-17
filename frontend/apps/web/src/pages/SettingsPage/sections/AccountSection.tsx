@@ -279,20 +279,21 @@ export function AccountSection() {
         </Card.Content>
       </Card>
 
-      <Card className="border-destructive/40 py-0">
-        <Card.Content className="space-y-4">
+      <Card className="border-destructive/40 mb-[max(1rem,var(--safe-area-bottom))]">
+        <Card.Header>
           <div className="flex items-start gap-3">
-            <TriangleAlert className="h-5 w-5 shrink-0 text-destructive" strokeWidth={1.5} />
+            <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-destructive" strokeWidth={1.5} />
             <div className="space-y-1">
-              <h3 className="text-sm font-medium">Delete account</h3>
-              <p className="text-sm text-muted-foreground">
+              <Card.Title>Delete account</Card.Title>
+              <Card.Description>
                 Signs you out everywhere immediately. This account, its memories and any files you uploaded
                 are then permanently deleted from this server after {PURGE_GRACE_DESCRIPTION}. This cannot be
                 undone.
-              </p>
+              </Card.Description>
             </div>
           </div>
-
+        </Card.Header>
+        <Card.Content>
           <Button variant="destructive" disabled={!email} onClick={() => setOpen(true)}>
             Delete account
           </Button>

@@ -1,4 +1,6 @@
 import {
+  BadGatewayException,
+  BadRequestException,
   Body,
   ConflictException,
   Controller,
@@ -24,10 +26,16 @@ import { BaseOAuth2Client } from '@ci/domains/connections/clients/BaseOAuth2Clie
 import { EventService } from '@ci/domains/events';
 
 import { ClientFactory } from '../clients';
+import type { TokenExchange } from '../clients/types';
 import type { Connection } from '../entities/ConnectionEntity';
 import { CloudOAuthProxyService } from '../services/CloudOAuthProxyService';
 import { ConnectionService } from '../services/ConnectionService';
-import type { CompleteConnectionDto, CreateConnectionDto, UpdateConnectionDto } from '../types';
+import {
+  type CompleteConnectionDto,
+  completeConnectionSchema,
+  type CreateConnectionDto,
+  type UpdateConnectionDto,
+} from '../types';
 
 const createConnectionSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -59,21 +67,32 @@ const updateConnectionSchema = z.object({
   endpoints: z.array(z.string()).optional(),
 });
 
-const completeConnectionSchema = z.discriminatedUnion('flow', [
-  z.object({
-    flow: z.literal('proxy'),
-    state: z.string(),
-    accessToken: z.string(),
-    refreshToken: z.string().optional(),
-    expiresIn: z.number().int().positive().optional(),
-    userProviderId: z.string(),
-  }),
-  z.object({
-    flow: z.literal('direct'),
-    state: z.string(),
-    code: z.string(),
-  }),
-]);
+type ProxyCompletion = Extract<CompleteConnectionDto, { flow: 'proxy' }>;
+
+/**
+ * How long completing a proxied connection waits on CI Portal's token refresh. CI Portal
+ * waits on the provider's token endpoint in turn and neither request times out on its
+ * own, so without a bound a stalled one holds the callback page's spinner for minutes.
+ */
+const PORTAL_REFRESH_TIMEOUT_MS = 30_000;
+
+/**
+ * When a token that lives `seconds` from now expires; null when that is not a positive
+ * number of seconds a date can hold. A numeric string counts, as it already does on the
+ * refresh path in `BaseOAuth2Client`: CI Portal passes the provider's `expires_in` on as
+ * it came.
+ */
+function expiryAfter(seconds: unknown): Date | null {
+  const n = typeof seconds === 'string' ? Number(seconds) : seconds;
+
+  if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) {
+    return null;
+  }
+
+  const expiry = new Date(Date.now() + n * 1000);
+
+  return Number.isNaN(expiry.getTime()) ? null : expiry;
+}
 
 const completeOpenIDSchema = z.object({
   params: z.record(z.string()),
@@ -240,6 +259,12 @@ export class ConnectionsController {
 
     const { state: connectionId } = body;
 
+    // Refused before anything is looked up, removed or spent: a proxied completion
+    // with neither token has nothing to store.
+    if (body.flow === 'proxy' && !body.refreshToken && !body.accessToken) {
+      throw new BadRequestException('Missing proxy credentials');
+    }
+
     const connection = await this.connectionService.findById(serviceContext, connectionId);
 
     if (connection == null) {
@@ -249,7 +274,7 @@ export class ConnectionsController {
     }
 
     if (body.flow === 'proxy') {
-      // CI Cloud proxy flow: tokens already exchanged by CI Cloud.
+      // CI Cloud proxy flow: CI Cloud already exchanged the code.
       // Check for duplicate connection before storing tokens.
       const existingConnections = await this.connectionService.search(serviceContext, {
         providerId: connection.providerId,
@@ -257,17 +282,18 @@ export class ConnectionsController {
         externalId: body.userProviderId,
       });
 
-      if (existingConnections.length > 0 && existingConnections.find((c) => c.id !== connectionId)) {
+      const duplicate = existingConnections.find((c) => c.id !== connectionId);
+
+      if (duplicate) {
+        await this.adoptProxyGrant(serviceContext, connection, duplicate, body);
         await this.connectionService.remove(serviceContext, connectionId);
         throw new ConflictException('A connection to that account already exists');
       }
 
-      const tokenExpiry = body.expiresIn ? new Date(Date.now() + body.expiresIn * 1000) : null;
+      const tokens = await this.proxyTokens(body);
 
       await this.update(context, connectionId, {
-        accessToken: body.accessToken,
-        refreshToken: body.refreshToken ?? null,
-        tokenExpiry,
+        ...tokens,
         active: true,
         needsReauth: false,
         externalId: body.userProviderId,
@@ -446,6 +472,131 @@ export class ConnectionsController {
       needsReauth: false,
       externalId: steamId,
     });
+  }
+
+  /**
+   * The tokens a proxied connection is stored with.
+   *
+   * ⚠ NOT THE ACCESS TOKEN THE BROWSER CARRIED, whenever there is a better one
+   * (CI-Server#2676). CI Portal returns the provider's access token through the
+   * browser's URL fragment, so what reaches this handler is whatever the page
+   * was given and cannot be checked. With a proxy refresh token, the access
+   * token is fetched from CI Portal over the device-authenticated channel
+   * instead — which is also what lets CI Portal stop sending it to the browser.
+   *
+   * A grant CI Portal holds no refresh token for — one whose token response
+   * carries none, Facebook's for instance — arrives with only the access token,
+   * and that remains the only token there is.
+   */
+  private async proxyTokens(body: ProxyCompletion): Promise<TokenExchange> {
+    if (body.refreshToken) {
+      return this.refreshThroughPortal(body.state, body.refreshToken);
+    }
+
+    if (body.accessToken) {
+      return { accessToken: body.accessToken, refreshToken: null, tokenExpiry: expiryAfter(body.expiresIn) };
+    }
+
+    // `completeCallback` refuses this before anything is looked up; kept so a
+    // connection is never stored with no token at all.
+    throw new BadRequestException('Missing proxy credentials');
+  }
+
+  /**
+   * The tokens CI Portal returns for a proxy refresh token.
+   *
+   * ⚠ CI PORTAL ROTATES THE PROXY REFRESH TOKEN ON EVERY USE. The one passed in
+   * is spent by this call, so the rotated one CI Portal returns is what must be
+   * stored; keeping the spent one would leave a connection that can never
+   * refresh. If CI Portal returns none, none is stored.
+   */
+  private async refreshThroughPortal(
+    connectionId: string,
+    proxyRefreshToken: string,
+  ): Promise<TokenExchange> {
+    const refreshed = await this.cloudOAuthProxyService
+      .refreshAccessToken(proxyRefreshToken, { signal: AbortSignal.timeout(PORTAL_REFRESH_TIMEOUT_MS) })
+      .catch((error: unknown) => {
+        // `err`, not `error.message`: a network failure's message is only
+        // "fetch failed", with the reason in its `cause`.
+        this.logger.error('Could not fetch the access token for a proxied connection from CI Portal', {
+          connectionId,
+          err: error,
+        });
+
+        throw new BadGatewayException('Could not complete the connection through CI Portal', {
+          cause: error,
+          description: 'Bad Gateway',
+        });
+      });
+
+    if (typeof refreshed?.access_token !== 'string' || refreshed.access_token === '') {
+      this.logger.error('CI Portal returned no access token for a proxied connection', { connectionId });
+      throw new BadGatewayException('Could not complete the connection through CI Portal');
+    }
+
+    return {
+      accessToken: refreshed.access_token,
+      refreshToken:
+        typeof refreshed.refresh_token === 'string' && refreshed.refresh_token !== ''
+          ? refreshed.refresh_token
+          : null,
+      tokenExpiry: expiryAfter(refreshed.expires_in),
+    };
+  }
+
+  /**
+   * Hand the proxy grant a refused duplicate carried to the connection that
+   * already holds that account.
+   *
+   * ⚠ BY NOW THAT CONNECTION'S OWN PROXY REFRESH TOKEN IS DEAD. CI Portal keeps
+   * one credential per (device, provider, account), and its callback replaced
+   * that credential's proxy refresh token with the one in this request before
+   * redirecting here. Refusing the duplicate without keeping it would leave the
+   * existing connection unable to ever refresh again.
+   *
+   * ⚠ ONLY AFTER THE PROVIDER CONFIRMS THE ACCOUNT. `existing` was found by the
+   * browser-supplied `userProviderId`, which nothing ties to the proxy refresh
+   * token, so without this check a body pairing one account's grant with another
+   * account's id would overwrite that other connection's tokens.
+   *
+   * Best-effort: the duplicate is refused either way, and a failure or a mismatch
+   * leaves the existing connection as it was.
+   */
+  private async adoptProxyGrant(
+    context: UserServiceContext,
+    pending: Connection,
+    existing: Connection,
+    body: ProxyCompletion,
+  ): Promise<void> {
+    // Without a proxy refresh token CI Portal stored nothing, so nothing was replaced.
+    if (!body.refreshToken) {
+      return;
+    }
+
+    try {
+      const tokens = await this.refreshThroughPortal(existing.id, body.refreshToken);
+      const client = this.clientFactory.getClientByProviderId(pending.provider?.id);
+      const accountId = await client?.getAccountIdentifier({ ...existing, accessToken: tokens.accessToken });
+
+      if (!accountId || accountId !== existing.externalId) {
+        this.logger.warn('Not handing a CI Portal grant to a connection for a different account', {
+          connectionId: existing.id,
+        });
+
+        return;
+      }
+
+      await this.connectionService.update(context, existing.id, tokens);
+    } catch (error) {
+      this.logger.warn(
+        'Could not hand the CI Portal grant of a reconnected account to its existing connection',
+        {
+          connectionId: existing.id,
+          err: error,
+        },
+      );
+    }
   }
 
   private async persistAccountLabel(context: UserServiceContext, connection: Connection): Promise<void> {

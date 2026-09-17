@@ -126,7 +126,14 @@ describe('AppSchema', () => {
   // syncs, and only the columns needed to label an event. Anything here that
   // looks like the rest of that table means the projection widened by accident.
   it('entities carries no personal-graph columns', () => {
-    for (const column of ['first_name', 'last_name', 'birth_date', 'dossier', 'location_point', 'search_vector']) {
+    for (const column of [
+      'first_name',
+      'last_name',
+      'birth_date',
+      'dossier',
+      'location_point',
+      'search_vector',
+    ]) {
       expect(columnNames('entities')).not.toContain(column);
     }
   });

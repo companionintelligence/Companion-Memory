@@ -12,6 +12,7 @@ import {
   type DeclineReason,
 } from '@ci/domains/schedule';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { EventType } from '../types/EventType';
 import { GlobalUID } from '../types/GlobalUID';
 import { ScheduleCandidateType } from '../types/ScheduleCandidateType';
@@ -92,6 +93,7 @@ export class ScheduleCandidateResolver {
     description:
       'Refresh the slate from current actions and insight key_actions. Idempotent; returns rows written.',
   })
+  @GraphqlPrivacy({ destructive: false })
   async syncScheduleSuggestions(@Context() context: RequestContext): Promise<number> {
     if (!(await this.isScheduleEnabled())) {
       return 0;
@@ -110,6 +112,7 @@ export class ScheduleCandidateResolver {
   @Mutation(() => [ScheduleCandidateType], {
     description: 'Break free text into schedule candidates. Adds to the slate; schedules nothing.',
   })
+  @GraphqlPrivacy({ destructive: false })
   async breakDownTasks(
     @Context() context: RequestContext,
     @Args('text', { type: () => String }) text: string,
@@ -134,6 +137,10 @@ export class ScheduleCandidateResolver {
    * a card onto a day. Nothing auto-accepts.
    */
   @Mutation(() => EventType, { description: 'Accept a candidate at a chosen time, minting a real event' })
+  // CandidateService.accept only calls eventService.remove on the losing side of a detected
+  // concurrent double-accept — cleaning up the event THIS call just minted, not destroying existing
+  // user data. The normal path only creates an event and updates the candidate row.
+  @GraphqlPrivacy({ destructive: false })
   async acceptCandidate(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) id: string,
@@ -164,6 +171,10 @@ export class ScheduleCandidateResolver {
   @Mutation(() => ScheduleCandidateType, {
     description: 'Return a placed event to the slate, deleting the event it minted',
   })
+  // CandidateService.returnToSlate ends in eventService.remove — the SDL description already says
+  // "deleting the event it minted". Started with none of the prefixes, so a `write` key refused
+  // deleteEvent could delete the same row through here.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async returnEventToSlate(
     @Context() context: RequestContext,
     @Args('eventId', { type: () => ID }) gid: string,
@@ -186,6 +197,11 @@ export class ScheduleCandidateResolver {
   @Mutation(() => ScheduleCandidateType, {
     description: 'Reject a candidate. reason: not_now | wrong_time | not_like_this | never',
   })
+  // CandidateService.decline only ever updates the candidate's status/reason (never/declined/
+  // snoozed); the row and its content stay intact and queryable either way. Flagged as a
+  // borderline judgment call: reasons 'never'/'not_like_this' have no un-decline mutation in this
+  // schema, but nothing is deleted.
+  @GraphqlPrivacy({ destructive: false })
   async declineCandidate(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) id: string,
@@ -203,6 +219,7 @@ export class ScheduleCandidateResolver {
   }
 
   @Mutation(() => ScheduleCandidateType, { description: 'Defer a candidate until a future instant' })
+  @GraphqlPrivacy({ destructive: false })
   async snoozeCandidate(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) id: string,

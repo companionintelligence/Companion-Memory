@@ -30,6 +30,8 @@ const h = vi.hoisted(() => ({
   ],
   reschedule: vi.fn(),
   hbpeEnabled: true,
+  /** The profile zone `useCurrentUser` reports; null exercises the browser fallback. */
+  profileTimeZone: null as string | null,
 }));
 
 vi.mock('@/api/useScheduleService', () => ({
@@ -62,6 +64,17 @@ vi.mock('@/api/useRescheduleEvent', () => ({
   useRescheduleEvent: () => h.reschedule,
 }));
 
+// The page reads the owner's zone to draw in. `useCurrentUser` reaches for the
+// auth hook context, which `renderWithProviders` deliberately does not supply.
+vi.mock('@/hooks/useCurrentUser', () => ({
+  useCurrentUser: () => ({
+    user: { id: 'u1', timezone: h.profileTimeZone },
+    loading: false,
+    error: undefined,
+    refetch: vi.fn(),
+  }),
+}));
+
 /**
  * Stand-in for the grid.
  *
@@ -75,12 +88,14 @@ vi.mock('@/components/HorizonGrid', () => ({
     footer,
     colorMode,
     occupancy,
+    timeZone,
     onMoveEvent,
     onSelectSlot,
   }: {
     footer?: string;
     colorMode?: string;
     occupancy?: unknown[];
+    timeZone?: string;
     onMoveEvent: (id: string, at: Date) => void;
     onSelectSlot?: (slot: { instant: Date; allDay: boolean }) => void;
   }) => (
@@ -94,12 +109,20 @@ vi.mock('@/components/HorizonGrid', () => ({
       <button type="button" onClick={() => onMoveEvent('e1', new Date())}>
         stub-move
       </button>
+      {/* A second chip, so a test can drag the planner's block specifically. */}
+      <button type="button" onClick={() => onMoveEvent('pb1', MOVED_TO)}>
+        stub-move-planned
+      </button>
       <p data-testid="stub-color-mode">{colorMode}</p>
       <p data-testid="stub-occupancy">{occupancy?.length ?? 0}</p>
+      <p data-testid="stub-time-zone">{timeZone}</p>
       <p>{footer}</p>
     </div>
   ),
 }));
+
+/** Where `stub-move-planned` drops its chip. */
+const MOVED_TO = new Date('2026-08-07T18:30:00Z');
 
 vi.mock('@/components/TaskSlate', () => {
   type DrawerProps = {
@@ -150,6 +173,16 @@ const event = (overrides: Partial<ScheduleEvent> = {}): ScheduleEvent => ({
   externalSyncStatus: null,
   ...overrides,
 });
+
+/** A planner-minted chip: the calendar row plus the task standing behind it. */
+const plannedBlock = (overrides: Partial<ScheduleEvent> = {}): ScheduleEvent =>
+  event({
+    id: 'pb1',
+    title: 'Call the dentist',
+    eventType: 'planned_block',
+    taskId: 't1',
+    ...overrides,
+  });
 
 const drawnCluster = {
   clusterId: 'c1',
@@ -214,6 +247,7 @@ beforeEach(() => {
   ];
   h.reschedule = vi.fn().mockResolvedValue(undefined);
   h.hbpeEnabled = true;
+  h.profileTimeZone = null;
 });
 
 afterEach(() => vi.clearAllMocks());
@@ -836,5 +870,125 @@ describe('SchedulePage — colour mode only once colour means something', () => 
     renderWithProviders(<SchedulePage />);
 
     expect(screen.getByRole('radiogroup')).toBeInTheDocument();
+  });
+});
+
+/**
+ * A planned block is two things at once, and a drag has to move both.
+ *
+ * `rescheduleEvent` writes the event's start and end and nothing else, so
+ * sending a planner chip through it moved the block and left the task's
+ * `scheduledFor` on the day the block used to sit on — `taskSections` files
+ * cards by that field, so the card dropped straight into Overdue, and the stale
+ * past date later made `proposedTimeIsPast` strip the task's `dueAt`.
+ * `placeOnDay` is the Plan page's path: `scheduleTask(startTime:)` reschedules
+ * the same block AND mirrors `scheduledFor`.
+ */
+describe('SchedulePage — dragging a planned block moves its task too', () => {
+  it('routes a planned-block chip through the mutation that re-dates the task', () => {
+    const placeOnDay = vi.fn().mockResolvedValue(undefined);
+    setSchedule({ events: [plannedBlock()] });
+    setPlan({ placeOnDay });
+
+    renderWithProviders(<SchedulePage />);
+    fireEvent.click(screen.getByText('stub-move-planned'));
+
+    expect(placeOnDay).toHaveBeenCalledWith('t1', MOVED_TO);
+    expect(h.reschedule).not.toHaveBeenCalled();
+  });
+
+  it('leaves an ordinary calendar event on the plain reschedule path', () => {
+    const placeOnDay = vi.fn().mockResolvedValue(undefined);
+    setSchedule({ events: [event()] });
+    setPlan({ placeOnDay });
+
+    renderWithProviders(<SchedulePage />);
+    fireEvent.click(screen.getByText('stub-move'));
+
+    expect(h.reschedule).toHaveBeenCalledTimes(1);
+    expect(placeOnDay).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the plain reschedule when the block names no task', () => {
+    const placeOnDay = vi.fn().mockResolvedValue(undefined);
+    setSchedule({ events: [plannedBlock({ taskId: null })] });
+    setPlan({ placeOnDay });
+
+    renderWithProviders(<SchedulePage />);
+    fireEvent.click(screen.getByText('stub-move-planned'));
+
+    expect(h.reschedule).toHaveBeenCalledWith('pb1', MOVED_TO);
+    expect(placeOnDay).not.toHaveBeenCalled();
+  });
+
+  it('tells the user when the task re-date is refused', async () => {
+    setSchedule({ events: [plannedBlock()] });
+    setPlan({ placeOnDay: vi.fn().mockRejectedValue(new Error('slot taken')) });
+
+    renderWithProviders(<SchedulePage />);
+    fireEvent.click(screen.getByText('stub-move-planned'));
+
+    expect(await screen.findByText(/Could not move that/)).toBeInTheDocument();
+  });
+
+  /**
+   * An expanded recurring occurrence backs no row.
+   *
+   * The server computes these from the series' RRULE at read time, so the id on
+   * the chip addresses nothing: `rescheduleEvent`'s findOne misses, the mutation
+   * resolves null WITHOUT throwing, `run`'s catch never fires, and the refetch
+   * puts the chip back where it was with nothing on screen to explain it. Say so
+   * instead — and the grid drops `draggable` on these chips as well.
+   */
+  it('refuses to move an expanded recurring occurrence, and says why', async () => {
+    const placeOnDay = vi.fn().mockResolvedValue(undefined);
+    setSchedule({ events: [event({ seriesMasterId: 'master-1' })] });
+    setPlan({ placeOnDay });
+
+    renderWithProviders(<SchedulePage />);
+    fireEvent.click(screen.getByText('stub-move'));
+
+    expect(await screen.findByText(/Recurring occurrences can't be moved yet/)).toBeInTheDocument();
+    expect(h.reschedule).not.toHaveBeenCalled();
+    expect(placeOnDay).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Which clock the week is drawn on.
+ *
+ * The backend places blocks in `ci.users.timezone`; the grid used to do all of
+ * its arithmetic in the browser's zone and never read the profile at all, so a
+ * traveller — or anyone whose laptop disagrees with their settings — saw every
+ * block at the wrong hour with nothing on screen looking inconsistent.
+ */
+describe('SchedulePage — the week is drawn in the profile zone', () => {
+  it('hands the grid the owner’s zone', () => {
+    h.profileTimeZone = 'America/New_York';
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByTestId('stub-time-zone')).toHaveTextContent('America/New_York');
+  });
+
+  it('falls back to the browser zone when the profile has none', () => {
+    h.profileTimeZone = null;
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByTestId('stub-time-zone')).toHaveTextContent(
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
+  });
+
+  it('falls back rather than blanking the page on a zone Intl does not know', () => {
+    h.profileTimeZone = 'Mars/Olympus_Mons';
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByTestId('stub-time-zone')).toHaveTextContent(
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
+    expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
   });
 });

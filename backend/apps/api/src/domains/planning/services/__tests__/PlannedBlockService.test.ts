@@ -6,6 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import { EventEntity, CalendarEventService, PersonService, UserContextService } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
+import { shiftLocalDate } from '../../engine/computePlacement';
 import { PLANNING_PREFS_DEFAULTS } from '../../entities/PlanningPrefsEntity';
 import { PlannedBlockService } from '../PlannedBlockService';
 import { PlanningPrefsService } from '../PlanningPrefsService';
@@ -22,6 +23,7 @@ const CTX = { userId: 'alice-uuid' } as UserServiceContext;
 // of what it was actually testing. Derived from `new Date()` so this fixture
 // cannot rot the same way again.
 const TODAY = new Date().toISOString().slice(0, 10);
+const TOMORROW = shiftLocalDate(TODAY, 1);
 
 const OPEN_TASK = {
   id: 'task-1',
@@ -81,13 +83,18 @@ describe('PlannedBlockService', () => {
       findById: jest.fn(),
       findByIds: jest.fn(),
       findInRange: jest.fn().mockResolvedValue([]),
-      create: jest.fn().mockResolvedValue([
+      // Echoes the DTO back rather than answering with one canned row: a test
+      // that reads `outcome.event` is otherwise asserting the fixture, not the
+      // placement, and would keep passing if the solver handed `create` a
+      // different slot than the one it reported.
+      create: jest.fn(async (_ctx: unknown, dto: Record<string, unknown>) => [
         {
           id: 'evt-1',
-          title: OPEN_TASK.title,
-          eventType: 'planned_block',
-          startTime: new Date(`${TODAY}T09:00:00.000Z`),
-          endTime: new Date(`${TODAY}T09:30:00.000Z`),
+          title: dto.title,
+          eventType: dto.event_type,
+          startTime: dto.start_time,
+          endTime: dto.end_time,
+          taskId: dto.task_id,
         },
       ]),
       remove: jest.fn(),
@@ -108,6 +115,7 @@ describe('PlannedBlockService', () => {
       timezoneFor: jest.fn().mockResolvedValue('UTC'),
       today: jest.fn().mockResolvedValue(TODAY),
       localDate: jest.fn(async (_ctx: unknown, instant: Date) => instant.toISOString().slice(0, 10)),
+      wallTime: jest.fn(async (_ctx: unknown, instant: Date) => instant.toISOString().slice(11, 16)),
       toInstant: jest.fn(
         async (_ctx: unknown, date: string, wall: string) => new Date(`${date}T${wall}:00.000Z`),
       ),
@@ -155,6 +163,25 @@ describe('PlannedBlockService', () => {
       }),
     );
     expect(outcome.status).toBe('placed');
+
+    // The event handed back is the one that was written. `create` echoes its
+    // DTO, so this is a real link between the slot the solver chose and the
+    // slot the caller is told about — it cannot pass against a canned row.
+    const [, created] = eventService.create.mock.calls[0];
+
+    expect(outcome.status === 'placed' && outcome.event.startTime).toEqual(created.start_time);
+  });
+
+  it('user Schedule stamps is_auto=false and a fresh last_moved_at', async () => {
+    const before = Date.now();
+
+    await service.scheduleTask(CTX, OPEN_TASK.id);
+
+    const [, created] = eventService.create.mock.calls[0];
+
+    expect(created.is_auto).toBe(false);
+    expect(created.last_moved_at).toBeInstanceOf(Date);
+    expect((created.last_moved_at as Date).getTime()).toBeGreaterThanOrEqual(before);
   });
 
   it('automation review writes a pending schedule instead of placing', async () => {
@@ -185,6 +212,12 @@ describe('PlannedBlockService', () => {
     });
     expect(outcome.status).toBe('placed');
     expect(eventService.create).toHaveBeenCalled();
+
+    // Nobody clicked anything to get here — the trust dial decided this task
+    // may be placed unattended, so the block must say so.
+    const [, created] = eventService.create.mock.calls[0];
+
+    expect(created.is_auto).toBe(true);
   });
 
   // ═══ scheduleTaskAt — the calendar-drop path ═══
@@ -214,6 +247,9 @@ describe('PlannedBlockService', () => {
     // The gap solver reads occupancy via `findInRange` — proof nothing about
     // "is there room" was ever consulted for an explicit drop.
     expect(eventService.findInRange).not.toHaveBeenCalled();
+
+    // A drag is a human action.
+    expect(eventService.create).toHaveBeenCalledWith(CTX, expect.objectContaining({ is_auto: false }));
   });
 
   it('scheduleTaskAt derives an end from the task’s own estimate when none is given', async () => {
@@ -251,10 +287,34 @@ describe('PlannedBlockService', () => {
 
     const outcome = await service.scheduleTaskAt(CTX, OPEN_TASK.id, start);
 
-    expect(eventService.reschedule).toHaveBeenCalledWith(CTX, 'evt-existing', start, undefined);
+    // `{ isAuto: false }`: a drag is a human placing this block right now,
+    // regardless of whether it was previously auto-placed.
+    expect(eventService.reschedule).toHaveBeenCalledWith(CTX, 'evt-existing', start, undefined, {
+      isAuto: false,
+    });
     expect(eventService.create).not.toHaveBeenCalled();
     expect(outcome.status).toBe('placed');
     expect('event' in outcome && outcome.event).toBe(moved);
+  });
+
+  // The move branch used to return the ORIGINAL task, so a card dragged to a
+  // new day kept the old `scheduledFor`: the block sat on Thursday while the
+  // Plan page filed the card under Overdue, and the stale past date later made
+  // `planAsUnscheduled` strip the task's dueAt outright.
+  it('scheduleTaskAt re-dates the task when it MOVES an existing block', async () => {
+    const existingRow = { id: 'evt-existing' } as EventEntity;
+    eventRepository.createQueryBuilder = jest.fn(() => makeEventQb(existingRow));
+    eventService.findById.mockResolvedValue({ id: 'evt-existing', taskId: OPEN_TASK.id });
+
+    const start = new Date(`${TOMORROW}T15:15:00.000Z`);
+    eventService.reschedule.mockResolvedValue({ id: 'evt-existing', startTime: start });
+    taskService.update.mockResolvedValue({ ...OPEN_TASK, scheduledFor: TOMORROW });
+
+    const outcome = await service.scheduleTaskAt(CTX, OPEN_TASK.id, start);
+
+    expect(taskService.update).toHaveBeenCalledWith(CTX, OPEN_TASK.id, { scheduledFor: TOMORROW });
+    expect(outcome.status).toBe('placed');
+    expect('task' in outcome && outcome.task?.scheduledFor).toBe(TOMORROW);
   });
 
   it('scheduleTaskAt falls back to already_placed only if the move genuinely fails', async () => {
@@ -286,6 +346,38 @@ describe('PlannedBlockService', () => {
       new Set([OPEN_TASK.id]),
     );
     await expect(service.listActiveTaskIds(CTX, [])).resolves.toEqual(new Set());
+  });
+
+  // ═══ unschedule — the Undo of the whole feature ═══
+  //
+  // Two writes, and BOTH have to happen: the block comes off the calendar and
+  // the task loses its date. Dropping the second leaves a task dated to a day
+  // with nothing on it, which `sectionFor` files under Overdue — the same
+  // confusion a calendar drag that forgets `scheduledFor` produces.
+
+  it('unschedule removes the block and clears the task’s date', async () => {
+    eventRepository.createQueryBuilder = jest.fn(() => makeEventQb({ id: 'evt-existing' } as EventEntity));
+    eventService.findById.mockResolvedValue({ id: 'evt-existing', taskId: OPEN_TASK.id });
+    taskService.update.mockResolvedValue({ ...OPEN_TASK, scheduledFor: null });
+
+    const result = await service.unschedule(CTX, OPEN_TASK.id);
+
+    expect(eventService.remove).toHaveBeenCalledWith(CTX, 'evt-existing');
+    expect(taskService.update).toHaveBeenCalledWith(CTX, OPEN_TASK.id, { scheduledFor: null });
+    expect(result?.scheduledFor).toBeNull();
+  });
+
+  // Unscheduling a task that never had a block is the ordinary case for work
+  // dated by a scan rather than placed by the planner: nothing to remove, and
+  // the date still has to go.
+  it('unschedule is a safe no-op on a task with no block, and still clears the date', async () => {
+    taskService.update.mockResolvedValue({ ...OPEN_TASK, scheduledFor: null });
+
+    const result = await service.unschedule(CTX, OPEN_TASK.id);
+
+    expect(eventService.remove).not.toHaveBeenCalled();
+    expect(taskService.update).toHaveBeenCalledWith(CTX, OPEN_TASK.id, { scheduledFor: null });
+    expect(result?.scheduledFor).toBeNull();
   });
 
   it('planAsUnscheduled declines a pending date, opens a proposal, and clears the block', async () => {
@@ -414,6 +506,173 @@ describe('PlannedBlockService', () => {
     expect(outcome.status).toBe('skipped');
     expect(eventService.create).not.toHaveBeenCalled();
     expect(taskService.createPendingChange).not.toHaveBeenCalled();
+  });
+
+  // ═══ applyPendingSchedule — Accept on a suggestion that has been waiting ═══
+  //
+  // A `schedule` patch is written once, at task creation, and accepted whenever
+  // the user gets to it. Replaying the stored instant blind booked blocks in
+  // the past and stacked every proposal from one scan run on the same slot,
+  // because filing a proposal reserves nothing and `propose` is deterministic
+  // against an unchanged calendar. The stored slot now only survives while it
+  // is still future and still free.
+
+  function schedulePatch(start: Date, end: Date) {
+    return { startTime: start.toISOString(), endTime: end.toISOString(), estimatedMinutes: 30 };
+  }
+
+  it('applyPendingSchedule honours a stored slot that is still future and free', async () => {
+    const start = new Date(`${TOMORROW}T10:00:00.000Z`);
+    const end = new Date(`${TOMORROW}T10:30:00.000Z`);
+
+    const outcome = await service.applyPendingSchedule(CTX, OPEN_TASK.id, schedulePatch(start, end));
+
+    expect(outcome.status).toBe('placed');
+    expect(eventService.create).toHaveBeenCalledWith(
+      CTX,
+      expect.objectContaining({ start_time: start, end_time: end }),
+    );
+
+    // The AI computed WHERE (the stored slot came from `propose` back at
+    // task-creation time), but a human just clicked Confirm — the trust-dial
+    // `review` path exists precisely because the AI was not confident enough
+    // to write this unattended, so the click is the placement decision.
+    const [, created] = eventService.create.mock.calls[0];
+
+    expect(created.is_auto).toBe(false);
+  });
+
+  it('applyPendingSchedule re-solves rather than booking a stored instant that is now past', async () => {
+    const start = new Date(Date.now() - 26 * 60 * 60 * 1000);
+    const end = new Date(start.getTime() + 30 * 60_000);
+    const before = Date.now();
+
+    const outcome = await service.applyPendingSchedule(CTX, OPEN_TASK.id, schedulePatch(start, end));
+
+    expect(outcome.status).toBe('placed');
+
+    const [, created] = eventService.create.mock.calls[0];
+
+    // computePlacement clamps its cursor to `now`; the whole point of routing
+    // back through the solver is that this can no longer land in the past.
+    expect(created.start_time.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it('applyPendingSchedule re-solves when something has taken the stored slot', async () => {
+    const start = new Date(`${TOMORROW}T09:00:00.000Z`);
+    const end = new Date(`${TOMORROW}T09:30:00.000Z`);
+
+    // The meeting the user accepted after the suggestion was filed — and, in
+    // the multi-proposal case, the block a sibling confirmation already placed.
+    eventService.findInRange.mockResolvedValue([
+      { startTime: start, endTime: end, isAllDay: false, plannedMinutes: null },
+    ]);
+
+    const outcome = await service.applyPendingSchedule(CTX, OPEN_TASK.id, schedulePatch(start, end));
+
+    expect(outcome.status).toBe('placed');
+    expect(eventService.create).toHaveBeenCalledWith(
+      CTX,
+      expect.objectContaining({ start_time: new Date(`${TOMORROW}T09:30:00.000Z`) }),
+    );
+  });
+
+  it('applyPendingSchedule falls back to the solver for an unusable patch', async () => {
+    const outcome = await service.applyPendingSchedule(CTX, OPEN_TASK.id, { startTime: 'not-a-date' });
+
+    expect(outcome.status).toBe('placed');
+    expect(eventService.create).toHaveBeenCalled();
+  });
+
+  // ═══ all-day rows are not occupied time ═══
+  //
+  // A holiday calendar, a birthday, or a week of PTO is stored midnight to
+  // midnight. Treating one as busy covers the whole workday, so one row per day
+  // made every task in the flex window return no_gap — permanently, explained
+  // only by a logger.debug.
+
+  function allDayRows(overrides: Record<string, unknown> = {}) {
+    return Array.from({ length: PLANNING_PREFS_DEFAULTS.flexDays + 1 }, (_unused, day) => ({
+      startTime: new Date(`${shiftLocalDate(TODAY, day)}T00:00:00.000Z`),
+      endTime: new Date(`${shiftLocalDate(TODAY, day + 1)}T00:00:00.000Z`),
+      isAllDay: true,
+      plannedMinutes: null,
+      ...overrides,
+    }));
+  }
+
+  it('places straight through a flex window covered by all-day events', async () => {
+    eventService.findInRange.mockResolvedValue(allDayRows());
+
+    const outcome = await service.scheduleTask(CTX, OPEN_TASK.id);
+
+    expect(outcome.status).toBe('placed');
+  });
+
+  // The `isAllDay` column is authority, but rows already in the database were
+  // written without it being read back — so the midnight-to-midnight SHAPE has
+  // to count too, or every existing PTO row keeps blocking the planner.
+  it('recognises a legacy midnight-to-midnight row whose isAllDay flag reads false', async () => {
+    eventService.findInRange.mockResolvedValue(allDayRows({ isAllDay: false }));
+
+    const outcome = await service.scheduleTask(CTX, OPEN_TASK.id);
+
+    expect(outcome.status).toBe('placed');
+  });
+
+  // The importer stores Google's bare `start.date` as UTC midnight whatever
+  // zone the owner is in, so for anyone outside UTC an existing PTO row is not
+  // owner-local-midnight-aligned — matching only the local wall clock would
+  // leave every non-UTC user's calendar just as blocked as before.
+  it('recognises a UTC-midnight all-day row for an owner in another zone', async () => {
+    planningTimeMock.wallTime = jest.fn(async (_ctx: unknown, instant: Date) =>
+      new Date(instant.getTime() - 4 * 60 * 60_000).toISOString().slice(11, 16),
+    );
+    eventService.findInRange.mockResolvedValue(allDayRows({ isAllDay: false }));
+
+    const outcome = await service.scheduleTask(CTX, OPEN_TASK.id);
+
+    expect(outcome.status).toBe('placed');
+  });
+
+  // The counterweight: this must not have become "ignore occupancy".
+  it('still refuses a flex window whose every workday is genuinely booked', async () => {
+    eventService.findInRange.mockResolvedValue(
+      allDayRows().map((row) => ({
+        ...row,
+        isAllDay: false,
+        startTime: new Date(row.startTime.getTime() + 60_000),
+      })),
+    );
+
+    const outcome = await service.scheduleTask(CTX, OPEN_TASK.id);
+
+    expect(outcome.status).toBe('no_gap');
+  });
+
+  // ═══ null-status blocks ═══
+  //
+  // `ci.events.status` is nullable, and `NULL NOT IN (...)` is UNKNOWN rather
+  // than TRUE, so the bare predicate these readers used to carry silently
+  // dropped every block whose status was never set.
+  it('treats a block with no status as live in every planned-block read', async () => {
+    const qb = makeEventQb({ id: 'evt-1', taskId: OPEN_TASK.id } as EventEntity);
+    eventRepository.createQueryBuilder.mockReturnValue(qb);
+    eventService.findById.mockResolvedValue({ id: 'evt-1', taskId: OPEN_TASK.id });
+    eventService.findByIds.mockResolvedValue([{ id: 'evt-1', taskId: OPEN_TASK.id }]);
+
+    await service.list(CTX, new Date(`${TODAY}T00:00:00.000Z`), new Date(`${TOMORROW}T00:00:00.000Z`));
+    await service.findActiveForTask(CTX, OPEN_TASK.id);
+    await service.listActiveTaskIds(CTX, [OPEN_TASK.id]);
+
+    const statusPredicates = qb.andWhere.mock.calls
+      .map(([sql]) => String(sql))
+      .filter((sql) => sql.includes('cancelled'));
+
+    expect(statusPredicates).toHaveLength(3);
+    for (const sql of statusPredicates) {
+      expect(sql).toBe("COALESCE(event.status, 'confirmed') NOT IN ('cancelled', 'no_show', 'skipped')");
+    }
   });
 
   describe('PlannedBlockService workday resolution', () => {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  DEFAULT_PORTAL_URL,
   listMemoryServers,
   persistPortalUrl,
   probeMemoryOrigin,
@@ -111,9 +112,19 @@ describe('device-connect portal-client', () => {
     await expect(probeMemoryOrigin('https://memory.example.com')).rejects.toThrow(/503/);
   });
 
-  it('persists the Companion Portal URL for the next OIDC hop', () => {
+  it('defaults cloud connect to production, not the internal Hub appliance Portal', () => {
+    expect(DEFAULT_PORTAL_URL).toBe('https://hub.ci.computer');
+    expect(readPersistedPortalUrl()).toBe('https://hub.ci.computer');
+  });
+
+  it('persists the Companion URL for the next OIDC hop', () => {
     persistPortalUrl('https://hub.ci.computer/');
 
+    expect(readPersistedPortalUrl()).toBe('https://hub.ci.computer');
+  });
+
+  it('does not restore the internal dev cloud host as the Companion URL', () => {
+    localStorage.setItem('ci.deviceConnect.portalUrl', 'https://hub.companionintelligence.com');
     expect(readPersistedPortalUrl()).toBe('https://hub.ci.computer');
   });
 });

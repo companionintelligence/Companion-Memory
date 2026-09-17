@@ -832,13 +832,27 @@ automated verification.
 > were removed from the repo; disconnect `App | BuildTestFlight` in App Store
 > Connect so it stops reporting on PRs. TestFlight is `mobile-release.yml`.
 
-Turning `ci.yml` back on would have made it *worse*, not better: its backend job
-runs the suite with **no database**, every DB-backed suite is
-`availability.available ? describe : describe.skip`, and jest exits **0**. The
-gate therefore does two things `ci.yml` does not — it supplies a real migrated
-Postgres (the appliance's own `ghcr.io/companionintelligence/companion/database`
-image, pinned, because the migrations need TimescaleDB + PostGIS + pgvector and
-PG18's native `uuidv7()`), and it **fails if any consent test skips**.
+Turning `ci.yml` back on would have made it *worse*, not better, **at the time
+this was written**: its backend job ran the suite with **no database**, every
+DB-backed suite was `availability.available ? describe : describe.skip`, and
+jest exited **0**. The gate therefore does two things `ci.yml` did not — it
+supplies a real migrated Postgres (the appliance's own
+`ghcr.io/companionintelligence/companion/database` image, pinned, because the
+migrations need TimescaleDB + PostGIS + pgvector and PG18's native
+`uuidv7()`), and it **fails if any consent test skips**.
+
+> **Δ 2026-09-10 — `ci.yml` gained a database; this no longer describes its
+> current state.** `ci.yml`'s `test` job now provisions the same pinned
+> Postgres and sets `ASKS_/PEERS_/SEARCH_NEXT_TEST_DATABASE_URL` (verified
+> 2026-09-10 against the live file), then runs
+> `yarn workspace @ci/be-api test --coverage` — the full suite, a superset of
+> the consent-critical suites this gate scopes to. A dispatched `ci.yml` run no
+> longer silently skips these tests. **This does not make `consent-path-gate.yml`
+> redundant**: `ci.yml` has no equivalent of `assert-consent-suites-ran.mjs`,
+> so nothing there fails if a suite silently degrades from "ran" to "produced
+> zero tests" or gets re-guarded behind an availability check. This gate is
+> also ~4-7 minutes against `ci.yml`'s 65-minute budget, relevant if its
+> commented-out `pull_request` trigger is ever turned into a real per-PR gate.
 
 Two independent checks, both needed: **zero skips anywhere in scope** (catches a
 new DB-backed suite nobody added to the manifest) and **a named manifest of five

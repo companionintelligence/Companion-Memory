@@ -12,6 +12,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
 });
 
 const h = vi.hoisted(() => ({
+  ios: false,
   persistApiBaseUrl: vi.fn(),
   getApiBaseUrl: vi.fn(() => ''),
   signInToPortal: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
   persistApiBaseUrl: h.persistApiBaseUrl,
   getApiBaseUrl: () => h.getApiBaseUrl(),
+  isIosPlatform: () => h.ios,
 }));
 
 vi.mock('@/components/ThemePicker', () => ({
@@ -84,6 +86,7 @@ vi.mock('./oidc', async (importOriginal) => {
 });
 
 beforeEach(() => {
+  h.ios = false;
   navigate.mockReset();
   h.persistApiBaseUrl.mockReset();
   h.getApiBaseUrl.mockReset();
@@ -115,6 +118,29 @@ describe('DeviceConnectPage', () => {
     expect(
       screen.queryByRole('button', { name: /enter a memory server url instead/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it('names Safari on iOS and stays browser-neutral everywhere else while OIDC is pending', async () => {
+    // Never resolves: the page keeps the abort controller, so the pending hint stays up.
+    h.loginWithPortalOidc.mockReturnValue(new Promise(() => {}));
+
+    const { unmount } = render(<DeviceConnectPage />);
+
+    fireEvent.click(screen.getByTestId('oidc-login-btn'));
+
+    expect(
+      await screen.findByText(/Finish signing in in your browser, then return to this app\./),
+    ).toBeInTheDocument();
+    unmount();
+
+    h.ios = true;
+    render(<DeviceConnectPage />);
+
+    fireEvent.click(screen.getByTestId('oidc-login-btn'));
+
+    expect(
+      await screen.findByText(/Finish signing in in Safari, then return to this app\./),
+    ).toBeInTheDocument();
   });
 
   it('opens Advanced from the splash', () => {

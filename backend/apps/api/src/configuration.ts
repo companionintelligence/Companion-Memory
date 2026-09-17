@@ -73,6 +73,28 @@ const booleanStringSchema = z.preprocess((val) => {
   return val;
 }, z.boolean());
 
+/**
+ * Is this URL empty, or unambiguously on this machine?
+ *
+ * Hostname-only, and an allowlist rather than a pattern: `127.0.0.1.evil.com`
+ * and `localhost.attacker.net` both CONTAIN a loopback string and resolve
+ * wherever their owner points them. A URL that does not parse is not loopback
+ * either.
+ */
+export function isEmptyOrLoopback(value: string): boolean {
+  if (value === '') {
+    return true;
+  }
+
+  try {
+    const { hostname } = new URL(value);
+
+    return ['127.0.0.1', '::1', '[::1]', 'localhost', 'host.docker.internal'].includes(hostname);
+  } catch {
+    return false;
+  }
+}
+
 export const ConfigSchema = z.object({
   host: z.string(),
   port: z.number(),
@@ -247,6 +269,38 @@ export const ConfigSchema = z.object({
       // public CI_HUB_ORIGINS list is for browser redirects; this is the
       // appliance-local hop. Override with CI_HUB_INTERNAL_URL.
       hubInternalUrl: z.string().optional().default('http://ci-os-hub:3000'),
+
+      /**
+       * DEV ONLY. Ring OpenClaw's `/hooks/wake` directly, skipping Hub.
+       *
+       * A local dev stack cannot reach Hub — `CI_HUB_INTERNAL_URL` names a
+       * Docker alias no CI-Server compose file defines, and
+       * `CI_HUB_FORWARD_AUTH_SECRET` is empty — so dispatch could not be
+       * exercised at all without a full Hub install: a private-registry token,
+       * a source build, Postgres + RabbitMQ, and OpenClaw installed THROUGH
+       * Hub, because Hub resolves wake targets only from installed app files.
+       *
+       * Skipping Hub is safe here because the wake is a DOORBELL, not a grant.
+       * The body carries no secret; all authority lives in the packet fetch the
+       * harness then makes with its own user-scoped key, and `getPacket` scopes
+       * the row by `{ id, userId }`. Hub's own leg to OpenClaw is already a
+       * plain shared bearer rather than a signature, so nothing cryptographic
+       * is given up. What IS given up is Hub's policy point — it decides which
+       * apps may be woken at all — and its sole custody of the wake token.
+       * That is why this is dev-only.
+       *
+       * LOOPBACK-ENFORCED AT PARSE TIME, deliberately. The one way this could
+       * weaken anything real is misactivation: an appliance that somehow had it
+       * set would POST a bearer to whatever host it named. Refusing to boot
+       * beats warning about it.
+       */
+      devDirectWakeUrl: z.string().optional().default('').refine(isEmptyOrLoopback, {
+        message:
+          'CI_DEV_DIRECT_WAKE_URL must be loopback (127.0.0.1, ::1, localhost or host.docker.internal). It exists to exercise dispatch on a dev stack and must never point off-box.',
+      }),
+
+      /** The static bearer OpenClaw's `/hooks/wake` compares — its `HUB_WAKE_SECRET`. */
+      devDirectWakeToken: z.string().optional().default(''),
     }),
   }),
   db: z.object({
@@ -288,6 +342,18 @@ export const ConfigSchema = z.object({
       chatModel: z.string().default(DEFAULT_CHAT_MODEL),
       /** Background extraction/classification model. See {@link DEFAULT_UTILITY_MODEL}. */
       utilityModel: z.string().default(DEFAULT_UTILITY_MODEL),
+      /**
+       * How long one model request may go without ANY response — no headers,
+       * no first token — before it is torn down (`firstResponseDeadline.ts`).
+       * Bounds the wait for a runner that never comes (a model swap the
+       * scheduler cannot make, a wedged backend), not the generation: once the
+       * backend starts answering the deadline no longer applies. Before this
+       * the only bound was undici's five-minute headers timeout, and pg-boss's
+       * 15-minute job expiry did the rest. Sized above the longest legitimate
+       * wait for a busy single-slot runner; a request cut here is retried, so
+       * too short costs churn, too long costs a person's patience.
+       */
+      firstResponseTimeoutMs: z.coerce.number().int().positive().default(90_000),
       chat: z
         .object({
           groundedRecall: z
@@ -332,6 +398,57 @@ export const ConfigSchema = z.object({
            * rather than a guess. 0 = fall back to the router's own profile.
            */
           onDeviceContextTokens: z.number().int().nonnegative().default(0),
+        })
+        .default({}),
+      /**
+       * GPU co-residency planning for the utility model
+       * (`domains/llm/services/ResidencyPlannerService.ts`).
+       *
+       * Before this existed every background call asked Ollama to load
+       * `utilityModel` at Ollama's default context, and Ollama decided whether
+       * it fit from its own prediction. When it did not, Ollama tried to evict
+       * the chat model — which a busy appliance never lets go idle — and every
+       * request for a non-resident model queued behind that wait, silently.
+       * The planner reads live GPU memory and refuses to start a load it cannot
+       * prove fits, routing that call to the resident chat model instead.
+       */
+      residency: z
+        .object({
+          /** `off` restores the old behaviour: the configured utility model, unplanned, no `num_ctx`. */
+          mode: z.enum(['auto', 'off']).default('auto'),
+          /**
+           * Total GPU memory, in bytes, for machines where neither the AMD sysfs
+           * counters nor `nvidia-smi` are readable from this process. 0 = unknown,
+           * and an unknown total routes every utility call to the chat model
+           * unless the utility model is already resident.
+           */
+          vramTotalBytes: z.coerce.number().int().nonnegative().default(0),
+          /** Headroom always left unallocated. Covers the compositor, HBPE's scratch, estimate error. */
+          safetyMarginBytes: z.coerce
+            .number()
+            .int()
+            .nonnegative()
+            .default(1024 ** 3),
+          /** Top rung of the utility model's context ladder (32K → 16K → 8K → 4K). */
+          maxUtilityContextTokens: z.coerce.number().int().positive().default(32_768),
+          /**
+           * After the planner asks Ollama to load the utility model, how long
+           * it may stay absent from `/api/ps` before the planner concludes the
+           * load is stuck behind an eviction that cannot happen. A cold load of
+           * a ~10 GB model finishes in 10–20 s; the first-response deadline is
+           * 90 s. 0 disables the watchdog.
+           */
+          loadWatchdogMs: z.coerce.number().int().nonnegative().default(120_000),
+          /**
+           * How long co-residency stays off after the watchdog fires (or a
+           * planned load times out). Utility calls run on the chat model
+           * meanwhile. Long enough for the wedge to clear or be noticed.
+           */
+          cooldownMs: z.coerce
+            .number()
+            .int()
+            .positive()
+            .default(15 * 60_000),
         })
         .default({}),
     })
@@ -1211,6 +1328,37 @@ export const ConfigSchema = z.object({
      */
     portalBaseUrl: z.string().default(''),
   }),
+  // Web Push (VAPID) for planning reminders — see docs/architecture/planning-roadmap.md
+  // M5 and WebPushService. Deliberately config-only, not a stored/generated
+  // keypair: the roadmap's "Deliberately not doing" table rules out a generic
+  // `app_config` table, and unlike CI-Planning's SQLite server (which
+  // generates and PERSISTS a keypair on first boot because it has nowhere
+  // else to put one), this appliance already has the operator-provisioned
+  // secret convention every other cryptographic key here follows —
+  // AUTH_TOKEN_SECRET, AUTH_FIELD_ENCRYPTION_KEY, AUTH_CSRF_TOKEN_SECRET — so
+  // VAPID keys follow it too rather than inventing a new persistence
+  // mechanism for one feature. Both empty (the default) means push is simply
+  // OFF: `WebPushService.isConfigured()` returns false, reminders still fire
+  // (the record still moves to 'fired'), and the resolver's `pushPublicKey`
+  // query returns null so the client never shows a "turn on push" control.
+  //
+  // Generate a pair with `npx web-push generate-vapid-keys` and set both
+  // VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY — a HALF-set pair is refused the same
+  // way an operator-supplied env keypair is refused elsewhere in this file
+  // (see the field-encryption warning above): `WebPushService` treats
+  // "exactly one of the two set" as a misconfiguration and leaves push
+  // dormant rather than guessing. Never rotate an existing pair without
+  // clearing `ci.push_subscriptions` first — a subscription is
+  // cryptographically bound to the public key it was created against, so
+  // rotating breaks push for every existing subscriber at once.
+  push: z.object({
+    vapid: z.object({
+      publicKey: z.string().default(''),
+      privateKey: z.string().default(''),
+      /** `mailto:` contact a push service may use if it needs to reach the sender. Cosmetic. */
+      subject: z.string().default('mailto:admin@companion.local'),
+    }),
+  }),
 });
 
 const parsed = ConfigSchema.parse(config);
@@ -1271,6 +1419,19 @@ if (!parsed.llm.apiKey) {
 if (!parsed.llm.chatModel) {
   parsed.llm.chatModel = DEFAULT_CHAT_MODEL;
 }
+
+// Captured BEFORE the default below overwrites it: whether an operator (or
+// the Hub installer) actually set LLM_UTILITY_MODEL, as distinct from it
+// having fallen back to the compiled-in DEFAULT_UTILITY_MODEL. `config.has`
+// reads the raw merged sources (env + config/*.json) ahead of this file's own
+// normalization, so it sees "absent" exactly when the env var was never set —
+// default.json carries no `llm.utilityModel` key at all, only
+// custom-environment-variables.json's LLM_UTILITY_MODEL mapping can put one
+// there. Exists so a vision-capable utility model is only ever used for
+// vision work when an operator asked for it: see UTILITY_MODEL_EXPLICITLY_CONFIGURED
+// in OllamaService, which is what actually reads this.
+export const UTILITY_MODEL_EXPLICITLY_CONFIGURED =
+  config.has('llm.utilityModel') && Boolean(config.get('llm.utilityModel'));
 
 // An empty LLM_UTILITY_MODEL means "not configured", not "use the empty
 // string" — same normalization chatModel gets just above. Falling back to the

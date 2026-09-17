@@ -85,7 +85,7 @@ export interface RunDoctorOptions {
  * With 19 checks that is a ~4m45s worst case if EVERY one times out, and well
  * under a second in the normal case. Raise it with `--timeout` for a deliberate
  * full audit on a large corpus; the point of the default is that an agent can
- * put `ci-import doctor --json` in a loop without the loop occasionally taking
+ * put `ci doctor --json` in a loop without the loop occasionally taking
  * five minutes.
  */
 export const DEFAULT_STATEMENT_TIMEOUT_MS = 15_000;

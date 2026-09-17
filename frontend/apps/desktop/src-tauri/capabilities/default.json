@@ -1,17 +1,25 @@
 {
   "identifier": "default",
-  "description": "Bootstrap-splash capabilities (tauri://localhost only \u2014 no remote.urls; the real web app's grants live in oidc-remote-deep-link.json, deliberately much narrower).\n\n`allow-bootstrap-ipc` is not optional and not redundant: Tauri 2's app-command ACL is INERT until a crate ships its own permissions/*.toml, so this page called check_docker_* / start_stack_command for months with no grant at all. The moment allow-oidc-ipc was added for the remote origin, the check went live app-wide and the splash died on 'Command check_docker_installed_command not allowed by ACL' before it could run a single check. Any new command bootstrap.js starts calling has to be added there too.",
+  "description": "Bootstrap-page-only capabilities. No remote.urls: after window.location.replace() navigates to http://127.0.0.1:8642/, that page is the real CI-Server web app and gets only what capabilities/oidc-remote-deep-link.json grants it. `allow-bootstrap-commands` is load-bearing rather than tidy-up: once any src-tauri/permissions/*.toml exists, tauri-build sets has_app_manifest and the webview ACL gate starts applying to the LOCAL origin too, so the splash's own invokes must be granted explicitly or the stack never starts.",
   "windows": [
     "main"
   ],
   "permissions": [
+    "allow-check-docker-available-command",
+    "allow-check-docker-installed-command",
+    "allow-check-stack-status-command",
+    "allow-get-gateway-url-command",
+    "allow-forget-stale-frontend-command",
+    "allow-get-startup-progress-command",
+    "allow-open-docker-downloads-command",
+    "allow-open-logs-dir-command",
+    "allow-start-stack-command",
     "core:default",
     "core:window:allow-close",
     "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-unminimize",
     "core:window:allow-set-focus",
-    "opener:default",
-    "allow-bootstrap-ipc"
+    "opener:default"
   ]
 }

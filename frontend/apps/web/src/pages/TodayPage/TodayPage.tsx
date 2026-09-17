@@ -16,9 +16,9 @@ import { SchedulePage } from '@/pages/SchedulePage';
  * entry, and it describes a horizon rather than a day, so it answers a
  * different question than this page does.
  *
- * `PageContent` carries no padding here — the calendar supplies its own
- * framing (a bordered, rounded card), and every pixel not spent on chrome is
- * a pixel of scrollable hours.
+ * Phone stays flush (`p-0`) so hours keep the viewport. Desktop only needs a
+ * little air above the week range — full `p-6` inset the whole calendar.
+ * `device:` (896), not `md:`, matches the chrome switch.
  *
  * "Calendar" rather than "Schedule": every link to this route already calls
  * it that, and `SchedulePage`'s own standalone title would say otherwise —
@@ -32,5 +32,9 @@ export function TodayPage() {
   const { isFeatureEnabled } = useFeatures();
   const scheduleEnabled = isFeatureEnabled('schedule.page');
 
-  return <PageContent className="p-0 gap-0">{scheduleEnabled && <SchedulePage embedded />}</PageContent>;
+  return (
+    <PageContent className="p-0 gap-0 device:pt-3">
+      {scheduleEnabled && <SchedulePage embedded />}
+    </PageContent>
+  );
 }
