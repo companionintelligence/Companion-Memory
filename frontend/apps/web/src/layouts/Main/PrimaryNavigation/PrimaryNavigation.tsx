@@ -49,8 +49,19 @@ export function PrimaryNavigation() {
       {/* Memory explorer: search left, view tabs after it.
           Other pages: nav-views, then search fills the remaining width.
           There are no breadcrumbs anywhere — the Power Rail is the only
-          location indicator. */}
-      <div className="relative flex min-w-0 flex-1 flex-col gap-2 md:flex-row md:items-center md:gap-3">
+          location indicator.
+
+          A <nav>, not a plain box — and the element that was already here
+          rather than a new one, so the flex geometry is unchanged. The view
+          tabs and the search that moves between them are the navigable half of
+          this header, and they now sit in a landmark a screen reader can jump
+          to; "Primary" keeps it distinct from the rail's "Main navigation".
+          The <header> stays the banner landmark, and keeps the chips and Add,
+          which are not navigation. */}
+      <nav
+        aria-label="Primary"
+        className="relative flex min-w-0 flex-1 flex-col gap-2 md:flex-row md:items-center md:gap-3"
+      >
         {isMemoryExplorer ? (
           <>
             {!isSharedView && (
@@ -72,7 +83,7 @@ export function PrimaryNavigation() {
             )}
           </>
         )}
-      </div>
+      </nav>
 
       {/* Right: status chips, page actions, and the primary Add control.
           Account/settings live in the left rail now. The chips sit in the

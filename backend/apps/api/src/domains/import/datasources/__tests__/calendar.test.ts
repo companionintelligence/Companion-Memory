@@ -174,7 +174,7 @@ describe('Calendar datasource', () => {
     expect(event.id).toBe(`ics:noUidEscaped.ics:${expectedSig}`);
   });
 
-  it('detects DTSTART;VALUE=DATE all-day and RRULE recurring from iCal params', async () => {
+  it('reads all-day, recurring and the event zone from iCal params', async () => {
     // These populate is_all_day / is_recurring downstream, so they must survive
     // the line-param parse — an earlier `^([^:;]+)(?:;[^:]*)?:` regex stripped
     // the params and left both false for every imported event.
@@ -194,6 +194,7 @@ describe('Calendar datasource', () => {
         'BEGIN:VEVENT',
         'UID:once@x',
         'DTSTART;TZID=America/Los_Angeles:20260120T140000',
+        'DTEND;TZID=America/Los_Angeles:20260120T150000',
         'SUMMARY:Timed one-off',
         'END:VEVENT',
         'END:VCALENDAR',
@@ -213,6 +214,22 @@ describe('Calendar datasource', () => {
       expect(series?.metadata.isRecurring).toBe(true);
       expect(once?.metadata.isAllDay).toBe(false);
       expect(once?.metadata.isRecurring).toBe(false);
+
+      // The TZID is part of the value, not decoration: 14:00 America/Los_Angeles
+      // on 2026-01-20 (PST, UTC-8) is 22:00Z. The parser used to drop the param
+      // and read the wall clock as SERVER-local, so on the appliance's UTC
+      // container this event was stored eight hours early — and permanently,
+      // since the .ics and the Google ETL converge on one identity whose
+      // find-or-create never revisits start_time.
+      //
+      // Asserted as absolute instants (`toISOString`), so the expectation holds
+      // whatever TZ the machine running the suite is in.
+      expect(once?.timestamp?.toISOString()).toBe('2026-01-20T22:00:00.000Z');
+      expect(once?.timespanEnd?.toISOString()).toBe('2026-01-20T23:00:00.000Z');
+
+      // The DATE-only series master is unaffected: no TZID to resolve, so it
+      // stays the UTC midnight of its date.
+      expect(series?.timestamp?.toISOString()).toBe('2026-01-17T00:00:00.000Z');
     } finally {
       fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
     }

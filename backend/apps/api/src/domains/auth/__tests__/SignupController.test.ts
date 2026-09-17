@@ -34,6 +34,9 @@ const mockAuthService = {
 const mockUserService = {
   checkEmailAvailability: jest.fn().mockResolvedValue(false),
   create: jest.fn().mockResolvedValue(mockUser),
+  // Default to an appliance that already has an account, so the signup-code
+  // tests below exercise the gate rather than the first-account exemption.
+  hasNoUsers: jest.fn().mockResolvedValue(false),
 };
 
 const mockSignupCodeService = {
@@ -110,6 +113,7 @@ describe('SignupController', () => {
     mockAuthService.issueAccessToken.mockReturnValue('access-token-value');
     mockFeatureService.isFeatureEnabled.mockResolvedValue(false);
     mockSignupCodeService.findOne.mockResolvedValue({ signup_code: 'valid-code', used: false });
+    mockUserService.hasNoUsers.mockResolvedValue(false);
   });
 
   const validPayload = {
@@ -201,6 +205,46 @@ describe('SignupController', () => {
           .post('/signup')
           .send({ ...validPayload, signup_code: 'bad-code' })
           .expect(400);
+      });
+
+      // A self-hosted appliance starts with an empty user table AND an empty
+      // signup-code table, and nothing in the product mints a code — so with the
+      // gate applied unconditionally, the person who just installed the box could
+      // never create the first account on it. The exemption is exactly one
+      // account wide.
+      it('allows the first account on an unclaimed appliance, with no code', async () => {
+        mockUserService.hasNoUsers.mockResolvedValue(true);
+
+        await request(app.getHttpServer()).post('/signup').send(validPayload).expect(201);
+
+        expect(mockSignupCodeService.findOne).not.toHaveBeenCalled();
+        expect(mockSignupCodeService.update).not.toHaveBeenCalled();
+      });
+
+      it('requires a code again once the appliance has an account', async () => {
+        mockUserService.hasNoUsers.mockResolvedValue(false);
+
+        await request(app.getHttpServer()).post('/signup').send(validPayload).expect(400);
+      });
+    });
+
+    describe('GET /signup/requirements', () => {
+      it('reports a code as required when the flag is on and the appliance is claimed', async () => {
+        mockFeatureService.isFeatureEnabled.mockResolvedValue(true);
+        mockUserService.hasNoUsers.mockResolvedValue(false);
+
+        const response = await request(app.getHttpServer()).get('/signup/requirements').expect(200);
+
+        expect(response.body).toEqual({ codeRequired: true });
+      });
+
+      it('reports no code required on an unclaimed appliance, so the form hides the field', async () => {
+        mockFeatureService.isFeatureEnabled.mockResolvedValue(true);
+        mockUserService.hasNoUsers.mockResolvedValue(true);
+
+        const response = await request(app.getHttpServer()).get('/signup/requirements').expect(200);
+
+        expect(response.body).toEqual({ codeRequired: false });
       });
     });
   });

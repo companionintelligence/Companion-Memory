@@ -2,14 +2,28 @@ import type { ReactNode } from 'react';
 
 import { useDeviceLayout } from '@ci/common';
 import { cn } from '@ci/shadcn';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
 
 import { MEMORY_HUB_SECTIONS } from './memoryHubSections';
 
+/**
+ * The address a section chip opens: the section, plus the current `?search=`
+ * and nothing else. The header search box writes the query into whichever
+ * memory list is open, so switching lists keeps what was typed — but the
+ * page's filters and sort stay behind, since the next page has its own and
+ * may not understand these.
+ */
+export function sectionHref(to: string, params: URLSearchParams): string {
+  const search = params.get('search')?.trim();
+
+  return search ? `${to}?${new URLSearchParams({ search }).toString()}` : to;
+}
+
 export function MemoryHubNav({ actions }: { actions?: ReactNode }) {
   const { pathname } = useLocation();
+  const [searchParams] = useSearchParams();
   const { isMobile } = useDeviceLayout();
   const { isFeatureEnabled } = useFeatures();
 
@@ -28,7 +42,7 @@ export function MemoryHubNav({ actions }: { actions?: ReactNode }) {
             return (
               <Link
                 key={section.to}
-                to={section.to}
+                to={sectionHref(section.to, searchParams)}
                 className={cn(
                   'shrink-0 rounded-md px-2.5 py-1 text-sm font-medium transition-colors',
                   active

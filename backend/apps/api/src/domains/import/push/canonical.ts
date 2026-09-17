@@ -32,6 +32,9 @@ import { mimeForFile, type MediaAttachment } from '../datasources/timeline';
 import type { StagedItem } from '../entities/StagedItemEntity';
 
 import { readCommerceField } from './commerceKeys';
+import { firstRedditMediaLink, redditLinkMedia, type RedditMediaRef } from './redditMedia';
+
+export type { RedditMediaRef } from './redditMedia';
 
 /**
  * The pipeline that produced these records — pure provenance since the
@@ -861,66 +864,21 @@ export function isSocialAffiliation(rec: CanonicalRecord): boolean {
   return false;
 }
 
-// Reddit's GDPR export is CSV-only — media exists solely as URLs. Direct-media
-// hosts, or any URL whose path ends in a media extension, count; imgur PAGE
-// links (imgur.com/abc) don't. .gifv is imgur's video wrapper, hence video.
-const REDDIT_IMAGE_HOSTS = /^https?:\/\/(i\.redd\.it|preview\.redd\.it|i\.imgur\.com)\//i;
-const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|heic)$/i;
-const REDDIT_VIDEO_HOSTS = /^https?:\/\/v\.redd\.it\//i;
-const VIDEO_EXT = /\.(mp4|mov|webm|m4v|gifv)$/i;
-
-function mediaUrlKind(url: string): 'image' | 'video' | null {
-  let pathname: string;
-  try {
-    pathname = new URL(url).pathname;
-  } catch {
-    return null;
-  }
-
-  if (REDDIT_VIDEO_HOSTS.test(url) || VIDEO_EXT.test(pathname)) {
-    return 'video';
-  }
-
-  if (REDDIT_IMAGE_HOSTS.test(url) || IMAGE_EXT.test(pathname)) {
-    return 'image';
-  }
-
-  return null;
-}
-
-export interface RedditMediaRef {
-  url: string;
-  kind: 'image' | 'video';
-}
-
 /**
  * The media a Reddit record carries, or null. A link post's media is its URL
  * field (the link target) when it points at an image or video. A comment has
  * no URL field pointing at media (metadata.URL is the comment's own
  * permalink), so its media is the first direct image/video link found in the
- * body markdown.
+ * body markdown. The classification itself lives in ./redditMedia so the
+ * connection transform applies the identical rule.
  */
 export function redditMediaUrl(rec: CanonicalRecord): RedditMediaRef | null {
   if (isRedditPost(rec)) {
-    const url = str(rec.metadata.URL);
-    if (!url) {
-      return null;
-    }
-
-    const kind = mediaUrlKind(url);
-
-    return kind ? { url, kind } : null;
+    return redditLinkMedia(str(rec.metadata.URL));
   }
 
   if (isRedditComment(rec)) {
-    const body = str(rec.metadata.Body) ?? '';
-    for (const m of body.matchAll(/https?:\/\/[^\s)\]<>"']+/g)) {
-      const url = m[0].replace(/[.,;!?]+$/, '');
-      const kind = mediaUrlKind(url);
-      if (kind) {
-        return { url, kind };
-      }
-    }
+    return firstRedditMediaLink(str(rec.metadata.Body));
   }
 
   return null;
@@ -1854,6 +1812,18 @@ export function contentFileRef(rec: CanonicalRecord): { id?: string; url?: strin
   const m = rec.metadata as Record<string, unknown>;
 
   return { id: str(m.FileId) ?? undefined, url: str(m.FileUrl) ?? undefined };
+}
+
+/**
+ * The SHA-256 the object store computed for the bytes {@link contentFileRef}
+ * points at (MediaStage.markUploaded stamps `FileSha256` beside `FileId`), or
+ * undefined when nothing was uploaded or the store did not hash. Validated as
+ * 64 hex characters so a stray value cannot become a `file` identity.
+ */
+export function fileSha256Ref(rec: CanonicalRecord): string | undefined {
+  const value = str((rec.metadata as Record<string, unknown>).FileSha256);
+
+  return value && /^[0-9a-fA-F]{64}$/.test(value) ? value.toLowerCase() : undefined;
 }
 
 /**

@@ -106,6 +106,9 @@ export const SCAN_RECOGNITION_CACHE = {
  */
 const MAX_UNIT_SIZING_ENTRIES = 50_000;
 
+/** Keep directory sizing fast without opening an unbounded number of files. */
+const AGGREGATE_STAT_CONCURRENCY = 64;
+
 /**
  * The batch ceiling. A request over it is REJECTED, not truncated — silently
  * importing 100 of 130 units reads as "imported everything" to the person who
@@ -874,6 +877,9 @@ export class ImportInboxService implements OnModuleInit {
       return { sizeBytes, fileCount };
     }
 
+    const files: string[] = [];
+    const directories: string[] = [];
+
     for (const entry of entries) {
       if (budget.entries >= MAX_UNIT_SIZING_ENTRIES) {
         budget.exhausted = true;
@@ -889,18 +895,44 @@ export class ImportInboxService implements OnModuleInit {
       const fullPath = path.join(dir, entry.name);
 
       if (entry.isFile()) {
-        try {
-          sizeBytes += (await lstat(fullPath)).size;
-          fileCount += 1;
-        } catch {
-          // Vanished mid-walk; the aggregate is advisory.
-        }
+        files.push(fullPath);
       } else if (entry.isDirectory()) {
-        const nested = await this.aggregate(fullPath, budget);
-
-        sizeBytes += nested.sizeBytes;
-        fileCount += nested.fileCount;
+        directories.push(fullPath);
       }
+    }
+
+    // A large recognized unit is still one unit, but its display metadata can
+    // contain tens of thousands of files. The old serial lstat loop turned a
+    // 25,000-file scan into a two-minute timeout on the local filesystem. Keep
+    // the work bounded so this remains friendly to the appliance's file-descriptor
+    // and thread-pool budgets while allowing independent files to progress in
+    // parallel.
+    for (let offset = 0; offset < files.length; offset += AGGREGATE_STAT_CONCURRENCY) {
+      const batch = files.slice(offset, offset + AGGREGATE_STAT_CONCURRENCY);
+      const sizes = await Promise.all(
+        batch.map(async (fullPath) => {
+          try {
+            return (await lstat(fullPath)).size;
+          } catch {
+            // Vanished mid-walk; the aggregate is advisory.
+            return null;
+          }
+        }),
+      );
+
+      for (const size of sizes) {
+        if (size != null) {
+          sizeBytes += size;
+          fileCount += 1;
+        }
+      }
+    }
+
+    for (const nestedDir of directories) {
+      const nested = await this.aggregate(nestedDir, budget);
+
+      sizeBytes += nested.sizeBytes;
+      fileCount += nested.fileCount;
     }
 
     return { sizeBytes, fileCount };

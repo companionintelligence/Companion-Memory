@@ -1,5 +1,8 @@
 import { LoaderCircleIcon, LoaderIcon, LoaderPinwheelIcon, type LucideProps } from 'lucide-react';
-import { cn } from '@/lib/utils';
+// Relative, not the `@/` alias `shadcn add` generates — see the note in
+// ../../kbd.tsx: the alias is declared only in @ci/shadcn's own tsconfig, so it
+// breaks every consuming workspace's typecheck.
+import { cn } from '../../../../lib/utils';
 
 type SpinnerVariantProps = Omit<SpinnerProps, 'variant'>;
 

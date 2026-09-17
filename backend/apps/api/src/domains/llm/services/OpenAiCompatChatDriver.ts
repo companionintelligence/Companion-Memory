@@ -7,6 +7,8 @@ import type {
   ChatCompletionTool,
 } from 'openai/resources/chat/completions';
 
+import config from '@ci/configuration';
+
 /**
  * OpenAI-protocol transport for the chat path, used when `LLM_API_BASE` points
  * at a non-Ollama backend (a Hub-selected vLLM instance, or any other
@@ -51,7 +53,10 @@ export class OpenAiCompatChatDriver {
       apiKey,
       // Default is 10 minutes with retries. Background accoutrements then occupy
       // vLLM's `--max-num-seqs` slots until the GPU is unreachable for chat.
-      timeout: 180_000,
+      // The SDK clears this timer once response headers arrive (client.js
+      // `fetchWithTimeout`), so it is the same first-response deadline the
+      // native path applies through `firstResponseDeadline.ts`.
+      timeout: config.llm.firstResponseTimeoutMs,
       maxRetries: 0,
     });
   }
@@ -69,6 +74,13 @@ export class OpenAiCompatChatDriver {
     tools?: Tool[];
     format?: string;
     enableThinking?: boolean;
+    signal?: AbortSignal;
+    /**
+     * Cap on the completion, in tokens (OpenAI's `max_tokens`). Absent leaves
+     * the server's default alone. Named to match `chatStream`'s `maxTokens`,
+     * which is what `OllamaService` already threads through on that path.
+     */
+    maxTokens?: number;
   }): Promise<ChatResponse> {
     const extraBody = vllmThinkingExtraBody(request.enableThinking);
     const response = await this.client.chat.completions.create(
@@ -78,9 +90,10 @@ export class OpenAiCompatChatDriver {
         ...(request.tools && request.tools.length > 0 && { tools: toOpenAiTools(request.tools) }),
         // Ollama's `format: 'json'` maps onto the OpenAI json_object response format.
         ...(request.format === 'json' && { response_format: { type: 'json_object' as const } }),
+        ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
         ...extraBody,
       },
-      { timeout: 180_000, maxRetries: 0 },
+      { signal: request.signal, timeout: config.llm.firstResponseTimeoutMs, maxRetries: 0 },
     );
 
     const choice = response.choices[0];
@@ -138,7 +151,7 @@ export class OpenAiCompatChatDriver {
         ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
         ...extraBody,
       },
-      { signal: request.signal, timeout: 180_000, maxRetries: 0 },
+      { signal: request.signal, timeout: config.llm.firstResponseTimeoutMs, maxRetries: 0 },
     );
 
     // Streamed tool calls arrive fragmented: an entry with id+name at some

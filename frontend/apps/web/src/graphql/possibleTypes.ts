@@ -89,6 +89,7 @@ export interface PossibleTypesResultData {
       "QuestionType",
       "ReceiptType",
       "RelationshipType",
+      "ReminderType",
       "SavedSearchType",
       "SummaryType",
       "TagType",
@@ -113,6 +114,7 @@ export interface PossibleTypesResultData {
       "PlaceType",
       "ProductModelType",
       "ReceiptType",
+      "TaskType",
       "ThreadType"
     ],
     "Taggable": [
@@ -129,6 +131,7 @@ export interface PossibleTypesResultData {
       "PlaceType",
       "ProductModelType",
       "ReceiptType",
+      "TaskType",
       "ThreadType"
     ],
     "TaggableEntityType": [
@@ -145,6 +148,7 @@ export interface PossibleTypesResultData {
       "PlaceType",
       "ProductModelType",
       "ReceiptType",
+      "TaskType",
       "ThreadType"
     ]
   }

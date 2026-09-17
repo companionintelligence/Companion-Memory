@@ -22,12 +22,15 @@ import { expect, test, type Page } from './fixtures/authenticated';
 
 // Top-level rows that ship enabled by default (`config/default.json`). Asks is
 // deliberately absent: it rides *under* Saved Searches as a child row, which the
-// group test below covers. Deliberately not derived from `railDestinations.ts` —
-// a test that imports the same table as the code under test agrees with it by
-// construction, including when both are wrong.
+// group test below covers. Tasks and Calendar are likewise absent: Plan and
+// Calendar were merged into one 'Planning' destination at /plan, with Tasks
+// (/plan/tasks) and Calendar (/plan/calendar) as its submenu children — covered
+// by the Planning group test below rather than as top-level rows here.
+// Deliberately not derived from `railDestinations.ts` — a test that imports the
+// same table as the code under test agrees with it by construction, including
+// when both are wrong.
 const DEFAULT_ROWS = [
-  { label: 'Plan', path: '/plan' },
-  { label: 'Calendar', path: '/calendar' },
+  { label: 'Planning', path: '/plan' },
   { label: 'Memory', path: '/memory' },
   { label: 'Saved Searches', path: '/saved-searches' },
   { label: 'Sources', path: '/sources' },
@@ -134,6 +137,43 @@ test.describe('application shell', () => {
 
     await expect(page).toHaveURL(/\/asks/);
     await expect(page.locator('main')).toBeVisible();
+  });
+
+  test('Planning rides as one destination with Tasks and Calendar as children', async ({ page }) => {
+    await page.goto('/plan');
+
+    const rail = await openRail(page);
+
+    // The group head is still its own destination — the children sit beside
+    // it, they do not replace it.
+    await expect(rail.getByRole('link', { name: 'Planning', exact: true })).toBeVisible();
+    await ensureGroupOpen(rail, 'Planning', page);
+
+    const children = [
+      { label: 'Tasks', path: '/plan/tasks' },
+      { label: 'Calendar', path: '/plan/calendar' },
+    ] as const;
+
+    for (const child of children) {
+      const link = rail.getByRole('link', { name: child.label, exact: true });
+
+      await expect(link, `the Planning submenu is missing "${child.label}"`).toBeVisible();
+      await expect(link, `the "${child.label}" row points somewhere unexpected`).toHaveAttribute(
+        'href',
+        child.path,
+      );
+    }
+
+    // Then prove each sub-view actually renders, rather than 404ing or
+    // bouncing to /login — the failure mode a rail row gated on the wrong
+    // flag produces.
+    for (const child of children) {
+      await page.goto(child.path);
+
+      await expect(page).toHaveURL(new RegExp(child.path.replace(/\//g, '\\/')));
+      await expect(page.locator('main'), `${child.path} rendered no content well`).toBeVisible();
+      await expect(page, `${child.path} bounced to /login`).not.toHaveURL(/\/login/);
+    }
   });
 
   test('the Memory submenu and the in-page hub tabs agree', async ({ page }) => {

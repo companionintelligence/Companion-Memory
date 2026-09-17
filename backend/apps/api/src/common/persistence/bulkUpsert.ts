@@ -22,6 +22,12 @@ export interface SourceTriple {
   sourceType: string | null | undefined;
   sourceSystem: string | null | undefined;
   sourceId: string | null | undefined;
+  /**
+   * Ledger-only: the delivering platform (see RecordSourceRow.platform).
+   * Omit for platform kinds (the system is the platform); federated kinds
+   * pass the producer's platform, or null when it has none. Never matched on.
+   */
+  sourcePlatform?: string | null;
 }
 
 /**
@@ -82,15 +88,27 @@ interface BulkInsertOptions<Entity extends ObjectLiteral> {
   /**
    * Optional list of DB column names to refresh on conflict (an empty list is
    * the same as omitting it — see INGEST_REFRESH_COLUMNS, the central per-entity
-   * source of these lists). When non-empty, the
-   * INSERT emits `ON CONFLICT (<arbiter>) DO UPDATE SET col = EXCLUDED.col, ...`
-   * for these columns instead of `DO NOTHING`, so a re-ingest of the same triple
-   * self-heals source-derived mutable fields (e.g. the importer's corrected email
-   * `direction`, or a newly-populated `participants_metadata`) rather than being a
-   * no-op. List ONLY source-derived mutable columns — never the identity/arbiter
-   * columns (id, time, user_id, source_*), and never columns a user may edit
-   * server-side (a re-sync would clobber those). When omitted, the legacy
-   * `DO NOTHING` find-or-return behaviour is kept verbatim.
+   * source of these lists). When non-empty, the INSERT emits
+   * `ON CONFLICT (<arbiter>) DO UPDATE SET ...` for these columns instead of
+   * `DO NOTHING`. List ONLY source-derived mutable columns — never the
+   * identity/arbiter columns (id, time, user_id, source_*), and never columns a
+   * user may edit server-side (a re-sync would clobber those). When omitted, the
+   * legacy `DO NOTHING` find-or-return behaviour is kept verbatim.
+   *
+   * WHAT THE UPDATE DOES depends on who is writing — see
+   * {@link conflictUpdateSetClause}. The arbiter is the identity pair, so a
+   * conflict is EITHER the same producer re-syncing (a corrected parser, a
+   * History file copied after the dwell time was written) OR a different
+   * producer delivering the same datum (the browser extension after a Takeout
+   * import). `source_type` names the producer:
+   *
+   *   - same producer   → refresh: the new value wins, unless it is null
+   *   - other producer  → fill gaps: the existing value wins, unless it is null
+   *
+   * The null guards are what let the two coexist: a plain `col = EXCLUDED.col`
+   * on a same-producer re-sync would null out whatever the other producer had
+   * filled in. Columns that cannot be null need their own rule, declared in
+   * {@link conflictMergeKinds}.
    *
    * Idempotency is preserved either way (the arbiter still prevents duplicate
    * rows); the only difference is whether the conflicting row is left untouched
@@ -98,6 +116,20 @@ interface BulkInsertOptions<Entity extends ObjectLiteral> {
    * *CreatedEvent fires for genuine inserts only (see `RETURNING (xmax = 0)`).
    */
   conflictUpdateColumns?: readonly string[];
+  /**
+   * Per-column merge kind for `conflictUpdateColumns` entries whose type makes
+   * "unless null" meaningless (see {@link ConflictMergeKind}). Columns absent
+   * here are `'value'`. See INGEST_MERGE_KINDS for the central declarations.
+   */
+  conflictMergeKinds?: Readonly<Record<string, ConflictMergeKind>>;
+  /**
+   * Per-column producer preference for `conflictUpdateColumns` entries where
+   * "the first arrival keeps it" is the wrong tie-break between two producers
+   * that BOTH hold a value (see {@link ProducerPreference}). Columns absent
+   * here keep the arrival-order rule. See INGEST_PRODUCER_PREFERENCE for the
+   * central declarations.
+   */
+  conflictProducerPreference?: ProducerPreference;
   /**
    * Optional partition-time column (entity property). When set, the existence and
    * hydration SELECTs are bounded to the batch's [min, max] of this column so a
@@ -203,7 +235,7 @@ export async function chunkedConflictInsert<Entity extends ObjectLiteral>(
  *      23505 the old catch handled) without throwing. RETURNING yields the primary
  *      keys actually inserted (race losers / intra-batch dups are skipped).
  *      When `conflictUpdateColumns` is supplied the conflict action becomes
- *      `DO UPDATE SET col = EXCLUDED.col, ...` and ALL dedupable rows are sent
+ *      `DO UPDATE SET col = <merge>, ...` (conflictUpdateSetClause) and ALL dedupable rows are sent
  *      (the pre-check is skipped) so existing rows are refreshed; `RETURNING
  *      (xmax = 0) AS inserted` then tells genuine inserts (xmax = 0) apart from
  *      updates so events still fire for new rows only.
@@ -282,6 +314,117 @@ async function executeBulkInsert<Entity extends ObjectLiteral>(
  * entities, run with a repository already bound to the transaction. `chunk` is the
  * slice of `options.entities` this invocation covers; all other options are shared.
  */
+/**
+ * How a refreshed column combines the existing row with the arriving one.
+ *
+ *   'value'  nullable scalars. Same producer: new unless null. Other producer:
+ *            existing unless null. The default.
+ *   'flag'   NOT NULL booleans defaulting to false, where "null" never occurs
+ *            and false means "did not say". Same producer: new. Other
+ *            producer: OR — a producer that KNOWS a page was incognito must
+ *            not be silenced by one that defaulted the flag.
+ *   'json'   object-valued jsonb bags (properties, metadata). Both directions
+ *            merge keys; on a shared key the same producer's new value wins
+ *            and the other producer's does not. A straight replace here would
+ *            drop every key the other producer contributed. Object-valued
+ *            ONLY: jsonb `||` on arrays concatenates, so an array column
+ *            declared 'json' would grow on every re-sync.
+ */
+export type ConflictMergeKind = 'value' | 'flag' | 'json';
+
+/**
+ * Which producer's value wins a refreshed column when two DIFFERENT producers
+ * both hold one. Keyed by column; the value is the `source_type` values in
+ * order of trust, most trusted first. A producer not in the list ranks below
+ * every listed one; two unlisted producers tie, and a tie keeps the existing
+ * value (the arrival-order rule this refines).
+ *
+ * The rule without a preference — "another producer only fills what is
+ * empty" — is order-DEPENDENT whenever both sides have a value: the History
+ * file's real dwell time and the extension's 30-second default are both
+ * non-null, so whichever arrived first stood. A preference makes that column
+ * order-independent: the more trusted producer's value stands whether it
+ * arrived first (the less trusted one cannot overwrite it) or second (it
+ * overwrites). The same-producer branch is untouched — a producer always
+ * refreshes its own value.
+ */
+export type ProducerPreference = Readonly<Record<string, readonly string[]>>;
+
+/** The column that names a producer for the same-vs-other test. */
+const PRODUCER_COLUMN = 'source_type';
+
+/** Rank of `ref`'s producer in `producers` (1 = most trusted); unlisted ranks last. */
+function producerRank(ref: string, producers: readonly string[]): string {
+  const list = producers.map((producer) => `'${producer.replace(/'/g, "''")}'`).join(', ');
+
+  return `COALESCE(array_position(ARRAY[${list}]::text[], ${ref}."${PRODUCER_COLUMN}"), 2147483647)`;
+}
+
+/**
+ * The `SET` list of the DO UPDATE conflict action, one CASE per refreshed
+ * column: same producer refreshes, another producer only fills what is empty
+ * — unless `preference` names the column, in which case a MORE trusted
+ * producer also overwrites (and a less trusted one still only fills).
+ * `tableName` is the unqualified target table, which is how Postgres lets the
+ * existing row be referenced inside ON CONFLICT DO UPDATE.
+ *
+ * Pure and exported so the emitted SQL is testable without a driver; the
+ * integration spec proves the semantics against real Postgres.
+ */
+export function conflictUpdateSetClause(
+  tableName: string,
+  columns: readonly string[],
+  kinds: Readonly<Record<string, ConflictMergeKind>> = {},
+  preference: ProducerPreference = {},
+): string {
+  const same = `EXCLUDED."${PRODUCER_COLUMN}" IS NOT DISTINCT FROM "${tableName}"."${PRODUCER_COLUMN}"`;
+
+  return columns
+    .map((col) => {
+      const current = `"${tableName}"."${col}"`;
+      const incoming = `EXCLUDED."${col}"`;
+      const producers = preference[col];
+      // The extra arm between "same producer" and "other producer": the
+      // arriving producer outranks the one that wrote the row, so it takes
+      // the same-producer treatment (its value wins, null-guarded).
+      const outranks =
+        producers && producers.length > 0
+          ? ` WHEN ${producerRank('EXCLUDED', producers)} < ${producerRank(`"${tableName}"`, producers)}`
+          : null;
+
+      switch (kinds[col] ?? 'value') {
+        case 'flag':
+          // OR is symmetric; a preference has nothing to decide here.
+          return (
+            `"${col}" = CASE WHEN ${same} THEN COALESCE(${incoming}, ${current}) ` +
+            `ELSE (COALESCE(${current}, false) OR COALESCE(${incoming}, false)) END`
+          );
+        case 'json': {
+          const incomingWins = `(COALESCE(${current}, '{}'::jsonb) || COALESCE(${incoming}, '{}'::jsonb))`;
+          const currentWins = `(COALESCE(${incoming}, '{}'::jsonb) || COALESCE(${current}, '{}'::jsonb))`;
+
+          return (
+            `"${col}" = CASE WHEN ${same} THEN ${incomingWins}` +
+            (outranks ? `${outranks} THEN ${incomingWins}` : '') +
+            ` ELSE ${currentWins} END`
+          );
+        }
+
+        default: {
+          const incomingWins = `COALESCE(${incoming}, ${current})`;
+          const currentWins = `COALESCE(${current}, ${incoming})`;
+
+          return (
+            `"${col}" = CASE WHEN ${same} THEN ${incomingWins}` +
+            (outranks ? `${outranks} THEN ${incomingWins}` : '') +
+            ` ELSE ${currentWins} END`
+          );
+        }
+      }
+    })
+    .join(', ');
+}
+
 async function executeChunk<Entity extends ObjectLiteral>(
   options: BulkInsertOptions<Entity>,
   entities: Entity[],
@@ -295,6 +438,8 @@ async function executeChunk<Entity extends ObjectLiteral>(
     identityColumns,
     timeColumn,
     conflictUpdateColumns,
+    conflictMergeKinds,
+    conflictProducerPreference,
     sourceLedger,
   } = options;
 
@@ -313,8 +458,7 @@ async function executeChunk<Entity extends ObjectLiteral>(
   // docs/design/cross-pipeline-identity.md).
   const isDedupable = (triple: SourceTriple): boolean => triple.sourceId != null;
 
-  const tripleKey = (triple: SourceTriple): string =>
-    `${triple.sourceSystem ?? ''} ${triple.sourceId ?? ''}`;
+  const tripleKey = (triple: SourceTriple): string => `${triple.sourceSystem ?? ''} ${triple.sourceId ?? ''}`;
 
   const applyScope = (qb: SelectQueryBuilder<Entity>): void => {
     for (const [property, value] of Object.entries(scope)) {
@@ -481,9 +625,7 @@ async function executeChunk<Entity extends ObjectLiteral>(
 
   if (toInsert.length > 0) {
     const conflictAction = doUpdate
-      ? `${conflictTarget} DO UPDATE SET ${conflictUpdateColumns!
-          .map((col) => `"${col}" = EXCLUDED."${col}"`)
-          .join(', ')}`
+      ? `${conflictTarget} DO UPDATE SET ${conflictUpdateSetClause(alias, conflictUpdateColumns!, conflictMergeKinds, conflictProducerPreference)}`
       : `${conflictTarget} DO NOTHING`;
 
     const insertQb = repository
@@ -575,10 +717,15 @@ async function executeChunk<Entity extends ObjectLiteral>(
         sourceId: triple.sourceId as string,
         connectionId: sourceLedger.getConnectionId?.(entity) ?? null,
         importRunId: sourceLedger.importRunId ?? null,
+        platform: triple.sourcePlatform,
       });
     }
 
-    await appendRecordSources(repository.manager, { table: sourceLedger.table, userId: sourceLedger.userId }, ledgerRows);
+    await appendRecordSources(
+      repository.manager,
+      { table: sourceLedger.table, userId: sourceLedger.userId },
+      ledgerRows,
+    );
   }
 
   // --- Reassemble in input order, flagging which rows this call inserted. --------

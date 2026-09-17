@@ -4,11 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { WizardSteps } from './WizardSteps';
 
 /**
- * The one navigation row for the whole import surface: three steps, whose
- * state (todo/active/done) has to track wherever the surface actually is —
- * including Inbox/History, where `step` is null and none of the three is
- * current — and whose Export entry is a real gate, not just a visual one:
- * clicking it before anything is picked must not navigate anywhere.
+ * The wizard's navigation row: three steps, whose state (pick/export/sync)
+ * has to track where the wizard actually is, and whose Export entry is a real
+ * gate, not just a visual one: clicking it before anything is picked must not
+ * navigate anywhere.
  */
 describe('WizardSteps', () => {
   it('marks the current step active and leaves the others reachable but not current', () => {
@@ -36,23 +35,6 @@ describe('WizardSteps', () => {
 
     // Sync is the current step, not done — it still shows its own number.
     expect(sync).toHaveAttribute('aria-current', 'step');
-    expect(sync.textContent).toContain('3');
-  });
-
-  it('treats every step as todo, and none as current, off the wizard entirely', () => {
-    // Inbox and History pass step=null: the row is still the way back to any
-    // step, but nothing on it should claim to be "where you are".
-    render(<WizardSteps step={null} canExport onStep={vi.fn()} />);
-
-    const [pick, exportStep, sync] = screen.getAllByRole('button');
-
-    for (const button of [pick, exportStep, sync]) {
-      expect(button).not.toHaveAttribute('aria-current');
-      expect(button.querySelector('svg')).toBeNull();
-    }
-
-    expect(pick.textContent).toContain('1');
-    expect(exportStep.textContent).toContain('2');
     expect(sync.textContent).toContain('3');
   });
 

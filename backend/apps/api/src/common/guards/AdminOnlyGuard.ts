@@ -16,11 +16,36 @@ import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@
  * `PortalTokenVerifier`'s doc comment) to avoid a guard → auth → user → guard cycle, so this reads
  * only what the auth guard already put on the request.
  *
- * One consequence of that: a request authenticated via the portal-bearer path currently populates
- * `request.user` with only `{ id }` (see `PortalTokenVerifier.verifyAndProvision`), not the full
- * user record — so a portal-authenticated admin is refused here today, not just a non-admin. That
- * fails closed (403, not a bypass), and widening the portal principal to carry `role` is a change
- * to that path, not to this guard.
+ * All three principals reaching this guard DO carry `role`: `JwtStrategy` and `ApiKeyStrategy` both
+ * return `userService.findById(...)`, and `PortalTokenService.verifyAndProvision` returns a whole
+ * `User` too — its interface merely used to say `{ id }` (now widened, and asserted in
+ * `__tests__/AdminOnlyGuard.test.ts`). An earlier revision of this comment claimed the portal path
+ * was refused here; it is not, and that claim was being cited as a reason not to admin-gate routes.
+ *
+ * ═══ ADMIN BOOTSTRAPPING (was: THE REAL CAVEAT) ═══
+ *
+ * This guard used to be unreachable on a fresh appliance, and this comment used to say so. The
+ * cause: nothing in application code ever wrote `role = 'admin'`. The only path was migration
+ * 20260825233952, which promotes the earliest EXISTING user and only when no admin exists — on an
+ * upgrade that found the owner, but on a FRESH install it ran against an empty `ci.users`, matched
+ * nothing, and the first signup landed on the column default `'user'`. Those appliances had no
+ * admin, permanently, so every route here returned 403 to everybody: all MCP server configuration
+ * (including the outbound per-tool approval UI, which the web app renders and which therefore
+ * failed for every user) and `GET /api/tools/invocations/system`, the only reader of the tool
+ * ledger's `user_id IS NULL` rows.
+ *
+ * Both halves are now closed. `UserService.claimApplianceIfUnowned` promotes the account that
+ * claims an unowned appliance, covering every appliance created from that release on, and
+ * migration 20260910133657 re-runs the backfill for the fresh installs 20260825233952 could not
+ * reach. Read those two for the reasoning; the short version is that on a single-owner personal
+ * appliance the first account IS the owner, which is what `SignupController`'s first-account
+ * exemption and `UserService.findAllOnboarded` already assumed.
+ *
+ * So a route may now be gated here without stranding new installs. `/jobs`' appliance-wide
+ * controls still use {@link ApplianceAdminGuard} rather than this guard, and deliberately: that
+ * one degrades to admitting everyone on an appliance with no live admin, which is the honest
+ * answer for a control plane, whereas these routes fail closed because stdio transport is
+ * arbitrary local command execution and "unclaimed" is not a reason to hand that out.
  */
 @Injectable()
 export class AdminOnlyGuard implements CanActivate {

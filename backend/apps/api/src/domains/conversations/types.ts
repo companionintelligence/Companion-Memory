@@ -4,6 +4,7 @@ export interface CreateMessageDto {
   role: string;
   model: string;
   content: string;
+  source?: 'openclaw' | 'memory' | 'user';
   mimetype?: string;
   toolCalls?: Record<string, unknown>[] | null;
   canceled?: boolean;
@@ -22,6 +23,8 @@ export interface CreateThreadDto {
   name?: string;
   model?: string;
   description?: string;
+  kind?: 'chat' | 'dispatch';
+  generationStatus?: 'idle' | 'queued' | 'running' | 'failed';
 }
 
 export interface UpdateThreadDto {

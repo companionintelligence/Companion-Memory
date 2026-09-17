@@ -1,5 +1,6 @@
 import type { LoggerService } from '@ci/common/logging';
 
+import { DEAD_LETTER_QUEUE } from '../../constants';
 import { JobMetricsCollector } from '../JobMetricsCollector';
 
 /**
@@ -41,11 +42,15 @@ function sqlFor(capture: Capture, matches: (sql: string) => boolean, what: strin
 // one also contains: the per-category FLOW query selects `data->>'name'` out of
 // `pgboss.job` too, so a naive search for that would let a gauge assertion pass
 // against the flow query and silently guard nothing.
+//
+// The two gauges are told apart by `AS event`, NOT by `AS queue` — both select
+// the queue now that the category fold resolves the (event, queue) pair, and
+// only the per-category one carries the event.
 const perQueueGauge = (capture: Capture) =>
-  sqlFor(capture, (sql) => sql.includes('AS queue') && sql.includes('AS pending'), 'the per-queue gauge');
+  sqlFor(capture, (sql) => sql.includes('AS pending') && !sql.includes('AS event'), 'the per-queue gauge');
 
 const perCategoryGauge = (capture: Capture) =>
-  sqlFor(capture, (sql) => sql.includes('AS pending') && !sql.includes('AS queue'), 'the per-category gauge');
+  sqlFor(capture, (sql) => sql.includes('AS pending') && sql.includes('AS event'), 'the per-category gauge');
 
 const perCategoryFlow = (capture: Capture) =>
   sqlFor(capture, (sql) => sql.includes('AS arrived'), 'the per-category flow');
@@ -116,20 +121,24 @@ function makeCollector(
 }
 
 describe('JobMetricsCollector — the per-category sweep', () => {
-  it('groups on the event in the payload, never on the queue', async () => {
+  it('groups on the (event, queue) pair the category fold resolves on', async () => {
     const capture = makeCollector();
 
     await capture.collector.sample(new Date('2026-09-01T12:00:00.000Z'));
 
     const gauges = perCategoryGauge(capture);
 
+    // Both columns, because `categoryOfJob` resolves the PAIR: a handful of
+    // events mean different things on different queues, and this table is read
+    // beside the Jobs list's category chips, which resolve the same way.
     expect(gauges).toContain(`SELECT data->>'name' AS event`);
-    // The queue column may appear only as the dead-letter predicate. pg-boss
-    // rewrites it to the literal `dead-letter` on the copy it makes of a
-    // dead-lettered job — 43% of rows on a live appliance — so a queue-keyed
-    // grouping cannot be turned back into a category for any of them.
-    expect(gauges).not.toMatch(/\bname\s+AS\s+(queue|category|event)\b/);
-    expect(gauges).toMatch(/GROUP BY 1\b/);
+    expect(gauges).toMatch(/name\s+AS queue/);
+    expect(gauges).toMatch(/GROUP BY 1, 2\b/);
+    // The queue is a grouping COLUMN, never the category key on its own —
+    // pg-boss rewrites it to the literal `dead-letter` on the copy it makes of a
+    // dead-lettered job (43% of rows on a live appliance), and `categoryOfJob`
+    // falls back to the event name for exactly those. See its doc comment.
+    expect(gauges).toContain('name = $1');
   });
 
   it('counts a dead-lettered job ONCE, unlike the per-queue gauge that must count it twice', async () => {
@@ -196,6 +205,55 @@ describe('JobMetricsCollector — the per-category sweep', () => {
     // category of work — it gets its own bucket rather than borrowing one.
     expect(byCategory.unclassified.pending).toBe(5);
     expect(Object.keys(byCategory).sort()).toEqual(['search', 'unclassified']);
+  });
+
+  it('folds a queue-scoped event by its queue, and its dead-letter copy by its event', async () => {
+    // `content.created` is `search` on `search-index` and `pipeline` on
+    // `pipeline-index`. Folding on the event alone put all three rows below
+    // under `search` — which is what the Jobs list's category chips did too,
+    // while the table and the filter beside them said `pipeline`. This table is
+    // read on the same page, so it has to fold the same way.
+    const capture = makeCollector({
+      categoryGauges: [
+        {
+          event: 'content.created',
+          queue: 'search-index',
+          pending: 2,
+          active: 0,
+          retry: 0,
+          dead_lettered: 0,
+        },
+        {
+          event: 'content.created',
+          queue: 'pipeline-index',
+          pending: 7,
+          active: 0,
+          retry: 0,
+          dead_lettered: 0,
+        },
+        // The dead-letter copy: pg-boss rewrote the queue, so the pair is
+        // unrecoverable and the fold degrades to the event — exactly as the
+        // list's filter does for the same row.
+        {
+          event: 'content.created',
+          queue: DEAD_LETTER_QUEUE,
+          pending: 0,
+          active: 0,
+          retry: 0,
+          dead_lettered: 3,
+        },
+      ],
+    });
+
+    await capture.collector.sample(new Date('2026-09-01T12:00:00.000Z'));
+
+    const byCategory = Object.fromEntries(
+      insertedRows(capture, 'ci.job_category_metrics').map((row) => [row.category, row]),
+    );
+
+    expect(byCategory.pipeline.pending).toBe(7);
+    expect(byCategory.search.pending).toBe(2);
+    expect(byCategory.search.dead_lettered).toBe(3);
   });
 
   it('still writes the per-queue sample when the category table has not been migrated yet', async () => {

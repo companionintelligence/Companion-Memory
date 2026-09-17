@@ -3,8 +3,8 @@ import { Fragment } from 'react';
 import { cn, Tooltip } from '@ci/shadcn';
 
 import type { DueForecast, DueItem, WeekForecast, WeekForecastCluster } from '@/api/useWeekAheadService';
-import { dueItemVisible, weekClusterVisible } from '@/lib/forecastDisplay';
 import { l0Background } from '@/components/ForecastStrip/ForecastStrip';
+import { dueItemVisible, weekClusterVisible } from '@/lib/forecastDisplay';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 

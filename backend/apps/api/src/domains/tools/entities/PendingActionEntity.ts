@@ -54,6 +54,21 @@ export class PendingActionEntity {
   @Column({ type: 'text', name: 'actor' })
   actor!: ApiKeyCapability;
 
+  /**
+   * The installed app that proposed this, as its api-key name
+   * (`app:ci-openclaw:ci-marketplace`), or null when the owner proposed it.
+   *
+   * `actor` says what authority the caller held and `origin` which tier it came
+   * from — neither says WHO. The managed-app gate exists because an installed
+   * harness is a different principal from the owner, so a card that cannot name
+   * it is asking the owner to authorise an anonymous caller.
+   *
+   * Stores the name, not a display label: the row records the fact, and turning
+   * `app:ci-openclaw:...` into "OpenClaw" is presentation.
+   */
+  @Column({ type: 'text', name: 'principal_name', nullable: true })
+  principalName!: string | null;
+
   @Column({ type: 'text', name: 'status' })
   status!: PendingActionStatus;
 

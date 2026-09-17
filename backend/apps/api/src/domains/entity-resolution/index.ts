@@ -16,6 +16,7 @@ import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule, ReceiptEntity } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
 import { ParsingModule } from '@ci/domains/parsing';
+import { PlanningModule } from '@ci/domains/planning';
 
 import { EntityResolutionService } from './services/EntityResolutionService';
 
@@ -31,6 +32,7 @@ import { EntityResolutionService } from './services/EntityResolutionService';
     MemoryModule,
     NotesModule,
     ParsingModule,
+    PlanningModule,
   ],
   providers: [EntityResolutionService],
   exports: [EntityResolutionService],

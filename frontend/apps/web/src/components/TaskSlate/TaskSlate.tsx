@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation } from '@apollo/client';
 import { useDeviceLayout } from '@ci/common';
 import { Button, cn, Sheet, Tabs, Tooltip } from '@ci/shadcn';
-import { GripVertical, X } from '@ci/shadcn/icons';
+import { X } from '@ci/shadcn/icons';
 
 import {
   EventForm,
@@ -16,12 +16,8 @@ import {
 import type { CalendarSlot } from '@/components/HorizonGrid';
 import { formatClock } from '@/components/HorizonGrid/nowNext';
 import { gql } from '@/graphql';
-import { CANDIDATE_DRAG_TYPE } from '@/lib/scheduleDrag';
-import { type Section, type SectionedTask } from '@/pages/PlanPage/taskSections';
+import { type Section } from '@/pages/PlanPage/taskSections';
 import type { PlanTask } from '@/pages/PlanPage/usePlanTasks';
-
-import { ScheduleDragGhost } from './ScheduleDragGhost';
-import { useCandidatePointerDrag } from './useCandidatePointerDrag';
 
 const CREATE_EVENT = gql(`
   mutation CreateEvent($input: CreateEventInput!) {
@@ -37,55 +33,33 @@ const CREATE_EVENT = gql(`
   }
 `);
 
-export { CANDIDATE_DRAG_TYPE };
-
 function formatDue(dueAt: string | Date): string {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(dueAt));
-}
-
-function overdueCount<T extends SectionedTask>(section: Section<T>): number {
-  return section.lanes.find((lane) => lane.key === 'overdue')?.tasks.length ?? 0;
 }
 
 interface CardProps {
   task: PlanTask;
   /** Proposed inbox items can be declined; unscheduled work is only placed. */
   onDismiss?: (id: string) => void;
-  /** Hold-to-drag on touch; desktop keeps HTML5. */
-  touchDrag?: boolean;
-  /**
-   * Whether this card can be dropped onto a day at all.
-   *
-   * False in the slot drawer — those cards are clicked onto the selected time
-   * rather than dragged.
-   */
-  placeable?: boolean;
   /** Click the card to put it on the selected slot. */
   onPlace?: (id: string) => void;
 }
 
-function BacklogCard({ task, onDismiss, touchDrag = false, placeable = true, onPlace }: CardProps) {
+/**
+ * A possibility, waiting.
+ *
+ * ═══ WHAT THIS USED TO DO ═══
+ * Carry a whole drag subsystem — HTML5 `dragstart` on a mouse, a hold-to-drag
+ * pointer protocol on touch, and a six-dot handle to start it — so a card could
+ * be dropped on a day. #2529 replaced that with clicking an empty slot, and
+ * nothing has rendered a draggable card since; the machinery stayed, unreachable
+ * on every device, while its comments still promised drag-to-place worked.
+ */
+function BacklogCard({ task, onDismiss, onPlace }: CardProps) {
   const proposed = task.status === 'proposed' || Boolean(task.hasPendingChange);
-  const { onPointerDown, onHandlePointerDown, onContextMenu } = useCandidatePointerDrag(
-    task,
-    touchDrag && placeable,
-  );
-  const html5Drag = placeable && !touchDrag;
 
   return (
     <li
-      draggable={html5Drag}
-      onDragStart={
-        html5Drag
-          ? (event) => {
-              event.dataTransfer.setData(CANDIDATE_DRAG_TYPE, task.id);
-              event.dataTransfer.setData('text/plain', task.title);
-              event.dataTransfer.effectAllowed = 'move';
-            }
-          : undefined
-      }
-      onPointerDown={placeable ? onPointerDown : undefined}
-      onContextMenu={placeable ? onContextMenu : undefined}
       onClick={onPlace ? () => onPlace(task.id) : undefined}
       onKeyDown={
         onPlace
@@ -102,31 +76,10 @@ function BacklogCard({ task, onDismiss, touchDrag = false, placeable = true, onP
       aria-label={onPlace ? `Add ${task.title} at this time` : undefined}
       className={cn(
         'group relative flex flex-col rounded-lg border border-border bg-background',
-        'p-2.5 transition-colors',
-        placeable ? 'cursor-grab pl-7 hover:border-primary/50 active:cursor-grabbing' : 'pl-2.5 pr-9',
+        'p-2.5 pl-2.5 pr-9 transition-colors',
         onPlace && 'cursor-pointer hover:border-primary/50',
-        placeable && touchDrag && 'select-none touch-pan-y [-webkit-touch-callout:none]',
       )}
     >
-      {placeable &&
-        (touchDrag ? (
-          <button
-            type="button"
-            aria-label={`Drag ${task.title} onto the calendar`}
-            className="absolute left-0 top-1 z-10 flex h-11 w-8 touch-none items-start justify-center pt-2 text-muted-foreground"
-            onPointerDown={onHandlePointerDown}
-            onContextMenu={onContextMenu}
-          >
-            <GripVertical className="h-4 w-4" strokeWidth={1.5} aria-hidden />
-          </button>
-        ) : (
-          <GripVertical
-            className="absolute left-1.5 top-3 h-4 w-4 text-muted-foreground/40 group-hover:text-muted-foreground pointer-coarse:text-muted-foreground/70"
-            strokeWidth={1.5}
-            aria-hidden
-          />
-        ))}
-
       <p className="text-[13px] leading-snug text-foreground">{task.title}</p>
 
       {onDismiss && proposed ? (
@@ -179,22 +132,68 @@ function BacklogCard({ task, onDismiss, touchDrag = false, placeable = true, onP
   );
 }
 
+/**
+ * What this rail actually puts on screen, and what it leaves to Plan.
+ *
+ * `section.count` / `section.overdueCount` are subtree-aware: right for the
+ * Plan board, which renders every child nested under its root, wrong here,
+ * where only roots get a card. Borrowing them printed a "3" over a list of
+ * one. Roots are all this surface can attribute — a `Section` carries the
+ * subtree's size but not its rows — so the badge counts the cards and the
+ * remainder is named (see `NestedNote`) rather than left looking like a bug.
+ *
+ * A root sits in the Overdue lane exactly when `isOverdue` holds for it, so
+ * whatever overdue the section counts beyond that lane is a hidden child.
+ */
+function listedInSlate(section: Section<PlanTask>) {
+  const count = section.tasks.length;
+  const overdueCount = section.lanes.find((lane) => lane.key === 'overdue')?.tasks.length ?? 0;
+
+  return {
+    count,
+    overdueCount,
+    nested: section.count - count,
+    nestedOverdue: section.overdueCount - overdueCount,
+  };
+}
+
+/**
+ * "Plan nests 2 subtasks under these" — the board's number, minus this list.
+ *
+ * `nested` counts finished descendants too, and it has to: a `Section` carries
+ * the subtree's size but not its rows, so a done child is indistinguishable
+ * from a live one from here. "2 nested subtasks" therefore promised
+ * outstanding work in a rail titled Possibilities even when the only child was
+ * ticked off, so the line says what the number actually spans instead.
+ *
+ * `nestedOverdue` comes from `overdueCount`, which is status-aware — finished
+ * work is never overdue — so that clause can still be stated flatly.
+ */
+function NestedNote({ nested, nestedOverdue }: { nested: number; nestedOverdue: number }) {
+  if (nested <= 0) {
+    return null;
+  }
+
+  return (
+    <p className="px-1 pb-2 text-[11px] leading-snug text-muted-foreground">
+      Plan nests {nested} {nested === 1 ? 'subtask' : 'subtasks'} under these, done or not
+      {nestedOverdue > 0 ? <span className="text-destructive"> · {nestedOverdue} overdue</span> : null}
+    </p>
+  );
+}
+
 function BacklogColumn({
   section,
   onDismiss,
   showHeading = true,
-  touchDrag = false,
-  placeable = true,
   onPlace,
 }: {
   section: Section<PlanTask>;
   onDismiss?: (id: string) => void;
   showHeading?: boolean;
-  touchDrag?: boolean;
-  placeable?: boolean;
   onPlace?: (id: string) => void;
 }) {
-  const overdue = overdueCount(section);
+  const { count, overdueCount: overdue, nested, nestedOverdue } = listedInSlate(section);
   const dismiss = section.key === 'proposed' ? onDismiss : undefined;
 
   return (
@@ -202,7 +201,7 @@ function BacklogColumn({
       {showHeading ? (
         <h4 className="shrink-0 px-1 pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {section.label}
-          <span className="ml-2 font-normal">{section.tasks.length}</span>
+          <span className="ml-2 font-normal">{count}</span>
           {overdue > 0 ? (
             <span className="ml-2 font-normal normal-case tracking-normal text-destructive">
               {overdue} overdue
@@ -212,6 +211,8 @@ function BacklogColumn({
       ) : overdue > 0 ? (
         <p className="px-1 pb-2 text-xs text-destructive">{overdue} overdue</p>
       ) : null}
+
+      <NestedNote nested={nested} nestedOverdue={nestedOverdue} />
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto" data-list-scroll="">
         {section.lanes.map((lane) => (
@@ -229,14 +230,7 @@ function BacklogColumn({
             ) : null}
             <ul className="flex flex-col gap-2">
               {lane.tasks.map((task) => (
-                <BacklogCard
-                  key={task.id}
-                  task={task}
-                  onDismiss={dismiss}
-                  touchDrag={touchDrag}
-                  placeable={placeable}
-                  onPlace={onPlace}
-                />
+                <BacklogCard key={task.id} task={task} onDismiss={dismiss} onPlace={onPlace} />
               ))}
             </ul>
           </div>
@@ -246,7 +240,7 @@ function BacklogColumn({
   );
 }
 
-interface TaskSlateProps {
+interface SlateBodyProps {
   sections: Section<PlanTask>[];
   loading: boolean;
   /**
@@ -257,29 +251,10 @@ interface TaskSlateProps {
   error?: boolean;
   onDismissProposed?: (id: string) => void;
   onPlace?: (id: string) => void;
-  className?: string;
 }
 
-interface SlateBodyProps extends Omit<TaskSlateProps, 'className'> {
-  /** Undefined until the media query has resolved — neither branch renders. */
-  isMobile: boolean | undefined;
-  /** Cards can be dragged onto a day. See {@link BacklogCard}. */
-  placeable: boolean;
-  /** How tall a tab panel may grow: the inline card caps it, the drawer does not. */
-  paneClassName: string;
-}
-
-/** The empty/loading/error copy and the two columns, wherever they are shown. */
-function SlateBody({
-  sections,
-  loading,
-  error = false,
-  onDismissProposed,
-  onPlace,
-  isMobile,
-  placeable,
-  paneClassName,
-}: SlateBodyProps) {
+/** The empty/loading/error copy and the backlog columns, behind a tablist. */
+function SlateBody({ sections, loading, error = false, onDismissProposed, onPlace }: SlateBodyProps) {
   const [tab, setTab] = useState<string | null>(null);
   const hasCards = sections.some((section) => section.tasks.length > 0);
   const firstKey = sections[0]?.key;
@@ -299,105 +274,41 @@ function SlateBody({
 
       {!loading && !hasCards && !error ? (
         <p className="max-w-md self-start text-[12px] leading-relaxed text-muted-foreground">
-          {placeable
-            ? 'Nothing in Proposed or Unscheduled. Add a task on the Plan page and it will show up here to drop onto a day.'
-            : 'Nothing in Proposed or Unscheduled. Add a task on the Plan page and it will show up here.'}
+          Nothing in Proposed or Unscheduled. Add a task on the Plan page and it will show up here.
         </p>
       ) : null}
 
-      {hasCards && isMobile && activeTab ? (
+      {hasCards && activeTab ? (
         <Tabs value={activeTab} onValueChange={setTab} className="flex min-h-0 flex-col gap-3">
           <Tabs.List className="h-auto max-w-full justify-start overflow-x-auto">
-            {sections.map((section) => (
-              <Tabs.Trigger key={section.key} value={section.key} className="shrink-0">
-                {section.label}
-                <span className="ml-2 font-normal">{section.tasks.length}</span>
-                {overdueCount(section) > 0 ? (
-                  <span className="ml-2 font-normal text-destructive">{overdueCount(section)} overdue</span>
-                ) : null}
-              </Tabs.Trigger>
-            ))}
+            {sections.map((section) => {
+              const listed = listedInSlate(section);
+
+              return (
+                <Tabs.Trigger key={section.key} value={section.key} className="shrink-0">
+                  {section.label}
+                  <span className="ml-2 font-normal">{listed.count}</span>
+                  {listed.overdueCount > 0 ? (
+                    <span className="ml-2 font-normal text-destructive">{listed.overdueCount} overdue</span>
+                  ) : null}
+                </Tabs.Trigger>
+              );
+            })}
           </Tabs.List>
 
           {sections.map((section) => (
-            <Tabs.Content key={section.key} value={section.key} className={paneClassName}>
+            <Tabs.Content key={section.key} value={section.key} className="min-h-0">
               <BacklogColumn
                 section={section}
                 onDismiss={onDismissProposed}
                 showHeading={false}
-                touchDrag
-                placeable={placeable}
                 onPlace={onPlace}
               />
             </Tabs.Content>
           ))}
         </Tabs>
       ) : null}
-
-      {/* Only ever reached inline — the drawer is a phone surface and passes
-          `isMobile` outright, so the rail keeps its own cap. */}
-      {hasCards && isMobile === false ? (
-        <div className="flex max-h-72 min-h-0 gap-3 overflow-x-auto">
-          {sections.map((section) => (
-            <div
-              key={section.key}
-              className="flex min-w-[14rem] flex-1 flex-col rounded-lg border border-border bg-muted/30 px-2 py-2"
-            >
-              <BacklogColumn
-                section={section}
-                onDismiss={onDismissProposed}
-                placeable={placeable}
-                onPlace={onPlace}
-              />
-            </div>
-          ))}
-        </div>
-      ) : null}
     </>
-  );
-}
-
-/**
- * Proposed and Unscheduled work from Plan — the same two Kanban columns, sitting
- * under the week so a card is a short drag from a day.
- *
- * Scheduled and Done stay on the Plan board. Nothing here places itself; dropping
- * onto a day is the consent that turns a todo into committed time.
- *
- * This is the desktop shape, where there is room beside the week for a rail and
- * a drag across it is a real gesture. A phone gets {@link TaskSlateDrawer}.
- */
-export function TaskSlate({
-  sections,
-  loading,
-  error = false,
-  onDismissProposed,
-  className,
-}: TaskSlateProps) {
-  const { isMobile } = useDeviceLayout();
-  const hasCards = sections.some((section) => section.tasks.length > 0);
-
-  return (
-    <div className={cn('rounded-xl border border-border bg-card p-3 md:p-4', className)}>
-      <div className="mb-2.5 flex items-baseline justify-between gap-2">
-        <h3 className="text-sm font-medium text-foreground">Possibilities</h3>
-        <span className="text-[11px] text-muted-foreground">
-          {hasCards ? (isMobile ? 'drag the handle onto the day above' : 'drag one onto a day above') : null}
-        </span>
-      </div>
-
-      <SlateBody
-        sections={sections}
-        loading={loading}
-        error={error}
-        onDismissProposed={onDismissProposed}
-        isMobile={isMobile}
-        placeable
-        paneClassName="max-h-72 overflow-hidden"
-      />
-
-      <ScheduleDragGhost />
-    </div>
   );
 }
 
@@ -407,7 +318,7 @@ function formatSlotHeading(slot: CalendarSlot): string {
   return slot.allDay ? `${day} · All day` : `${day} · ${formatClock(slot.instant)}`;
 }
 
-interface TaskSlateDrawerProps extends Omit<TaskSlateProps, 'className'> {
+interface TaskSlateDrawerProps extends SlateBodyProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   slot: CalendarSlot | null;
@@ -438,7 +349,9 @@ export function TaskSlateDrawer({
 }: TaskSlateDrawerProps) {
   const { isMobile } = useDeviceLayout();
   const [composing, setComposing] = useState(false);
-  const [draft, setDraft] = useState<EventDraft>(() => eventDraftAt(slot?.instant ?? new Date(), slot?.allDay));
+  const [draft, setDraft] = useState<EventDraft>(() =>
+    eventDraftAt(slot?.instant ?? new Date(), slot?.allDay),
+  );
   const [problem, setProblem] = useState<EventDraftProblem | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [createEvent, { loading: creating }] = useMutation(CREATE_EVENT);
@@ -458,6 +371,25 @@ export function TaskSlateDrawer({
       description: previous.description,
     }));
   }, [slot]);
+
+  /**
+   * Leaving the composer takes its failure with it.
+   *
+   * `submitError` used to be cleared only when `slot` went null, so Cancel then
+   * "New event" re-mounted a fresh, untouched form under the alert from the
+   * previous attempt — a rejection reported against a write that never happened.
+   */
+  const closeComposer = () => {
+    setComposing(false);
+    setProblem(null);
+    setSubmitError(null);
+  };
+
+  const openComposer = () => {
+    setProblem(null);
+    setSubmitError(null);
+    setComposing(true);
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -500,14 +432,22 @@ export function TaskSlateDrawer({
         </Sheet.Header>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
-          <section aria-labelledby="slot-predictions-label" className="rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+          <section
+            aria-labelledby="slot-predictions-label"
+            className="rounded-lg border border-border bg-muted/30 px-3 py-2.5"
+          >
             <h4
               id="slot-predictions-label"
               className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
             >
               Predictions
             </h4>
-            <p className={cn('mt-1 text-[13px] leading-snug', insight ? 'text-foreground' : 'text-muted-foreground')}>
+            <p
+              className={cn(
+                'mt-1 text-[13px] leading-snug',
+                insight ? 'text-foreground' : 'text-muted-foreground',
+              )}
+            >
               {insight ?? 'No predictions available'}
             </p>
           </section>
@@ -521,7 +461,7 @@ export function TaskSlateDrawer({
                 </p>
               ) : null}
               <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => setComposing(false)} disabled={creating}>
+                <Button type="button" variant="outline" size="sm" onClick={closeComposer} disabled={creating}>
                   Cancel
                 </Button>
                 <Button type="submit" size="sm" disabled={creating}>
@@ -531,7 +471,7 @@ export function TaskSlateDrawer({
             </form>
           ) : (
             <>
-              <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => setComposing(true)}>
+              <Button type="button" variant="outline" size="sm" className="self-start" onClick={openComposer}>
                 New event
               </Button>
 
@@ -545,9 +485,6 @@ export function TaskSlateDrawer({
                   error={error}
                   onDismissProposed={onDismissProposed}
                   onPlace={onPlace}
-                  isMobile
-                  placeable={false}
-                  paneClassName="min-h-0"
                 />
               </div>
             </>

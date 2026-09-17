@@ -48,6 +48,18 @@ members = [
     "backend/apps/summary",
     "backend/packages/*",
 ]
+# `backend/packages/` is a mixed-language directory, and the glob above is a
+# glob on purpose: a new PYTHON member there is picked up without editing this
+# file. The cost is that a member with no `pyproject.toml` is not ignored — uv
+# fails the whole workspace with "missing a `pyproject.toml`", so every
+# JavaScript package that lands there has to be named here.
+#
+# `uv sync --all-packages --locked` is what breaks, which means `make install`,
+# `make lint` and ci.yml's `python` lane all break together, none of them
+# anywhere near the change that caused it.
+exclude = [
+    "backend/packages/tool-core",
+]
 
 # Tooling for the whole workspace, installed by `uv sync --all-packages`.
 # Dependency groups are never published into a wheel, so members do not

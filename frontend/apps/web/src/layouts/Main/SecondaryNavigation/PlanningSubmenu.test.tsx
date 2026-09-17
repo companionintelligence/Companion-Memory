@@ -54,6 +54,18 @@ describe('PlanningSubmenu', () => {
     expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
   });
 
+  it('opens Planning section icons below the head when the collapsed icon is clicked', () => {
+    renderSubmenu('/feed', { expanded: false });
+
+    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Planning' }));
+
+    expect(screen.getByRole('link', { name: 'Tasks' })).toHaveAttribute('href', '/plan/tasks');
+    expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('href', '/plan/calendar');
+    expect(screen.queryByText('Tasks')).not.toBeInTheDocument();
+  });
+
   it('offers Tasks and Calendar once expanded and opened', () => {
     renderSubmenu('/plan/tasks');
 

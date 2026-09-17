@@ -49,19 +49,22 @@ describe('ENTITY_SOURCE_MAP agrees with the pipeline stage sources that write th
     ['person', { schema: 'ci', table: 'entities', idColumn: 'entity_id' }],
   ];
 
-  it.each(cases)('%s resolves the same table + id column its embed stage writes', (entityType, stageSource) => {
-    const mapped = ENTITY_SOURCE_MAP[entityType];
+  it.each(cases)(
+    '%s resolves the same table + id column its embed stage writes',
+    (entityType, stageSource) => {
+      const mapped = ENTITY_SOURCE_MAP[entityType];
 
-    expect({
-      schema: mapped.schema,
-      table: mapped.table,
-      idColumn: mapped.idColumn,
-    }).toEqual({
-      schema: stageSource.schema,
-      table: stageSource.table,
-      idColumn: stageSource.idColumn,
-    });
-  });
+      expect({
+        schema: mapped.schema,
+        table: mapped.table,
+        idColumn: mapped.idColumn,
+      }).toEqual({
+        schema: stageSource.schema,
+        table: stageSource.table,
+        idColumn: stageSource.idColumn,
+      });
+    },
+  );
 });
 
 describe('ENTITY_SOURCE_MAP.file', () => {
@@ -105,5 +108,24 @@ describe('ENTITY_SOURCE_MAP.file', () => {
     // mirroring INDEX_EMBED_FILE_SOURCE.predicate, which this domain may not
     // import (see the note on the cross-check above).
     expect(predicate).toBe("s.variant = 'ORIGINAL' AND s.deleted_at IS NULL");
+  });
+});
+
+describe('ENTITY_SOURCE_MAP.event', () => {
+  /**
+   * Backfill-only, and it must mirror `INDEX_EMBED_EVENT_SOURCE.predicate`
+   * exactly, for the same reason the file entry mirrors its stage: the sweep
+   * must never enqueue a row the stage would refuse. For events the refused row
+   * is a planned block — planning's own object, whose words live on the task —
+   * and before this predicate existed every one of them was re-found on every
+   * pass and re-enqueued as a permanent no-op.
+   */
+  it('mirrors the embed stage predicate, excluding planned blocks and deleted rows', () => {
+    const predicate = ENTITY_SOURCE_MAP.event.backfillPredicate;
+
+    expect(predicate).toBeDefined();
+    expect(predicate).toContain("s.event_type <> 'planned_block'");
+    expect(predicate).toContain('s.is_deleted IS NOT TRUE');
+    expect(predicate).toBe("s.is_deleted IS NOT TRUE AND s.event_type <> 'planned_block'");
   });
 });

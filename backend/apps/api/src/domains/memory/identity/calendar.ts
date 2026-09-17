@@ -30,7 +30,14 @@ function zonedWallClockOf(instantMs: number, timeZone: string): number {
   }).formatToParts(new Date(instantMs));
   const field = (type: string): number => Number(parts.find((part) => part.type === type)?.value ?? 0);
 
-  return Date.UTC(field('year'), field('month') - 1, field('day'), field('hour'), field('minute'), field('second'));
+  return Date.UTC(
+    field('year'),
+    field('month') - 1,
+    field('day'),
+    field('hour'),
+    field('minute'),
+    field('second'),
+  );
 }
 
 /**

@@ -704,9 +704,11 @@ describe('a human decision is final', () => {
 
     const evidence = statements.find((statement) => /^WITH mine AS/i.test(statement.sql));
 
-    // Four legs now: the swept subjects, the group-size count, the other side of
-    // the join, and the other side's E.164 aggregate.
-    expect(evidence?.sql.match(/disposition IS DISTINCT FROM 'rejected'/g)?.length).toBe(4);
+    // Two legs: the swept subjects (`mine`) and every holder of their values
+    // (`holders`). Group size and the other side's E.164 form are derived from
+    // `holders`, not re-read — the correlated per-row form never finished on a
+    // real corpus (see `loadEvidence`).
+    expect(evidence?.sql.match(/disposition IS DISTINCT FROM 'rejected'/g)?.length).toBe(2);
     expect(evidence?.sql).toMatch(/o\.entity_id IS NOT NULL/);
   });
 

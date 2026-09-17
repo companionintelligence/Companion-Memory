@@ -47,6 +47,39 @@ describe('resolveTargetFor', () => {
     });
   });
 
+  it('keys Hulu rows by the parsed work, through the Netflix title shape', () => {
+    expect(
+      resolveTargetFor({
+        sourceSystem: 'hulu',
+        externalId: 'hulu:title:0123456789abcdef',
+        externalIdKind: 'external_uri',
+        sourceTitle: "Bob's Burgers: Season 16: The Keyboard Kid",
+      }),
+    ).toMatchObject({
+      resolver: 'wikidata',
+      key: 'wd:tv:bob s burgers',
+      work: { kind: 'tv', title: "Bob's Burgers", season: 16, episodeTitle: 'The Keyboard Kid' },
+    });
+    expect(resolveTargetFor({ sourceSystem: 'hulu', sourceTitle: 'The Raid: Redemption' })).toMatchObject({
+      key: 'wd:movie:the raid redemption',
+    });
+  });
+
+  it('keys Disney+ rows the same way', () => {
+    expect(
+      resolveTargetFor({
+        sourceSystem: 'disney_plus',
+        externalId: 'disney_plus:title:0123456789abcdef',
+        externalIdKind: 'external_uri',
+        sourceTitle: 'The Mandalorian: Season 1: Chapter 2: The Child',
+      }),
+    ).toMatchObject({
+      resolver: 'wikidata',
+      key: 'wd:tv:the mandalorian',
+      work: { kind: 'tv', title: 'The Mandalorian', season: 1, episodeTitle: 'Chapter 2: The Child' },
+    });
+  });
+
   it('falls back to OpenGraph for any other web URL, canonicalized', () => {
     expect(
       resolveTargetFor({ url: 'https://www.reddit.com/r/gifs/comments/459icd/x/?utm_source=share' }),

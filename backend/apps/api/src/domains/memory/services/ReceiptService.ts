@@ -6,7 +6,11 @@ import { v7 as uuid7 } from 'uuid';
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import {
-  appendRecordSources, type BulkInsertResult, bulkInsertIdempotent, computeChunkSize } from '@ci/common/persistence';
+  appendRecordSources,
+  type BulkInsertResult,
+  bulkInsertIdempotent,
+  computeChunkSize,
+} from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
 import type {
@@ -38,9 +42,15 @@ import { ProductModelService } from './ProductModelService';
  * {@link ReceiptService.countEntitiesForReceipts} (sort key, keyset predicate,
  * date-range bounds) and a copy that drifts silently mis-pages the feed.
  *
+ * Falls back to `updated_at`, not `created_at`: the explorer's plain browse
+ * orders every row-stamped kind by its last change, so an undated receipt that
+ * was re-extracted or edited surfaces when that happened, and at worst (never
+ * touched since insert) the two columns are equal.
+ *
  * @see backend/apps/api/db/postgres/migrations/20260819211924_add_receipts_browse_time_index.sql
+ * @see the `receipts_user_browse_updated_idx` migration that re-keys that index on this expression.
  */
-const RECEIPT_BROWSE_TIME = 'COALESCE(receipt.purchased_at, receipt.created_at)';
+const RECEIPT_BROWSE_TIME = 'COALESCE(receipt.purchased_at, receipt.updated_at)';
 
 /** The `receipts_source_identity_uniq` arbiter. */
 const SOURCE_IDENTITY_CONFLICT_TARGET =
@@ -445,6 +455,7 @@ export class ReceiptService {
       limit?: number;
       startTime?: Date;
       endTime?: Date;
+      connectors?: string[];
       afterTime?: Date;
       afterId?: string;
       order?: 'ASC' | 'DESC';
@@ -454,6 +465,14 @@ export class ReceiptService {
       .createQueryBuilder('receipt')
       .select('receipt.receipt_id', 'id')
       .where('receipt.user_id = :userId', { userId: context.userId });
+
+    // The How filter: keep rows from the named sources. Every browsed table
+    // with a source_system column applies this same clause (see
+    // SearchResolver.searchByTimedEntities), so a source selected on /memory
+    // narrows every kind it can, not just events.
+    if (options.connectors && options.connectors.length > 0) {
+      query = query.andWhere('receipt.source_system IN (:...connectors)', { connectors: options.connectors });
+    }
 
     if (options.startTime) {
       query = query.andWhere(`${RECEIPT_BROWSE_TIME} >= :startTime`, { startTime: options.startTime });
@@ -493,11 +512,19 @@ export class ReceiptService {
    */
   async countEntitiesForReceipts(
     context: ServiceContext,
-    options: { startTime?: Date; endTime?: Date } = {},
+    options: { startTime?: Date; endTime?: Date; connectors?: string[] } = {},
   ): Promise<number> {
     let query = this.receiptRepository
       .createQueryBuilder('receipt')
       .where('receipt.user_id = :userId', { userId: context.userId });
+
+    // The How filter: keep rows from the named sources. Every browsed table
+    // with a source_system column applies this same clause (see
+    // SearchResolver.searchByTimedEntities), so a source selected on /memory
+    // narrows every kind it can, not just events.
+    if (options.connectors && options.connectors.length > 0) {
+      query = query.andWhere('receipt.source_system IN (:...connectors)', { connectors: options.connectors });
+    }
 
     if (options.startTime) {
       query = query.andWhere(`${RECEIPT_BROWSE_TIME} >= :startTime`, { startTime: options.startTime });

@@ -5,10 +5,12 @@ import { z } from 'zod';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaService';
+import { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import { EventEntity, CalendarEventService } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
+
+import { ACTIVE_TASK_STATUSES, isClosedTaskStatus } from '../taskStatus';
 
 import { TaskService } from './TaskService';
 
@@ -44,6 +46,23 @@ const PROCESS_MAX_OUTPUT_TOKENS = 600;
  * shares the tier.
  */
 const PROCESS_KEEP_ALIVE = '1h';
+
+/**
+ * Tasks one run reviews. Each costs an LLM call, so this is a spend cap per
+ * tick and not a statement about how many tasks matter.
+ */
+export const PROCESS_BATCH_SIZE = 40;
+
+/**
+ * Ceiling on the pool {@link PROCESS_BATCH_SIZE} rotates through. Bounded
+ * because this is still one unpaginated query; a user past this many ACTIVE
+ * tasks loses the tail of the ordering, which is the old behaviour rather than
+ * a new one.
+ */
+const PROCESS_CANDIDATE_CAP = 400;
+
+/** The todoProcess cron's six-hour interval, used only to index the rotation. */
+const PROCESS_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 const CANCEL_PHRASES = [
   'cancelled',
@@ -242,6 +261,35 @@ function toDate(value: Date | string | null | undefined): Date | null {
 }
 
 /**
+ * The slice of the candidate pool this run reviews.
+ *
+ * `findAll` orders by `due_at ASC NULLS LAST`, then priority, then created_at,
+ * and an overdue date never advances — so a bare `LIMIT 40` handed every tick
+ * the SAME forty rows. A user with 45 active tasks had five that were never
+ * reviewed at all: no append, no revise, no reparent, ever, for as long as the
+ * forty ahead of them stayed active. Nothing said so either, because `applied`
+ * and `pending` only count what the run did look at.
+ *
+ * The window index comes from the clock rather than from a counter on this
+ * instance on purpose: the worker restarts, and a counter restarts with it back
+ * at the same forty rows. Ticks six hours apart therefore land on consecutive
+ * windows without any state to keep.
+ *
+ * Wrapping (rather than a short final window) keeps every run's batch the same
+ * size, so the rotation costs no throughput.
+ */
+function rotateBatch<T>(candidates: T[], size: number, now: number): T[] {
+  if (candidates.length <= size) {
+    return candidates;
+  }
+
+  const windows = Math.ceil(candidates.length / size);
+  const offset = (Math.floor(now / PROCESS_INTERVAL_MS) % windows) * size;
+
+  return [...candidates, ...candidates].slice(offset, offset + size);
+}
+
+/**
  * Tokens distinctive enough to say a recall hit is ABOUT this title. Returning
  * `[]` (all-stopword or too short) means "not attributable" — callers must not
  * act on evidence they cannot tie to the thing they are about to mutate.
@@ -302,101 +350,118 @@ export class TodoProcessService {
     const context = { userId } as UserServiceContext;
     const tallies = { applied: 0, pending: 0 };
 
-    const tasks = await this.taskService.findAll(context, {
-      status: ['open', 'in_progress'],
-      limit: 40,
-    });
+    const tasks = rotateBatch(
+      await this.taskService.findAll(context, {
+        status: [...ACTIVE_TASK_STATUSES],
+        limit: PROCESS_CANDIDATE_CAP,
+      }),
+      PROCESS_BATCH_SIZE,
+      Date.now(),
+    );
 
     for (const task of tasks) {
-      const block = formatRecall(
-        await recallHits(
-          this.dataSource,
-          this.searchService,
-          context,
-          `${task.title} ${task.description ?? ''}`.trim(),
-          8,
-        ),
-      );
+      try {
+        const block = formatRecall(
+          await recallHits(
+            this.dataSource,
+            this.searchService,
+            context,
+            `${task.title} ${task.description ?? ''}`.trim(),
+            8,
+          ),
+        );
 
-      if (!block.trim()) {
-        continue;
-      }
+        if (!block.trim()) {
+          continue;
+        }
 
-      const suggestion = await this.suggest(context, task.title, block);
+        const suggestion = await this.suggest(context, task.title, block);
 
-      if (!suggestion || suggestion.action === 'none') {
-        continue;
-      }
+        if (!suggestion || suggestion.action === 'none') {
+          continue;
+        }
 
-      const confidence = clampConfidence(suggestion.confidence);
-      const kind = suggestion.action === 'complete' ? 'task_complete' : 'task_mutate';
-      const decision = await this.personalizationService.decideAction(userId, { kind, confidence });
+        const confidence = clampConfidence(suggestion.confidence);
+        const kind = suggestion.action === 'complete' ? 'task_complete' : 'task_mutate';
+        const decision = await this.personalizationService.decideAction(userId, { kind, confidence });
 
-      if (decision === 'skip') {
-        continue;
-      }
+        if (decision === 'skip') {
+          continue;
+        }
 
-      if (suggestion.action === 'complete') {
+        if (suggestion.action === 'complete') {
+          if (decision === 'auto') {
+            await this.taskService.complete(context, task.id);
+            tallies.applied += 1;
+          } else {
+            await this.taskService.createPendingChange(context, {
+              taskId: task.id,
+              kind: 'complete',
+              patch: {},
+              rationale: suggestion.rationale ?? 'Looks like this may be done.',
+              confidence,
+            });
+            tallies.pending += 1;
+          }
+
+          continue;
+        }
+
+        const patch: Record<string, unknown> = {};
+
+        if (suggestion.action === 'append' && suggestion.notes?.trim()) {
+          patch.appendNotes = suggestion.notes.trim();
+        }
+
+        if (suggestion.action === 'revise' && suggestion.title?.trim()) {
+          patch.title = suggestion.title.trim();
+        }
+
+        if (suggestion.action === 'reparent' && suggestion.parentTitle?.trim()) {
+          const parent = await this.taskService.findByTitleMatch(context, suggestion.parentTitle);
+
+          if (parent && parent.id !== task.id) {
+            patch.parentId = parent.id;
+          }
+        }
+
+        if (Object.keys(patch).length === 0) {
+          continue;
+        }
+
         if (decision === 'auto') {
-          await this.taskService.complete(context, task.id);
+          if (typeof patch.appendNotes === 'string') {
+            await this.taskService.appendNotes(context, task.id, patch.appendNotes);
+          }
+
+          const { appendNotes: _a, ...rest } = patch;
+
+          if (Object.keys(rest).length > 0) {
+            await this.taskService.update(context, task.id, rest);
+          }
+
           tallies.applied += 1;
         } else {
           await this.taskService.createPendingChange(context, {
             taskId: task.id,
-            kind: 'complete',
-            patch: {},
-            rationale: suggestion.rationale ?? 'Looks like this may be done.',
+            kind: 'mutate',
+            patch,
+            rationale: suggestion.rationale ?? 'Suggested update from memory.',
             confidence,
           });
           tallies.pending += 1;
         }
-
-        continue;
-      }
-
-      const patch: Record<string, unknown> = {};
-
-      if (suggestion.action === 'append' && suggestion.notes?.trim()) {
-        patch.appendNotes = suggestion.notes.trim();
-      }
-
-      if (suggestion.action === 'revise' && suggestion.title?.trim()) {
-        patch.title = suggestion.title.trim();
-      }
-
-      if (suggestion.action === 'reparent' && suggestion.parentTitle?.trim()) {
-        const parent = await this.taskService.findByTitleMatch(context, suggestion.parentTitle);
-
-        if (parent && parent.id !== task.id) {
-          patch.parentId = parent.id;
-        }
-      }
-
-      if (Object.keys(patch).length === 0) {
-        continue;
-      }
-
-      if (decision === 'auto') {
-        if (typeof patch.appendNotes === 'string') {
-          await this.taskService.appendNotes(context, task.id, patch.appendNotes);
-        }
-
-        const { appendNotes: _a, ...rest } = patch;
-
-        if (Object.keys(rest).length > 0) {
-          await this.taskService.update(context, task.id, rest);
-        }
-
-        tallies.applied += 1;
-      } else {
-        await this.taskService.createPendingChange(context, {
+      } catch (err) {
+        // Same reasoning as TodoScanService: one task's failure must not force
+        // pg-boss to redeliver the whole job and re-walk the tasks already
+        // reviewed above. A reparent whose target was deleted between
+        // findByTitleMatch and update throws NotFoundException out of the loop,
+        // and the remaining tasks would then wait a full 6-hour tick.
+        this.logger.warn('Todo process task failed; continuing with remaining tasks', {
+          userId,
           taskId: task.id,
-          kind: 'mutate',
-          patch,
-          rationale: suggestion.rationale ?? 'Suggested update from memory.',
-          confidence,
+          error: err instanceof Error ? err.message : String(err),
         });
-        tallies.pending += 1;
       }
     }
 
@@ -423,7 +488,7 @@ export class TodoProcessService {
       ].join('\n');
 
       const response = await this.ollamaService.chat(context as never, [{ role: 'user', content: prompt }], {
-        model: UTILITY_MODEL,
+        tier: 'utility',
         enableTools: false,
         format: SUGGESTION_JSON_SCHEMA,
         signal: controller.signal,
@@ -513,41 +578,64 @@ export class EventNowService {
         continue;
       }
 
-      const title = titles.get(block.id) ?? '';
-      const tokens = distinctiveTokens(title);
+      try {
+        const title = titles.get(block.id) ?? '';
+        const tokens = distinctiveTokens(title);
 
-      if (tokens.length === 0) {
-        continue;
+        if (tokens.length === 0) {
+          continue;
+        }
+
+        const hits = await recallHits(this.dataSource, this.searchService, context, title, 6);
+        const from = new Date(block.startTime.getTime() - CANCEL_LOOKBEHIND_MS);
+        const evidence = hits.filter(
+          (hit) => hasPhrase(hit, CANCEL_PHRASES) && mentions(hit, tokens) && occurredWithin(hit, from, now),
+        );
+
+        if (evidence.length === 0) {
+          continue;
+        }
+
+        const confidence = evidence.length > 1 ? 0.75 : 0.6;
+        const decision = await this.personalizationService.decideAction(userId, {
+          kind: 'event_revise',
+          confidence,
+        });
+
+        if (decision === 'skip') {
+          continue;
+        }
+
+        // Same reasoning as VerifyDoneService's `complete` guard: a declined
+        // row leaves the `pending` set createPendingChange de-dupes against, so
+        // without this the ±2h window re-files the identical "was this
+        // cancelled?" prompt on every hourly tick it still covers. Bounded by
+        // `from` — the earliest moment a cancellation notice for THIS block
+        // could have arrived — so it is the same window the evidence is drawn
+        // from, and a later block asks again.
+        if (await this.taskService.hasDeclinedChangeSince(context, block.taskId, 'event_revise', from)) {
+          continue;
+        }
+
+        await this.taskService.createPendingChange(context, {
+          taskId: block.taskId,
+          kind: 'event_revise',
+          patch: { eventStatus: 'cancelled', eventId: block.id },
+          rationale: `Memory suggests "${title}" may have been cancelled: ${describeEvidence(evidence[0])}`,
+          confidence,
+        });
+        tallies.proposed += 1;
+      } catch (err) {
+        // Same reasoning as TodoScanService: one block's failure must not force
+        // pg-boss to redeliver the whole job and re-walk the blocks above.
+        // createPendingChange is idempotent per (task, kind), so the skipped
+        // block is simply picked up by the next hourly tick.
+        this.logger.warn('Event-now block failed; continuing with remaining blocks', {
+          userId,
+          eventId: block.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
-
-      const hits = await recallHits(this.dataSource, this.searchService, context, title, 6);
-      const from = new Date(block.startTime.getTime() - CANCEL_LOOKBEHIND_MS);
-      const evidence = hits.filter(
-        (hit) => hasPhrase(hit, CANCEL_PHRASES) && mentions(hit, tokens) && occurredWithin(hit, from, now),
-      );
-
-      if (evidence.length === 0) {
-        continue;
-      }
-
-      const confidence = evidence.length > 1 ? 0.75 : 0.6;
-      const decision = await this.personalizationService.decideAction(userId, {
-        kind: 'event_revise',
-        confidence,
-      });
-
-      if (decision === 'skip') {
-        continue;
-      }
-
-      await this.taskService.createPendingChange(context, {
-        taskId: block.taskId,
-        kind: 'event_revise',
-        patch: { eventStatus: 'cancelled', eventId: block.id },
-        rationale: `Memory suggests "${title}" may have been cancelled: ${describeEvidence(evidence[0])}`,
-        confidence,
-      });
-      tallies.proposed += 1;
     }
 
     this.logger.log('Event-now pass finished', { userId, ...tallies });
@@ -588,7 +676,12 @@ export class VerifyDoneService {
       .where('event.user_id = :userId', { userId })
       .andWhere('event.task_id IS NOT NULL')
       .andWhere('event.is_deleted = false')
-      .andWhere('event.status NOT IN (:...doneStatuses)', {
+      // COALESCE for the same reason dailyAggregateSql.ts does it on this
+      // column: `status NOT IN (...)` is three-valued, so a NULL-status row
+      // evaluates to NULL and WHERE discards it. A block written before
+      // `ci.events.status` was backfilled would then never be verified — and
+      // "no status" is the one value that certainly does not mean done.
+      .andWhere("COALESCE(event.status, '') NOT IN (:...doneStatuses)", {
         doneStatuses: ['cancelled', 'completed', 'skipped', 'no_show'],
       })
       .andWhere('COALESCE(event.end_time, event.start_time) < :now', { now })
@@ -602,49 +695,80 @@ export class VerifyDoneService {
         continue;
       }
 
-      const task = await this.taskService.findById(context, block.taskId);
+      try {
+        const task = await this.taskService.findById(context, block.taskId);
 
-      if (!task || task.status === 'done' || task.status === 'archived' || task.status === 'skipped') {
-        continue;
-      }
+        if (!task || isClosedTaskStatus(task.status)) {
+          continue;
+        }
 
-      // The query is the task's own words ONLY. Asking memory for "did I finish
-      // or complete X" retrieves entities BECAUSE they contain finish/complete,
-      // so a doneSignal over those hits is circular — it re-reads the terms the
-      // retrieval selected for, and any "your order has been completed" mail
-      // satisfies it.
-      const tokens = distinctiveTokens(task.title);
-      const hits = tokens.length
-        ? await recallHits(this.dataSource, this.searchService, context, task.title, 6)
-        : [];
-      const evidence = hits.filter(
-        (hit) =>
-          hasPhrase(hit, DONE_PHRASES) && mentions(hit, tokens) && occurredWithin(hit, block.startTime, now),
-      );
-      const doneSignal = evidence.length > 0;
+        // The query is the task's own words ONLY. Asking memory for "did I finish
+        // or complete X" retrieves entities BECAUSE they contain finish/complete,
+        // so a doneSignal over those hits is circular — it re-reads the terms the
+        // retrieval selected for, and any "your order has been completed" mail
+        // satisfies it.
+        const tokens = distinctiveTokens(task.title);
+        const hits = tokens.length
+          ? await recallHits(this.dataSource, this.searchService, context, task.title, 6)
+          : [];
+        const evidence = hits.filter(
+          (hit) =>
+            hasPhrase(hit, DONE_PHRASES) &&
+            mentions(hit, tokens) &&
+            occurredWithin(hit, block.startTime, now),
+        );
+        const doneSignal = evidence.length > 0;
 
-      const confidence = doneSignal ? ATTRIBUTED_DONE_CONFIDENCE : UNVERIFIED_DONE_CONFIDENCE;
-      const decision = await this.personalizationService.decideAction(userId, {
-        kind: 'task_complete',
-        confidence,
-      });
-
-      if (decision === 'auto' && doneSignal) {
-        await this.taskService.complete(context, task.id);
-        block.status = 'completed';
-        await this.eventRepository.save(block);
-        tallies.completed += 1;
-      } else if (decision === 'review' || (decision === 'auto' && !doneSignal)) {
-        await this.taskService.createPendingChange(context, {
-          taskId: task.id,
-          kind: 'complete',
-          patch: { eventId: block.id },
-          rationale: doneSignal
-            ? `Looks like this got done — confirm to mark complete? ${describeEvidence(evidence[0])}`
-            : 'This scheduled item passed. Did it get done?',
+        const confidence = doneSignal ? ATTRIBUTED_DONE_CONFIDENCE : UNVERIFIED_DONE_CONFIDENCE;
+        const decision = await this.personalizationService.decideAction(userId, {
+          kind: 'task_complete',
           confidence,
         });
-        tallies.pending += 1;
+
+        if (decision === 'auto' && doneSignal) {
+          await this.taskService.complete(context, task.id);
+          block.status = 'completed';
+          await this.eventRepository.save(block);
+          tallies.completed += 1;
+        } else if (decision === 'review' || (decision === 'auto' && !doneSignal)) {
+          // A dismissal has to outlive the tick that produced the prompt.
+          // `createPendingChange` de-dupes only against a row that is still
+          // `pending`, so declining moved the row OUT of the set that was
+          // suppressing it and the next tick filed the identical question —
+          // roughly 36 more times before the block aged out of the lookback.
+          // Reading the declined history here is the same discipline
+          // PersonLinkStage applies to a `rejected` disposition: the producer
+          // honours the verdict rather than the writer remembering to.
+          //
+          // Bounded by the block's own end so this suppresses this occurrence
+          // only; a later block for the same task asks again.
+          const blockEnd = block.endTime ?? block.startTime;
+
+          if (await this.taskService.hasDeclinedChangeSince(context, task.id, 'complete', blockEnd)) {
+            continue;
+          }
+
+          await this.taskService.createPendingChange(context, {
+            taskId: task.id,
+            kind: 'complete',
+            patch: { eventId: block.id },
+            rationale: doneSignal
+              ? `Looks like this got done — confirm to mark complete? ${describeEvidence(evidence[0])}`
+              : 'This scheduled item passed. Did it get done?',
+            confidence,
+          });
+          tallies.pending += 1;
+        }
+      } catch (err) {
+        // Same reasoning as TodoScanService: one block's failure must not force
+        // pg-boss to redeliver the whole job and re-walk the blocks above. Both
+        // outcomes here are idempotent on a later tick (complete() keeps the
+        // original instant, createPendingChange upserts per (task, kind)).
+        this.logger.warn('Verify-done block failed; continuing with remaining blocks', {
+          userId,
+          eventId: block.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 

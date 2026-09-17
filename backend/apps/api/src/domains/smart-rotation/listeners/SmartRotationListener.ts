@@ -6,7 +6,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { Events, EventService, OnEvent } from '@ci/domains/events';
 import { excludeForkedOriginsSql, QuestionService } from '@ci/domains/intelligence';
-import { LLM_QUEUE } from '@ci/domains/llm';
+import { LLM_BACKGROUND_QUEUE } from '@ci/domains/llm';
 import { GraphEnrichmentService, MaintenanceOrchestratorService } from '@ci/domains/maintenance';
 import {
   ContextPromptGenerateService,
@@ -138,16 +138,11 @@ export class SmartRotationListener {
       }
 
       case 'insights': {
-        const hasNovelty = await this.lifeContextService.hasNoveltySinceLastRun(userId, 'insights');
-        if (!hasNovelty) {
-          this.logger.log('Smart rotation insights skipped — no novelty', { userId });
-
-          return;
-        }
-
-        // Dispatch to the summary service via pg-boss (deferred completion +
-        // retries) instead of a blocking HTTP call. Personalization is
-        // resolved here because the trust dial lives app-side.
+        // Novelty is decided by the summary sidecar against the timestamp of
+        // the last STORED insight. A scheduler-side gate used the timestamp of
+        // the last rotation job instead, so a dispatched run that failed (or
+        // skipped on a different source set) suppressed retries until some
+        // unrelated data changed. Keep one authoritative gate.
         const lifeContext = await this.lifeContextService.buildForUser(userId);
         const enqueued = await this.pythonFunctionService.dispatch(
           'summary',
@@ -170,19 +165,57 @@ export class SmartRotationListener {
       }
 
       case 'summaries': {
-        const hoursSince = await this.hoursSinceLastSummary(userId);
-        const stale = hoursSince == null || hoursSince >= 24;
-        const functionName = stale ? 'dossier_refresh' : 'hourly_summary';
-
-        const enqueued = await this.pythonFunctionService.dispatch(
+        // These are two independent products. The old either/or branch sent a
+        // user with no summaries to dossier_refresh; that function needs
+        // summaries as input, so the user could never become non-stale and the
+        // hourly stream never started. Always advance the activity digest.
+        const summaryEnqueued = await this.pythonFunctionService.dispatch(
           'summary',
-          functionName,
+          'hourly_summary',
           userId,
           {},
-          { singletonKey: `fn:${functionName}:${userId}:rotation` },
+          { singletonKey: `fn:hourly_summary:${userId}:rotation` },
+        );
+        // The dossier is a separate, far more expensive product — a full LLM
+        // pass over 30 days of daily plus 24 hours of hourly summaries — and
+        // this case runs hourly. Unlike the digest it has no cheap "nothing
+        // happened" exit of its own: it re-reads whatever summaries exist and
+        // regenerates, so on a quiet appliance (where hourly_summary returns
+        // skipped:no_activity and writes no row) it would spend a GPU slot
+        // rewriting the same dossier from the same inputs 24 times a day.
+        //
+        // The gate is on the INPUT, not a cadence: build only when a summary
+        // has been stored since the dossier itself was built. That never
+        // withholds the hourly digest above, so the empty-user loop the
+        // either/or branch created cannot come back — a user with no summaries
+        // still gets hourly_summary every tick, and the first stored row makes
+        // the dossier stale on the very next one.
+        const dossierStale = await this.hasSummaryNewerThanDossier(userId);
+
+        if (!dossierStale) {
+          this.logger.log('Smart rotation summary work dispatched', {
+            userId,
+            summaryEnqueued,
+            dossierEnqueued: false,
+            dossierSkipped: 'no_new_summaries',
+          });
+
+          return;
+        }
+
+        const dossierEnqueued = await this.pythonFunctionService.dispatch(
+          'summary',
+          'dossier_refresh',
+          userId,
+          {},
+          { singletonKey: `fn:dossier_refresh:${userId}:rotation` },
         );
 
-        this.logger.log('Smart rotation summary dispatched', { userId, functionName, enqueued });
+        this.logger.log('Smart rotation summary work dispatched', {
+          userId,
+          summaryEnqueued,
+          dossierEnqueued,
+        });
 
         return;
       }
@@ -269,25 +302,95 @@ export class SmartRotationListener {
     }
   }
 
-  private async hoursSinceLastSummary(userId: string): Promise<number | null> {
-    type Row = { created_at: Date | null };
+  /**
+   * Is there anything for `dossier_refresh` to fold in that the stored dossier
+   * has not already seen?
+   *
+   * ═══ WHAT THIS ASKS, AND WHAT IT DELIBERATELY DOES NOT ═══
+   *
+   * A deleted predecessor (`hoursSinceLastSummary`) asked "is the newest
+   * summary older than 24h?" and picked dossier-instead-of-digest when it was.
+   * That is the wrong question twice over: it starved the hourly stream on a
+   * user with no summaries at all, and on a busy user it fired the dossier on a
+   * clock rather than on new input. This asks the only question the dossier
+   * actually cares about — was a summary STORED after the dossier was BUILT —
+   * so a quiet hour costs nothing and a single new summary is enough.
+   *
+   * Only `hourly` and `daily` count, because those are exactly the two period
+   * types `fetch_summaries_for_dossier_activity` reads. An `insight` row (same
+   * table, written by `insights_generation`) is not dossier input, and letting
+   * it mark the dossier stale would put the hourly rebuild straight back.
+   *
+   * It reads `created_at`, not `GREATEST(created_at, updated_at)`, on purpose.
+   * A window re-summarized in place keeps its `created_at`, so a rewrite of an
+   * hour that already has a row waits for the next new hour before it is
+   * folded in — a bounded miss, on the quiet side. `updated_at` moves for
+   * reasons that are not new input at all, `seen`/`dismissed` among them, and
+   * a flag flipped in the feed is not worth an LLM pass.
+   *
+   * ═══ WHERE THE BUILD TIME COMES FROM ═══
+   *
+   * `store_dossier_activity` writes the whole dossier into
+   * `ci.entities.dossier`, and the payload carries its own `lastUpdatedAt`
+   * stamped by the generator. That field, not `entities.updated_at`, is the
+   * honest answer: the row's `updated_at` is bumped by every unrelated entity
+   * write (imports, merges, enrichment), and a bump from one of those would
+   * read as "the dossier is current" and suppress a rebuild that is genuinely
+   * owed. The stamp is naive UTC (`datetime.utcnow().isoformat()`), so the
+   * comparison is done in UTC rather than the session TimeZone, which the API's
+   * pool does not pin.
+   *
+   * ═══ IT FAILS OPEN ═══
+   *
+   * Every unknown reads as stale: no user row, no self entity, `dossier` still
+   * the `'{}'` default, or a `lastUpdatedAt` that will not parse (hence
+   * JSON_VALUE ... DEFAULT NULL ON ERROR rather than a bare cast, which would
+   * throw and take the whole tick down with it). A brand-new user therefore
+   * always gets their first dossier attempt, and a corrupted stamp costs one
+   * extra LLM pass rather than a dossier that is never rebuilt again.
+   */
+  private async hasSummaryNewerThanDossier(userId: string): Promise<boolean> {
+    type Row = { stale: boolean };
     const rows = (await this.dataSource.query(
       `
-      SELECT MAX(created_at) AS created_at
-      FROM ci.summaries
-      WHERE user_id = $1
-        AND period_type != 'insight';
+      WITH self_entity AS (
+        -- Same resolution order as the sidecar's get_entity_id_activity: the
+        -- users row first, the oldest owned Person second. Resolving it
+        -- differently here would gate on a different entity than the one
+        -- dossier_refresh writes to, and the gate would never close.
+        SELECT COALESCE(
+          (SELECT u.entity_id FROM ci.users u WHERE u.id = $1),
+          (
+            SELECT e.entity_id
+            FROM ci.entities e
+            WHERE e.owner_user_id = $1
+              AND e.entity_type = 'Person'
+            ORDER BY e.created_at
+            LIMIT 1
+          )
+        ) AS entity_id
+      ),
+      built AS (
+        SELECT JSON_VALUE(e.dossier, '$.lastUpdatedAt' RETURNING timestamp DEFAULT NULL ON ERROR) AS built_at
+        FROM ci.entities e
+        JOIN self_entity s ON s.entity_id = e.entity_id
+      )
+      SELECT
+        (SELECT built_at FROM built) IS NULL
+        OR EXISTS (
+          SELECT 1
+          FROM ci.summaries fresh
+          WHERE fresh.user_id = $1
+            AND fresh.period_type IN ('hourly', 'daily')
+            AND fresh.created_at AT TIME ZONE 'UTC' > (SELECT built_at FROM built)
+        ) AS stale;
       `,
       [userId],
     )) as Row[];
 
-    const createdAt = rows[0]?.created_at;
-
-    if (!createdAt) {
-      return null;
-    }
-
-    return (Date.now() - new Date(createdAt).getTime()) / 3_600_000;
+    // No FROM on the outer SELECT, so one row always comes back; the ?? true
+    // is the same fail-open as every branch inside the query.
+    return rows[0]?.stale ?? true;
   }
 
   /**
@@ -328,8 +431,8 @@ export class SmartRotationListener {
    * 72 dispatches a day) rather than all of them.
    *
    * The queue name is matched as well as the event name so Postgres can prune
-   * to the `llm` partition (`AnswerInferenceListener` binds
-   * `Events.INFER_QUESTION_ANSWER` to `LLM_QUEUE`). If that binding ever moves,
+   * to the `llm-background` partition (`AnswerInferenceListener` binds
+   * `Events.INFER_QUESTION_ANSWER` to `LLM_BACKGROUND_QUEUE`). If that binding ever moves,
    * this reads as "no attempt history" and degrades to the old
    * oldest-unanswered order — which is the safe direction to fail.
    *
@@ -400,7 +503,7 @@ export class SmartRotationListener {
       ORDER BY a.last_attempt_at ASC NULLS FIRST, q.created_at ASC, q.question_id ASC
       LIMIT 1;
       `,
-      [userId, LLM_QUEUE, Events.INFER_QUESTION_ANSWER, INFERENCE_ATTEMPT_COOLDOWN_HOURS, userId],
+      [userId, LLM_BACKGROUND_QUEUE, Events.INFER_QUESTION_ANSWER, INFERENCE_ATTEMPT_COOLDOWN_HOURS, userId],
     )) as Row[];
 
     return rows[0]?.id ?? null;

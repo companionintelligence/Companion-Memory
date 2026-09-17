@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from '@apollo/client';
+import { Link } from 'react-router-dom';
 
 import { gql, useFragment } from '@/graphql';
 
@@ -114,7 +115,17 @@ export function CommunicationDetails({ entity }: Props) {
   // 300px preview while the original downloads. Attachments that are not
   // pictures (a PDF on an email) are listed below by name instead.
   const media = attachments.filter(isRenderableMedia);
-  const documents = attachments.filter((attachment) => !isRenderableMedia(attachment) && attachment.filename);
+  // Every attachment is also listed by name under "Attachments": one that is
+  // a content row in the memory links to that row in the Content library, one
+  // that is only a stored or remote file opens the file itself. The in-drawer
+  // jump to the file or content record is a Connections card, projected from
+  // the attachments column by the graph's edge rules
+  // (communication.has_attachment / has_content_attachment).
+  const listed = attachments.filter(
+    (attachment) => attachment.contentId || attachment.url || attachment.filename,
+  );
+  const attachmentName = (attachment: Attachment, index: number) =>
+    attachment.filename ?? `Attachment ${index + 1}`;
 
   const headline = `${capitalize(data.direction)} ${capitalize(data.type)}`.trim();
   const recipients = (data.to?.edges ?? [])
@@ -130,6 +141,7 @@ export function CommunicationDetails({ entity }: Props) {
       entity={entity}
       title={data.subject || data.preview || headline || 'Communication'}
       subtitle={data.subject ? data.preview : undefined}
+      subtitleKind="text"
       media={
         media.length > 0 ? (
           <div className="flex flex-col gap-3" data-testid="communication-attachments">
@@ -174,22 +186,42 @@ export function CommunicationDetails({ entity }: Props) {
         {
           label: 'Attachments',
           value:
-            documents.length > 0 ? (
+            listed.length > 0 ? (
               <ul className="flex flex-col gap-1">
-                {documents.map((attachment, index) => (
-                  <li key={attachment.fileId ?? attachment.contentId ?? `${index}`}>
-                    {attachment.url ? (
+                {listed.map((attachment, index) => (
+                  <li key={attachment.fileId ?? attachment.contentId ?? `${index}`} className="break-all">
+                    {attachment.contentId ? (
+                      <Link
+                        to={`/memory/content/${attachment.contentId}`}
+                        className="text-primary hover:underline"
+                      >
+                        {attachmentName(attachment, index)}
+                      </Link>
+                    ) : attachment.url ? (
                       <a
                         href={resolveStaticUrl(attachment.url)}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="break-all text-primary hover:underline"
+                        className="text-primary hover:underline"
                       >
-                        {attachment.filename}
+                        {attachmentName(attachment, index)}
                       </a>
                     ) : (
-                      <span className="break-all">{attachment.filename}</span>
+                      <span>{attachmentName(attachment, index)}</span>
                     )}
+                    {attachment.contentId && attachment.url ? (
+                      <>
+                        {' · '}
+                        <a
+                          href={resolveStaticUrl(attachment.url)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-muted-foreground hover:underline"
+                        >
+                          original
+                        </a>
+                      </>
+                    ) : null}
                   </li>
                 ))}
               </ul>

@@ -443,17 +443,17 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       .andWhere('person.merged_into_entity_id IS NULL');
 
     // Composite keyset: page strictly past (afterTime, afterId) in
-    // (created_at DESC, entity_id DESC) — see ContentService.getEntitiesForContents.
+    // (updated_at DESC, entity_id DESC) — see ContentService.getEntitiesForContents.
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(person.created_at < :afterTime OR (person.created_at = :afterTime AND person.entity_id < :afterId))',
+        '(person.updated_at < :afterTime OR (person.updated_at = :afterTime AND person.entity_id < :afterId))',
         { afterTime: options.afterTime, afterId: options.afterId },
       );
     }
 
     // Deterministic tiebreak so same-timestamp rows page consistently.
     query = query
-      .orderBy('person.created_at', options.order ?? 'DESC')
+      .orderBy('person.updated_at', options.order ?? 'DESC')
       .addOrderBy('person.entity_id', 'DESC');
 
     if (options.limit) {
@@ -525,11 +525,11 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       .andWhere('person.merged_into_entity_id IS NULL');
 
     if (options.startTime) {
-      query = query.andWhere('person.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('person.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('person.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('person.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     return query.getCount();

@@ -293,6 +293,10 @@ export class EvernoteFileImporter implements FileImporter {
           Tags: tags.length > 0 ? tags : undefined,
           Updated: parseEnexDate(firstString(note.updated))?.toISOString(),
           Source: 'Evernote',
+          // Plain-text note body. A `note` routes to `content` only, and that
+          // row's `text` is read from metadata by `descriptionFor` — the content
+          // blob attached above never reaches the push path.
+          Text: text,
         },
       },
     });

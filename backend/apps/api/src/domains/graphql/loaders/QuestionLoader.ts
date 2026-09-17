@@ -20,17 +20,14 @@ export class QuestionLoader extends Loader<Question | null, string> {
     context: UserServiceContext,
     questionIds: readonly string[],
   ): Promise<readonly (Question | null)[]> {
-    // `QuestionService.findByIds` is an `IN (...)` lookup that returns the set of
-    // questions this caller can see — in the planner's order, and short by one
-    // for every id that is missing or private to somebody else. It is the only
-    // findByIds behind a loader here that does not already re-key (CalendarEventService,
-    // PlaceService, ContentService and ThreadService all do), and DataLoader
-    // pairs results with keys by POSITION, so passing it through captioned each
-    // answer with a different answer's question — "I follow hockey." under "What
-    // city were you born in?" — silently, and only once a page held more than one.
+    // `QuestionService.findByIds` used to hand back the SET of questions this
+    // caller can see — planner order, and short by one for every id that is
+    // missing or private to somebody else. DataLoader pairs results with keys
+    // by POSITION, so passing that through captioned each answer with a
+    // different answer's question — "I follow hockey." under "What city were
+    // you born in?" — silently, and only once a page held more than one.
     const questions = await this.questionService.findByIds(context, [...questionIds]);
-    const byId = new Map(questions.map((question) => [question.id, question]));
 
-    return questionIds.map((questionId) => byId.get(questionId) ?? null);
+    return this.rekey(questionIds, questions, (question) => question.id);
   }
 }

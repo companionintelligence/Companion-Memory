@@ -37,6 +37,39 @@ row reports a running count of what has been dropped.
 A cron has only two states. A tick that is not taken is simply not taken, so
 `paused` would mean nothing for a schedule.
 
+**The Schedules list covers the whole build, not just this process.** Under the
+`Procfile`'s split the API runs `CI_ROLE=web` and never registers the eleven
+`role: 'worker'` schedules with its own scheduler, so a list read from
+`SchedulerRegistry` stopped at the ones the API happens to run — presented under
+a plain count, as though it were the total. The list is sourced from
+`CronRegistry` (`common/schedule/CronRegistry.ts`) instead, which every `@Cron`
+fills in at class-definition time *before* the role gate, so it is complete and
+identical in both processes. Rows the answering process does not run carry a
+`worker` badge and the card says how many there are.
+
+Those rows are still switchable from the web process: the mode is a
+`ci.job_settings` row, every process polls it, and the `@Cron` wrapper in the
+worker consults it on each tick. The web process was never unable to *control* a
+worker schedule — only unable to name one.
+
+`JobMonitorService.getCronSchedules()` lists them too, carrying exactly what
+durable state supports: `lastRunAt`, `lastSuccessAt` and `disabled`, read from
+`ci.cron_runs` and `ci.job_settings`, which whichever process ticks has already
+written. It carries `overdue` for them too, computed from the declared
+expression and timezone against that durable last attempt — the one signal that
+says a worker process has died, and the reason listing these rows was worth
+doing. What it does not carry is `running` or `nextRunAt`: live scheduler state
+this process does not have. `running` is `null` rather than `false` there,
+because `false` renders as *stopped*, and a schedule ticking normally in the
+worker is the last thing that should read as stopped on the page an operator
+opens to find out what stopped. The Schedules table badges them by role instead,
+except when they are overdue, which outranks the badge wherever a schedule runs.
+
+`POST /jobs/crons/run` cannot fire across processes — `fireOnTick` is a handle on
+a live job — so asking the web process for a worker schedule returns an error
+naming the process that can, rather than the empty `{fired: [], skipped: [],
+errors: []}` it used to.
+
 ### Pause background work
 
 One switch, at the top of the card. It pauses every queue that carries no
@@ -73,7 +106,18 @@ silently does nothing.
 
 **Nothing an operator can save from this page makes the box hotter than the
 build already allowed.** That is deliberate, and it is why every number here is a
-minimum rather than an override.
+minimum rather than an override — including the two global ones, whose maximum is
+the shipped figure itself. Both boxes therefore show the same number as their
+default and their ceiling: 10 appliance-wide, 6 per queue, on a build that has
+not changed `queues.concurrency`.
+
+There is no way to ask for more throughput than the build ships with from this
+page, and that is the point: it exists because an unattended appliance drives a
+machine to 100% CPU. More capacity is a `CI_QUEUE_CONCURRENCY` change and a
+restart — a deliberate act, not a text box on the page you opened because the
+fans were loud. A stored value above the ceiling (written by an older build, or
+by hand) is clamped on read rather than rejected, and the card says
+*Running at N — a lower ceiling applies* rather than echoing the request back.
 
 Changes take effect on a running worker. `p-limit`'s concurrency is live in both
 directions: lowering it admits nothing new and lets the jobs already running
@@ -164,7 +208,7 @@ Three choke points, and nothing bypasses them.
 | Queue mode, enqueue side | `PGBossEventService.send()` / `sendMany()` |
 | Queue mode, execute side | the per-queue worker loop in `PGBossEventService.work()` |
 | Cron mode | the `@Cron` wrapper at `common/schedule/decorators/Cron.ts` |
-| Concurrency | `syncConcurrencyLimits()`, from the worker loop |
+| Concurrency | `syncConcurrencyLimits()`, from the worker loop, over the arithmetic in `domains/events/jobConcurrency.ts` |
 
 All 53 scheduled methods go through that one `@Cron` wrapper — importing Nest's
 raw `Cron` anywhere outside `src/common/schedule/` is an eslint error — so gating

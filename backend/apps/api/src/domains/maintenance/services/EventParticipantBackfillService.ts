@@ -237,11 +237,13 @@ export class EventParticipantBackfillService {
           `UPDATE ci.events e
               SET organizer_entity_id = COALESCE(u.organizer_id, e.organizer_entity_id),
                   participant_entity_ids = CASE
-                                             WHEN u.participant_ids IS NOT NULL
-                                                  AND (e.participant_entity_ids IS NULL
-                                                       OR cardinality(e.participant_entity_ids) = 0)
-                                             THEN u.participant_ids
-                                             ELSE e.participant_entity_ids
+                                             WHEN u.participant_ids IS NULL THEN e.participant_entity_ids
+                                             ELSE ARRAY(
+                                               SELECT m.id
+                                                 FROM unnest(COALESCE(e.participant_entity_ids, '{}'::uuid[]) || u.participant_ids)
+                                                      WITH ORDINALITY AS m(id, ord)
+                                                GROUP BY m.id
+                                                ORDER BY min(m.ord))
                                            END
              FROM (
                SELECT t.id,

@@ -1,16 +1,22 @@
-import { Body, Controller, Get, HttpCode, Patch, UseGuards } from '@nestjs/common';
+import { Body, ConflictException, Controller, Get, HttpCode, Patch, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 
-import { LlmEndpointService } from '../services/LlmEndpointService';
+import { LlmEndpointLockedError, LlmEndpointService } from '../services/LlmEndpointService';
 
-const updateSchema = z.object({
-  backend: z.enum(['ollama', 'openai_compatible']),
-  port: z.coerce.number().int().min(1).max(65535),
-  apiKey: z.string().trim().optional(),
-});
+const updateSchema = z
+  .object({
+    backend: z.enum(['ollama', 'openai_compatible']),
+    port: z.coerce.number().int().min(1).max(65535),
+    apiKey: z.string().trim().min(1).max(4096).optional(),
+    clearApiKey: z.boolean().optional(),
+  })
+  .refine((value) => !(value.apiKey && value.clearApiKey), {
+    message: 'apiKey and clearApiKey cannot be used together',
+    path: ['clearApiKey'],
+  });
 
 @Controller('llm')
 export class LlmEndpointController {
@@ -24,9 +30,24 @@ export class LlmEndpointController {
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @Get('endpoint/preflight')
+  @HttpCode(200)
+  preflightEndpoint() {
+    return this.llmEndpointService.preflight();
+  }
+
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Patch('endpoint')
   @HttpCode(200)
   updateEndpoint(@Body(new ValidationPipe(updateSchema)) body: z.infer<typeof updateSchema>) {
-    return this.llmEndpointService.update(body);
+    try {
+      return this.llmEndpointService.update(body);
+    } catch (error) {
+      if (error instanceof LlmEndpointLockedError) {
+        throw new ConflictException(error.message);
+      }
+
+      throw error;
+    }
   }
 }

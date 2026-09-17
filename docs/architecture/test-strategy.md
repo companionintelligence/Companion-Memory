@@ -114,7 +114,7 @@ This is the priority queue. Each item should land its own ratcheted coverage flo
 
 ### DB-backed suites — the two ways this misleads you
 
-A suite that needs Postgres resolves its connection through
+*Most* suites that need Postgres resolve the connection through
 `domains/__tests__/support/databaseConnection.ts`, in this precedence:
 
 1. **the suite's own** `<DOMAIN>_TEST_DATABASE_URL`,
@@ -128,13 +128,32 @@ name: `ASKS_`, `BROWSER_ACTIVITY_`, `CONNECTIONS_`, `EVENTS_`, `IMPORT_`,
 (each `…_TEST_DATABASE_URL`). Naming one per suite is what lets you point a
 single domain at a scratch database without moving the whole app.
 
+**The fallback to `DATABASE_URL` is NOT universal — three suites do not have
+it.** They read their variable straight off `process.env` and gate `describe` on
+that alone, so setting only `DATABASE_URL` leaves them skipping:
+
+| Suite | Reads |
+| --- | --- |
+| `planning/services/__tests__/TaskService.tenancy.integration.test.ts` (two `describe` blocks) | `PLANNING_TEST_DATABASE_URL` |
+| `notes/__tests__/NoteCapture.integration.spec.ts` | `NOTES_TEST_DATABASE_URL` |
+| `schedule/services/__tests__/CandidateService.lifecycle.integration.test.ts` | `SCHEDULE_TEST_DATABASE_URL ?? PLANNING_TEST_DATABASE_URL` |
+
+They also miss the port probe as a result: point one at a URL with nothing
+listening and it fails every test instead of skipping. Anything pointing an
+environment at a database — `ci.yml`, a runbook, your shell — must set the
+per-suite variables, not just `DATABASE_URL`.
+
 **Trap 1 — a skip is not a pass.** The probe answers *"is a port open"*. With no
 database the suites `describe.skip` and **jest exits 0**. That is deliberate (a
 laptop with no stack must not fail), but it means a green local run, or a green
 `ci.yml` run, can have executed none of the DB-backed coverage. `ci.yml`'s
-backend job has no `services: postgres`, so this is its normal state — the point
-`consent-path-gate.yml` was built to fix for the consent path, by failing if any
-suite in scope skips.
+backend job now runs a `services: postgres`, bootstraps the role and extensions,
+migrates, and sets all sixteen per-suite variables, so the DB-backed suites do
+run there. What still skips in that job is the seven suites gating on
+`scratchDatabaseAvailability()`, because `DATABASE_ADMIN_PASSWORD` is
+deliberately unset — a cost decision the workflow states in a comment rather
+than hides. `consent-path-gate.yml` remains the stronger guarantee for the
+consent path: it fails if any suite in scope skips.
 
 **Trap 2 — a database without the migrations FAILS, and looks like your bug.**
 "Port open" and "schema correct" are different questions, and only the first is

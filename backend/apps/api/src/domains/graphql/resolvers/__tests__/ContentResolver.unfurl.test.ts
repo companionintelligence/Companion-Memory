@@ -5,7 +5,7 @@ import { ContentResolver } from '../ContentResolver';
 
 const CTX = { user: { id: 'user-1' } } as unknown as RequestContext;
 
-function makeResolver() {
+function makeResolver(payload: Record<string, unknown> = { season: 1 }) {
   const load = jest.fn(async () => ({
     status: 'ok',
     resolver: 'wikidata',
@@ -18,7 +18,7 @@ function makeResolver() {
     thumbnailUrl: '/ci-files/abc?X-Amz-Signature=x',
     durationSeconds: null,
     externalRef: 'wikidata:Q28443710',
-    payload: { season: 1 },
+    payload,
     fetchedAt: new Date('2026-08-20T00:00:00Z'),
   }));
   const resolver = new ContentResolver(
@@ -72,6 +72,52 @@ describe('ContentResolver.unfurl', () => {
 
     expect(ep10?.payload).toMatchObject({ season: 1, episode: 10, episode_title: 'Alpha and Omega' });
     expect(ep3?.payload).toMatchObject({ season: 2, episode: 3, episode_title: 'Ghosts' });
+  });
+
+  it("points a streaming row at its own provider's page when Wikidata knows one", async () => {
+    const watchLinks = {
+      hulu: 'https://www.hulu.com/series/2171423f-3326-4dfa-b193-b40494e60109',
+      netflix: 'https://www.netflix.com/title/80100172',
+    };
+    const { resolver } = makeResolver({ watch_links: watchLinks });
+
+    const hulu = await resolver.unfurl(
+      CTX,
+      node({ sourceSystem: 'hulu', sourceData: { Title: 'Dark: Season 1: Alpha and Omega' } }),
+    );
+    expect(hulu).toMatchObject({
+      canonicalUrl: 'https://www.hulu.com/series/2171423f-3326-4dfa-b193-b40494e60109',
+      siteName: 'Hulu',
+      payload: {
+        wikipedia_url: 'https://en.wikipedia.org/wiki/Dark_(TV_series)',
+        season: 1,
+        episode_title: 'Alpha and Omega',
+      },
+    });
+
+    const netflix = await resolver.unfurl(
+      CTX,
+      node({
+        sourceSystem: 'netflix',
+        sourceData: { Title: 'Dark: Season 1: Alpha and Omega (Episode 10)' },
+      }),
+    );
+    expect(netflix).toMatchObject({
+      canonicalUrl: 'https://www.netflix.com/title/80100172',
+      siteName: 'Netflix',
+    });
+
+    // The same shared cache row, read for a source Wikidata has no id for:
+    // the Wikipedia article stays the page.
+    const prime = await resolver.unfurl(
+      CTX,
+      node({ sourceSystem: 'prime_video', sourceData: { Title: 'Alpha and Omega-Dark - Season 1' } }),
+    );
+    expect(prime).toMatchObject({
+      canonicalUrl: 'https://en.wikipedia.org/wiki/Dark_(TV_series)',
+      siteName: 'Wikipedia',
+    });
+    expect(prime?.payload).not.toHaveProperty('wikipedia_url');
   });
 
   it('skips the loader entirely for a row with nothing resolvable', async () => {

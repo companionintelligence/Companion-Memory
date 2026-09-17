@@ -3,6 +3,7 @@ import type { SchedulerRegistry } from '@nestjs/schedule';
 import type { DataSource, Repository } from 'typeorm';
 
 import { JobControlStore } from '@ci/common/job-controls';
+import { CronRegistry } from '@ci/common/schedule';
 
 import type { JobSettingEntity } from '../../entities/JobSettingEntity';
 import { EventListenerRegistry } from '../../event-registration';
@@ -105,6 +106,7 @@ function configureStore(rows: SettingsRow[]): Promise<void> {
 }
 
 beforeEach(() => {
+  CronRegistry.clear();
   EventListenerRegistry.clear();
   EventListenerRegistry.register(
     'file.uploaded',
@@ -120,6 +122,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await JobControlStore.configure(null);
+  CronRegistry.clear();
   EventListenerRegistry.clear();
 });
 
@@ -227,6 +230,37 @@ describe('JobControlsService.update validation', () => {
     await expect(
       service.update({ crons: [{ name: 'NoSuchCron.tick', mode: 'disabled' }] }, 'user-1'),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('accepts a schedule that runs in the OTHER process', async () => {
+    CronRegistry.declare({
+      name: 'DerivationCron.deriveNightly',
+      cron: '0 0 3 * * *',
+      timeZone: null,
+      role: 'worker',
+      servedHere: false,
+    });
+
+    const { service, upserts } = makeHarness({ crons: ['PlanningJobsCron.todoScan'] });
+
+    await configureStore([]);
+
+    await service.update({ crons: [{ name: 'DerivationCron.deriveNightly', mode: 'disabled' }] }, 'user-1');
+
+    // The mode is a `ci.job_settings` row and every process polls it, so the
+    // web process was never unable to CONTROL a worker schedule — only unable to
+    // name one, which the old validation then read as "no such schedule".
+    expect(upserts).toEqual([
+      {
+        kind: 'cron',
+        key: 'DerivationCron.deriveNightly',
+        mode: 'disabled',
+        concurrency: null,
+        setsMode: true,
+        setsConcurrency: false,
+        userId: 'user-1',
+      },
+    ]);
   });
 });
 
@@ -372,5 +406,97 @@ describe('JobControlsService.get', () => {
     expect(dto.topology.perProcessConcurrency * dto.topology.queueWorkerProcesses).toBe(
       dto.global.concurrency.effective,
     );
+  });
+
+  it('offers the shipped figure as the ceiling on both global numbers, not MAX_CONCURRENCY', async () => {
+    const { service } = makeHarness();
+
+    await configureStore([]);
+
+    const dto = await service.get();
+
+    // The card renders `max` as the input's `max` attribute, so reporting 64
+    // here is the page inviting an operator to take the appliance six times past
+    // what the build allows. `max === default` is the whole shape of these two
+    // controls: the shipped number is what you get and the most you can ask for.
+    expect(dto.global.concurrency.max).toBe(dto.global.concurrency.default);
+    expect(dto.global.perQueueConcurrency.max).toBe(dto.global.perQueueConcurrency.default);
+    expect(dto.global.concurrency.max).toBeLessThan(dto.maxConcurrency);
+  });
+
+  it('reports a raised global cap as clamped rather than in force', async () => {
+    const { service } = makeHarness();
+
+    await configureStore([
+      {
+        kind: 'global',
+        key: 'concurrency',
+        mode: null,
+        concurrency: 64,
+        skipped_count: '0',
+        last_skipped_at: null,
+        updated_at: new Date(),
+      },
+    ]);
+
+    const dto = await service.get();
+
+    // A row can still hold 64 — written by an older build, or by hand — so the
+    // clamp has to live on the read path, not only in validation. The card shows
+    // "Running at N" off exactly this disagreement.
+    expect(dto.global.concurrency.value).toBe(64);
+    expect(dto.global.concurrency.effective).toBe(dto.global.concurrency.default);
+  });
+
+  it('lists a schedule this process does not run, and says which one does', async () => {
+    // The Procfile's split: the API is CI_ROLE=web, so none of the eleven
+    // `role: 'worker'` schedules ever register with its scheduler. Sourced from
+    // the scheduler, the card offered a list that stopped there — under a plain
+    // count, as though it were the total.
+    CronRegistry.declare({
+      name: 'OrphanCleanupCron.sweepOnSchedule',
+      cron: '0 15 4 * * *',
+      timeZone: null,
+      role: 'worker',
+      servedHere: false,
+    });
+
+    const { service } = makeHarness({ crons: ['PlanningJobsCron.todoScan'] });
+
+    await configureStore([]);
+
+    const dto = await service.get();
+    const orphan = dto.crons.find((cron) => cron.name === 'OrphanCleanupCron.sweepOnSchedule');
+
+    expect(orphan).toMatchObject({ cron: '0 15 4 * * *', role: 'worker', servedHere: false });
+    // The ones this process does run are still there, and marked as such.
+    expect(dto.crons.find((cron) => cron.name === 'PlanningJobsCron.todoScan')).toMatchObject({
+      servedHere: true,
+    });
+  });
+
+  it('does not let a raised per-queue default lift every queue at once', async () => {
+    const { service } = makeHarness();
+
+    await configureStore([
+      {
+        kind: 'global',
+        key: 'per_queue_concurrency',
+        mode: null,
+        concurrency: 64,
+        skipped_count: '0',
+        last_skipped_at: null,
+        updated_at: new Date(),
+      },
+    ]);
+
+    const dto = await service.get();
+    const image = dto.queues.find((queue) => queue.name === 'image-description');
+
+    // Every per-queue ceiling is derived from this one number, and each queue
+    // clamped to it faithfully — which is what made the raise invisible: the
+    // rows all looked internally consistent while the appliance ran ten times hot.
+    expect(dto.global.perQueueConcurrency.effective).toBe(dto.global.perQueueConcurrency.default);
+    expect(image?.concurrency.max).toBe(dto.global.perQueueConcurrency.default);
   });
 });

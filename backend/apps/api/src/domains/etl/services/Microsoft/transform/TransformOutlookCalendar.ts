@@ -319,6 +319,8 @@ export class OutlookCalendarTransformService {
       location_name: location_name || undefined,
       location_coordinates: location_coordinates || undefined,
       source_type: 'ETL',
+      // Ledger platform: the Outlook Calendar connection delivered it.
+      source_platform: canonicalSystem('outlook_calendar'),
       // Identity: iCalUId under the federated `calendar` system (override
       // instants as the RECURRENCE-ID suffix), converging with an exported
       // .ics or a Google fetch of the same invite —
@@ -338,6 +340,11 @@ export class OutlookCalendarTransformService {
             };
       })(),
       connection_id: connectionId,
+      // True for BOTH a series master and an instance Microsoft already
+      // expanded server-side (`seriesMasterId` set). That is why read-time
+      // expansion must never gate on `is_recurring` alone — it gates on a
+      // parseable RRULE in `metadata.recurrenceRule` instead, which this
+      // transform does not write, so no Outlook row is ever expanded twice.
       is_recurring: !!event.recurrence || !!event.seriesMasterId,
       is_all_day: event.isAllDay || false,
       status: this.normalizeStatus(event.isCancelled),

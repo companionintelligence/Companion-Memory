@@ -17,6 +17,7 @@ import { PersonType } from './PersonType';
 import { PlaceType } from './PlaceType';
 import { ProductModelType } from './ProductModelType';
 import { ReceiptType } from './ReceiptType';
+import { TaskType } from './TaskType';
 import { ThreadType } from './ThreadType';
 
 export const SearchResultType = createUnionType({
@@ -38,6 +39,7 @@ export const SearchResultType = createUnionType({
       PlaceType,
       ProductModelType,
       ReceiptType,
+      TaskType,
       ThreadType,
     ] as const,
   resolveType(instance): typeof Node {
@@ -74,6 +76,8 @@ export const SearchResultType = createUnionType({
         return ProductModelType;
       case 'receipt':
         return ReceiptType;
+      case 'task':
+        return TaskType;
       case 'thread':
         return ThreadType;
       default:

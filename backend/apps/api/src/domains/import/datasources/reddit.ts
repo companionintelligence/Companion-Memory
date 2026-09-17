@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { redditRecordId } from '@ci/domains/memory';
+
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -263,12 +265,14 @@ export class RedditFileImporter implements FileImporter {
     const text = row.body?.trim() || title;
     // Stable id keeps the dedup hash distinct: posts share the `post.txt`
     // filename, and saved posts have no timestamp, so without a natural key they
-    // would collapse to a single row (see hashItem in persistence.ts).
+    // would collapse to a single row (see hashItem in staging/identity.ts). It
+    // is also the row's source_id, minted by the builder the Reddit CONNECTION
+    // uses, so the same post arriving both ways is one row.
     const kind = saved ? 'saved_post' : 'post';
     const key = row.id?.trim() || row.permalink?.trim();
     params.pipeline.push({
       item: {
-        id: key ? `reddit:${kind}:${key}` : undefined,
+        id: key ? redditRecordId(kind, key) : undefined,
         classification: 'social',
         timestamp: ts,
         content: {
@@ -317,7 +321,7 @@ export class RedditFileImporter implements FileImporter {
     const key = row.id?.trim() || row.permalink?.trim() || row.link?.trim();
     params.pipeline.push({
       item: {
-        id: key ? `reddit:${kind}:${key}` : undefined,
+        id: key ? redditRecordId(kind, key) : undefined,
         classification: 'social',
         timestamp: ts,
         content: {

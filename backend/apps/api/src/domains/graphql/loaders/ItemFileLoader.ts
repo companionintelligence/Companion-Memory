@@ -20,6 +20,8 @@ export class ItemFileLoader extends Loader<SignedFile | null, string> {
     context: UserServiceContext,
     fileIds: readonly string[],
   ): Promise<readonly (SignedFile | null)[]> {
-    return this.fileService.findByIds(context, [...fileIds]);
+    const files = await this.fileService.findByIds(context, [...fileIds]);
+
+    return this.rekey(fileIds, files, (file) => file.id);
   }
 }

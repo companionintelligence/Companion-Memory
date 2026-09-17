@@ -1,26 +1,31 @@
 """
-LLM-based summarization using PydanticAI for structured outputs.
+Structured-output schemas for every LLM path, plus the user-dossier generator.
 
-Uses PydanticAI agents to guarantee valid responses from any OpenAI-compatible API.
-No OpenAI dependency, no manual JSON parsing, just type-safe responses.
+The pydantic response models below are the shared contract: llm_config.py wires
+them into the agents that summary_functions.py runs, and that -- not this file
+-- is where hourly summaries, rollups, insights and actions are generated.
+
+This module used to carry a second, self-contained implementation of all of
+those. Nothing called it, so it rotted invisibly: its prompt builders still
+enumerated data sources (`measurements`, `activities`, `api_logs`,
+`screen_captures`) that summary_sources.py has never emitted, and read a
+`from_entity_id` that the insight queries stopped selecting -- while reading,
+to anyone who opened this file first, as the authoritative implementation.
+Those duplicates are gone. New generation logic belongs in
+summary_functions.py; what stays here is `generate_user_dossier`, which
+dossier_builder.py calls through the module-level `summarizer` singleton.
 """
 
 from datetime import datetime
 from typing import Any
 
-import httpx
 import structlog
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, NativeOutput, PromptedOutput, ToolOutput
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from .config import (
-    resolve_embedding_api_base,
-    resolve_embedding_api_key,
-    resolve_llm_model,
-    settings,
-)
+from .config import resolve_llm_model, settings
 
 logger = structlog.get_logger()
 
@@ -305,7 +310,13 @@ class ActionsResponse(BaseModel):
 
 
 class Summarizer:
-    """Generates summaries using self-hosted LLM via PydanticAI."""
+    """Generates the user dossier using the self-hosted LLM via PydanticAI.
+
+    Only the dossier agent is built here. `summarizer = Summarizer()` runs at
+    import time, and llm_config.py imports this module purely for the response
+    models above, so every agent declared in __init__ is constructed on that
+    import too -- agents for paths nobody calls are startup cost for nothing.
+    """
 
     def __init__(self):
         # Create model pointing to your self-hosted endpoint
@@ -325,83 +336,6 @@ class Summarizer:
             ),
         )
 
-        # Create agents for each summary type
-        self.hourly_agent = Agent(
-            self.model,
-            output_type=wrap_output(HourlySummaryResponse),
-            retries=settings.output_retries,
-            system_prompt=(
-                "You are an AI that creates concise hourly summaries of user activity. "
-                "Analyze the data and provide insights, patterns, and notable events."
-            ),
-        )
-
-        # Time-scale specific agents
-        self.daily_agent = Agent(
-            self.model,
-            output_type=wrap_output(DailySummaryResponse),
-            retries=settings.output_retries,
-            system_prompt=(
-                "You synthesize hourly summaries into a daily overview. "
-                "Focus on: daily rhythms and routines, workflow patterns, "
-                "productivity peaks and valleys, social interactions, "
-                "and how the day's activities connected together. "
-                "Identify what made this day distinct or typical."
-            ),
-        )
-
-        self.weekly_agent = Agent(
-            self.model,
-            output_type=wrap_output(WeeklySummaryResponse),
-            retries=settings.output_retries,
-            system_prompt=(
-                "You synthesize daily summaries into a weekly overview. "
-                "Focus on: work-life balance, recurring weekly patterns, "
-                "progress on projects or goals, social dynamics, "
-                "behavioral trends across weekdays vs weekends. "
-                "Identify how the week developed and key accomplishments or challenges."
-            ),
-        )
-
-        self.monthly_agent = Agent(
-            self.model,
-            output_type=wrap_output(MonthlySummaryResponse),
-            retries=settings.output_retries,
-            system_prompt=(
-                "You synthesize weekly summaries into a monthly overview. "
-                "Focus on: major milestones and achievements, evolving priorities, "
-                "habit formation or changes, relationship developments, "
-                "month-over-month growth or shifts in focus areas. "
-                "Identify the arc of the month and significant transitions."
-            ),
-        )
-
-        self.seasonal_agent = Agent(
-            self.model,
-            output_type=wrap_output(SeasonalSummaryResponse),
-            retries=settings.output_retries,
-            system_prompt=(
-                "You synthesize monthly summaries into a seasonal (3-month) overview. "
-                "Focus on: life phase transitions, major project outcomes, "
-                "seasonal behavioral patterns, strategic direction changes, "
-                "personal or professional evolution. "
-                "Identify the broader narrative arc and transformative themes of this quarter."
-            ),
-        )
-
-        self.yearly_agent = Agent(
-            self.model,
-            output_type=wrap_output(YearlySummaryResponse),
-            retries=settings.output_retries,
-            system_prompt=(
-                "You synthesize seasonal summaries into a yearly overview. "
-                "Focus on: annual achievements and setbacks, identity shifts, "
-                "life trajectory changes, enduring patterns vs. experiments, "
-                "key relationships and their evolution, personal growth themes. "
-                "Provide a bird's-eye view of the year as a chapter in their life story."
-            ),
-        )
-
         self.dossier_agent = Agent(
             self.model,
             output_type=wrap_output(UserDossierResponse),
@@ -412,134 +346,11 @@ class Summarizer:
             ),
         )
 
-        self.insights_agent = Agent(
-            self.model,
-            output_type=wrap_output(InsightsResponse),
-            retries=settings.output_retries,
-            system_prompt=(
-                "You are a proactive personal assistant that generates actionable insights. "
-                "Analyze the user's recent activity, relationships, upcoming events, and changes "
-                "to their knowledge graph to surface helpful suggestions they might not think of themselves.\n\n"
-                "Focus on:\n"
-                "- Upcoming dates (anniversaries, birthdays, deadlines) and relevant people\n"
-                "- Recently added or changed relationships that might need attention\n"
-                "- Patterns in behavior that suggest opportunities or needs\n"
-                "- Connections between people, places, and events the user might not see\n"
-                "- Timely reminders based on recurring activities or maintenance cycles\n\n"
-                "Each insight should be:\n"
-                "- Actionable: Include specific next steps the user can take\n"
-                "- Timely: Relevant to upcoming events or recent changes\n"
-                "- Personal: Use knowledge about the user's relationships and preferences\n"
-                "- Non-obvious: Connect dots the user might not see themselves\n\n"
-                "Generate 3-5 high-quality insights. Prioritize quality over quantity."
-            ),
-        )
-
-        self.action_agent = Agent(
-            self.model,
-            output_type=wrap_output(ActionsResponse),
-            retries=settings.output_retries,
-            system_prompt=(
-                "You are an AI assistant that facilitates proactive engagement. "
-                "Based on the user's recent context, suggest 3 Conversation Starters or Planning Cycles. "
-                "Conversation Starters should be thought-provoking questions or topics based on recent events or interests. "
-                "Planning Cycles should be review prompts for projects, goals, or weekly reflections.\n"
-                "Ensure variety and relevance. Use a friendly and encouraging tone."
-            ),
-        )
-
         logger.info(
             "pydantic_ai_initialized",
             model=self.model_name,
             base_url=settings.llm_api_base,
         )
-
-    def generate_hourly_summary(
-        self, aggregated_data: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Generate hourly summary from aggregated data."""
-        activity_counts = self._count_activities(aggregated_data)
-
-        if activity_counts.get("total", 0) == 0:
-            return {
-                "summary_text": "Nothing new.",
-                "summary_type": "hourly",
-                "key_insights": [],
-                "events": [],
-                "anomalies": [],
-                "embedding": [],
-                "activity_counts": activity_counts,
-                "tokens_used": 0,
-            }
-
-        # Build prompt
-        prompt = self._build_data_prompt(aggregated_data, activity_counts)
-        logger.info(
-            "calling_llm_for_summary",
-            model=self.model_name,
-            base_url=settings.llm_api_base,
-            prompt_length=len(prompt),
-        )
-
-        # Run agent (automatically retries and validates)
-        try:
-            result = self.hourly_agent.run_sync(
-                prompt,
-                model_settings={
-                    "temperature": settings.llm_temperature,
-                    "max_tokens": settings.llm_max_tokens,
-                },
-            )
-            logger.info(
-                "llm_response_received",
-                tokens=result.usage.total_tokens if result.usage else 0,
-            )
-        except Exception as exc:
-            logger.error(
-                "llm_call_failed", error=str(exc), error_type=type(exc).__name__
-            )
-            raise
-
-        # Extract validated response
-        response = result.output
-        embedding = self.generate_embedding(response.summary_text)
-
-        # Convert Pydantic response to dict to capture all structured fields
-        response_dict = response.model_dump(exclude_none=True)
-
-        return {
-            "summary_text": response.summary_text,
-            "summary_type": "hourly",
-            "key_insights": response.key_insights,
-            "events": response.notable_events,
-            "anomalies": response.anomalies,
-            "structured_data": response_dict,  # Store all structured fields
-            "embedding": embedding,
-            "activity_counts": activity_counts,
-            "tokens_used": result.usage.total_tokens if result.usage else 0,
-        }
-
-    def generate_daily_summary(
-        self, hourly_summaries: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        """Generate daily summary from hourly summaries."""
-        return self._generate_rollup("daily", hourly_summaries, self.daily_agent)
-
-    def generate_period_rollup(
-        self,
-        period_type: str,
-        child_summaries: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        """Generate rollup summary (weekly/monthly/etc) from child summaries."""
-        # Select the appropriate time-scale specific agent
-        agent_map = {
-            "weekly": self.weekly_agent,
-            "monthly": self.monthly_agent,
-            "seasonal": self.seasonal_agent,
-            "yearly": self.yearly_agent,
-        }
-        agent = agent_map.get(period_type, self.daily_agent)
-        return self._generate_rollup(period_type, child_summaries, agent)
 
     def generate_user_dossier(
         self,
@@ -592,329 +403,6 @@ class Summarizer:
             },
         }
 
-    def generate_insights(self, insights_context: dict[str, Any]) -> dict[str, Any]:
-        """Generate proactive insights from aggregated context data.
-
-        Args:
-            insights_context: Dict containing:
-                - graph_deltas: Recent changes to entities/relationships
-                - upcoming_events: Events in the next 14 days
-                - recent_summaries: Recent activity summaries
-                - strongest_relationships: Top relationships by strength
-                - recently_changed_relationships: Recently modified relationships
-                - event_relevant_relationships: Relationships tied to upcoming events
-                - recent_communications: Recent messages/emails
-                - user_dossier: User's profile/preferences
-
-        Returns:
-            Dict with insights, embeddings, and metadata
-        """
-        prompt = self._build_insights_prompt(insights_context)
-
-        logger.info(
-            "calling_llm_for_insights",
-            model=self.model_name,
-            prompt_length=len(prompt),
-        )
-
-        try:
-            result = self.insights_agent.run_sync(
-                prompt,
-                model_settings={
-                    "temperature": 0.7,  # Slightly higher for creative suggestions
-                    "max_tokens": settings.llm_max_tokens,
-                },
-            )
-            logger.info(
-                "insights_response_received",
-                tokens=result.usage.total_tokens if result.usage else 0,
-                num_insights=len(result.output.insights),
-            )
-        except Exception as exc:
-            logger.error(
-                "insights_generation_failed",
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            raise
-
-        response = result.output
-
-        # Generate embedding from combined insight text
-        combined_text = " ".join(
-            [i.title + ": " + i.summary_text for i in response.insights]
-        )
-        embedding = self.generate_embedding(combined_text)
-
-        # Convert to serializable format
-        insights_list = [item.model_dump() for item in response.insights]
-
-        return {
-            "insights": insights_list,
-            "data_sources_used": response.data_sources_used,
-            "embedding": embedding,
-            "tokens_used": result.usage.total_tokens if result.usage else 0,
-            "num_insights": len(response.insights),
-        }
-
-    def generate_actions(self, context: dict[str, Any]) -> dict[str, Any]:
-        """Generate proactive actions from context."""
-        # Reuse insights prompt builder for now as it contains similar context
-        prompt = self._build_insights_prompt(context)
-        prompt += "\nBased on this context, generate appropriate Action Cards (Conversation Starters or Planning Cycles)."
-
-        logger.info(
-            "calling_llm_for_actions",
-            model=self.model_name,
-            prompt_length=len(prompt),
-        )
-
-        try:
-            result = self.action_agent.run_sync(
-                prompt,
-                model_settings={
-                    "temperature": 0.8,
-                    "max_tokens": settings.llm_max_tokens,
-                },
-            )
-            logger.info(
-                "actions_response_received",
-                tokens=result.usage.total_tokens if result.usage else 0,
-                num_actions=len(result.output.actions),
-            )
-        except Exception as exc:
-            logger.error(
-                "actions_generation_failed",
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            raise
-
-        response = result.output
-        actions_list = [item.model_dump() for item in response.actions]
-
-        return {
-            "actions": actions_list,
-            "tokens_used": result.usage.total_tokens if result.usage else 0,
-        }
-
-    def _build_insights_prompt(self, context: dict[str, Any]) -> str:
-        """Build prompt for insights generation from aggregated context."""
-        parts = ["Generate proactive insights based on the following user context:\n"]
-
-        # User dossier (personality/preferences)
-        dossier = context.get("user_dossier")
-        if dossier:
-            parts.append("## USER PROFILE")
-            parts.append(f"Summary: {dossier.get('summary', 'N/A')}")
-            if dossier.get("interests"):
-                parts.append(f"Interests: {', '.join(dossier['interests'][:5])}")
-            if dossier.get("preferences"):
-                parts.append(f"Preferences: {', '.join(dossier['preferences'][:5])}")
-            parts.append("")
-
-        # Upcoming events
-        events = context.get("upcoming_events", [])
-        if events:
-            parts.append("## UPCOMING EVENTS (next 14 days)")
-            for event in events[:10]:
-                start = event.get("start_time") or event.get("start_date", "")
-                title = event.get("title") or event.get("name", "Untitled")
-                eid = event.get("id") or ""
-                parts.append(f"- {start}: {title} (ID: {eid})")
-            parts.append("")
-
-        # Graph deltas (recent changes)
-        deltas = context.get("graph_deltas", [])
-        if deltas:
-            parts.append("## RECENT CHANGES TO KNOWLEDGE GRAPH")
-            for delta in deltas[:15]:
-                change_type = delta.get("change_type", "unknown")
-                node_type = delta.get("node_type", "")
-                entity_type = delta.get("entity_type") or delta.get(
-                    "relationship_type", ""
-                )
-                changed_fields = delta.get("changed_fields", {})
-                eid = delta.get("entity_id") or delta.get("from_entity_id") or ""
-
-                if node_type == "entity":
-                    name = changed_fields.get("name", {}).get(
-                        "new"
-                    ) or changed_fields.get("name", {}).get("old", "Unknown")
-                    parts.append(
-                        f"- {change_type.upper()} {entity_type}: {name} (ID: {eid})"
-                    )
-                else:
-                    parts.append(
-                        f"- {change_type.upper()} relationship: {entity_type} (ID: {eid})"
-                    )
-            parts.append("")
-
-        # Strongest relationships
-        strongest = context.get("strongest_relationships", [])
-        if strongest:
-            parts.append("## CLOSEST RELATIONSHIPS (by strength)")
-            for rel in strongest[:3]:
-                eid = rel.get("to_entity_id") or ""
-                parts.append(
-                    f"- {rel.get('name', 'Unknown')} ({rel.get('relationship_type', 'related')}) (ID: {eid})"
-                )
-            parts.append("")
-
-        # Recently changed relationships
-        recent_rels = context.get("recently_changed_relationships", [])
-        if recent_rels:
-            parts.append("## RECENTLY CHANGED RELATIONSHIPS")
-            for rel in recent_rels[:5]:
-                change = rel.get("change_type", "updated")
-                name = rel.get("name", "Unknown")
-                eid = rel.get("entity_id") or ""
-                parts.append(f"- {change}: {name} (ID: {eid})")
-            parts.append("")
-
-        # Event-relevant relationships (people tied to upcoming events)
-        event_rels = context.get("event_relevant_relationships", [])
-        if event_rels:
-            parts.append("## PEOPLE CONNECTED TO UPCOMING EVENTS")
-            for rel in event_rels[:5]:
-                name = rel.get("name", "Unknown")
-                eid = rel.get("entity_id") or ""
-                event = rel.get("event_title", "")
-                parts.append(f"- {name} (ID: {eid}): {event}")
-            parts.append("")
-
-        # Recent summaries (patterns)
-        summaries = context.get("recent_summaries", [])
-        if summaries:
-            parts.append("## RECENT ACTIVITY PATTERNS")
-            for summary in summaries[:5]:
-                text = summary.get("summary_text", "")[:200]
-                if text:
-                    parts.append(f"- {text}")
-            parts.append("")
-
-        # Recent communications
-        comms = context.get("recent_communications", [])
-        if comms:
-            parts.append("## RECENT COMMUNICATIONS")
-            for comm in comms[:5]:
-                subject = comm.get("subject") or comm.get("title", "")[:50]
-                from_id = comm.get("from_entity_id") or ""
-                if subject:
-                    parts.append(f"- {subject} (From ID: {from_id})")
-            parts.append("")
-
-        parts.append(
-            "\nBased on this context, generate 3-5 actionable insights that would be helpful to the user."
-        )
-        parts.append(
-            "Focus on upcoming opportunities, relationship maintenance, and timely suggestions."
-        )
-
-        return "\n".join(parts)
-
-    def generate_embedding(self, text: str) -> list[float]:
-        """Generate embedding using OpenAI-compatible embedding endpoint."""
-        try:
-            # Direct HTTP call to embedding endpoint (no openai dependency)
-            with httpx.Client(timeout=30.0) as client:
-                response = client.post(
-                    f"{resolve_embedding_api_base(settings.llm_api_base)}/embeddings",
-                    headers={"Authorization": f"Bearer {resolve_embedding_api_key()}"},
-                    json={
-                        "model": settings.embedding_model,
-                        "input": text,
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data["data"][0]["embedding"]
-        except Exception as exc:
-            logger.error("embedding_generation_failed", error=str(exc))
-            return [0.0] * settings.embedding_dimensions
-
-    # ========================================================================
-    # Internal helpers
-    # ========================================================================
-
-    def _generate_rollup(
-        self, period_type: str, child_summaries: list[dict[str, Any]], agent: Agent
-    ) -> dict[str, Any]:
-        """Generic rollup for daily/weekly/monthly/etc using specified time-scale agent."""
-        combined_text = "\n\n".join(
-            [
-                f"Summary {i + 1}: {s.get('summary_text', '')}"
-                for i, s in enumerate(child_summaries)
-            ]
-        )
-
-        prompt = f"Synthesize these summaries into a {period_type} overview:\n\n{combined_text}"
-
-        result = agent.run_sync(
-            prompt,
-            model_settings={
-                "temperature": settings.llm_temperature,
-                "max_tokens": settings.llm_max_tokens,
-            },
-        )
-
-        response = result.output
-        embedding = self.generate_embedding(response.summary_text)
-
-        # Aggregate counts
-        total_counts = {}
-        for summary in child_summaries:
-            counts = summary.get("activity_counts", {})
-            for key, value in counts.items():
-                total_counts[key] = total_counts.get(key, 0) + value
-
-        # Convert Pydantic response to dict to capture all structured fields
-        response_dict = response.model_dump(exclude_none=True)
-
-        return {
-            "summary_text": response.summary_text,
-            "summary_type": period_type,
-            "structured_data": response_dict,  # Store all structured fields
-            "embedding": embedding,
-            "activity_counts": total_counts,
-            "num_child_summaries": len(child_summaries),
-            "tokens_used": result.usage.total_tokens if result.usage else 0,
-        }
-
-    def _build_data_prompt(self, data: dict[str, Any], counts: dict[str, int]) -> str:
-        """Build prompt from aggregated data."""
-        parts = [
-            f"Time: {data['start_time']} to {data['end_time']}",
-            f"User: {data['user_id']}",
-            "",
-            "Activity counts:",
-        ]
-
-        for key, count in counts.items():
-            if key != "total" and count > 0:
-                parts.append(f"- {key}: {count}")
-
-        parts.append("")
-
-        # Add sample data from each category
-        for category in [
-            "measurements",
-            "events",
-            "communications",
-            "activities",
-            "messages",
-            "files",
-            "browser_activity",
-        ]:
-            items = data.get(category, [])
-            if items:
-                parts.append(f"{category.upper()}:")
-                for item in items[:5]:  # Top 5
-                    parts.append(f"- {self._format_item(item)}")
-                parts.append("")
-
-        return "\n".join(parts)
-
     def _build_dossier_prompt(
         self,
         daily_summaries: list[dict[str, Any]],
@@ -938,42 +426,27 @@ class Summarizer:
         )
         return "\n".join(parts)
 
-    def _format_item(self, item: dict[str, Any]) -> str:
-        """Format a data item for prompt."""
-        if "title" in item:
-            return item["title"]
-        if "activity_name" in item:
-            return item["activity_name"]
-        if "subject" in item:
-            return item.get("subject", "")[:50]
-        if "filename" in item:
-            return item["filename"]
-        if "url" in item:
-            return item.get("url", "")[:50]
-        return str(item)[:50]
-
-    def _count_activities(self, data: dict[str, Any]) -> dict[str, int]:
-        """Count activities by category."""
-        counts = {
-            key: len(data.get(key, []))
-            for key in [
-                "measurements",
-                "positions",
-                "communications",
-                "activities",
-                "events",
-                "messages",
-                "files",
-                "api_logs",
-                "browser_activity",
-                "screen_captures",
-            ]
-        }
-        counts["total"] = sum(counts.values())
-        return counts
-
 
 # Global summarizer instance
 summarizer = Summarizer()
 
-__all__ = ["Summarizer", "summarizer"]
+# Exported deliberately, and pinned by tests/test_summarizer_surface.py: the
+# response models are llm_config.py's agent contract and `summarizer` is
+# dossier_builder.py's entry point. Nothing else in here has a caller.
+__all__ = [
+    "ActionItem",
+    "ActionsResponse",
+    "DailySummaryResponse",
+    "HourlySummaryResponse",
+    "InsightItem",
+    "InsightsResponse",
+    "MonthlySummaryResponse",
+    "SeasonalSummaryResponse",
+    "SingleInsightResponse",
+    "Summarizer",
+    "UserDossierResponse",
+    "WeeklySummaryResponse",
+    "YearlySummaryResponse",
+    "summarizer",
+    "wrap_output",
+]

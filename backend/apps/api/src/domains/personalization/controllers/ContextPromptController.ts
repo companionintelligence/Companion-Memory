@@ -1,7 +1,9 @@
 import { Body, Controller, Get, NotFoundException, Param, Post, UseGuards } from '@nestjs/common';
+import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { ValidationPipe } from '@ci/common/pipes';
 import { EventService } from '@ci/domains/events';
 import { SmartRotationWorkEvent } from '@ci/domains/smart-rotation/events';
 
@@ -12,6 +14,13 @@ import { ContextPromptService } from '../services/ContextPromptService';
 // path; a drift between the two just means interactive requests stop cutting
 // ahead of background rotation work, not a broken send.
 const CONTEXT_PROMPT_WORK_PRIORITY = 5;
+
+/**
+ * The stored `response` is deliberately free-form JSON (the prompt selector
+ * decides its shape), so the schema only pins the envelope: a JSON object, not
+ * a bare string/array/null that would be persisted straight onto the row.
+ */
+export const contextPromptRespondSchema = z.object({ response: z.unknown().optional() }).strip();
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Controller('context-prompts')
@@ -35,7 +44,7 @@ export class ContextPromptController {
   async respond(
     @Context() context: RequestContext,
     @Param('id') id: string,
-    @Body() body: { response?: unknown },
+    @Body(new ValidationPipe(contextPromptRespondSchema)) body: { response?: unknown },
   ) {
     const saved = await this.contextPromptService.respond(
       toServiceContext(context),

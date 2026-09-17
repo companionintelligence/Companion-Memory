@@ -144,6 +144,56 @@ class Settings(BaseSettings):
     label_http_timeout_seconds: float | None = Field(
         default_factory=_label_http_timeout_seconds
     )
+    # While the GGUF fallback is active, re-probe the chat endpoint this often
+    # and switch back to it when it answers (0 disables). See inference/qwen.py.
+    label_endpoint_reprobe_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("HBPE_LABEL_REPROBE_SECONDS", "300"))
+    )
+    # GGUF fallback: prompt chunk size (n_batch = n_ubatch). Small and fixed on
+    # purpose — it bounds the backend's scratch pool. Measured 2026-09-11 on
+    # ROCm: 64 held VRAM flat after warm-up where the default 512 grew ~0.5 MiB
+    # per completion indefinitely, at the same speed.
+    qwen_gguf_batch: int = Field(
+        default_factory=lambda: int(os.getenv("QWEN_GGUF_BATCH", "64"))
+    )
+    # GGUF fallback: rebuild the llama.cpp context after this many completions
+    # to release whatever the scratch pool still accumulated (0 disables).
+    qwen_gguf_recycle_calls: int = Field(
+        default_factory=lambda: int(os.getenv("QWEN_GGUF_RECYCLE_CALLS", "500"))
+    )
+
+    # ── Yield to chat (see label_yield.py) ────────────────────────────────────
+    # Before each chat-API label request, stand aside while any thread has a
+    # chat turn queued or running (ci.threads.generation_status). Only the HTTP
+    # backend shares Ollama with chat; the in-process GGUF backend never asks.
+    # Waiting counts against label_budget_seconds — that is the point.
+    label_yield_to_chat: bool = Field(
+        default_factory=lambda: (
+            os.getenv("HBPE_LABEL_YIELD_TO_CHAT", "true").strip().lower()
+            not in ("0", "false", "no", "off")
+        )
+    )
+    # Longest one request will wait for a turn to finish before proceeding
+    # anyway. Long on purpose: a real turn with thinking and tools on a local
+    # model takes minutes, and cutting in early re-creates the starvation.
+    label_yield_max_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("HBPE_LABEL_YIELD_MAX_SECONDS", "600"))
+    )
+    label_yield_poll_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("HBPE_LABEL_YIELD_POLL_SECONDS", "2"))
+    )
+
+    # ── Request ceiling (see label_ceiling.py) ───────────────────────────────
+    # Most chat-API label requests per minute, enforced as an even gap between
+    # request starts (6 → one every 10 s). Exists so the shared chat runner is
+    # regularly idle and Ollama can evict or swap it; measured 2026-09-14 the
+    # unthrottled labeler kept a 27B runner busy all afternoon and wedged the
+    # scheduler. 0 disables. The GGUF fallback is never throttled.
+    label_max_requests_per_minute: float = Field(
+        default_factory=lambda: float(
+            os.getenv("HBPE_LABEL_MAX_REQUESTS_PER_MINUTE", "6")
+        )
+    )
 
     # ── Staleness (§1.2) ─────────────────────────────────────────────────────
     cluster_staleness_days: int = Field(
@@ -163,12 +213,19 @@ class Settings(BaseSettings):
     #
     # The width of that window is bootstrap.SERIALIZE_WINDOW_DAYS, NOT
     # recurrence.HISTORY_DAYS (180). A label reaches the profiler only via
-    # hbpe.token_stream, and the only writer of that table serializes the
-    # trailing SERIALIZE_WINDOW_DAYS; a day that fell out of that window before
-    # its events were labeled is never revisited. Labeling the 90–180-day band
-    # therefore produces zero token_stream rows — on the dev corpus that is
-    # 5,775 of the 7,192 unlabeled events inside 180 days, i.e. most of a
-    # reserved budget share spent for no forecast at all. A value *smaller*
+    # hbpe.token_stream, and the only writer of that table serializes the days
+    # bootstrap.content_source_days returns; a day that fell out of that list
+    # before its events were labeled is never revisited. On a DENSE corpus that
+    # list is the trailing SERIALIZE_WINDOW_DAYS, so labeling the 90–180-day
+    # band produces zero token_stream rows — on the dev corpus that is 5,775 of
+    # the 7,192 unlabeled events inside 180 days, i.e. most of a reserved budget
+    # share spent for no forecast at all.
+    #
+    # That equivalence is no longer unconditional: the list is days-with-data
+    # under a tiered budget, so on a SPARSE-event corpus tier A's reserved event
+    # days can reach into and past the 90–180-day band, and those days ARE
+    # serialized. The setting is still kept equal to the serialize window
+    # because a value *smaller*
     # than the serialize window is the harmful direction: it hands days that
     # serialize will write to the oldest-first historical phase, which reaches
     # them last. Kept equal by a test in tests/test_label_drain.py.

@@ -2,6 +2,7 @@ import {
   effectiveQueueConcurrency,
   maxQueueConcurrency,
   perProcessGlobalConcurrency,
+  perQueueDefaultConcurrency,
 } from '../jobConcurrency';
 
 /**
@@ -32,7 +33,12 @@ describe('perProcessGlobalConcurrency', () => {
 
   it('splits an operator cap evenly across the processes that enforce it', () => {
     expect(perProcessGlobalConcurrency(12, 10, 2)).toBe(6);
-    expect(perProcessGlobalConcurrency(12, 10, 1)).toBe(12);
+    // On a single-process appliance the shipped ceiling is 10, so 12 is a RAISE
+    // and clamps. This case used to assert 12 — the suite's own header states
+    // property 2 and this line quietly contradicted it, which is how the
+    // behaviour survived review.
+    expect(perProcessGlobalConcurrency(12, 10, 1)).toBe(10);
+    expect(perProcessGlobalConcurrency(8, 10, 1)).toBe(8);
   });
 
   it('rounds the split down, so the appliance never exceeds the cap', () => {
@@ -46,6 +52,42 @@ describe('perProcessGlobalConcurrency', () => {
     // process with zero slots has stopped, and "cap at 1" must not mean "switch
     // the appliance off".
     expect(perProcessGlobalConcurrency(1, 10, 2)).toBe(1);
+  });
+
+  it('refuses to raise the appliance above what the build ships with', () => {
+    // Property 2, on the control that most obviously breaks it. `MAX_CONCURRENCY`
+    // is 64 and the API accepts it, so without this clamp typing 64 into "Jobs at
+    // once, whole appliance" put six times the shipped load on the box — from the
+    // page whose reason for existing is that the box is already too hot.
+    expect(perProcessGlobalConcurrency(64, 10, 1)).toBe(10);
+    expect(perProcessGlobalConcurrency(64, 10, 2)).toBe(10);
+  });
+
+  it('clamps at the shipped APPLIANCE figure, not the per-process one', () => {
+    // On a split deployment the shipped appliance ceiling is 20, so 16 is a real
+    // reduction and must be honoured rather than being read as "above 10".
+    expect(perProcessGlobalConcurrency(16, 10, 2)).toBe(8);
+  });
+});
+
+describe('perQueueDefaultConcurrency', () => {
+  it('is the shipped default when the operator has no opinion', () => {
+    expect(perQueueDefaultConcurrency(null, 6)).toBe(6);
+  });
+
+  it('honours a lower default', () => {
+    expect(perQueueDefaultConcurrency(2, 6)).toBe(2);
+  });
+
+  it('refuses to raise the default above what the build ships with', () => {
+    // The subtle half of property 2. Every queue's ceiling is derived from this
+    // number, so a raise here is a raise on every queue at once — and each queue
+    // would then clamp faithfully to the raised figure and look correct doing it.
+    expect(perQueueDefaultConcurrency(64, 6)).toBe(6);
+  });
+
+  it('never returns zero', () => {
+    expect(perQueueDefaultConcurrency(null, 0)).toBe(1);
   });
 });
 
@@ -85,5 +127,14 @@ describe('effectiveQueueConcurrency', () => {
 
   it('never returns zero', () => {
     expect(effectiveQueueConcurrency({ perQueueDefault: 0, requested: null, declared: 0 })).toBe(1);
+  });
+
+  it('cannot be raised through the global per-queue default either', () => {
+    // The composition the two functions have to satisfy together: the operator
+    // raises the global default to 64 AND asks this queue for 64. Clamping only
+    // against the default they just raised would answer 64.
+    const perQueueDefault = perQueueDefaultConcurrency(64, 6);
+
+    expect(effectiveQueueConcurrency({ perQueueDefault, requested: 64, declared: null })).toBe(6);
   });
 });

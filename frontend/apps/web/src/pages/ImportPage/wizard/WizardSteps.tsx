@@ -4,11 +4,8 @@ import { Check } from '@ci/shadcn/icons';
 import type { ImportStage } from '../ImportPage';
 
 export interface WizardStepsProps {
-  /**
-   * The step being shown, or `null` when the surface is on Inbox or History —
-   * then no step is current, and every one of them is a way back.
-   */
-  step: ImportStage | null;
+  /** The step being shown. */
+  step: ImportStage;
   /** Export is unreachable until something is picked. */
   canExport: boolean;
   onStep: (step: ImportStage) => void;
@@ -28,26 +25,19 @@ const ORDER: Record<ImportStage, number> = { pick: 0, export: 1, sync: 2 };
  *
  * This used to be a second row stacked directly under an Import/Inbox/History
  * tab bar — two rows of chrome, one of which repeated the other ("Import", then
- * "1 Pick"). They are one row now: the three steps ARE the import tab, so
- * clicking any of them returns from Inbox or History to the wizard at that
- * step, and the tab bar keeps only the two destinations the steps do not name.
+ * "1 Pick"). Then for a while the steps doubled as the way back from Inbox and
+ * History, shown there with no step current. Now the row is shown only with
+ * the wizard — the surface buttons on the heading do the switching — so a
+ * step is always exactly one of: done, where you are, or ahead of you.
  *
- * Lives here rather than inside `ImportWizard` because the wizard unmounts when
- * the surface is on Inbox or History, and the row has to survive that to be the
- * way back.
+ * Lives here rather than inside `ImportWizard` because the page host pins it
+ * above the scrolling wizard, while the onboarding host shows no row at all.
  */
 export function WizardSteps({ step, canExport, onStep, className }: WizardStepsProps) {
   return (
     <ol className={cn('grid gap-2 sm:grid-cols-3', className)}>
       {STEPS.map((entry) => {
-        const state =
-          step == null
-            ? 'todo'
-            : entry.step === step
-              ? 'active'
-              : ORDER[entry.step] < ORDER[step]
-                ? 'done'
-                : 'todo';
+        const state = entry.step === step ? 'active' : ORDER[entry.step] < ORDER[step] ? 'done' : 'todo';
 
         const reachable = entry.step !== 'export' || canExport;
 

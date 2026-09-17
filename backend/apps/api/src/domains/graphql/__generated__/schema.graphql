@@ -61,16 +61,27 @@ type ActivityBucketType {
 }
 
 type ActivityCountsType {
-  activities: Int
-  apiLogs: Int
+  activities: Int @deprecated(reason: "Retired summary source; only set on summaries written before it was dropped.")
+  answers: Int
+  apiLogs: Int @deprecated(reason: "Retired summary source; only set on summaries written before it was dropped.")
   browserActivity: Int
   communications: Int
+  content: Int
   events: Int
+  fileChunks: Int
   files: Int
-  measurements: Int
+  measurements: Int @deprecated(reason: "Retired summary source; only set on summaries written before it was dropped.")
   messages: Int
-  positions: Int
-  screenCaptures: Int
+  notes: Int
+  objectObservations: Int
+  objects: Int
+  position: Int
+  positions: Int @deprecated(reason: "Never populated — the source has always been named `position`. Use `position`.")
+  receiptLineItems: Int
+  receipts: Int
+  screenCaptures: Int @deprecated(reason: "Retired summary source; only set on summaries written before it was dropped.")
+  tasks: Int
+  toolInvocations: Int
   total: Int!
 }
 
@@ -566,6 +577,17 @@ type ContentEdge implements Edge {
   node: ContentType!
 }
 
+type ContentFacets {
+  """Distinct `mimetype` values."""
+  mimetypes: [String!]!
+
+  """Distinct `source_system` values — the How filter, over content alone."""
+  sourceSystems: [String!]!
+
+  """Distinct `type` values (image, post, note, …)."""
+  types: [String!]!
+}
+
 type ContentType implements Node & Taggable {
   createdAt: DateTime!
   event: EventType
@@ -734,6 +756,11 @@ input CreateEventInput {
   endTime: DateTime
   eventType: String
   isAllDay: Boolean
+
+  """
+  CI-Planning's manually-locked-block flag; settable/readable only, not yet enforced.
+  """
+  isLocked: Boolean
   isRecurring: Boolean
   locationCoordinates: JSON
   locationEntityId: ID
@@ -839,6 +866,8 @@ input CreatePeerLinkInput {
   displayName: String
   memoryEndpoint: String!
   peerHandle: String!
+  peerIssuer: String
+  peerSubject: String
   personEntityId: ID
   trustTier: PeerTrustTier
 }
@@ -920,6 +949,22 @@ input CreateRelationshipInput {
 
 type CreateRelationshipPayload {
   relationship: RelationshipType
+  success: Boolean!
+}
+
+input CreateReminderInput {
+  """A planned block (`ci.events` id). See `taskId`."""
+  blockId: ID
+
+  """The instant this reminder fires. Must be in the future."""
+  fireAt: DateTime!
+
+  """Exactly one of `taskId`/`blockId` must be set."""
+  taskId: ID
+}
+
+type CreateReminderPayload {
+  reminder: ReminderType
   success: Boolean!
 }
 
@@ -1192,7 +1237,22 @@ type EventType implements Node & Taggable {
   externalSyncStatus: String
   id: ID!
   isAllDay: Boolean
+
+  """
+  True for a planned block placed by the deterministic placer running unattended; false for anything a human action produced (the Schedule button, a calendar drag, confirming a proposal). Lets the UI label honestly, e.g. "AI Briefing" vs "Day Overview".
+  """
+  isAuto: Boolean
+
+  """
+  CI-Planning's manually-locked-block flag. Settable via `updateEvent`; nothing currently refuses to move a locked block — a future reflow engine owns enforcing that.
+  """
+  isLocked: Boolean
   isRecurring: Boolean
+
+  """
+  The last instant this row's startTime/endTime changed. Null means never observed moving.
+  """
+  lastMovedAt: DateTime
   location: PlaceType
   locationCoordinates: JSON
   locationEntityId: ID
@@ -1216,6 +1276,16 @@ type EventType implements Node & Taggable {
   """
   plannedMinutes: Int
   previewUrl: String
+
+  """
+  RECURRENCE-ID (`YYYYMMDDTHHMMSSZ`) of an expanded occurrence; null on stored rows.
+  """
+  recurrenceId: String
+
+  """
+  Series master of an occurrence expanded from an RRULE at read time. Non-null means this node backs no stored row: its `id` addresses nothing, and it cannot be rescheduled or edited.
+  """
+  seriesMasterId: ID
   sourceId: ID
   sourceSystem: String
   sourceType: String
@@ -1907,6 +1977,9 @@ type Mutation {
   bulkIngestGraph(input: BulkGraphInput!): BulkGraphPayload!
   bulkIngestItemRelationships(input: [ItemRelationshipInput!]!): BulkItemRelationshipResult!
 
+  """Soft-cancel a reminder. The row survives."""
+  cancelReminder(id: ID!): ReminderType
+
   """
   Mark a task done. Idempotent — the original completion instant is preserved.
   """
@@ -1947,6 +2020,7 @@ type Mutation {
   createQuestion(input: CreateQuestionInput!): QuestionType!
   createQuestions(input: [CreateQuestionInput!]!): [QuestionType!]!
   createRelationship(input: CreateRelationshipInput!): CreateRelationshipPayload!
+  createReminder(input: CreateReminderInput!): CreateReminderPayload!
   createSavedSearch(input: CreateSavedSearchInput!): CreateSavedSearchPayload!
   createTask(input: CreateTaskInput!): CreateTaskPayload!
   createThings(input: [CreateThingInput!]!): [ItemType!]!
@@ -2090,11 +2164,19 @@ type Mutation {
     startTime: DateTime
   ): ScheduleTaskPayload!
   sendPeerAsk(input: SendPeerAskInput!): SendPeerAskPayload!
+  setCategoryDirectionEnabled(input: SetCategoryDirectionEnabledInput!): Boolean!
+  setEntityCategories(input: SetEntityCategoriesInput!): [TagType!]!
   setHouseholdTier(input: SetHouseholdTierInput!): HouseholdTierType!
   setSavedSearchSharing(input: SetSavedSearchSharingInput!): UpdateSavedSearchPayload!
+  setTagCategories(input: SetTagCategoriesInput!): SetTagGroupingPayload!
+  setTagDirections(input: SetTagDirectionsInput!): SetTagGroupingPayload!
+  setTagKind(input: SetTagKindInput!): SetTagKindPayload!
 
   """Defer a candidate until a future instant"""
   snoozeCandidate(id: ID!, until: DateTime!): ScheduleCandidateType!
+
+  """Register (or re-point) a browser Web Push endpoint."""
+  subscribeToPush(input: PushSubscriptionInput!): Boolean!
 
   """
   Refresh the slate from current actions and insight key_actions. Idempotent; returns rows written.
@@ -2107,6 +2189,9 @@ type Mutation {
 
   """Remove the planned block for this task and clear scheduledFor."""
   unscheduleTask(id: ID!): TaskType
+
+  """Remove a browser Web Push endpoint."""
+  unsubscribeFromPush(endpoint: String!): Boolean!
   untagEntities(input: TagEntitiesInput!): [TaggableEntityType!]!
   updateAnswer(input: UpdateAnswerInput!): AnswerType
   updateAskGrant(id: ID!, input: UpdateAskGrantInput!): AskGrantPayload!
@@ -2666,8 +2751,9 @@ type ProviderEndpointType {
 
 type ProviderKeyType implements Node {
   clientId: String!
-  clientSecret: String!
+  clientSecretHint: String
   createdAt: DateTime!
+  hasClientSecret: Boolean!
   id: ID!
   providerId: ID!
   updatedAt: DateTime!
@@ -2692,6 +2778,16 @@ type ProviderType implements Node {
   providerKeys: ProviderKeyType
   scopes: [String!]
   theme: ProviderThemeType
+}
+
+input PushSubscriptionInput {
+  """PushSubscription.getKey("auth"), base64url-encoded."""
+  auth: String!
+  endpoint: String!
+
+  """PushSubscription.getKey("p256dh"), base64url-encoded."""
+  p256dh: String!
+  userAgent: String
 }
 
 type Query {
@@ -2743,7 +2839,33 @@ type Query {
   connectionSyncJobs(after: String, before: String, connectionId: ID, endpointName: String, first: Int, last: Int, type: String): ConnectionSyncJobConnection!
   connections(after: String, before: String, first: Int, last: Int): ConnectionConnection!
   content(id: ID!): ContentType
-  contents(after: String, before: String, first: Int, last: Int): ContentConnection!
+
+  """
+  The distinct type / mimetype / source values the content library can filter by.
+  """
+  contentFacets: ContentFacets!
+  contents(
+    after: String
+    before: String
+
+    """
+    Keep only these `source_system` values — the same How filter the explorer takes.
+    """
+    connectors: [String!]
+    first: Int
+    last: Int
+
+    """Keep only these mimetypes."""
+    mimetypes: [String!]
+
+    """
+    Substring of the title, text or URL — the header search box on /memory/content.
+    """
+    query: String
+
+    """Keep only these `type` values."""
+    types: [String!]
+  ): ContentConnection!
 
   """
   Precomputed daily feature-store rows for the signed-in user over an inclusive yyyy-MM-dd range.
@@ -2756,6 +2878,11 @@ type Query {
     to: String!
   ): [DailyMetricsType!]!
 
+  """
+  Events deleted by deleteEvent and not yet restored — the handle restoreEvent needs. Newest first.
+  """
+  deletedEvents(after: String, before: String, first: Int, last: Int): EventConnection!
+
   """Answers every catalog question from stored daily_metrics."""
   descriptiveAnswers(date: String): [DescriptiveAnswerType!]!
 
@@ -2766,6 +2893,7 @@ type Query {
   Fetch HBPE renewal predictions: periodic behaviors coming due or overdue
   """
   dueForecast: DueForecastType
+  entityCategories(entityId: ID!): [TagType!]!
   event(id: ID!): EventType
 
   """
@@ -2906,12 +3034,20 @@ type Query {
   ): ProductModelConnection!
   provider(id: ID!): ProviderType
   providers(after: String, before: String, first: Int, last: Int): ProviderConnection!
+
+  """
+  The VAPID public key, base64url — null when push is not configured on this appliance.
+  """
+  pushPublicKey: String
   question(id: ID!): QuestionType
   questions(after: String, before: String, first: Int, last: Int): QuestionConnection!
   receipt(id: ID!): ReceiptType
   receipts(after: String, extractionState: ReceiptExtractionState, first: Int, merchantName: String, purchasedFrom: DateTime, purchasedTo: DateTime): ReceiptConnection!
   relationship(id: ID!): RelationshipType
   relationships(after: String, before: String, first: Int, last: Int): RelationshipConnection!
+
+  """Reminders not soft-cancelled, ordered by fireAt."""
+  reminders: [ReminderType!]!
   reverseGeocode(latitude: Float!, longitude: Float!): ReverseGeocodeResultType!
   savedSearch(id: ID!): SavedSearchType
   savedSearches(after: String, before: String, first: Int, isSeed: Boolean, last: Int, query: String): SavedSearchConnection!
@@ -2920,6 +3056,11 @@ type Query {
   scheduleCandidates(from: DateTime!, to: DateTime!): [ScheduleCandidateType!]!
   search(input: SearchInput!): SearchResultConnection!
   sharedSavedSearch(token: String!): SavedSearchType
+
+  """
+  Distinct data sources (source_system) present for the user across every browsed table — events, communications, content, browser activity, receipts, products and things. The How picker's option list; `eventSources` is the events-only subset. Takes the same includeTypes / excludeTypes pair as `search`, so the list is pared to the kinds a What selection has in play — a source no selected kind carries would select nothing.
+  """
+  sourceSystems(excludeTypes: [String!], includeTypes: [String!]): [String!]!
   summaries(after: String, before: String, first: Int, last: Int): SummaryConnection!
   summary(id: ID!): SummaryType
   tag(id: ID!): TagType
@@ -3114,6 +3255,35 @@ type RelationshipType implements Node {
   type: String!
 }
 
+"""
+'auto' is reserved for a future due-date derivation engine; today every reminder is 'manual'.
+"""
+enum ReminderSource {
+  auto
+  manual
+}
+
+"""
+A reminder's claim state. Fired is terminal in this milestone — there is no snooze yet.
+"""
+enum ReminderStatus {
+  cancelled
+  fired
+  pending
+}
+
+type ReminderType implements Node {
+  """A planned block — a `ci.events` row."""
+  blockId: ID
+  createdAt: DateTime!
+  fireAt: DateTime!
+  firedAt: DateTime
+  id: ID!
+  source: ReminderSource!
+  status: ReminderStatus!
+  taskId: ID
+}
+
 input RemoveItemIdentifierInput {
   itemId: ID!
   namespace: ObjectIdentifierNamespace!
@@ -3164,6 +3334,7 @@ type SavedSearchEdge implements Edge {
 input SavedSearchFiltersInput {
   connectors: [String!]
   datePreset: String
+  direction: String
   endTime: String
   eventTypes: [String!]
   hasLocation: Boolean
@@ -3178,6 +3349,7 @@ input SavedSearchFiltersInput {
 type SavedSearchFiltersType {
   connectors: [String!]
   datePreset: String
+  direction: String
   endTime: String
   eventTypes: [String!]
   hasLocation: Boolean
@@ -3249,6 +3421,7 @@ input SearchInput {
   after: String
   bbox: [Float!]
   connectors: [String!]
+  direction: String
   endTime: String
   eventTypes: [String!]
   excludeTypes: [String!]
@@ -3279,7 +3452,7 @@ type SearchResultEdge {
   node: SearchResultType!
 }
 
-union SearchResultType = ActionType | AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileChunkType | FileType | ItemType | NoteType | PersonType | PlaceType | ProductModelType | ReceiptType | ThreadType
+union SearchResultType = ActionType | AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileChunkType | FileType | ItemType | NoteType | PersonType | PlaceType | ProductModelType | ReceiptType | TaskType | ThreadType
 
 input SendPeerAskInput {
   archetype: String!
@@ -3302,6 +3475,17 @@ type SendPeerAskPayload {
   success: Boolean!
 }
 
+input SetCategoryDirectionEnabledInput {
+  categoryId: ID!
+  directionId: ID!
+  enabled: Boolean!
+}
+
+input SetEntityCategoriesInput {
+  categoryIds: [ID!]!
+  entityId: ID!
+}
+
 input SetHouseholdTierInput {
   memberId: ID!
 
@@ -3314,6 +3498,31 @@ input SetSavedSearchSharingInput {
   id: ID!
   isPublic: Boolean!
   maxDisclosure: String
+}
+
+input SetTagCategoriesInput {
+  categoryIds: [ID!]!
+  id: ID!
+}
+
+input SetTagDirectionsInput {
+  directionIds: [ID!]!
+  id: ID!
+}
+
+type SetTagGroupingPayload {
+  success: Boolean!
+  tags: [TagType!]!
+}
+
+input SetTagKindInput {
+  id: ID!
+  kind: TagKind!
+}
+
+type SetTagKindPayload {
+  success: Boolean!
+  tag: TagType
 }
 
 type SummaryConnection implements Connection {
@@ -3370,12 +3579,27 @@ input TagEntitiesInput {
   labels: [String!]!
 }
 
+"""
+The taxonomy LEVEL a tag sits at: a brand-set direction (Home/Work/Community), an intention grouped under directions, or a category grouped over intentions. Orthogonal to a tag application's level on EntityTagType, which is a per-entity dilution weight, not a taxonomy level.
+"""
+enum TagKind {
+  category
+  direction
+  intention
+}
+
 type TagType implements Node {
+  categories: [TagType!]!
   description: String
+  directionOptOuts: [TagType!]!
+  directions: [TagType!]!
   entities(after: String, before: String, first: Int, last: Int): TaggableEntityConnection!
   entityCount: Int!
   id: ID!
+  isBase: Boolean!
+  kind: TagKind
   label: String!
+  muted: Boolean!
 }
 
 interface Taggable {
@@ -3393,7 +3617,7 @@ type TaggableEntityEdge {
   node: TaggableEntityType!
 }
 
-union TaggableEntityType = ActionType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ProductModelType | ReceiptType | ThreadType
+union TaggableEntityType = ActionType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ProductModelType | ReceiptType | TaskType | ThreadType
 
 type TaskConnection implements Connection {
   edges: [TaskEdge!]!
@@ -3435,6 +3659,7 @@ type TaskPendingChangeType implements Node {
 """Lifecycle state of a planning task."""
 enum TaskStatus {
   archived
+  delegated
   done
   in_progress
   open
@@ -3442,7 +3667,7 @@ enum TaskStatus {
   skipped
 }
 
-type TaskType implements Node {
+type TaskType implements Node & Taggable {
   actualMinutes: Int!
 
   """
@@ -3484,6 +3709,7 @@ type TaskType implements Node {
   """Where the task came from: `manual`, or an ingest source."""
   sourceKind: String!
   status: TaskStatus!
+  tags: [EntityTagType!]!
 
   """
   Wall-clock time of day, `HH:MM:SS`, in the user timezone. Zoneless by design.
@@ -3630,6 +3856,11 @@ input UpdateEventInput {
   eventType: String
   id: ID!
   isAllDay: Boolean
+
+  """
+  CI-Planning's manually-locked-block flag; settable/readable only, not yet enforced.
+  """
+  isLocked: Boolean
   isRecurring: Boolean
   locationCoordinates: JSON
   locationEntityId: ID
@@ -3750,6 +3981,8 @@ type UpdateNotePayload {
 input UpdatePeerLinkInput {
   displayName: String
   id: ID!
+  peerIssuer: String
+  peerSubject: String
   personEntityId: ID
   trustTier: PeerTrustTier
 }
@@ -3889,6 +4122,7 @@ type UserType implements Node {
   email: String!
   entity: PersonType
   id: ID!
+  isAdmin: Boolean!
   name: String!
   needsIdentityStep: Boolean!
   onboarded: Boolean!

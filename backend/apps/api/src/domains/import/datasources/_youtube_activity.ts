@@ -198,7 +198,8 @@ export function youtubeActivityGraph(cell: ActivityCell, opts: YouTubeActivityOp
         timestamp: ts,
         content: {
           filename: liked ? 'like.txt' : 'watch.txt',
-          mediaType: 'text/plain',
+          // Watched or liked, the content row is the video, delivered over MPEG-DASH.
+          mediaType: 'application/dash+xml',
           data: async () => Buffer.from(url || title),
         },
         metadata: {

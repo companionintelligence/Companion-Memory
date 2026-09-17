@@ -62,17 +62,37 @@ export class SearchInput {
   // filters they AND together (candidate-set + post-filter), and when any of
   // them is set the result is restricted to matching events.
 
-  /** "Connector" — data sources (event.source_system) to include, e.g. 'gmail','imessage','spotify'. */
+  /**
+   * "How" — data sources (`source_system`) to include, e.g. 'gmail','imessage','reddit'.
+   * Unlike who / where, this is not event-only: it narrows every browsed kind that
+   * carries a source column (events, communications, content, browser activity,
+   * receipts, products, things) and sets aside the kinds that have none.
+   */
   @Field(() => [String], { nullable: true })
   connectors?: string[];
 
-  /** "Who" — person name patterns; matched (ILIKE) against Person entities the event involves. */
+  /**
+   * "Who" — person name patterns; matched (ILIKE) against the Person entities a
+   * row links to: an event's participants / organizer, a communication's sender /
+   * recipients. Narrows those two kinds and sets aside every other kind.
+   */
   @Field(() => [String], { nullable: true })
   people?: string[];
 
   /** "Where" — place name patterns; matched (ILIKE) against the event's Location entity / location name. */
   @Field(() => [String], { nullable: true })
   places?: string[];
+
+  /**
+   * Message direction: `inbound` (received) or `outbound` (sent). A dimension
+   * only communications carry, so setting it pins the browse to them — the
+   * Who picker's "Received / Sent" toggle. With `people` set it also fixes the
+   * person's role: received means *from* one of them, sent means *to* one of
+   * them, so a group chat they merely belong to does not surface everyone
+   * else's messages. Other values are ignored.
+   */
+  @Field(() => String, { nullable: true })
+  direction?: string;
 
   /** "Where" — when true, only events carrying geographic coordinates are returned (located only). */
   @Field(() => Boolean, { nullable: true })

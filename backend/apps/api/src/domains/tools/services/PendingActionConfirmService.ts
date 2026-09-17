@@ -103,9 +103,27 @@ export class PendingActionConfirmService {
     // authority — not the proposing one's — and the row id, which is the only
     // thing that lets the gate stand aside (and only after re-reading the row
     // and finding it `approved`).
+    //
+    // `principal` and `principalName` are carried from the ROW, not from the
+    // confirming caller. They are two different questions and the ledger asks
+    // both: `capability` records what authority ran the call (the owner's), and
+    // `principal` records who asked for it (the app). Left off, the ledger row
+    // for a confirmed OpenClaw send read as the owner having sent it
+    // themselves — the attribution erased at the one moment it matters most,
+    // since a confirmed action is by definition one that needed asking about.
+    //
+    // This cannot re-enter the managed-app gate: `evaluate` checks the
+    // `pendingActionId` row first and returns `dispatch` once it reads
+    // `approved`, so the principal rule below it is never reached.
     const result = await this.registry.executeTool(
       row.tool,
-      { userId, capability, pendingActionId: id },
+      {
+        userId,
+        capability,
+        pendingActionId: id,
+        principal: row.principalName != null ? 'managed-app' : 'owner',
+        principalName: row.principalName ?? null,
+      },
       row.input,
     );
 

@@ -2,13 +2,16 @@ import { Field, GraphQLISODateTime, ID, Int, ObjectType, registerEnumType } from
 
 import { type Task } from '@ci/domains/planning';
 
+import { EntityTagType } from './EntityTagType';
 import { GlobalUID } from './GlobalUID';
 import { Node } from './Node';
+import { Taggable } from './Taggable';
 
 export enum TaskStatusEnum {
   proposed = 'proposed',
   open = 'open',
   in_progress = 'in_progress',
+  delegated = 'delegated',
   done = 'done',
   skipped = 'skipped',
   archived = 'archived',
@@ -19,8 +22,8 @@ registerEnumType(TaskStatusEnum, {
   description: 'Lifecycle state of a planning task.',
 });
 
-@ObjectType({ implements: () => [Node] })
-export class TaskType implements Node {
+@ObjectType({ implements: () => [Node, Taggable] })
+export class TaskType implements Node, Taggable {
   __typename = TaskType.name;
 
   __source!: Task;
@@ -36,6 +39,9 @@ export class TaskType implements Node {
 
   @Field(() => String, { nullable: true })
   notes!: string | null;
+
+  @Field(() => [EntityTagType])
+  tags!: EntityTagType[];
 
   @Field(() => TaskStatusEnum)
   status!: TaskStatusEnum;
@@ -70,7 +76,11 @@ export class TaskType implements Node {
     description:
       'True when a planned calendar block exists. `scheduledFor` alone is a preferred date, not a placement.',
   })
-  placedOnCalendar!: boolean;
+  // Left unset by `toType()` — the `@ResolveField` in TaskResolver treats "not a
+  // boolean yet" as "go look it up" and falls back to plannedBlockService. Only
+  // callers that already know the real placement (e.g. TaskResolver.toTaskType)
+  // should assign this.
+  placedOnCalendar?: boolean;
 
   @Field(() => String, {
     nullable: true,
@@ -107,6 +117,7 @@ export class TaskType implements Node {
       title: source.title,
       description: source.description,
       notes: source.notes,
+      tags: [], // Hydrated by TaskResolver.tags
       status: source.status as TaskStatusEnum,
       priority: source.priority,
       parentId: source.parentId ? GlobalUID.encode('task', source.parentId) : null,
@@ -114,7 +125,8 @@ export class TaskType implements Node {
       dueAt: source.dueAt,
       taskTime: source.taskTime,
       scheduledFor: source.scheduledFor,
-      placedOnCalendar: false,
+      // Intentionally omitted: see the field's doc comment above. Leaving it
+      // unset lets TaskResolver.placedOnCalendar's fallback lookup run.
       deferUntil: source.deferUntil,
       deferCount: source.deferCount,
       estimatedMinutes: source.estimatedMinutes,

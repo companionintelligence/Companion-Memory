@@ -9,6 +9,7 @@ import {
   CalendarEventService,
   type CreateEventDto,
   calendarEventIdentity,
+  canonicalSystem,
   icsRecurrenceInstant,
   platformIdentity,
 } from '@ci/domains/memory';
@@ -290,12 +291,30 @@ export class GoogleCalendarTransformService {
       organizerName: eventDetails.organizerName,
       participantCount: eventDetails.participants.length,
       participants: eventDetails.participants,
-      googleCalendarUrl: rawEvent.htmlLink ?? `https://calendar.google.com/calendar/event?eid=${eventDetails.id}`,
+      googleCalendarUrl:
+        rawEvent.htmlLink ?? `https://calendar.google.com/calendar/event?eid=${eventDetails.id}`,
       created: eventDetails.created,
       updated: eventDetails.updated,
       rawEventId: rawEvent.id,
       rawEventSummary: rawEvent.summary,
       rawEventStatus: rawEvent.status,
+      // singleEvents=false (see SyncCalendar.ts) returns series masters rather
+      // than per-occurrence instances, and nothing in this codebase expands an
+      // RRULE yet. Persist it losslessly on the stored row — the one column
+      // that survives create() unmodified (see CalendarEventService.toEntityFields,
+      // which only renames a handful of DTO fields onto EventEntity's camelCase
+      // columns; `recurrence_pattern` is not one of them and would be silently
+      // dropped on insert) — so a future expansion pass has something to expand.
+      ...(rawEvent.recurrence && rawEvent.recurrence.length > 0
+        ? { recurrenceRule: rawEvent.recurrence }
+        : {}),
+      // The zone the RRULE is anchored in, and the ONLY authoritative source
+      // for it — `start_time` is a UTC instant, which cannot say whether
+      // "every Monday at 09:00" means 09:00 in Los Angeles or in Berlin.
+      // Without it the expander falls back to the owner's own zone, which is
+      // right until the two zones disagree about when DST starts. Google
+      // already sends it and `extractEventDetails` was throwing it away.
+      ...(rawEvent.start?.timeZone ? { recurrenceTimeZone: rawEvent.start.timeZone } : {}),
     };
 
     const isAllDay = this.isAllDayEvent(eventDetails.startTime);
@@ -319,6 +338,8 @@ export class GoogleCalendarTransformService {
       // ground truth; leave the default 1.0 when there are no coordinates.
       ...(location_confidence !== null ? { confidence_score: location_confidence } : {}),
       source_type: 'ETL',
+      // Ledger platform: the Google Calendar connection delivered it.
+      source_platform: canonicalSystem('google_calendar'),
       // Identity: iCalUID under the federated `calendar` system (with the
       // override's original-start instant as the RECURRENCE-ID suffix), so the
       // same event converges with a Takeout/exported .ics import —

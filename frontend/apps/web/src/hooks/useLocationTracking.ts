@@ -8,6 +8,7 @@ import {
   BACKGROUND_MIN_DISTANCE_METERS,
   BACKGROUND_MIN_INTERVAL_MS,
   LOCATION_MODE_CHANGE_EVENT,
+  LOCATION_NEEDS_SETTINGS_EVENT,
   MIN_DISTANCE_METERS,
   addAppStateListener,
   addBackgroundLocationWatcher,
@@ -15,10 +16,14 @@ import {
   createLocationSampler,
   fixFromBackgroundGeolocationLocation,
   fixFromGeolocationPosition,
+  getNativeLocationAuthorization,
+  isIosPlatform,
   isNativePlatform,
+  publishLocationNeedsSettingsUpgrade,
   publishLocationTrackingMode,
   readLocationTrackingMode,
   removeBackgroundLocationWatcher,
+  requestNativeLocationAuthorization,
   requestNotificationPermission,
   writeLocationTrackingMode,
 } from '@ci/common';
@@ -26,6 +31,36 @@ import {
 import { useAuth } from './useAuth';
 
 export { isLocationTrackingEnabled } from '@ci/common';
+
+/**
+ * iOS 13+ will not grant Always from `notDetermined` in one shot — it shows
+ * When In Use first. Ask that, then escalate. Returns whether Always is held.
+ */
+async function ensureIosAlwaysAuthorization(): Promise<boolean> {
+  let status = await getNativeLocationAuthorization();
+
+  if (status === 'always') {
+    return true;
+  }
+
+  if (status === 'denied' || status === 'restricted') {
+    return false;
+  }
+
+  if (status === 'notDetermined') {
+    status = await requestNativeLocationAuthorization({ always: false });
+  }
+
+  if (status === 'always') {
+    return true;
+  }
+
+  if (status === 'whenInUse') {
+    status = await requestNativeLocationAuthorization({ always: true });
+  }
+
+  return status === 'always';
+}
 
 /**
  * Location tracking: records `ci.position` fixes from this device.
@@ -49,6 +84,8 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
   const samplerRef = useRef<LocationSampler | null>(null);
   const backgroundSamplerRef = useRef<LocationSampler | null>(null);
   const isActiveRef = useRef(true);
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
 
   samplerRef.current ??= createLocationSampler();
   backgroundSamplerRef.current ??= createLocationSampler({
@@ -85,6 +122,20 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
     return () => window.removeEventListener(LOCATION_MODE_CHANGE_EVENT, onChange);
   }, []);
 
+  useEffect(() => {
+    const onNeeds = (event: Event) => {
+      const detail = (event as CustomEvent<boolean>).detail;
+
+      if (typeof detail === 'boolean') {
+        setNeedsSettingsUpgrade(detail);
+      }
+    };
+
+    window.addEventListener(LOCATION_NEEDS_SETTINGS_EVENT, onNeeds);
+
+    return () => window.removeEventListener(LOCATION_NEEDS_SETTINGS_EVENT, onNeeds);
+  }, []);
+
   const enabled = mode !== 'off';
 
   // Tracks foreground/background so the watcher callback can pick the right sampling
@@ -99,6 +150,16 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
 
     void addAppStateListener((isActive) => {
       isActiveRef.current = isActive;
+
+      if (!isActive || modeRef.current !== 'always' || !isIosPlatform()) {
+        return;
+      }
+
+      void getNativeLocationAuthorization().then((status) => {
+        const needs = status !== 'always';
+        setNeedsSettingsUpgrade(needs);
+        publishLocationNeedsSettingsUpgrade(needs);
+      });
     }).then((fn) => {
       if (cancelled) {
         void fn();
@@ -118,14 +179,19 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
   // Native watcher — one writer for iOS + Android. Web never starts this; it uses
   // navigator.geolocation below instead.
   useEffect(() => {
-    if (!watch || mode === 'off' || !authenticated || !isNativePlatform()) {
+    if (!watch) {
+      return;
+    }
+
+    if (mode === 'off' || !authenticated || !isNativePlatform()) {
+      setNeedsSettingsUpgrade(false);
+      publishLocationNeedsSettingsUpgrade(false);
+
       return;
     }
 
     let cancelled = false;
     let watcherId: string | null = null;
-
-    setNeedsSettingsUpgrade(false);
 
     const onLocation = (location: Parameters<typeof fixFromBackgroundGeolocationLocation>[0]) => {
       if (cancelled) {
@@ -152,6 +218,7 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
     const onError = (error: BackgroundGeolocationError) => {
       if (!cancelled && error.code === 'NOT_AUTHORIZED') {
         setNeedsSettingsUpgrade(true);
+        publishLocationNeedsSettingsUpgrade(true);
       }
     };
 
@@ -160,12 +227,28 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
         // Android 13+ requires POST_NOTIFICATIONS before the persistent tracking
         // notification (the OS's price of admission for background sampling) can show.
         await requestNotificationPermission();
+
+        if (isIosPlatform()) {
+          const granted = await ensureIosAlwaysAuthorization();
+
+          if (cancelled) {
+            return;
+          }
+
+          setNeedsSettingsUpgrade(!granted);
+          publishLocationNeedsSettingsUpgrade(!granted);
+        }
+      } else {
+        setNeedsSettingsUpgrade(false);
+        publishLocationNeedsSettingsUpgrade(false);
       }
 
       const id = await addBackgroundLocationWatcher(
         {
           background: mode === 'always',
           distanceFilter: mode === 'always' ? BACKGROUND_MIN_DISTANCE_METERS : MIN_DISTANCE_METERS,
+          // iOS Always is requested above so the plugin does not skip the second prompt.
+          requestPermissions: mode === 'always' ? !isIosPlatform() : true,
         },
         onLocation,
         onError,

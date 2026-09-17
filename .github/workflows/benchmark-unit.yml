@@ -13,6 +13,10 @@ on:
       - scripts/benchmark/**
       - .github/workflows/benchmark-unit.yml
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit:
     runs-on: ubuntu-latest
@@ -28,8 +32,44 @@ jobs:
           cache-dependency-path: scripts/benchmark/requirements.txt
       - name: Install deps
         run: pip install -r requirements.txt
+
+      # This job is the only check that runs automatically for THIS path (it
+      # was the only automatic check anywhere until `pr-gate.yml` landed on
+      # 2026-09-06 and started running on every PR with no path filter — but
+      # pr-gate runs no Python, so `scripts/benchmark/**` is still covered here
+      # or nowhere), and until now it ran pytest and no linter — which is exactly how 141
+      # ruff violations reached this directory unnoticed while `ci.yml`'s
+      # `python` lane (`uv run ruff check .`, which covers scripts/benchmark
+      # from the root config) sat undispatched. See
+      # `docs/qa/ci-gate-proposal.md` §3.2.
+      #
+      # Pinned to the version `uv.lock` resolves so this lane and `ci.yml`'s
+      # agree on what a violation is; an unpinned `pip install ruff` would let a
+      # new release turn a passing PR red with no change of ours.
+      #
+      # There is no config here: `scripts/benchmark/pyproject.toml` has no
+      # `[tool.ruff]` section, so ruff walks up and uses the repo-root one —
+      # the same rules the Python lane applies to the sidecars.
+      #
+      # The 141-error debt this step was added against is CLEARED: measured
+      # 2026-09-07 with the pinned ruff, `ruff check scripts/benchmark` is "All
+      # checks passed!" and `ruff format --check` is "36 files already
+      # formatted". A red run here is therefore a real finding in the change
+      # under review, not pre-existing debt to wave through. Deliberately no
+      # `continue-on-error` and no path scoping — a check that does not fail on
+      # what it found is the false comfort this step exists to end.
+      #
+      # It still runs AFTER pytest: a failing step ends the job, and a lint
+      # failure must not swallow the test signal, which is the older and more
+      # expensive of the two.
       - name: Run pytest
         run: pytest
+
+      - name: Lint
+        run: |
+          pip install ruff==0.16.1
+          ruff check .
+          ruff format --check .
 
   # Re-runs the naive adapter on every committed persona and compares against
   # the JSON baselines under scripts/benchmark/baselines/. Naive is fully
@@ -76,6 +116,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: benchmark-reports
           path: scripts/benchmark/reports/
           if-no-files-found: ignore

@@ -11,7 +11,6 @@ import {
   type SignatureFailure,
 } from './PeerSignatureService';
 
-
 const peersConfig: Record<string, unknown> = {};
 
 jest.mock('@ci/configuration', () => ({

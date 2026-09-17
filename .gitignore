@@ -96,3 +96,6 @@ frontend/packages/*/android/build/
 # real archive was loaded. Per-machine and per-run; never committed.
 # See backend/apps/api/scripts/federation-harness/README.md
 .federation-harness/
+
+# Playwright output for the desktop-appliance suite (playwright.desktop.config.ts)
+test-results-desktop/

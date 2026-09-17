@@ -3,18 +3,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Accordion, Badge, Card, Input, Skeleton, Switch, cn } from '@ci/shadcn';
 import { AlertTriangle, Lock } from '@ci/shadcn/icons';
 
-import { describeCron } from './cronDescriptor';
 import { FoldBody, FoldCard, FoldTrigger, cardPad, usePhone } from './Fold';
 import { categoryDot, categoryLabel, CATEGORY_LABELS } from './jobCategories';
-import type {
-  CronMode,
-  JobControlsPatch,
-  JobControlsResponse,
-  JobCronControl,
-  JobMode,
-  JobQueueControl,
-} from './useJobControls';
-import type { JobTypesResponse } from './useJobTypes';
+import type { JobControlsPatch, JobControlsResponse, JobMode, JobQueueControl } from './useJobControls';
 
 /**
  * The operator's controls over the job system.
@@ -42,26 +33,22 @@ export function JobControlsCard({
   loading,
   saving,
   error,
-  jobTypes,
+  errorStatus,
   onSave,
 }: {
   controls: JobControlsResponse | null;
   loading: boolean;
   saving: boolean;
   error: string | null;
-  jobTypes: JobTypesResponse | null;
+  /** HTTP status behind `error`, when there was one. Decides the explanation. */
+  errorStatus?: number | null;
   onSave: (patch: JobControlsPatch) => Promise<boolean>;
 }) {
   const phone = usePhone();
 
   const queueGroups = useMemo(() => groupQueues(controls?.queues ?? []), [controls?.queues]);
-  const cronRows = useMemo(
-    () => (controls?.crons ?? []).map((cron) => ({ cron, descriptor: describeCron(cron.name, jobTypes) })),
-    [controls?.crons, jobTypes],
-  );
 
   const offQueues = (controls?.queues ?? []).filter((queue) => queue.mode !== 'enabled').length;
-  const offCrons = (controls?.crons ?? []).filter((cron) => cron.mode === 'disabled').length;
 
   return (
     <FoldCard fold>
@@ -76,7 +63,17 @@ export function JobControlsCard({
       </Card.Header>
       <FoldBody>
         <Card.Content className={cn('space-y-4', cardPad(phone))}>
-          {error ? (
+          {/* A red alert means SOMETHING YOU DID FAILED — a save that did not
+              stick. It is not the right shape for "this section has nothing in
+              it", which is a state, not a failure, and which the paragraph
+              below explains in words an operator can act on.
+
+              The card used to raise the alert for both, so an appliance that
+              simply predates job controls greeted you with a raw Express string
+              in red — `Cannot GET /jobs/controls` — stacked on a diagnosis of an
+              unrelated problem. The server's own words are still worth keeping,
+              but as a detail under the explanation, not as the headline. */}
+          {error && controls ? (
             <div
               role="alert"
               className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
@@ -89,10 +86,15 @@ export function JobControlsCard({
           {loading && !controls ? (
             <Skeleton className="h-40 w-full" />
           ) : !controls ? (
-            <p className="text-sm text-muted-foreground">
-              Job controls are unavailable. The settings table may not have been migrated yet — until it is,
-              every queue and schedule runs with its shipped defaults.
-            </p>
+            <div className="space-y-1.5">
+              <p className="text-sm text-muted-foreground">{explainUnavailable(errorStatus)}</p>
+              {error ? (
+                <p className="break-words font-mono text-xs text-muted-foreground/70">
+                  {errorStatus != null ? `${errorStatus} · ` : ''}
+                  {error}
+                </p>
+              ) : null}
+            </div>
           ) : (
             <>
               <GlobalControls controls={controls} saving={saving} onSave={onSave} />
@@ -136,36 +138,6 @@ export function JobControlsCard({
                     </div>
                   </Accordion.Content>
                 </Accordion.Item>
-
-                <Accordion.Item value="schedules">
-                  <Accordion.Trigger className="py-2.5 text-sm hover:no-underline">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className="truncate">Schedules</span>
-                      <span className="text-xs font-normal text-muted-foreground tabular-nums">
-                        {controls.crons.length}
-                      </span>
-                      {offCrons > 0 ? (
-                        <Badge variant="secondary" className="text-[10px] uppercase">
-                          {offCrons} off
-                        </Badge>
-                      ) : null}
-                    </span>
-                  </Accordion.Trigger>
-                  <Accordion.Content>
-                    <ul className="pb-2">
-                      {cronRows.map(({ cron, descriptor }) => (
-                        <CronRow
-                          key={cron.name}
-                          cron={cron}
-                          label={descriptor.label}
-                          category={descriptor.category}
-                          saving={saving}
-                          onSave={onSave}
-                        />
-                      ))}
-                    </ul>
-                  </Accordion.Content>
-                </Accordion.Item>
               </Accordion>
             </>
           )}
@@ -173,6 +145,39 @@ export function JobControlsCard({
       </FoldBody>
     </FoldCard>
   );
+}
+
+/**
+ * Why the controls are not here — from the STATUS, not a guess.
+ *
+ * This used to be one fixed sentence blaming an unmigrated settings table,
+ * printed under whatever the server said. On an appliance running a build from
+ * before job controls existed that read:
+ *
+ *     Cannot GET /jobs/controls
+ *     Job controls are unavailable. The settings table may not have been migrated yet…
+ *
+ * — a raw Express 404 stacked on a diagnosis of a completely different problem,
+ * sending the reader to check migrations when the endpoint simply is not in the
+ * build they are running. The two need opposite actions, so the copy has to
+ * distinguish them.
+ */
+function explainUnavailable(status?: number | null): string {
+  if (status === 404) {
+    return 'This appliance is running a build from before job controls shipped — the endpoint is not there. Update the server and restart it; nothing is wrong with the settings. Until then every queue and schedule runs with its shipped defaults.';
+  }
+
+  if (status === 401 || status === 403) {
+    return 'You are not signed in to this appliance, or this account cannot read job controls. Everything keeps running on its shipped defaults meanwhile.';
+  }
+
+  if (status != null && status >= 500) {
+    return 'The server has the controls endpoint but could not answer it — the settings table may not have been migrated yet. Until it is, every queue and schedule runs with its shipped defaults.';
+  }
+
+  // No status at all: the request never reached a server (offline, wrong host,
+  // proxy down). Claiming a migration problem here would be a guess.
+  return 'Job controls could not be loaded. Every queue and schedule is running with its shipped defaults meanwhile.';
 }
 
 function GlobalControls({
@@ -235,6 +240,20 @@ function GlobalControls({
         />
       </div>
 
+      {/* Said once, above both boxes, rather than implied by two `max`
+          attributes nobody reads until the field refuses a keystroke.
+
+          Both numbers used to accept 64 against a shipped 10 and 6, which made
+          this page a way to take the appliance six times past what the build
+          allows — on the page you opened *because* the machine was hot. They
+          now clamp at the shipped figure, so the direction of travel is the
+          same as every other control here: this makes the box quieter. */}
+      <p className="text-xs text-muted-foreground">
+        Both numbers only go <strong>down</strong>. {shippedSummary(controls)} is what this build ships with
+        and the most either box will take — more throughput than that is a{' '}
+        <code className="font-mono">CI_QUEUE_CONCURRENCY</code> change and a restart, not a setting.
+      </p>
+
       {/* The single most common way to be wrong about this page: assuming one of
           the two limits covers the other. They do not overlap at all — the Hub's
           limit is how much CPU the container may use, this is how many jobs
@@ -247,6 +266,16 @@ function GlobalControls({
       </p>
     </div>
   );
+}
+
+/**
+ * "10 appliance-wide, 6 per queue" — the shipped pair, read off the DTO rather
+ * than hardcoded, because an appliance whose compose file already raised
+ * `CI_QUEUE_CONCURRENCY` ships with different numbers and this sentence has to
+ * name the ones that are actually binding.
+ */
+function shippedSummary(controls: JobControlsResponse): string {
+  return `${controls.global.concurrency.max} appliance-wide and ${controls.global.perQueueConcurrency.max} per queue`;
 }
 
 function QueueRow({
@@ -342,58 +371,6 @@ function QueueStatusLine({ queue, globallyPaused }: { queue: JobQueueControl; gl
   }
 
   return dropped ? <p className="mt-0.5 text-xs text-muted-foreground">Running.{dropped}</p> : null;
-}
-
-function CronRow({
-  cron,
-  label,
-  category,
-  saving,
-  onSave,
-}: {
-  cron: JobCronControl;
-  label: string;
-  category: string;
-  saving: boolean;
-  onSave: (patch: JobControlsPatch) => Promise<boolean>;
-}) {
-  const disabled = cron.mode === 'disabled';
-  const inputId = `cron-${cron.name.replace(/[^\w-]/g, '-')}`;
-
-  return (
-    <li className="flex items-start justify-between gap-3 border-t border-border/40 py-2 first:border-t-0">
-      {/* Only the schedule's name is inside the label — the cadence and the
-          off-notice are described-by instead, so the switch is identified by
-          "Planning jobs todo scan" rather than by that plus a cron expression. */}
-      <div className="min-w-0 flex-1">
-        <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
-          <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${categoryDot(category)}`} />
-          <label htmlFor={inputId}>{label}</label>
-          {cron.locked ? <LockedBadge reason={cron.lockedReason} /> : null}
-        </span>
-        <p id={`${inputId}-cadence`} className="mt-0.5 text-xs text-muted-foreground" title={cron.name}>
-          {cron.cron}
-        </p>
-        {disabled ? (
-          <p className="mt-0.5 text-xs text-destructive">
-            Off — this schedule does not run.
-            {cron.skippedCount > 0
-              ? ` ${cron.skippedCount.toLocaleString()} tick${cron.skippedCount === 1 ? '' : 's'} skipped.`
-              : ''}
-          </p>
-        ) : null}
-      </div>
-      <Switch
-        id={inputId}
-        aria-describedby={`${inputId}-cadence`}
-        checked={!disabled}
-        disabled={saving || cron.locked}
-        onCheckedChange={(next) =>
-          void onSave({ crons: [{ name: cron.name, mode: (next ? 'enabled' : 'disabled') as CronMode }] })
-        }
-      />
-    </li>
-  );
 }
 
 function LockedBadge({ reason }: { reason: string | null }) {
@@ -543,7 +520,7 @@ function NumberControl({
     setDraft(control.value == null ? '' : String(control.value));
   }, [control.value]);
 
-  const commit = () => {
+  const commit = async () => {
     const trimmed = draft.trim();
     const next = trimmed === '' ? null : Number.parseInt(trimmed, 10);
 
@@ -557,7 +534,16 @@ function NumberControl({
       return;
     }
 
-    void onCommit(next);
+    const saved = await onCommit(next);
+
+    // The `useEffect` above only re-syncs `draft` when `control.value` itself
+    // changes, which by definition does not happen when the appliance refuses
+    // the save or the request fails outright. Without this, a rejected number
+    // stayed in the box looking exactly like a stored one — resync it back to
+    // what is actually on the appliance instead.
+    if (!saved) {
+      setDraft(control.value == null ? '' : String(control.value));
+    }
   };
 
   return (

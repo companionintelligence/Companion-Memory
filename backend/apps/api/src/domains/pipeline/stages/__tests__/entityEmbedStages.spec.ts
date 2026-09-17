@@ -15,6 +15,7 @@ import {
   ItemEmbedStage,
   PersonEmbedStage,
 } from '../index/entityEmbedStages';
+import { loadEventRows } from '../index/entityRows';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -245,6 +246,22 @@ describe('EventEmbedStage', () => {
     const results = await h.stage.run(ctx, ['event-1']);
 
     expect(results.get('event-1')).toEqual({ outcome: 'skipped', reason: 'empty' });
+  });
+
+  it('excludes planned blocks at the source, so autoplan does not feed the embed ledger', () => {
+    // Guardrail #2 in planning-roadmap.md. The listener refused these; this
+    // path did not, and embedded every block an autoplan run moved.
+    expect(INDEX_EMBED_EVENT_SOURCE.predicate).toContain("event_type <> 'planned_block'");
+  });
+
+  it('re-checks planned_block when loading rows, not only at the source', async () => {
+    // Same reasoning as the loader re-checking is_deleted: a row that reached
+    // the loader by any other route must still not embed.
+    const query = jest.fn().mockResolvedValue([]);
+
+    await loadEventRows({ query } as never, 'user-1', ['00000000-0000-7000-8000-000000000001']);
+
+    expect(query.mock.calls[0]?.[0]).toContain("event_type <> 'planned_block'");
   });
 
   it('excludes soft-deleted events at the source', () => {

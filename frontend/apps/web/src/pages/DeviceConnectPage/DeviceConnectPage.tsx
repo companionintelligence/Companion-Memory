@@ -1,23 +1,23 @@
-import { type FormEvent, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
-import { persistApiBaseUrl, resolveHttpOrigin } from '@ci/common';
-import { Button, Card, Input, LoadingButton, PasswordInput } from '@ci/shadcn';
+import { isIosPlatform, persistApiBaseUrl, resolveHttpOrigin } from '@ci/common';
+import { Button, Card, LoadingButton } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
+import { ThemeToggle } from '@/components/ThemePicker';
 import { useAuth, useCurrentUser } from '@/hooks';
+import { BrainMark, CONNECT_MARK_SIZE, Reveal, SplashShell } from '@/pages/SplashPage/SplashChrome';
 
 import {
-  emailFromIdToken,
   loginWithPortalOidc,
   OidcCancelledError,
   resumePendingOidcLogin,
   selectMemoryPortalBearers,
 } from './oidc';
 import {
-  DEFAULT_PORTAL_URL,
   listMemoryServers,
   probeMemoryOrigin,
-  signInToPortal,
+  readPersistedPortalUrl,
   type MemoryServerDevice,
   type PortalAuth,
 } from './portal-client';
@@ -56,33 +56,28 @@ function readStoredPortalAuth(): PortalAuth | null {
 }
 
 /**
- * Native-only Hub-style picker: Portal OIDC (system browser + companion://auth/callback)
- * or email, list `ci-memory` apps, persist that origin, then hand off to Memory login.
- * Named `/device-connect` because `/connect` already means Sources.
+ * Native-only Hub-style picker: Portal OIDC in the *system* browser (Safari /
+ * `companion://auth/callback`), list `ci-memory` apps, persist that origin, then
+ * mint a Memory key from the Companion token. A Memory URL or email/password
+ * cannot cloud-connect a new phone — those live under Advanced as Hub URL /
+ * offline unlock. Named `/device-connect` because `/connect` already means Sources.
  */
 export function DeviceConnectPage() {
   const navigate = useNavigate();
-  const [{ authenticated, initializing }, { completePortalMemoryConnect, completeMemoryPasswordConnect }] =
-    useAuth();
+  const [{ authenticated, initializing }, { completePortalMemoryConnect }] = useAuth();
   const { user, loading: userLoading, error: userError } = useCurrentUser();
 
   // Do not leave this page until Memory has accepted the minted key and `me`
   // resolved. Navigating to `/` earlier makes RedirectKnownUser treat a missing
   // profile as "logged out" and bounce straight back here.
   const [step, setStep] = useState<Step>('sign-in');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [portalUrl, setPortalUrl] = useState(DEFAULT_PORTAL_URL);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [portalUrl] = useState(readPersistedPortalUrl);
   const [auth, setAuth] = useState<PortalAuth | null>(null);
   const [devices, setDevices] = useState<MemoryServerDevice[]>([]);
   const [busy, setBusy] = useState(false);
   const [oidcController, setOidcController] = useState<AbortController | null>(null);
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [signInError, setSignInError] = useState<string | null>(null);
-  const [memoryLoginOrigin, setMemoryLoginOrigin] = useState<string | null>(null);
-  const [memoryEmail, setMemoryEmail] = useState('');
-  const [memoryPassword, setMemoryPassword] = useState('');
   const [awaitingProfile, setAwaitingProfile] = useState(false);
 
   useEffect(() => {
@@ -188,25 +183,6 @@ export function DeviceConnectPage() {
     setStep('pick');
   };
 
-  const handleSignIn = async (event: FormEvent) => {
-    event.preventDefault();
-
-    if (!email || !password) {
-      return;
-    }
-
-    setBusy(true);
-    setSignInError(null);
-
-    try {
-      await loadDevices(await signInToPortal(email, password, portalUrl));
-    } catch (err) {
-      setSignInError(err instanceof Error ? err.message : 'Sign-in failed');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleOidcLogin = async () => {
     const controller = new AbortController();
     setOidcController(controller);
@@ -255,7 +231,6 @@ export function DeviceConnectPage() {
 
     setConnectingId(device.id);
     setSignInError(null);
-    setMemoryLoginOrigin(null);
 
     try {
       const origin = resolveHttpOrigin(device.memoryUrl);
@@ -268,18 +243,14 @@ export function DeviceConnectPage() {
       const bearers = selectMemoryPortalBearers(rawBearers);
 
       if (rawBearers.length === 0) {
-        setSignInError('Sign in with Companion Intelligence first, then pick this server again.');
+        setSignInError('Sign in with your Companion account first, then pick this server again.');
         setConnectingId(null);
 
         return;
       }
 
       if (bearers.length === 0) {
-        setSignInError(
-          'Your Companion Intelligence sign-in expired. Sign in again, or use the Memory email and password from the browser.',
-        );
-        setMemoryLoginOrigin(origin);
-        setMemoryEmail(emailFromIdToken(auth?.idToken) ?? '');
+        setSignInError('Your Companion sign-in expired. Sign in again.');
         setConnectingId(null);
 
         return;
@@ -306,13 +277,6 @@ export function DeviceConnectPage() {
         ? lastError
         : new Error('Could not sign in to this Memory Server with your Portal account.');
     } catch (err) {
-      const origin = (() => {
-        try {
-          return resolveHttpOrigin(device.memoryUrl);
-        } catch {
-          return null;
-        }
-      })();
       const unauthorized = /unauthorized/i.test(err instanceof Error ? err.message : '');
 
       setSignInError(
@@ -321,261 +285,174 @@ export function DeviceConnectPage() {
           : /load failed|failed to fetch/i.test(err instanceof Error ? err.message : '')
             ? 'Could not reach this Memory Server from the phone (webview blocked the request). Retry after the app reloads native HTTP.'
             : unauthorized
-              ? 'This Memory Server is online, but it did not accept your Companion Intelligence token. Sign in with the email and password you use in the browser.'
+              ? 'This Memory Server is online, but it did not accept your Companion account. Sign in again.'
               : `Could not sign in to ${device.memoryUrl}. ${err instanceof Error ? err.message : ''}`.trim(),
       );
-      if (unauthorized && origin) {
-        setMemoryLoginOrigin(origin);
-        setMemoryEmail(emailFromIdToken(auth?.idToken) ?? '');
-      }
 
       setConnectingId(null);
     }
   };
 
-  const handleMemoryPassword = async (event: FormEvent) => {
-    event.preventDefault();
+  if (step === 'sign-in') {
+    return (
+      <SplashShell>
+        <div className="relative z-10 flex h-full flex-col items-center justify-center gap-5 overflow-y-auto px-8 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))]">
+          <Reveal delay={0} className="flex shrink-0 flex-col items-center">
+            <BrainMark sizeClass={CONNECT_MARK_SIZE} />
+            <p className="-mt-3 text-sm font-semibold tracking-[0.2em] text-muted-foreground uppercase">
+              Companion Memory
+            </p>
+          </Reveal>
 
-    if (!memoryLoginOrigin || !memoryEmail || !memoryPassword) {
-      return;
-    }
+          <Reveal delay={180} className="flex w-full max-w-sm flex-col items-center gap-3">
+            <LoadingButton
+              type="button"
+              size="lg"
+              className={`w-full px-10 shadow-glow-ci ${TOUCH}`}
+              onClick={() => void handleOidcLogin()}
+              loading={busy}
+              disabled={busy}
+              data-testid="oidc-login-btn"
+            >
+              Log in
+            </LoadingButton>
 
-    setBusy(true);
-    setSignInError(null);
-
-    try {
-      await completeMemoryPasswordConnect(memoryEmail, memoryPassword, memoryLoginOrigin);
-      setAwaitingProfile(true);
-    } catch (err) {
-      setSignInError(
-        err instanceof Error ? err.message : 'Could not sign in to this Memory Server with that password.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="w-full max-w-md">
-      <Card>
-        <Card.Header>
-          <Card.Title>{step === 'sign-in' ? 'Connect to your Memory' : 'Pick a Memory Server'}</Card.Title>
-          <Card.Description>
-            {step === 'sign-in'
-              ? 'Sign in to your Companion Intelligence account to find the Memory Servers you own.'
-              : 'Choose the Companion Memory instance this phone should talk to.'}
-          </Card.Description>
-        </Card.Header>
-
-        <Card.Content>
-          {step === 'sign-in' ? (
-            <div className="flex flex-col gap-4">
-              <LoadingButton
-                type="button"
-                className={TOUCH}
-                onClick={() => void handleOidcLogin()}
-                loading={busy}
-                disabled={busy}
-                data-testid="oidc-login-btn"
+            {signInError ? (
+              <p
+                className="text-destructive text-center text-sm"
+                data-testid="connect-signin-error"
+                role="alert"
               >
-                Sign in with Companion Intelligence
-              </LoadingButton>
-              {signInError ? (
-                <p className="text-destructive text-sm" data-testid="connect-signin-error" role="alert">
-                  {signInError}
-                </p>
-              ) : null}
+                {signInError}
+              </p>
+            ) : null}
 
-              {oidcController ? (
-                <div className="bg-muted/40 flex flex-col items-center gap-2 rounded-md p-3 text-center text-xs text-muted-foreground">
-                  <span>Finish signing in in your browser, then return to this app.</span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className={TOUCH}
-                    onClick={() => oidcController.abort()}
-                    data-testid="cancel-oidc-btn"
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <div className="text-muted-foreground flex items-center gap-3 text-xs">
-                    <span className="bg-border h-px flex-1" />
-                    or use email
-                    <span className="bg-border h-px flex-1" />
-                  </div>
-                  <form onSubmit={handleSignIn} className="flex flex-col gap-4">
-                    <Input
-                      type="email"
-                      className={TOUCH}
-                      aria-label="Email"
-                      placeholder="you@example.com"
-                      autoComplete="username"
-                      inputMode="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      required
-                    />
-                    <PasswordInput
-                      className={TOUCH}
-                      aria-label="Password"
-                      placeholder="Password"
-                      autoComplete="current-password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      required
-                    />
-                    {showAdvanced ? (
-                      <Input
-                        type="url"
-                        className={TOUCH}
-                        aria-label="Portal URL"
-                        placeholder="Portal URL"
-                        inputMode="url"
-                        value={portalUrl}
-                        onChange={(e) => setPortalUrl(e.target.value)}
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        className={`text-muted-foreground self-start py-2 text-xs underline ${TOUCH}`}
-                        onClick={() => setShowAdvanced(true)}
-                      >
-                        Advanced
-                      </button>
-                    )}
-                    <LoadingButton
-                      type="submit"
-                      variant="outline"
-                      className={TOUCH}
-                      loading={busy}
-                      disabled={busy || !email || !password}
-                    >
-                      Sign in with email
-                    </LoadingButton>
-                  </form>
-                </>
-              )}
-              <Button
-                type="button"
-                variant="ghost"
-                className={`w-full ${TOUCH}`}
-                onClick={() => navigate('/server')}
-              >
-                Enter a Memory Server URL instead
-              </Button>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {devices.length === 0 ? (
-                <p className="text-muted-foreground py-6 text-center text-sm">
-                  No Memory Servers on this account. Install Companion Memory on your Hub, or enter a URL.
-                </p>
-              ) : (
-                devices.map((device) => {
-                  const reachable = Boolean(device.memoryUrl);
-                  const active = reachable && device.status === 'active';
-
-                  return (
-                    <button
-                      key={device.id}
-                      type="button"
-                      disabled={connectingId !== null || !reachable}
-                      onClick={() => void handleConnect(device)}
-                      data-testid={`memory-row-${device.id}`}
-                      className="border-input flex min-h-[56px] items-center justify-between gap-3 rounded-md border p-4 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate font-medium">{device.name}</div>
-                        <div className="text-muted-foreground truncate text-xs">
-                          {device.memoryUrl ?? 'No address published'}
-                        </div>
-                      </div>
-                      <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-sm ${active ? 'bg-green-500/15 text-green-600 dark:text-green-400' : 'bg-muted text-foreground/80'}`}
-                      >
-                        {connectingId === device.id
-                          ? 'Connecting…'
-                          : reachable
-                            ? device.status
-                            : 'unreachable'}
-                      </span>
-                    </button>
-                  );
-                })
-              )}
-              {signInError ? (
-                <p className="text-destructive text-sm" data-testid="connect-signin-error" role="alert">
-                  {signInError}
-                </p>
-              ) : null}
-              {memoryLoginOrigin ? (
-                <form onSubmit={(event) => void handleMemoryPassword(event)} className="flex flex-col gap-3">
-                  <Input
-                    type="email"
-                    className={TOUCH}
-                    aria-label="Memory email"
-                    placeholder="Memory email"
-                    autoComplete="username"
-                    inputMode="email"
-                    value={memoryEmail}
-                    onChange={(e) => setMemoryEmail(e.target.value)}
-                    required
-                    data-testid="memory-email"
-                  />
-                  <PasswordInput
-                    className={TOUCH}
-                    aria-label="Memory password"
-                    placeholder="Memory password"
-                    autoComplete="current-password"
-                    value={memoryPassword}
-                    onChange={(e) => setMemoryPassword(e.target.value)}
-                    required
-                    data-testid="memory-password"
-                  />
-                  <LoadingButton
-                    type="submit"
-                    className={TOUCH}
-                    loading={busy}
-                    disabled={busy || !memoryEmail || !memoryPassword}
-                    data-testid="memory-password-submit"
-                  >
-                    Sign in to this Memory Server
-                  </LoadingButton>
-                </form>
-              ) : null}
-              <div className="mt-2 flex items-center justify-between">
+            {oidcController ? (
+              <div className="flex flex-col items-center gap-2 text-center text-xs text-muted-foreground">
+                <span>
+                  Finish signing in in {isIosPlatform() ? 'Safari' : 'your browser'}, then return to this app.
+                </span>
                 <Button
+                  type="button"
                   variant="ghost"
                   size="sm"
                   className={TOUCH}
-                  onClick={() => setStep('sign-in')}
-                  disabled={connectingId !== null}
+                  onClick={() => oidcController.abort()}
+                  data-testid="cancel-oidc-btn"
                 >
-                  Back
+                  Cancel
                 </Button>
-                <LoadingButton
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className={TOUCH}
-                  onClick={() => void handleRefresh()}
-                  loading={busy}
-                  disabled={busy || connectingId !== null}
-                >
-                  Refresh
-                </LoadingButton>
               </div>
-              <Button type="button" variant="ghost" className={TOUCH} onClick={() => navigate('/server')}>
-                Enter a URL instead
-              </Button>
-            </div>
-          )}
-        </Card.Content>
-      </Card>
+            ) : (
+              <button
+                type="button"
+                className="text-muted-foreground py-2 text-xs underline"
+                onClick={() => navigate('/device-connect/advanced')}
+                data-testid="advanced-link"
+              >
+                Advanced
+              </button>
+            )}
+          </Reveal>
+        </div>
+      </SplashShell>
+    );
+  }
+
+  return (
+    <div className="safe-area-inset flex min-h-dvh w-full flex-col overflow-y-auto px-6 pb-6">
+      <div className="flex justify-end">
+        <ThemeToggle />
+      </div>
+      <div className="flex flex-1 flex-col items-center justify-center">
+        <div className="w-full max-w-md">
+          <Card>
+            <Card.Header>
+              <Card.Title>Pick a Memory Server</Card.Title>
+              <Card.Description>
+                Choose the Companion Memory instance this phone should talk to.
+              </Card.Description>
+            </Card.Header>
+
+            <Card.Content>
+              <div className="flex flex-col gap-3">
+                {devices.length === 0 ? (
+                  <p className="text-muted-foreground py-6 text-center text-sm">
+                    No Memory Servers on this account. Install Companion Memory on your Hub, then Refresh.
+                  </p>
+                ) : (
+                  devices.map((device) => {
+                    const reachable = Boolean(device.memoryUrl);
+                    const active = reachable && device.status === 'active';
+
+                    return (
+                      <button
+                        key={device.id}
+                        type="button"
+                        disabled={connectingId !== null || !reachable}
+                        onClick={() => void handleConnect(device)}
+                        data-testid={`memory-row-${device.id}`}
+                        className="border-input flex min-h-[56px] items-center justify-between gap-3 rounded-md border p-4 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{device.name}</div>
+                          <div className="text-muted-foreground truncate text-xs">
+                            {device.memoryUrl ?? 'No address published'}
+                          </div>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-sm ${active ? 'bg-green-500/15 text-green-600 dark:text-green-400' : 'bg-muted text-foreground/80'}`}
+                        >
+                          {connectingId === device.id
+                            ? 'Connecting…'
+                            : reachable
+                              ? device.status
+                              : 'unreachable'}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+                {signInError ? (
+                  <p className="text-destructive text-sm" data-testid="connect-signin-error" role="alert">
+                    {signInError}
+                  </p>
+                ) : null}
+                <div className="mt-2 flex items-center justify-between">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className={TOUCH}
+                    onClick={() => setStep('sign-in')}
+                    disabled={connectingId !== null}
+                  >
+                    Back
+                  </Button>
+                  <LoadingButton
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className={TOUCH}
+                    onClick={() => void handleRefresh()}
+                    loading={busy}
+                    disabled={busy || connectingId !== null}
+                  >
+                    Refresh
+                  </LoadingButton>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className={TOUCH}
+                  onClick={() => navigate('/device-connect/advanced')}
+                >
+                  Advanced
+                </Button>
+              </div>
+            </Card.Content>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }

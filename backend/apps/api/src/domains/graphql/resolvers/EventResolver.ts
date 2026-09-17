@@ -7,6 +7,7 @@ import { MaxArraySizePipe } from '@ci/common/pipes';
 import { CalendarEventService, adoptIngestIdentity } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { EventContentsLoader } from '../loaders/EventContentsLoader';
 import { type EventMedia, EventMediaLoader } from '../loaders/EventMediaLoader';
 import { PersonLoader } from '../loaders/PersonLoader';
@@ -36,6 +37,19 @@ import { Paginator } from '../utils/Paginator';
 /** Widest window eventsInRange will serve — a quarter, enough for the month view. */
 const MAX_RANGE_DAYS = 92;
 
+/**
+ * The `ci.events` row a node's batched fields must be looked up by.
+ *
+ * An occurrence expanded from an RRULE (`domains/memory/recurrence`) carries a
+ * synthetic id that backs no row, so every DataLoader keyed on it would return
+ * empty: a recurring meeting's chip would open with no tags, no attachments and
+ * no thumbnail, and nothing on screen would say why. The series master is the
+ * row all three actually live on.
+ */
+function backingEventId(parent: EventType): string {
+  return parent.__source.seriesMasterId ?? parent.__source.id;
+}
+
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => EventType)
 export class EventResolver {
@@ -47,6 +61,24 @@ export class EventResolver {
     private readonly eventMediaLoader: EventMediaLoader,
     private readonly eventContentsLoader: EventContentsLoader,
   ) {}
+
+  /**
+   * Refuse a reversed interval before it reaches the writer.
+   *
+   * `ci.events` carries `valid_time_range CHECK (end_time IS NULL OR
+   * start_time <= end_time)` and formatError reduces the 23514 it raises to a
+   * bare `Internal server error`, so an event minted end-before-start answers
+   * user input with an unclassified 500. Equal instants stay legal — the
+   * constraint allows them, and a zero-length marker is a real thing to store.
+   *
+   * Only decidable when the request names both ends: `updateEvent` may move
+   * one edge of a stored row, and the other edge is not in the arguments.
+   */
+  private assertTimeOrder(startTime?: Date, endTime?: Date): void {
+    if (startTime && endTime && endTime < startTime) {
+      throw new BadRequestException('`endTime` must not precede `startTime`');
+    }
+  }
 
   /** Map a CreateEventInput (GraphQL) to the service's CreateEventDto. */
   private toDto(input: CreateEventInput) {
@@ -75,14 +107,18 @@ export class EventResolver {
       metadata: input.metadata,
       status: input.status,
       sharing_level: input.sharingLevel,
+      is_locked: input.isLocked,
     };
   }
 
   @Mutation(() => EventType)
+  @GraphqlPrivacy({ destructive: false })
   async createEvent(
     @Context() context: RequestContext,
     @Args('input') input: CreateEventInput,
   ): Promise<EventType> {
+    this.assertTimeOrder(input.startTime, input.endTime);
+
     const serviceContext = toServiceContext(context);
 
     const entity = await this.eventService.create(serviceContext, this.toDto(input));
@@ -97,11 +133,14 @@ export class EventResolver {
    * The clean batch equivalent of N aliased createEvent mutations.
    */
   @Mutation(() => [EventType])
+  @GraphqlPrivacy({ destructive: false })
   async createEvents(
     @Context() context: RequestContext,
     @Args({ name: 'input', type: () => [CreateEventInput] }, new MaxArraySizePipe())
     input: CreateEventInput[],
   ): Promise<EventType[]> {
+    input.forEach((i) => this.assertTimeOrder(i.startTime, i.endTime));
+
     const serviceContext = toServiceContext(context);
 
     const entities = await this.eventService.create(
@@ -113,10 +152,13 @@ export class EventResolver {
   }
 
   @Mutation(() => EventType, { nullable: true })
+  @GraphqlPrivacy({ destructive: false })
   async updateEvent(
     @Context() context: RequestContext,
     @Args('input') input: UpdateEventInput,
   ): Promise<EventType | null> {
+    this.assertTimeOrder(input.startTime, input.endTime);
+
     const serviceContext = toServiceContext(context);
 
     const id = GlobalUID.parse('event', input.id);
@@ -145,6 +187,7 @@ export class EventResolver {
       is_all_day: input.isAllDay,
       metadata: input.metadata,
       status: input.status,
+      is_locked: input.isLocked,
     });
 
     return entity ? EventType.toType(entity) : entity;
@@ -156,6 +199,8 @@ export class EventResolver {
    * convention the rest of this family uses and echoes the id it removed.
    */
   @Mutation(() => Boolean)
+  // Deprecated alias for deleteEvent; declared so deprecating it cannot quietly downgrade it.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removeEvent(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -173,6 +218,13 @@ export class EventResolver {
    * puts it back.
    */
   @Mutation(() => DeleteByIdPayload)
+  // The BASE row is a reversible tombstone (CtiAggregate softDeleteFlag: 'isDeleted'), but the
+  // gate is not resting on that. EmbeddingService.remove and VectorService.remove physically
+  // delete the embedding and tsvector rows, and restoreEvent RECOMPUTES them rather than
+  // restoring them. And no query in the schema surfaces tombstoned events: the only handle is the
+  // id echoed once in the delete payload, so a caller that discards the response has lost
+  // imported history in every way it can observe.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteEvent(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,
@@ -197,6 +249,8 @@ export class EventResolver {
 
   /** Undoes {@link deleteEvent}; `null` if there is no deleted event to restore. */
   @Mutation(() => EventType, { nullable: true })
+  // The undo path for deleteEvent — restorative, not destructive.
+  @GraphqlPrivacy({ destructive: false })
   async restoreEvent(
     @Context() context: RequestContext,
     @Args('input') input: RestoreByIdInput,
@@ -217,14 +271,21 @@ export class EventResolver {
   ): Promise<EventConnection> {
     const serviceContext = toServiceContext(context);
 
-    const entities = await this.eventService.findAll(serviceContext);
+    // Keyset, not slice-in-memory: this used to `findAll` the user's entire
+    // event table — photos, visits and every ETL row, not just calendar
+    // entries — and then discard all but `first` of them. The cursors stay
+    // GlobalUID-encoded row ids, so the wire contract is unchanged.
+    const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.eventService.findPage(
+      serviceContext,
+      {
+        first: pagination.first,
+        last: pagination.last,
+        afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
+        beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
+      },
+    );
 
-    const { slice, pageInfo, totalCount } = Paginator.paginate(entities, {
-      ...pagination,
-      getId: (entity) => GlobalUID.encode('event', entity.id),
-    });
-
-    const edges: EventEdge[] = slice.map((entity) => {
+    const edges: EventEdge[] = entities.map((entity) => {
       const node = EventType.toType(entity);
 
       return {
@@ -235,7 +296,69 @@ export class EventResolver {
 
     return {
       edges,
-      pageInfo,
+      pageInfo: {
+        hasNextPage,
+        hasPreviousPage,
+        startCursor: edges.length > 0 ? edges[0].cursor : null,
+        endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
+      },
+      totalCount,
+    };
+  }
+
+  /**
+   * The trash: events tombstoned by {@link deleteEvent}, newest first.
+   *
+   * This exists so `restoreEvent` is reachable. `deleteEvent` is a soft delete
+   * and restore genuinely reverses the base row, but every other read path
+   * filters `is_deleted = false` — so the only handle on a deleted event was
+   * the id echoed once in the delete payload. Discard that response and the
+   * event was unrecoverable through the API, while its label advertised a
+   * reversible operation. A restore you cannot address is not a restore.
+   *
+   * Read-only and user-scoped like any other query here. Note what restore does
+   * NOT bring back untouched: the delete physically removes the embedding and
+   * tsvector rows, and restore re-computes them asynchronously rather than
+   * restoring them, so a restored event reappears in the timeline immediately
+   * and in semantic search once re-indexing completes.
+   */
+  @Query(() => EventConnection, {
+    description:
+      'Events deleted by deleteEvent and not yet restored — the handle restoreEvent needs. Newest first.',
+  })
+  async deletedEvents(
+    @Context() context: RequestContext,
+    @Args() pagination: PaginationArgs,
+  ): Promise<EventConnection> {
+    const serviceContext = toServiceContext(context);
+
+    const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.eventService.findDeletedPage(
+      serviceContext,
+      {
+        first: pagination.first,
+        last: pagination.last,
+        afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
+        beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
+      },
+    );
+
+    const edges: EventEdge[] = entities.map((entity) => {
+      const node = EventType.toType(entity);
+
+      return {
+        node,
+        cursor: node.id,
+      };
+    });
+
+    return {
+      edges,
+      pageInfo: {
+        hasNextPage,
+        hasPreviousPage,
+        startCursor: edges.length > 0 ? edges[0].cursor : null,
+        endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
+      },
       totalCount,
     };
   }
@@ -283,15 +406,16 @@ export class EventResolver {
       'Move an event to a new time, keeping its duration. Externally-sourced events are moved ' +
       'locally only and marked pending — the change is not pushed to the source calendar.',
   })
+  // Moves start/end time on the same row via CalendarEventService.reschedule; an ordinary field
+  // update like updateEvent, not a delete-and-recreate.
+  @GraphqlPrivacy({ destructive: false })
   async rescheduleEvent(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
     @Args('startTime', { type: () => Date }) startTime: Date,
     @Args('endTime', { type: () => Date, nullable: true }) endTime?: Date,
   ): Promise<EventType | null> {
-    if (endTime && endTime < startTime) {
-      throw new BadRequestException('`endTime` must not precede `startTime`');
-    }
+    this.assertTimeOrder(startTime, endTime);
 
     const serviceContext = toServiceContext(context);
     const id = GlobalUID.parse('event', gid);
@@ -410,7 +534,7 @@ export class EventResolver {
 
     const tags = await this.tagLoader.load(serviceContext, {
       type: 'event',
-      id: parent.__source.id,
+      id: backingEventId(parent),
     });
 
     return tags.map((tag) => EntityTagType.toType(tag));
@@ -428,7 +552,7 @@ export class EventResolver {
   ): Promise<ContentConnection> {
     const serviceContext = entityOwnerScope(context, parent.__source.userId);
 
-    const entities = await this.eventContentsLoader.load(serviceContext, parent.__source.id);
+    const entities = await this.eventContentsLoader.load(serviceContext, backingEventId(parent));
 
     const { slice, pageInfo, totalCount } = Paginator.paginate(entities, {
       ...pagination,
@@ -457,7 +581,10 @@ export class EventResolver {
    * page of events resolves its media in a single batch.
    */
   private resolveMedia(context: RequestContext, parent: EventType): Promise<EventMedia | null> {
-    return this.eventMediaLoader.load(entityOwnerScope(context, parent.__source.userId), parent.__source.id);
+    return this.eventMediaLoader.load(
+      entityOwnerScope(context, parent.__source.userId),
+      backingEventId(parent),
+    );
   }
 
   /** Thumbnail (PREVIEW variant) URL for a photo/video event. */

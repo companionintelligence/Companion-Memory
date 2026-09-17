@@ -2,21 +2,22 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import {
-  ContentService,
-  CalendarEventService,
-  SOURCE_NATIVE_EXTERNAL_ID_KIND,
-  platformIdentity,
-} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import type { RedditSavedItem } from '../sync/redditListing';
 
+import { RedditRecordWriter, savedRecord } from './RedditRecordWriter';
+
+/**
+ * Posts and comments the user saved (the `saved` listing, a mix of both).
+ * Each one becomes the same content-only row the GDPR export importer writes
+ * for it — no communication, because neither side knows WHEN it was saved —
+ * see {@link RedditRecordWriter}.
+ */
 @Injectable()
 export class RedditSavedTransformService {
   constructor(
-    private readonly contentService: ContentService,
-    private readonly eventService: CalendarEventService,
+    private readonly writer: RedditRecordWriter,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(RedditSavedTransformService.name);
@@ -30,9 +31,9 @@ export class RedditSavedTransformService {
       connectionId: connection.id,
     });
 
-    const savedItems = (data?.saved as RedditSavedItem[]) || [];
+    const items = (data?.saved as RedditSavedItem[]) || [];
 
-    if (savedItems.length === 0) {
+    if (items.length === 0) {
       this.logger.log('No Reddit saved items found to transform', {
         userId,
         connectionId: connection.id,
@@ -41,9 +42,11 @@ export class RedditSavedTransformService {
       return;
     }
 
-    for (const item of savedItems) {
+    const outcomes = { created: 0, updated: 0, content_only: 0 };
+
+    for (const item of items) {
       try {
-        await this.transformOne(item, { connection, userId });
+        outcomes[await this.writer.write({ userId, connection }, savedRecord(item))] += 1;
       } catch (error) {
         // Per-row isolation, matching Slack/Gmail/Signal's transforms:
         // SyncOrchestrator marks a job lastTransformed even on an uncaught
@@ -52,7 +55,7 @@ export class RedditSavedTransformService {
         this.logger.error('Failed to transform Reddit saved item', {
           userId,
           connectionId: connection.id,
-          itemName: item.name,
+          name: item.name,
           error: error instanceof Error ? error.message : 'Unknown error',
         });
       }
@@ -61,92 +64,8 @@ export class RedditSavedTransformService {
     this.logger.log('Reddit saved items transformation completed', {
       userId,
       connectionId: connection.id,
-      totalItems: savedItems.length,
+      total: items.length,
+      ...outcomes,
     });
-  }
-
-  private async transformOne(
-    item: RedditSavedItem,
-    { connection, userId }: { connection: Connection; userId: string },
-  ): Promise<void> {
-    const permalink = item.permalink.startsWith('http')
-      ? item.permalink
-      : `https://www.reddit.com${item.permalink}`;
-
-    const isComment = item.name.startsWith('t1_');
-    const contentType = isComment ? 'reddit_comment' : 'reddit_post';
-    const eventType = isComment ? 'reddit_saved_comment' : 'reddit_saved_post';
-    const eventIdentity = platformIdentity('reddit_saved', item.name);
-    const title = isComment
-      ? `Saved comment on "${item.link_title}" in r/${item.subreddit}`
-      : `Saved post in r/${item.subreddit}: ${item.title || item.name}`;
-    const text = isComment ? item.body || '' : item.selftext || item.title || '';
-
-    const existingContent = await this.contentService.search({ userId }, { external_id: item.name });
-
-    if (existingContent.length === 0) {
-      await this.contentService.create(
-        { userId },
-        {
-          connection_id: connection.id,
-          type: contentType,
-          title,
-          text,
-          url: permalink,
-          external_id: item.name,
-          external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-          // content_source_identity_uniq backstops the racy search-then-create
-          // above. source_system is 'reddit' (matching the posts/comments
-          // transforms) because the content row IS the post or comment —
-          // whichever transform writes it first owns the key.
-          source_type: 'ETL',
-          ...(() => {
-            const identity = platformIdentity('reddit', item.name);
-
-            return { source_system: identity.system, source_id: identity.id };
-          })(),
-          source_url: permalink,
-          source_data: {
-            reddit_item_id: item.id,
-            subreddit: item.subreddit,
-            saved: true,
-            score: item.score,
-            // RedditSavedItem has no is_self flag (unlike RedditPost), so a
-            // link post is identified by its url differing from its own
-            // permalink — a self post's url is the permalink itself.
-            ...(!isComment && item.url && item.url !== permalink ? { link_url: item.url } : {}),
-            author: item.author,
-          },
-        },
-      );
-    }
-
-    const existingEvent = await this.eventService.search(
-      { userId },
-      {
-        sourceSystem: eventIdentity.system,
-        sourceId: eventIdentity.id,
-      },
-    );
-
-    if (existingEvent.length === 0) {
-      await this.eventService.create(
-        { userId },
-        {
-          connection_id: connection.id,
-          event_type: eventType,
-          // Without source_type, CalendarEventService.createOne skips its
-          // find-or-create AND events_source_identity_uniq treats the row as
-          // NULL-distinct — only the search above stood between a replay
-          // and a duplicate.
-          source_type: 'ETL',
-          source_id: eventIdentity.id,
-          start_time: new Date(item.created_utc * 1000),
-          title,
-          description: text,
-          source_system: eventIdentity.system,
-        },
-      );
-    }
   }
 }

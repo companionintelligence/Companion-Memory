@@ -140,6 +140,130 @@ describe('checkEgressUrl', () => {
 });
 
 /**
+ * `peers.allowCgnatEndpoints` — the opt-in escape hatch for peer egress into
+ * CGNAT space (100.64.0.0/10), where Tailscale lives.
+ *
+ * Every function under test here takes the option as a plain argument rather
+ * than reading config, so these are deterministic and need no
+ * `@ci/configuration` mock — the production wiring that reads the live config
+ * value (`peerEgressFetch`, the `peerEgressLookup` singleton) is covered
+ * separately in `urlPolicy.allowCgnat.spec.ts`.
+ *
+ * THE DEFAULT CASE (`options` omitted, or `{}`, or `{ allowCgnat: false }`) is
+ * every test above this point, unmodified — that is the byte-identical
+ * requirement, pinned by simply not touching them.
+ */
+describe('peers.allowCgnatEndpoints (options.allowCgnat)', () => {
+  it('omitted, {} and {allowCgnat:false} all refuse CGNAT identically to the pre-flag behaviour', () => {
+    for (const opts of [undefined, {}, { allowCgnat: false }] as const) {
+      expect(checkEgressUrl('https://100.64.0.1/ask', opts)).toEqual({
+        ok: false,
+        reason: 'must not target a private or loopback address',
+      });
+      expect(isEgressUrlAllowed('https://100.64.0.1/ask', opts)).toBe(false);
+      expect(isBlockedAddress('100.64.0.1', opts)).toBe(true);
+    }
+  });
+
+  it('allowCgnat:true permits a literal CGNAT address through the pre-flight check', () => {
+    expect(checkEgressUrl('https://100.64.0.1/ask', { allowCgnat: true })).toEqual({ ok: true });
+    expect(isEgressUrlAllowed('https://100.64.0.1/ask', { allowCgnat: true })).toBe(true);
+    // The far end of the range, and an IPv4-mapped IPv6 spelling of a CGNAT
+    // address — the mapped path must thread the option through too.
+    expect(isEgressUrlAllowed('https://100.127.255.254/ask', { allowCgnat: true })).toBe(true);
+    expect(isEgressUrlAllowed('https://[::ffff:100.64.1.1]/ask', { allowCgnat: true })).toBe(true);
+    expect(isEgressUrlAllowed('https://[::ffff:6440:101]/ask', { allowCgnat: true })).toBe(true); // hex spelling
+  });
+
+  it('allowCgnat:true does NOT widen anything outside 100.64.0.0/10 — not loopback, link-local, "this network", or RFC1918', () => {
+    for (const host of [
+      '127.0.0.1', // loopback
+      '169.254.169.254', // link-local / cloud metadata
+      '0.0.0.0', // "this" network
+      '10.0.0.1', // RFC1918
+      '172.16.0.1', // RFC1918
+      '172.31.255.254', // RFC1918
+      '192.168.1.1', // RFC1918
+      '198.18.0.1', // benchmarking
+      '224.0.0.1', // multicast
+    ]) {
+      expect(isEgressUrlAllowed(`https://${host}/ask`, { allowCgnat: true })).toBe(false);
+      expect(isBlockedAddress(host, { allowCgnat: true })).toBe(true);
+    }
+
+    // The IPv6-native ranges (never touched by this flag at all, since they
+    // have nothing to do with the IPv4 CGNAT table) and an IPv4-mapped
+    // loopback, which must still resolve through to the v4 check.
+    for (const host of ['[::1]', '[fe80::1]', '[fc00::1]', '[::ffff:127.0.0.1]', '[::ffff:10.0.0.5]']) {
+      expect(isEgressUrlAllowed(`https://${host}/ask`, { allowCgnat: true })).toBe(false);
+    }
+  });
+
+  it('still refuses a public address that merely looks similar, flag on or off', () => {
+    for (const opts of [undefined, { allowCgnat: true }] as const) {
+      expect(isEgressUrlAllowed('https://100.63.255.255/ask', opts)).toBe(true); // just outside CGNAT
+      expect(isEgressUrlAllowed('https://100.128.0.1/ask', opts)).toBe(true); // just outside CGNAT
+    }
+  });
+
+  describe('the connect-time guard (createEgressLookup) with allowCgnat:true', () => {
+    function resolverReturning(...addresses: dns.LookupAddress[]): AddressResolver {
+      return (_hostname, _options, callback) => {
+        setImmediate(() => callback(null, addresses));
+      };
+    }
+
+    it('permits a hostname that resolves PURELY to a CGNAT address', (done) => {
+      const lookup = createEgressLookup(resolverReturning({ address: '100.64.1.5', family: 4 }), {
+        allowCgnat: true,
+      });
+
+      lookup('peer.example.com', { all: true }, (error, addresses) => {
+        expect(error).toBeNull();
+        expect(addresses).toEqual([{ address: '100.64.1.5', family: 4 }]);
+        done();
+      });
+    });
+
+    it('still refuses a hostname that resolves to loopback — the flag does not touch this range', (done) => {
+      const lookup = createEgressLookup(resolverReturning({ address: '127.0.0.1', family: 4 }), {
+        allowCgnat: true,
+      });
+
+      lookup('peer.example.com', {}, (error) => {
+        expect(error).toBeInstanceOf(EgressBlockedError);
+        done();
+      });
+    });
+
+    it('still refuses a MIXED CGNAT + loopback answer entirely — one blocked address poisons the set even with the flag on', (done) => {
+      // The exact "poisoned DNS answer" shape the task calls out: a name that
+      // SHOULD be a legitimate CGNAT-hosted peer answers with a loopback
+      // address too (compromised DNS, or a peer publishing a bad A record).
+      const lookup = createEgressLookup(
+        resolverReturning({ address: '100.64.1.5', family: 4 }, { address: '127.0.0.1', family: 4 }),
+        { allowCgnat: true },
+      );
+
+      lookup('peer.example.com', {}, (error) => {
+        expect(error).toBeInstanceOf(EgressBlockedError);
+        done();
+      });
+    });
+
+    it('without the option (default), the SAME CGNAT-only answer is refused exactly as before the flag existed', (done) => {
+      const lookup = createEgressLookup(resolverReturning({ address: '100.64.1.5', family: 4 }));
+
+      lookup('peer.example.com', {}, (error) => {
+        expect(error).toBeInstanceOf(EgressBlockedError);
+        expect((error as EgressBlockedError).reason).toContain('peer.example.com');
+        done();
+      });
+    });
+  });
+});
+
+/**
  * The address table, pinned on its own.
  *
  * `checkEgressUrl` only ever sees a hostname; the CONNECT-TIME guard sees a

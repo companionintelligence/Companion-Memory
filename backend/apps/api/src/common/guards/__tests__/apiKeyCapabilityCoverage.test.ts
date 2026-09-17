@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 
 import { REQUIRE_CAPABILITY_KEY, REQUIRE_SCOPES_KEY } from '@ci/common/decorators';
 
+import { AgentJobsController } from '../../../domains/agent/controllers/AgentJobsController';
 import { IntentsController } from '../../../domains/agent/controllers/IntentsController';
 import { MemoryController } from '../../../domains/agent/controllers/MemoryController';
 import { FilesController } from '../../../domains/files/controllers/FilesController';
@@ -27,14 +28,25 @@ import { PendingActionsController } from '../../../domains/tools/controllers/Pen
 const SCOPED_CONTROLLERS = [
   MemoryController,
   IntentsController,
+  AgentJobsController,
   McpController,
   PersonaIntelligenceController,
+  // `/v1/agent/jobs` — dispatch to an agent harness. Class-level `memory` scope,
+  // per-route capability. It arrived with #2558 and was not added here, which is
+  // precisely what the tree scan at the bottom of this file is for: the routes
+  // were correctly annotated, so nothing was reachable that should not have
+  // been, but the suite was not WATCHING them and would not have noticed if the
+  // next route on this controller had shipped without a capability.
+  AgentJobsController,
   // The `capture` tier. Both grant at the CLASS level, which is why
   // effectiveMetadata() below falls back to the class — a per-method scan alone
   // would see these as unscoped and skip the capability assertion entirely.
   FilesController,
   BulkIngestController,
   PendingActionsController,
+  // Added by #2558; every route already declared a capability, only this
+  // hand-maintained mirror had not caught up.
+  AgentJobsController,
 ];
 
 /** Every own method on a controller prototype (route handlers and helpers alike). */

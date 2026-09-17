@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { fetchJson } from '@ci/common';
+import { fetchJson, FetchJsonError } from '@ci/common';
 
 import { readJobsSnapshot, writeJobsSnapshot } from './jobsSnapshots';
 import { useJobsAuth } from './useJobsAuth';
@@ -51,6 +51,14 @@ export interface JobCronControl {
   readonly name: string;
   readonly cron: string;
   readonly mode: CronMode;
+  /** Which process runs it. Every schedule in the build is listed, both roles. */
+  readonly role: 'web' | 'worker';
+  /**
+   * Whether the process that answered is the one that runs it. False only on a
+   * split deployment, and it does not mean uncontrollable — the switch writes a
+   * setting every process polls.
+   */
+  readonly servedHere: boolean;
   readonly locked: boolean;
   readonly lockedReason: string | null;
   readonly skippedCount: number;
@@ -116,6 +124,17 @@ export function useJobControls() {
   const [loading, setLoading] = useState(restored == null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The HTTP status behind {@link error}, when there was one.
+   *
+   * Kept because the message alone cannot tell the card WHY controls are
+   * missing, and the card was guessing: a 404 (this build has no controls
+   * endpoint) rendered the same "the settings table may not have been migrated
+   * yet" explanation as a 500 (the endpoint is there and the table is not).
+   * Those need opposite actions, and sending someone to check migrations when
+   * the server is simply too old costs them the afternoon.
+   */
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     if (!ready) {
@@ -131,11 +150,13 @@ export function useJobControls() {
       }
 
       setError(null);
+      setErrorStatus(null);
     } catch (err: unknown) {
       // Keep whatever is on screen. Blanking the card on a failed refetch would
       // hide the very settings an operator came here to change, and the values
       // cannot have drifted — nothing else writes them.
       setError(err instanceof Error ? err.message : String(err));
+      setErrorStatus(err instanceof FetchJsonError ? err.status : null);
     } finally {
       setLoading(false);
     }
@@ -174,10 +195,12 @@ export function useJobControls() {
         }
 
         setError(null);
+        setErrorStatus(null);
 
         return true;
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : String(err));
+        setErrorStatus(err instanceof FetchJsonError ? err.status : null);
 
         return false;
       } finally {
@@ -187,5 +210,5 @@ export function useJobControls() {
     [ready, headers],
   );
 
-  return { data, loading, saving, error, refresh: load, save } as const;
+  return { data, loading, saving, error, errorStatus, refresh: load, save } as const;
 }

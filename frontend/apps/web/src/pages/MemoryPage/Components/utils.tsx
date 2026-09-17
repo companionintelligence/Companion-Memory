@@ -68,7 +68,8 @@ export const INGEST_TIME_SOURCE = 'ingest';
 
 /**
  * The canonical timestamp for an entity, matching the server's ordering logic
- * (`SearchResolver.getEntityTimestamp`, which keys off `time ?? startTime`).
+ * (`SearchResolver.getEntityTimestamp`, which keys off `time ?? startTime`,
+ * then `purchasedAt` for receipts).
  * Keeping the same field priority here ensures the date-group headers we render
  * line up with the chronological order the API already returned. Entities with
  * no domain timestamp (people, places, concepts, …) return null and fall into
@@ -108,6 +109,9 @@ export function getEntityTimestamp(entity: EntityItem): Date | null {
     case 'PersonType':
     case 'PlaceType':
       raw = entity.bucketAppearedAt;
+      break;
+    case 'ReceiptType':
+      raw = entity.bucketPurchasedAt;
       break;
     default:
       return null;

@@ -155,6 +155,16 @@ export class GraphIngestService {
     return uuidv5(key, IMPORT_NAMESPACE);
   }
 
+  /**
+   * Ensure the owner has a canonical self Person before maintenance repairs or
+   * planning enrichment run. Public so an operator-triggered backfill can heal
+   * an imported account whose `ci.users.entity_id` points at a Person that was
+   * never marked `is_self`.
+   */
+  async ensureSelfEntityForOwner(context: UserServiceContext): Promise<{ id: string; type: string } | null> {
+    return this.ensureSelfEntity(context.userId);
+  }
+
   async ingest(
     context: UserServiceContext,
     input: { entities: GraphEntityInputDto[]; relationships: GraphRelationshipInputDto[] },
@@ -692,6 +702,7 @@ export class GraphIngestService {
         await this.nodeRepository.manager.query(`SELECT name, email FROM ci.users WHERE id = $1`, [ownerId]);
       const displayName = users[0]?.name?.trim() || users[0]?.email?.trim() || 'Me';
       const email = users[0]?.email?.trim() || null;
+      await this.markSelfEntity(ownerId, existing.id);
       await this.entityIdentifierService.claimForSelf(ownerId, existing.id, {
         emails: email ? [email] : [],
         names: [displayName],
@@ -734,6 +745,8 @@ export class GraphIngestService {
       throw new Error(selfErrors[0] ?? 'failed to provision self entity');
     }
 
+    await this.markSelfEntity(ownerId, selfEntityId);
+
     // Link the owner to it, but never clobber a pointer set concurrently.
     await this.nodeRepository.manager.query(
       `UPDATE ci.users SET entity_id = $2 WHERE id = $1 AND entity_id IS NULL`,
@@ -752,6 +765,18 @@ export class GraphIngestService {
 
     // Honour whatever pointer actually won; fall back to the row we created.
     return (await this.resolveSelfEntity(ownerId)) ?? { id: selfEntityId, type: SELF_ENTITY_TYPE };
+  }
+
+  private async markSelfEntity(ownerId: string, entityId: string): Promise<void> {
+    await this.nodeRepository.manager.query(
+      `UPDATE ci.entities
+          SET is_self = TRUE,
+              properties = COALESCE(properties, '{}'::jsonb) || jsonb_build_object('is_self', TRUE),
+              updated_at = now()
+        WHERE entity_id = $1::uuid
+          AND owner_user_id = $2::uuid`,
+      [entityId, ownerId],
+    );
   }
 
   /**

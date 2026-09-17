@@ -242,7 +242,10 @@ export class TelegramFileImporter implements FileImporter {
             : undefined;
         params.pipeline.push({
           item: {
-            id: msg.id != null ? `telegram:${chat.id}:${msg.id}` : `telegram:${chat.id}:${ts?.getTime() ?? 'noTs'}:${i}`,
+            id:
+              msg.id != null
+                ? `telegram:${chat.id}:${msg.id}`
+                : `telegram:${chat.id}:${ts?.getTime() ?? 'noTs'}:${i}`,
             classification: 'message',
             timestamp: ts,
             content: {

@@ -1,5 +1,8 @@
 import type { QueueOptions } from '@ci/domains/events';
 
+/** Hub URN for the official OpenClaw app. Dispatch doorbells this one only. */
+export const OPENCLAW_APP_URN = 'ci-openclaw:ci-marketplace';
+
 /**
  * Per-user chat-turn distillation. One queue, one event
  * (`AgentTurnFragmentsEvent`), one producer (`TurnFragmentCron`).
@@ -17,6 +20,22 @@ import type { QueueOptions } from '@ci/domains/events';
  * `ci.messages` plus one INSERT per turn: cheap, but pointless to run six
  * abreast against a 25-connection pool when the cadence is minutes.
  */
+/** Long-running OpenClaw dispatch. Stays `active` until checkpoint/complete. */
+export const AGENT_DISPATCH_QUEUE = 'agent';
+
+export const AGENT_DISPATCH_QUEUE_OPTIONS: QueueOptions = {
+  policy: 'short',
+  expireInSeconds: 2 * 60 * 60,
+  retryLimit: 3,
+  retryDelay: 30,
+};
+
+/** Still queued after this: OpenClaw never fetched the packet. */
+export const DISPATCH_QUEUED_STALE_MS = 2 * 60 * 1000;
+
+/** Running this long with no terminal checkpoint: treat as hung. */
+export const DISPATCH_RUNNING_STALE_MS = 15 * 60 * 1000;
+
 export const AGENT_MEMORY_QUEUE = 'agent-memory';
 
 export const AGENT_MEMORY_QUEUE_OPTIONS: QueueOptions = {

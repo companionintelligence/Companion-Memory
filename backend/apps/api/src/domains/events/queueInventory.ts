@@ -2,7 +2,7 @@ import type { ServedRole } from '@ci/common/roles';
 
 import { DEAD_LETTER_QUEUE } from './constants';
 import { EventListenerRegistry } from './event-registration';
-import { describeJob, type JobCategory } from './taxonomy';
+import { describeJob, type JobRowCategory } from './taxonomy';
 
 /**
  * Everything the appliance knows about one queue, assembled from the two places
@@ -52,8 +52,13 @@ export interface QueueInventoryEntry {
    * writes, new-user seeding and LLM work — and a UI that showed it under a
    * single category would be telling an operator that switching it off costs
    * them one thing when it costs them five.
+   *
+   * `unclassified` can appear here, and it means what it says: a listener has
+   * been registered for an event with no entry in the taxonomy. Showing the
+   * fingerprint's guess instead would tell an operator this queue does search
+   * work when nothing in the system can confirm that.
    */
-  readonly categories: readonly JobCategory[];
+  readonly categories: readonly JobRowCategory[];
 }
 
 /**
@@ -64,9 +69,21 @@ export interface QueueInventoryEntry {
  * remembering to add it here — and, more importantly, is controllable the day it
  * ships rather than the day someone notices it is not.
  *
- * The dead-letter queue is included: it has a real listener (the reaper) and a
- * real worker, so it is a real queue an operator can see. Whether it may be
- * switched off is a separate question, answered by the protected list.
+ * The dead-letter queue is NOT here, and that is correct. An earlier revision of
+ * this comment claimed it was, "because it has a real listener (the reaper) and a
+ * real worker" — it has neither. `DeadLetterReaperListener` is a `@Cron` that
+ * polls `pgboss.job`, deliberately not an `@OnEvent` on `dead-letter`, and its
+ * own header explains why at length: registering any handler there makes it a
+ * discovered queue, which starts a worker, which fetches every dead letter,
+ * finds no handler for the other forty event names and completes them — silently
+ * destroying the dead letters of every event but the one subscribed. Nothing
+ * works that queue on purpose.
+ *
+ * So it has no listener, does not appear here, and cannot be switched off
+ * because it is not offered. Its entry in the protected list is therefore
+ * unreachable today; it is kept as the guard that engages the moment somebody
+ * does register a handler there. `__tests__/jobControlPolicy.test.ts` fails on
+ * that change, which is the point at which the reaper's warning needs reading.
  */
 export function queueInventory(): QueueInventoryEntry[] {
   const events = new Map<string, Set<string>>();
@@ -106,8 +123,8 @@ export function isDeadLetterQueue(queue: string): boolean {
   return queue === DEAD_LETTER_QUEUE;
 }
 
-function rankedCategories(events: readonly string[], queue: string): JobCategory[] {
-  const counts = new Map<JobCategory, number>();
+function rankedCategories(events: readonly string[], queue: string): JobRowCategory[] {
+  const counts = new Map<JobRowCategory, number>();
 
   for (const event of events) {
     const { category } = describeJob(event, null, queue);

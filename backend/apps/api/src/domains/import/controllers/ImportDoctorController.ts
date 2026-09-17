@@ -15,7 +15,7 @@ export type DoctorCheckSummary = Omit<DoctorCheck, 'sql'>;
  *
  * The audit these checks came from was fifty statements typed into `psql` during
  * a live import. That works exactly once, for exactly the person holding the
- * shell. As a route it is: the same suite the CLI runs (`ci-import doctor`), on
+ * shell. As a route it is: the same suite the CLI runs (`ci doctor`), on
  * an appliance nobody has database credentials for, from an agent loop that has
  * an api key and nothing else, with the predicates version-controlled next to
  * the guards they mirror.

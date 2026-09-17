@@ -2,7 +2,13 @@
   "name": "@ci/editor",
   "version": "0.0.0",
   "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "main": "index.ts",
+  "sideEffects": [
+    "**/*.css"
+  ],
   "packageManager": "yarn@4.9.1",
   "dependencies": {
     "@ci/common": "workspace:*",
@@ -19,6 +25,7 @@
   },
   "devDependencies": {
     "@types/react": "^19.1.5",
-    "@types/react-dom": "^19.1.5"
+    "@types/react-dom": "^19.1.5",
+    "typescript": "^5.8.3"
   }
 }

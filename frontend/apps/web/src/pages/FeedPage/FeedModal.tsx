@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, type ReactNode } from 'react';
 
 import { ErrorPage, LoadingPage, useDeviceLayout } from '@ci/common';
 import { Dialog, IconButton, cn } from '@ci/shadcn';
@@ -17,6 +17,70 @@ import { useChatRequester } from '@/hooks';
 interface Props {
   actionId?: string | null;
   onClose?: () => void;
+}
+
+/**
+ * The evidence the backend's SuggestionEngine records for a derived action —
+ * see `domains/daily-metrics/suggest/SuggestionEngine.ts`, which writes
+ * `{ suggestionId, key, evidence }` into the action's metadata when it promotes
+ * a suggestion. Declared here rather than imported: `Action.metadata` is a
+ * free-form `Record<string, unknown>` (jsonb) on both sides of the wire.
+ */
+interface ActionEvidence {
+  metric: string;
+  windowDays?: number;
+  baseline?: number;
+  current?: number;
+  gap?: number;
+  sources: string[];
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Read the evidence bag back one field at a time.
+ *
+ * Actions come from several sources (onboarding seeds, agents, the suggestion
+ * engine) and rows written before the engine existed carry no evidence at all,
+ * so this cannot cast `metadata` to a shape and trust it. `metric` is the one
+ * required field — without it there is nothing to attribute the numbers to, and
+ * the caller falls back to the old copy.
+ */
+function readEvidence(metadata: Record<string, unknown> | undefined): ActionEvidence | undefined {
+  const raw = metadata?.evidence;
+
+  if (raw == null || typeof raw !== 'object') {
+    return undefined;
+  }
+
+  const fields = raw as Record<string, unknown>;
+  const metric = typeof fields.metric === 'string' ? fields.metric.trim() : '';
+
+  if (metric.length === 0) {
+    return undefined;
+  }
+
+  return {
+    metric,
+    windowDays: finiteNumber(fields.windowDays),
+    baseline: finiteNumber(fields.baseline),
+    current: finiteNumber(fields.current),
+    gap: finiteNumber(fields.gap),
+    sources: Array.isArray(fields.sources)
+      ? fields.sources.filter((source): source is string => typeof source === 'string')
+      : [],
+  };
+}
+
+/** `n_conversations` -> `n conversations`. The keys are the metric store's own. */
+function formatMetricName(metric: string) {
+  return metric.replace(/_/g, ' ');
+}
+
+function formatMetricValue(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
 export function FeedModal({ onClose }: Props) {
@@ -72,7 +136,41 @@ export function FeedModal({ onClose }: Props) {
     return context && context.trim().length > 0 ? context : undefined;
   }, [action?.metadata]);
 
-  const rationaleText = actionContext ?? 'No rationale available yet.';
+  const actionEvidence = useMemo(() => readEvidence(action?.metadata), [action?.metadata]);
+
+  // The fallback is for actions that genuinely carry no rationale. An action the
+  // suggestion engine derived carries measured evidence instead of prose, and
+  // claiming "no rationale" over it was the visible half of the reason nobody
+  // could tell what the engine was doing.
+  const rationaleText = actionContext ?? (actionEvidence ? null : 'No rationale available yet.');
+
+  const evidenceRows = useMemo(() => {
+    if (!actionEvidence) {
+      return [];
+    }
+
+    const rows: Array<{ label: string; value: string }> = [
+      { label: 'Metric', value: formatMetricName(actionEvidence.metric) },
+    ];
+
+    if (actionEvidence.baseline !== undefined) {
+      rows.push({
+        label:
+          actionEvidence.windowDays !== undefined ? `Baseline (${actionEvidence.windowDays}d)` : 'Baseline',
+        value: formatMetricValue(actionEvidence.baseline),
+      });
+    }
+
+    if (actionEvidence.current !== undefined) {
+      rows.push({ label: 'Current', value: formatMetricValue(actionEvidence.current) });
+    }
+
+    if (actionEvidence.gap !== undefined) {
+      rows.push({ label: 'Gap', value: formatMetricValue(actionEvidence.gap) });
+    }
+
+    return rows;
+  }, [actionEvidence]);
 
   const chatContext = useMemo(() => {
     if (!action) {
@@ -215,7 +313,33 @@ export function FeedModal({ onClose }: Props) {
                 </div>
                 {chatContext ? <ChatWithAgentMenu context={chatContext} size="sm" /> : null}
               </div>
-              <Markdown>{rationaleText}</Markdown>
+              {rationaleText != null && <Markdown>{rationaleText}</Markdown>}
+
+              {actionEvidence && (
+                // Plain divs and spans on purpose: this sits inside the `prose`
+                // container, and a dl/ul here would pick up typography margins
+                // meant for rendered Markdown.
+                <div className="mt-3 rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-sm">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Evidence
+                  </div>
+
+                  <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+                    {evidenceRows.map((row) => (
+                      <Fragment key={row.label}>
+                        <span className="text-muted-foreground">{row.label}</span>
+                        <span className="text-right font-medium tabular-nums">{row.value}</span>
+                      </Fragment>
+                    ))}
+                  </div>
+
+                  {actionEvidence.sources.length > 0 && (
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      Derived from {actionEvidence.sources.join(', ')}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

@@ -49,6 +49,7 @@ export function mockSavedSearch(
       places: ['Paris'],
       hasLocation: true,
       semantic: null,
+      direction: null,
     },
     isPublic: true,
     shareToken: 'b6f3a1c20d9e4f7a8c1b2d3e4f5a6b7c',

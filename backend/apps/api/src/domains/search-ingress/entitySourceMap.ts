@@ -85,7 +85,17 @@ export const ENTITY_SOURCE_MAP: Readonly<Record<IndexableEntity, EntitySource>> 
     backfillPredicate: 's.merged_into_entity_id IS NULL',
   },
   content: { schema: 'ci', table: 'content', idColumn: 'id' },
-  event: { schema: 'ci', table: 'events', idColumn: 'event_id' },
+  // Mirrors INDEX_EMBED_EVENT_SOURCE.predicate (pipeline domain; not importable
+  // from here). Without it the sweep's LEFT JOIN against embeddings + index_skips
+  // re-found every planned block on every pass and re-enqueued it, and the
+  // listener refused it on arrival without recording a skip — the exact
+  // non-convergence index_skips was created to end, at one row per block.
+  event: {
+    schema: 'ci',
+    table: 'events',
+    idColumn: 'event_id',
+    backfillPredicate: "s.is_deleted IS NOT TRUE AND s.event_type <> 'planned_block'",
+  },
   // `ci.files`, NOT the `ci.entities` graph node of `entity_type = 'File'`.
   //
   // Both exist, they are 1:1, and their ids are DIFFERENT: GraphIngest mints a
@@ -174,6 +184,16 @@ export const ENTITY_SOURCE_MAP: Readonly<Record<IndexableEntity, EntitySource>> 
     backfillPredicate: 's.merged_into_product_id IS NULL',
   },
   receipt: { schema: 'ci', table: 'receipts', idColumn: 'receipt_id' },
+  // Archived tasks are excluded from the sweep rather than skipped by the
+  // listener: an archived row is not going to be re-embedded, so re-finding it
+  // on every pass is the same non-convergence ci_search.index_skips was created
+  // to end. Live statuses stay eligible so a reopened task is re-indexed.
+  task: {
+    schema: 'ci',
+    table: 'tasks',
+    idColumn: 'id',
+    backfillPredicate: "s.status <> 'archived'",
+  },
   thread: { schema: 'ci', table: 'threads', idColumn: 'thread_id' },
 };
 

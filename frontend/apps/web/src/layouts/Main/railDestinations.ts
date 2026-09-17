@@ -6,15 +6,18 @@ import {
   CircleUserRound,
   CloudSun,
   FolderSearch2,
+  History,
   LifeBuoy,
   ListTodo,
   MessageCircleQuestion,
+  ShieldCheck,
   Workflow,
 } from '@ci/shadcn/icons';
 
 import { useFeatures } from '@/common/feature';
 import { isMemoryHubPath } from '@/components/MemoryHub/memoryHubSections';
 import { isJobsPath, JOBS_CATEGORY_SECTIONS, JOBS_SECTIONS } from '@/pages/JobsPage/jobsSections';
+import { isSourcesPath, SOURCES_SECTIONS } from '@/pages/SourcesPage/sourcesSections';
 
 /**
  * Destinations in the Power Rail, top to bottom (and on the phone, the same
@@ -70,7 +73,30 @@ export const RAIL_DESTINATIONS: readonly RailDestination[] = [
       { id: 'asks', to: '/asks', label: 'Asks', icon: MessageCircleQuestion, flag: 'ask' },
     ],
   },
-  { id: 'sources', to: '/sources', label: 'Sources', icon: Cable, end: false },
+  // Sources carries its own halves the way Jobs and Memory do. The page has
+  // always had three — Services, Import, Devices — but the rail offered only
+  // the question, so reaching Devices meant landing on Services first and
+  // knowing a switch existed above the fold.
+  //
+  // Derived from SOURCES_SECTIONS rather than restated, so the rail and the
+  // page's own tiles cannot drift. Import rides its flag: gated off, the row
+  // goes with it rather than pointing at a route that redirects away.
+  {
+    id: 'sources',
+    to: '/sources',
+    label: 'Sources',
+    icon: Cable,
+    end: false,
+    match: isSourcesPath,
+    children: SOURCES_SECTIONS.map((section) => ({
+      id: section.id,
+      to: section.to,
+      label: section.label,
+      icon: section.icon,
+      flag: section.flag,
+      match: section.match,
+    })),
+  },
   // Jobs carries its own sections the way Memory does — everything the page
   // shows used to be one scroll (summary, charts, the table, dead letters and
   // 53 schedules on a single route), which is fine to read once and miserable
@@ -109,6 +135,26 @@ export const RAIL_DESTINATIONS: readonly RailDestination[] = [
       })),
     ],
   },
+  // Approvals and Activity: what SOFTWARE did on your behalf, as against Jobs
+  // above, which is what the appliance does for itself. Approvals is the head
+  // because it is the one that is waiting on you — an unanswered card is an
+  // agent stopped mid-task — and Activity is the record of the same events
+  // after the fact.
+  //
+  // Both routes shipped complete, tested and unflagged and nothing linked to
+  // either, so the only way to reach them was to type the URL. That is the
+  // failure this file's own `visibleRailDestinations` comment warns about: a
+  // page you can only type at. Neither carries a `flag`, matching the route
+  // decision in App.tsx — `tools.pendingActions` gates whether the owner's DIAL
+  // queues their own actions, but an installed app is queued unconditionally,
+  // so cards arrive with the flag off and a gated row would hide them.
+  {
+    id: 'approvals',
+    to: '/approvals',
+    label: 'Approvals',
+    icon: ShieldCheck,
+    children: [{ id: 'activity', to: '/activity', label: 'Activity', icon: History }],
+  },
   // Below Jobs, off the primary six, while its flag ships false — turning it
   // on later should not disturb the places you actually work.
   { id: 'forecast', to: '/forecast', label: 'Forecast', icon: CloudSun, flag: 'forecast.page' },
@@ -119,8 +165,9 @@ export const RAIL_DESTINATIONS: readonly RailDestination[] = [
   // ═══ THIS USED TO RIDE `stats.page`, AND THAT REMOVED LOG OUT ═══
   //
   // The tile is the only mount point for `NavUserMenu` (SelfSubmenu renders it;
-  // nothing else does), and `NavUserMenu` is the only Settings / Theme / Log out
-  // cluster in the shell. The other two logout call sites both live inside the
+  // nothing else does), and that menu is the only Theme / Log out cluster in
+  // the shell. Settings sits beside Profile in the same submenu. The other two
+  // logout call sites both live inside the
   // `/self/*` subtree, which was gated on the same flag. So turning off a flag
   // named for a STATISTICS PAGE removed the user's avatar, their whole identity
   // surface, the theme switcher, Settings, and every way to sign out — leaving

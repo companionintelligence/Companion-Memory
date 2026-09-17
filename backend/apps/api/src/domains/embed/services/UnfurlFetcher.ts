@@ -2,7 +2,7 @@ import dns from 'node:dns';
 import net, { type LookupFunction } from 'node:net';
 
 import { Injectable } from '@nestjs/common';
-import { Agent, fetch as undiciFetch } from 'undici';
+import { Agent, fetch as undiciFetch, type Response as UndiciResponse } from 'undici';
 
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
@@ -265,10 +265,12 @@ function retryAfterMs(header: string | null): number {
 
 @Injectable()
 export class UnfurlFetcher {
+  // No redirect following underneath fetch: in undici 8 that is an opt-in
+  // interceptor (`interceptors.redirect`) and this agent composes none, so
+  // `redirect: 'manual'` below and the hop loop in `get` own every redirect.
   private readonly agent = new Agent({
     connect: { lookup: guardedLookup, timeout: DEFAULT_TIMEOUT_MS },
     keepAliveTimeout: 4_000,
-    maxRedirections: 0,
   });
 
   private readonly buckets = new RateBuckets(1000 / Math.max(0.1, config.unfurl.ratePerSecond));
@@ -305,7 +307,7 @@ export class UnfurlFetcher {
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
-      let response: Response;
+      let response: UndiciResponse;
       try {
         response = await undiciFetch(parsed, {
           method: 'GET',
@@ -404,7 +406,7 @@ export class UnfurlFetcher {
 }
 
 /** Reads at most `max` bytes; returns null (and cancels the stream) past that. */
-async function readCapped(response: Response, max: number): Promise<Buffer | null> {
+async function readCapped(response: UndiciResponse, max: number): Promise<Buffer | null> {
   if (!response.body) {
     return Buffer.alloc(0);
   }

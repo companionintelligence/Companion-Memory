@@ -16,12 +16,13 @@ carries a `path:line`. **Counts re-verified against `main` after #2514, #2519,
 | Queue engine | pg-boss 10, schema `pgboss`, **its own cron scheduler disabled** (`schedule: false`) |
 | Listener bindings | **109** `@OnEvent` methods across 56 files |
 | Distinct event names consumed | **89** |
-| pg-boss queues created at boot | **39** (38 from listeners + `dead-letter`) |
+| pg-boss queues created at boot | **40** (39 from listeners + `dead-letter`) |
 | Scheduled methods | **53** `@Cron` methods across 29 files — all via the `@ci/common/schedule` wrapper |
 | Crons pinned to the worker role | **11** |
 | Queues pinned to the worker role | **6** (5 import + `derivation-run`) |
 | Pipeline stages behind one `pipeline.slice` event | **43** |
 | Global in-flight ceiling | 10 jobs **per process**; 6 per queue |
+| Per-job execution deadline | queue's own `expireInSeconds`, else **7200 s** — see §1.11 |
 
 Recurrence and queueing are two separate systems here. **Nothing** calls
 `boss.schedule()` — every recurring job is a NestJS `@Cron`, and `pgboss.schedule`
@@ -61,10 +62,13 @@ invariants are enforced at registration, i.e. before Nest even starts:
 | Field | Meaning | Default |
 |---|---|---|
 | `policy` | pg-boss de-duplication policy. **This is what makes a `singletonKey` real** | `standard` (stores keys, enforces nothing) |
-| `expireInSeconds` | how long an `active` job may run before pg-boss expires and retries it | constructor `expireInHours: 12` |
+| `expireInSeconds` | how long an `active` job may run before pg-boss expires and retries it — **and, since the in-process deadline landed, how long the listener itself gets (§1.11)** | constructor `expireInHours: 12` in pg-boss; `queues.jobTimeoutSeconds` (2 h) in-process |
+| `retentionMinutes` | how long an **unfinished** (`created`/`retry`) job survives before the archive sweep discards it — see §1.7 | `WORK_QUEUE_RETENTION_MINUTES`, 90 d |
 | `retryLimit` / `retryDelay` | retries before dead-lettering; seconds between them | 3 / 10, with backoff |
 | `localConcurrency` | in-process worker slots for this queue — **can only lower**, never raise | `queues.perQueueConcurrency` (6) |
 | `role` | which process **consumes** this queue | `web` |
+| `lane` | name of a slot pool shared with other queues: members draw from ONE in-process semaphore sized to the smallest member's `localConcurrency`. The four Ollama-bound background queues share `ollama-background`, so at most one background generation is at the runner at a time | none (own semaphore) |
+| `yieldsTo` | name of a yield gate (`yieldGates.ts`); while it says "yield", the loop takes no new lease — jobs stay `created` like `paused`, the running job finishes. `image-description` names `interactive-chat`, which closes while any thread has a chat turn queued/running | none (never yields) |
 
 ### 1.2 Boot
 
@@ -93,29 +97,46 @@ call — that is what applies new options to a live database.
 ### 1.3 The worker loop
 
 There is **no `boss.work()` subscription anywhere**. Each served queue runs its
-own hand-rolled poller ([`PGBossEventService.ts:635`](../backend/apps/api/src/domains/events/services/PGBossEventService.ts)):
+own hand-rolled poller ([`PGBossEventService.work()`](../backend/apps/api/src/domains/events/services/PGBossEventService.ts)):
 
 ```
 while (running):
-  available = min(perQueueSemaphore.free, globalSemaphore.free)
-  if available == 0:  sleep 150ms;  continue          # backoffWhenFull
-  jobs = boss.fetch(queue, { batchSize: min(available, 10) })
-  if jobs is empty: sleep 5000ms;  continue           # backoffWhenEmpty
+  if perQueueSemaphore.free == 0:  sleep 150ms;  continue      # backoffWhenFull
+  reserved = globalSlots.reserve(min(perQueueSemaphore.free, 10))
+  if reserved == 0:  wait for a release (≤150ms);  continue    # backoffWhenFull
+  jobs = boss.fetch(queue, { batchSize: reserved })
+  globalSlots.release(reserved - jobs.length)                  # short fetch
+  if jobs is empty: sleep 5000ms;  continue                    # backoffWhenEmpty
   for job in jobs:
-     void perQueueSemaphore(() => runJob(queue, job))  # NOT awaited
+     void perQueueSemaphore(() => runJob(queue, job))          # NOT awaited
+        .finally(() => globalSlots.release())
 ```
 
-Two nested `p-limit` semaphores. The **per-queue** slot is held for the job's
-whole lifetime; `runJob` acquires the **global** slot inside it. So a job holds
-one of each while executing, and can sit `pending` on the per-queue limiter while
-it waits for a global slot. One queue can therefore never starve another, and
-total in-flight never exceeds the global cap.
+Two nested `p-limit` semaphores, plus a reservation in front of the fetch. The
+**per-queue** slot is held for the job's whole lifetime; `runJob` acquires the
+**global** slot inside it. So a job holds one of each while executing, and one
+queue can never starve another.
+
+The global half of the *fetch* decision is a claim
+([`jobSlotPool.ts`](../backend/apps/api/src/domains/events/jobSlotPool.ts)), not
+a reading of the limiter's counters, and that distinction is load-bearing. All
+~38 loops are started un-awaited in one synchronous pass and each runs as far as
+its first `await boss.fetch(...)` before any of them has dispatched anything — so
+a *read* showed every loop the same ten free slots, and every loop fetched
+against them. `fetch` takes the pg-boss lease, so the surplus rows went to state
+`active` (on their `expireInSeconds` clock, and counted by the console's
+"Running" tile) while sitting in a semaphore waiting for a slot. The pool grants
+its ten slots synchronously and holds each one until the row reaches a terminal
+outcome, so **rows leased never exceed the global cap**, not merely rows
+executing. It reads its ceiling from `globalSemaphore.concurrency`, so a runtime
+change from the Controls card moves both together.
 
 | Knob | Config path | Env | Value |
 |---|---|---|---|
 | Global in-flight ceiling | `queues.concurrency` | `CI_QUEUE_CONCURRENCY` | **10** |
 | Per-queue ceiling | `queues.perQueueConcurrency` | `CI_QUEUE_PER_QUEUE_CONCURRENCY` | **6** |
 | Fetch batch cap | `queues.fetchBatchSize` | `CI_QUEUE_FETCH_BATCH_SIZE` | **10** |
+| Fallback job deadline | `queues.jobTimeoutSeconds` | `CI_QUEUE_JOB_TIMEOUT_SECONDS` | **7200 s** |
 | Replayed dead-letter retention | `queues.replayedDeadLetterRetentionDays` | `CI_REPLAYED_DEAD_LETTER_RETENTION_DAYS` | **30 days** |
 | Queue suppression | *(none — raw env only)* | `CI_QUEUE_SUPPRESS` | unset |
 | Process role | `role` | `CI_ROLE` | **`all`** |
@@ -225,12 +246,43 @@ Two consequences the codebase guards explicitly:
 
 ### 1.6 Acknowledgement, retries, dead letters
 
+**The delivered payload is the domain's, verbatim.** The dispatcher strips
+`name` — the routing key — and adds nothing else. The queue's own job id is
+`ack.jobId`, and that is the id `completeJob` / `failJob` expect. A listener
+that reports completion out-of-band (`autoAcknowledge: false`) must read it
+from the acknowledgement, never from the payload.
+
+It used to be merged in as `jobId`, which meant the bus wrote into a namespace
+it does not own: any domain that named a field `jobId` silently lost it.
+`domains/agent` declares one on five payload types meaning the `ci.agent_jobs`
+row, so the dispatch listener rang OpenClaw's doorbell with pg-boss's id
+instead — the harness 404'd fetching its packet and the stale reaper closed the
+job reporting that it had never checked in.
+
 `autoAcknowledge: true` (default) wraps the handler: return → `ack.done()`,
 throw → `ack.fail()`. `autoAcknowledge: false` hands the handler an `ack` and it
 must call `done` / `fail` / `defer` itself; the wrapper tracks whether it did and
 fails the job as a fallback if it threw without acknowledging, because
 EventEmitter2's `suppressErrors: true` would otherwise eat the exception and leak
-the worker slot forever.
+the worker slot.
+
+**Every execution is bounded.** `runJob` races the listener against a deadline —
+the queue's own `expireInSeconds` where it declares one, otherwise
+`queues.jobTimeoutSeconds` (2 h), floored at 60 s — and on expiry rejects with a
+`JobTimeoutError` into the existing `catch`, so the timeout inherits the ordinary
+retry and dead-letter policy and releases all three slots (per-queue semaphore,
+global semaphore, `JobSlotPool`) through the same `.finally()` chain a normal
+failure does. It is logged at `error` level naming the queue, job id and event.
+Nothing bounded this before, and pg-boss's `expireInSeconds` is not a substitute:
+that re-queues the row in Postgres, it cannot release a semaphore inside this
+process. A listener that neither resolved nor rejected therefore held its three
+slots until the process restarted — which presented as a queue that had quietly
+stopped, with nothing in the log to say why.
+
+Deferred jobs are not affected: `ack.defer()` settles the promise promptly with
+outcome `deferred`, so the deadline is already cleared by the time the external
+executor starts working. Liveness from there is pg-boss's `expireInSeconds`,
+which is why `py-fn-hbpe` declares ~8 h.
 
 `ack.defer()` releases the worker slot while the job stays **`active`**.
 Completion arrives out-of-band via `EventService.completeJob` / `failJob`, or the
@@ -278,6 +330,44 @@ only surviving copy of a record the source will not re-send.
 it into one statement, `DELETE FROM pgboss.archive WHERE archived_on < now() - interval '24 hours'`.
 Likewise only the three **retry** values are written onto queue rows; `expireInHours: 12`
 stays a constructor default resolved as `COALESCE(job, queue, constructor)`.
+
+**…and to a job that never ran.** The same archive statement carries a third
+predicate, and it is the one that costs work rather than history:
+
+```sql
+OR (state < 'active' AND keep_until < now())
+```
+
+`state < 'active'` is the state enum's ordering, so it covers **`created` and
+`retry`** — jobs that have never completed. `keep_until` resolves as
+`start_after + COALESCE(job.keep_until, queue.retention_minutes * 60, constructor keep_until default, '14 days')`.
+
+| Stage | Mechanism | Window |
+|---|---|---|
+| `created`/`retry` → `pgboss.archive` | `retentionMinutes` on the queue row | `start_after` + **90 d** |
+| `pgboss.archive` → deleted | `deleteAfterHours: 24` | +24 h |
+
+That path **logs nothing, raises nothing, and never routes to `dead-letter`** —
+the job is simply gone, with no record that it existed. Until
+`retentionMinutes` was stamped onto every work queue all three COALESCE terms
+were NULL and the window was pg-boss's **14-day** fallback, so a queue an
+operator paused for a fortnight — or a bulk-import fan-out that outlived one
+behind a stalled Ollama — silently lost its oldest jobs.
+`WORK_QUEUE_RETENTION_MINUTES` (90 days) is now written onto every queue by
+`createQueue` **and** `updateQueue`; the second call is the one that back-fills
+appliances whose queue rows already exist, because `createQueue` is a no-op on
+an existing queue.
+
+Units matter here and only one survives the trip: pg-boss v10 destructures
+`retentionMinutes` alone, and its `create_queue` reads
+`options->>'retentionMinutes'` — a `retentionDays` is dropped on the floor and
+reads as a fix that did nothing. A queue wanting a different window declares
+`queueOptions.retentionMinutes` (§1.1); the appliance-wide 90 days is a code
+constant rather than a config key, because there is no appliance workload for
+which losing queued work *sooner* is the better outcome.
+
+This is also the horizon on the pause control described at §1.3: `paused` costs
+a backlog rather than work, but only for 90 days.
 
 Charts on the Jobs dashboard therefore read from `ci.job_metrics` (sampled every
 5 minutes, 30-day retention), not from pg-boss.
@@ -335,6 +425,18 @@ and `POST /api/jobs/crons/run` ([`JobsController.ts`](../backend/apps/api/src/do
 are the whole jobs API — there is no GraphQL surface. The frontend is
 `frontend/apps/web/src/pages/JobsPage/`.
 
+Every one of them requires `JwtOrApiKeyAuthGuard`. `POST /api/jobs/crons/run`
+additionally requires `@RequireCapability('full')`, because it fans out over
+**every** registered schedule and that set includes
+`AccountPurgeCron.purgeDueAccounts`, which permanently deletes accounts past
+their grace period — an authority `write` ("mutating, but nothing that deletes")
+does not describe. It previously carried no auth guard at all, gated instead on
+`request.socket.remoteAddress` being loopback; that is the immediate peer rather
+than the client, and both proxies this repo ships (the `make dev` Caddy route,
+and the Vite dev server's `/api` proxy, which binds `0.0.0.0`) dial the API on
+localhost, so any caller on the network satisfied it. An operator inside the
+container now needs a session or a full-capability API key like anyone else.
+
 [`taxonomy.ts`](../backend/apps/api/src/domains/events/taxonomy.ts) is the layer
 that turns queue names into meaning: every event gets a `label`, one of eleven
 `category` values, a plain-language `description`, and an `interactive` flag.
@@ -345,15 +447,132 @@ handful of event names two unrelated listeners share (see §5).
 
 ---
 
+### 1.11 The execution deadline — and why 33 queues had one imposed on them
+
+Two different clocks bound a job, and they are not interchangeable.
+
+| | `expireInSeconds` (pg-boss) | the execution deadline (`runJob`) |
+|---|---|---|
+| Where it runs | Postgres, on the `pgboss.job` row | in this process, `Promise.race` in [`withDeadline`](../backend/apps/api/src/domains/events/services/PGBossEventService.ts) |
+| What it does | flips an `active` job back to `retry` once `started_on + expire_in < now()` | rejects the listener's promise with `JobTimeoutError` |
+| What it frees | the queue row | the global slot, the per-queue slot and the `JobSlotPool` slot |
+| What it cannot do | reach into the worker | **stop the work** |
+
+The second one is the newer of the two and exists because the first was not
+enough: `executeJob` resolves only when the listener acknowledges, so a listener
+that neither resolved nor rejected — a `fetch` with no timeout, an Ollama
+generation that hung — held all three slots for the life of the process, with no
+log. Enough of those on one queue and it silently stops fetching. Expiring the
+row in Postgres does nothing about that; the semaphore is in Node.
+
+**A timed-out listener is abandoned, not killed.** `Promise.race` has no cancel.
+The losing side keeps running — same sockets, same file handles, same open
+transaction, still writing — while its three slots have been handed back and
+pg-boss has re-queued the row for retry. So the deadline firing on *healthy*
+work does not stop that work; it adds a second copy of it alongside. On a queue
+whose `localConcurrency` is a safety property rather than a throughput knob
+(`import-unpack` is 1 so two archives' disk preflights cannot both pass and then
+jointly fill the volume; `import-push` is 1 because two runs resolving the same
+person at once is an untested dedup path), that is precisely the state the
+number exists to prevent. **A too-short deadline is not a milder version of a
+too-long one. It is a different, worse failure.**
+
+#### The default, and what it silently changed
+
+`jobDeadlineMs` takes the queue's own `expireInSeconds` where there is one, and
+otherwise `queues.jobTimeoutSeconds` — **7200 s (2 h)**, `CI_QUEUE_JOB_TIMEOUT_SECONDS`,
+floored at `MIN_JOB_DEADLINE_MS` (60 s) so a misconfigured tiny value cannot
+dead-letter the whole appliance.
+
+The trap is that the fallback did not fill a gap. A queue declaring no
+`expireInSeconds` was never unbounded: pg-boss resolves expiry as
+COALESCE(job, queue row, constructor default) and the constructor says
+`expireInHours: 12`. So for all 33 queues that declared nothing, the effective
+bound went **12 h → 2 h**, with nothing saying so. For most of them the change
+is invisible — their unit of work is two orders of magnitude inside two hours.
+For the import lane it was not: an unpack alone is documented at an hour for a
+350 GB Takeout, before parse, media and push have started. Those five now
+declare 12 h of their own ([`IMPORT_STAGE_EXPIRE_SECONDS`](../backend/apps/api/src/domains/import/constants.ts)),
+which restores exactly the bound they already had and puts the number where a
+diff can see it. [`importStageQueueExpiry.test.ts`](../backend/apps/api/src/domains/import/__tests__/importStageQueueExpiry.test.ts)
+pins it, parsing both `expireInHours` and the fallback out of the files that set
+them so the assertion cannot be reverted along with the fix.
+
+Deadlines are **not** how liveness is detected on the import lane, and never
+were: `ImportStageListener` heartbeats the stage claim every 30 s and
+`ImportRunService.resumeInterrupted` re-enqueues anything silent for
+`STALE_STAGE_MINUTES` (10), on boot and every fifth minute. That reads a signal
+the work itself emits and catches a wedged stage in minutes; the deadline is the
+catastrophe backstop underneath it, sized to be unreachable by healthy work.
+`runStage` also claims through `beginStage`, so a redelivery of a stage a live
+owner still holds logs and returns instead of doing the work twice — which
+bounds the damage of an expiry without making one harmless.
+
+#### The 33 queues that declared nothing, and the verdict on each
+
+| Queue | Unit of one job | 2 h? |
+|---|---|---|
+| `import-unpack` | `unzip` a whole archive after a disk preflight — **an hour for 350 GB** | ❌ **12 h declared** |
+| `import-parse` | walk and parse the extracted tree; long synchronous stretches, 1 slot appliance-wide | ❌ **12 h declared** |
+| `import-media` | every photo/voicemail in the export into the object store — the longest leg of a photo export | ❌ **12 h declared** |
+| `import-push` | every staged row into `ci.*`; bounded by row count, not archive size | ❌ **12 h declared** |
+| `import-stages` | pre-split drain — carries a whole unpack or parse enqueued by an older release | ❌ **12 h declared** |
+| `pipeline-index` / `-enrich` / `-embed` | one slice (`DEFAULT_SLICE_SIZE` 200, **sized at ~60 s**) or one sweep hop (≤5 slices, then re-enqueues itself) | ✅ 120× headroom |
+| `search-index` | one `ci_search` upsert for one entity | ✅ |
+| `default` | one saved-search seed / home confirm / graph upsert / `file.uploaded` drain | ✅ |
+| `feed-queue` | one `action.created` or `summary.created` row | ✅ |
+| `telemetry` | one `tool.invoked` / `retrieval.query` row | ✅ |
+| `people-linking` | participant resolution for one communication | ✅ |
+| `memory-file-entity` | one idempotent graph File-node upsert | ✅ |
+| `context-prompt-persist` | one prompt row | ✅ |
+| `import-inbox-provision` | create one user's inbox drop folders | ✅ |
+| `cv-detections` | — **no producer; the queue is dead** | ✅ vacuously |
+| `geocode` | `geocoding.batchSize` (200) at `rateLimitPerSecond` (10) ≈ 20 s | ✅ |
+| `estimate-location` | `DEFAULT_ESTIMATE_BATCH_LIMIT` (500) in one set-based `UPDATE` | ✅ |
+| `media-dimensions` | deprecated shim — emits one sweep, writes nothing | ✅ |
+| `unfurl-sweep` | starts a sweep (cap 20 000 ids) and returns — enqueues, does not process | ✅ |
+| `file-preview-sweep` | starts a sweep and returns | ✅ |
+| `search-index-backfill` | maps 7 wire types to stage pairs and starts a sweep each | ✅ |
+| `graph-edge-backfill` | maps source names to `promote.edge_*` stages and starts a sweep each | ✅ |
+| `image-description` | one vision generation for one preview, 1 slot | ✅ *and the case the deadline is for* |
+| `thing-vision` | one Ollama vision pass for one upload, 1 slot | ✅ *ditto* |
+| `browser-activity-insight` | one insight pass for one page visit, 1 slot | ✅ *ditto* |
+| `document-parsing` | text extraction for one file, via the parser sidecar | ✅ *ditto* |
+| `planning` | one of five per-user passes, LLM-bound, 1 slot | ✅ |
+| `smart-rotation` | one work type for one user — **all ten inert while `smart.rotation` is false** (the default) | ✅ |
+| `etl` | ONE provider cursor page (`nextCursor` in, `results.nextCursor` out), or one job's transform | ✅ |
+| `derivation-run` | one user's graph aggregate — set-based SQL over `ci.relationships`, 1 slot, worker role | ✅ |
+
+Six queues already declared a budget and were never touched by the fallback:
+`agent-memory` 300 s, `llm` 900 s, `llm-background` 600 s, `py-fn-summary` 1800 s, `ingest-coalesce`
+3600 s, `agent` 7200 s, `py-fn-hbpe` `HBPE_LABEL_BUDGET_SECONDS +
+HBPE_POST_LABEL_SECONDS` (~8 h, pinned by [`hbpeQueueExpiry.test.ts`](../backend/apps/api/src/domains/python-functions/__tests__/hbpeQueueExpiry.test.ts)).
+With the import five, **12 of the 40 now state their own; 28 take the 2 h
+fallback.**
+
+The lever for a queue that outgrows two hours is its own `expireInSeconds`, not
+`CI_QUEUE_JOB_TIMEOUT_SECONDS` — raising the appliance-wide fallback widens the
+wedge window for all 28 to buy headroom for one. Lowering it is only honest
+after reading that queue's p95 out of `ci.job_metrics`, and is likewise a
+per-queue edit. pg-boss asserts `expireIn / 3600 < 24`, so no queue may state a
+day or more.
+
+---
+
 ## 2. Queues
 
-38 pg-boss queues. `default` is created unconditionally even with zero listeners;
+40 pg-boss queues. `default` is created unconditionally even with zero listeners;
 `dead-letter` is created separately, before the loop, and is deliberately absent
 from the discovered set — which is why no worker starts on it and why
 `send(…, { queue: 'dead-letter' })` is refused with a warning.
 
 Everything not stated inherits: `policy standard`, `retryLimit 3`, `retryDelay 10`
-(with backoff), `expireInHours 12`, `localConcurrency 6`, `role web`.
+(with backoff), `expireInHours 12`, `retentionMinutes 129600` (90 d),
+`localConcurrency 6`, `role web`.
+
+The **Expire** column below is now load-bearing twice over: it is both pg-boss's
+row-level expiry and the in-process execution deadline, and a blank one means
+2 h rather than 12 — see §1.11 for the per-queue reasoning behind every blank.
 
 | Queue | Slots | Role | Policy | Expire | Carries |
 |---|---|---|---|---|---|
@@ -363,16 +582,19 @@ Everything not stated inherits: `policy standard`, `retryLimit 3`, `retryDelay 1
 | `pipeline-enrich` | 6 | web | — | — | Slices + sweeps for CPU / object-store / metered-provider stages |
 | `pipeline-embed` | 6 | web | — | — | Slices + sweeps for the Ollama-bound embed family |
 | `planning` | 6 | web | `short` | — | The five `planning.*` jobs |
-| `llm` | **1** | web | `short` | **900 s** | `chat.generate`, `chat.summarization`, `infer.question.answer` |
-| `image-description` | **1** | web | `short` | — | `preview.generated`, `file.image-description-backfill-request` |
-| `thing-vision` | **1** | web | — *(deliberate)* | — | `file.uploaded` → Ollama vision "thing" pass |
+| `llm` | **1** | web | `short` | **900 s** | `chat.generate` only — the interactive slot; priority cannot preempt, so nothing else may run here |
+| `llm-background` | **1** | web | `short` | **600 s** | `chat.summarization`, `infer.question.answer`; `yieldsTo: interactive-chat` |
+| `image-description` | **1** | web | `short` | — | `preview.generated`, `file.image-description-backfill-request`; `yieldsTo: interactive-chat` |
+| `thing-vision` | **1** | web | — *(deliberate)* | — | `file.uploaded` → Ollama vision "thing" pass; `yieldsTo: interactive-chat` |
+| `browser-activity-insight` | **1** | web | — *(deliberate)* | — | `browseractivity.created` → Ollama insight pass; `yieldsTo: interactive-chat` |
 | `agent-memory` | **1** | web | `short` | **300 s** | `agent-memory.turn-fragments` |
+| `agent` | 6 | web | `short` | **7200 s** | `agent.task.dispatch` → OpenClaw. **Deferred completion** — stays `active` until checkpoint/complete |
 | `derivation-run` | **1** | **worker** | `short` | — | `maintenance.derivation-run-request` |
-| `import-unpack` | **1** | **worker** | `short` | — | `import.stage` (unpack) |
-| `import-parse` | **1** | **worker** | `short` | — | `import.stage` (parse) |
-| `import-media` | **2** | **worker** | `short` | — | `import.stage` (media) |
-| `import-push` | **1** | **worker** | `short` | — | `import.stage` (push) |
-| `import-stages` | **1** | **worker** | — *(deliberate)* | — | Legacy drain + deleted-stage fallback |
+| `import-unpack` | **1** | **worker** | `short` | **43 200 s** | `import.stage` (unpack) |
+| `import-parse` | **1** | **worker** | `short` | **43 200 s** | `import.stage` (parse) |
+| `import-media` | **2** | **worker** | `short` | **43 200 s** | `import.stage` (media) |
+| `import-push` | **1** | **worker** | `short` | **43 200 s** | `import.stage` (push) |
+| `import-stages` | **1** | **worker** | — *(deliberate)* | **43 200 s** | Legacy drain + deleted-stage fallback |
 | `py-fn-summary` | 6 | web | `short` | **1800 s** | `python.function.run` → Summary sidecar. **Deferred completion** |
 | `py-fn-hbpe` | 6 | web | `short` | **14400 s** | `python.function.run` → HBPE sidecar. **Deferred completion**, `retryLimit 2`, `retryDelay 300` |
 | `ingest-coalesce` | 6 | web | `short` | **3600 s** | `ingest.coalesce`, `retryDelay 60` |
@@ -518,8 +740,8 @@ or `failStage` + rethrow.
 | Event | Queue | What it does | Triggered by |
 |---|---|---|---|
 | `chat.generate` | `llm` | One chat turn. Flips `generation_status` to running, builds the turn, streams from Ollama, persists. **Survives leaving the page; Stop cancels it.** `INTERACTIVE_JOB_PRIORITY`, `singletonKey chat-generate:<threadId>` | `POST /llm/generate` |
-| `chat.summarization` | `llm` | Sidebar title for an unnamed thread. Try/caught and only logged — never retried | Chained from a successful `chat.generate`, only when the thread has no name |
-| `infer.question.answer` | `llm` | Infer a first-person answer to an unanswered profile question from what the appliance knows, rather than asking. Embedding call + `ci_search` query + generation, 60 s timeout | `AnswerInferenceCron` (flag off) or `SmartRotationListener` (flag on) |
+| `chat.summarization` | `llm-background` | Sidebar title for an unnamed thread. Try/caught and only logged — never retried | Chained from a successful `chat.generate`, only when the thread has no name |
+| `infer.question.answer` | `llm-background` | Infer a first-person answer to an unanswered profile question from what the appliance knows, rather than asking. Embedding call + `ci_search` query + generation, 60 s timeout | `AnswerInferenceCron` (flag off) or `SmartRotationListener` (flag on) |
 | `python.function.run` | `py-fn-summary` | POST to the Summary sidecar (`/functions/run`, 30 s *accept* timeout only), then `ack.defer()`. Completed by the callback webhook | The `PythonFunctionCrons` fan-outs, `SmartRotationListener` |
 | `python.function.run` | `py-fn-hbpe` | Same, aimed at HBPE. 4 h expiry because bootstrap trains models for hours | `hbpeNightly`, `hbpeBootstrapSweep`, `ForecastResolver.triggerHbpe` |
 

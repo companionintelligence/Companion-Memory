@@ -3,11 +3,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import {
-  headersFromOutlookMessage,
-  liveMailDropReason,
-  mailIncludeBulkEnabled,
-} from '@ci/domains/import';
+import { headersFromOutlookMessage, liveMailDropReason, mailIncludeBulkEnabled } from '@ci/domains/import';
 import {
   CommunicationService,
   CommunicationType,
@@ -433,6 +429,8 @@ export class OutlookMailTransformService {
       // collapsing every id-less message onto one shared row.
       // communications_source_identity_uniq still rejects a re-synced message.
       source_type: 'ETL',
+      // Ledger platform: the Outlook connection delivered it.
+      source_platform: canonicalSystem('outlook_mail'),
       ...(() => {
         const identity =
           emailIdentity(message.internetMessageId) ??

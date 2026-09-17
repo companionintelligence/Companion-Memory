@@ -1,5 +1,6 @@
 export { AdminOnlyGuard } from './AdminOnlyGuard';
 export { ApiKeyGuard } from './ApiKeyGuard';
+export { ApplianceAdminGuard } from './ApplianceAdminGuard';
 export { HubForwardAuthGuard } from './HubForwardAuthGuard';
 export { IdFormatGuard } from './IdFormatGuard';
 export { JwtAuthGuard } from './JwtAuthGuard';

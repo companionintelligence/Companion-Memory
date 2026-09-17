@@ -3,6 +3,7 @@ import { Global, Module } from '@nestjs/common';
 import config from '@ci/configuration';
 
 import { CONSUMPTION_STORE, type ConsumptionStore } from './ConsumptionStore';
+import { ConsumptionSweepCron } from './cron/ConsumptionSweepCron';
 import { InMemoryConsumptionStore } from './InMemoryConsumptionStore';
 import { PostgresConsumptionStore } from './PostgresConsumptionStore';
 
@@ -40,6 +41,13 @@ import { PostgresConsumptionStore } from './PostgresConsumptionStore';
       useFactory: (memory: InMemoryConsumptionStore, postgres: PostgresConsumptionStore): ConsumptionStore =>
         config.consumption?.store === 'memory' ? memory : postgres,
     },
+    // Registered as a provider so its @Cron method is discovered by the
+    // scheduler; nothing injects it, so it is deliberately NOT exported.
+    // Always schedules against PostgresConsumptionStore directly (not the
+    // CONSUMPTION_STORE token) — the in-memory backend has nothing to reap,
+    // and this must reclaim the Postgres tables regardless of which backend
+    // is selected for the hot path.
+    ConsumptionSweepCron,
   ],
   exports: [CONSUMPTION_STORE, PostgresConsumptionStore],
 })

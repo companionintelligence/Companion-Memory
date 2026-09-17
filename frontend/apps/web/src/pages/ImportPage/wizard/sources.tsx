@@ -338,30 +338,45 @@ export const ECOSYSTEM_ORDER = [
   'misc',
 ];
 
-/** Picker sections gather one or more ecosystems under a single heading. */
+/**
+ * Picker sections gather one or more ecosystems under a single heading.
+ *
+ * `hue` is the heading's accent (an OKLCH hue, 0–360), fixed per section so a
+ * colour stays with its group whatever the search filter hides. The headings
+ * used to be small muted text and vanished between the brand logos below
+ * them; a distinct hue per section is what lets the eye find the group
+ * boundaries again. Neighbouring sections get well-separated hues.
+ */
 export const PICKER_SECTIONS: ReadonlyArray<{
   key: string;
   label: string;
   icon: string;
+  hue: number;
   ecosystems: readonly string[];
 }> = [
-  { key: 'google', label: 'Google', icon: 'google', ecosystems: ['google'] },
-  { key: 'apple', label: 'Apple', icon: 'apple', ecosystems: ['apple'] },
-  { key: 'microsoft', label: 'Microsoft', icon: 'microsoft', ecosystems: ['microsoft'] },
-  { key: 'amazon', label: 'Amazon', icon: 'amazon', ecosystems: ['amazon'] },
-  { key: 'ai', label: 'AI assistants', icon: 'ai', ecosystems: ['ai'] },
-  { key: 'social', label: 'Social', icon: 'social', ecosystems: ['meta', 'x', 'social'] },
-  { key: 'messaging', label: 'Messaging', icon: 'messaging', ecosystems: ['messaging'] },
-  { key: 'music', label: 'Music', icon: 'music', ecosystems: ['music'] },
-  { key: 'streaming', label: 'Streaming', icon: 'streaming', ecosystems: ['streaming'] },
-  { key: 'gaming', label: 'Gaming', icon: 'gaming', ecosystems: ['gaming'] },
-  { key: 'browser', label: 'Browsers', icon: 'browser', ecosystems: ['browser'] },
-  { key: 'wearable', label: 'Fitness & wearables', icon: 'wearable', ecosystems: ['wearable'] },
-  { key: 'reading', label: 'Reading', icon: 'reading', ecosystems: ['reading'] },
-  { key: 'travel', label: 'Travel', icon: 'travel', ecosystems: ['travel'] },
-  { key: 'finance', label: 'Finance', icon: 'finance', ecosystems: ['finance'] },
-  { key: 'productivity', label: 'Productivity', icon: 'productivity', ecosystems: ['productivity'] },
-  { key: 'misc', label: 'Other', icon: 'misc', ecosystems: ['misc'] },
+  { key: 'google', label: 'Google', icon: 'google', hue: 255, ecosystems: ['google'] },
+  { key: 'apple', label: 'Apple', icon: 'apple', hue: 300, ecosystems: ['apple'] },
+  { key: 'microsoft', label: 'Microsoft', icon: 'microsoft', hue: 200, ecosystems: ['microsoft'] },
+  { key: 'amazon', label: 'Amazon', icon: 'amazon', hue: 55, ecosystems: ['amazon'] },
+  { key: 'ai', label: 'AI assistants', icon: 'ai', hue: 330, ecosystems: ['ai'] },
+  { key: 'social', label: 'Social', icon: 'social', hue: 20, ecosystems: ['meta', 'x', 'social'] },
+  { key: 'messaging', label: 'Messaging', icon: 'messaging', hue: 150, ecosystems: ['messaging'] },
+  { key: 'music', label: 'Music', icon: 'music', hue: 350, ecosystems: ['music'] },
+  { key: 'streaming', label: 'Streaming', icon: 'streaming', hue: 280, ecosystems: ['streaming'] },
+  { key: 'gaming', label: 'Gaming', icon: 'gaming', hue: 120, ecosystems: ['gaming'] },
+  { key: 'browser', label: 'Browsers', icon: 'browser', hue: 230, ecosystems: ['browser'] },
+  { key: 'wearable', label: 'Fitness & wearables', icon: 'wearable', hue: 30, ecosystems: ['wearable'] },
+  { key: 'reading', label: 'Reading', icon: 'reading', hue: 80, ecosystems: ['reading'] },
+  { key: 'travel', label: 'Travel', icon: 'travel', hue: 180, ecosystems: ['travel'] },
+  { key: 'finance', label: 'Finance', icon: 'finance', hue: 140, ecosystems: ['finance'] },
+  {
+    key: 'productivity',
+    label: 'Productivity',
+    icon: 'productivity',
+    hue: 265,
+    ecosystems: ['productivity'],
+  },
+  { key: 'misc', label: 'Other', icon: 'misc', hue: 210, ecosystems: ['misc'] },
 ];
 
 /**
@@ -624,6 +639,8 @@ export interface PickSection {
   key: string;
   label: string;
   icon: ReactElement | null;
+  /** Heading accent, an OKLCH hue — see PICKER_SECTIONS. */
+  hue: number;
   items: PickItem[];
 }
 
@@ -730,6 +747,7 @@ export function pickableSections(catalog: readonly CatalogSource[]): PickSection
         key: section.key,
         label: section.label,
         icon: ECOSYSTEM_ICONS[section.icon] ?? null,
+        hue: section.hue,
         items,
       });
     }
@@ -751,6 +769,8 @@ export function pickableSections(catalog: readonly CatalogSource[]): PickSection
         key: eco,
         label: ECOSYSTEM_LABELS[eco] ?? eco,
         icon: ECOSYSTEM_ICONS[eco] ?? null,
+        // Unclaimed ecosystems share the 'Other' accent.
+        hue: 210,
         items,
       });
     }

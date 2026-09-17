@@ -1,4 +1,4 @@
-import { type ReactNode, lazy, useEffect } from 'react';
+import { type ReactNode, Suspense, lazy, useEffect } from 'react';
 
 import {
   ConnectionModeProvider,
@@ -6,6 +6,7 @@ import {
   LoadingPage,
   OutboxQueueProvider,
   isNativePlatform,
+  isTauriPlatform,
   needsNativeCloudConnect,
   useDeviceLayout,
 } from '@ci/common';
@@ -21,7 +22,6 @@ import {
 } from 'react-router-dom';
 
 import { ApolloProvider } from '@/api/ApolloProvider';
-import { PowerSyncProvider } from '@/api/powersync/PowerSyncProvider';
 import { FeaturesProvider, useFeatures } from '@/common/feature';
 import NotFoundPage from '@/components/NotFound';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
@@ -32,6 +32,7 @@ import {
   AuthProvider,
   CaptureModalProvider,
   ModelProvider,
+  useAuth,
   useLocationTracking,
   useNativeShell,
   usePreventOverscroll,
@@ -39,9 +40,14 @@ import {
 } from '@/hooks';
 import { Centered as CenteredLayout, Main as MainLayout } from '@/layouts';
 import { CHAT_BASE, chatThreadPath } from '@/pages/ChatPage/chatPaths';
+import DesktopSignInPage from '@/pages/DesktopSignInPage';
 import LoginPage from '@/pages/LoginPage';
 import SignupPage from '@/pages/SignupPage';
 import SplashPage from '@/pages/SplashPage';
+
+const LazyPowerSyncProvider = lazy(() =>
+  import('@/api/powersync/PowerSyncProvider').then((m) => ({ default: m.PowerSyncProvider })),
+);
 
 const ChatPage = lazy(() => import('@/pages/ChatPage'));
 const CommunicationPage = lazy(() => import('@/pages/CommunicationPage'));
@@ -49,11 +55,14 @@ const ConceptPage = lazy(() => import('@/pages/ConceptPage'));
 const ConnectionPage = lazy(() => import('@/pages/ConnectionPage'));
 const ContentPage = lazy(() => import('@/pages/ContentPage'));
 const EventPage = lazy(() => import('@/pages/EventPage'));
+const FeedPage = lazy(() => import('@/pages/FeedPage'));
 const AsksPage = lazy(() => import('@/pages/AsksPage'));
 const ForecastPage = lazy(() => import('@/pages/ForecastPage'));
 const ItemPage = lazy(() => import('@/pages/ItemPage'));
 const SourcesPage = lazy(() => import('@/pages/SourcesPage'));
 const JobsPage = lazy(() => import('@/pages/JobsPage'));
+const ApprovalsPage = lazy(() => import('@/pages/ApprovalsPage'));
+const ActivityPage = lazy(() => import('@/pages/ActivityPage'));
 const ThingsPage = lazy(() => import('@/pages/ThingsPage'));
 const ReceiptsPage = lazy(() => import('@/pages/ReceiptsPage'));
 const ReceiptPage = lazy(() => import('@/pages/ReceiptPage'));
@@ -77,7 +86,7 @@ const SharedSearchPage = lazy(() => import('@/pages/SharedSearchPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 const SelfPage = lazy(() => import('@/pages/SelfPage'));
 const TagsPage = lazy(() => import('@/pages/TagsPage'));
-// Pulls SchedulePage and FeedPage in with it — neither is routed on its own.
+// Pulls SchedulePage in with it — SchedulePage is not routed on its own.
 const TodayPage = lazy(() => import('@/pages/TodayPage'));
 const SummaryDetailPage = lazy(() => import('@/pages/SummaryDetailPage'));
 
@@ -131,6 +140,29 @@ function RedirectProfileToSelfSettings() {
   return <Navigate to={rest ? `/self/settings/${rest}` : '/self/settings'} replace />;
 }
 
+/**
+ * PowerSync only matters once someone is signed in.
+ *
+ * It was mounted unconditionally, which put ~200 KB of sync engine in the chunk
+ * every visitor downloads before first paint and opened a WASQLite IndexedDB
+ * database for people sitting on the splash screen who may never sign in. Signed
+ * out, the tree renders without it; signed in, it loads and mounts exactly as
+ * before — every consumer of PowerSyncContext lives behind ProtectedRoute.
+ */
+function PowerSyncBoundary({ children }: { children: ReactNode }) {
+  const [{ authenticated, authToken }] = useAuth();
+
+  if (!authenticated && !authToken) {
+    return children;
+  }
+
+  return (
+    <Suspense fallback={<LoadingPage />}>
+      <LazyPowerSyncProvider>{children}</LazyPowerSyncProvider>
+    </Suspense>
+  );
+}
+
 function Providers({ children }: { children: ReactNode }) {
   return (
     <Router>
@@ -146,7 +178,7 @@ function Providers({ children }: { children: ReactNode }) {
                     <ModelProvider args={[]}>
                       <CaptureModalProvider args={[]}>
                         <ApolloProvider>
-                          <PowerSyncProvider>{children}</PowerSyncProvider>
+                          <PowerSyncBoundary>{children}</PowerSyncBoundary>
                         </ApolloProvider>
                       </CaptureModalProvider>
                     </ModelProvider>
@@ -180,11 +212,15 @@ function AppRoutes() {
   // the user has enabled it in Settings -> Location. Inert when disabled.
   useLocationTracking();
 
-  // Native pairing: `/device-connect` is Portal cloud-connect; `/server` is the
-  // Advanced URL fallback. iOS always uses cloud-connect (a leftover docker/LAN
-  // origin does not skip it). `/connect` is Sources and must not be used here.
+  // Native pairing: `/device-connect` is Portal cloud-connect; `/device-connect/advanced`
+  // (and the leftover `/server` alias) are Hub URL / offline-unlock settings. iOS always
+  // uses cloud-connect (a leftover docker/LAN origin does not skip it). `/connect` is
+  // Sources and must not be used here.
   useEffect(() => {
-    const pairing = location.pathname === '/device-connect' || location.pathname === '/server';
+    const pairing =
+      location.pathname === '/device-connect' ||
+      location.pathname === '/device-connect/advanced' ||
+      location.pathname === '/server';
 
     if (needsNativeCloudConnect() && !pairing) {
       navigate('/device-connect', { replace: true });
@@ -198,9 +234,18 @@ function AppRoutes() {
           path="/"
           element={
             <RedirectKnownUser>
-              {/* Native: Safari / cold start always reopens `/`. The marketing
-                  splash is web-only; the phone's first screen is cloud-connect. */}
-              {isNativePlatform() ? <Navigate to="/device-connect" replace /> : <SplashPage />}
+              {/* The marketing splash is for a browser visitor who has not decided
+                  yet. Someone inside the desktop app or the phone app has already
+                  installed the thing — they get a way in, not a pitch. Native goes
+                  to cloud-connect (it must find an appliance first); desktop is
+                  already looking at its own, so it goes straight to sign-in. */}
+              {isNativePlatform() ? (
+                <Navigate to="/device-connect" replace />
+              ) : isTauriPlatform() ? (
+                <DesktopSignInPage />
+              ) : (
+                <SplashPage />
+              )}
             </RedirectKnownUser>
           }
         />
@@ -223,17 +268,28 @@ function AppRoutes() {
           }
         />
 
+        {/* Full-bleed splash on sign-in; the picker centers itself. Do not wrap
+            this in CenteredLayout — that card column is what hid the Lottie. */}
+        <Route path="/device-connect" element={<DeviceConnectPage />} />
+
         <Route element={<CenteredLayout />}>
-          <Route path="/device-connect" element={<DeviceConnectPage />} />
-          <Route path="/server" element={<ServerSettingsPage />} />
+          <Route path="/device-connect/advanced" element={<ServerSettingsPage />} />
+          <Route path="/server" element={<Navigate to="/device-connect/advanced" replace />} />
 
           <Route
             path="/login"
             element={
-              // Native shells always cloud-connect. Restoring `/login` from an
-              // earlier hop (or an Android deep-link cold start) used to drop
-              // Portal PKCE that only DeviceConnectPage resumes.
-              isNativePlatform() ? (
+              // Native shells cloud-connect only while they still NEED to: an
+              // unpaired shell (no server origin yet, or iOS pointed at a local
+              // appliance) must go through DeviceConnectPage, because restoring
+              // `/login` from an earlier hop (or an Android deep-link cold start)
+              // drops Portal PKCE that only DeviceConnectPage resumes.
+              //
+              // Once a self-hosted Memory Server origin IS configured, that no
+              // longer applies and this redirect was locking the owner out: the
+              // only credential form left is Portal's, so an appliance whose
+              // owner has no Portal account had no way in at all.
+              needsNativeCloudConnect() ? (
                 <Navigate to="/device-connect" replace />
               ) : (
                 <RedirectKnownUser>
@@ -319,19 +375,46 @@ function AppRoutes() {
               so it still reaches the summary detail page. */}
           <Route path="/brief/:id?" element={<RedirectToCalendar />} />
           <Route path="/schedule" element={<RedirectToCalendar />} />
-          <Route path="/today/:id?" element={<RedirectToCalendar />} />
+
+          {/* Today — the brief's own home, and the only surface that can open
+              the actions, insights and summaries the engines compute all day.
+              Gated on `today.page`, which ships false.
+
+              Both branches sit at the same path rather than the usual
+              "registered only when on": /today has redirected into Calendar
+              since the brief cards were folded in there, so leaving the route
+              out with the flag off would 404 an address that used to work.
+              With the flag off the redirect is exactly what it was.
+
+              The off branch waits out `featuresLoading` for the same reason
+              "*" below does: `isFeatureEnabled` reports every flag as off until
+              the fetch settles, so deciding early would bounce a hard load of
+              /today into Calendar and leave no way back to the page that does
+              exist. */}
+          {isFeatureEnabled('today.page') ? (
+            <Route
+              path="/today/:id?"
+              element={
+                <ProtectedRoute>
+                  <FeedPage />
+                </ProtectedRoute>
+              }
+            />
+          ) : (
+            <Route path="/today/:id?" element={featuresLoading ? <LoadingPage /> : <RedirectToCalendar />} />
+          )}
 
           <Route path="/feed/summaries/:id" element={<RedirectFeedSummaryToBrief />} />
           <Route path="/feed/:id?" element={<RedirectToCalendar />} />
 
           {/* Nothing in the shell ever linked here — GlobalSearchBox is
               embedded directly in both the desktop header and MobileTopBar
-              and commits straight to /memory/events?search=, and desktop
+              and commits straight to /memory?search=, and desktop
               search itself is List View in Memory now (the old
               DesktopSearchRedirect this replaced already said so). Kept as a
               redirect, not deleted outright, in case an old bookmark or
               external link still points at /search. */}
-          <Route path="/search" element={<Navigate to="/memory/events" replace />} />
+          <Route path="/search" element={<Navigate to="/memory" replace />} />
 
           {/* `/memory` is the unfiltered explorer (all kinds). `/memory/events`
               is the same page with the Events submenu's type filter. */}
@@ -487,7 +570,7 @@ function AppRoutes() {
             </>
           )}
 
-          <Route path="/memory/knowledge" element={<Navigate to="/memory/events?view=graph" replace />} />
+          <Route path="/memory/knowledge" element={<Navigate to="/memory?view=graph" replace />} />
 
           {/* Chat moved under Memory — it's a bounded view over your own
               history the same way Events/People/Places are, not a peer
@@ -507,6 +590,37 @@ function AppRoutes() {
               <Route path="/chat/:id?" element={<RedirectToChat />} />
             </>
           )}
+
+          {/* Approvals — the owner's answer queue for anything the capability
+              gate stopped. NOT feature-flagged: `tools.pendingActions` gates
+              whether the DIAL queues an owner's own actions, but an installed
+              app is queued unconditionally (see resolveToolGate's `managed-app`
+              rule), so cards can arrive with the flag off. A flag-gated route
+              would hide them, which is the one failure mode worse than not
+              having the page. */}
+          <Route
+            path="/approvals"
+            element={
+              <ProtectedRoute>
+                <ApprovalsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Activity — the tool-call ledger, including the refusals. Sibling of
+              /approvals rather than part of it: the queue is the open questions,
+              this is the record of every answer and every call that needed none.
+              Also unflagged, and for the same reason — a refusal recorded where
+              nobody can read it is what made the ledger write-only for a
+              fortnight. */}
+          <Route
+            path="/activity"
+            element={
+              <ProtectedRoute>
+                <ActivityPage />
+              </ProtectedRoute>
+            }
+          />
 
           {/* Admin / System */}
           {/* One page, five addresses. The section (and, for a category

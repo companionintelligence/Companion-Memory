@@ -140,17 +140,60 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('href', '/plan/calendar');
   });
 
-  it('opens Planning sections on hover when expanded, and closes after leave when not sticky', () => {
+  it('opens Planning sections when the Planning link is clicked', () => {
     renderRail('/feed', { expanded: true });
 
     expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
 
-    const submenu = screen.getByTestId('planning-submenu');
-    fireEvent.mouseEnter(submenu);
+    fireEvent.click(screen.getByRole('link', { name: 'Planning' }));
+    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+  });
+
+  it('opens Planning sections from the collapsed rail without widening it', () => {
+    const { container } = renderRail('/feed', { expanded: false });
+
+    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+    expect(container.querySelector('div.relative')).toHaveClass('w-14');
+
+    fireEvent.click(screen.getByRole('link', { name: 'Planning' }));
+
+    expect(screen.getByRole('link', { name: 'Tasks' })).toHaveAttribute('href', '/plan/tasks');
+    expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('href', '/plan/calendar');
+    expect(screen.queryByText('Tasks')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-slot="popover-content"]')).not.toBeInTheDocument();
+    expect(container.querySelector('div.relative')).toHaveClass('w-14');
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
+  });
+
+  it('opens Memory sections from the collapsed rail', () => {
+    renderRail('/feed', { expanded: false });
+
+    expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Memory' }));
+
+    expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', '/memory/chat');
+  });
+
+  it('closes a route-open submenu when a peer group is opened by click', () => {
+    renderRail('/plan', { expanded: true });
+
     expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
 
-    fireEvent.mouseLeave(submenu);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Jobs sections' }));
     expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'History' })).toBeInTheDocument();
+  });
+
+  it('closes Jobs sections again when its chevron is clicked to collapse', () => {
+    renderRail('/plan', { expanded: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Jobs sections' }));
+    expect(screen.getByRole('link', { name: 'History' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Jobs sections' }));
+    expect(screen.queryByRole('link', { name: 'History' })).not.toBeInTheDocument();
   });
 
   it('keeps Planning sections open after a sticky chevron open even off /plan routes', () => {
@@ -177,21 +220,20 @@ describe('SecondaryNavigation', () => {
   });
 
   // One row that opens for theme and log out — not five flat ones sitting
-  // level with the places you actually work. Settings itself is no longer
-  // one of the things behind that chevron: it's its own bottom-anchored rail
-  // row (SettingsRailButton), reachable without opening Self at all — the
-  // whole point being it used to have no icon in the collapsed rail at all.
+  // level with the places you actually work. Settings lives in that same
+  // submenu as Profile / Stats / Reflections, not as its own rail row.
   it('keeps the account to one user tile that opens for theme and log out', () => {
     renderRail('/feed', { expanded: true });
 
     const account = screen.getByRole('link', { name: 'Test User' });
 
     expect(account).toHaveAttribute('href', '/self');
-    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings/appearance');
+    expect(screen.queryByRole('link', { name: 'Settings' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Log out' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand Self sections' }));
 
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings/appearance');
     expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
   });
 
@@ -206,12 +248,22 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('button', { name: 'Colours' })).toBeInTheDocument();
   });
 
-  // Collapsed, the account is the avatar and one destination — a 56px rail is
-  // no place for a nested accordion.
+  // Collapsed, the account is the avatar — click still opens its sections
+  // as icons in the rail, same as every other group, rather than a dead end
+  // to /self only.
   it('collapses the account to a single link to Self', () => {
     renderRail();
 
     expect(screen.getByRole('link', { name: /Test User/ })).toHaveAttribute('href', '/self');
+    expect(screen.queryByRole('button', { name: 'Log out' })).not.toBeInTheDocument();
+  });
+
+  it('opens Self sections from the collapsed account avatar', () => {
+    renderRail('/feed', { expanded: false });
+
+    fireEvent.click(screen.getByRole('link', { name: /Test User/ }));
+
+    expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
   });
 
   // Support and Docs were two permanent rows for one question.
@@ -228,9 +280,9 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Docs' })).toBeInTheDocument();
   });
 
-  // The drawer floats over the content on hover, so the lane it sits in keeps
-  // the collapsed width and the page beside it never reflows.
-  it('does not reflow the page when hover opens it', () => {
+  // The rail floats over the content when pinned open, so the lane it sits in
+  // keeps the collapsed width and the page beside it never reflows.
+  it('does not reflow the page when the rail opens', () => {
     const { container } = renderRail();
 
     const lane = container.querySelector('div.relative');
@@ -241,8 +293,8 @@ describe('SecondaryNavigation', () => {
   });
 
   // The toggle shares the rail's `auto` grid column, so a wordmark appearing
-  // there on hover widens the column and shoves the page — the exact reflow
-  // the absolute drawer above exists to avoid.
+  // there widens the column and shoves the page — the exact reflow the
+  // absolute drawer above exists to avoid.
   it('keeps the wordmark collapsed until the rail is pinned', () => {
     renderToggleAndRail();
 
@@ -314,20 +366,24 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Profile' })).toHaveAttribute('href', '/self');
     expect(screen.getByRole('link', { name: 'Stats' })).toHaveAttribute('href', '/self/stats');
     expect(screen.getByRole('link', { name: 'Reflections' })).toHaveAttribute('href', '/self/reflections');
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings/appearance');
     expect(screen.getByRole('link', { name: 'Stats' })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('opens Self sections on hover when expanded, and closes after leave when not sticky', () => {
+  it('keeps Self sections open on the settings overlay and marks Settings current', () => {
+    renderRail('/settings/appearance', { expanded: true });
+
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Profile' })).not.toHaveAttribute('aria-current');
+  });
+
+  it('opens Self sections when the account tile is clicked', () => {
     renderRail('/plan', { expanded: true });
 
     expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
 
-    const submenu = screen.getByTestId('self-submenu');
-    fireEvent.mouseEnter(submenu);
+    fireEvent.click(screen.getByRole('link', { name: 'Test User' }));
     expect(screen.getByRole('link', { name: 'Stats' })).toBeInTheDocument();
-
-    fireEvent.mouseLeave(submenu);
-    expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
   });
 
   it('keeps Self sections open after a sticky chevron open even off self routes', () => {
@@ -337,11 +393,10 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Stats' })).toBeInTheDocument();
   });
 
-  it('closes Self sections when the chevron is clicked, even while hovered', () => {
+  it('closes Self sections when the chevron is clicked', () => {
     renderRail('/plan', { expanded: true });
 
-    const submenu = screen.getByTestId('self-submenu');
-    fireEvent.mouseEnter(submenu);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Self sections' }));
     expect(screen.getByRole('link', { name: 'Stats' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Collapse Self sections' }));
@@ -353,28 +408,17 @@ describe('SecondaryNavigation', () => {
 
     expect(screen.getByRole('link', { name: 'Stats' })).toBeInTheDocument();
 
-    const submenu = screen.getByTestId('self-submenu');
     fireEvent.click(screen.getByRole('button', { name: 'Collapse Self sections' }));
-    expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
-
-    fireEvent.mouseLeave(submenu);
-    expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
-
-    fireEvent.mouseEnter(submenu);
     expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
   });
 
-  it('opens Memory sections on hover when expanded, and closes after leave when not sticky', () => {
+  it('opens Memory sections when the Memory link is clicked', () => {
     renderRail('/plan', { expanded: true });
 
     expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
 
-    const submenu = screen.getByTestId('memory-submenu');
-    fireEvent.mouseEnter(submenu);
+    fireEvent.click(screen.getByRole('link', { name: 'Memory' }));
     expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
-
-    fireEvent.mouseLeave(submenu);
-    expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
   });
 
   it('keeps Memory sections open after a sticky chevron open even off hub routes', () => {
@@ -384,11 +428,10 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
   });
 
-  it('closes Memory sections when the chevron is clicked, even while hovered', () => {
+  it('closes Memory sections when the chevron is clicked', () => {
     renderRail('/plan', { expanded: true });
 
-    const submenu = screen.getByTestId('memory-submenu');
-    fireEvent.mouseEnter(submenu);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Memory sections' }));
     expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Collapse Memory sections' }));
@@ -480,7 +523,7 @@ describe('SecondaryNavigation', () => {
     expect(screen.queryByRole('button', { name: 'Capture' })).not.toBeInTheDocument();
   });
 
-  it('lists the spine with Forecast, Self, and Settings at the foot', () => {
+  it('lists the spine with Forecast and Self at the foot', () => {
     renderRail();
 
     const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
@@ -492,8 +535,9 @@ describe('SecondaryNavigation', () => {
     // Forecast sits below Jobs, off the primary six, while its flag ships false.
     expect(hrefs.indexOf('/jobs')).toBeLessThan(hrefs.indexOf('/forecast'));
     expect(hrefs.indexOf('/forecast')).toBeLessThan(hrefs.indexOf('/self'));
-    // Settings is the last row of all — below Self, not nested inside it.
-    expect(hrefs.indexOf('/self')).toBeLessThan(hrefs.indexOf('/settings/appearance'));
+    // Settings lives inside Self, not as its own last row.
+    expect(hrefs).not.toContain('/settings/appearance');
+    expect(hrefs).not.toContain('/self/settings');
   });
 });
 
@@ -505,7 +549,7 @@ describe('PowerRailToggle', () => {
 
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(toggle).toHaveAttribute('aria-controls', 'power-rail');
-    expect(screen.queryByRole('link', { name: /Companion Intelligence/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Companion Memory/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Memory')).not.toBeInTheDocument();
 
     fireEvent.click(toggle);
@@ -523,10 +567,10 @@ describe('PowerRailToggle', () => {
     expect(localStorage.getItem(STORAGE_KEY)).toBe('false');
   });
 
-  // H4: hovering the rail open is a passing intention, not a decision — it
-  // must not tell assistive tech the menu was deliberately expanded. Only a
-  // pin (persisted, survives the pointer leaving) should.
-  it('reports aria-expanded from pinned, not from a hover-only expansion', () => {
+  // The rail widens only on a deliberate click of the pin toggle — brushing
+  // past it with the pointer must never expand it, and aria-expanded must
+  // only ever track that pin.
+  it('does not expand the rail on hover — only a click of the pin toggle does', () => {
     const { container } = renderToggleAndRail();
 
     const toggle = container.querySelector('button[aria-controls="power-rail"]');
@@ -536,16 +580,16 @@ describe('PowerRailToggle', () => {
 
     fireEvent.mouseEnter(lane as Element);
 
-    // Hover really did open the rail...
-    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'expanded');
-    // ...but the toggle must not claim it as "expanded".
+    // Hover does nothing to the rail any more...
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
     fireEvent.mouseLeave(lane as Element);
 
-    // A deliberate pin is what flips it.
+    // ...only a deliberate pin does.
     fireEvent.click(toggle as Element);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'expanded');
   });
 });
 

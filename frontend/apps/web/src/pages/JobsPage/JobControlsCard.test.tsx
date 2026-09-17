@@ -56,6 +56,8 @@ function cron(overrides: Partial<JobCronControl> = {}): JobCronControl {
     name: 'PlanningJobsCron.todoScan',
     cron: '0 */30 * * * *',
     mode: 'enabled',
+    role: 'web',
+    servedHere: true,
     locked: false,
     lockedReason: null,
     skippedCount: 0,
@@ -67,8 +69,10 @@ function cron(overrides: Partial<JobCronControl> = {}): JobCronControl {
 function controls(overrides: Partial<JobControlsResponse> = {}): JobControlsResponse {
   return {
     global: {
-      concurrency: { value: null, default: 10, max: 64, effective: 10 },
-      perQueueConcurrency: { value: null, default: 6, max: 64, effective: 6 },
+      // `max` mirrors `default` on the two global numbers: these controls only
+      // go down, so the shipped figure is also the ceiling.
+      concurrency: { value: null, default: 10, max: 10, effective: 10 },
+      perQueueConcurrency: { value: null, default: 6, max: 6, effective: 6 },
       nonInteractive: 'enabled',
     },
     topology: { role: 'all', queueWorkerProcesses: 1, perProcessConcurrency: 10 },
@@ -79,14 +83,18 @@ function controls(overrides: Partial<JobControlsResponse> = {}): JobControlsResp
   };
 }
 
-function renderCard(response: JobControlsResponse | null, onSave = vi.fn(async () => true)) {
+function renderCard(
+  response: JobControlsResponse | null,
+  onSave = vi.fn(async () => true),
+  failure: { error?: string | null; errorStatus?: number | null } = {},
+) {
   renderWithProviders(
     <JobControlsCard
       controls={response}
       loading={false}
       saving={false}
-      error={null}
-      jobTypes={null}
+      error={failure.error ?? null}
+      errorStatus={failure.errorStatus ?? null}
       onSave={onSave}
     />,
   );
@@ -152,6 +160,36 @@ describe('JobControlsCard global controls', () => {
     fireEvent.blur(input);
 
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ global: { concurrency: 4 } }));
+  });
+
+  it('resyncs the field to the stored value when the appliance rejects the save', async () => {
+    // The only re-sync path is a `useEffect` keyed on `control.value`, which by
+    // definition does not change when the save is refused or the request
+    // fails — so a discarded `false` used to leave the rejected number sitting
+    // in the box looking exactly like it had been stored.
+    const onSave = vi.fn(async () => false);
+
+    const { onSave: usedOnSave } = renderCard(
+      controls({
+        global: {
+          concurrency: { value: 4, default: 10, max: 64, effective: 4 },
+          perQueueConcurrency: { value: null, default: 6, max: 64, effective: 6 },
+          nonInteractive: 'enabled',
+        },
+      }),
+      onSave,
+    );
+
+    const input = screen.getByLabelText('Jobs at once, whole appliance');
+
+    fireEvent.change(input, { target: { value: '100' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(usedOnSave).toHaveBeenCalledWith({ global: { concurrency: 100 } }));
+
+    // The appliance never accepted 100 — it is still at 4, and the field has
+    // to say so rather than keep showing the rejected input.
+    await waitFor(() => expect(input).toHaveValue(4));
   });
 
   it('treats an emptied box as a reset to the shipped default', async () => {
@@ -286,53 +324,96 @@ describe('JobControlsCard queues', () => {
   });
 });
 
-describe('JobControlsCard schedules', () => {
-  it('switches a schedule off by name', async () => {
-    const { onSave } = renderCard(controls());
+describe('JobControlsCard concurrency ceilings', () => {
+  it('offers the shipped figure as the highest value either box will take', () => {
+    renderCard(controls());
 
-    openSection(/Schedules/);
-    // The switch is identified by the schedule's human label, which
-    // `describeCron` derives from the registry key `PlanningJobsCron.todoScan`.
-    fireEvent.click(screen.getByRole('switch', { name: /Todo scan/i }));
-
-    await waitFor(() =>
-      expect(onSave).toHaveBeenCalledWith({
-        crons: [{ name: 'PlanningJobsCron.todoScan', mode: 'disabled' }],
-      }),
-    );
+    // Both boxes used to carry max=64 against a shipped 10 and 6, so the page
+    // invited an operator to take the appliance six times past what the build
+    // allows — from the page they opened because it was already too hot.
+    expect(screen.getByLabelText(/Jobs at once, whole appliance/i)).toHaveAttribute('max', '10');
+    expect(screen.getByLabelText(/Jobs at once, per queue/i)).toHaveAttribute('max', '6');
   });
 
-  it('says a disabled schedule does not run, and how many ticks it has skipped', () => {
-    renderCard(controls({ crons: [cron({ mode: 'disabled', skippedCount: 42 })] }));
-    openSection(/Schedules/);
+  it('says in words that the numbers only go down', () => {
+    renderCard(controls());
 
-    expect(screen.getByText(/this schedule does not run/i)).toBeInTheDocument();
-    expect(screen.getByText(/42 ticks skipped/)).toBeInTheDocument();
+    expect(screen.getByText(/only go/i)).toBeInTheDocument();
+    expect(screen.getByText(/10 appliance-wide and 6 per queue/)).toBeInTheDocument();
   });
 
-  it('will not let a protected schedule be switched off', () => {
+  it('reports a stored value the appliance is not honouring', () => {
+    // A row can hold a number above the ceiling — written by an older build, or
+    // by hand — so the card has to show the disagreement rather than the request.
     renderCard(
       controls({
-        crons: [
-          cron({
-            name: 'JobMetricsCollector.sampleOnSchedule',
-            locked: true,
-            lockedReason: 'Samples the queue depths this page charts.',
-          }),
-        ],
+        global: {
+          concurrency: { value: 64, default: 10, max: 10, effective: 10 },
+          perQueueConcurrency: { value: null, default: 6, max: 6, effective: 6 },
+          nonInteractive: 'enabled',
+        },
       }),
     );
-    openSection(/Schedules/);
 
-    expect(screen.getByRole('switch', { name: /Job metrics sample/i })).toBeDisabled();
+    expect(screen.getByText(/Running at 10 — a lower ceiling applies/)).toBeInTheDocument();
   });
 });
 
 describe('JobControlsCard degradation', () => {
-  it('says the controls are unavailable rather than rendering an empty form', () => {
+  it('explains itself rather than rendering an empty form', () => {
     renderCard(null);
 
-    expect(screen.getByText(/Job controls are unavailable/)).toBeInTheDocument();
+    expect(screen.getByText(/could not be loaded/i)).toBeInTheDocument();
     expect(screen.getByText(/shipped defaults/)).toBeInTheDocument();
+  });
+
+  // The card used to print ONE fixed sentence blaming an unmigrated settings
+  // table, whatever had actually gone wrong — so an appliance running a build
+  // from before job controls shipped was told to go and check its migrations.
+  // A 404 and a 500 need opposite actions.
+  it('blames the build, not the migrations, when the endpoint is not there', () => {
+    renderCard(
+      null,
+      vi.fn(async () => true),
+      {
+        error: 'Cannot GET /jobs/controls',
+        errorStatus: 404,
+      },
+    );
+
+    expect(screen.getByText(/before job controls shipped/i)).toBeInTheDocument();
+    expect(screen.getByText(/Update the server and restart it/i)).toBeInTheDocument();
+    expect(screen.queryByText(/may not have been migrated/i)).not.toBeInTheDocument();
+  });
+
+  it('blames the migration only when the endpoint answered and failed', () => {
+    renderCard(
+      null,
+      vi.fn(async () => true),
+      {
+        error: 'relation "ci.job_settings" does not exist',
+        errorStatus: 500,
+      },
+    );
+
+    expect(screen.getByText(/may not have been migrated/i)).toBeInTheDocument();
+    expect(screen.queryByText(/before job controls shipped/i)).not.toBeInTheDocument();
+  });
+
+  // A raw server string in a red alert reads as "you broke something". The
+  // section being empty is a STATE; the alert is reserved for a save that
+  // failed, which is the only thing here the operator actually did.
+  it('keeps the server text as a detail rather than a red alert when nothing loaded', () => {
+    renderCard(
+      null,
+      vi.fn(async () => true),
+      {
+        error: 'Cannot GET /jobs/controls',
+        errorStatus: 404,
+      },
+    );
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText(/404 · Cannot GET \/jobs\/controls/)).toBeInTheDocument();
   });
 });

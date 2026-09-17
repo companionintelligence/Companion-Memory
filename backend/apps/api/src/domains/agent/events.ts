@@ -78,14 +78,67 @@ export type AgentTurnFragmentsPayload = {
   until: string;
 };
 
+export const AgentTaskDispatchEvent = 'agent.task.dispatch';
+export const AgentTaskCheckpointEvent = 'agent.task.checkpoint';
+export const AgentTaskCompletedEvent = 'agent.task.completed';
+export const AgentTaskBlockedEvent = 'agent.task.blocked';
+export const PlanningTaskResultEvent = 'planning.task_result';
+
+export type AgentTaskDispatchPayload = {
+  userId: string;
+  jobId: string;
+  threadId: string;
+  taskId?: string | null;
+};
+
+export type AgentTaskCheckpointPayload = {
+  userId: string;
+  jobId: string;
+  threadId: string;
+  status: string;
+};
+
+export type AgentTaskCompletedPayload = {
+  userId: string;
+  jobId: string;
+  threadId: string;
+  taskId?: string | null;
+};
+
+export type AgentTaskBlockedPayload = {
+  userId: string;
+  jobId: string;
+  threadId: string;
+  taskId?: string | null;
+  reason: string;
+};
+
+export type PlanningTaskResultPayload = {
+  userId: string;
+  jobId: string;
+  taskId?: string | null;
+  status: 'blocked' | 'completed' | 'failed';
+  reason?: string;
+};
+
 defineEvent<AgentMemoryCreatedPayload>(AgentMemoryCreatedEvent);
 defineEvent<AgentMemoryRemovedPayload>(AgentMemoryRemovedEvent);
 defineEvent<AgentTurnFragmentsPayload>(AgentTurnFragmentsEvent);
+defineEvent<AgentTaskDispatchPayload>(AgentTaskDispatchEvent);
+defineEvent<AgentTaskCheckpointPayload>(AgentTaskCheckpointEvent);
+defineEvent<AgentTaskCompletedPayload>(AgentTaskCompletedEvent);
+defineEvent<AgentTaskBlockedPayload>(AgentTaskBlockedEvent);
+defineEvent<PlanningTaskResultPayload>(PlanningTaskResultEvent);
 
 declare module '@ci/domains/events/registry' {
   interface EventRegistry {
     [AgentMemoryCreatedEvent]: AgentMemoryCreatedPayload;
     [AgentMemoryRemovedEvent]: AgentMemoryRemovedPayload;
     [AgentTurnFragmentsEvent]: AgentTurnFragmentsPayload;
+    [AgentTaskDispatchEvent]: AgentTaskDispatchPayload;
+    [AgentTaskCheckpointEvent]: AgentTaskCheckpointPayload;
+    [AgentTaskCompletedEvent]: AgentTaskCompletedPayload;
+    [AgentTaskBlockedEvent]: AgentTaskBlockedPayload;
+    [PlanningTaskResultEvent]: PlanningTaskResultPayload;
   }
 }

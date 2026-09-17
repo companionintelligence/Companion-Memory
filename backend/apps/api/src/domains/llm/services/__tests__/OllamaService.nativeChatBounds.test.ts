@@ -28,7 +28,8 @@
 import { ModelTierRouter } from '@ci/domains/model-routing';
 import { ToolRegistry } from '@ci/domains/tools';
 
-import { OllamaService, type ChatRequestContext } from '../OllamaService';
+import { toolResultByteBudget } from '../../toolResultBudget';
+import { OllamaService, UTILITY_MODEL, type ChatRequestContext } from '../OllamaService';
 
 const MODEL = 'test-model';
 
@@ -136,19 +137,25 @@ describe('native chat is cancellable', () => {
     }
 
     expect(seen).toHaveLength(1);
-    expect(seen[0].init.signal).toBe(controller.signal);
+    // The socket's signal is the deadline wrapper's own (firstResponseDeadline.ts),
+    // and the caller's abort is forwarded to it — that forwarding is the
+    // mechanism, so it is what gets driven.
+    expect(seen[0].init.signal.aborted).toBe(false);
+    controller.abort();
+    expect(seen[0].init.signal.aborted).toBe(true);
     // The wrapper must forward what it was given, not replace it.
     expect(seen[0].init.method).toBe('POST');
   });
 
-  it('leaves fetch alone when the caller passes no signal', async () => {
+  it('still injects a fetch when the caller passes no signal — the first-response deadline needs it', async () => {
     const service = makeService();
 
     await service.chat(context, messages, { model: MODEL });
 
-    // No signal means nothing to forward; overriding fetch anyway would be a
-    // behavior change for every caller that never asked for cancellation.
-    expect(chatClientConfig().fetch).toBeUndefined();
+    // Every generation is bounded now, signal or not: the wait for a backend
+    // that never answers used to end only at undici's five-minute headers
+    // timeout, as a bare `fetch failed`.
+    expect(typeof chatClientConfig().fetch).toBe('function');
   });
 
   it('does not start a generation when the signal already aborted', async () => {
@@ -208,5 +215,335 @@ describe('native chat generation bounds', () => {
     await service.chat(context, messages, { model: MODEL, maxOutputTokens: 0 });
 
     expect(chatMock.mock.calls[0]![0]).not.toHaveProperty('options');
+  });
+
+  // The non-streaming path never sent `num_ctx` — only chatStream did — so
+  // every background call ran at Ollama's VRAM-based default (32768 on a
+  // 24 GiB card), the window that made a second model's load an eviction.
+  it('sends numCtx as options.num_ctx alongside num_predict', async () => {
+    const service = makeService();
+
+    await service.chat(context, messages, { model: MODEL, numCtx: 8_192, maxOutputTokens: 400 });
+
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({ options: { num_ctx: 8_192, num_predict: 400 } });
+  });
+
+  it('sends num_ctx on the follow-up turn after tool calls too', async () => {
+    const service = makeService();
+
+    chatMock
+      .mockResolvedValueOnce({
+        model: MODEL,
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ function: { name: 'nope', arguments: {} } }],
+        },
+      })
+      .mockResolvedValueOnce({ model: MODEL, message: { role: 'assistant', content: 'done' } });
+
+    await service.chat(context, messages, { model: MODEL, numCtx: 4_096, enableTools: true });
+
+    expect(chatMock).toHaveBeenCalledTimes(2);
+    expect(chatMock.mock.calls[1]![0]).toMatchObject({ options: { num_ctx: 4_096 } });
+  });
+});
+
+/**
+ * `tier: 'utility'` is resolved per call by the residency planner into a model
+ * AND a window. Without a planner (this direct construction) it must fall back
+ * to the configured utility model, unplanned — the pre-planner behaviour every
+ * `new OllamaService(...)` test in this directory already assumes.
+ */
+describe('utility tier resolution', () => {
+  function makeServiceWithPlanner(choice: {
+    model: string;
+    numCtx?: number;
+    kind?: 'resident' | 'load' | 'routed';
+  }) {
+    const llmEndpointService = {
+      getOpenAiDriver: () => null,
+      getOllamaHost: () => 'http://localhost:11434',
+    } as any;
+    const planner = { resolveUtilityModel: jest.fn(async () => choice), noteUtilityOutcome: jest.fn() };
+    const service = new OllamaService(
+      llmEndpointService,
+      new ToolRegistry(
+        makeLogger(),
+        { send: jest.fn().mockResolvedValue([]) } as any,
+        { evaluate: jest.fn(), propose: jest.fn() } as any,
+      ),
+      makeLogger(),
+      { isFeatureEnabled: jest.fn(async () => false) } as any,
+      new ModelTierRouter(),
+      undefined,
+      planner as any,
+    );
+
+    return { service, planner };
+  }
+
+  it('runs on the model and window the planner chose', async () => {
+    const { service, planner } = makeServiceWithPlanner({ model: 'routed-chat-model', numCtx: 32_768 });
+
+    listMock.mockResolvedValue({ models: [{ name: 'routed-chat-model' }] });
+
+    await service.chat(context, messages, { tier: 'utility', maxOutputTokens: 100 });
+
+    expect(planner.resolveUtilityModel).toHaveBeenCalledTimes(1);
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({
+      model: 'routed-chat-model',
+      options: { num_ctx: 32_768, num_predict: 100 },
+    });
+  });
+
+  it('tells the planner how the load-carrying call went, so its watchdog can act', async () => {
+    const { service, planner } = makeServiceWithPlanner({ model: MODEL, numCtx: 8_192, kind: 'load' });
+    const noteUtilityOutcome = jest.fn();
+
+    (planner as any).noteUtilityOutcome = noteUtilityOutcome;
+
+    await service.chat(context, messages, { tier: 'utility' });
+
+    expect(noteUtilityOutcome).toHaveBeenCalledWith(
+      { model: MODEL, numCtx: 8_192, kind: 'load' },
+      { ok: true },
+    );
+
+    const failure = new Error('boom');
+
+    chatMock.mockRejectedValueOnce(failure);
+    await expect(service.chat(context, messages, { tier: 'utility' })).rejects.toBe(failure);
+    expect(noteUtilityOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'load' }), {
+      ok: false,
+      error: failure,
+    });
+  });
+
+  it("lets a caller's explicit numCtx win over the planner's", async () => {
+    const { service } = makeServiceWithPlanner({ model: MODEL, numCtx: 32_768 });
+
+    await service.chat(context, messages, { tier: 'utility', numCtx: 2_048 });
+
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({ model: MODEL, options: { num_ctx: 2_048 } });
+  });
+
+  it('falls back to the configured utility model, with no window, when there is no planner', async () => {
+    const service = makeService();
+
+    listMock.mockResolvedValue({ models: [{ name: UTILITY_MODEL }] });
+
+    await service.chat(context, messages, { tier: 'utility' });
+
+    const request = chatMock.mock.calls[0]![0];
+
+    expect(request.model).toBe(UTILITY_MODEL);
+    expect(request).not.toHaveProperty('options');
+  });
+
+  // `think` is never left to the server. Ollama's default for a
+  // thinking-capable model is ON, so an omitted flag silently bought every
+  // background job a chain of thought nobody read — most of a 7s image
+  // description on Gemma was the model thinking about the squirrel.
+  it('sends think:false explicitly when the caller did not enable thinking', async () => {
+    const service = makeService();
+
+    await service.chat(context, messages, { model: MODEL });
+
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({ think: false });
+  });
+
+  it('sends think:true when the caller enabled thinking', async () => {
+    const service = makeService();
+
+    await service.chat(context, messages, { model: MODEL, enableThinking: true });
+
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({ think: true });
+  });
+});
+
+/**
+ * Same bounds, on the OpenAI-compat transport. This path used to drop
+ * `signal`/`maxOutputTokens`/`keepAlive` entirely: `openAiDriver.chat(...)`
+ * was called with only `model`/`messages`/`tools`/`format`/`enableThinking`,
+ * so every appliance whose LLM endpoint is `openai_compatible` got none of
+ * the cancellation or output-cap work above — only the native driver did.
+ */
+describe('openai-compat chat generation bounds', () => {
+  function makeOpenAiService(openAiChat: jest.Mock) {
+    // getOpenAiDriver returning a driver is what selects the OpenAI-compat path.
+    const llmEndpointService = {
+      getOpenAiDriver: () => ({
+        chat: openAiChat,
+        listModels: jest.fn().mockResolvedValue([MODEL]),
+      }),
+      getOllamaHost: () => 'http://localhost:11434',
+    } as any;
+
+    return new OllamaService(
+      llmEndpointService,
+      new ToolRegistry(
+        makeLogger(),
+        { send: jest.fn().mockResolvedValue([]) } as any,
+        { evaluate: jest.fn(), propose: jest.fn() } as any,
+      ),
+      makeLogger(),
+      { isFeatureEnabled: jest.fn(async () => false) } as any,
+      new ModelTierRouter(),
+    );
+  }
+
+  it('threads signal and maxOutputTokens through to the OpenAI-compat driver', async () => {
+    const controller = new AbortController();
+    const openAiChat = jest
+      .fn()
+      .mockResolvedValue({ model: MODEL, message: { role: 'assistant', content: '{}' } });
+    const service = makeOpenAiService(openAiChat);
+
+    await service.chat(context, messages, {
+      model: MODEL,
+      signal: controller.signal,
+      maxOutputTokens: 800,
+      keepAlive: '1h',
+    });
+
+    expect(openAiChat).toHaveBeenCalledTimes(1);
+    expect(openAiChat.mock.calls[0]![0]).toMatchObject({ signal: controller.signal, maxTokens: 800 });
+  });
+
+  it('threads signal and maxOutputTokens through the tool-call follow-up turn too', async () => {
+    const controller = new AbortController();
+    const openAiChat = jest
+      .fn()
+      .mockResolvedValueOnce({
+        model: MODEL,
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ function: { name: 'knowledge_search', arguments: {} } }],
+        },
+      })
+      .mockResolvedValueOnce({ model: MODEL, message: { role: 'assistant', content: 'done' } });
+    const service = makeOpenAiService(openAiChat);
+
+    await service.chat(context, messages, {
+      model: MODEL,
+      enableTools: true,
+      signal: controller.signal,
+      maxOutputTokens: 800,
+    });
+
+    expect(openAiChat).toHaveBeenCalledTimes(2);
+    expect(openAiChat.mock.calls[1]![0]).toMatchObject({ signal: controller.signal, maxTokens: 800 });
+  });
+});
+
+/**
+ * `toolResultByteBudget(numCtx)` is documented as one ROUND's share of the
+ * context window, computed once per round. `handleToolCalls` used to apply
+ * that same number independently to each tool result in the round instead of
+ * splitting it across them, so a round with N tool calls spent N times the
+ * intended budget — 5 tool calls could put ~5x the window's tool-result share
+ * into the follow-up prompt.
+ */
+describe('multi-tool-call round budget', () => {
+  const READ = { access: 'read', sensitivity: 'personal', destructive: false, external: false };
+  const TOOL_COUNT = 5;
+
+  function fakeTool(name: string, data: unknown) {
+    return {
+      schema: {
+        name,
+        domain: 'knowledge',
+        title: name,
+        description: name,
+        parameters: { type: 'object' },
+        privacy: READ,
+        localCapable: false,
+      },
+      execute: jest.fn(async () => ({ success: true, data, executionTimeMs: 1 })),
+    } as any;
+  }
+
+  function fakeProvider(tools: any[]) {
+    const map = new Map(tools.map((tool) => [tool.schema.name, tool]));
+
+    return {
+      name: 'fake',
+      initialize: jest.fn(async () => {}),
+      shutdown: jest.fn(async () => {}),
+      getAvailableTools: jest.fn(async () => [...map.values()].map((t) => t.schema)),
+      getTool: (n: string) => map.get(n),
+      canHandle: (n: string) => map.has(n),
+      getHealthStatus: jest.fn(async () => ({
+        name: 'fake',
+        status: 'healthy',
+        toolCount: map.size,
+        lastCheck: new Date(),
+      })),
+    } as any;
+  }
+
+  it("splits the round's tool-result byte budget across all of that round's tool calls", async () => {
+    // Each tool returns a result well over the FULL per-round budget on its
+    // own, so the old per-call application would let every one of the 5 keep
+    // (roughly) the whole 2048-byte budget for itself.
+    const bigArray = Array.from({ length: 50 }, (_, i) => ({ id: `${i}`, text: 'y'.repeat(200) }));
+    const tools = Array.from({ length: TOOL_COUNT }, (_, i) => fakeTool(`tool_${i}`, bigArray));
+    const registry = new ToolRegistry(
+      makeLogger(),
+      { send: jest.fn().mockResolvedValue([]) } as any,
+      {
+        evaluate: jest
+          .fn()
+          .mockResolvedValue({ decision: 'execute', reason: 'allowed', explanation: 'open' }),
+        propose: jest.fn(),
+      } as any,
+    );
+    await registry.registerProvider(fakeProvider(tools));
+
+    const toolCalls = tools.map((tool) => ({ function: { name: tool.schema.name, arguments: {} } }));
+    let round = 0;
+    const chatStream = jest.fn(() => {
+      round += 1;
+
+      const chunk =
+        round === 1
+          ? { model: MODEL, message: { role: 'assistant', content: '', tool_calls: toolCalls } }
+          : { model: MODEL, message: { role: 'assistant', content: 'done' } };
+
+      return (async function* () {
+        yield chunk;
+      })();
+    });
+
+    const llmEndpointService = {
+      getOpenAiDriver: () => ({ chatStream, listModels: jest.fn(async () => [MODEL]) }),
+    } as any;
+    const service = new OllamaService(
+      llmEndpointService,
+      registry,
+      makeLogger(),
+      { isFeatureEnabled: jest.fn(async () => false) } as any,
+      new ModelTierRouter(),
+    );
+
+    const stream = await service.chatStream(context, messages, { model: MODEL, enableTools: true });
+
+    let iteration = await stream.next();
+
+    while (!iteration.done) {
+      iteration = await stream.next();
+    }
+
+    const toolMessages = stream.messages.filter((m) => m.role === 'tool');
+
+    expect(toolMessages).toHaveLength(TOOL_COUNT);
+
+    const totalBytes = toolMessages.reduce((sum, m) => sum + Buffer.byteLength(m.content ?? '', 'utf8'), 0);
+
+    // The bug this guards: with the budget applied per call instead of per
+    // round, this would be roughly TOOL_COUNT times the round budget.
+    expect(totalBytes).toBeLessThanOrEqual(toolResultByteBudget(undefined));
   });
 });

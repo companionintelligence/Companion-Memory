@@ -224,6 +224,21 @@ describe('zipFilesStore', () => {
       [3, 3],
     ]);
   });
+
+  it('packs a folder with more entries than the engine argument limit without blowing the stack', async () => {
+    // Regression: `parts.push(...centrals)` spread one argument per central
+    // directory record into a single call, which throws "Maximum call stack
+    // size exceeded" well before this count in V8 (~110k args). The fix pushes
+    // one at a time instead.
+    const FILE_COUNT = 130_000;
+    const files: File[] = [];
+
+    for (let i = 0; i < FILE_COUNT; i += 1) {
+      files.push(fileAt(`huge-export/file-${i}.txt`, ''));
+    }
+
+    await expect(zipFilesStore(files)).resolves.toBeInstanceOf(File);
+  }, 180_000);
 });
 
 /**
@@ -287,7 +302,15 @@ function readZip64CentralEntries(bytes: Uint8Array, dirOffset: number, dirSize: 
       extraAt += 4 + dataSize;
     }
 
-    entries.push({ name, crc32: view.getUint32(at + 16, true), rawSize, rawOffset, size, offset, versionNeeded });
+    entries.push({
+      name,
+      crc32: view.getUint32(at + 16, true),
+      rawSize,
+      rawOffset,
+      size,
+      offset,
+      versionNeeded,
+    });
     at += 46 + nameLength + extraLength;
   }
 

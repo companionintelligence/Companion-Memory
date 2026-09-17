@@ -40,7 +40,7 @@ export const GET_NOTES = gql(`
 `);
 
 export function NotesPage() {
-  usePageTitle('Notes - Companion Intelligence');
+  usePageTitle('Notes - Companion Memory');
 
   const { isMobile } = useDeviceLayout();
 

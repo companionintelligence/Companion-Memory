@@ -13,7 +13,18 @@ const PLANNING_QUEUE = 'planning';
 
 describe('planning queue policy', () => {
   it('declares "short" policy on the planning queue so PlanningJobsCron\'s per-user keys are enforced', () => {
-    expect(EventListenerRegistry.getQueueOptions(PLANNING_QUEUE)).toEqual({ policy: 'short' });
+    expect(EventListenerRegistry.getQueueOptions(PLANNING_QUEUE)).toMatchObject({ policy: 'short' });
+  });
+
+  /**
+   * TodoScan, InboxScan and TodoProcess call OllamaService in-process from this
+   * queue and never enter `llm`, so `INTERACTIVE_JOB_PRIORITY` cannot make them
+   * yield to a chat turn. Without a ceiling the per-queue default (six) let six
+   * background requests sit on the GPU at once. One at a time per process is
+   * the same shape `llm` uses for the same reason.
+   */
+  it('runs one planning job at a time per process, since each one holds an Ollama request', () => {
+    expect(EventListenerRegistry.getQueueOptions(PLANNING_QUEUE)).toMatchObject({ localConcurrency: 1 });
   });
 
   /**

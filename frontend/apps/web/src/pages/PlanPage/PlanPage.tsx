@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from 'react';
 
 import { useMutation } from '@apollo/client';
-import { EmptyState, LoadingPage, usePageTitle } from '@ci/common';
-import { Button, useToast } from '@ci/shadcn';
+import { EmptyState, LoadingPage, useDeviceLayout, usePageTitle } from '@ci/common';
+import { AlertDialog, Button, cn, useToast } from '@ci/shadcn';
 import { ListTodo } from '@ci/shadcn/icons';
 
 import { useFeatures } from '@/common/feature';
@@ -22,6 +22,7 @@ import {
   GET_TASKS,
   PLAN_TASK,
   SCHEDULE_TASK,
+  SCHEDULE_TASK_AT,
   usePlanTasks,
 } from './usePlanTasks';
 
@@ -69,7 +70,8 @@ const DECLINE_PENDING = gql(`
 `);
 
 export function PlanPage() {
-  usePageTitle('Plan - Companion Intelligence');
+  usePageTitle('Plan - Companion Memory');
+  const { isMobile } = useDeviceLayout();
   const { isFeatureEnabled } = useFeatures();
   const showEmptyState = isFeatureEnabled('planning.emptyState');
   const { toast } = useToast();
@@ -84,11 +86,13 @@ export function PlanPage() {
   const [declinePending] = useMutation(DECLINE_PENDING);
   const [planTask] = useMutation(PLAN_TASK);
   const [scheduleTask] = useMutation(SCHEDULE_TASK);
+  const [scheduleTaskAt] = useMutation(SCHEDULE_TASK_AT);
   const [updateTask] = useMutation(UPDATE_TASK);
   const [editingTask, setEditingTask] = useState<EditableTask | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [boardTab, setBoardTab] = useState<string | null>(null);
-  const { deleteTasks } = useDeleteTasks();
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
+  const { deleteTasks, deleting } = useDeleteTasks();
 
   const handleToggle = (id: string, done: boolean) => {
     void (done ? completeTask({ variables: { id } }) : reopenTask({ variables: { id } }));
@@ -96,6 +100,24 @@ export function PlanPage() {
 
   const handleDelete = (id: string) => {
     void deleteTasks([id]);
+  };
+
+  /**
+   * The per-row trash control deliberately has no confirm — that click IS the
+   * decision, and it removes exactly the one task under the cursor. Emptying a
+   * whole selection is a different blast radius: nothing here names what is
+   * about to go, and there is no undo behind it, so this one path asks first.
+   * A failure still toasts rather than holding the dialog open, so the
+   * confirmation closes either way and the selection survives for a retry.
+   */
+  const handleBulkDelete = () => {
+    void deleteTasks(selectedIds).then((ok) => {
+      setConfirmingBulkDelete(false);
+
+      if (ok) {
+        setSelectedIds([]);
+      }
+    });
   };
 
   const handleEdit = (task: EditableTask) => {
@@ -130,35 +152,98 @@ export function PlanPage() {
     no_gap:
       'No free slot in your working hours over the next week — try a specific day, or shorten the estimate.',
     skipped: 'That task can no longer be scheduled — it may already be done or removed.',
+    already_placed: 'That task already has a block on your calendar — move it from the calendar.',
   };
 
+  /**
+   * `already_placed` used to be silent, alongside `placed`. It is not a
+   * success: the gap solver never ran and nothing moved. Every path that can
+   * legitimately reach it now names a destination (see `handleReschedule`), so
+   * the only ways left are a stale board — the card says unplaced, the server
+   * disagrees — and a lost race, and both of those are exactly what the user
+   * needs told rather than shown as a button that does nothing.
+   */
   const reportScheduleOutcome = (status: string | null | undefined) => {
-    if (!status || status === 'placed' || status === 'already_placed') {
+    if (!status || status === 'placed') {
       return;
     }
 
     toast.error(scheduleStatusMessage[status] ?? 'Could not schedule that task. Try again shortly.');
   };
 
+  /**
+   * ═══ A THROWN MUTATION USED TO SAY NOTHING AT ALL ═══
+   *
+   * None of these paths had a `.catch`, so a network or GraphQL failure aborted
+   * the async block: no toast, no refetch, and the card simply snapped back to
+   * where it was. `handlePlan` below already carried the fix; its siblings did
+   * not. Refreshing in `finally` also puts the board back in step with the
+   * server after a partial sequence (an `updateTask` that landed, a
+   * `scheduleTask` that did not).
+   */
   const handleSchedule = (id: string) => {
-    void scheduleTask({ variables: { id } }).then((result) => {
-      reportScheduleOutcome(result.data?.scheduleTask.status);
-      refresh();
-    });
+    void (async () => {
+      try {
+        const result = await scheduleTask({ variables: { id } });
+
+        reportScheduleOutcome(result.data?.scheduleTask.status);
+      } catch {
+        toast.error('Could not schedule that task. Try again shortly.');
+      } finally {
+        refresh();
+      }
+    })();
   };
 
+  /**
+   * ═══ RESCHEDULING A PLACED TASK USED TO MOVE ONLY THE DUE DATE ═══
+   *
+   * Reschedule is the recovery affordance for overdue work, and overdue work
+   * very often already HAS a planned block — Task renders the picker for any
+   * overdue task, placed or not. `SCHEDULE_TASK`'s date-only path cannot move
+   * one: `PlannedBlockService.place` finds the existing block and returns
+   * `already_placed` before the gap solver runs. So the `updateTask` above
+   * landed, the block stayed on the day that has already passed, the card
+   * stayed in Overdue, and `already_placed` was silent — the user moved their
+   * due date by pressing a button that told them it had done nothing.
+   *
+   * `SCHEDULE_TASK_AT` is the mutation that MOVES a block: `scheduleTaskAt`
+   * reschedules the existing event (preserving its duration) instead of
+   * refusing. The instant it is given is the same local noon the new due date
+   * is set to, because a day picker names a day and there is no time of day to
+   * honour — the block's own start is not on the board to reuse. An unplaced
+   * task still goes through the gap solver, which is the better answer when
+   * there is nothing to move and working hours are the only constraint.
+   *
+   * `scheduledFor` is written alongside `dueAt` on that path and only on that
+   * path: `CalendarEventService.reschedule` moves the event and nothing
+   * updates the task, so without it `sectionFor` — which takes the EARLIEST of
+   * dueAt and scheduledFor — would keep the card in Overdue on the strength of
+   * the stale date. The gap-solver path needs no such help; `placeAt` sets
+   * `scheduledFor` from where it actually placed the block.
+   */
   const handleReschedule = (id: string, date: string) => {
+    const placed = nodes.find((task) => task.id === id)?.placedOnCalendar === true;
+    const dueAt = dueAtFromLocalDate(date);
+
     void (async () => {
-      await updateTask({
-        variables: {
-          input: { id, dueAt: dueAtFromLocalDate(date) },
-        },
-      });
+      try {
+        await updateTask({
+          variables: {
+            input: placed ? { id, dueAt, scheduledFor: date } : { id, dueAt },
+          },
+        });
 
-      const result = await scheduleTask({ variables: { id, date } });
+        const result = placed
+          ? await scheduleTaskAt({ variables: { id, startTime: dueAt } })
+          : await scheduleTask({ variables: { id, date } });
 
-      reportScheduleOutcome(result.data?.scheduleTask.status);
-      refresh();
+        reportScheduleOutcome(result.data?.scheduleTask.status);
+      } catch {
+        toast.error('Could not move that task. Try again shortly.');
+      } finally {
+        refresh();
+      }
     })();
   };
 
@@ -183,12 +268,19 @@ export function PlanPage() {
   };
 
   const handleAcceptAndSchedule = (id: string) => {
-    void acceptProposed({ variables: { id } }).then(() =>
-      scheduleTask({ variables: { id } }).then((result) => {
+    void (async () => {
+      try {
+        await acceptProposed({ variables: { id } });
+
+        const result = await scheduleTask({ variables: { id } });
+
         reportScheduleOutcome(result.data?.scheduleTask.status);
+      } catch {
+        toast.error('Could not schedule that task. Try again shortly.');
+      } finally {
         refresh();
-      }),
-    );
+      }
+    })();
   };
 
   const renderTree = (task: SectionedTask, depth: number): ReactNode => {
@@ -208,7 +300,28 @@ export function PlanPage() {
         onSelectToggle={handleSelectToggle}
         onLongPressSelect={handleLongPressSelect}
         onAcceptProposed={handlePlan}
-        onDeclineProposed={(id) => void declineProposed({ variables: { id } }).then(refresh)}
+        onDeclineProposed={(id) => {
+          void (async () => {
+            try {
+              // Only a `schedule` change is orphaned by this Dismiss. Task
+              // renders the proposed row INSTEAD of the pending-schedule row,
+              // so declining the proposal alone left that change open on the
+              // server with no UI left that could ever answer it. Every other
+              // kind still gets its own Confirm/Dismiss row alongside the
+              // proposed row, so the user is answering it themselves —
+              // declining it from here would silently answer for them.
+              if (pending?.kind === 'schedule') {
+                await declinePending({ variables: { id: pending.id } });
+              }
+
+              await declineProposed({ variables: { id } });
+            } catch {
+              toast.error('Could not dismiss that task. Try again shortly.');
+            } finally {
+              refresh();
+            }
+          })();
+        }}
         onAcceptAndSchedule={handleAcceptAndSchedule}
         onSchedule={handleSchedule}
         onReschedule={handleReschedule}
@@ -220,15 +333,19 @@ export function PlanPage() {
         onPlanPending={(taskId) => handlePlan(taskId)}
         onDismissPendingTask={(taskId, changeId) => {
           void (async () => {
-            await declinePending({ variables: { id: changeId } });
-
-            if (task.status === 'proposed') {
-              await declineProposed({ variables: { id: taskId } });
-            } else {
+            try {
+              // Only ever reached from the pending-schedule row, which a
+              // proposed card never renders — Task prefers the proposed
+              // actions when both apply. The `status === 'proposed'` branch
+              // that used to sit here was dead; the proposed card's own
+              // Dismiss handles that case.
+              await declinePending({ variables: { id: changeId } });
               await updateTask({ variables: { input: { id: taskId, status: 'archived' } } });
+            } catch {
+              toast.error('Could not dismiss that suggestion. Try again shortly.');
+            } finally {
+              refresh();
             }
-
-            refresh();
           })();
         }}
       >
@@ -295,7 +412,7 @@ export function PlanPage() {
   return (
     <>
       <PageContent>
-        <div className="flex h-full min-h-0 w-full flex-col gap-6">
+        <div className={cn('flex h-full min-h-0 w-full flex-col', isMobile ? 'gap-2' : 'gap-6')}>
           <div className="mx-auto w-full max-w-3xl shrink-0">
             <NewTaskForm onCreated={() => void refetch()} />
           </div>
@@ -314,13 +431,7 @@ export function PlanPage() {
                   type="button"
                   variant="destructive"
                   size="sm"
-                  onClick={() => {
-                    void deleteTasks(selectedIds).then((ok) => {
-                      if (ok) {
-                        setSelectedIds([]);
-                      }
-                    });
-                  }}
+                  onClick={() => setConfirmingBulkDelete(true)}
                 >
                   Delete
                 </Button>
@@ -340,6 +451,47 @@ export function PlanPage() {
       {editingTask && (
         <EditTaskModal task={editingTask} onClose={() => setEditingTask(null)} onSaved={refresh} />
       )}
+
+      <AlertDialog
+        open={confirmingBulkDelete && selectedIds.length > 0}
+        onOpenChange={(open) => !open && setConfirmingBulkDelete(false)}
+      >
+        <AlertDialog.Content>
+          <AlertDialog.Header>
+            <AlertDialog.Title>
+              {selectedIds.length === 1 ? 'Delete this task?' : `Delete ${selectedIds.length} tasks?`}
+            </AlertDialog.Title>
+            <AlertDialog.Description>
+              {selectedIds.length === 1
+                ? 'This task will be permanently deleted from your plan. This cannot be undone.'
+                : `These ${selectedIds.length} tasks will be permanently deleted from your plan. This cannot be undone.`}
+            </AlertDialog.Description>
+          </AlertDialog.Header>
+          <AlertDialog.Footer>
+            <AlertDialog.Cancel disabled={deleting}>Cancel</AlertDialog.Cancel>
+            <AlertDialog.Action
+              // The confirm has to carry its own destructive styling:
+              // AlertDialog.Action renders the DEFAULT button variant, unlike
+              // the `variant="destructive"` Button the Dialog-based delete
+              // modals use.
+              className="bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60"
+              disabled={deleting}
+              onClick={(e) => {
+                // Radix auto-closes on Action click; keep it open so the
+                // in-flight state stays visible until the deletes finish.
+                e.preventDefault();
+                handleBulkDelete();
+              }}
+            >
+              {deleting
+                ? 'Deleting…'
+                : selectedIds.length === 1
+                  ? 'Delete task'
+                  : `Delete ${selectedIds.length} tasks`}
+            </AlertDialog.Action>
+          </AlertDialog.Footer>
+        </AlertDialog.Content>
+      </AlertDialog>
     </>
   );
 }

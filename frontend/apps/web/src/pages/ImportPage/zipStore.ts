@@ -244,13 +244,12 @@ export async function zipFilesStore(
   const centralOffset = offset;
   const centralSize = centrals.reduce((sum, part) => sum + part.length, 0);
 
-  parts.push(...centrals);
+  for (const central of centrals) {
+    parts.push(central);
+  }
 
   const needsZip64Eocd =
-    anyZip64 ||
-    files.length > ZIP16_COUNT_LIMIT ||
-    centralOffset >= zip64At ||
-    centralSize >= zip64At;
+    anyZip64 || files.length > ZIP16_COUNT_LIMIT || centralOffset >= zip64At || centralSize >= zip64At;
 
   if (needsZip64Eocd) {
     // Zip64 EOCD record + locator, immediately before the classic EOCD.

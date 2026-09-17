@@ -6,6 +6,7 @@ import type {
   LocalHubStartResult,
   LocalHubStatusResult,
   NativeCurrentLocation,
+  NativeLocationAuthorization,
 } from './definitions';
 
 /**
@@ -57,5 +58,13 @@ export class LocalHubWeb extends WebPlugin implements LocalHubPlugin {
 
   async openAppSettings(): Promise<void> {
     throw this.unavailable('App Settings is only available in the native app.');
+  }
+
+  async getLocationAuthorization(): Promise<{ status: NativeLocationAuthorization }> {
+    return { status: 'unsupported' };
+  }
+
+  async requestLocationAuthorization(): Promise<{ status: NativeLocationAuthorization }> {
+    return { status: 'unsupported' };
   }
 }

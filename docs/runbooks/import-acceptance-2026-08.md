@@ -4,9 +4,15 @@
 > well enough to retire that repo? This is the record of one acceptance pass
 > against a live stack, with the real archives and the real output.
 >
-> Companion docs: the CLI in [`docs/cli/ci-import.md`](../cli/ci-import.md), the
+> Companion docs: the CLI in [`docs/cli/ci.md`](../cli/ci.md), the
 > enrichment half in [`pipeline-operations.md`](pipeline-operations.md), and the
 > ETL as a whole in [`docs/import/etl-agent-guide.md`](../import/etl-agent-guide.md).
+>
+> **The commands below say `ci-import` because that is what was typed.** The
+> binary has since been renamed `ci` and moved to its own workspace
+> (`backend/apps/cli`); `ci-import` still runs, as a deprecated alias. This is a
+> record of a pass that happened, so it is left as it was run rather than
+> rewritten to match today's spelling.
 
 > **Answered (2026-08-19): yes.** The repo was retired — renamed
 > **`ZARCHIVED-CI-Import-Tools`** on GitHub (the prefix is the retirement signal;

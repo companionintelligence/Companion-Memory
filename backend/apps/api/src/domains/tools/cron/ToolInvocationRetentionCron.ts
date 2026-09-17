@@ -41,9 +41,13 @@ export class ToolInvocationRetentionCron {
     this.logger.setContext(ToolInvocationRetentionCron.name);
   }
 
+  // `exclusive`: this class holds no overlap guard of its own, and a retention
+  // DELETE that overruns its cadence would have the next tick contend with it
+  // over the same rows for nothing.
   @Cron(TOOL_INVOCATION_RETENTION_CRON, {
     name: 'ToolInvocationRetentionCron.pruneOnSchedule',
     role: 'worker',
+    exclusive: true,
   })
   async pruneOnSchedule(): Promise<void> {
     const deleted = await this.ledger.prune();

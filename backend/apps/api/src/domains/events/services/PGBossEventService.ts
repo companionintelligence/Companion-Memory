@@ -1,5 +1,11 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import {
+  Injectable,
+  Optional,
+  type OnApplicationBootstrap,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
+import { EventEmitter2, EventEmitterReadinessWatcher } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import plimit from 'p-limit';
 import PgBoss, { JobWithMetadata } from 'pg-boss';
@@ -17,11 +23,14 @@ import { type EventPayloads } from '../event-registry';
 import {
   effectiveQueueConcurrency as computeQueueConcurrency,
   perProcessGlobalConcurrency,
+  perQueueDefaultConcurrency,
   queueWorkerProcesses,
 } from '../jobConcurrency';
+import { JobSlotPool } from '../jobSlotPool';
 import { queueInventory } from '../queueInventory';
 import { EventRegistry } from '../registry';
 import type { EventSendOptions, QueueOptions } from '../types';
+import { YieldGateRegistry } from '../yieldGates';
 
 import { EventService } from './EventService';
 
@@ -71,6 +80,33 @@ const QUEUE_PROVISION_LOCK_KEY = 804_551_297;
 const DEAD_LETTER_RETENTION_MINUTES = 30 * 24 * 60;
 
 /**
+ * How long an UNFINISHED job may sit on a work queue before pg-boss discards
+ * it. 90 days, in minutes, for the same reason the DLQ constant is in minutes.
+ *
+ * This is not the finished-job window — that is `deleteAfterHours`, and it is
+ * unrelated. pg-boss's `archive()` carries a third predicate nobody here had
+ * read: `state < 'active' AND keep_until < now()`, and `state < 'active'`
+ * covers `created` and `retry`, i.e. work that has never run. `keep_until`
+ * resolves as `start_after + COALESCE(job.keep_until, queue.retention_minutes
+ * * 60, constructor keep_until default, '14 days')` and this codebase set none
+ * of the first three — so every work queue row carried
+ * `retention_minutes = NULL` and inherited **14 days**. A queue an operator
+ * paused for a fortnight, or a backlog that outlived one (a bulk-import fan-out
+ * behind a stalled Ollama is the realistic case), had its oldest jobs moved to
+ * `pgboss.archive` and deleted `deleteAfterHours` later. Silently: that path
+ * logs nothing, raises nothing, and never routes to the dead-letter queue, so
+ * the work is gone with no record it ever existed.
+ *
+ * 90 days, and a code constant rather than a config key, on purpose. This is a
+ * floor on how long accepted work survives, not a tuning knob — there is no
+ * appliance workload for which losing queued work SOONER is the better outcome,
+ * and the number an operator would actually reach for is the length of pause
+ * they want to be safe. A queue that genuinely wants a different window says so
+ * in `QueueOptions.retentionMinutes`, where the unit is stated in the type.
+ */
+const WORK_QUEUE_RETENTION_MINUTES = 90 * 24 * 60;
+
+/**
  * The retry policy, stated once and applied in both places it has to hold.
  *
  * pg-boss resolves a job's retry settings as COALESCE(job, queue, constructor
@@ -95,8 +131,34 @@ const QUEUE_RETRY_POLICY = {
  */
 const QUEUE_WORKER_PROCESSES = queueWorkerProcesses();
 
+/**
+ * A job whose listener outran its execution deadline.
+ *
+ * Typed rather than a bare `Error` so the two things that have to tell it apart
+ * can: `runJob`, which logs a distinct line for it, and anyone reading
+ * `pgboss.job.output` afterwards, where the name is what separates "the handler
+ * threw" from "the handler never came back".
+ */
+export class JobTimeoutError extends Error {
+  constructor(
+    readonly queue: string,
+    readonly jobId: string,
+    readonly eventName: string | undefined,
+    readonly deadlineMs: number,
+  ) {
+    super(
+      `Job ${jobId} on queue ${queue} (${eventName ?? 'unknown event'}) did not settle within its ` +
+        `${deadlineMs} ms execution deadline`,
+    );
+    this.name = 'JobTimeoutError';
+  }
+}
+
 @Injectable()
-export class PGBossEventService extends EventService implements OnModuleInit, OnModuleDestroy {
+export class PGBossEventService
+  extends EventService
+  implements OnApplicationBootstrap, OnModuleInit, OnModuleDestroy
+{
   // Global in-flight job ceiling across ALL queues (bounds total DB/Ollama load).
   // Configurable (CI_QUEUE_CONCURRENCY) so the decoupled embedding/index workers
   // can be scaled for bulk imports, and overridable at runtime from the Jobs page
@@ -104,11 +166,44 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   // editing a compose file and restarting the appliance.
   private globalSemaphore = plimit(config.queues.concurrency);
 
+  // The same ceiling, claimed BEFORE a fetch rather than read after one.
+  //
+  // The semaphore above bounds what RUNS; on its own it does not bound what is
+  // fetched, because every queue's loop read its counters before any of them had
+  // dispatched — so ~38 loops each fetched against the same ten free slots and
+  // took the pg-boss lease on ~200 rows the box would run ten at a time. The
+  // pool hands out those ten slots synchronously, so a queue can only fetch
+  // against budget no other queue has already taken. It reads its ceiling from
+  // the semaphore, so a runtime concurrency change moves both together.
+  private readonly globalSlots = new JobSlotPool(() => this.globalSemaphore.concurrency);
+
   // Per-queue in-flight ceiling — one plimit per queue, created in onModuleInit.
   // Sized BELOW the global ceiling (CI_QUEUE_PER_QUEUE_CONCURRENCY) so a burst of
   // slow jobs on one queue can't take every global slot and starve another queue
   // (the search-index backlog stall behind image-description/embedding jobs).
   private readonly perQueueSemaphores = new Map<string, ReturnType<typeof plimit>>();
+
+  /**
+   * Lane → the one semaphore its member queues share (`queueOptions.lane`).
+   * `perQueueSemaphores` maps each member to this same instance, so the
+   * work loop's capacity arithmetic needs no lane awareness: a member sees
+   * the slot as taken whichever member took it.
+   */
+  private readonly laneSemaphores = new Map<string, ReturnType<typeof plimit>>();
+
+  /** Queue → lane, for the members only. */
+  private readonly queueLanes = new Map<string, string>();
+
+  /**
+   * Rows a loop has asked pg-boss for but not yet handed to the semaphore,
+   * per semaphore. The per-queue half of the capacity check is CLAIMED
+   * through this, not merely read — the same fix the global pool needed.
+   * Without it two loops on one lane both saw the shared slot free while the
+   * first was still awaiting its fetch, and both leased a row: one ran, the
+   * other sat `active` in pg-boss waiting for a slot it could not have, its
+   * expiry clock running on work nobody was doing.
+   */
+  private readonly fetchesInFlight = new Map<ReturnType<typeof plimit>, number>();
 
   // The shipped ceilings, held as instance fields rather than read from
   // `config` at each use. Not indirection for its own sake: the worker specs
@@ -121,6 +216,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   private readonly shippedPerQueueConcurrency = config.queues.perQueueConcurrency;
 
   private readonly fetchBatchSize = config.queues.fetchBatchSize;
+
+  // Fallback execution deadline for a job on a queue that declares no
+  // `expireInSeconds`. Held as an instance field for the same reason the
+  // ceilings above are: the worker specs need a two-second appliance without
+  // mutating process-wide config for every other suite in the run.
+  private readonly jobTimeoutMs = config.queues.jobTimeoutSeconds * 1000;
 
   // The `localConcurrency` each queue declared for itself, if any. A hard floor
   // on what a settings row can ask for: the code that wrote `localConcurrency: 1`
@@ -140,6 +241,15 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   // instead of logging "still paused" every time it wakes up.
   private readonly loggedQueueModes = new Map<string, JobMode>();
 
+  /**
+   * Whether each yielding queue was last seen standing aside, so the yield
+   * log line fires on the transition and not on every one-second re-check.
+   */
+  private readonly loggedQueueYields = new Map<string, boolean>();
+
+  /** Queues that named a yield gate nobody registered; warned about once. */
+  private readonly warnedMissingYieldGates = new Set<string>();
+
   // Queues whose drops have already been announced, and the settings revision
   // that announcement belongs to. Keeps a million-row import fan-out onto a
   // disabled queue to one log line rather than a million identical ones.
@@ -157,6 +267,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   // copies of the string is exactly how that exclusion silently stops matching.
   private static readonly DEAD_LETTER_QUEUE = DEAD_LETTER_QUEUE;
 
+  // Hard floor under every per-job execution deadline. A queue may ask for
+  // longer, never shorter: the deadline is a backstop against a wedged
+  // listener, and one set below the time a healthy job takes stops being a
+  // backstop and becomes a dead-letter generator for the whole appliance.
+  private static readonly MIN_JOB_DEADLINE_MS = 60_000;
+
   // Bulk-import escape hatch: even with per-event routing, one imported row can
   // legitimately fan out to several enrichment queues. During a bulk load, set
   // CI_QUEUE_SUPPRESS to a comma-separated list of queues to skip enqueuing
@@ -172,11 +288,26 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
   private running = false;
 
+  /** Set once the delayed worker start has been scheduled or completed. */
+  private workerStartScheduled = false;
+
+  /** Prevents a readiness callback from starting workers during shutdown. */
+  private shutdownRequested = false;
+
   private stopTasks: Promise<void>[] = [];
 
   private readonly backoffWhenFull = 150;
 
   private readonly backoffWhenEmpty = 5000;
+
+  /**
+   * Re-check cadence while a queue is standing aside for its yield gate. A
+   * chat turn ends on a token stream, not a poll, so this only bounds how
+   * long the GPU sits idle after the turn before background work resumes —
+   * one second is well inside what a person notices and far above the cost
+   * of the gate's lookup (one indexed count on `ci.threads`).
+   */
+  private readonly backoffWhenYielding = 1000;
 
   private boss = new PgBoss({
     host: config.db.host,
@@ -201,6 +332,7 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     protected readonly eventEmitter: EventEmitter2,
     protected readonly logger: LoggerService,
     @InjectDataSource() private readonly dataSource: DataSource,
+    @Optional() private readonly eventEmitterReadinessWatcher?: EventEmitterReadinessWatcher,
   ) {
     super();
     this.logger.setContext(PGBossEventService.name);
@@ -300,12 +432,17 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         // Listener-requested queue-level options (expiration/retries) — used by
         // deferred-completion queues whose jobs stay active while an external
         // executor works, so their expiration must match the work's runtime.
-        // `localConcurrency` and `role` are OURS (the semaphore size below, and
-        // which process consumes — used by the worker-start loop), not
-        // pg-boss's — split them off so the queue-create call sees only real
-        // pg-boss options.
-        const { localConcurrency, role, ...queueOptions } =
-          EventListenerRegistry.getQueueOptions(queue) ?? {};
+        // `localConcurrency`, `role` and `yieldsTo` are OURS (the semaphore
+        // size below, which process consumes, and which gate the worker loop
+        // asks before fetching), not pg-boss's — split them off so the
+        // queue-create call sees only real pg-boss options.
+        const {
+          localConcurrency,
+          role,
+          yieldsTo: _yieldsTo,
+          lane,
+          ...queueOptions
+        } = EventListenerRegistry.getQueueOptions(queue) ?? {};
 
         // Retry policy first so a listener's own `queueOptions` still override
         // it. Stating it explicitly is what puts it in the queue ROW: pg-boss
@@ -315,6 +452,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         const options = {
           name: queue,
           deadLetter: PGBossEventService.DEAD_LETTER_QUEUE,
+          // Before BOTH spreads, so a listener that declares its own
+          // `retentionMinutes` still wins. Stating it at all is what stops
+          // `keep_until` falling through to pg-boss's 14-day default and
+          // deleting never-run jobs off a paused or backlogged queue — see
+          // WORK_QUEUE_RETENTION_MINUTES.
+          retentionMinutes: WORK_QUEUE_RETENTION_MINUTES,
           ...QUEUE_RETRY_POLICY,
           ...queueOptions,
         };
@@ -326,7 +469,11 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
           this.declaredQueueCeilings.set(queue, localConcurrency);
         }
 
-        this.perQueueSemaphores.set(queue, plimit(this.effectiveQueueConcurrency(queue)));
+        if (lane != null) {
+          this.queueLanes.set(queue, lane);
+        }
+
+        this.perQueueSemaphores.set(queue, this.provisionSemaphore(queue));
         this.logger.debug(
           `Created queue: ${queue} (role=${role ?? 'web'}, deadLetter=${PGBossEventService.DEAD_LETTER_QUEUE})`,
         );
@@ -345,6 +492,47 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     // restart, i.e. the window an operator who just capped a hot box is watching.
     this.syncConcurrencyLimits();
 
+    // Queue rows and semaphores are ready now, but workers deliberately start
+    // later. `@nestjs/event-emitter` attaches `@OnEvent` methods during its own
+    // `onApplicationBootstrap`; starting pg-boss here lets a queued job win the
+    // race and be completed by `executeJob` as "no listeners found".
+  }
+
+  /**
+   * Start consumers only after Nest has attached every `@OnEvent` listener.
+   *
+   * The readiness promise is intentionally observed without awaiting it from
+   * this hook. Nest invokes bootstrap hooks in module order; waiting here
+   * would deadlock if this service happened to run before the event-emitter
+   * loader, while observing it lets the loader finish and then starts workers
+   * before the application becomes meaningfully live.
+   */
+  onApplicationBootstrap(): void {
+    if (this.workerStartScheduled) {
+      return;
+    }
+
+    this.workerStartScheduled = true;
+
+    const ready = this.eventEmitterReadinessWatcher?.waitUntilReady() ?? Promise.resolve();
+
+    void ready
+      .then(() => {
+        if (this.shutdownRequested) {
+          return;
+        }
+
+        this.startWorkers();
+      })
+      .catch((err: unknown) => {
+        this.logger.error(
+          'Event listener bootstrap failed; work queues will not start',
+          err instanceof Error ? err : new Error(String(err)),
+        );
+      });
+  }
+
+  private startWorkers(): void {
     try {
       this.logger.debug('Initializing work queues...');
 
@@ -354,6 +542,7 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       // the headless worker process, where a parser's synchronous stretches
       // cannot stutter the web process's event loop.
       let started = 0;
+      const discoveredQueues = this.getRegisteredQueues();
 
       for (const queue of discoveredQueues) {
         const queueRole = EventListenerRegistry.getQueueOptions(queue)?.role ?? 'web';
@@ -387,12 +576,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         'Failed to initialize work queue client',
         err instanceof Error ? err : new Error(String(err)),
       );
-
-      throw err;
     }
   }
 
   async onModuleDestroy() {
+    this.shutdownRequested = true;
+
     try {
       this.logger.debug('Flushing work queues...');
 
@@ -862,10 +1051,73 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
    */
   private effectiveQueueConcurrency(queue: string): number {
     return computeQueueConcurrency({
-      perQueueDefault: JobControlStore.perQueueConcurrency() ?? this.shippedPerQueueConcurrency,
+      perQueueDefault: perQueueDefaultConcurrency(
+        JobControlStore.perQueueConcurrency(),
+        this.shippedPerQueueConcurrency,
+      ),
       requested: JobControlStore.row('queue', queue)?.concurrency ?? null,
       declared: this.declaredQueueCeilings.get(queue) ?? null,
     });
+  }
+
+  /**
+   * The semaphore this queue draws from: its own, or its lane's shared one.
+   *
+   * A lane's semaphore is created by its first member and handed to every
+   * later one; its size is the SMALLEST member's effective concurrency, so a
+   * lane of four queues that each declare 1 is one slot, and a settings row
+   * raising one member cannot widen the pool past what another member's
+   * declared ceiling allows (the same "declared is a ceiling" rule
+   * effectiveQueueConcurrency enforces per queue).
+   */
+  private provisionSemaphore(queue: string): ReturnType<typeof plimit> {
+    const lane = this.queueLanes.get(queue);
+
+    if (lane == null) {
+      return plimit(this.effectiveQueueConcurrency(queue));
+    }
+
+    const existing = this.laneSemaphores.get(lane);
+
+    if (existing != null) {
+      existing.concurrency = this.effectiveLaneConcurrency(lane);
+
+      return existing;
+    }
+
+    const created = plimit(this.effectiveLaneConcurrency(lane));
+
+    this.laneSemaphores.set(lane, created);
+
+    return created;
+  }
+
+  /** The smallest effective concurrency among a lane's members. */
+  private effectiveLaneConcurrency(lane: string): number {
+    let lowest = Number.POSITIVE_INFINITY;
+
+    for (const [queue, memberLane] of this.queueLanes) {
+      if (memberLane === lane) {
+        lowest = Math.min(lowest, this.effectiveQueueConcurrency(queue));
+      }
+    }
+
+    return Number.isFinite(lowest) ? lowest : 1;
+  }
+
+  private releaseFetchClaim(semaphore: ReturnType<typeof plimit>, count: number): void {
+    const remaining = (this.fetchesInFlight.get(semaphore) ?? 0) - count;
+
+    if (remaining > 0) {
+      this.fetchesInFlight.set(semaphore, remaining);
+    } else {
+      this.fetchesInFlight.delete(semaphore);
+    }
+  }
+
+  /** Every distinct semaphore, lane-shared ones counted once. */
+  private distinctSemaphores(): Set<ReturnType<typeof plimit>> {
+    return new Set(this.perQueueSemaphores.values());
   }
 
   /**
@@ -902,13 +1154,63 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     }
 
     for (const [queue, semaphore] of this.perQueueSemaphores) {
-      const next = this.effectiveQueueConcurrency(queue);
+      const lane = this.queueLanes.get(queue);
+      const next = lane == null ? this.effectiveQueueConcurrency(queue) : this.effectiveLaneConcurrency(lane);
 
       if (semaphore.concurrency !== next) {
-        this.logger.log(`Queue ${queue} concurrency set to ${next}`);
+        this.logger.log(
+          lane == null
+            ? `Queue ${queue} concurrency set to ${next}`
+            : `Lane ${lane} concurrency set to ${next}`,
+        );
         semaphore.concurrency = next;
       }
     }
+  }
+
+  /**
+   * Whether this queue should stand aside right now, per `queueOptions.yieldsTo`.
+   *
+   * A queue that names no gate never yields. A queue that names a gate nobody
+   * registered reads as open and is warned about once: the wiring mistake
+   * should cost GPU contention (the old behaviour), never a queue that quietly
+   * stops. Logged on the transition only, in both directions, so an operator
+   * reading the log can see the queue stood aside AND that it resumed.
+   */
+  private async shouldYield(queue: string): Promise<boolean> {
+    const gate = EventListenerRegistry.getQueueOptions(queue)?.yieldsTo;
+
+    if (gate == null) {
+      return false;
+    }
+
+    if (!YieldGateRegistry.has(gate)) {
+      if (!this.warnedMissingYieldGates.has(queue)) {
+        this.warnedMissingYieldGates.add(queue);
+        this.logger.warn(
+          `Queue ${queue} yields to gate "${gate}" but no such gate is registered; it will not yield`,
+        );
+      }
+
+      return false;
+    }
+
+    const yielding = await YieldGateRegistry.shouldYield(gate);
+    // A transition, not an observation: the first check on a queue whose gate
+    // is open has nothing to report, and must not read as "resumed".
+    const previous = this.loggedQueueYields.get(queue) ?? false;
+
+    this.loggedQueueYields.set(queue, yielding);
+
+    if (previous !== yielding) {
+      this.logger.log(
+        yielding
+          ? `Queue ${queue} is standing aside for "${gate}"; jobs stay queued until it clears`
+          : `Queue ${queue} resumed after standing aside for "${gate}"`,
+      );
+    }
+
+    return yielding;
   }
 
   /** One line per mode transition, rather than one per five-second wake-up. */
@@ -955,7 +1257,15 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       // it could be: the jobs stay `created`, pg-boss holds no lease on them,
       // and they run in order the moment the queue is switched back on. That is
       // what makes `paused` safe to reach for on a hot box — it costs a backlog,
-      // never work.
+      // not work.
+      //
+      // "Not work" has a horizon, and it is the queue's retention: pg-boss's
+      // archive sweep deletes `created`/`retry` rows past `keep_until`, which
+      // is `start_after + retention`. WORK_QUEUE_RETENTION_MINUTES makes that
+      // 90 days rather than the 14-day default it silently used to be, so a
+      // pause is safe for as long as any operator plausibly holds one — but it
+      // is not infinite, and a queue left paused for a quarter starts losing
+      // its oldest jobs with no log and no dead letter.
       //
       // A `disabled` queue lands here too. Its own sends were already dropped at
       // enqueue, so what this stops is whatever was queued BEFORE the switch —
@@ -972,30 +1282,65 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
       this.logQueueMode(queueName, mode);
 
-      // Available slots are bounded by BOTH this queue's own ceiling and the
-      // global ceiling, so one queue can never consume more than its share of the
-      // global pool (no cross-queue starvation) nor exceed the total cap.
-      const perQueueInFlight = perQueueSemaphore.activeCount + perQueueSemaphore.pendingCount;
+      // The queue's yield gate, if it named one. Standing aside is deliberately
+      // the SAME mechanism as `paused` — no fetch, no lease, jobs stay `created`
+      // — so it costs a backlog, not work, and the running job is never cut.
+      if (await this.shouldYield(queueName)) {
+        await new Promise((resolve) => setTimeout(resolve, this.backoffWhenYielding));
+
+        continue;
+      }
+
+      // A fetch is bounded by BOTH this queue's own ceiling and the global one,
+      // so a queue can never take more than its share of the global pool (no
+      // cross-queue starvation) nor push the appliance past the total cap.
+      const perQueueInFlight =
+        perQueueSemaphore.activeCount +
+        perQueueSemaphore.pendingCount +
+        (this.fetchesInFlight.get(perQueueSemaphore) ?? 0);
       const perQueueAvailable = Math.max(perQueueSemaphore.concurrency - perQueueInFlight, 0);
 
-      const globalInFlight = this.globalSemaphore.activeCount + this.globalSemaphore.pendingCount;
-      const globalAvailable = Math.max(this.globalSemaphore.concurrency - globalInFlight, 0);
-
-      const available = Math.min(perQueueAvailable, globalAvailable);
-
-      if (available === 0) {
+      if (perQueueAvailable === 0) {
         await new Promise((resolve) => setTimeout(resolve, this.backoffWhenFull));
+        continue;
+      }
+
+      // The global half is CLAIMED, not read. Reading it was the bug: this loop
+      // is one of ~38 started in a single synchronous pass, none of which has
+      // dispatched anything by the time they all reach this line, so every one
+      // of them saw the whole global budget as free and fetched against it —
+      // taking the pg-boss lease on far more rows than the appliance would run.
+      // `reserve` mutates in the same turn it reads, so the slots this loop is
+      // about to fetch against are already gone from every other loop's view.
+      const reserved = this.globalSlots.reserve(Math.min(perQueueAvailable, this.fetchBatchSize));
+
+      if (reserved === 0) {
+        // Wakes on the next release rather than sleeping the backoff out, so
+        // bounding the fetch does not cost a poll interval per completed job.
+        await this.globalSlots.waitForSlot(this.backoffWhenFull);
         continue;
       }
 
       let jobs: JobWithMetadata<EventData>[];
 
+      // Claimed against the semaphore for the duration of the fetch; released
+      // just before the rows are handed to it below, in the same tick, so a
+      // sibling loop on the lane never sees the slot free in between.
+      this.fetchesInFlight.set(
+        perQueueSemaphore,
+        (this.fetchesInFlight.get(perQueueSemaphore) ?? 0) + reserved,
+      );
+
       try {
         jobs = await this.boss.fetch<EventData>(queueName, {
           includeMetadata: true,
-          batchSize: Math.min(available, this.fetchBatchSize),
+          batchSize: reserved,
         });
       } catch (err: unknown) {
+        this.releaseFetchClaim(perQueueSemaphore, reserved);
+        // Nothing was leased, so nothing is coming back to release these.
+        this.globalSlots.release(reserved);
+
         // A fetch failure is transient by nature — a dropped connection, a
         // failover, a statement timeout under load. Unguarded, it escaped the
         // `while` loop and rejected the promise sitting in `stopTasks`, which
@@ -1013,6 +1358,15 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         continue;
       }
 
+      this.releaseFetchClaim(perQueueSemaphore, reserved);
+
+      // A fetch may return fewer rows than asked for — usually an empty queue.
+      // The slots those rows would have occupied belong to the other queues now,
+      // not to this loop's next iteration.
+      if (jobs.length < reserved) {
+        this.globalSlots.release(reserved - jobs.length);
+      }
+
       if (jobs.length === 0) {
         await new Promise((resolve) => setTimeout(resolve, this.backoffWhenEmpty));
 
@@ -1028,12 +1382,23 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         // rejection, so the chain below must be total — `runJob` catches
         // everything it can, and this `.catch` is the backstop for anything it
         // cannot (a semaphore that throws, an error thrown by the logger itself).
-        void perQueueSemaphore(() => this.runJob(queueName, job)).catch((err: unknown) => {
-          this.logger.error(
-            `Job supervision failed on queue ${queueName}`,
-            err instanceof Error ? err : new Error(String(err)),
-          );
-        });
+        //
+        // The global slot this row was fetched against is released in `finally`,
+        // placed BEFORE the `catch` so that no path leaks it and no path escapes
+        // the chain: the release runs whether the job resolved or rejected, and
+        // a throw from the release itself lands in the same terminal `catch`.
+        // Ordered the other way round, a release that threw would be exactly the
+        // unhandled rejection this chain exists to prevent.
+        void perQueueSemaphore(() => this.runJob(queueName, job))
+          .finally(() => {
+            this.globalSlots.release();
+          })
+          .catch((err: unknown) => {
+            this.logger.error(
+              `Job supervision failed on queue ${queueName}`,
+              err instanceof Error ? err : new Error(String(err)),
+            );
+          });
       }
     }
   }
@@ -1058,9 +1423,31 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     await this.globalSemaphore(async () => {
       let outcome: 'completed' | 'deferred';
 
+      const deadlineMs = this.jobDeadlineMs(queueName);
+
       try {
-        outcome = await this.executeJob(queueName, job);
+        // Bounded, because nothing else bounds it. `executeJob` resolves only
+        // when the listener acknowledges, and a listener that neither resolves
+        // nor rejects — a `fetch` with no timeout, an Ollama generation that
+        // hangs — used to hold this global slot, the per-queue slot outside it
+        // and the fetch-side JobSlotPool slot for the life of the PROCESS.
+        // pg-boss's own `expireInSeconds` does not help: it re-queues the row in
+        // Postgres, it cannot reach into this process and release a semaphore.
+        // Enough stuck jobs and the queue stops fetching, silently.
+        outcome = await this.withDeadline(this.executeJob(queueName, job), deadlineMs, queueName, job);
       } catch (err: unknown) {
+        if (err instanceof JobTimeoutError) {
+          // Its own line, at error level, because this is the signal that did
+          // not exist: the old symptom was a queue that had quietly stopped,
+          // with nothing in the log to say which job wedged it.
+          this.logger.error(
+            `Job ${job.id} on queue ${queueName} (${job.data?.name ?? 'unknown event'}) exceeded its ` +
+              `${deadlineMs} ms execution deadline and was failed; pg-boss's retry and dead-letter ` +
+              `policy applies from here`,
+            err,
+          );
+        }
+
         // Persist the failure reason in the job's output so it survives in
         // pgboss.job — without this arg the error is lost and a failed job
         // is undiagnosable after the fact.
@@ -1085,6 +1472,78 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
           err instanceof Error ? err : new Error(String(err)),
         );
       }
+    });
+  }
+
+  /**
+   * How long one job on this queue may run before it is failed.
+   *
+   * The queue's own `expireInSeconds` first, because that number is already the
+   * considered statement of how long this queue's work legitimately takes —
+   * `py-fn-hbpe` says ~8 h because a GGUF labelling pass takes hours, and a
+   * shorter in-process deadline would kill it. Only a queue that declares
+   * nothing falls back to the appliance-wide default, and 28 of the 39 do.
+   *
+   * Note what the fallback does to a queue that declares nothing: pg-boss
+   * already gave it the constructor's `expireInHours: 12` via
+   * COALESCE(job, queue row, constructor), so the fallback does not fill a gap,
+   * it TIGHTENS an existing bound to `queues.jobTimeoutSeconds`. That is only
+   * safe where the queue's unit of work is orders of magnitude inside two
+   * hours. A queue that can legitimately run longer has to say so here — which
+   * is why the five import queues declare 12 h explicitly rather than
+   * inheriting a number that would have failed them mid-archive. See
+   * `IMPORT_STAGE_EXPIRE_SECONDS` and `docs/jobs-system.md` §1.11.
+   *
+   * Floored, so a misconfigured `expireInSeconds: 1` (or a config file that
+   * somehow yields a tiny number) cannot turn the deadline into a machine for
+   * dead-lettering every job on the box. The floor never lowers a deadline.
+   */
+  private jobDeadlineMs(queue: string): number {
+    const declaredSeconds = EventListenerRegistry.getQueueOptions(queue)?.expireInSeconds;
+    const requested = declaredSeconds != null ? declaredSeconds * 1000 : this.jobTimeoutMs;
+
+    return Math.max(requested, PGBossEventService.MIN_JOB_DEADLINE_MS);
+  }
+
+  /**
+   * Settle `work`, or reject with {@link JobTimeoutError} once `ms` has passed.
+   *
+   * The timer is cleared on every exit, so a healthy job does not park a
+   * two-hour timer per execution. The losing side of the race stays pending
+   * forever — that is unavoidable, since a listener that never acknowledges is
+   * precisely what this is for — but `Promise.race` has already subscribed to
+   * it, so a late rejection is absorbed rather than escaping as an unhandled
+   * rejection (which `application.ts` turns into `process.exit(1)`).
+   *
+   * ABANDONED, NOT KILLED, and that asymmetry is what sizes every deadline.
+   * `Promise.race` cannot cancel `work`: a listener that outruns its budget
+   * keeps its sockets, its file handles and its transaction open and keeps
+   * writing, while its global slot, its per-queue slot and its `JobSlotPool`
+   * slot have all been handed back and pg-boss has re-queued the row. On a
+   * queue whose `localConcurrency` is a safety property rather than a
+   * throughput knob — `import-unpack` is 1 so two archives' disk preflights
+   * cannot both pass — a deadline that fires on healthy work does not stop
+   * that work, it ADDS a second copy beside it. A too-short deadline is
+   * therefore not a milder version of a too-long one; it is a different and
+   * worse failure. Size every budget so it can only fire on something already
+   * broken.
+   */
+  private withDeadline<T>(
+    work: Promise<T>,
+    ms: number,
+    queue: string,
+    job: JobWithMetadata<EventData>,
+  ): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new JobTimeoutError(queue, job.id, job.data?.name, ms));
+      }, ms);
+    });
+
+    return Promise.race([work, deadline]).finally(() => {
+      clearTimeout(timer);
     });
   }
 
@@ -1139,7 +1598,7 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   private totalInFlightJobs(): number {
     let count = 0;
 
-    for (const semaphore of this.perQueueSemaphores.values()) {
+    for (const semaphore of this.distinctSemaphores()) {
       count += semaphore.activeCount + semaphore.pendingCount;
     }
 
@@ -1183,10 +1642,11 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       return new Promise<'completed' | 'deferred'>((resolve, reject) => {
         const { name, ...data } = job.data;
 
-        const resolvedData = {
-          ...data,
-          jobId: job.id,
-        };
+        // The payload is delivered VERBATIM. `name` — the routing key — is the
+        // only thing stripped, and the bus adds NOTHING: this used to merge
+        // `jobId: job.id` in, overwriting whatever the domain had put there.
+        // Runtime metadata rides the acknowledgement instead, so `jobId` is an
+        // ordinary domain field name again with no special meaning to the bus.
 
         this.logger.log('Executing job', {
           eventName: name,
@@ -1217,7 +1677,7 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         const queueSpecificEventName = `${name}:${queue}`;
 
         if (this.eventEmitter.hasListeners(queueSpecificEventName)) {
-          this.eventEmitter.emit(queueSpecificEventName, resolvedData, { done, fail, defer });
+          this.eventEmitter.emit(queueSpecificEventName, data, { jobId: job.id, done, fail, defer });
         } else {
           skip();
         }

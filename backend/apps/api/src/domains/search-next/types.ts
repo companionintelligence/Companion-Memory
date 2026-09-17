@@ -22,6 +22,12 @@ export const INDEXABLE_ENTITIES = [
   // finds the evidence rather than only the things minted off it.
   'product',
   'receipt',
+  // Planning work items (ci.tasks). Indexed so "what am I supposed to be doing
+  // about the Fenwick contract?" answers from the planner without a tool call —
+  // the stated reason planning lives in CI-Server at all
+  // (docs/architecture/planning-roadmap.md:14). Planned blocks are deliberately
+  // NOT indexed: the task carries the words, the block only carries a time.
+  'task',
   'thread',
 ] as const;
 
@@ -41,10 +47,28 @@ export const TAGGABLE_ENTITIES = [
   'place',
   'product',
   'receipt',
+  // Planning work items. Tags are how a task inherits a direction and the
+  // life-balance categories that placement and balance bias read, so tasks
+  // must share the one tag vocabulary rather than growing a parallel one.
+  'task',
   'thread',
 ] as const;
 
 export type TaggableEntity = (typeof TAGGABLE_ENTITIES)[number];
+
+/**
+ * The taxonomy LEVEL a tag sits at (`ci_search.tags.kind`) -- orthogonal to
+ * `entity_tag.level`, which is a per-*entity* dilution weight and has nothing
+ * to do with this. A 'direction' is a top-level, brand-set grouping
+ * (Home/Work/Community, `is_base`); an 'intention' groups under 0+
+ * directions via `tag_directions`; a 'category' is a SECOND, orthogonal
+ * grouping over intentions via `tag_categories`, with its own per-direction
+ * opt-outs. `null` (untyped) is the state of every tag that predates this
+ * column.
+ */
+export const TAG_KINDS = ['direction', 'intention', 'category'] as const;
+
+export type TagKind = (typeof TAG_KINDS)[number];
 
 export interface EntityIdentifier<T> {
   type: T;

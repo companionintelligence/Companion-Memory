@@ -5,7 +5,13 @@ import { expect, test } from '@playwright/test';
 test('logs in with the seeded user and lands in the app', async ({ page }) => {
   await page.goto('/');
 
-  await page.getByRole('link', { name: 'Log In' }).click();
+  // The splash's sign-in affordance is "I already have an account", sitting
+  // under the primary "Get Started" (SplashPage.tsx). It was a "Log In" link
+  // before the FTUE hero rebuild; this spec kept the old name and so timed out
+  // on a splash page that was working — and because the `auth` project is a
+  // dependency of the `chromium` and `mobile` projects, that one stale selector
+  // took the other 39 specs down as "did not run".
+  await page.getByRole('link', { name: 'I already have an account' }).click();
 
   // The login card is OIDC-first: "Sign in with Companion account" is the
   // primary path, and the email/password form is collapsed behind a link

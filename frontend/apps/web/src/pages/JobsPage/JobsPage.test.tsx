@@ -83,7 +83,7 @@ let lastWindowHours = 0;
 
 // Same reason as `useDeadLetters` above: the pinned import region reads the
 // auth context that `renderWithProviders` deliberately does not supply. It has
-// its own test file; what the PAGE owes is mounting it, above Queue Activity.
+// its own test file; what the PAGE owes is mounting it, above the Health card.
 vi.mock('@/components/ImportActivity', () => ({
   ImportActivity: ({ className }: { className?: string }) => <div className={className}>import activity</div>,
 }));
@@ -142,6 +142,12 @@ vi.mock('./useJobControls', async (importOriginal) => {
 
   return { ...actual, useJobControls: () => controlsState };
 });
+
+// Health Clear posts through useJobsAuth headers. The page tests do not supply
+// the auth provider; Clear itself is covered via JobHealthCard / API specs.
+vi.mock('./useJobsAuth', () => ({
+  useJobsAuth: () => ({ ready: true, headers: {} }),
+}));
 
 vi.mock('./useJobHistory', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./useJobHistory')>();
@@ -258,6 +264,8 @@ function render(
     staleSince?: Date | null;
     error?: string | null;
     deadLetters?: DeadLetterGroup[];
+    /** Initial URL, so a test can assert that a link restores a view. */
+    routerEntries?: string[];
   } = {},
 ) {
   Object.assign(dashboardState, {
@@ -278,7 +286,7 @@ function render(
     error: null,
   });
 
-  return renderWithProviders(<JobsPage />);
+  return renderWithProviders(<JobsPage />, { routerEntries: options.routerEntries ?? ['/jobs'] });
 }
 
 describe('JobsPage summary', () => {
@@ -289,7 +297,7 @@ describe('JobsPage summary', () => {
   function tile(label: string): HTMLElement {
     const heading = screen
       .getAllByText(label)
-      .find((node) => node.className.includes('uppercase') && node.tagName === 'P');
+      .find((node) => node.className.includes('uppercase') && node.tagName === 'SPAN');
 
     const button = heading?.closest('button');
 
@@ -317,6 +325,22 @@ describe('JobsPage summary', () => {
 
     // A number an operator cannot click is a number they have to go hunting for.
     expect(lastFilters).toMatchObject({ state: 'failed', offset: 0 });
+  });
+
+  it('reads its verdicts from the same appliance-wide summary as its tiles, not the filtered list', () => {
+    // A category route with no rows: the server scopes both stateCounts and
+    // categoryCounts to the active filter, so an empty category comes back
+    // empty here — exactly like /jobs/category/reflection with nothing in it.
+    // The dashboard summary (and its tiles) stay appliance-wide regardless.
+    render({ list: list({ stateCounts: {}, categoryCounts: {} }) });
+
+    // The tiles already read the unfiltered summary and show the real counts.
+    expect(tile('Dead-lettered')).toHaveTextContent('1,191');
+
+    // The verdicts sitting right above those tiles must not contradict them
+    // by claiming nothing has ever been queued.
+    expect(screen.queryByText(/No job history yet on this appliance/)).not.toBeInTheDocument();
+    expect(screen.getByText(/have given up/)).toBeInTheDocument();
   });
 });
 
@@ -362,6 +386,29 @@ describe('JobsPage table', () => {
     expect(screen.getByText(/at FfmpegCommand/)).toBeInTheDocument();
   });
 
+  it('clips a long failure to the job column so the page does not scroll sideways', () => {
+    const message =
+      'Error: Invalid model specified: qwen3.6:35b — '.repeat(20) +
+      'the rest of a stack-length message that used to stretch the table';
+
+    render({
+      list: list({
+        items: [job({ state: 'failed', label: 'Infer answer', failure: { message } })],
+        total: 1,
+      }),
+    });
+
+    const line = screen.getByText(message);
+
+    // CSS ellipsis only applies when the text node can shrink. The table is
+    // table-fixed and this cell is min-w-0 so a 2kb error cannot set the
+    // page width; the full string stays on title and in the expanded detail.
+    expect(line).toHaveClass('truncate', 'min-w-0');
+    expect(line).toHaveAttribute('title', message);
+    expect(line.closest('td')).toHaveClass('min-w-0');
+    expect(line.closest('table')).toHaveClass('table-fixed');
+  });
+
   it('asks the server for the filters rather than filtering in the browser', () => {
     render();
 
@@ -376,6 +423,40 @@ describe('JobsPage table', () => {
 
     fireEvent.change(screen.getByLabelText('Queue'), { target: { value: 'image-description' } });
     expect(lastFilters).toMatchObject({ queue: 'image-description' });
+  });
+
+  it('restores a whole view from the URL, so a link is a place', () => {
+    // Filters used to live in useState: a reload dropped you back to
+    // "everything, page 1", and there was no way to hand anyone a view except a
+    // screenshot and directions.
+    render({ routerEntries: ['/jobs?state=failed&category=llm&queue=image-description&search=ffmpeg'] });
+
+    expect(lastFilters).toMatchObject({
+      state: 'failed',
+      category: 'llm',
+      queue: 'image-description',
+      search: 'ffmpeg',
+    });
+  });
+
+  it('writes a picked filter back into the query string', () => {
+    render();
+
+    const categoryRow = screen.getByRole('tablist', { name: 'Job category' });
+    fireEvent.click(within(categoryRow).getByRole('tab', { name: /Planning/ }));
+
+    // The URL mechanics themselves are covered in useJobFilters.test.tsx — the
+    // harness runs a MemoryRouter, so window.location never moves. What this
+    // asserts is that the page routes a chip click through the same state the
+    // URL owns, rather than keeping a second copy beside it.
+    expect(lastFilters).toMatchObject({ category: 'planning' });
+  });
+
+  it('keeps the page size out of the URL — it is a property of the device, not the view', () => {
+    // A phone-sized link opened on a desktop must not stay phone-sized.
+    render({ routerEntries: ['/jobs?state=failed'] });
+
+    expect(lastFilters).toMatchObject({ limit: 50 });
   });
 
   it('offers every category as a toggle, carrying the count that picking it would yield', () => {
@@ -615,6 +696,186 @@ describe('JobsPage schedules', () => {
     expect(scheduleRow('JobMetricsCollector.purgeOnSchedule')).toHaveTextContent('Job metrics purge');
   });
 
+  /**
+   * The switch used to live in the Controls card, in a second list of all 53
+   * schedules with its own copy of each name and cadence — so the page rendered
+   * every schedule twice, and "is this on, and when does it next run?" was split
+   * across two cards. These three cases moved here with the switch.
+   */
+  describe('the on/off switch beside the schedule', () => {
+    /** The controls payload the switch reads, joined to the dashboard by name. */
+    function withControl(name: string, overrides: Record<string, unknown> = {}) {
+      controlsState.data = {
+        global: {
+          concurrency: { value: 10, effective: 10, source: 'default' },
+          perQueueConcurrency: { value: 6, effective: 6, source: 'default' },
+          nonInteractive: 'enabled',
+        },
+        topology: { role: 'all', queueWorkerProcesses: 1, perProcessConcurrency: 6 },
+        maxConcurrency: 64,
+        queues: [],
+        crons: [
+          {
+            name,
+            cron: '0 0 * * * *',
+            mode: 'enabled',
+            locked: false,
+            lockedReason: null,
+            skippedCount: 0,
+            lastSkippedAt: null,
+            ...overrides,
+          },
+        ],
+      } as unknown as JobControlsResponse;
+    }
+
+    afterEach(() => {
+      controlsState.data = null;
+      controlsState.save.mockClear();
+    });
+
+    it('switches a schedule off from its own row', async () => {
+      withControl('PlanningJobsCron.todoScan');
+      render({ dashboard: dashboard({ crons: [cron('PlanningJobsCron.todoScan')] }) });
+
+      const row = scheduleRow('PlanningJobsCron.todoScan');
+      fireEvent.click(within(row).getByRole('switch'));
+
+      await waitFor(() =>
+        expect(controlsState.save).toHaveBeenCalledWith({
+          crons: [{ name: 'PlanningJobsCron.todoScan', mode: 'disabled' }],
+        }),
+      );
+    });
+
+    it('says a disabled schedule does not run, and how many ticks it skipped', () => {
+      withControl('PlanningJobsCron.todoScan', { mode: 'disabled', skippedCount: 42 });
+      render({ dashboard: dashboard({ crons: [cron('PlanningJobsCron.todoScan')] }) });
+
+      const toggle = within(scheduleRow('PlanningJobsCron.todoScan')).getByRole('switch');
+
+      expect(toggle).not.toBeChecked();
+      expect(toggle).toHaveAttribute('title', expect.stringMatching(/does not run/i));
+      expect(toggle).toHaveAttribute('title', expect.stringMatching(/42 ticks skipped/));
+    });
+
+    it('will not let a protected schedule be switched off', () => {
+      withControl('JobMetricsCollector.sampleOnSchedule', {
+        locked: true,
+        lockedReason: 'Samples the queue depths this page charts.',
+      });
+      render({
+        dashboard: dashboard({ crons: [cron('JobMetricsCollector.sampleOnSchedule')] }),
+      });
+
+      expect(within(scheduleRow('JobMetricsCollector.sampleOnSchedule')).getByRole('switch')).toBeDisabled();
+    });
+
+    /**
+     * The 11 `role: 'worker'` schedules (of 53) never reach a CI_ROLE=web
+     * process's SchedulerRegistry, so the dashboard payload omits them. #2546
+     * fixed that for the controls list; moving the switches into this table
+     * would have re-hidden them, which is the same defect wearing a different
+     * card. The controls payload IS complete, so anything only it knows about
+     * is appended — switchable, with no run times, because this process never
+     * registered it.
+     */
+    it('lists a worker schedule the dashboard never saw, and says why it has no times', () => {
+      controlsState.data = {
+        global: {
+          concurrency: { value: 10, effective: 10, source: 'default' },
+          perQueueConcurrency: { value: 6, effective: 6, source: 'default' },
+          nonInteractive: 'enabled',
+        },
+        topology: { role: 'web', queueWorkerProcesses: 1, perProcessConcurrency: 6 },
+        maxConcurrency: 64,
+        queues: [],
+        crons: [
+          {
+            name: 'WorkerOnlyCron.sweep',
+            cron: '0 0 * * * *',
+            mode: 'enabled',
+            role: 'worker',
+            servedHere: false,
+            locked: false,
+            lockedReason: null,
+            skippedCount: 0,
+            lastSkippedAt: null,
+          },
+        ],
+      } as unknown as JobControlsResponse;
+
+      // The dashboard knows nothing about it — this is the CI_ROLE=web case.
+      render({ dashboard: dashboard({ crons: [] }) });
+
+      const row = scheduleRow('WorkerOnlyCron.sweep');
+
+      expect(row).toBeInTheDocument();
+      expect(within(row).getByRole('switch')).toBeInTheDocument();
+      expect(screen.getByText(/run in the worker process rather than this one/i)).toBeInTheDocument();
+
+      // The synthesized row used to carry `running: false`, which the status
+      // badge renders as "stopped" — on the page an operator opens to find out
+      // what has stopped, for a schedule ticking normally one process over.
+      expect(within(row).queryByText('stopped')).not.toBeInTheDocument();
+      expect(within(row).getByText('worker')).toBeInTheDocument();
+    });
+
+    it('shows the durable history the monitor now supplies for a worker schedule', () => {
+      const attemptedAt = new Date('2026-09-01T03:00:00.000Z');
+
+      // A current server lists these itself, with the ci.cron_runs rows it had
+      // been fetching and discarding. `servedHere: false` still suppresses the
+      // live fields, but last run and last success are real.
+      render({
+        dashboard: dashboard({
+          crons: [
+            cron('DerivationCron.deriveNightly', {
+              role: 'worker',
+              servedHere: false,
+              running: null,
+              lastRunAt: attemptedAt.toISOString(),
+              lastSuccessAt: null,
+            }),
+          ],
+        }),
+      });
+
+      const row = scheduleRow('DerivationCron.deriveNightly');
+
+      expect(within(row).getByText('worker')).toBeInTheDocument();
+      expect(within(row).queryByText('stopped')).not.toBeInTheDocument();
+      expect(within(row).getByText(attemptedAt.toLocaleTimeString())).toBeInTheDocument();
+      // "ran but never succeeded" — the signal that was structurally
+      // unreachable for these eleven while the monitor could not see them.
+      expect(within(row).getByText('never')).toBeInTheDocument();
+    });
+
+    it('leaves a schedule this process does run reading exactly as before', () => {
+      render({ dashboard: dashboard({ crons: [cron('PipelineTickCron.runOnSchedule')] }) });
+
+      const row = scheduleRow('PipelineTickCron.runOnSchedule');
+
+      expect(within(row).getByText('scheduled')).toBeInTheDocument();
+      expect(within(row).queryByText('worker')).not.toBeInTheDocument();
+    });
+
+    /**
+     * The table is the record of what is REGISTERED. A schedule the controls
+     * endpoint does not know about — an older server, or one registered since
+     * the controls were read — keeps its row and loses only its switch.
+     */
+    it('still lists a schedule the controls endpoint has never heard of', () => {
+      controlsState.data = null;
+      render({ dashboard: dashboard({ crons: [cron('PlanningJobsCron.todoScan')] }) });
+
+      const row = scheduleRow('PlanningJobsCron.todoScan');
+
+      expect(row).toHaveTextContent('Todo scan');
+      expect(within(row).queryByRole('switch')).not.toBeInTheDocument();
+    });
+  });
+
   it('marks a scheduler-minted name as the backend bug it is', () => {
     const uuid = '007c9ac0-fb23-4203-809b-c2d100b373e4';
 
@@ -662,6 +923,32 @@ describe('JobsPage schedules', () => {
 
     expect(within(healthy).getByText('scheduled')).toBeInTheDocument();
     expect(within(healthy).queryByText('overdue')).not.toBeInTheDocument();
+  });
+
+  it('calls a worker schedule overdue when the server says so, ahead of its role badge', () => {
+    render({
+      dashboard: dashboard({
+        crons: [
+          cron('DerivationCron.deriveNightly', {
+            role: 'worker',
+            servedHere: false,
+            running: null,
+            nextRunAt: null,
+            lastRunAt: '2026-09-01T03:00:00.000Z',
+            // Computed by the server from the declared expression against the
+            // durable last attempt — the signal that a worker process has died.
+            overdue: true,
+          }),
+        ],
+      }),
+    });
+
+    // The role badge used to take the slot first, so a late worker schedule
+    // could never read as late on the page an operator opens to find out.
+    const row = scheduleRow('DerivationCron.deriveNightly');
+
+    expect(within(row).getByText('overdue')).toBeInTheDocument();
+    expect(within(row).queryByText('stopped')).not.toBeInTheDocument();
   });
 
   it('shows when a schedule last succeeded, not only when it last fired', () => {
@@ -770,16 +1057,17 @@ describe('JobsPage dead letters', () => {
  *
  * The card has its own test file. What the PAGE owes it is being findable from
  * the counts that send someone looking for it — "something is pegging this box"
- * is answered by the tiles and acted on in Controls, and a control four cards
- * further down is one an operator reaches for after they have already restarted
- * the appliance.
+ * is answered by the tiles and acted on in Controls.
  */
 describe('JobsPage controls', () => {
   it('mounts the controls card under the summary', () => {
     render();
 
     const controls = screen.getByText('Controls');
-    const summary = screen.getByText('Queue Activity');
+    // The counts live in the Health card now — it and "Queue Activity" were two
+    // cards answering one question, and the tiles repeated figures the verdicts
+    // above them had already called out.
+    const summary = screen.getByText('Health');
 
     expect(controls).toBeInTheDocument();
     // DOCUMENT_POSITION_FOLLOWING: the summary comes before the controls.
@@ -960,6 +1248,60 @@ describe('JobsPage refresh', () => {
  * distinct stages). Nothing here said which archive was importing, how far
  * along it was, or which stage had been waiting an hour.
  */
+/**
+ * Sidebar destinations must open on their own surface, not on the same Health
+ * card the Overview already showed. Health and Controls stay on every Jobs
+ * address, but below the thing the rail just named.
+ */
+describe('JobsPage section order', () => {
+  function title(name: string): HTMLElement {
+    return screen.getByText(name, { selector: '[data-slot="card-title"]' });
+  }
+
+  it('keeps Health above the rest of Overview', () => {
+    render();
+
+    expect(
+      title('Health').compareDocumentPosition(title('History')) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      title('Health').compareDocumentPosition(title('Controls')) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('opens History on the charts, with Health underneath', () => {
+    render({ routerEntries: ['/jobs/history'] });
+
+    expect(
+      title('History').compareDocumentPosition(title('Health')) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('opens Schedules on the table, with Health underneath', () => {
+    render({ routerEntries: ['/jobs/schedules'] });
+
+    expect(
+      title('Schedules').compareDocumentPosition(title('Health')) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('opens Dead letters on that card, with Health underneath', () => {
+    render({ routerEntries: ['/jobs/dead-letters'] });
+
+    expect(
+      title('Dead letters').compareDocumentPosition(title('Health')) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('opens a category on the jobs table, with Health underneath', () => {
+    render({ routerEntries: ['/jobs/category/ingest'] });
+
+    expect(
+      title('Jobs').compareDocumentPosition(title('Health')) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});
+
 describe('JobsPage live imports', () => {
   it('pins import progress above the queue summary', () => {
     renderWithProviders(<JobsPage />);
@@ -967,10 +1309,11 @@ describe('JobsPage live imports', () => {
     const activity = screen.getByText('import activity');
 
     expect(activity).toBeInTheDocument();
-    // Above Queue Activity: while an import is in flight it outranks the raw
-    // queue, which is the thing an operator came here unable to interpret.
+    // Above the Health card, which now carries the queue counts: while an
+    // import is in flight it outranks the raw queue, which is the thing an
+    // operator came here unable to interpret.
     expect(
-      activity.compareDocumentPosition(screen.getByText('Queue Activity')) & Node.DOCUMENT_POSITION_FOLLOWING,
+      activity.compareDocumentPosition(screen.getByText('Health')) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -1102,8 +1445,16 @@ describe('JobsPage phone layout', () => {
 
     // The phone list is a separate renderer from the table, so it gets the same
     // assertion rather than being assumed to have kept up.
-    fireEvent.click(screen.getByRole('button', { name: /Schedules/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Unclassified/ }));
+    // Scoped: the Health card can also offer a "View schedules" action, and an
+    // unscoped getByRole('button') would find both and fail pointing at the
+    // wrong component.
+    fireEvent.click(screen.getByRole('button', { name: /^Schedules/ }));
+
+    // Scoped to the schedules list. The Health card also names categories (its
+    // legend filters by them), so an unscoped getByRole would match both and
+    // fail pointing at the wrong component.
+    const scheduleList = screen.getByRole('group', { name: 'Schedules by category' });
+    fireEvent.click(within(scheduleList).getByRole('button', { name: /Unclassified/ }));
 
     expect(screen.getByText('needs a name')).toBeInTheDocument();
   });
@@ -1131,8 +1482,10 @@ describe('JobsPage phone layout', () => {
       expect(screen.queryByRole('columnheader', { name: 'Duration' })).not.toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Schedules/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Maintenance/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Schedules/ }));
+
+    const scheduleList = screen.getByRole('group', { name: 'Schedules by category' });
+    fireEvent.click(within(scheduleList).getByRole('button', { name: /Maintenance/ }));
 
     expect(screen.getByText('overdue')).toBeInTheDocument();
     expect(screen.queryByText('scheduled')).not.toBeInTheDocument();

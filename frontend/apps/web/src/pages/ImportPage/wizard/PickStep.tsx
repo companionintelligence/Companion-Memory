@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { type CSSProperties, useMemo, useState } from 'react';
 
 import { Badge, Button, cn, Input } from '@ci/shadcn';
 import { Check, Search } from '@ci/shadcn/icons';
@@ -17,6 +17,11 @@ export interface PickStepProps {
   onContinue: () => void;
   /** When true (default), Continue stays pinned and only the catalog scrolls. */
   pinContinue?: boolean;
+  /**
+   * When false, the host's wizard footer carries Continue and this step draws
+   * no control row of its own (onboarding). Default true for /sources/import.
+   */
+  showContinue?: boolean;
 }
 
 /**
@@ -28,7 +33,14 @@ export interface PickStepProps {
  * "we know this service and haven't finished it" is a materially different
  * answer from silence, which reads as unsupported.
  */
-export function PickStep({ catalog, picked, onToggle, onContinue, pinContinue = true }: PickStepProps) {
+export function PickStep({
+  catalog,
+  picked,
+  onToggle,
+  onContinue,
+  pinContinue = true,
+  showContinue = true,
+}: PickStepProps) {
   const [logoFailed, setLogoFailed] = useState<ReadonlySet<string>>(new Set());
   const [query, setQuery] = useState('');
   const lastImportedAt = useSourceUsage();
@@ -88,10 +100,28 @@ export function PickStep({ catalog, picked, onToggle, onContinue, pinContinue = 
           </p>
         )}
         {visible.map((section) => (
-          <section key={section.key} className="space-y-2">
-            <h3 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <span className="h-4 w-4 [&>svg]:h-4 [&>svg]:w-4">{section.icon}</span>
+          <section key={section.key} className="space-y-2.5">
+            {/* Bigger and bolder than the card names below, in the section's
+                own hue: as small muted text the headings sank between the
+                brand logos and the grid read as one undifferentiated wall.
+                The lighter dark-mode tone keeps the same hue legible on a
+                dark ground. The rule after the label carries the colour
+                across the row so the boundary reads even where the label is
+                short. */}
+            <h3
+              className="flex items-center gap-2.5 text-lg font-semibold tracking-tight text-[var(--section-accent)] dark:text-[var(--section-accent-dark)]"
+              style={
+                {
+                  '--section-accent': `oklch(0.5 0.17 ${section.hue})`,
+                  '--section-accent-dark': `oklch(0.8 0.13 ${section.hue})`,
+                } as CSSProperties
+              }
+            >
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-current/12 [&>svg]:h-4 [&>svg]:w-4">
+                {section.icon}
+              </span>
               {section.label}
+              <span aria-hidden className="ml-1 h-px min-w-6 flex-1 bg-current/25" />
             </h3>
 
             {/* Three to a row, matching every other gallery on the page. */}
@@ -250,16 +280,18 @@ export function PickStep({ catalog, picked, onToggle, onContinue, pinContinue = 
           scrollport instead — same guarantee, the host's scroll model.
           Translucent-blurred like the onboarding banner so catalog tiles
           sliding beneath it read as "more below", not a hard cut. */}
-      <div
-        className={cn(
-          'flex shrink-0 justify-end border-t pt-4',
-          !pinContinue && 'sticky bottom-0 z-10 bg-background/95 pb-3 backdrop-blur-sm',
-        )}
-      >
-        <Button disabled={picked.size === 0} onClick={onContinue}>
-          Continue → {picked.size} selected
-        </Button>
-      </div>
+      {showContinue && (
+        <div
+          className={cn(
+            'flex shrink-0 justify-end border-t pt-4',
+            !pinContinue && 'sticky bottom-0 z-10 bg-background/95 pb-3 backdrop-blur-sm',
+          )}
+        >
+          <Button disabled={picked.size === 0} onClick={onContinue}>
+            Continue → {picked.size} selected
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

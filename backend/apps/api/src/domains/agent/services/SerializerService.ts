@@ -15,6 +15,7 @@ import {
   type Place,
 } from '@ci/domains/memory';
 import { type Note } from '@ci/domains/notes';
+import { type Task } from '@ci/domains/planning';
 
 import { type RecallObjectRef } from '../types';
 
@@ -102,6 +103,8 @@ export class SerializerService {
         return this.serializeFile(resolved.entity);
       case 'answer':
         return this.serializeAnswer(resolved.entity);
+      case 'task':
+        return this.serializeTask(resolved.entity);
       case 'thread':
         return this.serializeThread(resolved.entity);
       default:
@@ -154,6 +157,10 @@ export class SerializerService {
       case 'file':
       case 'thread':
         return isoTime(resolved.entity.createdAt);
+      case 'task':
+        // Due date is the instant that makes a task actionable; a task with no
+        // due date still needs a citation time, so fall back to creation.
+        return isoTime(resolved.entity.dueAt ?? resolved.entity.createdAt);
       case 'file-chunk':
         return isoTime(resolved.entity.file?.createdAt);
       default:
@@ -252,6 +259,12 @@ export class SerializerService {
 
   private serializeNote(entity: Note) {
     return join(`[Note] ${entity.title ?? 'Untitled'}`, entity.content?.slice(0, 120));
+  }
+
+  private serializeTask(entity: Task) {
+    // Status leads because a recalled task is almost always being checked for
+    // whether it is still outstanding.
+    return join(`[Task:${entity.status}] ${entity.title}`, entity.description?.slice(0, 120));
   }
 
   private serializeBrowserActivity(entity: BrowserActivity) {

@@ -189,6 +189,48 @@ describe('CommunicationDetails — attachments', () => {
     expect(screen.queryByTestId('communication-attachments')).not.toBeInTheDocument();
   });
 
+  it('links a content-backed attachment to its row in the memory, with the original beside it', async () => {
+    // A reddit post's picture: the importer attaches a content row that only
+    // knows the image URL. The picture renders above; the list below is the
+    // connection to that content row.
+    renderPost([
+      {
+        contentId: '01a06842-bc9b-766e-bd65-51d5ddd4f5e3',
+        filename: 'wu4xdo8if75h1.png',
+        contentType: 'image/png',
+        url: 'https://i.redd.it/wu4xdo8if75h1.png',
+      },
+    ]);
+
+    await screen.findByTestId('communication-attachments');
+    expect(screen.getByRole('img', { name: 'wu4xdo8if75h1.png' })).toBeInTheDocument();
+
+    const link = screen.getByRole('link', { name: 'wu4xdo8if75h1.png' });
+
+    expect(link).toHaveAttribute('href', '/memory/content/01a06842-bc9b-766e-bd65-51d5ddd4f5e3');
+    expect(link).not.toHaveAttribute('target');
+    expect(screen.getByRole('link', { name: 'original' })).toHaveAttribute(
+      'href',
+      'https://i.redd.it/wu4xdo8if75h1.png',
+    );
+  });
+
+  it('lists a stored-file picture by name as a link to the file', async () => {
+    renderPost([
+      {
+        fileId: 'file-2',
+        filename: 'facebook-photo-1.jpg',
+        contentType: 'image/jpeg',
+        url: '/companion/photo?sig=1',
+        previewUrl: '/companion/photo-preview?sig=1',
+      },
+    ]);
+
+    const link = await screen.findByRole('link', { name: 'facebook-photo-1.jpg' });
+
+    expect(link).toHaveAttribute('href', '/static/companion/photo?sig=1');
+  });
+
   it('shows no media block for a message with no attachments', async () => {
     renderPost([]);
 

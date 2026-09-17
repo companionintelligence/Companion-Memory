@@ -1,6 +1,6 @@
-import { useLayoutEffect, useMemo, useState, type BaseSyntheticEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState, type BaseSyntheticEvent } from 'react';
 
-import { FetchJsonError } from '@ci/common';
+import { buildApiUrl, fetchJson, FetchJsonError } from '@ci/common';
 import {
   Alert,
   Form,
@@ -41,7 +41,32 @@ export function SignupForm({ onSubmit }: SignupFormProps) {
   const [{ loading, error }] = useAuth();
 
   const { isFeatureEnabled } = useFeatures();
-  const codesRequired = isFeatureEnabled('require.signup.codes');
+  // The flag alone is not the answer: an appliance nobody has claimed yet always
+  // allows its first account, however the flag is set, because there is no way to
+  // mint a code on a box with an empty database. The server owns that rule, so
+  // ask it rather than reimplementing it here — and until it answers, assume the
+  // flag, so the field never flashes in and out on a server that does want a code.
+  const flagRequiresCode = isFeatureEnabled('require.signup.codes');
+  const [codesRequired, setCodesRequired] = useState(flagRequiresCode);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchJson<{ codeRequired: boolean }>(buildApiUrl('/api/signup/requirements'))
+      .then((result) => {
+        if (!cancelled && typeof result?.codeRequired === 'boolean') {
+          setCodesRequired(result.codeRequired);
+        }
+      })
+      // An unreachable endpoint leaves the flag's answer in place: showing the
+      // field when it turns out not to be needed is a smaller failure than
+      // hiding one the server will reject the submission without.
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [flagRequiresCode]);
 
   const form = useForm<SignupFormData>({
     resolver: formDataResolver(SignupFormSchema),
@@ -187,7 +212,7 @@ export function SignupForm({ onSubmit }: SignupFormProps) {
           )}
         />
 
-        {isFeatureEnabled('require.signup.codes') && (
+        {codesRequired && (
           <Form.Field
             control={form.control}
             name="signup_code"

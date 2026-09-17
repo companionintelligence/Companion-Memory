@@ -9,11 +9,17 @@
                        <H3>Folder</H3> headings and <A HREF ADD_DATE=…>Title</A>
                        anchors. ADD_DATE is SECONDS since the Unix epoch.
    We emit one 'page_view' per visit and one 'bookmark' per saved link.
+
+   Identities come from the registry's browser builders (identity/browser.ts),
+   under the `chromium` system: the same visit in the profile's History SQLite
+   (chromium.ts) or captured live by the browser extension must land on the
+   same ci.browser_activity row, and Takeout is just a third arrival of it.
 */
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { open, readdir, stat, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
+
+import { browserBookmarkIdentity, browserVisitIdentity, unixMsFromMicros } from '@ci/domains/memory';
 
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -22,17 +28,6 @@ import { timeframeContains } from './timeline';
 
 const HISTORY_FILE = 'history.json';
 const BOOKMARKS_FILE = 'bookmarks.html';
-
-// Takeout stamps visits in microseconds since the Unix epoch.
-function usecToDate(usec: unknown): Date | undefined {
-  if (typeof usec !== 'number' || usec <= 0) {
-    return undefined;
-  }
-
-  const d = new Date(Math.floor(usec / 1000));
-
-  return isNaN(d.getTime()) ? undefined : d;
-}
 
 // Bookmark ADD_DATE is whole seconds since the Unix epoch.
 function secToDate(sec: number | undefined): Date | undefined {
@@ -323,19 +318,17 @@ export class GoogleChromeFileImporter implements FileImporter {
         continue;
       }
 
-      const ts = usecToDate(v.time_usec);
+      // Takeout stamps visits in microseconds since the Unix epoch; the identity
+      // truncates to the millisecond every other producer can reach.
+      const ms = unixMsFromMicros(v.time_usec);
+      const ts = ms === undefined ? undefined : new Date(ms);
       if (!timeframeContains(params.timeframe, ts)) {
         continue;
       }
 
-      // Stable id per (url, time_usec): distinct visits stay distinct and a
-      // re-import dedups on the same key.
-      const id =
-        'google_chrome:' +
-        crypto
-          .createHash('sha1')
-          .update(`${url} ${v.time_usec ?? ''}`)
-          .digest('hex');
+      // Cross-producer key: the same (url, visit ms) from the History SQLite
+      // importer or the browser extension is the same row.
+      const id = browserVisitIdentity('chromium', url, ms).id;
       params.pipeline.push({
         item: {
           id,
@@ -349,6 +342,9 @@ export class GoogleChromeFileImporter implements FileImporter {
             Transition:
               typeof v.page_transition_qualifier === 'string' ? v.page_transition_qualifier : undefined,
             Source: 'Google Chrome',
+            // Takeout is Chrome Sync, so the brand is always Chrome. Same key
+            // the extension writes (`properties.browser`).
+            browser: 'chrome',
           },
         },
       });
@@ -383,13 +379,9 @@ export class GoogleChromeFileImporter implements FileImporter {
       }
 
       // ADD_DATE can be 0 ("Other Bookmarks" roots) or repeat across links, so
-      // key on (url, addDate) to keep distinct saves distinct.
-      const id =
-        'google_chrome:bookmark:' +
-        crypto
-          .createHash('sha1')
-          .update(`${b.url} ${b.addDate ?? ''}`)
-          .digest('hex');
+      // the key is (url, add second) — the builder's own precision for
+      // bookmarks, because this file is the one that only has seconds.
+      const id = browserBookmarkIdentity('chromium', b.url, ts?.getTime()).id;
       params.pipeline.push({
         item: {
           id,
@@ -406,6 +398,9 @@ export class GoogleChromeFileImporter implements FileImporter {
             Folder: b.folder,
             'Added Date': ts?.toISOString(),
             Source: 'Google Chrome',
+            // Takeout is Chrome Sync, so the brand is always Chrome. Same key
+            // the extension writes (`properties.browser`).
+            browser: 'chrome',
           },
         },
       });

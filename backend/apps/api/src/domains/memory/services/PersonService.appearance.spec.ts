@@ -33,13 +33,13 @@ function makeHarness() {
 }
 
 describe('PersonService people browse appearance dating', () => {
-  it('keeps the unique created_at list when there is no date window', async () => {
+  it('keeps the unique updated_at list when there is no date window', async () => {
     const { service, query, qb } = makeHarness();
 
     const rows = await service.getEntitiesForPeople(CONTEXT, { limit: 30 });
 
     expect(query).not.toHaveBeenCalled();
-    expect(qb.orderBy).toHaveBeenCalledWith('person.created_at', 'DESC');
+    expect(qb.orderBy).toHaveBeenCalledWith('person.updated_at', 'DESC');
     expect(rows).toEqual([{ id: PERSON, type: 'person' }]);
   });
 

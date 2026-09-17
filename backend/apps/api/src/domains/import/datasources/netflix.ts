@@ -314,7 +314,13 @@ export class NetflixFileImporter implements FileImporter {
         classification: 'watch',
         timestamp: ts,
         timespanEnd: end,
-        content: { filename: 'watch.txt', mediaType: 'text/plain', data: async () => Buffer.from(title) },
+        // Netflix streams over MPEG-DASH: the row describes the thing watched,
+        // not the title placeholder written as its body.
+        content: {
+          filename: 'watch.txt',
+          mediaType: 'application/dash+xml',
+          data: async () => Buffer.from(title),
+        },
         metadata: {
           Title: row['Title'] || undefined,
           // One content row per TITLE: the URI replaces the per-viewing item id

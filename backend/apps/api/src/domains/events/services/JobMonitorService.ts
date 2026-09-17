@@ -1,11 +1,13 @@
 import { Injectable, Logger, Optional, UnauthorizedException } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
+import { CronTime } from 'cron';
 import { Repository } from 'typeorm';
 
 import { RequestContext } from '@ci/common/context';
 import { JobControlStore } from '@ci/common/job-controls';
-import { CronRunStore } from '@ci/common/schedule';
+import { processRole, serves, type ServedRole } from '@ci/common/roles';
+import { type CronDeclaration, CronRegistry, CronRunStore, cronSkipReason } from '@ci/common/schedule';
 
 import { DEAD_LETTER_QUEUE } from '../constants';
 import { PgBossArchiveEntity } from '../entities/PgBossArchiveEntity';
@@ -106,8 +108,14 @@ export interface CronScheduleDto {
    * NOT health. The `@Cron` wrapper catches, logs and returns, so a schedule
    * whose body throws on every tick stays started forever. Read this with
    * {@link lastSuccessAt} and {@link overdue}, never alone.
+   *
+   * `null` when {@link servedHere} is false: the scheduler holding this job is
+   * in the other process and this one cannot see it. Distinct from `false`,
+   * which means the local scheduler has it and has it stopped — the card
+   * renders that as "stopped", which is exactly wrong for a schedule ticking
+   * normally one process over.
    */
-  readonly running: boolean;
+  readonly running: boolean | null;
   /** Next fire time, ISO-8601, or null if the job is stopped. */
   readonly nextRunAt: string | null;
   /**
@@ -146,6 +154,18 @@ export interface CronScheduleDto {
    * supposed not to be.
    */
   readonly disabled: boolean;
+  /** Which process runs it. Every schedule in the build is listed, both roles. */
+  readonly role: ServedRole;
+  /**
+   * Whether the process that answered is the one whose scheduler holds it.
+   *
+   * False only under the web/worker split, and it is what makes the rest of the
+   * row readable: `running`, `nextRunAt` and `overdue` are live scheduler state
+   * this process does not have, so they are null/false rather than claimed.
+   * `lastRunAt`, `lastSuccessAt` and `disabled` are durable and mean the same
+   * either way.
+   */
+  readonly servedHere: boolean;
 }
 
 export interface JobQueueDto {
@@ -308,6 +328,29 @@ export class JobMonitorService {
    *
    * `fireOnTick` does not await async cron bodies; work continues in the
    * background and lands on pg-boss like a normal tick.
+   *
+   * **A name this process cannot fire is reported, not dropped.** Under the
+   * split, the process serving HTTP is `CI_ROLE=web`, which holds none of the
+   * eleven worker schedules. Asking it for one walked a registry the name was
+   * not in, matched nothing, and returned `{fired: [], skipped: [], errors: []}`
+   * — a success-shaped answer to a request that did nothing, for the one
+   * operation whose whole purpose is making something happen now. Firing across
+   * processes is not possible (`fireOnTick` is a handle on a live job), so the
+   * honest outcome is an error naming the process that can.
+   *
+   * **A schedule the wrapper would refuse is skipped, not fired.**
+   * `job.fireOnTick()` invokes the same `@Cron`-wrapped body the scheduler
+   * ticks, and that body has its own early returns — the operator's off switch,
+   * and the `exclusive` guard when the previous tick is still running — each of
+   * which no-ops and records its own skip. But they run inside a promise this
+   * method does not await, so without a check here the name lands in `fired`
+   * before the body gets a chance to bail. That reports success for a run that
+   * did nothing, and double-counts the manual attempt against the setting's drop
+   * tally on top of the skip the wrapper itself already records.
+   *
+   * Asked through {@link cronSkipReason} rather than re-checked here, so the
+   * next early return added to the wrapper is covered by construction instead of
+   * by remembering to mirror it in this loop.
    */
   fireCronJobs(names?: readonly string[]): {
     fired: string[];
@@ -327,9 +370,35 @@ export class JobMonitorService {
     }
 
     const allow = names && names.length > 0 ? new Set(names) : null;
+    const jobs = this.schedulerRegistry.getCronJobs();
 
-    for (const [name, job] of this.schedulerRegistry.getCronJobs()) {
+    for (const requested of allow ?? []) {
+      if (jobs.has(requested)) {
+        continue;
+      }
+
+      const declared = CronRegistry.get(requested);
+
+      errors.push({
+        name: requested,
+        error: declared
+          ? `"${requested}" runs in the ${declared.role} process (this one is ${processRole()}), so its ` +
+            `scheduler is not here to fire. Run it from that process, or switch it off and on from the ` +
+            `Jobs page if you only need the setting to change.`
+          : `"${requested}" is not a schedule in this build.`,
+      });
+    }
+
+    for (const [name, job] of jobs) {
       if (allow && !allow.has(name)) {
+        skipped.push(name);
+        continue;
+      }
+
+      // Keyed on the registry name, which equals the wrapper's `runName` for
+      // every schedule that declares `name:` — an unnamed one gets a uuid
+      // registry key and is already invisible to this check, as it always was.
+      if (cronSkipReason(name) !== null) {
         skipped.push(name);
         continue;
       }
@@ -349,7 +418,7 @@ export class JobMonitorService {
   }
 
   /**
-   * The recurring jobs registered with Nest's scheduler in THIS process.
+   * Every recurring job on the appliance, whether or not this process runs it.
    *
    * `nextRunAt` comes from the live registry. `lastRunAt` prefers the durable
    * `ci.cron_runs` row (survives restarts) and falls back to in-memory
@@ -360,18 +429,43 @@ export class JobMonitorService {
    * `overdue` is computed here rather than left to the UI because it needs the
    * cron expression evaluated, and the only evaluator is the `CronTime` the
    * registry is holding.
+   *
+   * ── The schedules this process does not run ────────────────────────────────
+   *
+   * Under the Procfile's split the API is `CI_ROLE=web` and the eleven
+   * `role: 'worker'` schedules never register with its scheduler, so this
+   * reported 42 of 53. #2539 moved the switches into the Schedules table and
+   * #2546 gave the controls payload the complete list, so the card now fills the
+   * gap by appending the names the controls endpoint knows and this one does not
+   * — but it can only invent a row, and it invents `running: false`, which the
+   * status badge renders as **stopped**. Eleven schedules ticking normally in
+   * the worker therefore read as stopped on the page an operator opens to find
+   * out what stopped, with dashes where their history should be.
+   *
+   * The durable half of the answer was already in hand here: `ci.cron_runs` is
+   * written by whichever process ticks, `runsByName()` loads all of it, and
+   * those eleven rows were being fetched and thrown away for want of a registry
+   * entry. That is also why the page's `never-succeeded` verdict — its only
+   * critical schedule signal — could not fire for a worker schedule however long
+   * one had been broken: it reads `lastRunAt`/`lastSuccessAt` off this list.
+   *
+   * So they are listed here, from {@link CronRegistry}, carrying exactly what
+   * durable state supports: last run, last success, and the operator's own
+   * on/off. What they deliberately do NOT carry is `running`, `nextRunAt` or
+   * `overdue` — facts about a process, not about the build. This process cannot
+   * know whether the worker is up, and no cron evaluator is resolvable here to
+   * compute a fire time for an expression nothing local has parsed. `running` is
+   * `null` rather than `false` so the badge can tell "elsewhere" from "stopped".
    */
   private async getCronSchedules(): Promise<CronScheduleDto[]> {
     const schedules: CronScheduleDto[] = [];
     const persisted = await CronRunStore.runsByName();
-
-    if (!this.schedulerRegistry) {
-      return schedules;
-    }
+    const registered = new Set<string>();
 
     const now = Date.now();
 
-    for (const [name, job] of this.schedulerRegistry.getCronJobs()) {
+    for (const [name, job] of this.schedulerRegistry?.getCronJobs() ?? []) {
+      registered.add(name);
       let nextRunAt: string | null = null;
       let memoryLastRunAt: string | null = null;
       const durable = persisted.get(name);
@@ -408,6 +502,47 @@ export class JobMonitorService {
         lastSuccessAt: durable?.lastSuccessAt?.toISOString() ?? null,
         overdue: !disabled && isOverdue(job.cronTime, lastRunAt, now),
         disabled,
+        // The DECLARED role, which is a fact about the build. Deriving it from
+        // the process role was wrong under CI_ROLE=all, where every worker
+        // schedule registers locally and so reported itself as `web` — the
+        // preview fixture models role as a declaration for exactly this reason.
+        // The fallback covers a job registered without the decorator.
+        role: CronRegistry.get(name)?.role ?? (serves('web') ? 'web' : 'worker'),
+        servedHere: true,
+      });
+    }
+
+    for (const declaration of CronRegistry.all()) {
+      if (registered.has(declaration.name)) {
+        continue;
+      }
+
+      const durable = persisted.get(declaration.name);
+      const disabled = JobControlStore.cronMode(declaration.name) === 'disabled';
+      const lastRunAtMs = durable?.lastRunAt.getTime() ?? null;
+
+      schedules.push({
+        name: declaration.name,
+        cron: declaration.cron,
+        timezone: declaration.timeZone,
+        // Not `false`, which the card renders as "stopped".
+        running: null,
+        nextRunAt: null,
+        // The whole reason this loop exists: written by whichever process ticks,
+        // and discarded here until now.
+        lastRunAt: durable?.lastRunAt.toISOString() ?? null,
+        lastSuccessAt: durable?.lastSuccessAt?.toISOString() ?? null,
+        // Derived from durable state alone: the declaration carries the
+        // expression and timezone, ci.cron_runs carries the last attempt, and
+        // `cron` is a direct dependency so the expression can be evaluated here.
+        // This is the one signal that catches a dead worker process — a daily
+        // schedule whose last attempt is three days old — and it is the signal
+        // listing these rows was meant to restore. Hardcoding it false left the
+        // dashboard unable to say anything had gone wrong in the other process.
+        overdue: !disabled && isOverdue(cronTimeFor(declaration), lastRunAtMs, now),
+        disabled,
+        role: declaration.role,
+        servedHere: false,
       });
     }
 
@@ -679,16 +814,31 @@ export class JobMonitorService {
 /**
  * The slice of the `cron` library's `CronTime` this file uses.
  *
- * Declared structurally because `cron` is a transitive dependency of
- * `@nestjs/schedule` and PnP will not let this workspace import it — the only
- * handle on it is the live instance the registry hands back on `job.cronTime`.
- * Nothing here parses a cron string; the expression is only ever evaluated by
- * the library that registered it.
+ * Kept structural even though `cron` is now a direct dependency (pinned to the
+ * exact version `@nestjs/schedule` resolves, so there is one copy): the value
+ * arrives two ways — the live instance the registry hands back on
+ * `job.cronTime` for schedules this process runs, and one built by
+ * {@link cronTimeFor} for schedules it does not — and the verdict logic must not
+ * care which.
  */
 interface CronTimeLike {
   readonly timeZone?: string | null;
   sendAt?: (count: number) => unknown;
   getNextDateFrom?: (start: Date, timeZone?: string) => unknown;
+}
+
+/**
+ * A `CronTime` for a schedule this process did not register, built from its
+ * declaration. `undefined` when `cron` rejects the expression: a bad expression
+ * must not take the dashboard down, and `isOverdue` reads `undefined` as
+ * "cannot say", which is the honest answer for it.
+ */
+function cronTimeFor(declaration: CronDeclaration): CronTimeLike | undefined {
+  try {
+    return new CronTime(declaration.cron, declaration.timeZone ?? undefined);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Below a minute, clock skew alone would flip the verdict. */

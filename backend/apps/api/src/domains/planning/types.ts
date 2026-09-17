@@ -53,3 +53,17 @@ export interface CreateTaskPendingChangeDto {
   rationale?: string | null;
   confidence?: number | null;
 }
+
+/**
+ * Partial update of a user's planning preferences. Only the keys present are
+ * written; an explicit `null` resets that field to its shipped default rather
+ * than deleting the row.
+ */
+export interface UpdatePlanningPrefsDto {
+  /** Zoneless wall-clock `HH:MM`. */
+  workStart?: string | null;
+  /** Zoneless wall-clock `HH:MM`. */
+  workEnd?: string | null;
+  defaultEstimatedMinutes?: number | null;
+  flexDays?: number | null;
+}

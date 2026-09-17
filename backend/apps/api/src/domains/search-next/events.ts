@@ -16,7 +16,13 @@ import type { IndexableEntity } from './types';
 export const RetrievalQueryEvent = 'retrieval.query';
 
 /** Which entry point served the retrieval. Persisted as `caller`. */
-export type RetrievalCaller = 'search' | 'search_prompt' | 'search_messages' | 'search_anchored' | 'recall';
+export type RetrievalCaller =
+  | 'search'
+  | 'search_count'
+  | 'search_prompt'
+  | 'search_messages'
+  | 'search_anchored'
+  | 'recall';
 
 /** Payload of {@link RetrievalQueryEvent}. */
 export type RetrievalQueryPayload = {

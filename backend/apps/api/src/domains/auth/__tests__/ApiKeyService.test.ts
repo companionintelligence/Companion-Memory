@@ -387,7 +387,7 @@ describe('ApiKeyService.validateKey', () => {
 
   beforeEach(() => jest.clearAllMocks());
 
-  it('returns userId, scopes and capability for a live key', async () => {
+  it('returns the identity AND the provenance of a live key', async () => {
     const repo = makeRepo();
     repo.findOne.mockResolvedValueOnce({
       id: 'k1',
@@ -395,14 +395,51 @@ describe('ApiKeyService.validateKey', () => {
       expires_at: null,
       scopes: ['memory'],
       capability: 'write',
+      name: null,
+      managed_by: null,
+    });
+    const service = makeService(repo);
+
+    // `name` and `managedBy` joined the return type so the managed-app gate can
+    // tell WHO is calling, not only what they may do. A key the owner made
+    // themselves has neither, and both are null rather than absent — a caller
+    // reading `managedBy` must be able to distinguish "not an app" from "this
+    // build does not report provenance".
+    expect(await service.validateKey(validRaw)).toEqual({
+      keyId: 'k1',
+      userId: 'owner-1',
+      scopes: ['memory'],
+      capability: 'write',
+      name: null,
+      managedBy: null,
+    });
+  });
+
+  it('reports an installed app as managed, which is what the gate keys on', async () => {
+    // `managed_by: 'connect'` is the ONLY thing that distinguishes a harness key
+    // from an owner's own key of the same capability, and since the harnesses
+    // are minted at `full` it is the whole basis for confirming them. A key
+    // whose provenance were dropped here would be indistinguishable from the
+    // owner and would execute irreversible calls unasked.
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValueOnce({
+      id: 'k1',
+      user_id: 'owner-1',
+      expires_at: null,
+      scopes: ['memory', 'intents', 'mcp'],
+      capability: 'full',
+      name: 'app:ci-openclaw:ci-marketplace',
+      managed_by: 'connect',
     });
     const service = makeService(repo);
 
     expect(await service.validateKey(validRaw)).toEqual({
       keyId: 'k1',
       userId: 'owner-1',
-      scopes: ['memory'],
-      capability: 'write',
+      scopes: ['memory', 'intents', 'mcp'],
+      capability: 'full',
+      name: 'app:ci-openclaw:ci-marketplace',
+      managedBy: 'connect',
     });
   });
 
@@ -414,6 +451,8 @@ describe('ApiKeyService.validateKey', () => {
       expires_at: null,
       scopes: null,
       capability: 'write',
+      name: null,
+      managed_by: null,
     });
     const service = makeService(repo);
 
@@ -422,6 +461,8 @@ describe('ApiKeyService.validateKey', () => {
       userId: 'owner-1',
       scopes: [],
       capability: 'write',
+      name: null,
+      managedBy: null,
     });
   });
 

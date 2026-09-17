@@ -25,6 +25,11 @@ def overlap_minutes(
     default_minutes: float,
 ) -> float:
     """Minutes of [start, end] that fall in `bucket`. Point events use default_minutes."""
+    # start_min/end_min may arrive as float or decimal.Decimal (Postgres
+    # EXTRACT(epoch ...) / 60.0 yields numeric -> Decimal). Normalize both to
+    # float here so the arithmetic below never mixes the two types.
+    start_min = float(start_min)
+    end_min = float(end_min) if end_min is not None else None
     lo = bucket * BUCKET_MINUTES
     hi = lo + BUCKET_MINUTES
     span_end = (

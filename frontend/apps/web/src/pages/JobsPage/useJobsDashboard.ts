@@ -89,8 +89,22 @@ export interface CronSchedule {
    * `@Cron` wrapper catches, logs and returns, so a schedule whose body throws
    * on every tick stays started forever. Read with `lastSuccessAt` and
    * `overdue`, never alone.
+   *
+   * `null` when `servedHere` is false: the scheduler holding it is in the other
+   * process. Distinct from `false`, which means stopped — check `servedHere`
+   * first, or a schedule ticking normally elsewhere renders as stopped.
    */
-  readonly running: boolean;
+  readonly running: boolean | null;
+  /** Which process runs it. */
+  readonly role?: 'web' | 'worker';
+  /**
+   * Whether the process that answered is the one whose scheduler holds it.
+   *
+   * Optional so an appliance running a build from before this shipped still
+   * types — `undefined` there, which reads as "not known to be elsewhere" and
+   * leaves those rows behaving exactly as they did.
+   */
+  readonly servedHere?: boolean;
   readonly nextRunAt: string | null;
   /** Last *attempt*: stamped before the body, so a tick that threw still counts. */
   readonly lastRunAt: string | null;

@@ -230,25 +230,25 @@ export class ConceptService extends EntityService<ConceptEntity, Concept> {
       .where('concept.owner_user_id = :userId', { userId: context.userId });
 
     if (options.startTime) {
-      query = query.andWhere('concept.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('concept.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('concept.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('concept.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     // Composite keyset: page strictly past (afterTime, afterId) in
-    // (created_at DESC, entity_id DESC) — see ContentService.getEntitiesForContents.
+    // (updated_at DESC, entity_id DESC) — see ContentService.getEntitiesForContents.
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(concept.created_at < :afterTime OR (concept.created_at = :afterTime AND concept.entity_id < :afterId))',
+        '(concept.updated_at < :afterTime OR (concept.updated_at = :afterTime AND concept.entity_id < :afterId))',
         { afterTime: options.afterTime, afterId: options.afterId },
       );
     }
 
     // Deterministic tiebreak so same-timestamp rows page consistently.
     query = query
-      .orderBy('concept.created_at', options.order ?? 'DESC')
+      .orderBy('concept.updated_at', options.order ?? 'DESC')
       .addOrderBy('concept.entity_id', 'DESC');
 
     if (options.limit) {
@@ -274,11 +274,11 @@ export class ConceptService extends EntityService<ConceptEntity, Concept> {
       .where('concept.owner_user_id = :userId', { userId: context.userId });
 
     if (options.startTime) {
-      query = query.andWhere('concept.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('concept.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('concept.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('concept.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     return query.getCount();

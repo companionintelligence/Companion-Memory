@@ -1,5 +1,5 @@
 /**
- * The data-quality check registry — `ci-import doctor`'s whole vocabulary.
+ * The data-quality check registry — `ci doctor`'s whole vocabulary.
  *
  * ## Why this exists
  *
@@ -13,7 +13,7 @@
  *
  * So these are REGRESSION DETECTORS, not hypotheticals. Each one is the
  * question "did the defect we just fixed come back?", asked in a form that both
- * a person and an agent can run: `ci-import doctor` for a table, `--json` for a
+ * a person and an agent can run: `ci doctor` for a table, `--json` for a
  * loop, and a non-zero exit when anything HIGH is non-zero so a loop can gate
  * on it.
  *
@@ -78,7 +78,7 @@
 /**
  * How much a non-zero count matters.
  *
- * `high` is the gate: `ci-import doctor` exits non-zero when any high check is
+ * `high` is the gate: `ci doctor` exits non-zero when any high check is
  * non-zero, so it can sit in an agent's loop or a release check. Reserve it for
  * "this is provably wrong and there is a known fix" — a guard being violated, a
  * row that cannot be reached from anywhere, a job that will never run again.
@@ -192,7 +192,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       'These rows cannot be attributed to a person, so they are invisible to every people-centric view ' +
       'and contribute nothing to entity resolution. The participant edges are filled by the ' +
       '`extract_people` / `link_communications` enrichment legs — run ' +
-      '`ci-import backfill extract_people link_communications` before concluding the parser is at fault. ' +
+      '`ci backfill extract_people link_communications` before concluding the parser is at fault. ' +
       'That backfill resolves handles out of `participants_metadata`, so it can only help a row that ' +
       'HAS one: a row whose participants_metadata is empty names nobody to resolve, and no leg will ' +
       'ever fill it. On the reference corpus that is 16,325 outbound iMessages whose chat.db row has ' +
@@ -439,7 +439,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       'The count is ROWS in duplicate groups, not the number of groups: three "Chris Czaplak" rows ' +
       'count as three. Identical names are the cheapest possible duplicate signal and the one entity ' +
       'resolution should never miss, so a large number means the identifier-claim path did not run — ' +
-      'try `ci-import backfill extract_people heal_self_collation`. It is MEDIUM because two different ' +
+      'try `ci backfill extract_people heal_self_collation`. It is MEDIUM because two different ' +
       'people really can share a name, so a machine must not merge on this alone.',
     mirrors: null,
     // Grouped on (owner_user_id, name) rather than name alone: two accounts on
@@ -475,7 +475,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       'The source told us where this happened and the column that displays it is empty, so the event ' +
       'shows as placeless in the timeline and the map. Usually a mapping gap in the parser for the ' +
       'source named in the breakdown. Fix the mapping, then re-import — or run ' +
-      '`ci-import backfill geocode` if the name is present but the coordinates are what is missing.',
+      '`ci backfill geocode` if the name is present but the coordinates are what is missing.',
     mirrors: 'src/domains/geocode/util/virtualLocations.ts isUriLocation (the exclusion)',
     // Two exclusions, and neither is incidental — both stop this check firing
     // on rows that are CORRECT.
@@ -760,7 +760,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       'running for that stage, or the whole backlog is larger than the tick can drain. 172 of these ' +
       'were sitting on `enrich.geocode` with reason `provider_unavailable` during the live import. ' +
       'Check the stage named in the breakdown has a running consumer, then re-drive it with ' +
-      '`ci-import backfill <leg>`.',
+      '`ci backfill <leg>`.',
     mirrors: null,
     // Cheap regardless of table size: 20260809032723 creates a partial index on
     // (status, next_attempt_at) WHERE status = 'failed', which is exactly this
@@ -903,7 +903,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     title: 'Events with no ci_search.vectors row and no skip marker — unfindable by search',
     scope: 'ci.events, ci_search.vectors, ci_search.index_skips',
     remedy:
-      'Run `ci-import backfill search_index`. If the number does not move, the listener is not writing ' +
+      'Run `ci backfill search_index`. If the number does not move, the listener is not writing ' +
       'vectors at all — check for quarantined pipeline_state rows and dead letters on the index stage ' +
       'first (this doctor has a check for each), because a quarantined row makes the backfill report ' +
       'success while writing nothing.',
@@ -952,6 +952,167 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       )
       SELECT count(*)::bigint AS count,
              ${breakdownBy('source_system')} AS breakdown,
+             ${SAMPLE} AS sample
+        FROM bad
+    `,
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Cross-pipeline identity (docs/design/cross-pipeline-identity.md)
+  //
+  // The identity indexes key on (user, source_system, source_id) so the same
+  // datum delivered by a connection AND an archive lands once, and
+  // ci.record_sources keeps one row per (record, arrival). These two checks
+  // are the acceptance metric from §5 turned into a regression detector:
+  // after a Takeout import and a connection sync of the same account, every
+  // record inside the window both producers cover should carry two
+  // arrivals. A record with one is either honest residue (a fallback-lane id,
+  // counted separately) or a producer that stopped minting the shared key.
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'identity-fallback-lane-rows',
+    // MEDIUM: the fallback lane is a DESIGNED outcome (design doc §3.5) —
+    // Message-ID-less mail, UID-less VEVENTs, TZID-local RECURRENCE-IDs the
+    // normalizer does not recognise. Those rows are correct and can never
+    // converge, so the count is not zero on a correct corpus. What the
+    // breakdown is for is the regression: a producer that used to key on the
+    // natural key and now hashes instead (the exact-case `Message-ID` lookup
+    // that dropped every `Message-Id:` message into this lane, 2026-09-01).
+    severity: 'medium',
+    title: 'Rows keyed on a fallback id — this datum will never converge with the other pipeline',
+    scope: 'ci.communications, ci.events, ci.content, ci.browser_activity',
+    remedy:
+      'A `fallback:<sha256>` source_id means the producer could not find the datum’s natural key ' +
+      '(the RFC Message-ID for mail, the iCalUID for a calendar event) and hashed pipeline-local ' +
+      'material instead, which the OTHER pipeline cannot reproduce — so a copy delivered by the ' +
+      'connection and a copy delivered by the archive stay two rows. Some of that is honest: mail ' +
+      'with no Message-ID exists, and the design accepts the residue rather than pretend a body hash ' +
+      'is stable. Read the breakdown per source_system against what the source can carry: `email` ' +
+      'rows here should be rare, so a jump after a parser change means a builder stopped reading the ' +
+      'header it used to (registry builders in src/domains/memory/identity/ return null for a missing ' +
+      'key and the caller falls back; check the caller is passing the header at all). The rows ' +
+      'themselves are not wrong and need no repair; the natural-key population converges on its own. ' +
+      'Rows written before the identity change (no ledger arrival) are not fallback-lane and do not ' +
+      'count here.',
+    mirrors: 'src/domains/memory/identity/registry.ts fallbackId (the marker this predicate keys on)',
+    sql: String.raw`
+      WITH bad AS (
+        SELECT 'communications' AS record_table, c.id, c.source_type, c.source_system, c.source_id
+          FROM ci.communications c
+         WHERE c.source_id LIKE 'fallback:%'
+        UNION ALL
+        SELECT 'events', e.event_id, e.source_type, e.source_system, e.source_id
+          FROM ci.events e
+         WHERE e.source_id LIKE 'fallback:%'
+        UNION ALL
+        SELECT 'content', k.id, k.source_type, k.source_system, k.source_id
+          FROM ci.content k
+         WHERE k.source_id LIKE 'fallback:%'
+        UNION ALL
+        SELECT 'browser_activity', b.id, b.source_type, b.source_system, b.source_id
+          FROM ci.browser_activity b
+         WHERE b.source_id LIKE 'fallback:%'
+      )
+      SELECT count(*)::bigint AS count,
+             ${breakdownBy(`record_table || '/' || source_system`)} AS breakdown,
+             ${SAMPLE} AS sample
+        FROM bad
+    `,
+  },
+  {
+    id: 'identity-unconverged-in-overlap',
+    // MEDIUM, and the floor is genuinely not zero: the connection sweeps the
+    // mailbox the account has NOW, the archive holds what it had THEN, and a
+    // message deleted between the two is honestly single-producer inside the
+    // window. The number to watch is the trend across a re-import, not the
+    // absolute — a step change after a parser change is the regression.
+    severity: 'medium',
+    title:
+      'Records inside a two-producer overlap window that only one producer delivered — the pair did not converge',
+    scope: 'ci.record_sources, ci.communications, ci.events, ci.browser_activity',
+    // The second half of the key: `platform` is what tells a Gmail fetch
+    // from an Outlook fetch once both ledger under the federated `email`.
+    remedy:
+      'For every (table, source_system, platform) a user has received from two producers (a connection sync and ' +
+      'an import of the same account, say), this takes the window of record time BOTH producers cover ' +
+      '(each producer’s 5th–95th percentile of record time, so a few stray old timestamps do not stretch it) ' +
+      'and counts the records inside it that carry a single ci.record_sources arrival, excluding the ' +
+      'fallback lane (identity-fallback-lane-rows counts that). Zero means every datum both producers ' +
+      'delivered landed once — the acceptance metric in docs/design/cross-pipeline-identity.md §5. A ' +
+      'non-zero count is one of three things, told apart by the breakdown key `table/system/producer`: ' +
+      'honest residue (the archive holds mail the mailbox no longer does — expected, small, stable); a ' +
+      'sub-population one side never fetches (the Gmail sync reads the inbox and sent sweeps while ' +
+      'Takeout has every label — narrow the sync or accept it); or the two producers minting ' +
+      'DIFFERENT keys for the same datum, which is the regression this exists for. For the third, ' +
+      'pick one record from `sample`, find its twin in the other producer’s rows by subject and ' +
+      'time, and compare the two source_ids: the conformance suite ' +
+      '(src/domains/import/push/__tests__/crossPipelineIdentity.test.ts) is where the disagreement ' +
+      'gets a fixture and the registry builder gets fixed. Rows that predate the ledger have no ' +
+      'arrival and are outside this check entirely, and so is every arrival whose ledger platform is ' +
+      'NULL — a generic mbox/eml or .ics import that could not name its mailbox pairs with nothing ' +
+      '(record_sources.platform, migration 20260902225107); if a mailbox you DID connect shows no ' +
+      'pair here, its importer is not stamping the platform the connection stamps.',
+    mirrors:
+      'src/domains/import/push/__tests__/crossPipelineIdentity.test.ts (the suite that defines "converges")',
+    // Three UNION ALL arms rather than one join through a unioned view, so each
+    // arm hits its own table's primary key; `first_seen` is the ARRIVAL time
+    // and deliberately not used — the window is over the record's own time.
+    //
+    // Each producer's span is its 5th–95th percentile of record time, not its
+    // min/max. Measured on the first post-wipe corpus: the Gmail connection
+    // had synced ~870 messages, all but a handful from the last year, and the
+    // handful (thread replays with 2014–2018 dates) stretched a min/max window
+    // back a decade and pulled 11,100 archive-only messages into the count.
+    // Trimming the tails keeps the window where the producer actually
+    // delivered in bulk; a producer with fewer than 20 records has no interior
+    // to trim and keeps its full span.
+    sql: String.raw`
+      WITH arrivals AS (
+        SELECT rs.user_id, rs.record_table, rs.record_id, rs.source_system, rs.platform, rs.source_type,
+               rs.source_id, c.time AS t
+          FROM ci.record_sources rs
+          JOIN ci.communications c ON rs.record_table = 'communications' AND c.id = rs.record_id
+         WHERE rs.platform IS NOT NULL
+        UNION ALL
+        SELECT rs.user_id, rs.record_table, rs.record_id, rs.source_system, rs.platform, rs.source_type,
+               rs.source_id, e.start_time
+          FROM ci.record_sources rs
+          JOIN ci.events e ON rs.record_table = 'events' AND e.event_id = rs.record_id
+         WHERE rs.platform IS NOT NULL
+        UNION ALL
+        SELECT rs.user_id, rs.record_table, rs.record_id, rs.source_system, rs.platform, rs.source_type,
+               rs.source_id, b.time
+          FROM ci.record_sources rs
+          JOIN ci.browser_activity b ON rs.record_table = 'browser_activity' AND b.id = rs.record_id
+         WHERE rs.platform IS NOT NULL
+      ),
+      producers AS (
+        SELECT user_id, record_table, source_system, platform, source_type,
+               percentile_disc(0.05) WITHIN GROUP (ORDER BY t) AS lo,
+               percentile_disc(0.95) WITHIN GROUP (ORDER BY t) AS hi
+          FROM arrivals
+         GROUP BY 1, 2, 3, 4, 5
+      ),
+      windows AS (
+        SELECT user_id, record_table, source_system, platform, max(lo) AS lo, min(hi) AS hi
+          FROM producers
+         GROUP BY 1, 2, 3, 4
+        HAVING count(*) >= 2 AND max(lo) <= min(hi)
+      ),
+      bad AS (
+        SELECT a.record_table, a.record_id, a.source_system, a.platform,
+               min(a.source_type) AS source_type, min(a.source_id) AS source_id, min(a.t) AS time
+          FROM arrivals a
+          JOIN windows w
+            ON w.user_id = a.user_id AND w.record_table = a.record_table
+           AND w.source_system = a.source_system AND w.platform = a.platform
+         WHERE a.t BETWEEN w.lo AND w.hi
+         GROUP BY 1, 2, 3, 4
+        HAVING count(DISTINCT a.source_type) = 1
+           AND bool_and(a.source_id NOT LIKE 'fallback:%')
+      )
+      SELECT count(*)::bigint AS count,
+             ${breakdownBy(`record_table || '/' || platform || '/' || source_type`)} AS breakdown,
              ${SAMPLE} AS sample
         FROM bad
     `,

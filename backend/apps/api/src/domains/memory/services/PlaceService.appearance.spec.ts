@@ -38,13 +38,13 @@ function makeHarness() {
 }
 
 describe('PlaceService places browse appearance dating', () => {
-  it('keeps the unique created_at list when there is no date window', async () => {
+  it('keeps the unique updated_at list when there is no date window', async () => {
     const { service, query, qb } = makeHarness();
 
     const rows = await service.getEntitiesForPlaces(CONTEXT, { limit: 30 });
 
     expect(query).not.toHaveBeenCalled();
-    expect(qb.orderBy).toHaveBeenCalledWith('place.created_at', 'DESC');
+    expect(qb.orderBy).toHaveBeenCalledWith('place.updated_at', 'DESC');
     expect(rows).toEqual([{ id: PLACE, type: 'place' }]);
   });
 

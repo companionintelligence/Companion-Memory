@@ -128,6 +128,12 @@ export class GeoJSONFileImporter implements FileImporter {
     let featureIdx = 0;
     for (const feat of doc.features) {
       if (!feat || !feat.geometry) {
+        // U-22: a feature with no geometry is one record read that produced
+        // nothing. Counted at feature granularity here and at POSITION
+        // granularity in emitPosition, because that is the unit each of them
+        // actually loses — one LineString feature is N candidate fixes.
+        params.pipeline.consumed?.(1);
+        params.pipeline.drop?.('position_without_fix');
         featureIdx++;
         continue;
       }
@@ -150,20 +156,17 @@ export class GeoJSONFileImporter implements FileImporter {
           }
 
           case 'MultiLineString': {
-            // A running counter across every constituent line collapsed
-            // "point 0 of line 1" and "point 0 of line 2" onto colliding ids.
-            // Fold a per-line reset into a collision-safe compound index
-            // instead (note: re-importing a previously-imported
-            // MultiLineString file mints new ids for its points under this
-            // scheme, a one-time side effect, not a migration).
-            let lineIdx = 0;
+            // One running counter across every constituent line of this
+            // feature — never reset per line — so each position gets a
+            // strictly increasing, never-colliding index. A per-line reset
+            // combined with a `lineIdx * 100000 + i` compound index looks
+            // collision-safe but isn't: it collides as soon as any single
+            // line carries 100,000 or more positions.
+            let i = 0;
             for (const line of geom.coordinates as Position[][]) {
-              let i = 0;
               for (const pos of line) {
-                this.emitPosition(params, fpath, pos, props, featureIdx, lineIdx * 100000 + i++);
+                this.emitPosition(params, fpath, pos, props, featureIdx, i++);
               }
-
-              lineIdx++;
             }
 
             break;
@@ -189,13 +192,22 @@ export class GeoJSONFileImporter implements FileImporter {
     featureIdx: number,
     posIdx: number,
   ): void {
+    // One candidate fix read. Every path below either pushes it or drops it, so
+    // this is what makes `consumed = produced + dropped` a real equality rather
+    // than the 0 = 0 + 0 the parser used to report (U-22).
+    params.pipeline.consumed?.(1);
+
     if (!Array.isArray(pos) || pos.length < 2) {
+      params.pipeline.drop?.('position_without_fix');
+
       return;
     }
 
     const lon = parseFloat(String(pos[0]));
     const lat = parseFloat(String(pos[1]));
     if (isNaN(lat) || isNaN(lon)) {
+      params.pipeline.drop?.('position_without_fix');
+
       return;
     }
 
@@ -211,6 +223,8 @@ export class GeoJSONFileImporter implements FileImporter {
     }
 
     if (!timeframeContains(params.timeframe, ts)) {
+      params.pipeline.drop?.('outside_timeframe');
+
       return;
     }
 

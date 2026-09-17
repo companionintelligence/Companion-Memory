@@ -1,20 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
-import {
-  Badge,
-  Button,
-  Calendar,
-  Dialog,
-  Input,
-  Label,
-  Popover,
-  Select,
-  Tooltip,
-  cn,
-  useToast,
-} from '@ci/shadcn';
+import { Badge, Button, Dialog, Input, Label, Popover, Select, Tooltip, cn, useToast } from '@ci/shadcn';
 import {
   Activity,
   ArrowUpDown,
@@ -26,6 +14,7 @@ import {
   Filter,
   Map as MapIcon,
   MapPin,
+  MessageSquare,
   Save,
   Scan,
   Shapes,
@@ -35,10 +24,12 @@ import {
   Users,
   X,
 } from '@ci/shadcn/icons';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
+import { ActivityFilter } from '@/components/SearchBox/ActivityFilter';
 import { ConnectorFilter } from '@/components/SearchBox/ConnectorFilter';
+import { MESSAGE_DIRECTION_LABELS, readMessageDirection } from '@/components/SearchBox/DirectionToggle';
 import { EntityTypeFilter } from '@/components/SearchBox/EntityTypeFilter';
 import {
   FILTER_DRAG_TYPE,
@@ -46,6 +37,7 @@ import {
   readFilterDrag,
   type FilterDragKind,
 } from '@/components/SearchBox/filterDrag';
+import { EntityNameFilter } from '@/components/SearchBox/NameFilter';
 import { AVAILABLE_ENTITY_TYPES, useDropdown } from '@/components/SearchBox/useDropdown';
 import { type FragmentType } from '@/graphql';
 
@@ -64,24 +56,25 @@ import {
   FILTER_PARAMS,
   addEntityFilter,
   countActiveFilters,
+  eventsInPlay,
   filterValueKey,
   narrowedEntityTypes,
+  peopleInPlay,
   readCsvParam,
   removeEntityFilter,
   writeCsvFilterParam,
 } from './filterParams';
 import { SavedSearchPicker } from './SavedSearchPicker';
+import { currentSortValue, explorerSortOptions } from './sortOptions';
 import { droppedFilters, readMemoryView, unsupportedReason, type FilterDimension } from './viewFilterSupport';
 
-// Single-select sort presets that map to the backend's sortBy + sortOrder pair.
-const SORT_OPTIONS = [
-  { value: 'default', label: 'Default', sortBy: '', sortOrder: '' },
-  { value: 'relevance', label: 'Relevance', sortBy: 'relevance', sortOrder: 'desc' },
-  { value: 'newest', label: 'Newest first', sortBy: 'time', sortOrder: 'desc' },
-  { value: 'oldest', label: 'Oldest first', sortBy: 'time', sortOrder: 'asc' },
-  { value: 'name-asc', label: 'Name (A–Z)', sortBy: 'name', sortOrder: 'asc' },
-  { value: 'name-desc', label: 'Name (Z–A)', sortBy: 'name', sortOrder: 'desc' },
-] as const;
+/* The date grid sits inside a Popover and behind `showCustomPicker`, so it can
+   never be on screen at first paint — but importing it eagerly still put
+   react-day-picker in the chunk everyone downloads, because the Main layout
+   mounts GlobalSearchBox, which reaches into this module for SearchPanelFilters. */
+const Calendar = lazy(() =>
+  import('@ci/shadcn/src/components/coalescers/calendar').then((m) => ({ default: m.Calendar })),
+);
 
 const START_OF_DAY_TIME = '00:00';
 const END_OF_DAY_TIME = '23:59';
@@ -345,6 +338,7 @@ function FilterDropArea() {
   const hasLocation = searchParams.get('hasLocation') === '1';
   const semantic = searchParams.get('semantic') === '1';
   const hasMapArea = Boolean(searchParams.get('bbox'));
+  const direction = readMessageDirection(searchParams.get('direction'));
   // Which view the chips are being read against: a filter this view cannot
   // apply is shown struck through rather than quietly ignored.
   const view = readMemoryView(searchParams.get('view'));
@@ -357,6 +351,7 @@ function FilterDropArea() {
     hasLocation ||
     semantic ||
     hasMapArea ||
+    direction != null ||
     Object.values(selections).some((values) => values.length > 0);
   const [error, setError] = useState<string | null>(null);
   // Counts nested dragenter/dragleave pairs so the highlight doesn't flicker
@@ -572,6 +567,21 @@ function FilterDropArea() {
                     onRemove={() => removeCsvValue('eventTypes', name)}
                   />
                 ))}
+                {direction != null && (
+                  <FilterChip
+                    icon={MessageSquare}
+                    label={`${MESSAGE_DIRECTION_LABELS[direction]} only`}
+                    removeLabel="Remove message direction"
+                    inactiveReason={reasonFor('direction')}
+                    onRemove={() =>
+                      setSearchParams((params) => {
+                        params.delete('direction');
+
+                        return params;
+                      })
+                    }
+                  />
+                )}
                 {hasDateRange && (
                   <FilterChip
                     icon={CalendarIcon}
@@ -885,25 +895,30 @@ function DateControl() {
 
         {showCustomPicker && (
           <>
-            <Calendar
-              mode="range"
-              selected={selectedRange}
-              onSelect={(range) => {
-                const fromDate = range?.from ? localDateInputValue(range.from) : '';
-                const toDate = range?.to ? localDateInputValue(range.to) : '';
-                const from = fromDate
-                  ? dateTimeIso(fromDate, timeExpanded ? fromTimeValue : START_OF_DAY_TIME, 'start')
-                  : undefined;
-                let to: string | undefined;
+            {/* Only the grid itself is deferred, not the controls beside it:
+                "Clear range" and the time fields stay synchronous so opening the
+                popover still gives you something to act on immediately. */}
+            <Suspense fallback={null}>
+              <Calendar
+                mode="range"
+                selected={selectedRange}
+                onSelect={(range) => {
+                  const fromDate = range?.from ? localDateInputValue(range.from) : '';
+                  const toDate = range?.to ? localDateInputValue(range.to) : '';
+                  const from = fromDate
+                    ? dateTimeIso(fromDate, timeExpanded ? fromTimeValue : START_OF_DAY_TIME, 'start')
+                    : undefined;
+                  let to: string | undefined;
 
-                if (toDate) {
-                  to = dateTimeIso(toDate, timeExpanded ? toTimeValue : END_OF_DAY_TIME, 'end');
-                }
+                  if (toDate) {
+                    to = dateTimeIso(toDate, timeExpanded ? toTimeValue : END_OF_DAY_TIME, 'end');
+                  }
 
-                setDateRange(from, to);
-              }}
-              numberOfMonths={1}
-            />
+                  setDateRange(from, to);
+                }}
+                numberOfMonths={1}
+              />
+            </Suspense>
             <div className="space-y-3 border-t p-3">
               <div className="flex items-center justify-between gap-3">
                 <Button
@@ -993,24 +1008,26 @@ function DateControl() {
 }
 
 /**
- * Sort preset selector bound to the `sortBy`/`sortOrder` URL params. The graph
- * has no result order to sort, so there the control says so instead of
- * accepting a choice that quietly does nothing.
+ * Sort preset selector bound to the `sortBy`/`sortOrder` URL params. Which
+ * presets it offers depends on where it is: the everything browse on `/memory`
+ * defaults to relevance and only offers Newest / Oldest inside a When filter
+ * (see sortOptions). The graph has no result order to sort, so there the
+ * control says so instead of accepting a choice that quietly does nothing.
  */
 function SortControl() {
   const [{ sortBy, sortOrder }, { setSort }] = useDropdown();
   const [searchParams] = useSearchParams();
+  const { pathname } = useLocation();
   const reason = unsupportedReason(readMemoryView(searchParams.get('view')), 'sort');
 
-  const currentSort =
-    SORT_OPTIONS.find((option) => option.sortBy === sortBy && option.sortOrder === sortOrder)?.value ??
-    'default';
+  const options = explorerSortOptions(pathname, searchParams);
+  const currentSort = currentSortValue(options, sortBy, sortOrder);
 
   const select = (
     <Select
       value={currentSort}
       onValueChange={(value) => {
-        const option = SORT_OPTIONS.find((item) => item.value === value);
+        const option = options.find((item) => item.value === value);
 
         setSort(option?.sortBy || undefined, option?.sortOrder || undefined);
       }}
@@ -1020,7 +1037,7 @@ function SortControl() {
         <Select.Value placeholder="Sort" />
       </Select.Trigger>
       <Select.Content>
-        {SORT_OPTIONS.map((option) => (
+        {options.map((option) => (
           <Select.Item key={option.value} value={option.value}>
             {option.label}
           </Select.Item>
@@ -1057,7 +1074,7 @@ function SortControl() {
   );
 }
 
-/** When / How / toggles / sort — shared by the inline explorer toolbar and header panel. */
+/** When / How / Activity / Who / Where / toggles / sort — shared by the inline explorer toolbar and header panel. */
 function FilterControlsRow({
   modal,
   includeEntityTypeFilter = false,
@@ -1069,12 +1086,24 @@ function FilterControlsRow({
   /** Save sits with the filter chip row on `/memory`; stays here in the header panel. */
   showSave?: boolean;
 }) {
+  const [searchParams] = useSearchParams();
+  const { pathname } = useLocation();
+  // Where / Activity (`places` / `eventTypes`) narrow events only, and Who
+  // (`people`) narrows events and communications, so each picker is offered
+  // just while a kind it can act on is in play — never on a browse the What
+  // bar (or a `/memory/<kind>` page) has pointed away from all of them.
+  const showEventDimensions = eventsInPlay(searchParams, pathname);
+  const showWho = peopleInPlay(searchParams, pathname);
+
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
       {includeEntityTypeFilter && <EntityTypeFilter modal={modal} label="What" />}
       <DateControl />
 
       <ConnectorFilter modal={modal} label="How" />
+      {showEventDimensions && <ActivityFilter modal={modal} label="Activity" />}
+      {showWho && <EntityNameFilter kind="person" modal={modal} />}
+      {showEventDimensions && <EntityNameFilter kind="place" modal={modal} />}
 
       <ToggleChip
         param="hasLocation"
@@ -1115,8 +1144,8 @@ export function SearchPanelFilters({ modal }: { modal: boolean }) {
 }
 
 /**
- * When / How / toggles / sort for the Memory explorer — rendered inline after
- * the What categories in MemoryEntityTypeNav.
+ * When / How / Activity / Who / Where / toggles / sort for the Memory explorer
+ * — rendered inline after the What categories in MemoryEntityTypeNav.
  */
 export function MemoryExplorerFilterControls() {
   return <FilterControlsRow modal={false} showSave={false} />;
@@ -1124,7 +1153,7 @@ export function MemoryExplorerFilterControls() {
 
 /**
  * Inline explorer filters: applied-filter chip drop area with Save on the same
- * row. When / How / toggles / sort live in MemoryEntityTypeNav beside What.
+ * row. When / How / Activity / Who / Where / toggles / sort live in MemoryEntityTypeNav beside What.
  */
 export function AdvancedFilters() {
   return <FilterDropArea />;

@@ -31,9 +31,9 @@ async functions in `functions.py`.
 ```
 NestJS API (pg-boss crons) → py-fn-summary queue → POST /functions/run
                                                     ↓
-                    [Data Aggregation] → Measurements, Position, Communications,
-                                         Activities, Events, Messages, Files,
-                                         API Logs, Browser Activity, Screen Captures
+                    [Data Aggregation] → grounded current-schema projections
+                                         (activity, user text, files, tasks,
+                                          purchases, answers, inventory)
                                             ↓
                     [LLM Summarization] → Local OpenAI-compatible endpoint
                                             ↓
@@ -46,7 +46,7 @@ NestJS API (pg-boss crons) → py-fn-summary queue → POST /functions/run
 ## Features
 
 - ✅ **Function Runner**: `POST /functions/run` with a bounded worker pool and a signed completion callback
-- ✅ **Multi-Source Aggregation**: Queries 10 data tables, schema-introspected rather than hardcoded
+- ✅ **Multi-Source Aggregation**: Explicit bounded projections from 16 grounded source tables
 - ✅ **LLM Integration**: Uses local models via OpenAI-compatible API
 - ✅ **Vector Embeddings**: Generates semantic embeddings for all summaries
 - ✅ **Hierarchical Rollups**: hourly → daily → weekly → monthly
@@ -150,6 +150,7 @@ The registry (`FUNCTIONS` in `functions.py`) must stay in sync with
 | Function | Cron (UTC) |
 | --- | --- |
 | `hourly_summary` | `0 5 * * * *` |
+| `hourly_summary_backfill` | none — operator-initiated |
 | `daily_summary` | `0 10 0 * * *` |
 | `weekly_summary` | `0 15 0 * * 1` |
 | `monthly_summary` | `0 20 0 1 * *` |
@@ -157,9 +158,31 @@ The registry (`FUNCTIONS` in `functions.py`) must stay in sync with
 | `insights_generation` | `0 30 */3 * * *` |
 | `actions_generation` | `0 45 * * * *` |
 
+> `hourly_summary_backfill` has no cron — it only ever runs because an operator
+> asked for it — but it is in `FUNCTIONS` so the manual endpoint can hand a
+> multi-hour range to the runner instead of holding an HTTP request open for
+> it. It is listed in `PYTHON_FUNCTIONS.summary` on the NestJS side too: that
+> array is a dispatch allowlist, not a schedule, and a name missing from it is
+> one `dispatch()` rejects at the call site — so pg-boss could not send a
+> backfill at all. `pythonFunctionRegistryDrift.test.ts` parses this app's
+> `FUNCTIONS` dict and fails if the two sides diverge again.
+
+When `smart.rotation` is enabled, it owns the hourly summary/dossier tick at
+`:22` and the three-hour insight tick at `:45`. The ordinary hourly, dossier,
+and insight crons above stand down. A rotation summary tick always dispatches
+both `hourly_summary` and `dossier_refresh`; the dossier is never allowed to
+replace its own input stream.
+
 ### Checking Results
 
-Summaries land in `ci.summaries`, not in the entity graph:
+Summaries land in `ci.summaries`, not in the entity graph. **One row per
+`(user_id, period_type, period_start, period_end)`**, enforced by the partial
+unique index `summaries_user_window_uniq` (migration 20260903162709), so a
+concurrent cron and manual trigger converge instead of both inserting, and a
+`force` regeneration overwrites the window rather than adding a second answer
+to it. Insights are the deliberate exception — `period_type = 'insight'` is
+excluded from that index because a run stores one row per card over the same
+span.
 
 ```sql
 SELECT
@@ -198,35 +221,119 @@ curl -X POST http://localhost:8001/summary/manual-trigger \
     "end_time": "2025-11-12T23:59:59Z",
     "timezone": "America/Los_Angeles"
   }'
+
+# Recover up to 24 missing aligned hourly windows (existing hours are skipped)
+curl -X POST http://localhost:8001/summary/manual-trigger \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "<user-uuid>",
+    "period_type": "hourly_backfill",
+    "start_time": "2026-09-01T00:00:00Z",
+    "end_time": "2026-09-02T00:00:00Z",
+    "timezone": "UTC"
+  }'
+```
+
+### Hourly Backfill
+
+`hourly_backfill` is the bounded recovery path: aligned hour boundaries, UTC
+offsets required, whole hours only, at most **24** of them
+(`MAX_HOURLY_BACKFILL_HOURS`). A bad range is a `400` before anything is
+started, never a background failure you have to go looking for.
+
+Each window is a full LLM summary plus an embedding, so 24 of them serially is
+tens of minutes to hours — far longer than any proxy in front of this service
+will hold a connection. So **a multi-hour range is accepted, not awaited**:
+
+```jsonc
+// 202-shaped body from POST /summary/manual-trigger
+{
+  "status": "accepted",
+  "message": "Hourly backfill queued for 24 hour(s)",
+  "duplicate": false,          // true when this range was already in flight
+  "backfill_id": "…",
+  "run_id": "…",
+  "progress_url": "/summary/backfill/<backfill_id>",
+  "run_url": "/runs/<run_id>",
+  "hours": 24,
+  "forced": false,
+  "time_range": { "start": "…", "end": "…" }
+}
+```
+
+Poll `GET /summary/backfill/{backfill_id}` from the moment you get the 202.
+`status` is `queued` | `running` | `completed` | `failed` — the record is
+published when the run is accepted, not when a worker reaches it, which matters
+because `FUNCTION_RUNNER_CONCURRENCY` defaults to 2 against a pool of
+minutes-long LLM jobs. `completed`/`generated`/`skipped` advance after **every**
+window, and `windows` carries the per-hour result as each hour lands — so a
+backfill that dies on hour 9 of 24 still tells you which eight were written. A
+failure also records `error`. The last `MAX_BACKFILL_RECORDS` (50) records are
+kept in the service process; older ids answer `404`, as does an id from before a
+restart. `GET /runs/{run_id}` reports the same run from the runner's side.
+
+Submitting a range that is already `queued` or `running` returns that run —
+same `backfill_id`, `duplicate: true` — instead of starting a second one. The
+in-process runner takes no singleton key, so nothing else would stop a
+double-submitted day from spending 24 more LLM summaries rewriting the windows
+the first run is still working through. A finished range can be submitted
+again; the dedup only covers work in flight.
+
+Two flags:
+
+| Field | Does |
+| --- | --- |
+| `force` | Regenerate windows that already have a summary, **overwriting the row in place** (`summaries_user_window_uniq` makes that an upsert, not a second row). Without it the backfill can only fill gaps — an hour summarized before its import batch finished landing keeps its thin summary forever, because that row satisfies the exact-window match. Also accepted for `period_type: "hourly"`. |
+| `wait` | Run inline and return the finished result even for a multi-hour range. For a range short enough to beat your proxy timeout. A single hour runs inline either way. |
+
+```bash
+# Re-summarize a day that was summarized mid-import, and watch it land
+BACKFILL=$(curl -sX POST http://localhost:8001/summary/manual-trigger \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "<user-uuid>",
+    "period_type": "hourly_backfill",
+    "start_time": "2026-09-01T00:00:00Z",
+    "end_time": "2026-09-02T00:00:00Z",
+    "force": true
+  }' | jq -r .backfill_id)
+
+curl -s "http://localhost:8001/summary/backfill/$BACKFILL" | jq '{status, completed, hours}'
 ```
 
 The full inline surface:
 
 | Route | Does |
 | --- | --- |
-| `POST /summary/manual-trigger` | `hourly` / `daily` / `weekly` / `monthly` / `dossier` |
+| `POST /summary/manual-trigger` | `hourly` / `hourly_backfill` / `daily` / `weekly` / `monthly` / `dossier` — inline, except a multi-hour `hourly_backfill` |
+| `GET /summary/backfill/{id}` | Per-window progress for an accepted backfill |
 | `POST /dossier/refresh` · `POST /dossier/get` | Rebuild or read the dossier |
 | `POST /insights/generate` · `POST /insights/force-generate` | Insight generation, with and without the new-data gate |
 | `POST /actions/generate` | Feed actions |
 | `GET /summary/aggregate` | The aggregation step alone, no LLM |
 
-These bypass the queue and execute the same code the runner does, which makes
-them useful for debugging a specific window, backfilling a period, or working
-offline from the scheduler.
+These bypass the pg-boss queue and execute the same code the runner does, which
+makes them useful for debugging a specific window, backfilling a period, or
+working offline from the scheduler. The one exception is a multi-hour
+`hourly_backfill`, which goes through the runner's worker pool so the request
+does not have to stay open for the length of the generation — see
+[Hourly Backfill](#hourly-backfill).
 
 ### Hourly User Dossier Refresh
 
 `dossier_refresh` produces a compact **user dossier** every hour
-(`PythonFunctionCrons.dossierRefresh`, `0 12 * * * *`), and the cron narrows its
-audience to users who actually have daily summaries to fold in.
+(`PythonFunctionCrons.dossierRefresh`, `0 12 * * * *`, or the smart-rotation
+summary tick), and the ordinary cron narrows its audience to users who have a
+recent hourly or daily summary to fold in.
 
 - Configure refresh behavior with:
   - `SUMMARY_DOSSIER_LOOKBACK_DAYS` (default `30`)
   - `SUMMARY_DOSSIER_MAX_CHARS` (default `4000`)
-- The dossier is derived from the latest daily summaries plus the previously
-  persisted dossier so that updates remain incremental. The result is stored in
-  the `entities.dossier` JSONB column of the user's `Person` entity.
-- If no daily summaries exist for the window, the refresh is skipped.
+- The dossier is derived from the latest daily and hourly summaries plus the
+  previously persisted dossier so updates remain incremental. The result is
+  stored in the `entities.dossier` JSONB column of the user's `Person` entity.
+- If neither hourly nor daily summaries exist for the window, refresh is a
+  successful skip.
 
 Manual trigger example:
 
@@ -246,22 +353,26 @@ Each `summary_text` is produced by the same OpenAI-compatible model that powers 
 
 ## Data Sources
 
-CI-Summary aggregates data from:
+Hourly summaries read explicit projections from:
 
-1. **measurements** - Sensor data (heart rate, steps, temperature, etc.)
-2. **position** - GPS/location tracking
-3. **communications** - Emails, SMS, calls
-4. **activities** - Tracked life activities
-5. **events** - Calendar events (title/description join back from `ci.entities` since the CTI conversion)
-6. **messages** - Chat conversations
-7. **files** - File activity (created, modified)
-8. **api_logs** - API interactions
-9. **browser_activity** - Page views
-10. **screen_captures** - Screen capture rows (capped at 50 per window)
+1. **position** — grouped place/activity observations
+2. **communications** — compact email/message/call meaning and participants
+3. **events** — newly created or changed events, with CTI title/description
+4. **messages** — user-authored, non-deleted conversation text
+5. **files** and **file_chunks** — file metadata and newly parsed text
+6. **content** — captured/imported semantic content
+7. **notes** and **tasks** — user material and planning changes
+8. **browser_activity** — non-incognito, non-sensitive page activity
+9. **objects** and **object_observations** — inventory and observed changes
+10. **receipts** and **receipt_line_items** — purchases and their contents
+11. **answers** — non-sensitive, non-inferred answers to profile questions
+12. **tool_invocations** — behavioral intent/outcome metadata, never bodies
 
-The table list lives in `TABLES` in `data_aggregator.py`. Columns are
-introspected per table rather than hardcoded, and noisy ones (embeddings, blobs,
-OCR text, screenshots) are excluded by pattern.
+The registry lives in `summary_sources.py`. Every query is explicitly scoped,
+bounded, and ordered with semantic text first. Raw `capture_events` and derived
+products (`summaries`, insights, rollups, agent memories) are excluded to avoid
+duplicate material and self-feeding loops. A stale query fails the job visibly
+instead of being reported as an empty hour.
 
 ## Output Format
 
@@ -274,17 +385,18 @@ Each summary includes:
   "summary_text": "Natural language summary...",
   "key_insights": ["insight 1", "insight 2"],
   "activity_counts": {
-    "measurements": 150,
-    "positions": 60,
+    "position": 4,
     "communications": 5,
-    "activities": 3,
     "events": 2,
     "messages": 10,
     "files": 4,
-    "api_logs": 20,
+    "file_chunks": 8,
+    "notes": 1,
+    "tasks": 3,
     "browser_activity": 31,
-    "screen_captures": 0,
-    "total": 285
+    "receipts": 1,
+    "tool_invocations": 12,
+    "total": 81
   },
   "tokens_used": 1842
 }
@@ -335,7 +447,8 @@ backend/apps/summary/
 │   ├── summary_functions.py    # Window resolution + rollup helpers
 │   ├── config.py               # Configuration management
 │   ├── database.py             # Database connections (search_path=ci,public)
-│   ├── data_aggregator.py      # Multi-table data aggregation
+│   ├── summary_sources.py      # Explicit current-schema source projections
+│   ├── data_aggregator.py      # Executes source projections for a window
 │   ├── insight_aggregator.py   # Context for insight generation
 │   ├── action_aggregator.py    # Context for feed-action generation
 │   ├── dossier_builder.py      # Incremental user dossier
@@ -454,7 +567,9 @@ The web Jobs page (`/jobs`) shows the same queue with its dead letters.
 - **Temperature**: Lower for more factual, higher for more creative
 - **Concurrency**: `FUNCTION_RUNNER_CONCURRENCY` (default 2) bounds how many runs
   execute at once — this replaced the old per-priority task queues
-- **Batch Size**: Modify `MAX_ITEMS_PER_CATEGORY` to control context size
+- **Prompt Budget**: `MAX_HOURLY_PROMPT_CHARS`,
+  `MAX_PROMPT_ITEMS_PER_SOURCE`, and `MAX_PROMPT_ITEM_CHARS` bound context while
+  preserving space for every non-empty source
 
 ## License
 

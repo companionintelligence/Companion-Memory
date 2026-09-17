@@ -194,6 +194,7 @@ const EMBEDDABLE_SEARCH_TYPES = new Set<string>([
   // Catalog models (ci.product_models) and purchase evidence (ci.receipts).
   'product',
   'receipt',
+  'task',
   'thread',
 ]);
 

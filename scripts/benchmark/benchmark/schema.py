@@ -25,19 +25,19 @@ report row, so fail fast.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any
 
 
 @dataclass
 class EvalQuestion:
     id: str
     question: str
-    keywords: List[str]
+    keywords: list[str]
     category: str
     answer: str = ""
 
     @classmethod
-    def from_dict(cls, raw: Dict[str, Any]) -> "EvalQuestion":
+    def from_dict(cls, raw: dict[str, Any]) -> EvalQuestion:
         return cls(
             id=raw["id"],
             question=raw["question"],
@@ -52,7 +52,7 @@ class QuestionResult:
     question_id: str
     question: str
     category: str
-    keywords: List[str]
+    keywords: list[str]
     context: str
     hit: bool
     latency_ms: float
@@ -64,7 +64,7 @@ class SystemResult:
     system_name: str
     ingest_total_ms: float
     flush_total_ms: float
-    question_results: List[QuestionResult] = field(default_factory=list)
+    question_results: list[QuestionResult] = field(default_factory=list)
     error: str = ""
 
     @property
@@ -77,7 +77,11 @@ class SystemResult:
 
     @property
     def overall_score(self) -> float:
-        return self.questions_answered / self.total_questions if self.total_questions else 0.0
+        return (
+            self.questions_answered / self.total_questions
+            if self.total_questions
+            else 0.0
+        )
 
     def score_for_category(self, category: str) -> tuple[int, int]:
         qs = [r for r in self.question_results if r.category == category]
@@ -98,9 +102,9 @@ _REQUIRED_SESSION = ("id", "messages")
 _REQUIRED_QUESTION = ("id", "question", "category", "keywords")
 
 
-def validate_persona(data: Any) -> List[str]:
+def validate_persona(data: Any) -> list[str]:
     """Return a list of human-readable error strings; empty list = valid."""
-    errors: List[str] = []
+    errors: list[str] = []
     if not isinstance(data, dict):
         return ["persona must be a JSON object"]
 
@@ -130,7 +134,11 @@ def validate_persona(data: Any) -> List[str]:
                 errors.append(f"sessions[{i}].messages must be a non-empty list")
                 continue
             for j, msg in enumerate(messages):
-                if not isinstance(msg, dict) or "role" not in msg or "content" not in msg:
+                if (
+                    not isinstance(msg, dict)
+                    or "role" not in msg
+                    or "content" not in msg
+                ):
                     errors.append(f"sessions[{i}].messages[{j}] must have role+content")
 
     questions = data.get("eval_questions", [])

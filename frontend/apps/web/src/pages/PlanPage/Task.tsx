@@ -1,12 +1,14 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { useDeviceLayout } from '@ci/common';
-import { Button, Checkbox, DropdownMenu, IconButton, cn } from '@ci/shadcn';
-import { CalendarRange, ChevronDown, MoreHorizontal, Pencil, Trash } from '@ci/shadcn/icons';
+import { Button, Checkbox, IconButton, cn } from '@ci/shadcn';
+import { CalendarRange, ChevronDown, Pencil, Trash } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
 import { gql } from '@/graphql';
 import { type FragmentType, useFragment } from '@/graphql/fragment-masking';
+import { namedChatContext } from '@/lib/agentChat';
 
 import { isOverdue, localDateOf } from './taskSections';
 import { WhenSelector } from './WhenSelector';
@@ -77,6 +79,28 @@ const PRIORITY_LABELS: Record<number, string> = {
 export const SELECT_HOLD_MS = 450;
 const SELECT_CANCEL_PX = 12;
 
+type Gesture = {
+  pointerId: number;
+  timer: number;
+  onMove: (event: PointerEvent) => void;
+  onUp: (event: PointerEvent) => void;
+};
+
+/** Drop a hold in progress: its timer and its three window listeners. */
+function endGesture(gesture: React.MutableRefObject<Gesture | null>) {
+  const current = gesture.current;
+
+  if (!current) {
+    return;
+  }
+
+  gesture.current = null;
+  window.clearTimeout(current.timer);
+  window.removeEventListener('pointermove', current.onMove);
+  window.removeEventListener('pointerup', current.onUp);
+  window.removeEventListener('pointercancel', current.onUp);
+}
+
 /** `2026-01-15T17:00:00Z` -> `Jan 15`, in the viewer's own zone. */
 function formatDue(dueAt: string): string {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(dueAt));
@@ -111,11 +135,14 @@ export function Task({
   const task = useFragment(TaskRowFragment, taskMasked);
   const done = task.status === 'done';
   const proposed = task.status === 'proposed';
+  // Handed to an agent harness. Scheduling a block for work the user is not
+  // doing themselves would put a lie on their calendar.
+  const delegated = task.status === 'delegated';
   const overdue = isOverdue(task, localDateOf(new Date()));
   const [pickingWhen, setPickingWhen] = useState(false);
   const [descOpen, setDescOpen] = useState(false);
   const suppressTap = useRef(false);
-  const gesture = useRef<{ pointerId: number; startX: number; startY: number; timer: number } | null>(null);
+  const gesture = useRef<Gesture | null>(null);
   const priorityLabel = PRIORITY_LABELS[task.priority];
   const phone = isMobile === true;
   const canSelect = phone && Boolean(onLongPressSelect || onSelectToggle);
@@ -131,6 +158,12 @@ export function Task({
     dueAt: task.dueAt as string | null,
     estimatedMinutes: task.estimatedMinutes,
   };
+  const chatContext = namedChatContext({
+    title: task.title,
+    body: task.description,
+    sourceKind: 'Task',
+    sourceId: task.id,
+  });
 
   const activateBody = () => {
     if (suppressTap.current) {
@@ -148,15 +181,25 @@ export function Task({
     onEdit?.(editPayload);
   };
 
+  /**
+   * ═══ THE HOLD USED TO OUTLIVE THE CARD ═══
+   *
+   * Radix Tabs unmounts the inactive panel, so a hold begun just before a tab
+   * switch fired against a card the user could no longer see and popped the
+   * selection bar over a different column. Nothing cleared the timer or the
+   * window listeners on unmount.
+   */
+  useEffect(() => () => endGesture(gesture), []);
+
   const onSelectPointerDown = (event: React.PointerEvent<HTMLElement>) => {
     if (!canSelect || selecting) {
       return;
     }
 
-    if (event.pointerType !== 'touch' && event.pointerType !== 'pen') {
-      return;
-    }
-
+    // Every pointer type may hold, mouse included: the phone card layout is
+    // also what an iPad with a trackpad and any narrowed desktop window get,
+    // and selection is the only route to bulk delete. The hold duration and
+    // the move threshold are what separate a deliberate hold from a click.
     if (event.button !== 0) {
       return;
     }
@@ -171,49 +214,28 @@ export function Task({
         return;
       }
 
+      endGesture(gesture);
       suppressTap.current = true;
-      gesture.current = null;
       onLongPressSelect?.(task.id);
     }, SELECT_HOLD_MS);
-
-    gesture.current = { pointerId, startX, startY, timer };
 
     const onMove = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) {
         return;
       }
 
-      const current = gesture.current;
-
-      if (!current) {
-        return;
-      }
-
       if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) > SELECT_CANCEL_PX) {
-        window.clearTimeout(current.timer);
-        gesture.current = null;
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        window.removeEventListener('pointercancel', onUp);
+        endGesture(gesture);
       }
     };
 
     const onUp = (upEvent: PointerEvent) => {
-      if (upEvent.pointerId !== pointerId) {
-        return;
-      }
-
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
-
-      const current = gesture.current;
-      gesture.current = null;
-
-      if (current) {
-        window.clearTimeout(current.timer);
+      if (upEvent.pointerId === pointerId) {
+        endGesture(gesture);
       }
     };
+
+    gesture.current = { pointerId, timer, onMove, onUp };
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -225,10 +247,126 @@ export function Task({
     event.stopPropagation();
   };
 
+  // Chat / Edit / Delete. On a phone they used to sit in the title row (or a
+  // kebab that still occupied that corner), so a narrow card spent its width
+  // on chrome the title needed. They live on their own layer, next to
+  // Schedule when it fits and above it when the row wraps.
+  const overflowActions = !selecting ? (
+    <div className="flex shrink-0 items-center gap-0.5" data-testid="task-overflow-actions">
+      <ChatWithAgentMenu context={chatContext} />
+      {onEdit ? (
+        <IconButton
+          onClick={(event) => {
+            stop(event);
+            onEdit(editPayload);
+          }}
+          variant="ghost"
+          label={t('PLAN_TASK_EDIT', { title: task.title })}
+        >
+          <Pencil className="h-4 w-4" />
+        </IconButton>
+      ) : null}
+      <IconButton
+        onClick={(event) => {
+          stop(event);
+          onDelete(task.id);
+        }}
+        variant="ghost"
+        label={t('PLAN_TASK_DELETE', { title: task.title })}
+      >
+        <Trash className="h-4 w-4" />
+      </IconButton>
+    </div>
+  ) : null;
+
+  const showStandaloneSchedule =
+    !proposed &&
+    !done &&
+    !delegated &&
+    !overdue &&
+    !task.placedOnCalendar &&
+    !pendingSchedule &&
+    Boolean(onSchedule);
+
+  const showReschedule = !proposed && !done && overdue && Boolean(onReschedule);
+
+  const showConfirmDismiss = Boolean(
+    pendingChangeId && !pendingSchedule && onAcceptPending && onDeclinePending,
+  );
+
+  const scheduleButton = showStandaloneSchedule ? (
+    <Button
+      type="button"
+      size="sm"
+      onClick={(event) => {
+        stop(event);
+        onSchedule?.(task.id);
+      }}
+    >
+      <CalendarRange className="h-4 w-4" />
+      Schedule
+    </Button>
+  ) : null;
+
+  const rescheduleButton =
+    showReschedule && !pickingWhen ? (
+      <Button
+        type="button"
+        size="sm"
+        onClick={(event) => {
+          stop(event);
+          setPickingWhen(true);
+        }}
+        aria-label={`Reschedule ${task.title}`}
+      >
+        <CalendarRange className="h-4 w-4" />
+        Reschedule
+      </Button>
+    ) : null;
+
+  const confirmDismiss = showConfirmDismiss ? (
+    <div className="flex flex-wrap gap-2">
+      <Button
+        type="button"
+        size="sm"
+        variant="default"
+        onClick={(event) => {
+          stop(event);
+          onAcceptPending?.(pendingChangeId!);
+        }}
+      >
+        Confirm
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={(event) => {
+          stop(event);
+          onDeclinePending?.(pendingChangeId!);
+        }}
+      >
+        Dismiss
+      </Button>
+    </div>
+  ) : null;
+
+  const whenPicker =
+    showReschedule && pickingWhen ? (
+      <WhenSelector
+        onPick={(date) => {
+          setPickingWhen(false);
+          onReschedule?.(task.id, date);
+        }}
+        onCancel={() => setPickingWhen(false)}
+      />
+    ) : null;
+
   return (
     <li
       className={cn(
-        'flex flex-col gap-2 rounded-lg border bg-card p-3 text-card-foreground shadow-sm transition-shadow hover:shadow-md',
+        'flex flex-col rounded-lg border bg-card text-card-foreground shadow-sm transition-shadow hover:shadow-md',
+        phone ? 'gap-1.5 p-2' : 'gap-2 p-3',
         selected ? 'border-primary ring-2 ring-primary/40' : 'border-border',
       )}
       style={{
@@ -244,7 +382,18 @@ export function Task({
       <div className={cn('flex items-start', phone ? 'gap-2' : 'gap-3')}>
         {!selecting && !proposed ? (
           <Checkbox
-            className="mt-1"
+            // The box stays 16px; the transparent ::before makes it a tap
+            // target. Completing a task is the primary action on every card,
+            // and a near-miss used to land on the card padding or the title
+            // button — which opens the edit modal instead.
+            //
+            // The reach to the RIGHT is capped at 0.5rem because that is the
+            // phone row's whole `gap-2`: a uniform `-inset-2.5` reached 10px
+            // and so painted 2px over the title button's left edge — and the
+            // checkbox is positioned while the title was not, so those pixels
+            // completed the task instead of opening edit. Up, down and left is
+            // card padding, which nothing else is competing for.
+            className="relative mt-1 before:absolute before:-inset-y-2.5 before:-left-2.5 before:-right-2"
             checked={done}
             onCheckedChange={(checked) => onToggle(task.id, checked === true)}
             aria-label={done ? `Reopen ${task.title}` : `Complete ${task.title}`}
@@ -267,7 +416,11 @@ export function Task({
               <button
                 type="button"
                 className={cn(
-                  'min-w-0 flex-1 break-words text-left font-medium line-clamp-5',
+                  // `relative` is not layout: it is what makes the title win
+                  // its own pixels. The checkbox beside it is positioned and
+                  // grows a ::before tap target, and an unpositioned title
+                  // paints beneath any of it that reaches over.
+                  'relative min-w-0 flex-1 break-words text-left font-medium line-clamp-5',
                   done ? 'text-muted-foreground line-through' : '',
                 )}
                 onClick={activateBody}
@@ -283,11 +436,15 @@ export function Task({
               </span>
             )}
 
+            {/* Full icon-button size, not the 32px this used to be overridden
+                to: on a phone the chevron is the ONLY way to read a
+                description, and it sits against a much larger title button
+                that opens the edit modal on a mis-tap. */}
             {phone && task.description ? (
               <IconButton
                 type="button"
                 variant="ghost"
-                className="mt-0.5 h-8 w-8 shrink-0"
+                className="shrink-0"
                 label={descOpen ? `Hide description for ${task.title}` : `Show description for ${task.title}`}
                 onClick={(event) => {
                   stop(event);
@@ -314,6 +471,9 @@ export function Task({
 
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             {proposed ? <span>Proposed</span> : null}
+            {/* Without this the card is indistinguishable from an open task
+                that has simply lost its Schedule button. */}
+            {delegated ? <span>Delegated</span> : null}
             {task.dueAt ? <span>Due {formatDue(task.dueAt as string)}</span> : null}
             {task.scheduledFor ? (
               <span>
@@ -324,136 +484,34 @@ export function Task({
             {priorityLabel ? <span>{priorityLabel}</span> : null}
           </div>
 
-          {!proposed && !done && overdue && onReschedule ? (
-            pickingWhen ? (
-              <WhenSelector
-                onPick={(date) => {
-                  setPickingWhen(false);
-                  onReschedule(task.id, date);
-                }}
-                onCancel={() => setPickingWhen(false)}
-              />
-            ) : (
-              <div className="mt-1 flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={(event) => {
-                    stop(event);
-                    setPickingWhen(true);
-                  }}
-                  aria-label={`Reschedule ${task.title}`}
-                >
-                  <CalendarRange className="h-4 w-4" />
-                  Reschedule
-                </Button>
-              </div>
-            )
-          ) : null}
-
-          {!proposed && !done && !overdue && !task.placedOnCalendar && !pendingSchedule && onSchedule ? (
-            <div className="mt-1 flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                onClick={(event) => {
-                  stop(event);
-                  onSchedule(task.id);
-                }}
-              >
-                <CalendarRange className="h-4 w-4" />
-                Schedule
-              </Button>
-            </div>
-          ) : null}
-
-          {pendingChangeId && !pendingSchedule && onAcceptPending && onDeclinePending ? (
-            <div className="mt-1 flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="default"
-                onClick={(event) => {
-                  stop(event);
-                  onAcceptPending(pendingChangeId);
-                }}
-              >
-                Confirm
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={(event) => {
-                  stop(event);
-                  onDeclinePending(pendingChangeId);
-                }}
-              >
-                Dismiss
-              </Button>
-            </div>
+          {!phone ? (
+            <>
+              {whenPicker}
+              {rescheduleButton || scheduleButton || confirmDismiss ? (
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {rescheduleButton}
+                  {scheduleButton}
+                  {confirmDismiss}
+                </div>
+              ) : null}
+            </>
           ) : null}
         </div>
 
-        {phone && !selecting ? (
-          <DropdownMenu modal={false}>
-            <DropdownMenu.Trigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="shrink-0"
-                aria-label={t('PLAN_TASK_MORE', { title: task.title })}
-                onClick={(event) => event.stopPropagation()}
-                onPointerDown={(event) => event.stopPropagation()}
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Content align="end">
-              {onEdit ? (
-                <DropdownMenu.Item
-                  onSelect={() => {
-                    onEdit(editPayload);
-                  }}
-                >
-                  Edit
-                </DropdownMenu.Item>
-              ) : null}
-              <DropdownMenu.Item variant="destructive" onSelect={() => onDelete(task.id)}>
-                Delete
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu>
-        ) : null}
-
-        {!phone ? (
-          <div className="flex shrink-0 items-center gap-0.5">
-            {onEdit ? (
-              <IconButton
-                onClick={(event) => {
-                  stop(event);
-                  onEdit(editPayload);
-                }}
-                variant="ghost"
-                label={t('PLAN_TASK_EDIT', { title: task.title })}
-              >
-                <Pencil className="h-4 w-4" />
-              </IconButton>
-            ) : null}
-            <IconButton
-              onClick={(event) => {
-                stop(event);
-                onDelete(task.id);
-              }}
-              variant="ghost"
-              label={t('PLAN_TASK_DELETE', { title: task.title })}
-            >
-              <Trash className="h-4 w-4" />
-            </IconButton>
-          </div>
-        ) : null}
+        {!phone ? overflowActions : null}
       </div>
+
+      {phone && !selecting ? (
+        <div className="flex min-w-0 flex-col gap-1.5" data-testid="task-action-layer">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {overflowActions}
+            {rescheduleButton}
+            {scheduleButton}
+            {confirmDismiss}
+          </div>
+          {whenPicker}
+        </div>
+      ) : null}
 
       {proposed && onAcceptProposed && onDeclineProposed ? (
         <div className="grid w-full grid-cols-3 gap-2" data-testid="proposed-actions">

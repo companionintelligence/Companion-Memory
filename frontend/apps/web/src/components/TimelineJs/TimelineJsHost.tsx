@@ -57,6 +57,14 @@ function mountedEventIds(instance: TimelineInstance): string[] {
 }
 
 function syncTimelineEvents(instance: TimelineInstance, events: readonly TimelineSlide[]): void {
+  // TimelineJS parses its deck only after an asynchronous language load, and
+  // `add()` dereferences `this.config` unguarded. Before that point there is
+  // nothing to diff against — every slide would look new — so wait: the host
+  // only flips `ready` on the library's own `loaded` event, which re-runs this.
+  if (!instance.config) {
+    return;
+  }
+
   const { add, removeIds } = timelineEventDiff(mountedEventIds(instance), events);
 
   for (const event of add) {
@@ -273,7 +281,6 @@ export function TimelineJsHost({
               }),
             );
             instanceRef.current = instance;
-            instance.ready = !document.hidden;
             const syncAxis = () => syncTimeaxisLabelCollision(mount);
             instance.on?.('zoom_in', syncAxis);
             instance.on?.('zoom_out', syncAxis);
@@ -301,8 +308,34 @@ export function TimelineJsHost({
                 }
               }
             });
-            requestAnimationFrame(syncAxis);
-            setReady(true);
+            // The constructor returns before the timeline exists: TimelineJS
+            // loads its language file first (always a promise, even when
+            // cached) and only then parses the deck, sets `config`, and lays
+            // out its panes. Marking the host ready here used to let the sync
+            // effect call `add()` into a null `config` on a cold load — the
+            // language fetch was still in flight when React ran its effects,
+            // while a warm reload had it cached and resolved in a microtask
+            // that beat them. `loaded` fires once both panes are built; an
+            // instance that already has a config (a synchronous build in some
+            // future version) is treated as loaded now, since the event may
+            // already have fired.
+            const markReady = () => {
+              if (cancelled || instanceRef.current !== instance) {
+                return;
+              }
+
+              // Pause animators in a background tab (TimelineJS sets its own
+              // `ready` true during startup, so this has to come after it).
+              instance.ready = !document.hidden;
+              requestAnimationFrame(syncAxis);
+              setReady(true);
+            };
+
+            if (instance.config || !instance.on) {
+              markReady();
+            } else {
+              instance.on('loaded', markReady);
+            }
           } catch (cause) {
             setError(cause instanceof Error ? cause.message : 'TimelineJS failed to start');
           }

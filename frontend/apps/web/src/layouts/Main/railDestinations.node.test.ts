@@ -17,6 +17,7 @@ describe('visibleRailDestinations', () => {
       'saved-searches',
       'sources',
       'jobs',
+      'approvals',
       'forecast',
       'self',
     ]);
@@ -26,7 +27,8 @@ describe('visibleRailDestinations', () => {
   // ═══ THE ACCOUNT TILE IS NOT A STATISTICS PAGE ═══
   //
   // Self used to be gated on `stats.page`, and the tile is the ONLY mount point
-  // for `NavUserMenu` — the only Settings / Theme / Log out cluster in the app.
+  // for `NavUserMenu` — the Theme / Log out cluster, with Settings beside
+  // Profile in the same submenu.
   // Turning off a flag named for a statistics page therefore removed the user's
   // avatar, their whole identity surface, the theme switcher, Settings, and
   // every way to sign out. Both directions are asserted, because it is the
@@ -134,5 +136,106 @@ describe('isRailDestinationActive', () => {
   it('treats Sources children as Sources', () => {
     expect(isRailDestinationActive(byId.sources, '/sources/connect')).toBe(true);
     expect(isRailDestinationActive(byId.sources, '/plan')).toBe(false);
+  });
+});
+
+/**
+ * Sources has always had three halves — Services, Import, Devices — and the
+ * rail offered only the question. Reaching Devices meant landing on Services
+ * and knowing a switch existed above the fold.
+ */
+describe('Sources submenu', () => {
+  const sources = () => allRailDestinations().find((d) => d.id === 'sources');
+
+  it('carries the three halves the page has, in the page order', () => {
+    expect(sources()?.children?.map((child) => child.label)).toEqual(['Services', 'Import', 'Devices']);
+  });
+
+  it('points each row at the route the page actually serves', () => {
+    expect(sources()?.children?.map((child) => child.to)).toEqual([
+      '/sources/connect',
+      '/sources/import',
+      '/sources/devices',
+    ]);
+  });
+
+  /**
+   * A gated ROUTE in this app is never registered rather than blocked, so with
+   * `import.page` off `/sources/import` redirects back to Services. A row that
+   * survived the flag would be a link that silently lands somewhere else.
+   */
+  it('drops the Import row when its flag is off, keeping the other two', () => {
+    const visible = visibleRailDestinations((flag) => flag !== 'import.page');
+    const labels = visible.find((d) => d.id === 'sources')?.children?.map((c) => c.label);
+
+    expect(labels).toEqual(['Services', 'Devices']);
+  });
+
+  it('keeps Import when the flag is on', () => {
+    const visible = visibleRailDestinations(() => true);
+
+    expect(visible.find((d) => d.id === 'sources')?.children?.map((c) => c.label)).toContain('Import');
+  });
+
+  /**
+   * `/sources` normalises to the connect half (SourcesPage redirects), so the
+   * bare route must light Services up — otherwise landing on /sources shows a
+   * rail with nothing selected while Services is plainly on screen.
+   */
+  it('lights Services up on the bare /sources route as well as its own', () => {
+    const services = sources()?.children?.find((child) => child.label === 'Services');
+
+    expect(services?.match?.('/sources')).toBe(true);
+    expect(services?.match?.('/sources/connect')).toBe(true);
+    expect(services?.match?.('/sources/devices')).toBe(false);
+  });
+
+  it('does not light one half up on another half’s route', () => {
+    const [services, importRow, devices] = sources()?.children ?? [];
+
+    expect(importRow?.match?.('/sources/devices')).toBe(false);
+    expect(devices?.match?.('/sources/import')).toBe(false);
+    expect(services?.match?.('/sources/import')).toBe(false);
+  });
+});
+
+describe('Approvals and Activity', () => {
+  // Both routes shipped complete, tested and unflagged, and nothing linked to
+  // either — the only way to reach them was to type the URL. That is precisely
+  // the failure `visibleRailDestinations` warns about in its own comment: a
+  // page you can only type at.
+  it('reaches both pages from the rail', () => {
+    const routes = allRailDestinations().map((destination) => destination.to);
+
+    expect(routes).toContain('/approvals');
+    expect(routes).toContain('/activity');
+  });
+
+  it('carries Activity under Approvals rather than as a peer row', () => {
+    const approvals = visibleRailDestinations(() => true).find((d) => d.id === 'approvals');
+
+    expect(approvals?.children?.map((child) => child.id)).toEqual(['activity']);
+  });
+
+  it('never hides either row behind a feature flag', () => {
+    // `tools.pendingActions` gates whether the owner's own trust DIAL queues
+    // their actions. An installed app is queued unconditionally by
+    // resolveToolGate's managed-app rule, so cards arrive with that flag off —
+    // and a rail row gated on it would hide a queue that is not empty. Assert
+    // with EVERY flag off, which is the state a fresh appliance is in.
+    const visible = visibleRailDestinations(() => false);
+    const approvals = visible.find((d) => d.id === 'approvals');
+
+    expect(approvals).toBeDefined();
+    expect(approvals?.children?.map((c) => c.id)).toEqual(['activity']);
+  });
+
+  it('points at the routes App.tsx actually serves', () => {
+    // A rail entry pointing at a path no route matches is a link to a 404 —
+    // the same class of bug as gating a row on a different flag from its route.
+    const byId = Object.fromEntries(allRailDestinations().map((d) => [d.id, d.to]));
+
+    expect(byId.approvals).toBe('/approvals');
+    expect(byId.activity).toBe('/activity');
   });
 });

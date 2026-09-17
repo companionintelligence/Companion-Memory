@@ -110,3 +110,37 @@ export interface ApiKeyResponse {
 export interface CreateApiKeyResponse extends ApiKeyResponse {
   key: string;
 }
+
+/**
+ * What `ApiKeyService.validateKey` hands the auth strategy.
+ *
+ * `keyId` identifies WHICH key authenticated; `managedBy` and `name` say where it
+ * came from. The last two are the difference between "a caller with write
+ * authority" and "the OpenClaw harness acting on the owner's behalf" — a
+ * distinction the capability axis alone cannot express, because an owner's
+ * hand-made key and a connect-minted harness key can hold identical powers.
+ */
+export interface ValidatedApiKey {
+  keyId: string;
+  userId: string;
+  scopes: string[];
+  capability: ApiKeyCapability;
+  managedBy: ApiKeyProvenance | null;
+  name: string | null;
+}
+
+/**
+ * Is this caller an installed app acting for the owner, rather than the owner?
+ *
+ * Reads `managed_by` and NEVER the name prefix: a user can hand-create a key
+ * called `app:home-assistant`, and ApiKeyEntity's docblock is explicit that
+ * provenance comes from the column. The name is for labelling a card once this
+ * has already answered yes.
+ *
+ * The distinction exists because an owner's trust dial is an OWNER convenience.
+ * It should not decide whether a borrowed agent gets confirmed before doing
+ * something irreversible, and it must not let that agent answer its own card.
+ */
+export function isManagedAppPrincipal(key: { managedBy?: ApiKeyProvenance | null }): boolean {
+  return key.managedBy === CONNECT_PROVENANCE;
+}

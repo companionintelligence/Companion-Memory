@@ -5,8 +5,8 @@ import { Button, Separator, Sheet, cn } from '@ci/shadcn';
 import { Pencil, Sparkles, UserRound } from '@ci/shadcn/icons';
 
 import { formatCitationDate, readEvidenceSummary } from './answerEvidence';
-import { EvidenceSection } from './EvidenceSection';
 import { confidenceLabel, confidenceSentence, isInferred } from './confidence';
+import { EvidenceSection } from './EvidenceSection';
 
 /**
  * Everything the drawer needs about one question and its answer. Narrow on

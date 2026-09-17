@@ -21,7 +21,9 @@ export function youtubeVideoIdFromUrl(url: string | null | undefined): string | 
   }
 
   const match =
-    url.match(/[?&]v=([\w-]{6,})/) ?? url.match(/youtu\.be\/([\w-]{6,})/) ?? url.match(/\/shorts\/([\w-]{6,})/);
+    url.match(/[?&]v=([\w-]{6,})/) ??
+    url.match(/youtu\.be\/([\w-]{6,})/) ??
+    url.match(/\/shorts\/([\w-]{6,})/);
 
   return match ? match[1] : null;
 }

@@ -23,9 +23,15 @@ import {
   type DisclosureRung,
   type AskChannelProvenance,
 } from '@ci/domains/asks';
-import { EventEntity } from '@ci/domains/memory';
+import { EventEntity, dropExistingOverrides, expandAll, resolveExpansionZone } from '@ci/domains/memory';
 
-import { coarsenFreeBusy, computeFreeBusy, summarizeAvailability, type FreeBusy } from '../availability';
+import {
+  coarsenFreeBusy,
+  computeFreeBusy,
+  summarizeAvailability,
+  type BusySource,
+  type FreeBusy,
+} from '../availability';
 import { PeerAskCorrelationEntity } from '../entities/PeerAskCorrelationEntity';
 import { type PeerLink } from '../entities/PeerLinkEntity';
 import { type BusyInterval, type PeerAskBody, type PeerAskResponse, peerAskPending } from '../protocol';
@@ -293,6 +299,47 @@ export class PeerAskService {
   }
 
   /**
+   * The occurrences a peer's "are you free?" has to account for.
+   *
+   * `ci.events` holds series masters only (the Google connector fetches
+   * `singleEvents=false` on purpose), so without this every occurrence after
+   * the first read as free time and the box handed a peer a slot the owner has
+   * stood in a standup for two years.
+   *
+   * Occurrences are computed, never stored, and only the two boundaries reach
+   * `computeFreeBusy` — nothing new crosses the wire. Occurrences that already
+   * exist as their own override row are dropped, including cancelled and
+   * tombstoned ones, so an individually-deleted occurrence stays free.
+   */
+  private async expandRecurringForAvailability(
+    userId: string,
+    rows: readonly EventEntity[],
+    from: Date,
+    to: Date,
+  ): Promise<BusySource[]> {
+    const masters = rows.filter((row) => row.isRecurring);
+
+    if (masters.length === 0) {
+      return [];
+    }
+
+    const zone = await resolveExpansionZone(this.eventRepository, userId);
+    const specs = expandAll(
+      masters,
+      { from, to },
+      { fallbackTimeZone: zone.timeZone, fallbackTimeZoneSource: zone.source },
+    );
+    const kept = await dropExistingOverrides(this.eventRepository, userId, specs);
+    const allDay = new Map(masters.map((master) => [master.id, master.isAllDay]));
+
+    return kept.map((spec) => ({
+      startTime: spec.startTime,
+      endTime: spec.endTime,
+      isAllDay: allDay.get(spec.seriesId) ?? false,
+    }));
+  }
+
+  /**
    * Resolve a verified (issuer, subject) to the ONE peer link that may act on
    * it. Shared by every peer-facing entry point so the two refusals stay
    * identical — a stranger must not be able to distinguish "no such user on
@@ -414,15 +461,58 @@ export class PeerAskService {
             startTime: Between(from, to),
             endTime: IsNull(),
           },
+          // Third arm: recurring SERIES MASTERS, matched on start alone.
+          //
+          // `ci.events` stores one row per series, so a weekly standup whose
+          // DTSTART was two years ago satisfies neither arm above and the box
+          // answered a peer "free" through every occurrence after the first.
+          // These rows are loaded for their RULE, not their own span — a master
+          // that does not overlap the window contributes no busy time, because
+          // `computeFreeBusy` clamps every span to the window and drops the
+          // empties.
+          {
+            userId: context.userId,
+            isDeleted: false,
+            isRecurring: true,
+            startTime: LessThanOrEqual(to),
+          },
         ],
         // `id` is selected for the AUDIT, not for the answer — see the
         // backing-entity note below. `computeFreeBusy` ignores it, and no id
         // reaches the wire: the response carries interval boundaries only.
-        select: { id: true, startTime: true, endTime: true, isAllDay: true },
+        //
+        // The five recurrence columns are what `expandAll` reads; none of them
+        // reaches the wire either.
+        select: {
+          id: true,
+          startTime: true,
+          endTime: true,
+          isAllDay: true,
+          isRecurring: true,
+          recurrencePattern: true,
+          metadata: true,
+          sourceSystem: true,
+          sourceId: true,
+        },
         take: MAX_AVAILABILITY_EVENTS,
       });
 
-      const freeBusy = computeFreeBusy(events, { from, to }, { minMinutes: body.request.minMinutes });
+      // Deliberately NOT routed through `CalendarEventService.findInRange`,
+      // which does the same expansion for the calendar: that read also imposes
+      // SCHEDULE_EVENT_TYPES and LIVE_EVENT_SQL, and adopting them here would
+      // quietly change which of the owner's rows mark them busy to a peer. That
+      // a photo row and a cancelled meeting both do so today is arguable, but
+      // it is a separate change with its own review.
+      //
+      // The repositories are reached through the injected repository's manager
+      // for the reason `correlations` gives: this service is hand-constructed by
+      // several suites and its constructor arity is load-bearing at a distance.
+      const occurrences = await this.expandRecurringForAvailability(context.userId, events, from, to);
+      const freeBusy = computeFreeBusy(
+        [...events, ...occurrences],
+        { from, to },
+        { minMinutes: body.request.minMinutes },
+      );
       const answer = clampAvailability(freeBusy, ceiling, who);
 
       // The availability branch wrote NO `ci.ask_answers` row at all — the one

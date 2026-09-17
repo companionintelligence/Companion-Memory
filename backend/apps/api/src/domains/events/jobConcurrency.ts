@@ -47,6 +47,14 @@ export function queueWorkerProcesses(): number {
  * must not silently mean "switch the appliance off" — which is the one case this
  * rounds up, and it is that or a dead queue.
  *
+ * The `min` against the shipped appliance figure is the safety property, and it
+ * is the reason this control exists: the page was added because an unattended
+ * appliance drives a machine to 100% CPU, so a number typed into it may make the
+ * box quieter and must never make it hotter. An operator who genuinely wants
+ * more throughput than the build ships with raises `CI_QUEUE_CONCURRENCY`, which
+ * is a deliberate act with a restart attached rather than a text box on a page
+ * whose stated job is cooling the machine down.
+ *
  * @param setting  the operator's appliance-wide cap, or null for none
  * @param shipped  `config.queues.concurrency` — the shipped PER-PROCESS ceiling
  * @param processes how many processes run queue workers in this topology
@@ -58,10 +66,31 @@ export function perProcessGlobalConcurrency(
 ): number {
   // The default is expressed as shipped × processes precisely so that dividing
   // it again lands back on `shipped`. An unconfigured appliance therefore runs
-  // exactly as it did before this control existed, on either topology.
-  const appliance = setting ?? shipped * processes;
+  // exactly as it did before this control existed, on either topology — and it
+  // doubles as the ceiling, so leaving the box empty and typing the number that
+  // was already in it are the same appliance.
+  const shippedAppliance = shipped * processes;
+  const appliance = Math.min(setting ?? shippedAppliance, shippedAppliance);
 
   return Math.max(1, Math.floor(appliance / Math.max(1, processes)));
+}
+
+/**
+ * The global per-queue default in force: the operator's, bounded by the shipped
+ * one.
+ *
+ * The same one-way property as {@link perProcessGlobalConcurrency}, and it has
+ * to live here rather than at the two call sites, because both of them
+ * previously spelled it `setting ?? shipped` — which reads as a default and
+ * silently behaves as an override the moment a row exists. Every per-queue
+ * ceiling is derived from this number, so a value above `shipped` raises the
+ * ceiling on every queue at once.
+ *
+ * @param setting the operator's per-queue default, or null for none
+ * @param shipped `config.queues.perQueueConcurrency`
+ */
+export function perQueueDefaultConcurrency(setting: number | null, shipped: number): number {
+  return Math.max(1, Math.min(setting ?? shipped, shipped));
 }
 
 /**
@@ -89,6 +118,12 @@ export function maxQueueConcurrency(perQueueDefault: number, declared: number | 
  * make a queue quieter than shipped. That is the whole safety property of this
  * feature: nothing an operator can save from the Jobs page makes the box hotter
  * than the build already allowed.
+ *
+ * The minimum here only bounds a queue against `perQueueDefault`; what bounds
+ * `perQueueDefault` itself is {@link perQueueDefaultConcurrency}, and the two
+ * are load-bearing together. This function alone read as if it enforced the
+ * property, which is how the global fields came to accept 64 against a shipped 6
+ * — every queue clamped faithfully to a default the operator had just raised.
  */
 export function effectiveQueueConcurrency(options: {
   readonly perQueueDefault: number;

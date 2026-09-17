@@ -7,6 +7,8 @@
  * a DOM and what lets the DST cases below be asserted at all.
  */
 
+import type { TaskStatus } from '@/graphql/graphql';
+
 export type ColumnKey = 'proposed' | 'unscheduled' | 'scheduled' | 'done';
 
 export type LaneKey = 'inbox' | 'proposed_upcoming' | 'upcoming' | 'overdue';
@@ -40,14 +42,62 @@ export interface Lane<T> {
   /** Null when the column heading already names the list (Proposed inbox, Done). */
   label: string | null;
   tasks: T[];
+  /** `tasks` plus every descendant rendered nested under them. */
+  count: number;
 }
 
 export interface Section<T> {
   key: ColumnKey;
   label: string;
   lanes: Lane<T>[];
-  /** Flattened lane tasks, same order as `lanes`. */
+  /** Flattened lane tasks, same order as `lanes`. Roots only. */
   tasks: T[];
+  /**
+   * ═══ THE BADGES USED TO COUNT ONLY ROOTS ═══
+   *
+   * Children render nested under their parent, so they are in this column and
+   * actionable there — but `tasks` never held them, so a column of three roots
+   * with nine live subtasks read "3". Worst case an unchecked, overdue subtask
+   * sits inside the Done column purely by nesting: invisible to Unscheduled,
+   * with nothing saying Done contains live work.
+   */
+  count: number;
+  /** How many tasks in this column (roots and descendants) are overdue. */
+  overdueCount: number;
+}
+
+/**
+ * ═══ THE VOCABULARY HAS TO BE CLASSIFIED, NOT LISTED ═══
+ *
+ * A `Record` over the generated `TaskStatus` union, so adding a status to the
+ * server's enum and regenerating `graphql.ts` makes this file fail to COMPILE
+ * until the new status is classified. That is the client-side half of the guard
+ * `domains/planning/__tests__/taskStatus.test.ts` holds on the server: `delegated`
+ * shipped in #2558 as a status every hand-written filter quietly ignored, and a
+ * disjunction of string literals has no way to notice it is now incomplete.
+ *
+ * `proposed` is deliberately its own kind rather than a flavour of active: it is
+ * the review inbox, and the board gives it a column of its own.
+ */
+const STATUS_KIND: Record<TaskStatus, 'proposed' | 'active' | 'closed'> = {
+  proposed: 'proposed',
+  open: 'active',
+  in_progress: 'active',
+  delegated: 'active',
+  done: 'closed',
+  skipped: 'closed',
+  archived: 'closed',
+};
+
+/**
+ * An unrecognised status counts as live work, not as finished work.
+ *
+ * A client can be older than the server that answers it, and the two mistakes
+ * are not symmetrical: filing unknown work under Done hides it, while leaving it
+ * in the board's live columns merely shows it in a slightly wrong lane.
+ */
+function statusKind(status: string): 'proposed' | 'active' | 'closed' {
+  return STATUS_KIND[status as TaskStatus] ?? 'active';
 }
 
 const COLUMN_LABELS: Record<ColumnKey, string> = {
@@ -118,8 +168,21 @@ export function sectionFor(task: SectionedTask, today: string, timeZone?: string
     return { column: 'proposed', lane: 'inbox' };
   }
 
-  if (task.status === 'done' || task.status === 'skipped' || task.status === 'archived') {
+  if (statusKind(task.status) === 'closed') {
     return { column: 'done', lane: 'inbox' };
+  }
+
+  /**
+   * ═══ DELEGATED WORK IS NOT OVERDUE WORK ═══
+   *
+   * A delegated task is in flight with an agent harness. It kept whatever due
+   * date it had, so falling through to the dated branch below files a past-due
+   * one under Overdue — telling the user to chase something they have already
+   * handed off and cannot act on. It stays in the column its calendar state
+   * puts it in, always in the live lane.
+   */
+  if (task.status === 'delegated') {
+    return { column: task.placedOnCalendar ? 'scheduled' : 'unscheduled', lane: 'upcoming' };
   }
 
   // A deferred task is invisible until its date arrives, whatever its deadline.
@@ -191,12 +254,34 @@ function emptyLanes(): Record<ColumnKey, Record<LaneKey, SectionedTask[]>> {
   };
 }
 
+/** A root and every task nested beneath it, guarding against a `parentId` cycle. */
+function subtreeOf<T extends SectionedTask>(root: T, childrenByParent: Map<string, T[]>): T[] {
+  const out: T[] = [];
+  const stack: T[] = [root];
+  const seen = new Set<string>();
+
+  while (stack.length) {
+    const next = stack.pop() as T;
+
+    if (seen.has(next.id)) {
+      continue;
+    }
+
+    seen.add(next.id);
+    out.push(next);
+    stack.push(...(childrenByParent.get(next.id) ?? []));
+  }
+
+  return out;
+}
+
 /**
  * Groups tasks into Kanban columns with lanes, dropping empty columns and
  * empty lanes so the UI never renders a bare heading.
  *
  * Only roots are sectioned; children stay nested under their parent via
- * `parentId` (rendered by the Plan page tree).
+ * `parentId` (rendered by the Plan page tree). They are still *counted* into
+ * the column their root landed in — see `Section.count`.
  */
 export function groupIntoSections<T extends SectionedTask>(
   tasks: readonly T[],
@@ -204,6 +289,20 @@ export function groupIntoSections<T extends SectionedTask>(
   timeZone?: string,
 ): Section<T>[] {
   const roots = tasks.filter((task) => !task.parentId);
+  const childrenByParent = new Map<string, T[]>();
+
+  for (const task of tasks) {
+    if (task.parentId) {
+      const siblings = childrenByParent.get(task.parentId);
+
+      if (siblings) {
+        siblings.push(task);
+      } else {
+        childrenByParent.set(task.parentId, [task]);
+      }
+    }
+  }
+
   const buckets = emptyLanes() as Record<ColumnKey, Record<LaneKey, T[]>>;
 
   for (const task of roots) {
@@ -219,19 +318,26 @@ export function groupIntoSections<T extends SectionedTask>(
         return [];
       }
 
-      return [{ key: lane, label: LANE_LABELS[lane], tasks: [...bucket].sort(compareTasks) }];
+      const sorted = [...bucket].sort(compareTasks);
+      const rendered = sorted.flatMap((task) => subtreeOf(task, childrenByParent));
+
+      return [{ key: lane, label: LANE_LABELS[lane], tasks: sorted, count: rendered.length, rendered }];
     });
 
     if (!lanes.length) {
       return [];
     }
 
+    const rendered = lanes.flatMap((lane) => lane.rendered);
+
     return [
       {
         key: column,
         label: COLUMN_LABELS[column],
-        lanes,
+        lanes: lanes.map(({ rendered: _rendered, ...lane }) => lane),
         tasks: lanes.flatMap((lane) => lane.tasks),
+        count: rendered.length,
+        overdueCount: rendered.filter((task) => isOverdue(task, today, timeZone)).length,
       },
     ];
   });
@@ -248,6 +354,8 @@ export function withAllColumns<T extends SectionedTask>(sections: readonly Secti
         label: COLUMN_LABELS[key],
         lanes: [],
         tasks: [],
+        count: 0,
+        overdueCount: 0,
       },
   );
 }
@@ -257,13 +365,13 @@ export function childrenOf<T extends SectionedTask>(tasks: readonly T[], parentI
   return tasks.filter((task) => task.parentId === parentId).sort(compareTasks);
 }
 
-/** How many tasks still want doing. Drives the nav badge. */
+/**
+ * How many tasks still want doing. Drives the nav badge.
+ *
+ * "Not closed" rather than a list of the statuses that count: the list is what
+ * went stale when `delegated` arrived, and a task an agent is working on is
+ * still work the user is waiting on.
+ */
 export function openCount(tasks: readonly SectionedTask[]): number {
-  return tasks.filter(
-    (task) =>
-      task.status === 'open' ||
-      task.status === 'in_progress' ||
-      task.status === 'proposed' ||
-      task.hasPendingChange,
-  ).length;
+  return tasks.filter((task) => statusKind(task.status) !== 'closed' || task.hasPendingChange).length;
 }

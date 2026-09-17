@@ -109,7 +109,13 @@ export const PERSON_MATCH_RULE_GENERATION = 1;
  * was produced by it. A shared integer could not express that, and would either
  * strand the projection or rewrite evidence that is still correct.
  */
-export const PERSON_PROJECTION_RULE_GENERATION = 1;
+// v2 — the plural projection MERGES into the column instead of replacing it.
+// v1 wrote `to_entity_ids = <what this run resolved>`, so a message whose
+// importer had already linked four recipients was cut down to the one name the
+// index knew at sweep time (the owner's own, on every inbound group message of
+// a fresh import — 106,382 rows on one appliance). The bump re-opens every row,
+// which is also what re-links them now that their people exist.
+export const PERSON_PROJECTION_RULE_GENERATION = 2;
 
 /**
  * What lands in `ci.identifier_claims.spec_version` (and would land in
@@ -751,7 +757,15 @@ const COMMUNICATION_SUBJECT: SubjectDescriptor = {
   pluralRole: 'to',
   projectSql: `UPDATE ci.communications c
                   SET from_entity_id = COALESCE(u.singular_id, c.from_entity_id),
-                      to_entity_ids  = COALESCE(u.plural_ids, c.to_entity_ids)
+                      to_entity_ids  = CASE
+                                         WHEN u.plural_ids IS NULL THEN c.to_entity_ids
+                                         ELSE ARRAY(
+                                           SELECT m.id
+                                             FROM unnest(COALESCE(c.to_entity_ids, '{}'::uuid[]) || u.plural_ids)
+                                                  WITH ORDINALITY AS m(id, ord)
+                                            GROUP BY m.id
+                                            ORDER BY min(m.ord))
+                                       END
                  FROM (
                    SELECT t.id,
                           t.singular_id,
@@ -782,7 +796,15 @@ const EVENT_SUBJECT: SubjectDescriptor = {
   pluralRole: 'participant',
   projectSql: `UPDATE ci.events e
                   SET organizer_entity_id    = COALESCE(u.singular_id, e.organizer_entity_id),
-                      participant_entity_ids = COALESCE(u.plural_ids, e.participant_entity_ids),
+                      participant_entity_ids = CASE
+                                                 WHEN u.plural_ids IS NULL THEN e.participant_entity_ids
+                                                 ELSE ARRAY(
+                                                   SELECT m.id
+                                                     FROM unnest(COALESCE(e.participant_entity_ids, '{}'::uuid[]) || u.plural_ids)
+                                                          WITH ORDINALITY AS m(id, ord)
+                                                    GROUP BY m.id
+                                                    ORDER BY min(m.ord))
+                                               END,
                       updated_at             = now()
                  FROM (
                    SELECT t.id,
@@ -1184,13 +1206,17 @@ export class PersonLinkResolver {
   /**
    * Write every projected row in ONE statement.
    *
-   * `COALESCE(u.singular_id, c.from_entity_id)` and `COALESCE(u.plural_ids,
-   * c.to_entity_ids)` — note what is and is not there. There is NO
-   * `IS NULL`/`cardinality = 0` guard on the target column, which is the whole
-   * repair: a partially-linked row is REPLACED by the fuller answer instead of
-   * being frozen by its own first success. And there is no path that writes
-   * NULL, so a row this stage cannot resolve keeps whatever a previous writer
-   * managed. The projection can only ever add or improve.
+   * The singular slot is `COALESCE(u.singular_id, c.from_entity_id)`: this
+   * run's answer when it has one, else whatever was there. The plural slot
+   * MERGES: the column's existing ids, in their order, followed by any this run
+   * resolved that were not already present (`unnest ... WITH ORDINALITY`,
+   * grouped on the id, ordered by first appearance). There is NO
+   * `IS NULL`/`cardinality = 0` guard on either column, and there is no path
+   * that shrinks a list or writes NULL — so a row this stage cannot resolve
+   * keeps whatever a previous writer managed, and a row it can only PARTLY
+   * resolve keeps the rest. The projection can only ever add. (Generation 1
+   * replaced the plural column outright, which is how an importer's four
+   * recipients became the one the index knew at sweep time.)
    */
   private async writeProjection(userId: string, patches: Array<[string, Projection]>): Promise<void> {
     await this.dataSource.query(this.subject.projectSql, [

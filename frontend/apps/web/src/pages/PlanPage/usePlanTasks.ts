@@ -183,10 +183,10 @@ export function usePlanTasks(onPlaced?: () => void) {
     [sections],
   );
 
-  const backlogCount = useMemo(
-    () => backlog.reduce((count, section) => count + section.tasks.length, 0),
-    [backlog],
-  );
+  // `section.count`, not `section.tasks.length`: `tasks` is roots only, so the
+  // nav badge used to report a different number than the column badge on the
+  // board it links to, for the same two sections.
+  const backlogCount = useMemo(() => backlog.reduce((count, section) => count + section.count, 0), [backlog]);
 
   const placeOnDay = useCallback(
     async (id: string, at: Date) => {

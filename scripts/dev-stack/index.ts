@@ -243,10 +243,23 @@ function buildRoute(key: string, p: { apiPort: number; webPort: number; objPort:
   // WebAssembly compiled inside the DB web worker, and CSP counts compiling wasm
   // as eval — without it the worker's init throws and anything awaiting the local
   // database (logout's disconnectAndClear()) hangs. Mirrors nginx.conf.
+  // script-src/connect-src maps.googleapis.com + maps.gstatic.com: the SPA
+  // injects the Maps JS tag at runtime (frontend/apps/web/src/components/Map/
+  // googleMaps.ts) and the loader then pulls its own modules and tile/route data
+  // over XHR. Without them the script is refused, loadGoogleMaps()'s rejection is
+  // swallowed, and the map quietly degrades to dashed straight-line polylines.
+  // img-src is already `*`, so Maps' imagery needs no entry of its own.
+  // Copy 4 of 4 of this policy — the other three are the http{} block and the
+  // /static/ and /assets/ locations in infrastructure/gateway/nginx.conf. They
+  // already drift (this one carries 'unsafe-inline' and the ws:// dev origins);
+  // change all four together anyway or a fix that works in `make dev` silently
+  // does nothing in the gateway-served and desktop builds.
   const csp =
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' " +
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://maps.googleapis.com " +
+    "https://maps.gstatic.com; style-src 'self' 'unsafe-inline' " +
     "https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src * data: blob:; " +
-    `media-src 'self' blob:; connect-src 'self' ws://${host} wss://${host}; worker-src 'self'; ` +
+    "media-src 'self' blob:; connect-src 'self' https://maps.googleapis.com " +
+    `ws://${host} wss://${host}; worker-src 'self'; ` +
     "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; " +
     `frame-src ${PLAYER_FRAME_SRC};`;
 

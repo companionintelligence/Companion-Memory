@@ -68,7 +68,13 @@ export class RetrievalHealthCron {
     this.logger.setContext(RetrievalHealthCron.name);
   }
 
-  @Cron(RETRIEVAL_HEALTH_CRON, { name: 'RetrievalHealthCron.captureRetrievalHealth', role: 'worker' })
+  // `exclusive`: nothing else stops a second capture starting on top of the
+  // first, which would double the counts and raise each card twice.
+  @Cron(RETRIEVAL_HEALTH_CRON, {
+    name: 'RetrievalHealthCron.captureRetrievalHealth',
+    role: 'worker',
+    exclusive: true,
+  })
   async captureRetrievalHealth(): Promise<void> {
     const run = await this.retrievalHealthService.capture();
 

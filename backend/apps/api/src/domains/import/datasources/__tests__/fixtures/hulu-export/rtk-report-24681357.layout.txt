@@ -1,0 +1,295 @@
+Personal Information Report
+Specific Pieces of Personal Information. Below is a report that includes the specific pieces of personal information we have collected from or about you, which
+includes data collected in the preceding twelve months, in connection with your Hulu account, subject to certain exceptions (e.g., we do not disclose passwords or
+answers to security questions).
+
+
+Personal Details
+    First Name:                          Ada                                      Birthdate:                           1990-01-02
+
+    Last Name:                           Lovelace                                 Gender:                              Prefer Not To Say
+
+    Account Name:                        Ada Lovelace                             Home Zip:                            N/A
+
+    Email:                               ada@example.com
+
+
+
+Payment Details
+                          We have no information about you or your account relevant to this section of the report.
+
+
+Subscription Details
+    Created:                             N/A                                      Plan:                                Hulu (With Ads)
+
+    Canceled:                            N/A                                      Last Charged Date /                  N/A / 19.98 USD
+                                                                                  Amount:
+
+    Status:                              GOOD_STANDING                            Next Charge Date /                   N/A / N/A
+                                                                                  Amount:
+
+    Add Ons:                             Disney+ (With Ads), ESPN
+                                         Select
+  Plan Details
+Name                 ID                      Next Charge   Type       Duration   Next Program
+
+
+Disney+ (With Ads)   verizon_discount_incl   11.99         Standard              verizon_discount_incl
+                     usion_offer_hybrid                                          usion_offer_hybrid
+
+
+ESPN Select          verizon_discount_incl   12.99         Standard              verizon_discount_incl
+                     usion_offer_hybrid                                          usion_offer_hybrid
+
+
+Hulu (With Ads)      verizon_discount_incl   11.99         Standard              verizon_discount_incl
+                     usion_offer_hybrid                                          usion_offer_hybrid
+Subscription History
+Time                   Type                              Description
+
+
+09 Oct 2023 14:26:15   ENTITLEMENT_CHANGE
+
+
+15 Mar 2023 09:37:19   CHANGE_DISCOUNT                   change discounts from List(1075) to
+                                                         List(2656)
+
+
+15 Mar 2023 09:37:19   RECURRENCE_CHANGE_COMPONENT_      Component 15: change status from
+                       STATUS                            GOOD_STANDING to REMOVED
+
+
+02 Mar 2021 09:49:43   RECURRENCE_CHANGE_SUBSCRIPTIO     Change subscription status from Pending to
+                       N_STATUS                          GoodStanding
+
+
+02 Mar 2021 09:49:42   SITE_ACTIVATE_SUBSCRIPTION        customer type: VerizonViaDSS
+
+
+02 Mar 2021 09:49:42   SITE_CREATE_PENDING_SUBSCRIPTIO
+                       N
+Settings And Preferences
+Profiles
+Profile name   Kids Profile?   Gender              Birthdate     Created At
+
+
+A              No              Male                31 Oct 1950   19 Aug 2022 17:00:00
+
+
+Bronx          No              Prefer Not To Say   05 Dec 1954   01 Sep 2021 17:00:00
+MyStuff
+          We have no information about you or your account relevant to this section of the report.
+Tastes and Onboarding
+Name                           Genre
+
+
+New Girl                       Funny & Lighthearted
+
+
+The Bear                       Dark Comedy
+
+
+Only Murders in the Building   Dark Comedy
+
+
+Quiz Lady                      Comedy Movies
+
+
+El Señor de los Cielos         Spanish Language
+Cloud DVR
+ Quota:                 N/A                              Remaining Quota:              N/A
+
+            We have no information about you or your account relevant to this section of the report.
+Watch History
+Episode Name                 Series Name            Season   Last Played At
+
+
+2026: A Virtual Insanity     It's Always Sunny in   18       03 Sep 2026 04:42:48
+                             Philadelphia
+
+
+The Raid: Redemption         N/A                    N/A      31 Aug 2026 06:14:01
+
+
+The Original Beef of         The Bear               5        06 Jul 2026 07:16:38
+Chicagoland
+
+
+Caramel                      The Bear               5        04 Jul 2026 06:08:28
+
+
+Irrational Treasure [800th   The Simpsons           37       24 Feb 2026 07:14:37
+episode]
+
+
+Krapocracy Now!              Krapopolis             3        24 Feb 2026 07:14:37
+
+
+Mall Part 2: Questions &     Abbott Elementary      5        16 Jan 2026 05:34:32
+Concerns
+
+
+The Real Monsters            Alien: Earth           1        24 Sep 2025 06:03:23
+
+
+Eyewitness News 11PM         ABC7 Eyewitness News   0        12 Sep 2025 06:15:00
+
+
+Episode 1                    Shifting Gears         2        01 Aug 2025 05:01:00
+
+
+Episode 2                    Shifting Gears         2        02 Aug 2025 05:02:00
+
+
+Episode 3                    Shifting Gears         2        03 Aug 2025 05:03:00
+
+
+Episode 4                    Shifting Gears         2        04 Aug 2025 05:04:00
+
+
+Episode 5                    Shifting Gears         2        05 Aug 2025 05:05:00
+
+
+Episode 6                    Shifting Gears         2        06 Aug 2025 05:06:00
+
+
+Episode 7                    Shifting Gears         2        07 Aug 2025 05:07:00
+
+
+Episode 8                    Shifting Gears         2        08 Aug 2025 05:08:00
+
+
+Episode 9                    Shifting Gears         2        09 Aug 2025 05:09:00
+
+
+Episode 10                   Shifting Gears         2        10 Aug 2025 05:10:00
+
+
+Episode 11                   Shifting Gears         2        11 Aug 2025 05:11:00
+
+
+Episode 12                   Shifting Gears         2        12 Aug 2025 05:12:00
+
+
+Episode 13                   Shifting Gears         2        13 Aug 2025 05:13:00
+
+
+Episode 14                   Shifting Gears         2        14 Aug 2025 05:14:00
+
+
+Episode 15                   Shifting Gears         2        15 Aug 2025 05:15:00
+Episode Name                   Series Name                     Season   Last Played At
+
+
+Episode 16                     Shifting Gears                  2        16 Aug 2025 05:16:00
+
+
+Episode 17                     Shifting Gears                  2        17 Aug 2025 05:17:00
+
+
+Episode 18                     Shifting Gears                  2        18 Aug 2025 05:18:00
+
+
+Episode 19                     Shifting Gears                  2        19 Aug 2025 05:19:00
+
+
+Episode 20                     Shifting Gears                  2        20 Aug 2025 05:20:00
+
+
+Episode 21                     Shifting Gears                  2        21 Aug 2025 05:21:00
+
+
+Episode 22                     Shifting Gears                  2        22 Aug 2025 05:22:00
+
+
+Episode 23                     Shifting Gears                  2        23 Aug 2025 05:23:00
+
+
+Episode 24                     Shifting Gears                  2        24 Aug 2025 05:24:00
+
+
+Episode 25                     Shifting Gears                  2        25 Aug 2025 05:25:00
+
+
+Episode 26                     Shifting Gears                  2        26 Aug 2025 05:26:00
+
+
+Episode 27                     Shifting Gears                  2        27 Aug 2025 05:27:00
+
+
+Episode 28                     Shifting Gears                  2        28 Aug 2025 05:28:00
+
+
+Episode 29                     Shifting Gears                  2        29 Aug 2025 05:29:00
+
+
+Episode 30                     Shifting Gears                  2        30 Aug 2025 05:30:00
+
+
+The Nate Bargatze Shopping     The Greatest Average American   1
+Cart Nestle!
+
+
+The Devil Wears Prada 2        N/A                             N/A
+
+
+Seattle Kraken vs. Utah        NHL Hockey                      N/A
+Mammoth (Kraken Broadcast)
+
+
+Eyewitness News 11PM           ABC7 Eyewitness News            0
+
+
+Eyewitness News 11PM           ABC7 Eyewitness News            0
+
+
+Nikki Glaser; Joel Edgerton;   Jimmy Kimmel Live               24
+Debbie Gibson
+Devices And Logins
+ Activation    Device Name    Device ID        Last Known        Last Login    IP Address       Home
+ Date                                          Location          Time
+
+
+ 03 Sep 2026   Web Browser    61BFD7E8EF0      Irvine,CA,US      03 Sep 2026   136.52.105.11    No
+ 13:28:00                     6D6409A3C79                        13:28:00
+                              067B8F0894
+
+
+ 26 Jun 2026   Web Browser    3F8A889BB40      Laguna            26 Jun 2026   2600:8802:380    No
+ 14:41:37                     BE24A9D90A8      niguel,CA,US      14:41:37      c:d800:c8a3:89
+                              D1BFB0ADCE                                       5a:9e91:cf6d
+
+
+ 19 May 2024   Android -      ae1d1837fca12    Rancho            27 Mar 2025   136.52.40.30     No
+ 11:40:49      samsung        c64              cucamonga,CA,US   05:45:43
+               SM-P613
+               samsung
+
+
+ 17 Jan 2024   Roku Express   0c8c5aae-6e81    Bronx,NY,US       22 May 2025   67.84.181.233    No
+ 10:09:35      4K+            -512e-9fe8-626                     21:04:35
+                              c22e47ee6
+Advertising
+Advertising Device IDs
+                    c984923d-a3a8-5ab3-911c-29d68d3db58e
+
+
+
+Advertising Brands History
+                    ABBOTT
+
+
+                    AIRBNB
+
+
+                    Arhaus
+
+
+                    CHEWY INC
+
+
+                    HULU
+
+
+                    Zevia
+

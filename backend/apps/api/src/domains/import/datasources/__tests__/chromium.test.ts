@@ -4,12 +4,11 @@ import path from 'node:path';
 
 import Database from 'better-sqlite3';
 
+import { browserBrandFromPath } from '../chromium';
 import { allDataSources, dataSourcesRecognize } from '../registry';
 import type { ImportParams, Timeframe } from '../timeline';
 
 import type { EmittedGraph } from './support/emitted';
-
-import '../chromium';
 
 function getImporter(name: string) {
   const ds = allDataSources().find((d) => d.name === name);
@@ -64,6 +63,35 @@ async function runImport(dbPath: string, timeframe: Timeframe = {}) {
   return pipeline.filter((p) => p.item).map((p) => p.item);
 }
 
+describe('browserBrandFromPath', () => {
+  // The rename the import guide asks for.
+  it('reads the brand off a History-<brand> / Bookmarks-<brand> rename', () => {
+    expect(browserBrandFromPath('History-brave')).toBe('brave');
+    expect(browserBrandFromPath('/inbox/History-edge')).toBe('edge');
+    expect(browserBrandFromPath('Bookmarks-arc')).toBe('arc');
+    expect(browserBrandFromPath('history.sqlite-chrome')).toBe('chrome');
+  });
+
+  it('reads the brand off a profile directory on the way to the file', () => {
+    expect(browserBrandFromPath('BraveSoftware/Brave-Browser/Default/History')).toBe('brave');
+    expect(browserBrandFromPath('/home/u/.config/google-chrome/Default/History')).toBe('chrome');
+    expect(
+      browserBrandFromPath('C:\\Users\\u\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\History'),
+    ).toBe('edge');
+    expect(browserBrandFromPath('Library/Application Support/Arc/User Data/Default/History')).toBe('arc');
+    expect(browserBrandFromPath('Opera Software/Opera Stable/History')).toBe('opera');
+  });
+
+  it('prefers the first path that says anything, and never guesses', () => {
+    // The archive-relative name keeps the dropped folders; fullPath may not.
+    expect(browserBrandFromPath('Brave-Browser/Default/History', '/var/inbox/abc/History')).toBe('brave');
+    expect(browserBrandFromPath(undefined, '/var/inbox/abc/History')).toBeUndefined();
+    expect(browserBrandFromPath('History')).toBeUndefined();
+    // Whole-segment match: an unrelated folder that CONTAINS a brand name is not it.
+    expect(browserBrandFromPath('operations/History')).toBeUndefined();
+  });
+});
+
 describe('Chromium datasource', () => {
   it('recognizes a real History database', async () => {
     const dbPath = makeHistoryDb(tmpdir());
@@ -100,6 +128,43 @@ describe('Chromium datasource', () => {
     expect(items[2].timestamp?.toISOString()).toBe('2025-06-01T08:30:00.000Z');
   });
 
+  // The brand is a fact about the arrival, carried as `metadata.browser` (the
+  // row's properties bag, same key the extension writes) — never on the
+  // identity, which stays `chromium` for every brand.
+  it('stamps metadata.browser from a History-<brand> rename, and leaves it absent for a bare History', async () => {
+    const dir = tmpdir();
+    const bare = makeHistoryDb(dir);
+    const brave = path.join(dir, 'History-brave');
+    fs.copyFileSync(bare, brave);
+
+    const importer = getImporter('chromium');
+    async function run(fullPath: string, filename: string) {
+      const pipeline: EmittedGraph[] = [];
+      await importer.fileImport({}, { filename, fullPath }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      return pipeline.filter((p) => p.item).map((p) => p.item);
+    }
+
+    const fromBrave = await run(brave, 'History-brave');
+    expect(fromBrave.length).toBeGreaterThan(0);
+    expect(fromBrave.every((i) => i.metadata.browser === 'brave')).toBe(true);
+    // Same visits, same identities: the brand did not touch the key.
+    expect(fromBrave.map((i) => i.id)).toEqual((await run(bare, 'History')).map((i) => i.id));
+
+    const fromBare = await run(bare, 'History');
+    expect(fromBare.every((i) => i.metadata.browser === undefined)).toBe(true);
+
+    // The archive-relative filename carries the dropped profile folder even
+    // when fullPath is an anonymous Inbox location.
+    const fromFolder = await run(bare, 'Brave-Browser/Default/History');
+    expect(fromFolder.every((i) => i.metadata.browser === 'brave')).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('respects the timeframe filter', async () => {
     const items = await runImport(makeHistoryDb(tmpdir()), { since: new Date('2025-03-01T00:00:00Z') });
     expect(items.length).toBe(1);
@@ -115,6 +180,40 @@ describe('Chromium datasource', () => {
     expect(new Set(ids).size).toBe(3); // distinct visits -> distinct ids
     expect(ids.every(Boolean)).toBe(true);
     expect(second.map((i) => i.id!)).toEqual(ids); // deterministic across runs
+  });
+
+  // The cross-producer contract (identity/browser.ts): `visit:<unix ms>:<url>`,
+  // the same key Takeout's History.json and the browser extension mint for
+  // this visit. A WebKit-epoch microsecond stamp must come out as the plain
+  // Unix millisecond it denotes.
+  // Chromium stamps are above 2^53: read as a Number, `...999999` µs rounds to
+  // the next millisecond and the visit lands on a key Takeout never mints.
+  it('keeps the exact microsecond so a .999999 visit truncates to .999, not .000', async () => {
+    const dir = tmpdir();
+    const p = path.join(dir, 'History');
+    const db = new Database(p);
+    db.exec(`
+      CREATE TABLE urls (id INTEGER PRIMARY KEY, url TEXT, title TEXT, last_visit_time INTEGER);
+      CREATE TABLE visits (id INTEGER PRIMARY KEY, url INTEGER, visit_time INTEGER);
+    `);
+    db.prepare('INSERT INTO urls (id, url, title) VALUES (?, ?, ?)').run(1, 'https://example.com', 'Example');
+    // 2025-06-10T12:00:00.999999Z as 1601-epoch microseconds — not a safe integer.
+    db.prepare('INSERT INTO visits (id, url, visit_time) VALUES (?, ?, ?)').run(1, 1, 13394030400999999n);
+    db.close();
+
+    const items = await runImport(p);
+    expect(items[0].timestamp?.toISOString()).toBe('2025-06-10T12:00:00.999Z');
+    expect(items[0].id).toBe(`visit:${Date.parse('2025-06-10T12:00:00.999Z')}:https://example.com`);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('keys each visit on visit:<unix ms>:<url> — the key shared with Takeout and the extension', async () => {
+    const ids = (await runImport(makeHistoryDb(tmpdir()))).map((i) => i.id!);
+    expect(ids).toEqual([
+      `visit:${Date.parse('2025-02-14T00:00:00Z')}:https://example.com`,
+      `visit:${Date.parse('2025-02-15T12:00:00Z')}:https://news.example.org`,
+      `visit:${Date.parse('2025-06-01T08:30:00Z')}:https://example.com`,
+    ]);
   });
 });
 
@@ -262,7 +361,12 @@ describe('Chromium bookmarks', () => {
     const p = makeBookmarksFile(dir);
     const first = (await importBookmarks(p)).map((i) => i.id!);
     expect(new Set(first).size).toBe(3);
-    expect(first.every((id: string) => id.startsWith('chromium:bookmark:'))).toBe(true);
+    // `bookmark:<unix s>:<url>` — seconds, because Takeout's Bookmarks.html
+    // only has seconds; an undated bookmark keys on 0.
+    expect(
+      first.filter((id: string) => id.startsWith(`bookmark:${Date.parse('2025-03-01T12:00:00Z') / 1000}:`)),
+    ).toHaveLength(2);
+    expect(first).toContain('bookmark:0:https://undated.example.com');
     expect((await importBookmarks(p)).map((i) => i.id!)).toEqual(first);
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -576,11 +680,16 @@ describe('downloads', () => {
     expect(got).toHaveLength(0);
   });
 
-  it('keys on the guid so a re-import of the same profile dedups', async () => {
+  // (final url, start ms), not the guid: the extension's downloads API never
+  // sees a guid, and both sides see the URL the bytes came from and the start
+  // instant. The guid still rides in metadata for anyone who wants it.
+  it('keys on download:<start ms>:<final url> so a re-import AND the extension dedup', async () => {
     const got = await downloadsFrom([
       { guid: 'stable-guid', target: '/d/a.pdf', chainUrl: 'https://files.example/a.pdf' },
     ]);
-    expect(got[0].id).toContain('stable-guid');
+    expect(got[0].id).toMatch(/^download:\d+:https:\/\/files\.example\/a\.pdf$/);
+    expect(got[0].id).toBe(`download:${got[0].timestamp!.getTime()}:https://files.example/a.pdf`);
+    expect(got[0].metadata.Guid).toBe('stable-guid');
   });
 
   it('imports visits normally on a profile with no downloads table', async () => {

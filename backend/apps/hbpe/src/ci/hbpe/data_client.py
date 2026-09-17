@@ -311,6 +311,58 @@ def get_token_events_for_day(user_id: str, date_str: str) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
+# Structural-emptiness guard: as of migration 20260828120000, ci.tasks carries
+# l0_class / l1_cluster_id columns but nothing in the repo ever writes them
+# (see the comment on TaskEntity.l0Class / l1ClusterId). Without this guard,
+# every scheduled pass runs the WHERE-gated query below once per user per day
+# in the serialize window and it is *always* empty — a real DB round trip
+# spent proving a structural fact that does not change until a writer ships.
+# Cached for the life of the process so it costs one query, not one per call.
+_completed_tasks_precondition_checked: bool = False
+_completed_tasks_precondition_populated: bool = True
+
+
+def _completed_tasks_l0_class_populated() -> bool:
+    """One-time, process-wide EXISTS probe for a classified completed task."""
+    global \
+        _completed_tasks_precondition_checked, \
+        _completed_tasks_precondition_populated
+
+    if _completed_tasks_precondition_checked:
+        return _completed_tasks_precondition_populated
+
+    sql = """
+        SELECT EXISTS (
+            SELECT 1 FROM ci.tasks
+            WHERE l0_class IS NOT NULL AND l0_class <> 'UNKNOWN'
+        )
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                row = cur.fetchone()
+                populated = bool(row[0]) if row else False
+    except Exception as exc:
+        # Cannot tell either way on a read failure — do not mask a genuine DB
+        # problem behind the short-circuit; let the normal query run below
+        # and surface (or swallow, per its own contract) the same failure.
+        log.warning("l0_class population probe failed (non-fatal): %s", exc)
+        return True
+
+    _completed_tasks_precondition_checked = True
+    _completed_tasks_precondition_populated = populated
+
+    if not populated:
+        log.warning(
+            "ci.tasks.l0_class has no writer yet (see TaskEntity.ts) — "
+            "get_completed_tasks_for_day will short-circuit to [] for the "
+            "rest of this process instead of re-running an always-empty scan."
+        )
+
+    return populated
+
+
 def get_completed_tasks_for_day(user_id: str, date_str: str) -> list[dict]:
     """
     Done tasks with an L0 class, occurring at completed_at on date_str.
@@ -322,6 +374,9 @@ def get_completed_tasks_for_day(user_id: str, date_str: str) -> list[dict]:
     but it has to be able to tell "no completed tasks" from "could not read
     the completed tasks" before it deletes a day's token stream.
     """
+    if not _completed_tasks_l0_class_populated():
+        return []
+
     sql = """
         SELECT
             t.l0_class,
@@ -423,6 +478,79 @@ def get_unlabeled_summaries(user_id: str, date_str: str) -> list[dict]:
 
     labeled_ids = _get_labeled_summary_ids([s["summary_id"] for s in summaries])
     return [s for s in summaries if s["summary_id"] not in labeled_ids]
+
+
+def get_unlabeled_summaries_in_range(
+    user_id: str,
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    """Return unlabeled hourly summaries in an inclusive calendar-date range."""
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    if end < start:
+        raise ValueError("summary label end_date must be on or after start_date")
+
+    sql = """
+        SELECT s.summary_id::text, s.period_start, s.content
+        FROM ci.summaries s
+        LEFT JOIN hbpe.summary_l1_label label
+          ON label.summary_id = s.summary_id
+        WHERE s.user_id = %s::uuid
+          AND s.period_type = 'hourly'
+          AND s.period_start >= %s::date
+          AND s.period_start < (%s::date + INTERVAL '1 day')
+          AND label.summary_id IS NULL
+        ORDER BY s.period_start
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (str(user_id), start.isoformat(), end.isoformat()))
+            return [dict(row) for row in cur.fetchall()]
+
+
+def get_unlabeled_summaries_on_days(user_id: str, dates: list[str]) -> list[dict]:
+    """
+    Return unlabeled hourly summaries falling on an explicit set of days.
+
+    The serialize day list is days-with-data, so it is not contiguous: an
+    archival corpus whose events stop in 2024 still writes hourly summaries
+    today, and the two clusters sit two years apart.  Selecting them with a
+    range would drag in every summary in the gap.
+
+    The array match is paired with a MIN/MAX range predicate even though it
+    subsumes it.  ``period_start::date = ANY(...)`` is not sargable — on its own
+    it forces a full scan of the user's hourly summaries — so the range gives
+    the planner an index-usable bound and the array does the exact selection.
+    """
+    if not dates:
+        return []
+
+    days = sorted({date.fromisoformat(d) for d in dates})
+
+    sql = """
+        SELECT s.summary_id::text, s.period_start, s.content
+        FROM ci.summaries s
+        LEFT JOIN hbpe.summary_l1_label label
+          ON label.summary_id = s.summary_id
+        WHERE s.user_id = %s::uuid
+          AND s.period_type = 'hourly'
+          AND s.period_start >= %s::date
+          AND s.period_start < (%s::date + INTERVAL '1 day')
+          AND s.period_start::date = ANY(%s::date[])
+          AND label.summary_id IS NULL
+        ORDER BY s.period_start
+    """
+    params = (
+        str(user_id),
+        days[0].isoformat(),
+        days[-1].isoformat(),
+        [d.isoformat() for d in days],
+    )
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, params)
+            return [dict(row) for row in cur.fetchall()]
 
 
 def get_labeled_summaries(user_id: str, date_str: str) -> list[dict]:

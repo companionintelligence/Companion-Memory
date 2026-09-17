@@ -15,6 +15,7 @@ import {
 import { PythonFunctionService } from '@ci/domains/python-functions';
 import { UserService } from '@ci/domains/user';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { DueForecastType } from '../types/DueForecastType';
 import { ForecastHistoryDayType } from '../types/ForecastHistoryType';
 import { ForecastType } from '../types/ForecastType';
@@ -208,6 +209,10 @@ export class ForecastResolver {
   @Mutation(() => String, {
     description: 'Rebuild stay-point clusters and recency-decayed transitions for the current user',
   })
+  // PlaceTransitionService.rebuild issues an unconditional whole-user DELETE before re-inserting.
+  // Derived and recomputable in principle — but if clustering yields nothing the delete still
+  // happened and the table is left empty.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async rebuildPlaces(@Context() context: RequestContext): Promise<string> {
     if (!(await this.featureService.isFeatureEnabled('hbpe'))) {
       return 'disabled';
@@ -227,6 +232,8 @@ export class ForecastResolver {
   }
 
   @Mutation(() => String, { description: 'Manually trigger the HBPE pipeline for the current user' })
+  // Only enqueues the existing nightly pg-boss job; no direct write here.
+  @GraphqlPrivacy({ destructive: false })
   async triggerHbpe(@Context() context: RequestContext): Promise<string> {
     if (!(await this.featureService.isFeatureEnabled('hbpe'))) {
       return 'disabled';

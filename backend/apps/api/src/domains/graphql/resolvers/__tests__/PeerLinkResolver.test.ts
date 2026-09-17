@@ -160,6 +160,129 @@ describe('PeerLinkResolver', () => {
     });
   });
 
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * THE (iss, sub) BINDING — WRITABLE HERE, AND NOWHERE READABLE.
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * `PeerAskService.resolveLink` matches every INBOUND ask on
+   * `peer_links.peer_issuer` / `peer_subject`. `PeerLinkService.upsert` has
+   * always accepted the pair and nothing in production ever passed it, so a
+   * link created through this resolver was inert for inbound asks — the fix
+   * these tests pin.
+   *
+   * What has to hold: the pair reaches `upsert` when given, an absent pair
+   * NEVER clobbers a stored one, the owner-scoped refusals cover it exactly as
+   * they cover `trustTier`, and none of it leaks back out on the wire (the
+   * `projection` block below).
+   */
+  describe('identity binding', () => {
+    it('passes peerIssuer/peerSubject through to the service on create', async () => {
+      const { resolver, service, context } = build();
+
+      await resolver.createPeerLink(context, {
+        peerHandle: 'ada',
+        memoryEndpoint: 'https://ada.example/agent',
+        peerIssuer: 'https://portal.example',
+        peerSubject: 'sub-ada',
+      });
+
+      expect(service.upsert.mock.calls[0][1]).toMatchObject({
+        peerIssuer: 'https://portal.example',
+        peerSubject: 'sub-ada',
+      });
+    });
+
+    it('leaves the pair UNDEFINED on create when the caller omits it, never null', async () => {
+      // `upsert` merges `data.peerIssuer ?? existing?.peerIssuer ?? null`, so
+      // `undefined` and `null` behave identically THERE — but only `undefined`
+      // says "the caller did not mention this", and `upsert` reads that to
+      // decide whether the write TOUCHES the identity (and so whether the
+      // both-or-neither rule and the duplicate-identity conflict apply).
+      // Coercing to null here would make every plain rename look like an
+      // identity write.
+      const { resolver, service, context } = build();
+
+      await resolver.createPeerLink(context, {
+        peerHandle: 'ada',
+        memoryEndpoint: 'https://ada.example/agent',
+      });
+
+      const dto = service.upsert.mock.calls[0][1] as Record<string, unknown>;
+
+      expect(dto.peerIssuer).toBeUndefined();
+      expect(dto.peerSubject).toBeUndefined();
+    });
+
+    it('passes peerIssuer/peerSubject through to the service on update', async () => {
+      const { resolver, service, context } = build();
+
+      await resolver.updatePeerLink(context, {
+        id: GlobalUID.encode('peer-link', '01a0-link'),
+        peerIssuer: 'https://portal.example/v2',
+        peerSubject: 'sub-ada-2',
+      });
+
+      expect(service.upsert.mock.calls[0][1]).toMatchObject({
+        peerIssuer: 'https://portal.example/v2',
+        peerSubject: 'sub-ada-2',
+      });
+    });
+
+    it('preserves the existing binding when an update does not mention it', async () => {
+      // The exact mirror of the tier case above: a rename must never silently
+      // UNBIND a federated peer, which would stop every inbound ask from them.
+      const { resolver, service, context } = build();
+
+      await resolver.updatePeerLink(context, {
+        id: GlobalUID.encode('peer-link', '01a0-link'),
+        displayName: 'Ada L.',
+      });
+
+      expect(service.upsert.mock.calls[0][1]).toMatchObject({
+        peerIssuer: 'https://portal.example',
+        peerSubject: 'sub-ada',
+      });
+    });
+
+    it('SECURITY: cannot bind a link the owner cannot read, and writes nothing trying', async () => {
+      // These two fields decide WHICH remote identity may act as this peer, so
+      // the owner-scoped read in front of the write is doing more work for them
+      // than for any other field: without it, one household member could
+      // re-point another member's link at an identity they control and inherit
+      // that link's trust tier.
+      const { resolver, service, context } = build({
+        findById: jest.fn().mockResolvedValue(null),
+      });
+
+      await expect(
+        resolver.updatePeerLink(context, {
+          id: GlobalUID.encode('peer-link', 'someone-elses'),
+          peerIssuer: 'https://mallory.example',
+          peerSubject: 'mallory',
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(service.upsert).not.toHaveBeenCalled();
+    });
+
+    it('SECURITY: a create is scoped to the CALLER, never to a supplied owner', async () => {
+      // `upsert` keys its read and its write on `context.userId`. Nothing on
+      // the input can redirect that, so binding an identity onto another
+      // owner's row is unreachable from here.
+      const { resolver, service, context } = build();
+
+      await resolver.createPeerLink(context, {
+        peerHandle: 'ada',
+        memoryEndpoint: 'https://ada.example/agent',
+        peerIssuer: 'https://portal.example',
+        peerSubject: 'sub-ada',
+      });
+
+      expect(service.upsert.mock.calls[0][0]).toMatchObject({ userId: OWNER });
+    });
+  });
+
   describe('projection', () => {
     it('SECURITY: never puts the (iss, sub) binding on the wire', async () => {
       // That pair is what an inbound token is matched against — the thing that
@@ -172,6 +295,34 @@ describe('PeerLinkResolver', () => {
       expect(link).not.toHaveProperty('peerIssuer');
       expect(link).not.toHaveProperty('peerSubject');
       expect(JSON.stringify(link)).not.toContain('sub-ada');
+    });
+
+    it('SECURITY: the binding stays off the wire on the MUTATIONS that set it', async () => {
+      // The read query is not the only way out. `createPeerLink` and
+      // `updatePeerLink` both return a `PeerLinkType`, and the pair was just
+      // handed to them — echoing it back would turn a write-only field into a
+      // read one for anything holding a session, which is exactly what
+      // `PeerLinkType`'s docstring says must not happen.
+      const { resolver, context } = build();
+
+      const created = await resolver.createPeerLink(context, {
+        peerHandle: 'ada',
+        memoryEndpoint: 'https://ada.example/agent',
+        peerIssuer: 'https://portal.example',
+        peerSubject: 'sub-ada',
+      });
+      const updated = await resolver.updatePeerLink(context, {
+        id: GlobalUID.encode('peer-link', '01a0-link'),
+        peerIssuer: 'https://portal.example',
+        peerSubject: 'sub-ada',
+      });
+
+      for (const payload of [created, updated]) {
+        expect(payload.peerLink).not.toHaveProperty('peerIssuer');
+        expect(payload.peerLink).not.toHaveProperty('peerSubject');
+        expect(JSON.stringify(payload)).not.toContain('sub-ada');
+        expect(JSON.stringify(payload)).not.toContain('portal.example');
+      }
     });
 
     it('returns revoked links rather than hiding them', async () => {

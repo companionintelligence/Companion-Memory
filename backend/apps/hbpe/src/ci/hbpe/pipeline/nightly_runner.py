@@ -85,6 +85,19 @@ async def _run_inference(fn):
         raise
 
 
+def _stop_poll(should_stop):
+    """
+    Adapt ``_run_inference``'s ``threading.Event`` to a ``should_continue()``
+    predicate for the label batches, or ``None`` when there is no event.
+
+    Callers that drive a step function directly (tests, the bounded recovery
+    entry point) pass no event; those batches simply run to completion.
+    """
+    if should_stop is None:
+        return None
+    return lambda: not should_stop.is_set()
+
+
 # ── Step 1 — Label unlabeled events and content ────────────────────────────────
 
 
@@ -107,16 +120,19 @@ def _recency_cutoff(user_id: str, recency_days: int) -> datetime:
     """
     The instant separating the drain's recency phase from its historical one.
 
-    It is the first day of the window the *next* serialize run will write
+    It is the first CONTENT day the *next* serialize run will write
     (``bootstrap.label_recency_start``), not ``today - recency_days``: a label
     reaches hbpe.pipeline.recurrence — and so /forecast — only once serialize
     turns it into an hbpe.token_stream row, and serialize only ever rewrites
     that trailing window. Anchoring on the corpus rather than on the wall clock
     also keeps the two aligned when ingestion lags (see label_recency_start).
 
-    Note it is NOT recurrence.HISTORY_DAYS. The profiler reads 180 days of
-    token_stream, but nothing writes token_stream for the 90–180-day band, so
-    labeling into it cannot change any forecast.
+    Note it is NOT recurrence.HISTORY_DAYS, and not a calendar band at all: it
+    is read off the day list, because which days that list holds is
+    corpus-dependent. On a dense corpus nothing writes token_stream for the
+    90–180-day band, so labeling into it cannot change any forecast; on a sparse
+    one the reserved event tier reaches into and past that band, and those days
+    are serialized. See bootstrap.SERIALIZE_WINDOW_DAYS.
     """
     from ci.hbpe.pipeline.bootstrap import label_recency_start
 
@@ -376,22 +392,93 @@ async def label_unlabeled(user_id: str) -> dict:
 # ── Step 1b — Label hourly summaries ──────────────────────────────────────────
 
 
-async def label_summary_tokens(user_id: str) -> dict:
+async def label_summary_tokens(
+    user_id: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
     """
-    Step 1b: Label yesterday's hourly summaries with L0+L1 via Qwen.
+    Step 1b: Label the hourly summaries the next serialize run will publish.
 
     Summary tokens fill 15-min buckets that have no event-derived coverage
     (sleep, leisure, off-calendar hours).  Labels are stored in
-    ci.summary_l1_label and merged into the token stream at serialization time.
+    hbpe.summary_l1_label and merged into the token stream at serialization time.
+    An explicit inclusive range may be supplied for bounded recovery.
+
+    The default target is ``bootstrap.content_source_days`` — the same day
+    *list* serialize walks, not the span between its ends.  Aiming at a span
+    would pay two Qwen calls per summary for every day in a bimodal corpus's
+    two-year gap, none of which serialize would then publish.
+
+    Content days, not the full ``token_source_days``: a purge day holds no
+    summary at all (having none is what put it in that tier), so it can only
+    ever add a no-op date to the read — and ``get_unlabeled_summaries_on_days``
+    pairs its ``= ANY(...)`` match with a MIN/MAX bracket for the planner, so a
+    source-less 2020 day silently widens that bracket across the whole corpus.
     """
     import datetime
 
     def _run(should_stop) -> dict:
+        from ci.hbpe.pipeline.bootstrap import (
+            SERIALIZE_WINDOW_DAYS,
+            content_source_days,
+        )
         from ci.hbpe.tokenizer.summary_tokenizer import SummaryTokenizer
 
-        yesterday = datetime.date.today() - datetime.timedelta(days=1)
-        n = SummaryTokenizer().label_day(user_id, yesterday.isoformat())
-        return {"labeled": n, "date": yesterday.isoformat()}
+        if (start_date is None) != (end_date is None):
+            raise ValueError(
+                "summary label recovery requires both start_date and end_date"
+            )
+
+        keep_going = _stop_poll(should_stop)
+
+        if start_date is not None and end_date is not None:
+            start = datetime.date.fromisoformat(start_date)
+            end = datetime.date.fromisoformat(end_date)
+            if end < start:
+                raise ValueError(
+                    "summary label end_date must be on or after start_date"
+                )
+            if (end - start).days > SERIALIZE_WINDOW_DAYS:
+                raise ValueError(
+                    "summary label recovery cannot exceed the serialization window"
+                )
+            n = SummaryTokenizer().label_range(
+                user_id,
+                start.isoformat(),
+                end.isoformat(),
+                should_continue=keep_going,
+            )
+            return {
+                "labeled": n,
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "days": (end - start).days + 1,
+            }
+
+        days = content_source_days(user_id)
+        if not days:
+            # No dated content source at or before today at all — no event and
+            # no hourly summary. NOT "the newest summary is too fresh to be
+            # listed": the day list is clamped with
+            # ``< today + 1 day``, so a summary written minutes ago is already in
+            # it. Labeling yesterday therefore finds nothing either. The branch
+            # is here so the step still reports a concrete day rather than
+            # indexing into an empty list below, and it is a harmless no-op on
+            # every corpus that can reach it.
+            yesterday = datetime.datetime.now(datetime.UTC).date() - datetime.timedelta(
+                days=1
+            )
+            days = [yesterday]
+
+        dates = [d.isoformat() for d in days]
+        n = SummaryTokenizer().label_days(user_id, dates, should_continue=keep_going)
+        return {
+            "labeled": n,
+            "start_date": dates[0],
+            "end_date": dates[-1],
+            "days": len(dates),
+        }
 
     return await _run_inference(_run)
 

@@ -116,7 +116,7 @@ function ReceiptRowButton({ receipt, onOpen }: { receipt: ReceiptNode; onOpen: (
 }
 
 export function ReceiptsPage() {
-  usePageTitle('Receipts - Companion Intelligence');
+  usePageTitle('Receipts - Companion Memory');
 
   const navigate = useNavigate();
   // `q` to stay consistent with the URL key the rest of the hub uses for its

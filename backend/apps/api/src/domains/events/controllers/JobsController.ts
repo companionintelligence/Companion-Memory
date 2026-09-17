@@ -1,10 +1,9 @@
-import { Body, Controller, ForbiddenException, Get, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
-import type { Request } from 'express';
+import { Body, Controller, Get, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 
 import { Context, type RequestContext } from '@ci/common/context/';
-import { READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { FULL_CAPABILITY, READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
+import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MAX_CONCURRENCY } from '@ci/common/job-controls';
 import { ValidationPipe } from '@ci/common/pipes';
 
@@ -15,6 +14,7 @@ import {
   JobHistoryDto,
   JobListDto,
   JobQueryService,
+  type TerminalJobClearDto,
 } from '../services/JobQueryService';
 import { JOB_CATEGORIES, JOB_TYPES } from '../taxonomy';
 
@@ -66,11 +66,48 @@ const jobControlsSchema = z.object({
 
 type JobControlsBody = z.infer<typeof jobControlsSchema>;
 
-function isLoopback(request: Request): boolean {
-  const ip = request.socket.remoteAddress ?? '';
+/**
+ * The Jobs dashboard's REST surface.
+ *
+ * Everything here is APPLIANCE-WIDE rather than per-account: `JobMonitorService`
+ * and `JobQueryService` read `pgboss.job` / `ci.job_metrics` with no tenancy
+ * predicate, so any authenticated principal sees every account's job metadata.
+ * On the single-owner appliance this ships as that is the intended view, but it
+ * is not confined to one — and no guard here can confine it, because the scoping
+ * that would has to happen in the queries.
+ *
+ * {@link AdminOnlyGuard} is deliberately NOT applied, despite this being exactly
+ * the operator-shaped surface it was written for — but the reason has changed,
+ * and the old one is worth recording because it was cited widely. It used to be
+ * that no application code ever set `ci.users.role`: the column's only writer
+ * was a one-shot backfill (`20260825233952_add_role_to_users_backfill_admin`)
+ * promoting the earliest EXISTING row at migration time, which on a fresh
+ * install runs before anyone has signed up and so promoted nobody. Gating these
+ * routes then would have answered the owner's own Jobs page with a 403 they
+ * could not clear.
+ *
+ * `UserService.claimApplianceIfUnowned` now promotes the account that claims an
+ * unowned appliance, so that objection is gone. {@link ApplianceAdminGuard} is
+ * still the right guard here for a different reason: it degrades to admitting
+ * everyone on an appliance with no live admin, which for an appliance-wide
+ * control plane is the honest answer, where the arbitrary-command-execution
+ * routes behind `AdminOnlyGuard` must degrade closed instead.
+ *
+ * What the guards CAN do here, and do, is keep the routes that ACT — `POST
+ * jobs/crons/run`, which fires every cron, and `POST jobs/clear-terminal`,
+ * which deletes the dead-letter/failed queues — the most strongly gated routes
+ * on the controller. Every read below therefore states its capability floor
+ * explicitly instead of leaving it unstated: `read` is rank 0, so it narrows no
+ * key that reaches these routes today, but it means `full` on the acting routes
+ * sits at the top of a ladder that is declared end to end rather than above
+ * silence.
+ */
 
-  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
-}
+const clearTerminalSchema = z.object({
+  scope: z.enum(['dead-letter', 'failed']),
+});
+
+type ClearTerminalBody = z.infer<typeof clearTerminalSchema>;
 
 @Controller('jobs')
 export class JobsController {
@@ -81,6 +118,7 @@ export class JobsController {
   ) {}
 
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(READ_CAPABILITY)
   @Get('dashboard')
   getDashboard(@Context() context: RequestContext): Promise<JobDashboardDto> {
     return this.jobMonitorService.getDashboard(context);
@@ -89,26 +127,72 @@ export class JobsController {
   /**
    * Fire every Nest `@Cron` (or one named job) the way the scheduler would.
    *
-   * Loopback-only: operators `docker exec` into the api container and curl
-   * localhost. Authenticated remote callers use the Jobs UI / JWT surface
-   * instead of an open stampede endpoint on the public host.
+   * `full`, not `write`, because the set this fans out over is not curated: it is
+   * every schedule the process has registered, and that set includes
+   * `AccountPurgeCron.purgeDueAccounts`, which permanently deletes accounts past
+   * their grace period. Gating on the *narrowest* thing this can fire would be
+   * backwards — the capability has to cover the widest, and a per-cron
+   * destructive/non-destructive registry would fail open the day someone adds a
+   * schedule and forgets to classify it.
+   *
+   * This used to be guarded by a loopback check on `request.socket.remoteAddress`
+   * instead of by auth, on the theory that operators reach it by `docker exec` +
+   * curl. That check could not hold: `remoteAddress` is the IMMEDIATE PEER, so
+   * any reverse proxy in front of the API makes every request look local, and
+   * this repo ships two that dial the API on localhost — the `make dev` Caddy
+   * route at `<project>.localhost`, and the Vite dev server's own `/api` proxy
+   * (`API_PROXY_TARGET`), which binds `0.0.0.0` and allows `.ts.net` hosts. Any
+   * caller on the network could stampede every cron on the appliance.
+   *
+   * Nor was there an honest version of the check to fall back to. `X-Forwarded-For`
+   * is only meaningful behind a proxy that overwrites it, and `express` here runs
+   * `trust proxy = 1` globally, which makes `req.ip` attacker-controlled on a
+   * DIRECT connection — a spoofable header check reading as a network-location
+   * control is worse than none. The guard is the real control, so it is the only
+   * one left.
    */
+  @UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)
+  @RequireCapability(FULL_CAPABILITY)
   @Post('crons/run')
-  runCrons(
-    @Req() request: Request,
-    @Query('name') name?: string,
-  ): {
+  runCrons(@Query('name') name?: string): {
     fired: string[];
     skipped: string[];
     errors: { name: string; error: string }[];
   } {
-    if (!isLoopback(request)) {
-      throw new ForbiddenException('POST /jobs/crons/run is only allowed from inside the api container');
-    }
-
     const names = name?.trim() ? [name.trim()] : undefined;
 
     return this.jobMonitorService.fireCronJobs(names);
+  }
+
+  /**
+   * Clear terminal jobs named by the Health card — harvested dead-letter rows,
+   * or failed origin rows that have already exhausted retries.
+   *
+   * `full`, not `write`, and the distinction is this repo's own: `write` is
+   * defined in `ApiKeyCapability.ts` as "read + mutating tools, but **nothing
+   * that deletes**". This route is a hard DELETE. It shipped on `write`, which
+   * is also the level every new api key is minted at by default
+   * (`DEFAULT_API_KEY_CAPABILITY`), so the broadest, least-considered grant on
+   * the appliance reached the one button that destroys rows. Deleting is what
+   * `full` exists to name — the same reasoning `crons/run` above already
+   * carries.
+   *
+   * {@link ApplianceAdminGuard} is the other half, and is not redundant with
+   * it. `@RequireCapability` is enforced only for api-key principals — see
+   * `enforceApiKeyCapability`, which returns early when `apiKeyScopes` is
+   * undefined — so on its own it says nothing about a signed-in session, which
+   * is how a Jobs page open in any user's browser could clear the appliance.
+   * The capability covers the key axis, the guard covers the principal axis,
+   * and each is the only control in the case the other does not see.
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)
+  @RequireCapability(FULL_CAPABILITY)
+  @Post('clear')
+  clearTerminal(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(clearTerminalSchema)) body: ClearTerminalBody,
+  ): Promise<TerminalJobClearDto> {
+    return this.jobQueryService.clearTerminal(context, body.scope);
   }
 
   /**
@@ -119,6 +203,7 @@ export class JobsController {
    * state — they are stored as `created`, so without it they are unfindable.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(READ_CAPABILITY)
   @Get()
   list(
     @Context() context: RequestContext,
@@ -149,6 +234,7 @@ export class JobsController {
    * collector sampled it.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(READ_CAPABILITY)
   @Get('history')
   history(
     @Context() context: RequestContext,
@@ -175,6 +261,7 @@ export class JobsController {
    * rows on a live appliance), so only the event name in the payload survives.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(READ_CAPABILITY)
   @Get('history/categories')
   categoryHistory(
     @Context() context: RequestContext,
@@ -215,11 +302,17 @@ export class JobsController {
    * first write, so a body naming one unknown queue changes nothing rather than
    * applying the valid half of itself.
    *
+   * {@link ApplianceAdminGuard} all the same, for the reason spelled out on
+   * `clear` above: these controls are APPLIANCE-WIDE — pausing a queue or
+   * disabling a schedule stops that work for everyone on the box — and the
+   * capability decorator governs api keys only, so without the guard any
+   * signed-in user could switch off the memory system for the household.
+   *
    * Returns the recomputed state rather than an ack — see `JobControlsService`
    * for why "what you asked for" and "what the appliance will do" are routinely
    * different numbers.
    */
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)
   @RequireCapability(WRITE_CAPABILITY)
   @Put('controls')
   updateControls(
@@ -235,6 +328,7 @@ export class JobsController {
    * come from one source rather than a second copy in the frontend.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(READ_CAPABILITY)
   @Get('types')
   types(): {
     categories: string[];

@@ -12,7 +12,7 @@ import {
   type LucideIcon,
 } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
@@ -25,12 +25,32 @@ import { useEntityService } from '../MemoryPage/useEntityService';
 import { ActivityTimelineRail } from './ActivityTimelineRail';
 import { EntityDetails } from './Components/EntityDetails';
 import { ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
+import { hasWhenFilter } from './Components/ExplorerToolbar/filterParams';
 import { applyViewFilterDefaults, readMemoryView } from './Components/ExplorerToolbar/viewFilterSupport';
-import { GalleryView } from './GalleryView';
-import { GraphView } from './GraphView';
+import { LazyView, type ViewLoader } from './Components/LazyView';
+import { isEventsExplorer } from './explorerRoute';
+import { ExploreView } from './ExploreView';
 import { ListView } from './ListView';
-import { DesktopMapView } from './MapView';
-import { StoryTimelineView } from './StoryTimelineView';
+
+// Only List is bundled with the page — it is the default view, so lazy-loading
+// it would put a skeleton flash on the common path. The other four each drag in
+// a heavy dependency (leaflet, TimelineJS, force-graph + d3-force), which the
+// list-view visitor used to download without ever rendering.
+//
+// These are loaders, not lazy components: LazyView mints the React.lazy itself,
+// so it can mint a fresh one on retry — a rejected lazy payload re-throws the
+// same error forever, which would leave "Try again" permanently inert.
+const loadMapView: ViewLoader = () => import('./MapView').then((m) => ({ default: m.DesktopMapView }));
+const loadStoryTimelineView: ViewLoader = () =>
+  import('./StoryTimelineView').then((m) => ({ default: m.StoryTimelineView }));
+const loadGalleryView: ViewLoader = () => import('./GalleryView').then((m) => ({ default: m.GalleryView }));
+const loadGraphView: ViewLoader = () =>
+  import('./GraphView').then((m) => {
+    // LazyView renders its component with no props, so bind the variant here.
+    const DesktopGraphView = () => <m.GraphView variant="desktop" />;
+
+    return { default: DesktopGraphView };
+  });
 
 const VIEW_TABS: Array<{
   value: string;
@@ -47,8 +67,19 @@ const VIEW_TABS: Array<{
 
 export default function DesktopMemoryPage() {
   const { t } = useTranslation();
+  const { pathname } = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [{ activeEntity, refetch }, { setActiveEntity }] = useEntityService();
+
+  // Which list the List tab is: `/memory/events` is the chronology (ListView)
+  // and always has the activity heatmap and the Timeline view; a bare
+  // `/memory` is the ranked everything browse (ExploreView), which only
+  // offers either once a When filter has made time part of the question (and
+  // useExplorerWhenReset walks a stale `?view=timeline` back to List). See
+  // explorerRoute.
+  const eventsExplorer = isEventsExplorer(pathname);
+  const timeInPlay = eventsExplorer || hasWhenFilter(searchParams);
+  const viewTabs = timeInPlay ? VIEW_TABS : VIEW_TABS.filter((tab) => tab.value !== 'timeline');
 
   const [{ isOpen: isAddEventOpen }, { open: openAddEvent, close: closeAddEvent }] = useModalControls();
 
@@ -137,7 +168,7 @@ export default function DesktopMemoryPage() {
       {/* View tabs (list / map / timeline / gallery / graph) live in the header nav-views portal. */}
       <Portal.Slot id="nav-views">
         <div className="flex flex-wrap items-center gap-1">
-          {VIEW_TABS.map(({ value, label, titleKey, Icon }) => {
+          {viewTabs.map(({ value, label, titleKey, Icon }) => {
             const title = t(titleKey);
 
             return (
@@ -177,19 +208,20 @@ export default function DesktopMemoryPage() {
             <div className="px-2">
               <ExplorerToolbar open />
             </div>
-            {/* List view splits into two independently-scrolled panes: wheeling
-              over the left rail moves the heatmap's window through time, while
-              the result list on the right keeps its own scroll. */}
+            {/* With the heatmap showing, the List tab splits into two
+              independently-scrolled panes: wheeling over the left rail moves
+              the heatmap's window through time, while the result list on the
+              right keeps its own scroll. */}
             {activeTab === 'list' && (
               <div className="flex min-h-0 flex-1">
-                <ActivityTimelineRail className="shrink-0 border-r" />
-                <ListView />
+                {timeInPlay && <ActivityTimelineRail className="shrink-0 border-r" />}
+                {eventsExplorer ? <ListView /> : <ExploreView />}
               </div>
             )}
-            {activeTab === 'map' && <DesktopMapView />}
-            {activeTab === 'timeline' && <StoryTimelineView />}
-            {activeTab === 'gallery' && <GalleryView />}
-            {activeTab === 'graph' && <GraphView variant="desktop" />}
+            {activeTab === 'map' && <LazyView viewKey="map" load={loadMapView} />}
+            {activeTab === 'timeline' && <LazyView viewKey="timeline" load={loadStoryTimelineView} />}
+            {activeTab === 'gallery' && <LazyView viewKey="gallery" load={loadGalleryView} />}
+            {activeTab === 'graph' && <LazyView viewKey="graph" load={loadGraphView} />}
           </div>
         </MemoryHubShell>
       </PageContent>

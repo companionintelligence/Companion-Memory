@@ -182,8 +182,10 @@ describe('PersonMergeService', () => {
     expect(folded.emails).toEqual(expect.arrayContaining(['dana@x.com', 'danaq@y.com']));
     expect(folded.first_name).toBe('Dana');
 
-    // The fuller name wins — "Dana Q" is a token-superset of "Dana".
-    expect(propertiesUpdate[0].params?.[3]).toBe('Dana Q');
+    // The target's name is preserved — a source's fuller name must never
+    // silently overwrite it (a source can be an unreviewed stub, and the
+    // target can be the user's own self person).
+    expect(propertiesUpdate[0].params?.[3]).toBe('Dana');
 
     // Sources tombstoned and their search rows dropped from BOTH stores
     // (embedding = semantic, vectors = keyword), with tags re-pointed.
@@ -225,6 +227,33 @@ describe('PersonMergeService', () => {
     const compression = statementsMatching(harness, 'WHERE owner_user_id = $1 AND merged_into_entity_id');
     expect(compression).toHaveLength(1);
     expect(compression[0].params).toEqual([USER, [SOURCE_A], TARGET]);
+  });
+
+  it("keeps the target's name even when a merge source's name is fuller, including when the target is the self person", async () => {
+    // MergeCandidateService.autoMergePendingEmailPairs runs exactly this shape
+    // unattended: self person as target, a communications stub as source.
+    // pickFullerName's token-count comparison used to let the stub's longer
+    // name win; the target must always win when it already has a name.
+    const harness = makeHarness(
+      [personRow(SELF, { name: 'Liam Broza' }), personRow(SOURCE_A, { name: 'Liam Broza via GitHub' })],
+      SELF,
+    );
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], SELF);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    expect(propertiesUpdate).toHaveLength(1);
+    expect(propertiesUpdate[0].params?.[1]).toBe(SELF);
+    expect(propertiesUpdate[0].params?.[3]).toBe('Liam Broza');
+  });
+
+  it('falls back to a source name only when the target has none', async () => {
+    const harness = makeHarness([personRow(TARGET, { name: null }), personRow(SOURCE_A, { name: 'Dana Q' })]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    expect(propertiesUpdate[0].params?.[3]).toBe('Dana Q');
   });
 
   it("never lets a source's is_self flag leak onto a non-self target", async () => {

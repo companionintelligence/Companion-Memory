@@ -13,6 +13,7 @@ import { EntityFieldsCard } from '@/components/EntityFields';
 import { EntityGraph } from '@/components/EntityGraph';
 import { EntityRelationshipCards } from '@/components/EntityRelationshipCards/EntityRelationshipCards';
 import { EntityEditToggle, EntityTagsDescriptionCard } from '@/components/EntityTagsDescriptionCard';
+import { ErrorState } from '@/components/ErrorState';
 import { ItemIcon } from '@/components/icons';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
@@ -70,7 +71,7 @@ const REJECT_OBSERVATION = gql(`
 export function ItemPage() {
   const { id } = useParams<{ id: string }>();
 
-  const { data, loading, refetch } = useQuery(GET_ITEM, {
+  const { data, loading, error, refetch } = useQuery(GET_ITEM, {
     variables: {
       id: GlobalUID.encode('item', id!),
     },
@@ -84,14 +85,23 @@ export function ItemPage() {
 
   const [editMode, setEditMode] = useState(false);
 
-  usePageTitle(
-    item?.name ? `Thing - ${item.name} - Companion Intelligence` : 'Thing - Companion Intelligence',
-  );
+  usePageTitle(item?.name ? `Thing - ${item.name} - Companion Memory` : 'Thing - Companion Memory');
 
   let content: ReactNode | null = null;
 
   if (loading && item == null) {
     content = <LoadingPage />;
+  } else if (error && item == null) {
+    // A failed fetch is not an absent record. Dropping `error` sent a 500, a
+    // dead connection or an expired session down the branch below, which told
+    // the owner their own thing does not exist.
+    content = (
+      <ErrorState
+        title="Could not load this thing"
+        description="This thing is still here — this device could not reach it just now."
+        onRetry={() => void refetch()}
+      />
+    );
   } else if (item == null) {
     content = <EmptyState icon={<ItemIcon size={48} colorized={false} />} message="Thing not found" />;
   } else {

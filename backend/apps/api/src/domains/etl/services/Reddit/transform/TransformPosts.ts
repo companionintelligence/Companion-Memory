@@ -2,21 +2,21 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import {
-  ContentService,
-  CalendarEventService,
-  SOURCE_NATIVE_EXTERNAL_ID_KIND,
-  platformIdentity,
-} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import type { RedditPost } from '../sync/redditListing';
 
+import { RedditRecordWriter, postRecord } from './RedditRecordWriter';
+
+/**
+ * The user's own posts (the `submitted` listing).
+ * Each one becomes the same communication (+ media content) row the GDPR
+ * export importer writes for it — see {@link RedditRecordWriter}.
+ */
 @Injectable()
 export class RedditPostsTransformService {
   constructor(
-    private readonly contentService: ContentService,
-    private readonly eventService: CalendarEventService,
+    private readonly writer: RedditRecordWriter,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(RedditPostsTransformService.name);
@@ -30,9 +30,9 @@ export class RedditPostsTransformService {
       connectionId: connection.id,
     });
 
-    const posts = (data?.posts as RedditPost[]) || [];
+    const items = (data?.posts as RedditPost[]) || [];
 
-    if (posts.length === 0) {
+    if (items.length === 0) {
       this.logger.log('No Reddit posts found to transform', {
         userId,
         connectionId: connection.id,
@@ -41,9 +41,11 @@ export class RedditPostsTransformService {
       return;
     }
 
-    for (const post of posts) {
+    const outcomes = { created: 0, updated: 0, content_only: 0 };
+
+    for (const item of items) {
       try {
-        await this.transformOne(post, { connection, userId });
+        outcomes[await this.writer.write({ userId, connection }, postRecord(item))] += 1;
       } catch (error) {
         // Per-row isolation, matching Slack/Gmail/Signal's transforms:
         // SyncOrchestrator marks a job lastTransformed even on an uncaught
@@ -52,7 +54,7 @@ export class RedditPostsTransformService {
         this.logger.error('Failed to transform Reddit post', {
           userId,
           connectionId: connection.id,
-          postName: post.name,
+          name: item.name,
           error: error instanceof Error ? error.message : 'Unknown error',
         });
       }
@@ -61,83 +63,8 @@ export class RedditPostsTransformService {
     this.logger.log('Reddit posts transformation completed', {
       userId,
       connectionId: connection.id,
-      totalPosts: posts.length,
+      total: items.length,
+      ...outcomes,
     });
-  }
-
-  private async transformOne(
-    post: RedditPost,
-    { connection, userId }: { connection: Connection; userId: string },
-  ): Promise<void> {
-    const permalink = post.permalink.startsWith('http')
-      ? post.permalink
-      : `https://www.reddit.com${post.permalink}`;
-
-    const existingContent = await this.contentService.search({ userId }, { external_id: post.name });
-
-    if (existingContent.length === 0) {
-      await this.contentService.create(
-        { userId },
-        {
-          connection_id: connection.id,
-          type: 'reddit_post',
-          title: post.title,
-          text: post.selftext || post.title,
-          url: permalink,
-          external_id: post.name,
-          external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-          // content_source_identity_uniq backstops the racy search-then-create
-          // above. source_system is 'reddit' (not 'reddit_posts') so the
-          // saved-items transform, which writes the same underlying thing,
-          // lands on the same key.
-          source_type: 'ETL',
-          ...(() => {
-            const identity = platformIdentity('reddit', post.name);
-
-            return { source_system: identity.system, source_id: identity.id };
-          })(),
-          source_url: permalink,
-          source_data: {
-            reddit_post_id: post.id,
-            subreddit: post.subreddit,
-            score: post.score,
-            num_comments: post.num_comments,
-            is_self: post.is_self,
-            link_url: post.is_self ? undefined : post.url,
-            author: post.author,
-          },
-        },
-      );
-    }
-
-    const eventIdentity = platformIdentity('reddit_posts', post.name);
-
-    const existingEvent = await this.eventService.search(
-      { userId },
-      {
-        sourceSystem: eventIdentity.system,
-        sourceId: eventIdentity.id,
-      },
-    );
-
-    if (existingEvent.length === 0) {
-      await this.eventService.create(
-        { userId },
-        {
-          connection_id: connection.id,
-          event_type: 'reddit_post',
-          // Without source_type, CalendarEventService.createOne skips its
-          // find-or-create AND events_source_identity_uniq treats the row as
-          // NULL-distinct — only the search above stood between a replay
-          // and a duplicate.
-          source_type: 'ETL',
-          source_id: eventIdentity.id,
-          start_time: new Date(post.created_utc * 1000),
-          title: `Posted in r/${post.subreddit}: ${post.title}`,
-          description: post.selftext || post.title,
-          source_system: eventIdentity.system,
-        },
-      );
-    }
   }
 }

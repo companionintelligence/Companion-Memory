@@ -113,6 +113,7 @@ async def test_rollup_still_aggregates_when_the_window_has_summaries(monkeypatch
 
 @pytest.mark.asyncio
 async def test_hourly_summary_skips_when_the_window_has_no_activity(monkeypatch):
+    _patch(monkeypatch, "find_existing_summary_activity", None)
     _patch(monkeypatch, "aggregate_data_activity", {"events": [], "messages": []})
     generated = _patch(monkeypatch, "generate_hourly_summary_activity", {})
     stored = _patch(monkeypatch, "store_summary_activity", "summary-1")
@@ -137,6 +138,7 @@ async def test_hourly_summary_skips_when_the_window_has_no_activity(monkeypatch)
 async def test_hourly_summary_still_generates_when_the_window_has_activity(
     monkeypatch,
 ):
+    _patch(monkeypatch, "find_existing_summary_activity", None)
     _patch(monkeypatch, "aggregate_data_activity", {"events": [{"id": "e1"}]})
     _patch(
         monkeypatch,
@@ -162,6 +164,106 @@ async def test_hourly_summary_still_generates_when_the_window_has_activity(
     assert result["summary_text"] == "a meeting"
     assert result["tokens_used"] == 40
     assert len(stored) == 1
+
+
+@pytest.mark.asyncio
+async def test_hourly_summary_returns_existing_exact_window_without_more_work(
+    monkeypatch,
+):
+    _patch(
+        monkeypatch,
+        "find_existing_summary_activity",
+        {
+            "summary_id": "summary-existing",
+            "content": {
+                "summary_text": "already summarized",
+                "activity_counts": {"notes": 1, "total": 1},
+                "tokens_used": 24,
+            },
+        },
+    )
+    aggregated = _patch(monkeypatch, "aggregate_data_activity", {})
+    generated = _patch(monkeypatch, "generate_hourly_summary_activity", {})
+    stored = _patch(monkeypatch, "store_summary_activity", "summary-new")
+
+    result = await functions.hourly_summary(
+        "01a0124f-cbca-7609-938a-2d044dd8fbbc",
+        start_time="2026-08-18T14:00:00+00:00",
+        end_time="2026-08-18T15:00:00+00:00",
+        timezone="UTC",
+    )
+
+    assert result["summary_id"] == "summary-existing"
+    assert result["skipped"] == "already_exists"
+    assert result["summary_text"] == "already summarized"
+    assert aggregated == []
+    assert generated == []
+    assert stored == []
+
+
+@pytest.mark.asyncio
+async def test_hourly_backfill_runs_chronological_one_hour_windows(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    async def hourly(_user_id: str, *, start_time: str, end_time: str, **_):
+        calls.append((start_time, end_time))
+        index = len(calls)
+        if index == 2:
+            return {"summary_id": None, "skipped": "no_activity"}
+        return {"summary_id": f"summary-{index}"}
+
+    monkeypatch.setattr(functions, "hourly_summary", hourly)
+
+    result = await functions.hourly_summary_backfill(
+        "01a0124f-cbca-7609-938a-2d044dd8fbbc",
+        start_time="2026-08-18T12:00:00+00:00",
+        end_time="2026-08-18T15:00:00+00:00",
+        timezone="UTC",
+    )
+
+    assert calls == [
+        ("2026-08-18T12:00:00+00:00", "2026-08-18T13:00:00+00:00"),
+        ("2026-08-18T13:00:00+00:00", "2026-08-18T14:00:00+00:00"),
+        ("2026-08-18T14:00:00+00:00", "2026-08-18T15:00:00+00:00"),
+    ]
+    assert result["hours"] == 3
+    assert result["generated"] == 2
+    assert result["skipped"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("start_time", "end_time", "message"),
+    [
+        (
+            "2026-08-18T12:30:00+00:00",
+            "2026-08-18T13:30:00+00:00",
+            "hour boundaries",
+        ),
+        (
+            "2026-08-18T12:00:00",
+            "2026-08-18T13:00:00",
+            "UTC offsets",
+        ),
+        (
+            "2026-08-18T13:00:00+00:00",
+            "2026-08-18T12:00:00+00:00",
+            "after start_time",
+        ),
+        (
+            "2026-08-17T12:00:00+00:00",
+            "2026-08-18T13:00:00+00:00",
+            "limited to 24 hours",
+        ),
+    ],
+)
+async def test_hourly_backfill_rejects_unsafe_ranges(start_time, end_time, message):
+    with pytest.raises(ValueError, match=message):
+        await functions.hourly_summary_backfill(
+            "01a0124f-cbca-7609-938a-2d044dd8fbbc",
+            start_time=start_time,
+            end_time=end_time,
+        )
 
 
 # ── Dossier ──────────────────────────────────────────────────────────

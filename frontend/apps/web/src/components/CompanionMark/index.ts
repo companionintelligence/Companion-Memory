@@ -1,0 +1,1 @@
+export { CompanionMark } from './CompanionMark';

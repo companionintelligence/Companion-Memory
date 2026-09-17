@@ -4,7 +4,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 
 import { shiftLocalDate } from '../engine/computePlacement';
-import { titlesAreSimilar } from '../engine/taskTitleSimilarity';
+import { SCAN_DEDUP_LIMIT, SCAN_DEDUP_STATUSES, titlesAreSimilar } from '../engine/taskTitleSimilarity';
 import type { Task } from '../entities/TaskEntity';
 import type { UpdateTaskDto } from '../types';
 
@@ -59,7 +59,24 @@ export class ProposedTaskReconcileService {
     );
     const refs = new Set([...(options.relevantSourceRefs ?? [])].filter(Boolean));
     const today = await this.planningTime.today(context);
-    const proposed = await this.taskService.findAll(context, { status: ['proposed'] });
+    // Callers (InboxScanService, TodoScanService) build `relevantTitles` from a
+    // `tracked` set that is itself `findAll({ status: SCAN_DEDUP_STATUSES, limit:
+    // SCAN_DEDUP_LIMIT })` — capped at 300 rows, ordered `due_at ASC NULLS
+    // LAST`. Fetching an UNCAPPED `status: ['proposed']` here let a proposed
+    // task that simply fell outside that top-300 window (because 300+ other
+    // due/created/whatever-status rows sorted ahead of it) be treated as
+    // "no longer relevant" and auto-declined, even though nothing about it had
+    // actually changed. Issuing the identical capped/ordered query here means a
+    // proposed row is only ever a reconcile candidate when it is also a
+    // candidate for `tracked` — so both sides agree on what "currently
+    // tracked" means, and a row outside the shared window is left untouched
+    // (neither redated nor archived) instead of being wrongly declined.
+    const proposed = (
+      await this.taskService.findAll(context, {
+        status: [...SCAN_DEDUP_STATUSES],
+        limit: SCAN_DEDUP_LIMIT,
+      })
+    ).filter((task) => task.status === 'proposed');
     let redated = 0;
     let archived = 0;
 

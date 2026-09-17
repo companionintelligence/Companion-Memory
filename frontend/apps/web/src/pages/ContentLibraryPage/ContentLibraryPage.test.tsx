@@ -2,10 +2,9 @@ import { act, fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { resolveContentTileUrl } from '@/components/entities/resolveMediaUrl';
-import { gql } from '@/graphql';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
-import { ContentLibraryPage, PAGE_SIZE } from './ContentLibraryPage';
+import { ContentLibraryPage, GET_CONTENTS, GET_CONTENT_FACETS, PAGE_SIZE } from './ContentLibraryPage';
 import { contentKindFor } from './ContentTile';
 
 const navigate = vi.fn();
@@ -24,25 +23,6 @@ vi.mock('@/components/MemoryHub', () => ({
 vi.mock('./ContentSheet', () => ({
   ContentSheet: () => null,
 }));
-
-const GET_CONTENTS = gql(`
-  query GetContents($first: Int, $after: String) {
-    contents(first: $first, after: $after) {
-      totalCount
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      edges {
-        cursor
-        node {
-          id
-          ...ContentTileFragment
-        }
-      }
-    }
-  }
-`);
 
 /**
  * `/memory/content/:contentId` carries the RAW uuid — the page re-encodes it
@@ -109,6 +89,19 @@ function captureIntersectionObserver() {
     },
     restore: () => {
       globalThis.IntersectionObserver = original;
+    },
+  };
+}
+
+function facets({
+  types = ['image', 'post'],
+  mimetypes = ['image/png', 'text/plain'],
+  sourceSystems = ['reddit'],
+} = {}) {
+  return {
+    request: { query: GET_CONTENT_FACETS, variables: {} },
+    result: {
+      data: { contentFacets: { __typename: 'ContentFacets' as const, types, mimetypes, sourceSystems } },
     },
   };
 }
@@ -229,6 +222,32 @@ describe('ContentLibraryPage', () => {
     expect(navigate).not.toHaveBeenCalledWith(`/memory/content/${CONTENT_GLOBAL_ID}`);
   });
 
+  it('sends the URL filters with the query and offers to clear them', async () => {
+    const filteredPage = {
+      ...firstPage(),
+      request: {
+        query: GET_CONTENTS,
+        variables: { first: PAGE_SIZE, types: ['image'], connectors: ['reddit'] },
+      },
+    };
+
+    renderWithProviders(<ContentLibraryPage />, {
+      route: '/memory/content?types=image&connectors=reddit',
+      mocks: [filteredPage, facets()],
+    });
+
+    // The tile only appears if the request carried exactly those variables.
+    expect(await screen.findByText('Holiday photo')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Content type: image/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^File type: all/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^How: reddit/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+    await screen.findByRole('button', { name: /^Content type: all/ });
+    expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+  });
+
   it('shows the shared EmptyState when the library is genuinely empty', async () => {
     renderWithProviders(<ContentLibraryPage />, {
       mocks: [
@@ -252,12 +271,18 @@ describe('ContentLibraryPage', () => {
       'Nothing here yet. Content appears as your sources sync and files finish parsing.',
     );
 
-    // `EmptyState` (from `@ci/common`) wraps its message in an
-    // absolutely-positioned, pointer-events-none container — a DOM
-    // fingerprint the old bespoke `<p className="text-sm text-muted-foreground">`
-    // never had. Asserting on it proves this is genuinely the shared
-    // component now, not just visually identical bespoke markup.
-    expect(message.parentElement).toHaveClass('absolute', 'inset-0', 'pointer-events-none');
+    // `EmptyState` (from `@ci/common`) wraps its message in a
+    // pointer-events-auto content box nested inside an absolutely-positioned,
+    // pointer-events-none overlay — a DOM fingerprint the old bespoke
+    // `<p className="text-sm text-muted-foreground">` never had. Asserting on
+    // it proves this is genuinely the shared component now, not just visually
+    // identical bespoke markup. The pointer-events pair is inline style rather
+    // than a Tailwind class because `packages/common` is outside the web app's
+    // Tailwind source set, so a class authored only there is never compiled.
+    const content = message.parentElement;
+    expect(content).toHaveStyle({ pointerEvents: 'auto' });
+    expect(content?.parentElement).toHaveClass('absolute', 'inset-0');
+    expect(content?.parentElement).toHaveStyle({ pointerEvents: 'none' });
   });
 });
 

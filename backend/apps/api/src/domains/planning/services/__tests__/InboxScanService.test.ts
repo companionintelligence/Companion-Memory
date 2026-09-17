@@ -3,9 +3,11 @@ import type { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import type { CommunicationEntity } from '@ci/domains/memory';
 import type { PersonalizationService } from '@ci/domains/personalization';
 
+import { SCAN_DEDUP_LIMIT } from '../../engine/taskTitleSimilarity';
 import { InboxScanService, LOOKBACK_MS, SCAN_TIMEOUT_MS } from '../InboxScanService';
 import type { PlannedBlockService } from '../PlannedBlockService';
-import type { ProposedTaskReconcileService } from '../ProposedTaskReconcileService';
+import type { PlanningTimeService } from '../PlanningTimeService';
+import { ProposedTaskReconcileService } from '../ProposedTaskReconcileService';
 import type { TaskService } from '../TaskService';
 
 const USER_ID = 'user-1';
@@ -195,6 +197,99 @@ describe('InboxScanService stale proposed sweep', () => {
     await service.runForUser(USER_ID);
 
     expect(proposedReconcile.reconcileStaleProposed).not.toHaveBeenCalled();
+  });
+});
+
+describe('InboxScanService stale sweep vs the reconcile service cap window', () => {
+  it('does not decline a proposed inbox task that falls outside the same capped/ordered window `tracked` uses', async () => {
+    // Reproduces the cap-window mismatch end to end, wiring a REAL
+    // ProposedTaskReconcileService (not the usual mock) so its `findAll` call
+    // is exercised too. `tracked` here (built via
+    // findAll({ status: SCAN_DEDUP_STATUSES, limit: SCAN_DEDUP_LIMIT }),
+    // ordered due_at ASC NULLS LAST) is entirely filled by SCAN_DEDUP_LIMIT
+    // older-due archived rows, so the one live `proposed` inbox row — due
+    // yesterday, i.e. later than every filler row — sorts past the cap and
+    // falls outside it. Before the fix, reconcileStaleProposed queried an
+    // UNCAPPED `status: ['proposed']` and would find + decline that row
+    // anyway, purely because it fell outside `tracked`'s slice, not because it
+    // stopped being relevant.
+    const filler = Array.from({ length: SCAN_DEDUP_LIMIT }, (_, i) => ({
+      id: `filler-${i}`,
+      title: `Filler task ${i}`,
+      status: 'archived',
+      sourceKind: 'memory_scan',
+      sourceRef: null,
+      metadata: {},
+      dueAt: new Date(Date.UTC(2020, 0, 1 + (i % 28))),
+      scheduledFor: null,
+      deferUntil: null,
+      createdAt: new Date(Date.UTC(2020, 0, 1)),
+    }));
+    const staleProposed = {
+      id: 'inbox-proposal',
+      title: 'Follow up on invoice',
+      status: 'proposed',
+      sourceKind: 'inbox',
+      sourceRef: 'ref-invoice',
+      metadata: {},
+      dueAt: new Date('2026-08-25T12:00:00.000Z'),
+      scheduledFor: '2026-08-25', // "yesterday" relative to `today` below
+      deferUntil: null,
+      createdAt: new Date('2026-08-20T10:00:00.000Z'),
+    };
+    const allTasks = [...filler, staleProposed];
+
+    const declineProposed = jest.fn(async (_ctx: unknown, id: string) => ({ id, status: 'archived' }));
+    const update = jest.fn(async (_ctx: unknown, id: string, data: Record<string, unknown>) => ({
+      id,
+      ...data,
+    }));
+
+    const taskService = {
+      // Mirrors the real TaskService.findAll contract this fix depends on:
+      // filter by `status`, order `due_at` ascending, then honour `limit`.
+      findAll: jest.fn(async (_ctx: unknown, options: { status?: string[]; limit?: number } = {}) => {
+        let rows = allTasks;
+
+        if (options.status?.length) {
+          rows = rows.filter((task) => options.status!.includes(task.status));
+        }
+
+        rows = [...rows].sort((a, b) => a.dueAt.getTime() - b.dueAt.getTime());
+
+        return options.limit ? rows.slice(0, options.limit) : rows;
+      }),
+      findBySourceRef: jest.fn(async () => null),
+      findByTitleMatch: jest.fn(async () => null),
+      create: jest.fn(),
+      declineProposed,
+      update,
+    } as unknown as TaskService;
+
+    const planningTime = {
+      today: jest.fn(async () => '2026-08-26'),
+      localDate: jest.fn(async (_ctx: unknown, instant: Date) => instant.toISOString().slice(0, 10)),
+      toInstant: jest.fn(
+        async (_ctx: unknown, date: string, wall: string) => new Date(`${date}T${wall}:00.000Z`),
+      ),
+    } as unknown as PlanningTimeService;
+
+    const proposedReconcile = new ProposedTaskReconcileService(taskService, planningTime, makeLogger());
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage({ id: 'comm-1' })]) as never,
+      taskService,
+      makeOllamaService([]),
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      proposedReconcile,
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+
+    expect(declineProposed).not.toHaveBeenCalledWith(expect.anything(), 'inbox-proposal');
+    expect(update).not.toHaveBeenCalledWith(expect.anything(), 'inbox-proposal', expect.anything());
   });
 });
 

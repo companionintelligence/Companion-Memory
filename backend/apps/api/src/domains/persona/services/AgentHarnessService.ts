@@ -1,25 +1,54 @@
 import { Injectable } from '@nestjs/common';
 
 import { type ServiceContext } from '@ci/common/context';
+import { doorbellBlocker } from '@ci/common/hubDoorbell';
 import { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 import { ApiKeyService } from '@ci/domains/auth';
 import { CloudOAuthProxyService, type PortalDeviceApplication } from '@ci/domains/connections';
 
 export type AgentHarnessId = 'hermes' | 'openclaw';
+
+export type DispatchBlocker =
+  | 'not_installed'
+  | 'not_connected'
+  | 'not_running'
+  /**
+   * This appliance cannot ring Hub at all — no `CI_HUB_INTERNAL_URL`, or no
+   * `CI_HUB_FORWARD_AUTH_SECRET`. Nothing to do with OpenClaw, which may be
+   * installed, connected and running perfectly.
+   *
+   * Its absence is why a dev stack offered a Dispatch button that created a job
+   * and woke nothing.
+   */
+  | 'doorbell_unconfigured'
+  | 'not_wakeable'
+  | 'chat_only'
+  | null;
 
 export interface AgentHarnessStatus {
   id: AgentHarnessId;
   name: string;
   /** Hub connect flow minted a memory key for this agent app. */
   connectedToMemory: boolean;
-  /** Portal listed the app with a browser-reachable URL. */
+  /** Portal listed the app, or Hub already minted a connect key for it. */
   installed: boolean;
   /** HTTP probe against {@link openUrl} succeeded (when probed). */
   running: boolean;
   openUrl: string | null;
   /** Ready to open from Memory — installed with a resolvable open URL. */
   accessible: boolean;
+  /** Hub can ring this app's /hooks/wake. Hermes never is. */
+  wakeable: boolean;
+  /** Installed, talking to Memory, running, and wakeable. OpenClaw only. */
+  dispatchReady: boolean;
+  dispatchBlocker: DispatchBlocker;
+  /** Hub memory-connect launcher, when a Hub origin is configured. */
+  connectUrl: string | null;
 }
+
+export const OPENCLAW_APP_URN = 'ci-openclaw:ci-marketplace';
+export const HERMES_APP_URN = 'ci-hermes:ci-marketplace';
 
 interface AgentHarnessDefinition {
   id: AgentHarnessId;
@@ -67,12 +96,19 @@ export class AgentHarnessService {
 
     await Promise.all(
       statuses.map(async (status) => {
-        if (!status.openUrl) {
-          return;
+        if (status.openUrl) {
+          status.running = await this.probeOpenUrl(status.openUrl);
+          status.accessible = status.running;
         }
 
-        status.running = await this.probeOpenUrl(status.openUrl);
-        status.accessible = status.running;
+        Object.assign(
+          status,
+          resolveReadiness(status.id, {
+            installed: status.installed,
+            connectedToMemory: status.connectedToMemory,
+            running: status.running,
+          }),
+        );
       }),
     );
 
@@ -89,16 +125,27 @@ export class AgentHarnessService {
     );
 
     const portalApp = portalApps.find((app) => definition.appNames.includes(app.name));
-    const openUrl = portalApp ? resolvePortalOpenUrl(portalApp) : null;
+    const openUrl =
+      (portalApp ? resolvePortalOpenUrl(portalApp) : null) ?? fallbackHubAppUrl(definition.appNames[0]);
+
+    // Portal 401s look like "not installed". A connect key means Hub already
+    // wired the app — treat that as installed so Dispatch does not vanish.
+    const installed = portalApp != null || connectedToMemory;
+    const readiness = resolveReadiness(definition.id, {
+      installed,
+      connectedToMemory,
+      running: false,
+    });
 
     return {
       id: definition.id,
       name: definition.name,
       connectedToMemory,
-      installed: portalApp != null,
+      installed,
       running: false,
       openUrl,
       accessible: false,
+      ...readiness,
     };
   }
 
@@ -125,6 +172,108 @@ export class AgentHarnessService {
       clearTimeout(timeout);
     }
   }
+}
+
+function firstHubOrigin(): string | null {
+  const origins = config.auth.connect.hubOrigins
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  for (const entry of origins) {
+    try {
+      return new URL(entry).origin;
+    } catch {
+      // Ignore malformed allowlist entries the same way ConnectService does.
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Fleet Hub hostnames are `hub-<box>.…`. The app's public host is the same
+ * suffix with the app name, e.g. `hub-core3-bc` → `ci-openclaw-core3-bc`.
+ * Used when Portal's device-app list is down (401) but the app is connected.
+ */
+function fallbackHubAppUrl(appName: string | undefined): string | null {
+  if (!appName) {
+    return null;
+  }
+
+  const origin = firstHubOrigin();
+
+  if (!origin) {
+    return null;
+  }
+
+  try {
+    const url = new URL(origin);
+
+    if (!url.hostname.startsWith('hub-')) {
+      return null;
+    }
+
+    url.hostname = `${appName}-${url.hostname.slice('hub-'.length)}`;
+
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function buildConnectUrl(appUrn: string): string | null {
+  const origin = firstHubOrigin();
+
+  if (!origin) {
+    return null;
+  }
+
+  return `${origin}/api/memory-connect/start?app=${encodeURIComponent(appUrn)}`;
+}
+
+function resolveReadiness(
+  id: AgentHarnessId,
+  flags: { installed: boolean; connectedToMemory: boolean; running: boolean },
+): Pick<AgentHarnessStatus, 'wakeable' | 'dispatchReady' | 'dispatchBlocker' | 'connectUrl'> {
+  if (id === 'hermes') {
+    return {
+      wakeable: false,
+      dispatchReady: false,
+      dispatchBlocker: 'chat_only',
+      connectUrl: buildConnectUrl(HERMES_APP_URN),
+    };
+  }
+
+  let dispatchBlocker: DispatchBlocker = null;
+
+  if (!flags.installed) {
+    dispatchBlocker = 'not_installed';
+  } else if (!flags.connectedToMemory) {
+    dispatchBlocker = 'not_connected';
+  } else if (!flags.running) {
+    dispatchBlocker = 'not_running';
+  } else if (doorbellBlocker() != null) {
+    // Last of the specific reasons, deliberately. If OpenClaw is not even
+    // installed, "this appliance cannot ring Hub" is a true statement and a
+    // red herring — the actionable answer is the one about the app. Only once
+    // the harness itself is ready does the appliance's own configuration
+    // become the thing standing in the way.
+    dispatchBlocker = 'doorbell_unconfigured';
+  }
+
+  const wakeable = flags.installed && flags.running;
+
+  if (dispatchBlocker == null && !wakeable) {
+    dispatchBlocker = 'not_wakeable';
+  }
+
+  return {
+    wakeable,
+    dispatchReady: dispatchBlocker == null,
+    dispatchBlocker,
+    connectUrl: buildConnectUrl(OPENCLAW_APP_URN),
+  };
 }
 
 function resolvePortalOpenUrl(app: PortalDeviceApplication): string | null {

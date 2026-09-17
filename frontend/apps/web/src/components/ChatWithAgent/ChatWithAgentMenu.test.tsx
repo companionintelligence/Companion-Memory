@@ -24,14 +24,24 @@ vi.mock('@/api/useAgentHarnesses', () => ({
   }),
 }));
 
+vi.mock('@/hooks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks')>();
+
+  return { ...actual, useAuth: () => [{ authToken: 'test-token' }] };
+});
+
 const hermes: AgentHarnessStatus = {
   id: 'hermes',
   name: 'Hermes',
   connectedToMemory: true,
   installed: true,
-  running: false,
+  running: true,
   openUrl: 'https://hermes.example/chat',
   accessible: true,
+  wakeable: false,
+  dispatchReady: false,
+  dispatchBlocker: 'chat_only',
+  connectUrl: null,
 };
 
 describe('ChatWithAgentMenu', () => {
@@ -45,22 +55,23 @@ describe('ChatWithAgentMenu', () => {
     vi.restoreAllMocks();
   });
 
-  it('chats here immediately when no harness is connected', () => {
+  it('opens a menu even when no harness is connected', () => {
     renderWithProviders(<ChatWithAgentMenu context={{ title: 'Picnic', body: 'Bring snacks' }} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Chat about “Picnic”' }));
-    expect(h.navigate).toHaveBeenCalledWith('/memory/chat');
+    const button = screen.getByRole('button', { name: 'Chat about “Picnic”' });
+    expect(button).toHaveAttribute('aria-haspopup', 'menu');
+    fireEvent.click(button);
+    expect(h.navigate).not.toHaveBeenCalled();
   });
 
-  it('offers a connected Hermes even when it is not marked running', async () => {
+  it('offers a menu when Hermes is installed', () => {
     h.harnesses = [hermes];
 
-    renderWithProviders(<ChatWithAgentMenu context={{ title: 'Picnic', body: 'Bring snacks' }} size="sm" />);
+    renderWithProviders(<ChatWithAgentMenu context={{ title: 'Picnic', body: 'Bring snacks' }} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Hermes' }));
-    expect(window.open).toHaveBeenCalled();
-    const opened = new URL(String(vi.mocked(window.open).mock.calls[0]?.[0]));
-    expect(opened.origin).toBe('https://hermes.example');
-    expect(opened.searchParams.get('prompt')).toContain('Picnic');
+    expect(screen.getByRole('button', { name: 'Chat about “Picnic”' })).toHaveAttribute(
+      'aria-haspopup',
+      'menu',
+    );
   });
 });

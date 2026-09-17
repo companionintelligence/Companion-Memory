@@ -389,11 +389,9 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     // migration 20260811061411), so unlike the file.derived_from rule above
     // only ONE side needs a pre-join here.
     //
-    // Scoped to type='file' attachments only: a type='content' entry (a
-    // richer catalogued attachment some sources opt into) points at
-    // ci.content, not ci.files, and RelationshipMap has no content<->
-    // communication cell to write into yet — that is a separate, narrower gap
-    // this rule does not close.
+    // Scoped to type='file' attachments: a type='content' entry points at
+    // ci.content, not ci.files, and is the next rule's
+    // (communication.has_content_attachment).
     id: 'communication.has_attachment',
     description: 'File entity → the Communication it was attached to (ci.communications.attachments)',
     relationshipType: RelationshipType.ATTACHED_TO,
@@ -420,6 +418,40 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     fromIdExpr: 'ef.entity_id',
     toIdExpr: 'c.id',
     candidateWhere: `att->>'type' = 'file'`,
+  },
+  {
+    // The content half of a message attachment: a `{ type: 'content', id }`
+    // entry in ci.communications.attachments, resolved through the linked
+    // Content graph entity the same way the rule above resolves a file. This
+    // is how a reddit post carries its picture — the connection catalogues
+    // the image as a ci.content row (URL + mimetype) and stores no file — so
+    // without this edge the picture was unreachable from the post in the
+    // graph, and the drawer's Connections showed nothing for it. A Messenger
+    // photo, which has BOTH halves, gets both edges: File and Content each
+    // ATTACHED_TO the message, which is what they are.
+    id: 'communication.has_content_attachment',
+    description: 'Content entity → the Communication it was attached to (ci.communications.attachments)',
+    relationshipType: RelationshipType.ATTACHED_TO,
+    strength: 0.6,
+    properties: { derived_from: 'communications.attachments' },
+    source: 'communications',
+    table:
+      `ci.communications c ` +
+      `CROSS JOIN LATERAL jsonb_array_elements(c.attachments) AS att ` +
+      // Same CASE-guarded cast as the file rule: Postgres does not promise
+      // left-to-right AND short-circuiting, so a non-UUID id must become NULL
+      // inside the expression rather than abort the batched statement.
+      `JOIN ci.entities ec ON ec.linked_table = 'content' ` +
+      `AND ec.linked_id = (CASE WHEN att->>'id' ~ ` +
+      `'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' ` +
+      `THEN att->>'id' END)::uuid ` +
+      `AND ec.owner_user_id = c.user_id AND ec.entity_type = 'Content' AND ec.is_active = TRUE`,
+    userColumn: 'c.user_id',
+    timeColumn: 'c.time',
+    idColumn: 'c.id',
+    fromIdExpr: 'ec.entity_id',
+    toIdExpr: 'c.id',
+    candidateWhere: `att->>'type' = 'content'`,
   },
 ];
 

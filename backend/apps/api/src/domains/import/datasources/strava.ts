@@ -120,7 +120,9 @@ export class StravaFileImporter implements FileImporter {
       params.pipeline.push({
         item: {
           classification: 'workout',
-          id: row['Activity ID'] ? `strava:${row['Activity ID']}` : `strava:${path.basename(csvPath)}:${index}`,
+          id: row['Activity ID']
+            ? `strava:${row['Activity ID']}`
+            : `strava:${path.basename(csvPath)}:${index}`,
           timestamp: actDate,
           ...(start && { location: start }),
           content: {

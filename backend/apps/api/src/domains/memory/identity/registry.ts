@@ -59,13 +59,14 @@ export const PLATFORM_SYSTEMS: readonly string[] = [
   'audible',
   'bluebubbles',
   'chatgpt',
-  'chromium',
+  'chromium', // every Chromium-family browser (Chrome/Brave/Edge/Arc/Opera): History SQLite, Takeout Chrome, AND the browser extension — see identity/browser.ts
   'claude',
   'coinbase',
   'contact_list',
   'discord',
+  'disney_plus',
   'evernote',
-  'firefox',
+  'firefox', // places.sqlite importer AND the Firefox build of the browser extension — see identity/browser.ts
   'fitbit',
   'flickr',
   'flighty',
@@ -84,6 +85,7 @@ export const PLATFORM_SYSTEMS: readonly string[] = [
   'google_voice',
   'gpx',
   'grok',
+  'hulu',
   'imessage',
   'instagram',
   'kindle',
@@ -118,6 +120,8 @@ export const PLATFORM_SYSTEMS: readonly string[] = [
   'venmo',
   'whatsapp',
   'withings',
+  // Browser extension only (external ingest; no importer reads Safari history)
+  'safari',
   // Internal producers (not user-facing platforms, but they mint rows too)
   'attachment_extract',
   'capture',
@@ -150,14 +154,48 @@ export const SYSTEM_ALIASES: Readonly<Record<string, string>> = {
   chrome: 'chromium',
   chrome_history: 'chromium',
   google_chrome: 'chromium',
+  brave: 'chromium',
+  edge: 'chromium',
+  arc: 'chromium',
+  opera: 'chromium',
   x: 'twitter',
   Amazon: 'amazon',
 };
 
-const REGISTERED: ReadonlySet<string> = new Set([
-  ...Object.values(FEDERATED_SYSTEMS),
-  ...PLATFORM_SYSTEMS,
-]);
+const REGISTERED: ReadonlySet<string> = new Set([...Object.values(FEDERATED_SYSTEMS), ...PLATFORM_SYSTEMS]);
+const FEDERATED: ReadonlySet<string> = new Set(Object.values(FEDERATED_SYSTEMS));
+
+/** Is this system a federated KIND (`email`, `calendar`, `file`) rather than a platform? */
+export function isFederatedSystem(value: string | null | undefined): boolean {
+  return value != null && FEDERATED.has(value);
+}
+
+/**
+ * The platform to ledger an arrival under (ci.record_sources.platform — design
+ * doc §5). For a platform kind the system IS the platform. For a federated
+ * kind the system says nothing about where the datum came from, so the
+ * producer must say (`explicit`: the connection's platform, the importer's
+ * platform-specific datasource) — and when it cannot (a generic mbox or .ics
+ * reader, an external ingest that named none) the answer is null, which pairs
+ * with nothing. Never guess: a wrong platform makes two mailboxes look like
+ * one, which is exactly the false signal the column exists to remove.
+ */
+export function ledgerPlatform(
+  system: string | null | undefined,
+  explicit?: string | null,
+): SourceSystem | null {
+  if (explicit) {
+    const platform = canonicalSystem(explicit);
+
+    return isFederatedSystem(platform) ? null : platform;
+  }
+
+  if (!system || isFederatedSystem(system)) {
+    return null;
+  }
+
+  return canonicalSystem(system);
+}
 
 /** Is this exact string a registry-canonical `source_system`? */
 export function isRegisteredSystem(value: string): boolean {
@@ -193,11 +231,26 @@ export function platformIdentity(system: string, ...parts: [string, ...string[]]
  * This is the ONE constructor for out-of-process input — internal code calls
  * a specific builder instead.
  */
-export function adoptIngestIdentity(system: string | null | undefined, id: string | null | undefined): Partial<SourceIdentity> {
+export function adoptIngestIdentity(
+  system: string | null | undefined,
+  id: string | null | undefined,
+): Partial<SourceIdentity> {
   return {
     system: system != null ? canonicalSystem(system) : undefined,
     id: id != null ? asSourceId(id) : undefined,
   };
+}
+
+/**
+ * Identity for an attachment of an identified parent record (a mail message,
+ * a chat message): the parent's identity plus the SHA-256 of the attachment
+ * bytes, under the parent's system. Never the attachment INDEX — part order
+ * is not stable across producers (Gmail API vs MIME), and an index-keyed row
+ * would silently fork on a re-import that ordered them differently. The
+ * same bytes attached twice to one message are one row, which is the truth.
+ */
+export function attachmentIdentity(parent: SourceIdentity, bytesSha256Hex: string): SourceIdentity {
+  return { system: parent.system, id: asSourceId(`attachment:${parent.id}:${bytesSha256Hex.toLowerCase()}`) };
 }
 
 /**

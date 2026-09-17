@@ -113,6 +113,13 @@ describe('PythonFunctionCrons', () => {
    * at :12, so on a quiet appliance the un-gated fan-out enqueued a job per
    * user per hour whose only possible outcome was "no summaries" — 19 dead
    * letters on the QA box before the Python side stopped raising.
+   *
+   * Past that skip the function regenerates unconditionally, so the audience
+   * also asks whether anything is NEWER than the stored dossier. That half is
+   * asserted here as SQL shape only; which users Postgres actually returns is
+   * executed against the live schema in
+   * PythonFunctionCrons.dossierGate.integration.spec.ts, because a mocked
+   * DataSource cannot tell a correct comparison from an inverted one.
    */
   describe('dossier refresh precondition', () => {
     it('does not enqueue for a user with no summaries in the lookback window', async () => {
@@ -125,7 +132,40 @@ describe('PythonFunctionCrons', () => {
       expect(query.mock.calls[0][1]).toEqual([30]);
     });
 
-    it('enqueues only the users that have summaries to build from', async () => {
+    // `smart.rotation` is false in config/default.json and no environment
+    // overrides it, so SmartRotationListener's copy of this gate never runs on
+    // the shipped configuration — this cron is the only dossier scheduler
+    // there is, and a gate that lives only in the listener is a gate nobody
+    // runs.
+    it('gates on the dossier payload stamp rather than the entity row timestamp', async () => {
+      const { crons, query } = makeCrons(['user-1'], false, ['user-1']);
+
+      await crons.dossierRefresh();
+
+      const flattened = (query.mock.calls[0][0] as string).replace(/\s+/g, ' ');
+
+      // store_dossier_activity stamps the payload it writes. entities.updated_at
+      // is bumped by unrelated entity writes (imports, merges, enrichment), any
+      // one of which would read as "the dossier is current" and suppress a
+      // rebuild that is owed — under ANY alias, hence the word boundary rather
+      // than one spelling of the qualified column.
+      expect(flattened).toContain("JSON_VALUE(e.dossier, '$.lastUpdatedAt'");
+      expect(flattened).not.toMatch(/\bupdated_at\b/);
+      // A bare ::timestamp cast throws on a malformed stamp and would take the
+      // whole fan-out down; ON ERROR turns it into "unknown", and unknown is
+      // stale.
+      expect(flattened).toContain('DEFAULT NULL ON ERROR');
+      expect(flattened).toContain('built.built_at IS NULL');
+      // fetch_summaries_for_dossier_activity reads hourly + daily only. An
+      // `insight` row shares the table and is written hourly, so counting one
+      // would restore the every-hour rebuild through the back door.
+      expect(flattened).toContain("fresh.period_type IN ('hourly', 'daily')");
+      // Compared in naive UTC, because the sidecar stamps datetime.utcnow()
+      // and the API pool pins no session TimeZone.
+      expect(flattened).toContain("fresh.created_at AT TIME ZONE 'UTC' > built.built_at");
+    });
+
+    it('enqueues only the users that have new summaries to build from', async () => {
       const { crons, pythonFunctionService } = makeCrons(['user-1', 'user-2'], false, ['user-2']);
 
       await crons.dossierRefresh();

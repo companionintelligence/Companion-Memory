@@ -560,7 +560,9 @@ export class ObjectPromoteStage implements Stage {
     // until the detail rows exist. Splitting these across two transactions
     // would commit detail rows with no base row and fail the constraint.
     return this.dataSource.transaction(async (manager) => {
-      const rows = await manager.query<Array<{ object_id: string; source_id: string; source_system: string | null }>>(
+      const rows = await manager.query<
+        Array<{ object_id: string; source_id: string; source_system: string | null }>
+      >(
         `INSERT INTO ci.objects AS inv (
          user_id, owner_user_id, brand, model, identifier_codes,
          purchase_price, currency, acquired_at, is_digital, condition,

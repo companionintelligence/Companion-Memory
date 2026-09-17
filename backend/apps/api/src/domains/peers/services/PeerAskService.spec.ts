@@ -408,6 +408,72 @@ describe('PeerAskService.handle', () => {
     // Availability never runs the memory search executor.
     expect(executorService.execute).not.toHaveBeenCalled();
   });
+
+  it('marks the owner busy for an occurrence of a recurring series', async () => {
+    // `ci.events` holds ONE row per series, and this row's own span is in June.
+    // Without read-time RRULE expansion the box answered "free" for every
+    // occurrence after the first — so a peer was handed a slot the owner has
+    // stood in a standup for, every Monday, for years.
+    const { service, eventRepository } = makeService({ links: [link({ trustTier: 'family' })] });
+    eventRepository.find.mockResolvedValue([
+      {
+        id: '0198f0a0-0000-7000-8000-000000000001',
+        startTime: new Date('2026-06-01T16:00:00Z'),
+        endTime: new Date('2026-06-01T16:30:00Z'),
+        isAllDay: false,
+        isRecurring: true,
+        metadata: {
+          recurrenceRule: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+          recurrenceTimeZone: 'America/Los_Angeles',
+        },
+        recurrencePattern: null,
+        sourceSystem: 'calendar',
+        sourceId: 'standup@google.com',
+      },
+    ]);
+
+    const result = await service.handle(
+      PEER,
+      body({
+        archetype: 'availability',
+        // 2026-08-03 is a Monday; 09:00 Pacific is 16:00Z.
+        from: '2026-08-03T15:00:00.000Z',
+        to: '2026-08-03T20:00:00.000Z',
+        purpose: 'lunch',
+      }),
+    );
+
+    expect(result.answer?.busy).toEqual([
+      { start: '2026-08-03T16:00:00.000Z', end: '2026-08-03T16:30:00.000Z' },
+    ]);
+  });
+
+  it('asks for recurring masters on a third where arm, matched on start alone', async () => {
+    const { service, eventRepository } = makeService();
+
+    await service.handle(
+      PEER,
+      body({
+        archetype: 'availability',
+        from: '2026-08-03T15:00:00.000Z',
+        to: '2026-08-03T20:00:00.000Z',
+      }),
+    );
+
+    const [{ where, select }] = eventRepository.find.mock.calls[0] as [
+      { where: Record<string, unknown>[]; select: Record<string, unknown> },
+    ];
+    // A series master's own DTSTART is almost never inside the window, so
+    // neither overlap arm reaches it. This arm is the only one that does.
+    expect(where[2]).toEqual(
+      expect.objectContaining({ isRecurring: true, isDeleted: false, startTime: expect.anything() }),
+    );
+    expect(where[2]).not.toHaveProperty('endTime');
+    // The rule text, and the identity the override suppression is keyed on.
+    expect(select).toEqual(
+      expect.objectContaining({ metadata: true, sourceSystem: true, sourceId: true, isRecurring: true }),
+    );
+  });
 });
 
 describe('availability window', () => {

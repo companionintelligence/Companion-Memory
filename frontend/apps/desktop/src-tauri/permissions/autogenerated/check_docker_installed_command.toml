@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-check-docker-installed-command"
+description = "Enables the check_docker_installed_command command without any pre-configured scope."
+commands.allow = ["check_docker_installed_command"]
+
+[[permission]]
+identifier = "deny-check-docker-installed-command"
+description = "Denies the check_docker_installed_command command without any pre-configured scope."
+commands.deny = ["check_docker_installed_command"]

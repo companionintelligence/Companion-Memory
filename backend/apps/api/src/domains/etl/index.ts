@@ -57,6 +57,7 @@ import { OneDriveTransformService } from './services/Microsoft/transform/Transfo
 import { OutlookCalendarTransformService } from './services/Microsoft/transform/TransformOutlookCalendar';
 import { OutlookMailTransformService } from './services/Microsoft/transform/TransformOutlookMail';
 import { PromoteService } from './services/PromoteService';
+import { RedditRecordWriter } from './services/Reddit/transform/RedditRecordWriter';
 import { RedditCommentsTransformService } from './services/Reddit/transform/TransformComments';
 import { RedditPostsTransformService } from './services/Reddit/transform/TransformPosts';
 import { RedditSavedTransformService } from './services/Reddit/transform/TransformSaved';
@@ -129,6 +130,7 @@ import { SyncNowService } from './services/SyncNowService';
     SpotifySavedTracksTransformService,
     SpotifyTopArtistsTransformService,
     GitHubEventsTransformService,
+    RedditRecordWriter,
     RedditPostsTransformService,
     RedditCommentsTransformService,
     RedditSavedTransformService,

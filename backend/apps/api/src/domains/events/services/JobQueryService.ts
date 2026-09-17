@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository } from 'typeorm';
 
@@ -10,7 +10,7 @@ import { JobMetricEntity } from '../entities/JobMetricEntity';
 import { PgBossArchiveEntity } from '../entities/PgBossArchiveEntity';
 import { PgBossJobEntity } from '../entities/PgBossJobEntity';
 import {
-  categoryOfEvent,
+  categoryOfJob,
   describeJob,
   jobCategorySelector,
   JOB_TYPES,
@@ -161,12 +161,42 @@ function clampWindowHours(windowHours: number | undefined): number {
  * Split from `JobMonitorService` (which answers "how is the appliance doing?")
  * because this answers a different question — "find me these specific jobs" —
  * and it needs filtering, paging and a stable ordering that the summary does
- * not. Both read the same tables; neither writes.
+ * not. Both read the same tables. The one write is {@link clearTerminal}: an
+ * operator clearing exhausted dead-letter or failed rows from the Health card.
  *
- * As with the dashboard summary, job payloads never leave here: rows are
- * projected to their taxonomy description plus a parsed failure. See
+ * As with the dashboard summary, job payloads never leave the list path: rows
+ * are projected to their taxonomy description plus a parsed failure. See
  * `JobRecordDto` in JobMonitorService for the reasoning.
  */
+export type TerminalJobClearScope = 'dead-letter' | 'failed';
+
+export interface TerminalJobClearDto {
+  readonly scope: TerminalJobClearScope;
+  /** Rows actually removed for this scope, across every table it touches. */
+  readonly deleted: number;
+  /**
+   * Rows this scope deliberately LEFT BEHIND, so the caller can say why the
+   * number on screen did not reach zero rather than leaving an operator to
+   * click again.
+   *
+   * Only `dead-letter` can be non-zero: it is the count of dead letters the
+   * reaper has not copied into `ci.pipeline_dead_letters` yet, which this
+   * refuses to delete. Always 0 for `failed`.
+   */
+  readonly retained: number;
+}
+
+/**
+ * The one predicate standing between `Clear` and permanent data loss.
+ *
+ * Schema-qualified rather than aliased on purpose: TypeORM's DELETE builder
+ * emits `DELETE FROM "pgboss"."job"` with no alias, so the correlated reference
+ * has to name the table. Writing it as `"pgboss"."job"."id"` also survives
+ * TypeORM later choosing to emit one.
+ */
+const HARVESTED_DEAD_LETTER =
+  'EXISTS (SELECT 1 FROM ci.pipeline_dead_letters d WHERE d.id = "pgboss"."job"."id")';
+
 @Injectable()
 export class JobQueryService {
   constructor(
@@ -179,6 +209,142 @@ export class JobQueryService {
     @InjectRepository(JobCategoryMetricEntity)
     private readonly categoryMetricRepository: Repository<JobCategoryMetricEntity>,
   ) {}
+
+  /**
+   * Permanently delete terminal jobs the Health card has already named.
+   *
+   * `dead-letter` removes dead-letter rows **that have already been harvested**;
+   * `failed` removes the origin rows that minted those copies, wherever they
+   * currently live. Neither touches live work (`created` / `active` / `retry`)
+   * or completed history. Irreversible; the Health card asks before calling.
+   */
+  async clearTerminal(context: RequestContext, scope: TerminalJobClearScope): Promise<TerminalJobClearDto> {
+    if (!context.userId) {
+      throw new UnauthorizedException('A user context is required.');
+    }
+
+    return scope === 'dead-letter' ? this.clearHarvestedDeadLetters() : this.clearFailedOrigins();
+  }
+
+  /**
+   * Delete only the dead letters `DeadLetterReaperListener` has already copied
+   * into `ci.pipeline_dead_letters`.
+   *
+   * ── Why this cannot be an unqualified DELETE ───────────────────────────────
+   *
+   * It shipped as one — `DELETE FROM pgboss.job WHERE name = 'dead-letter'`,
+   * no predicate — and the dead-letter queue is not unconsumed. The reaper
+   * copies at most DEAD_LETTER_REAP_BATCH (500) rows every two minutes into
+   * `ci.pipeline_dead_letters`, which is the table the Dead letters card on this
+   * same page renders and replays from. So `Clear` was racing a harvest it could
+   * not see: at 20,000 dead letters the reaper needs ~80 minutes to drain, and a
+   * click ten minutes in destroyed ~19,500 payloads plus their failure output
+   * from BOTH tables, with no ledger row and no replay path.
+   *
+   * It is worst in exactly the case the button is most tempting. When the worker
+   * is down the reaper's cron is not ticking either, so nothing has been
+   * harvested at all and an unqualified Clear destroys 100% of the evidence
+   * about what died — during the incident that produced it.
+   *
+   * `DeadLetterReaperListener`'s own header states the invariant this broke:
+   * it never deletes, so pg-boss's copy stays inspectable alongside ours, and
+   * `purgeReplayed` refuses to touch an unreplayed letter at ANY age because the
+   * payload is frequently the only surviving copy of a record the source will
+   * not re-send. A Clear button is not a licence to make that decision for the
+   * operator, so it deletes only what the ledger already holds.
+   *
+   * The predicate is exact rather than approximate: `ci.pipeline_dead_letters.id`
+   * IS the originating `pgboss.job.id` (the reaper sets it deliberately, as its
+   * idempotency key), so `EXISTS (… WHERE d.id = job.id)` matches a row if and
+   * only if its payload is safe in our table. There is no clock and no window
+   * involved, so nothing about it can be too aggressive under load.
+   */
+  private async clearHarvestedDeadLetters(): Promise<TerminalJobClearDto> {
+    // Fail CLOSED when the ledger is absent. `ci.pipeline_dead_letters` is
+    // created by a migration, so it is missing on a node that started before
+    // `migrate-database` finished — and on such a node "nothing is harvested" is
+    // indistinguishable from "everything is", which is precisely the confusion
+    // that must not end in a DELETE. Raising here is also what keeps the
+    // predicate honest: without the guard the missing relation would surface as
+    // a raw Postgres error an operator would reasonably read as a UI bug.
+    const [ledger] = await this.jobRepository.query<Array<{ present: boolean }>>(
+      `SELECT to_regclass('ci.pipeline_dead_letters') IS NOT NULL AS present`,
+    );
+
+    if (ledger?.present !== true) {
+      throw new ServiceUnavailableException(
+        'Dead letters cannot be cleared until ci.pipeline_dead_letters exists — run the database ' +
+          'migrations first. Clearing without it would delete payloads nothing has copied.',
+      );
+    }
+
+    const result = await this.jobRepository
+      .createQueryBuilder()
+      .delete()
+      .from(PgBossJobEntity)
+      .where('name = :deadLetter', { deadLetter: DEAD_LETTER_QUEUE })
+      .andWhere(HARVESTED_DEAD_LETTER)
+      .execute();
+
+    // Counted AFTER the delete, so it is what is still there rather than what we
+    // predicted would be: every dead-letter row left is by definition one the
+    // reaper has not reached. Slightly racy against a concurrent harvest, which
+    // is the harmless direction — it can only over-report, and the next tick
+    // fixes it.
+    const retained = await this.jobRepository
+      .createQueryBuilder('job')
+      .where('job.name = :deadLetter', { deadLetter: DEAD_LETTER_QUEUE })
+      .getCount();
+
+    return { scope: 'dead-letter', deleted: result.affected ?? 0, retained };
+  }
+
+  /**
+   * Delete the `failed` origin rows — from `pgboss.archive` as well as
+   * `pgboss.job`.
+   *
+   * The archive half is not an extension of scope, it is what makes the button
+   * finish. The number this clears is `JobMonitorService.getSummary`'s
+   * `failed`, which is `job('failed') + archived('failed')`; the delete covered
+   * only the first term, so on any appliance old enough for pg-boss's
+   * maintenance to have archived a failure — which is every appliance, the
+   * archive being where finished rows go — the count could not reach zero. The
+   * operator clicks, watches a number that does not move, and clicks again.
+   *
+   * Safe to widen precisely because of what the OTHER scope now refuses to
+   * touch: every queue is created with `deadLetter: 'dead-letter'`, so a job
+   * that exhausts its retries mints an independent dead-letter copy carrying the
+   * same payload, and that copy is a different row with a different id which
+   * nothing here deletes. A failed origin row is a duplicate of evidence held
+   * elsewhere; an unharvested dead letter is the evidence.
+   *
+   * `name != 'dead-letter'` on both tables for the same reason it was always
+   * there: a dead letter that pg-boss has since archived is still a dead letter,
+   * and it is the other scope's business, under the other scope's predicate.
+   */
+  private async clearFailedOrigins(): Promise<TerminalJobClearDto> {
+    const live = await this.jobRepository
+      .createQueryBuilder()
+      .delete()
+      .from(PgBossJobEntity)
+      .where('state = :failed', { failed: 'failed' })
+      .andWhere('name != :deadLetter', { deadLetter: DEAD_LETTER_QUEUE })
+      .execute();
+
+    const archived = await this.archiveRepository
+      .createQueryBuilder()
+      .delete()
+      .from(PgBossArchiveEntity)
+      .where('state = :failed', { failed: 'failed' })
+      .andWhere('name != :deadLetter', { deadLetter: DEAD_LETTER_QUEUE })
+      .execute();
+
+    return {
+      scope: 'failed',
+      deleted: (live.affected ?? 0) + (archived.affected ?? 0),
+      retained: 0,
+    };
+  }
 
   async list(context: RequestContext, query: JobQuery): Promise<JobListDto> {
     if (!context.userId) {
@@ -367,39 +533,40 @@ export class JobQueryService {
       // expresses. `JobMetricsCollector.readThroughput` unions the same pair for
       // the same reason.
       //
-      // GROUPED ON `data->>'name'` — THE EVENT — NEVER ON `name`, the queue. A
-      // dead-lettered row's queue column is the literal `dead-letter`: pg-boss
-      // copies `data` verbatim onto the DLQ row and rewrites the queue, so the
-      // queue is gone for 8,431 of 19,606 rows (43%) on a live appliance. A
-      // queue-keyed grouping would file all of them under one bucket that maps
-      // to no category at all.
+      // Grouped on the (event, queue) PAIR, which is what `categoryOfJob` folds
+      // and what the category filter selects on. The queue is a grouping COLUMN
+      // here, never the category key on its own: an event with no queue-scoped
+      // entry still resolves through its own name.
       //
-      // Those DLQ copies are excluded outright, because the copy carries a
-      // FRESH `created_on` — the instant the job was dead-lettered, not the
-      // instant the work arrived. Counting it would draw a surge of new work at
-      // exactly the moment work started failing. The original row survives in
-      // its own partition with `state = 'failed'` and is what supplies the
-      // arrival.
+      // DLQ copies are excluded outright, because the copy carries a FRESH
+      // `created_on` — the instant the job was dead-lettered, not the instant
+      // the work arrived. Counting it would draw a surge of new work at exactly
+      // the moment work started failing. The original row survives in its own
+      // partition with `state = 'failed'` and is what supplies the arrival.
+      // That exclusion is also why every row this query returns still HAS its
+      // origin queue: `name = 'dead-letter'`, the one value that would make the
+      // pair unrecoverable, is the one value it never sees.
       const liveRows = (await this.jobRepository.manager.query(
         `
         SELECT to_timestamp(floor(extract(epoch from live.created_on) / $2) * $2) AS at,
                live.data->>'name' AS event,
+               live.name AS queue,
                COUNT(*)::int AS count
           FROM (
-            SELECT data, created_on FROM pgboss.job     WHERE created_on >= $1 AND name <> $3
+            SELECT name, data, created_on FROM pgboss.job     WHERE created_on >= $1 AND name <> $3
             UNION ALL
-            SELECT data, created_on FROM pgboss.archive WHERE created_on >= $1 AND name <> $3
+            SELECT name, data, created_on FROM pgboss.archive WHERE created_on >= $1 AND name <> $3
           ) AS live
-         GROUP BY 1, 2
+         GROUP BY 1, 2, 3
         `,
         [liveSince, bucketSeconds, DEAD_LETTER_QUEUE],
-      )) as Array<{ at: Date; event: string | null; count: number }>;
+      )) as Array<{ at: Date; event: string | null; queue: string | null; count: number }>;
 
       for (const row of liveRows) {
-        // categoryOfEvent, the same fold facetCounts uses for the chips —
-        // never describeJob(), whose per-queue overrides would put an event
-        // under a category its own filter resolves somewhere else.
-        add(row.at, categoryOfEvent(row.event), Number(row.count) || 0);
+        // categoryOfJob, the same fold facetCounts uses for the chips — never
+        // describeJob(), which fingerprints an unknown event into a category
+        // guess that no chip counts and no filter can select.
+        add(row.at, categoryOfJob(row.event, row.queue), Number(row.count) || 0);
       }
 
       usedLive = liveRows.length > 0;
@@ -583,9 +750,7 @@ export class JobQueryService {
             // typo in a query string should return an empty table, not the
             // unfiltered one — so an empty event list becomes a sentinel.
             const excludes =
-              selector.excludeQueueKeys.length > 0
-                ? ` AND ${queueKey} NOT IN (:...excludedQueueKeys)`
-                : '';
+              selector.excludeQueueKeys.length > 0 ? ` AND ${queueKey} NOT IN (:...excludedQueueKeys)` : '';
 
             where.where(`job.data->>'name' IN (:...categoryEvents)${excludes}`, {
               categoryEvents: selector.events.length > 0 ? selector.events : ['__no-such-category__'],
@@ -605,19 +770,20 @@ export class JobQueryService {
     if (query.search) {
       const term = `%${query.search.trim()}%`;
 
-      // Event name, queue name and the failure message — the three things an
-      // operator actually types. NOT the payload: that is user content, and the
-      // whole point of the projection is that it never leaves the server.
-      //
-      // Event/queue names are taxonomy values, the same for every user, so they
-      // stay unscoped. The failure message is a different user's job output —
-      // this is a multi-user appliance with no admin role, so matching it is
-      // restricted to jobs `data->>'userId'` says the caller owns.
+      // Event name, queue name, the caller's own job id, and their failure
+      // message. NOT free-form payload: that is user content. `jobId` is the
+      // Memory-owned dispatch id operators paste from a Chat thread — scoped
+      // to `data->>'userId'` the same way failure text is.
       builder.andWhere(
         new Brackets((where) => {
           where
             .where(`job.data->>'name' ILIKE :term`, { term })
             .orWhere('job.name ILIKE :term', { term })
+            .orWhere(`job.id::text ILIKE :term AND job.data->>'userId' = :userId`, { term, userId })
+            .orWhere(`job.data->>'jobId' ILIKE :term AND job.data->>'userId' = :userId`, {
+              term,
+              userId,
+            })
             .orWhere(`job.output->>'message' ILIKE :term AND job.data->>'userId' = :userId`, {
               term,
               userId,
@@ -643,12 +809,23 @@ export class JobQueryService {
    * by construction: they cannot disagree about a job, because they are counting
    * the same job.
    *
-   * GROUPING IS ON `data->>'name'` — THE EVENT — NEVER ON `job.name`. A
-   * dead-lettered row's `job.name` is the literal `dead-letter`: pg-boss copies
-   * `data` verbatim onto the DLQ row but rewrites the queue column, so the queue
-   * it died on is gone forever. On a live appliance 88% of rows are
-   * dead-lettered, which would make any queue-keyed grouping report almost
-   * nothing.
+   * GROUPED ON THE (event, queue) PAIR, and folded through `categoryOfJob` —
+   * the same rule `applyFilters` selects with, which is the only reason a chip's
+   * number and the table under it agree. The fold used to be `categoryOfEvent`,
+   * on the event alone, and for the handful of events two listeners share on
+   * different queues the chip counted one thing and clicking it returned
+   * another: every `content.created` on `pipeline-index` was added to Search
+   * index, while the Pipeline filter was what actually returned it.
+   *
+   * The queue is a grouping COLUMN, not the category key. That distinction is
+   * what makes this safe: pg-boss copies `data` verbatim onto a dead-letter row
+   * but REWRITES the queue column, so for the 88% of rows sitting on
+   * `dead-letter` the pair is unrecoverable — and `categoryOfJob` falls back to
+   * the event alone for exactly those, as does the filter, whose include/exclude
+   * lists hold no `::dead-letter` key to match. Keying the category ON the queue
+   * would file all of them under one meaningless bucket; grouping BY it does
+   * not, because the fold still resolves the ones it cannot pair through their
+   * event name.
    */
   private async facetCounts(
     query: JobQuery,
@@ -663,26 +840,33 @@ export class JobQueryService {
       // QUEUE, never a state, so the bucket column has to be text.
       .select(`CASE WHEN job.name = :deadLetter THEN 'dead-letter' ELSE job.state::text END`, 'bucket')
       .addSelect(`job.data->>'name'`, 'event')
+      .addSelect('job.name', 'queue')
       .addSelect('COUNT(*)::int', 'count')
       .setParameter('deadLetter', DEAD_LETTER_QUEUE)
       // One `groupBy` call, not `groupBy().addGroupBy()` — the unit suite drives
       // this through a hand-rolled mock builder that implements neither.
-      .groupBy('1, 2');
+      .groupBy('1, 2, 3');
 
     this.applyFilters(builder, query, userId, { skipState: true, skipCategory: true, skipType: true });
 
-    const rows = await builder.getRawMany<{ bucket: string; event: string | null; count: number }>();
+    const rows = await builder.getRawMany<{
+      bucket: string;
+      event: string | null;
+      queue: string | null;
+      count: number;
+    }>();
 
     const stateCounts: Record<string, number> = {};
     const categoryCounts: Record<string, number> = {};
 
     for (const row of rows) {
       const count = Number(row.count) || 0;
-      // JOB_TYPES, NOT describeJob() — see categoryOfEvent for why, and why the
-      // expression is shared rather than repeated: the category chart samples
+      // The taxonomy's own fold, NOT describeJob() — describeJob fingerprints an
+      // unknown event into a category guess, and counting must never follow a
+      // guess. Shared rather than repeated because the category chart samples
       // and aggregates through the same function, so a chip and a series can
       // never put the same job in two different buckets.
-      const categoryKey = categoryOfEvent(row.event);
+      const categoryKey = categoryOfJob(row.event, row.queue);
 
       // Each fold re-applies the filter the OTHER one dropped, so both sets keep
       // the "what would selecting this yield" contract. `bucket` has already

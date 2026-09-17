@@ -79,20 +79,29 @@ describe('JobQueryService.facetCounts — bucket expression', () => {
   });
 
   /**
-   * The category half of the same scan, and the reason it cannot group by queue.
+   * The category half of the same scan, and why it groups by the PAIR.
    *
-   * pg-boss copies a job's `data` verbatim onto the dead-letter row but rewrites
-   * the queue column to the literal `dead-letter`, so the queue a job died on is
-   * gone. On a live appliance 88% of rows are dead-lettered — grouping the
-   * category counts on `job.name` would file almost the entire table under one
-   * meaningless bucket and every category chip would read ~0.
+   * `categoryOfJob` resolves a row's category from (event, queue), because a
+   * handful of events mean different things on different queues — and that is
+   * also what the category FILTER selects on. Grouping on the event alone made
+   * the chip and the table under it disagree for exactly those rows: every
+   * `content.created` on `pipeline-index` was added to the Search index chip,
+   * while clicking Pipeline was what returned it.
+   *
+   * The queue is a grouping COLUMN, not the category key. pg-boss copies a job's
+   * `data` verbatim onto the dead-letter row but rewrites the queue column to
+   * the literal `dead-letter`, so for the 88% of rows that are dead-lettered the
+   * pair is unrecoverable — and `categoryOfJob` falls back to the event name for
+   * those, as does the filter. Keying the category ON the queue would file the
+   * whole table under one meaningless bucket; grouping BY it does not.
    */
-  it('groups the category counts on the event in the payload, never on the queue', () => {
+  it('groups the category counts on the (event, queue) pair the fold resolves on', () => {
     const { addSelects, groupBy } = captureSelect();
 
     expect(addSelects).toContain("job.data->>'name'");
-    // Both grouped columns in one call: the mock builder above implements
+    expect(addSelects).toContain('job.name');
+    // All three grouped columns in one call: the mock builder above implements
     // `groupBy` but not `addGroupBy`, and so does this service on purpose.
-    expect(groupBy).toBe('1, 2');
+    expect(groupBy).toBe('1, 2, 3');
   });
 });

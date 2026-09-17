@@ -18,7 +18,10 @@ import { UserService } from '@ci/domains/user';
 import { OidcController } from '../controllers/OidcController';
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
+import { FederatedIdentityService } from '../services/FederatedIdentityService';
+import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 import { OidcNativeCodeService } from '../services/OidcNativeCodeService';
+import { SignupCodeService } from '../services/SignupCodeService';
 
 import { parseCookies } from './utils/parseCookies';
 
@@ -86,6 +89,14 @@ const mockLogger = {
     { provide: CsrfService, useValue: mockCsrfService },
     { provide: FeatureService, useValue: mockFeatureService },
     { provide: OidcNativeCodeService, useValue: mockOidcNativeCodeService },
+    // Confirm-account never reaches the invite path; present so Nest can construct
+    // the controller.
+    { provide: SignupCodeService, useValue: { findOne: jest.fn(), update: jest.fn() } },
+    {
+      provide: FederatedIdentityService,
+      useValue: { findUserId: jest.fn(), listForUser: jest.fn().mockResolvedValue([]), bind: jest.fn() },
+    },
+    { provide: HubForwardAuthBridgeService, useValue: { verifyUsername: jest.fn().mockReturnValue(null) } },
     { provide: LoggerService, useValue: mockLogger },
   ],
 })

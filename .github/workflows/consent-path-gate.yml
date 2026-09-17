@@ -43,6 +43,26 @@ name: Consent path gate
 # Postgres with the migrations applied, and it FAILS if any consent test skips.
 # See `.github/scripts/assert-consent-suites-ran.mjs`.
 #
+# ── Δ 2026-09-10 — ci.yml now has a database; the section above no longer
+#    describes ci.yml's current state, but the conclusion still holds ───────
+#
+# `ci.yml`'s `test` job ("Run backend tests") gained a pinned Postgres service
+# and the same ASKS_/PEERS_/SEARCH_NEXT_TEST_DATABASE_URL vars this workflow
+# sets (verified 2026-09-10 by grep against the live file). It runs
+# `yarn workspace @ci/be-api test --coverage` — the full suite, a strict
+# superset of the consent-critical suites this workflow scopes to. So a
+# DISPATCHED ci.yml run no longer silently skips these tests the way the
+# measurement above (at fe5075a79) showed.
+#
+# That does not make this workflow redundant. ci.yml has no equivalent of
+# assert-consent-suites-ran.mjs: nothing there fails if a suite goes from
+# "ran and passed" to "silently produced zero tests" or "skipped again"
+# because someone re-guards it behind an availability check. This workflow
+# also finishes in ~4-7 minutes against ci.yml's 65-minute budget, which
+# matters if the commented-out `pull_request` trigger below is ever turned on
+# as a fast per-PR gate. Read the section above as the history that motivated
+# this file's creation, not as a live description of ci.yml today.
+#
 # ── Enabling it is the repository owner's call ───────────────────────────
 #
 # Every workflow here was deliberately gated to manual because CI "didn't work

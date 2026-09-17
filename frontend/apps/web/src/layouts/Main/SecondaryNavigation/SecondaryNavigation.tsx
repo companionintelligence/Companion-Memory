@@ -17,7 +17,6 @@ import { MemorySubmenu } from './MemorySubmenu';
 import { NavLink } from './NavLink';
 import { PlanningSubmenu } from './PlanningSubmenu';
 import { SelfSubmenu } from './SelfSubmenu';
-import { SettingsRailButton } from './SettingsRailButton';
 
 interface ExternalNavLinkProps {
   href: string;
@@ -123,7 +122,9 @@ function HelpSubmenu() {
  */
 function OverlayRailHeader({ closeOverlay }: { closeOverlay: () => void }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 pt-2 pb-1.5">
+    // Same inset as a nav row (`border-l-2` + `px-2 py-2`) so the mark sits on
+    // the same left edge as Capture / Planning instead of hugging the pane.
+    <div className="flex min-w-0 items-center border-l-2 border-transparent px-2 py-2">
       <PowerRailWordmark />
       <RailEdgeToggle open onClick={closeOverlay} className="ml-auto shrink-0" />
     </div>
@@ -166,7 +167,6 @@ function OverlayRail({
         <div className="mt-auto flex flex-col gap-1 pb-2">
           <HelpSubmenu />
           {showSelf ? <SelfSubmenu /> : null}
-          <SettingsRailButton />
         </div>
       </Tooltip.Provider>
     </nav>
@@ -174,7 +174,7 @@ function OverlayRail({
 }
 
 export function SecondaryNavigation() {
-  const { expanded, pinned, setHovered, variant, closeOverlay } = usePowerRail();
+  const { expanded, pinned, variant, closeOverlay } = usePowerRail();
   const destinations = useVisibleRailDestinations();
   const [{ isOpen: captureOpen }, { close: closeCapture }] = useCaptureModal();
   const overlay = variant === 'overlay';
@@ -236,25 +236,17 @@ export function SecondaryNavigation() {
     // A drawer, not a column that shoves the page around.
     //
     // The wrapper always occupies the collapsed width, so the layout beside it
-    // never moves on hover. The rail itself is absolutely positioned inside
-    // that lane and grows over the content when it opens — brushing past on
-    // the way to something else costs you a widening panel, not a reflow of
-    // everything you were reading.
+    // never moves. The rail itself is absolutely positioned inside that lane
+    // and only grows over the content when a click pins it open — nothing
+    // here reacts to the pointer, so passing through never costs you a
+    // widening panel you didn't ask for.
     //
-    // Pinning is the exception, and deliberately so: a pinned rail takes real
-    // width, the content settles beside it once, and it stays that way.
+    // Pinning takes real width instead: the content settles beside it once,
+    // and it stays that way.
     <>
       {captureModal}
       <div
         className={cn('relative h-full shrink-0 transition-[width] duration-200', pinned ? 'w-56' : 'w-14')}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        onFocusCapture={() => setHovered(true)}
-        onBlurCapture={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-            setHovered(false);
-          }
-        }}
       >
         <nav
           id="power-rail"
@@ -277,7 +269,6 @@ export function SecondaryNavigation() {
             <div className="mt-auto flex flex-col gap-1 pb-2">
               <HelpSubmenu />
               {showSelf ? <SelfSubmenu /> : null}
-              <SettingsRailButton />
             </div>
           </Tooltip.Provider>
         </nav>
