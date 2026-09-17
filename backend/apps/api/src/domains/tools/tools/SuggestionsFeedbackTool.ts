@@ -8,9 +8,11 @@ import { SuggestionEngine } from '@ci/domains/daily-metrics';
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
+import { booleanish } from './booleanish';
+
 const InputSchema = z.object({
   id: z.string().min(1),
-  accepted: z.boolean(),
+  accepted: booleanish(),
 });
 
 export type SuggestionsFeedbackInput = z.infer<typeof InputSchema>;

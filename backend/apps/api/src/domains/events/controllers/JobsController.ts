@@ -77,22 +77,30 @@ type JobControlsBody = z.infer<typeof jobControlsSchema>;
  * that would has to happen in the queries.
  *
  * {@link AdminOnlyGuard} is deliberately NOT applied, despite this being exactly
- * the operator-shaped surface it was written for. `ci.users.role` defaults to
- * `'user'` and no application code ever sets it otherwise: `CreateUserDto`
- * carries no `role`, neither does `UpdateUserDto`, and the column's only writer
- * is a one-shot backfill (`20260825233952_add_role_to_users_backfill_admin`)
- * that promotes the earliest EXISTING row at migration time. On a fresh install
- * migrations run before anyone has signed up, so it promotes nobody and the
- * appliance ends up with no admin at all, permanently and with no in-app way to
- * make one. Gating these routes on it would answer the owner's own Jobs page
- * with a 403 they could not clear.
+ * the operator-shaped surface it was written for — but the reason has changed,
+ * and the old one is worth recording because it was cited widely. It used to be
+ * that no application code ever set `ci.users.role`: the column's only writer
+ * was a one-shot backfill (`20260825233952_add_role_to_users_backfill_admin`)
+ * promoting the earliest EXISTING row at migration time, which on a fresh
+ * install runs before anyone has signed up and so promoted nobody. Gating these
+ * routes then would have answered the owner's own Jobs page with a 403 they
+ * could not clear.
  *
- * What the guards CAN do here, and do, is keep `POST jobs/crons/run` — the one
- * route that acts — the most strongly gated route on the controller. Every read
- * below therefore states its capability floor explicitly instead of leaving it
- * unstated: `read` is rank 0, so it narrows no key that reaches these routes
- * today, but it means `full` on the acting route sits at the top of a ladder
- * that is declared end to end rather than above silence.
+ * `UserService.claimApplianceIfUnowned` now promotes the account that claims an
+ * unowned appliance, so that objection is gone. {@link ApplianceAdminGuard} is
+ * still the right guard here for a different reason: it degrades to admitting
+ * everyone on an appliance with no live admin, which for an appliance-wide
+ * control plane is the honest answer, where the arbitrary-command-execution
+ * routes behind `AdminOnlyGuard` must degrade closed instead.
+ *
+ * What the guards CAN do here, and do, is keep the routes that ACT — `POST
+ * jobs/crons/run`, which fires every cron, and `POST jobs/clear-terminal`,
+ * which deletes the dead-letter/failed queues — the most strongly gated routes
+ * on the controller. Every read below therefore states its capability floor
+ * explicitly instead of leaving it unstated: `read` is rank 0, so it narrows no
+ * key that reaches these routes today, but it means `full` on the acting routes
+ * sits at the top of a ladder that is declared end to end rather than above
+ * silence.
  */
 
 const clearTerminalSchema = z.object({

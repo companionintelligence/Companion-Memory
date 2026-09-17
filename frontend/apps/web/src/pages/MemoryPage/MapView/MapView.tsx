@@ -33,6 +33,7 @@ import {
 import { TimelineView } from '../TimelineView';
 
 import { clusterDiameterPx, mergeCollidingClusters, type PixelCluster } from './clusterOverlap';
+import { LocationAlwaysBanner } from './LocationAlwaysBanner';
 import { readCoordinates, readGeoJsonPoint } from './mapCoordinates';
 import { fitSignature, pinsInBounds, routePoints } from './pinSet';
 import { PositionTraceLayer, TraceToggleControl } from './TraceLayer';
@@ -1303,7 +1304,12 @@ export function MobileMapView({ readOnly = false }: { readOnly?: boolean } = {})
 
   return (
     <PlaybackProvider args={[{ pins: playbackPins, source: readOnly ? EMPTY_TRACK_SOURCE : undefined }]}>
-      <MobileMapSurface view={view} readOnly={readOnly} />
+      <div className="flex h-full min-h-0 flex-1 flex-col">
+        {!readOnly ? <LocationAlwaysBanner /> : null}
+        <div className="min-h-0 flex-1">
+          <MobileMapSurface view={view} readOnly={readOnly} />
+        </div>
+      </div>
     </PlaybackProvider>
   );
 }

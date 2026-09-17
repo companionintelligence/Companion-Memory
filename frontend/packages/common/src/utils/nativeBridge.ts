@@ -53,6 +53,10 @@ interface LocalHubPlugin {
    */
   getCurrentLocation?(): Promise<NativeCurrentLocation>;
   openAppSettings?(): Promise<void>;
+  getLocationAuthorization?(): Promise<{ status: NativeLocationAuthorization }>;
+  requestLocationAuthorization?(options: {
+    always: boolean;
+  }): Promise<{ status: NativeLocationAuthorization }>;
 }
 
 export interface BackgroundGeolocationError {
@@ -92,6 +96,15 @@ export interface NativeCurrentLocation {
   longitude: number;
   accuracy?: number;
 }
+
+/** Core Location authorization — iOS Always two-step. `unsupported` on web/Android. */
+export type NativeLocationAuthorization =
+  | 'notDetermined'
+  | 'denied'
+  | 'restricted'
+  | 'whenInUse'
+  | 'always'
+  | 'unsupported';
 
 export type DeviceLocationErrorCode = 'denied' | 'unavailable' | 'timeout';
 
@@ -524,7 +537,7 @@ export async function openExternalUrl(url: string): Promise<void> {
  * `null` if no watcher was started.
  */
 export async function addBackgroundLocationWatcher(
-  options: { background: boolean; distanceFilter?: number },
+  options: { background: boolean; distanceFilter?: number; requestPermissions?: boolean },
   onLocation: (location: BackgroundGeolocationLocation) => void,
   onError: (error: BackgroundGeolocationError) => void,
 ): Promise<string | null> {
@@ -536,7 +549,7 @@ export async function addBackgroundLocationWatcher(
 
   return plugin.addWatcher(
     {
-      requestPermissions: true,
+      requestPermissions: options.requestPermissions ?? true,
       distanceFilter: options.distanceFilter,
       ...(options.background
         ? {
@@ -606,6 +619,63 @@ export async function getNativeCurrentLocation(): Promise<NativeCurrentLocation 
   }
 
   return hub.getCurrentLocation();
+}
+
+const LOCATION_AUTH_STATUSES: readonly NativeLocationAuthorization[] = [
+  'notDetermined',
+  'denied',
+  'restricted',
+  'whenInUse',
+  'always',
+  'unsupported',
+];
+
+function asLocationAuthorization(status: string | undefined): NativeLocationAuthorization {
+  if (status && (LOCATION_AUTH_STATUSES as readonly string[]).includes(status)) {
+    return status as NativeLocationAuthorization;
+  }
+
+  return 'unsupported';
+}
+
+/** iOS Core Location authorization. `unsupported` on web and Android. */
+export async function getNativeLocationAuthorization(): Promise<NativeLocationAuthorization> {
+  const hub = plugins()?.LocalHub;
+
+  if (!isIosPlatform() || !hub?.getLocationAuthorization) {
+    return 'unsupported';
+  }
+
+  try {
+    const result = await hub.getLocationAuthorization();
+
+    return asLocationAuthorization(result.status);
+  } catch {
+    return 'unsupported';
+  }
+}
+
+/**
+ * Prompt When In Use (`always: false`) or Always (`always: true`).
+ * iOS 13+ shows When In Use first when status is still not determined; call
+ * again with `always: true` after that grant. `unsupported` on web/Android.
+ */
+export async function requestNativeLocationAuthorization(options: {
+  always: boolean;
+}): Promise<NativeLocationAuthorization> {
+  const hub = plugins()?.LocalHub;
+
+  if (!isIosPlatform() || !hub?.requestLocationAuthorization) {
+    return 'unsupported';
+  }
+
+  try {
+    const result = await hub.requestLocationAuthorization(options);
+
+    return asLocationAuthorization(result.status);
+  } catch {
+    return 'unsupported';
+  }
 }
 
 /**

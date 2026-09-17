@@ -23,7 +23,8 @@ const GET_PROVIDERS = gql(`
           providerKeys {
             id
             clientId
-            clientSecret
+            hasClientSecret
+            clientSecretHint
           }
         }
       }
@@ -37,7 +38,8 @@ const CREATE_PROVIDER_KEY = gql(`
       id
       providerId
       clientId
-      clientSecret
+      hasClientSecret
+      clientSecretHint
       userId
     }
   }
@@ -48,7 +50,8 @@ const UPDATE_PROVIDER_KEY = gql(`
     updateProviderKey(id: $id, input: $input) {
       id
       clientId
-      clientSecret
+      hasClientSecret
+      clientSecretHint
     }
   }
 `);
@@ -62,7 +65,12 @@ const DELETE_PROVIDER_KEY = gql(`
 interface ProviderFixture {
   id: string;
   name: string;
-  providerKeys?: { id: string; clientId: string; clientSecret: string } | null;
+  providerKeys?: {
+    id: string;
+    clientId: string;
+    hasClientSecret: boolean;
+    clientSecretHint: string | null;
+  } | null;
 }
 
 function providersMock(providers: ProviderFixture[]) {
@@ -181,7 +189,8 @@ describe('OAuthSection', () => {
                   id: 'pk-google',
                   providerId: 'prov-google',
                   clientId: 'client-abc',
-                  clientSecret: 'secret-xyz',
+                  hasClientSecret: true,
+                  clientSecretHint: '-xyz',
                   userId: 'u1',
                 },
               },
@@ -217,16 +226,23 @@ describe('OAuthSection', () => {
           {
             id: 'prov-google',
             name: 'Google',
-            providerKeys: { id: 'pk-google', clientId: 'old-id', clientSecret: 'old-secret' },
+            providerKeys: {
+              id: 'pk-google',
+              clientId: 'old-id',
+              hasClientSecret: true,
+              clientSecretHint: 'cret',
+            },
           },
         ]),
         {
           request: {
             query: UPDATE_PROVIDER_KEY,
-            variables: { id: 'pk-google', input: { clientId: 'new-id', clientSecret: 'old-secret' } },
+            // The secret field was left blank, so the stored secret is kept: it
+            // is not re-sent, and the client never had it to re-send.
+            variables: { id: 'pk-google', input: { clientId: 'new-id' } },
           },
           result: () => {
-            updateCalled = { id: 'pk-google', input: { clientId: 'new-id', clientSecret: 'old-secret' } };
+            updateCalled = { id: 'pk-google', input: { clientId: 'new-id' } };
 
             return {
               data: {
@@ -234,7 +250,8 @@ describe('OAuthSection', () => {
                   __typename: 'ProviderKeyType',
                   id: 'pk-google',
                   clientId: 'new-id',
-                  clientSecret: 'old-secret',
+                  hasClientSecret: true,
+                  clientSecretHint: 'cret',
                 },
               },
             };
@@ -259,7 +276,12 @@ describe('OAuthSection', () => {
           {
             id: 'prov-google',
             name: 'Google',
-            providerKeys: { id: 'pk-google', clientId: 'the-id', clientSecret: 'the-secret' },
+            providerKeys: {
+              id: 'pk-google',
+              clientId: 'the-id',
+              hasClientSecret: true,
+              clientSecretHint: 'cret',
+            },
           },
         ]),
         {
@@ -296,7 +318,12 @@ describe('OAuthSection', () => {
           {
             id: 'prov-google',
             name: 'Google',
-            providerKeys: { id: 'pk-google', clientId: 'the-id', clientSecret: 'the-secret' },
+            providerKeys: {
+              id: 'pk-google',
+              clientId: 'the-id',
+              hasClientSecret: true,
+              clientSecretHint: 'cret',
+            },
           },
         ]),
         // No DELETE_PROVIDER_KEY mock: an unexpected send would surface as an
@@ -315,6 +342,97 @@ describe('OAuthSection', () => {
     expect(within(providerCard('Google')).getByLabelText('Client ID')).toHaveValue('the-id');
   });
 
+  it('never shows a stored secret: the field is empty with a hint placeholder and a keep-or-replace note', async () => {
+    renderWithProviders(<OAuthSection />, {
+      mocks: [
+        providersMock([
+          {
+            id: 'prov-google',
+            name: 'Google',
+            providerKeys: {
+              id: 'pk-google',
+              clientId: 'the-id',
+              hasClientSecret: true,
+              clientSecretHint: 'cret',
+            },
+          },
+        ]),
+      ],
+    });
+
+    await screen.findByText('Google');
+    const google = providerCard('Google');
+    const secret = within(google).getByLabelText('Client Secret');
+
+    expect(secret).toHaveValue('');
+    expect(secret).toHaveAttribute('placeholder', '••••••••cret');
+    expect(within(google).getByText(/a secret is stored and is never shown/i)).toBeInTheDocument();
+    // Revealing the field reveals nothing, because nothing was ever sent.
+    fireEvent.click(within(google).getByRole('button', { name: /show client secret/i }));
+    expect(secret).toHaveValue('');
+    // Nothing to save until something changes.
+    expect(within(google).queryByRole('button', { name: /save credentials/i })).not.toBeInTheDocument();
+  });
+
+  it('replaces the stored secret only when a new one is typed', async () => {
+    let updateCalled: { id: unknown; input: unknown } | undefined;
+
+    renderWithProviders(<OAuthSection />, {
+      mocks: [
+        providersMock([
+          {
+            id: 'prov-google',
+            name: 'Google',
+            providerKeys: {
+              id: 'pk-google',
+              clientId: 'the-id',
+              hasClientSecret: true,
+              clientSecretHint: 'cret',
+            },
+          },
+        ]),
+        {
+          request: {
+            query: UPDATE_PROVIDER_KEY,
+            variables: { id: 'pk-google', input: { clientId: 'the-id', clientSecret: 'brand-new-secret' } },
+          },
+          result: () => {
+            updateCalled = {
+              id: 'pk-google',
+              input: { clientId: 'the-id', clientSecret: 'brand-new-secret' },
+            };
+
+            return {
+              data: {
+                updateProviderKey: {
+                  __typename: 'ProviderKeyType',
+                  id: 'pk-google',
+                  clientId: 'the-id',
+                  hasClientSecret: true,
+                  clientSecretHint: 'cret',
+                },
+              },
+            };
+          },
+        },
+      ],
+    });
+
+    await screen.findByText('Google');
+    const google = providerCard('Google');
+
+    fireEvent.change(within(google).getByLabelText('Client Secret'), {
+      target: { value: 'brand-new-secret' },
+    });
+    fireEvent.click(within(google).getByRole('button', { name: /save credentials/i }));
+
+    await waitFor(() => expect(updateCalled).toBeDefined());
+    // The typed secret is cleared from the field after saving; the hint takes over again.
+    await waitFor(() =>
+      expect(within(providerCard('Google')).getByLabelText('Client Secret')).toHaveValue(''),
+    );
+  });
+
   it('flags a half-filled pair for an existing key, and does not blame the field the user is still typing into', async () => {
     renderWithProviders(<OAuthSection />, {
       mocks: [
@@ -322,7 +440,12 @@ describe('OAuthSection', () => {
           {
             id: 'prov-google',
             name: 'Google',
-            providerKeys: { id: 'pk-google', clientId: 'the-id', clientSecret: 'the-secret' },
+            providerKeys: {
+              id: 'pk-google',
+              clientId: 'the-id',
+              hasClientSecret: true,
+              clientSecretHint: 'cret',
+            },
           },
         ]),
       ],

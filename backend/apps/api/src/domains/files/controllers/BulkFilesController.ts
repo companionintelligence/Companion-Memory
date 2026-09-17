@@ -14,6 +14,7 @@ import {
 import { FilesInterceptor } from '@nestjs/platform-express';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 
 import { FileService } from '../services/FileService';
@@ -57,7 +58,15 @@ export class BulkFilesController {
   constructor(private readonly fileService: FileService) {}
 
   @UseGuards(JwtOrApiKeyAuthGuard)
+  // Mirrors FilesController's single-upload route, which has carried
+  // `write` since it was scoped. This one never did: `v1/files` takes 50 files
+  // of up to 1 GB each, and until now a read-only key could post all of them —
+  // an empty-scope key skips scope enforcement, so capability was the only axis
+  // left and nothing asked about it. Capability only, deliberately: adding
+  // `@RequireScopes` here would newly refuse keys that carry some OTHER scope,
+  // which is a different change from the one #1780 asks for.
   @Post()
+  @RequireCapability(WRITE_CAPABILITY)
   @UseInterceptors(
     FilesInterceptor('files', MAX_FILES_PER_BATCH, {
       dest: tmpdir(),

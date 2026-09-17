@@ -48,14 +48,25 @@ export function useOnboardingProgress() {
         return;
       }
 
-      await fetchJson<OnboardingProgress>('/api/onboarding/progress', {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ stepKey, draft }),
-      });
+      // Saving progress is a convenience, never a precondition for moving: the
+      // hydrate path already falls back to the first step when the read fails.
+      // This used to throw, and every caller advanced the step only *after*
+      // awaiting it — so one failed PUT (a phone stepping off the appliance's
+      // LAN mid-setup, which is the normal case on the native shells) left the
+      // whole footer looking live and doing nothing.
+      try {
+        await fetchJson<OnboardingProgress>('/api/onboarding/progress', {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ stepKey, draft }),
+        });
+        setError(null);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err : new Error(String(err)));
+      }
     },
     [authToken],
   );

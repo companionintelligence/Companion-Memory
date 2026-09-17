@@ -10,7 +10,7 @@ export function SummaryDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [{ data: summary, loading, error }] = useSummaryService(id || '');
 
-  usePageTitle(summary?.title || 'Summary - Companion Intelligence');
+  usePageTitle(summary?.title || 'Summary - Companion Memory');
 
   if (loading) {
     return (

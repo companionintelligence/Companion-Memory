@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+
+  // Shared settings for Node-side TypeScript (the NestJS API, scripts, future
+  // backend/packages/*). Extends tsconfig.base.json rather than restating it:
+  // before this existed every project hand-copied the same eight options and
+  // drifted — target was ES2020 in one place and ES2023 in another for no
+  // reason anyone could name.
+  "extends": "./tsconfig.base.json",
+
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "commonjs",
+    "moduleResolution": "node",
+
+    "allowSyntheticDefaultImports": true,
+
+    // Nest reads parameter types at runtime from the metadata tsc emits.
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true
+  }
+}

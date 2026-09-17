@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 
 import { READ_CAPABILITY } from '@ci/common/decorators';
 
@@ -49,7 +49,7 @@ describe('PendingActionsController', () => {
 
     await expect(controller.list({})).rejects.toBeInstanceOf(UnauthorizedException);
     await expect(controller.approve('pa-1', {}, REQ)).rejects.toBeInstanceOf(UnauthorizedException);
-    await expect(controller.decline('pa-1', {})).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(controller.decline('pa-1', {}, REQ)).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it('hands the confirming caller’s OWN capability to the confirm path', async () => {
@@ -60,10 +60,27 @@ describe('PendingActionsController', () => {
     expect(confirmations.confirm).toHaveBeenCalledWith('user-1', 'pa-1', READ_CAPABILITY);
   });
 
+  it('refuses an installed app the owner\u2019s decision, on both verbs', async () => {
+    // Both harnesses carry the `intents` scope this controller requires, and
+    // approve/decline sit behind READ capability — so without this a harness
+    // could list the owner's queue and answer its own card. The card exists
+    // BECAUSE the caller was an installed app; letting it answer makes the gate
+    // a formality performed on itself.
+    const { controller } = harness();
+    const managedApp = { ...REQ, apiKeyManagedBy: 'connect' as const };
+
+    await expect(
+      controller.approve('pa-1', { userId: 'user-1' }, managedApp),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(
+      controller.decline('pa-1', { userId: 'user-1' }, managedApp),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it('declines through the same owner scope', async () => {
     const { controller, confirmations } = harness();
 
-    const response = await controller.decline('pa-1', { userId: 'user-1' });
+    const response = await controller.decline('pa-1', { userId: 'user-1' }, REQ);
 
     expect(confirmations.decline).toHaveBeenCalledWith('user-1', 'pa-1');
     expect(response.action).toStrictEqual({ id: 'pa-1', status: 'declined' });

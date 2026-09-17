@@ -47,7 +47,8 @@ function TaskColumn<T extends SectionedTask>({
       )}
       <div
         className={cn(
-          'flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto',
+          'flex min-h-0 flex-1 flex-col overflow-y-auto',
+          isMobile ? 'gap-2' : 'gap-3',
           // Phone: space after the last card so the list end is obvious and
           // the home indicator does not cover it.
           isMobile && 'pb-[calc(1.5rem+var(--safe-area-bottom))]',
@@ -125,7 +126,7 @@ export function TaskBoard<T extends SectionedTask>({
     }
 
     return (
-      <Tabs value={activeTab} onValueChange={setTab} className="flex h-full min-h-0 flex-1 flex-col gap-3">
+      <Tabs value={activeTab} onValueChange={setTab} className="flex h-full min-h-0 flex-1 flex-col gap-2">
         <Tabs.List className="h-auto max-w-full justify-start overflow-x-auto">
           {columns.map((section) => (
             <Tabs.Trigger key={section.key} value={section.key} className="shrink-0">

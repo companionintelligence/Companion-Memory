@@ -5,6 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { SummaryService } from '@ci/domains/summaries';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { GlobalUID } from '../types/GlobalUID';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { SummaryConnection } from '../types/SummaryConnection';
@@ -59,6 +60,7 @@ export class SummaryResolver {
   }
 
   @Mutation(() => SummaryType, { nullable: true, description: 'Mark a summary as seen' })
+  @GraphqlPrivacy({ destructive: false })
   async markSummaryAsSeen(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -71,6 +73,7 @@ export class SummaryResolver {
   }
 
   @Mutation(() => SummaryType, { nullable: true, description: 'Mark a summary as dismissed' })
+  @GraphqlPrivacy({ destructive: false })
   async markSummaryAsDismissed(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,

@@ -184,6 +184,16 @@ export class EventEntity {
   @Column({ type: 'integer', nullable: true, name: 'energy_level' })
   energyLevel!: number | null;
 
+  /**
+   * Non-null in the database as well as here, as of
+   * 20260908000139_events_status_not_null. The column had carried DEFAULT
+   * 'confirmed' since creation but not NOT NULL, so an explicit NULL write
+   * produced a row no calendar surface could see: every read filters with
+   * `status NOT IN (...)`, which SQL evaluates to UNKNOWN — not TRUE — for a
+   * NULL, silently dropping the row from the schedule grid, the planner's
+   * occupied set and peer free/busy alike. The reads COALESCE defensively so
+   * they stay correct against a database that has not taken that migration yet.
+   */
   @Column({ type: 'text', default: 'confirmed' })
   status!: string;
 
@@ -208,6 +218,76 @@ export class EventEntity {
   /** Intended duration for a planned block; `duration_minutes` stays generated actual. */
   @Column({ type: 'integer', nullable: true, name: 'planned_minutes' })
   plannedMinutes!: number | null;
+
+  /**
+   * CI-Planning's manually-locked-block flag. A future reflow engine must
+   * never move a locked block (roadmap invariant 4) — but that invariant also
+   * says protection is passed to reflow IN MEMORY, never re-derived from this
+   * column mid-run, so a crashed reflow cannot leave stale locks behind. This
+   * milestone only makes the column settable/readable (`updateEvent`,
+   * `EventType.isLocked`); nothing yet enforces it against a move.
+   */
+  @Column({ type: 'boolean', default: false, name: 'is_locked' })
+  isLocked!: boolean;
+
+  /**
+   * True for a block placed by the deterministic placer running unattended
+   * (the trust dial's `auto` decision in `PlannedBlockService.tryPlaceAfterOpen`);
+   * false for anything a human action produced — the Plan page's Schedule
+   * button, a calendar drag, or confirming a trust-dial `review` proposal.
+   * Flipped back to false by `CalendarEventService.reschedule` when a human
+   * moves a block, regardless of how it got there.
+   */
+  @Column({ type: 'boolean', default: false, name: 'is_auto' })
+  isAuto!: boolean;
+
+  /**
+   * Materialized-instance date for a future recurrence engine (roadmap
+   * "Later" — RRULE expansion is explicitly not implemented by this column).
+   * Schema readiness only; nothing writes it yet.
+   */
+  @Column({ type: 'date', nullable: true, name: 'occurrence_date' })
+  occurrenceDate!: string | null;
+
+  /** Links a materialized recurring instance back to its template row. Schema readiness only. */
+  @Column({ type: 'uuid', nullable: true, name: 'recurrence_parent_id' })
+  recurrenceParentId!: string | null;
+
+  /** Unparsed, unexpanded RRULE string. Schema readiness only — never expand this in SQL. */
+  @Column({ type: 'text', nullable: true, name: 'recurrence_rule' })
+  recurrenceRule!: string | null;
+
+  /**
+   * Stamped whenever this row's `startTime`/`endTime` changes — by
+   * `CalendarEventService.update` and `.reschedule`, and by
+   * `PlannedBlockService.placeAt` on first placement. Needed later for
+   * reflow's anti-thrash stability window (roadmap "Later"); this milestone
+   * only stamps it correctly, it does not read it back for anything yet.
+   */
+  @Column({ type: 'timestamptz', nullable: true, name: 'last_moved_at' })
+  lastMovedAt!: Date | null;
+
+  /** Correlates blocks placed by the same autoplan invocation. Schema readiness only — autoplan is a later milestone. */
+  @Column({ type: 'uuid', nullable: true, name: 'auto_run_id' })
+  autoRunId!: string | null;
+
+  /**
+   * Category tag this block was placed under, at write time. References
+   * `ci_search.tags(id)` with no dependency on `tags.kind` existing yet (M2
+   * may land the taxonomy's `kind` discriminator before or after this
+   * migration) — schema readiness only, nothing assigns this yet.
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'category_tag_id' })
+  categoryTagId!: string | null;
+
+  /**
+   * Frozen colour-token stamp, copied from the category at write time —
+   * deliberately NOT derived live from `categoryTagId` at read time, so
+   * re-coloring a category later cannot retroactively re-colour history.
+   * Schema readiness only; nothing computes a value for this yet.
+   */
+  @Column({ type: 'text', nullable: true, name: 'color_token' })
+  colorToken!: string | null;
 
   @Column({ type: 'text', nullable: true, name: 'created_by' })
   createdBy!: string | null;
@@ -274,6 +354,15 @@ export class EventEntity {
       parentEventId: entity.parentEventId,
       taskId: entity.taskId,
       plannedMinutes: entity.plannedMinutes,
+      isLocked: entity.isLocked,
+      isAuto: entity.isAuto,
+      occurrenceDate: entity.occurrenceDate,
+      recurrenceParentId: entity.recurrenceParentId,
+      recurrenceRule: entity.recurrenceRule,
+      lastMovedAt: entity.lastMovedAt,
+      autoRunId: entity.autoRunId,
+      categoryTagId: entity.categoryTagId,
+      colorToken: entity.colorToken,
       sharingLevel: entity.sharingLevel,
       createdBy: entity.createdBy,
       userId: entity.userId,
@@ -288,4 +377,17 @@ export type Event = Readonly<Omit<EventEntity, 'user' | 'entityType'>> & {
   readonly title: string | null;
   readonly description: string | null;
   user?: User;
+
+  /**
+   * Set only on an occurrence synthesized by read-time RRULE expansion
+   * (`domains/memory/recurrence`): the `event_id` of the series master this
+   * occurrence was computed from. Absent on every stored row.
+   *
+   * It has no column and never will — occurrences are ephemeral. Anything that
+   * needs to reach the backing row (tag/content/media batching, a future write
+   * path) must follow this rather than `id`, which addresses no row.
+   */
+  readonly seriesMasterId?: string | null;
+  /** RECURRENCE-ID of a synthesized occurrence (`YYYYMMDDTHHMMSSZ`); absent on stored rows. */
+  readonly recurrenceId?: string | null;
 };

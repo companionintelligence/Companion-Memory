@@ -62,7 +62,7 @@ export interface ResolveSource {
   sourceTitle?: string | null;
 }
 
-const STREAMING_SOURCES = new Set(['netflix', 'prime_video', 'hulu']);
+const STREAMING_SOURCES = new Set(['netflix', 'prime_video', 'hulu', 'disney_plus']);
 
 export function resolveTargetFor(row: ResolveSource): ResolveTarget | null {
   const kind = row.externalIdKind ?? classifyExternalId(row.externalId);

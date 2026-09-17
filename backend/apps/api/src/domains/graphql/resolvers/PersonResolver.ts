@@ -26,6 +26,7 @@ import {
   serializePersonAddress,
 } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PersonIdentifiersLoader } from '../loaders/PersonIdentifiersLoader';
 import { PersonInteractionStatsLoader } from '../loaders/PersonInteractionStatsLoader';
 import { TagLoader } from '../loaders/TagLoader';
@@ -222,6 +223,9 @@ export class PersonResolver {
   ) {}
 
   @Mutation(() => CreatePersonPayload)
+  // Calls entityIdentifierService.replaceForEntity, but on a BRAND NEW entity — there is no prior
+  // identifier row it could drop, unlike the same call in updatePerson.
+  @GraphqlPrivacy({ destructive: false })
   async createPerson(
     @Context() context: RequestContext,
     @Args('input') input: CreatePersonInput,
@@ -283,6 +287,7 @@ export class PersonResolver {
    * input order — the clean batch equivalent of N createPerson mutations.
    */
   @Mutation(() => [PersonType])
+  @GraphqlPrivacy({ destructive: false })
   async createPeople(
     @Context() context: RequestContext,
     @Args('input', { type: () => [CreatePersonInput] }, new MaxArraySizePipe())
@@ -310,6 +315,15 @@ export class PersonResolver {
   }
 
   @Mutation(() => UpdatePersonPayload)
+  // NOT a plain field patch. When `input.contacts` is supplied, this calls
+  // EntityIdentifierService.replaceForEntity(['email','phone'], contacts) — which, per its own doc
+  // comment, "deletes the rows of those kinds that are no longer listed". ci.entity_identifiers has
+  // no soft-delete column (see removePersonIdentifier above), so a caller that passes a shorter
+  // contacts list than what's stored permanently drops the omitted email/phone identifiers, with no
+  // restore path. This is the same hard-delete removePersonIdentifier is declared destructive for,
+  // reachable through a mutation named like an ordinary update — flagged as the audit's own example
+  // of the bug class this file exists to close.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async updatePerson(
     @Context() context: RequestContext,
     @Args('input') input: UpdatePersonInput,
@@ -377,6 +391,7 @@ export class PersonResolver {
   }
 
   @Mutation(() => DeleteByIdPayload)
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deletePerson(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,
@@ -405,6 +420,9 @@ export class PersonResolver {
    * the sources. See PersonMergeService.
    */
   @Mutation(() => MergePeoplePayload)
+  // Tombstones every source (is_active = FALSE) and drops their search rows. Takes an ARRAY of
+  // source ids, so one call at `write` could retire an unbounded number of people. One-way.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async mergePeople(
     @Context() context: RequestContext,
     @Args('input') input: MergePeopleInput,
@@ -438,6 +456,8 @@ export class PersonResolver {
   @Mutation(() => Boolean, {
     description: 'Mark a suggested duplicate group as distinct people, so it is never re-proposed',
   })
+  // Writes entity_merge_blocks rows to suppress a re-proposal; touches no person or search data.
+  @GraphqlPrivacy({ destructive: false })
   async rejectPersonDuplicates(
     @Context() context: RequestContext,
     @Args('personIds', { type: () => [ID] }) personIds: string[],
@@ -456,6 +476,7 @@ export class PersonResolver {
 
   /** Add a contact method / identifier to a person (source='user'). */
   @Mutation(() => [PersonIdentifierType])
+  @GraphqlPrivacy({ destructive: false })
   async addPersonIdentifier(
     @Context() context: RequestContext,
     @Args('input') input: AddPersonIdentifierInput,
@@ -500,6 +521,13 @@ export class PersonResolver {
 
   /** Remove a contact method / identifier from a person. */
   @Mutation(() => [PersonIdentifierType])
+  // Correct today only by naming accident. This is NOT the "scope detach" it looks like:
+  // EntityIdentifierService.removeForEntity is a bare repository.delete against
+  // ci.entity_identifiers, a table with no soft-delete column. addPersonIdentifier restores the
+  // row only while the (kind, value) tuple is unclaimed, and CommunicationParticipantLinkListener
+  // mints a stub Person that claims it on the next inbound communication — after which the only
+  // repair is mergePeople, which is itself destructive and has no unmerge.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removePersonIdentifier(
     @Context() context: RequestContext,
     @Args('input') input: RemovePersonIdentifierInput,

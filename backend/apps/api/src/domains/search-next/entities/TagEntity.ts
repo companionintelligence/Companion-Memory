@@ -9,6 +9,8 @@ import {
   Unique,
 } from 'typeorm';
 
+import { type TagKind } from '../types';
+
 import { type EntityTag, EntityTagEntity } from './EntityTagEntity';
 
 @Entity({ schema: 'ci_search', name: 'tags' })
@@ -25,6 +27,18 @@ export class TagEntity {
 
   @Column({ name: 'user_id', type: 'uuid' })
   userId!: string;
+
+  // Taxonomy LEVEL (20260916025313_planning_tag_taxonomy). NULL = untyped,
+  // the state of every tag that predates this column. Orthogonal to
+  // EntityTagEntity.level -- see that class's own note.
+  @Column({ type: 'text', nullable: true })
+  kind!: TagKind | null;
+
+  @Column({ type: 'boolean', default: false })
+  muted!: boolean;
+
+  @Column({ name: 'is_base', type: 'boolean', default: false })
+  isBase!: boolean;
 
   @OneToMany(() => EntityTagEntity, (entityTag) => entityTag.tag)
   entities?: EntityTagEntity[];
@@ -44,6 +58,9 @@ export class TagEntity {
       label: entity.label,
       description: entity.description,
       userId: entity.userId,
+      kind: entity.kind,
+      muted: entity.muted,
+      isBase: entity.isBase,
       entities: entity.entities ? entity.entities.map((et) => EntityTagEntity.toEgressType(et)) : undefined,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,

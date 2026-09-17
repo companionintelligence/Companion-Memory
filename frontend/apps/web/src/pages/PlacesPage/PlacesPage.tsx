@@ -456,7 +456,7 @@ function KnownPlacesCard({
 }
 
 export function PlacesPage() {
-  usePageTitle('Places - Companion Intelligence');
+  usePageTitle('Places - Companion Memory');
 
   const { isMobile } = useDeviceLayout();
   const navigate = useNavigate();

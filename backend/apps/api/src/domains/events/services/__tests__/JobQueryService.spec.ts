@@ -298,7 +298,14 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
   // A run-unique marker folded into every seeded job's queue/name so this
   // suite's assertions never see another worker's (or a live appliance's) rows
   // in the same shared `pgboss.job` table.
-  const marker = uuidv7().slice(0, 8);
+  //
+  // Deliberately NOT a uuid prefix. `search` also matches `job.id::text ILIKE`,
+  // and uuidv7 is time-ordered — so a marker taken from the first 8 hex digits
+  // of one uuid matches the id of every other uuid minted in the same window,
+  // including this suite's own fixtures. That made the pagination assertions
+  // fail intermittently against a row nobody searched for. The `zz` prefix
+  // cannot appear in a uuid, so the term can only match what it was folded into.
+  const marker = `zzjq-${uuidv7().slice(-8)}`;
   const searchTerm = `zzsearch-${marker}`;
   const otherUserId = uuidv7();
   // Two rows whose category comes from their QUEUE rather than their event
@@ -484,11 +491,21 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
   });
 
   it('resolves category through the JOB_TYPES taxonomy, not a literal string match', async () => {
-    const result = await service.list(CTX, { category: 'search' });
+    // Both filters, deliberately. `category: 'search'` alone returns a page of
+    // every search-category job the user owns, and against a database with real
+    // traffic in it this suite's own `note.created` row is simply not on the
+    // first page — the assertion then fails for a reason that has nothing to do
+    // with the taxonomy. Pinning `type` to the exact event name scopes the read
+    // to the seeded row while still proving the point: `note.created` is not the
+    // literal string 'search', so a category filter that string-matched instead
+    // of resolving through JOB_TYPES would return nothing here.
+    const mapped = await service.list(CTX, { category: 'search', type: 'note.created' });
+    expect(mapped.items.map((i) => i.event)).toContain('note.created');
 
-    const events = result.items.map((i) => i.event);
-    expect(events).toContain('note.created'); // mapped to category 'search'
-    expect(events).not.toContain(`${marker}.uncategorized`); // not in JOB_TYPES at all
+    // And the other direction: an event absent from JOB_TYPES entirely must not
+    // be swept into a category by a loose match.
+    const unmapped = await service.list(CTX, { category: 'search', search: marker });
+    expect(unmapped.items.map((i) => i.event)).not.toContain(`${marker}.uncategorized`);
   });
 
   it('never returns a row this same response labels with a DIFFERENT category', async () => {

@@ -30,6 +30,7 @@ type ResourceType =
   | 'receipt'
   | 'receipt-line-item'
   | 'relationship'
+  | 'reminder'
   | 'schedule-candidate'
   | 'summary'
   | 'saved-search'

@@ -13,14 +13,22 @@
 # operator), so this file relies on that variable always being set rather
 # than supplying its own fallback.
 #
-# hbpe-service also resets devices/group_add to empty. Compose merges
-# list-valued keys across -f files by CONCATENATION, so a plain override
-# cannot remove docker-compose.production.yml's ROCm device passthrough
-# (/dev/kfd, /dev/dri, group_add: [video]) — only the Compose Specification's
-# `!reset` tag (Docker Compose CLI >= 2.24) actually clears a list. Without
-# this, `docker compose up` hard-fails ("no such device") on every desktop
-# that isn't an AMD ROCm box. GPU-variant image selection is out of scope for
-# v1 — this always runs the cpu-capable image with no GPU device passthrough.
+# hbpe-service no longer needs to reset devices/group_add. It used to carry
+# `devices: !reset []` and `group_add: !reset []`, because
+# docker-compose.production.yml declared ROCm device passthrough (/dev/kfd,
+# /dev/dri, group_add: [video]) unconditionally and Compose merges list-valued
+# keys across -f files by CONCATENATION — a plain override cannot remove list
+# entries, so only the Compose Specification's `!reset` tag (Docker Compose CLI
+# >= 2.24) could clear them, and without it `docker compose up` hard-failed
+# ("no such device") on every desktop that isn't an AMD ROCm box. Production no
+# longer forces those devices — passthrough moved to the opt-in
+# docker-compose.rocm.yml overlay, which the desktop never layers in — so there
+# is nothing left to reset and the two `!reset` lines are gone. NOTE the
+# >= 2.24 requirement is still enforced by compose_version_error() in
+# src-tauri/src/stack_manager.rs; nothing in this file needs it any more, but
+# that gate is a separate call and is not touched here. GPU-variant image
+# selection is out of scope for v1 — this always runs the cpu-capable image
+# with no GPU device passthrough.
 #
 # api also gets OIDC_ISSUER_URL/APP_BASE_URL, which no other compose file sets
 # (map-valued `environment:` merges by key across -f files, unlike the
@@ -65,5 +73,3 @@ services:
     image: ghcr.io/companionintelligence/companion/setup-secrets:${CI_SERVER_IMAGE_TAG}
   hbpe-service:
     image: ghcr.io/companionintelligence/companion/hbpe-service:${CI_SERVER_IMAGE_TAG}
-    devices: !reset []
-    group_add: !reset []

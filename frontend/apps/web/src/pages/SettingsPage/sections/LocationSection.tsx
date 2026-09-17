@@ -214,8 +214,9 @@ export function LocationSection() {
                 leave. iOS shows the blue location indicator; Android shows a persistent notification.
               </span>
               <span className="mt-2 block">
-                This needs Always Allow, not While Using. Locations go only to your Companion server, never
-                ads. You can stay on While Using and keep using Companion.
+                iOS asks twice: Allow While Using the App, then Always Allow. If the second prompt does not
+                appear, use Open Settings and set Location to Always. Locations go only to your Companion
+                server, never ads. You can stay on While Using and keep using Companion.
               </span>
             </AlertDialog.Description>
           </AlertDialog.Header>

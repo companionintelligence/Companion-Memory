@@ -22,7 +22,7 @@ describe('AppSchema', () => {
   it('declares every table from sync-rules.yaml', () => {
     const names = AppSchema.tables.map((t) => t.name).sort();
 
-    expect(names).toEqual(['files', 'messages', 'notes', 'tags', 'threads']);
+    expect(names).toEqual(['entities', 'events', 'files', 'messages', 'notes', 'tags', 'threads']);
   });
 
   // Column sets mirror infrastructure/powersync/sync-rules.yaml's `data` selects
@@ -66,5 +66,75 @@ describe('AppSchema', () => {
       'updated_at',
       'user_id',
     ]);
+  });
+
+  it('events matches the user_data bucket select (event_id aliased to id)', () => {
+    expect(columnNames('events').sort()).toEqual([
+      'capture_tick_id',
+      'category',
+      'created_at',
+      'end_time',
+      'event_type',
+      'is_all_day',
+      'is_inferred',
+      'is_predicted',
+      'is_private',
+      'observed_at',
+      'parent_event_id',
+      'priority',
+      'sharing_level',
+      'source_id',
+      'source_system',
+      'source_type',
+      'start_time',
+      'status',
+      'sync_period',
+      'task_id',
+      'updated_at',
+      'user_id',
+    ]);
+  });
+
+  // The two columns this asserts the ABSENCE of are the point of the projection,
+  // not an oversight. `metadata` is the raw capture payload — window titles, cwd,
+  // established connections — and never syncs; `duration_minutes` is GENERATED and
+  // Postgres does not replicate it under this publication (pubgencols='n'), so
+  // declaring it would create a column that silently stays null forever.
+  it('events does not mirror the raw capture payload or the generated column', () => {
+    expect(columnNames('events')).not.toContain('metadata');
+    expect(columnNames('events')).not.toContain('duration_minutes');
+  });
+
+  it('entities matches the user_data bucket select (entity_id aliased to id)', () => {
+    expect(columnNames('entities').sort()).toEqual([
+      'created_at',
+      'description',
+      'entity_type',
+      'is_active',
+      'is_archived',
+      'linked_id',
+      'linked_table',
+      'name',
+      'sync_period',
+      'updated_at',
+      'user_id',
+    ]);
+  });
+
+  // ci.entities is the whole entity graph server-side — people, places, things,
+  // with names, birth dates, geography and dossiers. Only the Event-typed slice
+  // syncs, and only the columns needed to label an event. Anything here that
+  // looks like the rest of that table means the projection widened by accident.
+  it('entities carries no personal-graph columns', () => {
+    for (const column of [
+      'first_name',
+      'last_name',
+      'birth_date',
+      'dossier',
+      'location_point',
+      'search_vector',
+    ]) {
+      expect(columnNames('entities')).not.toContain(column);
+    }
   });
 });

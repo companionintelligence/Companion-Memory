@@ -36,6 +36,7 @@ export {
   HOME_GEOFENCE_RADIUS_METERS,
   LOCATION_ENABLED_STORAGE_KEY,
   LOCATION_MODE_CHANGE_EVENT,
+  LOCATION_NEEDS_SETTINGS_EVENT,
   LOCATION_MODE_STORAGE_KEY,
   LOCATION_TRACKING_MODES,
   MIN_DISTANCE_METERS,
@@ -56,6 +57,7 @@ export {
   newNoteId,
   positionSourceId,
   publishLocationTrackingMode,
+  publishLocationNeedsSettingsUpgrade,
   readLocationTrackingMode,
   rememberQueuedNote,
   writeLocationTrackingMode,
@@ -133,6 +135,7 @@ export {
   getCurrentDeviceLocation,
   getLaunchUrl,
   getNativeCurrentLocation,
+  getNativeLocationAuthorization,
   hasNotificationPermission,
   hideSplashScreen,
   isBarcodeScanError,
@@ -141,6 +144,7 @@ export {
   openNativeAppSettings,
   openNativeLocationSettings,
   removeBackgroundLocationWatcher,
+  requestNativeLocationAuthorization,
   requestNotificationPermission,
   scanQrCode,
   scheduleLocalNotification,
@@ -157,6 +161,7 @@ export type {
   DeviceLocationErrorCode,
   LocalNotification,
   NativeCurrentLocation,
+  NativeLocationAuthorization,
 } from './src/utils/nativeBridge';
 export { BarcodeScanError, DeviceLocationError } from './src/utils/nativeBridge';
 export {

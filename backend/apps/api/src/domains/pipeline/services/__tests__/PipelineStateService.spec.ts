@@ -645,3 +645,46 @@ describe('PipelineStateService.coverage', () => {
     expect(`${sql} ${JSON.stringify(params)}`).toContain(STAGE_ID);
   });
 });
+
+describe('PipelineStateService.reopen', () => {
+  function make(returning: Array<{ entity_id: string }>) {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const query = jest.fn(async (raw: string, params: unknown[] = []) => {
+      statements.push({ sql: raw.replace(/\s+/g, ' ').trim(), params });
+
+      return returning;
+    });
+    const logger = {
+      setContext: jest.fn(),
+      log: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      debug: jest.fn(),
+    };
+
+    return { service: new PipelineStateService({ query } as never, logger as never), statements };
+  }
+
+  it('sets terminal rows back to version 0 — the value a fresh claim carries — and reports how many moved', async () => {
+    const { service, statements } = make([{ entity_id: srcId(1) }, { entity_id: srcId(2) }]);
+
+    await expect(service.reopen(ENTITY_TYPE, STAGE_ID, [srcId(1), srcId(2), srcId(1)])).resolves.toBe(2);
+
+    expect(statements).toHaveLength(1);
+    const { sql, params } = statements[0];
+
+    expect(sql).toMatch(/UPDATE ci\.pipeline_state ps SET stage_version = 0/);
+    // Only decided rows: a running row is a live claim, a failed row has its own gate.
+    expect(sql).toMatch(/ps\.status IN \('done', 'skipped'\)/);
+    expect(sql).toMatch(/ps\.stage_version > 0/);
+    // Deduplicated, in the contract order.
+    expect(params).toEqual([ENTITY_TYPE, STAGE_ID, [srcId(1), srcId(2)]]);
+  });
+
+  it('issues no statement for an empty id list', async () => {
+    const { service, statements } = make([]);
+
+    await expect(service.reopen(ENTITY_TYPE, STAGE_ID, [])).resolves.toBe(0);
+    expect(statements).toHaveLength(0);
+  });
+});

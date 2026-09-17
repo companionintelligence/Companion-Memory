@@ -5,6 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { FileService } from '@ci/domains/files';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { FileItemsLoader } from '../loaders/FileItemsLoader';
 import { PreviewLoader } from '../loaders/PreviewLoader';
 import { TagLoader } from '../loaders/TagLoader';
@@ -100,6 +101,13 @@ export class FileResolver {
   }
 
   @Mutation(() => FileType, { nullable: true })
+  // fileService.update() writes only title/description (UpdateFileDto = Pick<..., 'title' |
+  // 'description' | 'externalUpdatedAt'>, and this resolver sends just the first two) on the row
+  // matching `id`. Variants (ORIGINAL/PREVIEW/THUMBNAIL) are separate FileEntity rows linked by
+  // `parentId`, so this can't reach or drop a sibling variant, and it never touches FileEntity's
+  // own `deletedAt` (DeleteDateColumn) or `variant` columns — a soft-deleted row stays hidden from
+  // find()/findOne() either way, and this mutation cannot flip that state.
+  @GraphqlPrivacy({ destructive: false })
   async updateFile(
     @Context() context: RequestContext,
     @Args('input') input: UpdateFileInput,

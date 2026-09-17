@@ -22,6 +22,7 @@ import {
   adoptIngestIdentity,
 } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { ItemAcquisitionLoader } from '../loaders/ItemAcquisitionLoader';
 import { ItemFileLoader } from '../loaders/ItemFileLoader';
 import { ItemIdentifierLoader } from '../loaders/ItemIdentifierLoader';
@@ -549,6 +550,7 @@ export class ItemResolver {
   }
 
   @Mutation(() => CreateItemPayload)
+  @GraphqlPrivacy({ destructive: false })
   async createItem(
     @Context() context: RequestContext,
     @Args('input') input: CreateItemInput,
@@ -592,6 +594,7 @@ export class ItemResolver {
    * created-or-existing items in input order.
    */
   @Mutation(() => [ItemType])
+  @GraphqlPrivacy({ destructive: false })
   async createThings(
     @Context() context: RequestContext,
     @Args('input', { type: () => [CreateThingInput] }, new MaxArraySizePipe())
@@ -626,6 +629,7 @@ export class ItemResolver {
   }
 
   @Mutation(() => UpdateItemPayload)
+  @GraphqlPrivacy({ destructive: false })
   async updateItem(
     @Context() context: RequestContext,
     @Args('input') input: UpdateItemInput,
@@ -664,6 +668,7 @@ export class ItemResolver {
   }
 
   @Mutation(() => DeleteByIdPayload)
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteItem(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,
@@ -692,6 +697,9 @@ export class ItemResolver {
    * tombstones the sources. See ObjectMergeService.
    */
   @Mutation(() => MergeItemsPayload)
+  // ObjectMergeService tombstones each source and deletes the sources' search rows. One-way: the
+  // schema has no unmerge.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async mergeItems(
     @Context() context: RequestContext,
     @Args('input') input: MergeItemsInput,
@@ -740,6 +748,8 @@ export class ItemResolver {
   @Mutation(() => Boolean, {
     description: 'Mark a suggested duplicate group as distinct things, so it is never re-proposed',
   })
+  // Writes entity_merge_blocks rows to suppress a re-proposal; touches no item or search data.
+  @GraphqlPrivacy({ destructive: false })
   async rejectItemDuplicates(
     @Context() context: RequestContext,
     @Args('itemIds', { type: () => [ID] }) itemIds: string[],
@@ -762,6 +772,7 @@ export class ItemResolver {
    * silently re-pointing — the right fix is `mergeItems`.
    */
   @Mutation(() => [ObjectIdentifierType])
+  @GraphqlPrivacy({ destructive: false })
   async addItemIdentifier(
     @Context() context: RequestContext,
     @Args('input') input: AddItemIdentifierInput,
@@ -805,6 +816,9 @@ export class ItemResolver {
   }
 
   @Mutation(() => [ObjectIdentifierType])
+  // Same hard delete as removePersonIdentifier, via ObjectIdentifierService.removeForSubject.
+  // Declared so the two siblings cannot drift apart on a rename.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removeItemIdentifier(
     @Context() context: RequestContext,
     @Args('input') input: RemoveItemIdentifierInput,
@@ -832,6 +846,9 @@ export class ItemResolver {
    * by passing a null `productId`.
    */
   @Mutation(() => UpdateItemPayload)
+  // Points productId at a catalog model, or clears it (unlink) — a plain field update either way;
+  // no row is removed.
+  @GraphqlPrivacy({ destructive: false })
   async linkItemToProduct(
     @Context() context: RequestContext,
     @Args('input') input: LinkItemToProductInput,

@@ -23,7 +23,8 @@ export const GET_PROVIDERS = gql`
           providerKeys {
             id
             clientId
-            clientSecret
+            hasClientSecret
+            clientSecretHint
           }
         }
       }

@@ -1,7 +1,9 @@
 import type { ScheduleEvent } from '@/api/useScheduleService';
+import { detectBrowserTimeZone } from '@/lib/timezone';
 
 import { isBrowserCapture } from './scheduleClusters';
 import { eventFallsOnDay } from './scheduleToTimeline';
+import { zonedAddDays, zonedSameDay, zonedStartOfDay } from './zonedClock';
 
 export type NowNextStatus = 'now' | 'next' | 'later';
 
@@ -17,26 +19,28 @@ export interface NowNextPick {
   done: boolean;
 }
 
-export function startOfLocalDay(date: Date): Date {
-  const day = new Date(date);
-  day.setHours(0, 0, 0, 0);
-
-  return day;
+/**
+ * Day boundaries and clock reading, in the zone the surface draws in.
+ *
+ * `zone` defaults to the browser's so a caller with no profile zone to hand
+ * (TaskSlate's slot label) keeps the reading it always had; the schedule
+ * surface passes the owner's profile zone — see {@link ./zonedClock} for why
+ * that is the source of truth.
+ */
+export function startOfLocalDay(date: Date, zone: string = detectBrowserTimeZone()): Date {
+  return zonedStartOfDay(date, zone);
 }
 
-export function addDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-
-  return next;
+export function addDays(date: Date, days: number, zone: string = detectBrowserTimeZone()): Date {
+  return zonedAddDays(date, days, zone);
 }
 
-export function sameLocalDay(a: Date, b: Date): boolean {
-  return startOfLocalDay(a).getTime() === startOfLocalDay(b).getTime();
+export function sameLocalDay(a: Date, b: Date, zone: string = detectBrowserTimeZone()): boolean {
+  return zonedSameDay(a, b, zone);
 }
 
-export function formatClock(date: Date): string {
-  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+export function formatClock(date: Date, zone: string = detectBrowserTimeZone()): string {
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: zone });
 }
 
 function eventEnd(event: ScheduleEvent): Date {
@@ -51,9 +55,13 @@ function eventEnd(event: ScheduleEvent): Date {
  * Calendar blocks for a local day, oldest first. Browser-capture ticks stay
  * out — they belong in the week grid, not in a three-line "what's next".
  */
-export function eventsOnDay(events: readonly ScheduleEvent[], day: Date): ScheduleEvent[] {
+export function eventsOnDay(
+  events: readonly ScheduleEvent[],
+  day: Date,
+  zone: string = detectBrowserTimeZone(),
+): ScheduleEvent[] {
   return events
-    .filter((event) => eventFallsOnDay(event, day) && !isBrowserCapture(event))
+    .filter((event) => eventFallsOnDay(event, day, zone) && !isBrowserCapture(event))
     .sort((a, b) => {
       if (a.isAllDay !== b.isAllDay) {
         return a.isAllDay ? -1 : 1;
@@ -69,14 +77,20 @@ export function eventsOnDay(events: readonly ScheduleEvent[], day: Date): Schedu
  * Other days skip the "already ended" filter and just show the first `limit`
  * blocks — you are looking ahead or back, not asking "what do I do now".
  */
-export function pickNowNext(events: readonly ScheduleEvent[], day: Date, now: Date, limit = 3): NowNextPick {
-  const dayEvents = eventsOnDay(events, day);
+export function pickNowNext(
+  events: readonly ScheduleEvent[],
+  day: Date,
+  now: Date,
+  limit = 3,
+  zone: string = detectBrowserTimeZone(),
+): NowNextPick {
+  const dayEvents = eventsOnDay(events, day, zone);
 
   if (dayEvents.length === 0) {
     return { items: [], remaining: 0, done: false };
   }
 
-  const lookingAtToday = sameLocalDay(day, now);
+  const lookingAtToday = sameLocalDay(day, now, zone);
   const relevant = lookingAtToday
     ? dayEvents.filter((event) => event.isAllDay || eventEnd(event).getTime() > now.getTime())
     : dayEvents;

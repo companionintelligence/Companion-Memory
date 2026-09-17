@@ -7,7 +7,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/hooks';
 
 export function OpenIDCallbackPage() {
-  usePageTitle('Complete Connection - Companion Intelligence');
+  usePageTitle('Complete Connection - Companion Memory');
 
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();

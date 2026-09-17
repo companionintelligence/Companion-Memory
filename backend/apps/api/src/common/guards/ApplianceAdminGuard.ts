@@ -25,34 +25,43 @@ import { DataSource } from 'typeorm';
  *
  * ── Why not {@link AdminOnlyGuard} ─────────────────────────────────────────
  *
- * Because applying it today would take the Jobs page's switches away from every
- * fresh install, permanently. Nothing in application code ever writes
- * `role = 'admin'`: the only path is migration 20260825233952, which promotes
- * the earliest EXISTING user and only when no admin exists. On an upgrade that
- * finds the owner; on a fresh install it runs against an empty `ci.users`, the
- * first signup lands on the column default `'user'`, and the appliance has no
- * admin and no in-app way to mint one. `AdminOnlyGuard`'s own doc says so, and
- * cites it as the reason `/jobs` is not gated.
+ * This guard was written when applying {@link AdminOnlyGuard} would have taken
+ * the Jobs page's switches away from every fresh install, permanently, because
+ * nothing in application code ever wrote `role = 'admin'` — the only path being
+ * migration 20260825233952, which promotes the earliest EXISTING user and so
+ * matched nothing on an empty `ci.users`.
  *
- * So this guard asks the question that is actually answerable: **is there an
- * admin to require?** If yes, require one. If no, the appliance is unclaimed and
- * the request is admitted — exactly today's behaviour, not worse. That makes it
- * a strict tightening on every appliance where it can mean anything, with no
- * install left locked out of its own job controls.
+ * **That is fixed** (`UserService.claimApplianceIfUnowned` promotes the account
+ * that claims an unowned appliance; migration 20260910133657 heals the installs
+ * the original backfill could not reach), so the original objection no longer
+ * holds. This guard stays anyway, and the difference from `AdminOnlyGuard` is
+ * now a deliberate choice about failure mode rather than a workaround:
+ *
+ * It asks **is there an admin to require?** If yes, require one. If no, the
+ * appliance is unclaimed and the request is admitted. For an appliance-wide
+ * control plane that is the honest answer — an unclaimed box's job controls
+ * should not be inert — whereas `AdminOnlyGuard` fails closed because the
+ * routes behind it hand out arbitrary local command execution, where
+ * "unclaimed" is not a reason to grant anything.
+ *
+ * With bootstrapping in place the permissive branch is now transitional rather
+ * than the steady state: a fresh appliance has an admin from its first account
+ * onward, so the branch only fires in the window before anyone can authenticate
+ * at all, or if an owner later deletes their account (and the next account
+ * created re-claims the box, by the same rule).
  *
  * ── What this is NOT ───────────────────────────────────────────────────────
  *
- * It is not a substitute for admin bootstrapping, and it must not be read as
- * closing that gap. On an appliance with no admin this admits everyone, and
- * that is the honest state of the system rather than a decision made here.
- * Once a first-run promotion exists in application code, every appliance has an
- * admin and this becomes a plain admin gate with no change to this file.
+ * It was never a substitute for admin bootstrapping, and it did not close that
+ * gap — a first-run promotion in application code did, and as this file
+ * predicted, that turned this into a plain admin gate with no change to the
+ * code below.
  *
- * It is also deliberately NOT applied to `AdminOnlyGuard`'s existing routes.
- * Widening that guard the same way would LOOSEN the MCP server-config routes
- * (stdio transport is arbitrary local command execution), which are today
- * unreachable rather than open on a fresh appliance. Tightening one surface must
- * not silently open another.
+ * It is still deliberately NOT applied to `AdminOnlyGuard`'s routes. Widening
+ * that guard the same way would LOOSEN the MCP server-config routes on any
+ * appliance that has lost its admin, handing arbitrary local command execution
+ * to whoever is signed in. Tightening one surface must not silently open
+ * another.
  *
  * Must run after an auth guard that populates `request.user` — combine as
  * `@UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)`. Like its sibling it

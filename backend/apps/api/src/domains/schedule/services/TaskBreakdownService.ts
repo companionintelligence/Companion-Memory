@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { type RequestContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { RecallService } from '@ci/domains/agent';
-import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm';
+import { OllamaService } from '@ci/domains/llm';
 import { UserContextService } from '@ci/domains/memory';
 import { estimateActivityDurationMinutes, PlacementService } from '@ci/domains/personalization';
 
@@ -296,7 +296,7 @@ export class TaskBreakdownService {
         // No tools: this is a pure text transform and a tool call here would only
         // be the model wandering off. The schema (not the bare 'json' string) is
         // what makes the output usable — see RESPONSE_JSON_SCHEMA.
-        { model: UTILITY_MODEL, enableTools: false, format: RESPONSE_JSON_SCHEMA, signal },
+        { tier: 'utility', enableTools: false, format: RESPONSE_JSON_SCHEMA, signal },
       );
 
       content = response.message.content;

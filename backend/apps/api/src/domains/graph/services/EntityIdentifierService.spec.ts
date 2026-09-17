@@ -10,7 +10,7 @@ const ENTITY = '00000000-0000-0000-0000-0000000000bb';
  * batch specs can assert the chunked-INSERT shape.
  */
 function makeInsertBuilder() {
-  const calls = { values: [] as unknown[], valuesCalls: [] as unknown[][], orIgnore: 0 };
+  const calls = { values: [] as unknown[], valuesCalls: [] as unknown[][], orIgnore: 0, returning: 0 };
   const builder: Record<string, unknown> = {};
   builder.insert = () => builder;
   builder.into = () => builder;
@@ -27,9 +27,15 @@ function makeInsertBuilder() {
     return builder;
   };
 
-  // Simulate ON CONFLICT DO NOTHING: only return identifiers for the inserted
-  // rows. Default to "all inserted"; tests can override.
-  builder.execute = async () => ({ identifiers: (calls.values as unknown[]).map(() => ({})) });
+  builder.returning = () => {
+    calls.returning += 1;
+
+    return builder;
+  };
+
+  // Simulate ON CONFLICT DO NOTHING: only return rows for the inserted values.
+  // Default to "all inserted"; tests can override.
+  builder.execute = async () => ({ raw: (calls.values as unknown[]).map(() => ({})) });
 
   return { builder, calls };
 }
@@ -136,7 +142,7 @@ describe('EntityIdentifierService.upsertForEntity', () => {
   it('reports only the rows actually inserted (idempotent re-run)', async () => {
     const insertBuilder = makeInsertBuilder();
     // Simulate a re-run where both rows already existed -> conflict -> 0 inserted.
-    insertBuilder.builder.execute = async () => ({ identifiers: [] });
+    insertBuilder.builder.execute = async () => ({ raw: [] });
     const { service } = makeService({ insertBuilder });
 
     const inserted = await service.upsertForEntity(OWNER, ENTITY, {
@@ -283,7 +289,7 @@ describe('EntityIdentifierService.upsertForEntities', () => {
 
   it('reports 0 inserted on an idempotent re-send (every row conflicts)', async () => {
     const insertBuilder = makeInsertBuilder();
-    insertBuilder.builder.execute = async () => ({ identifiers: [] });
+    insertBuilder.builder.execute = async () => ({ raw: [] });
     const { service } = makeService({ insertBuilder });
 
     const inserted = await service.upsertForEntities(OWNER, [
@@ -315,7 +321,7 @@ describe('EntityIdentifierService.upsertForEntities', () => {
     const execute = jest
       .fn()
       .mockRejectedValueOnce(new Error('deadlock detected'))
-      .mockImplementation(async () => ({ identifiers: [{}] }));
+      .mockImplementation(async () => ({ raw: [{}] }));
     insertBuilder.builder.execute = execute;
     const { service } = makeService({ insertBuilder });
 

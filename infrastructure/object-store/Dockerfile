@@ -8,8 +8,14 @@
 # MinIO's only version scheme is the RELEASE.<timestamp> tag; there is no
 # semver tag to use instead. Override MINIO_VERSION to move the pin
 # deliberately, and re-verify the object store still boots after doing so.
+#
+# Pulled from quay.io, not Docker Hub: docker.io/minio/minio no longer exists
+# (every tag, :latest included, answers "pull access denied"), which broke the
+# publish build. MinIO's quay.io mirror carries the same RELEASE tags; this one's
+# amd64 and arm64 layers are identical (rootfs diff_ids) to the base inside the
+# already-published companion/object-store:2026.9.10 image.
 ARG MINIO_VERSION=RELEASE.2025-04-22T22-12-26Z
-FROM minio/minio:${MINIO_VERSION}
+FROM quay.io/minio/minio:${MINIO_VERSION}
 
 COPY LICENSE.md /LICENSE.md
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh

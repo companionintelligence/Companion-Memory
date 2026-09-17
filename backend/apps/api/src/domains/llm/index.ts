@@ -9,9 +9,11 @@ import { ConversationModule } from '@ci/domains/conversations';
 import { DailyMetricsModule } from '@ci/domains/daily-metrics';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
+import { GeocodeModule } from '@ci/domains/geocode';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { PlanningModule } from '@ci/domains/planning';
+import { PositionModule } from '@ci/domains/position';
 import { PredictionsModule } from '@ci/domains/predictions';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { SummariesModule } from '@ci/domains/summaries';
@@ -21,6 +23,7 @@ import { BrowserActivityInsightPreferenceModule } from './browser-activity-insig
 import { LlmEndpointController } from './controllers/LlmEndpointController';
 import { OllamaController } from './controllers/OllamaController';
 import { LlmCoreModule } from './core.module';
+import { ImageDescriptionSweepCron } from './cron/ImageDescriptionSweepCron';
 import { ImageDescriptionPreferenceModule } from './image-description-preference.module';
 import { BrowserActivityInsightListener } from './listeners/BrowserActivityInsightListener';
 import { ChatGenerateListener } from './listeners/ChatGenerateListener';
@@ -28,8 +31,11 @@ import { CvDetectionsListener } from './listeners/CvDetectionsListener';
 import { ImageDescriptionBackfillListener } from './listeners/ImageDescriptionBackfillListener';
 import { ImageDescriptionListener } from './listeners/ImageDescriptionListener';
 import { ThingVisionListener } from './listeners/ThingVisionListener';
+import { CaptureContextService } from './services/CaptureContextService';
 import { ChatGenerationBroker } from './services/ChatGenerationBroker';
 import { ChatTurnService } from './services/ChatTurnService';
+import { InteractiveChatYieldGate } from './services/InteractiveChatYieldGate';
+import { VisionRenditionService } from './services/VisionRenditionService';
 
 /**
  * @internal
@@ -43,10 +49,12 @@ import { ChatTurnService } from './services/ChatTurnService';
     DailyMetricsModule,
     EventsModule,
     FilesModule,
+    GeocodeModule,
     IntelligenceModule,
     ImageDescriptionPreferenceModule,
     MemoryModule,
     PlanningModule,
+    PositionModule,
     PredictionsModule,
     SearchNextModule,
     SummariesModule,
@@ -59,7 +67,11 @@ import { ChatTurnService } from './services/ChatTurnService';
     ChatGenerateListener,
     CvDetectionsListener,
     ImageDescriptionListener,
+    VisionRenditionService,
+    CaptureContextService,
     ImageDescriptionBackfillListener,
+    ImageDescriptionSweepCron,
+    InteractiveChatYieldGate,
     ThingVisionListener,
   ],
   controllers: [OllamaController, LlmEndpointController],
@@ -70,7 +82,15 @@ export class LLMModule {}
 export { LlmCoreModule } from './core.module';
 export { OllamaService } from './services/OllamaService';
 export { PROMPT_MODEL, UTILITY_MODEL, type ChatRequestContext } from './services/OllamaService';
-export { LLM_QUEUE, LLM_QUEUE_OPTIONS } from './constants';
+export { ResidencyPlannerService, type ResidencyReport } from './services/ResidencyPlannerService';
+export { type UtilityModelChoice, type UtilityPlan } from './residency/footprint';
+export {
+  INTERACTIVE_CHAT_YIELD_GATE,
+  LLM_BACKGROUND_QUEUE,
+  LLM_BACKGROUND_QUEUE_OPTIONS,
+  LLM_QUEUE,
+  LLM_QUEUE_OPTIONS,
+} from './constants';
 export {
   ANSWER_SUPPORT_LEVELS,
   type AnswerSupport,

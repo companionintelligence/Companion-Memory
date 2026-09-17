@@ -1,1 +1,1 @@
-export { ForecastStrip } from './ForecastStrip';
+export { ForecastStrip, SlotTooltip } from './ForecastStrip';

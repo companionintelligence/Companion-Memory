@@ -22,6 +22,7 @@ import { UserService } from '@ci/domains/user';
 import { CsrfGuard } from '../guards/CsrfGuard';
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
+import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 import { LoginThrottleService } from '../services/LoginThrottleService';
 import { JwtPayload, LoginDto } from '../types';
 import {
@@ -44,6 +45,7 @@ export class SessionController {
     private readonly authService: AuthService,
     private readonly csrfService: CsrfService,
     private readonly loginThrottle: LoginThrottleService,
+    private readonly hubBridge: HubForwardAuthBridgeService,
   ) {}
 
   /**
@@ -72,6 +74,28 @@ export class SessionController {
     // anon-scoped (no session cookie), so the anon token it receives is exactly what
     // the guard's cookie-less branch verifies.
     return { csrfToken: token };
+  }
+
+  /**
+   * Verified Hub identity for this request, or `{ username: null }` when
+   * forward-auth is off / headers are missing. The SPA uses this to refuse a
+   * stale Memory home when Traefik already named a different person.
+   */
+  @Get('hub-identity')
+  @HttpCode(200)
+  hubIdentity(@Req() req: Request) {
+    return { username: this.hubBridge.verifyUsername(req) };
+  }
+
+  /**
+   * If Traefik named a Hub person who does not match the Memory cookie, replace
+   * the session (and CSRF) so the next refresh/query is already the right user.
+   */
+  @Post('hub-bridge')
+  @HttpCode(200)
+  @UseGuards(CsrfGuard)
+  async hubBridgeAlign(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    return this.hubBridge.alignSession(req, res);
   }
 
   @Post()

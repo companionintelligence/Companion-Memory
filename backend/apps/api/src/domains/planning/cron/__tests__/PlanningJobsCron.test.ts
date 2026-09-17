@@ -8,6 +8,7 @@ import { UserService } from '@ci/domains/user';
 
 import {
   PlanningEventNowEvent,
+  PlanningFireRemindersEvent,
   PlanningInboxScanEvent,
   PlanningTodoProcessEvent,
   PlanningTodoScanEvent,
@@ -79,7 +80,7 @@ describe('PlanningJobsCron fan-out audience', () => {
     );
   });
 
-  // All five schedules share `fanOut`, but each is a separate cron entry point:
+  // All six schedules share `fanOut`, but each is a separate cron entry point:
   // a future audience change made in one of them has to be made in all of them.
   it.each([
     ['enqueueTodoScans', PlanningTodoScanEvent, 'todo_scan'],
@@ -87,6 +88,7 @@ describe('PlanningJobsCron fan-out audience', () => {
     ['enqueueInboxScans', PlanningInboxScanEvent, 'inbox_scan'],
     ['enqueueEventNow', PlanningEventNowEvent, 'event_now'],
     ['enqueueVerifyDone', PlanningVerifyDoneEvent, 'verify_done'],
+    ['enqueueFireReminders', PlanningFireRemindersEvent, 'fire_reminders'],
   ] as const)('%s reaches onboarded users only', async (method, event, label) => {
     const { cron, send } = makeCron(POPULATION);
 

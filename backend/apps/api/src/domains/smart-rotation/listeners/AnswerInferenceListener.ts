@@ -27,8 +27,8 @@ import {
   isAboutSomethingElse,
   isNarratedVoice,
   isNonAnswer,
-  LLM_QUEUE,
-  LLM_QUEUE_OPTIONS,
+  LLM_BACKGROUND_QUEUE,
+  LLM_BACKGROUND_QUEUE_OPTIONS,
   OllamaService,
   parseInferredAnswer,
   PROMPT_MODEL,
@@ -41,7 +41,7 @@ const RECENT_ANSWER_FALLBACK = 5;
 
 /**
  * This call was previously unbounded — no signal, no timeout — so a hung or
- * slow-loading model held its job (and the single-slot LLM_QUEUE behind it)
+ * slow-loading model held its job (and the single-slot LLM_BACKGROUND_QUEUE behind it)
  * indefinitely, up to pg-boss's own 900s `expireInSeconds`. Observed on a real
  * appliance as `infer.question.answer` jobs dead-lettering with a raw "fetch
  * failed" and no useful diagnosis, under the SAME contention pattern documented
@@ -66,7 +66,7 @@ const INFERENCE_MAX_OUTPUT_TOKENS = 800;
 
 /**
  * Keep the model resident across the run (Ollama `keep_alive`). Answer
- * inference fires per-question on the same single-slot LLM_QUEUE as chat and
+ * inference fires per-question on the single-slot LLM_BACKGROUND_QUEUE next to
  * title generation, so an hour keeps it warm across that traffic rather than
  * reloading it inside this call's own budget.
  */
@@ -209,7 +209,10 @@ export class AnswerInferenceListener {
     this.logger.setContext(AnswerInferenceListener.name);
   }
 
-  @OnEvent(Events.INFER_QUESTION_ANSWER, { queue: LLM_QUEUE, queueOptions: LLM_QUEUE_OPTIONS })
+  @OnEvent(Events.INFER_QUESTION_ANSWER, {
+    queue: LLM_BACKGROUND_QUEUE,
+    queueOptions: LLM_BACKGROUND_QUEUE_OPTIONS,
+  })
   async inferQuestionAnswer(payload: EventPayloads[Events.INFER_QUESTION_ANSWER]) {
     const ownerId = payload.ownerId;
     if (!ownerId) {

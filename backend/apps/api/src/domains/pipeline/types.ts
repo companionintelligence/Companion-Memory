@@ -364,9 +364,12 @@ export type StageRef = Pick<Stage, 'id' | 'version'>;
  * which dead-letters it with the payload intact rather than letting `undefined`
  * flow into a SQL parameter and fail somewhere unrecognisable.
  *
- * The schemas are non-strict on purpose: the job envelope adds keys of its own
- * (`jobId`, and `name` is stripped by the dispatcher), and a future field must
- * not make old workers reject new jobs.
+ * The schemas are non-strict on purpose. The dispatcher strips `name` (the
+ * routing key) and adds nothing — the delivered payload is the domain's,
+ * verbatim. Non-strictness is for time, not for the envelope: a future field
+ * must not make old workers reject new jobs, and a replayed dead letter written
+ * by an older release may still carry keys this build has never heard of —
+ * including a stale `jobId` from before the bus stopped injecting one.
  */
 
 /** One slice: a bounded set of entity ids for one stage, for one user. */

@@ -1668,13 +1668,26 @@ export const WIZARD_SOURCES: WizardSource[] = [
       'Open the Walt Disney Privacy Center (link below) and submit a "Data Subject Rights" request.',
       'Choose "Access" or "Download my data" and provide your Disney+ account email.',
       'Verify your identity via the email link that arrives.',
-      'Wait up to 45 days for the data archive. Download and unzip.',
+      'Disney emails a download link when the report is ready — this can take up to 45 days.',
+      'Download the PDF report (`<request id>_Final.pdf`, e.g. `77VH23XCAN_Final.pdf`).',
       UPLOAD_STEP,
     ],
+    expectedFormat:
+      'The Disney "Data Subject Access Request" report PDF (`<request id>_Final.pdf`). The report is a PDF and nothing else; it is read with `pdftotext`, which the appliance ships.',
+    whatImported: [
+      'Titles watched — one event per play from the Disney+/ESPN+ "Titles Watched" table, with the day, the profile, the program and the series and season',
+    ],
+    caveats: [
+      'Disney records the day of each play, not the time; plays land at midnight UTC.',
+      'Disney often lists an episode twice for one day — once by number ("Episode 8") and once by title — and not always both, so both rows are imported as printed.',
+      'Only the titles-watched table is imported. The profile sheet, account, subscription, profile and payment details, customer-service history, the advertiser list and the parks, cruise, store and other business-unit sheets are skipped.',
+    ],
     inboxPath: 'disney_plus',
-    importerReady: false,
+    signature: ['*.pdf'],
+    importer: 'disney_plus',
+    importerReady: true,
     notes: [
-      'Disney+ has no self-serve download button — all exports go through their DSAR (Data Subject Access Request) portal. US Hulu subscribers are redirected to the Hulu portal. No importer yet.',
+      'Disney+ has no self-serve download button — all exports go through their DSAR (Data Subject Access Request) portal. US Hulu subscribers are redirected to the Hulu portal.',
     ],
   },
   {

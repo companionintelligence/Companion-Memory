@@ -5,6 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ConnectionService, ProviderKeyService } from '@ci/domains/connections';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { CreateProviderKeyInput } from '../inputs/CreateProviderKeyInput';
 import { UpdateProviderKeyInput } from '../inputs/UpdateProviderKeyInput';
 import { GlobalUID } from '../types/GlobalUID';
@@ -19,6 +20,9 @@ export class ProviderKeyResolver {
   ) {}
 
   @Mutation(() => ProviderKeyType)
+  // Stores an OAuth client id/secret used to connect to an external provider — not user memory
+  // data, but a credential, so sensitivity is raised above the 'personal' default.
+  @GraphqlPrivacy({ destructive: false, sensitivity: 'sensitive' })
   async createProviderKey(
     @Context() context: RequestContext,
     @Args('input') input: CreateProviderKeyInput,
@@ -47,6 +51,11 @@ export class ProviderKeyResolver {
   }
 
   @Mutation(() => ProviderKeyType, { nullable: true })
+  // Overwrites clientId/clientSecret — the old secret is unrecoverable after a rotation, but that is
+  // the intended effect of rotating a credential (existing connections are flagged needsReauth
+  // rather than broken silently), not the mergePeople/deleteTag class of accidental data loss.
+  // Sensitivity raised for the same reason as createProviderKey.
+  @GraphqlPrivacy({ destructive: false, sensitivity: 'sensitive' })
   async updateProviderKey(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) id: string,
@@ -72,6 +81,9 @@ export class ProviderKeyResolver {
   }
 
   @Mutation(() => Boolean)
+  // Deletes the stored credential outright and forces every active connection using this provider
+  // into needsReauth — a real capability loss on top of the row deletion.
+  @GraphqlPrivacy({ access: 'delete', destructive: true, sensitivity: 'sensitive' })
   async deleteProviderKey(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) id: string,

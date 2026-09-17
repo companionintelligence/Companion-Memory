@@ -7,6 +7,7 @@ import type { SearchService } from '@ci/domains/search-next';
 import type { TaskService } from '../TaskService';
 import {
   EventNowService,
+  PROCESS_BATCH_SIZE,
   PROCESS_TIMEOUT_MS,
   TodoProcessService,
   VerifyDoneService,
@@ -132,7 +133,10 @@ describe('EventNowService', () => {
       createQueryBuilder: jest.fn(() => makeEventQb([block])),
       save: jest.fn(async (row: EventEntity) => row),
     };
-    const taskService = { createPendingChange: jest.fn(async () => null) } as unknown as TaskService;
+    const taskService = {
+      createPendingChange: jest.fn(async () => null),
+      hasDeclinedChangeSince: jest.fn(async () => false),
+    } as unknown as TaskService;
 
     const service = new EventNowService(
       eventRepository as never,
@@ -173,7 +177,10 @@ describe('EventNowService', () => {
       save: jest.fn(async (row: EventEntity) => row),
     };
     const createPendingChange = jest.fn(async () => null);
-    const taskService = { createPendingChange } as unknown as TaskService;
+    const taskService = {
+      createPendingChange,
+      hasDeclinedChangeSince: jest.fn(async () => false),
+    } as unknown as TaskService;
 
     const service = new EventNowService(
       eventRepository as never,
@@ -196,6 +203,44 @@ describe('EventNowService', () => {
     expect(result).toEqual({ proposed: 1 });
   });
 
+  it('does not re-propose a cancellation the user has already dismissed', async () => {
+    // The ±2h window covers this block on ~4 consecutive hourly ticks, and
+    // createPendingChange only de-dupes against a row that is still `pending` —
+    // so a declined prompt came straight back on the next tick.
+    const searchService = makeSearchService([{ id: HIT_ID, type: 'communication' }]);
+    const dataSource = makeDataSource([
+      {
+        id: HIT_ID,
+        entity_type: 'communication',
+        name: 'Text from Sam',
+        snippet: 'I could not attend the dentist appointment today, they cancelled it.',
+        occurred_at: new Date(Date.now() - HOUR_MS),
+      },
+    ]);
+    const createPendingChange = jest.fn(async () => null);
+    const hasDeclinedChangeSince = jest.fn(async () => true);
+    const service = new EventNowService(
+      { createQueryBuilder: jest.fn(() => makeEventQb([makeBlock()])) } as never,
+      makeEventService([{ id: BLOCK_ID, title: 'Dentist appointment' }]),
+      { createPendingChange, hasDeclinedChangeSince } as unknown as TaskService,
+      searchService,
+      makePersonalizationService('hands_off') as never,
+      dataSource as never,
+      makeLogger(),
+    );
+
+    const result = await service.runForUser(CTX_USER);
+
+    expect(hasDeclinedChangeSince).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: CTX_USER }),
+      'task-1',
+      'event_revise',
+      expect.any(Date),
+    );
+    expect(createPendingChange).not.toHaveBeenCalled();
+    expect(result).toEqual({ proposed: 0 });
+  });
+
   it('ignores cancellation evidence from long before the block', async () => {
     const searchService = makeSearchService([{ id: HIT_ID, type: 'communication' }]);
     const dataSource = makeDataSource([
@@ -207,7 +252,10 @@ describe('EventNowService', () => {
         occurred_at: new Date(Date.now() - 5 * 365 * 24 * HOUR_MS),
       },
     ]);
-    const taskService = { createPendingChange: jest.fn(async () => null) } as unknown as TaskService;
+    const taskService = {
+      createPendingChange: jest.fn(async () => null),
+      hasDeclinedChangeSince: jest.fn(async () => false),
+    } as unknown as TaskService;
     const eventRepository = {
       createQueryBuilder: jest.fn(() => makeEventQb([makeBlock()])),
       save: jest.fn(async (row: EventEntity) => row),
@@ -237,16 +285,20 @@ describe('VerifyDoneService', () => {
     trustMode: 'cautious' | 'balanced' | 'hands_off';
     taskTitle: string;
     block?: EventEntity;
+    /** Whether the user has already dismissed this block's question. */
+    declined?: boolean;
   }) {
     const searchService = makeSearchService(opts.hits);
     const dataSource = makeDataSource(opts.rows);
     const personalizationService = makePersonalizationService(opts.trustMode);
     const complete = jest.fn(async () => ({ id: 'task-1', status: 'done' }));
     const createPendingChange = jest.fn(async () => null);
+    const hasDeclinedChangeSince = jest.fn(async () => opts.declined ?? false);
     const taskService = {
       findById: jest.fn(async () => ({ id: 'task-1', title: opts.taskTitle, status: 'open' })),
       complete,
       createPendingChange,
+      hasDeclinedChangeSince,
     } as unknown as TaskService;
     const block = opts.block ?? makeBlock();
     const eventRepository = {
@@ -259,6 +311,7 @@ describe('VerifyDoneService', () => {
       complete,
       createPendingChange,
       eventRepository,
+      hasDeclinedChangeSince,
       personalizationService,
       searchService,
       service: new VerifyDoneService(
@@ -365,6 +418,74 @@ describe('VerifyDoneService', () => {
     expect(result).toEqual({ completed: 1, pending: 0 });
   });
 
+  // ═══ a dismissal is a decision, and it has to survive the next tick ═══
+  //
+  // createPendingChange de-dupes only against a row that is still `pending`, so
+  // declining moved the row out of the set that was suppressing it: the hourly
+  // cron re-filed the identical "did this get done?" prompt for as long as the
+  // block stayed inside the 36h lookback — about 36 more times — and every
+  // dismissal was silently discarded. Nothing anywhere read `declined`.
+  it('does not re-ask a question the user has already dismissed for this block', async () => {
+    const { service, createPendingChange, hasDeclinedChangeSince, block } = buildService({
+      hits: [],
+      rows: [],
+      trustMode: 'balanced',
+      taskTitle: 'Renew passport',
+      declined: true,
+    });
+
+    const result = await service.runForUser(CTX_USER);
+
+    expect(hasDeclinedChangeSince).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: CTX_USER }),
+      'task-1',
+      'complete',
+      block.endTime,
+    );
+    expect(createPendingChange).not.toHaveBeenCalled();
+    expect(result).toEqual({ completed: 0, pending: 0 });
+  });
+
+  it('asks again for a block that ended after the decline', async () => {
+    // The suppression is bounded by the block's own end, so it settles that
+    // occurrence rather than muting the task for good.
+    const { service, createPendingChange } = buildService({
+      hits: [],
+      rows: [],
+      trustMode: 'balanced',
+      taskTitle: 'Renew passport',
+      declined: false,
+    });
+
+    const result = await service.runForUser(CTX_USER);
+
+    expect(createPendingChange).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ completed: 0, pending: 1 });
+  });
+
+  it('does not let a NULL status hide a block from the pass', async () => {
+    // `ci.events.status` has no NOT NULL yet (EventEntity.status), and
+    // three-valued `status NOT IN (...)` evaluates to NULL for such a row —
+    // which WHERE drops. COALESCE keeps it, because "no status" is the one
+    // value that certainly does not mean the block is done.
+    const { service, eventRepository } = buildService({
+      hits: [],
+      rows: [],
+      trustMode: 'balanced',
+      taskTitle: 'Renew passport',
+    });
+
+    await service.runForUser(CTX_USER);
+
+    const qb = eventRepository.createQueryBuilder.mock.results[0].value as {
+      andWhere: jest.Mock;
+    };
+
+    expect(qb.andWhere.mock.calls.map(([sql]) => sql)).toContain(
+      "COALESCE(event.status, '') NOT IN (:...doneStatuses)",
+    );
+  });
+
   it('does not complete from evidence that predates the block', async () => {
     const { service, complete, createPendingChange } = buildService({
       hits: [{ id: HIT_ID, type: 'communication' }],
@@ -430,6 +551,204 @@ describe('TodoProcessService', () => {
     // The hydration query is scoped to the caller and asks for exactly the ids
     // search() returned.
     expect(dataSource.query).toHaveBeenCalledWith(expect.any(String), [[HIT_ID], CTX_USER]);
+  });
+
+  // ═══ the line between "asks you" and "closes your task for you" ═══
+  //
+  // `complete` is the only suggestion routed through the `task_complete` gate
+  // (0.85 in balanced) instead of `task_mutate`'s autoPromoteThreshold (0.55),
+  // and clampConfidence's 0.75 default — what a small model returning a bare
+  // {"action":"complete"} gets — sits between the two. So mis-routing that
+  // suggestion does not fail loudly: it silently turns a Plan-page
+  // confirmation into the appliance closing the user's task from a keyword
+  // recall hit, with VerifyDoneService then stamping the block done.
+  describe('a completion suggestion', () => {
+    function buildService(opts: {
+      trustMode: 'cautious' | 'balanced' | 'hands_off';
+      suggestion: Record<string, unknown>;
+    }) {
+      const searchService = makeSearchService([{ id: HIT_ID, type: 'communication' }]);
+      const dataSource = makeDataSource([
+        {
+          id: HIT_ID,
+          entity_type: 'communication',
+          name: 'Text to Alex',
+          snippet: 'Picked the passport up from the office this morning.',
+          occurred_at: new Date(Date.now() - HOUR_MS),
+        },
+      ]);
+      const chat = jest.fn(async () => ({
+        message: { role: 'assistant', content: JSON.stringify(opts.suggestion) },
+      })) as unknown as OllamaService['chat'];
+      const complete = jest.fn(async () => ({ id: 'task-1', status: 'done' }));
+      const createPendingChange = jest.fn(async () => null);
+      const taskService = {
+        findAll: jest.fn(async () => [{ id: 'task-1', title: 'Renew passport', description: null }]),
+        complete,
+        createPendingChange,
+        appendNotes: jest.fn(),
+        update: jest.fn(),
+        findByTitleMatch: jest.fn(async () => null),
+      } as unknown as TaskService;
+      const personalizationService = makePersonalizationService(opts.trustMode);
+
+      return {
+        complete,
+        createPendingChange,
+        personalizationService,
+        service: new TodoProcessService(
+          taskService,
+          searchService,
+          { chat } as unknown as OllamaService,
+          personalizationService as never,
+          dataSource as never,
+          makeLogger(),
+        ),
+      };
+    }
+
+    it('asks rather than closing the task in the default trust mode', async () => {
+      const { service, complete, createPendingChange, personalizationService } = buildService({
+        trustMode: 'balanced',
+        // No `confidence`: the bare answer a utility model actually returns,
+        // which clampConfidence turns into 0.75.
+        suggestion: { action: 'complete', rationale: 'Alex was told the passport arrived.' },
+      });
+
+      const result = await service.runForUser(CTX_USER);
+
+      expect(personalizationService.decideAction).toHaveBeenCalledWith(CTX_USER, {
+        kind: 'task_complete',
+        confidence: 0.75,
+      });
+      expect(complete).not.toHaveBeenCalled();
+      expect(createPendingChange).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: CTX_USER }),
+        expect.objectContaining({
+          taskId: 'task-1',
+          kind: 'complete',
+          patch: {},
+          rationale: 'Alex was told the passport arrived.',
+          confidence: 0.75,
+        }),
+      );
+      expect(result).toEqual({ applied: 0, pending: 1 });
+    });
+
+    it('closes the task under hands_off', async () => {
+      const { service, complete, createPendingChange, personalizationService } = buildService({
+        trustMode: 'hands_off',
+        suggestion: { action: 'complete', confidence: 0.92, rationale: 'Passport collected.' },
+      });
+
+      const result = await service.runForUser(CTX_USER);
+
+      expect(personalizationService.decideAction).toHaveBeenCalledWith(CTX_USER, {
+        kind: 'task_complete',
+        confidence: 0.92,
+      });
+      expect(complete).toHaveBeenCalledWith(expect.objectContaining({ userId: CTX_USER }), 'task-1');
+      expect(createPendingChange).not.toHaveBeenCalled();
+      expect(result).toEqual({ applied: 1, pending: 0 });
+    });
+
+    it('still asks under hands_off when the model is unsure', async () => {
+      // ALWAYS_REVIEW_BELOW_CONFIDENCE (0.55) is a floor under every trust
+      // mode, so the most permissive dial there is still cannot close a task
+      // on a hedge.
+      const { service, complete, createPendingChange, personalizationService } = buildService({
+        trustMode: 'hands_off',
+        suggestion: { action: 'complete', confidence: 0.4 },
+      });
+
+      const result = await service.runForUser(CTX_USER);
+
+      expect(personalizationService.decideAction).toHaveBeenCalledWith(CTX_USER, {
+        kind: 'task_complete',
+        confidence: 0.4,
+      });
+      expect(complete).not.toHaveBeenCalled();
+      expect(createPendingChange).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: CTX_USER }),
+        // The model gave no rationale, so the user still gets a sentence.
+        expect.objectContaining({ kind: 'complete', rationale: 'Looks like this may be done.' }),
+      );
+      expect(result).toEqual({ applied: 0, pending: 1 });
+    });
+  });
+
+  // ═══ every active task gets a turn ═══
+  //
+  // `findAll` orders by due_at ASC NULLS LAST and an overdue date never
+  // advances, so the old fixed `LIMIT 40` handed every six-hour tick the SAME
+  // forty rows: a user with more than forty active tasks had a tail that was
+  // never reviewed at all, and the run's `applied`/`pending` tallies could not
+  // show it because they only count what the run looked at.
+  describe('candidate rotation', () => {
+    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+
+    /** The titles the run actually sent to the model, in order. */
+    async function reviewedTitles(now: number, taskCount: number): Promise<string[]> {
+      const searchService = makeSearchService([{ id: HIT_ID, type: 'communication' }]);
+      const dataSource = makeDataSource([
+        {
+          id: HIT_ID,
+          entity_type: 'communication',
+          name: 'Text from Sam',
+          snippet: 'Already picked up the dry cleaning, no need to go.',
+          occurred_at: new Date(now - HOUR_MS),
+        },
+      ]);
+      const chat = jest.fn(async () => ({
+        message: { role: 'assistant', content: JSON.stringify({ action: 'none' }) },
+      })) as unknown as OllamaService['chat'];
+      const tasks = Array.from({ length: taskCount }, (_unused, index) => ({
+        id: `task-${index}`,
+        title: `Task ${index}`,
+        description: null,
+      }));
+      const taskService = { findAll: jest.fn(async () => tasks) } as unknown as TaskService;
+
+      const service = new TodoProcessService(
+        taskService,
+        searchService,
+        { chat } as unknown as OllamaService,
+        makePersonalizationService('balanced') as never,
+        dataSource as never,
+        makeLogger(),
+      );
+
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+
+      try {
+        await service.runForUser(CTX_USER);
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      return (chat as jest.Mock).mock.calls.map(([, messages]) => messages[0].content.split('\n')[0]);
+    }
+
+    it('moves on to the tasks the previous run could not reach', async () => {
+      const tick = 4 * SIX_HOURS_MS;
+      const first = await reviewedTitles(tick, PROCESS_BATCH_SIZE + 5);
+      const second = await reviewedTitles(tick + SIX_HOURS_MS, PROCESS_BATCH_SIZE + 5);
+
+      expect(first).toHaveLength(PROCESS_BATCH_SIZE);
+      expect(second).toHaveLength(PROCESS_BATCH_SIZE);
+      // The five that fell off the end of the first window are reviewed by the
+      // next tick — under the old fixed LIMIT they never were.
+      const starved = ['Task: Task 40', 'Task: Task 41', 'Task: Task 42', 'Task: Task 43', 'Task: Task 44'];
+
+      expect(first).toEqual(expect.not.arrayContaining(starved));
+      expect(second).toEqual(expect.arrayContaining(starved));
+    });
+
+    it('leaves a pool that fits in one batch exactly as it was', async () => {
+      const reviewed = await reviewedTitles(7 * SIX_HOURS_MS, 3);
+
+      expect(reviewed).toEqual(['Task: Task 0', 'Task: Task 1', 'Task: Task 2']);
+    });
   });
 });
 
@@ -521,7 +840,7 @@ describe('per-item failure isolation', () => {
     const service = new EventNowService(
       { createQueryBuilder: jest.fn(() => makeEventQb(blocks)) } as never,
       makeEventService(blocks.map((block) => ({ id: block.id, title: 'Dentist appointment' }))),
-      { createPendingChange } as unknown as TaskService,
+      { createPendingChange, hasDeclinedChangeSince: jest.fn(async () => false) } as unknown as TaskService,
       searchService,
       makePersonalizationService('hands_off') as never,
       dataSource as never,
@@ -559,6 +878,7 @@ describe('per-item failure isolation', () => {
       })),
       complete: jest.fn(),
       createPendingChange,
+      hasDeclinedChangeSince: jest.fn(async () => false),
     } as unknown as TaskService;
 
     const service = new VerifyDoneService(

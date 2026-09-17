@@ -2,9 +2,8 @@
    returns (rtk-report-<digits>.pdf).
 
    Hulu ships no machine-readable export: the whole report is one PDF of
-   tables. Text comes out of it with poppler's `pdftotext -layout` (a system
-   binary, the way the import domain already shells out to `unzip` and
-   `ffprobe`), and `_hulu_report.ts` reads the layout back into tables.
+   tables. Text comes out of it with poppler's `pdftotext -layout`
+   (`_pdftotext.ts`), and `_hulu_report.ts` reads the layout back into tables.
 
    Only Watch History is imported:
    - dated rows   → 'watch' events (kind media.watch), one per play, the
@@ -22,20 +21,17 @@
    and the plan / billing / device tables are internal bookkeeping whose
    timestamps mix unstated timezones — noise on a timeline at best, wrong at
    worst. See the section map in `_hulu_report.ts`. */
-import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import type { Stats } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import { cellValue, parseHuluReport, parseHuluTimestamp, type HuluReport } from './_hulu_report';
+import { pdfToLayoutText, pdftotextKnownMissing, PdftotextMissingError } from './_pdftotext';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { Graph, ImportParams } from './timeline';
 import { timeframeContains } from './timeline';
-
-const execFileAsync = promisify(execFile);
 
 const FILENAME_RE = /^rtk-report-\d+\.pdf$/i;
 
@@ -44,64 +40,6 @@ const MAX_REPORT_BYTES = 8 * 1024 * 1024;
 
 /** First-page text that names the document: the cover blurb mentions the account. */
 const COVER_RE = /personal information report[\s\S]{0,600}your hulu account/i;
-
-/**
- * Once pdftotext is missing on this host we don't keep paying the spawn cost
- * for every PDF a recognition scan walks past. Cached for the process.
- */
-let pdftotextAvailable: boolean | undefined;
-
-export class PdftotextMissingError extends Error {
-  constructor() {
-    super(
-      'pdftotext (poppler-utils) is not installed; the Hulu report is a PDF and cannot be read without it',
-    );
-    this.name = 'PdftotextMissingError';
-  }
-}
-
-/**
- * Run pdftotext over the file. `-layout` keeps the page geometry the table
- * parser depends on; `-l 1` limits a recognition sniff to the cover page.
- * Returns null when the binary is absent (memoised) or the file is not a PDF
- * poppler can open.
- */
-export async function pdfToLayoutText(
-  fpath: string,
-  opts: { firstPageOnly?: boolean } = {},
-): Promise<string | null> {
-  if (pdftotextAvailable === false) {
-    return null;
-  }
-
-  const args = ['-layout', '-enc', 'UTF-8', '-q'];
-  if (opts.firstPageOnly) {
-    args.push('-l', '1');
-  }
-
-  args.push(fpath, '-');
-
-  try {
-    const { stdout } = await execFileAsync('pdftotext', args, {
-      timeout: 60_000,
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    pdftotextAvailable = true;
-
-    return stdout;
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
-      pdftotextAvailable = false;
-    }
-
-    return null;
-  }
-}
-
-/** For tests: forget the cached verdict on pdftotext's presence. */
-export function resetPdftotextProbe(): void {
-  pdftotextAvailable = undefined;
-}
 
 /**
  * Stable per-title identity for the content row: case/whitespace-insensitive
@@ -151,8 +89,11 @@ function textContent(filename: string, body: string) {
   return { filename, mediaType: WATCH_MEDIA_TYPE, data: async () => Buffer.from(body) };
 }
 
-/** Distinct, stable ids for rows that are byte-identical within one report. */
-class Occurrences {
+/**
+ * Distinct, stable ids for rows that are byte-identical within one report.
+ * Shared with disney_plus.ts, whose report has the same habit.
+ */
+export class Occurrences {
   private readonly seen = new Map<string, number>();
 
   id(base: string): string {
@@ -231,7 +172,7 @@ export class HuluFileImporter implements FileImporter {
     const named = FILENAME_RE.test(base);
     const cover = await pdfToLayoutText(fpath, { firstPageOnly: true });
     if (cover == null) {
-      return named && pdftotextAvailable === false ? 0.5 : 0;
+      return named && pdftotextKnownMissing() ? 0.5 : 0;
     }
 
     if (!COVER_RE.test(cover)) {
@@ -294,10 +235,9 @@ export class HuluFileImporter implements FileImporter {
     const base = path.basename(fpath);
     const text = await pdfToLayoutText(fpath);
     if (text == null) {
-      const reason =
-        pdftotextAvailable === false
-          ? new PdftotextMissingError().message
-          : 'pdftotext could not read the file';
+      const reason = pdftotextKnownMissing()
+        ? new PdftotextMissingError('the Hulu report').message
+        : 'pdftotext could not read the file';
       params.log?.('error', `Failed to read ${base}`, { error: reason });
 
       return;

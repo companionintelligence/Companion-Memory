@@ -136,7 +136,7 @@ export function apiEnv(
     // that says nothing about which directory or why.
     //
     // `CI_IMPORT_INBOX_DIR` is pinned even though this harness never runs
-    // `ci-import inbox`. THE INBOX CONSUMES WHAT IT IMPORTS, BY RENAME, so the
+    // `ci inbox`. THE INBOX CONSUMES WHAT IT IMPORTS, BY RENAME, so the
     // one thing worth guaranteeing about it is that it can only ever point at a
     // directory the harness owns and can throw away.
     CI_IMPORT_UPLOADS_DIR: path.join(STATE_DIR, 'import', 'uploads'),
@@ -325,7 +325,7 @@ export async function connect(runtime: BoxRuntime): Promise<Client> {
  * The IMPORT stages are not: `ImportStageListener` declares `role: 'worker'` on
  * all four queues (unpack / parse / media / push), so a web-only box accepts an
  * import, writes an `ci_import.import_runs` row, and leaves it at **`queued`
- * forever** with no error anywhere. `ci-import --wait` then simply never
+ * forever** with no error anywhere. `ci --wait` then simply never
  * returns, which reads as a slow import rather than an absent consumer.
  *
  * Starting both keeps the harness's two boxes shaped like a real one and stops
