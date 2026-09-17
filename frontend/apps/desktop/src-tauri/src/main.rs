@@ -52,33 +52,48 @@ struct PendingDeepLink(Mutex<Option<String>>);
 /// so there is exactly one place downstream of the OS that needs to know how to
 /// reach the frontend.
 fn dispatch_deep_link(app: &tauri::AppHandle, url: &str) {
-    log::info!("deep link received: {}", deep_link_log_label(url));
+    log::info!("deep link received: {}", redacted_url_log_label(url));
 
     if let Ok(mut pending) = app.state::<PendingDeepLink>().0.lock() {
         *pending = Some(url.to_string());
     }
 
+    // Looked up once and shared by every branch below — each needs the same
+    // state, and the branches are mutually exclusive per call.
+    let state = app.try_state::<StackPathsState>();
+
     if let Some(window) = app.get_webview_window("main") {
         // serde_json::to_string on a &str produces a properly quoted-and-escaped JS
         // string literal — the safe way to splice an arbitrary URL (OAuth `code`/
         // `state` params included) into an eval'd script.
-        if let Ok(js_literal) = serde_json::to_string(url) {
-            // Whether the eval reached the page is the other half of the answer:
-            // a delivered-but-not-dispatched link and a never-delivered one look
-            // identical from the frontend, and they have completely different fixes.
-            let dispatched = window.eval(format!(
-                "window.dispatchEvent(new CustomEvent('companion-deep-link', {{ detail: {js_literal} }}));"
-            ));
+        match serde_json::to_string(url) {
+            Ok(js_literal) => {
+                // Whether the eval reached the page is the other half of the answer:
+                // a delivered-but-not-dispatched link and a never-delivered one look
+                // identical from the frontend, and they have completely different fixes.
+                let dispatched = window.eval(format!(
+                    "window.dispatchEvent(new CustomEvent('companion-deep-link', {{ detail: {js_literal} }}));"
+                ));
 
-            if let Some(state) = app.try_state::<StackPathsState>() {
-                let outcome = match &dispatched {
-                    Ok(()) => "dispatched to the webview".to_string(),
-                    Err(e) => format!("FAILED to dispatch to the webview: {e}"),
-                };
-                stack_manager::append_desktop_log(&state.0, "deep-link", &outcome);
+                if let Some(state) = state {
+                    let outcome = match &dispatched {
+                        Ok(()) => "dispatched to the webview".to_string(),
+                        Err(e) => format!("FAILED to dispatch to the webview: {e}"),
+                    };
+                    stack_manager::append_desktop_log(&state.0, "deep-link", &outcome);
+                }
+            }
+            Err(e) => {
+                if let Some(state) = state {
+                    stack_manager::append_desktop_log(
+                        &state.0,
+                        "deep-link",
+                        &format!("FAILED to encode the URL for the webview: {e}"),
+                    );
+                }
             }
         }
-    } else if let Some(state) = app.try_state::<StackPathsState>() {
+    } else if let Some(state) = state {
         // The pending slot above still holds it, so this is recoverable rather
         // than lost — take_pending_deep_link_command hands it over on mount.
         stack_manager::append_desktop_log(
@@ -89,18 +104,20 @@ fn dispatch_deep_link(app: &tauri::AppHandle, url: &str) {
     }
 }
 
-/// The only part of a deep-link URL that may reach the log file.
+/// The only part of a URL that may reach the log file.
 ///
-/// The OIDC callback's `code` query param is a short-lived credential, and
-/// desktop.log is a file the UI invites the user to open and paste into a bug
-/// report — so everything from the first `?` on is dropped. What survives is
-/// enough to confirm which link arrived (`companion://auth/callback`), which is
-/// the whole reason the line exists.
+/// Both the incoming OIDC callback deep link and the outgoing sign-in URL this
+/// app opens in the system browser carry short-lived (or, for `signup_code`,
+/// single-use) credentials in their query string, and desktop.log is a file
+/// the UI invites the user to open and paste into a bug report — so everything
+/// from the first `?` on is dropped. What survives is enough to confirm which
+/// URL was involved (`companion://auth/callback`, `.../api/authenticate/oidc`),
+/// which is the whole reason the line exists.
 ///
-/// Split out of [`dispatch_deep_link`] so the redaction is pinned by a test:
-/// it is one `.split()` away from logging a live credential, and nothing else
-/// in this file would notice if it went missing.
-fn deep_link_log_label(url: &str) -> &str {
+/// Split out of its callers so the redaction is pinned by a test: it is one
+/// `.split()` away from logging a live credential, and nothing else in this
+/// file would notice if it went missing.
+fn redacted_url_log_label(url: &str) -> &str {
     url.split('?').next().unwrap_or(url)
 }
 
@@ -569,19 +586,25 @@ fn open_external_url_command(
     state: tauri::State<'_, StackPathsState>,
     url: String,
 ) -> Result<(), String> {
+    // Logged on every path on purpose, including rejection. This is the sign-in
+    // button: when it does nothing, the only question that matters is whether
+    // the command was even reached and what happened — and the frontend can
+    // only console.error into a devtools nobody has open. The URL itself is
+    // never logged in full: it can carry a `signup_code` invite credential
+    // (OidcButton.tsx), and desktop.log is a file the UI invites the user to
+    // paste into a bug report.
+    let label = redacted_url_log_label(&url).to_string();
+
     if !is_openable_external_url(&url) {
+        stack_manager::append_desktop_log(&state.0, "open-url", &format!("REJECTED {label}: not an http(s) URL"));
         return Err("open_external_url_command only accepts http(s) URLs".to_string());
     }
 
-    // Logged on both paths on purpose. This is the sign-in button: when it does
-    // nothing, the only question that matters is whether the command was reached
-    // and what the opener said — and the frontend can only console.error into a
-    // devtools nobody has open.
     let result = app.opener().open_url(&url, None::<String>).map_err(|e| e.to_string());
 
     match &result {
-        Ok(()) => stack_manager::append_desktop_log(&state.0, "open-url", &format!("opened {url}")),
-        Err(e) => stack_manager::append_desktop_log(&state.0, "open-url", &format!("FAILED {url}: {e}")),
+        Ok(()) => stack_manager::append_desktop_log(&state.0, "open-url", &format!("opened {label}")),
+        Err(e) => stack_manager::append_desktop_log(&state.0, "open-url", &format!("FAILED {label}: {e}")),
     }
 
     result
@@ -616,23 +639,28 @@ mod tests {
     use log::Log;
 
     /// desktop.log is the file the UI's "View Logs" button opens and the user
-    /// is invited to paste into a bug report, so an OAuth `code` reaching it is
+    /// is invited to paste into a bug report, so an OAuth `code` — or, for the
+    /// outgoing sign-in URL, a `signup_code` invite credential — reaching it is
     /// a credential leak with a long tail. Every branch of the redaction is
     /// covered because the fallback (`unwrap_or(url)`) is what runs for the
     /// links that carry no query at all.
     #[test]
-    fn a_deep_links_query_string_never_reaches_the_log() {
+    fn a_urls_query_string_never_reaches_the_log() {
         assert_eq!(
-            deep_link_log_label("companion://auth/callback?code=4/0AY0e-g7&state=xyzzy"),
+            redacted_url_log_label("companion://auth/callback?code=4/0AY0e-g7&state=xyzzy"),
             "companion://auth/callback"
+        );
+        assert_eq!(
+            redacted_url_log_label("https://ci-server.localhost/api/authenticate/oidc?client=native&signup_code=abc123"),
+            "https://ci-server.localhost/api/authenticate/oidc"
         );
         // No query: the whole URL is already safe, and must survive intact
         // rather than being truncated to nothing.
-        assert_eq!(deep_link_log_label("companion://auth/callback"), "companion://auth/callback");
-        assert_eq!(deep_link_log_label(""), "");
+        assert_eq!(redacted_url_log_label("companion://auth/callback"), "companion://auth/callback");
+        assert_eq!(redacted_url_log_label(""), "");
         // A bare `?` still redacts to the path — the split always yields a
         // first element, so this can never fall through to logging the rest.
-        assert_eq!(deep_link_log_label("companion://x?"), "companion://x");
+        assert_eq!(redacted_url_log_label("companion://x?"), "companion://x");
     }
 
     /// The webview is the untrusted side of this boundary: a compromised page
