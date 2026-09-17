@@ -457,9 +457,18 @@ each mp3 is a read of**, so an edited line reports itself by name instead of sil
 old recording — and **all 30 PNGs**, of which the storyboard currently references 14.
 
 `memory-map-view{,.mobile}` came from [the real-corpus stage](#the-real-corpus-stage) and are the
-only frames in the repo taken against real personal data; they are aggregate-only by construction
-— clusters and counts, no labels, no panel. They are also, with the other seven unreferenced
-shots, no longer in the film.
+only shots in `assets/shots/` taken against real personal data — every other capture here came from
+the seeded stack, whose people are fictional, and the two `graphic-*` plates are artwork. They are
+aggregate-only by construction — clusters and counts, no labels, no panel — and they are also, with
+the other six unreferenced shots, no longer in the film.
+
+They were never the only such frames in the repo. `docs/images/memory/explorer-*.jpg` (#1577) were
+taken against a real archive too — their names and 2880×1800 size match CI-Docs'
+`scripts/capture-memory-screenshots.mjs`, which signs in to a local dev app holding imported data —
+and showed a personal email address, a full name, subreddit subscriptions and neighbourhood-level
+map pins. They were deleted from the tree on 2026-09-17. **Deleting a file does not remove it from
+git history:** those JPEGs, like this map pair, stay retrievable from the commits that added them
+until history is rewritten.
 
 **Unreferenced PNGs are kept, and that is a deliberate trade rather than an oversight.** Deleting
 them would throw away a 45-minute, 826,478-item corpus load for the map pair, and the shot library
