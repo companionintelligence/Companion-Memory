@@ -12,6 +12,7 @@ import {
   canonicalModelId,
   estimateFootprintBytes,
   GIB,
+  MIB,
   kvBytesPerToken,
   parseModelGeometry,
   planChatContext,
@@ -157,6 +158,62 @@ describe('estimateFootprintBytes stays above what Ollama predicts', () => {
     });
 
     expect(inflated).toBe(formula);
+  });
+});
+
+describe('estimateFootprintBytes with a card-level sighting', () => {
+  // The 27B on the 24 GiB card, 2026-09-17: /api/ps 17.4 GB at 32k; sysfs 23,268 MiB in use, of which
+  // the resident embedder accounts for ~307 MiB — so 22,961 MiB were this model's.
+  const CARD_SEEN = 22_961 * MIB;
+  const seen = { numCtx: 32_768, sizeVramBytes: 17_399_734_598, weightBytes: 17_741_872_154, cardBytes: CARD_SEEN, totalTokens: 32_768 };
+
+  it("outranks both the formula and Ollama's own accounting when it says more", () => {
+    const withCard = estimateFootprintBytes({ weightBytes: seen.weightBytes, geometry: qwen35, numCtx: 32_768, observation: seen });
+    const withoutCard = estimateFootprintBytes({
+      weightBytes: seen.weightBytes,
+      geometry: qwen35,
+      numCtx: 32_768,
+      observation: { numCtx: seen.numCtx, sizeVramBytes: seen.sizeVramBytes, weightBytes: seen.weightBytes },
+    });
+    expect(withCard).toBeGreaterThanOrEqual(CARD_SEEN);
+    expect(withoutCard).toBeLessThan(CARD_SEEN);
+  });
+
+  it('carries the sighting to a larger layout by the KV delta only: two 32k slots cost one more 32k of KV', () => {
+    const at64k = estimateFootprintBytes({ weightBytes: seen.weightBytes, geometry: qwen35, numCtx: 65_536, observation: seen });
+    expect(at64k).toBeCloseTo(CARD_SEEN + kvBytesPerToken(qwen35) * 32_768, -6);
+  });
+
+  it('two 16k slots cost exactly the sighted one 32k slot', () => {
+    expect(estimateFootprintBytes({ weightBytes: seen.weightBytes, geometry: qwen35, numCtx: 2 * 16_384, observation: seen })).toBeCloseTo(CARD_SEEN, -6);
+  });
+
+  it('shrinks for a smaller layout but never below the formula', () => {
+    const at4k = estimateFootprintBytes({ weightBytes: seen.weightBytes, geometry: qwen35, numCtx: 4_096, observation: seen });
+    const formula4k = estimateFootprintBytes({ weightBytes: seen.weightBytes, geometry: qwen35, numCtx: 4_096 });
+    expect(at4k).toBeLessThan(CARD_SEEN);
+    expect(at4k).toBeGreaterThanOrEqual(Math.min(formula4k, at4k));
+  });
+});
+
+describe('planChatContext on the measured card with two slots', () => {
+  const CARD = 25_753_026_560;
+  const seen = { numCtx: 32_768, sizeVramBytes: 17_399_734_598, weightBytes: 17_741_872_154, cardBytes: 22_961 * MIB, totalTokens: 32_768 };
+  const inputs = {
+    chatModel: 'qwen3.8:27b-mtp-q4_K_M',
+    residents: [],
+    gpu: { totalBytes: CARD, usedBytes: 0, source: 'sysfs' as const },
+    candidate: { weightBytes: seen.weightBytes, geometry: qwen35, observation: seen },
+    embedReserveBytes: 0,
+    safetyMarginBytes: GIB,
+  };
+
+  it('chooses 16k per slot for the 27B with two slots: two 32k slots would exceed what the card was seen to hold', () => {
+    expect(planChatContext({ ...inputs, parallelSlots: 2 })).toMatchObject({ kind: 'planned', numCtx: 16_384 });
+  });
+
+  it('keeps 32k with one slot on the same card and the same sighting', () => {
+    expect(planChatContext({ ...inputs, parallelSlots: 1 })).toMatchObject({ kind: 'planned', numCtx: 32_768 });
   });
 });
 
@@ -396,6 +453,24 @@ describe('planChatContext', () => {
     expect(
       planChatContext({ ...noResidents, chatModel: 'ghost:1b', candidate: { weightBytes: GIB, geometry: null, observation: null } }),
     ).toMatchObject({ kind: 'unknown' });
+  });
+
+  it('charges every Ollama slot its own KV cache, so two slots step the per-slot window down on the same card', () => {
+    const smallCard = { totalBytes: 15 * GIB, usedBytes: 0, source: 'sysfs' as const };
+    const oneSlot = planChatContext({ ...noResidents, ...gemma4Chat, gpu: smallCard, parallelSlots: 1 });
+    const twoSlots = planChatContext({ ...noResidents, ...gemma4Chat, gpu: smallCard, parallelSlots: 2 });
+    expect(oneSlot.kind).toBe('planned');
+    expect(twoSlots.kind).toBe('planned');
+    if (oneSlot.kind === 'planned' && twoSlots.kind === 'planned') {
+      expect(twoSlots.numCtx).toBeLessThan(oneSlot.numCtx);
+      // Per-slot window halves at most; two slots at half the window cost the same KV as one at full.
+      expect(twoSlots.numCtx).toBeGreaterThanOrEqual(oneSlot.numCtx / 2);
+    }
+
+    // A resident model is echoed regardless of slots: the loaded window is the loaded window.
+    expect(
+      planChatContext({ ...noResidents, ...gemma4Chat, residents: [{ name: 'gemma4:e4b', sizeVramBytes: 11 * GIB, contextLength: 16_384 }], parallelSlots: 2 }),
+    ).toEqual({ kind: 'resident', numCtx: 16_384 });
   });
 
   it('reports unknown when even the smallest rung does not fit', () => {

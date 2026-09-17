@@ -191,6 +191,15 @@ export class ImageDescriptionListener {
       captureContext: captureContext?.source ?? null,
     });
 
+    // Name the window explicitly rather than inherit the server default. A request that
+    // sends no `num_ctx` gets whatever `OLLAMA_CONTEXT_LENGTH` (or Ollama's VRAM-based
+    // default) says, and on a multi-slot server a default larger than the loaded per-slot
+    // window reloads the model at that size times the slot count. The planner's answer
+    // is the loaded window when the model is resident and a size that fits otherwise;
+    // the ~1.5k-token prompt fits any rung. `null` (no planner) keeps the old behaviour.
+    // Optional call: unit tests build this listener on a partial facade.
+    const numCtx = (await this.ollamaService.resolveChatContextTokens?.(model)) ?? null;
+
     let response;
     try {
       response = await this.ollamaService.chat(serviceContext, messages, {
@@ -199,6 +208,7 @@ export class ImageDescriptionListener {
         enableThinking: false,
         format: 'json',
         maxOutputTokens: IMAGE_DESCRIPTION_MAX_OUTPUT_TOKENS,
+        ...(numCtx != null && { numCtx }),
       });
     } catch (error) {
       if (isNonMultimodalModelError(error)) {

@@ -101,11 +101,19 @@ export class CalibrationStore {
 
         for (const [model, record] of Object.entries(parsed.observations ?? {})) {
           if (isRecord(record)) {
+            const raw = record as CalibrationRecord & Record<string, unknown>;
+            const positive = (value: unknown): number | undefined =>
+              typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+            const cardBytes = positive(raw.cardBytes);
+            const totalTokens = positive(raw.totalTokens);
+
             observations.set(model, {
               numCtx: record.numCtx,
               sizeVramBytes: record.sizeVramBytes,
               weightBytes: record.weightBytes,
               seenAt: typeof record.seenAt === 'string' ? record.seenAt : new Date(0).toISOString(),
+              // Both or neither: a card figure without the layout it was taken at cannot be carried anywhere.
+              ...(cardBytes != null && totalTokens != null && { cardBytes, totalTokens }),
             });
           }
         }

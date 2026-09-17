@@ -546,4 +546,39 @@ describe('ResidencyPlannerService.resolveChatContextTokens', () => {
     await expect(service.resolveChatContextTokens()).resolves.toBeNull();
     expect(logger.warn).toHaveBeenCalledWith('Chat context planning failed; the chat path keeps its configured fallback', expect.objectContaining({ error: 'ECONNREFUSED' }));
   });
+
+});
+
+describe('card-level calibration', () => {
+  it("attributes the card's unaccounted bytes to the largest resident and persists them with the layout", async () => {
+    psMock.mockResolvedValue({
+      models: [
+        { name: 'qwen3.6:27b', size_vram: QWEN_RESIDENT_32K, context_length: 32_768 },
+        { name: 'nomic-embed-text:latest', size_vram: 323_150_151, context_length: 2_048 },
+      ],
+    });
+    // sysfs says 23 GiB in use; Ollama's two residents account for ~17.5 GiB of it.
+    probeMock.mockResolvedValue({ totalBytes: CARD, usedBytes: 23 * GIB, source: 'sysfs', device: 'card1' });
+    const { store, saved } = memoryStore();
+    const { service } = loadService({ calibration: store });
+
+    await service.resolveChatContextTokens();
+
+    const record = saved.at(-1)?.get('qwen3.6:27b');
+    expect(record).toMatchObject({ numCtx: 32_768, totalTokens: 32_768 });
+    expect(record?.cardBytes).toBe(23 * GIB - 323_150_151);
+    // The embedder never gets a card figure: the buffers are not its.
+    expect(saved.at(-1)?.get('nomic-embed-text')?.cardBytes).toBeUndefined();
+  });
+
+  it("records no card figure from the `config` source, which only echoes Ollama's own numbers back", async () => {
+    psMock.mockResolvedValue({ models: [{ name: 'qwen3.6:27b', size_vram: QWEN_RESIDENT_32K, context_length: 32_768 }] });
+    probeMock.mockResolvedValue({ totalBytes: CARD, usedBytes: QWEN_RESIDENT_32K, source: 'config' });
+    const { store, saved } = memoryStore();
+    const { service } = loadService({ calibration: store });
+
+    await service.resolveChatContextTokens();
+
+    expect(saved.at(-1)?.get('qwen3.6:27b')?.cardBytes).toBeUndefined();
+  });
 });

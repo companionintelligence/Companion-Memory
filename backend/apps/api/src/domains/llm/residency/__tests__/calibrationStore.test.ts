@@ -107,4 +107,25 @@ describe('CalibrationStore', () => {
       '/srv/api/.llm-residency-calibration.json',
     ]);
   });
+
+  it('round-trips the optional card-level fields, and drops one without the other', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'calib-'));
+    const path = join(dir, 'calibration.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        version: 1,
+        observations: {
+          full: { ...QWEN, cardBytes: 24_000_000_000, totalTokens: 32_768 },
+          half: { ...QWEN, cardBytes: 24_000_000_000 },
+        },
+      }),
+    );
+
+    const loaded = new CalibrationStore([path]).load();
+
+    expect(loaded.get('full')).toMatchObject({ cardBytes: 24_000_000_000, totalTokens: 32_768 });
+    expect(loaded.get('half')?.cardBytes).toBeUndefined();
+    expect(loaded.get('half')?.totalTokens).toBeUndefined();
+  });
 });

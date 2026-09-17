@@ -177,6 +177,17 @@ export interface ResidencyObservation {
   numCtx: number;
   sizeVramBytes: number;
   weightBytes: number;
+  /**
+   * What the CARD lost to this model while it was resident, from the GPU counters: sysfs
+   * used bytes minus every other resident's `size_vram`. Unlike `sizeVramBytes` (Ollama's
+   * own accounting, weights + KV) this includes the vision encoder's compute buffers,
+   * llama.cpp scratch and the prompt cache — measured 2026-09-17: 23.0 GiB on the card for
+   * a 27B whose `/api/ps` said 16.2 GiB. Recorded only for the largest resident, the one
+   * those buffers belong to; absent for the rest and for older files.
+   */
+  cardBytes?: number;
+  /** Total context tokens the runner held at that sighting (per-slot window × slots). */
+  totalTokens?: number;
 }
 
 export interface FootprintInputs {
@@ -214,8 +225,19 @@ export function estimateFootprintBytes({
     weightBytes +
     (dynamicBytes / observation.numCtx) * numCtx * OBSERVATION_SAFETY_FACTOR +
     FIXED_RUNNER_OVERHEAD_BYTES;
+  const estimate = Math.min(formula, calibrated);
 
-  return Math.min(formula, calibrated);
+  // A card-level sighting outranks both when it says MORE: it is the only number that
+  // includes the buffers neither the formula nor Ollama's `size_vram` know about. It is
+  // carried to the requested layout by the KV delta alone — buffers do not grow with
+  // context — and never lets the answer drop below what the formula says.
+  if (observation.cardBytes != null && observation.cardBytes > 0 && observation.totalTokens != null && observation.totalTokens > 0) {
+    const measured = observation.cardBytes + kvBytesPerToken(geometry) * (numCtx - observation.totalTokens);
+
+    return Math.max(estimate, measured);
+  }
+
+  return estimate;
 }
 
 /** Ollama lists `nomic-embed-text` as `nomic-embed-text:latest`; config says the former. */
@@ -271,6 +293,8 @@ export interface PlanInputs {
   coResidencyBlocked?: { untilMs: number; reason: string } | null;
   /** Injected for tests; defaults to `Date.now()`. */
   nowMs?: number;
+  /** Ollama slots per loaded model (`OLLAMA_NUM_PARALLEL`); each holds a full KV cache. Default 1. */
+  parallelSlots?: number;
 }
 
 export type UtilityPlanKind = 'resident' | 'load' | 'routed';
@@ -352,6 +376,8 @@ export interface ChatContextInputs {
   embedReserveBytes: number;
   safetyMarginBytes: number;
   ladder?: readonly number[];
+  /** Ollama slots per loaded model (`OLLAMA_NUM_PARALLEL`); each holds a full KV cache. Default 1. */
+  parallelSlots?: number;
 }
 
 export type ChatContextPlan =
@@ -376,6 +402,7 @@ export type ChatContextPlan =
 export function planChatContext(inputs: ChatContextInputs): ChatContextPlan {
   const { chatModel, residents, gpu, candidate, embedReserveBytes, safetyMarginBytes } = inputs;
   const ladder = inputs.ladder ?? CHAT_CONTEXT_LADDER;
+  const slots = Math.max(1, Math.floor(inputs.parallelSlots ?? 1));
 
   const resident = residents.find((model) => sameModel(model.name, chatModel));
   if (resident?.contextLength != null && resident.contextLength > 0) {
@@ -400,10 +427,12 @@ export function planChatContext(inputs: ChatContextInputs): ChatContextPlan {
   const candidates = rungs.length > 0 ? rungs : trainingMax != null ? [trainingMax] : [];
 
   for (const numCtx of candidates) {
+    // `numCtx` is the PER-SLOT window the request will name; the runner allocates KV for
+    // every slot, so the footprint is charged for all of them.
     const footprintBytes = estimateFootprintBytes({
       weightBytes: candidate.weightBytes,
       geometry: candidate.geometry,
-      numCtx,
+      numCtx: numCtx * slots,
       observation: candidate.observation,
     });
     if (footprintBytes <= headroomBytes) {
@@ -460,13 +489,14 @@ export function planUtilityResidency(inputs: PlanInputs): UtilityPlan {
   // A model whose training window is below the smallest rung still gets one try, at its window.
   const candidates = rungs.length > 0 ? rungs : trainingMax != null ? [trainingMax] : [];
 
+  const slots = Math.max(1, Math.floor(inputs.parallelSlots ?? 1));
   let smallestFootprintBytes: number | null = null;
 
   for (const numCtx of candidates) {
     const footprintBytes = estimateFootprintBytes({
       weightBytes: candidate.weightBytes,
       geometry: candidate.geometry,
-      numCtx,
+      numCtx: numCtx * slots,
       observation: candidate.observation,
     });
 

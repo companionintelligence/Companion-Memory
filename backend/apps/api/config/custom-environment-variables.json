@@ -148,6 +148,10 @@
       "cooldownMs": {
         "__name": "LLM_RESIDENCY_COOLDOWN_MS",
         "__format": "json"
+      },
+      "parallelSlots": {
+        "__name": "LLM_OLLAMA_NUM_PARALLEL",
+        "__format": "json"
       }
     }
   },

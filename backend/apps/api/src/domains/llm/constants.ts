@@ -1,3 +1,4 @@
+import config from '@ci/configuration';
 import type { QueueOptions } from '@ci/domains/events';
 
 /**
@@ -120,7 +121,10 @@ export const IMAGE_DESCRIPTION_QUEUE = 'image-description';
  */
 export const IMAGE_DESCRIPTION_QUEUE_OPTIONS: QueueOptions = {
   policy: 'short',
-  localConcurrency: 1,
+  // One job per Ollama slot. The server runs `OLLAMA_NUM_PARALLEL` requests per model at once
+  // and queues the rest, so admitting more than that only moves the wait from pg-boss to
+  // Ollama; admitting fewer leaves a slot idle. See `llm.residency.parallelSlots`.
+  localConcurrency: Math.max(1, Math.floor(config.llm.residency.parallelSlots ?? 1)),
   yieldsTo: INTERACTIVE_CHAT_YIELD_GATE,
   lane: OLLAMA_BACKGROUND_LANE,
 };

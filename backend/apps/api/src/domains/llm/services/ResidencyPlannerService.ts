@@ -259,6 +259,7 @@ export class ResidencyPlannerService implements OnModuleInit {
         candidate,
         embedReserveBytes,
         safetyMarginBytes: config.llm.residency.safetyMarginBytes,
+        parallelSlots: this.parallelSlots(),
       });
       this.logChatContextChange(model, plan);
 
@@ -271,6 +272,17 @@ export class ResidencyPlannerService implements OnModuleInit {
 
       return null;
     }
+  }
+
+  /**
+   * Ollama slots per loaded model (`llm.residency.parallelSlots`, from `LLM_OLLAMA_NUM_PARALLEL`).
+   * Read through a guard: zod defaults it to 1 in production, but a hand-built config (tests,
+   * an older Hub env) may omit it, and `undefined × contextLength` would poison a calibration.
+   */
+  private parallelSlots(): number {
+    const configured = config.llm.residency.parallelSlots;
+
+    return typeof configured === 'number' && Number.isFinite(configured) && configured >= 1 ? Math.floor(configured) : 1;
   }
 
   /** Per-model memory of the last answer, so a steady state costs no log lines. */
@@ -316,6 +328,7 @@ export class ResidencyPlannerService implements OnModuleInit {
       safetyMarginBytes: config.llm.residency.safetyMarginBytes,
       ladder: UTILITY_CONTEXT_LADDER.filter((ctx) => ctx <= config.llm.residency.maxUtilityContextTokens),
       coResidencyBlocked: this.activeBlock(),
+      parallelSlots: this.parallelSlots(),
     });
 
     const report: ResidencyReport = {
@@ -572,6 +585,25 @@ export class ResidencyPlannerService implements OnModuleInit {
     // the numbers move, not on every poll.
     let changed = false;
 
+    const residentBytes = residents.reduce((total, resident) => total + resident.sizeVramBytes, 0);
+    const gpu = await probeGpuMemory({
+      configuredTotalBytes: config.llm.residency.vramTotalBytes,
+      residentBytes,
+    });
+
+    // The card's unaccounted bytes — what sysfs says is used beyond every resident's own
+    // `size_vram` — belong to the largest resident: its vision encoder, llama.cpp scratch and
+    // prompt cache. Only a real counter can say this (the `config` source is just residentBytes
+    // echoed back), and only when the counter exceeds Ollama's own accounting.
+    const largest = residents.reduce<ResidentModel | null>(
+      (best, resident) => (best == null || resident.sizeVramBytes > best.sizeVramBytes ? resident : best),
+      null,
+    );
+    const cardBytesForLargest =
+      gpu != null && gpu.source !== 'config' && largest != null && gpu.usedBytes > residentBytes
+        ? gpu.usedBytes - (residentBytes - largest.sizeVramBytes)
+        : null;
+
     for (const resident of residents) {
       const id = canonicalModelId(resident.name);
       const weightBytes = weightsByModel.get(id);
@@ -580,22 +612,37 @@ export class ResidencyPlannerService implements OnModuleInit {
         continue;
       }
 
+      const isLargest = largest != null && sameModel(resident.name, largest.name);
+      const cardBytes = isLargest && cardBytesForLargest != null ? cardBytesForLargest : undefined;
+      const totalTokens = cardBytes != null ? resident.contextLength * this.parallelSlots() : undefined;
       const previous = this.observations.get(id);
 
       if (
         previous &&
         previous.numCtx === resident.contextLength &&
         previous.sizeVramBytes === resident.sizeVramBytes &&
-        previous.weightBytes === weightBytes
+        previous.weightBytes === weightBytes &&
+        // A card figure only ever REPLACES a smaller or absent one: buffers grow as features
+        // are exercised (the first image allocates the vision encoder), and a sighting taken
+        // before that would otherwise overwrite the one that saw it.
+        (cardBytes == null || (previous.cardBytes != null && previous.cardBytes >= cardBytes))
       ) {
         continue;
       }
+
+      const keepPrevious =
+        cardBytes == null && previous?.cardBytes != null && previous.totalTokens != null && previous.numCtx === resident.contextLength;
 
       this.observations.set(id, {
         numCtx: resident.contextLength,
         sizeVramBytes: resident.sizeVramBytes,
         weightBytes,
         seenAt: new Date().toISOString(),
+        ...(cardBytes != null && totalTokens != null
+          ? { cardBytes: Math.max(cardBytes, previous?.cardBytes ?? 0), totalTokens }
+          : keepPrevious
+            ? { cardBytes: previous.cardBytes, totalTokens: previous.totalTokens }
+            : {}),
       });
       changed = true;
 
@@ -606,12 +653,6 @@ export class ResidencyPlannerService implements OnModuleInit {
     if (changed) {
       this.calibration.save(this.observations);
     }
-
-    const residentBytes = residents.reduce((total, resident) => total + resident.sizeVramBytes, 0);
-    const gpu = await probeGpuMemory({
-      configuredTotalBytes: config.llm.residency.vramTotalBytes,
-      residentBytes,
-    });
 
     return { takenAt: Date.now(), residents, gpu, weightsByModel };
   }

@@ -432,6 +432,17 @@ export const ConfigSchema = z.object({
           /** Top rung of the utility model's context ladder (32K → 16K → 8K → 4K). */
           maxUtilityContextTokens: z.coerce.number().int().positive().default(32_768),
           /**
+           * How many requests the Ollama server runs concurrently per loaded model
+           * (`OLLAMA_NUM_PARALLEL` on the HOST — a server setting this process cannot
+           * read back, so whoever provisions the host says it: CI-Hub via the app env,
+           * or the operator via `LLM_OLLAMA_NUM_PARALLEL`). Every slot holds its own KV
+           * cache, so the planners divide the card by this before sizing a window, and
+           * the image-description queue admits this many jobs at once. `1` is always
+           * safe: a wrong `1` only leaves a slot idle, a wrong `2` reloads at twice the
+           * KV it can afford.
+           */
+          parallelSlots: z.coerce.number().int().min(1).max(8).default(1),
+          /**
            * After the planner asks Ollama to load the utility model, how long
            * it may stay absent from `/api/ps` before the planner concludes the
            * load is stuck behind an eviction that cannot happen. A cold load of
