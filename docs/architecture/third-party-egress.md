@@ -48,8 +48,8 @@ styling choice).
 
 > This is also why removing the `.leaflet-control-attribution` mask from
 > [`video/storyboard.json`](../../video/storyboard.json) changed no pixels at the time: the mask was
-> hiding an element that did not then exist. Now that the control renders, the `memory-map-view`
-> shot shows it — see the re-shoot note under Recommendation 1.
+> hiding an element that did not then exist. Now that the control renders, a re-shot
+> `memory-map-view` would show it — see the note under Recommendation 1.
 
 The egress itself is unchanged: rendering the map still contacts Esri on every tile.
 
@@ -79,9 +79,11 @@ Esri sends where you are looking; the geocoder is sent what your records say.
 ## Recommendation
 
 **1. ~~Restore attribution~~ — done.** The `TileLayer` carries its `attribution` string and the
-control renders. The remaining task is presentational: `memory-map-view` shows the control now, so
-it must be re-shot in both viewports against the real-corpus stage
-(`video/stage.real-corpus.sh`).
+control renders. Nothing presentational is left to do here: the committed `memory-map-view` pair
+predated the restored control, and it was deleted on 2026-09-17 rather than re-shot — it was taken
+against the owner's real archive and no scene has used it since the narrative re-cut
+(`video/README.md` § "What is committed"). A scene that brings the map back shoots it in both
+viewports against the real-corpus stage (`video/stage.real-corpus.sh`), with the control in frame.
 
 **2. Self-host the basemap (the real answer for #1).** Still open. An appliance that ships its own
 tiles is the only version of this product where "opens on hardware you own" is unqualified.

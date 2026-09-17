@@ -3,10 +3,11 @@
  *
  * Clustering buckets located entities into a fixed pixel grid at the current zoom. A grid has hard
  * edges: two dense neighbouring cells can each put their centroid near the shared edge, so their
- * bubbles are drawn a few pixels apart and overlap — `11` half-hidden behind `34` in the committed
- * `memory-map-view.mobile.png`, and a pin sitting on top of `27` in the desktop one. A count you
- * cannot read is worse than a coarser cluster, so any two markers whose discs would collide are
- * merged into one bubble carrying both cells' items.
+ * bubbles are drawn a few pixels apart and overlap — `11` half-hidden behind `34` in the
+ * `memory-map-view.mobile.png` capture, and a pin sitting on top of `27` in the desktop one (both
+ * were deleted from video/assets/shots/ on 2026-09-17; they were shot against a real archive). A
+ * count you cannot read is worse than a coarser cluster, so any two markers whose discs would
+ * collide are merged into one bubble carrying both cells' items.
  *
  * The geometry here mirrors what is actually drawn (see `makeClusterIcon` and
  * `components/Map/Marker.tsx`) so the two cannot drift:
