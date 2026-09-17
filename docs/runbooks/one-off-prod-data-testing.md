@@ -253,7 +253,14 @@ OAuth through **CI Portal** (`hub.ci.computer`):
 1. User clicks Connect → api calls Portal `/api/oauth/authorize`
 2. User signs in at Microsoft/Google → redirect to Portal `/api/oauth/callback`
 3. Portal exchanges the code and redirects back to the box:
-   `https://<your-host>/oauth/callback?connectionId=…&access_token=…`
+   `https://<your-host>/oauth/callback?connectionId=…#access_token=…&user_provider_id=…`
+   The URL fragment always carries `access_token`, `expires_in`, `provider` and
+   `user_provider_id`, plus `email` when Portal knows it and `refresh_token` (a proxy
+   refresh token) only when the provider issued one. When a proxy refresh token is
+   present, the api fetches the access token from Portal itself
+   (`/api/oauth/token/refresh`, device credentials) and stores the rotated refresh token;
+   the fragment's `access_token` is only used when there is none, i.e. for a provider
+   whose token response carries no refresh token (Facebook, for one).
 
 **Redirect URIs for the proxy path** (configured on CI Portal's OAuth apps, not on your
 box):

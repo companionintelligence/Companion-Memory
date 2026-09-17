@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { ForecastBucket } from '@/api/useForecastService';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
 
 import { addDays, startOfLocalDay } from './nowNext';
@@ -9,6 +10,8 @@ import {
   dropInstant,
   eventUrl,
   movedStart,
+  occupancyClaims,
+  occupancySignalInRange,
   packLanes,
   rhythmCells,
   slotForecastLine,
@@ -126,6 +129,82 @@ describe('spanForDay — clipping committed events onto a day row', () => {
 
     expect(span?.leftPct).toBe(0);
     expect(span?.widthPct).toBe(100);
+  });
+
+  /** Which local day columns of that week an event claims, by day of month. */
+  function coveredDays(entry: ScheduleEvent): number[] {
+    return [1, 2, 3, 4, 5]
+      .map((day) => startOfLocalDay(new Date(2026, 7, day)))
+      .filter((day) => spanForDay(entry, day) !== null)
+      .map((day) => day.getDate());
+  }
+
+  /**
+   * A Google all-day row is date-only in the payload, so it is stored UTC
+   * midnight to UTC midnight. Clipped by instant overlap it claimed TWO
+   * adjacent columns in every zone — Aug 3 and Aug 4 under UTC and east of it,
+   * Aug 2 and Aug 3 across the Americas — so one birthday drew two chips.
+   */
+  it('puts a UTC-midnight all-day event on exactly one day column, in every zone', () => {
+    for (const zone of ['UTC', 'Asia/Tokyo', 'Pacific/Auckland', 'America/New_York', 'America/Los_Angeles']) {
+      withTimeZone(zone, () => {
+        const birthday = event({
+          title: 'Ada’s birthday',
+          startTime: '2026-08-03T00:00:00.000Z',
+          endTime: '2026-08-04T00:00:00.000Z',
+          isAllDay: true,
+        });
+
+        expect(coveredDays(birthday)).toEqual([3]);
+      });
+    }
+  });
+
+  /** The other shape: EventForm writes all-day events at LOCAL midnight. */
+  it('puts a local-midnight all-day event on exactly one day column', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      const holiday = event({
+        startTime: new Date(2026, 7, 3).toISOString(),
+        endTime: new Date(2026, 7, 4).toISOString(),
+        isAllDay: true,
+      });
+
+      expect(coveredDays(holiday)).toEqual([3]);
+    });
+  });
+
+  it('spans an all-day event over every date it names, exclusive end and all', () => {
+    const trip = event({
+      startTime: '2026-08-03T00:00:00.000Z',
+      endTime: '2026-08-06T00:00:00.000Z',
+      isAllDay: true,
+    });
+
+    expect(coveredDays(trip)).toEqual([3, 4, 5]);
+  });
+
+  it('leaves an event that ends exactly at midnight off the following day', () => {
+    const lateShift = event({
+      title: 'Close the bar',
+      startTime: new Date(2026, 7, 2, 23, 0).toISOString(),
+      endTime: new Date(2026, 7, 3, 0, 0).toISOString(),
+    });
+
+    // The old `end < dayStart` test admitted it, then clipped it to zero
+    // minutes and widened it to the 20-minute floor: a phantom chip pinned to
+    // the top of a day the event never touched.
+    expect(spanForDay(lateShift, MONDAY)).toBeNull();
+    expect(spanForDay(lateShift, addDays(MONDAY, -1))).not.toBeNull();
+  });
+
+  it('keeps a zero-length event that starts at midnight on its own day', () => {
+    const span = spanForDay(
+      event({ startTime: new Date(2026, 7, 3, 0, 0).toISOString(), endTime: null }),
+      MONDAY,
+    );
+
+    expect(span?.leftPct).toBe(0);
+    expect(span?.widthPct).toBeGreaterThan(0);
   });
 
   it('gives a zero-length event a floor width so it stays visible', () => {
@@ -409,6 +488,65 @@ describe('rhythmCells — 15-minute intensities across a local day', () => {
   });
 });
 
+describe('occupancyClaims — 96-bin histogram clipped onto a local day', () => {
+  function bucket(overrides: Partial<ForecastBucket> = {}): ForecastBucket {
+    return {
+      bucketIndex: 36,
+      startTime: new Date(2026, 7, 3, 9, 0).toISOString(),
+      l0Probs: [{ label: 'WORK', probability: 0.8 }],
+      l1Probs: [{ label: 'focus', probability: 0.7 }],
+      l2Probs: null,
+      q10: 0.5,
+      q50: 0.8,
+      q90: 0.9,
+      ...overrides,
+    };
+  }
+
+  it('returns null when nothing lands on the day', () => {
+    expect(occupancyClaims(MONDAY, [])).toBeNull();
+    expect(occupancyClaims(MONDAY, [bucket({ startTime: addDays(MONDAY, 2).toISOString() })])).toBeNull();
+  });
+
+  it('emits 96 cells and places a 09:00 bin at slot 36', () => {
+    const cells = occupancyClaims(MONDAY, [bucket()]);
+
+    expect(cells).toHaveLength(96);
+    expect(cells?.[36].weight).toBe(0.8);
+    expect(cells?.[36].l0Class).toBe('WORK');
+    expect(cells?.[36].bucket?.l1Probs[0]?.label).toBe('focus');
+    expect(cells?.filter((cell) => cell.bucket !== null)).toHaveLength(1);
+  });
+
+  it('keeps a UTC histogram on the local day the instant actually falls in', () => {
+    // 02:00 UTC on the 4th is 22:00 the previous evening in New York in August.
+    const cells = withTimeZone('America/New_York', () => {
+      const monday = startOfLocalDay(new Date(2026, 7, 3));
+
+      return occupancyClaims(monday, [
+        bucket({
+          bucketIndex: 8,
+          startTime: '2026-08-04T02:00:00.000Z',
+          l0Probs: [{ label: 'SLEEP', probability: 0.9 }],
+          q50: 0.9,
+        }),
+      ]);
+    });
+
+    expect(cells).not.toBeNull();
+    expect(cells?.[88].l0Class).toBe('SLEEP');
+    expect(cells?.[88].weight).toBe(0.9);
+  });
+
+  it('only counts occupancy that falls inside the drawn window', () => {
+    const bins = [bucket()];
+
+    expect(occupancySignalInRange(bins, MONDAY, addDays(MONDAY, 1))).toBe(true);
+    expect(occupancySignalInRange(bins, addDays(MONDAY, 1), addDays(MONDAY, 8))).toBe(false);
+    expect(occupancySignalInRange([bucket({ q50: 0.01 })], MONDAY, addDays(MONDAY, 1))).toBe(false);
+  });
+});
+
 describe('dropInstant — where a dragged suggestion lands', () => {
   it('maps the middle of a row to midday', () => {
     expect(dropInstant(MONDAY, 0.5).getHours()).toBe(12);
@@ -611,6 +749,104 @@ describe('slotForecastLine — what the drawer is allowed to claim', () => {
       const instant = new Date(Date.UTC(2026, 7, 6, 16, 15));
 
       expect(slotForecastLine({ instant, allDay: false }, () => undefined)).toBeNull();
+    });
+  });
+});
+
+/**
+ * The zone the grid draws in is the OWNER'S, not the browser's.
+ *
+ * Every case here pins the process to a zone that disagrees with the profile
+ * one being passed in — the browser zone is exactly what the old
+ * `getHours()`-based geometry read, so a test that let the two coincide would
+ * pass against the bug this closes.
+ */
+describe('scheduleGeometry — drawn in the profile zone, not the browser one', () => {
+  const PROFILE = 'America/New_York';
+
+  /** 09:00–09:30 in New York on Mon 03 Aug 2026, exactly as the placer books it. */
+  const placedAtNine = event({
+    startTime: '2026-08-03T13:00:00Z',
+    endTime: '2026-08-03T13:30:00Z',
+  });
+
+  it('puts a block the placer booked at 09:00 on the 09:00 row', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      const monday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'), PROFILE);
+      const span = spanForDay(placedAtNine, monday, PROFILE);
+
+      expect(span?.leftPct).toBeCloseTo((9 * 60 * 100) / 1440, 5);
+    });
+  });
+
+  it('is the wrong hour — and the wrong day — when the browser zone is used instead', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      // Tokyo is nine hours ahead of UTC, so the same instant reads 22:00 there
+      // and the Monday row does not even contain it. This is what the owner saw.
+      const monday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'));
+
+      expect(spanForDay(placedAtNine, monday)?.leftPct).toBeCloseTo((22 * 60 * 100) / 1440, 5);
+    });
+  });
+
+  it('keeps a late-evening block on the profile day rather than the UTC one', () => {
+    withTimeZone('UTC', () => {
+      // 22:00 Monday in New York is Tuesday 02:00 UTC.
+      const lateEvening = event({
+        startTime: '2026-08-04T02:00:00Z',
+        endTime: '2026-08-04T03:00:00Z',
+      });
+      const monday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'), PROFILE);
+      const tuesday = addDays(monday, 1, PROFILE);
+
+      expect(spanForDay(lateEvening, monday, PROFILE)?.leftPct).toBeCloseTo((22 * 60 * 100) / 1440, 5);
+      expect(spanForDay(lateEvening, tuesday, PROFILE)).toBeNull();
+    });
+  });
+
+  it('drops a chip at the profile wall-clock time the cursor was over', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      const monday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'), PROFILE);
+      const at = dropInstant(monday, 15 / 24, PROFILE);
+
+      // 15:00 in New York on 03 Aug 2026 (EDT, UTC-4).
+      expect(at.toISOString()).toBe('2026-08-03T19:00:00.000Z');
+    });
+  });
+
+  it('moves a dragged chip by the grab delta in profile wall clock', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      const monday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'), PROFILE);
+      const at = movedStart(monday, 15 / 24, 30 * 60_000, PROFILE);
+
+      expect(at.toISOString()).toBe('2026-08-03T18:30:00.000Z');
+    });
+  });
+
+  it('paints the rhythm strip against the profile day, not the browser one', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      // 12:00–18:00 UTC is the 'afternoon' daypart; 08:00–14:00 in New York.
+      const day: RhythmDay = {
+        date: '2026-08-03',
+        dow: 'Mon',
+        clusters: [
+          {
+            clusterId: 'c1',
+            name: 'Deep work',
+            l0Class: 'WORK',
+            pOccur: 1,
+            scheduled: false,
+            daypartProbs: [{ label: 'afternoon', probability: 1 }],
+          },
+        ],
+      };
+      const monday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'), PROFILE);
+      const cells = rhythmCells(monday, (key) => (key === '2026-08-03' ? day : undefined), PROFILE);
+
+      // Slot 36 is 09:00 profile time = 13:00 UTC, inside the band.
+      expect(cells[36]).toBe(1);
+      // Slot 4 is 01:00 profile time = 05:00 UTC, outside it.
+      expect(cells[4]).toBe(0);
     });
   });
 });

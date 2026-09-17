@@ -157,18 +157,59 @@ const WINDOWS_1252_C1_OVERRIDE: Readonly<Record<string, string>> = {
 
 const WINDOWS_1252_LABELS = new Set(['windows-1252', 'cp1252', 'x-cp1252']);
 
+/**
+ * Every label the IANA registry lists for ISO-8859-1 proper.
+ *
+ * Handled here rather than by `TextDecoder` because that decoder cannot be
+ * trusted to tell these two charsets apart, in EITHER direction:
+ *
+ *  - The WHATWG Encoding Standard, which `TextDecoder` implements, declares
+ *    `iso-8859-1` an ALIAS of windows-1252. A conforming decoder therefore
+ *    renders 0x80 as `€` under a label that never defined it — precisely the
+ *    folding the sibling test exists to forbid.
+ *  - Node's actual behaviour varies by ICU build. On the node:22 CI container
+ *    `new TextDecoder('iso-8859-1').decode(Buffer.from([0x80]))` returns `€`;
+ *    on Node 22.15.1 with full ICU locally it returns U+0080. Same code, same
+ *    input, two answers — which is why this bug survived: the suite it was
+ *    caught by had not completed a run since 2026-08-19.
+ *
+ * `Buffer.toString('latin1')` is the fix because it is not a charset lookup at
+ * all: Node defines it as a straight byte -> U+00XX map, with no ICU involved,
+ * so it IS ISO-8859-1 by construction and answers identically everywhere.
+ * windows-1252 is then that same map plus the C1 overrides below, which is
+ * exactly how the two charsets differ.
+ */
+const ISO_8859_1_LABELS = new Set([
+  'iso-8859-1',
+  'iso8859-1',
+  'iso_8859-1',
+  'iso-ir-100',
+  'latin1',
+  'l1',
+  'csisolatin1',
+  'ibm819',
+  'cp819',
+]);
+
 function decodeWithCharset(bytes: Buffer, charset: string | undefined): string {
   const label = (charset ?? '').trim().toLowerCase();
   if (!label || label === 'utf-8' || label === 'utf8' || label === 'us-ascii') {
     return bytes.toString('utf8');
   }
 
-  try {
-    const decoded = new TextDecoder(label).decode(bytes);
+  // Both branches decode via 'latin1' so the result cannot move under us with
+  // the ICU build (see ISO_8859_1_LABELS). The override table is the whole
+  // difference between the two charsets.
+  if (ISO_8859_1_LABELS.has(label)) {
+    return bytes.toString('latin1');
+  }
 
-    return WINDOWS_1252_LABELS.has(label)
-      ? Array.from(decoded, (ch) => WINDOWS_1252_C1_OVERRIDE[ch] ?? ch).join('')
-      : decoded;
+  if (WINDOWS_1252_LABELS.has(label)) {
+    return Array.from(bytes.toString('latin1'), (ch) => WINDOWS_1252_C1_OVERRIDE[ch] ?? ch).join('');
+  }
+
+  try {
+    return new TextDecoder(label).decode(bytes);
   } catch {
     return bytes.toString('utf8');
   }

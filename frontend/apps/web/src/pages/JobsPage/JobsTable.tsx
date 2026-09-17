@@ -347,27 +347,31 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange, o
             ))}
           </ul>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] border-collapse text-sm">
+          <div className="min-w-0 max-w-full overflow-x-auto">
+            {/* table-fixed so a long failure cannot grow the Job column past
+                the card. table-auto + truncate does nothing: the cell's
+                min-width follows the text, the wrapper grows with the table,
+                and the whole page scrolls sideways. */}
+            <table className="w-full table-fixed border-collapse text-sm">
               <thead>
                 <tr className="border-b border-border/60 text-left text-xs uppercase text-muted-foreground">
                   <th scope="col" className="w-8 py-1.5" />
-                  <th scope="col" className="py-1.5 pr-3 font-medium">
+                  <th scope="col" className="min-w-0 py-1.5 pr-3 font-medium">
                     Job
                   </th>
-                  <th scope="col" className="py-1.5 pr-3 font-medium">
+                  <th scope="col" className="w-36 py-1.5 pr-3 font-medium">
                     Queue
                   </th>
-                  <th scope="col" className="py-1.5 pr-3 font-medium">
+                  <th scope="col" className="w-28 py-1.5 pr-3 font-medium">
                     State
                   </th>
-                  <th scope="col" className="py-1.5 pr-3 text-right font-medium">
+                  <th scope="col" className="w-20 py-1.5 pr-3 text-right font-medium">
                     Duration
                   </th>
-                  <th scope="col" className="py-1.5 pr-3 text-right font-medium">
+                  <th scope="col" className="w-16 py-1.5 pr-3 text-right font-medium">
                     Retries
                   </th>
-                  <th scope="col" className="py-1.5 text-right font-medium">
+                  <th scope="col" className="w-36 py-1.5 text-right font-medium">
                     Created
                   </th>
                 </tr>
@@ -413,6 +417,24 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange, o
   );
 }
 
+/**
+ * Collapsed-row failure: one line, ellipsis, full text on hover and in details.
+ *
+ * A table cell grows to its text unless this is allowed to shrink (`min-w-0`)
+ * and the table is `table-fixed`. `inline-flex` + `truncate` alone is not
+ * enough — the flex item sizes to the message and the page scrolls sideways.
+ */
+function JobFailureLine({ message }: { message: string }) {
+  return (
+    <span className="mt-1 flex min-w-0 max-w-full items-center gap-1 text-xs text-destructive">
+      <AlertTriangle aria-hidden className="h-3 w-3 shrink-0" />
+      <span className="min-w-0 truncate" title={message}>
+        {message}
+      </span>
+    </span>
+  );
+}
+
 function JobRow({ job, expanded, onToggle }: { job: JobListItem; expanded: boolean; onToggle: () => void }) {
   const Chevron = expanded ? ChevronDown : ChevronRight;
 
@@ -433,31 +455,26 @@ function JobRow({ job, expanded, onToggle }: { job: JobListItem; expanded: boole
             <Chevron className="h-4 w-4" />
           </button>
         </td>
-        <td className="py-1.5 pr-3">
-          <div className="flex flex-col">
-            <span className="flex items-center gap-1.5 font-medium">
+        <td className="min-w-0 py-1.5 pr-3">
+          <div className="flex min-w-0 flex-col">
+            <span className="flex min-w-0 items-center gap-1.5 font-medium">
               {/* Category as a colour cue on every row, so a subsystem's work is
                   scannable in a wall of thousands. The written category is in the
                   expanded detail and the filter — colour is never the only
                   channel (WCAG 1.4.1). */}
               <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${categoryDot(job.category)}`} />
-              {job.label}
+              <span className="min-w-0 truncate">{job.label}</span>
             </span>
-            <span className="text-xs text-muted-foreground">
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
               {job.event ?? 'no event name'}
               {job.interactive ? ' · interactive' : ''}
             </span>
           </div>
-          {job.failure ? (
-            <span className="mt-1 inline-flex max-w-full items-center gap-1 text-xs text-destructive">
-              <AlertTriangle aria-hidden className="h-3 w-3 shrink-0" />
-              <span className="truncate" title={job.failure.message}>
-                {job.failure.message}
-              </span>
-            </span>
-          ) : null}
+          {job.failure ? <JobFailureLine message={job.failure.message} /> : null}
         </td>
-        <td className="py-1.5 pr-3 text-xs text-muted-foreground">{job.queue}</td>
+        <td className="truncate py-1.5 pr-3 text-xs text-muted-foreground" title={job.queue}>
+          {job.queue}
+        </td>
         <td className="py-1.5 pr-3">
           <StateBadge job={job} />
         </td>
@@ -489,7 +506,7 @@ function JobCard({ job, expanded, onToggle }: { job: JobListItem; expanded: bool
         aria-expanded={expanded}
         aria-label={`Details for ${job.label}`}
         onClick={onToggle}
-        className="flex w-full flex-col gap-1 py-2.5 text-left"
+        className="flex w-full min-w-0 flex-col gap-1 py-2.5 text-left"
       >
         <div className="flex items-start justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5 font-medium">
@@ -511,14 +528,7 @@ function JobCard({ job, expanded, onToggle }: { job: JobListItem; expanded: bool
           {' · '}
           {formatTimestamp(job.createdOn)}
         </p>
-        {job.failure ? (
-          <span className="inline-flex min-w-0 items-center gap-1 text-xs text-destructive">
-            <AlertTriangle aria-hidden className="h-3 w-3 shrink-0" />
-            <span className="truncate" title={job.failure.message}>
-              {job.failure.message}
-            </span>
-          </span>
-        ) : null}
+        {job.failure ? <JobFailureLine message={job.failure.message} /> : null}
       </button>
       {expanded ? (
         <div className="pb-3">
@@ -552,7 +562,7 @@ function JobDetails({ job }: { job: JobListItem }) {
       </dl>
       {job.failure ? (
         <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/5 p-2">
-          <p className="text-xs font-medium text-destructive">{job.failure.message}</p>
+          <p className="break-words text-xs font-medium text-destructive">{job.failure.message}</p>
           {job.failure.failedAt ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
               Failed {formatTimestamp(job.failure.failedAt)}

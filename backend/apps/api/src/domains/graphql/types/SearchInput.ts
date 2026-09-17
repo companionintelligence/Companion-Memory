@@ -71,13 +71,28 @@ export class SearchInput {
   @Field(() => [String], { nullable: true })
   connectors?: string[];
 
-  /** "Who" — person name patterns; matched (ILIKE) against Person entities the event involves. */
+  /**
+   * "Who" — person name patterns; matched (ILIKE) against the Person entities a
+   * row links to: an event's participants / organizer, a communication's sender /
+   * recipients. Narrows those two kinds and sets aside every other kind.
+   */
   @Field(() => [String], { nullable: true })
   people?: string[];
 
   /** "Where" — place name patterns; matched (ILIKE) against the event's Location entity / location name. */
   @Field(() => [String], { nullable: true })
   places?: string[];
+
+  /**
+   * Message direction: `inbound` (received) or `outbound` (sent). A dimension
+   * only communications carry, so setting it pins the browse to them — the
+   * Who picker's "Received / Sent" toggle. With `people` set it also fixes the
+   * person's role: received means *from* one of them, sent means *to* one of
+   * them, so a group chat they merely belong to does not surface everyone
+   * else's messages. Other values are ignored.
+   */
+  @Field(() => String, { nullable: true })
+  direction?: string;
 
   /** "Where" — when true, only events carrying geographic coordinates are returned (located only). */
   @Field(() => Boolean, { nullable: true })

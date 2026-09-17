@@ -6,7 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
-import { DatabaseSearchTool, type SearchResult } from './DatabaseSearchTool';
+import { DatabaseSearchTool, type SearchToolResult } from './DatabaseSearchTool';
 
 const PeopleFindInputSchema = z.object({
   query: z.string().min(1).max(500),
@@ -21,7 +21,7 @@ export type PeopleFindInput = z.infer<typeof PeopleFindInputSchema>;
  * own curated intent definition.
  */
 @Injectable()
-export class PeopleFindTool extends BaseTool<PeopleFindInput, SearchResult[]> {
+export class PeopleFindTool extends BaseTool<PeopleFindInput, SearchToolResult> {
   readonly schema: IntentDefinition = {
     name: 'people.find',
     domain: 'people',
@@ -57,7 +57,7 @@ export class PeopleFindTool extends BaseTool<PeopleFindInput, SearchResult[]> {
   protected async executeInternal(
     context: ToolExecutionContext,
     input: PeopleFindInput,
-  ): Promise<SearchResult[]> {
+  ): Promise<SearchToolResult> {
     return this.search.run(context, {
       query: input.query,
       maxResults: input.maxResults,

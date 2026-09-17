@@ -1,15 +1,23 @@
-import ffmpegDefault from 'fluent-ffmpeg';
-import sharp from 'sharp';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
+import ffmpegDefault from 'fluent-ffmpeg';
+
+import { vipsCliAvailable } from '../../../__tests__/support/vipsCli';
 import { MediaDimensionsService } from '../MediaDimensionsService';
+import { VipsService } from '../VipsService';
 
 // Mock fluent-ffmpeg so the video path is driven by scripted ffprobe output
-// (no ffmpeg binary / real video fixture needed). sharp stays real for images.
+// (no ffmpeg binary / real video fixture needed). The image path runs the real
+// `vips` tools on the fixtures below and is skipped on a machine without them.
 jest.mock('fluent-ffmpeg', () => ({
   __esModule: true,
   default: { ffprobe: jest.fn() },
 }));
 const ffmpeg = ffmpegDefault as unknown as { ffprobe: jest.Mock };
+
+const describeIfVips = vipsCliAvailable() ? describe : describe.skip;
+const fixture = (name: string) => readFileSync(join(__dirname, '__fixtures__', name));
 
 function makeLogger() {
   return { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
@@ -17,20 +25,7 @@ function makeLogger() {
 
 function makeService() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return new MediaDimensionsService(makeLogger() as any);
-}
-
-/** A solid-colour PNG of the given pixel dimensions, optionally tagged with an EXIF orientation. */
-async function makeImage(width: number, height: number, orientation?: number): Promise<Buffer> {
-  let image = sharp({
-    create: { width, height, channels: 3, background: { r: 10, g: 20, b: 30 } },
-  });
-
-  if (orientation != null) {
-    image = image.withMetadata({ orientation });
-  }
-
-  return image.jpeg().toBuffer();
+  return new MediaDimensionsService(new VipsService(makeLogger() as any), makeLogger() as any);
 }
 
 /** Make ffprobe resolve with a single video stream carrying the given fields. */
@@ -40,39 +35,38 @@ function scriptFfprobe(stream: Record<string, unknown>) {
   });
 }
 
-describe('MediaDimensionsService.fromImageBuffer', () => {
+describeIfVips('MediaDimensionsService.fromImageBuffer', () => {
   it('reads width/height from an image header', async () => {
-    const service = makeService();
-
-    await expect(service.fromImageBuffer(await makeImage(64, 40))).resolves.toEqual({
+    await expect(makeService().fromImageBuffer(fixture('64x40.jpg'))).resolves.toEqual({
       width: 64,
       height: 40,
     });
   });
 
   it('swaps dimensions for a 90°/270° EXIF orientation (5–8) to match the displayed image', async () => {
-    const service = makeService();
-
     // Orientation 6 = rotate 90° CW: stored 64×40 displays as 40×64.
-    await expect(service.fromImageBuffer(await makeImage(64, 40, 6))).resolves.toEqual({
+    await expect(makeService().fromImageBuffer(fixture('64x40-orientation-6.jpg'))).resolves.toEqual({
       width: 40,
       height: 64,
     });
   });
 
   it('does not swap for an upright orientation (1)', async () => {
-    const service = makeService();
+    await expect(makeService().fromImageBuffer(fixture('64x40-orientation-1.jpg'))).resolves.toEqual({
+      width: 64,
+      height: 40,
+    });
+  });
 
-    await expect(service.fromImageBuffer(await makeImage(64, 40, 1))).resolves.toEqual({
+  it('reads HEIC, the format the previous decoder could not', async () => {
+    await expect(makeService().fromImageBuffer(fixture('64x40.heic'))).resolves.toEqual({
       width: 64,
       height: 40,
     });
   });
 
   it('returns null (does not throw) for an unreadable buffer', async () => {
-    const service = makeService();
-
-    await expect(service.fromImageBuffer(Buffer.from('not an image'))).resolves.toBeNull();
+    await expect(makeService().fromImageBuffer(Buffer.from('not an image'))).resolves.toBeNull();
   });
 });
 

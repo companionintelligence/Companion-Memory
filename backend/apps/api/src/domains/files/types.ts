@@ -69,6 +69,8 @@ export interface SavedSearchFilters {
   places?: string[];
   hasLocation?: boolean;
   semantic?: boolean;
+  /** Message direction to keep (`inbound` received, `outbound` sent); pins the browse to communications. */
+  direction?: string;
 }
 
 export interface CreateSavedSearchDto {

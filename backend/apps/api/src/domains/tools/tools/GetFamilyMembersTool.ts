@@ -8,6 +8,8 @@ import { GraphQueryService, GraphReadService } from '@ci/domains/memory';
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
+import { booleanish } from './booleanish';
+
 const FAMILY_RELATIONSHIP_TYPES = [
   'SPOUSE',
   'PARTNER',
@@ -21,7 +23,7 @@ const FAMILY_RELATIONSHIP_TYPES = [
 // Input schema
 const getFamilyMembersInputSchema = z.object({
   relationshipType: z.enum(['family', 'romantic_partner', 'all']).optional().default('all'),
-  includePreferences: z.boolean().default(false),
+  includePreferences: booleanish().default(false),
 });
 
 type GetFamilyMembersInput = z.infer<typeof getFamilyMembersInputSchema>;

@@ -22,7 +22,7 @@ import {
 import { z, type ZodTypeAny } from 'zod';
 
 import { LoggerService } from '@ci/common/logging';
-import type { IntentPrivacy } from '@ci/domains/tools';
+import { GRAPHQL_PRIVACY_EXTENSION, type IntentPrivacy } from '@ci/domains/tools';
 
 import type { McpToolDefinition } from '../types';
 
@@ -32,6 +32,18 @@ import type { McpToolDefinition } from '../types';
  * the treatment of the native `memory.forget` intent.
  */
 const DESTRUCTIVE_MUTATION_PREFIXES = ['delete', 'remove', 'destroy', 'purge', 'drop'] as const;
+
+/**
+ * Every mutation field name on `mutationType` that carries no explicit `@GraphqlPrivacy`
+ * declaration — i.e. `field.extensions[GRAPHQL_PRIVACY_EXTENSION]` is absent, not merely `{}`.
+ * Exported so the boot-time guard below and its unit test exercise the exact same check; a guard
+ * is only trustworthy if the thing verifying it is the thing that actually runs.
+ */
+export function findUndeclaredMutations(mutationType: GraphQLObjectType): string[] {
+  return Object.entries(mutationType.getFields())
+    .filter(([, field]) => field.extensions?.[GRAPHQL_PRIVACY_EXTENSION] == null)
+    .map(([name]) => name);
+}
 
 @Injectable()
 export class GraphQLToolAdapter implements OnModuleInit {
@@ -71,6 +83,8 @@ export class GraphQLToolAdapter implements OnModuleInit {
     }
 
     if (mutationType) {
+      this.assertAllMutationsDeclared(mutationType);
+
       const fields = mutationType.getFields();
 
       for (const [name, field] of Object.entries(fields)) {
@@ -85,6 +99,33 @@ export class GraphQLToolAdapter implements OnModuleInit {
     });
   }
 
+  /**
+   * Boot-time completeness guard, the same shape as `ENTITY_SOURCE_MAP`'s module-load throw in
+   * `domains/search-ingress/entitySourceMap.ts`: a schema that grows a new mutation with no
+   * `@GraphqlPrivacy` declaration must fail loudly here rather than silently falling through to
+   * the name-prefix heuristic — the entire reason that heuristic was demoted to a fallback (see
+   * the class doc on {@link synthesizePrivacy}) is that it under-flags real deletions, which is
+   * the dangerous direction to get wrong. Every mutation in the schema is declared as of this
+   * change, so this is unconditional rather than an allowlisted escape hatch: the count of
+   * mutations still on the inferred path is zero, and this is what keeps it that way.
+   *
+   * Runs from {@link onModuleInit}, so a mutation added without a declaration fails Nest's own
+   * bootstrap — not just a test suite that happens to exercise this file.
+   */
+  private assertAllMutationsDeclared(mutationType: GraphQLObjectType): void {
+    const undeclared = findUndeclaredMutations(mutationType);
+
+    if (undeclared.length > 0) {
+      throw new Error(
+        `GraphQLToolAdapter: ${undeclared.length} mutation(s) have no @GraphqlPrivacy declaration, so ` +
+          `their MCP tool privacy would silently fall back to the name-only heuristic — the exact bug ` +
+          `class this file exists to close (see GraphqlPrivacy.ts). Add ` +
+          `@GraphqlPrivacy({ destructive: true | false, ... }) directly above the resolver method for: ` +
+          `${undeclared.join(', ')}`,
+      );
+    }
+  }
+
   private fieldToTool(
     name: string,
     field: GraphQLField<unknown, unknown>,
@@ -97,7 +138,7 @@ export class GraphQLToolAdapter implements OnModuleInit {
       name: `${operation}_${name}`,
       description,
       inputSchema,
-      privacy: this.synthesizePrivacy(name, operation),
+      privacy: this.synthesizePrivacy(name, field, operation),
       operationName: name,
       operationType: operation,
       graphqlArgs: field.args,
@@ -106,20 +147,73 @@ export class GraphQLToolAdapter implements OnModuleInit {
   }
 
   /**
-   * Synthesize a privacy/safety label for an auto-wrapped GraphQL root field. These tools are
-   * generated from the schema and carry no hand-authored {@link IntentPrivacy}; without a label
-   * they slip past the intent layer's dispatcher entirely. We derive a conservative label from the
-   * operation kind and field name:
+   * The privacy/safety label for an auto-wrapped GraphQL root field.
+   *
+   * A DECLARED label wins. `@GraphqlPrivacy` writes one onto the field's
+   * `extensions`, which is the only channel that survives schema construction —
+   * the adapter never sees the resolver class, so Reflect metadata would be
+   * invisible here. Fields that declare nothing fall back to the name heuristic
+   * below.
+   *
+   * The heuristic is kept, but demoted, because it is wrong in both directions
+   * and cannot be repaired by lengthening the word list:
+   *
+   * - `returnEventToSlate` ends in `eventService.remove` and its SDL says
+   *   "deleting the event it minted", yet started with none of the prefixes. A
+   *   `write` key refused `deleteEvent` could delete the same row through it.
+   * - `mergePeople`/`mergeItems`/`mergePlaces` tombstone their sources and drop
+   *   the sources' search rows, one-way, at `write`.
+   * - `untagEntities` deletes join rows in bulk at `write`, while `deleteTag`
+   *   — a single label — costs `full`. The heuristic inverted the severity.
+   * - and a verb denylist would misfire the other way: `forageReset` reads like
+   *   a wipe and writes nothing at all.
+   *
+   * The deletion is typically one or two hops down inside a service, where no
+   * name-based rule can reach it. So: declare the truth at the resolver, and let
+   * the prefix cover the ordinary `deleteX` CRUD it was always right about.
    *
    * - queries → read access, non-destructive;
-   * - mutations → write access, unless the name matches a {@link DESTRUCTIVE_MUTATION_PREFIXES}
-   *   pattern (e.g. `deleteMemory`), in which case it is `delete`/`destructive`;
-   * - all wrapped operations are internal CRUD against local Companion Memory, so `external: false`.
+   * - mutations → write, unless declared otherwise or the name matches a
+   *   {@link DESTRUCTIVE_MUTATION_PREFIXES} pattern, in which case
+   *   `delete`/`destructive`.
    *
-   * Sensitivity defaults to `personal` — memory data is personal by default; a dispatcher can
-   * downgrade specific safe fields later.
+   * `external` defaults to false — most wrapped operations are local CRUD — but
+   * it is NOT unconditional any more. The previous blanket `external: false`
+   * was untrue of `sendPeerAsk`, `runAsk` and `createConnection`, which reach
+   * another Companion or a third party, and it surfaced to MCP clients as
+   * `openWorldHint: false`. Those fields declare it.
+   *
+   * Sensitivity defaults to `personal` — memory data is personal by default.
    */
-  private synthesizePrivacy(name: string, operation: 'query' | 'mutation'): IntentPrivacy {
+  private synthesizePrivacy(
+    name: string,
+    field: GraphQLField<unknown, unknown>,
+    operation: 'query' | 'mutation',
+  ): IntentPrivacy {
+    const declared = field.extensions?.[GRAPHQL_PRIVACY_EXTENSION] as Partial<IntentPrivacy> | undefined;
+
+    const inferred = this.inferPrivacy(name, operation);
+
+    if (!declared) {
+      return inferred;
+    }
+
+    // A declaration overrides field by field, so a resolver can correct one axis
+    // (`external`) without restating the rest. `destructive` and `access` are
+    // kept consistent: declaring either as data-losing implies the other, so a
+    // partial declaration cannot produce `destructive: true, access: 'write'`,
+    // which `capabilityRequiredFor` would price at `write`.
+    const merged: IntentPrivacy = { ...inferred, ...declared };
+
+    if (merged.destructive || merged.access === 'delete') {
+      merged.destructive = true;
+      merged.access = 'delete';
+    }
+
+    return merged;
+  }
+
+  private inferPrivacy(name: string, operation: 'query' | 'mutation'): IntentPrivacy {
     if (operation === 'query') {
       return {
         access: 'read',

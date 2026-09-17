@@ -73,6 +73,28 @@ const booleanStringSchema = z.preprocess((val) => {
   return val;
 }, z.boolean());
 
+/**
+ * Is this URL empty, or unambiguously on this machine?
+ *
+ * Hostname-only, and an allowlist rather than a pattern: `127.0.0.1.evil.com`
+ * and `localhost.attacker.net` both CONTAIN a loopback string and resolve
+ * wherever their owner points them. A URL that does not parse is not loopback
+ * either.
+ */
+export function isEmptyOrLoopback(value: string): boolean {
+  if (value === '') {
+    return true;
+  }
+
+  try {
+    const { hostname } = new URL(value);
+
+    return ['127.0.0.1', '::1', '[::1]', 'localhost', 'host.docker.internal'].includes(hostname);
+  } catch {
+    return false;
+  }
+}
+
 export const ConfigSchema = z.object({
   host: z.string(),
   port: z.number(),
@@ -247,6 +269,38 @@ export const ConfigSchema = z.object({
       // public CI_HUB_ORIGINS list is for browser redirects; this is the
       // appliance-local hop. Override with CI_HUB_INTERNAL_URL.
       hubInternalUrl: z.string().optional().default('http://ci-os-hub:3000'),
+
+      /**
+       * DEV ONLY. Ring OpenClaw's `/hooks/wake` directly, skipping Hub.
+       *
+       * A local dev stack cannot reach Hub — `CI_HUB_INTERNAL_URL` names a
+       * Docker alias no CI-Server compose file defines, and
+       * `CI_HUB_FORWARD_AUTH_SECRET` is empty — so dispatch could not be
+       * exercised at all without a full Hub install: a private-registry token,
+       * a source build, Postgres + RabbitMQ, and OpenClaw installed THROUGH
+       * Hub, because Hub resolves wake targets only from installed app files.
+       *
+       * Skipping Hub is safe here because the wake is a DOORBELL, not a grant.
+       * The body carries no secret; all authority lives in the packet fetch the
+       * harness then makes with its own user-scoped key, and `getPacket` scopes
+       * the row by `{ id, userId }`. Hub's own leg to OpenClaw is already a
+       * plain shared bearer rather than a signature, so nothing cryptographic
+       * is given up. What IS given up is Hub's policy point — it decides which
+       * apps may be woken at all — and its sole custody of the wake token.
+       * That is why this is dev-only.
+       *
+       * LOOPBACK-ENFORCED AT PARSE TIME, deliberately. The one way this could
+       * weaken anything real is misactivation: an appliance that somehow had it
+       * set would POST a bearer to whatever host it named. Refusing to boot
+       * beats warning about it.
+       */
+      devDirectWakeUrl: z.string().optional().default('').refine(isEmptyOrLoopback, {
+        message:
+          'CI_DEV_DIRECT_WAKE_URL must be loopback (127.0.0.1, ::1, localhost or host.docker.internal). It exists to exercise dispatch on a dev stack and must never point off-box.',
+      }),
+
+      /** The static bearer OpenClaw's `/hooks/wake` compares — its `HUB_WAKE_SECRET`. */
+      devDirectWakeToken: z.string().optional().default(''),
     }),
   }),
   db: z.object({
@@ -288,6 +342,18 @@ export const ConfigSchema = z.object({
       chatModel: z.string().default(DEFAULT_CHAT_MODEL),
       /** Background extraction/classification model. See {@link DEFAULT_UTILITY_MODEL}. */
       utilityModel: z.string().default(DEFAULT_UTILITY_MODEL),
+      /**
+       * How long one model request may go without ANY response — no headers,
+       * no first token — before it is torn down (`firstResponseDeadline.ts`).
+       * Bounds the wait for a runner that never comes (a model swap the
+       * scheduler cannot make, a wedged backend), not the generation: once the
+       * backend starts answering the deadline no longer applies. Before this
+       * the only bound was undici's five-minute headers timeout, and pg-boss's
+       * 15-minute job expiry did the rest. Sized above the longest legitimate
+       * wait for a busy single-slot runner; a request cut here is retried, so
+       * too short costs churn, too long costs a person's patience.
+       */
+      firstResponseTimeoutMs: z.coerce.number().int().positive().default(90_000),
       chat: z
         .object({
           groundedRecall: z
@@ -332,6 +398,57 @@ export const ConfigSchema = z.object({
            * rather than a guess. 0 = fall back to the router's own profile.
            */
           onDeviceContextTokens: z.number().int().nonnegative().default(0),
+        })
+        .default({}),
+      /**
+       * GPU co-residency planning for the utility model
+       * (`domains/llm/services/ResidencyPlannerService.ts`).
+       *
+       * Before this existed every background call asked Ollama to load
+       * `utilityModel` at Ollama's default context, and Ollama decided whether
+       * it fit from its own prediction. When it did not, Ollama tried to evict
+       * the chat model — which a busy appliance never lets go idle — and every
+       * request for a non-resident model queued behind that wait, silently.
+       * The planner reads live GPU memory and refuses to start a load it cannot
+       * prove fits, routing that call to the resident chat model instead.
+       */
+      residency: z
+        .object({
+          /** `off` restores the old behaviour: the configured utility model, unplanned, no `num_ctx`. */
+          mode: z.enum(['auto', 'off']).default('auto'),
+          /**
+           * Total GPU memory, in bytes, for machines where neither the AMD sysfs
+           * counters nor `nvidia-smi` are readable from this process. 0 = unknown,
+           * and an unknown total routes every utility call to the chat model
+           * unless the utility model is already resident.
+           */
+          vramTotalBytes: z.coerce.number().int().nonnegative().default(0),
+          /** Headroom always left unallocated. Covers the compositor, HBPE's scratch, estimate error. */
+          safetyMarginBytes: z.coerce
+            .number()
+            .int()
+            .nonnegative()
+            .default(1024 ** 3),
+          /** Top rung of the utility model's context ladder (32K → 16K → 8K → 4K). */
+          maxUtilityContextTokens: z.coerce.number().int().positive().default(32_768),
+          /**
+           * After the planner asks Ollama to load the utility model, how long
+           * it may stay absent from `/api/ps` before the planner concludes the
+           * load is stuck behind an eviction that cannot happen. A cold load of
+           * a ~10 GB model finishes in 10–20 s; the first-response deadline is
+           * 90 s. 0 disables the watchdog.
+           */
+          loadWatchdogMs: z.coerce.number().int().nonnegative().default(120_000),
+          /**
+           * How long co-residency stays off after the watchdog fires (or a
+           * planned load times out). Utility calls run on the chat model
+           * meanwhile. Long enough for the wedge to clear or be noticed.
+           */
+          cooldownMs: z.coerce
+            .number()
+            .int()
+            .positive()
+            .default(15 * 60_000),
         })
         .default({}),
     })
@@ -1108,6 +1225,48 @@ export const ConfigSchema = z.object({
      *     console.log(JSON.stringify(generateKeyPairSync('ed25519').privateKey.export({format:'jwk'})))"
      */
     signingKeyJwk: z.string().optional(),
+    /**
+     * OPT-IN escape hatch: let peer egress dial CGNAT space (100.64.0.0/10).
+     *
+     * OFF by default, and off is byte-identical to the pre-existing behaviour —
+     * `urlPolicy.ts`'s address table blocks the whole range exactly as before.
+     * This exists because CGNAT is also where Tailscale (and similar
+     * carrier-grade-NAT mesh overlays) live: two appliances an operator has
+     * deliberately linked over their own private tailnet fall in the SAME
+     * range a hostile directory entry would use to reach the box's own LAN,
+     * so without this knob they can never federate at all. Confirmed live: a
+     * real cross-machine `sendPeerAsk` over Tailscale refused with "Peer
+     * endpoint not permitted" before this flag existed.
+     *
+     * Deliberately narrower than "any private network". RFC1918 space (10/8,
+     * 172.16/12, 192.168/16) stays blocked regardless of this setting — that
+     * is where an appliance's OWN infrastructure typically lives (its Docker
+     * network, its Postgres, a cloud VPC's internal services), so folding it
+     * into the same switch would trade a narrow, tested federation scenario
+     * for a much larger SSRF surface against the box's own internals. A
+     * deployment that genuinely needs RFC1918 peer egress should get its own
+     * explicit flag, not inherit this one for convenience.
+     *
+     * Loopback (127.0.0.0/8), link-local (169.254.0.0/16, including cloud
+     * metadata) and 0.0.0.0/8 are NEVER gated by this flag, at any setting:
+     * those guard against dialing the box's OWN services, a different mistake
+     * than "I run a private mesh", and no operator intent should reopen them.
+     *
+     * Changes only which addresses `checkEgressUrl` treats as in range to
+     * try. The DNS-rebinding / redirect protections in `peerEgressFetch`
+     * (connect-time address pinning, zero redirects followed) apply UNCHANGED
+     * to the newly-permitted range — a CGNAT hostname that rebinds to a
+     * blocked answer is still refused, flag or no flag.
+     *
+     * `booleanStringSchema`, not `z.coerce.boolean()` — the plain coercion
+     * `requireHttpSignature` above uses treats ANY non-empty string as `true`,
+     * including the literal string `"false"` an env var would carry, which is
+     * exactly why that field still has no env mapping in
+     * `custom-environment-variables.json`. This flag is meant to be operator
+     * -set via `CI_PEER_ALLOW_CGNAT_ENDPOINTS`, so it needs the schema that
+     * actually parses `"true"`/`"false"` strings correctly.
+     */
+    allowCgnatEndpoints: booleanStringSchema.default(false),
   }),
   /**
    * Where the abuse-control counters live -- the rate-limit windows and the
@@ -1169,6 +1328,37 @@ export const ConfigSchema = z.object({
      */
     portalBaseUrl: z.string().default(''),
   }),
+  // Web Push (VAPID) for planning reminders — see docs/architecture/planning-roadmap.md
+  // M5 and WebPushService. Deliberately config-only, not a stored/generated
+  // keypair: the roadmap's "Deliberately not doing" table rules out a generic
+  // `app_config` table, and unlike CI-Planning's SQLite server (which
+  // generates and PERSISTS a keypair on first boot because it has nowhere
+  // else to put one), this appliance already has the operator-provisioned
+  // secret convention every other cryptographic key here follows —
+  // AUTH_TOKEN_SECRET, AUTH_FIELD_ENCRYPTION_KEY, AUTH_CSRF_TOKEN_SECRET — so
+  // VAPID keys follow it too rather than inventing a new persistence
+  // mechanism for one feature. Both empty (the default) means push is simply
+  // OFF: `WebPushService.isConfigured()` returns false, reminders still fire
+  // (the record still moves to 'fired'), and the resolver's `pushPublicKey`
+  // query returns null so the client never shows a "turn on push" control.
+  //
+  // Generate a pair with `npx web-push generate-vapid-keys` and set both
+  // VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY — a HALF-set pair is refused the same
+  // way an operator-supplied env keypair is refused elsewhere in this file
+  // (see the field-encryption warning above): `WebPushService` treats
+  // "exactly one of the two set" as a misconfiguration and leaves push
+  // dormant rather than guessing. Never rotate an existing pair without
+  // clearing `ci.push_subscriptions` first — a subscription is
+  // cryptographically bound to the public key it was created against, so
+  // rotating breaks push for every existing subscriber at once.
+  push: z.object({
+    vapid: z.object({
+      publicKey: z.string().default(''),
+      privateKey: z.string().default(''),
+      /** `mailto:` contact a push service may use if it needs to reach the sender. Cosmetic. */
+      subject: z.string().default('mailto:admin@companion.local'),
+    }),
+  }),
 });
 
 const parsed = ConfigSchema.parse(config);
@@ -1229,6 +1419,19 @@ if (!parsed.llm.apiKey) {
 if (!parsed.llm.chatModel) {
   parsed.llm.chatModel = DEFAULT_CHAT_MODEL;
 }
+
+// Captured BEFORE the default below overwrites it: whether an operator (or
+// the Hub installer) actually set LLM_UTILITY_MODEL, as distinct from it
+// having fallen back to the compiled-in DEFAULT_UTILITY_MODEL. `config.has`
+// reads the raw merged sources (env + config/*.json) ahead of this file's own
+// normalization, so it sees "absent" exactly when the env var was never set —
+// default.json carries no `llm.utilityModel` key at all, only
+// custom-environment-variables.json's LLM_UTILITY_MODEL mapping can put one
+// there. Exists so a vision-capable utility model is only ever used for
+// vision work when an operator asked for it: see UTILITY_MODEL_EXPLICITLY_CONFIGURED
+// in OllamaService, which is what actually reads this.
+export const UTILITY_MODEL_EXPLICITLY_CONFIGURED =
+  config.has('llm.utilityModel') && Boolean(config.get('llm.utilityModel'));
 
 // An empty LLM_UTILITY_MODEL means "not configured", not "use the empty
 // string" — same normalization chatModel gets just above. Falling back to the
@@ -1334,6 +1537,19 @@ if (/^0{64}$/i.test(parsed.auth.encryption.fieldKey)) {
   }
 
   console.warn(msg);
+}
+
+// Loud by design (see the field's own doc comment above): an operator who set
+// CI_PEER_ALLOW_CGNAT_ENDPOINTS should never have to wonder later whether they
+// did. This fires once, at boot, independent of whether the box ever actually
+// makes a peer call into that range.
+if (parsed.peers.allowCgnatEndpoints) {
+  console.warn(
+    '[configuration] CI_PEER_ALLOW_CGNAT_ENDPOINTS is set — peer egress may now dial addresses in ' +
+      '100.64.0.0/10 (CGNAT space, including Tailscale). This box will treat that range as reachable ' +
+      'peer infrastructure. Only enable this if you have deliberately linked your appliances over a ' +
+      'private network you trust; RFC1918, loopback and link-local space remain blocked regardless.',
+  );
 }
 
 export default parsed;

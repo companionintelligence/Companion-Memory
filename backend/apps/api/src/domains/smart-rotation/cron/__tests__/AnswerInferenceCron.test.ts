@@ -50,7 +50,7 @@ describe('AnswerInferenceCron with smart.rotation', () => {
     // The attempt-history keying is what breaks the head-of-line loop: the
     // selection must read back the same queue/event this cron dispatches on.
     expect(questionService.findUnansweredByUserId).toHaveBeenCalledWith({
-      queue: 'llm',
+      queue: 'llm-background',
       eventName: Events.INFER_QUESTION_ANSWER,
       cooldownHours: 6,
     });

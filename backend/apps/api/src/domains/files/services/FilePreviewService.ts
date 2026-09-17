@@ -5,7 +5,6 @@ import { join } from 'node:path';
 
 import { Injectable } from '@nestjs/common';
 import ffmpeg from 'fluent-ffmpeg';
-import sharp from 'sharp';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -17,8 +16,10 @@ import { FileVariant } from '../types';
 
 import { FileService } from './FileService';
 import { type MediaDimensions, MediaDimensionsService } from './MediaDimensionsService';
+import { VipsDecodeError, VipsService } from './VipsService';
 
 const PREVIEW_MAX_DIMENSION = 300;
+const PREVIEW_JPEG_QUALITY = 80;
 const IMAGE_MIME_PREFIX = 'image/';
 const VIDEO_MIME_PREFIX = 'video/';
 
@@ -78,6 +79,7 @@ export class FilePreviewService {
   constructor(
     private readonly fileService: FileService,
     private readonly mediaDimensionsService: MediaDimensionsService,
+    private readonly vips: VipsService,
     private readonly eventService: EventService,
     private readonly logger: LoggerService,
   ) {
@@ -152,7 +154,7 @@ export class FilePreviewService {
     const preview = await this.fileService.create(context, {
       contentType: 'image/jpeg',
       size: result.buffer.length,
-      // Always known — captured from sharp's resolveWithObject. Lets the FE
+      // Always known — read back from the rendered JPEG's header. Lets the FE
       // thumbnail loader size the slot before the image decodes.
       width: result.previewDimensions.width,
       height: result.previewDimensions.height,
@@ -203,26 +205,27 @@ export class FilePreviewService {
     const sourceDimensions = await this.mediaDimensionsService.fromImageBuffer(original);
 
     try {
-      // failOn: 'error', not sharp's default 'warning'. Real phone JPEGs —
-      // Samsung above all — routinely carry warning-level defects (stray bytes
-      // before restart markers) that every viewer decodes fine; the default
-      // turned ~8% of a sampled Takeout batch into failed preview jobs.
-      const { data, info } = await sharp(original, { failOn: 'error' })
-        .rotate()
-        .resize(PREVIEW_MAX_DIMENSION, PREVIEW_MAX_DIMENSION, {
-          fit: 'inside',
-        })
-        .jpeg({
-          quality: 80,
-        })
-        .toBuffer({ resolveWithObject: true });
+      // Auto-rotated, fail-on=error (warning-level phone-JPEG quirks decode),
+      // HEIC included — see VipsService for what each of those cost under sharp.
+      const rendered = await this.vips.renderJpeg(original, {
+        maxDimension: PREVIEW_MAX_DIMENSION,
+        quality: PREVIEW_JPEG_QUALITY,
+      });
 
       return {
-        buffer: data,
-        previewDimensions: { width: info.width, height: info.height },
+        buffer: rendered.buffer,
+        previewDimensions: { width: rendered.width, height: rendered.height },
         sourceDimensions,
       };
     } catch (err: unknown) {
+      // Only libvips' own verdict on the bytes is a skip. A missing `vips`
+      // binary, a full temp disk or anything else is an environment fault:
+      // rethrow so the job fails loudly and retries, instead of recording
+      // every file on the box as undecodable.
+      if (!(err instanceof VipsDecodeError)) {
+        throw err;
+      }
+
       // A decode failure on bytes that are NOT the whole file says nothing
       // about the file: rethrow so the read is retried. `size` is a Postgres
       // bigint with no transformer, so TypeORM hands it back as a string;
@@ -314,27 +317,28 @@ export class FilePreviewService {
 
       const frame = await fs.readFile(tempOutput);
 
-      // ffmpeg already auto-rotates the extracted frame, so .rotate() is a
-      // safety net for any orientation tag still on the JPEG bytes. Same
-      // failOn: 'error' tolerance as the image path, and the same
+      // ffmpeg already auto-rotates the extracted frame, so the renderer's own
+      // rotation is a safety net for any orientation tag still on the JPEG
+      // bytes. Same fail-on=error tolerance as the image path, and the same
       // skip-don't-throw contract: an undecodable extracted frame is a file
       // we cannot preview, not a job worth retrying three times and
       // dead-lettering.
       try {
-        const { data, info } = await sharp(frame, { failOn: 'error' })
-          .rotate()
-          .resize(PREVIEW_MAX_DIMENSION, PREVIEW_MAX_DIMENSION, {
-            fit: 'inside',
-          })
-          .jpeg({ quality: 80 })
-          .toBuffer({ resolveWithObject: true });
+        const rendered = await this.vips.renderJpeg(frame, {
+          maxDimension: PREVIEW_MAX_DIMENSION,
+          quality: PREVIEW_JPEG_QUALITY,
+        });
 
         return {
-          buffer: data,
-          previewDimensions: { width: info.width, height: info.height },
+          buffer: rendered.buffer,
+          previewDimensions: { width: rendered.width, height: rendered.height },
           sourceDimensions,
         };
       } catch (err: unknown) {
+        if (!(err instanceof VipsDecodeError)) {
+          throw err;
+        }
+
         this.logger.warn('Video frame decode failed, skipping preview generation', {
           fileId: file.id,
           contentType: file.contentType,

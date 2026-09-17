@@ -9,7 +9,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
  * `/server` remains the Advanced URL fallback. Do not reuse `/connect` — that is Sources.
  */
 const config: CapacitorConfig = {
-  appId: 'com.companionintelligence.app',
+  appId: 'com.ci.memory',
   appName: 'Memory',
   webDir: '../web/dist',
   server: {

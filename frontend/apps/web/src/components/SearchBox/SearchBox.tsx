@@ -30,7 +30,7 @@ import type { FilterDragPayload } from './filterDrag';
 import { DropdownProvider, useDropdown } from './useDropdown';
 
 /** Radix filter menus portal outside the search wrapper — clicks there must not dismiss the panel. */
-const PORTALED_FILTER_IDS = ['entity-type-filters', 'how-filters', 'connector-filters'];
+const PORTALED_FILTER_IDS = ['entity-type-filters'];
 
 function isPortaledFilterTarget(target: Node | null): boolean {
   if (target == null) {

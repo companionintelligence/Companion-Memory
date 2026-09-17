@@ -200,6 +200,21 @@ describe('resolveOidcOriginBounce', () => {
     ).toBe(`${PUBLIC_BASE}${INITIATE_PATH}?client=native&${OIDC_ORIGIN_BOUNCE_PARAM}=1`);
   });
 
+  it('carries an invitation across the bounce, or the bounced request clears the cookie it never got', () => {
+    expect(
+      resolveOidcOriginBounce(
+        { host: '192.168.1.50:8642', secure: false },
+        PUBLIC_BASE,
+        undefined,
+        false,
+        'native',
+        'ABCD-1234',
+      ),
+    ).toBe(
+      `${PUBLIC_BASE}${INITIATE_PATH}?client=native&signup_code=ABCD-1234&${OIDC_ORIGIN_BOUNCE_PARAM}=1`,
+    );
+  });
+
   it('does not add a client flag for ordinary web sign-in', () => {
     expect(resolveOidcOriginBounce({ host: '192.168.1.50:8642', secure: false }, PUBLIC_BASE)).toBe(
       `${PUBLIC_BASE}${INITIATE_PATH}?${OIDC_ORIGIN_BOUNCE_PARAM}=1`,

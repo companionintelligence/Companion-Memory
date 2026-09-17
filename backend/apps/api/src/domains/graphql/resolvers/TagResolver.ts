@@ -25,6 +25,7 @@ import {
   TagService,
 } from '@ci/domains/search-next';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagAssignmentCountLoader } from '../loaders/TagAssignmentCountLoader';
 import { ActionType } from '../types/ActionType';
 import { BrowserActivityType } from '../types/BrowserActivityType';
@@ -41,6 +42,13 @@ import { NoteType } from '../types/NoteType';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { PersonType } from '../types/PersonType';
 import { PlaceType } from '../types/PlaceType';
+import { SetCategoryDirectionEnabledInput } from '../types/SetCategoryDirectionEnabledInput';
+import { SetEntityCategoriesInput } from '../types/SetEntityCategoriesInput';
+import { SetTagCategoriesInput } from '../types/SetTagCategoriesInput';
+import { SetTagDirectionsInput } from '../types/SetTagDirectionsInput';
+import { SetTagGroupingPayload } from '../types/SetTagGroupingPayload';
+import { SetTagKindInput } from '../types/SetTagKindInput';
+import { SetTagKindPayload } from '../types/SetTagKindPayload';
 import { TagConnection } from '../types/TagConnection';
 import { TagEdge } from '../types/TagEdge';
 import { TagEntitiesInput } from '../types/TagEntitiesInput';
@@ -117,6 +125,31 @@ export class TagResolver {
     return entity ? TagType.toType(entity) : null;
   }
 
+  /**
+   * The categories applied to one taggable entity, in position order.
+   * Deliberately not a field on the entity's own GraphQL type (`TaskType`
+   * etc.) — `ci_search.entity_categories` is queried through the tag domain,
+   * exactly like `entity_tag` is read through `tagEntities`/`untagEntities`
+   * rather than a bespoke field on every taggable type.
+   */
+  @Query(() => [TagType])
+  async entityCategories(
+    @Context() context: RequestContext,
+    @Args('entityId', { type: () => ID }) entityId: string,
+  ): Promise<TagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const { type, id } = GlobalUID.decode(entityId);
+
+    if (!isTaggableEntity(type)) {
+      throw new Error(`Invalid entity type: ${type}`);
+    }
+
+    const categories = await this.tagService.getEntityCategories(serviceContext, { type, id });
+
+    return categories.map((tag) => TagType.toType(tag));
+  }
+
   @ResolveField(() => TaggableEntityConnection)
   async entities(
     @Context() context: RequestContext,
@@ -175,6 +208,48 @@ export class TagResolver {
   }
 
   /**
+   * The direction tags this tag belongs to. Only meaningful for a
+   * `kind: 'intention'` tag; every other kind resolves to an empty list
+   * (an intention with no membership row is "Unsorted", which looks
+   * identical from this field).
+   */
+  @ResolveField(() => [TagType])
+  async directions(@Context() context: RequestContext, @Parent() parent: TagType): Promise<TagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const tags = await this.tagService.getTagDirections(serviceContext, parent.__source.id);
+
+    return tags.map((tag) => TagType.toType(tag));
+  }
+
+  /**
+   * The category tags this tag belongs to. Same contract as {@link directions}
+   * on the second, orthogonal grouping axis.
+   */
+  @ResolveField(() => [TagType])
+  async categories(@Context() context: RequestContext, @Parent() parent: TagType): Promise<TagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const tags = await this.tagService.getTagCategories(serviceContext, parent.__source.id);
+
+    return tags.map((tag) => TagType.toType(tag));
+  }
+
+  /**
+   * The direction tags turned OFF for this tag. Only meaningful for a
+   * `kind: 'category'` tag; empty means every direction applies (see the
+   * opt-out polarity note on `category_direction_optouts`).
+   */
+  @ResolveField(() => [TagType])
+  async directionOptOuts(@Context() context: RequestContext, @Parent() parent: TagType): Promise<TagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const tags = await this.tagService.getCategoryDirectionOptouts(serviceContext, parent.__source.id);
+
+    return tags.map((tag) => TagType.toType(tag));
+  }
+
+  /**
    * Rename a tag and/or re-describe it.
    *
    * Renaming onto a label the caller already owns merges the two tags rather
@@ -187,6 +262,13 @@ export class TagResolver {
    * rename — otherwise they would quietly stop matching anything.
    */
   @Mutation(() => UpdateTagPayload)
+  // Not a plain rename. Per this method's own doc comment: renaming onto a label the caller
+  // already owns runs TagService.update's merge branch, which calls the same mergeInto/purge path
+  // as deleteTag — the tag being "updated" is hard-deleted and its own description is dropped in
+  // favor of the surviving tag's (unless a new description is also passed). The label collision is
+  // caller-triggerable, not a rare edge case, so the whole mutation is declared destructive rather
+  // than trying to express a conditional privacy label.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async updateTag(
     @Context() context: RequestContext,
     @Args('input') input: UpdateTagInput,
@@ -235,6 +317,12 @@ export class TagResolver {
    * them (a one-tag saved search would start matching everything).
    */
   @Mutation(() => DeleteByIdPayload)
+  // TagService.purge runs entityTagRepository.delete({ tagId }) — unbounded, no LIMIT — then
+  // tagRepository.delete, explicitly bypassing the deleted_at column TagEntity carries. There is
+  // no createTag and no restore in the schema, and re-tagging mints a NEW id with no description,
+  // leaving every previously-tagged entity untagged. It destroys a strict superset of
+  // untagEntities, which this branch already raised to destructive.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteTag(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,
@@ -258,6 +346,7 @@ export class TagResolver {
   }
 
   @Mutation(() => [TaggableEntityType])
+  @GraphqlPrivacy({ destructive: false })
   async tagEntities(
     @Context() context: RequestContext,
     @Args('input') input: TagEntitiesInput,
@@ -286,6 +375,10 @@ export class TagResolver {
   }
 
   @Mutation(() => [TaggableEntityType])
+  // Deletes entity_tag join rows for every (label x entity) pair. deleteTag — a single label —
+  // already cost `full`; removing a label from ten thousand entities cost `write`. The name
+  // heuristic inverted the severity ordering.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async untagEntities(
     @Context() context: RequestContext,
     @Args('input') input: TagEntitiesInput,
@@ -311,6 +404,133 @@ export class TagResolver {
     });
 
     return this.resolveEntities(serviceContext, entities);
+  }
+
+  /** Set a tag's taxonomy level (direction / intention / category). */
+  @Mutation(() => SetTagKindPayload)
+  // TagService.setKind is a plain single-column UPDATE; no join rows touched.
+  @GraphqlPrivacy({ destructive: false })
+  async setTagKind(
+    @Context() context: RequestContext,
+    @Args('input') input: SetTagKindInput,
+  ): Promise<SetTagKindPayload> {
+    const serviceContext = toServiceContext(context);
+
+    const id = GlobalUID.parse('tag', input.id);
+
+    const tag = await this.tagService.setKind(serviceContext, id, input.kind);
+
+    return tag == null ? { success: false } : { success: true, tag: TagType.toType(tag) };
+  }
+
+  /**
+   * Replace an intention tag's direction membership. Any id in
+   * `directionIds` that is not one of the caller's own direction tags is
+   * silently dropped rather than failing the whole call.
+   */
+  @Mutation(() => SetTagGroupingPayload)
+  // "Replace" per its own doc comment, and TagService.setTagDirections implements that literally:
+  // `manager.getRepository(TagDirectionEntity).delete({ intentionTagId })` unconditionally, THEN
+  // re-inserts only the ids the caller passed. A caller (or an agent) that omits a previously-set
+  // direction permanently drops that join row — the same category of loss untagEntities is already
+  // declared destructive for, just reached through a "set" name instead of "untag".
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
+  async setTagDirections(
+    @Context() context: RequestContext,
+    @Args('input') input: SetTagDirectionsInput,
+  ): Promise<SetTagGroupingPayload> {
+    const serviceContext = toServiceContext(context);
+
+    const id = GlobalUID.parse('tag', input.id);
+    const directionIds = input.directionIds.map((gid) => GlobalUID.parse('tag', gid));
+
+    const directions = await this.tagService.setTagDirections(serviceContext, id, directionIds);
+
+    return directions == null
+      ? { success: false, tags: [] }
+      : { success: true, tags: directions.map((tag) => TagType.toType(tag)) };
+  }
+
+  /**
+   * Replace an intention tag's category membership — the second, orthogonal
+   * grouping axis. Same contract as {@link setTagDirections}.
+   */
+  @Mutation(() => SetTagGroupingPayload)
+  // Same delete-then-reinsert replace shape as setTagDirections (TagCategoryEntity in place of
+  // TagDirectionEntity) — see that mutation's comment.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
+  async setTagCategories(
+    @Context() context: RequestContext,
+    @Args('input') input: SetTagCategoriesInput,
+  ): Promise<SetTagGroupingPayload> {
+    const serviceContext = toServiceContext(context);
+
+    const id = GlobalUID.parse('tag', input.id);
+    const categoryIds = input.categoryIds.map((gid) => GlobalUID.parse('tag', gid));
+
+    const categories = await this.tagService.setTagCategories(serviceContext, id, categoryIds);
+
+    return categories == null
+      ? { success: false, tags: [] }
+      : { success: true, tags: categories.map((tag) => TagType.toType(tag)) };
+  }
+
+  /**
+   * Toggle whether a category applies under a direction. `enabled: false`
+   * writes an opt-out row; `enabled: true` removes one. Returns false when
+   * either tag does not exist, belongs to another user, or is not the kind
+   * its role requires.
+   */
+  @Mutation(() => Boolean)
+  // A single-row toggle, not a replace: enabled:true DELETES one opt-out row (restoring the
+  // default — an unblock, like revokeAskGrant), enabled:false inserts one. Neither branch can drop
+  // unrelated state the way setTagDirections/setTagCategories/setEntityCategories can.
+  @GraphqlPrivacy({ destructive: false })
+  async setCategoryDirectionEnabled(
+    @Context() context: RequestContext,
+    @Args('input') input: SetCategoryDirectionEnabledInput,
+  ): Promise<boolean> {
+    const serviceContext = toServiceContext(context);
+
+    const categoryId = GlobalUID.parse('tag', input.categoryId);
+    const directionId = GlobalUID.parse('tag', input.directionId);
+
+    return this.tagService.setCategoryDirectionEnabled(
+      serviceContext,
+      categoryId,
+      directionId,
+      input.enabled,
+    );
+  }
+
+  /**
+   * Replace one entity's category set, in the order given. Bounded to a
+   * single entity and at most three rows (`ENTITY_CATEGORY_CAP`) — unlike
+   * `untagEntities`, which fans out over an arbitrary list of entities and
+   * labels, this cannot touch more than one entity's assignments per call.
+   */
+  @Mutation(() => [TagType])
+  // Same delete-then-reinsert replace shape as setTagDirections/setTagCategories, this time over
+  // EntityCategoryEntity — TagService.setEntityCategories unconditionally deletes every existing
+  // (entityType, entityId) row before re-inserting only the ids passed.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
+  async setEntityCategories(
+    @Context() context: RequestContext,
+    @Args('input') input: SetEntityCategoriesInput,
+  ): Promise<TagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const { type, id } = GlobalUID.decode(input.entityId);
+
+    if (!isTaggableEntity(type)) {
+      throw new Error(`Invalid entity type: ${type}`);
+    }
+
+    const categoryIds = input.categoryIds.map((gid) => GlobalUID.parse('tag', gid));
+
+    const categories = await this.tagService.setEntityCategories(serviceContext, { type, id }, categoryIds);
+
+    return categories.map((tag) => TagType.toType(tag));
   }
 
   private async resolveEntities(

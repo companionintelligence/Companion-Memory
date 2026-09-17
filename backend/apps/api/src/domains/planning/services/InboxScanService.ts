@@ -7,7 +7,7 @@ import { z } from 'zod';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaService';
+import { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import { CommunicationEntity } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
@@ -538,7 +538,7 @@ export class InboxScanService {
         .join('\n');
 
       const response = await this.ollamaService.chat(context as never, [{ role: 'user', content: prompt }], {
-        model: UTILITY_MODEL,
+        tier: 'utility',
         enableTools: false,
         format: RESPONSE_JSON_SCHEMA,
         signal: controller.signal,

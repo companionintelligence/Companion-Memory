@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-stack-command"
+description = "Enables the start_stack_command command without any pre-configured scope."
+commands.allow = ["start_stack_command"]
+
+[[permission]]
+identifier = "deny-start-stack-command"
+description = "Denies the start_stack_command command without any pre-configured scope."
+commands.deny = ["start_stack_command"]

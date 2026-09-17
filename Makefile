@@ -49,14 +49,6 @@ JOHN_SMITH_USER_ID := b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b
 
 export TAG ?= $(shell git describe --tags --exact-match 2>/dev/null)
 
-# Ollama models the stack cannot run without: the embedding model
-# (`embedding.model` in backend/apps/api/config/default.json) and the chat model
-# every LLM-backed feature falls back to (`DEFAULT_CHAT_MODEL` in
-# backend/apps/api/src/configuration.ts). `dev` pulls any that are missing
-# rather than refusing to boot — a first run on a fresh machine is a download,
-# not an error. Keep this list in step with those two sources of truth.
-REQUIRED_OLLAMA_MODELS := nomic-embed-text gemma4:e4b
-
 # Subdirectory build contexts that need a copy of LICENSE. Images built
 # from the repo root (api, gateway, and the Python services) read LICENSE.md
 # directly and are not listed here.
@@ -66,13 +58,39 @@ LICENSE_DIRS := \
 	infrastructure/setup-database \
 	infrastructure/setup-secrets
 
+# ---------------------------------------------------------------------------
+# Native test toolchains (`test-android`, `test-desktop`)
+# ---------------------------------------------------------------------------
+
+ANDROID_APP_DIR := frontend/apps/android/android
+DESKTOP_TAURI_DIR := frontend/apps/desktop/src-tauri
+
+# Mirrors of what the Gradle build actually declares: `compileSdkVersion` in
+# $(ANDROID_APP_DIR)/variables.gradle, and the `jvmTarget`/`JavaVersion` lines in
+# each module's build.gradle. They exist only so the precondition messages can
+# name the version they want and the sdkmanager line that installs it.
+ANDROID_JDK_MAJOR := 21
+ANDROID_COMPILE_SDK := 36
+ANDROID_BUILD_TOOLS := 36.0.0
+
+# Where the Android SDK is, resolved the way every Android tool resolves it and
+# NEVER hard-coded: ANDROID_HOME, then the deprecated-but-still-common
+# ANDROID_SDK_ROOT, then the `sdk.dir` Android Studio writes into the project's
+# git-ignored local.properties. Empty when the machine has told us nothing —
+# which `test-android` reports as an error with the fix in it, rather than
+# guessing a path and failing somewhere less obvious.
+android_sdk_dir = $(strip $(or $(ANDROID_HOME),$(ANDROID_SDK_ROOT),$(shell sed -n 's/^ *sdk\.dir *= *//p' $(ANDROID_APP_DIR)/local.properties 2>/dev/null | head -n1)))
+
+# System libraries the Tauri crate links on Linux, as pkg-config names (what the
+# *-sys build scripts actually query) and as the apt line that installs them —
+# the same set desktop-build.yml installs on its ubuntu runner.
+DESKTOP_LINUX_PKGCONFIG := glib-2.0 gtk+-3.0 webkit2gtk-4.1 libsoup-3.0
+DESKTOP_LINUX_APT_PACKAGES := pkg-config libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
 # Helper: emoji $(2) when goal $(1) is the one invoked at top level, else ➤.
 # The MAKELEVEL/MAKECMDGOALS guard keeps the icon to the directly-requested
 # target, so recursive sub-makes fall back to the plain arrow.
 task_icon =$(if $(and $(filter 0,$(MAKELEVEL)),$(filter $(1),$(MAKECMDGOALS))),$(2),➤)
-
-# Helper: expands to "-t repo:tag" only when TAG is non-empty
-versioned_tag = $(if $(TAG),-t $(1):$(TAG))
 
 # Detects which environment (local|staging|production) is currently up by
 # reading the running compose project's config files from Docker as the source
@@ -144,24 +162,14 @@ GPU ?= $(shell scripts/detect-gpu.sh)
 # REBUILD=1 forces `dev`/`local` to rebuild local images; unset reuses them.
 REBUILD ?=
 
-# Images built for ENV=local — must match the `build` recipe's local set
-# (api/gateway/setup-secrets are NOT built for local).
-LOCAL_IMAGES := $(SETUP_DATABASE_REPO) $(DATABASE_REPO) $(OBJECT_STORE_REPO) \
-	$(SUMMARY_REPO) $(HBPE_REPO)
-
-VALID_ENVS := local staging production
-VALID_GPUS := cpu cuda rocm
-
-# GPU → HBPE Dockerfile (cpu uses the default Dockerfile)
-HBPE_DOCKERFILE_cpu  := Dockerfile
-HBPE_DOCKERFILE_cuda := Dockerfile.cuda
-HBPE_DOCKERFILE_rocm := Dockerfile.rocm
-HBPE_DOCKERFILE := $(HBPE_DOCKERFILE_$(GPU))
-
-# The uv pin, read from required-version in the root pyproject.toml — the
-# one authoritative place it is set. Passed to the Python Dockerfiles as
-# UV_VERSION; setup-uv in CI reads the same field on its own.
-UV_VERSION := $(shell sed -n 's/^required-version = "==\(.*\)"$$/\1/p' pyproject.toml)
+# The GPU/wheel-tag build logic that used to live below this point —
+# LOCAL_IMAGES, sidecar_stamp, VALID_ENVS/VALID_GPUS, HBPE_DOCKERFILE*,
+# UV_VERSION, the derived HBPE_TORCH_*/HBPE_CUDA_*/HBPE_PY_*/HBPE_ROCM_*
+# values, the wheel-image tag compositions, and HBPE_GPU_BUILD_ARGS — now
+# lives in scripts/xtask/lib/gpu.ts, scripts/xtask/lib/uv.ts and
+# scripts/xtask/lib/images.ts, run by the `build`/`dev` targets below. Only
+# the 4 raw pins the wheel-publish scripts (build-{flash-attn,llama-cpp,
+# llama-cpp-rocm}-wheel.sh) still `sed` out of this file by name stay here.
 
 # The llama-cpp-python pin: a commit on the JamePeng fork, which tracks
 # llama.cpp HEAD and can load Qwen3.5 GGUFs (the official PyPI package is
@@ -169,6 +177,11 @@ UV_VERSION := $(shell sed -n 's/^required-version = "==\(.*\)"$$/\1/p' pyproject
 # this same commit with hardware-specific CMake flags; the pin lives here
 # because the install happens only in Dockerfiles, passed as a build arg.
 # Bump deliberately: the fork moves fast and is our inference stack.
+#
+# Read by name (not just by `build`) by backend/apps/hbpe/build-{llama-cpp,
+# llama-cpp-rocm}-wheel.sh, which `sed` it straight out of this file to
+# publish a wheel, and by scripts/xtask/lib/gpu.ts the same way. Keep the
+# `NAME := value` formatting byte-exact or all three break.
 LLAMA_CPP_PYTHON_REF := 81190b03f6d177988112dad5fc919491a77705d1
 
 # The version the fork reports AT that ref, which is not derivable from it —
@@ -177,26 +190,14 @@ LLAMA_CPP_PYTHON_REF := 81190b03f6d177988112dad5fc919491a77705d1
 # the filename build-llama-cpp-wheel.sh exports into dist-llama/. Wrong here and
 # the default wheel tag points at nothing, which fails the pull loudly rather
 # than installing anything incorrect.
+#
+# Read by name, same as LLAMA_CPP_PYTHON_REF above and for the same reason —
+# by build-{llama-cpp,llama-cpp-rocm}-wheel.sh and scripts/xtask/lib/gpu.ts.
 LLAMA_CPP_PYTHON_VERSION := 0.3.46
 
-# The AMD gfx architecture llama.cpp's HIP backend compiles for, detected from
-# this host (gfx1100 on an RX 7900, gfx1030 on a 6800/6900). Empty is a valid
-# answer and means "let llama.cpp pick its default target list"; pass
-# AMDGPU_TARGETS=gfx#### explicitly to override, which is what a host with both
-# an APU and a discrete card needs.
-#
-# Recursive (`?=` defines a deferred variable), so `rocminfo` is only invoked
-# where the value is actually used — see HBPE_GPU_BUILD_ARGS below, which is
-# the sole reference and is itself guarded on GPU=rocm. A cpu or cuda build
-# therefore never shells out.
-#
-# `?=` also means an AMDGPU_TARGETS already in the environment wins, matching
-# how ENV/GPU/REBUILD behave. Worth knowing that a ROCm workstation often
-# exports one from a shell profile — which is precisely why the GPU guard lives
-# at the point of use and not in this assignment. Attached here it would be
-# defeated by that same ambient value, and a cpu build would still be handed a
-# gfx target.
-AMDGPU_TARGETS ?= $(shell scripts/detect-gpu.sh --amdgpu-arch)
+# GPU/HBPE wheel-tag auto-detection (what used to live here as AMDGPU_TARGETS)
+# is now scripts/xtask/lib/gpu.ts's detectAmdgpuArch(), called by `build`/`dev`
+# below; still backed by scripts/detect-gpu.sh --amdgpu-arch, unchanged.
 
 # The gfx targets the PUBLISHED ROCm wheel is compiled for, which is a different
 # question from AMDGPU_TARGETS above. That one is "what card is in front of me"
@@ -214,6 +215,9 @@ AMDGPU_TARGETS ?= $(shell scripts/detect-gpu.sh --amdgpu-arch)
 # The cost is real and worth knowing: HIP emits a code object per target, so
 # both the compile and the shipped libggml-hip.so scale with this list. Trim it
 # if the fleet is narrower than the prune policy assumes — but trim both.
+#
+# Read by name, same as the two LLAMA_CPP_PYTHON_* pins above and for the same
+# reason — by build-llama-cpp-rocm-wheel.sh and scripts/xtask/lib/gpu.ts.
 AMDGPU_WHEEL_TARGETS ?= gfx1030;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1200;gfx1201
 
 # The flash-attn pin. Installed outside the lock for the same reason
@@ -224,106 +228,21 @@ AMDGPU_WHEEL_TARGETS ?= gfx1030;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;
 # so two builds of the same commit could produce different images.
 #
 # CUDA only. flash-attn has no ROCm build, and the CPU image has no use for it.
+#
+# Read by name, same as the pins above — by build-flash-attn-wheel.sh and
+# scripts/xtask/lib/gpu.ts. Keep the `NAME := value` formatting byte-exact.
 FLASH_ATTN_VERSION := 2.8.3.post1
 
-# Optional URL of a prebuilt flash-attn wheel, which skips a source compile of
-# tens of minutes. It must match the image's torch version, CUDA major and
-# C++11 ABI exactly; see the wheel notes in backend/apps/hbpe/Dockerfile.cuda
-# for the naming scheme and how to read those values off the image. Unset by
-# default because no wheel exists for every combination — there was none for
-# torch 2.13 when this was written.
-FLASH_ATTN_WHEEL ?=
-
-# ── Prebuilt wheel images, and the tags that name them ────────────────────────
-# Both expensive CUDA compiles come from FROM-scratch images on GHCR, published
-# by backend/apps/hbpe/build-{flash-attn,llama-cpp}-wheel.sh and copied in by
-# Dockerfile.cuda. Measured 2026-08-11 on a 24-core desktop: with both wheels a
-# full `make build GPU=cuda` is 13.3 s, against ~71 min for the flash-attn
-# source compile and 278 s for llama-cpp's.
-#
-# Images rather than URLs because they survive access control: both packages are
-# public today and pull anonymously, but if either were made private, docker
-# authenticates to the registry on its own, where a private URL would need a
-# token passed as a build arg and baked into image history.
-#
-# THE TAGS ARE COMPOSED FROM THE PINS THEY DESCRIBE, not written out. A literal
-# tag would survive a pin bump and quietly install the wheel built for the
-# PREVIOUS pin — the build-time guards do not cover this: flash-attn's checks the
-# ABI but not the version, and llama-cpp's checks the CUDA architectures but not
-# the fork ref. Composed, a bump nobody has republished for produces a tag that
-# does not exist, and the build fails at the pull with `manifest unknown`. That
-# is the intended behaviour: a loud "republish the wheel" beats a silently wrong
-# image. Republish with `PUSH=1 ./backend/apps/hbpe/build-<name>-wheel.sh`.
-#
-# Each component is read from the file that owns it. `:=` so the seds run once
-# per make invocation rather than once per expansion.
-HBPE_TORCH_VERSION := $(shell sed -n 's/^ *torch==\([0-9.]*\).*/\1/p' backend/apps/hbpe/Dockerfile.cuda | head -1)
-HBPE_CUDA_MAJOR    := $(shell sed -n 's|^FROM nvidia/cuda:\([0-9]*\)\..*|\1|p' backend/apps/hbpe/Dockerfile.cuda | head -1)
-HBPE_CUDA_ARCHS    := $(shell sed -n 's/^ARG TORCH_CUDA_ARCH_LIST="\(.*\)"$$/\1/p' backend/apps/hbpe/Dockerfile.cuda)
-HBPE_PY_VERSION    := $(shell sed -n 's/^RUN uv python install \([0-9.]*\) *$$/\1/p' backend/apps/hbpe/Dockerfile.cuda | head -1)
-HBPE_PY_TAG        := cp$(subst .,,$(HBPE_PY_VERSION))
-
-# torch's local-version segment is MAJOR.MINOR — `basename` drops the patch,
-# turning 2.13.0 into the 2.13 that setup.py stamps into the wheel name.
-HBPE_TORCH_MINOR   := $(basename $(HBPE_TORCH_VERSION))
-# 8.6;8.9;12.0 -> sm86_89_120. Underscores because dots would read as a version.
-HBPE_ARCH_TAG      := sm$(subst ;,_,$(subst .,,$(HBPE_CUDA_ARCHS)))
-
-# The C++11 ABI flag is the one component NOT derived: it is a property of how
-# the torch wheel was compiled, readable only from an installed torch, and it
-# HAS flipped between releases. If it ever flips again this tag keeps naming the
-# old wheel, and the backstop is flash-attn's build-time import of
-# flash_attn_2_cuda, which fails on an undefined symbol — loud, just later than
-# a failed pull would be.
-HBPE_TORCH_ABI     := cxx11abitrue
-
-FLASH_ATTN_WHEEL_IMAGE ?= ghcr.io/companionintelligence/companion/flash-attn-wheel:$(FLASH_ATTN_VERSION)-cu$(HBPE_CUDA_MAJOR)torch$(HBPE_TORCH_MINOR)$(HBPE_TORCH_ABI)-$(HBPE_PY_TAG)
-LLAMA_CPP_WHEEL_IMAGE  ?= ghcr.io/companionintelligence/companion/llama-cpp-wheel:$(LLAMA_CPP_PYTHON_VERSION)-$(shell echo $(LLAMA_CPP_PYTHON_REF) | cut -c1-12)-cu$(HBPE_CUDA_MAJOR)-$(HBPE_ARCH_TAG)-$(HBPE_PY_TAG)
-
-# The ROCm equivalents, read from Dockerfile.rocm rather than Dockerfile.cuda.
-# The python version is read separately even though both images pin 3.11 today:
-# the cp tag is a claim about the image the wheel was built in, and borrowing
-# the CUDA image's value would keep that claim looking right through exactly the
-# divergence that would make it wrong.
-HBPE_ROCM_VERSION    := $(shell sed -n 's|^FROM rocm/dev-ubuntu-22.04:\([0-9]*\.[0-9]*\).*|\1|p' backend/apps/hbpe/Dockerfile.rocm | head -1)
-HBPE_ROCM_PY_VERSION := $(shell sed -n 's/^RUN uv python install \([0-9.]*\) *$$/\1/p' backend/apps/hbpe/Dockerfile.rocm | head -1)
-HBPE_ROCM_PY_TAG     := cp$(subst .,,$(HBPE_ROCM_PY_VERSION))
-# gfx1030;gfx1100;... -> gfx1030_1100_... The repeated "gfx" is dropped so the
-# tag stays readable; build-llama-cpp-rocm-wheel.sh composes it identically.
-HBPE_GFX_TAG         := gfx$(subst ;,_,$(subst gfx,,$(AMDGPU_WHEEL_TARGETS)))
-
-LLAMA_CPP_ROCM_WHEEL_IMAGE ?= ghcr.io/companionintelligence/companion/llama-cpp-rocm-wheel:$(LLAMA_CPP_PYTHON_VERSION)-$(shell echo $(LLAMA_CPP_PYTHON_REF) | cut -c1-12)-rocm$(HBPE_ROCM_VERSION)-$(HBPE_GFX_TAG)-$(HBPE_ROCM_PY_TAG)
-
-# Set any of them to empty to force the source compile:
-#   make build GPU=cuda FLASH_ATTN_WHEEL_IMAGE= LLAMA_CPP_WHEEL_IMAGE=
-#   make build GPU=rocm LLAMA_CPP_ROCM_WHEEL_IMAGE=
-#
-# A sed that stops matching would leave its component empty and compose a
-# plausible-looking tag with a hole in it, so the components are checked rather
-# than trusted. Guarded per variant: a restructured Dockerfile.cuda should not
-# break a ROCm build, or the reverse.
-ifeq ($(GPU),cuda)
-$(if $(HBPE_TORCH_VERSION),,$(error could not read the torch pin from backend/apps/hbpe/Dockerfile.cuda))
-$(if $(HBPE_CUDA_MAJOR),,$(error could not read the CUDA major from the FROM line in backend/apps/hbpe/Dockerfile.cuda))
-$(if $(HBPE_CUDA_ARCHS),,$(error could not read ARG TORCH_CUDA_ARCH_LIST from backend/apps/hbpe/Dockerfile.cuda))
-$(if $(HBPE_PY_VERSION),,$(error could not read the python version from backend/apps/hbpe/Dockerfile.cuda))
-endif
-ifeq ($(GPU),rocm)
-$(if $(HBPE_ROCM_VERSION),,$(error could not read the ROCm version from the FROM line in backend/apps/hbpe/Dockerfile.rocm))
-$(if $(HBPE_ROCM_PY_VERSION),,$(error could not read the python version from backend/apps/hbpe/Dockerfile.rocm))
-$(if $(AMDGPU_WHEEL_TARGETS),,$(error AMDGPU_WHEEL_TARGETS is empty — a published wheel needs an explicit gfx target list))
-endif
-
-# Passed per hardware variant: each Dockerfile declares only the ARGs it uses,
-# and docker warns on a build-arg nothing consumes.
-HBPE_GPU_BUILD_ARGS = \
-	$(if $(filter rocm,$(GPU)),--build-arg AMDGPU_TARGETS=$(AMDGPU_TARGETS) \
-		$(if $(LLAMA_CPP_ROCM_WHEEL_IMAGE),--build-arg LLAMA_CPP_ROCM_WHEEL_IMAGE=$(LLAMA_CPP_ROCM_WHEEL_IMAGE))) \
-	$(if $(filter cuda,$(GPU)),--build-arg FLASH_ATTN_VERSION=$(FLASH_ATTN_VERSION) \
-		$(if $(FLASH_ATTN_WHEEL),--build-arg FLASH_ATTN_WHEEL=$(FLASH_ATTN_WHEEL)) \
-		$(if $(FLASH_ATTN_WHEEL_IMAGE),--build-arg FLASH_ATTN_WHEEL_IMAGE=$(FLASH_ATTN_WHEEL_IMAGE)) \
-		$(if $(LLAMA_CPP_WHEEL_IMAGE),--build-arg LLAMA_CPP_WHEEL_IMAGE=$(LLAMA_CPP_WHEEL_IMAGE)))
-
+# Everything else that used to follow here — FLASH_ATTN_WHEEL, the prebuilt
+# wheel-image tag compositions (FLASH_ATTN_WHEEL_IMAGE, LLAMA_CPP_WHEEL_IMAGE,
+# LLAMA_CPP_ROCM_WHEEL_IMAGE), the HBPE_TORCH_*/HBPE_CUDA_*/HBPE_PY_*/
+# HBPE_ROCM_* values derived from the HBPE Dockerfiles, the two `ifeq`
+# Dockerfile-pin guards, and HBPE_GPU_BUILD_ARGS — now lives in
+# scripts/xtask/lib/gpu.ts, exercised by `xtask build`'s HBPE step. The 5
+# escape hatches documented there (`make build GPU=cuda FLASH_ATTN_WHEEL_IMAGE=`
+# and friends, to force a source compile) still work exactly as before: GNU
+# Make exports any `VAR=value` given on the command line to the recipe's
+# shell even when this Makefile no longer declares that variable.
 
 define BANNER
    ______                                  _
@@ -349,6 +268,12 @@ help: ## List make commands with their descriptions
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 	@printf "\n"
 
+# Kept as shell, and kept PUBLIC: these are not private helpers of `build`.
+# `.github/workflows/e2e.yml`, `video/stage.sh` and `video/stage.real-corpus.sh`
+# all run `make distribute-license` directly before their own `docker build`
+# lines, and `video/README.md` documents it as a hand-run step. `xtask build`
+# calls back into these two rather than reimplementing the copy, so there is
+# exactly one implementation and no yarn/tsx dependency on a `cp` loop.
 .PHONY: distribute-license
 distribute-license:
 	@for dir in $(LICENSE_DIRS); do \
@@ -372,14 +297,22 @@ reset: ## Reset the local development environment
 		overmind quit 2>/dev/null || true; \
 	fi
 
-	@VOLS=$$(docker volume ls -q --filter "name=$(PROJECT_NAME)"); \
+	@# Selected by the COMPOSE LABEL, not by name. Docker's `name` filter is an
+	@# unanchored substring match, and in the main checkout PROJECT_NAME is the
+	@# bare repo stem (`ci-server`) — a prefix of every linked worktree's
+	@# `ci-server-<worktree>`. So the name form selected every OTHER worktree's
+	@# volumes too and fed them all to `rm -f`, with `|| true` hiding the result.
+	@# Measured on one developer box: 12 volumes across 3 compose projects, where
+	@# only 4 belonged to the checkout running the command. The label is exact
+	@# rather than name-shaped, and it is what actually owns the resource.
+	@VOLS=$$(docker volume ls -q --filter "label=com.docker.compose.project=$(PROJECT_NAME)"); \
 	if [ -n "$$VOLS" ]; then \
 		printf "\n➤ Removing project volumes...\n"; \
 		printf "$$VOLS\n"; \
 		echo "$$VOLS" | xargs docker volume rm -f >/dev/null 2>&1 || true; \
 	fi
 
-	@NETS=$$(docker network ls -q --filter "name=$(PROJECT_NAME)"); \
+	@NETS=$$(docker network ls -q --filter "label=com.docker.compose.project=$(PROJECT_NAME)"); \
 	if [ -n "$$NETS" ]; then \
 		printf "\n➤ Removing project networks...\n"; \
 		printf "$$NETS\n"; \
@@ -389,54 +322,8 @@ reset: ## Reset the local development environment
 	@printf "\n$(GREEN)✓$(RESET) Reset complete.\n\n"
 
 .PHONY: build
-build: ## Build images. ENV=local|staging|production (default local) GPU=cpu|cuda|rocm (default: auto-detected)
-	@echo "$(VALID_ENVS)" | grep -qw "$(ENV)" || { printf "$(RED)✗$(RESET) Invalid ENV '$(ENV)'. Choose one of: $(VALID_ENVS)\n\n"; exit 1; }
-	@echo "$(VALID_GPUS)" | grep -qw "$(GPU)" || { printf "$(RED)✗$(RESET) Invalid GPU '$(GPU)'. Choose one of: $(VALID_GPUS)\n\n"; exit 1; }
-
-	@test -n "$(UV_VERSION)" || { printf "$(RED)✗$(RESET) Could not read the uv pin from required-version in pyproject.toml.\n\n"; exit 1; }
-
-	@# The Python images sync with --frozen, which trusts uv.lock as-is so
-	@# each Dockerfile only has to copy the manifests it actually uses. The
-	@# freshness check they gave up lives here instead, where the whole
-	@# workspace is present: fail before building anything rather than bake
-	@# a stale resolution into an image.
-	@uv lock --check || { printf "$(RED)✗$(RESET) uv.lock is out of date with the manifests. Run 'uv lock' and retry.\n\n"; exit 1; }
-
-	@$(MAKE) distribute-license
-
-	@printf "$(call task_icon,build,🧱) Building $(ENV) images...\n"
-
-	@# API, gateway and web frontend are only built for staging/production
-	@if [ "$(ENV)" != "local" ]; then printf "\n➤ Compiling API...\n\n" && ( cd backend/apps/api && yarn clean && yarn build ) && printf "\n➤ Compiling web frontend...\n\n" && ( cd frontend/apps/web && yarn clean && yarn build ) && printf "\n➤ Building API image...\n\n" && docker build -f backend/apps/api/Dockerfile $(call versioned_tag,$(API_REPO)) -t $(API_REPO):latest . && printf "\n➤ Building gateway image...\n\n" && docker build -f infrastructure/gateway/Dockerfile $(call versioned_tag,$(GATEWAY_REPO)) -t $(GATEWAY_REPO):latest . ; fi
-
-	@printf "\n➤ Building database setup image...\n\n"
-	@docker build -f infrastructure/setup-database/Dockerfile $(call versioned_tag,$(SETUP_DATABASE_REPO)) -t $(SETUP_DATABASE_REPO):latest infrastructure/setup-database
-
-	@printf "\n➤ Building database image...\n\n"
-	@docker build -f infrastructure/database/Dockerfile $(call versioned_tag,$(DATABASE_REPO)) -t $(DATABASE_REPO):latest infrastructure/database
-
-	@printf "\n➤ Building object store image...\n\n"
-	@docker build -f infrastructure/object-store/Dockerfile $(call versioned_tag,$(OBJECT_STORE_REPO)) -t $(OBJECT_STORE_REPO):latest infrastructure/object-store
-
-	@# setup-secrets is only built for production
-	@if [ "$(ENV)" = "production" ]; then printf "\n➤ Building setup secrets image...\n\n" && docker build -f infrastructure/setup-secrets/Dockerfile $(call versioned_tag,$(SETUP_SECRETS_REPO)) -t $(SETUP_SECRETS_REPO):latest infrastructure/setup-secrets ; fi
-
-	@printf "\n➤ Building summary service image...\n\n"
-	@docker build -f backend/apps/summary/Dockerfile --build-arg UV_VERSION=$(UV_VERSION) $(call versioned_tag,$(SUMMARY_REPO)) -t $(SUMMARY_REPO):latest .
-
-	@printf "\n➤ Building HBPE service image ($(GPU)$(if $(filter rocm,$(GPU)),$(if $(AMDGPU_TARGETS), $(AMDGPU_TARGETS), no-gfx-target)))...\n\n"
-ifeq ($(GPU),rocm)
-	@test -n "$(AMDGPU_TARGETS)" || { \
-		printf "$(YELLOW)•$(RESET) No AMD gfx architecture detected — llama.cpp will build for its default\n"; \
-		printf "  target list, which may not include this host's card. Pass $(YELLOW)AMDGPU_TARGETS=gfx####$(RESET)\n"; \
-		printf "  to compile for it explicitly ($(YELLOW)rocminfo | grep gfx$(RESET) reports it).\n\n"; \
-	}
-endif
-	@docker build -f backend/apps/hbpe/$(HBPE_DOCKERFILE) --build-arg UV_VERSION=$(UV_VERSION) --build-arg LLAMA_CPP_PYTHON_REF=$(LLAMA_CPP_PYTHON_REF) $(HBPE_GPU_BUILD_ARGS) $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest .
-
-	@$(MAKE) clean-license
-
-	@printf "\n"
+build: ## Build images. ENV=local|staging|production GPU=cpu|cuda|rocm IMAGE=<one image> DRY_RUN=1
+	@yarn tsx scripts/xtask/index.ts build --env $(ENV) --gpu $(GPU) $(if $(DRY_RUN),--dry-run) $(IMAGE)
 
 .PHONY: dbclear
 dbclear: ## Clear the data stored in the PostgreSQL database
@@ -472,89 +359,7 @@ urls: ## Show the URLs this worktree's running stack serves (read live from Cadd
 
 .PHONY: dev
 dev: ## Run the development environment locally
-	@printf "$(call task_icon,dev,🧑‍💻) Starting development environment...\n\n"
-
-	@$(MAKE) health
-
-	@OVERMIND=$$(which overmind 2>/dev/null); \
-	if [ -z "$$OVERMIND" ]; then \
-		printf "$(RED)✗$(RESET) You do not have 'overmind' installed or it is not in your PATH.\n\n"; \
-		exit 1; \
-	else \
-		printf "$(GREEN)✓$(RESET) overmind found at $$OVERMIND\n\n"; \
-	fi
-
-	@CADDY=$$(which caddy 2>/dev/null); \
-	if [ -z "$$CADDY" ]; then \
-		printf "$(RED)✗$(RESET) You do not have 'caddy' installed or it is not in your PATH.\n\n"; \
-		exit 1; \
-	else \
-		printf "$(GREEN)✓$(RESET) caddy found at $$CADDY\n\n"; \
-	fi
-
-	@if curl -sf http://localhost:2019/config/ >/dev/null 2>&1; then \
-		printf "  $(GREEN)✓$(RESET) caddy admin API reachable on :2019\n\n"; \
-	else \
-		printf "  $(RED)✗$(RESET) caddy admin API not reachable on :2019. Start it with 'brew services start caddy'.\n\n"; \
-		exit 1; \
-	fi
-
-	@OLLAMA=$$(which ollama 2>/dev/null); \
-	if [ -z "$$OLLAMA" ]; then \
-		printf "$(RED)✗$(RESET) You do not have 'ollama' installed or it is not in your PATH.\n\n"; \
-		exit 1; \
-	else \
-		printf "$(GREEN)✓$(RESET) ollama found at $$OLLAMA 🦙\n\n"; \
-	fi
-
-	@if nc -z localhost 11434 > /dev/null 2>&1; then \
-		printf "  $(GREEN)✓$(RESET) ollama is running on port 11434\n\n"; \
-	else \
-		printf "  $(RED)✗$(RESET) ollama is NOT running on port 11434. Please start ollama (e.g., 'ollama serve')\n\n"; \
-		exit 1; \
-	fi
-
-	@# Every required model, pulled if absent. `ollama pull` streams its own
-	@# progress and blocks until the blobs are on disk, so boot simply waits here
-	@# on a cold machine instead of failing and leaving the operator to run the
-	@# pull by hand. A tag-less name lands as `<name>:latest`, which is what the
-	@# presence test accepts alongside the literal name; matching on the tag
-	@# column (not the whole line) keeps `nomic-embed-text` from being satisfied
-	@# by an unrelated `nomic-embed-text-v2-moe`.
-	@for MODEL in $(REQUIRED_OLLAMA_MODELS); do \
-		if ollama list | awk 'NR>1 {print $$1}' | grep -qxF -e "$$MODEL" -e "$$MODEL:latest"; then \
-			printf "  $(GREEN)✓$(RESET) ollama model '$$MODEL' is available\n\n"; \
-		else \
-			printf "  $(YELLOW)•$(RESET) ollama model '$$MODEL' is not pulled yet — downloading now (this can take several minutes)...\n\n"; \
-			if ollama pull "$$MODEL"; then \
-				printf "\n  $(GREEN)✓$(RESET) ollama model '$$MODEL' pulled\n\n"; \
-			else \
-				printf "\n  $(RED)✗$(RESET) Failed to pull ollama model '$$MODEL'. Fix the error above (or run $(YELLOW)ollama pull $$MODEL$(RESET) manually) and retry.\n\n"; \
-				exit 1; \
-			fi; \
-		fi; \
-	done
-
-	@$(MAKE) init
-
-	@# The supervisor runs `docker compose up` (not build), so the local images
-	@# must exist first. Build them only when one is missing or REBUILD=1 — a warm
-	@# spin-up reuses them.
-	@missing=""; for img in $(LOCAL_IMAGES); do \
-		docker image inspect "$$img:latest" >/dev/null 2>&1 || missing="$$missing $$img"; \
-	done; \
-	if [ -n "$(REBUILD)" ] || [ -n "$$missing" ]; then \
-		[ -n "$$missing" ] && printf "$(YELLOW)•$(RESET) building — missing image(s):$$missing\n\n" || true; \
-		$(MAKE) build ENV=local GPU=$(GPU); \
-	else \
-		printf "$(GREEN)✓$(RESET) Reusing existing local images (set $(YELLOW)REBUILD=1$(RESET) to rebuild)\n\n"; \
-	fi
-
-	@# Hand off to the per-worktree stack supervisor: it allocates ports, brings
-	@# up the compose stack, migrates, registers the Caddy route at
-	@# $(PROJECT_NAME).localhost, and runs the Procfile via overmind. Foreground;
-	@# Ctrl-C tears the route down and stops the stack.
-	@yarn tsx scripts/dev-stack/index.ts up --key $(PROJECT_NAME)
+	@yarn tsx scripts/xtask/index.ts dev --gpu $(GPU) $(if $(REBUILD),--rebuild)
 
 .PHONY: fed-up
 fed-up: ## Federation harness: bring two CI-Server boxes + a local OIDC issuer up
@@ -676,6 +481,85 @@ health: ## Check the repository for prerequisites
 		printf "$(GREEN)✓$(RESET) uv found at $$UV ($$(uv --version | cut -d' ' -f2))\n\n"; \
 	fi
 
+	@# `vips` (libvips-tools) is the image decoder behind previews, dimensions
+	@# and the vision renditions — the API shells out to it, so the host running
+	@# the API needs it, and a missing binary fails every image job loudly.
+	@VIPS=$$(which vips 2>/dev/null); \
+	if [ -z "$$VIPS" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'vips' installed or it is not in your path. Install it with 'sudo apt install libvips-tools' (Debian/Ubuntu) or 'brew install vips' (macOS).\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) vips found at $$VIPS ($$(vips --version 2>/dev/null | sed 's/^vips-//'))\n\n"; \
+	fi
+
+	@# A present `vips` is not enough: it must also decode HEVC, the codec
+	@# inside every iPhone HEIC. Debian and Homebrew link that decoder into
+	@# libheif; Ubuntu 24.04 (and Mint 22) ship it as a separate plugin package
+	@# that the current libheif1 no longer depends on, so a fresh install opens
+	@# the container and then fails every tile. Decode the repo's HEIC test
+	@# fixture the way VipsService does. `vips` exits 0 on that failure and
+	@# writes a black image, so the verdict is the tile warnings on stderr.
+	@HEIC=backend/apps/api/src/domains/files/services/__tests__/__fixtures__/64x40.heic; \
+	OUT=$$(mktemp -t ci-health-heic-XXXXXX.jpg); \
+	ERR=$$(vips thumbnail "$$HEIC[fail-on=error]" "$$OUT" 64 2>&1); STATUS=$$?; \
+	rm -f "$$OUT"; \
+	if [ $$STATUS -ne 0 ] || printf '%s' "$$ERR" | grep -qE 'error in tile|Unsupported codec'; then \
+		printf "$(RED)✗$(RESET) vips cannot decode HEIC (no HEVC decoder in libheif). On Ubuntu 24.04 / Mint 22 install it with 'sudo apt install libheif-plugin-libde265'; on Debian and macOS it comes with libvips-tools / brew vips.\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) vips decodes HEIC (HEVC decoder present)\n\n"; \
+	fi
+
+	@# The pre-commit guards must actually FIRE in a linked worktree. `yarn
+	@# prepare` (husky, see package.json) points core.hooksPath at `.husky/_` —
+	@# a RELATIVE path, which git resolves against the root of the working tree
+	@# the hook runs in. That directory only exists in the checkout husky was
+	@# installed in, and it is gitignored, so every `git worktree add` produces
+	@# a tree where core.hooksPath names a directory that is simply not there.
+	@# Git's response to that is to run NO hooks at all, with no message —
+	@# which is exactly where parallel agent work happens. Everything
+	@# .husky/pre-commit drives goes with it: the Info.plist duplicate-key
+	@# check, the Capacitor native-sync check, and bin/check-migration-versions.js,
+	@# the guard that stops two branches committing the same dbmate timestamp
+	@# prefix and breaking `yarn migrate` for everyone.
+	@#
+	@# Repair by pinning an ABSOLUTE hooksPath in this worktree's own config.
+	@# `git config --worktree` (not --local) is what makes it stick: the value
+	@# lands in this worktree's .git/config.worktree and outranks the shared
+	@# one, so the next `yarn prepare` in the main checkout cannot reset it to
+	@# the relative form. husky's `_/h` derives the script it runs from its own
+	@# location (dirname of dirname of $$0), so pointing at the main checkout's
+	@# .husky/_ runs the main checkout's .husky/pre-commit — and git runs hooks
+	@# with the cwd set to THIS worktree's root, so lint-staged still sees this
+	@# worktree's staged files.
+	@#
+	@# Warn, never fail. `dev` calls `health` from its recipe and `production`
+	@# and `staging` take it as a prerequisite (`publish` does not — it depends
+	@# on `init` alone), so a non-zero exit here refuses to start a stack, and a
+	@# missing hook is not a reason to do that.
+	@hooks=$$(git config --get core.hooksPath 2>/dev/null); \
+	if [ -z "$$hooks" ]; then \
+		printf "$(GREEN)✓$(RESET) git hooks: repository default (no core.hooksPath override)\n\n"; \
+	else \
+		case "$$hooks" in \
+			/*) resolved="$$hooks" ;; \
+			*) resolved="$$(git rev-parse --show-toplevel 2>/dev/null)/$$hooks" ;; \
+		esac; \
+		main_hooks="$$(cd "$$(dirname "$$(git rev-parse --git-common-dir 2>/dev/null)")" 2>/dev/null && pwd)/.husky/_"; \
+		if [ -f "$$resolved/pre-commit" ]; then \
+			printf "$(GREEN)✓$(RESET) git hooks resolve ($$resolved)\n\n"; \
+		elif [ -f "$$main_hooks/pre-commit" ] && git config extensions.worktreeConfig true && git config --worktree core.hooksPath "$$main_hooks"; then \
+			printf "$(YELLOW)•$(RESET) core.hooksPath was '$$hooks', which does not exist in this worktree — commits here were running NO pre-commit checks.\n"; \
+			printf "  Repaired: this worktree now uses $$main_hooks\n\n"; \
+		else \
+			printf "$(YELLOW)•$(RESET) core.hooksPath is '$$hooks', which does not exist here, so commits in this worktree run NO pre-commit checks\n"; \
+			printf "  (no migration-version guard, no plist or Capacitor sync check). Repair it with either:\n"; \
+			printf "    $(YELLOW)yarn prepare$(RESET)                                                  # re-creates .husky/_ in this worktree\n"; \
+			printf "    $(YELLOW)git config extensions.worktreeConfig true$(RESET) && \\\\\n"; \
+			printf "      $(YELLOW)git config --worktree core.hooksPath \"$$main_hooks\"$(RESET)\n\n"; \
+		fi; \
+	fi
+
 	@# Report on per-stack data volumes (convention: <project>-local-*). Purely
 	@# informational — flags volumes whose key has no live worktree so orphans
 	@# from deleted worktrees are visible; never removes anything.
@@ -721,7 +605,21 @@ init: ## Initialize repository after checkout
 	@yarn prepare
 
 	@printf "\n"
-	@uv sync --all-packages
+	@# --locked, never a bare sync. A bare `uv sync` treats a stale uv.lock as
+	@# something to REPAIR: it re-resolves against the live index and writes the
+	@# new resolution back. `publish` depends on this target and only reaches
+	@# `build`'s `uv lock --check` afterwards, so on a release runner the lock
+	@# would be silently refreshed first and the freshness gate would then pass
+	@# against a file this same run just rewrote — unreviewed dependency
+	@# versions baked into the summary and hbpe images, and two publishes of one
+	@# commit on different days quietly differing. A build must not mutate its
+	@# own inputs; --locked makes a stale lock an error instead.
+	@#
+	@# For a developer whose lock is legitimately stale this is now a hard stop
+	@# rather than an invisible fix. uv's own message names the remedy — run
+	@# `uv lock`, review the resolution diff, commit it, and re-run. Reviewing
+	@# that diff is the whole point.
+	@uv sync --all-packages --locked
 
 	@if [ ! -f .env ]; then \
 		printf "Copying dotenv template file... "; \
@@ -737,7 +635,11 @@ install: ## Install project dependencies
 
 	@printf "\n"
 
-	@uv sync --all-packages
+	@# --locked for the same reason as `init` above: installing must never
+	@# re-resolve and rewrite uv.lock behind the operator's back. If this stops
+	@# with "the lockfile is not up-to-date", run `uv lock`, review the diff and
+	@# commit it — that is the intended workflow, not a bug in this target.
+	@uv sync --all-packages --locked
 
 	@printf "\n"
 
@@ -763,19 +665,135 @@ lint: ## Check the source for lint and formatting errors, both stacks
 
 	@printf "\nNo lint errors found.\n\n"
 
+.PHONY: typecheck
+typecheck: ## Typecheck every JS/TS workspace that declares a typecheck script
+	@printf "$(call task_icon,typecheck,🧾) Typechecking...\n\n"
+
+	@# JS/TS only — Python types are already checked by `uv run mypy` in `make lint`.
+	@#
+	@# Until now the eight frontend/packages/* were never typechecked on their
+	@# own: none of them declared a script, and `foreach` silently skips a
+	@# workspace that has nothing to run. They were only ever checked as a side
+	@# effect of `yarn workspace @ci/fe-web build` pulling their source through
+	@# the bundler, which means a package with no importer in web was checked by
+	@# nothing at all.
+	@yarn workspaces foreach --all run typecheck
+
+	@printf "\nTypes check out.\n\n"
+
 .PHONY: test
 test: ## Run the unit tests, both stacks
-	@printf "$(call task_icon,test,🧪) Running tests...\n\n"
+	@yarn tsx scripts/xtask/index.ts test
 
-	@# foreach only runs workspaces that declare a test script, so a new
-	@# workspace's tests are picked up without a line here.
-	@yarn workspaces foreach --all run test
+.PHONY: test-android
+test-android: ## Run the Android native unit tests (JVM; no emulator needed)
+	@printf "$(call task_icon,test-android,🤖) Running Android unit tests...\n\n"
 
-	@printf "\n"
+	@# Kept out of `make test` on purpose: this needs a JDK $(ANDROID_JDK_MAJOR) and an Android
+	@# SDK, which a backend-only machine has no reason to carry. Folding it in
+	@# would turn `make test` red for everyone who never touches the app.
+	@#
+	@# Preconditions are checked the way `dev` checks overmind/caddy/ollama —
+	@# name the missing thing and the command that fixes it, rather than let
+	@# Gradle fail 300 lines later.
+	@JAVA=$$(command -v java 2>/dev/null); \
+	if [ -z "$$JAVA" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'java' installed or it is not in your PATH. The Android build needs JDK $(ANDROID_JDK_MAJOR) (point $(YELLOW)JAVA_HOME$(RESET) at one — Android Studio bundles a JBR).\n\n"; \
+		exit 1; \
+	fi; \
+	major=$$(java -version 2>&1 | sed -n 's/^[a-zA-Z ]*version "\([0-9][0-9]*\).*/\1/p' | head -n1); \
+	if [ "$$major" != "$(ANDROID_JDK_MAJOR)" ]; then \
+		printf "$(RED)✗$(RESET) JDK version mismatch. Expected $(ANDROID_JDK_MAJOR) (AGP 8.7.2 and jvmTarget 21 accept nothing else), but got $${major:-unknown}. Point $(YELLOW)JAVA_HOME$(RESET) at a JDK $(ANDROID_JDK_MAJOR).\n\n"; \
+		exit 1; \
+	fi; \
+	printf "$(GREEN)✓$(RESET) JDK $$major found at $$JAVA\n\n"
 
-	@uv run pytest
+	@# The SDK's location is the machine's business, never this file's: honour
+	@# ANDROID_HOME, then ANDROID_SDK_ROOT, then the sdk.dir Android Studio
+	@# writes into the project's (git-ignored) local.properties. Nothing is
+	@# guessed, and no path is hard-coded — an unset SDK is an error with a fix
+	@# in it, not a default that silently points somewhere wrong.
+	@SDK="$(android_sdk_dir)"; \
+	if [ -z "$$SDK" ]; then \
+		printf "$(RED)✗$(RESET) No Android SDK found. Set $(YELLOW)ANDROID_HOME$(RESET) (or ANDROID_SDK_ROOT) to your SDK root, or put $(YELLOW)sdk.dir=/path/to/sdk$(RESET) in $(ANDROID_APP_DIR)/local.properties.\n\n"; \
+		exit 1; \
+	elif [ ! -d "$$SDK" ]; then \
+		printf "$(RED)✗$(RESET) Android SDK path '$$SDK' is not a directory. Fix $(YELLOW)ANDROID_HOME$(RESET) / ANDROID_SDK_ROOT.\n\n"; \
+		exit 1; \
+	elif [ ! -d "$$SDK/platforms/android-$(ANDROID_COMPILE_SDK)" ]; then \
+		printf "$(RED)✗$(RESET) SDK at $$SDK has no $(YELLOW)platforms;android-$(ANDROID_COMPILE_SDK)$(RESET) (the project's compileSdk). Install it:\n"; \
+		printf "    $(YELLOW)sdkmanager \"platform-tools\" \"platforms;android-$(ANDROID_COMPILE_SDK)\" \"build-tools;$(ANDROID_BUILD_TOOLS)\"$(RESET)\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) Android SDK at $$SDK (platforms;android-$(ANDROID_COMPILE_SDK))\n\n"; \
+	fi
 
-	@printf "\nAll tests passed.\n\n"
+	@# The three :ci-capacitor-* modules reach the Gradle build through yarn
+	@# `portal:` symlinks under this app's own node_modules, which a root PnP
+	@# install does not materialize (see CLAUDE.md → Package manager). Without
+	@# them, settings.gradle resolves nothing and the failure names a generated
+	@# file instead of the missing install.
+	@if [ ! -d $(ANDROID_APP_DIR)/../node_modules/@ci ]; then \
+		printf "$(RED)✗$(RESET) $(ANDROID_APP_DIR)/../node_modules/@ci is missing — the native modules are not linked. Run $(YELLOW)yarn install$(RESET) inside frontend/apps/android (it is a standalone project, not a workspace).\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) Native plugin modules linked\n\n"; \
+	fi
+
+	@# `testDebugUnitTest` with no module prefix runs every module that has a
+	@# unit-test source set, so a new plugin package is picked up without a line
+	@# here — the same reasoning as `foreach --all` in `test` above. Instrumented
+	@# (androidTest) suites are NOT here: they need a running device. Run those
+	@# with `./gradlew connectedDebugAndroidTest` against a booted emulator.
+	@cd $(ANDROID_APP_DIR) && ANDROID_HOME="$(android_sdk_dir)" ./gradlew testDebugUnitTest $(GRADLE_ARGS)
+
+	@# Each module writes its own report, and three of the four modules live
+	@# outside the app directory (they are pulled in over `portal:` symlinks),
+	@# so name both roots rather than one glob that misses most of them.
+	@printf "\n$(GREEN)✓$(RESET) Android unit tests passed. HTML reports:\n"
+	@printf "    $(ANDROID_APP_DIR)/app/build/reports/tests/testDebugUnitTest/index.html\n"
+	@printf "    frontend/packages/capacitor-*/android/build/reports/tests/testDebugUnitTest/index.html\n\n"
+
+.PHONY: test-desktop
+test-desktop: ## Run the desktop (Tauri/Rust) unit tests
+	@printf "$(call task_icon,test-desktop,🖥️) Running desktop tests...\n\n"
+
+	@CARGO=$$(command -v cargo 2>/dev/null); \
+	if [ -z "$$CARGO" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'cargo' installed or it is not in your PATH. Install the Rust toolchain from https://rustup.rs.\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) cargo found at $$CARGO ($$(cargo --version | cut -d' ' -f2))\n\n"; \
+	fi
+
+	@# Linux only: the crate links GTK/WebKit through *-sys build scripts, so the
+	@# tests do not even COMPILE without the -dev packages — and the failure is
+	@# 200 lines of build-script output that never names the package to install.
+	@# pkg-config is exactly how those build scripts look, so ask it the same
+	@# question first and answer with the apt line desktop-build.yml already uses.
+	@if [ "$$(uname -s)" = "Linux" ]; then \
+		if ! command -v pkg-config >/dev/null 2>&1; then \
+			printf "$(RED)✗$(RESET) 'pkg-config' is not installed — the Rust *-sys build scripts need it to find GTK/WebKit.\n"; \
+			printf "    $(YELLOW)sudo apt-get install -y $(DESKTOP_LINUX_APT_PACKAGES)$(RESET)\n\n"; \
+			exit 1; \
+		fi; \
+		missing=""; \
+		for pkg in $(DESKTOP_LINUX_PKGCONFIG); do \
+			pkg-config --exists "$$pkg" 2>/dev/null || missing="$$missing $$pkg"; \
+		done; \
+		if [ -n "$$missing" ]; then \
+			printf "$(RED)✗$(RESET) Missing system libraries for the Tauri crate:$$missing\n"; \
+			printf "    $(YELLOW)sudo apt-get install -y $(DESKTOP_LINUX_APT_PACKAGES)$(RESET)\n"; \
+			printf "    (or set $(YELLOW)PKG_CONFIG_PATH$(RESET) if they live outside the default search path)\n\n"; \
+			exit 1; \
+		else \
+			printf "$(GREEN)✓$(RESET) GTK/WebKit development libraries found\n\n"; \
+		fi; \
+	fi
+
+	@cd $(DESKTOP_TAURI_DIR) && cargo test $(CARGO_ARGS)
+
+	@printf "\n$(GREEN)✓$(RESET) Desktop tests passed.\n\n"
 
 .PHONY: migrate
 migrate: ## Run database migrations
@@ -818,11 +836,232 @@ smoke-api: ## Verify the API image can run `migrate` with production-only depend
 
 	@printf "\nAPI image can migrate. ✅\n\n"
 
+# `smoke-api` above proves one process can resolve its imports. It never BOOTS
+# the API, so until this target existed nothing in the repo started the
+# assembled stack from the images `build` had just produced: Nest's dependency
+# graph, entrypoint.sh's secrets loading, the migration run against a fresh
+# database and infrastructure/gateway/nginx.conf were all first exercised by a
+# user at first launch, on the appliance, after the images shipped.
+#
+# Deliberately a THROWAWAY compose project, not $(PROJECT_NAME): this target
+# ends in `down -v`, and sharing the project name with a real stack would
+# delete that stack's ${COMPOSE_PROJECT_NAME}-production-db-data volume.
+SMOKE_PROJECT_NAME := $(PROJECT_NAME)-smoke
+
+# Seconds to wait for the gateway to answer /api/health once the containers are
+# up. Bump it on a cold machine where the first migration run is slow.
+SMOKE_TIMEOUT ?= 120
+
+# Seconds to leave the worker running before judging it healthy. The worker has
+# `restart: unless-stopped`, so a process that dies at DI-graph construction
+# comes straight back and a snapshot taken immediately after `up -d` sees a
+# "Running" container either way. Waiting lets the crash loop show itself in the
+# restart count.
+#
+# That count is read as `{{.RestartCount}}`, NOT `{{.State.RestartCount}}`:
+# docker puts it at the TOP LEVEL of the inspect object, a sibling of `State`.
+# The wrong path does not read empty — text/template aborts the whole render
+# with `map has no entry for key "RestartCount"` and exits non-zero, which is
+# how the first run of this check took `make publish` down with it instead of
+# reporting on the worker.
+SMOKE_WORKER_WATCH ?= 30
+
+# What counts as "the worker did not boot cleanly", as an ERE for grep -Ei.
+# These are the fingerprints of the two DI faults docs/qa/release-qa-program.md
+# §6.4/§6.4b records — a duplicate FileService provider and an import-barrel
+# cycle — both of which shipped because the unit tests stub the providers and so
+# could not fail, and both of which were found only by running the app:
+#   ExceptionHandler / "Nest can't resolve" — Nest's own boot-time DI failure
+#   is not a function                      — the barrel-cycle symptom exactly
+#                                            (`this.ollamaService.chat is not a
+#                                            function`)
+#   unhandledRejection                     — anything that escaped a handler
+# Apostrophe written as `.` so the value needs no quoting inside the recipe.
+SMOKE_WORKER_FATAL_RE ?= ExceptionHandler|Nest can.t resolve|UnhandledPromiseRejection|unhandledRejection|is not a function
+
+# The compose invocation the smoke uses everywhere, including in its teardown
+# trap. CI_IMPORT_WORK_DIR / CI_REPO_DIR are redirected at $SMOKE_TMP (set by
+# the recipe) because their defaults are `./import-work` and `~/Downloads`:
+# docker CREATES a missing bind source, so the defaults would drop an untracked
+# import-work/ into the repo root on every publish.
+SMOKE_COMPOSE = COMPOSE_PROJECT_NAME=$(SMOKE_PROJECT_NAME) \
+	CI_IMPORT_WORK_DIR="$$SMOKE_TMP/import-work" CI_REPO_DIR="$$SMOKE_TMP/repo" \
+	docker compose -f docker-compose.yml -f docker-compose.production.yml --profile production
+
+.PHONY: smoke-stack
+smoke-stack: ## Boot the built production images and prove the gateway serves the API, the SPA and a healthy worker
+	@printf "$(call task_icon,smoke-stack,🚦) Smoke-testing the assembled production stack...\n\n"
+
+# Every image the smoke touches must already exist locally. Compose would
+# otherwise try to PULL ci/api from a registry, and a green run would then say
+# nothing about what `build` just produced — the same "a gate that verified
+# nothing must not report green" rule smoke-api follows above.
+	@for img in $(API_REPO) $(GATEWAY_REPO) $(DATABASE_REPO) $(OBJECT_STORE_REPO) $(SETUP_DATABASE_REPO) $(SETUP_SECRETS_REPO); do \
+		docker image inspect "$$img:latest" >/dev/null 2>&1 || { \
+			printf "  $(RED)✗$(RESET) $$img:latest not found — run 'make build ENV=production' first.\n\n"; \
+			exit 1; \
+		}; \
+	done
+
+# nginx resolves `upstream api { server api:3030; }` and the object-store
+# proxy_pass at CONFIG LOAD time, so a bare `nginx -t` outside the compose
+# network dies with "host not found in upstream" and tells you nothing about
+# the config itself. The two --add-host entries give those names something to
+# resolve to; what is under test is nginx.conf's syntax and directives, not
+# connectivity. Seconds of work, and it fails here instead of as a
+# crash-looping gateway on someone's appliance.
+	@printf "➤ Validating the gateway's nginx.conf...\n\n"
+	@docker run --rm --add-host api:127.0.0.1 --add-host object-store:127.0.0.1 \
+		--entrypoint nginx $(GATEWAY_REPO):latest -t
+
+# docker-compose.production.yml publishes the gateway on a FIXED host port, so
+# anything already holding 8642 (a running `make production`, the desktop app)
+# turns this into an opaque bind failure. Name it up front. `nc` is only
+# advisory here — skip the check rather than fail when it is absent.
+	@if command -v nc >/dev/null 2>&1 && nc -z localhost 8642 >/dev/null 2>&1; then \
+		printf "\n  $(RED)✗$(RESET) Port 8642 is already in use — stop whatever holds it ('make stop') and retry.\n\n"; \
+		exit 1; \
+	fi
+
+# One shell for boot + poll + teardown, so the trap owns the containers for the
+# whole span: the stack comes down on success, on a failed assertion, and on a
+# Ctrl-C, and a leaked stack can never sit on 8642 and poison the next run.
+#
+# EVERY command in the teardown ends in `|| true`, the `rm` included, and that
+# is load-bearing rather than tidy: under `set -e` a failing LAST command in an
+# EXIT trap becomes the shell's exit status, so an unguarded teardown error
+# both masks a real health failure AND turns a fully passing smoke into a
+# failed `make publish`. The `rm` is the one that actually trips: on a rootful
+# daemon docker creates a missing bind source as root, and the api creates
+# inbox/ under /var/lib/ci-import at startup (see the mount comment in
+# docker-compose.production.yml) — so the leftovers are root-owned and `rm -rf`
+# exits 1 with "Permission denied". Pre-creating the two bind sources below
+# keeps that parent directory owned by the invoking user, which is what lets
+# the trap remove the empty root-owned children it finds inside; `|| true`
+# covers the case where it still cannot, at the cost of one stray mktemp dir.
+#
+# `gateway` and `worker` are named, so compose starts those two dependency
+# closures — object-store, api, and through both of them generate-secrets,
+# migrate-database and database. hbpe-service, summary-service and powersync
+# stay down: they are not what is under test, and hbpe would drag GPU device
+# nodes and a model download into a release gate. setup-database runs first and
+# synchronously (`run` waits and propagates the exit code) because it creates
+# the application role and database that migrate-database then connects as, and
+# nothing in the compose graph orders those two.
+#
+# `worker` is here — it used to be in the "stay down" list — because it is the
+# ONLY thing in this repo that boots the real module graph in the shape the two
+# defects in docs/qa/release-qa-program.md §6.4/§6.4b took: a duplicate provider
+# and an import-barrel cycle, both invisible to the unit tests (which stub the
+# providers) and both found by running the app. It is the same ci/api image with
+# CI_ROLE=worker, so it costs one more container and no new image, and unlike
+# the api it constructs the eleven `role: 'worker'` schedules. Watching it for
+# $(SMOKE_WORKER_WATCH)s is a boot-time check: it catches a graph that cannot be
+# constructed, NOT a fault that only fires when a cron later runs (the
+# barrel-cycle bug's actual trigger). Widen SMOKE_WORKER_WATCH, or trigger a
+# job, if you want the latter too.
+#
+# The /api/health poll is necessary and not sufficient: nginx PROXIES that path
+# to the api container, so it is green whenever the API is green and says
+# nothing at all about the gateway's own payload. Until the GET / assertions
+# below existed, a gateway image whose web root was empty or stale passed this
+# target and printed success — and an empty root is a realistic build outcome,
+# because infrastructure/gateway/Dockerfile is a bare
+# `COPY frontend/apps/web/dist /usr/share/nginx/html/ci/web` and COPY of an
+# empty-but-present directory succeeds silently. So: GET / must be 200, must
+# carry the SPA shell's `id="root"` div, and must reference at least one hashed
+# /assets/ bundle that the gateway then actually serves. The last check is the
+# one that separates "shipped a Vite build" from "shipped the dev index.html".
+#
+# NOTE for anyone editing the block below: it is ONE `\`-continued shell line,
+# so a `#` shell comment inside it would comment out everything after it. Put
+# rationale up here at column 0 instead.
+	@set -e; \
+	SMOKE_TMP=$$(mktemp -d); \
+	mkdir -p "$$SMOKE_TMP/import-work" "$$SMOKE_TMP/repo"; \
+	trap '$(SMOKE_COMPOSE) down -v --remove-orphans >/dev/null 2>&1 || true; rm -rf "$$SMOKE_TMP" 2>/dev/null || true' EXIT INT TERM; \
+	printf "\n➤ Creating the application role and database...\n\n"; \
+	$(SMOKE_COMPOSE) run --rm -T setup-database; \
+	printf "\n➤ Starting database, api, worker and gateway from the local images...\n\n"; \
+	$(SMOKE_COMPOSE) up -d gateway worker || { \
+		printf "\n  $(RED)✗$(RESET) The stack did not start. Logs:\n\n"; \
+		$(SMOKE_COMPOSE) logs --tail 80 || true; \
+		exit 1; \
+	}; \
+	printf "\n➤ Polling http://localhost:8642/api/health (up to $(SMOKE_TIMEOUT)s)...\n\n"; \
+	deadline=$$(( $$(date +%s) + $(SMOKE_TIMEOUT) )); \
+	until curl -fsS http://localhost:8642/api/health >/dev/null 2>&1; do \
+		if [ "$$(date +%s)" -ge "$$deadline" ]; then \
+			printf "  $(RED)✗$(RESET) The gateway never answered /api/health within $(SMOKE_TIMEOUT)s. Logs:\n\n"; \
+			$(SMOKE_COMPOSE) logs --tail 80 api gateway || true; \
+			exit 1; \
+		fi; \
+		sleep 2; \
+	done; \
+	printf "$(GREEN)✓$(RESET) gateway served /api/health from the built images\n"; \
+	printf "\n➤ Asserting the gateway serves the web app, not an empty root...\n\n"; \
+	curl -fsS -o "$$SMOKE_TMP/index.html" http://localhost:8642/ || { \
+		printf "  $(RED)✗$(RESET) GET / did not return 200 — the gateway image has no web root. infrastructure/gateway/Dockerfile COPYs frontend/apps/web/dist, and COPY of an empty-but-present directory SUCCEEDS, so this is what a gateway built without a web build looks like. Rebuild with 'make build ENV=production'. Logs:\n\n"; \
+		$(SMOKE_COMPOSE) logs --tail 40 gateway || true; \
+		exit 1; \
+	}; \
+	grep -q 'id="root"' "$$SMOKE_TMP/index.html" || { \
+		printf "  $(RED)✗$(RESET) GET / returned 200 but the body is not the SPA shell — no <div id=\"root\"> (see frontend/apps/web/index.html; Vite leaves that div untouched, so its absence means the served file is not our index.html at all). First 20 lines:\n\n"; \
+		head -n 20 "$$SMOKE_TMP/index.html" || true; \
+		printf "\n"; \
+		exit 1; \
+	}; \
+	asset=$$(grep -o '/assets/[A-Za-z0-9._-]\{1,\}' "$$SMOKE_TMP/index.html" | head -n 1); \
+	if [ -z "$$asset" ]; then \
+		printf "  $(RED)✗$(RESET) The served index.html references no /assets/ bundle, so nothing would ever mount into #root. An UNBUILT index.html (script src=/src/main.tsx) was shipped instead of a Vite build.\n\n"; \
+		exit 1; \
+	fi; \
+	curl -fsS -o /dev/null "http://localhost:8642$$asset" || { \
+		printf "  $(RED)✗$(RESET) index.html references $$asset but the gateway will not serve it — nginx.conf's /assets/ location is 'try_files \$$uri = 404', so the web root is stale or partially copied.\n\n"; \
+		exit 1; \
+	}; \
+	printf "$(GREEN)✓$(RESET) gateway served the SPA shell and its hashed bundle $$asset\n"; \
+	printf "\n➤ Watching the worker for $(SMOKE_WORKER_WATCH)s...\n\n"; \
+	sleep $(SMOKE_WORKER_WATCH); \
+	worker_cid=$$($(SMOKE_COMPOSE) ps -aq worker); \
+	if [ -z "$$worker_cid" ]; then \
+		printf "  $(RED)✗$(RESET) There is no worker container — it never started. Logs:\n\n"; \
+		$(SMOKE_COMPOSE) logs --tail 80 worker || true; \
+		exit 1; \
+	fi; \
+	worker_state=$$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' "$$worker_cid") || { \
+		printf "  $(RED)✗$(RESET) Could not inspect the worker container ($$worker_cid). Logs:\n\n"; \
+		$(SMOKE_COMPOSE) logs --tail 80 worker || true; \
+		exit 1; \
+	}; \
+	if [ "$$worker_state" != "true 0" ]; then \
+		printf "  $(RED)✗$(RESET) The worker did not stay up for $(SMOKE_WORKER_WATCH)s (Running/RestartCount = '$$worker_state', wanted 'true 0'). 'restart: unless-stopped' means a crash loop still shows a Running container, which is why the restart count is checked too. Logs:\n\n"; \
+		$(SMOKE_COMPOSE) logs --tail 80 worker || true; \
+		exit 1; \
+	fi; \
+	if $(SMOKE_COMPOSE) logs --no-color worker 2>&1 | grep -Eqi "$(SMOKE_WORKER_FATAL_RE)"; then \
+		printf "  $(RED)✗$(RESET) The worker is up but logged a fatal-looking error while constructing the real module graph:\n\n"; \
+		$(SMOKE_COMPOSE) logs --no-color worker 2>&1 | grep -Ei "$(SMOKE_WORKER_FATAL_RE)" | head -n 20 || true; \
+		printf "\n"; \
+		exit 1; \
+	fi; \
+	printf "$(GREEN)✓$(RESET) worker stayed up $(SMOKE_WORKER_WATCH)s with no DI or unhandled-rejection errors in its log\n"
+
+	@printf "\nProduction stack boots, serves the web app, and keeps a worker alive. ✅\n\n"
+
 .PHONY: publish
 publish: init ## Publish CI-Server images and metadata to the CI-Portal store
 	@$(MAKE) build ENV=production GPU=$(GPU)
 
 	@$(MAKE) smoke-api
+
+	@# smoke-api only proves the image's imports resolve. This one boots the
+	@# stack it is about to publish and requires a real 200 from the gateway on
+	@# BOTH /api/health and the SPA shell, plus a worker that survives its own
+	@# DI graph — so a DI fault, a broken entrypoint, a bad nginx.conf or a
+	@# gateway image with an empty web root stops the release here rather than
+	@# at a user's first launch.
+	@$(MAKE) smoke-stack
 
 	@printf "$(call task_icon,publish,📦) Publishing to CI-Portal registry...\n\n"
 

@@ -231,7 +231,13 @@ describe('SmartRotationListener', () => {
       // and the event name is what identifies an inference dispatch.
       // The owner is bound twice — Postgres deduces one type per parameter and
       // this query needs the owner as a uuid AND as jsonb text.
-      expect(params).toEqual(['user-1', 'llm', Events.INFER_QUESTION_ANSWER, expect.any(Number), 'user-1']);
+      expect(params).toEqual([
+        'user-1',
+        'llm-background',
+        Events.INFER_QUESTION_ANSWER,
+        expect.any(Number),
+        'user-1',
+      ]);
     });
 
     it('holds a question out of the rotation for a cooldown after it was dispatched', async () => {

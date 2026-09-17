@@ -127,8 +127,93 @@ fail() {
 
 # ── Generate docker-compose.json ───────────────────────────────────────
 #
-# Kept in step with CI-Marketplace's apps/ci-memory/docker-compose.json, with
-# one deliberate exception: the database volume.
+# ⚠ HAND-MAINTAINED MIRROR OF docker-compose.production.yml. Nothing derives
+# this heredoc from the compose model — the runtipi dynamic-compose schema is a
+# different shape entirely (JSON, `services` as an array, camelCase keys,
+# hostPath mounts instead of named volumes), so the two drift silently and only
+# a store install ever shows it. It already had: the bundle shipped with NO
+# `worker` service at all, which meant every store install ran the import
+# queues (long synchronous parser stages) inside the same process serving HTTP
+# — the split docker-compose.production.yml has had since CI_ROLE landed.
+#
+# ⚠ ADDING A SERVICE TO docker-compose.production.yml? ADD IT HERE TOO. A
+# service that exists only there is a service store users never get.
+#
+# Drift closed at the same time, for the record: summary-service and
+# hbpe-service now also wait on `setup-database` (see the NOTE beside them in
+# docker-compose.yml — both connect as the `companion` role setup-database
+# creates, so gating on `database: service_healthy` alone races role creation
+# and crash-loops the sidecar), and gateway now waits for the api to be
+# *healthy* rather than merely started, so a store install cannot serve 502s
+# from the moment the container exists until Nest finishes booting.
+#
+# Differences from docker-compose.production.yml that are DELIBERATE, not drift:
+#
+#   * Volumes. Everything hangs off ${APP_DATA_DIR} hostPaths because that is
+#     the only storage runtipi hands an app; the named volumes (db-data,
+#     object-data, secrets) and the operator bind mounts (CI_IMPORT_WORK_DIR,
+#     CI_REPO_DIR) have no equivalent here, so the api/worker get one /app-data
+#     mount instead.
+#   * `fix-db-permissions` exists only here: runtipi creates ${APP_DATA_DIR}
+#     as root, and postgres:18.4-bookworm runs as uid 999.
+#   * `setup-secrets` is production compose's `generate-secrets`, renamed after
+#     its image (companion/setup-secrets).
+#   * No `networks`, `logging`, `profiles`, `mem_limit`, `ports`: runtipi owns
+#     all of those. `isMain`/`internalPort`/`addToMainNetwork` on the gateway
+#     are runtipi-only keys with no compose counterpart.
+#   * No hbpe-service `devices`/`group_add` — and this is no longer a
+#     difference from docker-compose.production.yml at all: that file used to
+#     declare /dev/kfd + /dev/dri unconditionally, which made every non-AMD
+#     host refuse to start the service, so the passthrough was moved into
+#     docker-compose.rocm.yml, an opt-in overlay a generic store host never
+#     layers in. Nothing to mirror here; the bullet stays only so the next
+#     person diffing this bundle against production does not go looking for it.
+#   * Environment. Production reads SENTRY_*, LLM_API_* from the appliance
+#     .env; a store install has no .env, so the bundle passes only what it can
+#     point at inside /app-data (LLM_ENDPOINT_CONFIG_PATH and the three
+#     CI_IMPORT_*_DIR paths below).
+#   * The api healthCheck is production's, respelled: compose's `start_period`
+#     is `startPeriod` here (v2 dynamic-compose schema, checked against
+#     https://schemas.runtipi.io/v2/dynamic-compose.json — `test` there is a
+#     STRING, never compose's ["CMD", …] array form, hence the shell-form
+#     command). Getting a key name wrong fails bundle validation for every
+#     installer, so mirror spellings from that schema, not from compose.
+#
+# Three things about the api/worker pair that are easy to break by halves:
+#
+#   1. `CI_ROLE` MUST be set on BOTH. It defaults to `all` (see
+#      common/roles.ts), so a worker added next to an api that still defaults
+#      to `all` gives two processes consuming the same queues — and the import
+#      recovery sweep assumes exactly one worker.
+#   2. The three CI_IMPORT_*_DIR paths MUST be set, to the SAME values, on
+#      BOTH — and they must live under /app-data, the only mount the two
+#      containers share. Their defaults (configuration.ts: uploadsDir
+#      /var/lib/ci-import/uploads, scratchDir /var/tmp/ci-import, inboxDir
+#      /var/lib/ci-import/inbox) are container-local, which is harmless for a
+#      single `all` process and silently fatal once the halves split:
+#      ImportUploadsController (HTTP, so the web half) writes the staged
+#      archive to `<uploadsDir>/<dropId>/`, and the stage jobs that consume it
+#      are `role: 'worker'` (import/constants.ts), so the worker would look for
+#      those bytes in its own empty filesystem and every uploaded import would
+#      fail with ENOENT. This is the same contract production compose states in
+#      the worker's `${CI_IMPORT_WORK_DIR}:/var/lib/ci-import` comment — "both
+#      halves must see one filesystem" — expressed with env instead of a mount
+#      because /app-data is the only storage runtipi hands the app. Keep the
+#      three siblings: configuration.ts rejects any one of them nested inside
+#      another (uploads under the inbox would expose staged uploads to the
+#      inbox scan).
+#   3. The worker gets no healthCheck on purpose, exactly as in production
+#      compose: it serves no port and nothing dependsOn it.
+#
+# KNOWN REMAINING DRIFT (deliberately left, needs more than a mirror edit):
+#   * Production's gateway also waits on `object-store: service_healthy`. That
+#     needs an object-store healthCheck here first — docker-compose.yml's is
+#     `curl -f http://localhost:9000/minio/health/live` — and an unproven probe
+#     would leave the gateway waiting forever on a store install, so it is left
+#     to whoever can test a real install rather than guessed at here.
+#
+# It is also kept in step with CI-Marketplace's apps/ci-memory/docker-compose.json,
+# with one deliberate exception: the database volume.
 #
 # CI-Marketplace mounts ${APP_DATA_DIR}/data/db at /home/postgres/pgdata and
 # chowns it to 1000. Those are timescale/timescaledb-ha (Spilo) conventions,
@@ -159,7 +244,7 @@ generate_compose() {
         { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
-        "api": { "condition": "service_started" }
+        "api": { "condition": "service_healthy" }
       }
     },
     {
@@ -168,7 +253,39 @@ generate_compose() {
       "restart": "unless-stopped",
       "environment": [
         { "key": "ENABLE_REQUIRE_SIGNUP_CODES", "value": "false" },
-        { "key": "LLM_ENDPOINT_CONFIG_PATH", "value": "/app-data/data/llm-endpoint.json" }
+        { "key": "LLM_ENDPOINT_CONFIG_PATH", "value": "/app-data/data/llm-endpoint.json" },
+        { "key": "CI_ROLE", "value": "web" },
+        { "key": "CI_IMPORT_UPLOADS_DIR", "value": "/app-data/data/import-work/uploads" },
+        { "key": "CI_IMPORT_SCRATCH_DIR", "value": "/app-data/data/import-work/scratch" },
+        { "key": "CI_IMPORT_INBOX_DIR", "value": "/app-data/data/import-work/inbox" }
+      ],
+      "extraHosts": ["host.docker.internal:host-gateway"],
+      "volumes": [
+        { "hostPath": "\${APP_DATA_DIR}", "containerPath": "/app-data" },
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
+      ],
+      "healthCheck": {
+        "test": "curl -f http://localhost:3030/health",
+        "interval": "10s",
+        "timeout": "5s",
+        "retries": 5,
+        "startPeriod": "30s"
+      },
+      "dependsOn": {
+        "migrate-database": { "condition": "service_completed_successfully" },
+        "database": { "condition": "service_healthy" }
+      }
+    },
+    {
+      "name": "worker",
+      "image": "${reg}/companion/api:${ver}",
+      "restart": "unless-stopped",
+      "environment": [
+        { "key": "CI_ROLE", "value": "worker" },
+        { "key": "LLM_ENDPOINT_CONFIG_PATH", "value": "/app-data/data/llm-endpoint.json" },
+        { "key": "CI_IMPORT_UPLOADS_DIR", "value": "/app-data/data/import-work/uploads" },
+        { "key": "CI_IMPORT_SCRATCH_DIR", "value": "/app-data/data/import-work/scratch" },
+        { "key": "CI_IMPORT_INBOX_DIR", "value": "/app-data/data/import-work/inbox" }
       ],
       "extraHosts": ["host.docker.internal:host-gateway"],
       "volumes": [
@@ -235,6 +352,7 @@ generate_compose() {
       ],
       "dependsOn": {
         "database": { "condition": "service_healthy" },
+        "setup-database": { "condition": "service_completed_successfully" },
         "setup-secrets": { "condition": "service_completed_successfully" }
       }
     },
@@ -269,6 +387,7 @@ generate_compose() {
       ],
       "dependsOn": {
         "database": { "condition": "service_healthy" },
+        "setup-database": { "condition": "service_completed_successfully" },
         "setup-secrets": { "condition": "service_completed_successfully" }
       }
     },

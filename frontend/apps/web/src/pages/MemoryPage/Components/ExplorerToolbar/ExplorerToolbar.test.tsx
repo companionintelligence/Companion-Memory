@@ -62,6 +62,25 @@ const SOURCE_SYSTEMS_QUERY = gql(`
   }
 `);
 
+const EVENT_TYPES_QUERY = gql(`
+  query EventTypes {
+    eventTypes
+  }
+`);
+
+const PERSON_NAME_SUGGESTIONS_QUERY = gql(`
+  query PersonNameSuggestions($query: String, $first: Int) {
+    people(query: $query, first: $first) {
+      edges {
+        node {
+          id
+          name
+        }
+      }
+    }
+  }
+`);
+
 // Surfaces the live URL search params in the DOM so assertions can read the
 // filter state the toolbar writes without reaching into router internals.
 function ParamsProbe() {
@@ -77,7 +96,29 @@ function renderToolbar(ui: ReactNode, options: RenderWithProvidersOptions = {}) 
       {ui}
     </DropdownProvider>,
     {
-      mocks: [mockQuery(SOURCE_SYSTEMS_QUERY, {}, { sourceSystems: [] })],
+      mocks: [
+        mockQuery(SOURCE_SYSTEMS_QUERY, {}, { sourceSystems: ['gmail', 'reddit'] }),
+        mockQuery(EVENT_TYPES_QUERY, {}, { eventTypes: ['messaged', 'visited'] }),
+        mockQuery(
+          PERSON_NAME_SUGGESTIONS_QUERY,
+          { query: '', first: 8 },
+          {
+            people: {
+              edges: [
+                {
+                  node: { id: 'p1', name: 'Ada Lovelace', __typename: 'PersonType' },
+                  __typename: 'PersonEdge',
+                },
+                {
+                  node: { id: 'p2', name: 'Alan Turing', __typename: 'PersonType' },
+                  __typename: 'PersonEdge',
+                },
+              ],
+              __typename: 'PersonConnection',
+            },
+          },
+        ),
+      ],
       ...options,
     },
   );
@@ -127,6 +168,153 @@ describe('ExplorerToolbar', () => {
 
       expect(screen.getByTestId('params').textContent).not.toMatch(/from=|to=|when=/);
       expect(screen.getByRole('button', { name: 'When' })).toBeInTheDocument();
+    });
+  });
+
+  describe('activity picker', () => {
+    it('offers Activity beside How on the everything browse and reads the URL selection', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
+
+      expect(screen.getByRole('button', { name: /^How: all/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Activity: all/ })).toBeInTheDocument();
+    });
+
+    it('labels the trigger with the selected event type', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory?eventTypes=visited' });
+
+      expect(screen.getByRole('button', { name: /^Activity: visited/ })).toBeInTheDocument();
+    });
+
+    it('is withheld once the What bar leaves events out, since eventTypes only narrows events', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory?includedEntityTypes=Content,File' });
+
+      expect(screen.getByRole('button', { name: /^How: all/ })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Activity/ })).not.toBeInTheDocument();
+    });
+
+    it('stays on the events browse, whose kinds always include events', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, {
+        route: '/memory/events?includedEntityTypes=Content',
+      });
+
+      expect(screen.getByRole('button', { name: /^Activity: all/ })).toBeInTheDocument();
+    });
+
+    it('lists the event types once opened and writes the pick to the URL', async () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
+
+      fireEvent.click(screen.getByRole('button', { name: /^Activity: all/ }));
+      fireEvent.click(await screen.findByRole('option', { name: 'visited' }));
+
+      expect(screen.getByTestId('params').textContent).toContain('eventTypes=visited');
+      expect(screen.getByRole('button', { name: /^Activity: visited/ })).toBeInTheDocument();
+    });
+
+    it('narrows the list by the typed text and refuses text that is not an event type', async () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
+
+      fireEvent.click(screen.getByRole('button', { name: /^Activity: all/ }));
+      await screen.findByRole('option', { name: 'visited' });
+
+      const search = screen.getByRole('textbox', { name: 'Search activities…' });
+
+      fireEvent.change(search, { target: { value: 'vis' } });
+      expect(screen.getByRole('option', { name: 'visited' })).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: 'messaged' })).not.toBeInTheDocument();
+
+      fireEvent.change(search, { target: { value: 'skydived' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+
+      expect(screen.queryByRole('option', { name: /skydived/ })).not.toBeInTheDocument();
+      expect(screen.getByText('No activities match')).toBeInTheDocument();
+      expect(screen.getByTestId('params').textContent).not.toContain('eventTypes=');
+    });
+  });
+
+  describe('how picker', () => {
+    it('lists the sources once opened and toggles the pick in the URL', async () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
+
+      fireEvent.click(screen.getByRole('button', { name: /^How: all/ }));
+      fireEvent.click(await screen.findByRole('option', { name: 'gmail' }));
+
+      expect(screen.getByTestId('params').textContent).toContain('connectors=gmail');
+      expect(screen.getByRole('button', { name: /^How: gmail/ })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('option', { name: 'gmail' }));
+      expect(screen.getByTestId('params').textContent).not.toContain('connectors=');
+    });
+
+    it('keeps a URL-carried source the list no longer holds, flagged, so it can be removed', async () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory?connectors=myspace' });
+
+      fireEvent.click(screen.getByRole('button', { name: /^How: myspace/ }));
+      await screen.findByRole('option', { name: 'gmail' });
+
+      const stale = screen.getByRole('option', { name: 'myspace' });
+
+      expect(stale).toHaveAttribute('aria-selected', 'true');
+      expect(stale.querySelector('svg.text-warning-foreground')).not.toBeNull();
+
+      fireEvent.click(stale);
+      expect(screen.getByTestId('params').textContent).not.toContain('connectors=');
+    });
+  });
+
+  describe('who / where pickers', () => {
+    it('offers Who and Where beside Activity while events are in play, and not otherwise', () => {
+      const { unmount } = renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
+
+      expect(screen.getByRole('button', { name: /^Who: all/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Where: all/ })).toBeInTheDocument();
+      unmount();
+
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory?includedEntityTypes=Content,File' });
+      expect(screen.queryByRole('button', { name: /^Who/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Where/ })).not.toBeInTheDocument();
+    });
+
+    it('keeps Who, but not Where or Activity, on a communications-only browse', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory?includedEntityTypes=Communication' });
+
+      expect(screen.getByRole('button', { name: /^Who: all/ })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Where/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Activity/ })).not.toBeInTheDocument();
+    });
+
+    it('lists people suggestions once opened and writes the pick to the URL', async () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
+
+      fireEvent.click(screen.getByRole('button', { name: /^Who: all/ }));
+      fireEvent.click(await screen.findByRole('option', { name: 'Ada Lovelace' }));
+
+      expect(screen.getByTestId('params').textContent).toContain('people=Ada+Lovelace');
+      expect(screen.getByRole('button', { name: /^Who: Ada Lovelace/ })).toBeInTheDocument();
+    });
+
+    it('offers the From / To toggle inside Who, chips it, and clears it from the chip', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
+
+      fireEvent.click(screen.getByRole('button', { name: /^Who: all/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'To' }));
+
+      expect(screen.getByTestId('params').textContent).toContain('direction=outbound');
+      expect(screen.getByRole('button', { name: 'To' })).toHaveAttribute('aria-pressed', 'true');
+
+      fireEvent.click(screen.getByRole('button', { name: 'From' }));
+      expect(screen.getByTestId('params').textContent).toContain('direction=inbound');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Any' }));
+      expect(screen.getByTestId('params').textContent).not.toContain('direction=');
+    });
+
+    it('reads an existing Who selection from the URL and removes it from the panel', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory?people=Ada%20Lovelace' });
+
+      fireEvent.click(screen.getByRole('button', { name: /^Who: Ada Lovelace/ }));
+      fireEvent.click(screen.getByRole('option', { name: 'Ada Lovelace' }));
+
+      expect(screen.getByTestId('params').textContent).not.toContain('people=');
     });
   });
 

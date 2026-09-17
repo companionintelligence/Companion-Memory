@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 export type LlmBackendKind = 'ollama' | 'openai_compatible';
@@ -44,7 +44,10 @@ export function llmApiBaseFromSettings(settings: ResolvedLlmEndpointEnv): string
 
 export function writeSharedConfig(path: string, settings: PersistedLlmEndpointSettings): void {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(settings, null, 2));
+  writeFileSync(path, JSON.stringify(settings, null, 2), { mode: 0o600 });
+  // `mode` only applies to new files. Tighten an existing file too, because it
+  // can carry an OpenAI-compatible bearer credential.
+  chmodSync(path, 0o600);
 }
 
 export function readSharedConfig(path: string): PersistedLlmEndpointSettings | null {

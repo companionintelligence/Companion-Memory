@@ -23,6 +23,10 @@ import {
   DeterministicEdgeBackfillService,
 } from './DeterministicEdgeBackfillService';
 import {
+  type EntityIdentifierBackfillOptions,
+  EntityIdentifierBackfillService,
+} from './EntityIdentifierBackfillService';
+import {
   type EventParticipantBackfillOptions,
   EventParticipantBackfillService,
 } from './EventParticipantBackfillService';
@@ -43,13 +47,15 @@ import { type SummaryBackfillOptions, SummaryBackfillService } from './SummaryBa
 /**
  * The canonical execution order of the orchestrated enrichment legs. A request
  * may name any SUBSET of these stages, but they always execute in THIS order —
- * the legs have real data dependencies (extract_people seeds the identifier
- * index link_communications/link_events resolve against; materialize_edges
+ * the legs have real data dependencies (index_entity_identifiers and
+ * extract_people seed the identifier index link_communications/link_events
+ * resolve against; materialize_edges
  * projects the columns those two just filled into ci.relationships; geocoding
  * should land before the estimator so it only fills what nothing else could;
  * search_index runs last so the embeds cover the enriched rows).
  */
 export const ORCHESTRATE_STAGES = [
+  'index_entity_identifiers',
   'extract_people',
   'link_communications',
   'link_events',
@@ -73,6 +79,7 @@ export type OrchestrateStage = (typeof ORCHESTRATE_STAGES)[number];
 
 /** Per-leg option passthrough — each field forwards verbatim to its leg. */
 export interface OrchestrateLegOptions {
+  indexEntityIdentifiers?: EntityIdentifierBackfillOptions;
   extractPeople?: PersonStubBackfillOptions;
   linkCommunications?: Omit<CommunicationLinkBackfillOptions, 'onProgress'>;
   linkEvents?: Omit<EventParticipantBackfillOptions, 'onProgress'>;
@@ -196,6 +203,7 @@ export class MaintenanceOrchestratorService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly signallingEventService: SignallingEventService,
     private readonly logger: LoggerService,
+    private readonly entityIdentifierBackfillService: EntityIdentifierBackfillService,
     private readonly personStubBackfillService: PersonStubBackfillService,
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
     private readonly eventParticipantBackfillService: EventParticipantBackfillService,
@@ -343,6 +351,9 @@ export class MaintenanceOrchestratorService {
     const options = body.options ?? {};
 
     switch (leg) {
+      case 'index_entity_identifiers':
+        return this.entityIdentifierBackfillService.backfill(userId, options.indexEntityIdentifiers ?? {});
+
       case 'extract_people':
         return this.personStubBackfillService.backfill(userId, options.extractPeople ?? {});
 

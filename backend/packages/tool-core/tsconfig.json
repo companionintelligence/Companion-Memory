@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+
+  // The TOOLING project: everything under src/, specs included. This is what
+  // `yarn typecheck`, typescript-eslint's project service and an editor all
+  // pick up, so a spec gets the same diagnostics as the code it covers.
+  //
+  // Emit is tsconfig.build.json's job — see there for why the two are split.
+  "extends": "../../../tsconfig.node.json",
+
+  "compilerOptions": {
+    "noEmit": true,
+
+    // Deliberately NOT inherited-and-disabled the way backend/apps/api does:
+    // this package is new, so every strictness flag in tsconfig.base.json is
+    // satisfied from day one rather than left as a cleanup for later.
+
+    // Nothing here is a Nest provider, so the decorator metadata the shared
+    // node preset turns on has nothing to emit for. Off, so that a decorator
+    // arriving in this package is a compile error rather than a silent
+    // dependency on reflect-metadata.
+    "emitDecoratorMetadata": false,
+    "experimentalDecorators": false
+  },
+
+  "include": ["src"],
+  "exclude": ["dist", "node_modules"]
+}

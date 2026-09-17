@@ -40,6 +40,16 @@
  *
  * Every source is counted independently so coverage can distinguish "no rows"
  * from "no value".
+ *
+ * The three `count(DISTINCT …)` legs were re-checked on 2026-09-15 after
+ * `DuplicateDetectStage` lost six hours to TimescaleDB's skip-scan planner
+ * rewriting a correlated `count(DISTINCT entity_id)` as a walk over the DISTINCT
+ * column's own index. They do not share that exposure: each is bounded ONCE by
+ * the `(user_id, time)` range above, not evaluated per row, and the planner
+ * never reaches for `communications_thread_idx` — measured for one day (Index
+ * Scan, 4 ms), a month (13 ms), a year (Bitmap) and the whole table (Seq Scan +
+ * Sort, 82 ms). The whole statement ran in 12 ms on the busiest day of a 202k-
+ * communication corpus. Leave them as written.
  */
 export const DAILY_AGGREGATE_SQL = `
 SELECT

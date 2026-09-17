@@ -1,10 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
+import { LessThan, Repository, type SelectQueryBuilder } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
 
+import type { ToolPrincipal } from '../core/types';
 import { ToolInvocationEntity } from '../entities/ToolInvocationEntity';
 import {
   TOOL_INVOCATION_ERROR_MAX_LENGTH,
@@ -38,6 +39,79 @@ export interface ToolInvocationQuery {
   /** Only rows at or after this instant. */
   since?: Date;
   limit?: number;
+  /**
+   * Restrict to one principal — `managed-app` is the "what have the installed apps been doing"
+   * question, `owner` its complement.
+   */
+  principal?: ToolPrincipal;
+  /** Restrict to one installed app by api-key name, e.g. `app:ci-openclaw:ci-marketplace`. */
+  principalName?: string;
+  /** Continue a previous page. Encodes the last row's `(occurredAt, id)`; see {@link encodeCursor}. */
+  cursor?: ToolInvocationCursor;
+}
+
+/**
+ * Where a page left off.
+ *
+ * Both halves, not just the timestamp: `occurred_at` is emitted by the caller and is NOT unique —
+ * a chat turn dispatching three tools in the same millisecond is ordinary — so a cursor keyed on
+ * it alone either repeats rows or skips them at every page boundary. `id` breaks the tie.
+ *
+ * `id` cannot carry the ordering by itself either, even though it is a uuidv7: it is minted at
+ * INSERT while `occurred_at` is stamped at emit, and the event is durable — a row replayed off a
+ * dead letter gets a new, later id for an older occurrence. Ordering by id would file that replay
+ * at the top of the page as if it had just happened.
+ */
+export interface ToolInvocationCursor {
+  occurredAt: Date;
+  id: string;
+}
+
+/** One page of the ledger, plus how to ask for the next. */
+export interface ToolInvocationPage {
+  items: ToolInvocationEntity[];
+  /** `null` when this page is the end of the ledger. */
+  nextCursor: string | null;
+}
+
+/**
+ * Opaque, URL-safe encoding of a {@link ToolInvocationCursor}.
+ *
+ * Opaque because the client must not compose one: a hand-built cursor is a way to ask for an
+ * arbitrary offset into someone's history, and the shape is ours to change.
+ */
+export function encodeCursor(cursor: ToolInvocationCursor): string {
+  return Buffer.from(`${cursor.occurredAt.toISOString()}|${cursor.id}`, 'utf8').toString(
+    'base64url',
+  );
+}
+
+/**
+ * Decode a cursor, or throw. Never silently falls back to the first page: a client that pages with
+ * a cursor this service cannot read would otherwise loop over page one forever, reporting the same
+ * rows as if they were new ones.
+ */
+export function decodeCursor(raw: string): ToolInvocationCursor {
+  const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+  // The FIRST separator, because the timestamp is the half with the guaranteed
+  // format: `Date.toISOString()` can never contain a `|`, while the id is only
+  // "whatever the primary key happens to be" and is a uuid by convention rather
+  // than by contract. Splitting on the last one would let a separator in an id
+  // eat into the timestamp and turn a valid cursor into a 400.
+  const separator = decoded.indexOf('|');
+
+  if (separator <= 0) {
+    throw new Error('Malformed cursor');
+  }
+
+  const occurredAt = new Date(decoded.slice(0, separator));
+  const id = decoded.slice(separator + 1);
+
+  if (Number.isNaN(occurredAt.getTime()) || id === '') {
+    throw new Error('Malformed cursor');
+  }
+
+  return { occurredAt, id };
 }
 
 /**
@@ -75,6 +149,9 @@ export class ToolInvocationLedgerService {
       correlationId: payload.correlationId ?? null,
       apiKeyId: payload.apiKeyId ?? null,
       capability: payload.capability ?? null,
+      principal: payload.principal ?? null,
+      principalName: payload.principalName ?? null,
+      tier: payload.tier ?? null,
       access: payload.access ?? null,
       external: payload.external,
       destructive: payload.destructive,
@@ -88,8 +165,8 @@ export class ToolInvocationLedgerService {
   }
 
   /** One account's invocations, newest first. */
-  async listForUser(userId: string, query: ToolInvocationQuery = {}): Promise<ToolInvocationEntity[]> {
-    return this.find({ userId }, query);
+  async listForUser(userId: string, query: ToolInvocationQuery = {}): Promise<ToolInvocationPage> {
+    return this.find((qb) => qb.andWhere('invocation.user_id = :userId', { userId }), query);
   }
 
   /**
@@ -98,33 +175,78 @@ export class ToolInvocationLedgerService {
    * controller exposes them behind their own admin-gated route rather than silently folding them
    * into somebody's page.
    */
-  async listSystem(query: ToolInvocationQuery = {}): Promise<ToolInvocationEntity[]> {
-    return this.find({ userId: IsNull() }, query);
+  async listSystem(query: ToolInvocationQuery = {}): Promise<ToolInvocationPage> {
+    return this.find((qb) => qb.andWhere('invocation.user_id IS NULL'), query);
   }
 
+  /**
+   * The one read, keyset-paginated on `(occurred_at, id)` descending.
+   *
+   * A query builder rather than `repository.find`, for the cursor: the predicate is a row
+   * comparison — `(occurred_at, id) < (:at, :id)` — which is the whole reason this pages correctly
+   * and which `FindOptionsWhere` cannot express. Postgres compares row constructors
+   * lexicographically, so that single clause means "strictly older, or the same instant and a
+   * lower id" without the three-way OR a hand-expanded version needs.
+   *
+   * Keyset and not OFFSET because the newest end of this table is where rows are being appended:
+   * an offset page-two re-reads rows that page one already showed, every time a tool ran in
+   * between. The ledger's whole job is to be trustworthy about what happened, and a paginator
+   * that duplicates or drops rows undermines that more quietly than a missing feature would.
+   */
   private async find(
-    scope: Record<string, unknown>,
+    scope: (qb: SelectQueryBuilder<ToolInvocationEntity>) => SelectQueryBuilder<ToolInvocationEntity>,
     query: ToolInvocationQuery,
-  ): Promise<ToolInvocationEntity[]> {
-    const where: Record<string, unknown> = { ...scope };
+  ): Promise<ToolInvocationPage> {
+    const limit = clampLimit(query.limit);
+    const builder = scope(this.repository.createQueryBuilder('invocation'));
 
     if (query.tool) {
-      where.tool = query.tool;
+      builder.andWhere('invocation.tool = :tool', { tool: query.tool });
     }
 
     if (query.outcome) {
-      where.outcome = query.outcome;
+      builder.andWhere('invocation.outcome = :outcome', { outcome: query.outcome });
     }
 
     if (query.since) {
-      where.occurredAt = MoreThanOrEqual(query.since);
+      builder.andWhere('invocation.occurred_at >= :since', { since: query.since });
     }
 
-    return this.repository.find({
-      where,
-      order: { occurredAt: 'DESC' },
-      take: clampLimit(query.limit),
-    });
+    if (query.principal) {
+      builder.andWhere('invocation.principal = :principal', { principal: query.principal });
+    }
+
+    if (query.principalName) {
+      builder.andWhere('invocation.principal_name = :principalName', {
+        principalName: query.principalName,
+      });
+    }
+
+    if (query.cursor) {
+      builder.andWhere(
+        '(invocation.occurred_at, invocation.id) < (:cursorAt, CAST(:cursorId AS uuid))',
+        { cursorAt: query.cursor.occurredAt, cursorId: query.cursor.id },
+      );
+    }
+
+    // One more than asked for, so "is there a next page" is answered by the rows themselves
+    // rather than by a second COUNT over a year of history.
+    const rows = await builder
+      .orderBy('invocation.occurred_at', 'DESC')
+      .addOrderBy('invocation.id', 'DESC')
+      .take(limit + 1)
+      .getMany();
+
+    const items = rows.slice(0, limit);
+    const last = items.at(-1);
+
+    return {
+      items,
+      nextCursor:
+        rows.length > limit && last != null
+          ? encodeCursor({ occurredAt: last.occurredAt, id: last.id })
+          : null,
+    };
   }
 
   /** Drop invocations past {@link TOOL_INVOCATION_RETENTION_DAYS}. Returns the number deleted. */

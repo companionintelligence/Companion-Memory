@@ -69,6 +69,9 @@ function makeListener(opts: { content?: string; externalCreatedAt?: Date | null 
     getFileContent: jest.fn(async () => Buffer.from('pixels')),
   };
 
+  const rendition = {
+    render: jest.fn(async () => ({ jpeg: Buffer.from('pixels'), source: 'original' as const })),
+  };
   const ollamaService = {
     resolveModel: jest.fn(async (_ctx: unknown, opts?: { requestedModel?: string | null }) => ({
       model: opts?.requestedModel?.trim() ? opts.requestedModel : 'Qwen3-8B',
@@ -134,6 +137,8 @@ function makeListener(opts: { content?: string; externalCreatedAt?: Date | null 
     resolutionService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     imageDescriptionPreference as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rendition as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger as any,
   );

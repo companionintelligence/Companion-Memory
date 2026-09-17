@@ -10,6 +10,7 @@ import { gql } from '@/graphql';
 
 import { toFiltersInput, type EditableFilters } from './savedSearchFiltersEdit';
 import { SavedSearchFiltersEditor } from './SavedSearchFiltersEditor';
+import { useSavedSearchVocabulary } from './useSavedSearchVocabulary';
 
 /**
  * Shared with the Memory explorer's SaveSearchButton (which saves the *current*
@@ -46,6 +47,7 @@ export function CreateSavedSearchModal({ onClose }: Props) {
   const [description, setDescription] = useState('');
   const [query, setQuery] = useState('');
   const [filters, setFilters] = useState<EditableFilters>({});
+  const vocabulary = useSavedSearchVocabulary();
   const [{ selectedEntityTypes }] = useDropdown();
 
   const [createSavedSearch, { loading }] = useMutation(CREATE_SAVED_SEARCH, {
@@ -145,7 +147,7 @@ export function CreateSavedSearchModal({ onClose }: Props) {
             <p className="text-xs text-muted-foreground">
               The who / where / when / how / sort applied whenever this search runs.
             </p>
-            <SavedSearchFiltersEditor value={filters} onChange={setFilters} />
+            <SavedSearchFiltersEditor value={filters} onChange={setFilters} vocabulary={vocabulary} />
           </div>
         </div>
 

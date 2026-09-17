@@ -30,10 +30,11 @@ export function MemorySubmenu() {
 
   // Idle until the group is actually showing its contents — the rail renders
   // on every page, so an eager thread list would be a request per navigation
-  // for a menu nobody opened. Collapsed flyouts use clickOpen; the expanded
-  // accordion uses open (route or click) only while the rail is wide.
+  // for a menu nobody opened. Collapsed icon stacks use clickOpen; the
+  // expanded accordion uses open (route or click) only while the rail is wide.
+  // Threads themselves are labels, so they stay off the collapsed stack.
   const { threads, loading: threadsLoading } = useRecentThreads({
-    enabled: expanded ? open : clickOpen,
+    enabled: expanded && open,
   });
 
   const visible = MEMORY_HUB_SECTIONS.filter((section) => !section.flag || isFeatureEnabled(section.flag));
@@ -77,7 +78,7 @@ export function MemorySubmenu() {
               }
             />
 
-            {isChat && (
+            {isChat && expanded && (
               <>
                 {threads.length > 0 && (
                   <span className="px-2 pb-0.5 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">

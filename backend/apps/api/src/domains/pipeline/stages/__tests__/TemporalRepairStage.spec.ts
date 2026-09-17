@@ -382,6 +382,31 @@ describe('classifyEventTime', () => {
       expect(decision.patch?.shiftMs).toBe(7 * 60 * 60 * 1000);
     });
 
+    it('repairs the same event under the federated `calendar` source system', () => {
+      // This is the system production actually writes. `calendarEventIdentity`
+      // keys every UID-bearing event on its iCalUID under `calendar`, so the
+      // `google_calendar` row above is the UID-LESS fallback and this one is the
+      // common case. While SOURCE_TIME_SPECS had no `calendar` entry the whole
+      // class was skipped as `source_time_spec_missing` and the floatingAsUtc
+      // repair — the only reason those entries exist — never ran once.
+      const decision = classifyEventTime(
+        row({
+          source_system: 'calendar',
+          is_all_day: true,
+          start_time: new Date('2020-06-15T00:00:00.000Z'),
+          end_time: new Date('2020-06-16T00:00:00.000Z'),
+        }),
+        'America/Los_Angeles',
+      );
+
+      expect(decision.result.outcome).toBe('done');
+      expect(decision.patch?.startTime.toISOString()).toBe('2020-06-15T07:00:00.000Z');
+      expect(decision.patch?.endTime?.toISOString()).toBe('2020-06-16T07:00:00.000Z');
+      expect(decision.patch?.timeSource).toBe(TIME_SOURCES.REPAIRED);
+      expect(decision.patch?.timePrecision).toBe(TIME_PRECISIONS.DAY);
+      expect(decision.patch?.shiftMs).toBe(7 * 60 * 60 * 1000);
+    });
+
     it('prefers a TZID carried in the payload over the user zone', () => {
       // A meeting booked in another zone keeps that zone. The user's own zone is
       // the fallback, not the authority.
@@ -609,6 +634,11 @@ describe('SOURCE_TIME_SPECS', () => {
     // reviewable line plus a generation bump, and that is the point.
     expect(Object.keys(SOURCE_TIME_SPECS).sort()).toEqual([
       'amazon',
+      // The federated calendar kind. This list froze before cross-pipeline
+      // identity moved UID-bearing events off `google_calendar`, so pinning it
+      // without `calendar` pinned the bug: the floatingAsUtc repair had no key
+      // to match and every all-day event was skipped.
+      'calendar',
       'google_calendar',
       'google_maps_places',
       'outlook_calendar',

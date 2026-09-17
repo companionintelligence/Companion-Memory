@@ -93,11 +93,11 @@ export class CommunicationParticipantLinkListener {
     }
 
     const fromAlreadySet = communication.fromEntityId != null;
-    const toAlreadySet = Array.isArray(communication.toEntityIds) && communication.toEntityIds.length > 0;
-    if (fromAlreadySet && toAlreadySet) {
-      // Nothing to do — the creator pre-resolved both sides.
-      return;
-    }
+    // A non-empty recipient list is NOT "done": it is whatever an earlier
+    // writer could resolve at the time. The listener resolves every `to` name
+    // and contributes the ones the column lacks — the same merge rule the
+    // person-link stage projects by — so a list can only ever grow.
+    const toAlreadyLinked = new Set(communication.toEntityIds ?? []);
 
     const meta = communication.participantsMetadata ?? {};
 
@@ -122,7 +122,9 @@ export class CommunicationParticipantLinkListener {
       collect(readString(meta.from));
     }
 
-    if (!toAlreadySet) {
+    // Recipients are always collected: a partial list may still be missing
+    // the people some of these names belong to (see toAlreadyLinked).
+    {
       for (const raw of readStringArray(meta.to)) {
         collect(raw);
       }
@@ -135,7 +137,6 @@ export class CommunicationParticipantLinkListener {
         collect(raw);
       }
     }
-
     if (seenByComposite.size === 0) {
       return;
     }
@@ -238,19 +239,17 @@ export class CommunicationParticipantLinkListener {
     };
 
     const fromId = fromAlreadySet ? null : lookup(readString(meta.from));
+    const newToIds: string[] = [];
 
-    let toIds: string[] | null = null;
-    if (!toAlreadySet) {
-      const ids: string[] = [];
-      for (const raw of readStringArray(meta.to)) {
-        const id = lookup(raw);
-        if (id != null) {
-          ids.push(id);
-        }
+    for (const raw of readStringArray(meta.to)) {
+      const id = lookup(raw);
+
+      if (id != null && !toAlreadyLinked.has(id) && !newToIds.includes(id)) {
+        newToIds.push(id);
       }
-
-      toIds = ids.length > 0 ? [...new Set(ids)] : null;
     }
+
+    const toIds = newToIds.length > 0 ? newToIds : null;
 
     if (fromId == null && toIds == null) {
       // Nothing resolved — the row stays as it was. Idempotent.
@@ -260,9 +259,11 @@ export class CommunicationParticipantLinkListener {
     // Targeted UPDATE scoped to the full primary key (time, user_id, id) so
     // TimescaleDB excludes every chunk but the one carrying this row, and so
     // an id ever reused across `time` partitions can never match two rows.
-    // Both link columns use NULL/empty guards so a value a concurrent path
+    // The sender fills only when still NULL, so a value a concurrent path
     // (e.g. the operator backfill) wrote between this listener's read and
-    // write is preserved — the listener never overwrites an existing link.
+    // write is preserved. The recipients MERGE: the column's ids first, in
+    // their order, then the new ones — so a concurrent write is kept too, and
+    // a list is never shortened by whoever resolved less.
     // No CommunicationUpdatedEvent fires so the search listener doesn't
     // redundantly re-embed the same content.
     await this.dataSource.query(
@@ -273,10 +274,13 @@ export class CommunicationParticipantLinkListener {
                                  ELSE from_entity_id
                                END,
               to_entity_ids  = CASE
-                                 WHEN $4::uuid[] IS NOT NULL
-                                      AND (to_entity_ids IS NULL OR cardinality(to_entity_ids) = 0)
-                                 THEN $4::uuid[]
-                                 ELSE to_entity_ids
+                                 WHEN $4::uuid[] IS NULL THEN to_entity_ids
+                                 ELSE ARRAY(
+                                   SELECT m.id
+                                     FROM unnest(COALESCE(to_entity_ids, '{}'::uuid[]) || $4::uuid[])
+                                          WITH ORDINALITY AS m(id, ord)
+                                    GROUP BY m.id
+                                    ORDER BY min(m.ord))
                                END
         WHERE user_id = $1
           AND id = $2

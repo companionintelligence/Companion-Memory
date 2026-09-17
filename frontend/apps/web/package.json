@@ -16,7 +16,9 @@
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build",
     "graphql:generate": "graphql-codegen",
-    "graphql:watch": "graphql-codegen --watch"
+    "graphql:watch": "graphql-codegen --watch",
+    "brand:sync": "node scripts/sync-brand.mjs",
+    "brand:check": "node scripts/sync-brand.mjs --check"
   },
   "packageManager": "yarn@4.9.1",
   "dependencies": {
@@ -27,7 +29,7 @@
     "@ci/common": "workspace:*",
     "@ci/editor": "workspace:*",
     "@ci/shadcn": "workspace:*",
-    "@companionintelligence/tokens": "^0.3.1",
+    "@companionintelligence/tokens": "^1.0.0",
     "@journeyapps/wa-sqlite": "^1.5.0",
     "@knight-lab/timelinejs": "^3.9.13",
     "@powersync/capacitor": "^0.5.2",
@@ -69,6 +71,7 @@
     "zod": "^3.25.6"
   },
   "devDependencies": {
+    "@companionintelligence/assets": "^1.0.0",
     "@graphql-codegen/cli": "^6.1.0",
     "@graphql-codegen/client-preset": "^5.2.1",
     "@graphql-codegen/fragment-matcher": "^6.0.0",

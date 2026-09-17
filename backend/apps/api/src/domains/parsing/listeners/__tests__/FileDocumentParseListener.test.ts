@@ -9,7 +9,7 @@ function makeLogger() {
 }
 
 function makeAck(): Acknowledgement {
-  return { done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
+  return { jobId: 'test-job', done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
 }
 
 function makeListener(fileOverrides: Record<string, unknown> = {}) {

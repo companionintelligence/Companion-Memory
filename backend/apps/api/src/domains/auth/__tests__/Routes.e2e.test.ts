@@ -13,6 +13,7 @@ import { SessionController } from '../controllers/SessionController';
 import { SignupController } from '../controllers/SignupController';
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
+import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 import { LoginThrottleService } from '../services/LoginThrottleService';
 import { SignupCodeService } from '../services/SignupCodeService';
 
@@ -112,6 +113,13 @@ const mockLoginThrottle = {
     // rejection-reason warnings.
     { provide: LoggerService, useValue: mockLogger },
     { provide: LoginThrottleService, useValue: mockLoginThrottle },
+    {
+      provide: HubForwardAuthBridgeService,
+      useValue: {
+        verifyUsername: jest.fn().mockReturnValue(null),
+        alignSession: jest.fn().mockResolvedValue({ username: null, replaced: false }),
+      },
+    },
   ],
 })
 class TestModule implements NestModule {

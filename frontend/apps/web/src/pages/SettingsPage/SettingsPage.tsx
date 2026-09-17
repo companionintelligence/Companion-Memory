@@ -20,7 +20,7 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   ].join(' ');
 
 export function SettingsPage() {
-  usePageTitle('Settings - Companion Intelligence');
+  usePageTitle('Settings - Companion Memory');
 
   const { t } = useTranslation();
   const location = useLocation();

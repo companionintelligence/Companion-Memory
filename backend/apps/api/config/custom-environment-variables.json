@@ -37,7 +37,9 @@
     },
     "connect": {
       "hubOrigins": "CI_HUB_ORIGINS",
-      "hubInternalUrl": "CI_HUB_INTERNAL_URL"
+      "hubInternalUrl": "CI_HUB_INTERNAL_URL",
+      "devDirectWakeUrl": "CI_DEV_DIRECT_WAKE_URL",
+      "devDirectWakeToken": "CI_DEV_DIRECT_WAKE_TOKEN"
     },
     "portal": {
       "enabled": {
@@ -101,6 +103,10 @@
     "apiKey": "LLM_API_KEY",
     "chatModel": "LLM_DEFAULT_CHAT_MODEL",
     "utilityModel": "LLM_UTILITY_MODEL",
+    "firstResponseTimeoutMs": {
+      "__name": "LLM_FIRST_RESPONSE_TIMEOUT_MS",
+      "__format": "json"
+    },
     "chat": {
       "groundedRecall": {
         "enabled": {
@@ -118,6 +124,29 @@
       "escalatedModel": "LLM_TIER_ROUTING_ESCALATED_MODEL",
       "onDeviceContextTokens": {
         "__name": "LLM_TIER_ROUTING_ON_DEVICE_CONTEXT_TOKENS",
+        "__format": "json"
+      }
+    },
+    "residency": {
+      "mode": "LLM_RESIDENCY_MODE",
+      "vramTotalBytes": {
+        "__name": "LLM_RESIDENCY_VRAM_TOTAL_BYTES",
+        "__format": "json"
+      },
+      "safetyMarginBytes": {
+        "__name": "LLM_RESIDENCY_SAFETY_MARGIN_BYTES",
+        "__format": "json"
+      },
+      "maxUtilityContextTokens": {
+        "__name": "LLM_RESIDENCY_MAX_UTILITY_CONTEXT_TOKENS",
+        "__format": "json"
+      },
+      "loadWatchdogMs": {
+        "__name": "LLM_RESIDENCY_LOAD_WATCHDOG_MS",
+        "__format": "json"
+      },
+      "cooldownMs": {
+        "__name": "LLM_RESIDENCY_COOLDOWN_MS",
         "__format": "json"
       }
     }
@@ -387,6 +416,14 @@
     "memoryEndpoint": "CI_PEER_MEMORY_ENDPOINT",
     "handle": "CI_PEER_HANDLE",
     "audience": "CI_PEER_AUDIENCE",
-    "timeoutMs": "CI_PEER_TIMEOUT_MS"
+    "timeoutMs": "CI_PEER_TIMEOUT_MS",
+    "allowCgnatEndpoints": "CI_PEER_ALLOW_CGNAT_ENDPOINTS"
+  },
+  "push": {
+    "vapid": {
+      "publicKey": "VAPID_PUBLIC_KEY",
+      "privateKey": "VAPID_PRIVATE_KEY",
+      "subject": "VAPID_SUBJECT"
+    }
   }
 }

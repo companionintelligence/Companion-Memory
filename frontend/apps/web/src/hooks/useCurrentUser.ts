@@ -17,6 +17,7 @@ const USER_DATA_QUERY = gql(`
       needsIdentityStep
       timezone
       avatarUrl
+      isAdmin
 
       entity {
         id

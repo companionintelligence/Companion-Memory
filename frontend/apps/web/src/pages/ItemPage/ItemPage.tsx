@@ -85,9 +85,7 @@ export function ItemPage() {
 
   const [editMode, setEditMode] = useState(false);
 
-  usePageTitle(
-    item?.name ? `Thing - ${item.name} - Companion Intelligence` : 'Thing - Companion Intelligence',
-  );
+  usePageTitle(item?.name ? `Thing - ${item.name} - Companion Memory` : 'Thing - Companion Memory');
 
   let content: ReactNode | null = null;
 

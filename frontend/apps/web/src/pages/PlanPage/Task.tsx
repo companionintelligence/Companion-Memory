@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { useDeviceLayout } from '@ci/common';
-import { Button, Checkbox, DropdownMenu, IconButton, cn } from '@ci/shadcn';
-import { CalendarRange, ChevronDown, MoreHorizontal, Pencil, Trash } from '@ci/shadcn/icons';
+import { Button, Checkbox, IconButton, cn } from '@ci/shadcn';
+import { CalendarRange, ChevronDown, Pencil, Trash } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
 import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
-import { AgentActionItems } from '@/components/ChatWithAgent/AgentActionItems';
 import { gql } from '@/graphql';
 import { type FragmentType, useFragment } from '@/graphql/fragment-masking';
 import { namedChatContext } from '@/lib/agentChat';
@@ -248,10 +247,126 @@ export function Task({
     event.stopPropagation();
   };
 
+  // Chat / Edit / Delete. On a phone they used to sit in the title row (or a
+  // kebab that still occupied that corner), so a narrow card spent its width
+  // on chrome the title needed. They live on their own layer, next to
+  // Schedule when it fits and above it when the row wraps.
+  const overflowActions = !selecting ? (
+    <div className="flex shrink-0 items-center gap-0.5" data-testid="task-overflow-actions">
+      <ChatWithAgentMenu context={chatContext} />
+      {onEdit ? (
+        <IconButton
+          onClick={(event) => {
+            stop(event);
+            onEdit(editPayload);
+          }}
+          variant="ghost"
+          label={t('PLAN_TASK_EDIT', { title: task.title })}
+        >
+          <Pencil className="h-4 w-4" />
+        </IconButton>
+      ) : null}
+      <IconButton
+        onClick={(event) => {
+          stop(event);
+          onDelete(task.id);
+        }}
+        variant="ghost"
+        label={t('PLAN_TASK_DELETE', { title: task.title })}
+      >
+        <Trash className="h-4 w-4" />
+      </IconButton>
+    </div>
+  ) : null;
+
+  const showStandaloneSchedule =
+    !proposed &&
+    !done &&
+    !delegated &&
+    !overdue &&
+    !task.placedOnCalendar &&
+    !pendingSchedule &&
+    Boolean(onSchedule);
+
+  const showReschedule = !proposed && !done && overdue && Boolean(onReschedule);
+
+  const showConfirmDismiss = Boolean(
+    pendingChangeId && !pendingSchedule && onAcceptPending && onDeclinePending,
+  );
+
+  const scheduleButton = showStandaloneSchedule ? (
+    <Button
+      type="button"
+      size="sm"
+      onClick={(event) => {
+        stop(event);
+        onSchedule?.(task.id);
+      }}
+    >
+      <CalendarRange className="h-4 w-4" />
+      Schedule
+    </Button>
+  ) : null;
+
+  const rescheduleButton =
+    showReschedule && !pickingWhen ? (
+      <Button
+        type="button"
+        size="sm"
+        onClick={(event) => {
+          stop(event);
+          setPickingWhen(true);
+        }}
+        aria-label={`Reschedule ${task.title}`}
+      >
+        <CalendarRange className="h-4 w-4" />
+        Reschedule
+      </Button>
+    ) : null;
+
+  const confirmDismiss = showConfirmDismiss ? (
+    <div className="flex flex-wrap gap-2">
+      <Button
+        type="button"
+        size="sm"
+        variant="default"
+        onClick={(event) => {
+          stop(event);
+          onAcceptPending?.(pendingChangeId!);
+        }}
+      >
+        Confirm
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={(event) => {
+          stop(event);
+          onDeclinePending?.(pendingChangeId!);
+        }}
+      >
+        Dismiss
+      </Button>
+    </div>
+  ) : null;
+
+  const whenPicker =
+    showReschedule && pickingWhen ? (
+      <WhenSelector
+        onPick={(date) => {
+          setPickingWhen(false);
+          onReschedule?.(task.id, date);
+        }}
+        onCancel={() => setPickingWhen(false)}
+      />
+    ) : null;
+
   return (
     <li
       className={cn(
-        'flex flex-col gap-2 rounded-lg border bg-card p-3 text-card-foreground shadow-sm transition-shadow hover:shadow-md',
+        'flex flex-col rounded-lg border bg-card text-card-foreground shadow-sm transition-shadow hover:shadow-md',
+        phone ? 'gap-1.5 p-2' : 'gap-2 p-3',
         selected ? 'border-primary ring-2 ring-primary/40' : 'border-border',
       )}
       style={{
@@ -369,144 +484,34 @@ export function Task({
             {priorityLabel ? <span>{priorityLabel}</span> : null}
           </div>
 
-          {!proposed && !done && overdue && onReschedule ? (
-            pickingWhen ? (
-              <WhenSelector
-                onPick={(date) => {
-                  setPickingWhen(false);
-                  onReschedule(task.id, date);
-                }}
-                onCancel={() => setPickingWhen(false)}
-              />
-            ) : (
-              <div className="mt-1 flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={(event) => {
-                    stop(event);
-                    setPickingWhen(true);
-                  }}
-                  aria-label={`Reschedule ${task.title}`}
-                >
-                  <CalendarRange className="h-4 w-4" />
-                  Reschedule
-                </Button>
-              </div>
-            )
-          ) : null}
-
-          {!proposed &&
-          !done &&
-          !delegated &&
-          !overdue &&
-          !task.placedOnCalendar &&
-          !pendingSchedule &&
-          onSchedule ? (
-            <div className="mt-1 flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                onClick={(event) => {
-                  stop(event);
-                  onSchedule(task.id);
-                }}
-              >
-                <CalendarRange className="h-4 w-4" />
-                Schedule
-              </Button>
-            </div>
-          ) : null}
-
-          {pendingChangeId && !pendingSchedule && onAcceptPending && onDeclinePending ? (
-            <div className="mt-1 flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="default"
-                onClick={(event) => {
-                  stop(event);
-                  onAcceptPending(pendingChangeId);
-                }}
-              >
-                Confirm
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={(event) => {
-                  stop(event);
-                  onDeclinePending(pendingChangeId);
-                }}
-              >
-                Dismiss
-              </Button>
-            </div>
+          {!phone ? (
+            <>
+              {whenPicker}
+              {rescheduleButton || scheduleButton || confirmDismiss ? (
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {rescheduleButton}
+                  {scheduleButton}
+                  {confirmDismiss}
+                </div>
+              ) : null}
+            </>
           ) : null}
         </div>
 
-        {phone && !selecting ? (
-          <DropdownMenu modal={false}>
-            <DropdownMenu.Trigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="shrink-0"
-                aria-label={t('PLAN_TASK_MORE', { title: task.title })}
-                onClick={(event) => event.stopPropagation()}
-                onPointerDown={(event) => event.stopPropagation()}
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Content align="end">
-              <AgentActionItems context={chatContext} surface="dropdown" />
-              {onEdit ? (
-                <DropdownMenu.Item
-                  onSelect={() => {
-                    onEdit(editPayload);
-                  }}
-                >
-                  Edit
-                </DropdownMenu.Item>
-              ) : null}
-              <DropdownMenu.Item variant="destructive" onSelect={() => onDelete(task.id)}>
-                Delete
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu>
-        ) : null}
-
-        {!phone ? (
-          <div className="flex shrink-0 items-center gap-0.5">
-            <ChatWithAgentMenu context={chatContext} />
-            {onEdit ? (
-              <IconButton
-                onClick={(event) => {
-                  stop(event);
-                  onEdit(editPayload);
-                }}
-                variant="ghost"
-                label={t('PLAN_TASK_EDIT', { title: task.title })}
-              >
-                <Pencil className="h-4 w-4" />
-              </IconButton>
-            ) : null}
-            <IconButton
-              onClick={(event) => {
-                stop(event);
-                onDelete(task.id);
-              }}
-              variant="ghost"
-              label={t('PLAN_TASK_DELETE', { title: task.title })}
-            >
-              <Trash className="h-4 w-4" />
-            </IconButton>
-          </div>
-        ) : null}
+        {!phone ? overflowActions : null}
       </div>
+
+      {phone && !selecting ? (
+        <div className="flex min-w-0 flex-col gap-1.5" data-testid="task-action-layer">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {overflowActions}
+            {rescheduleButton}
+            {scheduleButton}
+            {confirmDismiss}
+          </div>
+          {whenPicker}
+        </div>
+      ) : null}
 
       {proposed && onAcceptProposed && onDeclineProposed ? (
         <div className="grid w-full grid-cols-3 gap-2" data-testid="proposed-actions">

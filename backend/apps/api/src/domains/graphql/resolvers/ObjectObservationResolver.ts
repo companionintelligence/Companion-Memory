@@ -5,6 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ObjectObservationService } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { ContentLoader } from '../loaders/ContentLoader';
 import { PlaceLoader } from '../loaders/PlaceLoader';
 import { ContentType } from '../types/ContentType';
@@ -117,6 +118,7 @@ export class ObjectObservationResolver {
    * person looked.
    */
   @Mutation(() => ObjectObservationType, { nullable: true })
+  @GraphqlPrivacy({ destructive: false })
   async confirmObservation(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -160,6 +162,9 @@ export class ObjectObservationResolver {
    * tables.
    */
   @Mutation(() => ObjectObservationType, { nullable: true })
+  // Clears the resolvedObjectId/resolvedProductId LINK, not the observation row itself — the
+  // sighting stays, per the method's own doc comment. The linked item/product are untouched.
+  @GraphqlPrivacy({ destructive: false })
   async rejectObservation(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,

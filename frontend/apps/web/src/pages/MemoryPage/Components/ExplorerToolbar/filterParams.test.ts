@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   UNDATED_ENTITY_TYPES,
+  countActiveFilters,
+  eventsInPlay,
   explorerSearchTypeFilters,
   hasWhenFilter,
   narrowedEntityTypes,
+  peopleInPlay,
   resolveExplorerTypes,
 } from './filterParams';
 
@@ -126,5 +129,62 @@ describe('resolveExplorerTypes on the events browse', () => {
       droppedByWhen: [],
       nothingLeft: false,
     });
+  });
+});
+
+describe('eventsInPlay', () => {
+  it('is true on the everything browse when nothing is narrowed', () => {
+    expect(eventsInPlay(new URLSearchParams('view=list'), '/memory')).toBe(true);
+  });
+
+  it('is true on the events browse, whose kinds always include events', () => {
+    expect(eventsInPlay(new URLSearchParams(''), '/memory/events')).toBe(true);
+    // A What selection that names no events-browse kind falls back to all of them.
+    expect(eventsInPlay(new URLSearchParams('includedEntityTypes=Content'), '/memory/events')).toBe(true);
+  });
+
+  it('is false once the What bar leaves events out', () => {
+    expect(eventsInPlay(new URLSearchParams('includedEntityTypes=Content,File'), '/memory')).toBe(false);
+    expect(eventsInPlay(new URLSearchParams('excludedEntityTypes=Event,Answer,Concept'), '/memory')).toBe(
+      false,
+    );
+  });
+
+  it('is true when events are among the selected kinds', () => {
+    expect(eventsInPlay(new URLSearchParams('includedEntityTypes=Content,Event'), '/memory')).toBe(true);
+  });
+
+  it('survives the When override, which only drops undated kinds', () => {
+    expect(eventsInPlay(new URLSearchParams('when=yesterday'), '/memory')).toBe(true);
+    // ...but not a selection the override empties out entirely.
+    expect(eventsInPlay(new URLSearchParams('when=yesterday&includedEntityTypes=Note'), '/memory')).toBe(
+      false,
+    );
+  });
+});
+
+describe('peopleInPlay', () => {
+  it('follows events, which link to people through participants', () => {
+    expect(peopleInPlay(new URLSearchParams(''), '/memory')).toBe(true);
+    expect(peopleInPlay(new URLSearchParams('includedEntityTypes=Event'), '/memory')).toBe(true);
+  });
+
+  it('also holds for communications alone, whose sender and recipients link to people', () => {
+    expect(peopleInPlay(new URLSearchParams('includedEntityTypes=Communication'), '/memory')).toBe(true);
+    expect(eventsInPlay(new URLSearchParams('includedEntityTypes=Communication'), '/memory')).toBe(false);
+  });
+
+  it('is false once neither kind is in play', () => {
+    expect(peopleInPlay(new URLSearchParams('includedEntityTypes=Content,File'), '/memory')).toBe(false);
+    expect(
+      peopleInPlay(new URLSearchParams('excludedEntityTypes=Event,Communication,Answer,Concept'), '/memory'),
+    ).toBe(false);
+  });
+});
+
+describe('countActiveFilters', () => {
+  it('counts the From / To toggle as one filter', () => {
+    expect(countActiveFilters(new URLSearchParams('direction=inbound'))).toBe(1);
+    expect(countActiveFilters(new URLSearchParams('direction=inbound&people=Ada'))).toBe(2);
   });
 });

@@ -10,24 +10,51 @@ Backends (first match wins):
      — laptop / CI without a chat endpoint.
 
 The singleton is lazy-loaded on first get_qwen() call (thread-safe).
+
+The GGUF fallback is meant to be temporary, and two things keep it from
+becoming a permanent GPU tenant next to the inference server it stood in for:
+
+  * while the fallback is active, get_qwen() re-probes the configured chat
+    endpoint every ``HBPE_LABEL_REPROBE_SECONDS`` and swaps back to it the
+    moment it answers, closing the GGUF and returning its VRAM;
+  * the GGUF processes prompts in small fixed batches and is rebuilt every
+    ``QWEN_GGUF_RECYCLE_CALLS`` completions. llama.cpp's HIP scratch pool
+    keeps every distinct-size buffer it ever handed out, and labeling prompts
+    differ per event, so an unbounded batch grew VRAM by ~0.5 MiB per
+    completion for a whole day (4.4 GiB observed 2026-09-10). Fixed 64-token
+    chunks measured flat after warm-up; rebuilding the instance frees the pool
+    outright.
 """
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import re
 import threading
+import time
 import urllib.error
 import urllib.request
 from typing import Protocol
 
 from ci.hbpe.config import settings
+from ci.hbpe.label_ceiling import wait_for_request_slot
+from ci.hbpe.label_yield import wait_for_chat_idle
 
 log = logging.getLogger(__name__)
 
 _LOCK: threading.Lock = threading.Lock()
 _INSTANCE: LabelGenerator | None = None
+# time.monotonic() of the last chat-endpoint probe. Only meaningful while the
+# GGUF fallback is the active instance; see _reprobe_due().
+_LAST_PROBE_AT: float = 0.0
+
+# A re-probe runs on the labeling thread between two events, so it is bounded
+# separately from the generation timeout: a live endpoint answers /models in
+# milliseconds, and waiting the full label timeout for a dead one would stall
+# the drain for minutes every interval.
+_REPROBE_TIMEOUT_SECONDS = 10.0
 
 
 class LabelGenerator(Protocol):
@@ -94,6 +121,12 @@ class OpenAIChatLabeler:
             method="POST",
         )
         with self._gen_lock:
+            # The runner behind this endpoint is the one chat uses. Stand aside
+            # while a person is waiting on it; see label_yield.py for why. Then
+            # keep a gap from the previous request so the runner is regularly
+            # idle and Ollama can swap it; see label_ceiling.py.
+            wait_for_chat_idle()
+            wait_for_request_slot()
             try:
                 with urllib.request.urlopen(
                     req, timeout=settings.label_http_timeout_seconds
@@ -131,27 +164,75 @@ class QwenModel:
     first listed class on every call.  0.15 breaks the degeneracy while keeping
     outputs stable across runs.
     n_gpu_layers=-1 offloads every layer to GPU (Metal / HIPBLAS).
+
+    The instance is rebuilt every ``settings.qwen_gguf_recycle_calls``
+    completions and prompts are fed in ``settings.qwen_gguf_batch``-token
+    chunks — both bound the GPU scratch pool, see the module docstring.
     """
 
     def __init__(self, model_path: str) -> None:
-        from llama_cpp import Llama
-
-        log.info("Loading Qwen GGUF: %s", model_path)
-        self._llm = Llama(
-            model_path=model_path,
-            n_ctx=2048,
-            n_gpu_layers=-1,  # full GPU offload — Metal on M-series, HIPBLAS on ROCm
-            verbose=False,
-        )
+        self._model_path = model_path
         # A single llama.cpp context is NOT thread-safe: concurrent
         # create_chat_completion() calls interleave decodes on the shared KV
         # cache, corrupting it ("find_slot: non-consecutive token position …")
         # and aborting the process via GGML_ASSERT. This singleton is reached
-        # from multiple Temporal activity threads (overlapping users, or a
-        # timed-out attempt still draining while a retry starts), so every
-        # generation must hold this lock.
+        # from multiple threads (overlapping users, or a timed-out attempt
+        # still draining while a retry starts), so every generation — and
+        # every reload or close — must hold this lock.
         self._gen_lock = threading.Lock()
+        self._completions = 0  # since the current context was loaded
+        self._closed = False
+        self._llm = self._load()
+
+    def _load(self):
+        from llama_cpp import Llama
+
+        batch = max(1, int(settings.qwen_gguf_batch))
+        log.info("Loading Qwen GGUF: %s (batch=%d)", self._model_path, batch)
+        llm = Llama(
+            model_path=self._model_path,
+            n_ctx=2048,
+            # Fixed small chunks so the backend's scratch buffers come in a
+            # handful of sizes instead of one per prompt length.
+            n_batch=batch,
+            n_ubatch=batch,
+            n_gpu_layers=-1,  # full GPU offload — Metal on M-series, HIPBLAS on ROCm
+            verbose=False,
+        )
         log.info("Qwen GGUF loaded")
+        return llm
+
+    def _release_locked(self) -> None:
+        """Drop the llama.cpp context and its GPU memory. Caller holds _gen_lock."""
+        llm, self._llm = self._llm, None
+        if llm is None:
+            return
+        close = getattr(llm, "close", None)
+        if callable(close):
+            close()
+        del llm
+        gc.collect()
+
+    def _recycle_locked(self) -> None:
+        """Release the context BEFORE loading its replacement.
+
+        Order matters on a shared card: the old context's pool is what makes
+        room for the new one, and on a full card the reverse order fails to
+        load at all.
+        """
+        log.info(
+            "Recycling GGUF labeler after %d completions to release its GPU scratch pool",
+            self._completions,
+        )
+        self._release_locked()
+        self._completions = 0
+        self._llm = self._load()
+
+    def close(self) -> None:
+        """Release the model for good; further generate() calls raise."""
+        with self._gen_lock:
+            self._closed = True
+            self._release_locked()
 
     def generate(
         self,
@@ -172,11 +253,22 @@ class QwenModel:
         messages.append({"role": "user", "content": user_message})
 
         with self._gen_lock:
+            if self._closed:
+                raise RuntimeError("GGUF labeler has been closed")
+            recycle_after = int(settings.qwen_gguf_recycle_calls)
+            if self._llm is not None and 0 < recycle_after <= self._completions:
+                self._recycle_locked()
+            if self._llm is None:
+                # A previous reload failed part-way; try again rather than
+                # staying dead for the rest of the process.
+                self._llm = self._load()
+                self._completions = 0
             result = self._llm.create_chat_completion(
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=0.15,
             )
+            self._completions += 1
         raw = result["choices"][0]["message"]["content"].strip()
         # Qwen3.5 is a thinking model — strip <think>…</think> so _parse_json
         # sees only the final answer, not the in-progress reasoning.
@@ -246,18 +338,79 @@ def _strip_thinking(text: str) -> str:
 
 def reset_qwen_for_tests() -> None:
     """Drop the process singleton so tests can switch backends."""
-    global _INSTANCE
+    global _INSTANCE, _LAST_PROBE_AT
     _INSTANCE = None
+    _LAST_PROBE_AT = 0.0
 
 
 def get_qwen() -> LabelGenerator:
-    """Return the process-level labeler singleton (lazy-initialised, thread-safe)."""
-    global _INSTANCE
+    """Return the process-level labeler singleton (lazy-initialised, thread-safe).
+
+    While the GGUF fallback is active this also re-probes the configured chat
+    endpoint on an interval and swaps back to it once it answers, so a
+    transient outage at startup (or a firewall fixed hours later) does not
+    leave a second model on the GPU for the life of the process.
+    """
+    global _INSTANCE, _LAST_PROBE_AT
     if _INSTANCE is None:
         with _LOCK:
             if _INSTANCE is None:
                 _INSTANCE = _build_labeler()
+                _LAST_PROBE_AT = time.monotonic()
+    elif _reprobe_due():
+        with _LOCK:
+            if _reprobe_due():
+                _try_switch_back_locked()
     return _INSTANCE
+
+
+def _configured_endpoint() -> tuple[str, str] | None:
+    """(base, model) when both are set, else None — the chat backend's contract."""
+    base = (settings.label_api_base or "").strip()
+    model = (settings.label_chat_model or "").strip()
+    if base and model:
+        return base, model
+    return None
+
+
+def _reprobe_due() -> bool:
+    interval = float(settings.label_endpoint_reprobe_seconds or 0)
+    if interval <= 0 or _configured_endpoint() is None:
+        return False
+    if not isinstance(_INSTANCE, QwenModel):
+        return False
+    return time.monotonic() - _LAST_PROBE_AT >= interval
+
+
+def _try_switch_back_locked() -> None:
+    """Probe the chat endpoint; on success replace the GGUF fallback with it.
+
+    Caller holds _LOCK. The GGUF is closed only after the new instance is in
+    place, and close() takes the generation lock, so a completion already in
+    flight on the old instance finishes before its context is torn down.
+    """
+    global _INSTANCE, _LAST_PROBE_AT
+    _LAST_PROBE_AT = time.monotonic()
+    endpoint = _configured_endpoint()
+    if endpoint is None:
+        return
+    base, model = endpoint
+    timeout = min(
+        settings.label_http_timeout_seconds or _REPROBE_TIMEOUT_SECONDS,
+        _REPROBE_TIMEOUT_SECONDS,
+    )
+    if not _endpoint_reachable(base, timeout):
+        log.debug("HBPE label endpoint %s still unreachable; staying on GGUF", base)
+        return
+    old, _INSTANCE = _INSTANCE, OpenAIChatLabeler(base, model, settings.label_api_key)
+    log.warning(
+        "HBPE label endpoint %s is reachable again — switching back from the "
+        "GGUF labeler and releasing it",
+        base,
+    )
+    close = getattr(old, "close", None)
+    if callable(close):
+        close()
 
 
 def _endpoint_reachable(base: str, timeout: float) -> bool:
@@ -283,7 +436,7 @@ def _endpoint_reachable(base: str, timeout: float) -> bool:
 def _build_labeler() -> LabelGenerator:
     base = (settings.label_api_base or "").strip()
     model = (settings.label_chat_model or "").strip()
-    if base and model:
+    if _configured_endpoint() is not None:
         # Probe before committing. This singleton is built once per process and
         # never rebuilt, so choosing an unreachable endpoint kills labeling for
         # the life of the service: every label_event raises URLError, the drain
@@ -299,6 +452,11 @@ def _build_labeler() -> LabelGenerator:
         # stops. Observed live 2026-08-30: LLM_API_BASE=http://localhost:11434/v1
         # inside hbpe-service, connection refused on every event, 0 labels
         # written across a full run.
+        #
+        # "Never rebuilt" is no longer quite true: get_qwen() re-probes on an
+        # interval while the fallback is active and switches back (see
+        # _try_switch_back_locked). The initial choice still matters because
+        # the fallback owns the GPU until then.
         if _endpoint_reachable(base, settings.label_http_timeout_seconds or 10.0):
             return OpenAIChatLabeler(base, model, settings.label_api_key)
         log.error(

@@ -118,7 +118,7 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
   };
 
   const url = token ? shareUrl(token) : '';
-  const shareTitle = `${name} — shared from Companion Intelligence`;
+  const shareTitle = `${name} — shared from Companion Memory`;
   // Facebook/LinkedIn dropped: `/shared/:token` is behind ProtectedRoute (see
   // App.tsx), so it only ever resolves for someone already signed in to this
   // appliance — a public-audience share button promises a link anyone can

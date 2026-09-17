@@ -491,7 +491,7 @@ function DuplicateGroupCard({
 }
 
 export function ThingsPage() {
-  usePageTitle('Things - Companion Intelligence');
+  usePageTitle('Things - Companion Memory');
 
   const { isMobile } = useDeviceLayout();
   const navigate = useNavigate();

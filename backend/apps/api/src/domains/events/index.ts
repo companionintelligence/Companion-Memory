@@ -103,3 +103,4 @@ export { defineEvent, EventListenerRegistry } from './event-registration';
 // is interactive. Exported because the Jobs surface and its tests need it and
 // must not reach into `events/queueInventory` directly (no-cross-domain-internals).
 export { queueInventory, type QueueInventoryEntry } from './queueInventory';
+export { YieldGateRegistry, type YieldGate } from './yieldGates';

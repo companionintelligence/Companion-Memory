@@ -14,7 +14,7 @@ import { OffScript } from './OffScript';
 import { useForecastExtras } from './useForecastExtras';
 
 export function ForecastPage() {
-  usePageTitle('Forecast - Companion Intelligence');
+  usePageTitle('Forecast - Companion Memory');
 
   const { isFeatureEnabled } = useFeatures();
   const hbpeEnabled = isFeatureEnabled('hbpe');

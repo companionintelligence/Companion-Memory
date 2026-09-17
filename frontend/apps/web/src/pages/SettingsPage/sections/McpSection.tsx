@@ -30,7 +30,7 @@ import {
 } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
-import { useAuth } from '@/hooks';
+import { useAuth, useCurrentUser } from '@/hooks';
 
 type McpTransport = 'stdio' | 'http';
 type McpConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -660,6 +660,20 @@ export function McpSection() {
   const { t } = useTranslation();
   const [{ authToken }] = useAuth();
 
+  /**
+   * Every route that CHANGES a server config is admin-gated server-side (`AdminOnlyGuard` on
+   * create, update, delete, enable, disable, approve-tools and both test-connection routes);
+   * only `GET servers` and `GET catalog` are not. Without this the page rendered all of it to
+   * everyone and each 403 surfaced as a generic "Failed to …", so a non-owner met a dead button
+   * with no explanation.
+   *
+   * Presentation only — the guard is still the boundary. Defaults to false, so the controls stay
+   * disabled while `me` is in flight rather than flickering live and then dead; a request fired
+   * in that window would 403 anyway.
+   */
+  const { user } = useCurrentUser();
+  const canManageServers = user?.isAdmin ?? false;
+
   const [activeTab, setActiveTab] = useState<'servers' | 'catalog'>('servers');
 
   const [servers, setServers] = useState<McpServerConfig[]>([]);
@@ -1048,6 +1062,16 @@ export function McpSection() {
         </p>
       </div>
 
+      {user != null && !canManageServers && (
+        <div className="mb-4 flex items-start gap-2 rounded-md border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            Only the appliance owner can add or change MCP servers. You can see what is configured here, but
+            the controls are disabled.
+          </p>
+        </div>
+      )}
+
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'servers' | 'catalog')}>
         <div className="mb-4 flex items-center justify-between gap-3">
           <Tabs.List>
@@ -1055,7 +1079,12 @@ export function McpSection() {
             <Tabs.Trigger value="catalog">Browse suggested MCPs</Tabs.Trigger>
           </Tabs.List>
           {activeTab === 'servers' && (
-            <IconButton variant="outline" label={t('SETTINGS_MCP_CREATE')} onClick={openCreate}>
+            <IconButton
+              variant="outline"
+              label={t('SETTINGS_MCP_CREATE')}
+              onClick={openCreate}
+              disabled={!canManageServers}
+            >
               <Plus className="h-4 w-4" />
             </IconButton>
           )}
@@ -1147,7 +1176,7 @@ export function McpSection() {
                                       <Button
                                         size="sm"
                                         variant="outline"
-                                        disabled={approvingId === server.id}
+                                        disabled={approvingId === server.id || !canManageServers}
                                         onClick={() => void handleApproveTools(server, { approveAll: true })}
                                       >
                                         Approve all changes
@@ -1173,7 +1202,7 @@ export function McpSection() {
                                             size="sm"
                                             variant="ghost"
                                             className="shrink-0"
-                                            disabled={approvingId === server.id}
+                                            disabled={approvingId === server.id || !canManageServers}
                                             onClick={() =>
                                               void handleApproveTools(server, {
                                                 tools: [
@@ -1200,12 +1229,13 @@ export function McpSection() {
                           <Switch
                             checked={server.enabled}
                             onCheckedChange={() => void handleToggleEnabled(server)}
-                            disabled={togglingId === server.id}
+                            disabled={togglingId === server.id || !canManageServers}
                           />
                           <IconButton
                             variant="ghost"
                             className="h-8 w-8"
                             onClick={() => openEdit(server)}
+                            disabled={!canManageServers}
                             label={t('SETTINGS_MCP_EDIT_SERVER', { name: server.name })}
                           >
                             <Pencil className="h-4 w-4" />
@@ -1214,6 +1244,7 @@ export function McpSection() {
                             variant="ghost"
                             className="h-8 w-8 text-red-600 hover:text-red-700"
                             onClick={() => openDelete(server)}
+                            disabled={!canManageServers}
                             label={t('SETTINGS_MCP_DELETE_SERVER', { name: server.name })}
                           >
                             <Trash className="h-4 w-4" />
@@ -1253,7 +1284,11 @@ export function McpSection() {
                           <h4 className="font-medium">{entry.name}</h4>
                           <p className="text-sm text-muted-foreground">{entry.description}</p>
                         </div>
-                        <Button size="sm" onClick={() => openCreateFromCatalog(entry)}>
+                        <Button
+                          size="sm"
+                          onClick={() => openCreateFromCatalog(entry)}
+                          disabled={!canManageServers}
+                        >
                           <Plus className="h-4 w-4 mr-1" />
                           Add
                         </Button>
@@ -1425,7 +1460,7 @@ export function McpSection() {
               <Button
                 type="button"
                 variant="outline"
-                disabled={dialogTesting}
+                disabled={dialogTesting || !canManageServers}
                 onClick={() => void handleDialogTestConnection()}
               >
                 {dialogTesting ? (
@@ -1477,7 +1512,10 @@ export function McpSection() {
             <Button variant="outline" onClick={closeDialog}>
               Cancel
             </Button>
-            <Button onClick={() => void handleDialogSave()} disabled={dialogSaving || !form.name.trim()}>
+            <Button
+              onClick={() => void handleDialogSave()}
+              disabled={dialogSaving || !form.name.trim() || !canManageServers}
+            >
               {dialogSaving ? 'Saving…' : dialogMode === 'create' ? 'Add' : 'Save'}
             </Button>
           </Dialog.Footer>
@@ -1498,7 +1536,11 @@ export function McpSection() {
             <Button variant="outline" onClick={() => setDeleteOpen(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={() => void handleDelete()} disabled={deleteLoading}>
+            <Button
+              variant="destructive"
+              onClick={() => void handleDelete()}
+              disabled={deleteLoading || !canManageServers}
+            >
               {deleteLoading ? 'Deleting…' : 'Delete'}
             </Button>
           </Dialog.Footer>
@@ -1613,7 +1655,7 @@ export function McpSection() {
             </Button>
             <Button
               variant="destructive"
-              disabled={!highRiskAck || highRiskMissingRequired || highRiskSaving}
+              disabled={!highRiskAck || highRiskMissingRequired || highRiskSaving || !canManageServers}
               onClick={() => void handleHighRiskAdd()}
             >
               {highRiskSaving ? 'Adding…' : 'Add'}

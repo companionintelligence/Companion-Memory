@@ -117,7 +117,7 @@ describe('the version is derived, and both ids mirror the same derivation', () =
         [ENRICH_PERSON_LINK_STAGE_ID]: PERSON_LINK_VERSION + 1,
         [ENRICH_EVENT_PERSON_LINK_STAGE_ID]: PERSON_LINK_VERSION,
       }),
-    ).toThrow(/declares 2 but the stage derives 1/);
+    ).toThrow(new RegExp(`declares ${PERSON_LINK_VERSION + 1} but the stage derives ${PERSON_LINK_VERSION}`));
 
     expect(() =>
       personLinkStageVersion({
@@ -920,6 +920,31 @@ describe('run() answers for every id, and never anonymously', () => {
 
     // Nothing was projected, so no column was touched.
     expect(harness.update()).toBeUndefined();
+  });
+
+  it('MERGES the recipients it resolved into the column rather than replacing it', async () => {
+    // The v1 regression: the importer had linked four recipients; the index knew
+    // one name at sweep time; the projection wrote that one name over the four.
+    const harness = makeDecisionHarness({
+      rows: [commLoaded(1, { from: 'dana@example.com', to: ['Alex Kim', 'Brianne Paul'] })],
+      index: { 'name:alex kim': { entity_id: personId(2) } },
+    });
+
+    await outcomes(harness, [subjectId(1)]);
+
+    const update = harness.update();
+
+    expect(update).toBeDefined();
+    // The column's existing ids come first, in their order; this run's answers
+    // are appended only when absent. No arm of the statement can shorten it.
+    expect(update!.sql).toMatch(/WHEN u\.plural_ids IS NULL THEN c\.to_entity_ids/);
+    expect(update!.sql).toMatch(
+      /unnest\(COALESCE\(c\.to_entity_ids, '\{\}'::uuid\[\]\) \|\| u\.plural_ids\) WITH ORDINALITY/,
+    );
+    expect(update!.sql).toMatch(/GROUP BY m\.id ORDER BY min\(m\.ord\)/);
+    expect(update!.sql).not.toMatch(/to_entity_ids = COALESCE\(u\.plural_ids/);
+    // And the run still only projects what it resolved: Alex, not Brianne.
+    expect(update!.params[3]).toEqual([JSON.stringify([personId(2)])]);
   });
 
   it('projects resolved claims and reports the WEAKEST link as the confidence', async () => {

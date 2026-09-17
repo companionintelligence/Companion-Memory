@@ -9,12 +9,15 @@ const h = vi.hoisted(() => ({
   authToken: null as string | null,
   authenticated: false,
   isNativePlatform: vi.fn(() => false),
+  isIosPlatform: vi.fn(() => false),
   captureLocationFix: vi.fn(),
   createLocationSampler: vi.fn(),
   addBackgroundLocationWatcher: vi.fn(),
   removeBackgroundLocationWatcher: vi.fn(),
   addAppStateListener: vi.fn(),
   requestNotificationPermission: vi.fn(),
+  getNativeLocationAuthorization: vi.fn(),
+  requestNativeLocationAuthorization: vi.fn(),
 }));
 
 vi.mock('./useAuth', () => ({
@@ -45,10 +48,13 @@ vi.mock('@ci/common', async (importOriginal) => ({
     capturedAtMs: location.time,
   }),
   isNativePlatform: h.isNativePlatform,
+  isIosPlatform: h.isIosPlatform,
   addBackgroundLocationWatcher: h.addBackgroundLocationWatcher,
   removeBackgroundLocationWatcher: h.removeBackgroundLocationWatcher,
   addAppStateListener: h.addAppStateListener,
   requestNotificationPermission: h.requestNotificationPermission,
+  getNativeLocationAuthorization: h.getNativeLocationAuthorization,
+  requestNativeLocationAuthorization: h.requestNativeLocationAuthorization,
 }));
 
 interface FakeSampler {
@@ -120,6 +126,8 @@ beforeEach(() => {
   h.authenticated = false;
   h.isNativePlatform.mockReset();
   h.isNativePlatform.mockReturnValue(false);
+  h.isIosPlatform.mockReset();
+  h.isIosPlatform.mockReturnValue(false);
   h.captureLocationFix.mockReset();
   h.captureLocationFix.mockResolvedValue({ status: 'queued', record: {}, id: 'row-1' });
   h.createLocationSampler.mockReset();
@@ -132,6 +140,10 @@ beforeEach(() => {
   h.addAppStateListener.mockResolvedValue(() => {});
   h.requestNotificationPermission.mockReset();
   h.requestNotificationPermission.mockResolvedValue(true);
+  h.getNativeLocationAuthorization.mockReset();
+  h.getNativeLocationAuthorization.mockResolvedValue('notDetermined');
+  h.requestNativeLocationAuthorization.mockReset();
+  h.requestNativeLocationAuthorization.mockResolvedValue('whenInUse');
 });
 
 afterEach(() => {
@@ -410,6 +422,80 @@ describe('useLocationTracking — native watcher is the only writer', () => {
       ),
     );
     expect(h.requestNotificationPermission).toHaveBeenCalled();
+  });
+
+  it('on iOS asks When In Use then Always before starting the background watcher', async () => {
+    localStorage.setItem(STORAGE_KEY, 'true');
+    h.authenticated = true;
+    h.isNativePlatform.mockReturnValue(true);
+    h.isIosPlatform.mockReturnValue(true);
+    h.getNativeLocationAuthorization.mockResolvedValue('notDetermined');
+    h.requestNativeLocationAuthorization.mockResolvedValueOnce('whenInUse').mockResolvedValueOnce('always');
+
+    const { result } = renderHook(() => useLocationTracking());
+
+    act(() => result.current.setMode('always'));
+
+    await waitFor(() =>
+      expect(h.addBackgroundLocationWatcher).toHaveBeenLastCalledWith(
+        expect.objectContaining({ background: true, requestPermissions: false }),
+        expect.any(Function),
+        expect.any(Function),
+      ),
+    );
+    expect(h.requestNativeLocationAuthorization).toHaveBeenNthCalledWith(1, { always: false });
+    expect(h.requestNativeLocationAuthorization).toHaveBeenNthCalledWith(2, { always: true });
+    expect(result.current.needsSettingsUpgrade).toBe(false);
+  });
+
+  it('on iOS shows Open Settings when Always is requested but the OS stays on When In Use', async () => {
+    localStorage.setItem(STORAGE_KEY, 'true');
+    h.authenticated = true;
+    h.isNativePlatform.mockReturnValue(true);
+    h.isIosPlatform.mockReturnValue(true);
+    h.getNativeLocationAuthorization.mockResolvedValue('whenInUse');
+    h.requestNativeLocationAuthorization.mockResolvedValue('whenInUse');
+
+    const { result } = renderHook(() => useLocationTracking());
+
+    act(() => result.current.setMode('always'));
+
+    await waitFor(() => expect(result.current.needsSettingsUpgrade).toBe(true));
+    expect(h.addBackgroundLocationWatcher).toHaveBeenCalled();
+  });
+
+  it('shares needsSettingsUpgrade with a settings instance that is not watching', async () => {
+    localStorage.setItem(STORAGE_KEY, 'true');
+    h.authenticated = true;
+    h.isNativePlatform.mockReturnValue(true);
+    h.isIosPlatform.mockReturnValue(true);
+    h.getNativeLocationAuthorization.mockResolvedValue('whenInUse');
+    h.requestNativeLocationAuthorization.mockResolvedValue('whenInUse');
+
+    const settings = renderHook(() => useLocationTracking({ watch: false }));
+    const watcher = renderHook(() => useLocationTracking());
+
+    act(() => watcher.result.current.setMode('always'));
+
+    await waitFor(() => expect(settings.result.current.needsSettingsUpgrade).toBe(true));
+  });
+
+  it('clears Open Settings on the settings page when tracking is turned off', async () => {
+    localStorage.setItem(STORAGE_KEY, 'true');
+    h.authenticated = true;
+    h.isNativePlatform.mockReturnValue(true);
+    h.isIosPlatform.mockReturnValue(true);
+    h.getNativeLocationAuthorization.mockResolvedValue('whenInUse');
+    h.requestNativeLocationAuthorization.mockResolvedValue('whenInUse');
+
+    const settings = renderHook(() => useLocationTracking({ watch: false }));
+    const watcher = renderHook(() => useLocationTracking());
+
+    act(() => watcher.result.current.setMode('always'));
+    await waitFor(() => expect(settings.result.current.needsSettingsUpgrade).toBe(true));
+
+    act(() => watcher.result.current.setMode('off'));
+    await waitFor(() => expect(settings.result.current.needsSettingsUpgrade).toBe(false));
   });
 
   it('feeds a delivered location into captureLocationFix tagged as companion-mobile', async () => {

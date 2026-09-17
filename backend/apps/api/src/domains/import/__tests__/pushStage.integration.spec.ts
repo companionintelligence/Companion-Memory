@@ -8,6 +8,8 @@ import {
 import {
   GRAPH_EDGE_BACKFILL_QUEUE,
   GraphEdgeBackfillRequestEvent,
+  PERSON_STUB_BACKFILL_QUEUE,
+  PersonStubBackfillRequestEvent,
   SEARCH_INDEX_BACKFILL_QUEUE,
   SearchIndexBackfillRequestEvent,
 } from '@ci/domains/maintenance/events';
@@ -317,6 +319,25 @@ describeWithDatabase(`the push stage (${importDatabase.target})`, () => {
     expect(outcome.detail.searchIndex).toMatchObject({
       requested: expect.arrayContaining(['communication', 'person']),
     });
+  });
+
+  it('requests the people-stub pass when it wrote communications, so their participants get people without an operator', async () => {
+    const runId = await stageEmailWithParticipants();
+    const { stage, signals } = makeStage();
+
+    const outcome = await stage.run(contextFor(runId));
+
+    const kicks = kicksFor<{ userId: string; requestedBy: string }>(signals, PersonStubBackfillRequestEvent);
+
+    expect(kicks).toHaveLength(1);
+    const [{ payload, options }] = kicks;
+
+    expect(options).toEqual({
+      queue: PERSON_STUB_BACKFILL_QUEUE,
+      singletonKey: `person-stubs:${harness.userId}`,
+    });
+    expect(payload).toEqual({ userId: harness.userId, requestedBy: `import-run:${runId}` });
+    expect(outcome.detail.personStubs).toEqual({ requested: true });
   });
 
   it('requests a graph-edge projection for what it wrote, so pushed rows are reachable and not merely findable', async () => {
