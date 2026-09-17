@@ -74,12 +74,14 @@ name: Desktop E2E
 # watched. Until then: change stack_manager.rs and you MUST re-read this file,
 # and change this file and nothing will tell you if you got it wrong.
 
-# GATED TO MANUAL, matching this repo's convention: ten of its fourteen
-# workflows are `workflow_dispatch`-only — this file is one of them, and adding
-# it is what moved that count from nine to ten — and only pr-gate.yml,
-# benchmark-unit.yml and the two tag-triggered release lanes run on their own.
-# docs/CI.md's table is the canonical list; keep this line in step with it. CI
-# silence here means "nobody dispatched it", NOT "everything passed". Run it
+# GATED TO MANUAL, matching this repo's convention: all thirteen of its
+# workflows are `workflow_dispatch`-only as of 2026-09-17 (this file was
+# already one of ten when it landed, moving that count from nine to ten; the
+# other four exceptions — `pr-gate.yml`, `benchmark-unit.yml` and the two
+# tag-triggered release lanes — were deleted or gated since, to cut the GitHub
+# Actions bill). docs/CI.md's table is the canonical list; keep this line in
+# step with it. CI silence here means "nobody dispatched it", NOT "everything
+# passed". Run it
 # deliberately:
 #   gh workflow run desktop-e2e.yml --ref <branch-or-tag>
 #   gh workflow run desktop-e2e.yml --ref <branch> -f image_tag=2026.8.26

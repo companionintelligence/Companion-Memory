@@ -1,15 +1,20 @@
-# Signed, tag-triggered release of the desktop app (frontend/apps/desktop):
+# Signed, tag-named release of the desktop app (frontend/apps/desktop):
 #   git tag -a desktop-v0.1.0 -m "Desktop 0.1.0" && git push origin desktop-v0.1.0
+#   gh workflow run desktop-release.yml --ref desktop-v0.1.0
 #
-# This is one of only four workflows in this repo (of fourteen — the count
-# docs/CI.md keeps) that run without someone dispatching them: pr-gate.yml on
+# Used to be one of only four workflows in this repo (of fourteen — the count
+# docs/CI.md keeps) that ran without someone dispatching them: pr-gate.yml on
 # every PR, benchmark-unit.yml on scripts/benchmark/** changes, and the two
-# tag-triggered release lanes, mobile-release.yml and this one. Keep this list
-# and docs/CI.md's table in step; that table is the canonical one.
+# tag-triggered release lanes, mobile-release.yml and this one. All thirteen
+# surviving workflow files (pr-gate.yml was deleted) are `workflow_dispatch`-
+# only as of 2026-09-17, to cut the GitHub Actions bill — keep this line and
+# docs/CI.md's table in step; that table is the canonical one.
 #
-# A tag push here always builds AND publishes a GitHub Release; there is no
-# dry-run for this workflow (unlike mobile-release.yml, there is no app-store
-# submission step to rehearse separately from the build itself).
+# A tag push here used to always build AND publish a GitHub Release by
+# itself; now it only names the version, and the dispatch above is what
+# actually builds it. There is still no dry-run once dispatched (unlike
+# mobile-release.yml, there is no app-store submission step to rehearse
+# separately from the build itself).
 #
 # desktop-build.yml remains the credential-free lane that produces unsigned
 # artifacts on manual dispatch. This is the DISTRIBUTION lane.
@@ -124,8 +129,11 @@ on:
       # Same escape hatch, same name, same accountability requirements as
       # publish.yml's input of this name — the two release lanes are operated
       # by the same people and must not need two different mental models.
-      # Unavailable on a tag push (the `inputs` context is empty there), which
-      # is deliberate: bypassing the gate has to be a conscious dispatch.
+      # Used to be unavailable on a tag push (the `inputs` context is empty
+      # there), which was deliberate: bypassing the gate had to be a conscious
+      # dispatch. This workflow is `workflow_dispatch`-only since 2026-09-17
+      # (docs/CI.md), so every run now goes through this input regardless —
+      # the same deliberateness, enforced structurally instead.
       skip_test_gate:
         description: >-
           Release even though no successful desktop-build.yml run exists for
@@ -191,8 +199,11 @@ jobs:
           # No checkout in this job, so gh cannot infer the repo from a git
           # remote — name it explicitly.
           GH_REPO: ${{ github.repository }}
-          # Empty string on a tag push (no `inputs` context there), which is
-          # the enforcing path — the bypass is dispatch-only.
+          # Used to read as an empty string on a tag push (no `inputs`
+          # context there), which was the enforcing path — the bypass was
+          # dispatch-only. Every run is a dispatch now, so `inputs` is always
+          # populated; the bypass still needs an explicit `-f
+          # skip_test_gate=true` either way.
           SKIP_TEST_GATE: ${{ inputs.skip_test_gate }}
           BYPASS_REASON: ${{ inputs.bypass_reason }}
         run: |
@@ -247,9 +258,9 @@ jobs:
 
   version:
     name: Resolve version and server image tag
-    # Gated so a tag pushed without a green build burns one minute, not three
-    # 60-minute platform jobs — and so nothing downstream can observe a
-    # resolved tag from an unverified commit.
+    # Gated so a release dispatched without a green build burns one minute,
+    # not three 60-minute platform jobs — and so nothing downstream can
+    # observe a resolved tag from an unverified commit.
     needs: verify-desktop-build-passed
     runs-on: ubuntu-latest
     outputs:

@@ -306,9 +306,10 @@ pinning: the build plan, GPU detection and the HBPE wheel-tag derivation, the
 `REPO`/`PROJECT_NAME` formula, image tagging, the uv pin. The root
 `package.json` now declares `test` and `typecheck` scripts, so that suite is
 reached by `make test` (the root is a workspace, and `make test` is
-`yarn workspaces foreach --all`) and the code is typechecked by `yarn typecheck`
-and by pr-gate's existing `Type check packages` lane, which runs the same
-`foreach`.
+`yarn workspaces foreach --all`) and the code is typechecked by `make
+typecheck` / `yarn typecheck` — locally only; the CI lane that used to run
+this on every PR (`pr-gate.yml`'s `Type check packages`) was deleted along
+with the rest of that file, and it had no twin in `ci.yml`.
 
 Where the logic lives:
 
@@ -466,28 +467,35 @@ gh workflow run <file> --ref <branch-or-tag>
 `--ref` matters: the workflow file is read from that branch, so a workflow that
 only exists on your branch must be dispatched against it.
 
-Of the thirteen workflow files in `.github/workflows/`, nine are
-`workflow_dispatch`-only: `ci.yml`, `codeql.yml`, `consent-path-gate.yml`,
-`desktop-build.yml`, `e2e.yml`, `migration-integrity-check.yml`,
-`mobile-build.yml`, `publish.yml`, `style-canon-lint.yml`. For those, an absent
-check means nobody dispatched it — not that anything passed.
+Of the thirteen workflow files in `.github/workflows/`, all thirteen are
+`workflow_dispatch`-only as of 2026-09-17: `ci.yml`, `codeql.yml`,
+`consent-path-gate.yml`, `desktop-build.yml`, `desktop-e2e.yml`, `e2e.yml`,
+`migration-integrity-check.yml`, `mobile-build.yml`, `publish.yml`,
+`style-canon-lint.yml`, `benchmark-unit.yml`, `mobile-release.yml`,
+`desktop-release.yml`. For those, an absent check means nobody dispatched it —
+not that anything passed.
 
-Four have automatic triggers:
+Until 2026-09-17, four of them had automatic triggers instead:
 
-- **`pr-gate.yml`** — the one thing that runs on every pull request to `main`.
+- **`pr-gate.yml`** — the one thing that ran on every pull request to `main`.
   Lint (four lanes) and typecheck (two lanes), and nothing else; the unit-test
-  and Python lanes stay on dispatch because they are the expensive half. Its job
-  names match `ci.yml`'s on purpose, so a dispatched `ci.yml` would satisfy the
-  same branch-protection rule rather than sitting beside it as a near-duplicate.
+  and Python lanes stayed on dispatch because they were the expensive half.
+  **Deleted** 2026-09-17 to cut the GitHub Actions bill, along with the six
+  required status checks its lint/typecheck jobs used to produce — nothing
+  gates a merge now, automatically or by review.
 - **`benchmark-unit.yml`** — pull request and push to `main`, path-filtered to
-  `scripts/benchmark/**`. It runs pytest and no linter.
+  `scripts/benchmark/**`. Ran pytest and, later, a pinned ruff. Gated to
+  `workflow_dispatch`-only the same day.
 - **`mobile-release.yml`** — push of an `ios-v*`, `android-v*` or
-  `mobile-release-v*` tag; TestFlight and Play internal.
-- **`desktop-release.yml`** — push of a `desktop-v*` tag.
+  `mobile-release-v*` tag; TestFlight and Play internal. Gated the same day —
+  a tag push now only names the version, dispatch the workflow on it to
+  actually submit.
+- **`desktop-release.yml`** — push of a `desktop-v*` tag. Gated the same day,
+  same story as above.
 
-`codeql.yml` is gated for a specific reason: the scan completes and the SARIF
-upload is then rejected because this private repository has no GitHub Code
-Security. Restore its push/PR triggers only after that is enabled.
+`codeql.yml` is gated for a different, older reason: the scan completes and the
+SARIF upload is then rejected because this private repository has no GitHub
+Code Security. Restore its push/PR triggers only after that is enabled.
 
 Full table and per-workflow commands: [`docs/CI.md`](docs/CI.md). The release
 QA programme, the measured defect baseline, and the proposal for the minimum

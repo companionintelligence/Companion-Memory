@@ -7,17 +7,21 @@ name: CI
 # Restore a trigger by re-adding it to the `on:` block below.
 #
 # The cheap half of this file — the `lint` and `typecheck` lanes, identically
-# defined — DOES run on every PR, from `pr-gate.yml`. It lives in its own file
-# so the cost decision that gated this one stays revertible in a single move.
-# `pr-gate.yml` also carries a copy of `test-frontend` (without `--coverage`,
-# since only this file uploads the report) plus two jobs with no twin here: a
-# `build-web` PWA guard and a third `Type check packages` lane over
-# `frontend/packages/*`. Those two are deliberately NOT mirrored here:
-# `publish.yml`'s release gate reads whether THIS workflow concluded success, so
-# every lane added here is a lane that can block a release — mirroring one is a
-# release decision to take deliberately, once it has a green history on `main`.
+# defined — used to also run on every PR from a separate file, `pr-gate.yml`,
+# kept apart so the cost decision that gated THIS workflow stayed revertible in
+# a single move. That's exactly what happened: `pr-gate.yml` was deleted
+# 2026-09-17 to cut the GitHub Actions bill back down (see docs/CI.md), so
+# nothing in this repo runs automatically any more, including those two lanes.
+# It also carried a copy of `test-frontend` (without `--coverage`, since only
+# this file uploads the report) plus two jobs with no twin here: a `build-web`
+# PWA guard and a third `Type check packages` lane over `frontend/packages/*`.
+# Neither is mirrored here, and there is now no automated equivalent of either
+# anywhere: `publish.yml`'s release gate reads whether THIS workflow concluded
+# success, so every lane added here is a lane that can block a release —
+# mirroring one is a release decision to take deliberately, once it has a green
+# history on `main`.
 # The remaining expensive lanes here (`test`, `python`, `imports`, `graphql`)
-# are dispatch-only.
+# are dispatch-only, same as everything else now.
 on:
   workflow_dispatch:
 
@@ -222,7 +226,8 @@ jobs:
       # since the Postgres service landed: run 34184853130, 2026-09-08. The
       # image ships bash, so ask for it rather than dropping `pipefail`.
       #
-      # Same defect and same fix as `pr-gate.yml`'s plist guard. If you add a
+      # Same defect and same fix as the one `pr-gate.yml`'s plist guard needed,
+      # before that file was deleted. If you add a
       # `run:` block to a containerized job here, either keep it POSIX or say
       # `shell: bash`.
       - name: Bootstrap role, database and extensions
@@ -281,9 +286,10 @@ jobs:
       # rate extrapolates the whole suite (with `--coverage`, which this step
       # keeps) to ~39 minutes, so this is ~15% headroom.
       #
-      # Why a bigger ceiling and not shards, given pr-gate.yml shards the
-      # frontend suite four ways: `coverageThreshold` in jest.config.mjs is
-      # scoped to `./src/domains/planning/` and jest evaluates thresholds per
+      # Why a bigger ceiling and not shards, the way `pr-gate.yml` (deleted
+      # 2026-09-17) used to shard the frontend suite four ways:
+      # `coverageThreshold` in jest.config.mjs is scoped to
+      # `./src/domains/planning/` and jest evaluates thresholds per
       # invocation, so a sharded `--coverage` run measures a fraction of the
       # planning suite against a floor calibrated on all of it and fails. The
       # ways out — dropping `--coverage` here and re-deriving the ratchet from a
@@ -333,10 +339,11 @@ jobs:
       # @ci/cli's 200 tests across 33 files, which until now ran in NO workflow.
       # PR #2632 moved the CLI out of `domains/import/cli` into its own
       # workspace and reasoned that CI needed no new lanes because `make test`
-      # and pr-gate's `packages` typecheck lane both loop over every workspace
-      # declaring the script. That is true of those two and false of this file:
-      # the job above names its workspaces one at a time, and `pr-gate.yml` has
-      # no backend test lane at all, so `grep -rn "@ci/cli" .github/workflows/`
+      # and (at the time) `pr-gate.yml`'s `packages` typecheck lane both loop
+      # over every workspace declaring the script. That was true of those two
+      # and false of this file: the job above names its workspaces one at a
+      # time, and `pr-gate.yml` — since deleted — had no backend test lane at
+      # all, so `grep -rn "@ci/cli" .github/workflows/`
       # returned nothing. It matters here specifically because `publish.yml`
       # gates a release on THIS workflow (`ci.yml` is `required` in its
       # `GATED_WORKFLOWS` block), so the suite was absent from the one place a
@@ -457,28 +464,31 @@ jobs:
           - name: frontend
             command: yarn workspace @ci/fe-web typecheck
           # Same gap as the `Run CLI tests` step in the `test` job above, and
-          # closed here for the same reason. @ci/cli IS typechecked on every PR
-          # — `pr-gate.yml`'s `packages` lane runs
+          # closed here for the same reason. @ci/cli used to be typechecked on
+          # every PR regardless — `pr-gate.yml`'s `packages` lane ran
           # `yarn workspaces foreach --all run typecheck`, which picks up any
-          # workspace declaring the script — but that lane is advisory in BOTH
-          # directions, so until this line a CLI type error could reach a
-          # release unchallenged:
-          #   * it cannot block a merge. `main` does require status checks
-          #     (verified against the API 2026-09-07, not read off a doc), but
-          #     the required list is exactly six contexts — `Lint root`,
-          #     `Lint backend`, `Lint frontend`, `Lint format`,
-          #     `Type check backend`, `Type check frontend`. `Type check
-          #     packages` is deliberately not among them.
-          #   * it cannot block a release either: `publish.yml`'s
-          #     `GATED_WORKFLOWS` reads `ci.yml`, and `pr-gate.yml` is not in
-          #     that list.
+          # workspace declaring the script — but that lane was advisory in
+          # BOTH directions even while it still existed, so a CLI type error
+          # could already reach a release unchallenged:
+          #   * it could not block a merge. `main` required six status check
+          #     contexts at the time (`Lint root`, `Lint backend`, `Lint
+          #     frontend`, `Lint format`, `Type check backend`, `Type check
+          #     frontend`) and `Type check packages` was deliberately not
+          #     among them. `main` requires none of them any more as of
+          #     2026-09-17 (`pr-gate.yml` deleted, nothing put in its place),
+          #     so this point holds even more now: nothing gates a merge.
+          #   * it could not block a release either: `publish.yml`'s
+          #     `GATED_WORKFLOWS` reads `ci.yml`, and `pr-gate.yml` was never
+          #     in that list.
           # So the workspace the release gate reads was typechecked by no lane
-          # in this file at all.
+          # in this file at all — and, with `pr-gate.yml` gone, isn't
+          # typechecked automatically ANYWHERE unless this file is dispatched.
           #
-          # A `cli` entry rather than mirroring pr-gate's `foreach --all` lane:
-          # this file's header notes that every lane added here can block a
-          # release, so mirroring is a decision to take deliberately per lane.
-          # This one is scoped to the workspace with the demonstrated gap and
+          # A `cli` entry rather than mirroring pr-gate's old `foreach --all`
+          # lane: this file's header notes that every lane added here can
+          # block a release, so mirroring is a decision to take deliberately
+          # per lane. This one is scoped to the workspace with the
+          # demonstrated gap and
           # exits 0 on this branch, measured 2026-09-07. Note it reports a NEW
           # context, `Type check cli`, which is not in the six required above —
           # adding it here gates the RELEASE, not the merge. Making it block a

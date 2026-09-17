@@ -20,13 +20,13 @@ name: Desktop Build
 # permanently `if:`-disabling the test step silently converts the gate into a
 # rubber stamp.
 
-# GATED TO MANUAL, like ten of this repo's fourteen workflows (the count
-# docs/CI.md keeps — its table is the canonical one). Only four run on their
-# own (verified 2026-09-07): pr-gate.yml on every pull request,
-# benchmark-unit.yml path-filtered to scripts/benchmark/**, and the two
-# tag-triggered release lanes mobile-release.yml (ios-v*/android-v*/
-# mobile-release-v*) and desktop-release.yml (desktop-v*). codeql.yml is NOT
-# among them any more — an earlier version of this comment claimed it was.
+# GATED TO MANUAL, like all thirteen of this repo's workflows as of
+# 2026-09-17 (the count docs/CI.md keeps — its table is the canonical one).
+# Nothing runs on its own any more: `pr-gate.yml` (which ran on every pull
+# request) was deleted, and `benchmark-unit.yml` plus the two tag-triggered
+# release lanes, `mobile-release.yml` (ios-v*/android-v*/mobile-release-v*)
+# and `desktop-release.yml` (desktop-v*), were gated to `workflow_dispatch` —
+# all to cut the GitHub Actions bill.
 # CI silence here therefore means "nobody dispatched it", NOT "everything
 # passed". Run it deliberately:
 #   gh workflow run desktop-build.yml --ref <branch>

@@ -37,11 +37,14 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      # This job is the only check that runs automatically for THIS path (it
-      # was the only automatic check anywhere until `pr-gate.yml` landed on
-      # 2026-09-06 and started running on every PR with no path filter — but
-      # pr-gate runs no Python, so `scripts/benchmark/**` is still covered here
-      # or nowhere), and until now it ran pytest and no linter — which is exactly how 141
+      # This job used to be the only check that ran automatically for THIS
+      # path (and, before `pr-gate.yml` landed on 2026-09-06 and started
+      # running on every PR with no path filter, the only automatic check
+      # anywhere — pr-gate ran no Python, so `scripts/benchmark/**` was
+      # covered here or nowhere). Both are gone now: this workflow was gated
+      # to `workflow_dispatch`-only and `pr-gate.yml` was deleted, 2026-09-17,
+      # to cut the GitHub Actions bill (docs/CI.md). For a long stretch before
+      # that it ran pytest and no linter — which is exactly how 141
       # ruff violations reached this directory unnoticed while `ci.yml`'s
       # `python` lane (`uv run ruff check .`, which covers scripts/benchmark
       # from the root config) sat undispatched. See

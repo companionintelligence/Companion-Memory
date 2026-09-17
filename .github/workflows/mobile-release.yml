@@ -1,16 +1,15 @@
-# The only automatic *store* upload. Pushing a matching tag is the release action.
-# Most workflows in this repo are workflow_dispatch-only, but "every other one is"
-# was never true and is now plainly false — verified against the files 2026-09-06:
-#   desktop-release.yml  push on `desktop-v*` tags
-#   pr-gate.yml          pull_request → main
-#   benchmark-unit.yml   pull_request + push to main, scoped to scripts/benchmark/**
-# See docs/CI.md for the full trigger table.
+# Used to be the only automatic *store* upload — pushing a matching tag WAS
+# the release action. Gated to `workflow_dispatch`-only 2026-09-17, along with
+# every other workflow in this repo still on an automatic trigger, to cut the
+# GitHub Actions bill; see docs/CI.md. Pushing a tag now only names the
+# version — it submits nothing by itself:
 #
 #   git tag -a ios-v1.0.0 -m "iOS 1.0.0" && git push origin ios-v1.0.0
 #   git tag -a android-v1.0.0 -m "Android 1.0.0" && git push origin android-v1.0.0
 #   git tag -a mobile-release-v1.0.0 -m "1.0.0" && git push origin mobile-release-v1.0.0
+#   gh workflow run mobile-release.yml --ref ios-v1.0.0 -f dry_run=false -f platform=ios
 #
-# Rehearsal (nothing reaches a tester) is always a dispatch on a branch:
+# Rehearsal (nothing reaches a tester) is a dispatch on a branch instead of a tag:
 #   gh workflow run mobile-release.yml --ref main -f dry_run=true -f platform=ios
 # On Android a rehearsal is not store-free — read the `dry_run` note below before running one.
 name: Mobile Release
@@ -20,11 +19,12 @@ name: Mobile Release
 # `mobile-build.yml` remains the credential-free lane that produces an unsigned
 # simulator .app and a debug APK for sideloading.
 #
-# A tag *push* always submits. A manual dispatch honours `dry_run` (default true)
-# even if you point `--ref` at a tag. Use that to prove the signing chain before
-# spending a real build number — Apple and Google both permanently burn a build
-# number on upload, so a failed submission after a successful one still costs
-# you that number.
+# `dry_run` (default true) governs every dispatch, tag-ref or branch-ref alike —
+# there is no trigger left that bypasses it. Set `-f dry_run=false` to actually
+# submit. Use a dry run first to prove the signing chain before spending a real
+# build number — Apple and Google both permanently burn a build number on
+# upload, so a failed submission after a successful one still costs you that
+# number.
 #
 # `dry_run` does NOT mean "never touches a store", and the two lanes differ. iOS honours
 # it literally: the rehearsal stops at `altool --validate-app`, which validates without
@@ -33,7 +33,7 @@ name: Mobile Release
 # (draft, no rollout)"). No tester ever sees it, but Play keeps the version code of any
 # bundle it accepts, draft included. So an Android dry run costs a version code exactly
 # like a real one; that is the tradeoff for finding out about credentials, package name
-# and the pending Play declarations on a rehearsal instead of on a tag push.
+# and the pending Play declarations on a rehearsal instead of on a real release.
 #
 # ── Required secrets ───────────────────────────────────────────────────────────
 # iOS (App Store Connect API key auth — no Apple ID, no 2FA prompt in CI):
@@ -188,7 +188,13 @@ jobs:
           CODE=$(( ${{ github.run_number }} + BUILD_NUMBER_OFFSET ))
           echo "name=${NAME}"                        >> "$GITHUB_OUTPUT"
           echo "code=${CODE}"                        >> "$GITHUB_OUTPUT"
-          # A tag *push* always submits. Dispatch honours the checkbox even on a tag ref.
+          # A tag *push* always submitted, back when a tag push could trigger
+          # this workflow at all — it's `workflow_dispatch`-only since
+          # 2026-09-17 (docs/CI.md), so `GITHUB_EVENT_NAME` can never be
+          # `push` here any more and the branch below is dead. Left in place
+          # rather than deleted, so `ci-local restore` brings back the exact
+          # behavior a tag push used to have if this is ever un-gated, not a
+          # silently different one. Every real run today takes the `else`.
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
           else
@@ -648,10 +654,10 @@ jobs:
           if-no-files-found: error
 
       # The dry-run counterpart of the iOS `altool --validate-app`. Without it a dry run
-      # never talks to Google at all, so the FIRST contact with Play is a real tag push —
-      # and frontend/apps/android/DELIVERY.md (§1c, the "Play background-location declaration
-      # + demo video" item — cited by name, not line number, because that file grows) says
-      # that push is a hard rejection until
+      # never talks to Google at all, so the FIRST contact with Play is a real release
+      # (`dry_run=false`) — and frontend/apps/android/DELIVERY.md (§1c, the "Play
+      # background-location declaration + demo video" item — cited by name, not line
+      # number, because that file grows) says that release is a hard rejection until
       # the background-location declaration and the foreground-service `location` type
       # declaration are both filed and approved, "before this build goes to any Play track,
       # including internal testing". Better to learn that on a rehearsal.

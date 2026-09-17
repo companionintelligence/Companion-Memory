@@ -100,8 +100,10 @@ yarn tsx --test scripts/xtask/lib/gpu.test.ts      # one file
 ```
 
 Node's own test runner, no vitest. The root `package.json` declares `test` and
-`typecheck`, so these are also reached by `make test` (via `yarn workspaces foreach`)
-and by pr-gate's existing `Type check packages` lane. `build.test.ts` deliberately uses
+`typecheck`, so `test` is also reached by `make test` (via `yarn workspaces foreach`)
+and `typecheck` by `make typecheck` — the same command, run locally; nothing in CI
+runs it automatically since `pr-gate.yml`, whose `Type check packages` lane covered
+this, was deleted 2026-09-17. `build.test.ts` deliberately uses
 *this checkout* as its fixture — it calls `computeBuildPlan` against the real root, so
 it fails if someone drops one of the Makefile pins below or renames a Dockerfile.
 
