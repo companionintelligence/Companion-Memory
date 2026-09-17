@@ -5,6 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { withoutUndefined } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 
 import { type Summary, SummaryEntity } from '../entities/SummaryEntity';
@@ -121,7 +122,7 @@ export class SummaryService {
       return null;
     }
 
-    Object.assign(record, data);
+    Object.assign(record, withoutUndefined(data));
 
     const updatedEntity = await this.summaryRepository.save(record);
 

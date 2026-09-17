@@ -5,7 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { computeChunkSize } from '@ci/common/persistence';
+import { computeChunkSize, withoutUndefined } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
@@ -412,7 +412,7 @@ export class NoteService {
       return null;
     }
 
-    Object.assign(record, data);
+    Object.assign(record, withoutUndefined(data));
 
     const updatedEntity = await this.noteRepository.save(record);
 

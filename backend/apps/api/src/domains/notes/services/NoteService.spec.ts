@@ -84,7 +84,7 @@ function makeQuery(stored: StoredRow[]) {
   return { query, seen };
 }
 
-function makeService(stored: StoredRow[] = []) {
+function makeService(stored: StoredRow[] = [], findOneResult: NoteEntity | null = null) {
   const insertRecord = { inserted: false } as { values?: unknown[]; inserted: boolean };
   const created: NoteEntity[] = [];
   const { query, seen } = makeQuery(stored);
@@ -99,11 +99,13 @@ function makeService(stored: StoredRow[] = []) {
 
   const save = jest.fn(async (entity: NoteEntity) => entity);
   const find = jest.fn(async () => created);
+  const findOne = jest.fn(async () => findOneResult);
 
   const repository = {
     create,
     save,
     find,
+    findOne,
     manager: { query },
     // 6 persisted columns, matching repository.metadata.columns.length; drives
     // computeChunkSize in createMany.
@@ -123,7 +125,7 @@ function makeService(stored: StoredRow[] = []) {
     logger as any,
   );
 
-  return { service, send, insert: insertRecord, save, queries: seen };
+  return { service, send, insert: insertRecord, save, findOne, queries: seen };
 }
 
 describe('NoteService bulk createMany', () => {
@@ -286,6 +288,55 @@ describe('NoteService captureMany — the outbox replay path', () => {
     expect(result).toEqual({ created: [], updated: [], stale: [], conflicted: [] });
     expect(queries).toHaveLength(0);
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Absent vs. `undefined` vs. `null`.
+//
+// NoteResolver.updateNote builds its DTO as `{ title: input.title, content:
+// input.content }` with both keys always present, so an untouched field
+// arrives here as `key: undefined` rather than an absent key — reproduced
+// below rather than passing a sparse object, since a sparse `{ title: 'x' }`
+// in a test would not catch a regression of this fix. `Object.assign` must
+// not let that clobber the entity's current value; an explicit `null` must
+// still clear it. Because NoteType.title/content are nullable GraphQL fields,
+// the un-fixed bug did not crash — it silently serialized the clobbered field
+// as `null` in the response while the database kept the real value (the same
+// class of bug fixed in TaskService by #2703, generalized here).
+// ---------------------------------------------------------------------------
+describe('NoteService update', () => {
+  function makeStoredNote(overrides: Partial<NoteEntity> = {}): NoteEntity {
+    return Object.assign(new NoteEntity(), {
+      id: 'n1',
+      userId: USER,
+      title: 'Original title',
+      content: 'Original content',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      ...overrides,
+    });
+  }
+
+  it('leaves an untouched field alone when the caller sends every key, undefined for the ones it did not set', async () => {
+    const { service } = makeService([], makeStoredNote());
+
+    const result = await service.update(CONTEXT, 'n1', {
+      title: 'Renamed',
+      content: undefined,
+    });
+
+    expect(result?.title).toBe('Renamed');
+    expect(result?.content).toBe('Original content');
+  });
+
+  it('still clears a field when the caller sends an explicit null', async () => {
+    const { service } = makeService([], makeStoredNote());
+
+    const result = await service.update(CONTEXT, 'n1', { content: null });
+
+    expect(result?.content).toBeNull();
+    expect(result?.title).toBe('Original title');
   });
 });
 

@@ -22,6 +22,7 @@ export {
 export type { IngestEntityKind } from './ingestRefreshColumns';
 export { keysetPaginate, resolvePageShape, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from './keysetPaginate';
 export type { KeysetPageArgs, KeysetPage } from './keysetPaginate';
+export { withoutUndefined } from './withoutUndefined';
 export {
   assertSchemaIntegrity,
   currentStackKey,

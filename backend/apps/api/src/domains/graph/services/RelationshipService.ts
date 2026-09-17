@@ -6,6 +6,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { PgErrorCode } from '@ci/common/constants';
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { withoutUndefined } from '@ci/common/persistence';
 import { ThreadService } from '@ci/domains/conversations';
 import {
   ConceptService,
@@ -344,10 +345,22 @@ export class RelationshipService {
       return null;
     }
 
-    Object.assign(record, data);
+    Object.assign(record, withoutUndefined(data));
 
     const updatedEntity = await this.relationshipRepository.save(record);
 
+    // This re-fetch is load-bearing, not redundant: `record` above was mutated
+    // via `Object.assign`, and before withoutUndefined() guarded that call, an
+    // untouched field arriving as `key: undefined` (RelationshipResolver.
+    // updateRelationship builds its DTO with every key always present) clobbered
+    // the in-memory entity even though save() correctly left the column alone in
+    // SQL. Re-reading from the database is what kept `record`'s corruption from
+    // ever reaching a caller — RelationshipType.isBidirectional is non-nullable
+    // in the GraphQL schema, so returning the clobbered in-memory entity instead
+    // of this fresh read would throw on the very first omitted-field update.
+    // withoutUndefined() now fixes the root cause too, but removing this line
+    // would still remove the only thing that caught it (see TaskService#update,
+    // #2703, where the same class of bug shipped without this safety net).
     const entity = await this.findById(context, updatedEntity.id);
 
     return RelationshipEntity.toEgressType(entity!);
