@@ -4,8 +4,13 @@
 
 What every background job on this appliance is, what it does, and how the machine
 that runs it works. Read against the worktree at the time of writing; every claim
-carries a `path:line`. **Counts re-verified against `main` after #2514, #2519,
-#2522, #2523, #2524 and #2525 landed.** Companion documents: [`jobs-schedule-review.md`](jobs-schedule-review.md)
+carries a `path:line`. **Counts re-verified against `main` @ `cee410cf1`
+(2026-09-16)**, by re-running the same greps as the prior pass (`@OnEvent`/`@Cron`
+decorator bodies, resolving each `queue:` value back to its string constant) —
+see the prior commit for the method. That prior recount (checked 2026-09-01,
+against #2514/#2519/#2522/#2523/#2524/#2525) is 218 commits behind as of this
+pass, far too many to name individually, so this note cites the SHA instead of a
+PR list. Companion documents: [`jobs-schedule-review.md`](jobs-schedule-review.md)
 (a point-in-time critique of the schedule), [`jobs-system-rebuild-plan.md`](jobs-system-rebuild-plan.md)
 (the pipeline design), [`runbooks/jobs-system-review-2026-08.md`](runbooks/jobs-system-review-2026-08.md).
 
@@ -14,11 +19,11 @@ carries a `path:line`. **Counts re-verified against `main` after #2514, #2519,
 | | |
 |---|---|
 | Queue engine | pg-boss 10, schema `pgboss`, **its own cron scheduler disabled** (`schedule: false`) |
-| Listener bindings | **109** `@OnEvent` methods across 56 files |
-| Distinct event names consumed | **89** |
-| pg-boss queues created at boot | **40** (39 from listeners + `dead-letter`) |
-| Scheduled methods | **53** `@Cron` methods across 29 files — all via the `@ci/common/schedule` wrapper |
-| Crons pinned to the worker role | **11** |
+| Listener bindings | **119** `@OnEvent` methods across 59 files |
+| Distinct event names consumed | **99** |
+| pg-boss queues created at boot | **42** (41 from listeners + `dead-letter`) |
+| Scheduled methods | **58** `@Cron` methods across 33 files — all via the `@ci/common/schedule` wrapper |
+| Crons pinned to the worker role | **13** |
 | Queues pinned to the worker role | **6** (5 import + `derivation-run`) |
 | Pipeline stages behind one `pipeline.slice` event | **43** |
 | Global in-flight ceiling | 10 jobs **per process**; 6 per queue |
