@@ -4,6 +4,12 @@ import { DataSource } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
 import { EntityResolutionService } from '@ci/domains/entity-resolution';
+import {
+  ContentService,
+  eventsForMatchingMedia,
+  mergeIdentifiers,
+  searchReachesEvents,
+} from '@ci/domains/memory';
 import { SearchService, TagService, type IndexableEntity } from '@ci/domains/search-next';
 import { UserService } from '@ci/domains/user';
 
@@ -39,6 +45,7 @@ export class ActivityTimelineService {
     private readonly activityRollupService: ActivityRollupService,
     private readonly entityResolutionService: EntityResolutionService,
     private readonly searchService: SearchService,
+    private readonly contentService: ContentService,
     private readonly tagService: TagService,
     private readonly userService: UserService,
   ) {}
@@ -162,6 +169,19 @@ export class ActivityTimelineService {
             : { query, maxResults: SEARCH_BUCKET_LIMIT };
 
       identifiers = await this.searchService.search(context, searchOptions);
+
+      // Same reach the explorer's list has: an event found through its photo's
+      // words counts on the day of the event, not the day the file was imported.
+      if (searchReachesEvents(filters.includeTypes, filters.excludeTypes)) {
+        identifiers = mergeIdentifiers(
+          identifiers,
+          await eventsForMatchingMedia(
+            { searchService: this.searchService, contentService: this.contentService },
+            context,
+            { query, maxResults: SEARCH_BUCKET_LIMIT },
+          ),
+        );
+      }
     } else {
       const tagged = await this.tagService.getEntitiesForTags(context, filters.tags ?? []);
       const included = new Set(resolveBrowseIndexableTypes(filters.includeTypes, filters.excludeTypes));

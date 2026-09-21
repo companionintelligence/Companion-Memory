@@ -4,7 +4,7 @@ import { useQuery } from '@apollo/client';
 import { EmptyState, GlobalUID, usePageTitle } from '@ci/common';
 import { Button } from '@ci/shadcn';
 import { FileType, Shapes } from '@ci/shadcn/icons';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { ErrorState } from '@/components/ErrorState';
 import { InfiniteListFooter } from '@/components/InfiniteList';
@@ -86,6 +86,10 @@ export function ContentLibraryPage() {
   // `id` is the base64 global id, so each direction converts explicitly.
   const { contentId } = useParams<{ contentId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
+  // The drawer is a path segment; the search and every facet are query params.
+  // Opening and closing must carry `location.search` along, or the first click
+  // silently resets the library to an empty, queryless page behind the drawer.
+  const { search: queryString } = useLocation();
 
   const filterVariables = useMemo(() => {
     // The header search box's `?search=` (see isLiveSearchPath): title, text or URL.
@@ -166,10 +170,10 @@ export function ContentLibraryPage() {
   }, [contentId]);
 
   const handleSelect = useCallback(
-    (globalId: string) => navigate(`/memory/content/${GlobalUID.parse('content', globalId)}`),
-    [navigate],
+    (globalId: string) => navigate(`/memory/content/${GlobalUID.parse('content', globalId)}${queryString}`),
+    [navigate, queryString],
   );
-  const handleClose = useCallback(() => navigate('/memory/content'), [navigate]);
+  const handleClose = useCallback(() => navigate(`/memory/content${queryString}`), [navigate, queryString]);
   const handleChanged = useCallback(() => void refetch(), [refetch]);
 
   return (

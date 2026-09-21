@@ -61,6 +61,8 @@ function makeResolver() {
   };
 
   const contentService = {
+    // The query path now also reaches events through matching media; nothing here has any.
+    findEventIdsForMedia: jest.fn(async () => []),
     getEntitiesForContents: jest.fn(async (_context: unknown, options: Options) => {
       calls.contents.push(options);
 

@@ -78,7 +78,7 @@ describe('SearchResolver — mapPins', () => {
       stub('getEntitiesForBrowserActivities') as never,
       stub('getEntitiesForCommunications') as never,
       stub('getEntitiesForConcepts') as never,
-      stub('getEntitiesForContents') as never,
+      { ...stub('getEntitiesForContents'), findEventIdsForMedia: jest.fn(async () => []) } as never,
       { resolve: jest.fn(async () => new Map()) } as never,
       eventService as never,
       stub('getEntitiesForFiles') as never,

@@ -80,7 +80,7 @@ describe('SearchResolver — timed-path totalCount', () => {
       stub('getEntitiesForBrowserActivities') as never,
       stub('getEntitiesForCommunications') as never,
       stub('getEntitiesForConcepts') as never,
-      stub('getEntitiesForContents') as never,
+      { ...stub('getEntitiesForContents'), findEventIdsForMedia: jest.fn(async () => []) } as never,
       entityResolutionService as never,
       eventService as never,
       stub('getEntitiesForFiles') as never,

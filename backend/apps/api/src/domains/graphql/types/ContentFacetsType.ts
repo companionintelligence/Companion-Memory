@@ -15,7 +15,8 @@ export class ContentFacetsType {
   mimetypes!: string[];
 
   @Field(() => [String], {
-    description: 'Distinct `source_system` values — the How filter, over content alone.',
+    description:
+      "Distinct delivering platforms — the How filter, over content alone. The ledger platform (`google_photos`, `whatsapp`) where one was recorded, else the row's `source_system`.",
   })
   sourceSystems!: string[];
 }

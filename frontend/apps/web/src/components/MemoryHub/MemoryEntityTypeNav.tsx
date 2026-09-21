@@ -512,14 +512,19 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
   return (
     <nav
       aria-label="What to show in Memory"
-      className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1.5 md:gap-3 md:px-3"
+      className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border px-2 py-1.5 md:gap-x-3 md:px-3"
     >
       <div className="flex shrink-0 items-center gap-1.5 text-sm font-medium text-muted-foreground">
         <Shapes className="h-4 w-4" strokeWidth={1.5} aria-hidden />
         <span className="hidden sm:inline">What</span>
       </div>
 
-      <div className="scrollbar-none min-w-0 flex-1 overflow-x-auto overscroll-x-contain">
+      {/* `basis-0` so the strip claims no width of its own: it takes what the
+          line leaves and scrolls the categories inside it. The filter controls
+          used to sit INSIDE this `w-max` strip, which put them past the right
+          edge on a narrow window with the scrollbar hidden — the row's own
+          wrapping never got a chance. They are a sibling now (below). */}
+      <div className="scrollbar-none min-w-0 flex-1 basis-0 overflow-x-auto overscroll-x-contain">
         <div className="flex w-max items-center gap-1 md:gap-1.5">
           {categories.map((category) => {
             if (category.kind === 'standalone') {
@@ -565,14 +570,23 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
 
             return <TagWhatDropdown key={category.id} tags={tags} onTagsChange={setTags} />;
           })}
-
-          <MemoryExplorerFilterControls />
         </div>
       </div>
 
       {/* Outside the scrolling strip so the create action stays reachable when
           the What categories overflow. */}
-      {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+      {actions && (
+        <div className="order-1 ml-auto flex shrink-0 items-center gap-2 md:order-2">{actions}</div>
+      )}
+
+      {/* The When / How / Who / Where / sort controls. On a narrow window they
+          take a line of their own (`basis-full`, ordered after the create
+          action) and wrap within it; from `md` up they sit inline between the
+          strip and the create action, always on-screen, and the strip gives up
+          the room. */}
+      <div className="order-2 min-w-0 basis-full md:order-1 md:flex-none md:basis-auto">
+        <MemoryExplorerFilterControls />
+      </div>
     </nav>
   );
 }

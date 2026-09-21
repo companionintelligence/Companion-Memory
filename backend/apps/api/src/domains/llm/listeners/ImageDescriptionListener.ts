@@ -5,6 +5,7 @@ import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
 import { FileService, PreviewGeneratedEvent, type PreviewGeneratedPayload } from '@ci/domains/files';
+import { ContentService } from '@ci/domains/memory';
 
 import { IMAGE_DESCRIPTION_QUEUE, IMAGE_DESCRIPTION_QUEUE_OPTIONS } from '../constants';
 import { CaptureContextService } from '../services/CaptureContextService';
@@ -70,6 +71,7 @@ const ImageMetadataSchema = z.object({
 export class ImageDescriptionListener {
   constructor(
     private readonly fileService: FileService,
+    private readonly contentService: ContentService,
     private readonly ollamaService: OllamaService,
     private readonly imageDescriptionPreference: ImageDescriptionPreferenceService,
     private readonly rendition: VisionRenditionService,
@@ -259,6 +261,31 @@ export class ImageDescriptionListener {
       title: metadata.title,
       description: metadata.description,
     });
+
+    // The content row over this file is what the content library searches and
+    // what a chat link opens; without this the label is only ever on the file
+    // (see ContentService.applyFileLabel). The file write above already
+    // landed, so a failure here is logged, not thrown: re-driving the whole
+    // description over a content-side hiccup would pay for the model call again.
+    try {
+      const contentIds = await this.contentService.applyFileLabel(
+        serviceContext,
+        thumbnail.parentId,
+        metadata,
+      );
+
+      if (contentIds.length > 0) {
+        this.logger.log('Image label applied to linked content', {
+          parentFileId: thumbnail.parentId,
+          contentIds,
+        });
+      }
+    } catch (error) {
+      this.logger.warn('Image label applied to file but not to its content row', {
+        parentFileId: thumbnail.parentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private parseResponse(content: string): z.infer<typeof ImageMetadataSchema> | null {

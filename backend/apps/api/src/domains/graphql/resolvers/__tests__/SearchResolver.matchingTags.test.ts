@@ -22,7 +22,10 @@ function makeResolver() {
     getEntitiesForCommunications: jest.fn().mockResolvedValue([] as Identifier[]),
   };
   const conceptService = { getEntitiesForConcepts: jest.fn().mockResolvedValue([] as Identifier[]) };
-  const contentService = { getEntitiesForContents: jest.fn().mockResolvedValue([] as Identifier[]) };
+  const contentService = {
+    getEntitiesForContents: jest.fn().mockResolvedValue([] as Identifier[]),
+    findEventIdsForMedia: jest.fn().mockResolvedValue([] as string[]),
+  };
   const itemService = { getEntitiesForItems: jest.fn().mockResolvedValue([] as Identifier[]) };
   const noteService = { getEntitiesForNotes: jest.fn().mockResolvedValue([] as Identifier[]) };
   const personService = { getEntitiesForPeople: jest.fn().mockResolvedValue([] as Identifier[]) };

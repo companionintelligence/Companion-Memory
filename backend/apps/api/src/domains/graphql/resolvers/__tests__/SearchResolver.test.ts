@@ -36,6 +36,8 @@ function makeResolver() {
   };
   const contentService = {
     getEntitiesForContents: jest.fn().mockResolvedValue([] as Identifier[]),
+    // The query path also reaches events through matching media; nothing here has any.
+    findEventIdsForMedia: jest.fn().mockResolvedValue([] as string[]),
     countEntitiesForContents: jest.fn().mockResolvedValue(0),
   };
   const itemService = {

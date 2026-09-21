@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
 import { Markdown } from './Markdown';
@@ -55,5 +56,44 @@ describe('Markdown', () => {
 
       expect(container.querySelector('p')).not.toBeNull();
     });
+  });
+
+  it('renders an internal path as a client-side link inside a router', () => {
+    // What the chat's search tools hand the model as `link`; a full reload
+    // here would drop the open conversation.
+    render(
+      <MemoryRouter>
+        <Markdown>{"Here's the photo: [Squirrel](/content/abc-123)"}</Markdown>
+      </MemoryRouter>,
+    );
+
+    const link = screen.getByRole('link', { name: 'Squirrel' });
+    expect(link).toHaveAttribute('href', '/content/abc-123');
+  });
+
+  it('leaves an external URL as a plain anchor inside a router', () => {
+    render(
+      <MemoryRouter>
+        <Markdown>{'[out](https://example.com/x)'}</Markdown>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('link', { name: 'out' })).toHaveAttribute('href', 'https://example.com/x');
+  });
+
+  it('does not treat a protocol-relative URL as internal', () => {
+    render(
+      <MemoryRouter>
+        <Markdown>{'[evil](//example.com/x)'}</Markdown>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('link', { name: 'evil' })).toHaveAttribute('href', '//example.com/x');
+  });
+
+  it('still renders an internal path as an anchor with no router', () => {
+    render(<Markdown>{'[Squirrel](/content/abc-123)'}</Markdown>);
+
+    expect(screen.getByRole('link', { name: 'Squirrel' })).toHaveAttribute('href', '/content/abc-123');
   });
 });

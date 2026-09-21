@@ -72,7 +72,7 @@ describe('DatabaseSearchTool — task hydration (M4 Part B)', () => {
 
     expect(result.success).toBe(true);
     expect(findByIds).toHaveBeenCalledWith({ userId: CONTEXT.userId }, ['task-1']);
-    expect(result.data?.items).toEqual([task]);
+    expect(result.data?.items).toEqual([{ ...task, type: 'task' }]);
   });
 
   it('preserves search ranking across mixed entity types (task interleaved with other hits)', async () => {
@@ -88,7 +88,7 @@ describe('DatabaseSearchTool — task hydration (M4 Part B)', () => {
 
     // The event resolver is stubbed to return [], so only the task hit survives — proving the task
     // branch runs in the same resolution pass as every other type, in search-ranked order.
-    expect(result.data?.items).toEqual([taskHit]);
+    expect(result.data?.items).toEqual([{ ...taskHit, type: 'task' }]);
   });
 
   it('drops a task hit that TaskService cannot find (deleted/not owned) without throwing', async () => {

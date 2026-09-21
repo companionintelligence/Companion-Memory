@@ -95,6 +95,58 @@ export type SearchResult =
   | Thread;
 
 /**
+ * A hydrated hit as the model sees it: the entity, the type the index filed
+ * it under, and — when the app has a page for it — the path that opens it.
+ *
+ * The bare entity was the previous shape, and the model could not tell a
+ * person from a place without guessing from field names, let alone point the
+ * user anywhere: a photo's only address is a 461-byte presigned object-store
+ * URL, cut mid-signature by the tool-result string cap. `link` is short,
+ * stable and site-relative, so it survives the cap and works under whatever
+ * host the appliance is served from. The prompt tells the model to copy it
+ * verbatim and never to build one from an id.
+ */
+export type SearchResultItem = SearchResult & {
+  type: IndexableEntity;
+  link?: string;
+};
+
+/**
+ * The page each entity type opens at, by raw id. Types absent here have no
+ * page (a thread, a browser visit, a file chunk, a product model) and get no
+ * link. A file is the odd one: it has no page of its own, its content row does,
+ * so {@link itemLink} routes it through the file → content map.
+ */
+const ITEM_PAGES: Partial<Record<IndexableEntity, string>> = {
+  communication: '/communications',
+  concept: '/concepts',
+  content: '/content',
+  event: '/events',
+  item: '/items',
+  note: '/notes',
+  person: '/people',
+  place: '/places',
+  receipt: '/receipts',
+};
+
+/** The site-relative path that opens this hit, or undefined when nothing does. */
+export function itemLink(
+  type: IndexableEntity,
+  id: string,
+  contentIdsByFile: ReadonlyMap<string, readonly string[]>,
+): string | undefined {
+  if (type === 'file') {
+    const [contentId] = contentIdsByFile.get(id) ?? [];
+
+    return contentId ? `${ITEM_PAGES.content}/${contentId}` : undefined;
+  }
+
+  const page = ITEM_PAGES[type];
+
+  return page ? `${page}/${id}` : undefined;
+}
+
+/**
  * What every search intent hands the model: the page AND the size of the
  * match set behind it.
  *
@@ -116,8 +168,8 @@ export interface SearchToolResult {
   limit: number;
   /** The strategy that ran, or `'count'` for a count-only call. */
   mode: string;
-  /** Resolved entities, best first. Empty for a count-only call. */
-  items: SearchResult[];
+  /** Resolved entities, best first, each with its `type` and (where one exists) a `link`. Empty for a count-only call. */
+  items: SearchResultItem[];
   /**
    * Present on a count over photos: how many original images the user has and
    * how many carry a generated description. Only described photos can match a
@@ -293,7 +345,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
   private async resolveEntities(
     context: UserServiceContext,
     results: EntityIdentifier<IndexableEntity>[],
-  ): Promise<SearchResult[]> {
+  ): Promise<SearchResultItem[]> {
     const groupedByType: Map<IndexableEntity, string[]> = results.reduce((acc, result) => {
       if (!acc.has(result.type)) {
         acc.set(result.type, []);
@@ -385,9 +437,25 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
     tasks.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('task', d.id), d));
     threads.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('thread', d.id), d));
 
-    const orderedResults = results
-      .map((result) => resultMap.get(makeCompositeKey(result.type, result.id)))
-      .filter((entity): entity is SearchResult => entity != null);
+    // One lookup for the page's file hits: a file's link is its content row's
+    // page, and only rows that hydrated above are worth mapping.
+    const hydratedFileIds = fileIds.filter((id) => resultMap.has(makeCompositeKey('file', id)));
+    const contentIdsByFile =
+      hydratedFileIds.length > 0
+        ? await this.contentService.findIdsByFileIds(context, hydratedFileIds)
+        : new Map<string, string[]>();
+
+    const orderedResults = results.flatMap((result): SearchResultItem[] => {
+      const entity = resultMap.get(makeCompositeKey(result.type, result.id));
+
+      if (entity == null) {
+        return [];
+      }
+
+      const link = itemLink(result.type, result.id, contentIdsByFile);
+
+      return [{ ...entity, type: result.type, ...(link && { link }) }];
+    });
 
     // A hit the resolvers above cannot hydrate vanishes from the answer, and
     // the caller cannot tell "nothing matched" from "everything matched was

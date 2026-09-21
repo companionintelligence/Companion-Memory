@@ -2,9 +2,10 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react
 
 import { useApolloClient } from '@apollo/client';
 import { GlobalUID } from '@ci/common';
-import { Button, Card, IconButton, Label, Sheet, cn, useToast } from '@ci/shadcn';
-import { ImageOff, Loader2, Pencil, Trash2 } from '@ci/shadcn/icons';
+import { Button, Card, IconButton, Label, Sheet, Tooltip, cn, useToast } from '@ci/shadcn';
+import { FileSymlink, ImageOff, Loader2, Pencil, Trash2 } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
+import { Link, useInRouterContext } from 'react-router-dom';
 
 import { useTagEntityService } from '@/api';
 import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
@@ -34,6 +35,66 @@ import { useReadOnly } from './readOnly';
 // The field/meta contract now lives with the shared editor so the full-page
 // entity views can render the very same field set (see components/EntityFields).
 export type { EditField, MetaItem };
+
+/**
+ * The standalone page for each resource type the drawer can show, by raw id.
+ * Types absent here (a file, a browser visit, a thread) have no page and get no
+ * link. Kept in step with the routes in App.tsx and with `ITEM_PAGES` in the
+ * API's DatabaseSearchTool, which hands the chat the same paths.
+ */
+const FULL_PAGE_PATHS: Readonly<Record<string, string>> = {
+  communication: '/communications',
+  concept: '/concepts',
+  content: '/content',
+  event: '/events',
+  item: '/items',
+  note: '/notes',
+  person: '/people',
+  place: '/places',
+  receipt: '/receipts',
+};
+
+export function fullPagePath(resourceType: string | null, rawId: string | null): string | null {
+  if (resourceType == null || rawId == null) {
+    return null;
+  }
+
+  const base = FULL_PAGE_PATHS[resourceType];
+
+  return base ? `${base}/${rawId}` : null;
+}
+
+/**
+ * The header's "open full page" control. An in-app `Link`, never
+ * `target="_blank"`: the old escape hatch opened a new tab, which on the
+ * Capacitor build (WKWebView) left the app for the system browser (issue
+ * #2311). Routing in place keeps the drawer's page in history, so Back returns
+ * to the list with its filters intact. Outside a router (stories, unit tests)
+ * it degrades to a plain anchor.
+ */
+function FullPageLink({ to, label }: { to: string; label: string }) {
+  const inRouter = useInRouterContext();
+  const className =
+    '-mt-1 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground';
+  const link = inRouter ? (
+    <Link to={to} aria-label={label} className={className}>
+      <FileSymlink className="size-4" />
+    </Link>
+  ) : (
+    <a href={to} aria-label={label} className={className}>
+      <FileSymlink className="size-4" />
+    </a>
+  );
+
+  // The same bubble (and delay) IconButton gives its neighbours, so the four
+  // header controls read as one row rather than three tooltips and a `title`.
+  return (
+    <Tooltip delayDuration={600}>
+      <Tooltip.Content>{label}</Tooltip.Content>
+      <Tooltip.Trigger asChild>{link}</Tooltip.Trigger>
+    </Tooltip>
+  );
+}
 
 interface EntityDetailScaffoldProps {
   entity: MemoryEntity;
@@ -410,6 +471,7 @@ export function EntityDetailScaffold({
   // the entity's own resource type — so it reaches search results and graph
   // nodes alike, without each *Details body having to opt in.
   const deleteTarget = ref.resourceType ? (DELETE_TARGETS[ref.resourceType] ?? null) : null;
+  const fullPage = fullPagePath(ref.resourceType, ref.rawId);
   const canDelete = !readOnly && Boolean(deleteTarget && ref.globalId);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
@@ -483,6 +545,7 @@ export function EntityDetailScaffold({
         <div className="flex items-start justify-between gap-2">
           <Sheet.Title className="text-xl leading-tight tracking-tight">{title}</Sheet.Title>
           <div className="flex shrink-0 items-center gap-1">
+            {fullPage != null && <FullPageLink to={fullPage} label={t('ENTITY_DETAILS_OPEN_PAGE')} />}
             {!readOnly && <ChatWithAgentMenu context={chatContext} className="-mt-1 size-8 shrink-0" />}
             {canEnterEditMode && !editing && (
               <IconButton
@@ -593,12 +656,12 @@ export function EntityDetailScaffold({
 
         {rawData != null && <RawDataDetails data={rawData} />}
 
-        {/* There is deliberately no "Open full page" escape hatch here. The
-            drawer IS the object: it carries the media, the editable fields, the
-            metadata, the tags and the relationships. The old control was a
-            `target="_blank"` Link, which on the Capacitor build (WKWebView)
-            left the app for the system browser instead of routing in-app —
-            see issue #2311. Anything the user needs belongs in this body. */}
+        {/* The "open full page" control lives in the header (FullPageLink), as
+            an in-app route. It used to be omitted on purpose: the earlier
+            control was a `target="_blank"` Link, which on the Capacitor build
+            (WKWebView) left the app for the system browser (issue #2311). The
+            drawer still carries everything — media, editable fields, metadata,
+            tags, relationships — the link only gives the object its address. */}
       </div>
 
       {editing && (

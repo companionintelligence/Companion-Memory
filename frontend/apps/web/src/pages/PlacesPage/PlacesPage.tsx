@@ -5,7 +5,7 @@ import { EmptyState, GlobalUID, LoadingPage, useDeviceLayout, usePageTitle } fro
 import { Badge, Button, Card, Input } from '@ci/shadcn';
 import { LocateFixed, MapPin, Plus } from '@ci/shadcn/icons';
 import { Tooltip, useMap as useLeafletMap } from 'react-leaflet';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
 
 import { ChatAbout } from '@/components/ChatWithAgent';
 import { ErrorState } from '@/components/ErrorState';
@@ -486,11 +486,14 @@ export function PlacesPage() {
   // A hand-typed or stale id still encodes fine; the drawer simply stays
   // closed when the query returns nothing.
   const selectedGlobalId = useMemo(() => (placeId ? GlobalUID.encode('place', placeId) : null), [placeId]);
+  // Same rule as the content library: the drawer is a path segment and the
+  // filters are query params, so opening and closing carry `location.search`.
+  const { search: queryString } = useLocation();
   const openPlace = useCallback(
-    (globalId: string) => navigate(`/memory/places/${GlobalUID.parse('place', globalId)}`),
-    [navigate],
+    (globalId: string) => navigate(`/memory/places/${GlobalUID.parse('place', globalId)}${queryString}`),
+    [navigate, queryString],
   );
-  const closePlace = useCallback(() => navigate('/memory/places'), [navigate]);
+  const closePlace = useCallback(() => navigate(`/memory/places${queryString}`), [navigate, queryString]);
   const handleChanged = useCallback(async () => {
     await refetch();
   }, [refetch]);

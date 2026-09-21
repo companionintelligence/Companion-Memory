@@ -390,6 +390,13 @@ export type {
 } from './types';
 export type { ObjectObservationWriteResult } from './services/ObjectObservationService';
 export { detectionKeyFor } from './services/ObjectObservationService';
+export {
+  MEDIA_HIT_TYPES,
+  eventsForMatchingMedia,
+  mergeIdentifiers,
+  searchReachesEvents,
+  type MediaEventSearchDeps,
+} from './services/mediaEventSearch';
 // The object-identity service surface. Exported for the same reason the
 // observation DTOs above are: the API layer, the maintenance jobs and the
 // import path all speak these shapes, and a second definition of any of them is

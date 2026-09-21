@@ -33,6 +33,9 @@ function makeListener(
     findById: jest.fn(async (_ctx: unknown, id: string) => files.get(id) ?? null),
     update: jest.fn(async () => ({})),
   };
+  const contentService = {
+    applyFileLabel: jest.fn(async () => ['content-1']),
+  };
   const ollamaService = {
     resolveModel: jest.fn(async () => ({ model: 'gemma4:e4b', enableThinking: false, enableTools: false })),
     chat: jest.fn(
@@ -51,6 +54,8 @@ function makeListener(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     fileService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    contentService as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ollamaService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     preference as any,
@@ -62,7 +67,15 @@ function makeListener(
     logger as any,
   );
 
-  return { listener, fileService, ollamaService, renditionService, captureContextService, logger };
+  return {
+    listener,
+    fileService,
+    contentService,
+    ollamaService,
+    renditionService,
+    captureContextService,
+    logger,
+  };
 }
 
 describe('ImageDescriptionListener', () => {
@@ -93,6 +106,33 @@ describe('ImageDescriptionListener', () => {
       title: 'Gray Squirrel Foraging in Leaves',
       description: 'A squirrel on the ground.',
     });
+  });
+
+  it('carries the label onto the content row that wraps the file', async () => {
+    // The content library searches the content row, not the file, so a label
+    // that stops at the file is invisible there (820 "squirrel" photos, zero
+    // library hits, measured live).
+    const { listener, contentService } = makeListener();
+
+    await listener.handle({ userId: USER, previewId: PREVIEW_ID });
+
+    expect(contentService.applyFileLabel).toHaveBeenCalledWith(expect.anything(), ORIGINAL_ID, {
+      title: 'Gray Squirrel Foraging in Leaves',
+      description: 'A squirrel on the ground.',
+    });
+  });
+
+  it('keeps the file label when the content-side write fails', async () => {
+    const { listener, fileService, contentService, logger } = makeListener();
+    contentService.applyFileLabel.mockRejectedValueOnce(new Error('content down'));
+
+    await expect(listener.handle({ userId: USER, previewId: PREVIEW_ID })).resolves.toBeUndefined();
+
+    expect(fileService.update).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Image label applied to file but not to its content row',
+      expect.objectContaining({ error: 'content down' }),
+    );
   });
 
   // The two bounds that turned a 7s Gemma description into a 1.5s one: no

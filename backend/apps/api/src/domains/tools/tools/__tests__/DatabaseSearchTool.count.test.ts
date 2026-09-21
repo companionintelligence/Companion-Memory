@@ -55,7 +55,7 @@ function makeTool(options: {
     noop as any,
     noop as any,
     noop as any,
-    noop as any,
+    { ...noop, findIdsByFileIds: jest.fn().mockResolvedValue(new Map()) } as any, // contentService
     noop as any,
     { findByIds: jest.fn().mockResolvedValue([]) } as any,
     file as unknown as FileService,

@@ -22,6 +22,9 @@ import {
   PlaceService,
   ProductModelService,
   ReceiptService,
+  eventsForMatchingMedia,
+  mergeIdentifiers,
+  searchReachesEvents,
 } from '@ci/domains/memory';
 import { NoteService } from '@ci/domains/notes';
 import { FileChunkService } from '@ci/domains/parsing';
@@ -863,7 +866,22 @@ export class SearchResolver {
     }
 
     // Already ranked by relevance; identifiers carry a score we discard (order preserves rank).
-    return this.searchService.search(context, options);
+    const direct = await this.searchService.search(context, options);
+
+    // A photo's words are on its file and content rows, not on the event that
+    // dates it. When events are in scope, reach them through their media too,
+    // trailing the direct hits (see memory/services/mediaEventSearch.ts).
+    if (!searchReachesEvents(includeTypes, excludeTypes)) {
+      return direct;
+    }
+
+    const viaMedia = await eventsForMatchingMedia(
+      { searchService: this.searchService, contentService: this.contentService },
+      context,
+      { query, maxResults: options.maxResults, semantic },
+    );
+
+    return mergeIdentifiers(direct, viaMedia);
   }
 
   private async searchByTags(

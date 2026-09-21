@@ -222,6 +222,24 @@ describe('ContentLibraryPage', () => {
     expect(navigate).not.toHaveBeenCalledWith(`/memory/content/${CONTENT_GLOBAL_ID}`);
   });
 
+  it('carries the search and facets along when a row opens, so the library behind the drawer keeps them', async () => {
+    navigate.mockClear();
+    const page = firstPage();
+    renderWithProviders(<ContentLibraryPage />, {
+      route: '/memory/content?search=squirrel&types=media',
+      mocks: [
+        {
+          ...page,
+          request: { ...page.request, variables: { first: PAGE_SIZE, query: 'squirrel', types: ['media'] } },
+        },
+      ],
+    });
+
+    fireEvent.click(await screen.findByLabelText('Holiday photo'));
+
+    expect(navigate).toHaveBeenCalledWith(`/memory/content/${CONTENT_UUID}?search=squirrel&types=media`);
+  });
+
   it('sends the URL filters with the query and offers to clear them', async () => {
     const filteredPage = {
       ...firstPage(),

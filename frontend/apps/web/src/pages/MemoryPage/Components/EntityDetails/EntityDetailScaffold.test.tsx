@@ -68,7 +68,7 @@ describe('EntityDetailScaffold', () => {
    * `target="_blank"`; on the Capacitor build that handed the URL to the system
    * browser, so tapping it left the app entirely. The drawer is the object now.
    */
-  it('offers no "Open full page" link for an entity that has a routable detail page', async () => {
+  it('offers an in-app "Open full page" link for an entity that has a routable detail page', async () => {
     renderWithProviders(
       <EntityDrawerHostProvider value={host}>
         <Sheet open>
@@ -79,8 +79,11 @@ describe('EntityDetailScaffold', () => {
 
     await screen.findByTestId('entity-detail-sheet');
 
-    expect(screen.queryByRole('link', { name: /open full page/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: new RegExp(`/events/${EVENT_UUID}`) })).not.toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /open full page/i });
+    expect(link).toHaveAttribute('href', `/events/${EVENT_UUID}`);
+    // In-app route, never a new tab: a `target="_blank"` here left the
+    // Capacitor build for Safari (issue #2311).
+    expect(link).not.toHaveAttribute('target');
   });
 
   it('keeps the object itself in the drawer, and opens no new browser tab from it', async () => {

@@ -52,6 +52,7 @@ describe('SearchResolver — event-type ("how") filter', () => {
     };
     const contentService = {
       getEntitiesForContents: jest.fn().mockResolvedValue([]),
+      findEventIdsForMedia: jest.fn().mockResolvedValue([]),
       countEntitiesForContents: jest.fn().mockResolvedValue(0),
     };
     const itemService = {

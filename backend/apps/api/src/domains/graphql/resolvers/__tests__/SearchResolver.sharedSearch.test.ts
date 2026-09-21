@@ -41,7 +41,7 @@ function makeResolver() {
     {} as never, // browserActivityService
     {} as never, // communicationService
     {} as never, // conceptService
-    {} as never, // contentService
+    { findEventIdsForMedia: jest.fn(async () => []) } as never, // contentService
     {} as never, // entityResolutionService
     {} as never, // eventService
     {} as never, // fileService

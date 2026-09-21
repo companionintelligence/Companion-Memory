@@ -258,7 +258,8 @@ export class ContentResolver {
     @Args('connectors', {
       type: () => [String],
       nullable: true,
-      description: 'Keep only these `source_system` values — the same How filter the explorer takes.',
+      description:
+        'Keep only rows delivered by these platforms (the values `contentFacets.sourceSystems` offers) — the same How filter the explorer takes.',
     })
     connectors?: string[],
   ): Promise<ContentConnection> {

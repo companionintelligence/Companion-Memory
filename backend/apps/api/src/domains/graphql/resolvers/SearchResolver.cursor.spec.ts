@@ -29,6 +29,7 @@ function makeResolver() {
   const eventCalls: TimedOptions[] = [];
 
   const contentService = {
+    findEventIdsForMedia: jest.fn(async () => []),
     getEntitiesForContents: jest.fn(async (_context: unknown, options: TimedOptions) => {
       contentCalls.push(options);
 

@@ -582,7 +582,9 @@ type ContentFacets {
   """Distinct `mimetype` values."""
   mimetypes: [String!]!
 
-  """Distinct `source_system` values — the How filter, over content alone."""
+  """
+  Distinct delivering platforms — the How filter, over content alone. The ledger platform (`google_photos`, `whatsapp`) where one was recorded, else the row's `source_system`.
+  """
   sourceSystems: [String!]!
 
   """Distinct `type` values (image, post, note, …)."""
@@ -2850,7 +2852,7 @@ type Query {
     before: String
 
     """
-    Keep only these `source_system` values — the same How filter the explorer takes.
+    Keep only rows delivered by these platforms (the values `contentFacets.sourceSystems` offers) — the same How filter the explorer takes.
     """
     connectors: [String!]
     first: Int
