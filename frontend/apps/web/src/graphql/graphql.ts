@@ -91,6 +91,7 @@ export type ActivityCountsType = {
   events?: Maybe<Scalars['Int']['output']>;
   fileChunks?: Maybe<Scalars['Int']['output']>;
   files?: Maybe<Scalars['Int']['output']>;
+  macosActivity?: Maybe<Scalars['Int']['output']>;
   /** @deprecated Retired summary source; only set on summaries written before it was dropped. */
   measurements?: Maybe<Scalars['Int']['output']>;
   messages?: Maybe<Scalars['Int']['output']>;

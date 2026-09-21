@@ -16,6 +16,7 @@ export const SUMMARY_SOURCE_NAMES = [
   'position',
   'communications',
   'events',
+  'macos_activity',
   'messages',
   'files',
   'content',
@@ -76,6 +77,9 @@ export class ActivityCountsType {
 
   @Field(() => Int, { nullable: true })
   events?: number;
+
+  @Field(() => Int, { nullable: true })
+  macosActivity?: number;
 
   @Field(() => Int, { nullable: true })
   messages?: number;

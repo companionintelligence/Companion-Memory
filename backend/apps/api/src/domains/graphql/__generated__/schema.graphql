@@ -70,6 +70,7 @@ type ActivityCountsType {
   events: Int
   fileChunks: Int
   files: Int
+  macosActivity: Int
   measurements: Int @deprecated(reason: "Retired summary source; only set on summaries written before it was dropped.")
   messages: Int
   notes: Int

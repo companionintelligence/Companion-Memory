@@ -95,6 +95,7 @@ export const PLATFORM_SYSTEMS: readonly string[] = [
   'letterboxd',
   'linkedin',
   'lyft',
+  'macos_activity', // macOS activity export (scripts/macos/export_activity.py) — no connection counterpart
   'mastodon',
   'microsoft_account',
   'myfitnesspal',
