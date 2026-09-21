@@ -363,6 +363,10 @@ describe('ChatTurnService context budget without a Hub-exported window', () => {
     await service.execute(payload);
 
     expect(resolveChatContextTokens).not.toHaveBeenCalled();
-    expect(ollamaService.chatStream).toHaveBeenCalledWith(expect.anything(), expect.any(Array), expect.objectContaining({ numCtx: 4096 }));
+    expect(ollamaService.chatStream).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      expect.objectContaining({ numCtx: 4096 }),
+    );
   });
 });

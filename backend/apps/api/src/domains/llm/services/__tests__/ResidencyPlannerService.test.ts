@@ -509,7 +509,12 @@ describe('ResidencyPlannerService.resolveChatContextTokens', () => {
 
   it('returns the loaded window of a resident chat model, without asking /api/show for it', async () => {
     psMock.mockResolvedValue(residentChatAndEmbed);
-    probeMock.mockResolvedValue({ totalBytes: CARD, usedBytes: 22_240_452_608, source: 'sysfs', device: 'card1' });
+    probeMock.mockResolvedValue({
+      totalBytes: CARD,
+      usedBytes: 22_240_452_608,
+      source: 'sysfs',
+      device: 'card1',
+    });
     const { service, logger } = loadService();
 
     await expect(service.resolveChatContextTokens()).resolves.toBe(32_768);
@@ -529,7 +534,9 @@ describe('ResidencyPlannerService.resolveChatContextTokens', () => {
 
     await expect(service.resolveChatContextTokens()).resolves.toBe(32_768);
     expect(showMock).toHaveBeenCalledWith({ model: 'gemma4:e4b' });
-    expect(logger.log).toHaveBeenCalledWith(expect.stringContaining('Chat context for "gemma4:e4b": 32768 tokens'));
+    expect(logger.log).toHaveBeenCalledWith(
+      expect.stringContaining('Chat context for "gemma4:e4b": 32768 tokens'),
+    );
   });
 
   it('answers null, never a guess, when the planner is off or the backend is OpenAI-compatible', async () => {
@@ -544,9 +551,11 @@ describe('ResidencyPlannerService.resolveChatContextTokens', () => {
     const { service, logger } = loadService();
 
     await expect(service.resolveChatContextTokens()).resolves.toBeNull();
-    expect(logger.warn).toHaveBeenCalledWith('Chat context planning failed; the chat path keeps its configured fallback', expect.objectContaining({ error: 'ECONNREFUSED' }));
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Chat context planning failed; the chat path keeps its configured fallback',
+      expect.objectContaining({ error: 'ECONNREFUSED' }),
+    );
   });
-
 });
 
 describe('card-level calibration', () => {
@@ -572,7 +581,9 @@ describe('card-level calibration', () => {
   });
 
   it("records no card figure from the `config` source, which only echoes Ollama's own numbers back", async () => {
-    psMock.mockResolvedValue({ models: [{ name: 'qwen3.6:27b', size_vram: QWEN_RESIDENT_32K, context_length: 32_768 }] });
+    psMock.mockResolvedValue({
+      models: [{ name: 'qwen3.6:27b', size_vram: QWEN_RESIDENT_32K, context_length: 32_768 }],
+    });
     probeMock.mockResolvedValue({ totalBytes: CARD, usedBytes: QWEN_RESIDENT_32K, source: 'config' });
     const { store, saved } = memoryStore();
     const { service } = loadService({ calibration: store });

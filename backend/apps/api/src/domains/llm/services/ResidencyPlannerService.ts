@@ -282,22 +282,25 @@ export class ResidencyPlannerService implements OnModuleInit {
   private parallelSlots(): number {
     const configured = config.llm.residency.parallelSlots;
 
-    return typeof configured === 'number' && Number.isFinite(configured) && configured >= 1 ? Math.floor(configured) : 1;
+    return typeof configured === 'number' && Number.isFinite(configured) && configured >= 1
+      ? Math.floor(configured)
+      : 1;
   }
 
   /** Per-model memory of the last answer, so a steady state costs no log lines. */
   private readonly lastChatContext = new Map<string, string>();
 
   private logChatContextChange(model: string, plan: ChatContextPlan): void {
-    const key =
-      plan.kind === 'unknown' ? `unknown:${plan.reason}` : `${plan.kind}:${plan.numCtx}`;
+    const key = plan.kind === 'unknown' ? `unknown:${plan.reason}` : `${plan.kind}:${plan.numCtx}`;
     if (this.lastChatContext.get(model) === key) {
       return;
     }
 
     this.lastChatContext.set(model, key);
     if (plan.kind === 'unknown') {
-      this.logger.log(`Chat context for "${model}" cannot be planned (${plan.reason}); using the configured fallback`);
+      this.logger.log(
+        `Chat context for "${model}" cannot be planned (${plan.reason}); using the configured fallback`,
+      );
     } else if (plan.kind === 'resident') {
       this.logger.log(`Chat context for "${model}": ${plan.numCtx} tokens (already resident at that window)`);
     } else {
@@ -631,7 +634,10 @@ export class ResidencyPlannerService implements OnModuleInit {
       }
 
       const keepPrevious =
-        cardBytes == null && previous?.cardBytes != null && previous.totalTokens != null && previous.numCtx === resident.contextLength;
+        cardBytes == null &&
+        previous?.cardBytes != null &&
+        previous.totalTokens != null &&
+        previous.numCtx === resident.contextLength;
 
       this.observations.set(id, {
         numCtx: resident.contextLength,

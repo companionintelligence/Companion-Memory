@@ -231,7 +231,12 @@ export function estimateFootprintBytes({
   // includes the buffers neither the formula nor Ollama's `size_vram` know about. It is
   // carried to the requested layout by the KV delta alone — buffers do not grow with
   // context — and never lets the answer drop below what the formula says.
-  if (observation.cardBytes != null && observation.cardBytes > 0 && observation.totalTokens != null && observation.totalTokens > 0) {
+  if (
+    observation.cardBytes != null &&
+    observation.cardBytes > 0 &&
+    observation.totalTokens != null &&
+    observation.totalTokens > 0
+  ) {
     const measured = observation.cardBytes + kvBytesPerToken(geometry) * (numCtx - observation.totalTokens);
 
     return Math.max(estimate, measured);

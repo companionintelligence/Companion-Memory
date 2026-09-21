@@ -115,9 +115,13 @@ describe('CtiAggregate.applyUpdate', () => {
     };
     const manager = {
       getRepository: jest.fn((entityClass: unknown) => {
-        if (entityClass === Detail) {return detailRepo;}
+        if (entityClass === Detail) {
+          return detailRepo;
+        }
 
-        if (entityClass === Base) {return baseRepo;}
+        if (entityClass === Base) {
+          return baseRepo;
+        }
 
         throw new Error('unexpected entity class passed to getRepository');
       }),
@@ -144,9 +148,7 @@ describe('CtiAggregate.applyUpdate', () => {
     const { aggregate, detailRepo, baseRepo } = makeAggregate();
 
     const before = { id: 'd1', name: 'Old name', summary: 'Real summary' };
-    detailRepo.findOne
-      .mockResolvedValueOnce(before)
-      .mockResolvedValueOnce({ ...before, name: 'New name' });
+    detailRepo.findOne.mockResolvedValueOnce(before).mockResolvedValueOnce({ ...before, name: 'New name' });
 
     const result = await aggregate.applyUpdate({} as never, 'd1', {
       detail: { name: 'New name', summary: undefined },
