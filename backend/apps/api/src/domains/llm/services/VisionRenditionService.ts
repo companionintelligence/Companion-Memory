@@ -71,7 +71,12 @@ export class VisionRenditionService {
     original: RenderableFile,
     fallbackKey?: string | null,
   ): Promise<VisionRendition | null> {
-    if (original.key != null) {
+    // A video original is not something libvips can render, and it is the
+    // one kind of file this fetch must never make: 281 MB on average and up
+    // to 2 GB in the measured library (2026-09-22), pulled whole into memory
+    // to fail. Its frames come from VideoFrameSampleService; here, the
+    // PREVIEW (one extracted frame) is the only rendition on offer.
+    if (original.key != null && !isVideo(original.contentType)) {
       const bytes = Buffer.from(await this.fileService.getFileContent(context, original.key));
 
       try {
@@ -104,4 +109,8 @@ export class VisionRenditionService {
 
     return { jpeg: preview, source: 'preview' };
   }
+}
+
+function isVideo(contentType: string | null): boolean {
+  return contentType != null && contentType.startsWith('video/');
 }

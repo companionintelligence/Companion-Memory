@@ -772,7 +772,10 @@ export class FileService implements OnModuleInit {
   /**
    * Originals that are still missing a description but already have a PREVIEW
    * child — candidates to re-fire {@link PreviewGeneratedEvent} after the user
-   * turns image description back on.
+   * turns image description back on. Images and videos alike: a video's
+   * preview is one extracted frame, and the description listener samples
+   * more from the original. Until 2026-09-22 this said `image/%` alone, and
+   * every video in the measured library (519) sat undescribed for it.
    *
    * Newest first, paged by keyset on the original's id: `afterParentFileId`
    * returns the page strictly older than that id. Ids are UUIDv7, so id order
@@ -797,7 +800,10 @@ export class FileService implements OnModuleInit {
       .where('preview.userId = :userId', { userId })
       .andWhere('preview.variant = :previewVariant', { previewVariant: FileVariant.PREVIEW })
       .andWhere('original.variant = :originalVariant', { originalVariant: FileVariant.ORIGINAL })
-      .andWhere('original.contentType LIKE :imagePrefix', { imagePrefix: 'image/%' })
+      .andWhere('(original.contentType LIKE :imagePrefix OR original.contentType LIKE :videoPrefix)', {
+        imagePrefix: 'image/%',
+        videoPrefix: 'video/%',
+      })
       .andWhere("(original.description IS NULL OR btrim(original.description) = '')")
       .andWhere(afterParentFileId ? 'original.id < :afterParentFileId' : 'TRUE', { afterParentFileId })
       .orderBy('original.id', 'DESC')
@@ -866,7 +872,10 @@ export class FileService implements OnModuleInit {
         { previewVariant: FileVariant.PREVIEW },
       )
       .where('original.variant = :originalVariant', { originalVariant: FileVariant.ORIGINAL })
-      .andWhere('original.contentType LIKE :imagePrefix', { imagePrefix: 'image/%' })
+      .andWhere('(original.contentType LIKE :imagePrefix OR original.contentType LIKE :videoPrefix)', {
+        imagePrefix: 'image/%',
+        videoPrefix: 'video/%',
+      })
       .andWhere("(original.description IS NULL OR btrim(original.description) = '')")
       .andWhere('original.userId IS NOT NULL')
       .getRawMany();

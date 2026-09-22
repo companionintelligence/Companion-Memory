@@ -328,6 +328,56 @@ describe('utility tier resolution', () => {
     expect(chatMock.mock.calls[0]![0]).toMatchObject({ model: MODEL, options: { num_ctx: 2_048 } });
   });
 
+  it("fills a window the caller left out from the chat-context plan, so no call inherits Ollama's default", async () => {
+    const { service, planner } = makeServiceWithPlanner({ model: MODEL });
+    (planner as any).resolveChatContextTokens = jest.fn(async () => 16_384);
+    listMock.mockResolvedValue({ models: [{ name: MODEL }] });
+
+    await service.chat(context, messages, { model: MODEL });
+
+    expect((planner as any).resolveChatContextTokens).toHaveBeenCalledWith(MODEL);
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({ model: MODEL, options: { num_ctx: 16_384 } });
+  });
+
+  it('fills a routed utility call the same way when the plan named no window', async () => {
+    const { service, planner } = makeServiceWithPlanner({ model: 'routed-chat-model', kind: 'routed' });
+    (planner as any).resolveChatContextTokens = jest.fn(async () => 32_768);
+    listMock.mockResolvedValue({ models: [{ name: 'routed-chat-model' }] });
+
+    await service.chat(context, messages, { tier: 'utility' });
+
+    expect((planner as any).resolveChatContextTokens).toHaveBeenCalledWith('routed-chat-model');
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({ options: { num_ctx: 32_768 } });
+  });
+
+  it('lets CI_LLM_NUM_CTX outrank the planner for a window the caller left out', async () => {
+    const { service, planner } = makeServiceWithPlanner({ model: MODEL });
+    (planner as any).resolveChatContextTokens = jest.fn(async () => 16_384);
+    const previous = process.env.CI_LLM_NUM_CTX;
+    process.env.CI_LLM_NUM_CTX = '8192';
+    try {
+      await service.chat(context, messages, { model: MODEL });
+    } finally {
+      if (previous == null) {
+        delete process.env.CI_LLM_NUM_CTX;
+      } else {
+        process.env.CI_LLM_NUM_CTX = previous;
+      }
+    }
+
+    expect((planner as any).resolveChatContextTokens).not.toHaveBeenCalled();
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({ options: { num_ctx: 8_192 } });
+  });
+
+  it('sends no window when the planner has no answer either', async () => {
+    const { service, planner } = makeServiceWithPlanner({ model: MODEL });
+    (planner as any).resolveChatContextTokens = jest.fn(async () => null);
+
+    await service.chat(context, messages, { model: MODEL });
+
+    expect(chatMock.mock.calls[0]![0]).not.toHaveProperty('options');
+  });
+
   it('falls back to the configured utility model, with no window, when there is no planner', async () => {
     const service = makeService();
 
