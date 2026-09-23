@@ -188,6 +188,35 @@ SQL migration files in `backend/apps/api/db/postgres/migrations/` are hand-writt
 
 **Never hand-write the timestamp prefix.** Create migration files with `yarn workspace @ci/be-api migrate:make <name>`, which stamps the real UTC time to the second. Hand-picked round timestamps (…120000) have collided across parallel branches; dbmate keys `schema_migrations` on the prefix, so a duplicate breaks `migrate` for everyone. Uniqueness is enforced by `bin/check-migration-versions.js` (runs in lint-staged and before `yarn migrate`). It is plain CommonJS, not TypeScript, because `migrate` runs it inside the production image, which has no devDependencies — keep it dependency-free.
 
+## GraphQL codegen
+
+`backend/apps/api/src/domains/graphql/__generated__/schema.graphql` and everything under
+`frontend/apps/web/src/graphql/` (`graphql.ts`, `gql.ts`, `possibleTypes.ts`, `mocks/`) are
+**generated — never hand-edit them.** The resolvers and `*Type.ts` classes are the source of
+truth.
+
+**Run `make graphql` and commit its output in the same change.** It runs the two generators in
+order (`yarn workspace @ci/be-api graphql:generate`, then `yarn workspace @ci/fe-web
+graphql:generate`) — the same two steps, in the same order, that `ci.yml`'s **Check GraphQL
+schema and types** job runs before doing `git status --porcelain` and failing on any diff.
+Reproduce that check exactly rather than eyeballing it:
+
+```bash
+make graphql && git status --porcelain   # must print nothing
+```
+
+**A docstring is enough to drift it.** The trigger is not "did I add a field" — anything the
+SDL carries counts. `v2026.9.23` was blocked by a single reworded `/** ... */` comment on
+`ContentFacets.sourceSystems` that regenerated into web `graphql.ts` and was never committed
+(fixed in #2733). If you touched a resolver, a `*Type.ts`, or a `.graphql` document at all,
+regenerate.
+
+**Nothing will catch this before the release tag.** Per the CI section above, no workflow runs
+on a PR or on a push to `main`, and this job is one of the two `required` gates in
+`publish.yml`. So uncommitted codegen merges green, sits in `main`, and first surfaces as a
+failed release — burning the tag, since a pushed tag is not moved onto the fix but re-cut as
+`vYYYY.M.D.N`.
+
 ## Python sidecars
 
 - **HBPE** — container port **8002** (`uvicorn ci.hbpe.api:app`), host `8002` by default.
