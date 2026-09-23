@@ -641,7 +641,7 @@ export type ContentFacets = {
   __typename?: 'ContentFacets';
   /** Distinct `mimetype` values. */
   mimetypes: Array<Scalars['String']['output']>;
-  /** Distinct `source_system` values — the How filter, over content alone. */
+  /** Distinct delivering platforms — the How filter, over content alone. The ledger platform (`google_photos`, `whatsapp`) where one was recorded, else the row's `source_system`. */
   sourceSystems: Array<Scalars['String']['output']>;
   /** Distinct `type` values (image, post, note, …). */
   types: Array<Scalars['String']['output']>;

@@ -117,7 +117,9 @@ describe('CommunicationDetails — link back to the source', () => {
 
     await screen.findByText('Link');
     expect(screen.getByText('Shared link')).toBeInTheDocument();
-    expect(screen.getAllByRole('link')).toHaveLength(2);
+    // The two metadata rows. Scoped to the URL-named links so the scaffold's own
+    // "open full page" control — named, not URL-labelled — is not counted here.
+    expect(screen.getAllByRole('link', { name: /^https:\/\// })).toHaveLength(2);
   });
 
   it('shows no Link row when the metadata carries no URL', async () => {

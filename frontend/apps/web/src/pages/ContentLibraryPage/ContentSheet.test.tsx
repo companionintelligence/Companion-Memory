@@ -80,9 +80,12 @@ describe('ContentSheet', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Holiday photo' })).toBeInTheDocument();
 
-    // The drawer holds the object outright — there is no full-page escape hatch
-    // to send iOS out to Safari. See EntityDetailScaffold.
-    expect(screen.queryByRole('link', { name: /open full page/i })).not.toBeInTheDocument();
+    // The full-page control routes in place, never `target="_blank"`: a new tab
+    // left the Capacitor build for Safari (issue #2311). See EntityDetailScaffold.
+    const fullPage = screen.getByRole('link', { name: /open full page/i });
+
+    expect(fullPage).toHaveAttribute('href', `/content/${CONTENT_UUID}`);
+    expect(fullPage).not.toHaveAttribute('target');
 
     // The content's own web URL is genuinely external, so it still opens out.
     const external = screen.getByRole('link', { name: 'https://example.test/pier' });

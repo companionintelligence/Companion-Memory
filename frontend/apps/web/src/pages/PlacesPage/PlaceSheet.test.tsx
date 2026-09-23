@@ -48,9 +48,12 @@ describe('PlaceSheet', () => {
     expect(screen.getByRole('heading', { name: 'Bletchley Park' })).toBeInTheDocument();
     expect(screen.getByText('Where the codebreakers worked')).toBeInTheDocument();
 
-    // The drawer holds the object outright — there is no full-page escape hatch
-    // to send iOS out to Safari. See EntityDetailScaffold.
-    expect(screen.queryByRole('link', { name: /open full page/i })).not.toBeInTheDocument();
+    // The full-page control routes in place, never `target="_blank"`: a new tab
+    // left the Capacitor build for Safari (issue #2311). See EntityDetailScaffold.
+    const fullPage = screen.getByRole('link', { name: /open full page/i });
+
+    expect(fullPage).toHaveAttribute('href', `/places/${PLACE_UUID}`);
+    expect(fullPage).not.toHaveAttribute('target');
   });
 
   it('renders nothing when no place is routed', () => {
