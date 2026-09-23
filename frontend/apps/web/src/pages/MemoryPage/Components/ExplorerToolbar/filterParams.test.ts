@@ -5,6 +5,7 @@ import {
   countActiveFilters,
   eventsInPlay,
   explorerSearchTypeFilters,
+  hasActivityFilter,
   hasWhenFilter,
   narrowedEntityTypes,
   peopleInPlay,
@@ -132,7 +133,63 @@ describe('resolveExplorerTypes on the events browse', () => {
   });
 });
 
+describe('resolveExplorerTypes with an Activity filter', () => {
+  it('is off without the param and on for any named activity', () => {
+    expect(hasActivityFilter(new URLSearchParams('view=list'))).toBe(false);
+    expect(hasActivityFilter(new URLSearchParams('eventTypes='))).toBe(false);
+    expect(hasActivityFilter(new URLSearchParams('eventTypes=sale'))).toBe(true);
+  });
+
+  it('pins an unnarrowed browse to events instead of letting the other kinds through unfiltered', () => {
+    expect(resolveExplorerTypes(new URLSearchParams('eventTypes=sale'), '/memory')).toEqual({
+      includeTypes: ['Event'],
+      droppedByWhen: [],
+      nothingLeft: false,
+    });
+    expect(explorerSearchTypeFilters(new URLSearchParams('eventTypes=sale'), '/memory')).toEqual({
+      includeTypes: ['Event'],
+    });
+  });
+
+  it('pins the events browse to events, dropping its browser and communication kinds', () => {
+    expect(
+      resolveExplorerTypes(new URLSearchParams('view=list&eventTypes=sale,payment'), '/memory/events'),
+    ).toEqual({ includeTypes: ['Event'], droppedByWhen: [], nothingLeft: false });
+  });
+
+  it('pins a What selection that includes events', () => {
+    expect(
+      resolveExplorerTypes(
+        new URLSearchParams('includedEntityTypes=Event,Content&eventTypes=sale'),
+        '/memory',
+      ),
+    ).toEqual({ includeTypes: ['Event'], droppedByWhen: [], nothingLeft: false });
+  });
+
+  it('leaves a What selection alone once it has left events out, so the chip can be reported as unmatched', () => {
+    const params = new URLSearchParams('includedEntityTypes=Content,File&eventTypes=sale');
+
+    expect(resolveExplorerTypes(params, '/memory')).toEqual({
+      includeTypes: ['Content', 'File'],
+      droppedByWhen: [],
+      nothingLeft: false,
+    });
+    expect(eventsInPlay(params, '/memory')).toBe(false);
+  });
+
+  it('agrees with the When override, which keeps events', () => {
+    expect(
+      resolveExplorerTypes(new URLSearchParams('when=yesterday&eventTypes=sale'), '/memory/events'),
+    ).toEqual({ includeTypes: ['Event'], droppedByWhen: [], nothingLeft: false });
+  });
+});
+
 describe('eventsInPlay', () => {
+  it('stays true under an Activity filter, which pins the browse to events', () => {
+    expect(eventsInPlay(new URLSearchParams('eventTypes=sale'), '/memory/events')).toBe(true);
+    expect(eventsInPlay(new URLSearchParams('eventTypes=sale'), '/memory')).toBe(true);
+  });
+
   it('is true on the everything browse when nothing is narrowed', () => {
     expect(eventsInPlay(new URLSearchParams('view=list'), '/memory')).toBe(true);
   });

@@ -40,6 +40,15 @@ describe('activityTimelineFiltersFromSearchParams', () => {
     ).toEqual({ includeTypes: ['event'] });
   });
 
+  it('pins the heatmap to events under an Activity filter, like the list', () => {
+    expect(
+      activityTimelineFiltersFromSearchParams(
+        new URLSearchParams('view=list&eventTypes=sale'),
+        '/memory/events',
+      ),
+    ).toEqual({ includeTypes: ['event'], eventTypes: ['sale'] });
+  });
+
   it('passes who/where/how and text filters through to the heatmap query', () => {
     const params = new URLSearchParams({
       people: 'Ada',
@@ -51,6 +60,8 @@ describe('activityTimelineFiltersFromSearchParams', () => {
     });
 
     expect(activityTimelineFiltersFromSearchParams(params)).toEqual({
+      // The Activity filter pins the browse to events (resolveExplorerTypes).
+      includeTypes: ['event'],
       people: ['Ada'],
       places: ['Laguna Beach'],
       connectors: ['gmail'],
