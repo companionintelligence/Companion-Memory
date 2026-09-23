@@ -28,6 +28,8 @@ import { EventService as SignallingEventService } from '@ci/domains/events';
 import {
   FILE_PREVIEW_SWEEP_QUEUE,
   FilePreviewSweepRequestEvent,
+  VIDEO_PLAYBACK_SWEEP_QUEUE,
+  VideoPlaybackSweepRequestEvent,
   MediaDimensionsBackfillRequestEvent,
   MEDIA_DIMENSIONS_QUEUE,
 } from '@ci/domains/files';
@@ -716,6 +718,31 @@ export class MaintenanceController {
       FilePreviewSweepRequestEvent,
       { userId, requestedBy: 'maintenance-api' },
       { queue: FILE_PREVIEW_SWEEP_QUEUE, singletonKey: `file-preview-sweep:${userId}` },
+    );
+
+    return { status: 'enqueued' };
+  }
+
+  /**
+   * On-demand `enrich.video_playback` sweep: transcode the browser-playable
+   * PLAYBACK rendition for every stored video of the caller's whose codec
+   * needs one (HEVC etc.) and has none. Same shape and idempotency as
+   * `file-preview-sweep`; the sweep serialises the transcodes, so on a large
+   * library it runs for an hour or more in the background.
+   */
+  @Post('video-playback-sweep')
+  async videoPlaybackSweep(@Context() context: RequestContext): Promise<{ status: 'enqueued' | 'noop' }> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return { status: 'noop' };
+    }
+
+    await this.signallingEventService.send(
+      VideoPlaybackSweepRequestEvent,
+      { userId, requestedBy: 'maintenance-api' },
+      { queue: VIDEO_PLAYBACK_SWEEP_QUEUE, singletonKey: `video-playback-sweep:${userId}` },
     );
 
     return { status: 'enqueued' };

@@ -273,6 +273,17 @@ export interface StageSchedule {
    * rather than a quota.
    */
   perRunCap?: number;
+
+  /**
+   * Ids per slice for this stage, overriding `DEFAULT_SLICE_SIZE`. The default
+   * is sized for a slice that finishes in about a minute; a stage whose
+   * per-id cost is minutes (a software video transcode runs at about the
+   * clip's own length) would turn one slice into a job of hours, during which
+   * a pause or cancel cannot take effect and a process restart re-runs the
+   * whole slice. Such a stage declares a small number here so its jobs stay
+   * shallow; the sweep still covers every id, just across more hops.
+   */
+  sliceSize?: number;
 }
 
 /**

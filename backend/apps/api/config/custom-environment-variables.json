@@ -341,6 +341,14 @@
       }
     }
   },
+  "media": {
+    "videoPlayback": {
+      "maxEdge": {
+        "__name": "CI_MEDIA_VIDEO_PLAYBACK_MAX_EDGE",
+        "__format": "json"
+      }
+    }
+  },
   "features": {
     "scheduled.answer.inferencing": "ENABLE_SCHEDULED_ANSWER_INFERENCING",
     "scheduled.connection.sync": "ENABLE_SCHEDULED_CONNECTION_SYNC",

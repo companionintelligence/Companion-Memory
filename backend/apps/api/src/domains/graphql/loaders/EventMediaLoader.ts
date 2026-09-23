@@ -14,6 +14,14 @@ import { Loader } from './Loader';
 export interface EventMedia {
   previewUrl: string | null;
   mediaUrl: string | null;
+  /**
+   * The PLAYBACK variant's URL when one exists: the H.264 rendition made for
+   * videos whose own codec (HEVC, mostly) browsers cannot be relied on to
+   * decode. Null for photos and for videos that need none. The player uses
+   * it in place of `mediaUrl`; `mediaUrl` stays the original for download.
+   */
+  playbackUrl: string | null;
+  playbackContentType: string | null;
   contentType: string | null;
   width: number | null;
   height: number | null;
@@ -62,14 +70,18 @@ export class EventMediaLoader extends Loader<EventMedia | null, string> {
 
     const originalIds = [...new Set(fileIdByEvent.values())];
 
-    const [originals, previews] = await Promise.all([
+    const [originals, previews, playbacks] = await Promise.all([
       this.fileService.findByIds(context, originalIds),
       this.fileService.findVariantsByParentIds(context, originalIds, FileVariant.PREVIEW),
+      this.fileService.findVariantsByParentIds(context, originalIds, FileVariant.PLAYBACK),
     ]);
 
     const originalById = new Map(originals.filter((file) => file != null).map((file) => [file.id, file]));
     const previewByParent = new Map(
       previews.filter((file) => file != null).map((file) => [file.parentId, file]),
+    );
+    const playbackByParent = new Map(
+      playbacks.filter((file) => file != null).map((file) => [file.parentId, file]),
     );
 
     return eventIds.map((eventId) => {
@@ -81,6 +93,7 @@ export class EventMediaLoader extends Loader<EventMedia | null, string> {
 
       const original = originalById.get(fileId) ?? null;
       const preview = previewByParent.get(fileId) ?? null;
+      const playback = playbackByParent.get(fileId) ?? null;
 
       // A content link with neither a resolvable original nor a preview (e.g. the
       // file was deleted) carries no displayable media.
@@ -91,6 +104,8 @@ export class EventMediaLoader extends Loader<EventMedia | null, string> {
       return {
         previewUrl: preview?.url ?? null,
         mediaUrl: original?.url ?? null,
+        playbackUrl: playback?.url ?? null,
+        playbackContentType: playback?.contentType ?? null,
         contentType: original?.contentType ?? mimetypeByEvent.get(eventId) ?? null,
         width: original?.width ?? null,
         height: original?.height ?? null,

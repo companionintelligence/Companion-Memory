@@ -53,6 +53,7 @@ describeWithDb(`ContentService.getFacets reads along indexes (${availability.tar
   const ownerCtx: UserServiceContext = { userId: uuidv7() } as UserServiceContext;
   const liveEventId = uuidv7();
   const deadEventId = uuidv7();
+  let liveVideoId = '';
 
   const send = jest.fn<Promise<string[]>, [unknown, unknown]>(async () => []);
   const signalling = { send } as unknown as SignallingEventService;
@@ -164,6 +165,23 @@ describeWithDb(`ContentService.getFacets reads along indexes (${availability.tar
     await seedContent({ type: 'note', mimetype: 'text/plain', sourceSystem: 'file' });
     // A like whose ledger row names no platform, and no mimetype at all.
     await seedContent({ type: 'like', mimetype: null, sourceSystem: 'spotify', platform: null });
+    // A watch record: `media` with a mimetype no kind claims — offered as bare `media`.
+    await seedContent({
+      type: 'media',
+      mimetype: 'application/json',
+      sourceSystem: 'netflix',
+      platform: 'netflix',
+    });
+    // A Reddit GIF typed `video` outright: folds into the `video` option with the video files.
+    await seedContent({ type: 'video', mimetype: null, sourceSystem: 'reddit', platform: 'reddit' });
+    // A live video file, so `video` is offered despite the one on the deleted event.
+    liveVideoId = await seedContent({
+      type: 'media',
+      mimetype: 'video/mp4',
+      sourceSystem: 'file',
+      eventId: liveEventId,
+      platform: 'google_photos',
+    });
 
     contentService = new ContentService(
       dataSource.getRepository(ContentEntity),
@@ -193,9 +211,33 @@ describeWithDb(`ContentService.getFacets reads along indexes (${availability.tar
   it('offers every value a live row carries, sorted, and nothing found only on deleted-event media', async () => {
     const facets = await contentService.getFacets(ownerCtx);
 
-    expect(facets.types).toEqual(['like', 'media', 'note']);
-    expect(facets.mimetypes).toEqual(['image/jpeg', 'text/plain']);
-    expect(facets.sourceSystems).toEqual(['file', 'google_photos', 'spotify']);
+    // `media` rows are offered by kind: image and video (a live one exists) but no
+    // audio; the watch record is the bare `media`; `ghost` and `application/pdf`
+    // live only on the deleted event.
+    expect(facets.types).toEqual(['image', 'like', 'media', 'note', 'video']);
+    expect(facets.mimetypes).toEqual(['application/json', 'image/jpeg', 'text/plain', 'video/mp4']);
+    expect(facets.sourceSystems).toEqual(['file', 'google_photos', 'netflix', 'reddit', 'spotify']);
+  });
+
+  it('selects by kind: "video" is the video files and the row typed video, "media" is what no kind claims', async () => {
+    const videos = await contentService.findPage(ownerCtx, { first: 10 }, { types: ['video'] });
+    const videoRows = videos.entities.map((row) => `${row.type}:${row.mimetype ?? ''}`).sort();
+
+    expect(videoRows).toEqual(['media:video/mp4', 'video:']);
+    expect(videos.entities.map((row) => row.id)).toContain(liveVideoId);
+
+    const bare = await contentService.findPage(ownerCtx, { first: 10 }, { types: ['media'] });
+
+    expect(bare.entities.map((row) => `${row.type}:${row.mimetype ?? ''}`)).toEqual([
+      'media:application/json',
+    ]);
+
+    const images = await contentService.findPage(ownerCtx, { first: 10 }, { types: ['image', 'note'] });
+
+    expect(images.entities.map((row) => `${row.type}:${row.mimetype ?? ''}`).sort()).toEqual([
+      'media:image/jpeg',
+      'note:text/plain',
+    ]);
   });
 
   it('remembers the unledgered arm per user until it is forgotten', async () => {
@@ -209,6 +251,13 @@ describeWithDb(`ContentService.getFacets reads along indexes (${availability.tar
     contentService.forgetUnledgeredSourceSystems(ownerCtx.userId);
 
     const fresh = await contentService.getFacets(ownerCtx);
-    expect(fresh.sourceSystems).toEqual(['dropzone', 'file', 'google_photos', 'spotify']);
+    expect(fresh.sourceSystems).toEqual([
+      'dropzone',
+      'file',
+      'google_photos',
+      'netflix',
+      'reddit',
+      'spotify',
+    ]);
   });
 });

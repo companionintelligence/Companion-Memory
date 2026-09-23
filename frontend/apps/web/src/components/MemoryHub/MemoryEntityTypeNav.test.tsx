@@ -159,3 +159,32 @@ describe('MemoryEntityTypeNav — dropdown values', () => {
     expectRevealed(within(trigger).getByText('Products'));
   });
 });
+
+describe('the What strip shares its line with the filter controls without being squeezed out', () => {
+  // From `xl` up the When / How / Who controls sit beside the strip. They used
+  // to sit at their natural width (~1,280 px, wider than most windows), so
+  // their own wrapping never engaged: at 1,400 px the strip was a 57 px sliver
+  // scrolling behind them, and below ~1,350 px they dropped to a second line
+  // and ran off the right edge. The controls are the flexible item now.
+  it('floors the strip at 16rem from xl up and never lets it grow past its content', () => {
+    const { container } = renderNav();
+
+    const strip = container.querySelector('.overflow-x-auto');
+
+    expect(strip).not.toBeNull();
+    expect(strip).toHaveClass('flex-1', 'basis-0', 'min-w-0');
+    expect(strip).toHaveClass('xl:min-w-[16rem]', 'xl:max-w-max');
+    expect(strip).not.toHaveClass('md:basis-auto', 'md:min-w-[16rem]');
+  });
+
+  it('gives the filter controls their own line below xl, and a floored share of the line from xl up', () => {
+    const { container } = renderNav();
+    const nav = screen.getByRole('navigation', { name: 'What to show in Memory' });
+    const controls = nav.lastElementChild;
+
+    expect(nav).toHaveClass('flex-wrap');
+    expect(controls).toHaveClass('basis-full', 'min-w-0', 'xl:flex-1', 'xl:basis-[24rem]');
+    expect(controls).not.toHaveClass('md:basis-auto', 'md:flex-1');
+    expect(container.querySelector('.w-max')).not.toBeNull();
+  });
+});

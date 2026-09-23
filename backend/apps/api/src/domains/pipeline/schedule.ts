@@ -308,6 +308,26 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
   },
 
   /**
+   * Local CPU only, but the expensive kind: a software transcode runs at
+   * about the clip's own length, one at a time. That is why it is confined to
+   * the enrichment window and why the stage itself serialises — a library of
+   * a few hundred phone clips is an hour or two of background CPU, once. The
+   * upload path covers new videos; this is the backfill and the net.
+   * An on-demand run is available through `POST /api/maintenance/video-playback-sweep`.
+   */
+  [STAGE_IDS.ENRICH_VIDEO_PLAYBACK]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+    // Ten clips per job, not the default 200: the stage transcodes one at a
+    // time at about real time, so a default slice would be a single job of
+    // hours. See `StageSchedule.sliceSize`.
+    sliceSize: 10,
+  },
+
+  /**
    * Every key is a request to someone else's server, so this is metered even
    * though nobody bills for it: provider oEmbed endpoints and Wikimedia both
    * rate-limit, and a full-corpus first pass (tens of thousands of YouTube and

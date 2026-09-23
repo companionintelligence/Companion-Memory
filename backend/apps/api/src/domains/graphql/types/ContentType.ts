@@ -72,6 +72,16 @@ export class ContentType implements Node, Taggable {
   @Field(() => String, { nullable: true })
   mediaUrl?: string | null;
 
+  /**
+   * Browser-playable (PLAYBACK variant, H.264) URL of the linked video when its
+   * own codec needs one; null otherwise. Resolved by ContentResolver.
+   */
+  @Field(() => String, { nullable: true })
+  playbackUrl?: string | null;
+
+  @Field(() => String, { nullable: true })
+  playbackContentType?: string | null;
+
   /** Byte size of the linked ORIGINAL — lets a client avoid using it as a thumbnail. */
   @Field(() => Float, { nullable: true })
   mediaSize?: number | null;

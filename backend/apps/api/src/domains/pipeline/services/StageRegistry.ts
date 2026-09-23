@@ -32,6 +32,7 @@ import { STAGE_VERSIONS, stageVersion, type StageVersion } from '../versions';
 export const STAGE_REGISTRY: Record<StageId, string> = {
   [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: 'PipelineStage:enrich.media_dimensions',
   [STAGE_IDS.ENRICH_FILE_PREVIEW]: 'PipelineStage:enrich.file_preview',
+  [STAGE_IDS.ENRICH_VIDEO_PLAYBACK]: 'PipelineStage:enrich.video_playback',
   [STAGE_IDS.ENRICH_UNFURL]: 'PipelineStage:enrich.unfurl',
   [STAGE_IDS.INDEX_EMBED]: 'PipelineStage:index.embed',
   [STAGE_IDS.INDEX_EMBED_COMMUNICATION]: 'PipelineStage:index.embed_communication',

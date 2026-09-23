@@ -36,6 +36,8 @@ export const GET_CONTENT = gql(`
       # web page (e.g. photos.google.com/photo/…) — not an image, and blocked
       # by the browser when used as one.
       mediaUrl
+      playbackUrl
+      playbackContentType
       previewUrl
       # Poster + click-to-play for a link with rich media (Spotify, YouTube,
       # Netflix/Prime, …) — see RichMediaCard, the same fragment the memory

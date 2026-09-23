@@ -118,6 +118,46 @@ export type FilePreviewSweepRequestPayload = {
   requestedBy: string;
 };
 
+/**
+ * Ask for the browser-playable `PLAYBACK` rendition of one stored video (see
+ * `VideoPlaybackService`). Sent by `FilePreviewService` once a video's preview
+ * exists, so an upload gets its rendition minutes after landing instead of
+ * waiting for the nightly `enrich.video_playback` sweep. Consumed by
+ * `VideoPlaybackGenerationListener` in this domain.
+ */
+export const VideoPlaybackRequestEvent = 'file.video-playback-request';
+
+/**
+ * Its own queue, concurrency 1: a transcode is a CPU-bound run of about the
+ * clip's length, and it must never sit in front of preview generation or
+ * descriptions. `policy: 'short'` + a per-file singleton key fold repeat
+ * requests for one file into one job.
+ */
+export const VIDEO_PLAYBACK_QUEUE = 'video-playback';
+
+export type VideoPlaybackRequestPayload = {
+  userId: string;
+  /** The ORIGINAL video's `ci.files` id. */
+  fileId: string;
+};
+
+/**
+ * Ask for an `enrich.video_playback` sweep now: produce the PLAYBACK rendition
+ * for every stored video of the user's that needs one and has none. Consumed
+ * by the pipeline domain's `VideoPlaybackSweepRequestListener`, the same
+ * handoff shape as {@link FilePreviewSweepRequestEvent}.
+ */
+export const VideoPlaybackSweepRequestEvent = 'file.video-playback-sweep-request';
+
+/** Dedicated queue for the request, so it is not queued behind the transcodes themselves. */
+export const VIDEO_PLAYBACK_SWEEP_QUEUE = 'video-playback-sweep';
+
+export type VideoPlaybackSweepRequestPayload = {
+  userId: string;
+  /** Who asked — for the log line. */
+  requestedBy: string;
+};
+
 defineEvent<FileCreatedPayload>(FileCreatedEvent);
 defineEvent<FileUpdatedPayload>(FileUpdatedEvent);
 defineEvent<FileUploadedPayload>(FileUploadedEvent);
@@ -126,6 +166,8 @@ defineEvent<PreviewGeneratedPayload>(PreviewGeneratedEvent);
 defineEvent<MediaDimensionsBackfillRequestPayload>(MediaDimensionsBackfillRequestEvent);
 defineEvent<ImageDescriptionBackfillRequestPayload>(ImageDescriptionBackfillRequestEvent);
 defineEvent<FilePreviewSweepRequestPayload>(FilePreviewSweepRequestEvent);
+defineEvent<VideoPlaybackRequestPayload>(VideoPlaybackRequestEvent);
+defineEvent<VideoPlaybackSweepRequestPayload>(VideoPlaybackSweepRequestEvent);
 
 declare module '@ci/domains/events/registry' {
   interface EventRegistry {
@@ -137,6 +179,8 @@ declare module '@ci/domains/events/registry' {
     [MediaDimensionsBackfillRequestEvent]: MediaDimensionsBackfillRequestPayload;
     [ImageDescriptionBackfillRequestEvent]: ImageDescriptionBackfillRequestPayload;
     [FilePreviewSweepRequestEvent]: FilePreviewSweepRequestPayload;
+    [VideoPlaybackRequestEvent]: VideoPlaybackRequestPayload;
+    [VideoPlaybackSweepRequestEvent]: VideoPlaybackSweepRequestPayload;
   }
 }
 

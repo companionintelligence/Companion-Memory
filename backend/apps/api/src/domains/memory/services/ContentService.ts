@@ -34,7 +34,14 @@ import { classifyExternalId } from '../externalIdKind';
 import { ledgerPlatform } from '../identity';
 import { CreateContentDto, SearchContentDto, UpdateContentDto } from '../types';
 
-import { PLATFORMS_SQL, UNLEDGERED_SOURCE_SYSTEMS_SQL, distinctColumnSql } from './contentFacetsSql';
+import {
+  MEDIA_KINDS_SQL,
+  PLATFORMS_SQL,
+  UNLEDGERED_SOURCE_SYSTEMS_SQL,
+  contentTypeFilterSql,
+  contentTypeOptions,
+  distinctColumnSql,
+} from './contentFacetsSql';
 import { CtiAggregate } from './CtiAggregate';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
 
@@ -43,7 +50,12 @@ import { GraphDeltaWriter } from './GraphDeltaWriter';
 export interface FindContentsFilter {
   /** Free text: a case-insensitive substring of the title, the text or the URL. */
   query?: string;
-  /** `ci.content.type` values to keep (image, post, note, …). */
+  /**
+   * Content type options to keep — the values `contentFacets.types` offers:
+   * raw `ci.content.type` values (post, note, like, …) and, for `media` rows,
+   * the kind their mimetype says (image, video, audio, or `media` for the
+   * rest). See contentFacetsSql.contentTypeFilterSql.
+   */
   types?: string[];
   /** `ci.content.mimetype` values to keep. */
   mimetypes?: string[];
@@ -669,8 +681,9 @@ export class ContentService {
   }
 
   /**
-   * The content library's filter facets: every distinct `type`, `mimetype`
-   * and delivering platform the user's rows carry, each sorted. Built the way
+   * The content library's filter facets: every distinct type (with `media`
+   * rows offered by kind — image, video, audio — see contentFacetsSql),
+   * `mimetype` and delivering platform the user's rows carry, each sorted. Built the way
    * the explorer's How list is (SourceSystemService) — from what is actually
    * in the rows, not a fixed vocabulary — over the same rows the library
    * pages, so every option offered matches something.
@@ -702,13 +715,14 @@ export class ContentService {
     };
 
     const unledgered = await this.unledgeredSourceSystems(context.userId);
-    const [types, mimetypes, sourceSystems] = await Promise.all([
+    const [rawTypes, mediaKinds, mimetypes, sourceSystems] = await Promise.all([
       values(distinctColumnSql('type')),
+      values(MEDIA_KINDS_SQL),
       values(distinctColumnSql('mimetype')),
       values(PLATFORMS_SQL, [unledgered]),
     ]);
 
-    return { types, mimetypes, sourceSystems };
+    return { types: contentTypeOptions(rawTypes, mediaKinds), mimetypes, sourceSystems };
   }
 
   /**
@@ -769,7 +783,10 @@ export class ContentService {
     }
 
     if (filter.types && filter.types.length > 0) {
-      scoped = scoped.andWhere(`${alias}.type IN (:...contentTypes)`, { contentTypes: filter.types });
+      // Kinds, not raw column values — see contentTypeFilterSql.
+      const { sql, parameters } = contentTypeFilterSql(alias, filter.types);
+
+      scoped = scoped.andWhere(sql, parameters);
     }
 
     if (filter.mimetypes && filter.mimetypes.length > 0) {

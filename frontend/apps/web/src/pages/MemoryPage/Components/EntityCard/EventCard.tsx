@@ -42,6 +42,10 @@ export const EVENT_FRAGMENT = gql(`
     previewUrl
     mediaUrl
     mediaContentType
+    # Browser-playable H.264 rendition of a video whose own codec (HEVC) the
+    # browser may not decode; null for photos and for videos that need none.
+    playbackUrl
+    playbackContentType
     mediaWidth
     mediaHeight
     mediaSize

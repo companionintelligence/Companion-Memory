@@ -1031,6 +1031,31 @@ export const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
+  // Derived media the appliance makes from what the owner stores. Today that is
+  // the browser-playable H.264 rendition of every video whose own codec
+  // browsers cannot be relied on to decode (HEVC from every phone since ~2023;
+  // Chrome on Linux fails it outright). Consumed by
+  // `domains/files/services/VideoPlaybackService`.
+  media: z
+    .object({
+      videoPlayback: z
+        .object({
+          /**
+           * Longest edge of the rendition, in pixels; the original is never
+           * upscaled. `0` keeps the original's resolution. Measured 2026-09-22
+           * on an 11 s 4K HDR phone clip: 1920 → 7.7 MB, native 4K → 34 MB
+           * (about 4.5× the storage, ~26 Mbit/s to stream), and for SDR
+           * sources about 2.5× the encode time. 1080p is what the drawer and
+           * lightbox display at on anything but a 4K monitor full-screen;
+           * the original stays the download at full resolution either way.
+           * Changing this affects renditions made from then on — existing
+           * ones are kept, not re-encoded.
+           */
+          maxEdge: z.coerce.number().int().min(0).default(1920),
+        })
+        .default({}),
+    })
+    .default({}),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,
     /**

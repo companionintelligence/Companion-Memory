@@ -56,6 +56,7 @@ import { PersonInteractionStatsLoader } from './loaders/PersonInteractionStatsLo
 import { PersonLoader } from './loaders/PersonLoader';
 import { PlaceLoader } from './loaders/PlaceLoader';
 import { PlaceVisitStatsLoader } from './loaders/PlaceVisitStatsLoader';
+import { PlaybackLoader } from './loaders/PlaybackLoader';
 import { PreviewLoader } from './loaders/PreviewLoader';
 import { ProviderKeyLoader } from './loaders/ProviderKeyLoader';
 import { ProviderLoader } from './loaders/ProviderLoader';
@@ -228,6 +229,7 @@ import { UserResolver } from './resolvers/UserResolver';
     PlaceResolver,
     PositionResolver,
     PreviewLoader,
+    PlaybackLoader,
     ProductIdentifierLoader,
     ProductModelResolver,
     ProviderResolver,

@@ -158,3 +158,96 @@ export const PLATFORMS_SQL = `
                                               WHERE rs.user_id = c.user_id AND rs.record_table = 'content'
                                                 AND rs.record_id = c.id AND rs.platform IS NOT NULL))))
    ORDER BY v`;
+
+/**
+ * The kinds the Content type picker offers in place of the raw `media` type.
+ *
+ * Every imported file is `type = 'media'` — 130k rows on the measured library:
+ * photos, videos, Spotify plays, Netflix and Prime watches, PDFs — and the
+ * only rows typed `video` or `image` are a handful of Reddit posts. Offering
+ * the raw column made "Content type: video" select one Reddit GIF and none of
+ * the 519 video files (2026-09-22). So a `media` row is offered by what its
+ * mimetype says it is, and the raw type of the few rows that already say it
+ * folds into the same word: picking `video` selects both.
+ */
+export const MEDIA_KINDS = ['image', 'video', 'audio'] as const;
+
+export type MediaKind = (typeof MEDIA_KINDS)[number];
+
+/** `media` rows that are none of the kinds: watch and listen records, documents. */
+export const OTHER_MEDIA_TYPE = 'media';
+
+function isMediaKind(value: string): value is MediaKind {
+  return (MEDIA_KINDS as readonly string[]).includes(value);
+}
+
+const OTHER_MEDIA_MIMETYPE_SQL = (alias: string) =>
+  `(${alias}.mimetype IS NULL OR (${MEDIA_KINDS.map((kind) => `${alias}.mimetype NOT LIKE '${kind}/%'`).join(' AND ')}))`;
+
+/**
+ * Which of {@link MEDIA_KINDS}, and whether {@link OTHER_MEDIA_TYPE}, the
+ * user's live `media` rows carry. One EXISTS per kind over the
+ * `(user_id, mimetype)` index — a range scan that stops at the first live row,
+ * with the same deleted-event guard the column facets apply, so a kind that
+ * survives only on a deleted event's media is not offered.
+ */
+export const MEDIA_KINDS_SQL = `
+  SELECT kind AS v
+    FROM (VALUES ${MEDIA_KINDS.map((kind) => `('${kind}', '${kind}/%')`).join(', ')}) AS kinds(kind, pattern)
+   WHERE EXISTS (SELECT 1 FROM ci.content c
+                   LEFT JOIN ci.events e ON e.event_id = c.event_id
+                  WHERE c.user_id = $1 AND c.type = 'media' AND c.mimetype LIKE kinds.pattern
+                    AND (c.event_id IS NULL OR e.is_deleted = false))
+  UNION ALL
+  SELECT '${OTHER_MEDIA_TYPE}'
+   WHERE EXISTS (SELECT 1 FROM ci.content c
+                   LEFT JOIN ci.events e ON e.event_id = c.event_id
+                  WHERE c.user_id = $1 AND c.type = 'media' AND ${OTHER_MEDIA_MIMETYPE_SQL('c')}
+                    AND (c.event_id IS NULL OR e.is_deleted = false))`;
+
+/**
+ * The Content type facet as offered: the raw types the column facet found,
+ * with `media` replaced by the kinds the media rows carry. Sorted, unique, so a
+ * raw `video` row and a `media` row with a video mimetype are one option.
+ */
+export function contentTypeOptions(rawTypes: readonly string[], mediaKinds: readonly string[]): string[] {
+  const options = new Set<string>(rawTypes.filter((type) => type !== 'media'));
+
+  for (const kind of mediaKinds) {
+    options.add(kind);
+  }
+
+  return [...options].sort();
+}
+
+/**
+ * The WHERE clause for a Content type selection, the inverse of
+ * {@link contentTypeOptions}: a kind matches its raw type OR a `media` row of
+ * that mimetype; `media` matches the rows no kind claims; anything else is
+ * the raw type. `alias` is the content table's alias; the parameters are
+ * returned keyed for TypeORM's named binding.
+ */
+export function contentTypeFilterSql(
+  alias: string,
+  types: readonly string[],
+): { sql: string; parameters: Record<string, unknown> } {
+  const raw: string[] = [];
+  const clauses: string[] = [];
+
+  for (const type of types) {
+    if (isMediaKind(type)) {
+      clauses.push(`(${alias}.type = 'media' AND ${alias}.mimetype LIKE '${type}/%')`);
+      raw.push(type);
+    } else if (type === OTHER_MEDIA_TYPE) {
+      clauses.push(`(${alias}.type = 'media' AND ${OTHER_MEDIA_MIMETYPE_SQL(alias)})`);
+    } else {
+      raw.push(type);
+    }
+  }
+
+  if (raw.length > 0) {
+    clauses.push(`${alias}.type IN (:...contentTypes)`);
+  }
+
+  return { sql: `(${clauses.join(' OR ')})`, parameters: raw.length > 0 ? { contentTypes: raw } : {} };
+}

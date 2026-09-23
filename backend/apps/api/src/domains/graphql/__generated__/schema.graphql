@@ -587,7 +587,9 @@ type ContentFacets {
   """
   sourceSystems: [String!]!
 
-  """Distinct `type` values (image, post, note, …)."""
+  """
+  Content type options: raw `type` values (post, note, like, …) plus, for `media` rows, the kind their mimetype says — image, video, audio, or `media` for watch/listen records and documents.
+  """
   types: [String!]!
 }
 
@@ -600,6 +602,8 @@ type ContentType implements Node & Taggable {
   mediaSize: Float
   mediaUrl: String
   mimetype: String
+  playbackContentType: String
+  playbackUrl: String
   player: EmbedPlayerType
   previewUrl: String
   sourceData: JSON
@@ -1278,6 +1282,8 @@ type EventType implements Node & Taggable {
   Intended minutes for a planned block. Distinct from generated durationMinutes.
   """
   plannedMinutes: Int
+  playbackContentType: String
+  playbackUrl: String
   previewUrl: String
 
   """
@@ -1348,6 +1354,8 @@ type FileType implements Node & Taggable {
   parseError: String
   parseStatus: String
   parsedAt: DateTime
+  playbackContentType: String
+  playbackUrl: String
   previewUrl: String
   size: Float
   sourceUrl: String

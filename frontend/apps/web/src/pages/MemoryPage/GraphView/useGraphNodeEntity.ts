@@ -44,6 +44,7 @@ const GRAPH_NODE_ENTITY = gql(`
         galleryFilename: filename
         galleryPreviewUrl: previewUrl
         gallerySourceUrl: sourceUrl
+            galleryPlaybackUrl: playbackUrl
       }
 
       ... on ContentType {
@@ -64,6 +65,7 @@ const GRAPH_NODE_ENTITY = gql(`
         galleryMediaContentType: mediaContentType
         galleryPreviewUrl: previewUrl
         gallerySourceUrl: mediaUrl
+        galleryPlaybackUrl: playbackUrl
         galleryTitle: title
         galleryLocationName: locationName
       }
