@@ -12,7 +12,6 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any, ClassVar
 
-import jwt as pyjwt
 import pytest
 from fastapi import HTTPException
 
@@ -99,7 +98,6 @@ def test_submit_returns_429_when_pool_is_full():
 
 @pytest.mark.asyncio
 async def test_run_completes_and_delivers_callback(fake_httpx, monkeypatch):
-    monkeypatch.setattr(runner_module.settings, "api_jwt_secret", "test-secret")
     monkeypatch.setattr(runner_module.settings, "api_url", "http://api:3030")
     fake_httpx.responses = [_FakeResponse(204)]
 
@@ -115,6 +113,7 @@ async def test_run_completes_and_delivers_callback(fake_httpx, monkeypatch):
                 args={"user_id": "user-1"},
                 job_id="job-1",
                 queue="py-fn-summary",
+                access_token="run-token-from-the-api",
             )
         )
 
@@ -132,17 +131,17 @@ async def test_run_completes_and_delivers_callback(fake_httpx, monkeypatch):
             "result": {"echoed": "user-1"},
         }
 
-        # The callback JWT is self-signed with the shared secret, sub = user.
-        token = call["headers"]["Authorization"].removeprefix("Bearer ")
-        claims = pyjwt.decode(token, "test-secret", algorithms=["HS256"])
-        assert claims["sub"] == "user-1"
+        # The callback presents the per-run token the API attached to the request —
+        # echoed, never minted here: this service holds no signing secret any more.
+        assert call["headers"] == {"Authorization": "Bearer run-token-from-the-api"}
+        # And the record handed out by /runs/{id} never carries it.
+        assert "access_token" not in runner.runs[record.run_id].model_dump()
     finally:
         _stop_workers(runner)
 
 
 @pytest.mark.asyncio
 async def test_failed_run_reports_failed_status(fake_httpx, monkeypatch):
-    monkeypatch.setattr(runner_module.settings, "api_jwt_secret", "test-secret")
     fake_httpx.responses = [_FakeResponse(204)]
 
     async def boom(**_: Any) -> dict:
@@ -167,7 +166,6 @@ async def test_failed_run_reports_failed_status(fake_httpx, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_callback_retries_transient_failures(fake_httpx, monkeypatch):
-    monkeypatch.setattr(runner_module.settings, "api_jwt_secret", "test-secret")
     fake_httpx.responses = [
         ConnectionError("api restarting"),
         _FakeResponse(500, "flake"),

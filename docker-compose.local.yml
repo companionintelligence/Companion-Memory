@@ -6,33 +6,36 @@ services:
     # when free, else an ephemeral port — so concurrent worktrees never collide.
     # A plain `docker compose up` (no dev-stack) still binds the defaults.
     ports:
-      - ${DB_HOST_PORT:-5432}:5432
+      - 127.0.0.1:${DB_HOST_PORT:-5432}:5432
 
+  # Every host port in this overlay binds to loopback. The sidecars have no
+  # inbound auth beyond a shared bearer and Postgres/Minio carry dev passwords;
+  # none of them should be reachable from the LAN (Docker bypasses ufw).
   hbpe-service:
     environment:
       DATABASE_PASSWORD: ${DATABASE_PASSWORD}
       # The host api is reachable from this container at the dev-stack-chosen port.
       API_URL: http://host.docker.internal:${API_HOST_PORT:-3030}
-      API_JWT_SECRET: ${AUTH_TOKEN_SECRET}
+      SIDECAR_AUTH_SECRET: ${SIDECAR_AUTH_SECRET}
       LLM_API_BASE: ${LLM_API_BASE:-http://host.docker.internal:11434/v1}
       LLM_API_KEY: ${LLM_API_KEY:-ollama}
       LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
     ports:
-      - ${HBPE_HOST_PORT:-8002}:8002
+      - 127.0.0.1:${HBPE_HOST_PORT:-8002}:8002
 
   object-store:
     environment:
       USERNAME: ${OBJECT_STORE_USERNAME}
       PASSWORD: ${OBJECT_STORE_PASSWORD}
     ports:
-      - ${OBJECT_STORE_HOST_PORT:-9000}:9000
+      - 127.0.0.1:${OBJECT_STORE_HOST_PORT:-9000}:9000
 
   summary-service:
     ports:
-      - ${SUMMARY_HOST_PORT:-8001}:8001
+      - 127.0.0.1:${SUMMARY_HOST_PORT:-8001}:8001
       # Document-parser FastAPI (ci.summary.parser). Host 8003 avoids the HBPE service's
       # host 8002 mapping above; in-container it stays on 8002.
-      - ${PARSER_HOST_PORT:-8003}:8002
+      - 127.0.0.1:${PARSER_HOST_PORT:-8003}:8002
     # Pass the shared LLM config from .env (compose interpolates ${VAR} from the
     # root .env). Done explicitly rather than via env_file so host-oriented vars
     # like DATABASE_HOST=localhost don't leak in and break in-container DB/DNS.
@@ -41,7 +44,7 @@ services:
       # Function-run completion callbacks POST to the host api; the JWT secret
       # must match AUTH_JWT_AUTHTOKENSECRET so the callback passes auth.
       API_URL: http://host.docker.internal:${API_HOST_PORT:-3030}
-      API_JWT_SECRET: ${AUTH_TOKEN_SECRET}
+      SIDECAR_AUTH_SECRET: ${SIDECAR_AUTH_SECRET}
       LLM_API_BASE: ${LLM_API_BASE:-http://host.docker.internal:11434/v1}
       LLM_API_KEY: ${LLM_API_KEY:-ollama}
       # Unset by default: the summary service uses the Hub-injected model, or

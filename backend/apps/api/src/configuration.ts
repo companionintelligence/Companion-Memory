@@ -498,6 +498,14 @@ export const ConfigSchema = z.object({
     summary: z.object({
       host: z.string().default('http://summary-service:8001'),
     }),
+    /**
+     * Bearer the API presents on every request to the HBPE and Summary
+     * sidecars (and the document parser), which refuse requests without it.
+     * Minted by setup-secrets as SIDECAR_AUTH_SECRET. Required in production —
+     * see the check below the schema — because an API without it cannot
+     * dispatch a single function run.
+     */
+    sidecarAuthSecret: z.string().default(''),
   }),
   signalCli: z.object({
     restUrl: z.string(),
@@ -1543,6 +1551,21 @@ if (/^0{64}$/i.test(parsed.auth.encryption.fieldKey)) {
   const msg =
     '[configuration] FIELD_ENCRYPTION_KEY is the all-zero default — OAuth tokens and ' +
     'provider client secrets would be encrypted with a well-known key. Set a real 256-bit key.';
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(msg);
+  }
+
+  console.warn(msg);
+}
+
+// The sidecars refuse every request without this bearer, so an API that lacks it
+// is one whose imports never summarise and whose forecasts never train — and a
+// sidecar it could still reach would be one anyone could reach. Refuse to boot
+// outside dev rather than run half an appliance.
+if (!parsed.services.sidecarAuthSecret) {
+  const msg =
+    '[configuration] SIDECAR_AUTH_SECRET is not set — the HBPE/Summary sidecars refuse requests ' +
+    'without it. setup-secrets mints it; on an existing appliance it is added on the next boot.';
   if (process.env.NODE_ENV === 'production') {
     throw new Error(msg);
   }

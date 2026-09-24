@@ -446,7 +446,7 @@ def count_user_content(user_id: str) -> int:
         data = gql(_CONTENTS_EXISTS_QUERY, {}, user_id)
         return len(data["contents"]["edges"])
     except GraphQLUnavailable:
-        pass  # API_JWT_SECRET not set — expected in standalone / test runs
+        pass  # no run token registered for this user — expected outside a dispatched run
     except Exception as exc:
         log.warning(
             "count_user_content via GraphQL failed: %s — falling back to SQL", exc

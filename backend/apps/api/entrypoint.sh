@@ -44,16 +44,29 @@ get_secret() {
 # it should keep booting. When this is empty the token endpoint returns 503,
 # which is exactly what "sync is not configured" should look like.
 : "${POWERSYNC_JWT_SECRET:=$(get_secret POWERSYNC_JWT_SECRET)}"
+: "${SIDECAR_AUTH_SECRET:=$(get_secret SIDECAR_AUTH_SECRET)}"
 
 export DATABASE_PASSWORD
 export OBJECT_STORE_USERNAME OBJECT_STORE_PASSWORD
 export AUTH_TOKEN_SECRET AUTH_REFRESH_TOKEN_SECRET
 export AUTH_SESSION_PEPPER AUTH_FIELD_ENCRYPTION_KEY AUTH_CSRF_TOKEN_SECRET
 export POWERSYNC_JWT_SECRET
+export SIDECAR_AUTH_SECRET
 
 # ── Validation ───────────────────────────────────
 
 fail=0
+if [ -z "$SIDECAR_AUTH_SECRET" ]; then
+  echo "Error: SIDECAR_AUTH_SECRET is not set."
+  echo ""
+  echo "The API presents this bearer to the HBPE and Summary sidecars, which refuse"
+  echo "every request without it. setup-secrets mints it (and adds it to an existing"
+  echo "secrets file on the next boot); otherwise:"
+  echo ""
+  echo "  1. Add SIDECAR_AUTH_SECRET to the secrets file at $SECRETS_FILE, or"
+  echo "  2. Set the SIDECAR_AUTH_SECRET environment variable directly"
+  fail=1
+fi
 
 if [ -z "$AUTH_CSRF_TOKEN_SECRET" ]; then
   echo "Error: AUTH_CSRF_TOKEN_SECRET is not set."

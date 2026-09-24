@@ -52,42 +52,55 @@ def decode_gid(gid: str) -> str:
 # ── Auth ────────────────────────────────────────────────────────────────────────
 
 
-def _get_token(user_id: str) -> str:
-    """Return a cached service JWT, refreshing 60s before expiry."""
+def register_token(user_id: str, token: str) -> None:
+    """Make ``token`` the credential ``gql`` uses for ``user_id``.
+
+    Called by the function runner with the per-run token the API attached to
+    the run request. The token is a real API access token scoped by the API to
+    that job's user and lifetime; HBPE never signs one itself any more. The
+    expiry is read unverified purely to drop a stale entry — the API is the
+    verifier, not this side.
+    """
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+        exp = float(claims.get("exp") or 0)
+    except jwt.PyJWTError:
+        exp = 0.0
     with _LOCK:
-        now = time.time()
-        if user_id in _TOKEN_CACHE:
-            token, exp = _TOKEN_CACHE[user_id]
-            if exp - now > 60:
-                return token
-
-        expiry = int(now) + settings.api_jwt_expiry_seconds
-        payload: dict[str, Any] = {
-            "sub": user_id,
-            "iat": int(now),
-            "exp": expiry,
-        }
-        raw = jwt.encode(payload, settings.api_jwt_secret, algorithm="HS256")
-        # PyJWT < 2.0 returns bytes; >= 2.0 returns str
-        token = raw if isinstance(raw, str) else raw.decode("utf-8")
-        _TOKEN_CACHE[user_id] = (token, float(expiry))
-        return token
+        _TOKEN_CACHE[user_id] = (token, exp)
 
 
-# ── Request helpers ────────────────────────────────────────────────────────────
+def clear_token(user_id: str) -> None:
+    with _LOCK:
+        _TOKEN_CACHE.pop(user_id, None)
+
+
+def _get_token(user_id: str) -> str:
+    """Return the run token registered for ``user_id``; there is no other source."""
+    with _LOCK:
+        entry = _TOKEN_CACHE.get(user_id)
+    if entry is None:
+        raise GraphQLUnavailable(
+            f"no API token registered for user {user_id!r} — GraphQL calls are only "
+            "available inside a function run the API dispatched"
+        )
+    token, exp = entry
+    if exp and exp <= time.time():
+        clear_token(user_id)
+        raise GraphQLUnavailable(
+            f"the API token registered for user {user_id!r} has expired"
+        )
+    return token
 
 
 class GraphQLUnavailable(RuntimeError):
-    """Raised when the GraphQL client is not configured (no API_JWT_SECRET)."""
+    """Raised when no run token is registered for the user (or it has expired)."""
 
 
 def _check_configured() -> None:
-    """Raise GraphQLUnavailable if the JWT secret is not set."""
-    if not settings.api_jwt_secret:
-        raise GraphQLUnavailable(
-            "API_JWT_SECRET is not set — GraphQL calls are disabled. "
-            "Set API_JWT_SECRET to enable GraphQL reads from the app service."
-        )
+    """Kept for callers; configuration is now per run (see register_token)."""
+    if not settings.api_url:
+        raise GraphQLUnavailable("API_URL is not set — GraphQL calls are disabled.")
 
 
 def gql(query: str, variables: dict[str, Any], user_id: str) -> dict[str, Any]:

@@ -230,11 +230,14 @@ class Settings(BaseSettings):
     api_url: str = Field(
         default_factory=lambda: os.getenv("API_URL", "http://api:3030")
     )
-    # Shared JWT secret (AUTH_JWT_AUTHTOKENSECRET in the app). The runner
-    # self-signs callback JWTs with it — same pattern as HBPE's graphql_client.
-    api_jwt_secret: str = Field(default_factory=lambda: os.getenv("API_JWT_SECRET", ""))
-    api_jwt_expiry_seconds: int = Field(
-        default_factory=lambda: int(os.getenv("API_JWT_EXPIRY_SECONDS", "3600"))
+    # Shared bearer for this service's inbound HTTP surface (see auth.py): the
+    # API presents it on every request; the middleware refuses requests without
+    # it. Minted by setup-secrets as SIDECAR_AUTH_SECRET. Replaced API_JWT_SECRET,
+    # the API's own token-signing secret, which the runner used to self-sign a
+    # user token for the callback — the runner now echoes the per-run token the
+    # API attached to the run request instead, and signs nothing.
+    sidecar_auth_secret: str = Field(
+        default_factory=lambda: os.getenv("SIDECAR_AUTH_SECRET", "")
     )
 
     # Logging
