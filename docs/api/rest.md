@@ -488,6 +488,16 @@ Class-level `JwtOrApiKeyAuthGuard` (`:56`). Export/import the caller's Memory da
 | POST | `/account/import/stream` | `:69`   | **NDJSON streaming import** — `Content-Type: application/x-ndjson` required (400 otherwise), confirmation via the **`X-Confirm-Email` header** (400 if absent). Neither side buffers the archive: the express body parsers skip `application/x-ndjson`, so the handler gets the raw stream. (The middleware's explicit bypass constant is `/api/account/import/stream` and never matches this mount — see the body-limit note above.) **200**. |
 | POST | `/account/import`        | `:91`   | Legacy small-archive JSON import: `{ confirmEmail, archive: { version: 1, exportedAt, userId, profile, tables, fileBlobs } }`, `@BodyLimit('500mb')`. **200**.                                                                                                                                                                                                                                                                                 |
 
+> **File keys are never taken from the archive.** Both import paths rewrite every `ci.files` row's
+> `bucket` to this appliance's configured bucket, and honour an archived `key` only if this account
+> already owned a file at that key on this box before the import began (a same-box restore rewrites
+> its own objects in place). Any other key is replaced by a freshly minted UUID, applied identically
+> to the row and to the bytes so the two agree whichever arrives first
+> (`UserDataPortabilityService.ts`, `FileKeyMap`). Before this, the archive's `bucket`/`key` went
+> straight to `putObject` — any object in the store could be overwritten — and a row carrying
+> someone else's key was served back as the importer's own file by every by-key reader, export
+> included.
+
 ### `ConnectController` — `connect` · `domains/auth/controllers/ConnectController.ts:130`
 
 How CI-Hub brokers connecting an agent app (CI-OpenClaw / CI-Hermes) to the user's Companion Memory.
