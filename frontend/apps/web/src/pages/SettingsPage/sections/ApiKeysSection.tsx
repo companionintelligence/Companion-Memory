@@ -256,10 +256,10 @@ export function ApiKeysSection() {
   const mcpWithoutIntents =
     createScopes.includes(API_KEY_SCOPE_MCP) && !createScopes.includes(API_KEY_SCOPE_INTENTS);
 
-  // Capability is enforced on the routes that declare a scope — which is every route a scope-limited
-  // key can reach. An unscoped key is not scope-limited, so it also reaches GraphQL and bulk ingest,
-  // where nothing checks its capability. Read-only therefore means less than it says for this one
-  // combination, and the honest place to say so is here, before the key exists.
+  // Capability is enforced on every operation an api key can reach: a route that declares a level
+  // requires it, and one that declares nothing requires what its shape implies (GraphQL mutations and
+  // non-GET verbs write, queries and GETs read). So read-only now means read-only for an unscoped key
+  // too; what scopes add on top is confinement to particular areas, which is worth saying.
   const readWithoutScopes = createCapability === API_KEY_CAPABILITY_READ && createScopes.length === 0;
 
   const handleCreate = async () => {
@@ -659,9 +659,9 @@ export function ApiKeysSection() {
                   </p>
                 ) : null}
                 {readWithoutScopes ? (
-                  <p className="text-xs font-medium text-amber-600 dark:text-amber-500">
-                    Read-only is enforced on the areas selected above. A key with no areas selected can still
-                    reach GraphQL and bulk ingest — pick the areas it needs to confine it.
+                  <p className="text-muted-foreground text-xs">
+                    Read-only applies everywhere this key can reach, including GraphQL and bulk ingest.
+                    Picking areas above additionally confines which parts of Companion it can see.
                   </p>
                 ) : null}
               </div>

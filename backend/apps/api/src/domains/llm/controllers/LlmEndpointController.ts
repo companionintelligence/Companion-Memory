@@ -1,7 +1,7 @@
 import { Body, ConflictException, Controller, Get, HttpCode, Patch, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 
 import { LlmEndpointLockedError, LlmEndpointService } from '../services/LlmEndpointService';
@@ -36,7 +36,10 @@ export class LlmEndpointController {
     return this.llmEndpointService.preflight();
   }
 
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  // There is ONE inference endpoint per appliance: every user's prompts, embeddings and the
+  // stored bearer go wherever this points. Repointing it is an administrator's decision, not
+  // any signed-in household member's (the reads above stay open to everyone).
+  @UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)
   @Patch('endpoint')
   @HttpCode(200)
   updateEndpoint(@Body(new ValidationPipe(updateSchema)) body: z.infer<typeof updateSchema>) {

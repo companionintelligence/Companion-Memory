@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 
 import { Context, type RequestContext } from '@ci/common/context';
+import { READ_CAPABILITY, RequireCapability } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { UserService } from '@ci/domains/user';
 
@@ -228,6 +229,8 @@ export class ImportRunsController {
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Post('recognize')
+  // POST for the reasons above, but a pure read ("before anything is written").
+  @RequireCapability(READ_CAPABILITY)
   async recognize(@Context() context: RequestContext, @Body() body: RecognizeBody): Promise<PathRecognition> {
     if (!body?.path) {
       throw new BadRequestException('path is required');

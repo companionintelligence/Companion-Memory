@@ -17,7 +17,12 @@ jest.mock('@ci/configuration', () => {
   };
 });
 
-import { ConnectService, capabilityForApp, scopesForApp } from '../services/ConnectService';
+import {
+  ConnectService,
+  FULL_SURFACE_CONNECT_APPS,
+  capabilityForApp,
+  scopesForApp,
+} from '../services/ConnectService';
 
 /**
  * Unit tests for ConnectService — the connect-flow orchestration and its
@@ -171,7 +176,7 @@ describe('ConnectService.exchange', () => {
     });
   });
 
-  it('mints an empty-scope (full-access) key for the bulk importer', async () => {
+  it('mints the chat-agent tier for an app it has no specific knowledge of (the importer included)', async () => {
     const { service, apiKeyService, connectCodeService } = makeDeps();
     connectCodeService.consume.mockResolvedValue({
       userId: 'user-1',
@@ -182,9 +187,10 @@ describe('ConnectService.exchange', () => {
     await service.exchange('one-time-code');
 
     const [, data] = apiKeyService.createOrRotate.mock.calls[0];
-    expect(data.scopes).toEqual([]);
-    // Full SURFACE (empty scopes) still does not mean full authority — the
-    // importer is minted `write`, so it can never delete.
+    // Not `[]`: an unreviewed app is confined to the tier, never handed the whole surface.
+    expect(data.scopes).toEqual(['memory', 'intents', 'mcp']);
+    // Capability is the second axis and is chosen per app too: an unknown app is
+    // `write`, never `full`.
     expect(data.capability).toBe('write');
   });
 
@@ -326,12 +332,19 @@ describe('scopesForApp (two-tier least-privilege)', () => {
     expect(scopesForApp('ci-hermes:ci-marketplace')).toEqual(['memory', 'intents', 'mcp']);
   });
 
-  it('gives the bulk importer full access (empty scopes)', () => {
-    expect(scopesForApp('ci-import-tools:ci-marketplace')).toEqual([]);
+  it('SECURITY: confines an app it has no specific knowledge of to the same tier — never full access', () => {
+    // The default used to be an EMPTY scope list, which the guards read as
+    // "not scope-limited": every route, files, bulk ingest, the whole-account
+    // export, handed to any unreviewed marketplace app on Approve.
+    expect(scopesForApp('some-third-party-app:ci-marketplace')).toEqual(['memory', 'intents', 'mcp']);
+    expect(scopesForApp('ci-import-tools:ci-marketplace')).toEqual(['memory', 'intents', 'mcp']);
   });
 
-  it('defaults any unknown app to full access (never breaks an un-analyzed app)', () => {
-    expect(scopesForApp('some-third-party-app:ci-marketplace')).toEqual([]);
+  it('grants full access only to an app on the reviewed allowlist, which is empty', () => {
+    expect(FULL_SURFACE_CONNECT_APPS.size).toBe(0);
+    for (const name of ['ci-openclaw', 'ci-hermes', 'ci-import-tools', 'some-third-party-app']) {
+      expect(scopesForApp(`${name}:ci-marketplace`)).not.toEqual([]);
+    }
   });
 
   it('keys on the app name segment, ignoring the store', () => {

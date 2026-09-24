@@ -20,7 +20,7 @@ import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FULL_CAPABILITY, READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { UNFURL_SWEEP_QUEUE, UnfurlSweepRequestEvent } from '@ci/domains/embed/events';
@@ -1331,6 +1331,9 @@ export class MaintenanceController {
    * Complements the per-event cascade-delete the search listeners now do on
    * `*RemovedEvent` — this reaps the historical orphans those never covered.
    */
+  // Appliance-wide (it walks every user's index rows), so it is the administrator's call,
+  // not any signed-in household member's. See ApplianceAdminGuard for the unclaimed-box rule.
+  @UseGuards(ApplianceAdminGuard)
   @Post('search-index/cleanup-orphans')
   async cleanupSearchOrphans(
     @Body(new ValidationPipe(cleanupOrphansSchema)) body: CleanupOrphansRequest,
@@ -1347,6 +1350,8 @@ export class MaintenanceController {
    * tables wholesale. A data reset that clears `ci.*` must also do this (or it
    * re-orphans the entire index). Destructive — requires `{ "confirm": true }`.
    */
+  // Wipes BOTH search tables for EVERY user. Administrator only.
+  @UseGuards(ApplianceAdminGuard)
   @Post('search-index/truncate')
   async truncateSearchIndex(
     @Body(new ValidationPipe(truncateSearchIndexSchema)) body: { confirm: true },
@@ -1367,6 +1372,8 @@ export class MaintenanceController {
    * the batched-Ollama buffer amortises the embed calls. Re-runnable + incremental.
    * Run it after a bulk import (and after link-communications / extract-graph).
    */
+  // Re-embeds across every user; a heavy, appliance-wide job. Administrator only.
+  @UseGuards(ApplianceAdminGuard)
   @Post('search-index/backfill')
   async backfillSearchIndex(
     @Body(new ValidationPipe(searchIndexBackfillSchema)) body: SearchIndexBackfillRequest,

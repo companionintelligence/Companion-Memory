@@ -64,17 +64,37 @@ describe('enforceApiKeyScopes', () => {
  * could still POST /api/memory/write. That is worse than not offering read-only at all: the
  * settings UI has already told the user the key cannot record anything.
  */
-function setupCapability(required: ApiKeyCapability | undefined, request: Partial<ApiKeyScopedRequest>) {
+type Shape =
+  | { type: 'http'; method: string }
+  | { type: 'graphql'; operation: 'query' | 'mutation' | 'subscription' };
+
+/**
+ * `shape` is what the request looks like when the route declares nothing — the
+ * HTTP verb, or the GraphQL operation kind (mocked the way GqlExecutionContext
+ * reads it: `getArgs()[3]` is the resolver `info` argument). The default is a
+ * GET so the pre-existing cases, which only exercise the declared level, are
+ * shape-neutral.
+ */
+function setupCapability(
+  required: ApiKeyCapability | undefined,
+  request: Partial<ApiKeyScopedRequest>,
+  shape: Shape = { type: 'http', method: 'GET' },
+) {
   const reflector = {
     getAllAndOverride: jest.fn().mockReturnValue(required),
   } as unknown as Reflector;
+  const info = shape.type === 'graphql' ? { operation: { operation: shape.operation } } : undefined;
 
   const context = {
     getHandler: () => () => undefined,
     getClass: () => class {},
+    getType: () => shape.type,
+    getArgs: () => [undefined, undefined, undefined, info],
+    getArgByIndex: (index: number) => [undefined, undefined, undefined, info][index],
   } as unknown as ExecutionContext;
+  const req = { ...request, method: shape.type === 'http' ? shape.method : 'POST' };
 
-  return () => enforceApiKeyCapability(reflector, context, request as ApiKeyScopedRequest);
+  return () => enforceApiKeyCapability(reflector, context, req as ApiKeyScopedRequest);
 }
 
 describe('enforceApiKeyCapability', () => {
@@ -82,10 +102,46 @@ describe('enforceApiKeyCapability', () => {
     expect(setupCapability('full', { apiKeyScopes: undefined })).not.toThrow();
   });
 
-  it('allows a route that declares no capability, leaving current behaviour unchanged', () => {
-    // Opt-in rather than deny-by-default: this applies to empty-scope keys too, and those reach
-    // the whole API, so denying un-annotated routes would 403 every legacy key everywhere.
-    expect(setupCapability(undefined, { apiKeyScopes: ['memory'], apiKeyCapability: 'read' })).not.toThrow();
+  describe('a route that declares nothing requires what its shape implies', () => {
+    const readKey = { apiKeyScopes: [], apiKeyCapability: 'read' as const };
+    const writeKey = { apiKeyScopes: [], apiKeyCapability: 'write' as const };
+
+    it('GraphQL: a query is a read, a mutation is a write', () => {
+      expect(setupCapability(undefined, readKey, { type: 'graphql', operation: 'query' })).not.toThrow();
+      // The hole this closes: 140 mutations declared nothing, so a "read-only" key ran them all.
+      expect(setupCapability(undefined, readKey, { type: 'graphql', operation: 'mutation' })).toThrow(
+        /is "read".*requires "write"/,
+      );
+      expect(setupCapability(undefined, writeKey, { type: 'graphql', operation: 'mutation' })).not.toThrow();
+      // A subscription opens a stream the server pushes into — treated as a write, conservatively.
+      expect(setupCapability(undefined, readKey, { type: 'graphql', operation: 'subscription' })).toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('REST: GET/HEAD/OPTIONS are reads, every other verb is a write', () => {
+      for (const method of ['GET', 'HEAD', 'OPTIONS']) {
+        expect(setupCapability(undefined, readKey, { type: 'http', method })).not.toThrow();
+      }
+
+      for (const method of ['POST', 'PATCH', 'PUT', 'DELETE']) {
+        expect(setupCapability(undefined, readKey, { type: 'http', method })).toThrow(ForbiddenException);
+        expect(setupCapability(undefined, writeKey, { type: 'http', method })).not.toThrow();
+      }
+    });
+
+    it('a declared level overrides the shape in either direction', () => {
+      // Down: a POST that only computes (e.g. /llm/generate) says so and admits a read key.
+      expect(setupCapability('read', readKey, { type: 'http', method: 'POST' })).not.toThrow();
+      // Up: a GET that is really an operator action can demand full.
+      expect(setupCapability('full', writeKey, { type: 'http', method: 'GET' })).toThrow(ForbiddenException);
+    });
+
+    it('never applies to a session or Portal principal', () => {
+      expect(
+        setupCapability(undefined, { apiKeyScopes: undefined }, { type: 'graphql', operation: 'mutation' }),
+      ).not.toThrow();
+    });
   });
 
   it('lets a key act at or above the level a route requires', () => {

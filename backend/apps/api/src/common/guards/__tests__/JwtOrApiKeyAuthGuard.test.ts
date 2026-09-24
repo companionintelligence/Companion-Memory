@@ -181,7 +181,7 @@ describe('JwtOrApiKeyAuthGuard.canActivate — scope enforcement runs only when 
     spyOnMixinCanActivate().mockResolvedValue(true);
     const reflector = makeReflector(['memory']); // route requires 'memory'
     const guard = new JwtOrApiKeyAuthGuard(makePortal(), reflector);
-    const req = { headers: {}, apiKeyScopes: ['other'] };
+    const req = { headers: {}, method: 'GET', apiKeyScopes: ['other'] };
 
     await expect(guard.canActivate(httpContext(req))).rejects.toThrow(/scope/i);
   });
@@ -190,7 +190,7 @@ describe('JwtOrApiKeyAuthGuard.canActivate — scope enforcement runs only when 
     spyOnMixinCanActivate().mockResolvedValue(true);
     const reflector = makeReflector(['memory']);
     const guard = new JwtOrApiKeyAuthGuard(makePortal(), reflector);
-    const req = { headers: {}, apiKeyScopes: ['memory'] };
+    const req = { headers: {}, method: 'GET', apiKeyScopes: ['memory'] };
 
     await expect(guard.canActivate(httpContext(req))).resolves.toBe(true);
   });
@@ -201,7 +201,7 @@ describe('JwtOrApiKeyAuthGuard.canActivate — scope enforcement runs only when 
     const guard = new JwtOrApiKeyAuthGuard(makePortal(), reflector);
     // If enforcement ran regardless of `ok`, this would throw ForbiddenException
     // instead of resolving to false.
-    const req = { headers: {}, apiKeyScopes: ['other'] };
+    const req = { headers: {}, method: 'GET', apiKeyScopes: ['other'] };
 
     await expect(guard.canActivate(httpContext(req))).resolves.toBe(false);
   });

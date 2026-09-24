@@ -31,7 +31,7 @@ describe('renderConnectConsentPage capability disclosure', () => {
     expect(html).not.toContain('Full access');
   });
 
-  it('discloses FULL access for an empty-scope (bulk importer) key', () => {
+  it('discloses FULL access for an empty-scope key (only an app on the reviewed allowlist gets one)', () => {
     const html = render([]);
     expect(html).toContain('Full access to your Companion data');
     // It must not understate the grant as memory-only.

@@ -23,6 +23,18 @@ import { ConnectCodeService } from './ConnectCodeService';
 const CONNECT_KEY_TTL_DAYS = 90;
 
 /**
+ * Apps that are minted a FULL-SURFACE key (an empty scope list, which the
+ * api-key guards treat as "not scope-limited"): every route, GraphQL, files,
+ * bulk ingest, maintenance, the whole-account export. Empty today: the bulk
+ * importer that once needed it was folded into CI-Server itself. An app earns a
+ * place here by review, never by being unknown — see {@link scopesForApp}.
+ */
+export const FULL_SURFACE_CONNECT_APPS: ReadonlySet<string> = new Set<string>([]);
+
+/** What an app the server has no specific knowledge of is confined to. */
+export const DEFAULT_CONNECT_SCOPES: readonly string[] = [MEMORY_SCOPE, INTENTS_SCOPE, MCP_SCOPE];
+
+/**
  * The least-privilege scope set a connect key is minted with, per app.
  *
  * This is the SINGLE source of truth for both what the key can do (enforced
@@ -30,13 +42,23 @@ const CONNECT_KEY_TTL_DAYS = 90;
  * user it will do — they read this same function so they can never drift.
  *
  * App URNs are `<appName>:<store>` (e.g. `ci-openclaw:ci-marketplace`); we key
- * on the app name. The chat agents are confined to exactly what they use; the
- * bulk importer and any app we haven't explicitly narrowed get an EMPTY scope
- * set = full access (grandfathered), so enforcement never breaks an app whose
- * real needs we didn't enumerate.
+ * on the app name. The default is the chat-agent tier: long-term memory, the
+ * intent catalog and the MCP endpoint, and nothing on the raw data plane. It
+ * used to be the other way round — an app the switch did not name got an EMPTY
+ * scope set, i.e. full access, "so enforcement never breaks an app whose real
+ * needs we didn't enumerate" — which handed every unreviewed marketplace app
+ * the whole account (export included) the moment its user clicked Approve.
+ * Now a broader grant is an explicit, reviewed entry in
+ * {@link FULL_SURFACE_CONNECT_APPS}; an app that genuinely needs more than the
+ * tier fails visibly at its first out-of-scope call, and the fix is a line of
+ * review here rather than a default that quietly trusts everyone.
  */
 export function scopesForApp(appUrn: string): string[] {
   const appName = appUrn.split(':')[0];
+
+  if (FULL_SURFACE_CONNECT_APPS.has(appName)) {
+    return [];
+  }
 
   switch (appName) {
     case 'ci-openclaw':
@@ -48,11 +70,9 @@ export function scopesForApp(appUrn: string): string[] {
       // is the whole point of scoping these apps. Kept as a single tier (rather
       // than per-agent) so it can't break whichever of intents/mcp each agent
       // actually exercises.
-      return [MEMORY_SCOPE, INTENTS_SCOPE, MCP_SCOPE];
+      return [...DEFAULT_CONNECT_SCOPES];
     default:
-      // e.g. ci-import-tools (a bulk importer needing graphql/ingest/files/
-      // maintenance) and any unknown consumer → full access.
-      return [];
+      return [...DEFAULT_CONNECT_SCOPES];
   }
 }
 

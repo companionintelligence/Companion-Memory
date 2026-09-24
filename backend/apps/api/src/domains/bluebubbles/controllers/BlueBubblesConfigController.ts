@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Post, Put, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 
@@ -66,7 +66,10 @@ export class BlueBubblesConfigController {
     return this.projectConfig(await this.configService.getOrCreate());
   }
 
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  // The BlueBubbles configuration is one row for the whole appliance, and `test-connection`
+  // makes the appliance dial an arbitrary host:port and report back. Both are the
+  // administrator's; reading the config stays open to everyone.
+  @UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)
   @Put('config')
   @HttpCode(200)
   async updateConfig(@Body(new ValidationPipe(updateSchema)) body: z.infer<typeof updateSchema>) {
@@ -96,7 +99,7 @@ export class BlueBubblesConfigController {
    * the settings page can validate host/port/password before "Save".
    * Persists nothing.
    */
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)
   @Post('test-connection')
   @HttpCode(200)
   async testConnection(
@@ -121,7 +124,7 @@ export class BlueBubblesConfigController {
   }
 
   /** Kick off one sync pass immediately — the "Sync now" button. */
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)
   @Post('sync-now')
   @HttpCode(202)
   async syncNow() {
