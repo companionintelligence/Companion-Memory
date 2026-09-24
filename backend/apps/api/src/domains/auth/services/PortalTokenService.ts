@@ -22,8 +22,22 @@ import { FederatedIdentityService } from './FederatedIdentityService';
  *
  * CI-Portal (better-auth) is the identity provider; it signs JWTs with EdDSA and
  * publishes a JWKS. This service verifies a Bearer token against that JWKS
- * (issuer + audience checked) and JIT-provisions the matching CI-Server user, so
- * any portal-authenticated app can write to memory with one brokered token.
+ * (issuer + audience checked) and resolves it to the matching CI-Server user, so
+ * a first-party client holding a brokered token (a phone, the browser extension)
+ * can call the API without a browser session.
+ *
+ * ## Who may sign in with a Companion account
+ *
+ * An appliance serves one person, and that person's Portal identity is bound to
+ * their local account the first time they sign in. Anyone else on the box is a
+ * household member with an email-and-password account the owner invited. So a
+ * Portal identity that is not yet bound here is admitted in exactly one case:
+ * the appliance has no accounts at all, and this sign-in claims it. On a claimed
+ * appliance an unbound Portal identity is refused — there is no invitation
+ * mechanism on this path, and account creation belongs to the browser flow
+ * (`OidcController`), which is where invitations are checked. Until this rule
+ * existed the bearer path created an account for ANY valid Portal token, which
+ * on a tunnelled Hub install meant anyone with a Portal login could sign up.
  *
  * ## Service accounts (Portal-brokered service credential — B5)
  *
@@ -250,8 +264,18 @@ export class PortalTokenService implements PortalTokenVerifier {
       }
     }
 
-    // 3. Otherwise JIT-provision and bind on (iss,sub). Portal-authenticated
-    //    users have no CI-Server password; set a random one.
+    // 3. Nobody here has claimed this Portal identity. Only an UNCLAIMED
+    //    appliance admits it — the sign-in becomes the owner (UserService.create
+    //    promotes the first account to admin). On a claimed appliance the answer
+    //    is no: the owner already exists, and household members are invited
+    //    through the browser flow as email-and-password accounts.
+    if (!(await this.userService.hasNoUsers())) {
+      this.logger.warn(`refusing to provision ${issuer}#${sub}: this appliance already has an owner`);
+
+      return null;
+    }
+
+    //    Portal-authenticated users have no CI-Server password; set a random one.
     const created = await this.userService.create(
       { userId: SYSTEM_USER },
       { name, email, password: crypto.randomBytes(32).toString('hex') },

@@ -11,6 +11,26 @@ import { hasPendingPortalOidc } from '@/pages/DeviceConnectPage/oidc';
 
 import { LoginForm, type LoginFormData } from './LoginForm';
 
+/**
+ * What the `?error=` key from the OIDC callback means to the person reading it.
+ * Every key not listed here is a transport or protocol failure ("try again" is
+ * the honest advice); the listed ones are admission decisions, where trying
+ * again would only produce the same answer.
+ */
+function oidcErrorMessage(code: string): string {
+  switch (code) {
+    case 'signup_code_required':
+      return 'This Companion Memory already belongs to someone. Ask its owner for an invitation, or sign in with your email and password.';
+    case 'account_exists':
+    case 'account_linked_elsewhere':
+      return 'An account with this email already exists on this Companion Memory. Sign in with your email and password instead.';
+    case 'email_unverified':
+      return 'Your Companion account email has not been verified yet. Verify it, then sign in again.';
+    default:
+      return 'Sign in failed. Please try again.';
+  }
+}
+
 export function LoginPage() {
   const [{ error }, { login }] = useAuth();
   const navigate = useNavigate();
@@ -59,7 +79,7 @@ export function LoginPage() {
             </Alert>
           )}
           {oidcError && error == null && (
-            <p className="text-destructive mb-4 text-center text-sm">Sign in failed. Please try again.</p>
+            <p className="text-destructive mb-4 text-center text-sm">{oidcErrorMessage(oidcError)}</p>
           )}
 
           <OidcButton label="Sign in with Companion account" redirect={from} />

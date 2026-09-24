@@ -13,6 +13,23 @@ import config from '@ci/configuration';
 import { SessionEntity } from '../entities/SessionEntity';
 import type { IssuedSession, JwtPayload, RotationResult, SessionMetadata } from '../types';
 
+/** The OIDC (issuer, subject) pair a signup intent was minted for. */
+export interface SignupIntentIdentity {
+  issuer: string;
+  subject: string;
+}
+
+/**
+ * What the confirm-account step learns from its cookie. `issuer`/`subject` are
+ * what let it bind the account it creates to the Portal identity that asked for
+ * it — and recognise the one case where an account already exists for the
+ * address legitimately (a concurrent tab that confirmed first).
+ */
+export interface SignupIntent extends Partial<SignupIntentIdentity> {
+  email: string;
+  name?: string;
+}
+
 const SESSION_EXPIRES_IN = parseDuration(config.auth.session.duration) ?? 0;
 const REFRESH_GRACE_PERIOD = parseDuration(config.auth.session.refreshGracePeriod) ?? 0;
 
@@ -70,15 +87,21 @@ export class AuthService {
    * so the confirm endpoint can create the account without re-trusting inputs.
    * The `purpose` claim prevents it being accepted anywhere a session token is.
    */
-  issueSignupIntentToken(email: string, name?: string): string {
+  issueSignupIntentToken(email: string, name?: string, identity?: SignupIntentIdentity): string {
     return this.jwtService.sign(
-      { email, name, purpose: 'signup_intent' },
+      { email, name, purpose: 'signup_intent', issuer: identity?.issuer, subject: identity?.subject },
       { secret: config.auth.jwt.refreshTokenSecret, expiresIn: '10m' },
     );
   }
 
-  verifySignupIntentToken(token: string): { email: string; name?: string } {
-    const payload = this.jwtService.verify<{ email?: string; name?: string; purpose?: string }>(token, {
+  verifySignupIntentToken(token: string): SignupIntent {
+    const payload = this.jwtService.verify<{
+      email?: string;
+      name?: string;
+      purpose?: string;
+      issuer?: string;
+      subject?: string;
+    }>(token, {
       secret: config.auth.jwt.refreshTokenSecret,
     });
 
@@ -86,7 +109,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid signup intent token');
     }
 
-    return { email: payload.email, name: payload.name };
+    return { email: payload.email, name: payload.name, issuer: payload.issuer, subject: payload.subject };
   }
 
   async rotateSessionToken(userId: string, token: string, meta: SessionMetadata): Promise<RotationResult> {

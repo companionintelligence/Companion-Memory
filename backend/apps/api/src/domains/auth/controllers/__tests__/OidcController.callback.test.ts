@@ -170,7 +170,9 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       const res = makeRes();
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
-        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'user@example.com' }));
+        .mockResolvedValueOnce(
+          jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'user@example.com', email_verified: true }),
+        );
       userService.findByEmail.mockResolvedValue({ id: 'user-1' });
 
       await controller.callback(
@@ -196,7 +198,9 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       const res = makeRes();
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
-        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'user@example.com' }));
+        .mockResolvedValueOnce(
+          jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'user@example.com', email_verified: true }),
+        );
       userService.findByEmail.mockResolvedValue({ id: 'user-1' });
 
       await controller.callback('code-x', 'match', undefined, webReq(), res as never);
@@ -209,7 +213,9 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       const res = makeRes();
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
-        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'user@example.com' }));
+        .mockResolvedValueOnce(
+          jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'user@example.com', email_verified: true }),
+        );
       userService.findByEmail.mockResolvedValue({ id: 'user-1' });
 
       await controller.callback(
@@ -230,7 +236,9 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       const res = makeRes();
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
-        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'user@example.com' }));
+        .mockResolvedValueOnce(
+          jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'user@example.com', email_verified: true }),
+        );
       userService.findByEmail.mockResolvedValue({ id: 'user-1' });
 
       await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
@@ -258,7 +266,12 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       await controller.callback('code-x', 'match', undefined, webReq(), res as never);
 
       expect(userService.create).not.toHaveBeenCalled();
-      expect(authService.issueSignupIntentToken).toHaveBeenCalledWith('new@example.com', 'New Person');
+      // The intent carries the (issuer, subject) so confirm-account can bind the
+      // account it creates to this identity — and recognise a concurrent tab.
+      expect(authService.issueSignupIntentToken).toHaveBeenCalledWith('new@example.com', 'New Person', {
+        issuer: expect.any(String),
+        subject: 'portal-sub-1',
+      });
       expect(res.cookie).toHaveBeenCalledWith('oidc_signup_intent', 'signup-intent-jwt', expect.any(Object));
       expect(res.redirect).toHaveBeenCalledWith('/api/authenticate/oidc/confirm-account');
     });
@@ -465,7 +478,25 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       await controller.callback('code-x', 'match', undefined, webReq(), res as never);
 
       expect(authService.issueSessionToken).not.toHaveBeenCalled();
-      expect(res.redirect).toHaveBeenCalledWith('/api/authenticate/oidc/confirm-account');
+      // Terminal: it must NOT continue into the first-time flow, whose confirm
+      // step used to find the same address and sign the caller in as it.
+      expect(authService.issueSignupIntentToken).not.toHaveBeenCalled();
+      expect(res.redirect).toHaveBeenCalledWith('/login?error=account_linked_elsewhere');
+    });
+
+    it('does not sign in an existing account when the Portal has not verified the address', async () => {
+      const { controller, userService, authService } = makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'user@example.com' }));
+      userService.findByEmail.mockResolvedValue({ id: 'user-1' });
+
+      await controller.callback('code-x', 'match', undefined, webReq(), res as never);
+
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
+      expect(authService.issueSignupIntentToken).not.toHaveBeenCalled();
+      expect(res.redirect).toHaveBeenCalledWith('/login?error=email_unverified');
     });
 
     it('Hub-invited first login creates a Memory user without a signup code or confirm page', async () => {

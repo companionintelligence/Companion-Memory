@@ -25,7 +25,7 @@ import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { UserService } from '@ci/domains/user';
 
-import { AuthService } from '../services/AuthService';
+import { AuthService, type SignupIntent } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
 import { FederatedIdentityService } from '../services/FederatedIdentityService';
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
@@ -39,6 +39,17 @@ import {
   resolveOidcOriginBounce,
 } from '../utils/oidcCallbackUrl';
 import { renderSignupConfirmPage } from '../utils/signupConfirmPage';
+
+/**
+ * How a Portal identity maps onto this appliance's accounts. `refused` carries
+ * the `?error=` key the login page shows; it is deliberately distinct from
+ * `unknown` (no account for the address at all), which is the only outcome
+ * that may continue into the first-time sign-in flow.
+ */
+type PortalUserResolution =
+  | { kind: 'user'; user: { id: string } }
+  | { kind: 'refused'; reason: 'account_linked_elsewhere' | 'email_unverified' }
+  | { kind: 'unknown' };
 
 const STATE_COOKIE = 'oidc_state';
 const PKCE_COOKIE = 'oidc_pkce';
@@ -446,14 +457,25 @@ export class OidcController {
 
       const issuer = this.resolveOidcIssuer(userInfo, tokens.id_token);
       // (iss, sub) first; email is only a one-time link for unfederated rows.
-      const user = await this.resolvePortalUser({
+      const resolution = await this.resolvePortalUser({
         subject: userInfo.sub,
         issuer,
         email: userInfo.email,
         emailVerified: userInfo.email_verified === true,
       });
 
-      if (user) {
+      // An address that names an existing account this identity may not have:
+      // say why and stop, rather than falling into the first-time flow, whose
+      // confirm step would otherwise be handed that same address.
+      if (resolution.kind === 'refused') {
+        this.logger.warn(`OIDC sign-in refused for ${userInfo.email}: ${resolution.reason}`);
+
+        return failRedirect(resolution.reason);
+      }
+
+      if (resolution.kind === 'user') {
+        const { user } = resolution;
+
         // Native: return the credential via the deep link — no browser session cookie
         // can reach the app's cross-origin webview. Mint a short-lived, single-use code
         // and deep-link it back; the app exchanges it for a JWT at /oidc/native/exchange.
@@ -559,7 +581,10 @@ export class OidcController {
       // original destination.
       res.cookie(
         SIGNUP_INTENT_COOKIE,
-        this.authService.issueSignupIntentToken(userInfo.email, userInfo.name),
+        this.authService.issueSignupIntentToken(userInfo.email, userInfo.name, {
+          issuer,
+          subject: userInfo.sub,
+        }),
         {
           httpOnly: true,
           secure: req.secure,
@@ -617,7 +642,7 @@ export class OidcController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    let identity: { email: string; name?: string };
+    let identity: SignupIntent;
 
     try {
       identity = this.authService.verifySignupIntentToken(req.cookies?.[SIGNUP_INTENT_COOKIE]);
@@ -673,7 +698,7 @@ export class OidcController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    let identity: { email: string; name?: string };
+    let identity: SignupIntent;
 
     try {
       identity = this.authService.verifySignupIntentToken(req.cookies?.[SIGNUP_INTENT_COOKIE]);
@@ -712,9 +737,35 @@ export class OidcController {
 
     // Create only if it doesn't already exist (guards a double-submit / a
     // concurrent tab that already confirmed).
-    const user =
-      (await this.userService.findByEmail(identity.email)) ??
-      (await this.userService.create(
+    const existing = await this.userService.findByEmail(identity.email);
+    let user: { id: string };
+
+    if (existing) {
+      // An account for this address already exists. The only way that is
+      // legitimate here is a concurrent tab that confirmed first — in which
+      // case that tab also bound the account to this very (issuer, subject).
+      // Any other existing account (a password account, or one bound to a
+      // different Portal identity) must not be handed to whoever holds a
+      // Portal login for the same address; the callback already refused those
+      // and this step must not undo it.
+      const boundUserId =
+        identity.issuer && identity.subject
+          ? await this.federatedIdentityService.findUserId(identity.issuer, identity.subject)
+          : null;
+
+      if (boundUserId !== existing.id) {
+        this.logger.warn(
+          `confirm-account refused for ${identity.email}: an account for this address already exists`,
+        );
+        res.clearCookie(SIGNUP_INTENT_COOKIE, { path: '/' });
+        res.redirect(HttpStatus.SEE_OTHER, '/login?error=account_exists');
+
+        return;
+      }
+
+      user = existing;
+    } else {
+      user = await this.userService.create(
         { userId: SYSTEM_USER },
         {
           name: identity.name || identity.email.split('@')[0],
@@ -722,7 +773,14 @@ export class OidcController {
           // Random password — the account authenticates via OIDC.
           password: randomBytes(32).toString('hex'),
         },
-      ));
+      );
+
+      // Bind the new account to the Portal identity that asked for it, so the
+      // bearer path resolves it by (iss, sub) from the first API call on.
+      if (identity.issuer && identity.subject) {
+        await this.bindIfPossible(user.id, identity.issuer, identity.subject, identity.email);
+      }
+    }
 
     res.clearCookie(SIGNUP_INTENT_COOKIE, { path: '/' });
 
@@ -760,33 +818,46 @@ export class OidcController {
     issuer: string;
     email: string;
     emailVerified: boolean;
-  }): Promise<{ id: string } | null> {
+  }): Promise<PortalUserResolution> {
     if (identity.subject && identity.issuer) {
       const boundUserId = await this.federatedIdentityService.findUserId(identity.issuer, identity.subject);
       if (boundUserId) {
-        return this.userService.findById({ userId: SYSTEM_USER }, boundUserId);
+        const bound = await this.userService.findById({ userId: SYSTEM_USER }, boundUserId);
+
+        return bound ? { kind: 'user', user: bound } : { kind: 'unknown' };
       }
     }
 
     const existing = await this.userService.findByEmail(identity.email);
     if (!existing) {
-      return null;
+      return { kind: 'unknown' };
     }
 
+    // The address names an existing account. Email is not an identity — it is
+    // re-assignable and shared across issuers — so it links an account exactly
+    // once, only when the issuer vouches for it, and never one that is already
+    // somebody's. Both refusals are terminal for this sign-in: the caller must
+    // not fall through to the first-time flow with the same address in hand.
     const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id);
     if (alreadyFederated.length > 0) {
       this.logger.warn(
         `refusing email link for ${identity.issuer}#${identity.subject ?? '?'}: user already bound to another identity`,
       );
 
-      return null;
+      return { kind: 'refused', reason: 'account_linked_elsewhere' };
     }
 
-    if (identity.subject && identity.issuer && identity.emailVerified) {
-      await this.bindIfPossible(existing.id, identity.issuer, identity.subject, identity.email, 'email_link');
+    if (!identity.emailVerified) {
+      this.logger.warn(
+        `refusing email link for ${identity.issuer}#${identity.subject ?? '?'}: issuer has not verified the address`,
+      );
+
+      return { kind: 'refused', reason: 'email_unverified' };
     }
 
-    return existing;
+    await this.bindIfPossible(existing.id, identity.issuer, identity.subject, identity.email, 'email_link');
+
+    return { kind: 'user', user: existing };
   }
 
   private async createOidcUser(email: string, name?: string): Promise<{ id: string; email: string }> {
