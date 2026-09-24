@@ -496,7 +496,9 @@ Class-level `JwtOrApiKeyAuthGuard` (`:56`). Export/import the caller's Memory da
 > (`UserDataPortabilityService.ts`, `FileKeyMap`). Before this, the archive's `bucket`/`key` went
 > straight to `putObject` — any object in the store could be overwritten — and a row carrying
 > someone else's key was served back as the importer's own file by every by-key reader, export
-> included.
+> included. Those readers (`FileService.getFileContent` / `getFileStream`) now also refuse a key
+> unless the caller owns the `ci.files` row pointing at it (the system principal is exempt, as
+> for every other scoped lookup there), so a key learned from a share link is not enough either.
 
 ### `ConnectController` — `connect` · `domains/auth/controllers/ConnectController.ts:130`
 

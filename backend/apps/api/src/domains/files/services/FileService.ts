@@ -12,7 +12,7 @@ import {
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, type FindOptionsWhere } from 'typeorm';
 import { v4 as uuidv4, v7 as uuidv7 } from 'uuid';
@@ -41,6 +41,9 @@ export interface HourlyFileCount {
   bucketStart: Date;
   count: number;
 }
+
+/** Shape of every `ci.files.key` — the column is `uuid`, minted by `uuidv4()` on upload. */
+const UUID_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 @Injectable()
 export class FileService implements OnModuleInit {
@@ -614,7 +617,47 @@ export class FileService implements OnModuleInit {
     }
   }
 
+  /**
+   * Refuse a by-key read unless the caller owns the `ci.files` row that points
+   * at `key`. Object keys are minted UUIDs, but they are not secrets — they ride
+   * in every presigned `/static/` URL — and the two readers below took any key
+   * on the caller's word, so a key learned from someone else's share link (or
+   * planted in a row, as the account import once allowed) came back as bytes.
+   * The check is on the ROW, not the object: ownership is a fact about
+   * `ci.files.user_id`, and a soft-deleted row still names its owner, so the
+   * lookup includes deleted rows (export reads those too).
+   *
+   * The system principal is exempt, exactly as every other scoped lookup in
+   * this service exempts it: background jobs act for the appliance, not for a
+   * person, and carry no user to check against.
+   *
+   * A key that is not even UUID-shaped cannot match any row (the column is
+   * `uuid`), so it is refused up front rather than handed to Postgres to
+   * reject with a type error.
+   */
+  private async assertOwnsKey(context: ServiceContext, key: string): Promise<void> {
+    if (context.userId === SYSTEM_USER) {
+      return;
+    }
+
+    if (!UUID_KEY.test(key)) {
+      throw new NotFoundException('File not found');
+    }
+
+    const owned = await this.fileRepository.findOne({
+      where: { key, userId: context.userId },
+      select: ['id'],
+      withDeleted: true,
+    });
+
+    if (!owned) {
+      throw new NotFoundException('File not found');
+    }
+  }
+
   async getFileContent(context: ServiceContext, key: string): Promise<Uint8Array> {
+    await this.assertOwnsKey(context, key);
+
     const response = await this.s3.send(
       new GetObjectCommand({
         Bucket: config.staticfiles.bucket,
@@ -630,6 +673,8 @@ export class FileService implements OnModuleInit {
   }
 
   async getFileStream(context: ServiceContext, key: string): Promise<Readable> {
+    await this.assertOwnsKey(context, key);
+
     const response = await this.s3.send(
       new GetObjectCommand({
         Bucket: config.staticfiles.bucket,

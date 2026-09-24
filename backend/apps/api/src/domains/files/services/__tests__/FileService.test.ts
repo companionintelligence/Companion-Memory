@@ -1,6 +1,8 @@
 import { createHash } from 'crypto';
 
-import { type UserServiceContext } from '@ci/common/context';
+import { NotFoundException } from '@nestjs/common';
+
+import { SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 
 import { FileUploadedEvent } from '../../events';
 import { FileVariant } from '../../types';
@@ -291,5 +293,71 @@ describe('FileService.describedImageCoverage', () => {
       images: 0,
       described: 0,
     });
+  });
+});
+
+describe('FileService by-key readers — getFileContent / getFileStream', () => {
+  // Keys are minted UUIDs (`uuidv4()` in create); the column is `uuid`.
+  const OWNED_KEY = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const stranger = { userId: 'someone-else' } as UserServiceContext;
+  const system = { userId: SYSTEM_USER } as unknown as UserServiceContext;
+
+  function makeReadable(bytes: string) {
+    return {
+      transformToByteArray: async () => new TextEncoder().encode(bytes),
+      [Symbol.asyncIterator]: async function* () {
+        yield new TextEncoder().encode(bytes);
+      },
+    };
+  }
+
+  it('serves the bytes to the account that owns the row pointing at the key', async () => {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue({ id: 'file-1' });
+    const { service, s3Send } = makeService(repo);
+    s3Send.mockResolvedValue({ Body: makeReadable('hello') });
+
+    const bytes = await service.getFileContent(ownerCtx, OWNED_KEY);
+
+    expect(Buffer.from(bytes).toString('utf8')).toBe('hello');
+    // The lookup is by (key, owner) — and includes soft-deleted rows, because a
+    // deleted row still names its owner and export reads deleted files too.
+    expect(repo.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { key: OWNED_KEY, userId: 'owner-1' }, withDeleted: true }),
+    );
+  });
+
+  it('refuses another account, before the object store is ever asked', async () => {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue(null);
+    const { service, s3Send } = makeService(repo);
+
+    await expect(service.getFileContent(stranger, OWNED_KEY)).rejects.toThrow(NotFoundException);
+    await expect(service.getFileStream(stranger, OWNED_KEY)).rejects.toThrow(NotFoundException);
+    expect(s3Send).not.toHaveBeenCalled();
+  });
+
+  it('refuses a key that is not even UUID-shaped without touching the database', async () => {
+    const repo = makeRepo();
+    const { service, s3Send } = makeService(repo);
+
+    await expect(service.getFileStream(ownerCtx, 'user-1/f1')).rejects.toThrow(NotFoundException);
+    expect(repo.findOne).not.toHaveBeenCalled();
+    expect(s3Send).not.toHaveBeenCalled();
+  });
+
+  it('exempts the system principal, like every other scoped lookup in this service', async () => {
+    const repo = makeRepo();
+    const { service, s3Send } = makeService(repo);
+    s3Send.mockResolvedValue({ Body: makeReadable('x') });
+
+    const stream = await service.getFileStream(system, OWNED_KEY);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.from(chunk as Uint8Array));
+    }
+
+    expect(Buffer.concat(chunks).toString('utf8')).toBe('x');
+    expect(repo.findOne).not.toHaveBeenCalled();
   });
 });
