@@ -78,12 +78,6 @@ import {
   GraphEnrichmentService,
 } from '../services/GraphEnrichmentService';
 import { type HealSelfCollationResult, HealSelfCollationService } from '../services/HealSelfCollationService';
-import {
-  type DeferralResult,
-  type DroppedIndex,
-  IndexDeferralService,
-  type RecreateResult,
-} from '../services/IndexDeferralService';
 import { type IngestResetResult, IngestResetService } from '../services/IngestResetService';
 import {
   DEFAULT_ESTIMATE_SOURCE_SYSTEMS,
@@ -111,20 +105,6 @@ import {
   type SummaryBackfillResult,
   SummaryBackfillService,
 } from '../services/SummaryBackfillService';
-
-// Body for POST /api/maintenance/indexes/recreate: the `dropped` array returned
-// verbatim by the matching /drop call (each carries its exact CREATE statement).
-const recreateIndexesSchema = z.object({
-  dropped: z
-    .array(
-      z.object({
-        schema: z.string(),
-        name: z.string(),
-        definition: z.string(),
-      }),
-    )
-    .min(1),
-});
 
 const geocodeLocationsSchema = z.object({
   /** Max events to geocode in this batch (default: config.geocoding.batchSize). */
@@ -498,7 +478,6 @@ export class MaintenanceController {
   constructor(
     private readonly signallingEventService: SignallingEventService,
     @InjectDataSource() private readonly dataSource: DataSource,
-    private readonly indexDeferralService: IndexDeferralService,
     private readonly orphanCleanupService: OrphanCleanupService,
     private readonly entityIdentifierBackfillService: EntityIdentifierBackfillService,
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
@@ -1296,31 +1275,6 @@ export class MaintenanceController {
     }
 
     return this.maintenanceOrchestratorService.orchestrate(userId, body);
-  }
-
-  /**
-   * Index-deferral helper (issue #12), DROP phase. Drops the deferrable
-   * secondary indexes (FTS GIN, pgvector HNSW, per-table btree/GIN on the bulk
-   * destinations) before a very large load. Returns each dropped index's exact
-   * recreate statement in `dropped` — POST that array back to /indexes/recreate
-   * after the load. Provenance unique indexes and primary keys are never
-   * dropped (enforced in IndexDeferralService). OPT-IN; operator-triggered.
-   */
-  @Post('indexes/drop')
-  async dropIndexes(): Promise<DeferralResult> {
-    return this.indexDeferralService.dropDeferredIndexes();
-  }
-
-  /**
-   * Index-deferral helper (issue #12), RECREATE phase. Recreates the indexes
-   * dropped by /indexes/drop from the definitions returned there (passed back
-   * verbatim in the body).
-   */
-  @Post('indexes/recreate')
-  async recreateIndexes(
-    @Body(new ValidationPipe(recreateIndexesSchema)) body: { dropped: DroppedIndex[] },
-  ): Promise<RecreateResult> {
-    return this.indexDeferralService.recreateDeferredIndexes(body.dropped);
   }
 
   /**

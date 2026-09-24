@@ -129,19 +129,17 @@ yarn workspace @ci/be-api run exec scripts/bulk-load-indexes.ts recreate
 > the package script (`ts-node` + path aliases + `DOTENV_CONFIG_PATH`), which is what
 > the CLI needs.
 
-### HTTP (operator endpoints)
+### No HTTP form
 
-```
-POST /api/maintenance/indexes/drop       → { dropped: [{schema,name,definition}], skipped: [...] }
-POST /api/maintenance/indexes/recreate   ← body: { dropped: [...] }  (the array from /drop)
-```
-
-Pass the `dropped` array from `/drop` back into `/recreate`.
+The deferral helper is CLI-only. It used to have `POST /api/maintenance/indexes/{drop,recreate}`
+twins; the recreate route ran the CREATE statements from its request body verbatim, which made
+it an arbitrary-SQL primitive for any signed-in principal, and nothing ever called either route.
+Both were removed on 2026-09-24. Run the CLI on the box instead.
 
 ### What is dropped — and what is NOT
 
 Dropped (see `DEFERRABLE_INDEXES` in
-`src/domains/maintenance/services/IndexDeferralService.ts`; entries whose index no longer
+`src/domains/maintenance/deferrableIndexes.ts`; entries whose index no longer
 exists are skipped harmlessly):
 
 - FTS GIN tsvector indexes: `entities_fts_idx`, `document_chunks_fts_idx`,

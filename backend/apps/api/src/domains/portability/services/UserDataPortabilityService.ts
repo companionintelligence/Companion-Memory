@@ -22,7 +22,13 @@ import type {
   UserProfileSnapshot,
   UserScopedTable,
 } from '../types';
-import { DISCOVER_USER_TABLES_SQL, USER_DATA_SCHEMAS, isExcluded, qualifiedName } from '../userDataTables';
+import {
+  DISCOVER_USER_TABLES_SQL,
+  USER_DATA_SCHEMAS,
+  isExcluded,
+  qualifiedName,
+  quoteIdentifier,
+} from '../userDataTables';
 
 const ARCHIVE_VERSION = 1 as const;
 const INSERT_CHUNK_SIZE = 200;
@@ -309,6 +315,7 @@ export class UserDataPortabilityService {
       schema: string;
       table: string;
       user_column: string;
+      columns?: string[] | null;
     }>;
 
     return discovered
@@ -317,6 +324,8 @@ export class UserDataPortabilityService {
         schema: row.schema,
         table: row.table,
         userColumn: row.user_column as UserScopedTable['userColumn'],
+        // Fail closed: a row without a column list can accept no imported rows.
+        columns: Array.isArray(row.columns) ? row.columns : [],
       }));
   }
 
@@ -412,7 +421,10 @@ export class UserDataPortabilityService {
     };
   }
 
-  private async selectUserRows(userId: string, table: UserScopedTable): Promise<Record<string, unknown>[]> {
+  private async selectUserRows(
+    userId: string,
+    table: Pick<UserScopedTable, 'schema' | 'table' | 'userColumn'>,
+  ): Promise<Record<string, unknown>[]> {
     return this.dataSource.query(
       `SELECT * FROM "${table.schema}"."${table.table}" WHERE ${table.userColumn} = $1`,
       [userId],
@@ -440,6 +452,8 @@ export class UserDataPortabilityService {
     }
 
     let inserted = 0;
+    const target = `${quoteIdentifier(table.schema)}.${quoteIdentifier(table.table)}`;
+    const knownColumns = new Set(table.columns);
 
     for (let offset = 0; offset < rows.length; offset += INSERT_CHUNK_SIZE) {
       const chunk = rows.slice(offset, offset + INSERT_CHUNK_SIZE);
@@ -447,19 +461,49 @@ export class UserDataPortabilityService {
       for (const row of chunk) {
         const normalized = this.normalizeImportRow(row, userId, table.userColumn);
         const columns = Object.keys(normalized);
+
+        // The archive's keys become identifiers in the statement below. Only
+        // names the catalog reports for this table may get there: anything else
+        // is either drift between the exporting and importing schema (which the
+        // INSERT would have rejected anyway, just later and less clearly) or an
+        // attempt to break out of the identifier position. Reject before SQL.
+        this.assertKnownColumns(table, columns, knownColumns);
+
         const values = Object.values(normalized);
         const placeholders = columns.map((_, index) => `$${index + 1}`).join(', ');
-        const columnList = columns.map((column) => `"${column}"`).join(', ');
+        const columnList = columns.map(quoteIdentifier).join(', ');
 
-        await queryRunner.query(
-          `INSERT INTO "${table.schema}"."${table.table}" (${columnList}) VALUES (${placeholders})`,
-          values,
-        );
+        await queryRunner.query(`INSERT INTO ${target} (${columnList}) VALUES (${placeholders})`, values);
         inserted += 1;
       }
     }
 
     return inserted;
+  }
+
+  private assertKnownColumns(
+    table: UserScopedTable,
+    columns: string[],
+    knownColumns: ReadonlySet<string>,
+  ): void {
+    const unknown = columns.filter((column) => !knownColumns.has(column));
+
+    if (unknown.length === 0) {
+      return;
+    }
+
+    // Name a few so a genuine schema-drift case is diagnosable, but keep the
+    // message bounded: the keys are caller-controlled and can be arbitrarily
+    // long or numerous.
+    const shown = unknown
+      .slice(0, 5)
+      .map((column) => JSON.stringify(column.length > 80 ? `${column.slice(0, 80)}…` : column))
+      .join(', ');
+    const more = unknown.length > 5 ? ` (+${unknown.length - 5} more)` : '';
+
+    throw new BadRequestException(
+      `Archive row for ${qualifiedName(table)} names column(s) that do not exist: ${shown}${more}`,
+    );
   }
 
   private normalizeImportRow(

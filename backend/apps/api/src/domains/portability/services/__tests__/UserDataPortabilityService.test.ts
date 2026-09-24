@@ -98,8 +98,8 @@ describe('UserDataPortabilityService', () => {
      */
     it('deletes discovered tables in reverse order, inserts in forward order, then commits once', async () => {
       dataSource.query = jest.fn().mockResolvedValue([
-        { schema: 'ci', table: 'notes', user_column: 'user_id' },
-        { schema: 'ci', table: 'events', user_column: 'user_id' },
+        { schema: 'ci', table: 'notes', user_column: 'user_id', columns: ['id', 'user_id'] },
+        { schema: 'ci', table: 'events', user_column: 'user_id', columns: ['id', 'user_id'] },
       ]);
 
       const calls: string[] = [];
@@ -144,7 +144,9 @@ describe('UserDataPortabilityService', () => {
     it('rolls back and rethrows when an insert fails mid-import, and never commits', async () => {
       dataSource.query = jest
         .fn()
-        .mockResolvedValue([{ schema: 'ci', table: 'notes', user_column: 'user_id' }]);
+        .mockResolvedValue([
+          { schema: 'ci', table: 'notes', user_column: 'user_id', columns: ['id', 'user_id'] },
+        ]);
 
       queryRunner.query = jest.fn((sql: string) => {
         if (sql.startsWith('INSERT')) {
@@ -172,6 +174,106 @@ describe('UserDataPortabilityService', () => {
       expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
       expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
       expect(queryRunner.release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('importArchive — archive keys become SQL identifiers', () => {
+    const discovery = [
+      { schema: 'ci', table: 'notes', user_column: 'user_id', columns: ['id', 'title', 'user_id'] },
+    ];
+
+    const archiveWith = (row: Record<string, unknown>) => ({
+      version: 1 as const,
+      exportedAt: new Date().toISOString(),
+      userId: 'user-1',
+      profile: null,
+      tables: { 'ci.notes': [row] },
+      fileBlobs: [],
+    });
+
+    it('refuses a row naming a column the table does not have, before any INSERT is built', async () => {
+      dataSource.query = jest.fn().mockResolvedValue(discovery);
+      const calls: string[] = [];
+      queryRunner.query = jest.fn(async (sql: string) => {
+        calls.push(sql);
+
+        return undefined;
+      }) as unknown as QueryRunner['query'];
+
+      // The pre-fix code interpolated every archive key as `"${key}"`, so a key
+      // carrying a double quote closed the identifier and the rest of the key
+      // ran as SQL (bound values kept it to one statement, but a data-modifying
+      // CTE is one statement). The allowlist rejects it by name; the quoting
+      // helper would have neutralised the quote even if it had not.
+      const hostile =
+        "title\") WITH w AS (UPDATE ci.users SET role = 'admin' RETURNING 1) SELECT $1, $2, $3 FROM w --";
+
+      await expect(
+        service.importArchive(
+          { userId: 'user-1' } as never,
+          archiveWith({ id: 'n1', [hostile]: 'x', user_id: 'user-1' }),
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(calls.some((sql) => sql.startsWith('INSERT'))).toBe(false);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports schema drift by column name, bounded, without echoing the whole key', async () => {
+      dataSource.query = jest.fn().mockResolvedValue(discovery);
+      queryRunner.query = jest.fn().mockResolvedValue(undefined) as unknown as QueryRunner['query'];
+
+      const longKey = `body_${'x'.repeat(200)}`;
+
+      await expect(
+        service.importArchive(
+          { userId: 'user-1' } as never,
+          archiveWith({ id: 'n1', archived_at: null, [longKey]: 1, user_id: 'user-1' }),
+        ),
+      ).rejects.toThrow(/ci\.notes names column\(s\) that do not exist: "archived_at", "body_x{75}…"/);
+    });
+
+    it('quotes every identifier it does interpolate, so a catalog name with a quote cannot break out', async () => {
+      // Not a name Postgres would ever hand back for this schema — the point is
+      // that the identifier position is safe on its own, independent of the
+      // allowlist that already stops archive keys from reaching it.
+      dataSource.query = jest
+        .fn()
+        .mockResolvedValue([
+          { schema: 'ci', table: 'notes', user_column: 'user_id', columns: ['id', 'odd"name', 'user_id'] },
+        ]);
+      const calls: string[] = [];
+      queryRunner.query = jest.fn(async (sql: string) => {
+        calls.push(sql);
+
+        return undefined;
+      }) as unknown as QueryRunner['query'];
+
+      await service.importArchive(
+        { userId: 'user-1' } as never,
+        archiveWith({ id: 'n1', 'odd"name': 'v', user_id: 'user-1' }),
+      );
+
+      const insert = calls.find((sql) => sql.startsWith('INSERT'));
+      expect(insert).toBe('INSERT INTO "ci"."notes" ("id", "odd""name", "user_id") VALUES ($1, $2, $3)');
+    });
+
+    it('fails closed when discovery reports no column list for a table', async () => {
+      dataSource.query = jest
+        .fn()
+        .mockResolvedValue([{ schema: 'ci', table: 'notes', user_column: 'user_id' }]);
+      const calls: string[] = [];
+      queryRunner.query = jest.fn(async (sql: string) => {
+        calls.push(sql);
+
+        return undefined;
+      }) as unknown as QueryRunner['query'];
+
+      await expect(
+        service.importArchive({ userId: 'user-1' } as never, archiveWith({ id: 'n1', user_id: 'user-1' })),
+      ).rejects.toThrow(BadRequestException);
+      expect(calls.some((sql) => sql.startsWith('INSERT'))).toBe(false);
     });
   });
 

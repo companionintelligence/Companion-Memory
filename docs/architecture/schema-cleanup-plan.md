@@ -472,7 +472,7 @@ CREATE INDEX IF NOT EXISTS item_relationships_from_idx
     ON ci.item_relationships USING btree (user_id, from_source_type, from_source_system, from_source_id);
 ```
 
-**Code changes:** none. The literal string `item_relationships_from_idx` appears exactly twice repo-wide, both inside its own creating migration. `IndexDeferralService.ts` does not list it (and its drop guard refuses unique indexes anyway). `ItemRelationshipEntity.ts` declares no `@Index`, so TypeORM cannot recreate it.
+**Code changes:** none. The literal string `item_relationships_from_idx` appears exactly twice repo-wide, both inside its own creating migration. `deferrableIndexes.ts (formerly IndexDeferralService.ts)` does not list it (and its drop guard refuses unique indexes anyway). `ItemRelationshipEntity.ts` declares no `@Index`, so TypeORM cannot recreate it.
 
 **Verify:**
 
@@ -657,7 +657,7 @@ CREATE UNIQUE INDEX events_source_triple_uniq
 | `backend/apps/api/src/domains/memory/services/EventService.ts:220-222` | Replace `conflictTarget: '(source_type, source_system, source_id) WHERE source_id IS NOT NULL'` with `'(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL'`. Delete the comment claiming the index is not user-scoped; replace with wording matching `ContentService.ts:200-201`. `scope: { userId: context.userId }` at :219 is already correct and stays. |
 | `backend/apps/api/src/domains/memory/entities/EventEntity.ts:16-22` | `@Index('events_source_triple_uniq', ['sourceType','sourceSystem','sourceId'], {...})` → `@Index('events_source_triple_uniq', ['userId','sourceType','sourceSystem','sourceId'], { unique: true, where: '"source_id" IS NOT NULL' })`. `userId` exists at :171-172. Documentation-only (`synchronize` is off) but must not be left contradicting SQL. |
 
-Not changed, and correct as-is: `EventService.ts:188-190` and `ContentService.ts:285-286` comments become true; `EventService.ts:154-168`'s 23505 handler is fixed as a side effect (cross-tenant collisions stop happening, so the retry only fires for genuine same-tenant races); `ItemService.ts:110`'s arbiter already matches its index (that one is Wave 5); `IndexDeferralService.ts:70`'s exclusion stays correct.
+Not changed, and correct as-is: `EventService.ts:188-190` and `ContentService.ts:285-286` comments become true; `EventService.ts:154-168`'s 23505 handler is fixed as a side effect (cross-tenant collisions stop happening, so the retry only fires for genuine same-tenant races); `ItemService.ts:110`'s arbiter already matches its index (that one is Wave 5); `deferrableIndexes.ts (formerly IndexDeferralService.ts):70`'s exclusion stays correct.
 
 **Verify (run the third query BEFORE and AFTER):**
 
@@ -1049,7 +1049,7 @@ SELECT count(*) FROM information_schema.columns
 --
 -- DELIBERATELY KEEPS extracted_entities and intent_categories: they feed
 -- search_vector, which is GENERATED ALWAYS AS to_tsvector(... COALESCE wrappers ...)
--- and carries messages_fts_idx, registered BY NAME in IndexDeferralService.ts:45
+-- and carries messages_fts_idx, registered BY NAME in deferrableIndexes.ts (formerly IndexDeferralService.ts):45
 -- (a live service that drops and rebuilds it around bulk loads). Dropping them
 -- would force recreating search_vector and reproducing that index byte-for-byte.
 --
@@ -1844,7 +1844,7 @@ Each of these was investigated, measured or executed, and rejected. **This secti
 
 **Do NOT drop `ci.agents`** without deleting `backend/apps/summary/src/agent_registration.py` in the same change. It has a live `INSERT INTO agents` (:127) plus three `UPDATE`s, running on every summary-service boot. (1.1 does both.)
 
-**Do NOT drop `ci.events.extracted_entities` or `intent_categories`.** They feed `search_vector`, a generated column carrying `messages_fts_idx`-equivalent indexing, and dropping them forces recreating the index that `IndexDeferralService` registers **by name**.
+**Do NOT drop `ci.events.extracted_entities` or `intent_categories`.** They feed `search_vector`, a generated column carrying `messages_fts_idx`-equivalent indexing, and dropping them forces recreating the index that `DEFERRABLE_INDEXES` in `deferrableIndexes.ts` (formerly `IndexDeferralService`) registers **by name**.
 
 **Do NOT drop `ci.events.sentiment_score`.** Four request schemas declare it, `EventService.ts:394-396` writes it, `EventEntity.ts:211` returns it, and it carries a CHECK.
 

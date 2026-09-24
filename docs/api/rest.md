@@ -241,13 +241,6 @@ The order encodes real data dependencies: `extract_people` seeds the identifier 
 
 **One orchestration per user at a time — a second concurrent call → 409 Conflict** (`:1054-1056`, checked _before_ the stream headers are committed so the second caller gets a real 409 rather than a 200 that fails mid-stream). Non-stream response: `{ ok, legs[], totalDurationMs }`. Stream: NDJSON of `leg-start`/`leg-progress`/`leg-result`/`leg-error`/`tick`/`done` lines.
 
-### Index-deferral (bulk-load helper)
-
-| Verb | Path                                | Handler                     | Purpose                                                                                                                                                 |
-| ---- | ----------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST | `/api/maintenance/indexes/drop`     | `dropIndexes` (`:1083`)     | Drop deferrable secondary indexes before a huge load; returns each dropped index's exact recreate statement. Never drops PKs/provenance-unique indexes. |
-| POST | `/api/maintenance/indexes/recreate` | `recreateIndexes` (`:1093`) | Recreate them; body `{ dropped: {schema,name,definition}[] }` — the array from `/drop` verbatim.                                                        |
-
 ### Search-index hygiene & observability
 
 | Verb | Path                                            | Handler                                    | Purpose                                                                                                                                                                                        |
