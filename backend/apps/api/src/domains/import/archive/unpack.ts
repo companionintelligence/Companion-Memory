@@ -366,6 +366,129 @@ export function stripSymlinks(root: string, log?: (msg: string) => void): number
   return removed;
 }
 
+/**
+ * An archive tried to reach outside its extraction directory.
+ *
+ * Its own class so the extractor dispatch can tell it apart from a READ
+ * failure. adm-zip failing to parse a ZIP64 archive is a reason to retry with
+ * the system `unzip`; an entry named `../etc/cron.d/x` is not — retrying it
+ * with a second tool hands the escape to whatever that tool's defaults happen
+ * to be (Debian's `unzip` strips `../`; `ditto` was never checked). A
+ * containment failure is final.
+ */
+export class ArchiveEscapeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ArchiveEscapeError';
+  }
+}
+
+/** Reject an entry NAME whose resolved path escapes the extraction dir. */
+export function assertEntryInside(destDir: string, entryName: string): void {
+  const target = path.resolve(destDir, entryName);
+  const rel = path.relative(destDir, target);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new ArchiveEscapeError(`archive entry escapes extraction dir: ${entryName}`);
+  }
+}
+
+/** `lstat` truthiness: a dangling symlink counts as present, which `existsSync` denies. */
+function existsNoFollow(p: string): boolean {
+  try {
+    fs.lstatSync(p);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reject a WRITE whose parent directory is not really inside the extraction
+ * dir — the check a name can never make.
+ *
+ * `assertEntryInside` validates the string; this validates the filesystem. A
+ * symlink that an earlier archive left in the tree (`link -> /data`) turns an
+ * honest name (`link/x.txt`) into a write to `/data/x.txt`: `mkdirSync` with
+ * `recursive` walks straight through the link and `writeFileSync` follows it,
+ * and `existsSync` on the not-yet-existing file says false, so the
+ * never-overwrite guard passes too. Reproduced with Node 22 before this check
+ * existed.
+ *
+ * Walks up from the target's parent to the nearest path that exists, and
+ * requires its REAL path to sit under the extraction dir's real path. Done
+ * before `mkdirSync`, because creating the missing directories first would
+ * already have created them on the far side of the link.
+ */
+export function assertParentInside(destDir: string, target: string): void {
+  // Both sides resolve to their nearest EXISTING ancestor: the extraction dir
+  // itself may not exist yet (the upload extractor creates it with the first
+  // entry), and a path that does not exist cannot hold a link.
+  const nearestExisting = (p: string): string => {
+    let probe = p;
+    while (!existsNoFollow(probe) && probe !== path.dirname(probe)) {
+      probe = path.dirname(probe);
+    }
+
+    return probe;
+  };
+
+  let root: string;
+  let real: string;
+  try {
+    root = fs.realpathSync(nearestExisting(destDir));
+    real = fs.realpathSync(nearestExisting(path.dirname(target)));
+  } catch (err) {
+    throw new ArchiveEscapeError(
+      `cannot resolve extraction path for ${path.relative(destDir, target)}: ${(err as Error).message}`,
+    );
+  }
+
+  if (real !== root && !real.startsWith(root + path.sep)) {
+    throw new ArchiveEscapeError(
+      `archive entry would write outside extraction dir through a link: ${path.relative(destDir, target)}`,
+    );
+  }
+}
+
+/**
+ * Remove the symlinks among a just-extracted archive's own entries.
+ *
+ * The system extractors recreate a symlink entry as a real link, and the
+ * end-of-stage `stripSymlinks` sweep is too late for the archives that
+ * extract after it in the same pass — the next archive's writes would go
+ * through it. Checking the archive's own names is O(entries) `lstat`s rather
+ * than a walk of a 350GB tree per archive. A name that resolves outside
+ * `destDir` is skipped, never unlinked: the extractor did not write there,
+ * and neither may this.
+ */
+export function stripListedSymlinks(destDir: string, names: readonly string[], log?: (msg: string) => void): number {
+  let removed = 0;
+
+  for (const name of names) {
+    const target = path.resolve(destDir, name);
+    const rel = path.relative(destDir, target);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      continue;
+    }
+
+    try {
+      if (fs.lstatSync(target).isSymbolicLink()) {
+        fs.unlinkSync(target);
+        removed += 1;
+      }
+    } catch {
+      /* not extracted, or already gone */
+    }
+  }
+
+  if (removed > 0) {
+    log?.(`removed ${removed} symlink(s) an archive carried`);
+  }
+
+  return removed;
+}
+
 // Above this size, skip adm-zip (in-memory + no ZIP64) and stream via `unzip`.
 const LARGE_ZIP_BYTES = 1_000_000_000; // 1 GB
 
@@ -383,16 +506,32 @@ async function runSystemUnzip(
   archive: string,
   destDir: string,
 ): Promise<{ ok: boolean; files: number; detail: string }> {
-  const r = await systemExtract(archive, destDir);
-  let files = 0;
-  if (r.ok) {
-    const list = spawnSync('unzip', ['-Z1', archive], { encoding: 'utf8', maxBuffer: 1 << 30 });
-    if (list.status === 0) {
-      files = list.stdout.split('\n').filter((l) => l && !l.endsWith('/')).length;
-    }
+  // Names BEFORE bytes: every entry is checked for containment against the
+  // archive's own central directory, so the guarantee is this module's and not
+  // whichever extractor `systemExtract` picks. Without `unzip` there is no
+  // listing (ditto has none in this shape); the full-tree sweep below covers
+  // that case.
+  const list = spawnSync('unzip', ['-Z1', archive], { encoding: 'utf8', maxBuffer: 1 << 30 });
+  const names = list.status === 0 ? list.stdout.split('\n').filter((l) => l.length > 0) : null;
+  for (const name of names ?? []) {
+    assertEntryInside(destDir, name);
   }
 
-  return { ok: r.ok, files, detail: r.detail };
+  const r = await systemExtract(archive, destDir);
+  if (!r.ok) {
+    return { ok: false, files: 0, detail: r.detail };
+  }
+
+  // The extractor recreates symlink entries as real links. Take them out now,
+  // before the next archive in this pass can write through one — see
+  // stripListedSymlinks.
+  if (names) {
+    stripListedSymlinks(destDir, names);
+  } else {
+    stripSymlinks(destDir);
+  }
+
+  return { ok: true, files: names ? names.filter((n) => !n.endsWith('/')).length : 0, detail: r.detail };
 }
 
 /**
@@ -411,17 +550,19 @@ async function extractViaAdmZip(full: string, destDir: string): Promise<UnpackRe
   const entries = zip.getEntries();
 
   for (const entry of entries) {
+    assertEntryInside(destDir, entry.entryName);
     const target = path.resolve(destDir, entry.entryName);
-    if (path.relative(destDir, target).startsWith('..') || path.isAbsolute(path.relative(destDir, target))) {
-      throw new Error(`archive entry escapes extraction dir: ${entry.entryName}`);
-    }
 
     if (entry.isDirectory) {
+      assertParentInside(destDir, target);
       fs.mkdirSync(target, { recursive: true });
       continue;
     }
 
-    if (!fs.existsSync(target)) {
+    // Never overwrite — and a symlink at the target counts as "exists", where
+    // `existsSync` would follow a dangling one and say no, then write through it.
+    if (!existsNoFollow(target)) {
+      assertParentInside(destDir, target);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, entry.getData());
     }
@@ -433,17 +574,21 @@ async function extractViaAdmZip(full: string, destDir: string): Promise<UnpackRe
 }
 
 // Extract one archive into destDir. Small archives go through adm-zip (fast, no
-// subprocess); anything large — or an adm-zip failure (ZIP64 / corruption it
-// can't read) — falls through to the streaming system `unzip`.
+// subprocess); anything large — or an adm-zip READ failure (ZIP64 / corruption
+// it can't read) — falls through to the streaming system `unzip`. A containment
+// failure (ArchiveEscapeError) is never retried.
 async function extractArchive(full: string, destDir: string, size: number): Promise<UnpackResult> {
   const large = size >= LARGE_ZIP_BYTES;
   if (!large) {
     try {
       return await extractViaAdmZip(full, destDir);
     } catch (err) {
-      if (!systemUnzipAvailable()) {
+      // Only a READ failure earns a retry with the other extractor. An escape
+      // is the archive's doing, not adm-zip's, and a second tool must not be
+      // given the same entries to try its own defaults on.
+      if (err instanceof ArchiveEscapeError || !systemUnzipAvailable()) {
         throw err;
-      } // small + no fallback → genuine failure
+      }
     }
   }
 
