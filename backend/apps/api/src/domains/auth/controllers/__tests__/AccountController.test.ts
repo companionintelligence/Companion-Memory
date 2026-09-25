@@ -17,12 +17,14 @@ import { AccountController } from '../AccountController';
  * must not be asked for one it cannot possibly supply.
  */
 function makeController(
-  user: { id: string; email: string } | null = { id: 'u1', email: 'jsmith@example.com' },
+  user: { id: string; email: string; passwordSetAt?: Date | null } | null = { id: 'u1', email: 'jsmith@example.com', passwordSetAt: new Date() },
   {
     hasFederatedIdentity = false,
     validPassword = true,
     emailTaken = false,
-  }: { hasFederatedIdentity?: boolean; validPassword?: boolean; emailTaken?: boolean } = {},
+    // When the current session was established; `null` = the cookie names no live session.
+    sessionAgeMs = 0 as number | null,
+  }: { hasFederatedIdentity?: boolean; validPassword?: boolean; emailTaken?: boolean; sessionAgeMs?: number | null } = {},
 ) {
   const userService = {
     findById: jest.fn().mockResolvedValue(user),
@@ -39,6 +41,7 @@ function makeController(
 
   const authService = {
     invalidateOtherSessions: jest.fn().mockResolvedValue(undefined),
+    sessionEstablishedAt: jest.fn().mockResolvedValue(sessionAgeMs === null ? null : new Date(Date.now() - sessionAgeMs)),
   };
 
   const federatedIdentityService = {
@@ -53,6 +56,9 @@ function makeController(
 
   return { controller, userService, authService, federatedIdentityService };
 }
+
+/** An OIDC-provisioned account: a random password it has never seen, unless it has since set one. */
+const federatedUser = (passwordSetAt: Date | null = null) => ({ id: 'u1', email: 'jsmith@example.com', passwordSetAt });
 
 // A fresh object per test: toServiceContext caches on the RequestContext identity.
 const requestContext = () => ({ userId: 'u1' });
@@ -108,16 +114,24 @@ describe('AccountController — get', () => {
     await expect(controller.get(requestContext())).resolves.toEqual({
       email: 'jsmith@example.com',
       hasFederatedIdentity: false,
+      hasOwnPassword: true,
     });
   });
 
-  it('reports hasFederatedIdentity when an OIDC identity is bound', async () => {
-    const { controller } = makeController(undefined, { hasFederatedIdentity: true });
+  it('reports hasFederatedIdentity when an OIDC identity is bound, and no own password for a provisioned account', async () => {
+    const { controller } = makeController(federatedUser(), { hasFederatedIdentity: true });
 
     await expect(controller.get(requestContext())).resolves.toEqual({
       email: 'jsmith@example.com',
       hasFederatedIdentity: true,
+      hasOwnPassword: false,
     });
+  });
+
+  it('reports hasOwnPassword once a federated account has set one, so the page asks for it', async () => {
+    const { controller } = makeController(federatedUser(new Date()), { hasFederatedIdentity: true });
+
+    await expect(controller.get(requestContext())).resolves.toMatchObject({ hasFederatedIdentity: true, hasOwnPassword: true });
   });
 });
 
@@ -125,7 +139,7 @@ describe('AccountController — change email', () => {
   it('changes the email when the current password is correct', async () => {
     const { controller, userService } = makeController();
 
-    const result = await controller.changeEmail(requestContext(), {
+    const result = await controller.changeEmail(requestContext(), mockRequest(), {
       newEmail: 'new@example.com',
       currentPassword: 'correct-password',
     });
@@ -138,7 +152,7 @@ describe('AccountController — change email', () => {
   it('rejects with no current password on a non-federated account', async () => {
     const { controller, userService } = makeController();
 
-    await expect(controller.changeEmail(requestContext(), { newEmail: 'new@example.com' })).rejects.toThrow(
+    await expect(controller.changeEmail(requestContext(), mockRequest(), { newEmail: 'new@example.com' })).rejects.toThrow(
       BadRequestException,
     );
     expect(userService.changeEmail).not.toHaveBeenCalled();
@@ -148,24 +162,60 @@ describe('AccountController — change email', () => {
     const { controller, userService } = makeController(undefined, { validPassword: false });
 
     await expect(
-      controller.changeEmail(requestContext(), { newEmail: 'new@example.com', currentPassword: 'wrong' }),
+      controller.changeEmail(requestContext(), mockRequest(), { newEmail: 'new@example.com', currentPassword: 'wrong' }),
     ).rejects.toThrow(UnauthorizedException);
     expect(userService.changeEmail).not.toHaveBeenCalled();
   });
 
-  it('skips the current-password requirement for an OIDC-linked account', async () => {
-    const { controller, userService } = makeController(undefined, { hasFederatedIdentity: true });
+  it('asks a provisioned OIDC-linked account for a recent sign-in instead of a password it never saw', async () => {
+    const { controller, userService } = makeController(federatedUser(), { hasFederatedIdentity: true, sessionAgeMs: 60_000 });
 
-    await controller.changeEmail(requestContext(), { newEmail: 'new@example.com' });
+    await controller.changeEmail(requestContext(), mockRequest(), { newEmail: 'new@example.com' });
 
     expect(userService.changeEmail).toHaveBeenCalledWith({ userId: 'u1' }, 'u1', 'new@example.com');
+    expect(userService.validatePassword).not.toHaveBeenCalled();
+  });
+
+  it('SECURITY: refuses a provisioned OIDC-linked account on a session older than the window', async () => {
+    // The stolen-session case: a session hijacked yesterday cannot move the email today.
+    const { controller, userService } = makeController(federatedUser(), { hasFederatedIdentity: true, sessionAgeMs: 11 * 60_000 });
+
+    const error = await controller.changeEmail(requestContext(), mockRequest(), { newEmail: 'new@example.com' }).catch((err) => err);
+
+    expect(error).toBeInstanceOf(UnauthorizedException);
+    expect((error as UnauthorizedException).getResponse()).toMatchObject({ message: 'REAUTH_REQUIRED' });
+    expect(userService.changeEmail).not.toHaveBeenCalled();
+  });
+
+  it('SECURITY: refuses a provisioned OIDC-linked account with no session cookie at all', async () => {
+    const { controller, userService } = makeController(federatedUser(), { hasFederatedIdentity: true, sessionAgeMs: null });
+
+    const error = await controller
+      .changeEmail(requestContext(), { cookies: {} } as unknown as Request, { newEmail: 'new@example.com' })
+      .catch((err) => err);
+
+    expect(error).toBeInstanceOf(UnauthorizedException);
+    expect(userService.changeEmail).not.toHaveBeenCalled();
+  });
+
+  it('SECURITY: asks an OIDC-linked account that set its own password for that password, however fresh the session', async () => {
+    const { controller, userService } = makeController(federatedUser(new Date()), { hasFederatedIdentity: true, sessionAgeMs: 0 });
+
+    await expect(controller.changeEmail(requestContext(), mockRequest(), { newEmail: 'new@example.com' })).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(userService.changeEmail).not.toHaveBeenCalled();
+
+    await controller.changeEmail(requestContext(), mockRequest(), { newEmail: 'new@example.com', currentPassword: 'correct' });
+    expect(userService.validatePassword).toHaveBeenCalledWith('jsmith@example.com', 'correct');
+    expect(userService.changeEmail).toHaveBeenCalled();
   });
 
   it('rejects an email already in use and changes NOTHING', async () => {
     const { controller, userService } = makeController(undefined, { emailTaken: true });
 
     await expect(
-      controller.changeEmail(requestContext(), {
+      controller.changeEmail(requestContext(), mockRequest(), {
         newEmail: 'taken@example.com',
         currentPassword: 'correct-password',
       }),
@@ -177,7 +227,7 @@ describe('AccountController — change email', () => {
     const { controller, userService } = makeController();
 
     await expect(
-      controller.changeEmail(requestContext(), {
+      controller.changeEmail(requestContext(), mockRequest(), {
         newEmail: 'jsmith@example.com',
         currentPassword: 'correct-password',
       }),
@@ -221,11 +271,21 @@ describe('AccountController — change password', () => {
     expect(authService.invalidateOtherSessions).not.toHaveBeenCalled();
   });
 
-  it('allows setting a password with no current-password check for an OIDC-linked account', async () => {
-    const { controller, userService } = makeController(undefined, { hasFederatedIdentity: true });
+  it('lets a provisioned OIDC-linked account set its first password on a recent session', async () => {
+    const { controller, userService } = makeController(federatedUser(), { hasFederatedIdentity: true, sessionAgeMs: 60_000 });
 
     await controller.changePassword(requestContext(), mockRequest(), { newPassword: 'new-password-1' });
 
     expect(userService.changePassword).toHaveBeenCalledWith({ userId: 'u1' }, 'u1', 'new-password-1');
+  });
+
+  it('SECURITY: refuses to set a password for a provisioned OIDC-linked account on a stale session', async () => {
+    // A stolen session must not become a password the attacker knows.
+    const { controller, userService } = makeController(federatedUser(), { hasFederatedIdentity: true, sessionAgeMs: 11 * 60_000 });
+
+    await expect(controller.changePassword(requestContext(), mockRequest(), { newPassword: 'new-password-1' })).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    expect(userService.changePassword).not.toHaveBeenCalled();
   });
 });

@@ -254,7 +254,7 @@ export class PortalTokenService implements PortalTokenVerifier {
     //    users have no CI-Server password; set a random one.
     const created = await this.userService.create(
       { userId: SYSTEM_USER },
-      { name, email, password: crypto.randomBytes(32).toString('hex') },
+      { name, email, password: crypto.randomBytes(32).toString('hex'), passwordChosenByUser: false },
     );
 
     if (created) {

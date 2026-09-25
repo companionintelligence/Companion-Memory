@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   refetch: vi.fn(),
   email: 'jsmith@example.com',
   hasFederatedIdentity: false,
+  hasOwnPassword: true,
 }));
 
 vi.mock('@/hooks', () => ({
@@ -81,10 +82,11 @@ beforeEach(() => {
   h.authToken = 'jwt-abc';
   h.email = 'jsmith@example.com';
   h.hasFederatedIdentity = false;
+  h.hasOwnPassword = true;
 
   fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
     if (isAccountReadCall(url, init)) {
-      return Promise.resolve({ email: h.email, hasFederatedIdentity: h.hasFederatedIdentity });
+      return Promise.resolve({ email: h.email, hasFederatedIdentity: h.hasFederatedIdentity, hasOwnPassword: h.hasOwnPassword });
     }
 
     return Promise.resolve(undefined); // 204 No Content
@@ -173,7 +175,7 @@ describe('AccountSection — delete', () => {
   it('surfaces an error and stays signed in when the request fails', async () => {
     fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
       if (isAccountReadCall(url, init)) {
-        return Promise.resolve({ email: h.email, hasFederatedIdentity: false });
+        return Promise.resolve({ email: h.email, hasFederatedIdentity: false, hasOwnPassword: true });
       }
 
       return Promise.reject(new Error('Fetch failed: 500'));
@@ -213,8 +215,9 @@ describe('AccountSection — change email', () => {
     expect(screen.getByText('Email updated.')).toBeInTheDocument();
   });
 
-  it('skips the current-password field for a federated account', async () => {
+  it('skips the current-password field for a federated account with no password of its own', async () => {
     h.hasFederatedIdentity = true;
+    h.hasOwnPassword = false;
     render(<AccountSection />);
 
     // The heading for the OIDC copy is enough proof the fetched flag landed.
@@ -231,10 +234,50 @@ describe('AccountSection — change email', () => {
     expect(JSON.parse(init.body!)).toEqual({ newEmail: 'new@example.com' });
   });
 
+  it('asks a federated account that HAS set a password for it, like any other account', async () => {
+    h.hasFederatedIdentity = true;
+    h.hasOwnPassword = true;
+    render(<AccountSection />);
+
+    fireEvent.change(await screen.findByLabelText('Current password', { selector: '#emailCurrentPassword' }), {
+      target: { value: 'my-password' },
+    });
+    fireEvent.change(screen.getByLabelText('New email'), { target: { value: 'new@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update email' }));
+
+    await waitFor(() => expect(h.refetch).toHaveBeenCalled());
+    const [, init] = findCall('PATCH', '/api/account/email');
+    expect(JSON.parse(init.body!)).toEqual({ newEmail: 'new@example.com', currentPassword: 'my-password' });
+  });
+
+  it('tells a federated account whose sign-in is too old to sign in again', async () => {
+    h.hasFederatedIdentity = true;
+    h.hasOwnPassword = false;
+    fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
+      if (isAccountReadCall(url, init)) {
+        return Promise.resolve({ email: h.email, hasFederatedIdentity: true, hasOwnPassword: false });
+      }
+
+      if (init?.method === 'PATCH' && url === '/api/account/email') {
+        return Promise.reject(new FetchJsonError(401, 'Unauthorized', 'REAUTH_REQUIRED'));
+      }
+
+      return Promise.resolve(undefined);
+    });
+    render(<AccountSection />);
+    await screen.findByText(/no password yet/i);
+
+    fireEvent.change(screen.getByLabelText('New email'), { target: { value: 'new@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update email' }));
+
+    expect(await screen.findByText('Sign in again to make this change.')).toBeInTheDocument();
+    expect(h.refetch).not.toHaveBeenCalled();
+  });
+
   it('surfaces the server error and does not refetch the user', async () => {
     fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
       if (isAccountReadCall(url, init)) {
-        return Promise.resolve({ email: h.email, hasFederatedIdentity: false });
+        return Promise.resolve({ email: h.email, hasFederatedIdentity: false, hasOwnPassword: true });
       }
 
       if (init?.method === 'PATCH' && url === '/api/account/email') {
@@ -300,8 +343,9 @@ describe('AccountSection — change password', () => {
     expect(() => findCall('PATCH', '/api/account/password')).toThrow();
   });
 
-  it('labels the action "Set a password" and skips current-password for a federated account', async () => {
+  it('labels the action "Set a password" and skips current-password for a federated account without one', async () => {
     h.hasFederatedIdentity = true;
+    h.hasOwnPassword = false;
     render(<AccountSection />);
 
     expect(await screen.findByText('Set a password')).toBeInTheDocument();

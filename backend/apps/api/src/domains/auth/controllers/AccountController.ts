@@ -15,7 +15,7 @@ import type { Request } from 'express';
 import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { JwtAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { type User, UserService } from '@ci/domains/user';
@@ -37,7 +37,7 @@ const NEW_PASSWORD_SCHEMA = z.string().min(6, 'Password must be at least 6 chara
 
 const changeEmailSchema = z.object({
   newEmail: z.string().email('Invalid email address'),
-  /** Required unless the account is OIDC-linked — see `requireReauth` below. */
+  /** Required whenever the account has a password the user chose — see `requireReauth` below. */
   currentPassword: z.string().optional(),
 });
 
@@ -55,6 +55,24 @@ const changePasswordSchema = z.object({
  * an exemption: Apple wants the *initiation* path inside the app even though the data
  * lives on the user's own appliance.
  */
+/**
+ * How recently a session must have been established for an account that has no
+ * password of its own to change its email or set a password without further
+ * proof. The same "sudo mode" idea as a forge's re-authentication window.
+ */
+export const REAUTH_SESSION_WINDOW_MS = 10 * 60 * 1000;
+
+/** The `message` a 401 from `requireReauth` carries when signing in again is the answer. */
+export const REAUTH_REQUIRED = 'REAUTH_REQUIRED';
+
+/**
+ * Session-only, on every route. An API key is for reading and writing data on
+ * a person's behalf; it must never be able to change the credentials it hangs
+ * off. Under the `JwtOrApiKeyAuthGuard` these routes had, a `write` key — the
+ * level every new key is minted at — could set a password it knew and move the
+ * email, and on a Portal-signed-in account nothing asked it for anything
+ * (2026-09-24 audit).
+ */
 @Controller('account')
 export class AccountController {
   constructor(
@@ -67,13 +85,21 @@ export class AccountController {
    * a current-password prompt even makes sense for this account (see
    * `requireReauth`). */
   @Get()
-  @UseGuards(JwtOrApiKeyAuthGuard)
-  async get(@Context() context: RequestContext): Promise<{ email: string; hasFederatedIdentity: boolean }> {
+  @UseGuards(JwtAuthGuard)
+  async get(
+    @Context() context: RequestContext,
+  ): Promise<{ email: string; hasFederatedIdentity: boolean; hasOwnPassword: boolean }> {
     const serviceContext = toServiceContext(context);
     const user = await this.requireUser(serviceContext);
     const federatedIdentities = await this.federatedIdentityService.listForUser(user.id);
 
-    return { email: user.email, hasFederatedIdentity: federatedIdentities.length > 0 };
+    // `hasOwnPassword` is what the settings page keys the current-password field on: a
+    // federated account that has set a password of its own is asked for it like any other.
+    return {
+      email: user.email,
+      hasFederatedIdentity: federatedIdentities.length > 0,
+      hasOwnPassword: Boolean(user.passwordSetAt),
+    };
   }
 
   /**
@@ -96,7 +122,7 @@ export class AccountController {
    */
   @Delete()
   @HttpCode(HttpStatus.NO_CONTENT)
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtAuthGuard)
   async remove(
     @Context() context: RequestContext,
     @Body(new ValidationPipe(deleteAccountSchema)) input: { confirmEmail: string },
@@ -118,19 +144,20 @@ export class AccountController {
    * deletion, above) IS required here, for every account that has a password
    * the user actually knows — an email swap is a takeover vector deletion
    * isn't, since it redirects future logins to an address the attacker
-   * controls. `requireReauth` skips it only for OIDC-linked accounts, for the
-   * same reason `remove()` skips password confirmation for them.
+   * controls. `requireReauth` asks for the current password wherever the user
+   * has one, and for a recent sign-in otherwise.
    */
   @Patch('email')
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtAuthGuard)
   async changeEmail(
     @Context() context: RequestContext,
+    @Req() req: Request,
     @Body(new ValidationPipe(changeEmailSchema)) input: { newEmail: string; currentPassword?: string },
   ): Promise<{ email: string }> {
     const serviceContext = toServiceContext(context);
     const user = await this.requireUser(serviceContext);
 
-    await this.requireReauth(user, input.currentPassword);
+    await this.requireReauth(user, input.currentPassword, req);
 
     if (input.newEmail.trim().toLowerCase() === user.email.trim().toLowerCase()) {
       throw new BadRequestException('That is already your email address');
@@ -155,7 +182,7 @@ export class AccountController {
    * stays signed in, everywhere else is forced to re-authenticate.
    */
   @Patch('password')
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   async changePassword(
     @Context() context: RequestContext,
@@ -165,7 +192,7 @@ export class AccountController {
     const serviceContext = toServiceContext(context);
     const user = await this.requireUser(serviceContext);
 
-    await this.requireReauth(user, input.currentPassword);
+    await this.requireReauth(user, input.currentPassword, req);
     await this.userService.changePassword(serviceContext, user.id, input.newPassword);
 
     const currentToken: string | undefined = req.cookies?.[config.auth.cookies.sessionTokenName];
@@ -186,16 +213,35 @@ export class AccountController {
   }
 
   /**
-   * Verify the caller actually holds this account's current password before
-   * an email/password change — UNLESS the account is OIDC-linked, in which
-   * case it was given a random 32-byte password it has never seen
-   * (`OidcController`, `PortalTokenService`) and requiring it would make this
-   * permanently unreachable for exactly the users who sign in with CI-Portal.
+   * Prove the caller is the account's owner before an email or password change.
+   *
+   * The proof is the current password wherever the user has one they chose:
+   * every account that signed up with one, and a federated account that has
+   * since set one (`passwordSetAt`). The old rule exempted any account with a
+   * federated identity for good — reasonable for a Portal-provisioned account
+   * holding a random password it has never seen (`OidcController`,
+   * `PortalTokenService`), but it kept applying after that account had chosen a
+   * password, and it asked a stolen session for nothing.
+   *
+   * An account with no password of its own is asked for the next best thing:
+   * a session established within {@link REAUTH_SESSION_WINDOW_MS}. Sign-in time
+   * survives token rotation (it is the session row's, not the token's), and a
+   * caller with only an access token and no session cookie cannot prove it, so
+   * they get the same answer as a stale one: 401 `REAUTH_REQUIRED`, which the
+   * settings page turns into "sign in again".
    */
-  private async requireReauth(user: User, currentPassword: string | undefined): Promise<void> {
+  private async requireReauth(user: User, currentPassword: string | undefined, req: Request): Promise<void> {
     const federatedIdentities = await this.federatedIdentityService.listForUser(user.id);
+    const mustPresentPassword = federatedIdentities.length === 0 || Boolean(user.passwordSetAt);
 
-    if (federatedIdentities.length > 0) {
+    if (!mustPresentPassword) {
+      const sessionToken: string | undefined = req.cookies?.[config.auth.cookies.sessionTokenName];
+      const establishedAt = sessionToken ? await this.authService.sessionEstablishedAt(user.id, sessionToken) : null;
+
+      if (!establishedAt || Date.now() - establishedAt.getTime() > REAUTH_SESSION_WINDOW_MS) {
+        throw new UnauthorizedException({ message: REAUTH_REQUIRED, detail: 'Sign in again to make this change' });
+      }
+
       return;
     }
 

@@ -147,6 +147,21 @@ export class AuthService {
     });
   }
 
+  /**
+   * When the session behind `token` was established — its sign-in time, which
+   * survives token rotation because the row does. `null` when the token names
+   * no live session of this user. Read by `AccountController.requireReauth`
+   * as the "signed in recently" proof for an account with no password to ask
+   * for; nothing about the session is touched or extended.
+   */
+  async sessionEstablishedAt(userId: string, token: string): Promise<Date | null> {
+    const session = await this.sessionRepository.findOne({
+      where: { token: this.digest(token), expires_at: MoreThan(new Date()), user: { id: userId } },
+    });
+
+    return session?.created_at ?? null;
+  }
+
   issueAccessToken(userId: string): string {
     const payload = {
       sub: userId,

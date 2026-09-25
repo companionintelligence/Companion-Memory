@@ -721,6 +721,7 @@ export class OidcController {
           email: identity.email,
           // Random password — the account authenticates via OIDC.
           password: randomBytes(32).toString('hex'),
+          passwordChosenByUser: false,
         },
       ));
 
