@@ -75,7 +75,8 @@ export function AutonomySection() {
         <h2 className="text-xl font-semibold">Autonomy</h2>
         <p className="text-sm text-muted-foreground mt-1">
           Control how much Companion does on its own — inbox triage into tasks, calendar placement, graph
-          growth, inferred answers, and feed actions all respect this setting.
+          growth, inferred answers, and feed actions all respect this setting. So does chat: anything that
+          deletes data or sends it outside the appliance waits for your approval unless you choose Hands-off.
         </p>
       </div>
 

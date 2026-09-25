@@ -3,21 +3,25 @@ import { cn } from '@ci/shadcn';
 import type { OnboardingFormData } from './OnboardingPage';
 import { StepHeader } from './StepHeader';
 
+// The last clause of each hint is the tool gate (`PendingActionService`):
+// in chat, deleting or sending anything asks first on Cautious and Balanced,
+// and only Hands-off waives that. Keep the three in step with
+// `trustForToolCall` — this copy is the only place the owner learns the rule.
 export const TRUST_OPTIONS = [
   {
     value: 'cautious' as const,
     label: 'Cautious',
-    hint: 'Ask before adding to-dos or placing them on your calendar',
+    hint: 'Ask before adding to-dos or placing them on your calendar; ask before deleting or sending anything',
   },
   {
     value: 'balanced' as const,
     label: 'Balanced',
-    hint: 'High-confidence to-dos join the backlog; scheduling still asks first',
+    hint: 'High-confidence to-dos join the backlog; scheduling, deleting and sending still ask first',
   },
   {
     value: 'hands_off' as const,
     label: 'Hands-off',
-    hint: 'Add and place solid to-dos on the calendar automatically',
+    hint: 'Add and place solid to-dos automatically; delete and send from chat without asking',
   },
 ];
 

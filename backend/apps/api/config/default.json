@@ -261,7 +261,7 @@
     "derivation.engines": true,
     "ingest.selfHeal": true,
     "solid.protocol": false,
-    "tools.pendingActions": false
+    "tools.pendingActions": true
   },
   "environment": {
     "database.query.logging": false

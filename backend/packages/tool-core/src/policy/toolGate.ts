@@ -80,14 +80,14 @@ export function needsConfirmation(intent: DispatchableIntent): boolean {
  *    it applies only to intents {@link needsConfirmation} already flags, and its
  *    only possible effect is `execute` → `queue`.
  *
- * The trust mapping, with `kind: 'agent_write'`, `confidence: 1` and
- * `hasUserInput: true` (see `PendingActionService.evaluate` for why 1 is the
- * honest confidence for an explicit tool call rather than an inference):
+ * The trust mapping, as the API's `PendingActionService.trustForToolCall` makes
+ * it (the dial is read directly for a tool call, not through the inference
+ * scorer — an explicit intent has no confidence to grade):
  *
- * | trust mode  | decide() | destructive / external intent |
+ * | trust mode  | trust    | destructive / external intent |
  * |-------------|----------|-------------------------------|
- * | `hands_off` | auto     | executes — today's behaviour, exactly |
- * | `balanced`  | auto     | executes — today's behaviour, exactly |
+ * | `hands_off` | auto     | executes unattended |
+ * | `balanced`  | review   | queues for confirmation |
  * | `cautious`  | review   | queues for confirmation |
  *
  * `skip` queues rather than executing or silently dropping. The dial's `skip`

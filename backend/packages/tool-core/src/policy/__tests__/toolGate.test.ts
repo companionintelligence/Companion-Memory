@@ -119,7 +119,7 @@ describe('resolveToolGate — the appliance-tier trust dial', () => {
     }
   });
 
-  it('executes destructive and external work when the dial says auto — hands_off and balanced are unchanged', () => {
+  it('executes destructive and external work when the dial says auto — hands_off', () => {
     expect(
       resolveToolGate(DESTRUCTIVE, { tier: 'appliance', capability: FULL_CAPABILITY, trust: 'auto' })
         .decision,

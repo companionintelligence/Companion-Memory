@@ -12,6 +12,11 @@ import type { RequestContext } from '@ci/common/context';
 import { type ApiKeyCapability, FULL_CAPABILITY } from '@ci/common/decorators';
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
+import {
+  UNTRUSTED_TOOL_RESULTS_GUARD,
+  guardToolResultRound,
+  unguardToolResult,
+} from '@ci/common/prompt/untrustedBlock';
 import config, { UTILITY_MODEL_EXPLICITLY_CONFIGURED } from '@ci/configuration';
 import { ModelTierRouter, type RoutingDecision } from '@ci/domains/model-routing';
 import {
@@ -1627,16 +1632,25 @@ export class OllamaService implements OnModuleInit {
     // `resultByteBudget` is the ROUND's share of the context window (see
     // toolResultByteBudget's own doc), not each individual call's — a round
     // with N tool calls must split it N ways, or the round's actual total is
-    // N times the intended budget.
-    const perCallByteBudget = Math.max(1, Math.floor(resultByteBudget / toolResults.length));
-
-    return toolResults.map(
-      ({ result }) =>
-        ({
-          role: 'tool' as const,
-          content: boundToolResultForPrompt(result, perCallByteBudget),
-        }) satisfies OllamaMessage,
+    // N times the intended budget. The guard sentence below is part of the
+    // round, so it is paid for out of the same budget rather than on top.
+    const guardCost = UNTRUSTED_TOOL_RESULTS_GUARD.length + 1;
+    const perCallByteBudget = Math.max(
+      1,
+      Math.floor(Math.max(0, resultByteBudget - guardCost) / toolResults.length),
     );
+
+    // Fenced, not raw: a result is whatever the archive held — the matched
+    // email's body, verbatim — and the model reads it in the same position it
+    // reads the user. The pre-retrieved evidence block is already fenced
+    // (`ChatTurnService`); this is the same guard for the results the model
+    // fetches itself mid-turn. See `untrustedBlock.ts` for why JSON already
+    // supplies the structural half and the sentence is the missing prose half.
+    const contents = guardToolResultRound(
+      toolResults.map(({ result }) => boundToolResultForPrompt(result, perCallByteBudget)),
+    );
+
+    return contents.map((content) => ({ role: 'tool' as const, content }) satisfies OllamaMessage);
   }
 
   private convertToOllamaTool(toolSchema: ToolSchema): Tool {
@@ -1732,7 +1746,9 @@ export function savedKnowledgeWrapUp(messages: OllamaMessage[]): string | null {
     }
 
     try {
-      const parsed = JSON.parse(message.content) as {
+      // The first result of a round carries the untrusted-content guard ahead
+      // of its JSON (see `handleToolCalls`); take it off before parsing.
+      const parsed = JSON.parse(unguardToolResult(message.content)) as {
         error?: unknown;
         createdNodes?: number;
         createdRelationships?: number;

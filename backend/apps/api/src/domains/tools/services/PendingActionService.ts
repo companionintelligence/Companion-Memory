@@ -6,6 +6,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import { PersonalizationService } from '@ci/domains/personalization/services/PersonalizationService';
+import type { TrustDecision } from '@ci/tool-core';
 
 import type { IntentDefinition, ToolInvocationContext, ToolResult } from '../core/types';
 import { PendingActionEntity, type PendingAction } from '../entities/PendingActionEntity';
@@ -18,11 +19,47 @@ import {
 import { needsConfirmation, resolveToolGate, type ToolGateRuling } from '../policy/toolGate';
 
 /**
- * The feature flag, shaped like `ask` and `smart.rotation`: the whole gate is
- * dark until it is turned on, and while it is off `evaluate` is provably
- * today's behaviour (see the flag branch there).
+ * The feature flag, shaped like `ask` and `smart.rotation` — but ON by default
+ * since 2026-09-25. It shipped dark while the queue had no UI; the Approvals
+ * page has one now, and with the flag off the owner's own chat ran every delete
+ * and every send unattended, which made a planted email one tool call from
+ * exfiltration (see {@link trustForToolCall}). Off is now the kill switch, and
+ * while it is off `evaluate` is provably the pre-gate behaviour (see the flag
+ * branch there).
  */
 export const PENDING_ACTIONS_FEATURE = 'tools.pendingActions' as const;
+
+/**
+ * The dial's mode, named through the service this file already depends on:
+ * importing it from personalization's barrel closes a dependency cycle
+ * (personalization → llm → tools → here), and its `types.ts` is that domain's
+ * internal.
+ */
+type TrustMode = Awaited<ReturnType<PersonalizationService['getProfile']>>['trustMode'];
+
+/**
+ * The owner's trust dial, read DIRECTLY for a tool call rather than through
+ * `PersonalizationService.decide`.
+ *
+ * `decide` grades inferences: it takes a confidence and compares it with the
+ * mode's auto-promote threshold. A tool call is not an inference — the model
+ * emitted this exact intent, so its "confidence" is 1 — and 1 clears every
+ * threshold, so routing a tool call through `decide` meant `balanced` (the
+ * default dial) answered `auto` and the gate never queued anything for the
+ * owner. That was the hole: the chat model reads mail, messages and web pages
+ * somebody else wrote, and a model steered by one of them into `messaging.send`
+ * or `memory.forget` met no confirmation at all.
+ *
+ * So the mapping is the mode's own rule, stated for actions rather than for
+ * guesses: only `hands_off` — the owner explicitly choosing to be asked nothing —
+ * runs a destructive or external intent unattended. `balanced` and `cautious`
+ * both produce an approval card. This is consulted only for intents
+ * {@link needsConfirmation} already flags, so an ordinary read or write never
+ * reaches it.
+ */
+export function trustForToolCall(trustMode: TrustMode): TrustDecision {
+  return trustMode === 'hands_off' ? 'auto' : 'review';
+}
 
 /**
  * How long an unanswered proposal stays answerable.
@@ -101,7 +138,7 @@ export class PendingActionService {
     }
 
     if (!(await this.features.isFeatureEnabled(PENDING_ACTIONS_FEATURE))) {
-      // Flag off is today's behaviour, exactly: appliance tier, no trust dial.
+      // Flag off is the pre-gate behaviour, exactly: appliance tier, no trust dial.
       // The tier is pinned rather than read from the context on purpose — a
       // `?tier=local` caller must not be able to reach a queue branch that this
       // appliance has switched off.
@@ -121,22 +158,11 @@ export class PendingActionService {
 
     // The dial is consulted ONLY for the intents that could need confirming,
     // and only when there is an owner to consult it for. Every ordinary read or
-    // write skips it entirely, so turning the flag on cannot slow or change
-    // them.
+    // write skips it entirely, so the gate cannot slow or change them. The
+    // profile read is cached per user inside PersonalizationService.
     const trust =
       needsConfirmation(schema) && context.userId && context.principal !== 'managed-app'
-        ? await this.personalization.decideAction(context.userId, {
-            // `confidence: 1` is the honest value, not a way to force `auto`.
-            // The dial grades INFERENCES — how sure the appliance is that a
-            // guess it made is right. A tool call is not a guess: the model
-            // emitted this exact intent in response to the user. What varies by
-            // trust mode is therefore not the confidence but the mode's own
-            // rule, and `cautious` is the mode whose rule is "an action with
-            // user input gets reviewed".
-            kind: 'agent_write',
-            confidence: 1,
-            hasUserInput: true,
-          })
+        ? trustForToolCall((await this.personalization.getProfile(context.userId)).trustMode)
         : null;
 
     return resolveToolGate(schema, { tier, capability, trust, principal: context.principal });

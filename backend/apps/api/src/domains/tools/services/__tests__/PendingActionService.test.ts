@@ -34,17 +34,20 @@ const SEND = schema('messaging.send', { access: 'write', external: true });
 const RECALL = schema('memory.recall');
 
 /**
- * The real `PersonalizationService.decide` over a real profile — the mapping
- * under test is "trust mode → queue or not", so faking `decideAction` would
- * assert nothing about the binding this feature actually makes.
+ * A real profile for the mode, served the way `PersonalizationService.getProfile`
+ * serves it. `decideAction` is stubbed to fail loudly: the gate must read the
+ * dial directly (see `trustForToolCall`), because routing a confidence-1 tool
+ * call through the inference scorer is exactly how `balanced` used to answer
+ * `auto` and run deletes unattended.
  */
 function personalizationFor(trustMode: TrustMode) {
   const profile: PersonalizationProfile = PersonalizationService.profileForTrustMode(trustMode);
 
   return {
-    decideAction: jest.fn(async (_userId: string, input: any) =>
-      PersonalizationService.decide(profile, input),
-    ),
+    getProfile: jest.fn(async () => profile),
+    decideAction: jest.fn(async () => {
+      throw new Error('a tool call must not be graded as an inference');
+    }),
   } as any;
 }
 
@@ -82,7 +85,7 @@ function context(overrides: Partial<ToolInvocationContext> = {}): ToolInvocation
   return { userId: 'user-1', capability: FULL_CAPABILITY, ...overrides };
 }
 
-describe('PendingActionService.evaluate — feature flag off is today’s behaviour', () => {
+describe('PendingActionService.evaluate — feature flag off is the pre-gate behaviour', () => {
   it('executes a destructive intent even under the most cautious dial', async () => {
     const personalization = personalizationFor('cautious');
     const service = new PendingActionService(
@@ -96,8 +99,8 @@ describe('PendingActionService.evaluate — feature flag off is today’s behavi
 
     expect(ruling.decision).toBe('execute');
     // Not merely "the answer was execute": the dial must not even be asked, so
-    // turning the flag off cannot cost a Person lookup per tool call.
-    expect(personalization.decideAction).not.toHaveBeenCalled();
+    // turning the flag off cannot cost a profile lookup per tool call.
+    expect(personalization.getProfile).not.toHaveBeenCalled();
   });
 
   it('ignores a `tier=local` caller entirely, so a queue branch this appliance switched off is unreachable', async () => {
@@ -115,9 +118,13 @@ describe('PendingActionService.evaluate — feature flag off is today’s behavi
 });
 
 describe('PendingActionService.evaluate — the trust dial binding', () => {
+  // `balanced` is the default dial, so `balanced → queue` is the line that
+  // closes the hole: a chat model steered by a planted email into a delete or
+  // a send now produces a card, not an outcome. Only the owner explicitly
+  // choosing hands-off waives that.
   it.each([
     ['hands_off', 'execute'],
-    ['balanced', 'execute'],
+    ['balanced', 'queue'],
     ['cautious', 'queue'],
   ] as const)('trust mode %s → %s for a destructive intent', async (trustMode, expected) => {
     const service = new PendingActionService(
@@ -132,7 +139,7 @@ describe('PendingActionService.evaluate — the trust dial binding', () => {
 
   it.each([
     ['hands_off', 'execute'],
-    ['balanced', 'execute'],
+    ['balanced', 'queue'],
     ['cautious', 'queue'],
   ] as const)('trust mode %s → %s for an external intent', async (trustMode, expected) => {
     const service = new PendingActionService(
@@ -155,7 +162,7 @@ describe('PendingActionService.evaluate — the trust dial binding', () => {
     );
 
     expect((await service.evaluate(RECALL, context())).decision).toBe('execute');
-    expect(personalization.decideAction).not.toHaveBeenCalled();
+    expect(personalization.getProfile).not.toHaveBeenCalled();
   });
 
   it('never turns a capability denial into a queue, whatever the dial says', async () => {
