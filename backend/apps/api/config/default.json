@@ -261,7 +261,8 @@
     "derivation.engines": true,
     "ingest.selfHeal": true,
     "solid.protocol": false,
-    "tools.pendingActions": false
+    "tools.pendingActions": false,
+    "graphql.ide": true
   },
   "environment": {
     "database.query.logging": false

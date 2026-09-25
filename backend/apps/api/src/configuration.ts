@@ -1171,6 +1171,17 @@ export const ConfigSchema = z.object({
      */
     'solid.protocol': booleanStringSchema,
     /**
+     * Serve the GraphiQL IDE at `GET /graphiql`. The page is static HTML that
+     * authenticates per request with a pasted API key (see docs/graphql-api.md),
+     * so it cannot sit behind the auth guard — which is why it was served
+     * unauthenticated in every environment, loading its scripts from unpkg.com.
+     * Introspection is already off in production; this makes the IDE match.
+     * On by default, off in `production.json`, and ENABLE_GRAPHQL_IDE=true turns
+     * it back on for a deployment that wants it. The Settings link follows the
+     * flag.
+     */
+    'graphql.ide': booleanStringSchema,
+    /**
      * The dispatch gate: `ToolRegistry.executeTool` consults `resolveToolGate`
      * and parks a destructive/external/not-locally-permitted intent in
      * `ci.pending_actions` instead of running it, returning `TOOL_QUEUED`.

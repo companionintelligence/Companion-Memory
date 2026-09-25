@@ -371,6 +371,7 @@
     "smart.rotation": "ENABLE_SMART_ROTATION",
     "ask": "ENABLE_ASK",
     "tools.pendingActions": "ENABLE_PENDING_ACTIONS",
+    "graphql.ide": "ENABLE_GRAPHQL_IDE",
     "grounded.prompts": "ENABLE_GROUNDED_PROMPTS",
     "derivation.engines": "ENABLE_DERIVATION_ENGINES",
     "ingest.selfHeal": "ENABLE_INGEST_SELF_HEAL",

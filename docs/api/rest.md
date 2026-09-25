@@ -60,7 +60,7 @@ Grounded in source; every route cites `file:line`.
 
 **Scopes and capability.** A route may declare `@RequireScopes('memory'|'intents'|'mcp'|'capture')` and `@RequireCapability('read'|'write'|'full')`. Enforcement is **deny-by-default for scope-limited API keys**: such a key may reach a route only if the route grants a scope it holds. Session/JWT/Portal principals and empty-scope (legacy full-authority) keys are unaffected by the scope axis, but capability applies to _every_ api-key principal. See [auth-and-conventions.md §1.2](auth-and-conventions.md#12-api-keys-programmatic-clients).
 
-**Unauthenticated routes (no auth guard):** `GET /health`, `GET /_internal/features/global`, `GET /config/telemetry`, the `authenticate/*` + `/signup` + `authenticate/oidc/*` endpoints, `GET /connect`, `GET /graphiql`, `GET /solid/profile/:userId` (flag-gated), and `POST /agent/v1/ask` (verifies a peer's Portal token inline).
+**Unauthenticated routes (no auth guard):** `GET /health`, `GET /_internal/features/global` (the `PUBLIC_FEATURES` allowlist only), `GET /config/telemetry`, the `authenticate/*` + `/signup` + `authenticate/oidc/*` endpoints, `GET /connect`, `GET /graphiql` (flag-gated: `graphql.ide`, off in production), `GET /solid/profile/:userId` (flag-gated), and `POST /agent/v1/ask` (verifies a peer's Portal token inline).
 
 See [auth-and-conventions.md](auth-and-conventions.md) for the full auth model.
 

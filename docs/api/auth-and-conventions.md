@@ -216,7 +216,7 @@ CI-Server uses **per-controller guards**, not a global auth guard.
 | Route | Why it is open |
 |---|---|
 | `GET /health` | liveness probe |
-| `GET /_internal/features/global` | gates the SPA before login |
+| `GET /_internal/features/global` | gates the SPA before login — answers with the `PUBLIC_FEATURES` allowlist only, not the full flag map |
 | `GET /config/telemetry` | the SPA needs the Sentry DSN before it has a session. *(Its sibling `GET /config/maps` **is** guarded.)* |
 | `authenticate/*`, `/signup` | login/refresh/logout + CSRF issue — `CsrfGuard` where it applies, but no auth guard |
 | `authenticate/oidc/*` | the whole OIDC entry point, including `POST native/exchange` (the one-time code *is* the proof) and `GET`/`POST confirm-account` |
