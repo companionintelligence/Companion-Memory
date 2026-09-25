@@ -2,7 +2,7 @@ services:
   api:
     image: ci/api
     volumes:
-      - secrets:/run/secrets:ro
+      - secrets-api:/run/secrets:ro
       # ONE bind mount holding the importer's three working areas — uploads/
       # (staged uploads, TTL'd), inbox/ (the user's drop-in folder), and
       # scratch/ (per-run working trees). Sharing a filesystem is what lets a
@@ -117,7 +117,7 @@ services:
   worker:
     image: ci/api
     volumes:
-      - secrets:/run/secrets:ro
+      - secrets-api:/run/secrets:ro
       # The same working-area mount as the api: the worker MOVES staged
       # sources into run scratch, so both halves must see one filesystem.
       - ${CI_IMPORT_WORK_DIR:-./import-work}:/var/lib/ci-import
@@ -148,7 +148,7 @@ services:
 
   database:
     volumes:
-      - secrets:/run/secrets:ro
+      - secrets-database:/run/secrets:ro
     depends_on:
       generate-secrets:
         condition: service_completed_successfully
@@ -176,7 +176,7 @@ services:
     environment:
       API_URL: http://api:3030
     volumes:
-      - secrets:/run/secrets:ro
+      - secrets-hbpe:/run/secrets:ro
     depends_on:
       generate-secrets:
         condition: service_completed_successfully
@@ -199,14 +199,14 @@ services:
 
   object-store:
     volumes:
-      - secrets:/run/secrets:ro
+      - secrets-object-store:/run/secrets:ro
     depends_on:
       generate-secrets:
         condition: service_completed_successfully
 
   summary-service:
     volumes:
-      - secrets:/run/secrets:ro
+      - secrets-summary:/run/secrets:ro
     depends_on:
       generate-secrets:
         condition: service_completed_successfully
@@ -219,13 +219,25 @@ services:
     image: ci/setup-secrets
     restart: "no"
     volumes:
+      # The master, read-write, and the only place it is mounted.
       - secrets:/run/secrets
+      # One projection volume per service, at the path the entrypoint
+      # projects into (SECRETS_PROJECTION_ROOT/<service>). Each service
+      # above mounts its own at /run/secrets.
+      - secrets-api:/run/secrets/services/api
+      - secrets-database:/run/secrets/services/database
+      - secrets-setup-database:/run/secrets/services/setup-database
+      - secrets-object-store:/run/secrets/services/object-store
+      - secrets-hbpe:/run/secrets/services/hbpe
+      - secrets-summary:/run/secrets/services/summary
+      - secrets-powersync:/run/secrets/services/powersync
+      - secrets-tooling:/run/secrets/services/tooling
     profiles: [ "production" ]
 
   migrate-database:
     image: ci/api
     volumes:
-      - secrets:/run/secrets:ro
+      - secrets-api:/run/secrets:ro
     networks:
       - ci
     command: ["yarn", "migrate"]
@@ -239,7 +251,7 @@ services:
 
   setup-database:
     volumes:
-      - secrets:/run/secrets:ro
+      - secrets-setup-database:/run/secrets:ro
 
 volumes:
   db-data:

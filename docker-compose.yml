@@ -212,9 +212,11 @@ services:
         exec node service/lib/entry.js start -r unified
     volumes:
       - ./infrastructure/powersync:/config:ro
-      # Read-only, and world-readable inside (generate-secrets chmods 644), which
-      # is what lets this image's uid 901 source it without running as root.
-      - secrets:/run/secrets:ro
+      # Its OWN projection (replication + app roles and the sync JWT key),
+      # not the master: see generate-secrets. Read-only, and world-readable
+      # inside (the projection is 0644), which is what lets this image's uid
+      # 901 source it without running as root.
+      - secrets-powersync:/run/secrets:ro
     environment:
       # Read by the service directly, unlike the PS_* vars the wrapper above
       # exports. Those three are substituted into powersync.yaml via its `!env`
@@ -289,7 +291,7 @@ services:
   dbconnstr:
     image: alpine
     volumes:
-      - secrets:/run/secrets:ro
+      - secrets-tooling:/run/secrets:ro
     entrypoint:
       - sh
       - -c
@@ -312,7 +314,18 @@ services:
 volumes:
   db-data:
   object-data:
+  # The master secrets file. Mounted into generate-secrets ONLY; every other
+  # service gets one of the per-service projections below, holding just the
+  # keys it reads (the map is in infrastructure/setup-secrets/entrypoint.sh).
   secrets:
+  secrets-api:
+  secrets-database:
+  secrets-setup-database:
+  secrets-object-store:
+  secrets-hbpe:
+  secrets-summary:
+  secrets-powersync:
+  secrets-tooling:
   hbpe-models:
   hbpe-corpus:
 
