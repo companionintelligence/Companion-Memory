@@ -1175,13 +1175,19 @@ export const ConfigSchema = z.object({
      * and parks a destructive/external/not-locally-permitted intent in
      * `ci.pending_actions` instead of running it, returning `TOOL_QUEUED`.
      *
-     * OFF by default, and off is byte-identical to the pre-gate behaviour —
-     * `PendingActionService.evaluate` pins the tier to `appliance` and skips the
-     * trust dial, so the only ruling it can produce is the `execute` every call
-     * already got. Turn it on with ENABLE_PENDING_ACTIONS=true; what changes
-     * then is `cautious` trust mode (destructive/external intents ask first) and
-     * `?tier=local` execute calls (queued rather than run). `hands_off` and
-     * `balanced` behave exactly as they do today either way.
+     * ON by default since 2026-09-25 (it shipped dark while the queue had no
+     * UI). With it on, a destructive or external intent from the owner's own
+     * chat is queued as an approval card under the `balanced` and `cautious`
+     * dials and runs unattended only under `hands_off` — see
+     * `PendingActionService.trustForToolCall` for why the dial is read
+     * directly rather than through the inference scorer. `?tier=local`
+     * execute calls are queued rather than run.
+     *
+     * ENABLE_PENDING_ACTIONS=false is the kill switch, and off is
+     * byte-identical to the pre-gate behaviour: `PendingActionService.evaluate`
+     * pins the tier to `appliance` and skips the dial, so the owner's every
+     * call executes. An installed app's destructive intent is queued
+     * regardless of this flag (the `managed-app` rule in `resolveToolGate`).
      */
     'tools.pendingActions': booleanStringSchema,
   }),
