@@ -625,7 +625,9 @@ export class FileService implements OnModuleInit {
    * planted in a row, as the account import once allowed) came back as bytes.
    * The check is on the ROW, not the object: ownership is a fact about
    * `ci.files.user_id`, and a soft-deleted row still names its owner, so the
-   * lookup includes deleted rows (export reads those too).
+   * lookup includes deleted rows (export reads those too). It runs once per
+   * read, per file, in every background pass, so it must stay a single probe
+   * of `files_user_id_key_idx` (user_id, key) — keep both columns in the WHERE.
    *
    * The system principal is exempt, exactly as every other scoped lookup in
    * this service exempts it: background jobs act for the appliance, not for a
