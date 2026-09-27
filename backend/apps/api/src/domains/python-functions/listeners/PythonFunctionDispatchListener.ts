@@ -92,8 +92,8 @@ export class PythonFunctionDispatchListener {
         body: JSON.stringify({
           function: payload.function,
           args: payload.args,
-          // What the run may act as: this job's user, until shortly after the job
-          // would time out. The only credential the sidecar ever holds.
+          // What the run may act as: this job's user, until shortly after the
+          // queue would expire the job. The only credential the sidecar ever holds.
           access_token: this.tokens.issueRunToken({ userId: payload.userId, jobId: ack.jobId, queue }),
           // From the ACK: this is pg-boss's job id, which is what the sidecar
           // hands back to PythonFunctionCallbackController and what

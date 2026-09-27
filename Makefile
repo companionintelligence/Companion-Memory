@@ -627,6 +627,19 @@ init: ## Initialize repository after checkout
 		printf "\n"; \
 	fi
 
+	@# The copy above happens once, so a key added to .env.default later never
+	@# reaches an existing .env. SIDECAR_AUTH_SECRET is one the stack cannot boot
+	@# without — the HBPE/Summary entrypoints exit 1 when it is empty, and so does
+	@# the staging api — so mint one into a .env that predates it. A .env that
+	@# already names the key (a fresh copy carries the template's) is left alone.
+	@# scripts/dev-stack/sidecar-secret.ts does the same for a direct
+	@# `yarn tsx scripts/dev-stack/index.ts up`, which never runs this target.
+	@if [ -f .env ] && ! grep -q '^SIDECAR_AUTH_SECRET=' .env; then \
+		printf "Adding a generated SIDECAR_AUTH_SECRET to .env...\n\n"; \
+		printf '\n# Bearer the API presents to the HBPE/Summary sidecars; they refuse requests without it.\nSIDECAR_AUTH_SECRET=%s\n' \
+			"$$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env; \
+	fi
+
 .PHONY: install
 install: ## Install project dependencies
 	@printf "$(call task_icon,install,📦) Installing dependencies...\n\n"

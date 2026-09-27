@@ -34,10 +34,17 @@ import dotenv from 'dotenv';
 import { CaddyClient, routeId } from './caddy';
 import { keyFromArgv } from './key';
 import { fail, link, note, ok, step, table } from './log';
+import { ensureSidecarAuthSecret } from './sidecar-secret';
 import { removeStaleContainers } from './stale-containers';
 
 const ROOT = process.cwd();
 dotenv.config({ path: path.join(ROOT, '.env'), quiet: true });
+
+// A .env older than sidecar auth lacks this, and the sidecars exit without it.
+// `make init` backfills it for `make dev`; running this script directly skips that.
+if (ensureSidecarAuthSecret(path.join(ROOT, '.env'))) {
+  note('Added a generated SIDECAR_AUTH_SECRET to .env (it predated sidecar auth)');
+}
 
 const caddy = new CaddyClient();
 
