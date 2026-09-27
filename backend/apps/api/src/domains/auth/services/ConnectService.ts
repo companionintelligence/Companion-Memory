@@ -30,8 +30,8 @@ const CONNECT_KEY_TTL_DAYS = 90;
  * user it will do — they read this same function so they can never drift.
  *
  * App URNs are `<appName>:<store>` (e.g. `ci-openclaw:ci-marketplace`); we key
- * on the app name. The chat agents are confined to exactly what they use; the
- * bulk importer and any app we haven't explicitly narrowed get an EMPTY scope
+ * on the app name. The chat agents and the `ci-mentra` glasses bridge are
+ * confined to exactly what they use; the bulk importer and any app we haven't explicitly narrowed get an EMPTY scope
  * set = full access (grandfathered), so enforcement never breaks an app whose
  * real needs we didn't enumerate.
  */
@@ -49,6 +49,11 @@ export function scopesForApp(appUrn: string): string[] {
       // than per-agent) so it can't break whichever of intents/mcp each agent
       // actually exercises.
       return [MEMORY_SCOPE, INTENTS_SCOPE, MCP_SCOPE];
+    case 'ci-mentra':
+      // Mentra smart-glasses bridge: it only reads context/recall and records
+      // turns/fragments through `/memory/*`, so it is confined to the memory
+      // scope — no intents, no MCP, no raw data plane.
+      return [MEMORY_SCOPE];
     default:
       // e.g. ci-import-tools (a bulk importer needing graphql/ingest/files/
       // maintenance) and any unknown consumer → full access.
@@ -67,8 +72,8 @@ export function scopesForApp(appUrn: string): string[] {
  * `DEFAULT_API_KEY_CAPABILITY` — an authority level nobody had picked for these
  * apps, and one that would move under them if that default ever changed.
  *
- * The chat agents (`ci-openclaw`, `ci-hermes`) are on `full`; everything else on
- * `write`. Both chosen, not inherited:
+ * The chat agents (`ci-openclaw`, `ci-hermes`) are on `full`; everything else
+ * (including the memory-scoped `ci-mentra` glasses bridge) on `write`. Both chosen, not inherited:
  *
  * - the chat agents record as well as recall, so `read` would break them
  *   (`POST /memory/write` and `/memory/turn` are `@RequireCapability(write)`).
@@ -110,6 +115,12 @@ export function capabilityForApp(appUrn: string): ApiKeyCapability {
       // destructive attempt into an approval card rather than running it. Paired
       // with the `managed-app` rule in resolveToolGate; see the docblock above.
       return FULL_CAPABILITY;
+    case 'ci-mentra':
+      // Glasses bridge: reads context/recall and writes turns/fragments
+      // (`POST /memory/turn` and `/memory/write` need `write`). Not paired with
+      // the confirmation gate, so never `full`. Stated explicitly rather than
+      // riding the default so a change there cannot move it.
+      return WRITE_CAPABILITY;
     default:
       // Bulk importer / un-enumerated app: writes a lot, still destroys nothing.
       return WRITE_CAPABILITY;

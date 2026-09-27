@@ -119,7 +119,7 @@ curl -H "Authorization: Bearer eyJ…" -H "Content-Type: application/json" \
 
 ### 1.2 API keys (programmatic clients)
 
-Long-lived credentials for non-browser clients (the native iOS/Android shells and their App Intents, Companion Capture, CI-Hermes / CI-OpenClaw, MCP clients). Passed in the **`x-api-key`** header, or as **`Authorization: Bearer <key>`**.
+Long-lived credentials for non-browser clients (the native iOS/Android shells and their App Intents, Companion Capture, CI-Hermes / CI-OpenClaw, CI-Mentra smart glasses (memory-scoped), MCP clients). Passed in the **`x-api-key`** header, or as **`Authorization: Bearer <key>`**.
 
 The bearer form exists for MCP clients: most expose a single bearer-token field and cannot send a custom header, which made `/api/mcp` unreachable for them. It also removes a gratuitous difference from the Hub, whose MCP surface is bearer-only. The scheme is matched case-insensitively per RFC 7235 §2.1 (`bearer` works). The two in-process readers — `ApiKeyStrategy` and `JwtOrApiKeyAuthGuard`'s Portal path — share one `extractBearerToken` helper so they cannot drift; the third reader is `passport-jwt`, which does its own parse and has always lowercased the scheme (`extract_jwt.js:54,60`). `x-api-key` wins if both are present — unless it is blank, in which case the bearer form is used, so a proxy that always sets the header cannot mask a good credential. This does not shadow session auth — on `JwtOrApiKeyAuthGuard` the `jwt` strategy consumes bearer JWTs first, and a JWT that reached the api-key strategy would fail the 64-hex format check before any DB lookup.
 

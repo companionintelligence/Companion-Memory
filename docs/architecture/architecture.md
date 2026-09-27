@@ -404,7 +404,8 @@ and the [bulk load runbook](../../backend/apps/api/db/postgres/BULK_LOAD_RUNBOOK
 | Capacitor plugins | `frontend/packages/capacitor-local-hub`, `capacitor-speech`, `capacitor-local-llm` | Loopback sidecar + encrypted capture outbox; on-device dictation/synthesis; on-device LiteRT-LM (Android — iOS ships its own Swift implementation) |
 | Browser ext. | [CI-Browser-Extension](https://github.com/companionintelligence/CI-Browser-Extension) | Talks to `browser-activity` |
 | XR / Spatial | [CI-Spatial](https://github.com/companionintelligence/CI-Spatial), [CI-Spatial-Atlas](https://github.com/companionintelligence/CI-Spatial-Atlas), [CI-Spatial-Web](https://github.com/companionintelligence/CI-Spatial-Web) and siblings | Use `position` + AR relative coordinates; scans arrive as a GLB upload plus one `capture.scan` event |
-| Wearables / IoT | [CI-Pebble](https://github.com/companionintelligence/CI-Pebble), [CI-Mentra](https://github.com/companionintelligence/CI-Mentra), [CI-OMI](https://github.com/companionintelligence/CI-OMI), [CI-Even-Realities](https://github.com/companionintelligence/CI-Even-Realities) | Register in `devices`; readings land on the `/v1/*` ingest lanes (`ci.position`, `ci.events`). The old `sensors`/`measurements` tables were dropped in Feb 2026 |
+| Wearables / IoT | [CI-Pebble](https://github.com/companionintelligence/CI-Pebble), [CI-OMI](https://github.com/companionintelligence/CI-OMI), [CI-Even-Realities](https://github.com/companionintelligence/CI-Even-Realities) | Register in `devices`; readings land on the `/v1/*` ingest lanes (`ci.position`, `ci.events`). The old `sensors`/`measurements` tables were dropped in Feb 2026 |
+| Smart glasses | [CI-Mentra](https://github.com/companionintelligence/CI-Mentra) | Talks to `/memory/{context,recall,turn,write}` (platform `mentra`) with a memory-scoped api key minted by Hub connect as app `ci-mentra` (`memory` scope, `write` capability). Where it registers a device, it uses `device_type: smart_glasses` |
 
 ---
 
@@ -419,7 +420,8 @@ flowchart LR
     Portal[CI-Portal<br/>edge proxy + identity] -- routes user traffic --> Hub
     Browser[CI-Browser-Extension] -- GraphQL --> Server[CI-Server]
     XR[CI-Spatial / CI-Spatial-Atlas] -- "GraphQL + position + capture.scan" --> Server
-    Wearables[CI-Pebble / CI-Mentra / CI-OMI / CI-Even-Realities] -- "/v1 ingest" --> Server
+    Wearables[CI-Pebble / CI-OMI / CI-Even-Realities] -- "/v1 ingest" --> Server
+    Mentra[CI-Mentra<br/>smart glasses] -- "/memory/* (memory-scoped key)" --> Server
     Peer[Another user's CI-Server] -- "POST /agent/v1/ask" --> Server
     Docs[CI-Docs] -. references .-> Server
     Engineering[CI-Engineering] -. references .-> Server

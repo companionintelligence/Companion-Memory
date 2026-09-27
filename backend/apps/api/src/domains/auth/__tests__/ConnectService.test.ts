@@ -204,6 +204,20 @@ describe('ConnectService.exchange', () => {
     expect(data.capability).toBe('write');
   });
 
+  it('mints a memory-only, write-capability key for the ci-mentra glasses bridge', async () => {
+    const { service, apiKeyService, connectCodeService } = makeDeps();
+    connectCodeService.consume.mockResolvedValue({ userId: 'user-1', appUrn: 'ci-mentra:ci-marketplace' });
+    apiKeyService.createOrRotate.mockResolvedValue({ key: 'raw-key' });
+
+    await service.exchange('one-time-code');
+
+    const [, data] = apiKeyService.createOrRotate.mock.calls[0];
+    expect(data.name).toBe('app:ci-mentra:ci-marketplace');
+    // NOT the empty (full-surface) default — the bridge only touches /memory/*.
+    expect(data.scopes).toEqual(['memory']);
+    expect(data.capability).toBe('write');
+  });
+
   it('returns null for an invalid/expired/used code without minting', async () => {
     const { service, apiKeyService, connectCodeService } = makeDeps();
     connectCodeService.consume.mockResolvedValue(null);
@@ -292,6 +306,11 @@ describe('capabilityForApp (authority chosen per app, never inherited)', () => {
     expect(capabilityForApp('ci-import-tools:ci-marketplace')).toBe('write');
   });
 
+  it('gives the ci-mentra glasses bridge write — it records turns but is not gated', () => {
+    expect(capabilityForApp('ci-mentra:ci-marketplace')).toBe('write');
+    expect(capabilityForApp('ci-mentra:some-other-store')).toBe('write');
+  });
+
   it('defaults an unknown app to the narrow write level', () => {
     expect(capabilityForApp('some-third-party-app:ci-marketplace')).toBe('write');
   });
@@ -307,6 +326,7 @@ describe('capabilityForApp (authority chosen per app, never inherited)', () => {
       'some-third-party-app:some-other-store',
       'ci-openclaw-lookalike:ci-marketplace',
       'not-ci-hermes:ci-marketplace',
+      'ci-mentra:ci-marketplace',
     ]) {
       expect(capabilityForApp(appUrn)).not.toBe('full');
     }
@@ -324,6 +344,13 @@ describe('scopesForApp (two-tier least-privilege)', () => {
   it('confines the chat agents to the memory/intents/mcp tier', () => {
     expect(scopesForApp('ci-openclaw:ci-marketplace')).toEqual(['memory', 'intents', 'mcp']);
     expect(scopesForApp('ci-hermes:ci-marketplace')).toEqual(['memory', 'intents', 'mcp']);
+  });
+
+  it('confines the ci-mentra glasses bridge to the memory scope only', () => {
+    expect(scopesForApp('ci-mentra:ci-marketplace')).toEqual(['memory']);
+    expect(scopesForApp('ci-mentra:some-other-store')).toEqual(['memory']);
+    // Must never fall through to the empty (full-access) default.
+    expect(scopesForApp('ci-mentra:ci-marketplace')).not.toEqual([]);
   });
 
   it('gives the bulk importer full access (empty scopes)', () => {
