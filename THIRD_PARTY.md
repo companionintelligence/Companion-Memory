@@ -5,24 +5,6 @@ Every direct dependency declared in this repository's manifests — both
 each group. Transitive dependencies are not listed; resolve them with your
 package manager's own `licenses` command.
 
-**284 direct dependencies** across 13 licence groups.
-
-| Licence | Count |
-| --- | ---: |
-| MIT | 219 |
-| Apache-2.0 | 18 |
-| MIT OR Apache-2.0 | 11 |
-| Apache-2.0 OR MIT | 7 |
-| ISC | 6 |
-| BSD-2-Clause | 3 |
-| BSD-3-Clause | 2 |
-| **MPL-2.0** ⚠️ | 2 |
-| (Apache-2.0 OR MIT) | 1 |
-| **(MPL-2.0 OR Apache-2.0)** ⚠️ | 1 |
-| Hippocratic-2.1 | 1 |
-| not declared in package metadata | 2 |
-| first-party (internal) | 11 |
-
 ## MIT
 
 1. [`@apollo/client`](https://www.apollographql.com/docs/react/) `3.14.0` — runtime
@@ -310,7 +292,7 @@ package manager's own `licenses` command.
 1. [`rrule`](https://github.com/jakubroztocil/rrule) `2.8.1` — runtime
 2. [`zstd`](https://github.com/gyscos/zstd-rs) `0.14.0` — runtime — cargo
 
-## MPL-2.0 ⚠️
+## MPL-2.0
 
 > Reciprocal licence — see [NOTICE.md](NOTICE.md).
 
@@ -321,7 +303,7 @@ package manager's own `licenses` command.
 
 1. [`@swc/register`](https://github.com/swc-project/register#readme) `0.1.10` — dev
 
-## (MPL-2.0 OR Apache-2.0) ⚠️
+## (MPL-2.0 OR Apache-2.0)
 
 > Reciprocal licence — see [NOTICE.md](NOTICE.md).
 
