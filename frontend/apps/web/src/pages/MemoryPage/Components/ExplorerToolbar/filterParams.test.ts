@@ -157,13 +157,47 @@ describe('resolveExplorerTypes with an Activity filter', () => {
     ).toEqual({ includeTypes: ['Event'], droppedByWhen: [], nothingLeft: false });
   });
 
-  it('pins a What selection that includes events', () => {
+  it('pins a What selection made only of the events-browse kinds', () => {
+    expect(
+      resolveExplorerTypes(
+        new URLSearchParams('includedEntityTypes=Event,Communication&eventTypes=sale'),
+        '/memory',
+      ),
+    ).toEqual({ includeTypes: ['Event'], droppedByWhen: [], nothingLeft: false });
+  });
+
+  it('keeps a What selection that names another kind alongside events', () => {
     expect(
       resolveExplorerTypes(
         new URLSearchParams('includedEntityTypes=Event,Content&eventTypes=sale'),
         '/memory',
       ),
-    ).toEqual({ includeTypes: ['Event'], droppedByWhen: [], nothingLeft: false });
+    ).toEqual({ includeTypes: ['Content', 'Event'], droppedByWhen: [], nothingLeft: false });
+  });
+
+  it('keeps the Content half of the seeded "Trophy Case" search', () => {
+    // The URL applySavedSearchToParams writes for entityTypes ['event',
+    // 'content'] + eventTypes ['achievement_unlocked'] + query 'achievement'.
+    // Pinning it to events hid every matching post while the What bar still
+    // showed Content as picked, and a share link of it still returned them.
+    const params = new URLSearchParams(
+      'excludedEntityTypes=Browser,Communication,File,Note,Person,Place,Product,Receipt,Thing,Answer,Concept' +
+        '&eventTypes=achievement_unlocked&search=achievement',
+    );
+
+    expect(explorerSearchTypeFilters(params, '/memory')).toEqual({ includeTypes: ['Content', 'Event'] });
+    expect(eventsInPlay(params, '/memory')).toBe(true);
+  });
+
+  it('lets the When override report what it sets aside from such a selection', () => {
+    // The seeded "Recent Entertainment" search: File + Event, last week, an
+    // activity. The pin used to swallow File first, so droppedByWhen was empty.
+    expect(
+      resolveExplorerTypes(
+        new URLSearchParams('includedEntityTypes=Event,File&when=last-week&eventTypes=played_music'),
+        '/memory',
+      ),
+    ).toEqual({ includeTypes: ['Event'], droppedByWhen: ['File'], nothingLeft: false });
   });
 
   it('leaves a What selection alone once it has left events out, so the chip can be reported as unmatched', () => {

@@ -74,8 +74,9 @@ export function MemoryPage() {
 
   // Type filters with the route's scope, the Activity pin and the When
   // override applied: the events browse only asks for its three kinds, an
-  // Activity filter asks for events alone, and a date range only asks for
-  // kinds that have a date (see resolveExplorerTypes). When that leaves
+  // Activity filter asks for events alone (unless the What bar picked another
+  // kind alongside them), and a date range only asks for kinds that have a
+  // date (see resolveExplorerTypes). When that leaves
   // nothing to ask for, the query is skipped outright — an empty include list
   // would read as "everything" — and the view explains why instead.
   const typeFilters = resolveExplorerTypes(searchParams, pathname);

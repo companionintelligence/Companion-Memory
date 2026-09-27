@@ -143,8 +143,15 @@ export interface ExplorerTypeResolution {
  * it as events-only and the heatmap counts only events under it. The pin
  * applies only while events were in play: a What bar that has left events
  * out keeps its selection, and the toolbar marks the Activity chip as one
- * that can never match (see {@link eventsInPlay}). The pin comes before the
- * When override, and events are dated, so the two never fight either.
+ * that can never match (see {@link eventsInPlay}). It also applies only to
+ * a browse whose kinds were not really chosen — an un-narrowed What bar, or
+ * one narrowed to the events-browse kinds. A selection that names another
+ * kind alongside events is kept whole: those rows were asked for, not let
+ * through, and the server already narrows the events among them by
+ * activity. The seeded "Trophy Case" search is exactly that (Event + Content
+ * + an activity + a query), and it is what a shared link of the same saved
+ * search returns. The pin comes before the When override, and events are
+ * dated, so the two never fight either.
  */
 export function resolveExplorerTypes(params: URLSearchParams, pathname?: string): ExplorerTypeResolution {
   let narrowed = narrowedEntityTypes(params);
@@ -155,7 +162,11 @@ export function resolveExplorerTypes(params: URLSearchParams, pathname?: string)
     narrowed = kept.length > 0 ? kept : [...EVENTS_EXPLORER_TYPES];
   }
 
-  if (hasActivityFilter(params) && (narrowed == null || narrowed.includes('Event'))) {
+  if (
+    hasActivityFilter(params) &&
+    (narrowed == null ||
+      (narrowed.includes('Event') && narrowed.every((type) => EVENTS_EXPLORER_TYPES.includes(type))))
+  ) {
     narrowed = ['Event'];
   }
 
