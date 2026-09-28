@@ -32,6 +32,25 @@
  * failed entity as `entity <key>: <message>`) has only its text left. A chain
  * that does carry a code, and not a transient one, is decided by that code and
  * never by wording that happens to appear in it.
+ *
+ * ## Away before the statement ran, or gone down with it in flight
+ *
+ * "Transient" covers two different moments, and they differ in who could be to
+ * blame. A server that is still in recovery (57P03) or refusing sockets
+ * (ECONNREFUSED) never saw the statement: nothing about the statement can have
+ * caused it, and waiting is the whole answer. A session the server ENDED
+ * (57P01/57P02, "terminating connection …", pg's "Connection terminated
+ * unexpectedly", a reset socket) had the statement in flight — and a statement
+ * can crash a server. The precedent is a TimescaleDB 2.28 segfault during a
+ * bulk upsert: every retry of that statement restarts the database again.
+ *
+ * {@link isDatabaseCrashError} names the second kind, and
+ * {@link retryOnTransientDatabaseError} counts it when asked to
+ * (`crashAttempts`): an operation in flight at that many crashes stops being
+ * waited for and is raised as {@link DatabaseCrashedError}, which is NOT
+ * transient — the caller's own isolation (the push's per-row quarantine) gets
+ * to decide whether the operation, rather than the world, is the problem. A
+ * wait for a server that was not yet taking statements never counts.
  */
 
 /**
@@ -100,6 +119,33 @@ const TRANSIENT_MESSAGES: readonly string[] = [
 const NETWORK_CODE_IN_MESSAGE = new RegExp(`\\b(?:${[...TRANSIENT_NETWORK_CODES].join('|')})\\b`);
 
 /**
+ * The transient SQLSTATEs the server sends when it ENDS a session — so a
+ * statement may have been running on it. A subset of {@link TRANSIENT_SQLSTATES}.
+ *
+ * 57P02 is what every OTHER backend is told when one backend crashes; the one
+ * that crashed tells its client nothing, and the client sees its socket close
+ * (see {@link CRASH_NETWORK_CODES} and {@link CRASH_MESSAGES}).
+ */
+export const CRASH_SQLSTATES: ReadonlySet<string> = new Set(['57P01', '57P02']);
+
+/**
+ * The socket code for a connection that was up and then went away under a
+ * request. ECONNREFUSED/EHOSTUNREACH and friends are about connecting, i.e.
+ * before any statement ran, and are deliberately not here; so is EPIPE, which
+ * is OUR write failing — the statement did not reach the server.
+ */
+export const CRASH_NETWORK_CODES: ReadonlySet<string> = new Set(['ECONNRESET']);
+
+/** The wording of the same, for a failure that arrives with no code. */
+const CRASH_MESSAGES: readonly string[] = [
+  'terminating connection due to administrator command',
+  'terminating connection because of crash of another server process',
+  'Connection terminated unexpectedly',
+];
+
+const CRASH_CODE_IN_MESSAGE = new RegExp(`\\b(?:${[...CRASH_NETWORK_CODES].join('|')})\\b`);
+
+/**
  * A failure the caller KNOWS was transient but can no longer show a code for.
  *
  * The entity lane is the case: `GraphIngestService.ingest` catches a
@@ -140,11 +186,44 @@ export class DatabaseUnavailableError extends TransientDatabaseError {
   }
 }
 
+/**
+ * The database went down with this operation in flight, as many times as the
+ * caller was willing to see that happen — so the operation itself is now a
+ * suspect.
+ *
+ * Deliberately NOT a {@link TransientDatabaseError}, and
+ * {@link isTransientDatabaseError} answers `false` for it even though its
+ * `cause` carries a transient code. "Wait and send it again" is exactly what
+ * must stop: if the statement is what crashes the server, every resend
+ * restarts the whole appliance's database. Raised by
+ * {@link retryOnTransientDatabaseError} only for a caller that set
+ * `crashAttempts`, so that caller can isolate the work (the push degrades a
+ * batch to single rows, and quarantines a single row) instead of looping.
+ */
+export class DatabaseCrashedError extends Error {
+  constructor(
+    readonly operation: string,
+    readonly crashes: number,
+    cause: unknown,
+  ) {
+    super(
+      `the database went down ${crashes} time(s) with ${operation} in flight ` +
+        `(last error: ${describe(cause)})`,
+      { cause },
+    );
+    this.name = 'DatabaseCrashedError';
+  }
+}
+
 /** Is this failure the database being away, rather than the database refusing? */
 export function isTransientDatabaseError(err: unknown): boolean {
   const facts = collect(err);
 
-  if (facts.marked || facts.codes.some(isTransientCode)) {
+  if (facts.verdict != null) {
+    return facts.verdict === 'transient';
+  }
+
+  if (facts.codes.some(isTransientCode)) {
     return true;
   }
 
@@ -153,6 +232,34 @@ export function isTransientDatabaseError(err: unknown): boolean {
   }
 
   return facts.messages.some(isTransientDatabaseMessage);
+}
+
+/**
+ * Did the database end the session with a statement possibly IN FLIGHT —
+ * crash, forced shutdown, reset socket — rather than refuse to take one?
+ *
+ * Always a subset of {@link isTransientDatabaseError}. Code-first by the same
+ * rule: a chain that carries codes is decided by them (57P03 is "not yet
+ * accepting connections", so never a crash), and only a chain with no code at
+ * all is read for its wording. An error already given a verdict by class — a
+ * {@link TransientDatabaseError} or a {@link DatabaseCrashedError} — is not
+ * re-opened.
+ */
+export function isDatabaseCrashError(err: unknown): boolean {
+  const facts = collect(err);
+
+  if (facts.verdict != null) {
+    return false;
+  }
+
+  if (facts.codes.length > 0) {
+    return facts.codes.some((code) => CRASH_SQLSTATES.has(code) || CRASH_NETWORK_CODES.has(code));
+  }
+
+  return facts.messages.some(
+    (message) =>
+      CRASH_MESSAGES.some((needle) => message.includes(needle)) || CRASH_CODE_IN_MESSAGE.test(message),
+  );
 }
 
 /**
@@ -178,24 +285,43 @@ const MAX_CHAIN_DEPTH = 6;
 
 /**
  * Every code and message in the error, its `driverError`, its `cause` chain and
- * an AggregateError's members — plus whether anything in it was already
- * declared transient by class.
+ * an AggregateError's members — plus the verdict, if a link in it already
+ * carries one by class.
+ *
+ * A verdict class ends the walk at that link: {@link DatabaseCrashedError}
+ * wraps a transient `cause` precisely BECAUSE it has decided the failure is no
+ * longer to be waited out, and reading through it to that cause would undo the
+ * decision. The outermost verdict wins.
  */
-function collect(err: unknown): { codes: string[]; messages: string[]; marked: boolean } {
+function collect(err: unknown): { codes: string[]; messages: string[]; verdict: Verdict | null } {
   const codes: string[] = [];
   const messages: string[] = [];
-  let marked = false;
+  let verdict: Verdict | null = null;
   const seen = new Set<unknown>();
 
   const visit = (value: unknown, depth: number): void => {
-    if (value == null || typeof value !== 'object' || depth > MAX_CHAIN_DEPTH || seen.has(value)) {
+    if (
+      verdict != null ||
+      value == null ||
+      typeof value !== 'object' ||
+      depth > MAX_CHAIN_DEPTH ||
+      seen.has(value)
+    ) {
       return;
     }
 
     seen.add(value);
 
+    if (value instanceof DatabaseCrashedError) {
+      verdict = 'suspect';
+
+      return;
+    }
+
     if (value instanceof TransientDatabaseError) {
-      marked = true;
+      verdict = 'transient';
+
+      return;
     }
 
     const shaped = value as {
@@ -226,8 +352,15 @@ function collect(err: unknown): { codes: string[]; messages: string[]; marked: b
 
   visit(err, 0);
 
-  return { codes, messages, marked };
+  return { codes, messages, verdict };
 }
+
+/**
+ * What an error's CLASS already says about it: `transient` for a
+ * {@link TransientDatabaseError} (wait, never quarantine), `suspect` for a
+ * {@link DatabaseCrashedError} (stop waiting; the work may be the cause).
+ */
+type Verdict = 'transient' | 'suspect';
 
 function describe(err: unknown): string {
   if (err instanceof Error) {
@@ -252,6 +385,26 @@ export interface TransientRetryPolicy {
    * operation is not attempted again once the next pause would cross it.
    */
   budgetMs: number;
+  /**
+   * How many times the database may go down WITH THIS OPERATION IN FLIGHT
+   * ({@link isDatabaseCrashError}) before the operation is suspected of taking
+   * it down, and raised as {@link DatabaseCrashedError} instead of being sent
+   * again. Waiting for a server that was not yet taking statements (57P03,
+   * a refused socket) never counts toward it.
+   *
+   * Unset: every crash is waited out like any other outage. Right for a read or
+   * a ledger UPDATE by id, which cannot plausibly be what crashes a server;
+   * wrong for a bulk write of foreign data, which can.
+   */
+  crashAttempts?: number;
+  /**
+   * A pool of waiting time, in ms, that several calls SHARE. Every pause is
+   * drawn from it, and no call pauses once the next pause would overdraw it —
+   * so a caller running many operations against one outage (the push isolating
+   * a batch row by row, each row meeting the same crash recovery) waits that
+   * long in total, not `budgetMs` per operation. Mutated in place.
+   */
+  allowance?: { remainingMs: number };
   /** Injected in tests; defaults to a real timer. */
   sleep?: (ms: number) => Promise<void>;
   /** Injected in tests; defaults to `Date.now`. */
@@ -263,23 +416,35 @@ export interface TransientRetryNotice {
   attempt: number;
   delayMs: number;
   waitedMs: number;
+  /** Crashes counted against the operation so far — see `crashAttempts`. */
+  crashes: number;
   error: unknown;
 }
 
 /**
  * Run `op`, and when it fails because the database is away, wait and run it
- * again — until it succeeds, fails for a reason that is not transient, or the
- * budget is spent.
+ * again — until it succeeds, fails for a reason that is not transient, the
+ * budget is spent, or (with `crashAttempts`) the database has gone down with it
+ * in flight too many times.
  *
  * - A non-transient failure is rethrown untouched on the attempt it happened,
  *   so a caller's own handling (quarantine the row, dedup on 23505, stop on
  *   53100) sees exactly what it always saw.
- * - A transient failure that outlasts the budget is rethrown as
- *   {@link DatabaseUnavailableError}, with the last error as its `cause`.
+ * - A transient failure that outlasts the budget (or the shared `allowance`)
+ *   is rethrown as {@link DatabaseUnavailableError}, with the last error as its
+ *   `cause`.
+ * - The `crashAttempts`-th crash with `op` in flight is rethrown as
+ *   {@link DatabaseCrashedError}, which is not transient — see its doc.
  *
  * `op` must be safe to repeat. That is the caller's promise, not something this
- * can check: every write the import push makes upserts on its provenance
- * triple, which is what makes it true there.
+ * can check — and "safe" means "repeats land on the same rows", which each
+ * destination earns its own way. For the import push: most destinations upsert
+ * on the provenance triple (source_system, source_id, source_type); `position`
+ * has no triple and dedupes by timestamp (`PositionService` skips a time it
+ * already holds); `receipts` upserts its header on the triple and its lines on
+ * `(receipt_id, line_number)`, one transaction per receipt. The ledger writes
+ * are UPDATEs by row id. A new destination that has none of these is not safe
+ * to hand to this until it does.
  */
 export async function retryOnTransientDatabaseError<T>(
   operation: string,
@@ -292,6 +457,7 @@ export async function retryOnTransientDatabaseError<T>(
 
   let firstFailureAt: number | null = null;
   let delayMs = Math.max(0, policy.initialDelayMs);
+  let crashes = 0;
 
   for (let attempt = 1; ; attempt += 1) {
     try {
@@ -299,19 +465,33 @@ export async function retryOnTransientDatabaseError<T>(
     } catch (err) {
       if (err instanceof DatabaseUnavailableError || !isTransientDatabaseError(err)) {
         // A nested helper already gave up — waiting again here would multiply
-        // the budget rather than respect it.
+        // the budget rather than respect it. (A DatabaseCrashedError is not
+        // transient, so a nested verdict of that kind goes straight up too.)
         throw err;
+      }
+
+      if (policy.crashAttempts != null && isDatabaseCrashError(err)) {
+        crashes += 1;
+
+        if (crashes >= policy.crashAttempts) {
+          throw new DatabaseCrashedError(operation, crashes, err);
+        }
       }
 
       firstFailureAt ??= now();
 
       const waitedMs = now() - firstFailureAt;
+      const overdrawn = policy.allowance != null && delayMs > policy.allowance.remainingMs;
 
-      if (waitedMs + delayMs > policy.budgetMs) {
+      if (overdrawn || waitedMs + delayMs > policy.budgetMs) {
         throw new DatabaseUnavailableError(operation, attempt, waitedMs, err);
       }
 
-      onRetry?.({ attempt, delayMs, waitedMs, error: err });
+      onRetry?.({ attempt, delayMs, waitedMs, crashes, error: err });
+
+      if (policy.allowance != null) {
+        policy.allowance.remainingMs -= delayMs;
+      }
 
       await sleep(delayMs);
 

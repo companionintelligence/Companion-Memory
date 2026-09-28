@@ -1,4 +1,4 @@
-import { PushStage, entityErrorsByKey } from '../PushStage';
+import { PushStage, entityErrorMessage, entityErrorMessagesByKey, entityErrorsByKey } from '../PushStage';
 
 /**
  * People resolution when graph ingest fails a whole batch.
@@ -140,5 +140,31 @@ describe('entityErrorsByKey', () => {
     expect(map.get('contact:alice')).toBe('entity contact:alice: boom');
     expect(map.get('contact:a: b')).toBe('entity contact:a: b: second');
     expect([...map.values()].some((v) => v.startsWith('relationship'))).toBe(false);
+  });
+});
+
+describe('entityErrorMessagesByKey / entityErrorMessage', () => {
+  it('keeps the key out of the message a classifier reads', () => {
+    const errors = [
+      'entity contact:EPIPE Crew: value too long for type character varying(255)',
+      'entity contact:a: b: the database system is in recovery mode',
+    ];
+    const map = entityErrorMessagesByKey(errors);
+
+    // The key carries a socket code; the message does not.
+    expect(map.get('contact:EPIPE Crew')).toBe('value too long for type character varying(255)');
+    expect(map.get('contact:a: b')).toBe('the database system is in recovery mode');
+  });
+
+  it('strips the longest key the caller actually sent, and leaves an unknown one whole', () => {
+    const error = 'entity contact:a: b: ECONNRESET is the band name';
+
+    expect(entityErrorMessage(error, new Set(['contact:a', 'contact:a: b']))).toBe(
+      'ECONNRESET is the band name',
+    );
+    expect(entityErrorMessage(error, new Set(['contact:zzz']))).toBe(error);
+    expect(entityErrorMessage('relationship x->y: endpoint not found in batch', new Set(['x']))).toBe(
+      'relationship x->y: endpoint not found in batch',
+    );
   });
 });

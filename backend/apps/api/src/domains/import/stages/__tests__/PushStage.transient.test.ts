@@ -23,7 +23,11 @@ import { PushStage } from '../PushStage';
  *  - an outage that outlasts the wait FAILS THE STAGE with the rows still
  *    `pending`, which is the state a retried stage resumes from;
  *  - a row the database actually rejected is still quarantined, exactly as
- *    before — the per-row isolation is untouched.
+ *    before — the per-row isolation is untouched;
+ *  - a write the database keeps going down UNDER is not resent into every
+ *    restart: a batch is resent once, then isolated row by row, and the row
+ *    that crashes it is quarantined as `crashed_database` — while a wait for a
+ *    server still in recovery never counts against anything.
  */
 
 const RUN_ID = '11111111-1111-4111-8111-111111111111';
@@ -41,6 +45,49 @@ function queryFailed(code: string, message: string): Error {
 
 const inRecovery = () => queryFailed('57P03', 'the database system is in recovery mode');
 const notNull = () => queryFailed('23502', 'null value in column "content" violates not-null constraint');
+/** What pg raises when the backend running OUR statement dies under it: no code at all. */
+const terminated = () => new Error('Connection terminated unexpectedly');
+
+/**
+ * A Postgres that crashes whenever `crashesOn` says the statement is poison,
+ * then answers 57P03 for `recoveryCalls` statements while it comes back — the
+ * TimescaleDB-segfault shape. `downForGood` makes it stop coming back.
+ */
+function crashingServer(options: {
+  crashesOn: (input: CreateCommunicationDto[]) => boolean;
+  recoveryCalls?: number;
+  downForGood?: () => boolean;
+}) {
+  let recovering = 0;
+  let crashes = 0;
+  const sent: Array<{ size: number; outcome: 'crash' | 'recovering' | 'written' }> = [];
+
+  const respond = (input: CreateCommunicationDto[]): Array<{ inserted: boolean }> => {
+    if (recovering > 0 || options.downForGood?.() === true) {
+      recovering = Math.max(0, recovering - 1);
+      sent.push({ size: input.length, outcome: 'recovering' });
+
+      throw inRecovery();
+    }
+
+    if (options.crashesOn(input)) {
+      crashes += 1;
+      recovering = options.recoveryCalls ?? 2;
+      sent.push({ size: input.length, outcome: 'crash' });
+
+      throw terminated();
+    }
+
+    sent.push({ size: input.length, outcome: 'written' });
+
+    return input.map(() => ({ inserted: true }));
+  };
+
+  return { respond, sent, crashes: () => crashes };
+}
+
+const hasText = (input: CreateCommunicationDto[], text: string) =>
+  input.some((message) => message.content === text);
 
 let nextId = 0;
 
@@ -303,8 +350,13 @@ describe('an outage mid-push is waited out, not quarantined', () => {
       [messageRow('a'), messageRow('b'), messageRow('c')],
       {
         respond: (input, call) => {
-          if (call <= 2) {
+          // The outage, then the server still coming back from it.
+          if (call === 1) {
             throw outage();
+          }
+
+          if (call === 2) {
+            throw inRecovery();
           }
 
           return input.map(() => ({ inserted: true }));
@@ -314,8 +366,9 @@ describe('an outage mid-push is waited out, not quarantined', () => {
 
     const outcome = await stage.run(context);
 
-    // Twice refused, then written — never degraded to per-row, because the rows
-    // were never the problem.
+    // Refused, still recovering, then written — never degraded to per-row,
+    // because the rows were never the problem. One crash with the batch in
+    // flight is not enough to suspect it: another backend may have crashed.
     expect(callSizes).toEqual([3, 3, 3]);
     expect(clock.slept).toEqual([1_000, 2_000]);
     expect(itemUpdates('failed')).toEqual([]);
@@ -429,6 +482,121 @@ describe('an outage mid-push is waited out, not quarantined', () => {
   });
 });
 
+describe('a write that keeps taking the database down', () => {
+  it('isolates the row that crashes the database instead of resending its batch into every restart', async () => {
+    const rows = [messageRow('fine'), messageRow('poison'), messageRow('after')];
+    const server = crashingServer({ crashesOn: (input) => hasText(input, 'poison') });
+
+    const { stage, itemUpdates, updates, clock } = makeStage(rows, { respond: server.respond });
+
+    const outcome = await stage.run(context);
+
+    // The batch met two crashes and was not sent a third time.
+    expect(server.sent.filter((send) => send.size === 3 && send.outcome === 'crash')).toHaveLength(2);
+    expect(server.sent.filter((send) => send.size === 3 && send.outcome === 'written')).toEqual([]);
+    // Alone, the poison row met two crashes of its own and was then left alone:
+    // four restarts in all, not one every few seconds for three minutes.
+    expect(server.crashes()).toBe(4);
+    // …and the waits for the server to come back (57P03) between its two
+    // crashes did not count against it: it was sent into a crash exactly twice.
+    expect(server.sent.filter((send) => send.size === 1 && send.outcome === 'crash')).toHaveLength(2);
+
+    const failed = itemUpdates('failed');
+
+    expect(failed).toHaveLength(1);
+    expect(failed[0].params[0]).toBe(rows[1].id);
+    expect(String(failed[0].params[1])).toMatch(/^crashed_database: the database went down 2 time\(s\)/);
+    expect(String(failed[0].params[1])).toContain('Connection terminated unexpectedly');
+
+    // Its neighbours went, and the quarantine was written before the batch's
+    // outcomes — the moment it was decided.
+    expect(itemUpdates('pushed')[0].params[0]).toEqual([rows[0].id, rows[2].id]);
+    expect(updates.indexOf(failed[0])).toBeLessThan(updates.indexOf(itemUpdates('pushed')[0]));
+    expect(outcome.detail).toMatchObject({ pushed: 2, failed: 1 });
+
+    // Bounded: a budget for the batch, one more for the row-by-row pass.
+    expect(clock.slept.reduce((sum, ms) => sum + ms, 0)).toBeLessThanOrEqual(360_000);
+  });
+
+  it('gives a row that met ONE crash the benefit of the doubt, and does not count the recovery', async () => {
+    const rows = [messageRow('flaky'), messageRow('steady')];
+    let flakySentAlone = 0;
+    const server = crashingServer({
+      crashesOn: (input) => {
+        if (input.length > 1) {
+          return true;
+        }
+
+        if (hasText(input, 'flaky')) {
+          flakySentAlone += 1;
+
+          return flakySentAlone === 1;
+        }
+
+        return false;
+      },
+    });
+
+    const { stage, itemUpdates } = makeStage(rows, { respond: server.respond });
+
+    const outcome = await stage.run(context);
+
+    // A crash, then two 57P03s while the server came back, and still written:
+    // had the 57P03s counted, the second would have quarantined it.
+    expect(server.sent.filter((send) => send.size === 1 && send.outcome === 'crash')).toHaveLength(1);
+    expect(itemUpdates('failed')).toEqual([]);
+    expect(itemUpdates('pushed')[0].params[0]).toEqual([rows[0].id, rows[1].id]);
+    expect(outcome.detail).toMatchObject({ pushed: 2, failed: 0 });
+  });
+
+  it('keeps the quarantine, and the total wait, when the database then stays away for good', async () => {
+    const rows = [messageRow('poison'), messageRow('next'), messageRow('last')];
+    let gone = false;
+    const server = crashingServer({
+      crashesOn: (input) => {
+        if (!hasText(input, 'poison')) {
+          return false;
+        }
+
+        // The second crash with the poison row alone is the last one: the
+        // server does not come back after it.
+        if (input.length === 1 && server.sent.filter((send) => send.size === 1).length >= 3) {
+          gone = true;
+        }
+
+        return true;
+      },
+      downForGood: () => gone,
+    });
+
+    const { stage, itemUpdates, clock } = makeStage(rows, { respond: server.respond });
+
+    const failure = await stage.run(context).catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(DatabaseUnavailableError);
+
+    // The poison row is in the ledger although the stage failed, so the stage
+    // retry does not find it `pending` and take the database down with it again.
+    const failed = itemUpdates('failed');
+
+    expect(failed).toHaveLength(1);
+    expect(failed[0].params[0]).toBe(rows[0].id);
+    expect(String(failed[0].params[1])).toMatch(/^crashed_database: /);
+    // Nothing else was written off: the rest wait, `pending`, for the retry.
+    expect(itemUpdates('pushed')).toEqual([]);
+
+    // ONE allowance for the whole row-by-row pass — the poison row's waits and
+    // the next row's wait for a server that never came back — not a fresh
+    // three minutes per row. The batch before it waited on its own budget:
+    // 1s + 2s + 4s around its two crashes.
+    const waited = clock.slept.reduce((sum, ms) => sum + ms, 0);
+    const batchWaited = 7_000;
+
+    expect(waited - batchWaited).toBeLessThanOrEqual(180_000);
+    expect(waited - batchWaited).toBeGreaterThan(120_000);
+  });
+});
+
 describe('the entity lane', () => {
   type EntityPusher = {
     pushEntities(
@@ -480,6 +648,26 @@ describe('the entity lane', () => {
       (stage as unknown as EntityPusher).pushEntities(context, 'balanced', null),
     ).rejects.toBeInstanceOf(DatabaseUnavailableError);
     expect(entityMarks().filter((mark) => mark.status === 'failed')).toEqual([]);
+  });
+
+  it('reads only the message, never the key, when deciding the database was away', async () => {
+    // The key is the contact's handle — user data. `contact:EPIPE Crew` used
+    // to match the socket-code pattern, so a plain refusal was retried for the
+    // whole budget and then failed the stage.
+    const { stage, entityMarks, ingested, clock } = makeStage([], {
+      entities: [{ ...stagedEntity(0), identityKey: 'EPIPE Crew' }],
+      ingest: (keys) => ({
+        entities: [],
+        errors: [`entity ${keys[0]}: value too long for type character varying(255)`],
+      }),
+    });
+
+    const result = await (stage as unknown as EntityPusher).pushEntities(context, 'balanced', null);
+
+    expect(ingested).toEqual([['contact:EPIPE Crew']]);
+    expect(result).toMatchObject({ resolved: 0, failed: 1 });
+    expect(entityMarks()).toEqual([expect.objectContaining({ status: 'failed' })]);
+    expect(clock.slept).toEqual([]);
   });
 
   it('still records an entity ingest refused for a reason of its own', async () => {

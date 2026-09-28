@@ -42,10 +42,14 @@ export type {
   SchemaProbe,
 } from './schemaIntegrity';
 export {
+  CRASH_NETWORK_CODES,
+  CRASH_SQLSTATES,
+  DatabaseCrashedError,
   DatabaseUnavailableError,
   TRANSIENT_NETWORK_CODES,
   TRANSIENT_SQLSTATES,
   TransientDatabaseError,
+  isDatabaseCrashError,
   isTransientDatabaseError,
   isTransientDatabaseMessage,
   retryOnTransientDatabaseError,
