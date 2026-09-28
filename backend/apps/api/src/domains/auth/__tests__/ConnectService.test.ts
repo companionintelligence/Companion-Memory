@@ -353,6 +353,13 @@ describe('scopesForApp (two-tier least-privilege)', () => {
     expect(scopesForApp('ci-mentra:ci-marketplace')).not.toEqual([]);
   });
 
+  it('confines Home Assistant voice to memory alone', () => {
+    // Recall before an answer, /memory/turn after it; no intents, MCP or data plane.
+    expect(scopesForApp('ci-ha-voice:ci-marketplace')).toEqual(['memory']);
+    // write, because /memory/turn is @RequireCapability(write); never full.
+    expect(capabilityForApp('ci-ha-voice:ci-marketplace')).toBe('write');
+  });
+
   it('gives the bulk importer full access (empty scopes)', () => {
     expect(scopesForApp('ci-import-tools:ci-marketplace')).toEqual([]);
   });

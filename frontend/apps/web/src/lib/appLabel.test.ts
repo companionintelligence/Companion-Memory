@@ -7,6 +7,7 @@ describe('appLabel', () => {
     expect(appLabel('app:ci-openclaw:ci-marketplace')).toBe('OpenClaw');
     expect(appLabel('app:ci-hermes:ci-marketplace')).toBe('Hermes');
     expect(appLabel('app:ci-mentra:ci-marketplace')).toBe('Mentra glasses');
+    expect(appLabel('app:ci-ha-voice:ci-marketplace')).toBe('Home Assistant Voice');
   });
 
   it('falls back to the slug, so a newly installed app is nameable the day it ships', () => {

@@ -18,6 +18,7 @@ const APP_LABELS: Readonly<Record<string, string>> = {
   'ci-openclaw': 'OpenClaw',
   'ci-hermes': 'Hermes',
   'ci-mentra': 'Mentra glasses',
+  'ci-ha-voice': 'Home Assistant Voice',
 };
 
 /**

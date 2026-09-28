@@ -30,8 +30,8 @@ const CONNECT_KEY_TTL_DAYS = 90;
  * user it will do — they read this same function so they can never drift.
  *
  * App URNs are `<appName>:<store>` (e.g. `ci-openclaw:ci-marketplace`); we key
- * on the app name. The chat agents and the `ci-mentra` glasses bridge are
- * confined to exactly what they use; the bulk importer and any app we haven't explicitly narrowed get an EMPTY scope
+ * on the app name. The chat agents, the `ci-mentra` glasses bridge and the
+ * `ci-ha-voice` Home Assistant voice facade are confined to exactly what they use; the bulk importer and any app we haven't explicitly narrowed get an EMPTY scope
  * set = full access (grandfathered), so enforcement never breaks an app whose
  * real needs we didn't enumerate.
  */
@@ -53,6 +53,11 @@ export function scopesForApp(appUrn: string): string[] {
       // Mentra smart-glasses bridge: it only reads context/recall and records
       // turns/fragments through `/memory/*`, so it is confined to the memory
       // scope — no intents, no MCP, no raw data plane.
+    case 'ci-ha-voice':
+      // Home Assistant voice (CI-Home-Assistant-Voice-PE): grounds each spoken
+      // answer in `/memory/context` + `/memory/recall` and saves the exchange
+      // with `/memory/turn`. It runs no tools and reads no raw data, so memory
+      // is the whole grant.
       return [MEMORY_SCOPE];
     default:
       // e.g. ci-import-tools (a bulk importer needing graphql/ingest/files/
@@ -120,6 +125,10 @@ export function capabilityForApp(appUrn: string): ApiKeyCapability {
       // (`POST /memory/turn` and `/memory/write` need `write`). Not paired with
       // the confirmation gate, so never `full`. Stated explicitly rather than
       // riding the default so a change there cannot move it.
+      return WRITE_CAPABILITY;
+    case 'ci-ha-voice':
+      // Home Assistant voice: `/memory/turn` needs `write`, and a speaker in the
+      // kitchen has no business deleting memories. Explicit for the same reason.
       return WRITE_CAPABILITY;
     default:
       // Bulk importer / un-enumerated app: writes a lot, still destroys nothing.
