@@ -36,11 +36,11 @@ export function TrustDialStep({ value, onChange }: TrustDialStepProps) {
   const selected = value ?? 'balanced';
 
   return (
-    <div className="space-y-8 w-full max-w-xl mx-auto">
+    <div className="w-full min-w-0 max-w-xl mx-auto space-y-4 device:space-y-8">
       <StepHeader title="How much trust?" description="How much should your companion do on its own?" />
 
       {/* TODO(settings): Autonomy subsection — same dial, reads/writes self-entity properties.planner.trust_mode */}
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2 device:gap-3">
         {TRUST_OPTIONS.map((opt) => (
           <button
             key={opt.value}
@@ -50,15 +50,15 @@ export function TrustDialStep({ value, onChange }: TrustDialStepProps) {
             // faintly). aria-pressed exposes the same state non-visually.
             aria-pressed={selected === opt.value}
             className={cn(
-              'cursor-pointer rounded-xl border border-border px-5 py-4 text-left transition-colors hover:border-teal-600/60',
+              'cursor-pointer rounded-xl border border-border px-4 py-3 text-left transition-colors hover:border-teal-600/60 device:px-5 device:py-4',
               selected === opt.value && 'border-teal-600 bg-teal-500/10',
             )}
             onClick={() => onChange(opt.value)}
           >
-            <span className="block text-xl sm:text-2xl font-medium text-foreground leading-tight">
+            <span className="block text-lg font-medium leading-tight text-foreground device:text-2xl">
               {opt.label}
             </span>
-            <span className="block text-base sm:text-lg text-muted-foreground mt-1 leading-snug">
+            <span className="mt-1 block text-sm leading-snug text-muted-foreground device:text-lg">
               {opt.hint}
             </span>
           </button>

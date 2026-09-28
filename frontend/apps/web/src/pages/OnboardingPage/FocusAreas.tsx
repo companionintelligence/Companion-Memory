@@ -41,9 +41,9 @@ export function FocusAreas() {
   const form = useFormContext();
 
   return (
-    <div className="space-y-6 w-full max-w-xl mx-auto text-left">
+    <div className="w-full min-w-0 max-w-xl mx-auto space-y-4 text-left device:space-y-6">
       <StepHeader title="What should we focus on?" description="Pick anything that matters right now." />
-      <div className="space-y-3">
+      <div className="space-y-2 device:space-y-3">
         {focusAreaOptions.map((item) => (
           <Form.Field
             key={item.id}
@@ -72,7 +72,7 @@ export function FocusAreas() {
                   aria-checked={checked}
                   aria-label={item.label}
                   className={cn(
-                    'grid w-full grid-cols-[max-content_1fr] items-start gap-x-4 rounded-xl border border-border/70 bg-muted/40 px-4 py-3.5 text-left transition-colors cursor-pointer hover:bg-muted/55',
+                    'grid w-full min-w-0 grid-cols-[max-content_1fr] items-start gap-x-3 rounded-xl border border-border/70 bg-muted/40 px-3 py-2.5 text-left transition-colors cursor-pointer hover:bg-muted/55 device:gap-x-4 device:px-4 device:py-3.5',
                     checked && 'border-primary/40 bg-muted/60',
                   )}
                   onClick={toggle}
@@ -88,8 +88,8 @@ export function FocusAreas() {
                   </span>
 
                   <div className="space-y-1">
-                    <span className="text-lg sm:text-xl font-medium leading-snug">{item.label}</span>
-                    <p className="text-base text-muted-foreground leading-snug">{item.description}</p>
+                    <span className="text-base font-medium leading-snug device:text-xl">{item.label}</span>
+                    <p className="text-sm text-muted-foreground leading-snug device:text-base">{item.description}</p>
                   </div>
                 </button>
               );
