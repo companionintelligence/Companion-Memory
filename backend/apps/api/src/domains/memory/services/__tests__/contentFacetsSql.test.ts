@@ -1,4 +1,4 @@
-import { contentTypeFilterSql, contentTypeOptions } from '../contentFacetsSql';
+import { contentTypeFilterSql, contentTypeOptions, PLATFORMS_SQL } from '../contentFacetsSql';
 
 describe('contentTypeOptions', () => {
   it('offers media rows by kind and folds a raw kind-named type into the same option', () => {
@@ -41,5 +41,17 @@ describe('contentTypeFilterSql', () => {
 
     expect(sql).toBe("((c.type = 'media' AND c.mimetype LIKE 'image/%') OR c.type IN (:...contentTypes))");
     expect(parameters).toEqual({ contentTypes: ['note', 'image', 'post'] });
+  });
+});
+
+// The ledger has no FK, so its rows outlive deleted content. The loose scan
+// must step past them at its first probe and at every later one; the live
+// behaviour is pinned in ContentService.facets.integration.spec.ts.
+describe('PLATFORMS_SQL', () => {
+  it('walks only ledger rows whose content row still exists, in the anchor and in every step', () => {
+    const ledgerArm = PLATFORMS_SQL.slice(0, PLATFORMS_SQL.indexOf('unplatformed AS'));
+    const probe = 'EXISTS (SELECT 1 FROM ci.content lc WHERE lc.id = r.record_id AND lc.user_id = r.user_id)';
+
+    expect(ledgerArm.split(probe)).toHaveLength(3);
   });
 });

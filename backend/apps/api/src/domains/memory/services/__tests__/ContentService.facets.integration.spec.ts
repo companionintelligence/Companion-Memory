@@ -26,6 +26,8 @@ import type { GraphDeltaWriter } from '../GraphDeltaWriter';
  *    library hides that media, so offering its value would filter to nothing;
  *  - a value that a deleted event's media carries AND a live row carries, since
  *    the live row is what the filter would show;
+ *  - NOT a platform only ledger rows whose content is gone carry — deleting a
+ *    content item and the ingest reset both leave `ci.record_sources` behind;
  *  - the row's own `source_system` for a row the ledger never saw, and for a
  *    row whose ledger rows all carry a NULL platform (the sibling spec,
  *    ContentService.platformFacet, pins the ledger-vs-column rule itself).
@@ -183,6 +185,20 @@ describeWithDb(`ContentService.getFacets reads along indexes (${availability.tar
       platform: 'google_photos',
     });
 
+    // Ledger rows that outlived their content: `ci.record_sources` has no FK,
+    // and ContentService.remove and the ingest reset's TRUNCATE both leave
+    // them. One sorts before every live platform (the loose scan's first
+    // probe), one between two of them (a later step); neither is offered.
+    for (const platform of ['aardvark_orphan', 'instagram']) {
+      const orphanId = uuidv7();
+
+      await dataSource.query(
+        `INSERT INTO ci.record_sources (user_id, record_table, record_id, source_type, source_system, source_id, platform)
+         VALUES ($1, 'content', $2, 'ci-import-tools', $3, $4, $3)`,
+        [ownerCtx.userId, orphanId, platform, `facets-spec-orphan-${orphanId}`],
+      );
+    }
+
     contentService = new ContentService(
       dataSource.getRepository(ContentEntity),
       dataSource.getRepository(ContentBaseEntity),
@@ -216,6 +232,7 @@ describeWithDb(`ContentService.getFacets reads along indexes (${availability.tar
     // live only on the deleted event.
     expect(facets.types).toEqual(['image', 'like', 'media', 'note', 'video']);
     expect(facets.mimetypes).toEqual(['application/json', 'image/jpeg', 'text/plain', 'video/mp4']);
+    // …and no `aardvark_orphan` or `instagram`, which only orphaned ledger rows carry.
     expect(facets.sourceSystems).toEqual(['file', 'google_photos', 'netflix', 'reddit', 'spotify']);
   });
 

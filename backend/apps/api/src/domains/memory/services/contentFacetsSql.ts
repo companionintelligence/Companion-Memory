@@ -92,6 +92,17 @@ export const UNLEDGERED_SOURCE_SYSTEMS_SQL = `
    ORDER BY v`;
 
 /**
+ * The ledger row still names a content row. `ci.record_sources` has no FK:
+ * deleting a content item (`ContentService.remove`) and the ingest reset's
+ * TRUNCATE both leave its ledger rows behind, and a platform held only by
+ * those would be offered and then match nothing. One primary-key probe per
+ * row the loose scan visits — on a converged library, one per distinct
+ * platform; orphans are stepped past in index order until a live row turns up.
+ */
+const LIVE_LEDGER_RECORD_SQL = (alias: string) =>
+  `EXISTS (SELECT 1 FROM ci.content lc WHERE lc.id = ${alias}.record_id AND lc.user_id = ${alias}.user_id)`;
+
+/**
  * The How facet: every platform that delivered one of the user's content
  * rows, by the rule {@link effectiveSourceSystemSql} filters with — the
  * ledger's platform where it recorded one, else the row's own
@@ -99,7 +110,8 @@ export const UNLEDGERED_SOURCE_SYSTEMS_SQL = `
  * arm (`$2`, from {@link UNLEDGERED_SOURCE_SYSTEMS_SQL}):
  *
  *  - `ledger`: a loose scan over the platforms the ledger holds for the
- *    user's content rows.
+ *    user's content rows — rows that still exist, see
+ *    {@link LIVE_LEDGER_RECORD_SQL}.
  *  - `unplatformed`: records whose ledger rows all carry a NULL platform —
  *    a federated kind whose producer could not name one — reached through
  *    the partial index on exactly those rows; their column stands in.
@@ -111,12 +123,14 @@ export const UNLEDGERED_SOURCE_SYSTEMS_SQL = `
  */
 export const PLATFORMS_SQL = `
   WITH RECURSIVE ledger AS (
-    (SELECT platform AS v FROM ci.record_sources
-      WHERE user_id = $1 AND record_table = 'content' AND platform IS NOT NULL
-      ORDER BY platform LIMIT 1)
+    (SELECT r.platform AS v FROM ci.record_sources r
+      WHERE r.user_id = $1 AND r.record_table = 'content' AND r.platform IS NOT NULL
+        AND ${LIVE_LEDGER_RECORD_SQL('r')}
+      ORDER BY r.platform LIMIT 1)
     UNION ALL
     SELECT (SELECT r.platform FROM ci.record_sources r
              WHERE r.user_id = $1 AND r.record_table = 'content' AND r.platform > ledger.v
+               AND ${LIVE_LEDGER_RECORD_SQL('r')}
              ORDER BY r.platform LIMIT 1)
       FROM ledger WHERE ledger.v IS NOT NULL
   ), unplatformed AS (
