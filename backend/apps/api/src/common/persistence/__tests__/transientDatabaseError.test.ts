@@ -1,8 +1,12 @@
 import {
+  classifyDatabaseError,
+  classifyDatabaseMessage,
   DatabaseCrashedError,
+  DatabaseNotReadyError,
   DatabaseUnavailableError,
   TransientDatabaseError,
   isDatabaseCrashError,
+  isDatabaseNotReadyError,
   isTransientDatabaseError,
   isTransientDatabaseMessage,
   retryOnTransientDatabaseError,
@@ -10,11 +14,16 @@ import {
 } from '../transientDatabaseError';
 
 /**
- * "The database is away" versus "the database said no".
+ * "The database is away" versus "the database said no" — and, within the
+ * first, "it never took the statement" versus "it went down with the statement
+ * in flight".
  *
  * The first case below is the incident this module exists for: a Postgres
  * crash-restart answered a live import push with SQLSTATE 57P03 for a few
  * seconds, and the push quarantined 437 good rows as if each one were poisoned.
+ * The second is the reason the module does not resend everything it waits
+ * for: a statement can crash Postgres, and resending it into every recovery
+ * crashes it again every time.
  */
 
 /** The shape TypeORM's QueryFailedError takes: the code on the error AND on driverError. */
@@ -26,16 +35,67 @@ function queryFailed(code: string, message: string): Error {
   });
 }
 
-describe('isTransientDatabaseError', () => {
+/** A Node system error, as `net` raises it. */
+function socketError(code: string, syscall: string, message: string): Error {
+  return Object.assign(new Error(message), { code, syscall });
+}
+
+describe('classifyDatabaseError', () => {
   it.each([
-    ['57P03', 'the database system is in recovery mode'],
-    ['57P03', 'the database system is not yet accepting connections'],
-    ['57P01', 'terminating connection due to administrator command'],
-    ['57P02', 'terminating connection because of crash of another server process'],
-    ['08006', 'connection failure'],
-    ['53300', 'sorry, too many clients already'],
-  ])('treats SQLSTATE %s as the server being away', (code, message) => {
-    expect(isTransientDatabaseError(queryFailed(code, message))).toBe(true);
+    ['57P03 in recovery', queryFailed('57P03', 'the database system is in recovery mode')],
+    ['57P03 not accepting', queryFailed('57P03', 'the database system is not yet accepting connections')],
+    ['57P03 shutting down', queryFailed('57P03', 'the database system is shutting down')],
+    ['53300 full', queryFailed('53300', 'sorry, too many clients already')],
+    ['08001 refused at connect', queryFailed('08001', 'could not connect to server')],
+    ['a refused socket', socketError('ECONNREFUSED', 'connect', 'connect ECONNREFUSED 172.18.0.2:5432')],
+    ['an unreachable host', socketError('EHOSTUNREACH', 'connect', 'connect EHOSTUNREACH 172.18.0.2:5432')],
+    ['a DNS miss mid-restart', socketError('EAI_AGAIN', 'getaddrinfo', 'getaddrinfo EAI_AGAIN database')],
+    ['a connect that timed out', socketError('ETIMEDOUT', 'connect', 'connect ETIMEDOUT 172.18.0.2:5432')],
+    ['a pool with no free connection', new Error('timeout exceeded when trying to connect')],
+    [
+      // pg-pool kills the socket itself and wraps what pg says about it: the
+      // outer, specific link decides, not the crash-shaped cause.
+      'a pool connect timeout',
+      new Error('Connection terminated due to connection timeout', {
+        cause: new Error('Connection terminated unexpectedly'),
+      }),
+    ],
+    [
+      'a client pg already knows is dead',
+      new Error('Client has encountered a connection error and is not queryable'),
+    ],
+  ])('calls %s NOT READY: the statement never ran', (_label, err) => {
+    expect(classifyDatabaseError(err)).toBe('not_ready');
+    expect(isDatabaseNotReadyError(err)).toBe(true);
+    expect(isDatabaseCrashError(err)).toBe(false);
+    expect(isTransientDatabaseError(err)).toBe(true);
+  });
+
+  it.each([
+    ['57P01 admin shutdown', queryFailed('57P01', 'terminating connection due to administrator command')],
+    [
+      '57P02 crash of another backend',
+      queryFailed('57P02', 'terminating connection because of crash of another server process'),
+    ],
+    ['08006 connection failure', queryFailed('08006', 'connection failure')],
+    ['a reset socket', socketError('ECONNRESET', 'read', 'read ECONNRESET')],
+    // Our write meeting a closed socket. The query goes out in one write, so
+    // the pipe may have broken after the server had it: not provably unsent.
+    ['a broken pipe', socketError('EPIPE', 'write', 'write EPIPE')],
+    ['an open socket that stopped answering', socketError('ETIMEDOUT', 'read', 'read ETIMEDOUT')],
+    // The backend running OUR statement died: pg says only this, with no code.
+    ['pg losing the socket', new Error('Connection terminated unexpectedly')],
+    [
+      'a wrapped crash',
+      new Error('bulk insert failed', {
+        cause: queryFailed('57P02', 'terminating connection because of crash of another server process'),
+      }),
+    ],
+  ])('calls %s a CRASH: the statement may have been in flight', (_label, err) => {
+    expect(classifyDatabaseError(err)).toBe('crashed');
+    expect(isDatabaseCrashError(err)).toBe(true);
+    expect(isDatabaseNotReadyError(err)).toBe(false);
+    expect(isTransientDatabaseError(err)).toBe(true);
   });
 
   it('reads the code off driverError when TypeORM did not copy it up', () => {
@@ -43,150 +103,116 @@ describe('isTransientDatabaseError', () => {
       driverError: { code: '57P03' },
     });
 
-    expect(isTransientDatabaseError(err)).toBe(true);
-  });
-
-  it('treats a refused socket as transient, by its code', () => {
-    const err = Object.assign(new Error('connect ECONNREFUSED 172.18.0.2:5432'), { code: 'ECONNREFUSED' });
-
-    expect(isTransientDatabaseError(err)).toBe(true);
+    expect(classifyDatabaseError(err)).toBe('not_ready');
   });
 
   it('looks inside an AggregateError, which is how a multi-address connect fails', () => {
     const err = new AggregateError([
-      Object.assign(new Error('connect ECONNREFUSED ::1:5432'), { code: 'ECONNREFUSED' }),
-      Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED' }),
+      socketError('ECONNREFUSED', 'connect', 'connect ECONNREFUSED ::1:5432'),
+      socketError('ECONNREFUSED', 'connect', 'connect ECONNREFUSED 127.0.0.1:5432'),
     ]);
 
-    expect(isTransientDatabaseError(err)).toBe(true);
-  });
-
-  it('follows a service that wrapped the driver error with `cause`', () => {
-    const inner = queryFailed('57P03', 'the database system is in recovery mode');
-    const err = new Error('bulk insert into ci.communications failed', { cause: inner });
-
-    expect(isTransientDatabaseError(err)).toBe(true);
-  });
-
-  it('falls back to the wording when pg raised a bare Error with no code', () => {
-    expect(isTransientDatabaseError(new Error('Connection terminated unexpectedly'))).toBe(true);
-    expect(isTransientDatabaseError(new Error('timeout exceeded when trying to connect'))).toBe(true);
+    expect(classifyDatabaseError(err)).toBe('not_ready');
   });
 
   it('keeps a real rejection a rejection', () => {
     expect(
-      isTransientDatabaseError(
+      classifyDatabaseError(
         queryFailed('23502', 'null value in column "content" violates not-null constraint'),
       ),
-    ).toBe(false);
+    ).toBeNull();
     expect(
-      isTransientDatabaseError(queryFailed('23505', 'duplicate key value violates unique constraint')),
-    ).toBe(false);
+      classifyDatabaseError(queryFailed('23505', 'duplicate key value violates unique constraint')),
+    ).toBeNull();
     // Out of disk is its own stage failure (isOutOfDiskError), not a wait.
     expect(
-      isTransientDatabaseError(queryFailed('53100', 'could not extend file: No space left on device')),
-    ).toBe(false);
-    expect(isTransientDatabaseError(new Error('Unexpected token in JSON'))).toBe(false);
-    expect(isTransientDatabaseError(null)).toBe(false);
-    expect(isTransientDatabaseError('the database system is in recovery mode')).toBe(false);
+      classifyDatabaseError(queryFailed('53100', 'could not extend file: No space left on device')),
+    ).toBeNull();
+    expect(classifyDatabaseError(new Error('Unexpected token in JSON'))).toBeNull();
+    expect(classifyDatabaseError(null)).toBeNull();
+    expect(classifyDatabaseError('the database system is in recovery mode')).toBeNull();
+    expect(isTransientDatabaseError(queryFailed('23505', 'duplicate key'))).toBe(false);
   });
 
   it('lets a non-transient CODE win over transient-looking prose in the message', () => {
     // A value quoted into an error message is user data; the code is the verdict.
-    const err = queryFailed(
-      '22P02',
-      'invalid input syntax for type uuid: "Connection terminated unexpectedly"',
+    expect(
+      classifyDatabaseError(
+        queryFailed('22P02', 'invalid input syntax for type uuid: "Connection terminated unexpectedly"'),
+      ),
+    ).toBeNull();
+    expect(
+      classifyDatabaseError(queryFailed('57P03', 'Connection terminated unexpectedly while starting up')),
+    ).toBe('not_ready');
+  });
+
+  it('honours a verdict already carried by class, without reading through it', () => {
+    const crash = new Error('Connection terminated unexpectedly');
+    const recovering = queryFailed('57P03', 'the database system is in recovery mode');
+
+    expect(classifyDatabaseError(new DatabaseNotReadyError('entity k: in recovery'))).toBe('not_ready');
+    expect(classifyDatabaseError(new DatabaseUnavailableError('pushing', 3, 90_000, recovering))).toBe(
+      'not_ready',
     );
-
-    expect(isTransientDatabaseError(err)).toBe(false);
+    expect(classifyDatabaseError(new DatabaseCrashedError('pushing', crash))).toBe('crashed');
+    // Wrapped in turn — a stage context, say — the verdict still stands.
+    expect(
+      classifyDatabaseError(new Error('push failed', { cause: new DatabaseCrashedError('x', crash) })),
+    ).toBe('crashed');
+    // A crash verdict wrapping a not-ready cause is still a crash: the class decided.
+    expect(classifyDatabaseError(new DatabaseCrashedError('pushing', recovering))).toBe('crashed');
   });
 
-  it('honours an explicit TransientDatabaseError, and a DatabaseUnavailableError is one', () => {
-    expect(isTransientDatabaseError(new TransientDatabaseError('entity k: recovery'))).toBe(true);
-    expect(isTransientDatabaseError(new DatabaseUnavailableError('pushing', 3, 90_000, new Error('x')))).toBe(
-      true,
-    );
-  });
-});
+  it('reads a bare TransientDatabaseError the safe way: away, and not provably unsent', () => {
+    const err = new TransientDatabaseError('entity k: something about the database');
 
-describe('isDatabaseCrashError', () => {
-  it.each([
-    ['57P01', queryFailed('57P01', 'terminating connection due to administrator command')],
-    ['57P02', queryFailed('57P02', 'terminating connection because of crash of another server process')],
-    ['a reset socket', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })],
-    // The backend running OUR statement died: pg says only this, with no code.
-    ['pg losing the socket mid-query', new Error('Connection terminated unexpectedly')],
-    [
-      'a wrapped crash',
-      new Error('bulk insert failed', {
-        cause: queryFailed('57P02', 'terminating connection because of crash of another server process'),
-      }),
-    ],
-  ])('calls %s a crash with the statement possibly in flight', (_label, err) => {
     expect(isTransientDatabaseError(err)).toBe(true);
-    expect(isDatabaseCrashError(err)).toBe(true);
-  });
-
-  it.each([
-    ['57P03 in recovery', queryFailed('57P03', 'the database system is in recovery mode')],
-    ['57P03 not accepting', queryFailed('57P03', 'the database system is not yet accepting connections')],
-    [
-      'a refused socket',
-      Object.assign(new Error('connect ECONNREFUSED 10.0.0.4:5432'), { code: 'ECONNREFUSED' }),
-    ],
-    // Our own write failing: the statement never reached the server.
-    ['a broken pipe', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })],
-    ['a full server', queryFailed('53300', 'sorry, too many clients already')],
-    ['a pool connect timeout', new Error('timeout exceeded when trying to connect')],
-  ])('does not call %s a crash: the statement never ran', (_label, err) => {
-    expect(isTransientDatabaseError(err)).toBe(true);
-    expect(isDatabaseCrashError(err)).toBe(false);
-  });
-
-  it('decides by the code when there is one, not by prose that looks like a crash', () => {
-    const err = queryFailed('57P03', 'Connection terminated unexpectedly while starting up');
-
-    expect(isDatabaseCrashError(err)).toBe(false);
-    expect(isDatabaseCrashError(queryFailed('23505', 'Connection terminated unexpectedly'))).toBe(false);
-  });
-
-  it('does not re-open an error whose class already carries a verdict', () => {
-    const crash = queryFailed('57P02', 'terminating connection because of crash of another server process');
-
-    expect(isDatabaseCrashError(new DatabaseUnavailableError('pushing', 3, 9_000, crash))).toBe(false);
-    expect(isDatabaseCrashError(new DatabaseCrashedError('pushing', 2, crash))).toBe(false);
+    expect(classifyDatabaseError(err)).toBe('crashed');
   });
 });
 
 describe('DatabaseCrashedError', () => {
-  it('is NOT transient, although its cause is — that is the verdict it exists to carry', () => {
+  it('is transient — never a reason to quarantine a row — and says it was not resent', () => {
     const crash = new DatabaseCrashedError(
       'writing a batch',
-      2,
       new Error('Connection terminated unexpectedly'),
     );
 
-    expect(isTransientDatabaseError(crash)).toBe(false);
-    // Nor when something wraps it in turn.
-    expect(isTransientDatabaseError(new Error('push failed', { cause: crash }))).toBe(false);
+    expect(crash).toBeInstanceOf(TransientDatabaseError);
+    expect(isTransientDatabaseError(crash)).toBe(true);
+    expect(crash.operation).toBe('writing a batch');
     expect(crash.message).toBe(
-      'the database went down 2 time(s) with writing a batch in flight ' +
+      'the database went down with writing a batch possibly in flight, so it was not sent again ' +
         '(last error: Connection terminated unexpectedly)',
     );
   });
 });
 
-describe('isTransientDatabaseMessage', () => {
+describe('classifyDatabaseMessage', () => {
   it('recognises the text a string-only error channel is left with', () => {
     // GraphIngestService reports each failed entity as `entity <key>: <message>`.
-    expect(isTransientDatabaseMessage('entity person:abc: the database system is in recovery mode')).toBe(
-      true,
+    expect(classifyDatabaseMessage('the database system is in recovery mode')).toBe('not_ready');
+    expect(classifyDatabaseMessage('connect ECONNREFUSED 10.0.0.4:5432')).toBe('not_ready');
+    expect(classifyDatabaseMessage('connect ETIMEDOUT 10.0.0.4:5432')).toBe('not_ready');
+    expect(classifyDatabaseMessage('Connection terminated unexpectedly')).toBe('crashed');
+    expect(classifyDatabaseMessage('read ECONNRESET')).toBe('crashed');
+    expect(classifyDatabaseMessage('write EPIPE')).toBe('crashed');
+    expect(classifyDatabaseMessage('read ETIMEDOUT')).toBe('crashed');
+    expect(classifyDatabaseMessage('terminating connection because of crash of another server process')).toBe(
+      'crashed',
     );
-    expect(isTransientDatabaseMessage('entity person:abc: connect ECONNREFUSED 10.0.0.4:5432')).toBe(true);
+    expect(classifyDatabaseMessage('value too long for type character varying(255)')).toBeNull();
+    expect(classifyDatabaseMessage(null)).toBeNull();
+    expect(isTransientDatabaseMessage('the database system is in recovery mode')).toBe(true);
+    expect(isTransientDatabaseMessage('value too long for type character varying(255)')).toBe(false);
+  });
+
+  it('calls text naming both moments a crash: it cannot be shown to be the harmless one', () => {
     expect(
-      isTransientDatabaseMessage('entity person:abc: value too long for type character varying(255)'),
-    ).toBe(false);
-    expect(isTransientDatabaseMessage(null)).toBe(false);
+      classifyDatabaseMessage(
+        'Connection terminated unexpectedly; then: the database system is in recovery mode',
+      ),
+    ).toBe('crashed');
   });
 });
 
@@ -209,8 +235,9 @@ describe('retryOnTransientDatabaseError', () => {
   }
 
   const recovering = () => queryFailed('57P03', 'the database system is in recovery mode');
+  const crashed = () => new Error('Connection terminated unexpectedly');
 
-  it('waits out a restart and returns what the operation eventually produced', async () => {
+  it('waits out a server that is not ready and returns what the operation eventually produced', async () => {
     const policy = clock();
     let calls = 0;
 
@@ -232,6 +259,74 @@ describe('retryOnTransientDatabaseError', () => {
     expect(calls).toBe(4);
     // Exponential, from the first pause.
     expect(policy.slept).toEqual([1_000, 2_000, 4_000]);
+  });
+
+  it('never resends an operation the database went down under, and does not wait', async () => {
+    const policy = clock();
+    const cause = crashed();
+    let calls = 0;
+
+    const failure = await retryOnTransientDatabaseError(
+      'writing a batch',
+      async () => {
+        calls += 1;
+
+        throw cause;
+      },
+      policy,
+    ).catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(DatabaseCrashedError);
+    expect(failure).toMatchObject({ operation: 'writing a batch', cause });
+    expect(calls).toBe(1);
+    expect(policy.slept).toEqual([]);
+  });
+
+  it('raises the crash even after waiting out recovery first', async () => {
+    // Not ready, not ready, then taken — and the server went down under it.
+    const outcomes = [recovering, recovering, crashed];
+    const policy = clock();
+    let calls = 0;
+
+    const failure = await retryOnTransientDatabaseError(
+      'writing a batch',
+      async () => {
+        calls += 1;
+
+        throw outcomes[calls - 1]();
+      },
+      policy,
+    ).catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(DatabaseCrashedError);
+    expect(calls).toBe(3);
+    expect(policy.slept).toEqual([1_000, 2_000]);
+  });
+
+  it('waits out a crash too, for an operation whose policy says it cannot be the cause', async () => {
+    const policy = { ...clock(), resendAfterCrash: true };
+    let calls = 0;
+
+    const result = await retryOnTransientDatabaseError(
+      'recording a stage failure',
+      async () => {
+        calls += 1;
+
+        if (calls === 1) {
+          throw crashed();
+        }
+
+        if (calls === 2) {
+          throw recovering();
+        }
+
+        return 'recorded';
+      },
+      policy,
+    );
+
+    expect(result).toBe('recorded');
+    expect(policy.slept).toEqual([1_000, 2_000]);
   });
 
   it('rethrows a real rejection on the attempt it happened, without waiting', async () => {
@@ -278,65 +373,41 @@ describe('retryOnTransientDatabaseError', () => {
     expect(notices).toHaveLength(policy.slept.length);
   });
 
-  const crashed = () => new Error('Connection terminated unexpectedly');
+  it('passes a nested verdict straight up: no second budget, no resend past a crash', async () => {
+    const nestedUnavailable = new DatabaseUnavailableError('reading the batch', 9, 170_000, recovering());
+    const nestedCrash = new DatabaseCrashedError('writing a row', crashed());
 
-  it('stops resending, at crashAttempts, only an operation that asked it to', async () => {
-    const policy = { ...clock(), crashAttempts: 2 };
-    const outcomes = [crashed, recovering, recovering, crashed, recovering];
-    let calls = 0;
+    for (const nested of [nestedUnavailable, nestedCrash]) {
+      const policy = { ...clock(), resendAfterCrash: true };
+      let calls = 0;
 
-    const failure = await retryOnTransientDatabaseError(
-      'writing a batch',
-      async () => {
-        calls += 1;
+      await expect(
+        retryOnTransientDatabaseError(
+          'pushing a batch',
+          async () => {
+            calls += 1;
 
-        throw outcomes[calls - 1]();
-      },
-      policy,
-    ).catch((err: unknown) => err);
-
-    expect(failure).toBeInstanceOf(DatabaseCrashedError);
-    expect(failure).toMatchObject({ operation: 'writing a batch', crashes: 2 });
-    // The second crash ended it: the two 57P03s in between — the server not
-    // yet taking statements — did not count, and it was not sent a fifth time.
-    expect(calls).toBe(4);
-    expect(policy.slept).toEqual([1_000, 2_000, 4_000]);
-
-    // Without a limit — a read, a ledger UPDATE by id — every crash is still
-    // waited out like any other outage.
-    let reads = 0;
-
-    const result = await retryOnTransientDatabaseError(
-      'reading the next batch',
-      async () => {
-        reads += 1;
-
-        if (reads <= 3) {
-          throw crashed();
-        }
-
-        return 'read';
-      },
-      clock(),
-    );
-
-    expect(result).toBe('read');
-    expect(reads).toBe(4);
+            throw nested;
+          },
+          policy,
+        ),
+      ).rejects.toBe(nested);
+      expect(calls).toBe(1);
+      expect(policy.slept).toEqual([]);
+    }
   });
 
-  it('draws every pause from a shared allowance, so many operations wait one budget in total', async () => {
-    const allowance = { remainingMs: 10_000 };
-    const policy = { ...clock(), allowance };
+  it('resends on an explicit not-ready verdict, and raises a bare transient one as a crash', async () => {
+    const policy = clock();
     let calls = 0;
 
-    // The first operation meets two pauses (1s + 2s) and succeeds.
     await retryOnTransientDatabaseError(
-      'writing row 1',
+      'resolving entities',
       async () => {
         calls += 1;
 
-        if (calls <= 2) {
-          throw recovering();
+        if (calls === 1) {
+          throw new DatabaseNotReadyError('entity k: the database system is in recovery mode');
         }
 
         return true;
@@ -344,36 +415,16 @@ describe('retryOnTransientDatabaseError', () => {
       policy,
     );
 
-    expect(allowance.remainingMs).toBe(7_000);
-
-    // The second meets an outage that never ends, and gets only what is left:
-    // 1s + 2s + 4s, then an 8s pause would overdraw the 0 remaining.
-    const failure = await retryOnTransientDatabaseError(
-      'writing row 2',
-      async () => {
-        throw recovering();
-      },
-      policy,
-    ).catch((err: unknown) => err);
-
-    expect(failure).toBeInstanceOf(DatabaseUnavailableError);
-    expect(allowance.remainingMs).toBe(0);
-    expect(policy.slept).toEqual([1_000, 2_000, 1_000, 2_000, 4_000]);
-  });
-
-  it('does not stack a second budget on top of a nested one that already gave up', async () => {
-    const policy = clock();
-    const nested = new DatabaseUnavailableError('reading the batch', 9, 170_000, recovering());
+    expect(calls).toBe(2);
 
     await expect(
       retryOnTransientDatabaseError(
-        'pushing a batch',
+        'resolving entities',
         async () => {
-          throw nested;
+          throw new TransientDatabaseError('entity k: gone');
         },
-        policy,
+        clock(),
       ),
-    ).rejects.toBe(nested);
-    expect(policy.slept).toEqual([]);
+    ).rejects.toBeInstanceOf(DatabaseCrashedError);
   });
 });

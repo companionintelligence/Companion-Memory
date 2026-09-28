@@ -1006,7 +1006,8 @@ export class ImportRunService {
    *
    * It also re-drives a push that RAN and FAILED — with rows still `pending`
    * and none marked `failed`, which is how a push now ends when the database
-   * stays away past `PushStage`'s wait, or with every row settled, when it
+   * stays away past `PushStage`'s wait or crashes under one of its statements
+   * (`DatabaseCrashedDuringPushError`), or with every row settled, when it
    * died after the last batch. One command therefore recovers every shape of
    * "this run's push did not finish", and the operator does not need to know
    * which one the run is in.
@@ -1150,9 +1151,10 @@ export class ImportRunService {
 
       // A push that RAN and left something undone is re-driven even when no row
       // was marked failed: rows still `pending` (the database stayed away past
-      // PushStage's wait and the stage failed), or a stage that failed after
-      // every row settled (it died in the close-out). Leaving the second alone
-      // answered "nothing to retry" about a run that stayed `failed`.
+      // PushStage's wait, or crashed under it, and the stage failed), or a
+      // stage that failed after every row settled (it died in the close-out).
+      // Leaving the second alone answered "nothing to retry" about a run that
+      // stayed `failed`.
       const unfinishedPush =
         state.pushStageId != null && (state.hadPending || state.pushStatus !== 'completed');
 

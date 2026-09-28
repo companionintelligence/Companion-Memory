@@ -45,13 +45,19 @@ export {
   CRASH_NETWORK_CODES,
   CRASH_SQLSTATES,
   DatabaseCrashedError,
+  DatabaseNotReadyError,
   DatabaseUnavailableError,
+  NOT_READY_NETWORK_CODES,
+  NOT_READY_SQLSTATES,
   TRANSIENT_NETWORK_CODES,
   TRANSIENT_SQLSTATES,
   TransientDatabaseError,
+  classifyDatabaseError,
+  classifyDatabaseMessage,
   isDatabaseCrashError,
+  isDatabaseNotReadyError,
   isTransientDatabaseError,
   isTransientDatabaseMessage,
   retryOnTransientDatabaseError,
 } from './transientDatabaseError';
-export type { TransientRetryNotice, TransientRetryPolicy } from './transientDatabaseError';
+export type { DatabaseAbsence, TransientRetryNotice, TransientRetryPolicy } from './transientDatabaseError';

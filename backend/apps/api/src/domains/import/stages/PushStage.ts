@@ -4,11 +4,12 @@ import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 import {
+  classifyDatabaseMessage,
   DatabaseCrashedError,
+  DatabaseNotReadyError,
+  isDatabaseCrashError,
   isTransientDatabaseError,
-  isTransientDatabaseMessage,
   retryOnTransientDatabaseError,
-  TransientDatabaseError,
   type TransientRetryPolicy,
 } from '@ci/common/persistence';
 import { BrowserActivityService } from '@ci/domains/browser-activity';
@@ -95,6 +96,8 @@ import { type DropReason, dropReasonFor } from '../telemetry/dropReasons';
 import { buildStageSummary, SUMMARY_KEY, type StageSummary } from '../telemetry/stageSummary';
 import type { ImportStageRunner, StageOutcome, StageRunContext } from '../types';
 
+import { DatabaseCrashedDuringPushError } from './DatabaseCrashedDuringPushError';
+
 /** Mirrors personalization TrustMode without importing that domain (cycle risk). */
 type TrustMode = 'cautious' | 'balanced' | 'hands_off';
 
@@ -168,8 +171,9 @@ const NO_DESTINATION_REASON = 'no destination for this record';
 const REPRESENTED_ELSEWHERE_REASON = 'represented elsewhere by design';
 
 /**
- * How long the push waits out a database that stopped answering, before it
- * gives up and fails the stage with every unwritten row still `pending`.
+ * How long the push waits out a database that is not READY — still in recovery,
+ * not yet accepting connections, refusing sockets — before it gives up and
+ * fails the stage with every unwritten row still `pending`.
  *
  * Three minutes, because that is comfortably longer than the crash recovery
  * that motivated it: Postgres answered a live push with 57P03 ("in recovery
@@ -180,48 +184,18 @@ const REPRESENTED_ELSEWHERE_REASON = 'represented elsewhere by design';
  * is trying to come back.
  *
  * Past the budget the stage FAILS rather than waiting on: a failed stage keeps
- * its rows `pending`, and the stage retry (or `retryFailedPush`) re-drives
+ * its rows `pending`, and `retryFailedPush` (or the stage retry) re-drives
  * exactly what is left. What it never does is quarantine a row for a reason
  * that had nothing to do with the row.
+ *
+ * Only a server that never took the statement is waited for. One that went
+ * down WITH a statement in flight is not — see {@link DatabaseCrashedDuringPushError}.
  */
 const PUSH_TRANSIENT_RETRY: TransientRetryPolicy = {
   initialDelayMs: 1_000,
   maxDelayMs: 30_000,
   budgetMs: 180_000,
 };
-
-/**
- * How many database crashes a BATCH write may be in flight for before the
- * batch is suspected of causing them and degraded to single rows.
- *
- * Two, so ONE resend: a session the server ended (57P01/57P02, a reset socket,
- * "Connection terminated unexpectedly") may have been ended by some other
- * backend's crash, and a batch that meets that once deserves the benefit of the
- * doubt. A batch that meets it twice is the likelier cause — the precedent is a
- * TimescaleDB 2.28 segfault during a bulk upsert — and every further resend
- * would restart the whole appliance's database again. Waiting for a server that
- * is still coming back (57P03, a refused socket) never counts: nothing was
- * running.
- */
-const BATCH_CRASH_ATTEMPTS = 2;
-
-/**
- * The same, for one row on its own — past it the row is quarantined `failed`
- * as {@link CRASHED_DATABASE_REASON} rather than sent again.
- */
-const ROW_CRASH_ATTEMPTS = 2;
-
-/**
- * The `staged_items.push_error` prefix for a row quarantined because the
- * database went down every time it was written — see {@link ROW_CRASH_ATTEMPTS}.
- * A stable slug first, so a person or a query can tell "the database crashed
- * on this row" from "the database refused this row" without parsing prose.
- *
- * `retryFailedPush` resets these like any failed row. Re-pushing one costs up
- * to four more crashes (two in its batch, two alone) before it is isolated
- * again, so do it after changing what made the database crash, not before.
- */
-const CRASHED_DATABASE_REASON = 'crashed_database';
 
 /**
  * The slug this skip reason is reported under.
@@ -315,13 +289,6 @@ interface RowPlan {
   wrote: boolean;
   /** Set only by the per-row retry, and only for a genuine failure. */
   failure: string | null;
-  /**
-   * The failure is already in the ledger. Set for a row quarantined as
-   * {@link CRASHED_DATABASE_REASON}, which is written the moment it is decided
-   * — see {@link PushStage.sendGroup} — so {@link PushStage.recordOutcomes}
-   * counts it without writing it twice.
-   */
-  failureRecorded?: boolean;
   /**
    * The event this record resolved to (created or pre-existing), recorded by
    * the events destination so the content destination — which runs after it —
@@ -445,25 +412,33 @@ type DestinationCounts = Partial<Record<Destination, number>>;
  * the product would ever look at them again.
  *
  * So every database step here goes through {@link PushStage.retrying}: a
- * failure classified as the database being away (`isTransientDatabaseError`,
- * code-first) is retried on a doubling backoff for up to
- * {@link PUSH_TRANSIENT_RETRY}'s budget BEFORE a batch degrades to per-row or a
- * row is quarantined. If the database is still away after that, the stage
- * fails and every unwritten row stays `pending` for the retry to pick up. A
+ * failure classified as the database not being READY for the statement
+ * (`isDatabaseNotReadyError`, code-first) is retried on a doubling backoff for
+ * up to {@link PUSH_TRANSIENT_RETRY}'s budget, and no failure of the database
+ * being away (`isTransientDatabaseError`) ever degrades a batch to per-row or
+ * quarantines a row. If the database is still away after the wait, the stage
+ * fails and every unwritten row stays `pending` for the re-drive to pick up. A
  * row is `failed` only for something the database said about THAT row.
  *
- * ## …unless the write keeps taking the database down with it
+ * ## …but a database that crashed with a statement in flight stops the push
  *
- * Waiting is right for a server that went away on its own and wrong for one
- * the push is knocking over: a statement that crashes Postgres (a TimescaleDB
- * 2.28 segfault during a bulk upsert is the precedent) would be re-sent every
- * time the server came back, restarting the whole appliance's database ten
- * times in three minutes and then again on every stage retry, with the poison
- * row never isolated. So the destination writes count the crashes they were in
- * flight for — see {@link sendGroup}: a batch is resent once, then degraded to
- * single rows; a single row is resent once, then quarantined as
- * {@link CRASHED_DATABASE_REASON}. The wait for a server still in recovery
- * never counts against either.
+ * Waiting is right for a server that was not ready to take a statement and
+ * wrong for one that went down WHILE running one: the statement may be what
+ * crashed it (a TimescaleDB 2.28 segfault during a bulk upsert is the
+ * precedent), and resending it every time the server came back restarted the
+ * whole appliance's database ten times in three minutes. So only a server that
+ * never took the statement is waited for (57P03, a refused socket, a pool
+ * connect timeout). A crash-type failure — 57P01/57P02, a reset socket, a broken
+ * pipe, pg's "Connection terminated unexpectedly" — is never resent and never
+ * written off against a row: the stage fails AT ONCE with
+ * {@link DatabaseCrashedDuringPushError}, every row it had not settled still
+ * `pending`, for a person to re-drive (`ci push --run <id> --retry-failed`)
+ * once the database is healthy. One crash per attempt, whatever caused it.
+ *
+ * Isolating the row that crashes the database automatically is a known
+ * follow-up, deliberately not attempted here: done in-process it cost several
+ * crashes per poison row, failed to isolate it at all when recovery took more
+ * than a minute, and quarantined good rows when every write crashed the server.
  */
 @Injectable()
 export class PushStage implements ImportStageRunner {
@@ -499,7 +474,7 @@ export class PushStage implements ImportStageRunner {
   }
 
   /**
-   * Run one step of the push, waiting out a database that is not answering.
+   * Run one step of the push, waiting out a database that is not ready.
    *
    * Every step wrapped in this is safe to repeat — a read, a ledger UPDATE by
    * id, or a destination write that lands on the same rows when repeated (the
@@ -507,31 +482,37 @@ export class PushStage implements ImportStageRunner {
    * `position`, `(receipt_id, line_number)` for receipt lines — see
    * {@link retryOnTransientDatabaseError}) — which is the promise that helper
    * needs. A failure that is not the database being away is rethrown on the
-   * attempt it happened, so the caller's own handling is untouched; one that
-   * outlasts {@link PUSH_TRANSIENT_RETRY} becomes a `DatabaseUnavailableError`,
-   * which no caller here quarantines a row for.
+   * attempt it happened, so the caller's own handling is untouched; a
+   * not-ready database that outlasts {@link PUSH_TRANSIENT_RETRY} becomes a
+   * `DatabaseUnavailableError`, and a crash with the step in flight becomes a
+   * {@link DatabaseCrashedDuringPushError} on the spot, the step NOT resent.
+   * Both fail the stage; no caller here quarantines a row for either.
    *
-   * `policy` overrides the default for the destination writes, which are the
-   * one kind of step that can CRASH the server rather than merely meet a crash
-   * — see {@link sendGroup}.
+   * Every step, not only the destination writes: a crash is one crash per
+   * stage attempt whichever statement met it, and the stage never sends
+   * another statement after one.
    */
-  private retrying<T>(
-    context: StageRunContext,
-    operation: string,
-    op: () => Promise<T>,
-    policy: TransientRetryPolicy = this.transientRetry,
-  ): Promise<T> {
-    return retryOnTransientDatabaseError(operation, op, policy, (notice) => {
-      this.logger.warn('The database is not answering; waiting before trying again', {
-        runId: context.runId,
-        operation,
-        attempt: notice.attempt,
-        delayMs: notice.delayMs,
-        waitedMs: notice.waitedMs,
-        crashes: notice.crashes,
-        error: notice.error instanceof Error ? notice.error.message : String(notice.error),
+  private async retrying<T>(context: StageRunContext, operation: string, op: () => Promise<T>): Promise<T> {
+    try {
+      return await retryOnTransientDatabaseError(operation, op, this.transientRetry, (notice) => {
+        this.logger.warn('The database is not ready; waiting before trying again', {
+          runId: context.runId,
+          operation,
+          attempt: notice.attempt,
+          delayMs: notice.delayMs,
+          waitedMs: notice.waitedMs,
+          error: notice.error instanceof Error ? notice.error.message : String(notice.error),
+        });
       });
-    });
+    } catch (err) {
+      // Named for the push, with the way back in the message, once — a nested
+      // step's verdict is passed through as it is.
+      if (err instanceof DatabaseCrashedError && !(err instanceof DatabaseCrashedDuringPushError)) {
+        throw new DatabaseCrashedDuringPushError(context.runId, err.operation, err.cause);
+      }
+
+      throw err;
+    }
   }
 
   async run(context: StageRunContext): Promise<StageOutcome> {
@@ -1354,11 +1335,14 @@ export class PushStage implements ImportStageRunner {
     }
 
     // Keys ingest refused for a reason that was about the ENTITY. The rest of
-    // what ingest does not echo back — the database being away — is retried,
-    // never recorded here.
+    // what ingest does not echo back — the database being away — is never
+    // recorded here: a database that was not ready is waited out and the open
+    // entities re-sent; one that crashed under the batch fails the stage.
     const refused = new Map<string, string>();
 
-    await this.retrying(context, `resolving ${inputs.length} staged entities`, async () => {
+    const operation = `resolving ${inputs.length} staged entities`;
+
+    await this.retrying(context, operation, async () => {
       // Each attempt sends only what is still open, so a retry after a partial
       // success does not re-resolve (and re-count) the entities it already has.
       const open = inputs.filter((input) => byKey.has(input.key) && !refused.has(input.key));
@@ -1393,7 +1377,8 @@ export class PushStage implements ImportStageRunner {
         result.errors.length > 0
           ? entityErrorMessage(result.errors[0], openKeys)
           : 'entity not resolved by graph ingest';
-      let transient: string | null = null;
+      let notReady: string | null = null;
+      let crashed: string | null = null;
 
       for (const input of open) {
         if (!byKey.has(input.key)) {
@@ -1401,6 +1386,7 @@ export class PushStage implements ImportStageRunner {
         }
 
         const reason = reasonByKey.get(input.key) ?? fallback;
+        const message = messageByKey.get(input.key) ?? fallbackMessage;
 
         // Ingest catches a batch-level failure and reports it per entity as
         // TEXT, so the error object — and its SQLSTATE — is gone by the time it
@@ -1412,15 +1398,28 @@ export class PushStage implements ImportStageRunner {
         // — and a contact keyed `contact:EPIPE Crew` would otherwise read as a
         // socket error and be retried until the stage failed over a refusal
         // that had nothing to do with the database.
-        if (isTransientDatabaseMessage(messageByKey.get(input.key) ?? fallbackMessage)) {
-          transient ??= reason;
-        } else {
-          refused.set(input.key, reason);
+        switch (classifyDatabaseMessage(message)) {
+          case 'crashed':
+            crashed ??= message;
+            break;
+          case 'not_ready':
+            notReady ??= reason;
+            break;
+          default:
+            refused.set(input.key, reason);
         }
       }
 
-      if (transient != null) {
-        throw new TransientDatabaseError(transient);
+      // The database went down with the batch in flight — and the batch may be
+      // what took it down. Never re-sent: `retrying` fails the stage with it.
+      // (Checked first: a batch that met both was in flight for the crash.)
+      if (crashed != null) {
+        throw new DatabaseCrashedError(operation, new Error(crashed));
+      }
+
+      // It never took the batch. Waited out, and only the open entities re-sent.
+      if (notReady != null) {
+        throw new DatabaseNotReadyError(notReady);
       }
     });
 
@@ -2054,6 +2053,13 @@ export class PushStage implements ImportStageRunner {
    * are left to it, and the edge upsert makes the two paths converge anyway.)
    * Fail-soft: the rows are in ci.*, and a missed edge is what the edge sweep
    * exists to catch.
+   *
+   * Except for a database that CRASHED under the edge write. Swallowing that
+   * would carry the push on to the next batch — and to the next crash, if the
+   * edge write is what takes the server down — so it fails the stage like a
+   * crash anywhere else (see {@link DatabaseCrashedDuringPushError}). Ingest
+   * reports a failed edge batch as text, `relationship <from>-><to>: <message>`,
+   * so the message half is read the same way the entity lane reads its own.
    */
   private async linkSharedContent(
     ctx: { userId: string; importRunId?: string },
@@ -2079,14 +2085,32 @@ export class PushStage implements ImportStageRunner {
       return;
     }
 
+    const operation = `linking ${relationships.length} shared content row(s) to their events`;
+    let crashed: unknown = null;
+
     try {
-      await this.graph.ingest(ctx, { entities: [], relationships });
+      const result = await this.graph.ingest(ctx, { entities: [], relationships });
+      const message = result.errors
+        .map(relationshipErrorMessage)
+        .find((text) => classifyDatabaseMessage(text) === 'crashed');
+
+      if (message != null) {
+        crashed = new Error(message);
+      }
     } catch (err) {
-      this.logger.warn('Linking shared content rows to their events failed; the edge sweep will retry', {
-        runId: context.runId,
-        edges: relationships.length,
-        error: (err as Error).message,
-      });
+      if (isDatabaseCrashError(err)) {
+        crashed = err;
+      } else {
+        this.logger.warn('Linking shared content rows to their events failed; the edge sweep will retry', {
+          runId: context.runId,
+          edges: relationships.length,
+          error: (err as Error).message,
+        });
+      }
+    }
+
+    if (crashed != null) {
+      throw new DatabaseCrashedDuringPushError(context.runId, operation, crashed);
     }
   }
 
@@ -2104,30 +2128,13 @@ export class PushStage implements ImportStageRunner {
    * Out of disk is rethrown without the retry: nothing about the next row
    * avoids it, and 500 more attempts only delay the stage failing with a cause.
    *
-   * The database being AWAY is neither of those. It is waited out first —
-   * batch and row alike, see {@link retrying} — and if it outlasts the wait
-   * the stage fails with the rows still `pending`. A row is only ever marked
+   * The database being AWAY is neither of those, and never degrades the batch.
+   * A database that was not ready is waited out — batch and row alike, see
+   * {@link retrying} — and if it outlasts the wait the stage fails with the rows
+   * still `pending`. A database that crashed with the write in flight fails
+   * the stage on the spot, the write not resent, the rows still `pending` —
+   * see {@link DatabaseCrashedDuringPushError}. A row is only ever marked
    * `failed` for something the database said about that row.
-   *
-   * The database going DOWN WITH THE WRITE IN FLIGHT is counted rather than
-   * only waited out, because a write can be what crashes it. The batch is sent
-   * at most {@link BATCH_CRASH_ATTEMPTS} times into a crash, then isolated row
-   * by row; a row that is in flight at {@link ROW_CRASH_ATTEMPTS} crashes of its
-   * own is quarantined as {@link CRASHED_DATABASE_REASON} and the rest of the
-   * group goes on without it. That quarantine is written AT ONCE rather than
-   * with the batch's outcomes: if the stage then fails (the database stays
-   * away), the retry must not find the poison row `pending` and crash the
-   * database with it all over again.
-   *
-   * The waiting is bounded per group, not per statement: the batch waits at
-   * most {@link PUSH_TRANSIENT_RETRY}'s budget, and the row-by-row pass waits
-   * at most ONE more, shared by every row in it. Without the sharing a group
-   * of 500 rows, each meeting the same recovery, could wait 500 budgets; with
-   * it the group waits two at most, and past that the stage fails with the
-   * undecided rows still `pending`. The row pass gets its own allowance rather
-   * than the batch's leftovers so that a slow crash recovery spent on the batch
-   * cannot leave too little to isolate the row that caused it — which would
-   * bring back the loop this exists to break.
    */
   private async sendGroup(
     ctx: { userId: string; importRunId?: string },
@@ -2139,16 +2146,12 @@ export class PushStage implements ImportStageRunner {
     context: StageRunContext,
   ): Promise<void> {
     try {
-      // A batch that failed because the database was AWAY is sent again as a
-      // batch once it is back — the rows were never the problem, and degrading
-      // to per-row would only multiply the statements aimed at a server that is
-      // still recovering. A batch the database keeps going down UNDER is the
-      // exception, and comes out of here as a DatabaseCrashedError.
-      const wrote = await this.retrying(
-        context,
-        `writing ${group.length} ${destination} record(s)`,
-        () => this.sendMany(ctx, destination, group, counts, isSelf, selfEntityId),
-        { ...this.transientRetry, crashAttempts: BATCH_CRASH_ATTEMPTS },
+      // A batch that failed because the database was not READY is sent again as
+      // a batch once it is — the rows were never the problem, and degrading to
+      // per-row would only multiply the statements aimed at a server that is
+      // still recovering.
+      const wrote = await this.retrying(context, `writing ${group.length} ${destination} record(s)`, () =>
+        this.sendMany(ctx, destination, group, counts, isSelf, selfEntityId),
       );
 
       for (const [index, plan] of group.entries()) {
@@ -2167,33 +2170,23 @@ export class PushStage implements ImportStageRunner {
         );
       }
 
-      // Still away after the whole budget. Not the rows' fault, so none of them
-      // is quarantined: the stage fails with every one of them still `pending`,
-      // which is exactly the state a retried stage resumes from.
+      // Away past the whole wait, or crashed with the batch in flight. Not the
+      // rows' fault, so none of them is quarantined: the stage fails with every
+      // one of them still `pending`, which is exactly the state a re-driven push
+      // resumes from.
       if (isTransientDatabaseError(err)) {
+        this.logIfCrashed(context, destination, group, err);
+
         throw err;
       }
 
-      if (err instanceof DatabaseCrashedError) {
-        this.logger.error('The database went down with this batch in flight; isolating it row by row', {
-          runId: context.runId,
-          destination,
-          rows: group.length,
-          crashes: err.crashes,
-          error: err.message,
-        });
-      } else {
-        this.logger.warn('Batched push failed; retrying the group row by row', {
-          runId: context.runId,
-          destination,
-          rows: group.length,
-          error: (err as Error).message,
-        });
-      }
+      this.logger.warn('Batched push failed; retrying the group row by row', {
+        runId: context.runId,
+        destination,
+        rows: group.length,
+        error: (err as Error).message,
+      });
     }
-
-    // One pool of waiting for the whole row-by-row pass — see above.
-    const allowance = { remainingMs: this.transientRetry.budgetMs };
 
     for (const plan of group) {
       try {
@@ -2201,7 +2194,6 @@ export class PushStage implements ImportStageRunner {
           context,
           `writing ${plan.record.sourceSystem} record ${plan.row.id} to ${destination}`,
           () => this.send(ctx, destination, plan.record, plan.participants, counts, isSelf, selfEntityId),
-          { ...this.transientRetry, crashAttempts: ROW_CRASH_ATTEMPTS, allowance },
         );
 
         if (wrote) {
@@ -2226,32 +2218,13 @@ export class PushStage implements ImportStageRunner {
         // The per-row quarantine is for a record the database REJECTED. One it
         // could not take because it was restarting is not poisoned, and marking
         // it `failed` is what stranded 437 good rows behind a crash recovery.
+        // One it was writing when the database crashed MIGHT be poisoned — but
+        // might as well be the neighbour of a crash elsewhere, and a person
+        // re-driving the push tells those apart better than a guess here.
         if (isTransientDatabaseError(err)) {
+          this.logIfCrashed(context, destination, [plan], err);
+
           throw err;
-        }
-
-        if (err instanceof DatabaseCrashedError) {
-          // Every time this row was written on its own, the database went
-          // down. It is not sent again: recorded now, under a reason of its
-          // own, so neither the rest of this push nor a retried stage meets it.
-          plan.failure = boundedReason(`${CRASHED_DATABASE_REASON}: ${err.message}`);
-
-          await this.retrying(context, 'recording a row that crashed the database', () =>
-            this.markFailed(plan.row.id, plan.failure!),
-          );
-          plan.failureRecorded = true;
-
-          this.logger.error('The database went down every time this staged row was written; quarantined', {
-            runId: context.runId,
-            stagedItemId: plan.row.id,
-            dataSource: plan.record.sourceSystem,
-            kind: plan.record.kind,
-            destination,
-            crashes: err.crashes,
-            error: plan.failure,
-          });
-
-          continue;
         }
 
         plan.failure = (err as Error).message;
@@ -2265,6 +2238,37 @@ export class PushStage implements ImportStageRunner {
         });
       }
     }
+  }
+
+  /**
+   * Name the staged rows a crash caught in flight.
+   *
+   * The stage fails with them `pending` and nothing in the ledger marks them,
+   * so this line is where a person looks when a re-driven push crashes the
+   * database again at the same place — that is the batch to suspect. Bounded:
+   * the id range and the data sources, not 500 ids.
+   */
+  private logIfCrashed(
+    context: StageRunContext,
+    destination: Destination,
+    plans: readonly RowPlan[],
+    err: unknown,
+  ): void {
+    if (!isDatabaseCrashError(err)) {
+      return;
+    }
+
+    const ids = plans.map((plan) => plan.row.id).sort();
+
+    this.logger.error('The database crashed with these staged rows in flight; the push stops here', {
+      runId: context.runId,
+      destination,
+      rows: plans.length,
+      firstStagedItemId: ids[0],
+      lastStagedItemId: ids[ids.length - 1],
+      dataSources: [...new Set(plans.map((plan) => plan.record.sourceSystem))],
+      error: (err as Error).message,
+    });
   }
 
   /**
@@ -2286,13 +2290,11 @@ export class PushStage implements ImportStageRunner {
     // …and the ones it routed nowhere because another lane carries them. See
     // REPRESENTED_ELSEWHERE_REASON.
     const elsewhere: string[] = [];
-    // `recorded`: already written by sendGroup (a row that crashed the
-    // database), so counted here but not written a second time.
-    const failures: Array<{ id: string; error: string; recorded: boolean }> = [];
+    const failures: Array<{ id: string; error: string }> = [];
 
     for (const plan of plans) {
       if (plan.failure != null) {
-        failures.push({ id: plan.row.id, error: plan.failure, recorded: plan.failureRecorded === true });
+        failures.push({ id: plan.row.id, error: plan.failure });
         continue;
       }
 
@@ -2352,10 +2354,6 @@ export class PushStage implements ImportStageRunner {
     );
 
     for (const failure of failures) {
-      if (failure.recorded) {
-        continue;
-      }
-
       await this.retrying(context, 'recording a failed row', () =>
         this.markFailed(failure.id, failure.error),
       );
@@ -3117,6 +3115,19 @@ export function entityErrorMessage(error: string, keys: ReadonlySet<string>): st
   }
 
   return messageAt == null ? error : error.slice(messageAt);
+}
+
+/**
+ * The message half of an ingest RELATIONSHIP error, `relationship <from>-><to>:
+ * <message>`. Only for edges whose keys hold no `: ` — the push's own
+ * `content:<uuid>` / `event:<uuid>` — so the first `: ` ends the keys. A string
+ * of any other shape is returned whole.
+ */
+export function relationshipErrorMessage(error: string): string {
+  const prefix = 'relationship ';
+  const at = error.startsWith(prefix) ? error.indexOf(': ', prefix.length) : -1;
+
+  return at === -1 ? error : error.slice(at + 2);
 }
 
 /**
