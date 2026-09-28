@@ -114,9 +114,24 @@ interface RetryPushState {
   /** The first stage still in flight, if any — the reason to refuse. */
   liveKind: string | null;
   liveStatus: string | null;
+  /**
+   * The first stage AHEAD of the push that did not finish — the other reason
+   * to refuse. `upstreamAbandoned` when it is `running` in a finished run with
+   * nobody touching it: a worker that died after the run was closed.
+   */
+  upstreamId: string | null;
+  upstreamKind: string | null;
+  upstreamStatus: string | null;
+  upstreamAbandoned: boolean | null;
   /** The run's last push stage, the one a retry re-queues. */
   pushStageId: string | null;
   pushStatus: string | null;
+  /**
+   * Whether that push stage ever RAN: `completed`, or `failed`/`running` with a
+   * `started_at` from `beginStage`. A push that was cancelled or failed before
+   * a worker claimed it did not, and there is nothing of it to retry.
+   */
+  pushRan: boolean | null;
   /** Rows already `pending` before this retry reset anything. */
   hadPending: boolean;
 }
@@ -134,6 +149,35 @@ interface RetryPushState {
  * this copy had not heard.
  */
 const DEFAULT_STAGES: readonly ImportStageKindName[] = IMPORT_STAGE_KINDS;
+
+/**
+ * The 409 for a push retry whose run did not finish staging: which stage is
+ * ahead of the push, how it ended, and the way forward for it.
+ */
+function describeUnfinishedUpstream(
+  runId: string,
+  state: {
+    upstreamId: string | null;
+    upstreamKind: string | null;
+    upstreamStatus: string | null;
+    upstreamAbandoned: boolean | null;
+  },
+): string {
+  const how =
+    state.upstreamAbandoned === true
+      ? `was left '${state.upstreamStatus}' by a worker that is gone (the run was closed around it)`
+      : `is ${state.upstreamStatus}`;
+  const next =
+    state.upstreamStatus === 'failed' || state.upstreamStatus === 'cancelled'
+      ? `Retry that stage first (POST /import/runs/${runId}/stages/${state.upstreamId}/retry, or History → Retry), ` +
+        'then its push.'
+      : 'Its push cannot be retried until that stage completes.';
+
+  return (
+    `Import run ${runId} did not finish staging: its ${state.upstreamKind} stage ${how}, so its rows ` +
+    `are not all staged and a push now would close the run over a partial import. ${next}`
+  );
+}
 
 /**
  * How silent a stage must go before the recovery sweep treats its claim as
@@ -960,17 +1004,33 @@ export class ImportRunService {
    * the ordinary {@link startPush} route instead, which now finds pending rows
    * and appends one.
    *
-   * It also re-drives a push that FAILED with rows still `pending` and none
-   * marked `failed` — which is how a push now ends when the database stays
-   * away past `PushStage`'s wait: it fails the stage rather than quarantine
-   * rows for an outage. One command therefore recovers both shapes, and the
-   * operator does not need to know which one the run is in.
+   * It also re-drives a push that RAN and FAILED — with rows still `pending`
+   * and none marked `failed`, which is how a push now ends when the database
+   * stays away past `PushStage`'s wait, or with every row settled, when it
+   * died after the last batch. One command therefore recovers every shape of
+   * "this run's push did not finish", and the operator does not need to know
+   * which one the run is in.
    *
-   * Refused (409) while any stage of the run is still working. Resetting rows
-   * under a push that is running would hand the same rows to two writers, and
-   * re-queuing a stage a worker holds would let a second worker claim it. The
-   * check and the reset happen under the run's row lock, in one transaction —
-   * the same lock `startPush` takes — so a push cannot start in between.
+   * Refused (409), each with a message saying why and what to do instead:
+   *
+   *  - while any stage of the run is still working. Resetting rows under a push
+   *    that is running would hand the same rows to two writers, and re-queuing
+   *    a stage a worker holds would let a second worker claim it. A stage left
+   *    `running` in a FINISHED run and silent past STALE_STAGE_MINUTES is not
+   *    working — `cancel()` closed the run while its worker died, and nothing
+   *    else will ever move it — so it does not block forever.
+   *  - while a stage AHEAD of the push did not complete. A run cancelled mid-
+   *    parse has half its rows staged; pushing them would close the run over an
+   *    import that never finished parsing. That stage's own retry comes first.
+   *  - when the push never ran — cancelled, or failed before a worker claimed
+   *    it. There is nothing of it to retry, and starting it here would undo a
+   *    cancellation behind the user's back; the stage retry is the explicit way.
+   *
+   * The check and the reset happen under the run's row lock, in one transaction
+   * — the same lock `startPush` takes — so a push cannot start in between. The
+   * reopen itself is guarded on the status that was read, because `retryStage`
+   * and a claiming worker move a stage WITHOUT that lock: if the push stage
+   * moved in the meantime, nothing is reset and the caller gets a 409.
    *
    * The run's status is recomputed when the re-driven push finishes, by the
    * ordinary `advance` → {@link finishRun}: the run is reopened here
@@ -1005,7 +1065,11 @@ export class ImportRunService {
       // detail that makes the split necessary.
       const [state] = await manager.query<RetryPushState[]>(
         `SELECT live.kind AS "liveKind", live.status AS "liveStatus",
+                up.id AS "upstreamId", up.kind AS "upstreamKind", up.status AS "upstreamStatus",
+                up.abandoned AS "upstreamAbandoned",
                 push.id AS "pushStageId", push.status AS "pushStatus",
+                (push.status = 'completed'
+                  OR (push.status IN ('failed', 'running') AND push.started_at IS NOT NULL)) AS "pushRan",
                 EXISTS (SELECT 1 FROM ci_import.staged_items i
                          WHERE i.run_id = r.id AND i.push_status = 'pending')
                   OR EXISTS (SELECT 1 FROM ci_import.staged_entities e
@@ -1014,24 +1078,44 @@ export class ImportRunService {
            -- In flight: a stage that is running, or one that is queued in a run
            -- that has not finished (a finished run can hold a queued stage the
            -- worker never reached, after an earlier stage failed — that is a
-           -- leftover, not work in progress).
+           -- leftover, not work in progress). A RUNNING stage in a finished run
+           -- is in flight only while something still touches it: cancel()
+           -- closes the run without touching a running stage, so a worker that
+           -- died after it leaves the stage 'running' for good, and the
+           -- recovery sweep only reclaims stages of UNFINISHED runs.
            LEFT JOIN LATERAL (
              SELECT s.kind, s.status
                FROM ci_import.import_stages s
               WHERE s.run_id = r.id
-                AND (s.status = 'running' OR (s.status = 'queued' AND r.finished_at IS NULL))
+                AND ((s.status = 'running'
+                      AND (r.finished_at IS NULL
+                           OR s.updated_at >= now() - make_interval(mins => $2::int)))
+                     OR (s.status = 'queued' AND r.finished_at IS NULL))
               ORDER BY s.seq
               LIMIT 1
            ) live ON true
            LEFT JOIN LATERAL (
-             SELECT x.id, x.status
+             SELECT x.id, x.seq, x.status, x.started_at
                FROM ci_import.import_stages x
               WHERE x.run_id = r.id AND x.kind = 'push'
               ORDER BY x.seq DESC
               LIMIT 1
            ) push ON true
+           -- Ahead of the push: every stage before it in the pipeline (all of
+           -- them when there is no push stage yet). 'skipped' counts as done,
+           -- as it does in the percent rollup.
+           LEFT JOIN LATERAL (
+             SELECT u.id, u.kind, u.status, (u.status = 'running') AS abandoned
+               FROM ci_import.import_stages u
+              WHERE u.run_id = r.id
+                AND u.kind <> 'push'
+                AND (push.seq IS NULL OR u.seq < push.seq)
+                AND u.status NOT IN ('completed', 'skipped')
+              ORDER BY u.seq
+              LIMIT 1
+           ) up ON true
           WHERE r.id = $1::uuid`,
-        [runId],
+        [runId, STALE_STAGE_MINUTES],
       );
 
       if (state.liveKind != null) {
@@ -1044,22 +1128,35 @@ export class ImportRunService {
         );
       }
 
+      if (state.upstreamKind != null) {
+        throw new ConflictException(describeUnfinishedUpstream(runId, state));
+      }
+
+      if (state.pushStageId != null && state.pushRan !== true) {
+        throw new ConflictException(
+          `Import run ${runId}'s push stage is ${state.pushStatus} and never ran, so there is nothing ` +
+            'of it to retry.' +
+            (state.pushStatus === 'failed' || state.pushStatus === 'cancelled'
+              ? ` To run it anyway, re-queue the stage itself: ` +
+                `POST /import/runs/${runId}/stages/${state.pushStageId}/retry (History → Retry).`
+              : ''),
+        );
+      }
+
       // Both lanes: `pushEntities` marks a staged entity `failed` the same way,
       // and an unresolved person costs every record that names them.
       const items = await this.resetFailedRows(manager, 'staged_items', runId);
       const entities = await this.resetFailedRows(manager, 'staged_entities', runId);
 
-      // Nothing was failed, but a push that itself FAILED left rows pending —
-      // the shape a database outage past PushStage's wait now produces. Only a
-      // push that failed or was cancelled: a completed one has nothing left,
-      // and a push that never ran (an earlier stage failed) is not this
-      // method's to start ahead of the stage that stopped it.
-      const strandedByStage =
-        items + entities === 0 &&
-        state.hadPending &&
-        (state.pushStatus === 'failed' || state.pushStatus === 'cancelled');
+      // A push that RAN and left something undone is re-driven even when no row
+      // was marked failed: rows still `pending` (the database stayed away past
+      // PushStage's wait and the stage failed), or a stage that failed after
+      // every row settled (it died in the close-out). Leaving the second alone
+      // answered "nothing to retry" about a run that stayed `failed`.
+      const unfinishedPush =
+        state.pushStageId != null && (state.hadPending || state.pushStatus !== 'completed');
 
-      if (items + entities === 0 && !strandedByStage) {
+      if (items + entities === 0 && !unfinishedPush) {
         return { items, entities, stageId: null, append: false };
       }
 
@@ -1068,7 +1165,15 @@ export class ImportRunService {
         return { items, entities, stageId: null, append: true };
       }
 
-      await this.reopenPushStage(manager, runId, state.pushStageId);
+      if (!(await this.reopenPushStage(manager, runId, state.pushStageId))) {
+        // Moved between the read above and now — `retryStage` re-queued it, or
+        // a worker claimed what that re-queued. Throwing rolls the row reset
+        // back with it: a push that is about to run needs no help from here.
+        throw new ConflictException(
+          `Import run ${runId}'s push stage changed while this retry was running ` +
+            '(another retry, or a worker picking it up). Nothing was reset; look at the run again.',
+        );
+      }
 
       return { items, entities, stageId: state.pushStageId, append: false };
     });
@@ -1131,8 +1236,10 @@ export class ImportRunService {
   }
 
   /**
-   * Make the run's push stage runnable again, however it ended, and reopen the
-   * run around it.
+   * Make the run's push stage runnable again and reopen the run around it —
+   * provided the stage is still in a state `retryFailedPush` re-drives (ended,
+   * or abandoned `running`). Returns false, having changed nothing, when it is
+   * not.
    *
    * The LAST push stage by seq, because a run can accumulate more than one —
    * the deferred Sync appends its own. Re-queued rather than appended: a second
@@ -1143,17 +1250,30 @@ export class ImportRunService {
    * close it again when the push completes, recomputing `completed` /
    * `partial` from what the new attempt recorded.
    */
-  private async reopenPushStage(manager: EntityManager, runId: string, stageId: string): Promise<void> {
-    await manager.query(
+  private async reopenPushStage(manager: EntityManager, runId: string, stageId: string): Promise<boolean> {
+    // Guarded on the stages retryFailedPush agreed to re-drive — ended, or
+    // abandoned `running` in a finished run — because `retryStage` and a
+    // claiming worker do not take the run lock this runs under, and without
+    // the guard this could flip a stage a worker had JUST claimed back to
+    // `queued` for a second worker to claim. `updated_at` is bumped so the
+    // recovery sweep reads the re-queued stage as fresh, not as a job lost ten
+    // minutes ago that needs another enqueue.
+    const requeued = await manager.query<Array<{ id: string }>>(
       `WITH requeued AS (
          UPDATE ci_import.import_stages
             SET status = 'queued', error = NULL, started_at = NULL, finished_at = NULL,
-                processed = 0, duration_ms = NULL
+                processed = 0, duration_ms = NULL, updated_at = now()
           WHERE id = $1::uuid
+            AND (status IN ('completed', 'failed')
+                 OR (status = 'running' AND updated_at < now() - make_interval(mins => $2::int)))
       RETURNING id)
        SELECT id FROM requeued`,
-      [stageId],
+      [stageId, STALE_STAGE_MINUTES],
     );
+
+    if (requeued.length === 0) {
+      return false;
+    }
 
     await manager.query(
       `WITH reopened AS (
@@ -1164,6 +1284,8 @@ export class ImportRunService {
        SELECT id FROM reopened`,
       [runId],
     );
+
+    return true;
   }
 
   // -------------------------------------------------------------------------

@@ -138,6 +138,37 @@ describe('ci push --retry-failed', () => {
     expect(ctx.term.text()).toContain('Nothing to retry');
   });
 
+  it('says the push stage itself is run again when no row had failed', async () => {
+    // The appliance re-drives a push that FAILED with nothing marked failed —
+    // rows still pending after an outage, or none left and it died closing
+    // out. "0 item(s) moved" alone read like the retry had done nothing.
+    const ctx = harness({ retryFailedPush: async () => ({ items: 0, entities: 0, requeued: true }) });
+
+    await pushCommand(ctx, { run: [RUN], retryFailed: true });
+
+    expect(ctx.term.text()).toContain('queued (stage re-run)');
+    expect(ctx.term.text()).toContain(
+      '1 of them had no failed rows: the push itself did not finish, and is run again.',
+    );
+    expect(ctx.term.text()).not.toContain('Nothing to retry');
+  });
+
+  it('does not say "nothing to retry" about runs it was refused', async () => {
+    const ctx = harness({
+      retryFailedPush: async () => {
+        throw new ApiError(
+          409,
+          `Import run ${RUN} did not finish staging: its parse stage is cancelled.`,
+          '/x',
+        );
+      },
+    });
+
+    await expect(pushCommand(ctx, { run: [RUN], retryFailed: true })).rejects.toBeInstanceOf(CliError);
+    expect(ctx.term.errorText()).toContain('did not finish staging');
+    expect(ctx.term.text()).not.toContain('Nothing to retry');
+  });
+
   it('needs the run it is retrying', async () => {
     const ctx = harness({});
 

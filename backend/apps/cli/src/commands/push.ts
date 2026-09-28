@@ -117,17 +117,20 @@ export async function pushCommand(ctx: CliContext, options: PushOptions = {}): P
  * 437 perfectly good rows behind on a run that otherwise worked. This asks the
  * appliance (`POST /import/runs/:id/push/retry`) to move them back to
  * `pending` and re-queue the run's push stage, which then pushes those rows
- * and nothing else. It also re-drives a push that FAILED with rows still
- * pending, so it is the one command for "finish this run's push".
+ * and nothing else. It also re-drives a push that ran and FAILED — with rows
+ * still pending, or after every row settled — so it is the one command for
+ * "finish this run's push".
  *
  * Explicit run ids only. Re-pushing is safe — every destination upserts — but
  * "retry everything that ever failed, everywhere" is not a thing anyone should
  * be able to type by accident.
  *
- * A run still pushing is refused by the appliance with a 409 naming the stage;
- * that and a run that is not yours are reported per run, and the others go
- * ahead. `--wait` follows the re-queued runs to their close-out, which is where
- * the run's status is recomputed.
+ * The appliance refuses (409) a run still working, a run whose stages ahead of
+ * the push did not complete (cancelled mid-parse), and a push that never ran,
+ * each with a message saying what to do instead; those and a run that is not
+ * yours are reported per run, and the others go ahead. `--wait` follows the
+ * re-queued runs to their close-out, which is where the run's status is
+ * recomputed.
  */
 async function retryFailedPush(ctx: CliContext, options: PushOptions): Promise<void> {
   const runIds = options.run ?? [];
@@ -193,7 +196,13 @@ async function retryFailedPush(ctx: CliContext, options: PushOptions): Promise<v
         {
           header: 'push',
           value: (entry) =>
-            entry.error != null ? 'refused' : entry.result?.requeued ? 'queued' : 'nothing to retry',
+            entry.error != null
+              ? 'refused'
+              : !entry.result?.requeued
+                ? 'nothing to retry'
+                : entry.result.items + entry.result.entities > 0
+                  ? 'queued'
+                  : 'queued (stage re-run)',
         },
       ]),
     );
@@ -204,13 +213,26 @@ async function retryFailedPush(ctx: CliContext, options: PushOptions): Promise<v
 
     const items = requeued.reduce((sum, entry) => sum + (entry.result?.items ?? 0), 0);
     const entities = requeued.reduce((sum, entry) => sum + (entry.result?.entities ?? 0), 0);
+    // Re-queued with no row moved: the push itself did not finish — it failed
+    // with rows still pending, or with none left while closing out — and is
+    // simply run again. Worth saying, or "0 item(s) moved" reads like the
+    // retry did nothing.
+    const stageOnly = requeued.filter((entry) => entry.result!.items + entry.result!.entities === 0).length;
 
-    ctx.term.out(
-      requeued.length > 0
-        ? `\n${requeued.length} run(s) queued for push; ${items} item(s) and ${entities} entit(ies) ` +
-            `moved from failed back to pending.`
-        : '\nNothing to retry: no failed push rows on the run(s) named.',
-    );
+    if (requeued.length > 0) {
+      ctx.term.out(
+        `\n${requeued.length} run(s) queued for push; ${items} item(s) and ${entities} entit(ies) ` +
+          `moved from failed back to pending.` +
+          (stageOnly > 0
+            ? ` ${stageOnly} of them had no failed rows: the push itself did not finish, and is run again.`
+            : ''),
+      );
+    } else if (refused.length < results.length) {
+      ctx.term.out(
+        '\nNothing to retry: no failed push rows and no unfinished push on the run(s) named. ' +
+          'A run whose rows were never pushed is `ci push --run <id>`, without --retry-failed.',
+      );
+    }
   }
 
   if (options.wait && requeued.length > 0) {

@@ -136,6 +136,44 @@ describeWithDatabase(`failed push rows (${importDatabase.target})`, () => {
     return row;
   }
 
+  /**
+   * A three-stage run with one staged message, its unpack completed and the
+   * rest untouched — the starting point for the cancelled-run cases.
+   */
+  async function runWithOnePendingRow(name: string) {
+    const dropId = await harness.stageDrop(name);
+    const { run, stages } = await harness.startRunForDrop(dropId, ['unpack', 'parse', 'push']);
+    const writer = new StagedWriter(dataSource.manager, {
+      userId,
+      runId: run.id,
+      dataSource: 'google_voice',
+    });
+
+    writer.push({
+      item: {
+        id: `sms-${run.id.slice(0, 8)}`,
+        classification: 'message',
+        timestamp: new Date('2019-03-01T09:00:00Z'),
+        metadata: { Text: 'see you at six' },
+      },
+    });
+    await writer.settled();
+
+    expect(await service.beginStage(stages[0].id)).toBe(true);
+    await service.completeStage(stages[0].id, { processed: 1, total: 1, detail: {} });
+
+    return { runId: run.id, unpack: stages[0], parse: stages[1], push: stages[2] };
+  }
+
+  async function runRow(runId: string): Promise<{ status: string; finished_at: string | null }> {
+    const [row] = await dataSource.query(
+      `SELECT status, finished_at FROM ci_import.import_runs WHERE id = $1::uuid`,
+      [runId],
+    );
+
+    return row;
+  }
+
   describe('the trap', () => {
     it('leaves the rows unreachable by every other route', async () => {
       const { runId, pushStageId } = await runWithFailedRows();
@@ -332,6 +370,103 @@ describeWithDatabase(`failed push rows (${importDatabase.target})`, () => {
       // Recomputed by the ordinary close-out, which the reopen made run again.
       expect(runAfter.status).toBe('completed');
       expect(runAfter.finished_at).not.toBeNull();
+    });
+
+    it('refuses a run cancelled mid-parse, rather than push ahead of the unfinished parse', async () => {
+      // cancel() closes the run and cancels its QUEUED stages — the push among
+      // them — but not the parse that is running; that one's worker then dies
+      // with the archive half staged. Re-driving the push here would close the
+      // run over half an import.
+      const { runId, parse, push } = await runWithOnePendingRow('cancel-mid-parse.zip');
+
+      expect(await service.beginStage(parse.id)).toBe(true);
+      expect(await service.cancel({ userId }, runId)).toBe(true);
+      await service.failStage(parse.id, 'worker exited mid-parse');
+
+      events.send.mockClear();
+
+      await expect(service.retryFailedPush({ userId }, runId)).rejects.toThrow(
+        /did not finish staging: its parse stage is failed/,
+      );
+      expect(await stageRow(push.id)).toMatchObject({ status: 'cancelled' });
+      expect(await runRow(runId)).toMatchObject({ status: 'cancelled' });
+      expect((await pushStatuses(runId)).items).toEqual(['pending']);
+      expect(events.send).not.toHaveBeenCalled();
+    });
+
+    it('refuses a push that was cancelled before it ran', async () => {
+      const { runId, parse, push } = await runWithOnePendingRow('cancel-before-push.zip');
+
+      expect(await service.beginStage(parse.id)).toBe(true);
+      await service.completeStage(parse.id, { processed: 1, total: 1, detail: {} });
+      expect(await service.cancel({ userId }, runId)).toBe(true);
+
+      events.send.mockClear();
+
+      await expect(service.retryFailedPush({ userId }, runId)).rejects.toThrow(
+        /push stage is cancelled and never ran/,
+      );
+      expect(await stageRow(push.id)).toMatchObject({ status: 'cancelled' });
+      expect(await runRow(runId)).toMatchObject({ status: 'cancelled' });
+      expect(events.send).not.toHaveBeenCalled();
+    });
+
+    it('re-drives a push that failed after every row settled', async () => {
+      // The push died in its close-out: nothing pending, nothing failed, and
+      // the run `failed` until the push completes.
+      const { runId, parse, push } = await runWithOnePendingRow('closeout.zip');
+
+      expect(await service.beginStage(parse.id)).toBe(true);
+      await service.completeStage(parse.id, { processed: 1, total: 1, detail: {} });
+      expect(await service.beginStage(push.id)).toBe(true);
+      await dataSource.query(
+        `UPDATE ci_import.staged_items SET push_status = 'pushed', pushed_at = now() WHERE run_id = $1::uuid`,
+        [runId],
+      );
+      await service.failStage(push.id, 'the push stage died while summarizing');
+
+      events.send.mockClear();
+
+      expect(await service.retryFailedPush({ userId }, runId)).toEqual({
+        items: 0,
+        entities: 0,
+        requeued: true,
+      });
+      expect(await stageRow(push.id)).toMatchObject({ status: 'queued' });
+      expect(events.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not refuse forever a push left running when cancel() raced its worker dying', async () => {
+      const { runId, pushStageId } = await runWithFailedRows();
+
+      // The run is closed, and the push stage still says `running` — silent
+      // past the recovery sweep's window, which only reclaims stages of runs
+      // that are NOT finished. Nothing will ever move it but this.
+      await dataSource.query(
+        `UPDATE ci_import.import_stages
+            SET status = 'running', finished_at = NULL, updated_at = now() - interval '11 minutes'
+          WHERE id = $1::uuid`,
+        [pushStageId],
+      );
+
+      events.send.mockClear();
+
+      expect(await service.retryFailedPush({ userId }, runId)).toEqual({
+        items: 2,
+        entities: 1,
+        requeued: true,
+      });
+
+      const [stage] = await dataSource.query<Array<{ status: string; fresh: boolean }>>(
+        `SELECT status, updated_at > now() - interval '1 minute' AS fresh
+           FROM ci_import.import_stages WHERE id = $1::uuid`,
+        [pushStageId],
+      );
+
+      // Re-queued, and FRESH: the recovery sweep must read it as a stage that
+      // was just queued, not as one whose job was lost ten minutes ago.
+      expect(stage).toEqual({ status: 'queued', fresh: true });
+      expect(events.send).toHaveBeenCalledTimes(1);
     });
 
     it('is scoped to the caller — another user cannot revive this run', async () => {
