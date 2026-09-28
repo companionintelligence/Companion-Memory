@@ -288,7 +288,12 @@ export function OnboardingPage() {
     return <Navigate to={appHomePath()} replace />;
   }
 
-  if (userLoading || progressLoading || !hydrated) {
+  // `userLoading` gates the first hydrate above, and then it has to stay out of
+  // this check. A later `me` refetch (the phone has no JWT, so the Apollo cache
+  // used to get cleared under an active API-key session) flipped it true, this
+  // page swapped for the loader, and the welcome typing mounted again from the
+  // first character.
+  if (!hydrated || progressLoading) {
     return <LoadingPage message="Loading your setup…" />;
   }
 

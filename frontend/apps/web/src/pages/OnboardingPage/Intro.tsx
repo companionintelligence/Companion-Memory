@@ -18,6 +18,26 @@ function formatDisplayName(name: string | null | undefined): string {
     .join(' ');
 }
 
+// Survives the welcome step unmounting. A refetch that briefly replaces the
+// page with the loader used to mount this again and replay the typing after
+// it had already finished. A real browser reload clears this and may play once
+// more. A different signed-in person gets their own play.
+let introFinishedForUserId: string | null = null;
+
+function introAlreadyFinished(userId: string | undefined): boolean {
+  if (introFinishedForUserId == null) {
+    return false;
+  }
+
+  if (userId == null || introFinishedForUserId === '' || userId === introFinishedForUserId) {
+    return true;
+  }
+
+  introFinishedForUserId = null;
+
+  return false;
+}
+
 interface TypingEffectProps {
   text: string;
   speed?: number;
@@ -82,6 +102,10 @@ function TypingEffect({
     return () => {
       clearTimeout(typingTimeoutRef.current);
       clearTimeout(completeTimeoutRef.current);
+      // A leftover id is truthy, so the next run treated the line as already
+      // finished and skipped straight to onComplete.
+      typingTimeoutRef.current = undefined;
+      completeTimeoutRef.current = undefined;
     };
   }, [text, speed, pause]);
 
@@ -90,6 +114,7 @@ function TypingEffect({
 
 export function Intro() {
   const { user } = useCurrentUser();
+  const userId = user?.id;
 
   const bodyClassName = 'text-xl sm:text-2xl text-center text-muted-foreground leading-snug';
 
@@ -121,11 +146,21 @@ export function Intro() {
     },
   ];
 
-  const [completedCount, setCompletedCount] = useState(0);
+  const [completedCount, setCompletedCount] = useState(() =>
+    introAlreadyFinished(userId) ? messages.length : 0,
+  );
 
   const handleComplete = useCallback(() => {
-    setCompletedCount((count) => count + 1);
-  }, []);
+    setCompletedCount((count) => {
+      const next = count + 1;
+
+      if (next >= messages.length) {
+        introFinishedForUserId = userId ?? introFinishedForUserId ?? '';
+      }
+
+      return next;
+    });
+  }, [messages.length, userId]);
 
   return (
     <div className="w-full max-w-3xl mx-auto space-y-4 text-center px-1">
