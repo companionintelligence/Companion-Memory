@@ -44,7 +44,15 @@ export function ContentDetails({ entity }: Props) {
   // gateway's CSP is media-src 'self' — which is the honest outcome, and the
   // "Open original" link it offers is the only thing that can work for one.
   const isMedia = /^(image|video)\//.test(data.mimetype ?? '');
-  const mediaSrc = isMedia ? resolveStaticUrl(data.mediaUrl ?? data.contentUrl ?? data.sourceUrl) : undefined;
+  const isVideo = data.mimetype?.startsWith('video/') ?? false;
+  // A video plays from the server's browser-playable rendition when one exists
+  // (the H.264 PLAYBACK variant, for HEVC and the like); the original stays the
+  // "open or save" target.
+  const playbackSrc = isVideo ? resolveStaticUrl(data.playbackUrl) : null;
+  const mediaSrc = isMedia
+    ? (playbackSrc ?? resolveStaticUrl(data.mediaUrl ?? data.contentUrl ?? data.sourceUrl))
+    : undefined;
+  const mediaContentType = playbackSrc ? (data.playbackContentType ?? data.mimetype) : data.mimetype;
   const mediaPreviewSrc = isMedia ? resolveStaticUrl(data.previewUrl) : undefined;
   const fileHref = resolveStaticUrl(data.mediaUrl);
   const sourceHref = originHref(data.sourceUrl, data.contentUrl);
@@ -65,9 +73,9 @@ export function ContentDetails({ entity }: Props) {
           <EntityMedia
             src={mediaSrc}
             previewSrc={mediaPreviewSrc}
-            contentType={data.mimetype}
+            contentType={mediaContentType}
             alt={data.title ?? ''}
-            fallbackHref={data.contentUrl ?? data.sourceUrl}
+            fallbackHref={(isVideo ? fileHref : null) ?? data.contentUrl ?? data.sourceUrl}
           />
         )
       }

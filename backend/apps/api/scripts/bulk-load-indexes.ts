@@ -4,7 +4,7 @@ import path from 'node:path';
 import { DataSource } from 'typeorm';
 
 import config from '@ci/configuration';
-import { DEFERRABLE_INDEXES, type DroppedIndex } from '@ci/domains/maintenance/services/IndexDeferralService';
+import { DEFERRABLE_INDEXES, type DroppedIndex } from '@ci/domains/maintenance/deferrableIndexes';
 
 // =====================================================================
 // bulk-load-indexes — OPT-IN index deferral CLI (issue #12)

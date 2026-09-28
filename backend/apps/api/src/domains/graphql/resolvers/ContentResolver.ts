@@ -373,6 +373,23 @@ export class ContentResolver {
     return (await this.resolveFileMedia(context, parent))?.mediaUrl ?? null;
   }
 
+  /** Browser-playable (PLAYBACK variant) URL of the linked video, when one exists — see EventResolver.playbackUrl. */
+  @ResolveField(() => String, { nullable: true })
+  async playbackUrl(
+    @Context() context: RequestContext,
+    @Parent() parent: ContentType,
+  ): Promise<string | null> {
+    return (await this.resolveFileMedia(context, parent))?.playbackUrl ?? null;
+  }
+
+  @ResolveField(() => String, { nullable: true })
+  async playbackContentType(
+    @Context() context: RequestContext,
+    @Parent() parent: ContentType,
+  ): Promise<string | null> {
+    return (await this.resolveFileMedia(context, parent))?.playbackContentType ?? null;
+  }
+
   /** Byte size of the linked ORIGINAL. */
   @ResolveField(() => Float, { nullable: true })
   async mediaSize(@Context() context: RequestContext, @Parent() parent: ContentType): Promise<number | null> {

@@ -26,12 +26,17 @@ function signedFile(partial: Partial<SignedFile> & { id: string }): SignedFile {
   } as SignedFile;
 }
 
-function makeLoader(opts: { originals: SignedFile[]; previews: SignedFile[] }) {
+function makeLoader(opts: { originals: SignedFile[]; previews: SignedFile[]; playbacks?: SignedFile[] }) {
   const findByIds = jest.fn(async (_ctx: unknown, ids: string[]) =>
     ids.map((id) => opts.originals.find((f) => f.id === id) ?? null),
   );
-  const findVariantsByParentIds = jest.fn(async (_ctx: unknown, parentIds: string[]) =>
-    parentIds.map((pid) => opts.previews.find((f) => f.parentId === pid) ?? null),
+  const findVariantsByParentIds = jest.fn(async (_ctx: unknown, parentIds: string[], variant: FileVariant) =>
+    parentIds.map(
+      (pid) =>
+        (variant === FileVariant.PLAYBACK ? (opts.playbacks ?? []) : opts.previews).find(
+          (f) => f.parentId === pid,
+        ) ?? null,
+    ),
   );
 
   const fileService = { findByIds, findVariantsByParentIds } as unknown as FileService;
@@ -72,6 +77,8 @@ describe('ContentFileLoader', () => {
     await expect(loader.load(CTX, 'file-1')).resolves.toEqual({
       previewUrl: '/files/IMGP0463-thumb.jpg',
       mediaUrl: '/files/IMGP0463.JPG',
+      playbackUrl: null,
+      playbackContentType: null,
       contentType: 'image/jpeg',
       filename: 'IMGP0463.JPG',
       size: 4_194_304,
@@ -118,11 +125,12 @@ describe('ContentFileLoader', () => {
 
     expect(results.map((r) => r?.mediaUrl)).toEqual(['/files/a.jpg', '/files/b.jpg', '/files/a.jpg']);
     expect(findByIds).toHaveBeenCalledTimes(1);
-    expect(findVariantsByParentIds).toHaveBeenCalledTimes(1);
+    // PREVIEW and PLAYBACK are two variant hops, each batched once.
+    expect(findVariantsByParentIds).toHaveBeenCalledTimes(2);
     expect(findByIds.mock.calls[0][1]).toEqual(['file-a', 'file-b']);
   });
 
-  it('requests the PREVIEW variant, not another derivative', async () => {
+  it('requests the PREVIEW and PLAYBACK variants, and no other derivative', async () => {
     const { loader, findVariantsByParentIds } = makeLoader({
       originals: [signedFile({ id: 'file-c', url: '/files/c.jpg' })],
       previews: [],
@@ -131,5 +139,30 @@ describe('ContentFileLoader', () => {
     await loader.load(CTX, 'file-c');
 
     expect(findVariantsByParentIds).toHaveBeenCalledWith(CTX, ['file-c'], FileVariant.PREVIEW);
+    expect(findVariantsByParentIds).toHaveBeenCalledWith(CTX, ['file-c'], FileVariant.PLAYBACK);
+    expect(findVariantsByParentIds).toHaveBeenCalledTimes(2);
+  });
+
+  it('carries the PLAYBACK rendition for a video that has one', async () => {
+    const { loader } = makeLoader({
+      originals: [signedFile({ id: 'file-v', url: '/files/clip.mov', contentType: 'video/quicktime' })],
+      previews: [],
+      playbacks: [
+        signedFile({
+          id: 'play-v',
+          parentId: 'file-v',
+          variant: FileVariant.PLAYBACK,
+          contentType: 'video/mp4',
+          url: '/files/clip-h264.mp4',
+        }),
+      ],
+    });
+
+    await expect(loader.load(CTX, 'file-v')).resolves.toMatchObject({
+      mediaUrl: '/files/clip.mov',
+      contentType: 'video/quicktime',
+      playbackUrl: '/files/clip-h264.mp4',
+      playbackContentType: 'video/mp4',
+    });
   });
 });

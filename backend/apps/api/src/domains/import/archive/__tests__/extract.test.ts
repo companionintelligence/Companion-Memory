@@ -40,6 +40,22 @@ afterAll(() => {
 describe('extractUploadedArchive', () => {
   const dir = () => fs.mkdtempSync(path.join(TMP, 'unit-'));
 
+  it('refuses to write through a symlink a previous attempt left in the destination', async () => {
+    const d = dir();
+    const outside = path.join(d, 'outside');
+    fs.mkdirSync(outside);
+    // A resumed extraction lands in the directory the earlier attempt made —
+    // and that attempt's tree may hold a link, since links only exist after
+    // extraction and no name check can see where one points.
+    fs.mkdirSync(path.join(d, 'export'));
+    fs.symlinkSync(outside, path.join(d, 'export', 'link'));
+    const archive = path.join(d, 'export.zip');
+    fs.writeFileSync(archive, zipWith({ 'link/pwned.txt': 'x' }));
+
+    await expect(extractUploadedArchive(archive)).rejects.toThrow(/through a link/);
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
   it('extracts into a sibling directory and keeps the archive', async () => {
     const d = dir();
     const archive = path.join(d, 'export.zip');

@@ -141,7 +141,7 @@ Pair `mcp` with `intents`. The settings UI warns about exactly this
 (`frontend/apps/web/src/pages/SettingsPage/sections/ApiKeysSection.tsx:253-258`),
 and both chat-agent connect keys already carry both scopes
 (`scopesForApp`, verified in
-`backend/apps/api/src/domains/auth/__tests__/ConnectService.test.ts:297-298`).
+`backend/apps/api/src/domains/auth/__tests__/ConnectService.test.ts:347-348`).
 
 ---
 

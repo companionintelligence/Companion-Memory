@@ -21,6 +21,7 @@ import { PersonInteractionStatsLoader } from '../PersonInteractionStatsLoader';
 import { PersonLoader } from '../PersonLoader';
 import { PlaceLoader } from '../PlaceLoader';
 import { PlaceVisitStatsLoader } from '../PlaceVisitStatsLoader';
+import { PlaybackLoader } from '../PlaybackLoader';
 import { PreviewLoader } from '../PreviewLoader';
 import { ProviderKeyLoader } from '../ProviderKeyLoader';
 import { ProviderLoader } from '../ProviderLoader';
@@ -458,6 +459,23 @@ const CASES: readonly LoaderCase[] = [
     probe: (value) => (value as { visitCount: number }).visitCount,
     found: (id) => COUNT[id],
     empty: 0,
+  },
+  {
+    name: 'PlaybackLoader',
+    build: (present) => {
+      const loader = new PlaybackLoader(
+        stub({
+          // Keyed on the ORIGINAL video, exactly as PreviewLoader is.
+          findVariantsByParentIds: async (_ctx: unknown, ids: string[]) =>
+            planner(ids, present, (id) => ({ id: `pb-${id}`, parentId: id })),
+        }),
+        stub(LOGGER),
+      );
+
+      return (id) => loader.load(CTX, id);
+    },
+    probe: (value) => (value as { parentId: string } | null)?.parentId ?? null,
+    empty: null,
   },
   {
     name: 'PreviewLoader',

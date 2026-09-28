@@ -2,6 +2,7 @@ import { Injectable, ServiceUnavailableException, UnauthorizedException } from '
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { sidecarAuthHeaders } from '@ci/common/sidecar/sidecarAuth';
 import config from '@ci/configuration';
 
 import type { DueResponse, ForecastResponse, ForageTrialResponse, WeekForecastResponse } from '../types';
@@ -111,7 +112,11 @@ export class HbpeService {
     let response: Response;
 
     try {
-      response = await fetch(url, { ...init, signal: AbortSignal.timeout(options.timeoutMs ?? 10_000) });
+      response = await fetch(url, {
+        ...init,
+        headers: { ...sidecarAuthHeaders(), ...(init.headers as Record<string, string> | undefined) },
+        signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
+      });
     } catch (err) {
       this.logger.warn('HBPE service unreachable', { url, err });
       throw new ServiceUnavailableException('Forecast service unavailable');

@@ -132,6 +132,20 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   [STAGE_IDS.ENRICH_FILE_PREVIEW]: 2,
 
   /**
+   * v1 — first run of the playback-rendition generator (`VideoPlaybackService`:
+   * software x264 at 1080p max, HDR tone-mapped to BT.709, AAC audio).
+   *
+   * Bump when the codec rule changes (a codec added to or removed from
+   * `BROWSER_SAFE_VIDEO_CODECS`), when ffmpeg can decode something it
+   * previously could not (`transcode_failed` skips are re-offered), or when
+   * the rendition itself changes shape. As with file_preview, the source
+   * predicate excludes originals that already carry a PLAYBACK child, so a
+   * bump re-offers only the rendition-less corpus; re-encoding existing
+   * renditions needs the predicate widened — see VideoPlaybackStage.
+   */
+  [STAGE_IDS.ENRICH_VIDEO_PLAYBACK]: 1,
+
+  /**
    * v1 — oEmbed (YouTube/Spotify/Vimeo/SoundCloud/Dailymotion/X), Wikidata +
    * Wikipedia for Netflix + Prime titles, OpenGraph with oEmbed discovery for
    * the rest. Bump when a resolver's ANSWER for an unchanged key changes (new

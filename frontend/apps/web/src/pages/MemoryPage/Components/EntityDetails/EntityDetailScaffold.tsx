@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 import { useApolloClient } from '@apollo/client';
 import { GlobalUID } from '@ci/common';
@@ -256,13 +256,54 @@ function useProgressiveSrc(src?: string | null, previewSrc?: string | null): str
 }
 
 /**
+ * Re-fetches the drawer's node from the server so its media links are fresh.
+ *
+ * Every media URL the drawer shows is a signed object-store link that expires
+ * an hour after it was minted (`staticfiles.auth.signatureTTL`). The links
+ * ride in whatever query put the entity in the cache — the search page, the
+ * timeline — and stay there for as long as the tab does. A photo hides this:
+ * its preview was fetched (and browser-cached) when the list rendered, and
+ * the original's failure leaves the preview in place. A video is fetched
+ * only when its drawer opens, so an hour after the search the object store
+ * answers 403 and the element reports an error — "media couldn't be loaded"
+ * for a file that is fine. Measured 2026-09-22: a tampered or expired
+ * signature returns 403 through the gateway; nothing else about the file
+ * changes.
+ *
+ * Resolves true when a fresh node was written to the cache (the details
+ * re-render with the new links and the media retries by itself), false when
+ * nothing could be fetched. Null outside a scaffold (stories, unit tests).
+ */
+const MediaRefreshContext = createContext<(() => Promise<boolean>) | null>(null);
+
+export function MediaRefreshProvider({
+  refresh,
+  children,
+}: {
+  refresh: (() => Promise<boolean>) | null;
+  children: ReactNode;
+}) {
+  return <MediaRefreshContext.Provider value={refresh}>{children}</MediaRefreshContext.Provider>;
+}
+
+/**
  * Render image/video media for a media-bearing entity. `src` should already be
  * resolved to a loadable URL (callers add the `/static` prefix where needed).
  * Falls back to treating an unknown content type as an image.
  *
  * For images, pass `previewSrc` alongside the full-size `src` to paint the
  * preview while the original downloads (see {@link useProgressiveSrc}).
- * Videos ignore `previewSrc` — they stream and paint their own poster frame.
+ * Videos stream `src` and use `previewSrc`, when given, as the poster — and
+ * as the still that stays up when the browser cannot decode the stream.
+ *
+ * That last case is common, not exotic: phone recordings since ~2023 are
+ * HEVC (H.265), which Chrome on Linux does not decode at all (measured
+ * 2026-09-22: every 4K 2023–2026 clip in the library is HEVC Main/Main 10;
+ * the older and messaging-app clips are H.264 and play). The bytes arrive
+ * fine — a range request through the gateway answers 206 video/mp4 — the
+ * element just fires `error` with MEDIA_ERR_SRC_NOT_SUPPORTED. So a failed
+ * video is not "couldn't be loaded": it is the poster, a sentence saying the
+ * browser cannot play this format, and the original to open or save.
  */
 export function EntityMedia({
   src,
@@ -290,7 +331,45 @@ export function EntityMedia({
   // block degrades to a link instead; keyed by src so a new entity retries.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const shownSrc = isVideo ? src : imageSrc;
+  // At most ONE refresh per mount, and only for a failure a fresh link can
+  // cure: a network error (MediaError 2 — the object store answered 403 for an
+  // expired signature) or a source the element rejected outright (4). A DECODE
+  // error (3) is the codec, not the link — measured 2026-09-22: every 4K HEVC
+  // clip on the 7900 XTX dies with PIPELINE_ERROR_DECODE in Chrome's VA-API
+  // path, with or without Chrome's acceleration flags, while ffmpeg decodes
+  // the same bytes through the same driver — and refreshing on it produced a
+  // refetch on every play click while the player did nothing. A successful
+  // refresh re-renders with the re-minted `src` and remounts the element
+  // (`attempt`) so the retry does not depend on the link's text changing (two
+  // mints in one second are identical). Anything else, and any second
+  // failure, is the unavailable state.
+  const refreshMedia = useContext(MediaRefreshContext);
+  const [refreshed, setRefreshed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const handleError = useCallback(
+    (failing: string, error: MediaError | null) => {
+      const linkMayHaveExpired =
+        error == null ||
+        error.code === MediaError.MEDIA_ERR_NETWORK ||
+        error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED;
 
+      if (refreshMedia && !refreshed && linkMayHaveExpired) {
+        setRefreshed(true);
+        void refreshMedia().then((ok) => {
+          if (ok) {
+            setAttempt((n) => n + 1);
+          } else {
+            setFailedSrc(failing);
+          }
+        });
+
+        return;
+      }
+
+      setFailedSrc(failing);
+    },
+    [refreshMedia, refreshed],
+  );
   if (!shownSrc) {
     return null;
   }
@@ -300,21 +379,35 @@ export function EntityMedia({
   }
 
   if (failedSrc === shownSrc) {
+    const originalHref = fallbackHref ?? (isVideo ? src : null);
+
     return (
       <div
         role="status"
         className="flex shrink-0 flex-col items-center justify-center gap-2 rounded-md border bg-muted/40 p-6 text-sm text-muted-foreground"
       >
-        <ImageOff className="size-8" aria-hidden />
-        <span>Media couldn&apos;t be loaded</span>
-        {fallbackHref && (
+        {isVideo && previewSrc ? (
+          <img
+            src={previewSrc}
+            alt={alt ?? ''}
+            className="max-h-[max(30vh,12rem)] w-full rounded object-contain"
+          />
+        ) : (
+          <ImageOff className="size-8" aria-hidden />
+        )}
+        <span>
+          {isVideo
+            ? "This browser can't play this video (usually HEVC from a recent phone whose playable copy hasn't been made yet). The file itself is fine."
+            : "Media couldn't be loaded"}
+        </span>
+        {originalHref && (
           <a
-            href={fallbackHref}
+            href={originalHref}
             target="_blank"
             rel="noopener noreferrer"
             className="break-all text-primary hover:underline"
           >
-            Open original <span aria-hidden>↗</span>
+            {isVideo ? 'Open or save the original' : 'Open original'} <span aria-hidden>↗</span>
           </a>
         )}
       </div>
@@ -339,17 +432,20 @@ export function EntityMedia({
     <div className="flex shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/40">
       {isVideo ? (
         <video
+          key={attempt}
           src={shownSrc}
+          poster={previewSrc ?? undefined}
           controls
           className="max-h-[max(45vh,16rem)] w-full object-contain"
-          onError={() => setFailedSrc(shownSrc)}
+          onError={(event) => handleError(shownSrc, event.currentTarget.error)}
         />
       ) : (
         <img
+          key={attempt}
           src={shownSrc}
           alt={alt ?? ''}
           className="max-h-[max(45vh,16rem)] w-full object-contain"
-          onError={() => setFailedSrc(shownSrc)}
+          onError={() => handleError(shownSrc, null)}
         />
       )}
     </div>
@@ -471,6 +567,27 @@ export function EntityDetailScaffold({
   // the entity's own resource type — so it reaches search results and graph
   // nodes alike, without each *Details body having to opt in.
   const deleteTarget = ref.resourceType ? (DELETE_TARGETS[ref.resourceType] ?? null) : null;
+  // Fresh media links for the block above — see MediaRefreshContext. The same
+  // node query the related-card click uses, forced to the network so the
+  // signed URLs are re-minted; useFragment then re-renders the details.
+  const refreshMedia = useCallback(async (): Promise<boolean> => {
+    if (!ref.globalId) {
+      return false;
+    }
+
+    try {
+      const { data } = await apolloClient.query({
+        query: GET_DRAWER_NODE,
+        variables: { id: ref.globalId },
+        fetchPolicy: 'network-only',
+      });
+
+      return data?.node != null;
+    } catch {
+      return false;
+    }
+  }, [apolloClient, ref.globalId]);
+
   const fullPage = fullPagePath(ref.resourceType, ref.rawId);
   const canDelete = !readOnly && Boolean(deleteTarget && ref.globalId);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -586,7 +703,7 @@ export function EntityDetailScaffold({
       </Sheet.Header>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
-        {media}
+        <MediaRefreshProvider refresh={refreshMedia}>{media}</MediaRefreshProvider>
 
         {children}
 

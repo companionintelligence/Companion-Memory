@@ -104,6 +104,12 @@ export async function runTest(root: string): Promise<void> {
   run('uv', ['run', 'pytest'], { cwd: root });
 
   console.log('');
+
+  // The gateway entrypoint is plain sh with no Docker in its test, so it runs
+  // here rather than in any workspace. Its own file says what it covers.
+  run('sh', ['infrastructure/gateway/test.sh'], { cwd: root });
+
+  console.log('');
   ok('All the tests that exist passed.');
   console.log('');
 

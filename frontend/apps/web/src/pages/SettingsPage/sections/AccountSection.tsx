@@ -7,6 +7,12 @@ import { TriangleAlert } from '@ci/shadcn/icons';
 import { useAuth, useCurrentUser } from '@/hooks';
 
 function messageFrom(error: unknown, fallback: string): string {
+  if (error instanceof FetchJsonError && error.status === 401 && error.message === 'REAUTH_REQUIRED') {
+    // A Companion-signed-in account with no password of its own proves itself by a recent
+    // sign-in instead; the window has passed.
+    return 'Sign in again to make this change.';
+  }
+
   return error instanceof FetchJsonError ? error.message : fallback;
 }
 
@@ -43,12 +49,18 @@ export function AccountSection() {
   // password" to change email/password would lock them out permanently, the same
   // reason account deletion above doesn't require one either.
   const [hasFederatedIdentity, setHasFederatedIdentity] = useState(false);
+  // A federated account that has set a password of its own is asked for it like any other.
+  const [hasOwnPassword, setHasOwnPassword] = useState(false);
+  const asksCurrentPassword = !hasFederatedIdentity || hasOwnPassword;
 
   useEffect(() => {
-    fetchJson<{ email: string; hasFederatedIdentity: boolean }>('/api/account', {
+    fetchJson<{ email: string; hasFederatedIdentity: boolean; hasOwnPassword: boolean }>('/api/account', {
       headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
     })
-      .then((result) => setHasFederatedIdentity(result?.hasFederatedIdentity ?? false))
+      .then((result) => {
+        setHasFederatedIdentity(result?.hasFederatedIdentity ?? false);
+        setHasOwnPassword(result?.hasOwnPassword ?? false);
+      })
       .catch(() => {});
   }, [authToken]);
 
@@ -73,7 +85,7 @@ export function AccountSection() {
         },
         body: JSON.stringify({
           newEmail: newEmail.trim(),
-          ...(hasFederatedIdentity ? {} : { currentPassword: emailCurrentPassword }),
+          ...(asksCurrentPassword ? { currentPassword: emailCurrentPassword } : {}),
         }),
       });
 
@@ -117,7 +129,7 @@ export function AccountSection() {
         },
         body: JSON.stringify({
           newPassword,
-          ...(hasFederatedIdentity ? {} : { currentPassword: passwordCurrentPassword }),
+          ...(asksCurrentPassword ? { currentPassword: passwordCurrentPassword } : {}),
         }),
       });
 
@@ -125,6 +137,7 @@ export function AccountSection() {
       setNewPassword('');
       setConfirmNewPassword('');
       setPasswordCurrentPassword('');
+      setHasOwnPassword(true);
     } catch (err) {
       setPasswordError(messageFrom(err, 'Could not update password.'));
     } finally {
@@ -175,7 +188,7 @@ export function AccountSection() {
               <p className="text-sm text-muted-foreground">You'll use this address to sign in.</p>
             </div>
 
-            {!hasFederatedIdentity && (
+            {asksCurrentPassword && (
               <div className="grid gap-2">
                 <Label htmlFor="emailCurrentPassword">Current password</Label>
                 <PasswordInput
@@ -217,16 +230,16 @@ export function AccountSection() {
           <form className="space-y-4" onSubmit={handleChangePassword}>
             <div className="space-y-1">
               <h3 className="text-sm font-medium">
-                {hasFederatedIdentity ? 'Set a password' : 'Change password'}
+                {asksCurrentPassword ? 'Change password' : 'Set a password'}
               </h3>
               <p className="text-sm text-muted-foreground">
-                {hasFederatedIdentity
-                  ? 'You signed in with a Companion account and have no password yet — set one to also sign in with email.'
-                  : 'Changing your password signs out every other device.'}
+                {asksCurrentPassword
+                  ? 'Changing your password signs out every other device.'
+                  : 'You signed in with a Companion account and have no password yet — set one to also sign in with email.'}
               </p>
             </div>
 
-            {!hasFederatedIdentity && (
+            {asksCurrentPassword && (
               <div className="grid gap-2">
                 <Label htmlFor="passwordCurrentPassword">Current password</Label>
                 <PasswordInput

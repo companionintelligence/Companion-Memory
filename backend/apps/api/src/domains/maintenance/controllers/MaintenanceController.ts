@@ -20,7 +20,7 @@ import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FULL_CAPABILITY, READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { UNFURL_SWEEP_QUEUE, UnfurlSweepRequestEvent } from '@ci/domains/embed/events';
@@ -28,6 +28,8 @@ import { EventService as SignallingEventService } from '@ci/domains/events';
 import {
   FILE_PREVIEW_SWEEP_QUEUE,
   FilePreviewSweepRequestEvent,
+  VIDEO_PLAYBACK_SWEEP_QUEUE,
+  VideoPlaybackSweepRequestEvent,
   MediaDimensionsBackfillRequestEvent,
   MEDIA_DIMENSIONS_QUEUE,
 } from '@ci/domains/files';
@@ -78,12 +80,6 @@ import {
   GraphEnrichmentService,
 } from '../services/GraphEnrichmentService';
 import { type HealSelfCollationResult, HealSelfCollationService } from '../services/HealSelfCollationService';
-import {
-  type DeferralResult,
-  type DroppedIndex,
-  IndexDeferralService,
-  type RecreateResult,
-} from '../services/IndexDeferralService';
 import { type IngestResetResult, IngestResetService } from '../services/IngestResetService';
 import {
   DEFAULT_ESTIMATE_SOURCE_SYSTEMS,
@@ -111,20 +107,6 @@ import {
   type SummaryBackfillResult,
   SummaryBackfillService,
 } from '../services/SummaryBackfillService';
-
-// Body for POST /api/maintenance/indexes/recreate: the `dropped` array returned
-// verbatim by the matching /drop call (each carries its exact CREATE statement).
-const recreateIndexesSchema = z.object({
-  dropped: z
-    .array(
-      z.object({
-        schema: z.string(),
-        name: z.string(),
-        definition: z.string(),
-      }),
-    )
-    .min(1),
-});
 
 const geocodeLocationsSchema = z.object({
   /** Max events to geocode in this batch (default: config.geocoding.batchSize). */
@@ -498,7 +480,6 @@ export class MaintenanceController {
   constructor(
     private readonly signallingEventService: SignallingEventService,
     @InjectDataSource() private readonly dataSource: DataSource,
-    private readonly indexDeferralService: IndexDeferralService,
     private readonly orphanCleanupService: OrphanCleanupService,
     private readonly entityIdentifierBackfillService: EntityIdentifierBackfillService,
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
@@ -716,6 +697,31 @@ export class MaintenanceController {
       FilePreviewSweepRequestEvent,
       { userId, requestedBy: 'maintenance-api' },
       { queue: FILE_PREVIEW_SWEEP_QUEUE, singletonKey: `file-preview-sweep:${userId}` },
+    );
+
+    return { status: 'enqueued' };
+  }
+
+  /**
+   * On-demand `enrich.video_playback` sweep: transcode the browser-playable
+   * PLAYBACK rendition for every stored video of the caller's whose codec
+   * needs one (HEVC etc.) and has none. Same shape and idempotency as
+   * `file-preview-sweep`; the sweep serialises the transcodes, so on a large
+   * library it runs for an hour or more in the background.
+   */
+  @Post('video-playback-sweep')
+  async videoPlaybackSweep(@Context() context: RequestContext): Promise<{ status: 'enqueued' | 'noop' }> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return { status: 'noop' };
+    }
+
+    await this.signallingEventService.send(
+      VideoPlaybackSweepRequestEvent,
+      { userId, requestedBy: 'maintenance-api' },
+      { queue: VIDEO_PLAYBACK_SWEEP_QUEUE, singletonKey: `video-playback-sweep:${userId}` },
     );
 
     return { status: 'enqueued' };
@@ -1299,31 +1305,6 @@ export class MaintenanceController {
   }
 
   /**
-   * Index-deferral helper (issue #12), DROP phase. Drops the deferrable
-   * secondary indexes (FTS GIN, pgvector HNSW, per-table btree/GIN on the bulk
-   * destinations) before a very large load. Returns each dropped index's exact
-   * recreate statement in `dropped` — POST that array back to /indexes/recreate
-   * after the load. Provenance unique indexes and primary keys are never
-   * dropped (enforced in IndexDeferralService). OPT-IN; operator-triggered.
-   */
-  @Post('indexes/drop')
-  async dropIndexes(): Promise<DeferralResult> {
-    return this.indexDeferralService.dropDeferredIndexes();
-  }
-
-  /**
-   * Index-deferral helper (issue #12), RECREATE phase. Recreates the indexes
-   * dropped by /indexes/drop from the definitions returned there (passed back
-   * verbatim in the body).
-   */
-  @Post('indexes/recreate')
-  async recreateIndexes(
-    @Body(new ValidationPipe(recreateIndexesSchema)) body: { dropped: DroppedIndex[] },
-  ): Promise<RecreateResult> {
-    return this.indexDeferralService.recreateDeferredIndexes(body.dropped);
-  }
-
-  /**
    * Search-index hygiene (#2), ORPHAN-CLEANUP phase. Deletes
    * `ci_search.embeddings` / `ci_search.vectors` rows whose `entity_id` no longer
    * exists in its source table (per the entity-source map). Re-runnable and
@@ -1331,6 +1312,9 @@ export class MaintenanceController {
    * Complements the per-event cascade-delete the search listeners now do on
    * `*RemovedEvent` — this reaps the historical orphans those never covered.
    */
+  // Appliance-wide (it walks every user's index rows), so it is the administrator's call,
+  // not any signed-in household member's. See ApplianceAdminGuard for the unclaimed-box rule.
+  @UseGuards(ApplianceAdminGuard)
   @Post('search-index/cleanup-orphans')
   async cleanupSearchOrphans(
     @Body(new ValidationPipe(cleanupOrphansSchema)) body: CleanupOrphansRequest,
@@ -1347,6 +1331,8 @@ export class MaintenanceController {
    * tables wholesale. A data reset that clears `ci.*` must also do this (or it
    * re-orphans the entire index). Destructive — requires `{ "confirm": true }`.
    */
+  // Wipes BOTH search tables for EVERY user. Administrator only.
+  @UseGuards(ApplianceAdminGuard)
   @Post('search-index/truncate')
   async truncateSearchIndex(
     @Body(new ValidationPipe(truncateSearchIndexSchema)) body: { confirm: true },
@@ -1367,6 +1353,8 @@ export class MaintenanceController {
    * the batched-Ollama buffer amortises the embed calls. Re-runnable + incremental.
    * Run it after a bulk import (and after link-communications / extract-graph).
    */
+  // Re-embeds across every user; a heavy, appliance-wide job. Administrator only.
+  @UseGuards(ApplianceAdminGuard)
   @Post('search-index/backfill')
   async backfillSearchIndex(
     @Body(new ValidationPipe(searchIndexBackfillSchema)) body: SearchIndexBackfillRequest,

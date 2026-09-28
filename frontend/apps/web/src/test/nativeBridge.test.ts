@@ -1,10 +1,12 @@
 import {
   addAppUrlOpenListener,
   addBackButtonListener,
+  AuthSessionCancelledError,
   exitApp,
   getCurrentDeviceLocation,
   hasNotificationPermission,
   hideSplashScreen,
+  openAuthSession,
   openExternalUrl,
   closeBrowser,
   getLaunchUrl as readLaunchUrl,
@@ -150,6 +152,61 @@ describe('nativeBridge — native uses the Capacitor plugins', () => {
       url: 'https://hub.companionintelligence.com/api/auth/oauth2/authorize',
     });
     expect(browserOpen).not.toHaveBeenCalled();
+  });
+
+  it('openAuthSession on iOS uses the in-app sheet and not system Safari', async () => {
+    const startAuthSession = vi.fn(async () => {});
+    const hubOpenUrl = vi.fn(async () => {});
+    const { win, browserOpen } = fakeNativeWindow();
+    (win.Capacitor as unknown as { getPlatform: () => string }).getPlatform = () => 'ios';
+    (win as { Capacitor: { Plugins: Record<string, unknown> } }).Capacitor.Plugins.LocalHub = {
+      openUrl: hubOpenUrl,
+      startAuthSession,
+    };
+    setWindow(win);
+
+    await openAuthSession('https://idp.example.com/auth');
+
+    expect(startAuthSession).toHaveBeenCalledWith({
+      url: 'https://idp.example.com/auth',
+      callbackScheme: 'companion',
+    });
+    expect(hubOpenUrl).not.toHaveBeenCalled();
+    expect(browserOpen).not.toHaveBeenCalled();
+  });
+
+  it('openAuthSession maps a dismissed iOS sheet to AuthSessionCancelledError', async () => {
+    const startAuthSession = vi.fn(async () => {
+      throw Object.assign(new Error('Sign-in cancelled'), { code: 'CANCELLED' });
+    });
+    const { win } = fakeNativeWindow();
+    (win.Capacitor as unknown as { getPlatform: () => string }).getPlatform = () => 'ios';
+    (win as { Capacitor: { Plugins: Record<string, unknown> } }).Capacitor.Plugins.LocalHub = {
+      openUrl: vi.fn(async () => {}),
+      startAuthSession,
+    };
+    setWindow(win);
+
+    await expect(openAuthSession('https://idp.example.com/auth')).rejects.toBeInstanceOf(
+      AuthSessionCancelledError,
+    );
+  });
+
+  it('openAuthSession on Android still opens the system browser', async () => {
+    const startAuthSession = vi.fn(async () => {});
+    const hubOpenUrl = vi.fn(async () => {});
+    const { win } = fakeNativeWindow();
+    (win.Capacitor as unknown as { getPlatform: () => string }).getPlatform = () => 'android';
+    (win as { Capacitor: { Plugins: Record<string, unknown> } }).Capacitor.Plugins.LocalHub = {
+      openUrl: hubOpenUrl,
+      startAuthSession,
+    };
+    setWindow(win);
+
+    await openAuthSession('https://idp.example.com/auth');
+
+    expect(hubOpenUrl).toHaveBeenCalledWith({ url: 'https://idp.example.com/auth' });
+    expect(startAuthSession).not.toHaveBeenCalled();
   });
 
   it('openExternalUrl never falls back to in-app Capacitor Browser', async () => {

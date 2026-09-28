@@ -4,6 +4,8 @@ export enum FileVariant {
   ORIGINAL = 'ORIGINAL',
   PREVIEW = 'PREVIEW',
   THUMBNAIL = 'THUMBNAIL',
+  /** Browser-playable H.264 rendition of a video ORIGINAL whose codec browsers cannot rely on (HEVC etc.). */
+  PLAYBACK = 'PLAYBACK',
 }
 
 export interface CreateFileDto extends Partial<Pick<Express.Multer.File, 'path' | 'buffer'>> {

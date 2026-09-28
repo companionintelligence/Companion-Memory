@@ -207,30 +207,31 @@ describe('ApiKeysSection capability picker', () => {
     );
   });
 
-  // Capability is enforced on routes that declare a scope — which is every route a scope-limited key
-  // can reach. An unscoped key is not scope-limited, so read-only covers less than it says.
-  it('says so when read-only is picked with no areas selected', async () => {
+  // Capability is enforced on every operation a key can reach (a route's declared level, else the level
+  // its shape implies), so read-only holds for an unscoped key too. The note says so, and says what
+  // picking areas adds on top — which is why it only shows for read-only with no areas selected.
+  it('explains what read-only covers when it is picked with no areas selected', async () => {
     render(<ApiKeysSection />);
     await openCreateDialogAndName();
 
-    expect(screen.queryByText(/still\s+reach GraphQL and bulk ingest/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Read-only applies everywhere this key can reach/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('radio', { name: 'Read-only' }));
 
-    expect(screen.getByText(/still\s+reach GraphQL and bulk ingest/i)).toBeInTheDocument();
+    expect(screen.getByText(/Read-only applies everywhere this key can reach/i)).toBeInTheDocument();
 
-    // Confining the key to an area removes the caveat, because there capability IS enforced.
+    // Once an area is picked the key is confined, and the note has nothing left to add.
     fireEvent.click(screen.getByLabelText('Memory'));
-    expect(screen.queryByText(/still\s+reach GraphQL and bulk ingest/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Read-only applies everywhere this key can reach/i)).not.toBeInTheDocument();
   });
 
-  it('does not caveat write or full, which are not narrowed claims', async () => {
+  it('does not show the read-only note for write or full', async () => {
     render(<ApiKeysSection />);
     await openCreateDialogAndName();
 
     fireEvent.click(screen.getByRole('radio', { name: 'Read, write & delete' }));
 
-    expect(screen.queryByText(/still\s+reach GraphQL and bulk ingest/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Read-only applies everywhere this key can reach/i)).not.toBeInTheDocument();
   });
 
   it('resets to the default when the dialog is cancelled', async () => {

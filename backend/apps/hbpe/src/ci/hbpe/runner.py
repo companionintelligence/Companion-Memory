@@ -21,12 +21,12 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import jwt
 import requests
 import structlog
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from ci.hbpe import graphql_client
 from ci.hbpe.config import settings
 from ci.hbpe.functions import FUNCTIONS
 
@@ -46,6 +46,15 @@ class RunRequest(BaseModel):
         default=None, description="pg-boss job id — completion is reported back for it"
     )
     queue: str | None = Field(default=None, description="pg-boss queue holding job_id")
+    access_token: str | None = Field(
+        default=None,
+        repr=False,
+        description=(
+            "Per-run API token the dispatcher issued for this job's user. Presented on "
+            "the completion callback and on any GraphQL call the function makes; never "
+            "stored on the run record, so /runs/{id} cannot leak it."
+        ),
+    )
 
 
 class RunRecord(BaseModel):
@@ -78,6 +87,7 @@ class FunctionRunner:
         self._workers: list[asyncio.Task] = []
         # Args are held out of RunRecord so GET /runs never leaks payloads.
         self._pending_args: dict[str, dict[str, Any]] = {}
+        self._pending_tokens: dict[str, str | None] = {}
 
     def _ensure_workers(self) -> None:
         # Lazy start on the running loop (uvicorn's), so the runner needs no
@@ -114,6 +124,7 @@ class FunctionRunner:
 
         self._remember(record)
         self._pending_args[record.run_id] = request.args
+        self._pending_tokens[record.run_id] = request.access_token
         self._ensure_workers()
 
         logger.info(
@@ -135,6 +146,7 @@ class FunctionRunner:
             run_id = await self.queue.get()
             record = self.runs.get(run_id)
             args = self._pending_args.pop(run_id, {})
+            token = self._pending_tokens.pop(run_id, None)
 
             if record is None:  # evicted before it ran — should not happen
                 self.queue.task_done()
@@ -142,6 +154,10 @@ class FunctionRunner:
 
             record.status = "running"
             record.started_at = time.time()
+            user_id = str(args.get("user_id", ""))
+            if token and user_id:
+                # The run's credential for anything it asks the API (see graphql_client).
+                graphql_client.register_token(user_id, token)
 
             try:
                 result = await self.registry[record.function](**args)
@@ -169,12 +185,13 @@ class FunctionRunner:
                 record.finished_at = time.time()
                 self.queue.task_done()
 
-            if record.job_id and record.queue:
-                await self._deliver_callback(
-                    record, user_id=str(args.get("user_id", ""))
-                )
+            if user_id:
+                graphql_client.clear_token(user_id)
 
-    async def _deliver_callback(self, record: RunRecord, user_id: str) -> None:
+            if record.job_id and record.queue:
+                await self._deliver_callback(record, token=token)
+
+    async def _deliver_callback(self, record: RunRecord, token: str | None) -> None:
         url = f"{settings.api_url.rstrip('/')}/function-runs/callback"
         body: dict[str, Any] = {
             "job_id": record.job_id,
@@ -186,7 +203,7 @@ class FunctionRunner:
         else:
             body["error"] = record.error
 
-        headers = self._auth_headers(user_id)
+        headers = self._auth_headers(token)
 
         def _post() -> requests.Response:
             return requests.post(url, json=body, headers=headers, timeout=15.0)
@@ -229,18 +246,16 @@ class FunctionRunner:
             url=url,
         )
 
-    def _auth_headers(self, user_id: str) -> dict[str, str]:
-        if not settings.api_jwt_secret:
-            logger.warning("api_jwt_secret_missing_callback_will_be_unauthenticated")
+    def _auth_headers(self, token: str | None) -> dict[str, str]:
+        """The per-run token the API issued, echoed back. Nothing is signed here.
+
+        A run dispatched without one (only possible from a client other than the
+        API's dispatcher) reports unauthenticated and the API refuses it — the
+        job then recovers via pg-boss expiry rather than by trusting the caller.
+        """
+        if not token:
+            logger.warning("run_token_missing_callback_will_be_unauthenticated")
             return {}
-
-        now = int(time.time())
-        token = jwt.encode(
-            {"sub": user_id, "iat": now, "exp": now + settings.api_jwt_expiry_seconds},
-            settings.api_jwt_secret,
-            algorithm="HS256",
-        )
-
         return {"Authorization": f"Bearer {token}"}
 
 

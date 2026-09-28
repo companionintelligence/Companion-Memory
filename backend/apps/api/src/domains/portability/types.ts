@@ -32,6 +32,13 @@ export interface UserScopedTable {
   schema: string;
   table: string;
   userColumn: 'user_id' | 'owner_user_id';
+  /**
+   * Every column the table has, from the catalog. An archive row may only name
+   * columns in this list — the import refuses anything else before it reaches
+   * SQL. Empty when discovery could not read the column list, which fails
+   * closed (no row for that table can be imported).
+   */
+  columns: readonly string[];
 }
 
 export interface ImportResult {

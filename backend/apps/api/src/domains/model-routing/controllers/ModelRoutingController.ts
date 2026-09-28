@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 
+import { READ_CAPABILITY, RequireCapability } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 
 import { ModelTierRouter } from '../services/ModelTierRouter';
@@ -40,7 +41,10 @@ export class ModelRoutingController {
   }
 
   /** Plan the tier for a task described by its characteristics. */
+  // A POST because the body is a whole request description, but it only computes a
+  // routing decision — nothing is stored. Say so, or the shape rule would demand `write`.
   @Post('plan')
+  @RequireCapability(READ_CAPABILITY)
   plan(@Body() body: unknown): RoutingDecision {
     const parsed = routingRequestSchema.safeParse(body ?? {});
 

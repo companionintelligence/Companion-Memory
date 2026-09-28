@@ -14,6 +14,9 @@ import { Loader } from './Loader';
 export interface ContentFileMedia {
   previewUrl: string | null;
   mediaUrl: string | null;
+  /** The PLAYBACK variant's URL when one exists — see EventMedia.playbackUrl. */
+  playbackUrl: string | null;
+  playbackContentType: string | null;
   contentType: string | null;
   filename: string | null;
   size: number | null;
@@ -49,9 +52,10 @@ export class ContentFileLoader extends Loader<ContentFileMedia | null, string> {
   ): Promise<readonly (ContentFileMedia | null)[]> {
     const ids = [...fileIds];
 
-    const [originals, previews] = await Promise.all([
+    const [originals, previews, playbacks] = await Promise.all([
       this.fileService.findByIds(context, ids),
       this.fileService.findVariantsByParentIds(context, ids, FileVariant.PREVIEW),
+      this.fileService.findVariantsByParentIds(context, ids, FileVariant.PLAYBACK),
     ]);
 
     // Indexed by id rather than zipped by position, for the same reason
@@ -62,10 +66,14 @@ export class ContentFileLoader extends Loader<ContentFileMedia | null, string> {
     const previewByParent = new Map(
       previews.filter((file) => file != null).map((file) => [file.parentId, file]),
     );
+    const playbackByParent = new Map(
+      playbacks.filter((file) => file != null).map((file) => [file.parentId, file]),
+    );
 
     return ids.map((id) => {
       const original = originalById.get(id) ?? null;
       const preview = previewByParent.get(id) ?? null;
+      const playback = playbackByParent.get(id) ?? null;
 
       // An external_id that resolves to neither an original nor a preview is
       // not a file reference we can render (a purged blob, or an opaque
@@ -77,6 +85,8 @@ export class ContentFileLoader extends Loader<ContentFileMedia | null, string> {
       return {
         previewUrl: preview?.url ?? null,
         mediaUrl: original?.url ?? null,
+        playbackUrl: playback?.url ?? null,
+        playbackContentType: playback?.contentType ?? null,
         contentType: original?.contentType ?? null,
         filename: original?.filename ?? null,
         size: original?.size != null ? Number(original.size) : null,

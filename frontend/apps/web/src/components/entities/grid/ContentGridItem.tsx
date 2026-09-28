@@ -19,6 +19,8 @@ export const CONTENT_FRAGMENT = gql(`
     createdAt
     mimetype
     mediaUrl
+    playbackUrl
+    playbackContentType
     mediaFilename
     mediaSize
     previewUrl

@@ -8,7 +8,10 @@ import { Field, ObjectType } from '@nestjs/graphql';
  */
 @ObjectType('ContentFacets')
 export class ContentFacetsType {
-  @Field(() => [String], { description: 'Distinct `type` values (image, post, note, …).' })
+  @Field(() => [String], {
+    description:
+      'Content type options: raw `type` values (post, note, like, …) plus, for `media` rows, the kind their mimetype says — image, video, audio, or `media` for watch/listen records and documents.',
+  })
   types!: string[];
 
   @Field(() => [String], { description: 'Distinct `mimetype` values.' })

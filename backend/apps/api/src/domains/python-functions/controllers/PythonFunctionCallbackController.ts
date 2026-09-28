@@ -1,9 +1,18 @@
-import { BadRequestException, Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  ForbiddenException,
+  HttpCode,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
 
+import { type PythonRunCallbackRequest, PythonRunCallbackGuard } from '../guards/PythonRunCallbackGuard';
 import { PYTHON_FUNCTION_QUEUES, type PythonFunctionCallbackBody } from '../types';
 
 const CALLBACK_QUEUES = new Set<string>(Object.values(PYTHON_FUNCTION_QUEUES));
@@ -23,10 +32,13 @@ export class PythonFunctionCallbackController {
     this.logger.setContext(PythonFunctionCallbackController.name);
   }
 
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(PythonRunCallbackGuard)
   @Post('callback')
   @HttpCode(204)
-  async callback(@Body() body: PythonFunctionCallbackBody): Promise<void> {
+  async callback(
+    @Req() req: PythonRunCallbackRequest,
+    @Body() body: PythonFunctionCallbackBody,
+  ): Promise<void> {
     const { job_id: jobId, queue, status } = body;
 
     if (!jobId || typeof jobId !== 'string') {
@@ -35,6 +47,14 @@ export class PythonFunctionCallbackController {
 
     if (!CALLBACK_QUEUES.has(queue)) {
       throw new BadRequestException(`queue must be one of: ${[...CALLBACK_QUEUES].join(', ')}`);
+    }
+
+    // The token admits one run. A body naming any other job is refused, so a
+    // sidecar holding a token for job A cannot complete or dead-letter job B.
+    const run = req.pythonRun;
+
+    if (!run || run.jobId !== jobId || run.queue !== queue) {
+      throw new ForbiddenException('Run token does not match this job');
     }
 
     if (status === 'completed') {

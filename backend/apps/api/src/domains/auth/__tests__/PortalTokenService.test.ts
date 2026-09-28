@@ -35,7 +35,7 @@ const mockJwtVerify = jwtVerify as unknown as jest.Mock;
 const mockCreateRemoteJWKSet = createRemoteJWKSet as unknown as jest.Mock;
 
 describe('PortalTokenService', () => {
-  let userService: { findByEmail: jest.Mock; create: jest.Mock; findById: jest.Mock };
+  let userService: { findByEmail: jest.Mock; create: jest.Mock; findById: jest.Mock; hasNoUsers: jest.Mock };
   let federatedIdentityService: { findUserId: jest.Mock; bind: jest.Mock; listForUser: jest.Mock };
   let logger: { setContext: jest.Mock; debug: jest.Mock; warn: jest.Mock };
   let service: PortalTokenService;
@@ -44,7 +44,14 @@ describe('PortalTokenService', () => {
     mockJwtVerify.mockReset();
     mockCreateRemoteJWKSet.mockReset();
     mockCreateRemoteJWKSet.mockReturnValue('JWKS');
-    userService = { findByEmail: jest.fn(), create: jest.fn(), findById: jest.fn() };
+    // A claimed appliance is the steady state; tests that exercise the
+    // first-sign-in claim flip this to true explicitly.
+    userService = {
+      findByEmail: jest.fn(),
+      create: jest.fn(),
+      findById: jest.fn(),
+      hasNoUsers: jest.fn().mockResolvedValue(false),
+    };
     federatedIdentityService = {
       findUserId: jest.fn().mockResolvedValue(null),
       bind: jest.fn(),
@@ -60,6 +67,7 @@ describe('PortalTokenService', () => {
 
   it('verifies against the portal JWKS with the configured issuer + audience', async () => {
     mockJwtVerify.mockResolvedValue({ payload: { sub: 's1', email: 'liam@ci.computer' } });
+    userService.hasNoUsers.mockResolvedValue(true);
     userService.create.mockResolvedValue({ id: 'u1' });
 
     await service.verifyAndProvision('the-token');
@@ -84,11 +92,12 @@ describe('PortalTokenService', () => {
     expect(userService.create).not.toHaveBeenCalled();
   });
 
-  it('JIT-provisions a new user and binds it on (iss,sub)', async () => {
+  it('claims an UNCLAIMED appliance: provisions the first user and binds it on (iss,sub)', async () => {
     mockJwtVerify.mockResolvedValue({
       payload: { iss: 'https://hub.test', sub: 's1', email: 'liam@ci.computer', name: 'Liam' },
     });
     userService.findByEmail.mockResolvedValue(null);
+    userService.hasNoUsers.mockResolvedValue(true);
     userService.create.mockResolvedValue({ id: 'u-new' });
 
     const user = await service.verifyAndProvision('t');
@@ -102,6 +111,22 @@ describe('PortalTokenService', () => {
         bindMethod: 'sub',
       }),
     );
+  });
+
+  it('SECURITY: a CLAIMED appliance refuses a Portal identity nobody here has bound', async () => {
+    // The appliance already has its owner. A valid Portal login — anyone can
+    // register one — must not become a fresh local account on it: this was the
+    // path by which any Portal user could sign up to any reachable appliance.
+    mockJwtVerify.mockResolvedValue({
+      payload: { iss: 'https://hub.test', sub: 'stranger-sub', email: 'stranger@example.com', name: 'S' },
+    });
+    userService.findByEmail.mockResolvedValue(null);
+    userService.hasNoUsers.mockResolvedValue(false);
+
+    expect(await service.verifyAndProvision('t')).toBeNull();
+    expect(userService.create).not.toHaveBeenCalled();
+    expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/already has an owner/));
   });
 
   it('links a pre-existing account by VERIFIED email exactly once', async () => {
@@ -140,22 +165,22 @@ describe('PortalTokenService', () => {
 
   it('SECURITY: an unverified email never adopts an existing account', async () => {
     // The takeover shape: an attacker controls an unverified address at a
-    // trusted issuer that collides with a local user. It must provision a NEW
-    // account rather than inherit the victim's.
+    // trusted issuer that collides with a local user. It must not inherit the
+    // victim's account — and on a claimed appliance (the victim's account IS
+    // the claim) it gets nothing at all, not even a fresh account.
     mockJwtVerify.mockResolvedValue({
       payload: { iss: 'https://hub.test', sub: 'attacker-sub', email: 'liam@ci.computer' },
     });
     userService.findByEmail.mockResolvedValue({ id: 'u-victim' });
-    userService.create.mockResolvedValue({ id: 'u-fresh' });
 
-    expect(await service.verifyAndProvision('t')).toEqual({ id: 'u-fresh' });
-    expect(federatedIdentityService.bind).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'u-fresh', subject: 'attacker-sub', bindMethod: 'sub' }),
-    );
+    expect(await service.verifyAndProvision('t')).toBeNull();
+    expect(userService.create).not.toHaveBeenCalled();
+    expect(federatedIdentityService.bind).not.toHaveBeenCalled();
   });
 
   it('falls back to a deterministic shadow email when the token has no email', async () => {
     mockJwtVerify.mockResolvedValue({ payload: { iss: 'https://hub.test', sub: 'sub-xyz' } });
+    userService.hasNoUsers.mockResolvedValue(true);
     userService.create.mockResolvedValue({ id: 'u2' });
 
     await service.verifyAndProvision('t');

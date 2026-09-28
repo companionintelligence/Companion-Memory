@@ -10,23 +10,25 @@ job, no schedule, no uploaded artifact, and no committed `.mp4`. A cut is a buil
 one when you need it, use it, then delete it. What lives in git is the *input* — the storyboard,
 the narration audio, and the screenshots under `assets/shots/`.
 
-> **The storyboard references 9 shots — 18 files — and all of them are committed**, so
-> `check` passes without `--allow-slates`. Seven come from the seeded stack below. **Two are
+> **The storyboard references 10 shots — 20 files — and all of them are committed**, so
+> `check` passes without `--allow-slates`. Eight come from the seeded stack below. **Two are
 > not captures at all**: `graphic-traces` and `graphic-architecture` are Companion Intelligence's
 > own artwork from [ci.computer/memory](https://ci.computer/memory) — see
 > [The two graphic plates](#the-two-graphic-plates).
 >
-> **Sixteen more PNGs are committed and referenced by nothing.** The narrative re-cut took the film
+> **Twelve more PNGs are committed and referenced by nothing.** The narrative re-cut took the film
 > from 18 scenes to 15 and changed which screens it needs; `splash-screen`, `login-form`, `onboarding-focus`, `feed-overview`,
-> `memory-map-view`, `memory-stats`, `insight-detail-view` and `connect-providers` — both viewports
+> `memory-stats` and `connect-providers` — both viewports
 > each — left the storyboard with it. They are kept on purpose (see
 > [What is committed](#what-is-committed)), but be clear about what that means: `ci-video capture`
 > can only shoot ids the storyboard declares, so **nothing can re-shoot them while they are
 > unreferenced**, and they are frozen at 2026-08-07's product. Bringing one back into a scene means
-> re-shooting it in the same commit. `memory-map-view` is already out of date that way: CI-Server
+> re-shooting it in the same commit. `memory-map-view` left with them and is **not** committed any
+> more: it was the one shot taken against real personal data, nothing had used it since the re-cut,
+> and it was already out of date that way — CI-Server
 > [#1891](https://github.com/companionintelligence/CI-Server/pull/1891) restored the Esri
-> attribution control to `Map.tsx` after that shot was taken, so the committed frame shows a
-> basemap with no credit on it and the product no longer does.
+> attribution control to `Map.tsx` after that shot was taken — so it was deleted on 2026-09-17
+> rather than carried. See [What is committed](#what-is-committed).
 >
 > The old note here said the map was empty because `ci.entities.location_point` is NULL on a fresh
 > seed. That is true and it is not the reason. The map view is events-only and plots
@@ -168,13 +170,15 @@ Determinism hazards are catalogued at the top of [`capture.config.mjs`](capture.
 ## The real-corpus stage
 <a id="the-real-corpus-stage"></a>
 
-The seed is a 64-person fixture. It is the right stage for every screen in this cut except one, and
-it is the wrong stage for any claim about scale. `memory-map-view{,.mobile}` were captured against
-the owner's real archive — **826,478 items, 23 sources** — loaded into a throwaway appliance.
+The seed is a 64-person fixture. It is the right stage for every screen in this cut, and it is the
+wrong stage for any claim about scale — and it cannot film the map at all (hazard 13).
+`memory-map-view{,.mobile}` were captured against the owner's real archive — **826,478 items, 23
+sources** — loaded into a throwaway appliance. Those two PNGs were deleted on 2026-09-17 (see
+[What is committed](#what-is-committed)); this stage is what would shoot them again.
 
 **The corpus never leaves this machine and no third party is called.** Geocoding is deliberately
 NOT run: 83 of the 826,478 items carry genuine WGS84 coordinates already (79 Uber trips, 4 Google
-Maps places) and those are what the committed map plots. Forward-geocoding the ~1,400 calendar
+Maps places) and those are what the map plotted. Forward-geocoding the ~1,400 calendar
 events that carry a `Location` string would add roughly 700 more pins, but it posts those strings
 to Google's Geocoding API — a data-egress decision for the owner to make, not the capture job.
 
@@ -339,7 +343,7 @@ against this list:
 
 | Shot | The flat rectangle | What it is |
 |---|---|---|
-| `memory-map-view` *(no longer in the film)* | the 300px column down the left of the map | **A deliberate redaction.** At ≥768px the map renders `TimelineView` there, and against the real archive every card in it is a street address. Masked at the shutter, and it used to be cropped out of the cut as well — the scene was `motion: "hold"` with `focus.landscape` starting at `x = 0.284`, just right of the panel. See hazard 13 in `capture.config.mjs`. ⚠️ **`focus` needs video-kit ≥ 0.4.0** (`src/camera.mjs`); an older kit ignores the key silently and the flat panel stays in frame for the whole scene. The redaction still holds — the rectangle is opaque — but check the kit before you believe the framing. **The scene was cut in the narrative re-cut**, and not for pace: every map render fetches tiles from `server.arcgisonline.com`, which `docs/architecture/third-party-egress.md` records as the one egress a fresh appliance performs with no key and no connector — so in a film about records that stay home, that frame argues with its own narration whatever the caption says. |
+| `memory-map-view` *(no longer in the film; PNGs deleted 2026-09-17)* | the 300px column down the left of the map | **A deliberate redaction.** At ≥768px the map renders `TimelineView` there, and against the real archive every card in it is a street address. Masked at the shutter, and it used to be cropped out of the cut as well — the scene was `motion: "hold"` with `focus.landscape` starting at `x = 0.284`, just right of the panel. See hazard 13 in `capture.config.mjs`. ⚠️ **`focus` needs video-kit ≥ 0.4.0** (`src/camera.mjs`); an older kit ignores the key silently and the flat panel stays in frame for the whole scene. The redaction still holds — the rectangle is opaque — but check the kit before you believe the framing. **The scene was cut in the narrative re-cut**, and not for pace: every map render fetches tiles from `server.arcgisonline.com`, which `docs/architecture/third-party-egress.md` records as the one egress a fresh appliance performs with no key and no connector — so in a film about records that stay home, that frame argues with its own narration whatever the caption says. |
 | every shot with a list | individual `<time>` elements | Relative timestamps ("3:42 PM" / "Jun 14") that move with the clock. |
 
 `feed-overview` used to belong on that list — its 24-hour forecast strip was masked, leaving a dead
@@ -350,7 +354,7 @@ product, so the whole section is now hidden at the shutter instead of masked (ha
 A basemap attribution is a disclosure, not a nuisance — it is the one control that would name Esri
 on screen — and masking it is exactly the thing the honesty rule forbids. It also never did
 anything: `Map.tsx` sets `attributionControl={false}`, so the element is never in the DOM and the
-selector matched nothing. The corner of the committed shot is bare tiles. **The shot was honest;
+selector matched nothing. The corner of that shot was bare tiles. **The shot was honest;
 the product is what shows no attribution.** See hazard 6 in `capture.config.mjs` and
 [`docs/architecture/third-party-egress.md`](../docs/architecture/third-party-egress.md).
 
@@ -454,19 +458,29 @@ appliance.
 
 Both are there now: the audio — one mp3 per scene and `narration.json`, which records **which line
 each mp3 is a read of**, so an edited line reports itself by name instead of silently shipping the
-old recording — and **all 30 PNGs**, of which the storyboard currently references 14.
+old recording — and **all 32 PNGs**, of which the storyboard currently references 20.
 
-`memory-map-view{,.mobile}` came from [the real-corpus stage](#the-real-corpus-stage) and are the
-only frames in the repo taken against real personal data; they are aggregate-only by construction
-— clusters and counts, no labels, no panel. They are also, with the other seven unreferenced
-shots, no longer in the film.
+**No shot in `assets/shots/` was taken against real personal data.** Every capture here came from
+the seeded stack, whose people are fictional, and the two `graphic-*` plates are artwork. One pair
+was: `memory-map-view{,.mobile}`, from [the real-corpus stage](#the-real-corpus-stage), deleted on
+2026-09-17. It was aggregate-only by construction — clusters and counts, no labels, no panel — but
+it was still one identifiable person's travel history at metro scale; no scene had used it since
+the re-cut; and it was already stale against #1891, so a scene that brings the map back re-shoots
+it against a fresh corpus load whether or not that frame was kept. Keeping it bought nothing.
 
-**Unreferenced PNGs are kept, and that is a deliberate trade rather than an oversight.** Deleting
-them would throw away a 45-minute, 826,478-item corpus load for the map pair, and the shot library
-is an input anyone can render from — `video/.gitignore` does *not* exclude `assets/shots/`, which
-is deliberate and load-bearing: only a few of the thirteen CI products have a working capture stage,
-so gitignoring the shots would mean nobody but the stage's author could ever render the cut. The
-cost is that an unreferenced shot cannot be re-captured (capture only knows ids the storyboard
+It was never the only such frame in the repo. `docs/images/memory/explorer-*.jpg` (#1577) were
+taken against a real archive too — their names and 2880×1800 size match CI-Docs'
+`scripts/capture-memory-screenshots.mjs`, which signs in to a local dev app holding imported data —
+and showed a personal email address, a full name, subreddit subscriptions and neighbourhood-level
+map pins. They were deleted the same day. **Deleting a file does not remove it from git history:**
+both sets stay retrievable from the commits that added them (#1577, #1867) until history is
+rewritten.
+
+**Unreferenced PNGs are kept, and that is a deliberate trade rather than an oversight.** The shot
+library is an input anyone can render from — `video/.gitignore` does *not* exclude `assets/shots/`,
+which is deliberate and load-bearing: only a few of the thirteen CI products have a working capture
+stage, so gitignoring the shots would mean nobody but the stage's author could ever render the cut.
+The cost is that an unreferenced shot cannot be re-captured (capture only knows ids the storyboard
 declares) and therefore silently ages. Treat every one of them as **dated 2026-08-07 until
 re-shot**, and re-shoot in the same commit that brings one back.
 
@@ -492,7 +506,7 @@ retired "every `location_point` is NULL" diagnosis. Replace that entry with:
   "repo": "CI-Server",
   "capture": "video/make.sh",
   "captureRealCorpus": "video/stage.real-corpus.sh",
-  "comment": "The storyboard references 9 shots (18 files), all committed — seven captured, two committed graphic plates from ci.computer/memory that capture cannot produce and make.sh's GRAPHIC_SHOTS list excludes from its pass check, and both cuts render; `check` passes with no --allow-slates. video/make.sh stands up Postgres+PostGIS+pgvector, 281 migrations, the seed, API and Vite in the 3191+ band under its own compose project, then captures THREE passes under two identities (authenticated, VIDEO_FRESH_USER x2) with ENABLE_REQUIRE_SIGNUP_CODES=false, and refuses to shoot at all if its pass lists and storyboard.json disagree in either direction. SIXTEEN further PNGs are committed and referenced by no scene — they cannot be re-captured while unreferenced and are frozen at 2026-08-07's product; memory-map-view is already stale against CI-Server #1891. A SECOND STAGE, video/stage.real-corpus.sh, is what produced the map pair, loading the owner's real 826,478-item archive over the importer's GraphQL lane (the default /v1 lane silently drops event geo); it is not needed by the current film. AGGREGATE VIEWS ONLY against that stage — no individual may be identifiable in any frame; read the header of that script before adding a shot id to it."
+  "comment": "The storyboard references 10 shots (20 files), all committed — eight captured, two committed graphic plates from ci.computer/memory that capture cannot produce and make.sh's GRAPHIC_SHOTS list excludes from its pass check, and both cuts render; `check` passes with no --allow-slates. video/make.sh stands up Postgres+PostGIS+pgvector, 281 migrations, the seed, API and Vite in the 3191+ band under its own compose project, then captures THREE passes under two identities (authenticated, VIDEO_FRESH_USER x2) with ENABLE_REQUIRE_SIGNUP_CODES=false, and refuses to shoot at all if its pass lists and storyboard.json disagree in either direction. TWELVE further PNGs are committed and referenced by no scene — they cannot be re-captured while unreferenced and are frozen at 2026-08-07's product. A SECOND STAGE, video/stage.real-corpus.sh, produced the memory-map-view pair, loading the owner's real 826,478-item archive over the importer's GraphQL lane (the default /v1 lane silently drops event geo); those two PNGs were deleted on 2026-09-17 as the only frames in the shot library taken against real personal data, and the stage is not needed by the current film. AGGREGATE VIEWS ONLY against that stage — no individual may be identifiable in any frame; read the header of that script before adding a shot id to it."
 }
 ```
 

@@ -167,7 +167,8 @@
     },
     "summary": {
       "host": "SUMMARY_HOST"
-    }
+    },
+    "sidecarAuthSecret": "SIDECAR_AUTH_SECRET"
   },
   "embedding": {
     "host": "OLLAMA_EMBED_HOST",
@@ -341,6 +342,14 @@
       }
     }
   },
+  "media": {
+    "videoPlayback": {
+      "maxEdge": {
+        "__name": "CI_MEDIA_VIDEO_PLAYBACK_MAX_EDGE",
+        "__format": "json"
+      }
+    }
+  },
   "features": {
     "scheduled.answer.inferencing": "ENABLE_SCHEDULED_ANSWER_INFERENCING",
     "scheduled.connection.sync": "ENABLE_SCHEDULED_CONNECTION_SYNC",
@@ -371,6 +380,7 @@
     "smart.rotation": "ENABLE_SMART_ROTATION",
     "ask": "ENABLE_ASK",
     "tools.pendingActions": "ENABLE_PENDING_ACTIONS",
+    "graphql.ide": "ENABLE_GRAPHQL_IDE",
     "grounded.prompts": "ENABLE_GROUNDED_PROMPTS",
     "derivation.engines": "ENABLE_DERIVATION_ENGINES",
     "ingest.selfHeal": "ENABLE_INGEST_SELF_HEAL",

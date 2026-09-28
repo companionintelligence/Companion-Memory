@@ -34,8 +34,14 @@ export interface EntityMedia {
    * placeholder tile", not "this entity has no media": `fullUrl` still opens.
    */
   thumbUrl: string | null;
-  /** Full-resolution URL for the lightbox. */
+  /** Full-resolution URL for the lightbox — and, for a file, its download. */
   fullUrl: string;
+  /**
+   * For `kind === 'video'` only: the server's browser-playable H.264 rendition
+   * (the PLAYBACK variant) when the original's codec needs one. The lightbox
+   * plays this and keeps `fullUrl` as the original to download.
+   */
+  playbackUrl?: string | null;
   /** Human label for caption / alt text. */
   title: string;
   /** Present only for `kind === 'embed'`; `fullUrl` is then the provider page. */
@@ -175,6 +181,7 @@ export function getEntityMedia(entity: EntityItem): EntityMedia | null {
           sizeBytes: entity.galleryMediaSize ?? null,
         }),
         fullUrl: full,
+        ...(kind === 'video' ? { playbackUrl: resolveMediaUrl(entity.galleryPlaybackUrl) } : {}),
         title: entity.galleryFilename ?? 'Untitled',
       };
     }
@@ -207,6 +214,7 @@ export function getEntityMedia(entity: EntityItem): EntityMedia | null {
           sizeBytes: entity.galleryMediaSize ?? null,
         }),
         fullUrl: full,
+        ...(kind === 'video' ? { playbackUrl: resolveMediaUrl(entity.galleryPlaybackUrl) } : {}),
         title: eventDisplayTitle({
           title: entity.galleryTitle,
           startTime: (entity.bucketStartTime as string | Date | null) ?? undefined,
@@ -276,6 +284,7 @@ export function getEntityMedia(entity: EntityItem): EntityMedia | null {
             sizeBytes: entity.galleryMediaSize ?? null,
           }),
           fullUrl: url,
+          ...(kind === 'video' ? { playbackUrl: resolveMediaUrl(entity.galleryPlaybackUrl) } : {}),
           title: entity.galleryTitle ?? 'Untitled',
         };
       }

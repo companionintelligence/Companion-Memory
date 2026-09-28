@@ -2,10 +2,13 @@ import type { ComponentProps, MouseEvent } from 'react';
 import { useState } from 'react';
 
 import {
+  AuthSessionCancelledError,
   buildApiUrl,
+  isIosPlatform,
   isNativePlatform,
   isTauriPlatform,
   OIDC_NATIVE_CLIENT_FLAG,
+  openAuthSession,
   openExternalUrl,
 } from '@ci/common';
 import { Button } from '@ci/shadcn';
@@ -17,10 +20,10 @@ type ButtonVariant = ComponentProps<typeof Button>['variant'];
 /**
  * "Sign in with CI Portal" button. On web it's a plain anchor: the browser navigates
  * to the API, which 302s to the identity provider. On native — Capacitor (iOS/Android)
- * or Tauri (desktop) — OAuth/OIDC must run in the SYSTEM browser (not the app's own
- * webview: an embedded browser is both a weaker trust boundary for the user's
- * credentials and, for the desktop shell specifically, unable to run a real OS-level
- * OAuth redirect at all), so the click opens it externally and adds `?client=native`
+ * or Tauri (desktop) — OAuth/OIDC must not run in the app's own webview. iOS presents
+ * an in-app Safari authentication sheet (`ASWebAuthenticationSession`) so App Review
+ * does not see a jump to Safari, and the sheet hands `companion://` back to the app.
+ * Android and desktop still open the system browser. The click adds `?client=native`
  * so the backend callback returns the result via the custom URL scheme
  * (`companion://oidc/callback`) — handled by the deep-link listener in useAuth —
  * instead of setting a browser session cookie.
@@ -79,7 +82,14 @@ export function OidcButton({
       const oidcUrl = isTauriPlatform() ? `${window.location.origin}${oidcPath}` : buildApiUrl(oidcPath);
 
       setOpenError(null);
-      openExternalUrl(oidcUrl).catch((err: unknown) => {
+      const open = isIosPlatform() ? openAuthSession(oidcUrl) : openExternalUrl(oidcUrl);
+
+      open.catch((err: unknown) => {
+        // Dismissing the iOS sheet is a choice, not a broken button.
+        if (err instanceof AuthSessionCancelledError) {
+          return;
+        }
+
         // A rejected native/Tauri open call (bad URL, ACL denial, no default
         // browser, ...) must not look like a successful click.
         console.error('Failed to open the Companion sign-in page', err);

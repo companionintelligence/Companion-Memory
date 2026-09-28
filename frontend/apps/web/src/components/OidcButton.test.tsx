@@ -1,4 +1,11 @@
-import { isNativePlatform, isTauriPlatform, openExternalUrl } from '@ci/common';
+import {
+  AuthSessionCancelledError,
+  isIosPlatform,
+  isNativePlatform,
+  isTauriPlatform,
+  openAuthSession,
+  openExternalUrl,
+} from '@ci/common';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,14 +15,18 @@ import { OidcButton } from './OidcButton';
 // the platform checks and stub the native "open the system browser" bridge.
 vi.mock('@ci/common', async (orig) => ({
   ...(await orig<typeof import('@ci/common')>()),
+  isIosPlatform: vi.fn(() => false),
   isNativePlatform: vi.fn(() => false),
   isTauriPlatform: vi.fn(() => false),
+  openAuthSession: vi.fn(),
   openExternalUrl: vi.fn(),
 }));
 
 beforeEach(() => {
+  vi.mocked(isIosPlatform).mockReturnValue(false);
   vi.mocked(isNativePlatform).mockReturnValue(false);
   vi.mocked(isTauriPlatform).mockReturnValue(false);
+  vi.mocked(openAuthSession).mockResolvedValue(undefined);
   // vitest.config.ts sets `restoreMocks: true`, which wipes every mock's
   // implementation (not just its call history) before each test — including
   // one set once in the vi.mock factory above, the same reason
@@ -48,6 +59,31 @@ describe('OidcButton', () => {
 
     expect(openExternalUrl).toHaveBeenCalledTimes(1);
     expect(openExternalUrl).toHaveBeenCalledWith('/api/authenticate/oidc?client=native');
+    expect(openAuthSession).not.toHaveBeenCalled();
+  });
+
+  it('iOS: opens the OIDC route in the in-app sheet, not Safari', () => {
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(isIosPlatform).mockReturnValue(true);
+
+    render(<OidcButton label="Sign in with Companion account" />);
+    fireEvent.click(screen.getByRole('link', { name: 'Sign in with Companion account' }));
+
+    expect(openAuthSession).toHaveBeenCalledTimes(1);
+    expect(openAuthSession).toHaveBeenCalledWith('/api/authenticate/oidc?client=native');
+    expect(openExternalUrl).not.toHaveBeenCalled();
+  });
+
+  it('iOS: dismissing the sheet stays quiet', async () => {
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(isIosPlatform).mockReturnValue(true);
+    vi.mocked(openAuthSession).mockRejectedValue(new AuthSessionCancelledError());
+
+    render(<OidcButton label="Sign in with Companion account" />);
+    fireEvent.click(screen.getByRole('link', { name: 'Sign in with Companion account' }));
+
+    await waitFor(() => expect(openAuthSession).toHaveBeenCalled());
+    expect(screen.queryByText(/Could not open your browser to sign in/)).not.toBeInTheDocument();
   });
 
   it('desktop (Tauri): opens the OIDC route in the system browser as an ABSOLUTE url', () => {
@@ -78,7 +114,7 @@ describe('OidcButton', () => {
       '/api/authenticate/oidc?redirect=%2Fshared%2Fabc',
     );
 
-    // Native carries both the redirect and the client flag.
+    // Android still carries both the redirect and the client flag through the system browser.
     vi.mocked(isNativePlatform).mockReturnValue(true);
     fireEvent.click(screen.getByRole('link', { name: 'Sign in' }));
 

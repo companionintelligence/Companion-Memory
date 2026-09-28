@@ -1,9 +1,10 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
 
 import { PythonFunctionCallbackController } from '../controllers/PythonFunctionCallbackController';
+import type { PythonRunCallbackRequest } from '../guards/PythonRunCallbackGuard';
 
 const logger = { setContext() {}, log() {}, warn() {}, error() {} } as unknown as LoggerService;
 
@@ -16,11 +17,16 @@ function makeController() {
   return { controller: new PythonFunctionCallbackController(eventService, logger), eventService };
 }
 
+/** What PythonRunCallbackGuard leaves on the request: the run the bearer was minted for. */
+function reqFor(jobId: string, queue: string, userId = 'user-1'): PythonRunCallbackRequest {
+  return { pythonRun: { userId, jobId, queue } } as PythonRunCallbackRequest;
+}
+
 describe('PythonFunctionCallbackController', () => {
   it('completes the deferred job with the run result', async () => {
     const { controller, eventService } = makeController();
 
-    await controller.callback({
+    await controller.callback(reqFor('job-1', 'py-fn-summary'), {
       job_id: 'job-1',
       queue: 'py-fn-summary',
       status: 'completed',
@@ -34,7 +40,7 @@ describe('PythonFunctionCallbackController', () => {
   it('fails the deferred job with the error message', async () => {
     const { controller, eventService } = makeController();
 
-    await controller.callback({
+    await controller.callback(reqFor('job-2', 'py-fn-hbpe'), {
       job_id: 'job-2',
       queue: 'py-fn-hbpe',
       status: 'failed',
@@ -53,7 +59,11 @@ describe('PythonFunctionCallbackController', () => {
     const { controller, eventService } = makeController();
 
     await expect(
-      controller.callback({ job_id: 'job-1', queue: 'search-index', status: 'completed' }),
+      controller.callback(reqFor('job-1', 'search-index'), {
+        job_id: 'job-1',
+        queue: 'search-index',
+        status: 'completed',
+      }),
     ).rejects.toThrow(BadRequestException);
     expect(eventService.completeJob).not.toHaveBeenCalled();
   });
@@ -62,7 +72,11 @@ describe('PythonFunctionCallbackController', () => {
     const { controller } = makeController();
 
     await expect(
-      controller.callback({ job_id: '', queue: 'py-fn-summary', status: 'completed' }),
+      controller.callback(reqFor('', 'py-fn-summary'), {
+        job_id: '',
+        queue: 'py-fn-summary',
+        status: 'completed',
+      }),
     ).rejects.toThrow(BadRequestException);
   });
 
@@ -70,11 +84,41 @@ describe('PythonFunctionCallbackController', () => {
     const { controller } = makeController();
 
     await expect(
-      controller.callback({
+      controller.callback(reqFor('job-1', 'py-fn-summary'), {
         job_id: 'job-1',
         queue: 'py-fn-summary',
         status: 'running' as never,
       }),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('SECURITY: refuses a body that names a job other than the one the run token was minted for', async () => {
+    // The guard proves the caller holds a token for ONE run. Before this, any authenticated
+    // principal could complete or dead-letter any job id in either queue.
+    const { controller, eventService } = makeController();
+
+    await expect(
+      controller.callback(reqFor('job-1', 'py-fn-summary'), {
+        job_id: 'job-2',
+        queue: 'py-fn-summary',
+        status: 'completed',
+      }),
+    ).rejects.toThrow(ForbiddenException);
+    await expect(
+      controller.callback(reqFor('job-1', 'py-fn-summary'), {
+        job_id: 'job-1',
+        queue: 'py-fn-hbpe',
+        status: 'completed',
+      }),
+    ).rejects.toThrow(ForbiddenException);
+    await expect(
+      controller.callback({} as PythonRunCallbackRequest, {
+        job_id: 'job-1',
+        queue: 'py-fn-summary',
+        status: 'completed',
+      }),
+    ).rejects.toThrow(ForbiddenException);
+    expect(eventService.completeJob).not.toHaveBeenCalled();
+    expect(eventService.failJob).not.toHaveBeenCalled();
   });
 });

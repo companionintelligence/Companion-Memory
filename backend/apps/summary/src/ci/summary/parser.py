@@ -16,6 +16,8 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from markitdown import MarkItDown
 from pydantic import BaseModel
 
+from .auth import install_sidecar_auth
+
 PARSER_VERSION = "1.0.0"
 
 app = FastAPI(
@@ -23,6 +25,7 @@ app = FastAPI(
     version=PARSER_VERSION,
     description="Extracts text from uploaded documents and returns a normalized ParsedDocument.",
 )
+install_sidecar_auth(app)
 
 _md = MarkItDown()
 

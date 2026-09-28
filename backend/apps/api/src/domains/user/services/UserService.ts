@@ -47,12 +47,14 @@ export class UserService {
     }
 
     const id = data.id ?? uuidv7();
+    const { passwordChosenByUser = true, ...columns } = data;
     const hashedPassword = await bcrypt.hash(data.password, config.auth.local.saltRounds);
 
     const instance = this.userRepository.create({
-      ...data,
+      ...columns,
       id,
       password: hashedPassword,
+      passwordSetAt: passwordChosenByUser ? new Date() : null,
     });
 
     const entity = await this.userRepository.save(instance);
@@ -317,7 +319,9 @@ export class UserService {
 
     const hashedPassword = await bcrypt.hash(newPassword, config.auth.local.saltRounds);
 
-    await this.userRepository.update(id, { password: hashedPassword });
+    // From here the user knows a password, so `requireReauth` may ask for it —
+    // including on an OIDC-linked account that just set its first one.
+    await this.userRepository.update(id, { password: hashedPassword, passwordSetAt: new Date() });
 
     await this.eventService.send(UserUpdatedEvent, {
       userId: id,

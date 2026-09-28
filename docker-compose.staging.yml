@@ -122,7 +122,7 @@ services:
     environment:
       DATABASE_PASSWORD: ${DATABASE_PASSWORD}
       API_URL: http://api:3030
-      API_JWT_SECRET: ${AUTH_TOKEN_SECRET}
+      SIDECAR_AUTH_SECRET: ${SIDECAR_AUTH_SECRET}
       LLM_API_BASE: ${LLM_API_BASE:-http://host.docker.internal:11434/v1}
       LLM_API_KEY: ${LLM_API_KEY:-ollama}
       LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
@@ -153,7 +153,7 @@ services:
       # Function-run completion callbacks POST to the api service; the JWT
       # secret must match AUTH_JWT_AUTHTOKENSECRET so the callback passes auth.
       API_URL: http://api:3030
-      API_JWT_SECRET: ${AUTH_TOKEN_SECRET}
+      SIDECAR_AUTH_SECRET: ${SIDECAR_AUTH_SECRET}
       LLM_API_BASE: ${LLM_API_BASE:-http://host.docker.internal:11434/v1}
       LLM_API_KEY: ${LLM_API_KEY:-ollama}
       # Unset by default: the summary service uses the Hub-injected model, or

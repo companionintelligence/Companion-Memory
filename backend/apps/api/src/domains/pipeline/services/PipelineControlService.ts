@@ -1132,6 +1132,9 @@ export class PipelineControlService {
           // authorised the sweep is the number that bounds it. `null` (uncapped)
           // becomes `undefined`, which is what `StartSweepInput` spells it.
           maxIds: due.perRunCap ?? undefined,
+          // A stage that declared its own slice depth keeps it on the
+          // scheduled path too; the rest take the dispatcher's default.
+          sliceSize: due.schedule.sliceSize,
         });
 
         report.sweepsStarted += 1;

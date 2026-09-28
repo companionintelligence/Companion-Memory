@@ -16,6 +16,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { READ_CAPABILITY, RequireCapability } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard, type ApiKeyScopedRequest, apiKeyCapabilityOf } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
@@ -76,6 +77,11 @@ export class OllamaController {
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Post('generate')
   @HttpCode(200)
+  // Chat is reachable by a read key on purpose: the key's capability is handed to the
+  // tool layer (see `capability: apiKeyCapabilityOf(req)` below), which is what decides
+  // whether any tool the model reaches for may write. Without this the shape rule would
+  // turn every read-only chat key away at the door instead.
+  @RequireCapability(READ_CAPABILITY)
   async generate(
     @Context() context: RequestContext,
     @Body(new ValidationPipe(promptSchema)) input: PromptInput,
@@ -173,6 +179,8 @@ export class OllamaController {
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Post('threads/:threadId/cancel')
   @HttpCode(204)
+  // Stopping one's own generation is the read key's to do too.
+  @RequireCapability(READ_CAPABILITY)
   async cancel(@Context() context: RequestContext, @Param('threadId') threadId: string) {
     const serviceContext = toServiceContext(context);
     const thread = await this.threadService.findById(serviceContext, threadId);

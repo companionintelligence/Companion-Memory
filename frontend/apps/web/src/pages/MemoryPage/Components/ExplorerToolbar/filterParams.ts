@@ -61,6 +61,11 @@ export function hasWhenFilter(params: URLSearchParams): boolean {
   return Boolean(params.get('from') || params.get('to') || isRollingDatePreset(params.get('when')));
 }
 
+/** Whether an Activity filter (`?eventTypes=`) names at least one kind of event. */
+export function hasActivityFilter(params: URLSearchParams): boolean {
+  return (params.get('eventTypes')?.split(',') ?? []).some(Boolean);
+}
+
 /**
  * The What-picker types whose rows carry a real moment in time, so a When
  * filter can mean something for them:
@@ -128,6 +133,18 @@ export interface ExplorerTypeResolution {
  * clipped to them — never widened back to everything, and never emptied. That
  * clipping happens before the When override, and every one of those kinds
  * is dated, so the two never fight.
+ *
+ * An Activity filter (`?eventTypes=`) then pins the browse to events. The
+ * server applies that filter to event rows only and lets every other kind
+ * through untouched (SearchResolver's eventTypes post-filter, and the timed
+ * browse's per-type queries), so asking for the events-browse kinds alongside
+ * "sale" returned no sales and every browser visit and message there is.
+ * Nobody means that by picking an activity; the graph endpoint already reads
+ * it as events-only and the heatmap counts only events under it. The pin
+ * applies only while events were in play: a What bar that has left events
+ * out keeps its selection, and the toolbar marks the Activity chip as one
+ * that can never match (see {@link eventsInPlay}). The pin comes before the
+ * When override, and events are dated, so the two never fight either.
  */
 export function resolveExplorerTypes(params: URLSearchParams, pathname?: string): ExplorerTypeResolution {
   let narrowed = narrowedEntityTypes(params);
@@ -136,6 +153,10 @@ export function resolveExplorerTypes(params: URLSearchParams, pathname?: string)
     const kept = (narrowed ?? EVENTS_EXPLORER_TYPES).filter((type) => EVENTS_EXPLORER_TYPES.includes(type));
 
     narrowed = kept.length > 0 ? kept : [...EVENTS_EXPLORER_TYPES];
+  }
+
+  if (hasActivityFilter(params) && (narrowed == null || narrowed.includes('Event'))) {
+    narrowed = ['Event'];
   }
 
   if (!hasWhenFilter(params)) {

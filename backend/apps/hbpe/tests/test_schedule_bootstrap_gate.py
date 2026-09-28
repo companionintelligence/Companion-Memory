@@ -26,8 +26,10 @@ from ci.hbpe.model.checkpoints import (
     write_architecture_stamp,
 )
 
-WARM_USER = "11111111-warm-0000-0000-000000000000"
-COLD_USER = "22222222-cold-0000-0000-000000000000"
+WARM_USER = (
+    "7a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d"  # a UUID: user ids name checkpoint dirs
+)
+COLD_USER = "0f1e2d3c-4b5a-4968-8776-655443322110"
 
 
 def _make_checkpoint(user_id: str, *, stamp: bool = True) -> None:

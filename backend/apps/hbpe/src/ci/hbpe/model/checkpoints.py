@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from pathlib import Path
 
 from ci.hbpe.config import settings
@@ -33,7 +34,9 @@ def user_ckpt_dir(user_id: str, *, create: bool = False) -> Path:
     Pass create=True at write sites to ensure the directory exists; readers and
     existence checks should leave it False so they don't materialise empty dirs.
     """
-    d = Path(settings.models_dir) / "hmt" / "users" / str(user_id)
+    # user_id names a directory: it must be a UUID, so no caller-supplied value
+    # can carry a path separator into models_dir.
+    d = Path(settings.models_dir) / "hmt" / "users" / str(uuid.UUID(str(user_id)))
     if create:
         d.mkdir(parents=True, exist_ok=True)
     return d

@@ -80,6 +80,10 @@ app = FastAPI(
 )
 
 # pg-boss function runner: POST /functions/run, GET /runs/{id}
+from ci.hbpe.auth import install_sidecar_auth  # noqa: E402
+
+install_sidecar_auth(app)
+
 from ci.hbpe.runner import router as _runner_router  # noqa: E402
 
 app.include_router(_runner_router)

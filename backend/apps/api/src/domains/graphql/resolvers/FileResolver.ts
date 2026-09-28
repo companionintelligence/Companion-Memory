@@ -7,6 +7,7 @@ import { FileService } from '@ci/domains/files';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { FileItemsLoader } from '../loaders/FileItemsLoader';
+import { PlaybackLoader } from '../loaders/PlaybackLoader';
 import { PreviewLoader } from '../loaders/PreviewLoader';
 import { TagLoader } from '../loaders/TagLoader';
 import { EntityTagType } from '../types/EntityTagType';
@@ -30,6 +31,7 @@ export class FileResolver {
     private readonly fileItemsLoader: FileItemsLoader,
     private readonly tagLoader: TagLoader,
     private readonly previewLoader: PreviewLoader,
+    private readonly playbackLoader: PlaybackLoader,
   ) {}
 
   /** Largest page one request may sign; also the page when `first` is absent. */
@@ -137,6 +139,36 @@ export class FileResolver {
     const preview = await this.previewLoader.load(serviceContext, file.id);
 
     return preview ? preview.url : null;
+  }
+
+  /** Browser-playable (PLAYBACK variant) URL for a video whose codec needs one — see EventResolver.playbackUrl. */
+  @ResolveField(() => String, { nullable: true })
+  async playbackUrl(@Context() context: RequestContext, @Parent() parent: FileType): Promise<string | null> {
+    const file = parent.__source;
+
+    if (file == null) {
+      return null;
+    }
+
+    const playback = await this.playbackLoader.load(entityOwnerScope(context, file.userId), file.id);
+
+    return playback ? playback.url : null;
+  }
+
+  @ResolveField(() => String, { nullable: true })
+  async playbackContentType(
+    @Context() context: RequestContext,
+    @Parent() parent: FileType,
+  ): Promise<string | null> {
+    const file = parent.__source;
+
+    if (file == null) {
+      return null;
+    }
+
+    const playback = await this.playbackLoader.load(entityOwnerScope(context, file.userId), file.id);
+
+    return playback ? playback.contentType : null;
   }
 
   @ResolveField(() => ItemConnection, { nullable: true, complexity: 5 })

@@ -213,12 +213,22 @@ export function EventDetails({ entity }: Props) {
   // Photo/video events: the ORIGINAL is what renders (a 300px PREVIEW upscaled
   // into the sheet reads as blur on any large screen), with the preview passed
   // alongside so EntityMedia can paint it during the original's download.
-  // Videos take the full source directly so they play inline. Resolved
-  // server-side via the linked file (data.previewUrl / data.mediaUrl); null
-  // for non-media events, which render no media block.
+  // Videos play inline from the server's browser-playable rendition when
+  // one exists (playbackUrl — the H.264 PLAYBACK variant made for HEVC and
+  // other codecs browsers cannot be relied on to decode), else from the
+  // original, with the preview as their poster and as the still that stays
+  // up when the browser cannot decode the stream (see EntityMedia). The
+  // original remains the "open or save" target either way. Resolved
+  // server-side via the linked file; null for non-media events, which render
+  // no media block.
   const isVideo = data.mediaContentType?.startsWith('video/') ?? false;
-  const mediaSrc = resolveStaticUrl(data.mediaUrl ?? data.previewUrl);
-  const mediaPreviewSrc = isVideo ? undefined : resolveStaticUrl(data.previewUrl);
+  const playbackSrc = isVideo ? resolveStaticUrl(data.playbackUrl) : null;
+  const mediaSrc = playbackSrc ?? resolveStaticUrl(data.mediaUrl ?? data.previewUrl);
+  const mediaContentType = playbackSrc
+    ? (data.playbackContentType ?? data.mediaContentType)
+    : data.mediaContentType;
+  const mediaPreviewSrc = resolveStaticUrl(data.previewUrl);
+  const originalHref = isVideo ? resolveStaticUrl(data.mediaUrl) : null;
   const dimensions = data.mediaWidth && data.mediaHeight ? `${data.mediaWidth} × ${data.mediaHeight}` : null;
 
   // A watch / listen / read event is ABOUT its content row: when that row has
@@ -253,8 +263,9 @@ export function EventDetails({ entity }: Props) {
           <EntityMedia
             src={mediaSrc}
             previewSrc={mediaPreviewSrc}
-            contentType={data.mediaContentType}
+            contentType={mediaContentType}
             alt={title}
+            fallbackHref={originalHref}
           />
         ) : richContent ? (
           <RichMediaCard content={richContent} title={richContent.title} url={richContent.contentUrl} />

@@ -250,12 +250,17 @@ class Settings(BaseSettings):
     api_url: str = Field(
         default_factory=lambda: os.getenv("API_URL", "http://api:3030")
     )
-    # Shared JWT secret — must match AUTH_JWT_AUTHTOKENSECRET in the app.
-    # HBPE self-signs service JWTs with this secret so the app accepts them.
-    api_jwt_secret: str = Field(default_factory=lambda: os.getenv("API_JWT_SECRET", ""))
-    # How long each service JWT lives (default 24 h).
-    api_jwt_expiry_seconds: int = Field(
-        default_factory=lambda: int(os.getenv("API_JWT_EXPIRY_SECONDS", "86400"))
+    # Shared bearer for THIS service's inbound HTTP surface (see auth.py): the
+    # API presents it on every request and the middleware refuses requests
+    # without it. Minted by setup-secrets as SIDECAR_AUTH_SECRET.
+    #
+    # This replaced API_JWT_SECRET — the API's own token-signing secret, with
+    # which HBPE used to mint a user token for any ``user_id`` it was handed.
+    # HBPE now holds no signing secret at all: every run arrives with a
+    # per-run token the API issued for that job's user (see runner.py /
+    # graphql_client.py), and that token is the only thing it ever presents back.
+    sidecar_auth_secret: str = Field(
+        default_factory=lambda: os.getenv("SIDECAR_AUTH_SECRET", "")
     )
 
     # ── Function runner (pg-boss dispatch from the NestJS API) ───────────────

@@ -199,6 +199,15 @@ class LocalHubPlugin : Plugin() {
     }
 
     /**
+     * iOS presents the Portal sign-in sheet here. Android keeps using [openUrl].
+     * Declared so the shared plugin surface stays in lockstep.
+     */
+    @PluginMethod
+    fun startAuthSession(call: PluginCall) {
+        call.reject("In-app auth session is only available on iOS")
+    }
+
+    /**
      * One-shot high-accuracy fix ("use my location") is iOS-only for now -- see
      * `LocationTracker.swift`. Continuous background tracking on Android is owned
      * entirely by `@capacitor-community/background-geolocation`, not this plugin.

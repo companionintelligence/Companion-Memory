@@ -3,7 +3,7 @@ import type { RequestContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { SearchService } from '@ci/domains/search-next';
 
-import { DatabaseSearchTool, itemLink } from '../DatabaseSearchTool';
+import { DatabaseSearchTool, itemLink, stripStorageAddress } from '../DatabaseSearchTool';
 
 const CONTEXT = { userId: '00000000-0000-0000-0000-0000000000aa' } as RequestContext;
 
@@ -87,6 +87,43 @@ describe('itemLink', () => {
 });
 
 describe('DatabaseSearchTool — item links', () => {
+  it('strips the object-store address from a file hit, leaving link as its only path', async () => {
+    // The presigned GET, trimmed to path + query as FileService.signFile hands
+    // it over: `/companion/<key>` is the BUCKET and object key, not a route.
+    // Live on 2026-09-21 the model copied exactly this as a page link.
+    const photo = {
+      id: 'f1',
+      filename: 'IMG_1.jpg',
+      title: 'Squirrel on Fence',
+      bucket: 'companion',
+      key: '6386746a-0c6a-4007-924b-5602524e64ef',
+      hash: 'abc123',
+      url: '/companion/6386746a-0c6a-4007-924b-5602524e64ef?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=e1c6',
+    };
+    const content = {
+      ...emptyResolver(),
+      findIdsByFileIds: jest.fn().mockResolvedValue(new Map([['f1', ['c1']]])),
+    };
+    const tool = makeTool({
+      search: searchOf([{ type: 'file', id: 'f1' }]),
+      files: { findByIds: jest.fn().mockResolvedValue([photo]) },
+      content,
+    });
+
+    const result = await tool.execute(CONTEXT, { query: 'squirrel' });
+
+    expect(result.data?.items).toEqual([
+      { id: 'f1', filename: 'IMG_1.jpg', title: 'Squirrel on Fence', type: 'file', link: '/content/c1' },
+    ]);
+    expect(JSON.stringify(result.data)).not.toContain('/companion/');
+  });
+
+  it('stripStorageAddress keeps every other field intact', () => {
+    const file = { id: 'f1', filename: 'a.jpg', url: '/companion/k', bucket: 'companion', key: 'k', hash: 'h' };
+
+    expect(stripStorageAddress(file as any)).toEqual({ id: 'f1', filename: 'a.jpg' });
+  });
+
   it('stamps every hit with its type and a link when one exists', async () => {
     const photo = { id: 'f1', filename: 'IMG_1.jpg', title: 'Squirrel on Fence' };
     const person = { id: 'p1', name: 'Ada' };

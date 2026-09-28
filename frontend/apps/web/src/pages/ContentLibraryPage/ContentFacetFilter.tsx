@@ -11,6 +11,12 @@ interface Props {
   param: string;
   /** Every value the user's rows carry, from `contentFacets`. */
   options: readonly string[];
+  /**
+   * True when `contentFacets` failed and `options` is empty for that reason.
+   * An empty list then reads "couldn't load", never "none yet": the second is
+   * a claim about the account, and it was false every time it showed.
+   */
+  unavailable?: boolean;
   icon: LucideIcon;
   modal?: boolean;
 }
@@ -26,7 +32,14 @@ export function readFacetParam(params: URLSearchParams, param: string): string[]
  * picker (ConnectorFilter): a labelled trigger, a Clear, one checkbox per
  * value, and "No <label>s yet" while the account has nothing to offer.
  */
-export function ContentFacetFilter({ label, param, options, icon: Icon, modal = false }: Props) {
+export function ContentFacetFilter({
+  label,
+  param,
+  options,
+  unavailable = false,
+  icon: Icon,
+  modal = false,
+}: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const selected = readFacetParam(searchParams, param);
@@ -85,7 +98,9 @@ export function ContentFacetFilter({ label, param, options, icon: Icon, modal = 
         </div>
         <Separator />
         {options.length === 0 ? (
-          <div className="p-2 text-xs text-muted-foreground">No {label.toLowerCase()}s yet</div>
+          <div className="p-2 text-xs text-muted-foreground">
+            {unavailable ? `Couldn't load ${label.toLowerCase()}s` : `No ${label.toLowerCase()}s yet`}
+          </div>
         ) : (
           options.map((option) => (
             <CheckboxItem

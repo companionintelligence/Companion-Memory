@@ -46,16 +46,18 @@ export DATABASE_URL
 
 # ── API JWT Secret ────────────────────────────────
 # Needed by graphql_client.py to self-sign service JWTs.
-: "${API_JWT_SECRET:=$(get_secret AUTH_TOKEN_SECRET)}"
-export API_JWT_SECRET
+# The bearer the API presents on every request; this service refuses requests
+# without it. It replaces API_JWT_SECRET (the API's own token-signing secret),
+# which HBPE used to self-sign user tokens with — a secret that could act as
+# any user. HBPE now only ever holds the per-run token the API hands it.
+: "${SIDECAR_AUTH_SECRET:=$(get_secret SIDECAR_AUTH_SECRET)}"
+export SIDECAR_AUTH_SECRET
 
-if [ -z "$API_JWT_SECRET" ]; then
-  echo "Error: API_JWT_SECRET is not set."
+if [ -z "$SIDECAR_AUTH_SECRET" ]; then
+  echo "Error: SIDECAR_AUTH_SECRET is not set."
   echo ""
-  echo "Please set the JWT secret in one of the following ways:"
-  echo ""
-  echo "  1. Add AUTH_TOKEN_SECRET to $SECRETS_FILE, or"
-  echo "  2. Set the API_JWT_SECRET environment variable"
+  echo "  1. Add SIDECAR_AUTH_SECRET to $SECRETS_FILE (setup-secrets does this), or"
+  echo "  2. Set the SIDECAR_AUTH_SECRET environment variable"
   exit 1
 fi
 

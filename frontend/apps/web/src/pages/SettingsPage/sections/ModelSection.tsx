@@ -5,7 +5,7 @@ import { Button, Card, Input, Label, Select, Switch } from '@ci/shadcn';
 import { Brain, Eye, Server, Wrench } from '@ci/shadcn/icons';
 
 import { ModelSelector } from '@/components/ModelSelector';
-import { useModel, useSessionAuth } from '@/hooks';
+import { useCurrentUser, useModel, useSessionAuth } from '@/hooks';
 import { useLlmEndpoint, type LlmBackendKind } from '@/hooks/useLlmEndpoint';
 
 const BACKEND_OPTIONS: { value: LlmBackendKind; label: string; defaultPort: number; hint: string }[] = [
@@ -43,6 +43,11 @@ export function ModelSection() {
     saveEndpoint,
     checkEndpoint,
   } = useLlmEndpoint();
+
+  // Repointing the appliance's one inference endpoint is an administrator's decision; the server
+  // refuses it for anyone else (ApplianceAdminGuard), so don't offer a button that will 403.
+  const { user: currentUser } = useCurrentUser();
+  const canEditEndpoint = currentUser?.isAdmin ?? false;
 
   const [backend, setBackend] = useState<LlmBackendKind>('ollama');
   const [port, setPort] = useState('11434');
@@ -285,12 +290,20 @@ export function ModelSection() {
               <div className="flex items-center gap-3">
                 <Button
                   type="button"
-                  disabled={!endpointDirty || saving}
+                  disabled={!endpointDirty || saving || !canEditEndpoint}
                   onClick={() => void handleSaveEndpoint()}
+                  title={
+                    canEditEndpoint ? undefined : 'Only an administrator can change the inference endpoint.'
+                  }
                 >
                   {saving ? 'Saving…' : 'Save endpoint'}
                 </Button>
                 {saved && <span className="text-sm text-teal-700 dark:text-teal-300">Saved</span>}
+                {!canEditEndpoint && (
+                  <span className="text-muted-foreground text-sm">
+                    Changing the endpoint is reserved for an administrator of this Companion.
+                  </span>
+                )}
               </div>
             </div>
           ) : null}

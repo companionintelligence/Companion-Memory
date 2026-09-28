@@ -30,6 +30,7 @@ export const GET_DRAWER_NODE = gql(`
         galleryFilename: filename
         galleryPreviewUrl: previewUrl
         gallerySourceUrl: sourceUrl
+        galleryPlaybackUrl: playbackUrl
         galleryMediaSize: size
       }
 
@@ -40,6 +41,7 @@ export const GET_DRAWER_NODE = gql(`
         galleryContentSourceUrl: sourceUrl
         galleryPreviewUrl: previewUrl
         galleryFileUrl: mediaUrl
+        galleryPlaybackUrl: playbackUrl
         galleryMediaSize: mediaSize
       }
 
@@ -94,6 +96,7 @@ export const GET_DRAWER_NODE = gql(`
         galleryMediaContentType: mediaContentType
         galleryPreviewUrl: previewUrl
         gallerySourceUrl: mediaUrl
+        galleryPlaybackUrl: playbackUrl
         galleryMediaSize: mediaSize
         galleryTitle: title
         galleryLocationName: locationName

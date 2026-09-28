@@ -1,7 +1,9 @@
 import type { LoggerService } from '@ci/common/logging';
+import { sidecarAuthHeaders } from '@ci/common/sidecar/sidecarAuth';
 import type { Acknowledgement } from '@ci/domains/events';
 
 import { PythonFunctionDispatchListener } from '../listeners/PythonFunctionDispatchListener';
+import type { PythonFunctionTokenService } from '../services/PythonFunctionTokenService';
 import { PYTHON_FUNCTIONS } from '../types';
 
 function makeLogger() {
@@ -14,6 +16,14 @@ function makeLogger() {
 }
 
 const logger = makeLogger();
+
+/** Mints a recognisable stand-in for the per-run token so assertions can see what was requested. */
+const tokens = {
+  issueRunToken: jest.fn(
+    (claims: { userId: string; jobId: string; queue: string }) =>
+      `run-token:${claims.userId}:${claims.jobId}:${claims.queue}`,
+  ),
+} as unknown as PythonFunctionTokenService;
 
 // No `jobId` here any more. It was never the domain's field — the event bus
 // used to merge pg-boss's id into every delivered payload, and this listener
@@ -61,7 +71,7 @@ describe('PythonFunctionDispatchListener', () => {
 
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    const listener = new PythonFunctionDispatchListener(logger);
+    const listener = new PythonFunctionDispatchListener(logger, tokens);
     const ack = makeAck();
 
     await listener.dispatchSummary(payload, ack);
@@ -73,6 +83,7 @@ describe('PythonFunctionDispatchListener', () => {
     const [, init] = runs[0];
 
     expect(JSON.parse(String(init.body))).toEqual({
+      access_token: 'run-token:user-1:job-1:py-fn-summary',
       function: 'hourly_summary',
       args: { user_id: 'user-1' },
       job_id: 'job-1',
@@ -97,7 +108,7 @@ describe('PythonFunctionDispatchListener', () => {
     const ack = makeAck();
     ack.jobId = 'pgboss-job-2';
 
-    await new PythonFunctionDispatchListener(logger).dispatchSummary(
+    await new PythonFunctionDispatchListener(logger, tokens).dispatchSummary(
       { ...payload, jobId: 'a-domain-id-that-must-not-win' } as never,
       ack,
     );
@@ -120,7 +131,7 @@ describe('PythonFunctionDispatchListener', () => {
         ),
       ) as unknown as typeof fetch;
 
-    const listener = new PythonFunctionDispatchListener(logger);
+    const listener = new PythonFunctionDispatchListener(logger, tokens);
     const ack = makeAck();
 
     await listener.dispatchSummary(payload, ack);
@@ -132,7 +143,7 @@ describe('PythonFunctionDispatchListener', () => {
   it('fails the job when the runner is unreachable', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
 
-    const listener = new PythonFunctionDispatchListener(logger);
+    const listener = new PythonFunctionDispatchListener(logger, tokens);
     const ack = makeAck();
 
     await listener.dispatchHbpe({ ...payload, target: 'hbpe', function: 'nightly' }, ack);
@@ -156,7 +167,7 @@ describe('PythonFunctionDispatchListener', () => {
         return Promise.resolve({ ok: true });
       }) as unknown as typeof fetch;
 
-      const listener = new PythonFunctionDispatchListener(logger);
+      const listener = new PythonFunctionDispatchListener(logger, tokens);
       const ack = makeAck();
 
       await listener.dispatchHbpe({ ...payload, target: 'hbpe', function: 'nightly' }, ack);
@@ -193,7 +204,7 @@ describe('PythonFunctionDispatchListener', () => {
         return Promise.resolve({ ok: true });
       }) as unknown as typeof fetch;
 
-      const listener = new PythonFunctionDispatchListener(logger);
+      const listener = new PythonFunctionDispatchListener(logger, tokens);
 
       await listener.dispatchHbpe({ ...payload, target: 'hbpe', function: 'nightly' }, makeAck());
 
@@ -215,7 +226,7 @@ describe('PythonFunctionDispatchListener', () => {
 
       global.fetch = fetchMock as unknown as typeof fetch;
 
-      const listener = new PythonFunctionDispatchListener(logger);
+      const listener = new PythonFunctionDispatchListener(logger, tokens);
 
       await Promise.all([
         listener.dispatchSummary(payload, makeAck()),
@@ -241,7 +252,7 @@ describe('PythonFunctionDispatchListener', () => {
 
       global.fetch = fetchMock as unknown as typeof fetch;
 
-      const listener = new PythonFunctionDispatchListener(logger);
+      const listener = new PythonFunctionDispatchListener(logger, tokens);
       const ack = makeAck();
 
       await listener.dispatchSummary(payload, ack);
@@ -251,5 +262,38 @@ describe('PythonFunctionDispatchListener', () => {
       expect(logger.error).not.toHaveBeenCalled();
       expect(logger.warn).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('PythonFunctionDispatchListener — what the sidecar is handed', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it('presents the sidecar bearer on the run AND on the preflight, and mints a per-run token for the job', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(catalogResponse('summary'))
+      .mockResolvedValueOnce({ ok: true, status: 202, text: () => Promise.resolve('') });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await new PythonFunctionDispatchListener(logger, tokens).dispatchSummary(payload, makeAck());
+
+    // Every call to the sidecar — the catalog preflight included — carries the shared bearer, so
+    // a sidecar that refuses unauthenticated requests still lets the dispatcher through.
+    for (const [, init] of fetchMock.mock.calls as [string, RequestInit][]) {
+      expect(init.headers).toMatchObject(sidecarAuthHeaders());
+    }
+
+    // The run token is scoped to THIS job: its user, its pg-boss id, its queue.
+    expect(tokens.issueRunToken).toHaveBeenCalledWith({
+      userId: 'user-1',
+      jobId: 'job-1',
+      queue: 'py-fn-summary',
+    });
+    const [, init] = runCalls(fetchMock)[0];
+    expect(JSON.parse(String(init.body)).access_token).toBe('run-token:user-1:job-1:py-fn-summary');
   });
 });
