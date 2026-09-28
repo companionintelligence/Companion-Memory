@@ -90,6 +90,27 @@ describe('OnboardingPage source-step navigation', () => {
   });
 });
 
+describe('Onboarding step caption', () => {
+  it('keeps the caption line on later steps so the buttons do not drop', async () => {
+    mockStep('intro');
+    const firstView = render(<OnboardingPage />);
+
+    const first = await screen.findByTestId('onboarding-step-caption');
+
+    expect(first).toHaveTextContent('every step is skippable');
+    expect(first.className).toContain('min-h-4');
+
+    firstView.unmount();
+    mockStep('time-and-place');
+    render(<OnboardingPage />);
+
+    const later = await screen.findByTestId('onboarding-step-caption');
+
+    expect(later).not.toHaveTextContent('skippable');
+    expect(later.className).toContain('min-h-4');
+  });
+});
+
 describe('OnboardingNav primary width', () => {
   it('keeps Next the same width whether or not Back is in the row', () => {
     const { rerender } = render(

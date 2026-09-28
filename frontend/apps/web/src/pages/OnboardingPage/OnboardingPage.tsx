@@ -372,11 +372,14 @@ export function OnboardingPage() {
                   />
                 ))}
               </div>
-              {stepIndex === 0 && (
-                <p className="text-xs sm:text-sm text-muted-foreground text-center">
-                  Step {stepIndex + 1} of {stepKeys.length} — every step is skippable
-                </p>
-              )}
+              {/* The caption only has words on the first step. The line stays either
+                  way, so Next and Skip do not drop when the words go away. */}
+              <p
+                data-testid="onboarding-step-caption"
+                className="min-h-4 text-center text-xs text-muted-foreground sm:min-h-5 sm:text-sm"
+              >
+                {stepIndex === 0 ? `Step ${stepIndex + 1} of ${stepKeys.length} — every step is skippable` : null}
+              </p>
             </div>
           </div>
         </form>
