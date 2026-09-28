@@ -496,14 +496,20 @@ Every other `make` target is unchanged.
 | `make health` | Check prerequisites (Node.js version, Yarn version, `uv`) and report per-stack data volumes |
 
 `frontend/` consumes `@companionintelligence/*` packages from GitHub Packages, which requires a
-`NODE_AUTH_TOKEN` with `read:packages` (see `.yarnrc.yml`). `make init`/`make install` get this
-for free via [`scripts/gh-packages-auth.sh`](scripts/gh-packages-auth.sh), which reuses your `gh`
-CLI login (`gh auth login` first if you haven't). To get the token in your own shell — e.g. to
-run `yarn install` directly — run:
+`NODE_AUTH_TOKEN` with `read:packages` (see `.yarnrc.yml`). A normal `gh auth login` does not
+grant that scope, so a bare `yarn install` 403s on `@companionintelligence/*` until you refresh
+it. From the repo root:
 
 ```bash
-source scripts/gh-packages-auth.sh
+gh auth login
+gh auth refresh -s read:packages
+export NODE_AUTH_TOKEN=$(gh auth token)
+yarn install
 ```
+
+`make init` and `make install` do the refresh and export for you via
+[`scripts/gh-packages-auth.sh`](scripts/gh-packages-auth.sh). To export the token into the
+current shell without installing, `source scripts/gh-packages-auth.sh`.
 
 ### Development
 
