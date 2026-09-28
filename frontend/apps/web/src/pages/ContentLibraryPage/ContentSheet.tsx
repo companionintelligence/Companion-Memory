@@ -6,7 +6,7 @@ import { Sheet } from '@ci/shadcn';
 import { gql } from '@/graphql';
 import { EntityDrawerHostProvider } from '@/pages/MemoryPage/Components/EntityDetails/drawerHost';
 import { EntityDetails } from '@/pages/MemoryPage/Components/EntityDetails/EntityDetails';
-import type { MemoryEntity } from '@/pages/MemoryPage/useEntityService';
+import { withFresherEntity, type MemoryEntity } from '@/pages/MemoryPage/useEntityService';
 
 /**
  * Same selection the explorer's search connection makes for a ContentType node,
@@ -84,6 +84,11 @@ export function ContentSheet({
         } else {
           setPushedEntity(entity);
         }
+      },
+      // Only a pushed entity is a snapshot; the routed content row is a watched
+      // query and already re-reads whatever the refetch wrote to the cache.
+      refreshActiveEntity: (entity: MemoryEntity) => {
+        setPushedEntity((current) => withFresherEntity(current, entity));
       },
       refetch: onChanged,
     }),

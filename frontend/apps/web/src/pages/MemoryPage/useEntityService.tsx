@@ -264,6 +264,31 @@ export function resolveLiveEntity<TEntity extends MemoryEntity>(
 }
 
 /**
+ * `fresh` in place of `current` when both are the same record (same type and
+ * id), otherwise `current` untouched — including when nothing is open.
+ *
+ * For handing a re-fetched copy of the open entity to a drawer that holds a
+ * snapshot (a graph node, a map pin, a related card, a row paged out of the
+ * results), which nothing else re-reads: the drawer's expired media links are
+ * the case (EntityDetailScaffold's refreshMedia). The fetch can land after
+ * the drawer moved on or closed, and must then change nothing. Fields only
+ * the snapshot carries (a map pin's `bucketStartTime`, …) are kept; every
+ * field the fresh node has wins.
+ */
+export function withFresherEntity<TEntity extends MemoryEntity>(
+  current: TEntity | null,
+  fresh: MemoryEntity,
+): TEntity | null {
+  const key = entityCacheKey(current);
+
+  if (current == null || key == null || key !== entityCacheKey(fresh)) {
+    return current;
+  }
+
+  return { ...current, ...fresh } as TEntity;
+}
+
+/**
  * The filter half of the search variables — everything except paging.
  *
  * Exposed so a view that needs its own read of the SAME filtered set can issue
@@ -291,6 +316,8 @@ type ReturnType = [
   },
   {
     setActiveEntity: (entity: MemoryEntity | null) => void;
+    /** Swap a re-fetched copy into the drawer if it is still open on that entity (see {@link withFresherEntity}). */
+    refreshActiveEntity: (entity: MemoryEntity) => void;
   },
 ];
 
@@ -436,6 +463,10 @@ function useEntityService({
   // so a save made in the drawer is reflected in the drawer and not only in the
   // list behind it.
   const activeEntity = useMemo(() => resolveLiveEntity(selectedEntity, results), [selectedEntity, results]);
+  const refreshActiveEntity = useCallback(
+    (fresh: MemoryEntity) => setActiveEntity((current) => withFresherEntity(current, fresh)),
+    [],
+  );
 
   const refetchSearch = useCallback(() => {
     // Retry clears the stuck fetchMore failure too — a fresh refetch (or the
@@ -460,6 +491,7 @@ function useEntityService({
     },
     {
       setActiveEntity,
+      refreshActiveEntity,
     },
   ];
 }

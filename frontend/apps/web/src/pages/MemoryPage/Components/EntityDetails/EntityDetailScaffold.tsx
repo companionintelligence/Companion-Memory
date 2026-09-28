@@ -1,4 +1,13 @@
-import { type ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  Fragment,
+  type ReactNode,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 
 import { useApolloClient } from '@apollo/client';
 import { GlobalUID } from '@ci/common';
@@ -270,9 +279,10 @@ function useProgressiveSrc(src?: string | null, previewSrc?: string | null): str
  * signature returns 403 through the gateway; nothing else about the file
  * changes.
  *
- * Resolves true when a fresh node was written to the cache (the details
- * re-render with the new links and the media retries by itself), false when
- * nothing could be fetched. Null outside a scaffold (stories, unit tests).
+ * Resolves true when a fresh node was fetched and handed to the drawer (the
+ * details re-render with the new links and the media retries by itself),
+ * false when nothing could be fetched. Null outside a scaffold (stories,
+ * unit tests).
  */
 const MediaRefreshContext = createContext<(() => Promise<boolean>) | null>(null);
 
@@ -301,9 +311,10 @@ export function MediaRefreshProvider({
  * 2026-09-22: every 4K 2023–2026 clip in the library is HEVC Main/Main 10;
  * the older and messaging-app clips are H.264 and play). The bytes arrive
  * fine — a range request through the gateway answers 206 video/mp4 — the
- * element just fires `error` with MEDIA_ERR_SRC_NOT_SUPPORTED. So a failed
- * video is not "couldn't be loaded": it is the poster, a sentence saying the
- * browser cannot play this format, and the original to open or save.
+ * element just fires `error` with MEDIA_ERR_SRC_NOT_SUPPORTED. So a video
+ * that fails the way a codec does is not "couldn't be loaded": it is the
+ * poster, a sentence saying the browser cannot play this format, and the
+ * original to open or save. A network failure keeps "couldn't be loaded".
  */
 export function EntityMedia({
   src,
@@ -346,12 +357,25 @@ export function EntityMedia({
   const refreshMedia = useContext(MediaRefreshContext);
   const [refreshed, setRefreshed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // What the notice blames once a video gives up. DECODE (3) and
+  // SRC_NOT_SUPPORTED (4) are how an unplayable codec surfaces; a network
+  // error, or no reason at all, is the link or the connection, and "the file
+  // itself is fine" would be a guess there.
+  const [codecFailure, setCodecFailure] = useState(false);
   const handleError = useCallback(
     (failing: string, error: MediaError | null) => {
       const linkMayHaveExpired =
         error == null ||
         error.code === MediaError.MEDIA_ERR_NETWORK ||
         error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED;
+      const fail = () => {
+        setCodecFailure(
+          error != null &&
+            (error.code === MediaError.MEDIA_ERR_DECODE ||
+              error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED),
+        );
+        setFailedSrc(failing);
+      };
 
       if (refreshMedia && !refreshed && linkMayHaveExpired) {
         setRefreshed(true);
@@ -359,14 +383,14 @@ export function EntityMedia({
           if (ok) {
             setAttempt((n) => n + 1);
           } else {
-            setFailedSrc(failing);
+            fail();
           }
         });
 
         return;
       }
 
-      setFailedSrc(failing);
+      fail();
     },
     [refreshMedia, refreshed],
   );
@@ -396,7 +420,7 @@ export function EntityMedia({
           <ImageOff className="size-8" aria-hidden />
         )}
         <span>
-          {isVideo
+          {isVideo && codecFailure
             ? "This browser can't play this video (usually HEVC from a recent phone whose playable copy hasn't been made yet). The file itself is fine."
             : "Media couldn't be loaded"}
         </span>
@@ -501,7 +525,7 @@ export function EntityDetailScaffold({
   const ref = useMemo(() => resolveEntityRef(entity), [entity]);
   const currentTags = useMemo(() => readTags(entity), [entity]);
   const { tagEntities, untagEntities } = useTagEntityService();
-  const { refetch, setActiveEntity } = useEntityDrawerHost();
+  const { refetch, setActiveEntity, refreshActiveEntity } = useEntityDrawerHost();
   const apolloClient = useApolloClient();
   const { toast } = useToast();
   // Shared-search viewer: the drawer is display-only. Suppress every mutation /
@@ -569,7 +593,12 @@ export function EntityDetailScaffold({
   const deleteTarget = ref.resourceType ? (DELETE_TARGETS[ref.resourceType] ?? null) : null;
   // Fresh media links for the block above — see MediaRefreshContext. The same
   // node query the related-card click uses, forced to the network so the
-  // signed URLs are re-minted; useFragment then re-renders the details.
+  // signed URLs are re-minted. The cache write reaches a drawer whose entity
+  // is a live query result (an explorer row, the content library's routed
+  // row). It does not reach one holding a snapshot — a graph node, a map pin,
+  // a related card, a row paged out of the results — because `useFragment`
+  // here is a plain cast, not a cache subscription. So the fresh node also
+  // goes to the host, which swaps it in only if this entity is still shown.
   const refreshMedia = useCallback(async (): Promise<boolean> => {
     if (!ref.globalId) {
       return false;
@@ -581,12 +610,17 @@ export function EntityDetailScaffold({
         variables: { id: ref.globalId },
         fetchPolicy: 'network-only',
       });
+      const node = data?.node ?? null;
 
-      return data?.node != null;
+      if (node && isDetailNode(node)) {
+        refreshActiveEntity?.(node);
+      }
+
+      return node != null;
     } catch {
       return false;
     }
-  }, [apolloClient, ref.globalId]);
+  }, [apolloClient, ref.globalId, refreshActiveEntity]);
 
   const fullPage = fullPagePath(ref.resourceType, ref.rawId);
   const canDelete = !readOnly && Boolean(deleteTarget && ref.globalId);
@@ -703,7 +737,12 @@ export function EntityDetailScaffold({
       </Sheet.Header>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
-        <MediaRefreshProvider refresh={refreshMedia}>{media}</MediaRefreshProvider>
+        {/* Keyed per entity: a related card swaps the entity under the same
+            *Details body, and EntityMedia's once-per-mount refresh must not
+            carry over to the next entity's media. */}
+        <MediaRefreshProvider refresh={refreshMedia}>
+          <Fragment key={entityKey}>{media}</Fragment>
+        </MediaRefreshProvider>
 
         {children}
 

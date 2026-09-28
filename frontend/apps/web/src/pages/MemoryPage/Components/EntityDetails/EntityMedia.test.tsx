@@ -164,11 +164,35 @@ describe('EntityMedia video the browser cannot decode', () => {
     const video = container.querySelector('video');
     expect(video).toHaveAttribute('poster', '/static/companion/poster.jpg');
 
-    fireEvent.error(video!);
+    // What Chrome reports for an HEVC stream it has no decoder for.
+    failWith(video!, 4);
 
     expect(container.querySelector('video')).toBeNull();
     expect(screen.getByRole('status')).toHaveTextContent("can't play this video");
     expect(screen.getByRole('status')).not.toHaveTextContent("Media couldn't be loaded");
+    expect(screen.getByRole('img', { name: 'clip' })).toHaveAttribute('src', '/static/companion/poster.jpg');
+    expect(screen.getByRole('link', { name: /open or save the original/i })).toHaveAttribute(
+      'href',
+      '/static/companion/clip.mp4',
+    );
+  });
+
+  it('does not blame the codec for a network failure', () => {
+    // An expired link, a 404 or a dropped connection: "the file itself is
+    // fine" would be a guess, so the notice stays the plain one.
+    const { container } = render(
+      <EntityMedia
+        src="/static/companion/clip.mp4"
+        previewSrc="/static/companion/poster.jpg"
+        contentType="video/mp4"
+        alt="clip"
+      />,
+    );
+
+    failWith(container.querySelector('video')!, 2);
+
+    expect(screen.getByRole('status')).toHaveTextContent("Media couldn't be loaded");
+    expect(screen.getByRole('status')).not.toHaveTextContent("can't play this video");
     expect(screen.getByRole('img', { name: 'clip' })).toHaveAttribute('src', '/static/companion/poster.jpg');
     expect(screen.getByRole('link', { name: /open or save the original/i })).toHaveAttribute(
       'href',
@@ -294,6 +318,23 @@ describe('EntityMedia expired signed link', () => {
 
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('status')).toHaveTextContent("can't play this video");
+  });
+
+  it('does not blame the codec when a refreshed link still fails on the network', async () => {
+    const refresh = vi.fn(async () => true);
+    const { container } = render(
+      <MediaRefreshProvider refresh={refresh}>
+        <EntityMedia src="/static/companion/clip.mp4" contentType="video/mp4" alt="clip" />
+      </MediaRefreshProvider>,
+    );
+
+    failWith(container.querySelector('video')!, 2);
+    await act(async () => {});
+    failWith(container.querySelector('video')!, 2);
+    await act(async () => {});
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('status')).toHaveTextContent("Media couldn't be loaded");
   });
 
   it('shows the unavailable state at once when nothing can be refreshed', async () => {

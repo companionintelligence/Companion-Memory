@@ -10,6 +10,14 @@ import { useOptionalEntityService, type MemoryEntity } from '../../useEntityServ
 export interface EntityDrawerHost {
   setActiveEntity: (entity: MemoryEntity | null) => void;
   refetch: () => void;
+  /**
+   * Swap a re-fetched copy of the shown entity in, but only while that same
+   * entity is still shown (see withFresherEntity). A drawer rendering a
+   * snapshot re-reads nothing from the cache, so without this a refetch for
+   * fresh media links never reaches it. Optional: a host whose entity is
+   * always a live query result can leave it out.
+   */
+  refreshActiveEntity?: (entity: MemoryEntity) => void;
 }
 
 const EntityDrawerHostContext = createContext<EntityDrawerHost | null>(null);
@@ -30,9 +38,9 @@ export function useEntityDrawerHost(): EntityDrawerHost {
   }
 
   if (service) {
-    const [{ refetch }, { setActiveEntity }] = service;
+    const [{ refetch }, { setActiveEntity, refreshActiveEntity }] = service;
 
-    return { setActiveEntity, refetch };
+    return { setActiveEntity, refetch, refreshActiveEntity };
   }
 
   throw new Error('EntityDetails needs an EntityDrawerHostProvider or EntityServiceProvider above it');

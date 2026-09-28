@@ -6,7 +6,7 @@ import { Sheet } from '@ci/shadcn';
 import { gql } from '@/graphql';
 import { EntityDrawerHostProvider } from '@/pages/MemoryPage/Components/EntityDetails/drawerHost';
 import { EntityDetails } from '@/pages/MemoryPage/Components/EntityDetails/EntityDetails';
-import type { MemoryEntity } from '@/pages/MemoryPage/useEntityService';
+import { withFresherEntity, type MemoryEntity } from '@/pages/MemoryPage/useEntityService';
 
 /**
  * The selection the explorer makes for a PlaceType node, so the result slots
@@ -87,6 +87,11 @@ export function PlaceSheet({
         } else {
           setPushedEntity(entity);
         }
+      },
+      // Only a pushed entity is a snapshot; the routed place is a watched
+      // query and already re-reads whatever the refetch wrote to the cache.
+      refreshActiveEntity: (entity: MemoryEntity) => {
+        setPushedEntity((current) => withFresherEntity(current, entity));
       },
       refetch: onChanged,
     }),

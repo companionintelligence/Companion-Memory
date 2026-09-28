@@ -255,6 +255,65 @@ describe('useEntityService', () => {
 
       expect(result.current[0].activeEntity).toBeNull();
     });
+
+    // A graph node, a map pin or a related card is a snapshot no query
+    // re-reads, so the fresh media links a refetch writes to the cache never
+    // reached the drawer: it retried the same expired link.
+    it('swaps a re-fetched copy into a drawer showing a snapshot, keeping snapshot-only fields', () => {
+      const { result } = renderService({ searchQuery: '' });
+
+      act(() => {
+        result.current[1].setActiveEntity({
+          __typename: 'EventType',
+          id: 'e1',
+          mediaUrl: 'old',
+          bucketStartTime: 't0',
+        } as never);
+      });
+      act(() => {
+        result.current[1].refreshActiveEntity({
+          __typename: 'EventType',
+          id: 'e1',
+          mediaUrl: 'new',
+        } as never);
+      });
+
+      expect(result.current[0].activeEntity).toMatchObject({
+        id: 'e1',
+        mediaUrl: 'new',
+        bucketStartTime: 't0',
+      });
+    });
+
+    it('ignores a re-fetched copy that lands after the drawer moved on or closed', () => {
+      const { result } = renderService({ searchQuery: '' });
+
+      act(() => {
+        result.current[1].setActiveEntity({ __typename: 'EventType', id: 'e2', mediaUrl: 'b' } as never);
+      });
+      act(() => {
+        result.current[1].refreshActiveEntity({
+          __typename: 'EventType',
+          id: 'e1',
+          mediaUrl: 'new',
+        } as never);
+      });
+
+      expect(result.current[0].activeEntity).toMatchObject({ id: 'e2', mediaUrl: 'b' });
+
+      act(() => {
+        result.current[1].setActiveEntity(null);
+      });
+      act(() => {
+        result.current[1].refreshActiveEntity({
+          __typename: 'EventType',
+          id: 'e2',
+          mediaUrl: 'new',
+        } as never);
+      });
+
+      expect(result.current[0].activeEntity).toBeNull();
+    });
   });
 
   describe('resolveLiveEntity', () => {
