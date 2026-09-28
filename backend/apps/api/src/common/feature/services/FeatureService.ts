@@ -15,7 +15,10 @@ export type FeatureName = keyof typeof config.features;
  * surface for anyone who can reach the port, and only two entries were ever
  * read before login. Adding a pre-login flag means adding it here, on purpose.
  */
-export const PUBLIC_FEATURES = ['require.signup.codes', 'onboarding.preference.steps'] as const satisfies readonly FeatureName[];
+export const PUBLIC_FEATURES = [
+  'require.signup.codes',
+  'onboarding.preference.steps',
+] as const satisfies readonly FeatureName[];
 
 export type PublicFeatureName = (typeof PUBLIC_FEATURES)[number];
 

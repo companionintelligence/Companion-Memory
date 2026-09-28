@@ -86,7 +86,11 @@ beforeEach(() => {
 
   fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
     if (isAccountReadCall(url, init)) {
-      return Promise.resolve({ email: h.email, hasFederatedIdentity: h.hasFederatedIdentity, hasOwnPassword: h.hasOwnPassword });
+      return Promise.resolve({
+        email: h.email,
+        hasFederatedIdentity: h.hasFederatedIdentity,
+        hasOwnPassword: h.hasOwnPassword,
+      });
     }
 
     return Promise.resolve(undefined); // 204 No Content
@@ -239,9 +243,12 @@ describe('AccountSection — change email', () => {
     h.hasOwnPassword = true;
     render(<AccountSection />);
 
-    fireEvent.change(await screen.findByLabelText('Current password', { selector: '#emailCurrentPassword' }), {
-      target: { value: 'my-password' },
-    });
+    fireEvent.change(
+      await screen.findByLabelText('Current password', { selector: '#emailCurrentPassword' }),
+      {
+        target: { value: 'my-password' },
+      },
+    );
     fireEvent.change(screen.getByLabelText('New email'), { target: { value: 'new@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update email' }));
 

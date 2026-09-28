@@ -236,10 +236,15 @@ export class AccountController {
 
     if (!mustPresentPassword) {
       const sessionToken: string | undefined = req.cookies?.[config.auth.cookies.sessionTokenName];
-      const establishedAt = sessionToken ? await this.authService.sessionEstablishedAt(user.id, sessionToken) : null;
+      const establishedAt = sessionToken
+        ? await this.authService.sessionEstablishedAt(user.id, sessionToken)
+        : null;
 
       if (!establishedAt || Date.now() - establishedAt.getTime() > REAUTH_SESSION_WINDOW_MS) {
-        throw new UnauthorizedException({ message: REAUTH_REQUIRED, detail: 'Sign in again to make this change' });
+        throw new UnauthorizedException({
+          message: REAUTH_REQUIRED,
+          detail: 'Sign in again to make this change',
+        });
       }
 
       return;

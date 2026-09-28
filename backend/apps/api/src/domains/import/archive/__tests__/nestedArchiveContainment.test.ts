@@ -60,7 +60,10 @@ describe('nested archive containment', () => {
     fs.mkdirSync(staged);
     fs.mkdirSync(outside);
     fs.symlinkSync(outside, path.join(staged, 'link'));
-    fs.writeFileSync(path.join(staged, 'b.zip'), zipWith({ 'link/pwned.txt': 'x', 'link/deeper/pwned.txt': 'y' }));
+    fs.writeFileSync(
+      path.join(staged, 'b.zip'),
+      zipWith({ 'link/pwned.txt': 'x', 'link/deeper/pwned.txt': 'y' }),
+    );
 
     const log: string[] = [];
     const out = await unpackArchives(staged, (m) => log.push(m));

@@ -378,7 +378,9 @@ export function OnboardingPage() {
                 data-testid="onboarding-step-caption"
                 className="min-h-4 text-center text-xs text-muted-foreground sm:min-h-5 sm:text-sm"
               >
-                {stepIndex === 0 ? `Step ${stepIndex + 1} of ${stepKeys.length} — every step is skippable` : null}
+                {stepIndex === 0
+                  ? `Step ${stepIndex + 1} of ${stepKeys.length} — every step is skippable`
+                  : null}
               </p>
             </div>
           </div>

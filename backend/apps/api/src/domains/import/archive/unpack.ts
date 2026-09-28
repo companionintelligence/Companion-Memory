@@ -462,7 +462,11 @@ export function assertParentInside(destDir: string, target: string): void {
  * `destDir` is skipped, never unlinked: the extractor did not write there,
  * and neither may this.
  */
-export function stripListedSymlinks(destDir: string, names: readonly string[], log?: (msg: string) => void): number {
+export function stripListedSymlinks(
+  destDir: string,
+  names: readonly string[],
+  log?: (msg: string) => void,
+): number {
   let removed = 0;
 
   for (const name of names) {

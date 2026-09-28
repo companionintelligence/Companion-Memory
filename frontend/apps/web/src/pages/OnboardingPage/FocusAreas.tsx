@@ -89,7 +89,9 @@ export function FocusAreas() {
 
                   <div className="space-y-1">
                     <span className="text-base font-medium leading-snug device:text-xl">{item.label}</span>
-                    <p className="text-sm text-muted-foreground leading-snug device:text-base">{item.description}</p>
+                    <p className="text-sm text-muted-foreground leading-snug device:text-base">
+                      {item.description}
+                    </p>
                   </div>
                 </button>
               );
