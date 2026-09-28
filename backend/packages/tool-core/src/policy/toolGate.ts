@@ -84,11 +84,11 @@ export function needsConfirmation(intent: DispatchableIntent): boolean {
  * it (the dial is read directly for a tool call, not through the inference
  * scorer — an explicit intent has no confidence to grade):
  *
- * | trust mode  | trust    | destructive / external intent |
- * |-------------|----------|-------------------------------|
- * | `hands_off` | auto     | executes unattended |
- * | `balanced`  | review   | queues for confirmation |
- * | `cautious`  | review   | queues for confirmation |
+ * | trust mode  | trust                                  | destructive / external intent              |
+ * |-------------|----------------------------------------|--------------------------------------------|
+ * | `hands_off` | auto                                   | executes unattended                        |
+ * | `balanced`  | auto for an external read, else review | an external read executes; the rest queues |
+ * | `cautious`  | review                                 | queues for confirmation                    |
  *
  * `skip` queues rather than executing or silently dropping. The dial's `skip`
  * means "don't apply this inference"; there is no such thing as declining a

@@ -60,6 +60,25 @@ const FORCED_PROSE_NUDGE: OllamaMessage = {
 };
 
 /**
+ * What a `TOOL_QUEUED` result means, put next to the result itself.
+ *
+ * The chat is the dispatcher that most often meets the confirmation gate and
+ * the only one never told what it means: the harness's dispatch packet says
+ * "never re-issue a queued call", the chat prompt said nothing. A small model
+ * reads `success: false` as a failure to retry, and the loop gives it a second
+ * round to retry in. `PendingActionService.propose` hands back the same open
+ * card for an identical retry, so a repeat no longer queues a second one — but
+ * the model still has to tell the user the truth, which is that nothing has
+ * happened yet. In the result rather than the system prompt, so it is paid for
+ * only in a turn where something queued, and read at the moment the model
+ * decides what to do next. Under `toolResultBudget`'s per-string cap.
+ */
+export const TOOL_QUEUED_NOTE =
+  'Not done yet: this action is waiting for the user to approve it on the Approvals page, and runs only ' +
+  'if they do. Tell the user it is awaiting their approval. Do not call this tool again for it — a repeat ' +
+  'cannot run it.';
+
+/**
  * The model a PERSON is talking to.
  *
  * Despite the name this is `llm.chatModel`, the operator's interactive-chat
@@ -1603,10 +1622,19 @@ export class OllamaService implements OnModuleInit {
         try {
           const result = await this.toolRegistry.executeTool(toolName, invocationContext, args);
 
+          if (result.success) {
+            return { call: toolCall, result: result.data, success: true };
+          }
+
           return {
             call: toolCall,
-            result: result.success ? result.data : { error: result.error },
-            success: result.success,
+            // The note first, so a hard truncation of an oversized result cuts
+            // the error's details rather than what the model is meant to do.
+            result:
+              result.error?.code === 'TOOL_QUEUED'
+                ? { note: TOOL_QUEUED_NOTE, error: result.error }
+                : { error: result.error },
+            success: false,
           };
         } catch (error) {
           this.logger.error('Tool execution failed', {

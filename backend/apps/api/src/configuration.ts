@@ -1176,12 +1176,14 @@ export const ConfigSchema = z.object({
      * `ci.pending_actions` instead of running it, returning `TOOL_QUEUED`.
      *
      * ON by default since 2026-09-25 (it shipped dark while the queue had no
-     * UI). With it on, a destructive or external intent from the owner's own
-     * chat is queued as an approval card under the `balanced` and `cautious`
-     * dials and runs unattended only under `hands_off` — see
-     * `PendingActionService.trustForToolCall` for why the dial is read
-     * directly rather than through the inference scorer. `?tier=local`
-     * execute calls are queued rather than run.
+     * UI). With it on, a destructive intent, or an external one that is not
+     * a plain read (every connected-MCP tool is labelled this way), from the
+     * owner's own chat is queued as an approval card under the `balanced` and
+     * `cautious` dials and runs unattended only under `hands_off`; an external
+     * read (`messaging.listMessages`) asks only under `cautious`. See
+     * `PendingActionService.trustForToolCall` for the mapping and for why the
+     * dial is read directly rather than through the inference scorer.
+     * `?tier=local` execute calls are queued rather than run.
      *
      * ENABLE_PENDING_ACTIONS=false is the kill switch, and off is
      * byte-identical to the pre-gate behaviour: `PendingActionService.evaluate`
