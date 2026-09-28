@@ -7,11 +7,14 @@ import { ListTodo } from '@ci/shadcn/icons';
 
 import { useFeatures } from '@/common/feature';
 import { ErrorState } from '@/components/ErrorState';
+import { resolveTimeZone } from '@/components/HorizonGrid/zonedClock';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
+import { useCurrentUser } from '@/hooks';
 
 import { EditTaskModal, UPDATE_TASK, type EditableTask } from './EditTaskModal';
 import { NewTaskForm } from './NewTaskForm';
+import { describePendingChange } from './pendingRationale';
 import { Task } from './Task';
 import { TaskBoard } from './TaskBoard';
 import { childrenOf, dueAtFromLocalDate, type SectionedTask } from './taskSections';
@@ -75,6 +78,13 @@ export function PlanPage() {
   const { isFeatureEnabled } = useFeatures();
   const showEmptyState = isFeatureEnabled('planning.emptyState');
   const { toast } = useToast();
+  const { user } = useCurrentUser();
+  /**
+   * A pending suggestion names its slot on the OWNER's clock — the zone the
+   * backend placed it in (`ci.users.timezone`), the same one the Schedule grid
+   * draws in. The browser zone is only the fallback. See `pendingRationale`.
+   */
+  const timeZone = resolveTimeZone(user?.timezone);
 
   const { nodes, sections, pendingByTask, loading, error, refetch } = usePlanTasks();
 
@@ -326,7 +336,7 @@ export function PlanPage() {
         onSchedule={handleSchedule}
         onReschedule={handleReschedule}
         pendingChangeId={pending?.id}
-        pendingRationale={pending?.rationale}
+        pendingRationale={pending ? describePendingChange(pending, timeZone) : null}
         pendingKind={pending?.kind}
         onAcceptPending={(changeId) => void acceptPending({ variables: { id: changeId } }).then(refresh)}
         onDeclinePending={(changeId) => void declinePending({ variables: { id: changeId } }).then(refresh)}

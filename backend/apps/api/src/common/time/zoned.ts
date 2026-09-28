@@ -245,6 +245,36 @@ export function localDateInTZ(instant: Date, tz: string): string {
   return `${p.year}-${p.month}-${p.day}`;
 }
 
+/**
+ * An instant as a person reads it on `tz`'s clock: `Mon, Sep 28 at 4:00 PM`,
+ * with the year added only when it is not `now`'s year in that zone.
+ *
+ * For sentences a person reads — a pending change's rationale — and never for
+ * anything parsed back; the ISO instant stored beside that sentence is what
+ * machines read. English, because every sentence it is spliced into is.
+ *
+ * ICU puts a narrow no-break space (U+202F) before AM/PM. It is flattened to a
+ * plain space: the result is persisted as text, and agents and logs read that
+ * text as well as the Plan card.
+ */
+export function humanSlotInTZ(instant: Date, tz: string, now: Date = new Date()): string {
+  const sameYear = localDateInTZ(instant, tz).slice(0, 4) === localDateInTZ(now, tz).slice(0, 4);
+  const day = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  }).format(instant);
+  const time = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(instant);
+
+  return `${day} at ${time}`.replace(/[\u202F\u00A0]/g, ' ');
+}
+
 /** The local hour (0–23) of a UTC instant in `tz`. Used by the owner-local job enqueuer. */
 export function localHourInTZ(instant: Date, tz: string): number {
   return Number(utcToZonedWallTime(instant, tz).slice(0, 2));

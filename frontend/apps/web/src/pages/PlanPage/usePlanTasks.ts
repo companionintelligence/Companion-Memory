@@ -29,6 +29,7 @@ export const GET_TASKS = gql(`
       id
       taskId
       kind
+      patch
       rationale
       confidence
       status
@@ -120,7 +121,29 @@ export type PlanTask = SectionedTask & {
   estimatedMinutes?: number | null;
 };
 
-export type PendingChange = { id: string; rationale: string | null; kind: string };
+export type PendingChange = {
+  id: string;
+  rationale: string | null;
+  kind: string;
+  /**
+   * `patch.startTime` of a `schedule` change: the instant Confirm would place
+   * at. The card words the suggestion from this, on the owner's clock, rather
+   * than from `rationale` — which rows filed before the server stopped writing
+   * it carry as a raw UTC ISO string. See `describePendingChange`.
+   */
+  startTime: string | null;
+};
+
+/** The start instant a `schedule` patch proposes, if it carries a usable one. */
+function scheduleStartOf(kind: string, patch: unknown): string | null {
+  if (kind !== 'schedule' || patch == null || typeof patch !== 'object') {
+    return null;
+  }
+
+  const start = (patch as Record<string, unknown>).startTime;
+
+  return typeof start === 'string' && start.length > 0 ? start : null;
+}
 
 const BACKLOG_KEYS = new Set(['proposed', 'unscheduled']);
 
@@ -155,6 +178,7 @@ export function usePlanTasks(onPlaced?: () => void) {
           id: change.id,
           rationale: change.rationale ?? null,
           kind: change.kind,
+          startTime: scheduleStartOf(change.kind, change.patch),
         });
       }
     }

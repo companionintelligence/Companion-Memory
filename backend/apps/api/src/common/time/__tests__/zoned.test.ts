@@ -1,4 +1,5 @@
 import {
+  humanSlotInTZ,
   isValidTimezone,
   isoWeekKey,
   localDateInTZ,
@@ -133,6 +134,47 @@ describe('localDateInTZ', () => {
     // 07:59Z is 23:59 on the 14th in LA (PST); 08:00Z is 00:00 on the 15th.
     expect(localDateInTZ(new Date('2026-01-15T07:59:00.000Z'), LA)).toBe('2026-01-14');
     expect(localDateInTZ(new Date('2026-01-15T08:00:00.000Z'), LA)).toBe('2026-01-15');
+  });
+});
+
+describe('humanSlotInTZ', () => {
+  const NOW = new Date('2026-09-27T12:00:00.000Z');
+
+  it('reads the instant on the zone’s clock, not as a raw ISO string', () => {
+    const instant = new Date('2026-09-28T16:00:00.000Z');
+
+    expect(humanSlotInTZ(instant, UTC, NOW)).toBe('Mon, Sep 28 at 4:00 PM');
+    expect(humanSlotInTZ(instant, NY, NOW)).toBe('Mon, Sep 28 at 12:00 PM');
+    expect(humanSlotInTZ(instant, LA, NOW)).toBe('Mon, Sep 28 at 9:00 AM');
+  });
+
+  it('names the zone-local day when the instant sits on the other side of midnight', () => {
+    // 02:30Z on the 29th is still the evening of the 28th in LA, and already
+    // lunchtime on the 29th in Sydney (AEST, before its October DST switch).
+    const instant = new Date('2026-09-29T02:30:00.000Z');
+
+    expect(humanSlotInTZ(instant, LA, NOW)).toBe('Mon, Sep 28 at 7:30 PM');
+    expect(humanSlotInTZ(instant, SYDNEY, NOW)).toBe('Tue, Sep 29 at 12:30 PM');
+  });
+
+  it('keeps the wall clock steady across a DST change', () => {
+    // US fall-back is 2026-11-01: 16:00Z before it and 17:00Z after it are
+    // both 9:00 AM in Los Angeles.
+    expect(humanSlotInTZ(new Date('2026-10-30T16:00:00.000Z'), LA, NOW)).toBe('Fri, Oct 30 at 9:00 AM');
+    expect(humanSlotInTZ(new Date('2026-11-02T17:00:00.000Z'), LA, NOW)).toBe('Mon, Nov 2 at 9:00 AM');
+  });
+
+  it('adds the year only when it is not this year in the zone', () => {
+    const instant = new Date('2027-01-04T17:00:00.000Z');
+
+    expect(humanSlotInTZ(instant, LA, new Date('2026-12-30T12:00:00.000Z'))).toBe(
+      'Mon, Jan 4, 2027 at 9:00 AM',
+    );
+    expect(humanSlotInTZ(instant, LA, new Date('2027-01-02T12:00:00.000Z'))).toBe('Mon, Jan 4 at 9:00 AM');
+  });
+
+  it('uses plain spaces only, so stored copy reads cleanly outside a browser', () => {
+    expect(humanSlotInTZ(new Date('2026-09-28T16:00:00.000Z'), LA, NOW)).not.toMatch(/[\u202F\u00A0]/);
   });
 });
 

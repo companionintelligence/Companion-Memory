@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { humanSlotInTZ } from '@ci/common/time/zoned';
 import { EventEntity, CalendarEventService, PersonService, UserContextService } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
@@ -198,6 +199,25 @@ describe('PlannedBlockService', () => {
         kind: 'schedule',
       }),
     );
+  });
+
+  // The rationale is the sentence on the Plan card. It used to be
+  // "Place on the calendar at 2026-09-28T16:00:00.000Z?" — the UTC instant,
+  // verbatim. It must read the slot on the owner's clock instead, while the
+  // patch keeps the exact instant a Confirm replays.
+  it('words the pending schedule in the owner’s zone, not as a raw ISO instant', async () => {
+    personalizationService.decideAction.mockResolvedValue('review');
+    (planningTimeMock.timezoneFor as jest.Mock).mockResolvedValue('America/New_York');
+
+    await service.tryPlaceAfterOpen(CTX, OPEN_TASK as never, 0.8);
+
+    const [, change] = taskService.createPendingChange.mock.calls[0];
+    const start = new Date(change.patch.startTime);
+
+    expect(change.rationale).toBe(`Place on the calendar on ${humanSlotInTZ(start, 'America/New_York')}?`);
+    expect(change.rationale).not.toContain(change.patch.startTime);
+    expect(change.rationale).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+    expect(planningTimeMock.timezoneFor).toHaveBeenCalledWith(CTX.userId);
   });
 
   it('automation auto places into the next free gap', async () => {

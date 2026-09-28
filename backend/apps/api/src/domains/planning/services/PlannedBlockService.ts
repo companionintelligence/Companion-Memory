@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { humanSlotInTZ } from '@ci/common/time/zoned';
 import {
   EventEntity,
   CalendarEventService,
@@ -303,6 +304,14 @@ export class PlannedBlockService {
     // `applyPendingSchedule` is what keeps two accepts from landing on top of
     // each other.
     if (decision === 'review') {
+      // The rationale is the sentence the Plan card shows, so it names the
+      // slot on the OWNER's clock. It used to splice in the raw ISO instant —
+      // "Place on the calendar at 2026-09-28T16:00:00.000Z?" — which is UTC
+      // and machine-shaped. The instant a machine needs is the patch's
+      // `startTime`; the web card now renders from that directly, and this
+      // text is what agents and older app builds still read.
+      const timezone = await this.planningTime.timezoneFor(context.userId);
+
       await this.taskService.createPendingChange(context, {
         taskId: task.id,
         kind: 'schedule',
@@ -311,7 +320,7 @@ export class PlannedBlockService {
           endTime: proposal.end.toISOString(),
           estimatedMinutes: task.estimatedMinutes ?? DEFAULT_ESTIMATED_MINUTES,
         },
-        rationale: `Place on the calendar at ${proposal.start.toISOString()}?`,
+        rationale: `Place on the calendar on ${humanSlotInTZ(proposal.start, timezone)}?`,
         confidence,
       });
 

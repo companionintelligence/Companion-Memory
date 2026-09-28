@@ -49,8 +49,26 @@ function renderTask(overrides: Record<string, unknown>, props: Partial<TaskProps
   );
 }
 
+/**
+ * The decision row's layout contract. A Button is `whitespace-nowrap`, so a
+ * button narrower than its label does not shrink the label — it spills into
+ * the next button. That is how a narrow Proposed card came to read
+ * "ScheduleDismiss". Each button must grow from a zero basis (equal widths when
+ * they fit) and never go below its own label (so the row wraps instead).
+ */
+function expectWrappingDecisionRow(row: HTMLElement) {
+  expect(row).toHaveClass('flex', 'flex-wrap', 'w-full');
+  expect(row).not.toHaveClass('grid-cols-3');
+
+  for (const button of row.querySelectorAll('button')) {
+    expect(button).toHaveClass('min-w-fit', 'flex-1');
+    expect(button).not.toHaveClass('min-w-0');
+    expect(button).not.toHaveClass('w-full');
+  }
+}
+
 describe('Task actions', () => {
-  it('labels the proposed actions Plan and Schedule so they stay on one row', () => {
+  it('labels the proposed actions Plan and Schedule, short enough to share one row', () => {
     renderTask(
       { status: 'proposed' },
       {
@@ -63,12 +81,12 @@ describe('Task actions', () => {
     expect(screen.getByRole('button', { name: /^plan$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^schedule$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^dismiss$/i })).toBeInTheDocument();
-    expect(screen.getByTestId('proposed-actions')).toHaveClass('grid-cols-3', 'w-full');
+    expectWrappingDecisionRow(screen.getByTestId('proposed-actions'));
     expect(screen.queryByRole('button', { name: /add to plan/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add and schedule/i })).not.toBeInTheDocument();
   });
 
-  it('keeps Plan, Schedule, and Dismiss in fixed columns even without a schedule handler', () => {
+  it('keeps Plan, Schedule, and Dismiss in order even without a schedule handler', () => {
     renderTask({ status: 'proposed' }, { onAcceptProposed: vi.fn(), onDeclineProposed: vi.fn() });
 
     const buttons = screen.getByTestId('proposed-actions').querySelectorAll('button');
@@ -110,7 +128,7 @@ describe('Task actions', () => {
 
     expect(screen.queryByText(/place on calendar/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^ignore$/i })).not.toBeInTheDocument();
-    expect(screen.getByTestId('pending-schedule-actions')).toHaveClass('grid-cols-3', 'w-full');
+    expectWrappingDecisionRow(screen.getByTestId('pending-schedule-actions'));
 
     fireEvent.click(screen.getByRole('button', { name: /^plan$/i }));
     expect(onPlanPending).toHaveBeenCalledWith('dGFzazoxMTE=', 'change-1');
@@ -214,12 +232,72 @@ describe('Task actions', () => {
     expect(onDelete).toHaveBeenCalledWith('dGFzazoxMTE=');
   });
 
-  it('keeps chat, edit and delete on the title row on a wide screen', () => {
+  it('keeps chat, edit and delete in the card head on a wide screen', () => {
     renderTask({}, { onEdit: vi.fn() });
 
     expect(screen.queryByTestId('task-action-layer')).not.toBeInTheDocument();
-    expect(screen.getByTestId('task-overflow-actions')).toBeInTheDocument();
+    expect(within(screen.getByTestId('task-head')).getByTestId('task-overflow-actions')).toBeInTheDocument();
     expect(screen.getByTestId('plan-task')).toHaveClass('p-3');
+  });
+
+  // ═══ ONE CHARACTER PER LINE ═══
+  //
+  // A wide WINDOW used to mean the icons sat on the title row, whatever the
+  // card's own width. The board splits the window four ways, so at ~1024px the
+  // checkbox and three 36px icons took the whole of a ~140px card and the title
+  // and rationale rendered one character per line. jsdom cannot lay anything
+  // out, so this pins the classes that decide it: the card is a size container,
+  // the lead (checkbox + text) takes a whole line of its head by default and
+  // only shares it with the icons from 22rem of card, and the icons are the
+  // lead's sibling — not inside it — so they are free to wrap below it.
+  it('gives the title the full card width until the card itself is wide', () => {
+    renderTask({}, { onEdit: vi.fn() });
+
+    const card = screen.getByTestId('plan-task');
+    const head = screen.getByTestId('task-head');
+    const lead = screen.getByTestId('task-lead');
+    const icons = screen.getByTestId('task-overflow-actions');
+
+    expect(card).toHaveClass('@container/task', 'min-w-0');
+    expect(head).toHaveClass('flex', 'flex-wrap');
+    expect(lead).toHaveClass('min-w-0', 'basis-full', '@[22rem]/task:basis-0', '@[22rem]/task:grow');
+    expect(icons.parentElement).toBe(head);
+    expect(lead).not.toContainElement(icons);
+    expect(icons).toHaveClass('shrink-0');
+    expect(screen.getByText('Write the migration')).toHaveClass('min-w-0', 'flex-1', 'break-words');
+  });
+
+  // Schedule used to live inside the text column, under the title. Outside
+  // it, a narrow card can put it on the icons' line; a wide card moves it to a
+  // line of its own, indented to the text (checkbox 1rem + gap 0.75rem).
+  it('lets Schedule join the icons on a narrow card and sit under the text on a wide one', () => {
+    renderTask({});
+
+    const buttons = screen.getByTestId('task-buttons');
+
+    expect(buttons.parentElement).toBe(screen.getByTestId('task-head'));
+    expect(screen.getByTestId('task-lead')).not.toContainElement(buttons);
+    expect(buttons).toHaveClass('flex-wrap', 'min-w-0', '@[22rem]/task:basis-full', '@[22rem]/task:pl-7');
+    expect(within(buttons).getByRole('button', { name: /^schedule$/i })).toBeInTheDocument();
+  });
+
+  it('wraps a pending change’s rationale inside the card instead of widening it', () => {
+    renderTask(
+      {},
+      {
+        pendingChangeId: 'change-1',
+        pendingKind: 'schedule',
+        pendingRationale: 'Place on the calendar on Mon, Sep 28 at 9:00 AM?',
+        onAcceptPending: vi.fn(),
+        onDeclinePending: vi.fn(),
+      },
+    );
+
+    const rationale = screen.getByTestId('task-rationale');
+
+    expect(rationale).toHaveTextContent('Place on the calendar on Mon, Sep 28 at 9:00 AM?');
+    expect(rationale).toHaveClass('break-words');
+    expect(screen.getByTestId('task-lead')).toContainElement(rationale);
   });
 
   it('reschedules to a day picked from the calendar input, not just the chips', () => {

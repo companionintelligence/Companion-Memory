@@ -20,6 +20,20 @@ import {
 
 const featureState = vi.hoisted(() => ({ emptyState: false }));
 const toastError = vi.hoisted(() => vi.fn());
+/** The owner's profile zone `useCurrentUser` reports. */
+const profile = vi.hoisted(() => ({ timezone: 'America/Los_Angeles' as string | null }));
+
+// The page words pending suggestions on the owner's clock. `useCurrentUser`
+// reaches for the auth context, which `renderWithProviders` deliberately does
+// not mount — SchedulePage's test stubs it the same way.
+vi.mock('@/hooks/useCurrentUser', () => ({
+  useCurrentUser: () => ({
+    user: { id: 'u1', timezone: profile.timezone },
+    loading: false,
+    error: undefined,
+    refetch: vi.fn(),
+  }),
+}));
 
 // Sonner's `toast.error(...)` only renders into the DOM behind a mounted
 // `<Toaster>`, which this page does not own — mocking the hook directly is
@@ -115,6 +129,12 @@ function pendingChange(overrides: Record<string, unknown> = {}) {
     id: 'change-1',
     taskId: 'dGFzazoxMTE=',
     kind: 'schedule',
+    patch: {
+      startTime: '2026-08-29T16:00:00.000Z',
+      endTime: '2026-08-29T16:30:00.000Z',
+      estimatedMinutes: 30,
+    },
+    // Worded the way every row filed before the server fix still is.
     rationale: 'Place on the calendar at 2026-08-29T16:00:00.000Z?',
     confidence: 0.8,
     status: 'pending',
@@ -144,6 +164,7 @@ function tasksMock(nodes: ReturnType<typeof node>[], changes: ReturnType<typeof 
 describe('PlanPage', () => {
   beforeEach(() => {
     featureState.emptyState = false;
+    profile.timezone = 'America/Los_Angeles';
     toastError.mockClear();
   });
 
@@ -173,6 +194,69 @@ describe('PlanPage', () => {
     for (const column of ['Proposed', 'Unscheduled', 'Scheduled on calendar', 'Done']) {
       expect(await screen.findByText(column)).toBeInTheDocument();
     }
+  });
+
+  // ═══ THE COLUMNS USED TO SQUEEZE EVERY CARD ═══
+  //
+  // Four `flex-1` columns with an 11rem floor: just past the phone breakpoint
+  // all four sat at that floor and the cards collapsed to a character a line.
+  // The floor is now wide enough for a card, and the board scrolls sideways
+  // below it rather than squeezing. jsdom cannot lay out, so the classes are
+  // the contract.
+  it('gives every board column a usable floor and scrolls the board sideways below it', async () => {
+    renderWithProviders(<PlanPage />, { mocks: [tasksMock([node()])] });
+
+    const board = await screen.findByTestId('plan-board');
+    const columns = [...board.children];
+
+    expect(board).toHaveClass('flex', 'overflow-x-auto');
+    expect(columns).toHaveLength(4);
+
+    for (const column of columns) {
+      expect(column).toHaveClass('min-w-[13rem]', 'flex-1');
+      expect(column).not.toHaveClass('min-w-[11rem]');
+    }
+  });
+
+  // ═══ THE RATIONALE USED TO BE A RAW UTC TIMESTAMP ═══
+  //
+  // "Place on the calendar at 2026-08-29T16:00:00.000Z?" — the server spliced
+  // `toISOString()` into the sentence and the card printed it verbatim. Those
+  // rows are still stored that way, so the card words a schedule suggestion
+  // from its patch's start instant, on the owner's profile clock.
+  it('words a calendar suggestion on the owner’s clock, not as a raw ISO timestamp', async () => {
+    renderWithProviders(<PlanPage />, { mocks: [tasksMock([node()], [pendingChange()])] });
+
+    const rationale = await screen.findByTestId('task-rationale');
+
+    expect(rationale).toHaveTextContent(/^Place on the calendar on /);
+    expect(rationale.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+    // 16:00Z is 9:00 in Los Angeles (PDT) — not 16:00, and not 4:00 PM. Read
+    // loosely enough to hold in a 24-hour locale ("09:00") as well.
+    expect(rationale.textContent).toMatch(/(^|\D)0?9:00(\D|$)/);
+    expect(rationale.textContent).not.toMatch(/(^|\D)(16|4):00(\D|$)/);
+  });
+
+  it('follows the owner’s profile zone rather than a fixed one', async () => {
+    profile.timezone = 'America/New_York';
+
+    renderWithProviders(<PlanPage />, { mocks: [tasksMock([node()], [pendingChange()])] });
+
+    // 16:00Z is noon in New York (EDT).
+    expect((await screen.findByTestId('task-rationale')).textContent).toMatch(/\b12:00\b/);
+  });
+
+  it('shows a non-schedule suggestion in its own words', async () => {
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock(
+          [node()],
+          [pendingChange({ kind: 'complete', patch: {}, rationale: 'Looks like this may be done.' })],
+        ),
+      ],
+    });
+
+    expect(await screen.findByTestId('task-rationale')).toHaveTextContent('Looks like this may be done.');
   });
 
   // A failed query used to render NOTHING — it fell through to the zero-task
@@ -659,7 +743,7 @@ describe('PlanPage', () => {
       ],
     });
 
-    expect(await screen.findByText(/place on the calendar at/i)).toBeInTheDocument();
+    expect(await screen.findByText(/place on the calendar on/i)).toBeInTheDocument();
     expect(screen.getByTestId('pending-schedule-actions')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^plan$/i }));
@@ -667,7 +751,7 @@ describe('PlanPage', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('pending-schedule-actions')).not.toBeInTheDocument();
     });
-    expect(screen.queryByText(/place on the calendar at/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/place on the calendar/i)).not.toBeInTheDocument();
     expect(screen.getByText('Write the migration')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^unscheduled/i })).toBeInTheDocument();
   });

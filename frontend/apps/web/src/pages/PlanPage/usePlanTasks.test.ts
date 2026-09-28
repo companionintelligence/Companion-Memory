@@ -164,6 +164,7 @@ describe('usePlanTasks — pending changes', () => {
             id: 'c1',
             taskId: 't1',
             kind: 'schedule',
+            patch: { startTime: '2026-08-29T16:00:00.000Z', endTime: '2026-08-29T16:30:00.000Z' },
             rationale: 'Place on the calendar at 2026-08-29T16:00:00.000Z?',
             confidence: 0.8,
             status: 'declined',
@@ -181,5 +182,78 @@ describe('usePlanTasks — pending changes', () => {
     expect(result.current.pendingByTask.size).toBe(0);
     expect(result.current.sections.find((section) => section.key === 'unscheduled')?.tasks).toHaveLength(1);
     expect(result.current.sections.find((section) => section.key === 'proposed')).toBeUndefined();
+  });
+
+  // The card words a schedule suggestion from its structured start, so the
+  // hook must hand that start over — rows filed before the server stopped
+  // writing it still carry a raw UTC ISO string as their rationale.
+  it('carries a schedule change’s start instant alongside its rationale', () => {
+    mockedUseQuery.mockReturnValue({
+      data: {
+        tasks: { edges: [{ node: node() }], totalCount: 1 },
+        taskPendingChanges: [
+          {
+            id: 'c1',
+            taskId: 't1',
+            kind: 'schedule',
+            patch: { startTime: '2026-09-28T16:00:00.000Z', endTime: '2026-09-28T16:30:00.000Z' },
+            rationale: 'Place on the calendar at 2026-09-28T16:00:00.000Z?',
+            confidence: 0.8,
+            status: 'pending',
+          },
+        ],
+      },
+      loading: false,
+      error: undefined,
+      refetch,
+    } as unknown as ReturnType<typeof useQuery>);
+
+    const { result } = renderHook(() => usePlanTasks());
+
+    expect(result.current.pendingByTask.get('t1')).toEqual({
+      id: 'c1',
+      kind: 'schedule',
+      rationale: 'Place on the calendar at 2026-09-28T16:00:00.000Z?',
+      startTime: '2026-09-28T16:00:00.000Z',
+    });
+  });
+
+  it('reads no start from a change that is not a schedule, or a patch without one', () => {
+    mockedUseQuery.mockReturnValue({
+      data: {
+        tasks: {
+          edges: [{ node: node() }, { node: node({ id: 't2', title: 'Book the venue' }) }],
+          totalCount: 2,
+        },
+        taskPendingChanges: [
+          {
+            id: 'c1',
+            taskId: 't1',
+            kind: 'mutate',
+            patch: { startTime: '2026-09-28T16:00:00.000Z', title: 'Write the full deck' },
+            rationale: 'Suggested update from memory.',
+            confidence: 0.6,
+            status: 'pending',
+          },
+          {
+            id: 'c2',
+            taskId: 't2',
+            kind: 'schedule',
+            patch: { startTime: 42 },
+            rationale: null,
+            confidence: 0.8,
+            status: 'pending',
+          },
+        ],
+      },
+      loading: false,
+      error: undefined,
+      refetch,
+    } as unknown as ReturnType<typeof useQuery>);
+
+    const { result } = renderHook(() => usePlanTasks());
+
+    expect(result.current.pendingByTask.get('t1')?.startTime).toBeNull();
+    expect(result.current.pendingByTask.get('t2')?.startTime).toBeNull();
   });
 });
