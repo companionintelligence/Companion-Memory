@@ -34,7 +34,12 @@ const mockUser = { id: 'user-1', name: 'Test User', email: 'new@example.com' };
 const MOCK_SESSION_ID = 'session-id-1';
 
 const mockAuthService = {
-  verifySignupIntentToken: jest.fn().mockReturnValue({ email: 'new@example.com', name: 'Test User' }),
+  verifySignupIntentToken: jest.fn().mockReturnValue({
+    email: 'new@example.com',
+    name: 'Test User',
+    issuer: 'https://hub.test',
+    subject: 'portal-sub-1',
+  }),
   issueSignupIntentToken: jest.fn().mockReturnValue('intent-token'),
   issueSessionToken: jest
     .fn()
@@ -45,8 +50,14 @@ const mockAuthService = {
 };
 
 const mockUserService = {
-  findByEmail: jest.fn().mockResolvedValue(mockUser),
+  // Default: no account for the address yet — the ordinary first-time case.
+  findByEmail: jest.fn().mockResolvedValue(null),
   create: jest.fn().mockResolvedValue(mockUser),
+};
+const mockFederatedIdentityService = {
+  findUserId: jest.fn().mockResolvedValue(null),
+  listForUser: jest.fn().mockResolvedValue([]),
+  bind: jest.fn().mockResolvedValue(undefined),
 };
 
 const MOCK_CSRF_TOKEN = 'test-random.test-signature';
@@ -92,10 +103,7 @@ const mockLogger = {
     // Confirm-account never reaches the invite path; present so Nest can construct
     // the controller.
     { provide: SignupCodeService, useValue: { findOne: jest.fn(), update: jest.fn() } },
-    {
-      provide: FederatedIdentityService,
-      useValue: { findUserId: jest.fn(), listForUser: jest.fn().mockResolvedValue([]), bind: jest.fn() },
-    },
+    { provide: FederatedIdentityService, useValue: mockFederatedIdentityService },
     { provide: HubForwardAuthBridgeService, useValue: { verifyUsername: jest.fn().mockReturnValue(null) } },
     { provide: LoggerService, useValue: mockLogger },
   ],
@@ -304,6 +312,77 @@ describe('OidcController — confirm-account CSRF', () => {
 
       expect(res.headers.location).toBe('/login?error=signup_expired');
       expect(mockCsrfService.validateToken).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST confirm-account — who the account goes to', () => {
+    beforeEach(() => {
+      // Earlier cases swap these implementations (an expired intent, a CSRF
+      // fault) and clearAllMocks only clears calls — put the happy path back.
+      mockAuthService.verifySignupIntentToken.mockReturnValue({
+        email: 'new@example.com',
+        name: 'Test User',
+        issuer: 'https://hub.test',
+        subject: 'portal-sub-1',
+      });
+      mockCsrfService.validateToken.mockImplementation(() => undefined);
+      mockAuthService.resolveCsrfScope.mockReturnValue(null);
+    });
+
+    const validPost = () =>
+      request(app.getHttpServer())
+        .post(CONFIRM_PATH)
+        .set('Cookie', [`${SIGNUP_INTENT_COOKIE}=intent`, `${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .send({ csrf: MOCK_CSRF_TOKEN });
+
+    it('creates the account and binds it to the Portal identity the intent was minted for', async () => {
+      mockUserService.findByEmail.mockResolvedValue(null);
+
+      const res = await validPost();
+
+      expect(mockUserService.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ email: 'new@example.com', name: 'Test User' }),
+      );
+      // Bound at creation, so the bearer path resolves this account by
+      // (iss, sub) from its first API call — no email matching later.
+      expect(mockFederatedIdentityService.bind).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', issuer: 'https://hub.test', subject: 'portal-sub-1' }),
+      );
+      expect(mockAuthService.issueSessionToken).toHaveBeenCalledWith('user-1', expect.anything());
+      expect(res.headers.location).not.toMatch(/^\/login\?error=/);
+    });
+
+    it("SECURITY: refuses when an account for the address already exists and is not this identity's", async () => {
+      // The callback already refused this sign-in (password account, or one
+      // bound to a different Portal identity). This step used to do
+      // `findByEmail(email) ?? create(...)` and sign the caller in as whatever
+      // it found — undoing that refusal for anyone holding a Portal login that
+      // merely claims the same address.
+      mockUserService.findByEmail.mockResolvedValue({ id: 'user-victim', email: 'new@example.com' });
+      mockFederatedIdentityService.findUserId.mockResolvedValue(null);
+
+      const res = await validPost().expect(303);
+
+      expect(res.headers.location).toBe('/login?error=account_exists');
+      expect(mockUserService.create).not.toHaveBeenCalled();
+      expect(mockAuthService.issueSessionToken).not.toHaveBeenCalled();
+      // The intent is spent either way.
+      const cleared = parseCookies(res);
+      expect(cleared[SIGNUP_INTENT_COOKIE]?.value ?? '').toBe('');
+    });
+
+    it('signs in the account a concurrent tab already created for this same identity', async () => {
+      // Two tabs confirm; the first created and bound the account. The second
+      // must land in that account, not fail, and must not create a duplicate.
+      mockUserService.findByEmail.mockResolvedValue({ id: 'user-1', email: 'new@example.com' });
+      mockFederatedIdentityService.findUserId.mockResolvedValue('user-1');
+
+      const res = await validPost();
+
+      expect(mockUserService.create).not.toHaveBeenCalled();
+      expect(mockAuthService.issueSessionToken).toHaveBeenCalledWith('user-1', expect.anything());
+      expect(res.headers.location).not.toMatch(/^\/login\?error=/);
     });
   });
 });

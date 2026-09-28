@@ -6,6 +6,17 @@ services:
     networks:
       - ci
     restart: unless-stopped
+    # Docker gives a container 64 MB of /dev/shm, and Postgres puts every
+    # parallel query's dynamic shared memory there (dynamic_shared_memory_type
+    # = posix): the shared hash table of a parallel hash join, a parallel
+    # sort's tuplestore. A few such queries at once run it dry and each fails
+    # with "could not resize shared memory segment ... No space left on
+    # device" (SQLSTATE 53100) — measured live 2026-09-22: the content
+    # library's three facet queries, run together over a 132k-row library
+    # while the page query ran too, failed on every load, and the pickers
+    # said "No content types yet". 1 GB is the usual advice for a Postgres
+    # container and costs nothing until used; it is a cap, not a reservation.
+    shm_size: 1g
     # Docker's json-file driver is unbounded by default, and an appliance that
     # nobody prunes fills its disk with container logs long before it fills it
     # with data. 10MB x 3 rotated files is enough history to diagnose a crash

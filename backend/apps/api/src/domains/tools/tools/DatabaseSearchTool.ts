@@ -5,7 +5,7 @@ import { type UserServiceContext, toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { BrowserActivityService, type BrowserActivity } from '@ci/domains/browser-activity';
 import { ThreadService, type Thread } from '@ci/domains/conversations';
-import { FileService, type File } from '@ci/domains/files';
+import { FileService, type SignedFile } from '@ci/domains/files';
 import { AnswerService, type Answer } from '@ci/domains/intelligence';
 import {
   CommunicationService,
@@ -83,7 +83,7 @@ export type SearchResult =
   | Concept
   | Content
   | Event
-  | File
+  | ModelFile
   | FileChunk
   | Item
   | Note
@@ -110,6 +110,27 @@ export type SearchResultItem = SearchResult & {
   type: IndexableEntity;
   link?: string;
 };
+
+/**
+ * A file hit as the model may see it: {@link SignedFile} minus its object-store
+ * address. `url` is the presigned GET, trimmed to path + query so it proxies
+ * through the app host — which makes it `/companion/<key>?X-Amz-…`, where
+ * `companion` is the BUCKET, not a route. Measured live on 2026-09-21: the
+ * tool-result budget cut the query mid-signature, the model dropped what was
+ * left of it and answered with `/companion/<key>` as if it were a page, and
+ * the web app dutifully 404ed. `bucket`, `key` and `hash` are the same address
+ * in pieces. None of them is useful to the model — the signature expires in an
+ * hour and it cannot fetch bytes anyway — and at ~460 bytes a photo they were
+ * most of a 25-hit page's budget. `link` is the only address a hit carries.
+ */
+type ModelFile = Omit<SignedFile, 'url' | 'bucket' | 'key' | 'hash'>;
+
+/** Drop a file's object-store address so `link` is the only path the model can copy. */
+export function stripStorageAddress(file: SignedFile): ModelFile {
+  const { url: _url, bucket: _bucket, key: _key, hash: _hash, ...rest } = file;
+
+  return rest;
+}
 
 /**
  * The page each entity type opens at, by raw id. Types absent here have no
@@ -398,7 +419,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       this.contentService.findByIds(context, contentIds),
       this.eventService.findByIds(context, eventIds),
       this.fileChunkService.findByIds(fileChunkIds),
-      this.fileService.findByIds(context, fileIds),
+      this.fileService.findByIds(context, fileIds).then((files) => files.map((f) => f && stripStorageAddress(f))),
       this.itemService.findByIds(context, itemIds),
       this.noteService.findByIds(context, noteIds),
       this.personService.findByIds(context, peopleIds),

@@ -11,7 +11,7 @@ import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
 
 import { type File } from '../entities/FileEntity';
-import { PreviewGeneratedEvent } from '../events';
+import { PreviewGeneratedEvent, VIDEO_PLAYBACK_QUEUE, VideoPlaybackRequestEvent } from '../events';
 import { FileVariant } from '../types';
 
 import { FileService } from './FileService';
@@ -180,6 +180,19 @@ export class FilePreviewService {
       },
       { singletonKey: `image-description:${preview.id}` },
     );
+
+    // A video also gets its browser-playable rendition requested here, once
+    // its preview exists: the preview is what the player shows as poster
+    // while the rendition is transcoded (about the clip's length), and the
+    // codec check that decides whether one is needed lives in the service.
+    // The nightly `enrich.video_playback` sweep is the net under this.
+    if (file.contentType.startsWith(VIDEO_MIME_PREFIX)) {
+      await this.eventService.send(
+        VideoPlaybackRequestEvent,
+        { userId: context.userId, fileId: file.id },
+        { queue: VIDEO_PLAYBACK_QUEUE, singletonKey: `video-playback:${file.id}` },
+      );
+    }
 
     this.logger.log('Generated preview', {
       fileId: input.fileId,

@@ -138,7 +138,7 @@ This kills three critique blockers at once: Track 3's "identifiers point at a hy
 | Netflix regresses to `rnd` → unbounded duplication | **Correct.** | `rnd` deleted from the ladder. Universal fallback is `nat` over `{archive_relpath, record_ordinal}` — deterministic, ≥2 non-temporal dims by construction. |
 | `value_normalized TEXT` in a btree PK exceeds 2704 bytes for URLs | **Correct.** | `value_normalized` is always a fixed-width digest; human-readable form goes in unindexed `raw_value`. |
 | Two-index overlap window turns phantom-id into 23505 | **Correct** — Postgres does not absorb conflicts on non-arbiter indexes. | Old index dropped in the *same* deploy as the arbiter flip. |
-| `IndexDeferralService` has no "excluded set" to register in | **Correct** — `:41` is an opt-in list; exclusions are prose. | No edit; just don't list the new indexes. |
+| `DEFERRABLE_INDEXES` (deferrableIndexes.ts, formerly `IndexDeferralService`) has no "excluded set" to register in | **Correct** — `:41` is an opt-in list; exclusions are prose. | No edit; just don't list the new indexes. |
 | Phase C dedupe as a `DO $$` migration can't COMMIT | **Correct** — `2D000` inside dbmate's transaction. | Dedupe is a maintenance leg with real per-batch commits, not a migration. |
 | `act_verb_map` conflates four source columns | **Correct** — six seeded values are `ci.content.type`, not `event_type`. | PK is `(source_column, source_kind)`; one hint view per column. |
 | ETL `create()` has no ON CONFLICT, so a triple alone yields 23505 | **Correct** — `ContentService.ts:70-86` is plain save. | YouTube transforms routed through `createMany`. |

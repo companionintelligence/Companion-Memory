@@ -180,6 +180,12 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     category: JOB_CATEGORIES.ingest,
     description: 'Store what the vision model found in a captured frame.',
   },
+  'file.video-playback-request': {
+    label: 'Video playback rendition',
+    category: JOB_CATEGORIES.ingest,
+    description:
+      "Transcode one uploaded video into the H.264 rendition browsers play (only when its own codec, usually HEVC, needs it). Runs on the worker, one at a time, at about the clip's own length.",
+  },
   'file.media-dimensions-backfill-request': {
     label: 'Backfill media dimensions',
     category: JOB_CATEGORIES.ingest,
@@ -492,6 +498,12 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     category: JOB_CATEGORIES.pipeline,
     description:
       'Start an immediate enrich.file_preview sweep for the requesting user, regenerating thumbnails for originals that have none.',
+  },
+  'file.video-playback-sweep-request': {
+    label: 'Kick video playback sweep',
+    category: JOB_CATEGORIES.pipeline,
+    description:
+      'Start an immediate enrich.video_playback sweep for the requesting user, transcoding a browser-playable H.264 rendition for every stored video whose codec (HEVC and the like) browsers cannot be relied on to decode.',
   },
   'maintenance.derivation-run-request': {
     label: 'Nightly graph derivation',

@@ -12,6 +12,11 @@ import type { RequestContext } from '@ci/common/context';
 import { type ApiKeyCapability, FULL_CAPABILITY } from '@ci/common/decorators';
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
+import {
+  UNTRUSTED_TOOL_RESULTS_GUARD,
+  guardToolResultRound,
+  unguardToolResult,
+} from '@ci/common/prompt/untrustedBlock';
 import config, { UTILITY_MODEL_EXPLICITLY_CONFIGURED } from '@ci/configuration';
 import { ModelTierRouter, type RoutingDecision } from '@ci/domains/model-routing';
 import {
@@ -24,6 +29,7 @@ import {
 } from '@ci/domains/tools';
 
 import { ChatModelPreferenceService } from '../chat-model-preference.module';
+import { NUM_CTX_ENV_VAR, parseNumCtx } from '../contextBudget';
 import {
   createFirstResponseFetch,
   type FirstResponseFetch,
@@ -53,6 +59,25 @@ const FORCED_PROSE_NUDGE: OllamaMessage = {
     'grounded in the tool results above. If the results do not fully answer the question, summarize ' +
     'what was found and say what is missing.',
 };
+
+/**
+ * What a `TOOL_QUEUED` result means, put next to the result itself.
+ *
+ * The chat is the dispatcher that most often meets the confirmation gate and
+ * the only one never told what it means: the harness's dispatch packet says
+ * "never re-issue a queued call", the chat prompt said nothing. A small model
+ * reads `success: false` as a failure to retry, and the loop gives it a second
+ * round to retry in. `PendingActionService.propose` hands back the same open
+ * card for an identical retry, so a repeat no longer queues a second one — but
+ * the model still has to tell the user the truth, which is that nothing has
+ * happened yet. In the result rather than the system prompt, so it is paid for
+ * only in a turn where something queued, and read at the moment the model
+ * decides what to do next. Under `toolResultBudget`'s per-string cap.
+ */
+export const TOOL_QUEUED_NOTE =
+  'Not done yet: this action is waiting for the user to approve it on the Approvals page, and runs only ' +
+  'if they do. Tell the user it is awaiting their approval. Do not call this tool again for it — a repeat ' +
+  'cannot run it.';
 
 /**
  * The model a PERSON is talking to.
@@ -1085,9 +1110,12 @@ export class OllamaService implements OnModuleInit {
     const selection: UtilityModelChoice =
       options.tier === 'utility' ? await this.resolveUtilityModel() : { model: options.model };
     const model = selection.model;
-    // A caller's explicit window wins over the planner's; the planner's fills
-    // the gap every background caller used to leave.
-    const numCtx = options.numCtx ?? selection.numCtx;
+    // A caller's explicit window wins; then the utility plan's; then the chat-context plan
+    // for whatever model this call runs on. Nothing is left to Ollama's own default: that
+    // default was a second planner (32k on a 24 GB card) that disagreed with this one on
+    // every cold start, and the two took turns reloading the model — 29 loads in 3.5 min
+    // on 2026-09-22. `CI_LLM_NUM_CTX` still outranks the planner, as it does for chat.
+    const numCtx = options.numCtx ?? selection.numCtx ?? (await this.defaultContextTokens(model));
 
     await this.validateModel(context, model);
 
@@ -1222,6 +1250,25 @@ export class OllamaService implements OnModuleInit {
     }
 
     return this.residencyPlanner.resolveChatContextTokens(model);
+  }
+
+  /**
+   * The window a call that named none should ask for: CI-Hub's `CI_LLM_NUM_CTX`
+   * when exported, else the planner's answer for `model`, else `undefined` so
+   * the request carries no `num_ctx` (an OpenAI-compatible backend ignores it
+   * anyway). Never throws.
+   */
+  private async defaultContextTokens(model: string): Promise<number | undefined> {
+    const configured = parseNumCtx(process.env[NUM_CTX_ENV_VAR]);
+    if (configured != null) {
+      return configured;
+    }
+
+    if (this.llmEndpointService.getOpenAiDriver()) {
+      return undefined;
+    }
+
+    return (await this.resolveChatContextTokens(model)) ?? undefined;
   }
 
   async resolveModel(context: RequestContext, opts?: ValidateModelOptions): Promise<ValidateModelResult> {
@@ -1598,10 +1645,19 @@ export class OllamaService implements OnModuleInit {
         try {
           const result = await this.toolRegistry.executeTool(toolName, invocationContext, args);
 
+          if (result.success) {
+            return { call: toolCall, result: result.data, success: true };
+          }
+
           return {
             call: toolCall,
-            result: result.success ? result.data : { error: result.error },
-            success: result.success,
+            // The note first, so a hard truncation of an oversized result cuts
+            // the error's details rather than what the model is meant to do.
+            result:
+              result.error?.code === 'TOOL_QUEUED'
+                ? { note: TOOL_QUEUED_NOTE, error: result.error }
+                : { error: result.error },
+            success: false,
           };
         } catch (error) {
           this.logger.error('Tool execution failed', {
@@ -1627,16 +1683,25 @@ export class OllamaService implements OnModuleInit {
     // `resultByteBudget` is the ROUND's share of the context window (see
     // toolResultByteBudget's own doc), not each individual call's — a round
     // with N tool calls must split it N ways, or the round's actual total is
-    // N times the intended budget.
-    const perCallByteBudget = Math.max(1, Math.floor(resultByteBudget / toolResults.length));
-
-    return toolResults.map(
-      ({ result }) =>
-        ({
-          role: 'tool' as const,
-          content: boundToolResultForPrompt(result, perCallByteBudget),
-        }) satisfies OllamaMessage,
+    // N times the intended budget. The guard sentence below is part of the
+    // round, so it is paid for out of the same budget rather than on top.
+    const guardCost = UNTRUSTED_TOOL_RESULTS_GUARD.length + 1;
+    const perCallByteBudget = Math.max(
+      1,
+      Math.floor(Math.max(0, resultByteBudget - guardCost) / toolResults.length),
     );
+
+    // Fenced, not raw: a result is whatever the archive held — the matched
+    // email's body, verbatim — and the model reads it in the same position it
+    // reads the user. The pre-retrieved evidence block is already fenced
+    // (`ChatTurnService`); this is the same guard for the results the model
+    // fetches itself mid-turn. See `untrustedBlock.ts` for why JSON already
+    // supplies the structural half and the sentence is the missing prose half.
+    const contents = guardToolResultRound(
+      toolResults.map(({ result }) => boundToolResultForPrompt(result, perCallByteBudget)),
+    );
+
+    return contents.map((content) => ({ role: 'tool' as const, content }) satisfies OllamaMessage);
   }
 
   private convertToOllamaTool(toolSchema: ToolSchema): Tool {
@@ -1732,7 +1797,9 @@ export function savedKnowledgeWrapUp(messages: OllamaMessage[]): string | null {
     }
 
     try {
-      const parsed = JSON.parse(message.content) as {
+      // The first result of a round carries the untrusted-content guard ahead
+      // of its JSON (see `handleToolCalls`); take it off before parsing.
+      const parsed = JSON.parse(unguardToolResult(message.content)) as {
         error?: unknown;
         createdNodes?: number;
         createdRelationships?: number;

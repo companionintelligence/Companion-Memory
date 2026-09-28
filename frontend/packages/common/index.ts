@@ -140,6 +140,7 @@ export {
   hideSplashScreen,
   isBarcodeScanError,
   isDeviceLocationError,
+  openAuthSession,
   openExternalUrl,
   openNativeAppSettings,
   openNativeLocationSettings,
@@ -163,7 +164,7 @@ export type {
   NativeCurrentLocation,
   NativeLocationAuthorization,
 } from './src/utils/nativeBridge';
-export { BarcodeScanError, DeviceLocationError } from './src/utils/nativeBridge';
+export { AuthSessionCancelledError, BarcodeScanError, DeviceLocationError } from './src/utils/nativeBridge';
 export {
   OIDC_NATIVE_CALLBACK_URL,
   OIDC_NATIVE_CLIENT_FLAG,

@@ -13,6 +13,7 @@ export const createDeviceSchema = z.object({
     'tablet',
     'smartwatch',
     'smart_speaker',
+    'smart_glasses',
     'iot_sensor',
     'browser',
   ]),
@@ -41,6 +42,7 @@ export interface CreateDeviceDto {
     | 'tablet'
     | 'smartwatch'
     | 'smart_speaker'
+    | 'smart_glasses'
     | 'iot_sensor'
     | 'browser';
   platform?: 'ios' | 'android' | 'windows' | 'macos' | 'linux' | 'web';
@@ -65,6 +67,7 @@ export interface UpdateDeviceDto {
     | 'tablet'
     | 'smartwatch'
     | 'smart_speaker'
+    | 'smart_glasses'
     | 'iot_sensor'
     | 'browser';
   platform?: 'ios' | 'android' | 'windows' | 'macos' | 'linux' | 'web';

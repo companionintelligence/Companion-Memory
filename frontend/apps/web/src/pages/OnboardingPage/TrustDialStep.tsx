@@ -3,21 +3,27 @@ import { cn } from '@ci/shadcn';
 import type { OnboardingFormData } from './OnboardingPage';
 import { StepHeader } from './StepHeader';
 
+// The last clause of each hint is the chat tool gate (`PendingActionService`):
+// deleting, sending, completing a task and a connected MCP server's tools ask
+// first on Cautious and Balanced; reading from an outside service (the owner's
+// messages, streaming availability) asks first on Cautious only; Hands-off
+// waives all of it. Keep the three in step with `trustForToolCall` — this copy
+// and the Autonomy settings text are the only places the owner learns the rule.
 export const TRUST_OPTIONS = [
   {
     value: 'cautious' as const,
     label: 'Cautious',
-    hint: 'Ask before adding to-dos or placing them on your calendar',
+    hint: 'Ask before adding to-dos or placing them on your calendar, and before chat deletes, sends, or reads from an outside service',
   },
   {
     value: 'balanced' as const,
     label: 'Balanced',
-    hint: 'High-confidence to-dos join the backlog; scheduling still asks first',
+    hint: 'High-confidence to-dos join the backlog; scheduling, deleting, sending, completing tasks and connected MCP tools still ask first',
   },
   {
     value: 'hands_off' as const,
     label: 'Hands-off',
-    hint: 'Add and place solid to-dos on the calendar automatically',
+    hint: 'Add and place solid to-dos automatically; chat deletes, sends and uses connected tools without asking',
   },
 ];
 

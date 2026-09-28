@@ -56,7 +56,13 @@ export interface CaptureContext {
   source: 'exif-gps' | 'position' | 'events' | 'date-only';
 }
 
-/** Parsed from the photo's own EXIF; every field is absent when the tag is. */
+/** What the context line calls the file: fixes "taken" vs "recorded" and "photo" vs "video". */
+export type CaptureSubject = 'photo' | 'video';
+
+/**
+ * Parsed from the photo's own EXIF — or, for a video, mapped from its
+ * container tags by the caller; every field is absent when the tag is.
+ */
 export interface CaptureExif {
   /** The camera's wall-clock instant, resolved to UTC when an offset tag was present. */
   takenAt: Date | null;
@@ -115,24 +121,44 @@ export class CaptureContextService {
   ): Promise<CaptureContext | null> {
     const exif = await this.readExif(originalBytes);
 
-    if (exif == null || (exif.takenAt == null && exif.latitude == null)) {
+    if (exif == null) {
       return null;
     }
 
+    return this.buildFromCapture(context, exif, fileId, 'photo');
+  }
+
+  /**
+   * The same paragraph from capture facts the caller already has — a video's
+   * container tags, which are not EXIF and are read by the frame sampler
+   * alongside the frames. Same rungs, same guard against a file that says
+   * neither when nor where; only the wording changes with `subject`.
+   */
+  async buildFromCapture(
+    context: UserServiceContext,
+    exif: CaptureExif,
+    fileId: string,
+    subject: CaptureSubject = 'photo',
+  ): Promise<CaptureContext | null> {
+    if (exif.takenAt == null && exif.latitude == null) {
+      return null;
+    }
+
+    const verb = subject === 'video' ? 'recorded' : 'taken';
     const when = describeWhen(exif);
-    const where = await this.describeWhere(context, exif, fileId);
+    const where = await this.describeWhere(context, exif, fileId, subject);
 
     if (where == null) {
       if (when == null) {
         return null;
       }
 
-      return { text: `Context: the photo was taken ${when}.`, source: 'date-only' };
+      return { text: `Context: the ${subject} was ${verb} ${when}.`, source: 'date-only' };
     }
 
     const text =
-      `Context: the photo was taken ${when ?? 'on an unknown date'}. ${where.sentence} ` +
-      'Use this only if it fits what is visible; it says where the owner was, not what the photo shows.';
+      `Context: the ${subject} was ${verb} ${when ?? 'on an unknown date'}. ${where.sentence} ` +
+      `Use this only if it fits what is visible; it says where the owner was, not what the ${subject} shows.`;
 
     return { text, source: where.source };
   }
@@ -141,13 +167,14 @@ export class CaptureContextService {
     context: UserServiceContext,
     exif: CaptureExif,
     fileId: string,
+    subject: CaptureSubject,
   ): Promise<{ sentence: string; source: CaptureContext['source'] } | null> {
-    // Rung 1: the photo's own coordinates.
+    // Rung 1: the file's own coordinates.
     if (exif.latitude != null && exif.longitude != null) {
       const name = await this.placeNameFor(context, exif.latitude, exif.longitude, fileId);
 
       if (name != null) {
-        return { sentence: `The photo's GPS places it at ${name}.`, source: 'exif-gps' };
+        return { sentence: `The ${subject}'s GPS places it at ${name}.`, source: 'exif-gps' };
       }
     }
 

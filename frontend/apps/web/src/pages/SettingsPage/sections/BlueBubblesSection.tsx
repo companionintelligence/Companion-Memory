@@ -12,7 +12,7 @@ import {
   Pencil,
 } from '@ci/shadcn/icons';
 
-import { useAuth } from '@/hooks';
+import { useAuth, useCurrentUser } from '@/hooks';
 
 interface BlueBubblesConfigResponse {
   host: string;
@@ -67,6 +67,11 @@ function formatTimestamp(value: string | null): string {
  */
 export function BlueBubblesSection() {
   const [{ authToken }] = useAuth();
+  // The BlueBubbles connection is one configuration for the whole appliance, and "test
+  // connection" makes the appliance dial an arbitrary host. Both are administrator actions on
+  // the server (ApplianceAdminGuard); reading the current settings is not.
+  const { user: currentUser } = useCurrentUser();
+  const isAdmin = currentUser?.isAdmin ?? false;
 
   const [config, setConfig] = useState<BlueBubblesConfigResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -391,27 +396,35 @@ export function BlueBubblesSection() {
               <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
                 <Button
                   type="button"
-                  disabled={!dirty || saving || !hostValid || !portValid}
+                  disabled={!dirty || saving || !hostValid || !portValid || !isAdmin}
                   onClick={() => void handleSave()}
+                  title={isAdmin ? undefined : 'Only an administrator can change this.'}
                 >
                   {saving ? 'Saving…' : 'Save'}
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={testing || !hostValid || !portValid}
+                  disabled={testing || !hostValid || !portValid || !isAdmin}
                   onClick={() => void handleTestConnection()}
+                  title={isAdmin ? undefined : 'Only an administrator can test the connection.'}
                 >
                   {testing ? 'Testing…' : 'Test connection'}
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={syncing || !config?.enabled}
+                  disabled={syncing || !config?.enabled || !isAdmin}
                   onClick={() => void handleSyncNow()}
+                  title={isAdmin ? undefined : 'Only an administrator can start a sync.'}
                 >
                   {syncing ? 'Starting…' : 'Sync now'}
                 </Button>
+                {!isAdmin && (
+                  <span className="text-muted-foreground text-sm">
+                    Changing these settings is reserved for an administrator of this Companion.
+                  </span>
+                )}
                 {saved && <span className="text-sm text-teal-700 dark:text-teal-300">Saved</span>}
               </div>
 

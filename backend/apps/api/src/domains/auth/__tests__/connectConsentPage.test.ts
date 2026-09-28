@@ -31,7 +31,18 @@ describe('renderConnectConsentPage capability disclosure', () => {
     expect(html).not.toContain('Full access');
   });
 
-  it('discloses FULL access for an empty-scope (bulk importer) key', () => {
+  it('names the capture grant in words for a capture-tier key, not as a raw scope id', () => {
+    const html = render(['capture']);
+    expect(html).toContain(
+      'Add files and captured activity to your memory, and set file titles and descriptions',
+    );
+    expect(html).not.toContain('Access &quot;capture&quot;');
+    // A capture key opens no memory, intents or MCP route, so none is claimed.
+    expect(html).not.toContain('Read and write your long-term memory');
+    expect(html).not.toContain('Full access');
+  });
+
+  it('discloses FULL access for an empty-scope key (only an app on the reviewed allowlist gets one)', () => {
     const html = render([]);
     expect(html).toContain('Full access to your Companion data');
     // It must not understate the grant as memory-only.
@@ -120,7 +131,7 @@ describe('renderConnectConsentPage HTML escaping', () => {
 
   it('escapes an unrecognized scope name in the fallback capability line', () => {
     // capabilityLinesForScopes falls back to `Access "${scope}"` for any scope
-    // outside the known set (memory/intents/mcp) — that interpolation must be
+    // outside the known set (memory/intents/mcp/capture) — that interpolation must be
     // escaped like every other rendered field.
     const html = renderWith({ scopes: [RAW] });
 

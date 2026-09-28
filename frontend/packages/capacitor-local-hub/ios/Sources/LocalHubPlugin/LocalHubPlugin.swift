@@ -1,3 +1,4 @@
+import AuthenticationServices
 import Capacitor
 import Foundation
 import UIKit
@@ -29,6 +30,7 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "secureSet", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "secureRemove", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openUrl", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "startAuthSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getCurrentLocation", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getLocationAuthorization", returnType: CAPPluginReturnPromise),
@@ -40,6 +42,10 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     /// Credential namespace only. The outbox database key lives in its own namespace and is
     /// never reachable from JS -- nothing in the WebView has any business holding it.
     private let secureStore = CompanionSecureStore.credentials()
+
+    /// Kept alive until the sheet finishes. UIKit drops an `ASWebAuthenticationSession`
+    /// that nothing retains, and the completion handler never runs.
+    private var authSession: ASWebAuthenticationSession?
 
     /// Capacitor calls `load()` on the main thread at plugin-registration time, before any JS
     /// can reach `start()`. Warming GCDWebServer here means the class initializer -- which
@@ -138,10 +144,9 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    /// Opens a URL in the system browser (Safari), not SFSafariViewController.
-    /// Capacitor Browser presents in-app Safari from the bridge VC, which never
-    /// appears under our UIScene `SceneDelegate`. Portal PKCE needs the real Safari
-    /// so `companion://auth/callback` can bounce back into the app.
+    /// Opens a URL in the system browser (Safari). Not for sign-in: Portal OIDC uses
+    /// `startAuthSession`, which stays inside the app. This remains for links that
+    /// are not an authentication round-trip, such as iOS Settings.
     @objc func openUrl(_ call: CAPPluginCall) {
         guard let urlString = call.getString("url"), let url = URL(string: urlString) else {
             call.reject("A valid 'url' is required")
@@ -154,6 +159,63 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
                 } else {
                     call.reject("Could not open URL in Safari")
                 }
+            }
+        }
+    }
+
+    /// In-app Safari authentication sheet. `SFSafariViewController` swallows `companion://`
+    /// and never reaches `SceneDelegate`, so sign-in cannot finish. This session returns
+    /// the callback URL to the app while it stays in the foreground, then forwards it
+    /// through `ApplicationDelegateProxy` the same way `SceneDelegate` does, so
+    /// `appUrlOpen` and `getLaunchUrl` still see `companion://oidc/callback` and
+    /// `companion://auth/callback`.
+    @objc func startAuthSession(_ call: CAPPluginCall) {
+        guard let urlString = call.getString("url"),
+              let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http" else {
+            call.reject("A valid http(s) 'url' is required")
+            return
+        }
+        let callbackScheme = call.getString("callbackScheme")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let schemeToUse = (callbackScheme?.isEmpty == false) ? callbackScheme! : "companion"
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                call.reject("Sign-in sheet is unavailable")
+                return
+            }
+
+            self.authSession?.cancel()
+
+            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: schemeToUse) { [weak self] callbackURL, error in
+                self?.authSession = nil
+
+                if let callbackURL {
+                    _ = ApplicationDelegateProxy.shared.application(
+                        UIApplication.shared,
+                        open: callbackURL,
+                        options: [:]
+                    )
+                    call.resolve()
+                    return
+                }
+
+                if let authError = error as? ASWebAuthenticationSessionError, authError.code == .canceledLogin {
+                    call.reject("Sign-in cancelled", "CANCELLED")
+                    return
+                }
+
+                call.reject(error?.localizedDescription ?? "Sign-in failed")
+            }
+
+            session.presentationContextProvider = self
+            session.prefersEphemeralWebBrowserSession = false
+            self.authSession = session
+
+            if !session.start() {
+                self.authSession = nil
+                call.reject("Could not present the sign-in sheet")
             }
         }
     }
@@ -201,5 +263,25 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve(["status": status])
             }
         }
+    }
+}
+
+extension LocalHubPlugin: ASWebAuthenticationPresentationContextProviding {
+    /// The app's window lives on `SceneDelegate`, not `AppDelegate`. A missing anchor
+    /// is why an in-app sheet never appears under the UIScene lifecycle.
+    public func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+
+        if let scene {
+            if let key = scene.windows.first(where: \.isKeyWindow) {
+                return key
+            }
+            if let any = scene.windows.first {
+                return any
+            }
+        }
+
+        return ASPresentationAnchor()
     }
 }

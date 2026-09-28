@@ -6,6 +6,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import { PersonalizationService } from '@ci/domains/personalization/services/PersonalizationService';
+import type { TrustDecision } from '@ci/tool-core';
 
 import type { IntentDefinition, ToolInvocationContext, ToolResult } from '../core/types';
 import { PendingActionEntity, type PendingAction } from '../entities/PendingActionEntity';
@@ -15,14 +16,102 @@ import {
   TERMINAL_PENDING_ACTION_STATUSES,
   type PendingActionStatus,
 } from '../pendingActionStatus';
+import { removesData } from '../policy';
 import { needsConfirmation, resolveToolGate, type ToolGateRuling } from '../policy/toolGate';
 
 /**
- * The feature flag, shaped like `ask` and `smart.rotation`: the whole gate is
- * dark until it is turned on, and while it is off `evaluate` is provably
- * today's behaviour (see the flag branch there).
+ * The feature flag, shaped like `ask` and `smart.rotation` — but ON by default
+ * since 2026-09-25. It shipped dark while the queue had no UI; the Approvals
+ * page has one now, and with the flag off the owner's own chat ran every delete
+ * and every send unattended, which made a planted email one tool call from
+ * exfiltration (see {@link trustForToolCall}). Off is now the kill switch, and
+ * while it is off `evaluate` is provably the pre-gate behaviour (see the flag
+ * branch there).
  */
 export const PENDING_ACTIONS_FEATURE = 'tools.pendingActions' as const;
+
+/**
+ * The dial's mode, named through the service this file already depends on:
+ * importing it from personalization's barrel closes a dependency cycle
+ * (personalization → llm → tools → here), and its `types.ts` is that domain's
+ * internal.
+ */
+type TrustMode = Awaited<ReturnType<PersonalizationService['getProfile']>>['trustMode'];
+
+/**
+ * The owner's trust dial, read DIRECTLY for a tool call rather than through
+ * `PersonalizationService.decide`.
+ *
+ * `decide` grades inferences: it takes a confidence and compares it with the
+ * mode's auto-promote threshold. A tool call is not an inference — the model
+ * emitted this exact intent, so its "confidence" is 1 — and 1 clears every
+ * threshold, so routing a tool call through `decide` meant `balanced` (the
+ * default dial) answered `auto` and the gate never queued anything for the
+ * owner. That was the hole: the chat model reads mail, messages and web pages
+ * somebody else wrote, and a model steered by one of them into `messaging.send`
+ * or `memory.forget` met no confirmation at all.
+ *
+ * So the mapping is the mode's own rule, stated for actions rather than for
+ * guesses:
+ *
+ * - `hands_off` — the owner explicitly choosing to be asked nothing — runs
+ *   every flagged intent unattended.
+ * - `balanced` (the default) asks before anything that removes data or acts
+ *   outside the appliance, and runs an external READ — listing the owner's
+ *   own chats, looking a title up on a streaming service — unattended. A read
+ *   changes nothing and sends nothing as the owner, and a read queued behind
+ *   a card is a feature that stops working rather than one that asks first:
+ *   the approved run's result lands on the pending-action row, never back in
+ *   the chat that wanted it.
+ * - `cautious` asks before all of it, reads included.
+ *
+ * "Read" is the intent's own label: `access: 'read'` and not
+ * {@link removesData}. A tool from a connected MCP server is labelled
+ * `access: 'write', destructive: true` whatever it does (`McpToolProvider`
+ * cannot know, and an unknown external tool is exactly what a planted email
+ * would reach for), so under `balanced` every one of those asks. The Autonomy
+ * settings and onboarding copy (`TrustDialStep.TRUST_OPTIONS`) name each of
+ * these; change them together.
+ *
+ * This is consulted only for intents {@link needsConfirmation} already flags,
+ * so an on-appliance read or write never reaches it.
+ */
+export function trustForToolCall(trustMode: TrustMode, privacy: IntentDefinition['privacy']): TrustDecision {
+  if (trustMode === 'hands_off') {
+    return 'auto';
+  }
+
+  if (trustMode === 'balanced' && privacy.access === 'read' && !removesData(privacy)) {
+    return 'auto';
+  }
+
+  return 'review';
+}
+
+/**
+ * The input a proposal is matched on, in one canonical form: a JSON round-trip
+ * (what the `jsonb` column stores — `undefined` members gone) with object keys
+ * sorted (`jsonb` does not keep the order the model wrote them in).
+ */
+function canonicalInput(input: unknown): string {
+  const sortKeys = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+      return value.map(sortKeys);
+    }
+
+    if (value === null || typeof value !== 'object') {
+      return value;
+    }
+
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, sortKeys((value as Record<string, unknown>)[key])]),
+    );
+  };
+
+  return JSON.stringify(sortKeys(JSON.parse(JSON.stringify(input ?? {}))));
+}
 
 /**
  * How long an unanswered proposal stays answerable.
@@ -60,6 +149,14 @@ export interface SweepOutcome {
  */
 @Injectable()
 export class PendingActionService {
+  /**
+   * Proposals being written right now, by match key (see {@link propose}). A
+   * chat round's tool calls run concurrently (`OllamaService.handleToolCalls`),
+   * so two identical calls in one model message would both miss the lookup
+   * for an open card and both insert one.
+   */
+  private readonly proposing = new Map<string, Promise<PendingAction>>();
+
   constructor(
     @InjectRepository(PendingActionEntity)
     private readonly repository: Repository<PendingActionEntity>,
@@ -101,7 +198,7 @@ export class PendingActionService {
     }
 
     if (!(await this.features.isFeatureEnabled(PENDING_ACTIONS_FEATURE))) {
-      // Flag off is today's behaviour, exactly: appliance tier, no trust dial.
+      // Flag off is the pre-gate behaviour, exactly: appliance tier, no trust dial.
       // The tier is pinned rather than read from the context on purpose — a
       // `?tier=local` caller must not be able to reach a queue branch that this
       // appliance has switched off.
@@ -120,23 +217,12 @@ export class PendingActionService {
     const tier = context.tier ?? 'appliance';
 
     // The dial is consulted ONLY for the intents that could need confirming,
-    // and only when there is an owner to consult it for. Every ordinary read or
-    // write skips it entirely, so turning the flag on cannot slow or change
-    // them.
+    // and only when there is an owner to consult it for. Every on-appliance
+    // read or write skips it entirely, so the gate cannot slow or change them.
+    // The profile read is cached per user inside PersonalizationService.
     const trust =
       needsConfirmation(schema) && context.userId && context.principal !== 'managed-app'
-        ? await this.personalization.decideAction(context.userId, {
-            // `confidence: 1` is the honest value, not a way to force `auto`.
-            // The dial grades INFERENCES — how sure the appliance is that a
-            // guess it made is right. A tool call is not a guess: the model
-            // emitted this exact intent in response to the user. What varies by
-            // trust mode is therefore not the confidence but the mode's own
-            // rule, and `cautious` is the mode whose rule is "an action with
-            // user input gets reviewed".
-            kind: 'agent_write',
-            confidence: 1,
-            hasUserInput: true,
-          })
+        ? trustForToolCall((await this.personalization.getProfile(context.userId)).trustMode, schema.privacy)
         : null;
 
     return resolveToolGate(schema, { tier, capability, trust, principal: context.principal });
@@ -145,6 +231,16 @@ export class PendingActionService {
   /**
    * Park a queued intent for the owner to answer. Returns the row so the caller
    * can name it in the `TOOL_QUEUED` result.
+   *
+   * Idempotent for an identical OPEN proposal: the same user, intent, tool,
+   * asking app and input, still `proposed` and not yet expired, is handed back
+   * rather than joined by a second row. A model that reads `TOOL_QUEUED` as a
+   * failure and retries — the chat loop gives it a second round to do it in,
+   * and the harness's dispatch packet has to forbid it outright — would
+   * otherwise put two identical sends on the Approvals page, where approving
+   * both sends twice and approving one leaves no way to tell which it was.
+   * Anything that differs, the input above all, is a different question and
+   * gets its own card.
    *
    * `userId` is required by the table (it is the FK to the person whose
    * confirmation is being asked for), which is why `executeTool` refuses rather
@@ -158,6 +254,68 @@ export class PendingActionService {
     ruling: ToolGateRuling,
     now: Date = new Date(),
   ): Promise<PendingAction> {
+    // Only meaningful for a managed app; the owner proposing their own action
+    // is not a third party the card needs to name. Part of the match: the
+    // confirmed run replays with the asking app as its principal, so an app's
+    // card and the owner's are not the same card.
+    const principalName = context.principal === 'managed-app' ? (context.principalName ?? null) : null;
+    const inputKey = canonicalInput(input);
+    const key = JSON.stringify([context.userId, schema.name, toolName, principalName, inputKey]);
+
+    const inFlight = this.proposing.get(key);
+
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const proposal = this.openOrCreate(schema, toolName, context, input, ruling, principalName, inputKey, now);
+
+    this.proposing.set(key, proposal);
+
+    try {
+      return await proposal;
+    } finally {
+      this.proposing.delete(key);
+    }
+  }
+
+  private async openOrCreate(
+    schema: IntentDefinition,
+    toolName: string,
+    context: ToolInvocationContext & { userId: string },
+    input: unknown,
+    ruling: ToolGateRuling,
+    principalName: string | null,
+    inputKey: string,
+    now: Date,
+  ): Promise<PendingAction> {
+    const candidates = await this.repository.find({
+      where: { userId: context.userId, intent: schema.name, tool: toolName, status: 'proposed' },
+      order: { createdAt: 'DESC' },
+      take: 100,
+    });
+
+    // Expiry is checked here rather than in the query: a NULL `expires_at` is a
+    // deadline-free proposal (still confirmable — see the confirm path), and a
+    // `MoreThan(now)` would silently exclude it.
+    const open = candidates.find(
+      (row) =>
+        (row.expiresAt == null || row.expiresAt.getTime() > now.getTime()) &&
+        (row.principalName ?? null) === principalName &&
+        canonicalInput(row.input) === inputKey,
+    );
+
+    if (open) {
+      this.logger.log(`Intent already awaiting confirmation, not queueing it twice: ${schema.name}`, {
+        pendingActionId: open.id,
+        intent: schema.name,
+        tool: toolName,
+        userId: context.userId,
+      });
+
+      return open;
+    }
+
     const row = this.repository.create({
       id: uuidv7(),
       userId: context.userId,
@@ -167,9 +325,7 @@ export class PendingActionService {
       reason: ruling.reason,
       origin: context.tier ?? 'appliance',
       actor: context.capability,
-      // Only meaningful for a managed app; the owner proposing their own action
-      // is not a third party the card needs to name.
-      principalName: context.principal === 'managed-app' ? (context.principalName ?? null) : null,
+      principalName,
       status: 'proposed',
       expiresAt: new Date(now.getTime() + DEFAULT_PENDING_ACTION_TTL_HOURS * 60 * 60 * 1000),
       resolvedAt: null,

@@ -86,9 +86,18 @@ export interface LocalHubPlugin {
 
   /**
    * Opens `url` in the system browser (Safari / Chrome), not an in-app webview.
-   * Used for Portal PKCE so the custom-scheme redirect can bounce back into the app.
+   * Sign-in uses {@link LocalHubPlugin.startAuthSession} instead, so the Portal
+   * page stays inside the app.
    */
   openUrl(options: { url: string }): Promise<void>;
+
+  /**
+   * iOS only. Presents an in-app Safari authentication sheet and resolves when it
+   * finishes. The `companion://` callback is forwarded into the app; it does not
+   * open Safari. Rejects with code `CANCELLED` when the user dismisses the sheet.
+   * Android and web reject as unavailable — callers there use `openUrl`.
+   */
+  startAuthSession(options: { url: string; callbackScheme?: string }): Promise<void>;
 
   /**
    * iOS only. One high-accuracy fix for placing a pin — does not write the

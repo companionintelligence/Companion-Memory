@@ -266,6 +266,41 @@ describe('ContentLibraryPage', () => {
     expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
   });
 
+  it('lists every value the account carries when a facet picker opens', async () => {
+    renderWithProviders(<ContentLibraryPage />, {
+      mocks: [firstPage(), facets({ types: ['image', 'post', 'video'] })],
+    });
+
+    expect(await screen.findByText('Holiday photo')).toBeInTheDocument();
+
+    // Radix's DropdownMenuTrigger opens on pointerdown, not click.
+    fireEvent.pointerDown(await screen.findByRole('button', { name: /^Content type: all/ }), { button: 0 });
+
+    const items = await screen.findAllByRole('menuitemcheckbox');
+    expect(items.map((item) => item.textContent)).toEqual(['image', 'post', 'video']);
+  });
+
+  it('says the facets could not load, not that there are none, when their query fails', async () => {
+    // Live 2026-09-22: Postgres out of /dev/shm failed contentFacets on every
+    // load, and both pickers read "No content types yet" over a 132k-row
+    // library. The picker must not turn a failed query into a claim about
+    // the account.
+    renderWithProviders(<ContentLibraryPage />, {
+      mocks: [
+        firstPage(),
+        { request: { query: GET_CONTENT_FACETS, variables: {} }, error: new Error('db down') },
+      ],
+    });
+
+    expect(await screen.findByText('Holiday photo')).toBeInTheDocument();
+
+    fireEvent.pointerDown(await screen.findByRole('button', { name: /^Content type: all/ }), { button: 0 });
+
+    expect(await screen.findByText("Couldn't load content types")).toBeInTheDocument();
+    expect(screen.queryByText('No content types yet')).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitemcheckbox')).not.toBeInTheDocument();
+  });
+
   it('shows the shared EmptyState when the library is genuinely empty', async () => {
     renderWithProviders(<ContentLibraryPage />, {
       mocks: [

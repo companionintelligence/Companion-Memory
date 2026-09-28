@@ -79,7 +79,7 @@ describe('ApiKeyGuard.canActivate — scope enforcement gated on strategy succes
   it('DENIES a scope-limited key missing a route-required scope once the strategy authenticates', async () => {
     spyOnMixinCanActivate().mockResolvedValue(true);
     const guard = new ApiKeyGuard(makeReflector(['memory']));
-    const req = { headers: {}, apiKeyScopes: ['other'] };
+    const req = { headers: {}, method: 'GET', apiKeyScopes: ['other'] };
 
     await expect(guard.canActivate(httpContext(req))).rejects.toThrow(/scope/i);
   });
@@ -87,7 +87,7 @@ describe('ApiKeyGuard.canActivate — scope enforcement gated on strategy succes
   it('allows a scope-limited key that carries the required scope', async () => {
     spyOnMixinCanActivate().mockResolvedValue(true);
     const guard = new ApiKeyGuard(makeReflector(['memory']));
-    const req = { headers: {}, apiKeyScopes: ['memory'] };
+    const req = { headers: {}, method: 'GET', apiKeyScopes: ['memory'] };
 
     await expect(guard.canActivate(httpContext(req))).resolves.toBe(true);
   });
@@ -97,7 +97,7 @@ describe('ApiKeyGuard.canActivate — scope enforcement gated on strategy succes
     const guard = new ApiKeyGuard(makeReflector(['memory']));
     // If enforcement ran regardless, this would reject with ForbiddenException
     // rather than resolving to false.
-    const req = { headers: {}, apiKeyScopes: ['other'] };
+    const req = { headers: {}, method: 'GET', apiKeyScopes: ['other'] };
 
     await expect(guard.canActivate(httpContext(req))).resolves.toBe(false);
   });
@@ -107,7 +107,7 @@ describe('ApiKeyGuard.canActivate — scope enforcement gated on strategy succes
     const guard = new ApiKeyGuard(makeReflector(['memory']));
     // apiKeyScopes: [] — an empty-scope (legacy/full-access) key, unaffected by
     // deny-by-default scoping even on a route that requires one.
-    const req = { headers: {}, apiKeyScopes: [] };
+    const req = { headers: {}, method: 'GET', apiKeyScopes: [] };
 
     await expect(guard.canActivate(httpContext(req))).resolves.toBe(true);
   });

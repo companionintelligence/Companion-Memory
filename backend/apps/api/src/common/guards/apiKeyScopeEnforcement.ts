@@ -1,12 +1,15 @@
 import { type ExecutionContext, ForbiddenException } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
+import { GqlExecutionContext } from '@nestjs/graphql';
 import type { Request } from 'express';
 
 import {
   type ApiKeyCapability,
   FULL_CAPABILITY,
+  READ_CAPABILITY,
   REQUIRE_CAPABILITY_KEY,
   REQUIRE_SCOPES_KEY,
+  WRITE_CAPABILITY,
   capabilitySatisfies,
   coerceApiKeyCapability,
 } from '@ci/common/decorators';
@@ -133,18 +136,44 @@ export function enforceApiKeyScopes(
 }
 
 /**
+ * What an operation requires when its route declares nothing: the shape of the
+ * request decides. A GraphQL mutation or a non-GET HTTP verb changes state, so
+ * it needs `write`; a query or a GET needs `read`. `@RequireCapability` on the
+ * handler or class overrides this in either direction — up to `full` for the
+ * three operator actions, or down to `read` for a POST that only computes
+ * (`/llm/generate`, `/import/recognize`, `/model-routing/plan`, MCP).
+ *
+ * HEAD and OPTIONS are reads; everything else that is not GET is a write.
+ */
+export function capabilityImpliedByShape(
+  context: ExecutionContext,
+  request: ApiKeyScopedRequest,
+): ApiKeyCapability {
+  if (context.getType<string>() === 'graphql') {
+    const operation = GqlExecutionContext.create(context).getInfo<{ operation?: { operation?: string } }>()
+      ?.operation?.operation;
+
+    return operation === 'query' ? READ_CAPABILITY : WRITE_CAPABILITY;
+  }
+
+  const method = (request.method ?? '').toUpperCase();
+
+  return method === 'GET' || method === 'HEAD' || method === 'OPTIONS' ? READ_CAPABILITY : WRITE_CAPABILITY;
+}
+
+/**
  * Capability enforcement for api-key principals — the second axis, run alongside
  * {@link enforceApiKeyScopes} from the same guards.
  *
  * Scopes decide WHICH routes a key may reach; capability decides what it may do when it gets
- * there. Without this the two axes would only meet on the MCP tool surface, and a read-only key
- * carrying `memory` could still `POST /api/memory/write` — a hole the settings UI has already
- * promised is closed.
+ * there. Every operation a key can reach is vetted: a route that declares `@RequireCapability`
+ * requires that level, and one that declares nothing requires the level its shape implies
+ * ({@link capabilityImpliedByShape} — mutations and non-GET verbs write, queries and GETs read).
  *
- * Unlike scopes this is opt-in per route ({@link RequireCapability}), because it applies to
- * empty-scope keys too and those reach the entire API: a deny-by-default rule here would 403 a
- * legacy key on every un-annotated route. That is not a gap for a scope-limited key, which cannot
- * reach an un-annotated route at all.
+ * This used to be opt-in per route, and 334 GraphQL operations plus 74 REST writes declared
+ * nothing, so a key issued as "read-only" could run every mutation. The shape rule closes all of
+ * them at once and stays closed for routes added later; the decorator remains the way to say a
+ * route is an exception, in either direction.
  */
 export function enforceApiKeyCapability(
   reflector: Reflector,
@@ -156,14 +185,11 @@ export function enforceApiKeyCapability(
     return;
   }
 
-  const required = reflector.getAllAndOverride<ApiKeyCapability | undefined>(REQUIRE_CAPABILITY_KEY, [
+  const declared = reflector.getAllAndOverride<ApiKeyCapability | undefined>(REQUIRE_CAPABILITY_KEY, [
     context.getHandler(),
     context.getClass(),
   ]);
-
-  if (!required) {
-    return;
-  }
+  const required = declared ?? capabilityImpliedByShape(context, request);
 
   const capability = apiKeyCapabilityOf(request);
 

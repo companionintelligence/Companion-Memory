@@ -16,7 +16,8 @@ export const REQUIRE_SCOPES_KEY = 'require_scopes';
  * - `mcp` — the Model Context Protocol endpoint (`/mcp`), used by CI-Hermes.
  * - `capture` — the observation write plane: `/v1/*` bulk ingest and
  *   `POST /files/upload`. For capture agents (Companion Capture / CI-Applet,
- *   CI-Browser-Extension) that stream observations in and read nothing back.
+ *   CI-Browser-Extension, Companion Scan) that stream observations in and read
+ *   nothing back.
  *   Deliberately does NOT open GraphQL, `/memory/*` or `/maintenance`: a
  *   screenshot daemon should be able to write what it saw and nothing else.
  *   Before this existed the only key such an agent could use was an

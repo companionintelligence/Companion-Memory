@@ -519,12 +519,26 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
         <span className="hidden sm:inline">What</span>
       </div>
 
-      {/* `basis-0` so the strip claims no width of its own: it takes what the
-          line leaves and scrolls the categories inside it. The filter controls
-          used to sit INSIDE this `w-max` strip, which put them past the right
-          edge on a narrow window with the scrollbar hidden — the row's own
-          wrapping never got a chance. They are a sibling now (below). */}
-      <div className="scrollbar-none min-w-0 flex-1 basis-0 overflow-x-auto overscroll-x-contain">
+      {/* Below `xl` the strip takes the whole line (`basis-0`, grows) and scrolls
+          the categories inside it if it must; the filter controls sit on a
+          line of their own and wrap there. From `xl` up the strip and the
+          controls share the line: each has a floor (16rem here, 24rem there),
+          the room beyond both floors is split between them, and the strip
+          never grows past its content (`max-w-max`) so the excess goes to the
+          controls. Measured 2026-09-22 at the controls' natural width of
+          ~1,280 px: inline from `xl` gives a 99 px bar at 1,400 px, while
+          inline from `md` gave a 233 px bar at 900 px with the strip cut to
+          five buttons — the controls' own line is the shorter layout below
+          about 1,300 px.
+
+          History: the controls used to sit INSIDE this `w-max` strip, which put
+          them past the right edge on a narrow window with the scrollbar hidden.
+          Then they sat beside it from `md` at their NATURAL width
+          (`md:basis-auto`): their own wrapping never engaged, at 1,400 px the
+          strip was left a 57 px sliver — one What button and part of the next,
+          scrolling behind the controls — and below ~1,350 px the controls
+          dropped to a second line and ran off the right edge. */}
+      <div className="scrollbar-none min-w-0 flex-1 basis-0 overflow-x-auto overscroll-x-contain xl:min-w-[16rem] xl:max-w-max">
         <div className="flex w-max items-center gap-1 md:gap-1.5">
           {categories.map((category) => {
             if (category.kind === 'standalone') {
@@ -576,15 +590,16 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
       {/* Outside the scrolling strip so the create action stays reachable when
           the What categories overflow. */}
       {actions && (
-        <div className="order-1 ml-auto flex shrink-0 items-center gap-2 md:order-2">{actions}</div>
+        <div className="order-1 ml-auto flex shrink-0 items-center gap-2 xl:order-2">{actions}</div>
       )}
 
-      {/* The When / How / Who / Where / sort controls. On a narrow window they
-          take a line of their own (`basis-full`, ordered after the create
-          action) and wrap within it; from `md` up they sit inline between the
-          strip and the create action, always on-screen, and the strip gives up
-          the room. */}
-      <div className="order-2 min-w-0 basis-full md:order-1 md:flex-none md:basis-auto">
+      {/* The When / How / Who / Where / sort controls. Below `xl` they take a
+          line of their own (`basis-full`, ordered after the create action) and
+          wrap within it; from `xl` up they sit inline between the strip and
+          the create action with a 24rem floor, share the spare room with the
+          strip, and wrap within their share — never their natural width, which
+          is wider than most windows (see the strip's note above). */}
+      <div className="order-2 min-w-0 basis-full xl:order-1 xl:flex-1 xl:basis-[24rem]">
         <MemoryExplorerFilterControls />
       </div>
     </nav>

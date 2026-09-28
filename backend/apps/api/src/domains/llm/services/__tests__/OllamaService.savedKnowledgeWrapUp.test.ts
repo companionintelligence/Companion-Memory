@@ -1,5 +1,7 @@
 import type { Message as OllamaMessage } from 'ollama';
 
+import { guardToolResultRound } from '@ci/common/prompt/untrustedBlock';
+
 import { savedKnowledgeWrapUp } from '../OllamaService';
 
 /**
@@ -109,6 +111,16 @@ describe('savedKnowledgeWrapUp', () => {
     const messages: OllamaMessage[] = [assistantToolCall(), toolMsg('not json at all')];
 
     expect(savedKnowledgeWrapUp(messages)).toBeNull();
+  });
+
+  it('still reads a save summary from the guarded first result of a round', () => {
+    // `handleToolCalls` prefixes the round's first tool message with the
+    // untrusted-content guard; the wrap-up must see through it or every
+    // single-tool "remember this" turn would lose its "Saved." reply.
+    const [guarded] = guardToolResultRound([JSON.stringify({ createdNodes: 1, createdRelationships: 0 })]);
+    const messages: OllamaMessage[] = [assistantToolCall(), toolMsg(guarded)];
+
+    expect(savedKnowledgeWrapUp(messages)).toBe('Saved.');
   });
 
   it('ignores tool messages with empty content', () => {

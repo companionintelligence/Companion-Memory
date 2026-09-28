@@ -85,6 +85,9 @@ function capabilityLinesForScopes(scopes: string[]): string[] {
     memory: 'Read and write your long-term memory',
     intents: 'Read your intent catalog',
     mcp: 'Use your memory tools (MCP)',
+    // Capture routes are POST /v1/* bulk ingest, POST /files/upload and
+    // PATCH /files/:id (title/description): writes only, no read route carries it.
+    capture: 'Add files and captured activity to your memory, and set file titles and descriptions',
   };
 
   return scopes.map((scope) => KNOWN[scope] ?? `Access "${scope}"`);

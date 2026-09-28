@@ -75,7 +75,10 @@ export function AutonomySection() {
         <h2 className="text-xl font-semibold">Autonomy</h2>
         <p className="text-sm text-muted-foreground mt-1">
           Control how much Companion does on its own — inbox triage into tasks, calendar placement, graph
-          growth, inferred answers, and feed actions all respect this setting.
+          growth, inferred answers, and feed actions all respect this setting. So does chat: deleting data,
+          importing the inbox, sending a message, completing a task, and every tool from a connected MCP
+          server wait for your approval unless you choose Hands-off. Reading from an outside service — your
+          messages, streaming availability — asks first only on Cautious.
         </p>
       </div>
 

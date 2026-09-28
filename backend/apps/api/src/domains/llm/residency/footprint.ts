@@ -245,6 +245,40 @@ export function estimateFootprintBytes({
   return estimate;
 }
 
+/**
+ * A card-level sighting the planner may trust, or the same observation with
+ * the card figure struck.
+ *
+ * The card figure is "everything the counter saw beyond the other residents",
+ * and the counter cannot tell a runner's baseline from what it grew into. A
+ * runner that leaks (measured 2026-09-22: ~1.9 MiB per request on ROCm, no
+ * plateau) is still a resident, so the sighting only ever gets bigger — until
+ * it says the model needs more than the card can give at the window it is
+ * visibly running at. That is a contradiction, not a measurement: the model
+ * IS running there. With the figure kept, every rung of the ladder "fails to
+ * fit" and the planner asks for 4k the moment the model is not resident, while
+ * every caller that never asked the planner loads it at 32k — the reload loop
+ * of 2026-09-22 (29 loads in 3.5 min). `capacityBytes` is what the planner
+ * would let the model have on its own: the card less the embedder's reserve
+ * and the safety margin.
+ */
+export function trustworthyObservation(
+  observation: ResidencyObservation | null | undefined,
+  capacityBytes: number,
+): ResidencyObservation | null {
+  if (observation == null) {
+    return null;
+  }
+
+  if (observation.cardBytes != null && observation.cardBytes > capacityBytes) {
+    const { cardBytes: _cardBytes, totalTokens: _totalTokens, ...rest } = observation;
+
+    return rest;
+  }
+
+  return observation;
+}
+
 /** Ollama lists `nomic-embed-text` as `nomic-embed-text:latest`; config says the former. */
 export function canonicalModelId(model: string): string {
   const trimmed = model.trim();
@@ -307,7 +341,12 @@ export type UtilityPlanKind = 'resident' | 'load' | 'routed';
 /** What a caller passes to `OllamaService.chat` in place of a bare model id. */
 export interface UtilityModelChoice {
   model: string;
-  /** Absent leaves Ollama's default alone (only when nothing better is known). */
+  /**
+   * Absent means the plan named none (a routed call whose chat model is not
+   * resident). `OllamaService.chat` then fills it from the chat-context plan,
+   * so no call is left to Ollama's own default — a second, silent planner that
+   * disagreed with this one on every cold start.
+   */
   numCtx?: number;
   /**
    * How the choice was reached. `'load'` means this call is the one that asks
@@ -427,6 +466,7 @@ export function planChatContext(inputs: ChatContextInputs): ChatContextPlan {
   }
 
   const headroomBytes = gpu.totalBytes - embedReserveBytes - safetyMarginBytes;
+  const observation = trustworthyObservation(candidate.observation, headroomBytes);
   const trainingMax = candidate.geometry.trainingContextLength;
   const rungs = ladder.filter((ctx) => trainingMax == null || ctx <= trainingMax);
   const candidates = rungs.length > 0 ? rungs : trainingMax != null ? [trainingMax] : [];
@@ -438,7 +478,7 @@ export function planChatContext(inputs: ChatContextInputs): ChatContextPlan {
       weightBytes: candidate.weightBytes,
       geometry: candidate.geometry,
       numCtx: numCtx * slots,
-      observation: candidate.observation,
+      observation,
     });
     if (footprintBytes <= headroomBytes) {
       return { kind: 'planned', numCtx, footprintBytes, headroomBytes };
@@ -489,6 +529,12 @@ export function planUtilityResidency(inputs: PlanInputs): UtilityPlan {
   }
 
   const headroomBytes = gpu.totalBytes - gpu.usedBytes - embedReserveBytes - safetyMarginBytes;
+  // Judged against the card, not the headroom: the sighting is contradicted by what the
+  // whole card can hold, whatever else happens to be resident right now.
+  const observation = trustworthyObservation(
+    candidate.observation,
+    gpu.totalBytes - embedReserveBytes - safetyMarginBytes,
+  );
   const trainingMax = candidate.geometry.trainingContextLength;
   const rungs = ladder.filter((ctx) => trainingMax == null || ctx <= trainingMax);
   // A model whose training window is below the smallest rung still gets one try, at its window.
@@ -502,7 +548,7 @@ export function planUtilityResidency(inputs: PlanInputs): UtilityPlan {
       weightBytes: candidate.weightBytes,
       geometry: candidate.geometry,
       numCtx: numCtx * slots,
-      observation: candidate.observation,
+      observation,
     });
 
     smallestFootprintBytes = footprintBytes;

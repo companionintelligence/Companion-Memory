@@ -112,8 +112,13 @@ export function ContentLibraryPage() {
     fetchPolicy: 'cache-and-network',
     notifyOnNetworkStatusChange: true,
   });
-  const { data: facetData } = useQuery(GET_CONTENT_FACETS);
+  // `error` matters here as much as it does for the page query below: a facet
+  // query that fails leaves `facetData` undefined, and the pickers must not
+  // read that as "this account has no types". Measured live 2026-09-22 —
+  // Postgres out of /dev/shm, every load — they said exactly that.
+  const { data: facetData, error: facetError } = useQuery(GET_CONTENT_FACETS);
   const facets = facetData?.contentFacets;
+  const facetsUnavailable = facetError != null && facets == null;
 
   const clearFilters = useCallback(
     () =>
@@ -188,12 +193,14 @@ export function ContentLibraryPage() {
                 label="Content type"
                 param="types"
                 options={facets?.types ?? []}
+                unavailable={facetsUnavailable}
                 icon={Shapes}
               />
               <ContentFacetFilter
                 label="File type"
                 param="mimetypes"
                 options={facets?.mimetypes ?? []}
+                unavailable={facetsUnavailable}
                 icon={FileType}
               />
               <ConnectorFilter modal={false} label="How" includeTypes={['content']} />

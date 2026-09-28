@@ -157,6 +157,11 @@ services:
     image: ci/gateway
     ports:
       - 8642:8642
+    environment:
+      # Reverse proxies allowed to vouch for the client address (see
+      # infrastructure/gateway/entrypoint.sh). Leave empty on an install whose
+      # clients reach this port directly.
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
     networks:
       - ci
     depends_on:

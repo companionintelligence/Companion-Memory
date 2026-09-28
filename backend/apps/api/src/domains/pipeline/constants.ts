@@ -121,6 +121,18 @@ export const STAGE_IDS = {
   ENRICH_FILE_PREVIEW: 'enrich.file_preview',
 
   /**
+   * Produce the browser-playable H.264 `PLAYBACK` variant for `ci.files`
+   * video originals whose codec browsers cannot be relied on to decode —
+   * HEVC from every phone since ~2023 above all (Chrome on Linux fails it
+   * outright; Windows and Chromebooks need a paid codec; only Safari and
+   * Firefox+VA-API are dependable). The upload path requests one as soon as
+   * the preview exists (`VideoPlaybackGenerationListener`); this sweep is the
+   * backfill for the library that predates it and the net under the upload
+   * path. Same generator (`VideoPlaybackService`), driven by the ledger.
+   */
+  ENRICH_VIDEO_PLAYBACK: 'enrich.video_playback',
+
+  /**
    * Dense-embed `ci.content` into `ci_search.embeddings`. The conversion that
    * justifies the whole rebuild, because its version is not a hand-chosen
    * integer: it is a function of `(embedding model, pgvector width)`, so

@@ -47,7 +47,6 @@ import { ExternalIdKindIntegrityService } from './services/ExternalIdKindIntegri
 import { GraphEnrichmentReviewService } from './services/GraphEnrichmentReviewService';
 import { GraphEnrichmentService } from './services/GraphEnrichmentService';
 import { HealSelfCollationService } from './services/HealSelfCollationService';
-import { IndexDeferralService } from './services/IndexDeferralService';
 import { IngestResetService } from './services/IngestResetService';
 import { LocationEstimateService } from './services/LocationEstimateService';
 import { MaintenanceOrchestratorService } from './services/MaintenanceOrchestratorService';
@@ -100,7 +99,6 @@ import { SummaryBackfillService } from './services/SummaryBackfillService';
   ],
   controllers: [MaintenanceController],
   providers: [
-    IndexDeferralService,
     ExternalIdKindIntegrityService,
     IngestResetService,
     CommunicationLinkBackfillService,
@@ -138,7 +136,6 @@ import { SummaryBackfillService } from './services/SummaryBackfillService';
     DerivationCron,
   ],
   exports: [
-    IndexDeferralService,
     ExternalIdKindIntegrityService,
     CommunicationLinkBackfillService,
     EntityIdentifierBackfillService,

@@ -26,10 +26,13 @@ import { SavedSearchEntity, type SavedSearch } from './entities/SavedSearchEntit
 import { FilePreviewGenerationListener } from './listeners/FilePreviewGenerationListener';
 import { MediaDimensionsBackfillListener } from './listeners/MediaDimensionsBackfillListener';
 import { SeedDefaultSavedSearchesListener } from './listeners/SeedDefaultSavedSearchesListener';
+import { VideoPlaybackGenerationListener } from './listeners/VideoPlaybackGenerationListener';
 import { FilePreviewService } from './services/FilePreviewService';
 import { FileService } from './services/FileService';
 import { MediaDimensionsService } from './services/MediaDimensionsService';
 import { SavedSearchService } from './services/SavedSearchService';
+import { VideoFrameSampleService } from './services/VideoFrameSampleService';
+import { VideoPlaybackService } from './services/VideoPlaybackService';
 import { VipsService } from './services/VipsService';
 
 /**
@@ -42,13 +45,24 @@ import { VipsService } from './services/VipsService';
     SavedSearchService,
     MediaDimensionsService,
     VipsService,
+    VideoFrameSampleService,
     FilePreviewService,
+    VideoPlaybackService,
     FilePreviewGenerationListener,
+    VideoPlaybackGenerationListener,
     MediaDimensionsBackfillListener,
     SeedDefaultSavedSearchesListener,
   ],
   controllers: [FilesController, BulkFilesController],
-  exports: [FileService, SavedSearchService, MediaDimensionsService, VipsService, FilePreviewService],
+  exports: [
+    FileService,
+    SavedSearchService,
+    MediaDimensionsService,
+    VipsService,
+    VideoFrameSampleService,
+    FilePreviewService,
+    VideoPlaybackService,
+  ],
 })
 export class FilesModule {}
 
@@ -57,10 +71,40 @@ export { FilePreviewService } from './services/FilePreviewService';
 export type { PreviewOutcome, PreviewSkipReason } from './services/FilePreviewService';
 export { FilePreviewSweepRequestEvent, FILE_PREVIEW_SWEEP_QUEUE } from './events';
 export type { FilePreviewSweepRequestPayload } from './events';
+export {
+  VideoPlaybackRequestEvent,
+  VIDEO_PLAYBACK_QUEUE,
+  VideoPlaybackSweepRequestEvent,
+  VIDEO_PLAYBACK_SWEEP_QUEUE,
+} from './events';
+export type { VideoPlaybackRequestPayload, VideoPlaybackSweepRequestPayload } from './events';
+export {
+  VideoPlaybackService,
+  BROWSER_SAFE_VIDEO_CODECS,
+  PLAYBACK_MAX_EDGE,
+  ORIGINAL_RESOLUTION,
+  needsPlaybackRendition,
+  playbackFilterChain,
+} from './services/VideoPlaybackService';
+export type { PlaybackOutcome, PlaybackSkipReason, VideoStreamProbe } from './services/VideoPlaybackService';
 export { BulkFilesController, MAX_FILES_PER_BATCH } from './controllers/BulkFilesController';
 export type { BulkFileUploadResult } from './controllers/BulkFilesController';
 export { MediaDimensionsService } from './services/MediaDimensionsService';
 export { VipsDecodeError, VipsService, VipsUnavailableError } from './services/VipsService';
+export {
+  VideoFrameSampleService,
+  frameTimestamps,
+  parseIso6709,
+  parseRecordedAt,
+  MIN_FRAME_SPACING_SECONDS,
+} from './services/VideoFrameSampleService';
+export type {
+  SampleVideoOptions,
+  SampleableFile,
+  VideoCaptureMetadata,
+  VideoFrame,
+  VideoFrameSample,
+} from './services/VideoFrameSampleService';
 export type { ImageProbe, JpegRenderOptions, RenderedJpeg } from './services/VipsService';
 export type { MediaDimensions } from './services/MediaDimensionsService';
 export { MEDIA_DIMENSIONS_QUEUE } from './listeners/MediaDimensionsBackfillListener';

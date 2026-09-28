@@ -1,3 +1,4 @@
+import { AuthSessionCancelledError } from '@ci/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -11,7 +12,7 @@ import {
 } from './oidc';
 import { DEFAULT_PORTAL_URL } from './portal-client';
 
-const openExternalUrl = vi.fn<(url: string) => Promise<void>>(async () => {});
+const openAuthSession = vi.fn<(url: string) => Promise<void>>(async () => {});
 const closeBrowser = vi.fn(async () => {});
 const getLaunchUrl = vi.fn(async (): Promise<string | null> => null);
 let urlHandler: ((url: string) => void) | undefined;
@@ -19,7 +20,7 @@ const unlisten = vi.fn();
 
 vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
-  openExternalUrl: (url: string) => openExternalUrl(url),
+  openAuthSession: (url: string) => openAuthSession(url),
   closeBrowser: () => closeBrowser(),
   getLaunchUrl: () => getLaunchUrl(),
   addAppUrlOpenListener: vi.fn(async (handler: (url: string) => void) => {
@@ -31,7 +32,7 @@ vi.mock('@ci/common', async (importOriginal) => ({
 }));
 
 function openedAuthorizeUrl(): URL {
-  const href = openExternalUrl.mock.calls[0]?.[0];
+  const href = openAuthSession.mock.calls[0]?.[0];
 
   if (typeof href !== 'string') {
     throw new Error('authorize URL was not opened');
@@ -45,7 +46,8 @@ function tokenResponse(body: unknown, status = 200): Response {
 }
 
 beforeEach(() => {
-  openExternalUrl.mockClear();
+  openAuthSession.mockReset();
+  openAuthSession.mockResolvedValue(undefined);
   closeBrowser.mockClear();
   unlisten.mockClear();
   getLaunchUrl.mockReset();
@@ -63,7 +65,7 @@ beforeEach(() => {
 
 async function fireCallback(code: string, stateOverride?: string) {
   await vi.waitFor(() => {
-    expect(openExternalUrl).toHaveBeenCalled();
+    expect(openAuthSession).toHaveBeenCalled();
     expect(urlHandler).toBeTruthy();
   });
   const authorizeUrl = openedAuthorizeUrl();
@@ -138,6 +140,12 @@ describe('loginWithPortalOidc', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('treats a dismissed iOS sheet as a quiet cancel', async () => {
+    openAuthSession.mockRejectedValue(new AuthSessionCancelledError());
+    await expect(loginWithPortalOidc()).rejects.toBeInstanceOf(OidcCancelledError);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('rejects immediately when handed an already-aborted signal', async () => {
     const promise = loginWithPortalOidc(undefined, { signal: AbortSignal.abort() });
     await expect(promise).rejects.toMatchObject({ name: 'OidcCancelledError' });
@@ -171,7 +179,7 @@ describe('resumePendingOidcLogin', () => {
   it('exchanges a cold-start callback using the persisted PKCE verifier', async () => {
     const controller = new AbortController();
     const first = loginWithPortalOidc(undefined, { signal: controller.signal });
-    await vi.waitFor(() => expect(openExternalUrl).toHaveBeenCalled());
+    await vi.waitFor(() => expect(openAuthSession).toHaveBeenCalled());
     const authorizeUrl = openedAuthorizeUrl();
     const state = authorizeUrl.searchParams.get('state') ?? '';
 

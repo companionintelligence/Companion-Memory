@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import type { DataSource, QueryRunner } from 'typeorm';
 
 import type { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 import type { FileService } from '@ci/domains/files';
 import type { UserService } from '@ci/domains/user';
 
@@ -37,6 +38,8 @@ describe('UserDataPortabilityService', () => {
     warn: jest.fn(),
     debug: jest.fn(),
   } as unknown as LoggerService;
+
+  const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
   let service: UserDataPortabilityService;
 
@@ -98,8 +101,8 @@ describe('UserDataPortabilityService', () => {
      */
     it('deletes discovered tables in reverse order, inserts in forward order, then commits once', async () => {
       dataSource.query = jest.fn().mockResolvedValue([
-        { schema: 'ci', table: 'notes', user_column: 'user_id' },
-        { schema: 'ci', table: 'events', user_column: 'user_id' },
+        { schema: 'ci', table: 'notes', user_column: 'user_id', columns: ['id', 'user_id'] },
+        { schema: 'ci', table: 'events', user_column: 'user_id', columns: ['id', 'user_id'] },
       ]);
 
       const calls: string[] = [];
@@ -144,7 +147,9 @@ describe('UserDataPortabilityService', () => {
     it('rolls back and rethrows when an insert fails mid-import, and never commits', async () => {
       dataSource.query = jest
         .fn()
-        .mockResolvedValue([{ schema: 'ci', table: 'notes', user_column: 'user_id' }]);
+        .mockResolvedValue([
+          { schema: 'ci', table: 'notes', user_column: 'user_id', columns: ['id', 'user_id'] },
+        ]);
 
       queryRunner.query = jest.fn((sql: string) => {
         if (sql.startsWith('INSERT')) {
@@ -172,6 +177,293 @@ describe('UserDataPortabilityService', () => {
       expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
       expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
       expect(queryRunner.release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('importArchive — archive keys become SQL identifiers', () => {
+    const discovery = [
+      { schema: 'ci', table: 'notes', user_column: 'user_id', columns: ['id', 'title', 'user_id'] },
+    ];
+
+    const archiveWith = (row: Record<string, unknown>) => ({
+      version: 1 as const,
+      exportedAt: new Date().toISOString(),
+      userId: 'user-1',
+      profile: null,
+      tables: { 'ci.notes': [row] },
+      fileBlobs: [],
+    });
+
+    it('refuses a row naming a column the table does not have, before any INSERT is built', async () => {
+      dataSource.query = jest.fn().mockResolvedValue(discovery);
+      const calls: string[] = [];
+      queryRunner.query = jest.fn(async (sql: string) => {
+        calls.push(sql);
+
+        return undefined;
+      }) as unknown as QueryRunner['query'];
+
+      // The pre-fix code interpolated every archive key as `"${key}"`, so a key
+      // carrying a double quote closed the identifier and the rest of the key
+      // ran as SQL (bound values kept it to one statement, but a data-modifying
+      // CTE is one statement). The allowlist rejects it by name; the quoting
+      // helper would have neutralised the quote even if it had not.
+      const hostile =
+        "title\") WITH w AS (UPDATE ci.users SET role = 'admin' RETURNING 1) SELECT $1, $2, $3 FROM w --";
+
+      await expect(
+        service.importArchive(
+          { userId: 'user-1' } as never,
+          archiveWith({ id: 'n1', [hostile]: 'x', user_id: 'user-1' }),
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(calls.some((sql) => sql.startsWith('INSERT'))).toBe(false);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports schema drift by column name, bounded, without echoing the whole key', async () => {
+      dataSource.query = jest.fn().mockResolvedValue(discovery);
+      queryRunner.query = jest.fn().mockResolvedValue(undefined) as unknown as QueryRunner['query'];
+
+      const longKey = `body_${'x'.repeat(200)}`;
+
+      await expect(
+        service.importArchive(
+          { userId: 'user-1' } as never,
+          archiveWith({ id: 'n1', archived_at: null, [longKey]: 1, user_id: 'user-1' }),
+        ),
+      ).rejects.toThrow(/ci\.notes names column\(s\) that do not exist: "archived_at", "body_x{75}…"/);
+    });
+
+    it('quotes every identifier it does interpolate, so a catalog name with a quote cannot break out', async () => {
+      // Not a name Postgres would ever hand back for this schema — the point is
+      // that the identifier position is safe on its own, independent of the
+      // allowlist that already stops archive keys from reaching it.
+      dataSource.query = jest
+        .fn()
+        .mockResolvedValue([
+          { schema: 'ci', table: 'notes', user_column: 'user_id', columns: ['id', 'odd"name', 'user_id'] },
+        ]);
+      const calls: string[] = [];
+      queryRunner.query = jest.fn(async (sql: string) => {
+        calls.push(sql);
+
+        return undefined;
+      }) as unknown as QueryRunner['query'];
+
+      await service.importArchive(
+        { userId: 'user-1' } as never,
+        archiveWith({ id: 'n1', 'odd"name': 'v', user_id: 'user-1' }),
+      );
+
+      const insert = calls.find((sql) => sql.startsWith('INSERT'));
+      expect(insert).toBe('INSERT INTO "ci"."notes" ("id", "odd""name", "user_id") VALUES ($1, $2, $3)');
+    });
+
+    it('fails closed when discovery reports no column list for a table', async () => {
+      dataSource.query = jest
+        .fn()
+        .mockResolvedValue([{ schema: 'ci', table: 'notes', user_column: 'user_id' }]);
+      const calls: string[] = [];
+      queryRunner.query = jest.fn(async (sql: string) => {
+        calls.push(sql);
+
+        return undefined;
+      }) as unknown as QueryRunner['query'];
+
+      await expect(
+        service.importArchive({ userId: 'user-1' } as never, archiveWith({ id: 'n1', user_id: 'user-1' })),
+      ).rejects.toThrow(BadRequestException);
+      expect(calls.some((sql) => sql.startsWith('INSERT'))).toBe(false);
+    });
+  });
+
+  describe('archive file keys never reach object storage or a files row unchanged', () => {
+    const USER_ID = '11111111-1111-4111-8111-111111111111';
+    const OTHER_USERS_KEY = '22222222-2222-4222-8222-222222222222';
+    const OWNED_KEY = '33333333-3333-4333-8333-333333333333';
+
+    const filesDiscovery = [
+      { schema: 'ci', table: 'files', user_column: 'user_id', columns: ['id', 'bucket', 'key', 'user_id'] },
+    ];
+
+    function fakeRequest(lines: unknown[]): Request {
+      const text = `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`;
+
+      return {
+        setEncoding: () => undefined,
+
+        [Symbol.asyncIterator]: async function* () {
+          yield text;
+        },
+      } as unknown as Request;
+    }
+
+    const manifest = {
+      type: 'manifest',
+      version: 1,
+      format: 'ndjson',
+      exportedAt: new Date().toISOString(),
+      userId: USER_ID,
+      profile: null,
+    };
+
+    const chunkFor = (key: string, bucket = 'somebody-elses-bucket') => ({
+      type: 'file-chunk',
+      id: 'f1',
+      bucket,
+      key,
+      index: 0,
+      total: 1,
+      data: Buffer.from('bytes').toString('base64'),
+    });
+
+    /** Records every INSERT's parameters and answers the owned-keys snapshot. */
+    function recordingRunner(ownedKeys: string[]) {
+      const inserts: Array<{ sql: string; params: unknown[] }> = [];
+
+      queryRunner.query = jest.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('SELECT key FROM ci.files')) {
+          return ownedKeys.map((key) => ({ key }));
+        }
+
+        if (sql.startsWith('INSERT')) {
+          inserts.push({ sql, params: params ?? [] });
+        }
+
+        return undefined;
+      }) as unknown as QueryRunner['query'];
+
+      return inserts;
+    }
+
+    beforeEach(() => {
+      userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+      dataSource.query = jest.fn().mockResolvedValue(filesDiscovery);
+      fileService.putObject = jest.fn().mockResolvedValue(undefined);
+    });
+
+    it('replaces a key this account never owned with a fresh one — and the row and its bytes agree on it, whichever arrives first', async () => {
+      const inserts = recordingRunner([]);
+
+      // Chunk BEFORE row: the export writes rows first, but the import must not
+      // depend on that.
+      const req = fakeRequest([
+        manifest,
+        chunkFor(OTHER_USERS_KEY),
+        {
+          type: 'row',
+          table: 'ci.files',
+          row: { id: 'f1', bucket: 'somebody-elses-bucket', key: OTHER_USERS_KEY },
+        },
+      ]);
+
+      await service.importNdjsonStream({ userId: USER_ID } as never, req, 'jane@example.com');
+
+      const [, writtenBucket, writtenKey] = (fileService.putObject as jest.Mock).mock.calls[0] as [
+        unknown,
+        string,
+        string,
+      ];
+      expect(writtenBucket).toBe(config.staticfiles.bucket);
+      expect(writtenKey).toMatch(UUID_V4);
+      expect(writtenKey).not.toBe(OTHER_USERS_KEY);
+
+      // The files row was rewritten to the same minted key and to this
+      // appliance's bucket, so the pointer and the object stay consistent and
+      // the foreign key is gone from the account entirely.
+      const filesInsert = inserts.find((insert) => insert.sql.includes('"files"'));
+      expect(filesInsert?.sql).toBe(
+        'INSERT INTO "ci"."files" ("id", "bucket", "key", "user_id") VALUES ($1, $2, $3, $4)',
+      );
+      expect(filesInsert?.params).toEqual(['f1', config.staticfiles.bucket, writtenKey, USER_ID]);
+    });
+
+    it('keeps a key this account already owned on this box, so a same-box restore rewrites its own objects in place', async () => {
+      const inserts = recordingRunner([OWNED_KEY]);
+
+      const req = fakeRequest([
+        manifest,
+        { type: 'row', table: 'ci.files', row: { id: 'f1', bucket: 'whatever', key: OWNED_KEY } },
+        chunkFor(OWNED_KEY),
+      ]);
+
+      await service.importNdjsonStream({ userId: USER_ID } as never, req, 'jane@example.com');
+
+      const [, , writtenKey] = (fileService.putObject as jest.Mock).mock.calls[0] as [
+        unknown,
+        string,
+        string,
+      ];
+      expect(writtenKey).toBe(OWNED_KEY);
+      expect(inserts.find((insert) => insert.sql.includes('"files"'))?.params).toEqual([
+        'f1',
+        config.staticfiles.bucket,
+        OWNED_KEY,
+        USER_ID,
+      ]);
+    });
+
+    it('takes "owned" from the database before the deletes, never from the archive', async () => {
+      const calls: string[] = [];
+      queryRunner.query = jest.fn(async (sql: string) => {
+        calls.push(sql);
+
+        return sql.includes('SELECT key FROM ci.files') ? [] : undefined;
+      }) as unknown as QueryRunner['query'];
+
+      const req = fakeRequest([manifest, chunkFor(OTHER_USERS_KEY)]);
+
+      await service.importNdjsonStream({ userId: USER_ID } as never, req, 'jane@example.com');
+
+      const snapshot = calls.findIndex((sql) => sql.includes('SELECT key FROM ci.files'));
+      const firstDelete = calls.findIndex((sql) => sql.startsWith('DELETE'));
+      expect(snapshot).toBeGreaterThanOrEqual(0);
+      expect(firstDelete).toBeGreaterThan(snapshot);
+    });
+
+    it('applies the same rule on the legacy JSON path', async () => {
+      const inserts = recordingRunner([OWNED_KEY]);
+
+      await service.importArchive({ userId: USER_ID } as never, {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: USER_ID,
+        profile: null,
+        tables: {
+          'ci.files': [
+            { id: 'f-owned', bucket: 'x', key: OWNED_KEY },
+            { id: 'f-foreign', bucket: 'x', key: OTHER_USERS_KEY },
+          ],
+        },
+        fileBlobs: [
+          { id: 'f-owned', bucket: 'x', key: OWNED_KEY, contentBase64: Buffer.from('a').toString('base64') },
+          {
+            id: 'f-foreign',
+            bucket: 'x',
+            key: OTHER_USERS_KEY,
+            contentBase64: Buffer.from('b').toString('base64'),
+          },
+        ],
+      });
+
+      const writes = (fileService.putObject as jest.Mock).mock.calls.map(
+        ([, bucket, key]: [unknown, string, string]) => ({ bucket, key }),
+      );
+      expect(writes.map((write) => write.bucket)).toEqual([
+        config.staticfiles.bucket,
+        config.staticfiles.bucket,
+      ]);
+      expect(writes[0].key).toBe(OWNED_KEY);
+      expect(writes[1].key).toMatch(UUID_V4);
+      expect(writes[1].key).not.toBe(OTHER_USERS_KEY);
+
+      const rowKeys = inserts
+        .filter((insert) => insert.sql.includes('"files"'))
+        .map((insert) => insert.params[2]);
+      expect(rowKeys).toEqual([OWNED_KEY, writes[1].key]);
     });
   });
 
@@ -266,8 +558,12 @@ describe('UserDataPortabilityService', () => {
         string,
         Buffer,
       ];
-      expect(bucket).toBe('ci-files');
-      expect(key).toBe('user-1/f1');
+      // Neither the bucket nor the key is the archive's: the bucket is always
+      // this appliance's, and a key this account did not already own is
+      // replaced by a freshly minted one (see the "archive keys" block below).
+      expect(bucket).toBe(config.staticfiles.bucket);
+      expect(key).not.toBe('user-1/f1');
+      expect(key).toMatch(UUID_V4);
       // Chunks arrived 1-then-0 but must reassemble in INDEX order, not
       // arrival order — a network-level reorder must not corrupt the file.
       expect(buffer.toString('utf8')).toBe('hello world');

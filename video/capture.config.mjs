@@ -276,9 +276,13 @@
  *    Note the section also carries ten "Coming soon." disabled cards further
  *    down (ServiceIntegrationsSection.tsx:95-183); the shot is framed at the
  *    heading so the enabled providers lead.
- * 13. THE MAP. Now captured — but NOT from this seed, and the previous entry
- *    here named the wrong column. Corrected, with the evidence, because the old
- *    diagnosis sends the next person to fix a file that cannot fix the map.
+ * 13. THE MAP. Captured once, from the real-corpus stage — NOT from this seed,
+ *    and the previous entry here named the wrong column. Corrected, with the
+ *    evidence, because the old diagnosis sends the next person to fix a file
+ *    that cannot fix the map. THE TWO PNGs ARE GONE: they were the only frames
+ *    in the shot library taken against real personal data, and they were
+ *    deleted on 2026-09-17 (video/README.md § "What is committed"). What
+ *    follows is what a re-shoot has to get right.
  *
  *    WHAT THE MAP ACTUALLY PLOTS. Not `ci.entities.location_point`.
  *    MemoryPage.tsx:45-46 forces `hasLocation: true` whenever `view=map`;
@@ -303,7 +307,7 @@
  *    linked place and the seed will plot. NOT DONE HERE — unverified fixture
  *    changes are worse than a documented gap.
  *
- *    HOW THE COMMITTED SHOT WAS TAKEN. Against the owner's real archive
+ *    HOW THE DELETED SHOT WAS TAKEN. Against the owner's real archive
  *    (826,478 items) pushed into a throwaway stage — see video/README.md,
  *    "The real-corpus stage". 83 of those events carry genuine WGS84
  *    coordinates, so the map plots real clusters. Note the transport matters:

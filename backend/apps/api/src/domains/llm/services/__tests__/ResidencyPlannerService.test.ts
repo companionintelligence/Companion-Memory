@@ -546,6 +546,38 @@ describe('ResidencyPlannerService.resolveChatContextTokens', () => {
     await expect(loadService({ openAi: true }).service.resolveChatContextTokens()).resolves.toBeNull();
   });
 
+  it('answers the window it already planned while that load is in flight, and re-plans once it lapses', async () => {
+    // Two callers planning from scratch mid-load took turns reloading the 27B at 32k and 4k
+    // (2026-09-22). The first plan is now the answer for as long as the load watchdog runs.
+    jest.useFakeTimers({ now: new Date('2026-09-22T12:00:00Z') });
+    psMock.mockResolvedValue({ models: [] });
+    probeMock.mockResolvedValue({ totalBytes: CARD, usedBytes: 0, source: 'sysfs', device: 'card1' });
+    const { service } = loadService({ chatModel: 'gemma4:e4b' });
+
+    await expect(service.resolveChatContextTokens()).resolves.toBe(32_768);
+
+    // The card "shrinks" (a different probe answer) — a fresh plan would say 4k or nothing.
+    probeMock.mockResolvedValue({ totalBytes: 10 * GIB, usedBytes: 0, source: 'sysfs', device: 'card1' });
+    jest.setSystemTime(Date.now() + 30_000);
+    await expect(service.resolveChatContextTokens()).resolves.toBe(32_768);
+
+    jest.setSystemTime(Date.now() + 3 * 60_000);
+    await expect(service.resolveChatContextTokens()).resolves.not.toBe(32_768);
+  });
+
+  it('lets a resident model outrank the memo, at the window it is actually loaded with', async () => {
+    jest.useFakeTimers({ now: new Date('2026-09-22T12:00:00Z') });
+    psMock.mockResolvedValueOnce({ models: [] }).mockResolvedValue({
+      models: [{ name: 'gemma4:e4b', size_vram: 12 * GIB, context_length: 16_384 }],
+    });
+    probeMock.mockResolvedValue({ totalBytes: CARD, usedBytes: 0, source: 'sysfs', device: 'card1' });
+    const { service } = loadService({ chatModel: 'gemma4:e4b' });
+
+    await expect(service.resolveChatContextTokens()).resolves.toBe(32_768);
+    jest.setSystemTime(Date.now() + 5_000);
+    await expect(service.resolveChatContextTokens()).resolves.toBe(16_384);
+  });
+
   it('answers null when the backend cannot be reached, and says so once', async () => {
     psMock.mockRejectedValue(new Error('ECONNREFUSED'));
     const { service, logger } = loadService();
@@ -559,18 +591,42 @@ describe('ResidencyPlannerService.resolveChatContextTokens', () => {
 });
 
 describe('card-level calibration', () => {
-  it("attributes the card's unaccounted bytes to the largest resident and persists them with the layout", async () => {
-    psMock.mockResolvedValue({
-      models: [
-        { name: 'qwen3.6:27b', size_vram: QWEN_RESIDENT_32K, context_length: 32_768 },
-        { name: 'nomic-embed-text:latest', size_vram: 323_150_151, context_length: 2_048 },
-      ],
-    });
-    // sysfs says 23 GiB in use; Ollama's two residents account for ~17.5 GiB of it.
-    probeMock.mockResolvedValue({ totalBytes: CARD, usedBytes: 23 * GIB, source: 'sysfs', device: 'card1' });
+  const chatAndEmbed = {
+    models: [
+      { name: 'qwen3.6:27b', size_vram: QWEN_RESIDENT_32K, context_length: 32_768 },
+      { name: 'nomic-embed-text:latest', size_vram: 323_150_151, context_length: 2_048 },
+    ],
+  };
+  const sysfs = (usedBytes: number) => ({ totalBytes: CARD, usedBytes, source: 'sysfs', device: 'card1' });
+
+  /** Advance past the snapshot TTL so the next call probes again. */
+  const tick = (ms = 5_000) => jest.setSystemTime(Date.now() + ms);
+
+  it('takes no card figure for a runner that was already there at its first look — its age is unknown', async () => {
+    // The 2026-09-22 file: a process that boots beside a runner leaking for hours would
+    // otherwise record the whole card (23.7 GiB) as that model's footprint.
+    psMock.mockResolvedValue(chatAndEmbed);
+    probeMock.mockResolvedValue(sysfs(23 * GIB));
     const { store, saved } = memoryStore();
     const { service } = loadService({ calibration: store });
 
+    await service.resolveChatContextTokens();
+
+    const record = saved.at(-1)?.get('qwen3.6:27b');
+    expect(record).toMatchObject({ numCtx: 32_768 });
+    expect(record?.cardBytes).toBeUndefined();
+  });
+
+  it("attributes the card's unaccounted bytes to a runner it saw arrive, and persists them with the layout", async () => {
+    jest.useFakeTimers({ now: new Date('2026-09-22T12:00:00Z') });
+    psMock.mockResolvedValueOnce({ models: [] }).mockResolvedValue(chatAndEmbed);
+    // sysfs says 23 GiB in use once loaded; Ollama's two residents account for ~17.5 GiB of it.
+    probeMock.mockResolvedValueOnce(sysfs(0)).mockResolvedValue(sysfs(23 * GIB));
+    const { store, saved } = memoryStore();
+    const { service } = loadService({ calibration: store });
+
+    await service.resolveChatContextTokens();
+    tick();
     await service.resolveChatContextTokens();
 
     const record = saved.at(-1)?.get('qwen3.6:27b');
@@ -578,6 +634,102 @@ describe('card-level calibration', () => {
     expect(record?.cardBytes).toBe(23 * GIB - 323_150_151);
     // The embedder never gets a card figure: the buffers are not its.
     expect(saved.at(-1)?.get('nomic-embed-text')?.cardBytes).toBeUndefined();
+  });
+
+  it('lets the baseline grow inside the first minutes, then freezes it for the life of that runner', async () => {
+    jest.useFakeTimers({ now: new Date('2026-09-22T12:00:00Z') });
+    psMock.mockResolvedValueOnce({ models: [] }).mockResolvedValue(chatAndEmbed);
+    probeMock
+      .mockResolvedValueOnce(sysfs(0))
+      .mockResolvedValueOnce(sysfs(22 * GIB)) // t+5s: first look at the new runner
+      .mockResolvedValueOnce(sysfs(23 * GIB)) // t+1min: the vision encoder has been exercised
+      .mockResolvedValue(sysfs(24.5 * GIB)); // t+11min onward: growth, not baseline
+    const { store, saved } = memoryStore();
+    const { service } = loadService({ calibration: store });
+
+    await service.resolveChatContextTokens();
+    tick();
+    await service.resolveChatContextTokens();
+    expect(saved.at(-1)?.get('qwen3.6:27b')?.cardBytes).toBe(22 * GIB - 323_150_151);
+    tick(60_000);
+    await service.resolveChatContextTokens();
+    expect(saved.at(-1)?.get('qwen3.6:27b')?.cardBytes).toBe(23 * GIB - 323_150_151);
+    tick(10 * 60_000);
+    await service.resolveChatContextTokens();
+    tick(60_000);
+    await service.resolveChatContextTokens();
+    expect(saved.at(-1)?.get('qwen3.6:27b')?.cardBytes).toBe(23 * GIB - 323_150_151);
+  });
+
+  it('starts a fresh baseline when the runner reloads, replacing the old figure rather than ratcheting', async () => {
+    jest.useFakeTimers({ now: new Date('2026-09-22T12:00:00Z') });
+    psMock
+      .mockResolvedValueOnce({ models: [] })
+      .mockResolvedValueOnce(chatAndEmbed)
+      .mockResolvedValueOnce({ models: [] })
+      .mockResolvedValue(chatAndEmbed);
+    probeMock
+      .mockResolvedValueOnce(sysfs(0))
+      .mockResolvedValueOnce(sysfs(23 * GIB))
+      .mockResolvedValueOnce(sysfs(0))
+      .mockResolvedValue(sysfs(20 * GIB));
+    const { store, saved } = memoryStore();
+    const { service } = loadService({ calibration: store });
+
+    for (let i = 0; i < 4; i += 1) {
+      await service.resolveChatContextTokens();
+      tick();
+    }
+
+    expect(saved.at(-1)?.get('qwen3.6:27b')?.cardBytes).toBe(20 * GIB - 323_150_151);
+  });
+
+  it('treats a model that arrives after it was planned as a new runner, even at the same window and size', async () => {
+    // A reload to an identical layout is invisible in /api/ps; the planned-then-resident
+    // transition is the tell. Same-size fixture on both sides, so only the transition can
+    // explain a fresh baseline.
+    jest.useFakeTimers({ now: new Date('2026-09-22T12:00:00Z') });
+    const chatOnly = { models: [{ name: 'gemma4:e4b', size_vram: 12 * GIB, context_length: 32_768 }] };
+    psMock
+      .mockResolvedValueOnce(chatOnly) // present at first look: unwitnessed, no card figure
+      .mockResolvedValueOnce({ models: [] }) // evicted
+      .mockResolvedValue(chatOnly); // back, identical
+    probeMock
+      .mockResolvedValueOnce(sysfs(13 * GIB))
+      .mockResolvedValueOnce(sysfs(0))
+      .mockResolvedValue(sysfs(14 * GIB));
+    const { store, saved } = memoryStore();
+    const { service } = loadService({ chatModel: 'gemma4:e4b', calibration: store });
+
+    await service.resolveChatContextTokens();
+    expect(saved.at(-1)?.get('gemma4:e4b')?.cardBytes).toBeUndefined();
+    tick();
+    await expect(service.resolveChatContextTokens()).resolves.toBe(32_768); // planned: memo set
+    tick();
+    await service.resolveChatContextTokens();
+
+    expect(saved.at(-1)?.get('gemma4:e4b')?.cardBytes).toBe(14 * GIB);
+  });
+
+  it('plans 32k from a poisoned file rather than 4k: a sighting the card cannot hold is not a measurement', async () => {
+    const poisoned = new Map([
+      [
+        'gemma4:e4b',
+        {
+          numCtx: 32_768,
+          sizeVramBytes: 12 * GIB,
+          weightBytes: GEMMA4_WEIGHTS,
+          seenAt: '2026-09-22T16:43:58.922Z',
+          cardBytes: 25_421_131_449,
+          totalTokens: 32_768,
+        },
+      ],
+    ]);
+    psMock.mockResolvedValue({ models: [] });
+    probeMock.mockResolvedValue(sysfs(0));
+    const { service } = loadService({ chatModel: 'gemma4:e4b', calibration: memoryStore(poisoned).store });
+
+    await expect(service.resolveChatContextTokens()).resolves.toBe(32_768);
   });
 
   it("records no card figure from the `config` source, which only echoes Ollama's own numbers back", async () => {

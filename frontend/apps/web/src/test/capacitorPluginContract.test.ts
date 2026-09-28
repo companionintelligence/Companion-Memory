@@ -345,6 +345,7 @@ describe('LocalHubWeb — the fallback that runs in a browser tab and the Tauri 
   it('getCurrentLocation() and openUrl() reject as unavailable', async () => {
     await expect(hub.getCurrentLocation()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
     await expect(hub.openUrl()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+    await expect(hub.startAuthSession()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
     await expect(hub.openAppSettings()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
   });
 });

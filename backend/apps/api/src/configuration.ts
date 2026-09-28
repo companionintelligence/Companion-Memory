@@ -1039,6 +1039,31 @@ export const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
+  // Derived media the appliance makes from what the owner stores. Today that is
+  // the browser-playable H.264 rendition of every video whose own codec
+  // browsers cannot be relied on to decode (HEVC from every phone since ~2023;
+  // Chrome on Linux fails it outright). Consumed by
+  // `domains/files/services/VideoPlaybackService`.
+  media: z
+    .object({
+      videoPlayback: z
+        .object({
+          /**
+           * Longest edge of the rendition, in pixels; the original is never
+           * upscaled. `0` keeps the original's resolution. Measured 2026-09-22
+           * on an 11 s 4K HDR phone clip: 1920 → 7.7 MB, native 4K → 34 MB
+           * (about 4.5× the storage, ~26 Mbit/s to stream), and for SDR
+           * sources about 2.5× the encode time. 1080p is what the drawer and
+           * lightbox display at on anything but a 4K monitor full-screen;
+           * the original stays the download at full resolution either way.
+           * Changing this affects renditions made from then on — existing
+           * ones are kept, not re-encoded.
+           */
+          maxEdge: z.coerce.number().int().min(0).default(1920),
+        })
+        .default({}),
+    })
+    .default({}),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,
     /**
@@ -1179,17 +1204,36 @@ export const ConfigSchema = z.object({
      */
     'solid.protocol': booleanStringSchema,
     /**
+     * Serve the GraphiQL IDE at `GET /graphiql`. The page is static HTML that
+     * authenticates per request with a pasted API key (see docs/graphql-api.md),
+     * so it cannot sit behind the auth guard — which is why it was served
+     * unauthenticated in every environment, loading its scripts from unpkg.com.
+     * Introspection is already off in production; this makes the IDE match.
+     * On by default, off in `production.json`, and ENABLE_GRAPHQL_IDE=true turns
+     * it back on for a deployment that wants it. The Settings link follows the
+     * flag.
+     */
+    'graphql.ide': booleanStringSchema,
+    /**
      * The dispatch gate: `ToolRegistry.executeTool` consults `resolveToolGate`
      * and parks a destructive/external/not-locally-permitted intent in
      * `ci.pending_actions` instead of running it, returning `TOOL_QUEUED`.
      *
-     * OFF by default, and off is byte-identical to the pre-gate behaviour —
-     * `PendingActionService.evaluate` pins the tier to `appliance` and skips the
-     * trust dial, so the only ruling it can produce is the `execute` every call
-     * already got. Turn it on with ENABLE_PENDING_ACTIONS=true; what changes
-     * then is `cautious` trust mode (destructive/external intents ask first) and
-     * `?tier=local` execute calls (queued rather than run). `hands_off` and
-     * `balanced` behave exactly as they do today either way.
+     * ON by default since 2026-09-25 (it shipped dark while the queue had no
+     * UI). With it on, a destructive intent, or an external one that is not
+     * a plain read (every connected-MCP tool is labelled this way), from the
+     * owner's own chat is queued as an approval card under the `balanced` and
+     * `cautious` dials and runs unattended only under `hands_off`; an external
+     * read (`messaging.listMessages`) asks only under `cautious`. See
+     * `PendingActionService.trustForToolCall` for the mapping and for why the
+     * dial is read directly rather than through the inference scorer.
+     * `?tier=local` execute calls are queued rather than run.
+     *
+     * ENABLE_PENDING_ACTIONS=false is the kill switch, and off is
+     * byte-identical to the pre-gate behaviour: `PendingActionService.evaluate`
+     * pins the tier to `appliance` and skips the dial, so the owner's every
+     * call executes. An installed app's destructive intent is queued
+     * regardless of this flag (the `managed-app` rule in `resolveToolGate`).
      */
     'tools.pendingActions': booleanStringSchema,
   }),

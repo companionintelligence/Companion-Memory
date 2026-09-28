@@ -129,3 +129,25 @@ describe('retired feature flags', () => {
     expect(featureKeysIn('custom-environment-variables.json')).toEqual(resolvedKeys);
   });
 });
+
+describe('media.videoPlayback.maxEdge', () => {
+  function mappingIn(file: string): unknown {
+    const contents = JSON.parse(readFileSync(join(__dirname, '..', 'config', file), 'utf8')) as {
+      media?: { videoPlayback?: { maxEdge?: unknown } };
+    };
+
+    return contents.media?.videoPlayback?.maxEdge;
+  }
+
+  // 1080p is the measured default (2026-09-22: 4K costs ~4.5× the storage
+  // of 1080p and is downscaled on display anyway); the operator override is
+  // the one env var, parsed as a number so `0` (original resolution) survives.
+  it('defaults to 1920 and is overridable through CI_MEDIA_VIDEO_PLAYBACK_MAX_EDGE', () => {
+    expect(config.media.videoPlayback.maxEdge).toBe(1920);
+    expect(mappingIn('default.json')).toBe(1920);
+    expect(mappingIn('custom-environment-variables.json')).toEqual({
+      __name: 'CI_MEDIA_VIDEO_PLAYBACK_MAX_EDGE',
+      __format: 'json',
+    });
+  });
+});

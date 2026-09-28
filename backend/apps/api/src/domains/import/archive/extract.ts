@@ -38,7 +38,15 @@ import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import AdmZip from 'adm-zip';
 
 import { systemExtract } from './systemExtract';
-import { CorruptArchiveError, diagnoseArchive, freeBytesAt, InsufficientDiskError } from './unpack';
+import {
+  assertEntryInside,
+  assertParentInside,
+  CorruptArchiveError,
+  diagnoseArchive,
+  freeBytesAt,
+  InsufficientDiskError,
+  stripListedSymlinks,
+} from './unpack';
 
 export interface ExtractLimits {
   /** Max number of entries in the archive (default 100k). */
@@ -136,12 +144,27 @@ function extractionDestDir(archivePath: string): string {
   return path.resolve(fs.existsSync(base) && !fs.statSync(base).isDirectory() ? `${base}.extracted` : base);
 }
 
-/** Reject an entry name whose resolved path escapes the extraction dir. */
-function assertInside(destDir: string, entryName: string): void {
-  const target = path.resolve(destDir, entryName);
-  const rel = path.relative(destDir, target);
-  if (rel.startsWith('..') || path.isAbsolute(rel)) {
-    throw new Error(`archive entry escapes extraction dir: ${entryName}`);
+/**
+ * Reject an entry name whose resolved path escapes the extraction dir. The
+ * shared check in unpack.ts, so both extractors refuse the same names with the
+ * same error class.
+ */
+const assertInside = assertEntryInside;
+
+/**
+ * A symlink sitting where a file is about to be written would be written
+ * THROUGH, not replaced: `writeFileSync` follows it. The destination is
+ * normally fresh, but a resumed extraction lands in the directory an earlier
+ * attempt left behind, and nothing in an export needs a link (see
+ * stripSymlinks) — so it goes, and the file takes its place.
+ */
+function unlinkIfSymlink(target: string): void {
+  try {
+    if (fs.lstatSync(target).isSymbolicLink()) {
+      fs.unlinkSync(target);
+    }
+  } catch {
+    /* nothing there */
   }
 }
 
@@ -198,7 +221,11 @@ async function extractViaAdmZip(
       throw new Error(`archive exceeded the ${(maxTotalBytes / 1e9).toFixed(1)}GB extraction cap mid-write`);
     }
 
+    // The name was checked above; this checks the filesystem the name lands
+    // on — a link already in the destination would carry the write elsewhere.
+    assertParentInside(destDir, target);
     fs.mkdirSync(path.dirname(target), { recursive: true });
+    unlinkIfSymlink(target);
     fs.writeFileSync(target, data);
     files += 1;
 
@@ -294,6 +321,11 @@ async function extractViaSystemUnzip(
   if (!r.ok) {
     throw new Error(`archive extraction failed (${r.detail})`);
   }
+
+  // The extractor recreates symlink entries as real links, and the nested pass
+  // that runs next writes into this same tree. Take them out here rather than
+  // leaving them for the end-of-stage sweep.
+  stripListedSymlinks(destDir, names);
 
   const files = names.filter((n) => !n.endsWith('/')).length;
 

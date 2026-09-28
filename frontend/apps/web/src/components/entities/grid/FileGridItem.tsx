@@ -14,6 +14,8 @@ export const FILE_FRAGMENT = gql(`
     previewUrl
     contentType
     sourceUrl
+    playbackUrl
+    playbackContentType
     title
     description
     size

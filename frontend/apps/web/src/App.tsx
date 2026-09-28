@@ -164,8 +164,20 @@ function PowerSyncBoundary({ children }: { children: ReactNode }) {
 }
 
 function Providers({ children }: { children: ReactNode }) {
+  // React Router 7 wraps every navigation in React.startTransition unless
+  // told not to. That fights Apollo's useQuery, which re-observes (and
+  // fires the network request) during render: React renders the transition
+  // tree with the new URL, Apollo emits a store change mid-render, React
+  // throws that render away and re-renders synchronously with the OLD
+  // URL, Apollo re-observes the old variables and aborts the new request —
+  // and the two keep trading places on every response. Measured on
+  // /memory/events when the What bar wrote ?eventTypes=: one click, a
+  // dozen Search requests, half aborted, each with the pre-click variables.
+  // Synchronous navigation restores one request per URL change. The cost
+  // is that a lazily-loaded route shows its Suspense fallback on first
+  // visit instead of holding the previous screen — the v6 behaviour.
   return (
-    <Router>
+    <Router useTransitions={false}>
       <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
         <BackgroundProvider>
           <DeviceLayoutProvider args={[]}>

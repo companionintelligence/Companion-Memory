@@ -6,6 +6,7 @@ import { Braces, ExternalLink, X } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom';
 
+import { useFeatures } from '@/common/feature';
 import { appHomePath } from '@/lib/appHome';
 
 import { settingsPathToProfile, visibleSettingsSections } from './settingsNav';
@@ -26,6 +27,7 @@ export function SettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { isMobile } = useDeviceLayout();
+  const { isFeatureEnabled } = useFeatures();
   const backgroundLocation = (
     location.state as { backgroundLocation?: { pathname: string; search: string; hash: string } } | null
   )?.backgroundLocation;
@@ -98,17 +100,21 @@ export function SettingsPage() {
 
               {/* GraphiQL is a full-page IDE served by the API, so it opens in a
                   new tab rather than inside the settings modal. Authenticate it
-                  with a key from the API Keys section above. */}
-              <a
-                href="/api/graphiql"
-                target="_blank"
-                rel="noopener noreferrer"
-                className={navLinkClass({ isActive: false })}
-              >
-                <Braces className="h-4 w-4" />
-                GraphiQL
-                <ExternalLink className="ml-auto h-3.5 w-3.5 opacity-60" />
-              </a>
+                  with a key from the API Keys section above. The API serves it
+                  only when `graphql.ide` is on (off in production by default),
+                  so the link follows the flag rather than pointing at a 404. */}
+              {isFeatureEnabled('graphql.ide') ? (
+                <a
+                  href="/api/graphiql"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={navLinkClass({ isActive: false })}
+                >
+                  <Braces className="h-4 w-4" />
+                  GraphiQL
+                  <ExternalLink className="ml-auto h-3.5 w-3.5 opacity-60" />
+                </a>
+              ) : null}
             </aside>
           </ScrollArea>
 

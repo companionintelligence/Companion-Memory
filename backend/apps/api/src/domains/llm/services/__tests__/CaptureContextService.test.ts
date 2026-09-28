@@ -84,6 +84,24 @@ describe('CaptureContextService', () => {
     expect(positionService.findByDateRange).not.toHaveBeenCalled();
   });
 
+  it('words the line for a video when handed capture facts from a container, same rungs', async () => {
+    const { service, geocodeService } = makeService(null, { places: [{ name: 'Zion Canyon Overlook' }] });
+
+    const context = await service.buildFromCapture(USER, LOCATED, FILE_ID, 'video');
+
+    expect(context).toMatchObject({ source: 'exif-gps' });
+    expect(context?.text).toContain('the video was recorded on 2024-05-05');
+    expect(context?.text).toContain("The video's GPS places it at Zion Canyon Overlook.");
+    expect(context?.text).toContain('not what the video shows');
+    expect(context?.text).not.toContain('photo');
+    expect(geocodeService.reverseGeocode).not.toHaveBeenCalled();
+
+    // The same guard as a photo: no when and no where is no context.
+    await expect(
+      service.buildFromCapture(USER, { ...DATED, takenAt: null, takenOn: null }, FILE_ID, 'video'),
+    ).resolves.toBeNull();
+  });
+
   it('names the spot from the photo’s own GPS via the user’s nearest place first', async () => {
     const { service, geocodeService } = makeService(LOCATED, { places: [{ name: 'Cattedrale di Palermo' }] });
 

@@ -226,9 +226,12 @@ export function MediaLightbox({ entries, index, onClose, onIndexChange }: Props)
             // video both fit without scrolling.
             <EmbedPlayer player={current.player} title={current.title} fitViewport />
           ) : current.kind === 'video' ? (
+            // The playable rendition when the server made one (HEVC originals
+            // and the like); the download link above still hands over the
+            // original, which is `fullUrl`.
             <video
-              key={current.fullUrl}
-              src={current.fullUrl}
+              key={current.playbackUrl ?? current.fullUrl}
+              src={current.playbackUrl ?? current.fullUrl}
               controls
               onError={() => setBrokenUrl(current.fullUrl)}
               className="max-h-[82vh] max-w-[92vw] rounded-lg"

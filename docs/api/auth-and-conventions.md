@@ -119,7 +119,7 @@ curl -H "Authorization: Bearer eyJ…" -H "Content-Type: application/json" \
 
 ### 1.2 API keys (programmatic clients)
 
-Long-lived credentials for non-browser clients (the native iOS/Android shells and their App Intents, Companion Capture, CI-Hermes / CI-OpenClaw, MCP clients). Passed in the **`x-api-key`** header, or as **`Authorization: Bearer <key>`**.
+Long-lived credentials for non-browser clients (the native iOS/Android shells and their App Intents, Companion Capture, CI-Hermes / CI-OpenClaw, CI-Mentra smart glasses (memory-scoped), MCP clients). Passed in the **`x-api-key`** header, or as **`Authorization: Bearer <key>`**.
 
 The bearer form exists for MCP clients: most expose a single bearer-token field and cannot send a custom header, which made `/api/mcp` unreachable for them. It also removes a gratuitous difference from the Hub, whose MCP surface is bearer-only. The scheme is matched case-insensitively per RFC 7235 §2.1 (`bearer` works). The two in-process readers — `ApiKeyStrategy` and `JwtOrApiKeyAuthGuard`'s Portal path — share one `extractBearerToken` helper so they cannot drift; the third reader is `passport-jwt`, which does its own parse and has always lowercased the scheme (`extract_jwt.js:54,60`). `x-api-key` wins if both are present — unless it is blank, in which case the bearer form is used, so a proxy that always sets the header cannot mask a good credential. This does not shadow session auth — on `JwtOrApiKeyAuthGuard` the `jwt` strategy consumes bearer JWTs first, and a JWT that reached the api-key strategy would fail the 64-hex format check before any DB lookup.
 
@@ -138,7 +138,7 @@ The bearer form exists for MCP clients: most expose a single bearer-token field 
   | `mcp` | the Model Context Protocol endpoint (`POST/GET/DELETE /mcp`) |
   | `capture` | the observation write plane: the `/v1/*` bulk-ingest routes and `POST /files/upload` |
 
-- **Capability** — `'read' | 'write' | 'full'` (`common/decorators/ApiKeyCapability.ts:19-25`), ascending authority: `read` = nothing it can call changes stored data; `write` = read + mutating but never deleting; `full` = including destructive tools. The default on create is **`write`** (`DEFAULT_API_KEY_CAPABILITY`, `:35`) — `read` would break "create a key, connect an agent", `full` would silently hand every new key delete authority. A stored value that does not parse coerces to `read`, not the default: an authority we cannot read is the smallest one (`coerceApiKeyCapability`, `:50`). Routes declare a floor with `@RequireCapability`, enforced by `enforceApiKeyCapability` next to the scope check.
+- **Capability** — `'read' | 'write' | 'full'` (`common/decorators/ApiKeyCapability.ts:19-25`), ascending authority: `read` = nothing it can call changes stored data; `write` = read + mutating but never deleting; `full` = including destructive tools. The default on create is **`write`** (`DEFAULT_API_KEY_CAPABILITY`, `:35`) — `read` would break "create a key, connect an agent", `full` would silently hand every new key delete authority. A stored value that does not parse coerces to `read`, not the default: an authority we cannot read is the smallest one (`coerceApiKeyCapability`, `:50`). **Enforced on every operation a key can reach** (`enforceApiKeyCapability`): a route that declares `@RequireCapability` requires that level; one that declares nothing requires what its shape implies — a GraphQL mutation or non-GET verb `write`, a query or GET `read` (`capabilityImpliedByShape`). Before 2026-09-24 it was opt-in per route, and no GraphQL resolver opted in, so a `read` key could run every mutation. Routes declare a floor with `@RequireCapability`, enforced by `enforceApiKeyCapability` next to the scope check.
 
 #### `/keys` management — `@Controller('keys')`, **every method `JwtOrPortalAuthGuard`** (`ApiKeyController.ts:86-153`)
 
@@ -169,7 +169,7 @@ The deep-link scheme for the native flow comes from `auth.oidc.nativeRedirectSch
 
 > `sameSite: 'lax'` on the state/PKCE cookies is required: the browser returns from Portal via a top-level cross-site GET, and `lax` (unlike `strict`) sends cookies on that navigation. With `secure: req.secure`, this is why the flow also works over plain-HTTP Tailscale.
 
-**Callback** (`OidcController.ts:286-474`): reject on `error`/missing/`state` mismatch; POST `<issuer>/api/auth/oauth2/token` (`grant_type=authorization_code` + PKCE `code_verifier`, no secret); GET `/userinfo` → `{ sub, email, name }`; **JIT-provision** the user by email (auto-create with random password; rejected as `signup_code_required` if the signup-code gate is on); issue **the same session + CSRF cookies as local login**; 302 to the validated `oidc_redirect`.
+**Callback** (`OidcController.ts:286-474`): reject on `error`/missing/`state` mismatch; POST `<issuer>/api/auth/oauth2/token` (`grant_type=authorization_code` + PKCE `code_verifier`, no secret); GET `/userinfo` → `{ sub, email, name, email_verified }`; resolve the Portal identity to a local account — an established `(iss, sub)` binding wins; else a **verified** email links a not-yet-bound local account exactly once (an unverified address, or an account already bound to another identity, is refused as `email_unverified` / `account_linked_elsewhere` and the flow stops there); else it is a first-time sign-in, admitted only on an unclaimed appliance, by Hub invitation, or with a signup code (`signup_code_required` otherwise, when the gate is on). First-time web sign-ins bounce through `confirm-account`, whose intent cookie carries the `(iss, sub)` so the account it creates is bound at birth; it refuses (`account_exists`) if an account for the address appeared meanwhile, unless that account is already bound to this very identity (a concurrent tab); issue **the same session + CSRF cookies as local login**; 302 to the validated `oidc_redirect`.
 
 #### `redirect_uri` — `resolveOidcCallbackUrl` + `APP_BASE_URL`
 
@@ -193,7 +193,9 @@ Browser                    CI-Server                         CI-Portal (IdP)
 
 `auth.portal.enabled` is **`true`** in the shipped configuration (`config/default.json:79-84`), with issuer `https://hub.ci.computer`, `jwksUri` `https://hub.ci.computer/api/auth/jwks`, and the audience allowlist `ci-server,ci-hub,ci-import-tools,ci-browser-extension,ci-even,ci-applet`. That allowlist is a contract detail: a token whose `aud` is not on it does not authenticate.
 
-When enabled, `JwtOrApiKeyAuthGuard` first verifies an `Authorization: Bearer` as a **Portal-issued JWT** (against the Portal JWKS) and JIT-provisions the user before falling back to the legacy `jwt`/`api-key` strategies (`JwtOrApiKeyAuthGuard.ts:30-46`). A Portal principal carries full user authority and no API-key scopes, so scope/capability enforcement does not apply on that path.
+When enabled, `JwtOrApiKeyAuthGuard` first verifies an `Authorization: Bearer` as a **Portal-issued JWT** (against the Portal JWKS) and resolves it to a local user before falling back to the legacy `jwt`/`api-key` strategies (`JwtOrApiKeyAuthGuard.ts:30-46`). A Portal principal carries full user authority and no API-key scopes, so scope/capability enforcement does not apply on that path.
+
+**Who this path admits** (`PortalTokenService.provisionUser`): a Portal identity already bound to a local account, or a verified email that links a not-yet-bound local account exactly once — and, in one case only, an identity nobody here has bound: when the appliance has **no accounts at all**, the sign-in claims it and becomes the owner/admin. On a claimed appliance an unbound Portal identity gets a 401, full stop. The model is one Portal identity per appliance (the owner); household members are email-and-password accounts the owner invites through the browser flow, which is where invitations are checked. Until 2026-09-24 this path created an account for *any* valid Portal token, which on a tunnelled Hub install meant anyone with a Portal login could sign up.
 
 Three other server-to-server credentials exist alongside it:
 
@@ -217,7 +219,7 @@ CI-Server uses **per-controller guards**, not a global auth guard.
 | Route | Why it is open |
 |---|---|
 | `GET /health` | liveness probe |
-| `GET /_internal/features/global` | gates the SPA before login |
+| `GET /_internal/features/global` | gates the SPA before login — answers with the `PUBLIC_FEATURES` allowlist only, not the full flag map |
 | `GET /config/telemetry` | the SPA needs the Sentry DSN before it has a session. *(Its sibling `GET /config/maps` **is** guarded.)* |
 | `authenticate/*`, `/signup` | login/refresh/logout + CSRF issue — `CsrfGuard` where it applies, but no auth guard |
 | `authenticate/oidc/*` | the whole OIDC entry point, including `POST native/exchange` (the one-time code *is* the proof) and `GET`/`POST confirm-account` |

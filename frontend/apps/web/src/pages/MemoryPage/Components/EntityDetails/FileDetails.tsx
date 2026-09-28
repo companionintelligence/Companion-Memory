@@ -29,10 +29,13 @@ export function FileDetails({ entity }: Props) {
   const [updateFile] = useMutation(UPDATE_FILE);
 
   const isVideo = data.contentType?.startsWith('video/') ?? false;
-  // Video playback needs the original; images prefer preview then source (same
-  // fallback as gallery tiles so Capture screenshots show before preview gen).
+  // Video plays the server's browser-playable rendition when one exists (the
+  // H.264 PLAYBACK variant, for HEVC and the like), else the original; images
+  // prefer preview then source (same fallback as gallery tiles so Capture
+  // screenshots show before preview gen).
+  const playbackSrc = isVideo ? resolveMediaUrl(data.playbackUrl) : null;
   const mediaSrc = isVideo
-    ? resolveMediaUrl(data.sourceUrl)
+    ? (playbackSrc ?? resolveMediaUrl(data.sourceUrl))
     : resolveFileTileUrl({
         contentType: data.contentType,
         previewUrl: data.previewUrl,
@@ -46,7 +49,15 @@ export function FileDetails({ entity }: Props) {
       title={data.title || data.filename || 'File'}
       subtitle="File"
       taggable
-      media={<EntityMedia src={mediaSrc} contentType={data.contentType} alt={data.filename ?? ''} />}
+      media={
+        <EntityMedia
+          src={mediaSrc}
+          previewSrc={isVideo ? resolveStaticUrl(data.previewUrl) : null}
+          contentType={playbackSrc ? (data.playbackContentType ?? data.contentType) : data.contentType}
+          alt={data.filename ?? ''}
+          fallbackHref={isVideo ? downloadUrl : null}
+        />
+      }
       editFields={[
         { key: 'title', label: 'Title', value: data.title ?? '' },
         { key: 'description', label: 'Description', value: data.description ?? '', multiline: true },
