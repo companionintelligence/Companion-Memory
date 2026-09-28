@@ -95,13 +95,13 @@ export function scopesForApp(appUrn: string): string[] {
       // reviewed widening before it moves onto this key.
       return [CAPTURE_SCOPE];
     case 'ci-glasses-bridge':
-      // Companion Glasses Bridge (CI-Even-Realities `agent-hub`) augments chat
-      // with `POST /memory/recall` and writes the turn back with
-      // `POST /memory/turn`. Memory alone covers both.
+    // Companion Glasses Bridge (CI-Even-Realities `agent-hub`) augments chat
+    // with `POST /memory/recall` and writes the turn back with
+    // `POST /memory/turn`. Memory alone covers both.
     case 'ci-mentra':
-      // Mentra smart-glasses bridge: it only reads context/recall and records
-      // turns/fragments through `/memory/*`, so it is confined to the memory
-      // scope — no intents, no MCP, no raw data plane.
+    // Mentra smart-glasses bridge: it only reads context/recall and records
+    // turns/fragments through `/memory/*`, so it is confined to the memory
+    // scope — no intents, no MCP, no raw data plane.
     case 'ci-ha-voice':
       // Home Assistant voice (CI-Home-Assistant-Voice-PE): grounds each spoken
       // answer in `/memory/context` + `/memory/recall` and saves the exchange
