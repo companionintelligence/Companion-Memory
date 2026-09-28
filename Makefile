@@ -599,7 +599,7 @@ init: ## Initialize repository after checkout
 	@scripts/gh-packages-auth.sh --install
 
 	@printf "\n"
-	@yarn dlx @yarnpkg/sdks vscode
+	@yarn sdks vscode
 
 	@printf "\n"
 	@yarn prepare

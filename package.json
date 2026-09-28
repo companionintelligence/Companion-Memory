@@ -54,7 +54,8 @@
     "undici": "^8.10.0",
     "fast-uri": "^3.1.5",
     "lodash": "^4.18.1",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "@yarnpkg/sdks/@yarnpkg/core": "4.9.1"
   },
   "devDependencies": {
     "@companionintelligence/config": "^1.0.0",
@@ -63,6 +64,7 @@
     "@storybook/react-vite": "^9.1.19",
     "@types/node": "^25.0.1",
     "@types/pg": "^8",
+    "@yarnpkg/sdks": "^3.3.1",
     "dotenv": "^17.2.3",
     "eslint": "^9.27.0",
     "eslint-config-prettier": "^10.1.5",
