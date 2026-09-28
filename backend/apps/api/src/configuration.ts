@@ -498,6 +498,14 @@ export const ConfigSchema = z.object({
     summary: z.object({
       host: z.string().default('http://summary-service:8001'),
     }),
+    /**
+     * Bearer the API presents on every request to the HBPE and Summary
+     * sidecars (and the document parser), which refuse requests without it.
+     * Minted by setup-secrets as SIDECAR_AUTH_SECRET. Required in production —
+     * see the check below the schema — because an API without it cannot
+     * dispatch a single function run.
+     */
+    sidecarAuthSecret: z.string().default(''),
   }),
   signalCli: z.object({
     restUrl: z.string(),
@@ -1031,6 +1039,31 @@ export const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
+  // Derived media the appliance makes from what the owner stores. Today that is
+  // the browser-playable H.264 rendition of every video whose own codec
+  // browsers cannot be relied on to decode (HEVC from every phone since ~2023;
+  // Chrome on Linux fails it outright). Consumed by
+  // `domains/files/services/VideoPlaybackService`.
+  media: z
+    .object({
+      videoPlayback: z
+        .object({
+          /**
+           * Longest edge of the rendition, in pixels; the original is never
+           * upscaled. `0` keeps the original's resolution. Measured 2026-09-22
+           * on an 11 s 4K HDR phone clip: 1920 → 7.7 MB, native 4K → 34 MB
+           * (about 4.5× the storage, ~26 Mbit/s to stream), and for SDR
+           * sources about 2.5× the encode time. 1080p is what the drawer and
+           * lightbox display at on anything but a 4K monitor full-screen;
+           * the original stays the download at full resolution either way.
+           * Changing this affects renditions made from then on — existing
+           * ones are kept, not re-encoded.
+           */
+          maxEdge: z.coerce.number().int().min(0).default(1920),
+        })
+        .default({}),
+    })
+    .default({}),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,
     /**
@@ -1170,6 +1203,17 @@ export const ConfigSchema = z.object({
      * default — the surface stays dark (routes 404) until explicitly enabled.
      */
     'solid.protocol': booleanStringSchema,
+    /**
+     * Serve the GraphiQL IDE at `GET /graphiql`. The page is static HTML that
+     * authenticates per request with a pasted API key (see docs/graphql-api.md),
+     * so it cannot sit behind the auth guard — which is why it was served
+     * unauthenticated in every environment, loading its scripts from unpkg.com.
+     * Introspection is already off in production; this makes the IDE match.
+     * On by default, off in `production.json`, and ENABLE_GRAPHQL_IDE=true turns
+     * it back on for a deployment that wants it. The Settings link follows the
+     * flag.
+     */
+    'graphql.ide': booleanStringSchema,
     /**
      * The dispatch gate: `ToolRegistry.executeTool` consults `resolveToolGate`
      * and parks a destructive/external/not-locally-permitted intent in
@@ -1543,6 +1587,21 @@ if (/^0{64}$/i.test(parsed.auth.encryption.fieldKey)) {
   const msg =
     '[configuration] FIELD_ENCRYPTION_KEY is the all-zero default — OAuth tokens and ' +
     'provider client secrets would be encrypted with a well-known key. Set a real 256-bit key.';
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(msg);
+  }
+
+  console.warn(msg);
+}
+
+// The sidecars refuse every request without this bearer, so an API that lacks it
+// is one whose imports never summarise and whose forecasts never train — and a
+// sidecar it could still reach would be one anyone could reach. Refuse to boot
+// outside dev rather than run half an appliance.
+if (!parsed.services.sidecarAuthSecret) {
+  const msg =
+    '[configuration] SIDECAR_AUTH_SECRET is not set — the HBPE/Summary sidecars refuse requests ' +
+    'without it. setup-secrets mints it; on an existing appliance it is added on the next boot.';
   if (process.env.NODE_ENV === 'production') {
     throw new Error(msg);
   }

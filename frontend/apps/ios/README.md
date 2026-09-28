@@ -272,13 +272,16 @@ is restored from the keystore on startup, so sessions persist across launches. L
 clears the local key (server-side revocation is in Settings → API Keys — the
 `/api/keys` revoke endpoint is JWT-only).
 
-**OIDC ("Sign in with CI Portal")** opens the **system browser**
-(`@capacitor/browser`) and returns into the app via the **`companion://` deep link**
-(`@capacitor/app` `appUrlOpen`): the backend redirects the native callback to
+**OIDC ("Sign in with CI Portal")** on iOS presents an in-app Safari authentication
+sheet (`ASWebAuthenticationSession` via `LocalHub.startAuthSession`), not the Safari
+app and not `SFSafariViewController` (that sheet swallows `companion://`). The session
+hands the callback to `ApplicationDelegateProxy`, which raises `@capacitor/app`
+`appUrlOpen`. The backend redirects the native callback to
 `companion://oidc/callback?code=<one-time-code>`, which the app exchanges for a
-session. Keep the scheme in sync across `ios/App/App/Info.plist` (`CFBundleURLTypes`),
-the Android `AndroidManifest.xml` intent-filter (documented in `capacitor.config.ts`),
-`@ci/common`'s `OIDC_NATIVE_SCHEME`, and `auth.oidc.nativeRedirectScheme`.
+session. Android still opens the system browser. Keep the scheme in sync across
+`ios/App/App/Info.plist` (`CFBundleURLTypes`), the Android `AndroidManifest.xml`
+intent-filter (documented in `capacitor.config.ts`), `@ci/common`'s
+`OIDC_NATIVE_SCHEME`, and `auth.oidc.nativeRedirectScheme`.
 
 ## Native capabilities & permissions
 

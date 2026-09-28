@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from ci.telemetry import init_telemetry
 
 from . import __version__, functions
+from .auth import install_sidecar_auth
 from .data_aggregator import aggregator
 from .llm_health import check_endpoint_at_startup, probe_endpoint
 from .runner import RunRequest, runner
@@ -51,6 +52,8 @@ app = FastAPI(
     description="Manual summary triggers, background function runner, and data aggregation.",
     lifespan=lifespan,
 )
+
+install_sidecar_auth(app)
 
 # pg-boss function runner: POST /functions/run, GET /runs/{id}
 app.include_router(runner_router)

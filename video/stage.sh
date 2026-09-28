@@ -210,17 +210,19 @@ stage_down() {
 # storyboard as jsmith, including the two onboarding ones this identity cannot
 # reach, and abort before the passes that could have shot them.
 #
-# ⚠️ THE STORYBOARD NO LONGER REFERENCES SEVEN OF THE COMMITTED SHOTS —
-# splash-screen, login-form, onboarding-focus, feed-overview, memory-map-view,
-# memory-stats and connect-providers. Their PNGs are kept
-# (video/README.md § "What is committed": the shot library is an input anyone
-# can render from, and `memory-map-view` cost a 826,478-item real-corpus load),
-# but NOTHING BELOW SHOOTS THEM ANY MORE, because `ci-video capture` can only
+# ⚠️ THE STORYBOARD NO LONGER REFERENCES SIX OF THE COMMITTED SHOTS —
+# splash-screen, login-form, onboarding-focus, feed-overview, memory-stats and
+# connect-providers. Their PNGs are kept (video/README.md § "What is
+# committed": the shot library is an input anyone can render from), but
+# NOTHING BELOW SHOOTS THEM ANY MORE, because `ci-video capture` can only
 # shoot ids the storyboard declares. They are frozen at whatever the product
-# looked like when they were taken. `memory-map-view` is already stale against
-# CI-Server #1891, which restored the Esri attribution control to `Map.tsx`
-# after that shot was captured — re-shoot it from `video/stage.real-corpus.sh`
-# in the same commit as any scene that brings the map back.
+# looked like when they were taken. A seventh, `memory-map-view`, left the
+# storyboard with them and is no longer committed at all: it was the one shot
+# taken against the owner's real archive, and it was deleted on 2026-09-17
+# (it was also stale against CI-Server #1891, which restored the Esri
+# attribution control to `Map.tsx` after it was captured). Any scene that
+# brings the map back shoots it from `video/stage.real-corpus.sh` in the same
+# commit.
 AUTHED_SHOTS=memory-list-view,memory-search-results,memory-graph-view,insights-list,insight-detail-view
 FRESH_SHOTS="onboarding-connect onboarding-trust"
 

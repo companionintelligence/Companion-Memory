@@ -154,6 +154,7 @@ export class HubForwardAuthBridgeService {
         name: email.split('@')[0] || email,
         email,
         password: randomBytes(32).toString('hex'),
+        passwordChosenByUser: false,
       },
     );
 

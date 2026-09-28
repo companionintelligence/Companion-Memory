@@ -82,6 +82,20 @@ describe('VisionRenditionService.render', () => {
     expect(renderJpeg).not.toHaveBeenCalled();
   });
 
+  // The measured library's videos average 281 MB and run to 2 GB; fetching
+  // one to hand libvips is a download that can only fail.
+  it('never downloads a video original; the preview frame is its only rendition', async () => {
+    const renderJpeg = jest.fn();
+    const { service, fileService } = makeService(renderJpeg);
+
+    await expect(
+      service.render(context, { ...original, contentType: 'video/mp4' }, 'preview-key'),
+    ).resolves.toEqual({ jpeg: PREVIEW, source: 'preview' });
+    expect(fileService.getFileContent).toHaveBeenCalledTimes(1);
+    expect(fileService.getFileContent).toHaveBeenCalledWith(context, 'preview-key');
+    expect(renderJpeg).not.toHaveBeenCalled();
+  });
+
   // A missing decoder is an environment fault. Swallowing it here would have
   // every description quietly made from a 300px thumbnail, which is exactly
   // the behaviour this service replaced.

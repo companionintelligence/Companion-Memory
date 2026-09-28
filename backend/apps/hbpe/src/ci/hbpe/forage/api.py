@@ -11,6 +11,8 @@ import numpy as np
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from ci.hbpe.auth import install_sidecar_auth, require_uuid
+
 from .lake import lake_from_spec, sam_saturday_lake
 from .persist import write_trial
 from .trial import ForageError, ForageTrial
@@ -100,7 +102,8 @@ store = TrialStore()
 def _user_id(user_id: str | None) -> str:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id is required")
-    return user_id
+    # Becomes the trial file's name on disk (persist.write_trial) — UUID or nothing.
+    return require_uuid(user_id)
 
 
 def _payload(user_id: str, trial: ForageTrial) -> dict:
@@ -182,4 +185,5 @@ def unpin(user_id: str | None = Query(None)) -> dict:
 
 # Standalone app so the original forage tests can mount just this router.
 app = FastAPI(title="CI Forage", version="0.2.0")
+install_sidecar_auth(app)
 app.include_router(router)

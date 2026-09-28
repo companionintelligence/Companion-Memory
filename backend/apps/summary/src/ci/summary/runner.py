@@ -20,7 +20,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
-import jwt
 import structlog
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -44,6 +43,14 @@ class RunRequest(BaseModel):
         default=None, description="pg-boss job id — completion is reported back for it"
     )
     queue: str | None = Field(default=None, description="pg-boss queue holding job_id")
+    access_token: str | None = Field(
+        default=None,
+        repr=False,
+        description=(
+            "Per-run API token the dispatcher issued for this job's user; presented on "
+            "the completion callback. Never stored on the run record."
+        ),
+    )
 
 
 class RunRecord(BaseModel):
@@ -76,6 +83,7 @@ class FunctionRunner:
         self._workers: list[asyncio.Task] = []
         # Args are held out of RunRecord so GET /runs never leaks payloads.
         self._pending_args: dict[str, dict[str, Any]] = {}
+        self._pending_tokens: dict[str, str | None] = {}
 
     def _ensure_workers(self) -> None:
         # Lazy start on the running loop (uvicorn's), so the runner needs no
@@ -112,6 +120,7 @@ class FunctionRunner:
 
         self._remember(record)
         self._pending_args[record.run_id] = request.args
+        self._pending_tokens[record.run_id] = request.access_token
         self._ensure_workers()
 
         logger.info(
@@ -133,6 +142,7 @@ class FunctionRunner:
             run_id = await self.queue.get()
             record = self.runs.get(run_id)
             args = self._pending_args.pop(run_id, {})
+            token = self._pending_tokens.pop(run_id, None)
 
             if record is None:  # evicted before it ran — should not happen
                 self.queue.task_done()
@@ -168,11 +178,9 @@ class FunctionRunner:
                 self.queue.task_done()
 
             if record.job_id and record.queue:
-                await self._deliver_callback(
-                    record, user_id=str(args.get("user_id", ""))
-                )
+                await self._deliver_callback(record, token=token)
 
-    async def _deliver_callback(self, record: RunRecord, user_id: str) -> None:
+    async def _deliver_callback(self, record: RunRecord, token: str | None) -> None:
         url = f"{settings.api_url.rstrip('/')}/function-runs/callback"
         body: dict[str, Any] = {
             "job_id": record.job_id,
@@ -190,7 +198,7 @@ class FunctionRunner:
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     response = await client.post(
-                        url, json=body, headers=self._auth_headers(user_id)
+                        url, json=body, headers=self._auth_headers(token)
                     )
                 if response.status_code < 300:
                     logger.info(
@@ -225,18 +233,11 @@ class FunctionRunner:
             url=url,
         )
 
-    def _auth_headers(self, user_id: str) -> dict[str, str]:
-        if not settings.api_jwt_secret:
-            logger.warning("api_jwt_secret_missing_callback_will_be_unauthenticated")
+    def _auth_headers(self, token: str | None) -> dict[str, str]:
+        """The per-run token the API issued, echoed back. Nothing is signed here."""
+        if not token:
+            logger.warning("run_token_missing_callback_will_be_unauthenticated")
             return {}
-
-        now = int(time.time())
-        token = jwt.encode(
-            {"sub": user_id, "iat": now, "exp": now + settings.api_jwt_expiry_seconds},
-            settings.api_jwt_secret,
-            algorithm="HS256",
-        )
-
         return {"Authorization": f"Bearer {token}"}
 
 

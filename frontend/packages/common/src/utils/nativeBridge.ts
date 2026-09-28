@@ -48,6 +48,11 @@ interface LocalHubPlugin {
   secureRemove(options: { key: string }): Promise<void>;
   openUrl(options: { url: string }): Promise<void>;
   /**
+   * iOS only. In-app Safari authentication sheet. Resolves when the sheet
+   * finishes and rejects with `code: 'CANCELLED'` if the user dismisses it.
+   */
+  startAuthSession?(options: { url: string; callbackScheme?: string }): Promise<void>;
+  /**
    * iOS only. One high-accuracy fix for placing a pin — does not write the
    * tracking outbox. Rejects when permission is denied or a fix times out.
    */
@@ -522,6 +527,49 @@ export async function openExternalUrl(url: string): Promise<void> {
 
   if (typeof window !== 'undefined') {
     window.location.assign(url);
+  }
+}
+
+/** User dismissed the in-app sign-in sheet. Callers should stay quiet. */
+export class AuthSessionCancelledError extends Error {
+  constructor() {
+    super('Sign-in cancelled');
+    this.name = 'AuthSessionCancelledError';
+  }
+}
+
+function isAuthSessionCancel(err: unknown): boolean {
+  return Boolean(
+    err && typeof err === 'object' && 'code' in err && (err as { code?: unknown }).code === 'CANCELLED',
+  );
+}
+
+/**
+ * Sign-in / registration in an in-app sheet on iOS (`ASWebAuthenticationSession`).
+ * The sheet returns `companion://` to the app, which the existing deep-link
+ * listener finishes. Android, desktop, and web keep opening the system browser.
+ */
+export async function openAuthSession(url: string, callbackScheme = 'companion'): Promise<void> {
+  if (!isIosPlatform()) {
+    await openExternalUrl(url);
+
+    return;
+  }
+
+  const hub = resolveLocalHub();
+
+  if (!hub?.startAuthSession) {
+    throw new Error('Could not open the sign-in sheet.');
+  }
+
+  try {
+    await hub.startAuthSession({ url, callbackScheme });
+  } catch (err: unknown) {
+    if (isAuthSessionCancel(err)) {
+      throw new AuthSessionCancelledError();
+    }
+
+    throw err;
   }
 }
 

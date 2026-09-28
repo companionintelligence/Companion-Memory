@@ -39,6 +39,30 @@ const SNAPSHOT_TTL_MS = 3_000;
 /** `/api/show` and `/api/tags` describe files on disk; they change only on a pull. */
 const CATALOG_TTL_MS = 5 * 60_000;
 
+/**
+ * How long after a runner first shows up in `/api/ps` its card-level sighting
+ * is still taken as its baseline. Long enough to see the vision encoder's
+ * buffers, which are allocated on the first image rather than at load; short
+ * enough that a runner which grows per request (measured 2026-09-22: ~1.9 MiB
+ * per chat request on ROCm, no plateau) contributes minutes of growth, not
+ * hours. After the window the sighting is frozen for that runner's lifetime;
+ * a reload starts a new baseline. Sightings of a runner whose load this
+ * process did not witness are never taken: it may have been growing for hours.
+ */
+const CARD_BASELINE_WINDOW_MS = 10 * 60_000;
+
+/**
+ * How long a planned (non-resident) chat window is answered again without
+ * re-planning. A load takes several seconds, `/api/ps` does not list a model
+ * until it finishes, and the snapshot is refreshed every few seconds — so
+ * without this every call during a load re-derived the window from scratch and
+ * two callers could disagree, each reloading the model at its own answer
+ * (2026-09-22: 29 loads in 3.5 min, alternating 32k and 4k). The memo lasts as
+ * long as the load watchdog: if the model has not shown up by then, the plan
+ * is due a rethink anyway. A resident model always wins over the memo.
+ */
+const PLANNED_WINDOW_STICKY_MS = 120_000;
+
 /** The boot report must never hold the boot open. Same bound as the chat-model preflight. */
 const PREFLIGHT_TIMEOUT_MS = 5_000;
 
@@ -61,6 +85,17 @@ interface PendingLoad {
   numCtx: number | undefined;
   armedAt: number;
   timer: ReturnType<typeof setTimeout> | null;
+}
+
+/** One runner behind a `/api/ps` row, as this process has watched it. */
+interface RunnerInstance {
+  contextLength: number | null;
+  sizeVramBytes: number;
+  firstSeenAt: number;
+  /** True when this process saw the runner arrive; false for one already there at its first look. */
+  witnessed: boolean;
+  /** The largest card figure taken for THIS runner inside its baseline window. */
+  cardBytes: number | null;
 }
 
 /** What the caller saw happen to a utility call. */
@@ -157,6 +192,17 @@ export class ResidencyPlannerService implements OnModuleInit {
 
   private readonly pendingLoads = new Map<string, PendingLoad>();
 
+  /**
+   * The runner instance behind each resident, keyed by canonical id: when it
+   * first appeared and whether this process saw it appear (as opposed to
+   * finding it already there at boot). A change of window or size is a new
+   * instance. Drives {@link CARD_BASELINE_WINDOW_MS}.
+   */
+  private readonly runnerInstances = new Map<string, RunnerInstance>();
+
+  /** The chat window last planned for a non-resident model, per {@link PLANNED_WINDOW_STICKY_MS}. */
+  private readonly plannedWindows = new Map<string, { numCtx: number; plannedAt: number }>();
+
   private coResidencyBlocked: { untilMs: number; reason: string } | null = null;
 
   private lastReport: ResidencyReport | null = null;
@@ -247,6 +293,18 @@ export class ResidencyPlannerService implements OnModuleInit {
       // A resident chat model answers from `/api/ps` alone; `/api/show` and the
       // embed reserve are only needed to size a load that has not happened yet.
       const resident = snapshot.residents.some((entry) => sameModel(entry.name, model));
+      const id = canonicalModelId(model);
+
+      if (resident) {
+        this.plannedWindows.delete(id);
+      } else {
+        const sticky = this.plannedWindows.get(id);
+
+        if (sticky != null && Date.now() - sticky.plannedAt < PLANNED_WINDOW_STICKY_MS) {
+          return sticky.numCtx;
+        }
+      }
+
       const candidate = resident ? null : await this.describeCandidate(model, snapshot);
       const embedReserveBytes =
         resident || snapshot.residents.some((entry) => sameModel(entry.name, embedModel))
@@ -262,6 +320,10 @@ export class ResidencyPlannerService implements OnModuleInit {
         parallelSlots: this.parallelSlots(),
       });
       this.logChatContextChange(model, plan);
+
+      if (plan.kind === 'planned') {
+        this.plannedWindows.set(id, { numCtx: plan.numCtx, plannedAt: Date.now() });
+      }
 
       return plan.kind === 'unknown' ? null : plan.numCtx;
     } catch (err: unknown) {
@@ -606,29 +668,40 @@ export class ResidencyPlannerService implements OnModuleInit {
       gpu != null && gpu.source !== 'config' && largest != null && gpu.usedBytes > residentBytes
         ? gpu.usedBytes - (residentBytes - largest.sizeVramBytes)
         : null;
-
+    const now = Date.now();
+    this.trackRunnerInstances(residents, now);
     for (const resident of residents) {
       const id = canonicalModelId(resident.name);
       const weightBytes = weightsByModel.get(id);
-
       if (weightBytes == null || resident.contextLength == null || resident.sizeVramBytes <= 0) {
         continue;
       }
 
       const isLargest = largest != null && sameModel(resident.name, largest.name);
-      const cardBytes = isLargest && cardBytesForLargest != null ? cardBytesForLargest : undefined;
+      const instance = this.runnerInstances.get(id);
+      // The card figure is this runner's BASELINE, taken only while the runner is young and
+      // only when this process saw it arrive — see CARD_BASELINE_WINDOW_MS. It replaces
+      // whatever an earlier runner left behind (no ratchet across reloads) and, within the
+      // window, only grows: buffers appear as features are exercised (the first image
+      // allocates the vision encoder), and a sighting before that must not win.
+      const inBaselineWindow =
+        instance != null && instance.witnessed && now - instance.firstSeenAt <= CARD_BASELINE_WINDOW_MS;
+      const cardBytes =
+        isLargest && cardBytesForLargest != null && inBaselineWindow
+          ? Math.max(cardBytesForLargest, instance.cardBytes ?? 0)
+          : undefined;
+      if (cardBytes != null && instance != null) {
+        instance.cardBytes = cardBytes;
+      }
+
       const totalTokens = cardBytes != null ? resident.contextLength * this.parallelSlots() : undefined;
       const previous = this.observations.get(id);
-
       if (
         previous &&
         previous.numCtx === resident.contextLength &&
         previous.sizeVramBytes === resident.sizeVramBytes &&
         previous.weightBytes === weightBytes &&
-        // A card figure only ever REPLACES a smaller or absent one: buffers grow as features
-        // are exercised (the first image allocates the vision encoder), and a sighting taken
-        // before that would otherwise overwrite the one that saw it.
-        (cardBytes == null || (previous.cardBytes != null && previous.cardBytes >= cardBytes))
+        (cardBytes == null || previous.cardBytes === cardBytes)
       ) {
         continue;
       }
@@ -638,20 +711,18 @@ export class ResidencyPlannerService implements OnModuleInit {
         previous?.cardBytes != null &&
         previous.totalTokens != null &&
         previous.numCtx === resident.contextLength;
-
       this.observations.set(id, {
         numCtx: resident.contextLength,
         sizeVramBytes: resident.sizeVramBytes,
         weightBytes,
         seenAt: new Date().toISOString(),
         ...(cardBytes != null && totalTokens != null
-          ? { cardBytes: Math.max(cardBytes, previous?.cardBytes ?? 0), totalTokens }
+          ? { cardBytes, totalTokens }
           : keepPrevious
             ? { cardBytes: previous.cardBytes, totalTokens: previous.totalTokens }
             : {}),
       });
       changed = true;
-
       // A model we asked to load is now here: the watchdog can stand down.
       this.clearPending(id);
     }
@@ -661,6 +732,48 @@ export class ResidencyPlannerService implements OnModuleInit {
     }
 
     return { takenAt: Date.now(), residents, gpu, weightsByModel };
+  }
+
+  /**
+   * Reconcile {@link runnerInstances} with this `/api/ps` page. A resident seen for the
+   * first time is a new instance, witnessed only if this process had taken a snapshot
+   * before (a runner already there at boot has an unknown age). A resident whose window
+   * or size changed is a fresh runner too. Residents that left are forgotten, so their
+   * next appearance counts as a witnessed load.
+   */
+  private trackRunnerInstances(residents: readonly ResidentModel[], now: number): void {
+    const witnessedArrivals = this.snapshot != null;
+    const present = new Set<string>();
+    for (const resident of residents) {
+      const id = canonicalModelId(resident.name);
+      present.add(id);
+      const known = this.runnerInstances.get(id);
+      // A reload to the same window and size looks identical in `/api/ps`. But when this
+      // process planned a load for the model (the chat memo) or asked for one (the utility
+      // watchdog) and it now shows up, that arrival IS the runner it planned for — a fresh
+      // baseline, whatever the previous instance looked like.
+      const arrivedAsPlanned = this.plannedWindows.has(id) || this.pendingLoads.has(id);
+      const sameInstance =
+        known != null &&
+        !arrivedAsPlanned &&
+        known.contextLength === resident.contextLength &&
+        known.sizeVramBytes === resident.sizeVramBytes;
+      if (!sameInstance) {
+        this.runnerInstances.set(id, {
+          contextLength: resident.contextLength,
+          sizeVramBytes: resident.sizeVramBytes,
+          firstSeenAt: now,
+          witnessed: witnessedArrivals,
+          cardBytes: null,
+        });
+      }
+    }
+
+    for (const id of [...this.runnerInstances.keys()]) {
+      if (!present.has(id)) {
+        this.runnerInstances.delete(id);
+      }
+    }
   }
 
   private async catalogEntry(model: string, snapshot: Snapshot): Promise<CatalogEntry | null> {

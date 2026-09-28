@@ -33,6 +33,15 @@ export class UserEntity {
   @Column()
   password!: string;
 
+  /**
+   * When the password was last chosen by the user, or null for one they have
+   * never seen (a random password from Portal, OIDC or Hub-bridge provisioning).
+   * Read by `AccountController.requireReauth`: only a password the user knows
+   * can be asked for.
+   */
+  @Column({ type: 'timestamptz', name: 'password_set_at', nullable: true })
+  passwordSetAt?: Date | null;
+
   @Column({ type: 'uuid', name: 'entity_id', nullable: true })
   entityId?: string | null;
 
@@ -98,6 +107,7 @@ export class UserEntity {
       onboardingProgress: entity.onboardingProgress ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
+      passwordSetAt: entity.passwordSetAt ?? null,
     };
   }
 }

@@ -44,6 +44,12 @@ exploring the schema and running queries interactively, themed to the CI palette
 
 ![CI-themed GraphiQL IDE — the branded API-key bar above the schema explorer and editor, with a mint execute button](images/graphiql/graphiql-dark.jpg)
 
+**Availability:** gated by the `graphql.ide` feature flag — on by default, **off in
+production** (`config/production.json`), where the route answers 404 and the Settings link is
+hidden. Set `ENABLE_GRAPHQL_IDE=true` on a deployment that wants it. The page itself is
+static HTML that authenticates per request (below), which is why it is flag-gated rather than
+put behind the auth guard.
+
 **Open it:** Settings → **GraphiQL** (opens `/api/graphiql` in a new tab). It's a full-page
 IDE served by the API — [`GraphQLController`](../backend/apps/api/src/domains/graphql/controllers/GraphQLController.ts)
 returns the page from

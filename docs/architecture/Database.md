@@ -305,9 +305,9 @@ by `observation_id` as the *probe* vector and runs the ANN over `ci_search.embed
 
 For very large imports, the expensive secondary indexes (FTS GIN + HNSW + the
 communications/events secondaries) can be **dropped and rebuilt around the load** via the
-opt-in deferral helper (`maintenance/services/IndexDeferralService.ts`,
-`POST /api/maintenance/indexes/drop|recreate`). Unique/constraint indexes are hard-guarded
-against dropping. The two narrow indexes above — `embeddings_user_id_idx` and
+opt-in deferral helper (registry in `maintenance/deferrableIndexes.ts`, driven only by the
+`bulk-load-indexes` CLI — the HTTP twin was removed 2026-09-24 as unused attack surface).
+Unique/constraint indexes are hard-guarded against dropping. The two narrow indexes above — `embeddings_user_id_idx` and
 `embeddings_item_embedding_hnsw_idx` — are deliberately **not** in
 `DEFERRABLE_INDEXES`: they build in under a second, so deferring them buys nothing. See
 the [bulk load runbook](../../backend/apps/api/db/postgres/BULK_LOAD_RUNBOOK.md).

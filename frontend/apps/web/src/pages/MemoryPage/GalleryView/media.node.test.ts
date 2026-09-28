@@ -413,6 +413,38 @@ describe('getEntityMedia', () => {
       expect(media?.title).toBe('Birthday party clip');
     });
 
+    // An HEVC original carries the server's H.264 rendition beside it: the
+    // lightbox plays that, and the original stays the download (fullUrl).
+    it('keeps the original as fullUrl and carries the playback rendition for a video', () => {
+      const media = getEntityMedia(
+        entity({
+          __typename: 'EventType',
+          id: 'e-hevc',
+          galleryMediaContentType: 'video/quicktime',
+          gallerySourceUrl: '/events/clip.mov',
+          galleryPlaybackUrl: '/events/clip-h264.mp4',
+          galleryTitle: 'HEVC clip',
+        }),
+      );
+
+      expect(media?.fullUrl).toBe('/static/events/clip.mov');
+      expect(media?.playbackUrl).toBe('/static/events/clip-h264.mp4');
+    });
+
+    it('does not put a playback key on a photo', () => {
+      const media = getEntityMedia(
+        entity({
+          __typename: 'EventType',
+          id: 'e-photo',
+          galleryMediaContentType: 'image/jpeg',
+          gallerySourceUrl: '/events/photo.jpg',
+          galleryPlaybackUrl: null,
+        }),
+      );
+
+      expect(media).not.toHaveProperty('playbackUrl');
+    });
+
     // No previewUrl (no derived thumbnail variant yet) — the tile must still
     // render something rather than an empty thumbUrl.
     it('falls back the thumbnail to the full-resolution source when there is no preview', () => {

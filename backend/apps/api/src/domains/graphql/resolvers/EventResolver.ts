@@ -607,6 +607,25 @@ export class EventResolver {
     return (await this.resolveMedia(context, parent))?.contentType ?? null;
   }
 
+  /**
+   * Browser-playable (PLAYBACK variant, H.264) URL for a video whose own
+   * codec browsers cannot be relied on to decode; null when the original
+   * plays as-is or no rendition exists yet. The player prefers this over
+   * `mediaUrl`, which stays the original for download and as the fallback.
+   */
+  @ResolveField(() => String, { nullable: true })
+  async playbackUrl(@Context() context: RequestContext, @Parent() parent: EventType): Promise<string | null> {
+    return (await this.resolveMedia(context, parent))?.playbackUrl ?? null;
+  }
+
+  @ResolveField(() => String, { nullable: true })
+  async playbackContentType(
+    @Context() context: RequestContext,
+    @Parent() parent: EventType,
+  ): Promise<string | null> {
+    return (await this.resolveMedia(context, parent))?.playbackContentType ?? null;
+  }
+
   @ResolveField(() => Int, { nullable: true })
   async mediaWidth(@Context() context: RequestContext, @Parent() parent: EventType): Promise<number | null> {
     return (await this.resolveMedia(context, parent))?.width ?? null;

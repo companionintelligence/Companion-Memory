@@ -34,6 +34,14 @@ import { classifyExternalId } from '../externalIdKind';
 import { ledgerPlatform } from '../identity';
 import { CreateContentDto, SearchContentDto, UpdateContentDto } from '../types';
 
+import {
+  MEDIA_KINDS_SQL,
+  PLATFORMS_SQL,
+  UNLEDGERED_SOURCE_SYSTEMS_SQL,
+  contentTypeFilterSql,
+  contentTypeOptions,
+  distinctColumnSql,
+} from './contentFacetsSql';
 import { CtiAggregate } from './CtiAggregate';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
 
@@ -42,7 +50,12 @@ import { GraphDeltaWriter } from './GraphDeltaWriter';
 export interface FindContentsFilter {
   /** Free text: a case-insensitive substring of the title, the text or the URL. */
   query?: string;
-  /** `ci.content.type` values to keep (image, post, note, …). */
+  /**
+   * Content type options to keep — the values `contentFacets.types` offers:
+   * raw `ci.content.type` values (post, note, like, …) and, for `media` rows,
+   * the kind their mimetype says (image, video, audio, or `media` for the
+   * rest). See contentFacetsSql.contentTypeFilterSql.
+   */
   types?: string[];
   /** `ci.content.mimetype` values to keep. */
   mimetypes?: string[];
@@ -107,9 +120,18 @@ function effectiveSourceSystemSql(alias: string, param: string): string {
   );
 }
 
+/**
+ * How long one user's unledgered-source-system arm is remembered. Long enough
+ * that a library browse (every page load asks) pays the anti-join once, short
+ * enough that a re-import that ledgers legacy rows shows up within minutes.
+ */
+const UNLEDGERED_TTL_MS = 5 * 60_000;
+
 @Injectable()
 export class ContentService {
   private readonly aggregate: CtiAggregate<ContentEntity, ContentBaseEntity>;
+
+  private readonly unledgeredCache = new Map<string, { values: string[]; expiresAt: number }>();
 
   constructor(
     @InjectRepository(ContentEntity)
@@ -659,8 +681,9 @@ export class ContentService {
   }
 
   /**
-   * The content library's filter facets: every distinct `type`, `mimetype`
-   * and delivering platform the user's rows carry, each sorted. Built the way
+   * The content library's filter facets: every distinct type (with `media`
+   * rows offered by kind — image, video, audio — see contentFacetsSql),
+   * `mimetype` and delivering platform the user's rows carry, each sorted. Built the way
    * the explorer's How list is (SourceSystemService) — from what is actually
    * in the rows, not a fixed vocabulary — over the same rows the library
    * pages, so every option offered matches something.
@@ -672,68 +695,70 @@ export class ContentService {
    * delivered it lives in the `ci.record_sources` ledger (§5). Measured live
    * 2026-09-21: 19,135 Google Photos rows, 172 WhatsApp rows and 1,713 folder
    * rows all offered as one `file` option. See {@link effectiveSourceSystemSql}.
+   *
+   * Read along indexes, not by scanning (contentFacetsSql.ts has the
+   * measurements): three loose index scans that cost one probe per distinct
+   * value and touch no shared memory. The one arm with no index to walk —
+   * rows the ledger never saw, an anti-join over the library — runs serially
+   * and is kept per user for {@link UNLEDGERED_TTL_MS}, because its answer
+   * is about legacy rows and changes only when an import re-delivers them.
    */
   async getFacets(context: UserServiceContext): Promise<ContentFacets> {
-    const distinct = async (column: 'type' | 'mimetype'): Promise<string[]> => {
-      const rows = await this.excludeDeletedEventMedia(
-        this.contentRepository
-          .createQueryBuilder('content')
-          .select(`DISTINCT content.${column}`, 'value')
-          .where('content.user_id = :userId', { userId: context.userId })
-          .andWhere(`content.${column} IS NOT NULL`),
-        'content',
-      )
-        .orderBy('value', 'ASC')
-        .getRawMany<{ value: string }>();
+    const params = [context.userId];
+    const values = async (sql: string, extra: unknown[] = []): Promise<string[]> => {
+      const rows: Array<{ v: string }> = await this.contentRepository.manager.query(sql, [
+        ...params,
+        ...extra,
+      ]);
 
-      return rows.map((row) => row.value);
+      return rows.map((row) => row.v);
     };
 
-    // Each row contributes the platforms the ledger recorded for it, or its own
-    // source_system when the ledger recorded none — so a row seen by two
-    // platforms is offered under both, which is what a converged row is.
-    //
-    // Joined as a derived table, not probed per row: a correlated subquery here
-    // was 132k index probes and ~490 ms on a real library (measured 2026-09-21),
-    // this shape is one parallel hash join and ~70 ms. The ledger is
-    // deliberately entity-less (append-only raw SQL, common/persistence/
-    // recordSources.ts), so the join is a subquery over the raw table rather
-    // than an entity `leftJoin`, which TypeORM would try to resolve as a
-    // relation.
-    const platforms = async (): Promise<string[]> => {
-      const rows = await this.excludeDeletedEventMedia(
-        this.contentRepository
-          .createQueryBuilder('content')
-          .select('DISTINCT coalesce(rs.platform, content.source_system)', 'value')
-          .leftJoin(
-            (qb) =>
-              qb
-                .subQuery()
-                .select('r.user_id', 'user_id')
-                .addSelect('r.record_id', 'record_id')
-                .addSelect('r.platform', 'platform')
-                .from('ci.record_sources', 'r')
-                .where("r.record_table = 'content' AND r.platform IS NOT NULL"),
-            'rs',
-            'rs.user_id = content.user_id AND rs.record_id = content.id',
-          )
-          .where('content.user_id = :userId', { userId: context.userId })
-          .andWhere('coalesce(rs.platform, content.source_system) IS NOT NULL'),
-        'content',
-      )
-        .orderBy('value', 'ASC')
-        .getRawMany<{ value: string }>();
-
-      return rows.map((row) => row.value);
-    };
-
-    const [types, mimetypes, sourceSystems] = await Promise.all([
-      distinct('type'),
-      distinct('mimetype'),
-      platforms(),
+    const unledgered = await this.unledgeredSourceSystems(context.userId);
+    const [rawTypes, mediaKinds, mimetypes, sourceSystems] = await Promise.all([
+      values(distinctColumnSql('type')),
+      values(MEDIA_KINDS_SQL),
+      values(distinctColumnSql('mimetype')),
+      values(PLATFORMS_SQL, [unledgered]),
     ]);
 
-    return { types, mimetypes, sourceSystems };
+    return { types: contentTypeOptions(rawTypes, mediaKinds), mimetypes, sourceSystems };
+  }
+
+  /**
+   * {@link UNLEDGERED_SOURCE_SYSTEMS_SQL} for one user, remembered for
+   * {@link UNLEDGERED_TTL_MS}. Serial on purpose: `SET LOCAL` inside the
+   * transaction keeps the anti-join's hash table in process-local memory
+   * rather than the container's /dev/shm, which is what the parallel plan
+   * would use and what ran out. A converged library answers `[]` here.
+   */
+  private async unledgeredSourceSystems(userId: string): Promise<string[]> {
+    const cached = this.unledgeredCache.get(userId);
+
+    if (cached != null && cached.expiresAt > Date.now()) {
+      return cached.values;
+    }
+
+    const values = await this.contentRepository.manager.transaction(async (manager) => {
+      await manager.query('SET LOCAL max_parallel_workers_per_gather = 0');
+
+      const rows: Array<{ v: string }> = await manager.query(UNLEDGERED_SOURCE_SYSTEMS_SQL, [userId]);
+
+      return rows.map((row) => row.v);
+    });
+
+    this.unledgeredCache.set(userId, { values, expiresAt: Date.now() + UNLEDGERED_TTL_MS });
+
+    return values;
+  }
+
+  /** Drop the remembered unledgered arm for a user (or everyone), so the next facet read recomputes it. */
+  forgetUnledgeredSourceSystems(userId?: string): void {
+    if (userId == null) {
+      this.unledgeredCache.clear();
+    } else {
+      this.unledgeredCache.delete(userId);
+    }
   }
 
   /** The library's explicit filters, each an IN list over its column. */
@@ -758,7 +783,10 @@ export class ContentService {
     }
 
     if (filter.types && filter.types.length > 0) {
-      scoped = scoped.andWhere(`${alias}.type IN (:...contentTypes)`, { contentTypes: filter.types });
+      // Kinds, not raw column values — see contentTypeFilterSql.
+      const { sql, parameters } = contentTypeFilterSql(alias, filter.types);
+
+      scoped = scoped.andWhere(sql, parameters);
     }
 
     if (filter.mimetypes && filter.mimetypes.length > 0) {

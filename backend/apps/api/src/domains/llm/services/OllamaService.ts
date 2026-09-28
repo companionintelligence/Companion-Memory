@@ -24,6 +24,7 @@ import {
 } from '@ci/domains/tools';
 
 import { ChatModelPreferenceService } from '../chat-model-preference.module';
+import { NUM_CTX_ENV_VAR, parseNumCtx } from '../contextBudget';
 import {
   createFirstResponseFetch,
   type FirstResponseFetch,
@@ -1085,9 +1086,12 @@ export class OllamaService implements OnModuleInit {
     const selection: UtilityModelChoice =
       options.tier === 'utility' ? await this.resolveUtilityModel() : { model: options.model };
     const model = selection.model;
-    // A caller's explicit window wins over the planner's; the planner's fills
-    // the gap every background caller used to leave.
-    const numCtx = options.numCtx ?? selection.numCtx;
+    // A caller's explicit window wins; then the utility plan's; then the chat-context plan
+    // for whatever model this call runs on. Nothing is left to Ollama's own default: that
+    // default was a second planner (32k on a 24 GB card) that disagreed with this one on
+    // every cold start, and the two took turns reloading the model — 29 loads in 3.5 min
+    // on 2026-09-22. `CI_LLM_NUM_CTX` still outranks the planner, as it does for chat.
+    const numCtx = options.numCtx ?? selection.numCtx ?? (await this.defaultContextTokens(model));
 
     await this.validateModel(context, model);
 
@@ -1222,6 +1226,25 @@ export class OllamaService implements OnModuleInit {
     }
 
     return this.residencyPlanner.resolveChatContextTokens(model);
+  }
+
+  /**
+   * The window a call that named none should ask for: CI-Hub's `CI_LLM_NUM_CTX`
+   * when exported, else the planner's answer for `model`, else `undefined` so
+   * the request carries no `num_ctx` (an OpenAI-compatible backend ignores it
+   * anyway). Never throws.
+   */
+  private async defaultContextTokens(model: string): Promise<number | undefined> {
+    const configured = parseNumCtx(process.env[NUM_CTX_ENV_VAR]);
+    if (configured != null) {
+      return configured;
+    }
+
+    if (this.llmEndpointService.getOpenAiDriver()) {
+      return undefined;
+    }
+
+    return (await this.resolveChatContextTokens(model)) ?? undefined;
   }
 
   async resolveModel(context: RequestContext, opts?: ValidateModelOptions): Promise<ValidateModelResult> {

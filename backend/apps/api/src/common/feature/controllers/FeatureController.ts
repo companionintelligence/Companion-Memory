@@ -17,11 +17,14 @@ export class FeatureController {
     return allFeatures;
   }
 
+  /**
+   * Unauthenticated on purpose: the SPA reads it before login. It answers with
+   * the `PUBLIC_FEATURES` allowlist only — see FeatureService for why the full
+   * map stayed behind the guard above.
+   */
   @Get('features/global')
   @HttpCode(200)
   async globalFeatures() {
-    const allFeatures = await this.featureService.getAllFeatures();
-
-    return allFeatures;
+    return this.featureService.getPublicFeatures();
   }
 }

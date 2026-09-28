@@ -41,6 +41,7 @@ const SEARCH_QUERY = gql(`
             galleryFilename: filename
             galleryPreviewUrl: previewUrl
             gallerySourceUrl: sourceUrl
+            galleryPlaybackUrl: playbackUrl
             # Original byte size, so a tile can decline to use a huge original
             # as its thumbnail when no PREVIEW variant has been generated.
             galleryMediaSize: size
@@ -57,6 +58,7 @@ const SEARCH_QUERY = gql(`
             # EventType media aliases below).
             galleryPreviewUrl: previewUrl
             galleryFileUrl: mediaUrl
+            galleryPlaybackUrl: playbackUrl
             galleryMediaSize: mediaSize
             # Provider-hosted player derived server-side from url/externalId
             # (YouTube, Spotify, …). Null for anything without one. The tile
@@ -158,6 +160,7 @@ const SEARCH_QUERY = gql(`
             galleryMediaContentType: mediaContentType
             galleryPreviewUrl: previewUrl
             gallerySourceUrl: mediaUrl
+            galleryPlaybackUrl: playbackUrl
             galleryMediaSize: mediaSize
             galleryTitle: title
             galleryLocationName: locationName

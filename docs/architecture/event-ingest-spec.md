@@ -57,6 +57,7 @@ What's missing is the **single public HTTP surface** that every capture source w
 - `Companion-Pipe` (screenpipe) has no documented integration path at all
 - `CI-Import-Tools` writes to its own local SQLite *(since resolved differently: that repo was retired — renamed `ZARCHIVED-CI-Import-Tools` — and its parsers now run in-process as CI-Server's `domains/import`, whose push stage calls the NestJS services directly. No SQLite mirror, no HTTP transport. See the status block above.)*
 - `CI-Even-Realities`, `CI-Pebble`, `CI-OMI`, `CI-MaixCAM` write through whichever controller a developer chose at the time
+- `CI-Mentra` (smart glasses) writes conversation turns and memory fragments through `/memory/{turn,write}` with a memory-scoped key (Hub connect app `ci-mentra`), not through an ingest lane; where it registers a device it uses `device_type: smart_glasses`
 - `CI-Active-Inference` produces derived events but has no destination
 
 Result: the graph is rich but **fragmented at the edges**. No client gets a complete picture without compositing across N controllers. There is no shared schema for capture clients to target.

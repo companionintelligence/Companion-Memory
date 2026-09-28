@@ -60,7 +60,8 @@ export const DEFAULT_CONNECT_SCOPES: readonly string[] = [MEMORY_SCOPE, INTENTS_
  * at its next rotation, with no re-consent. So every marketplace app that
  * declares `hub_integration.memory` gets its tier from the routes it actually
  * calls (named below, or left on the default on purpose), and
- * ConnectService.test pins each one.
+ * ConnectService.test pins each one. The `ci-mentra` glasses bridge and the
+ * `ci-ha-voice` Home Assistant voice facade are confined to memory alone.
  */
 export function scopesForApp(appUrn: string): string[] {
   const appName = appUrn.split(':')[0];
@@ -97,6 +98,15 @@ export function scopesForApp(appUrn: string): string[] {
       // Companion Glasses Bridge (CI-Even-Realities `agent-hub`) augments chat
       // with `POST /memory/recall` and writes the turn back with
       // `POST /memory/turn`. Memory alone covers both.
+    case 'ci-mentra':
+      // Mentra smart-glasses bridge: it only reads context/recall and records
+      // turns/fragments through `/memory/*`, so it is confined to the memory
+      // scope — no intents, no MCP, no raw data plane.
+    case 'ci-ha-voice':
+      // Home Assistant voice (CI-Home-Assistant-Voice-PE): grounds each spoken
+      // answer in `/memory/context` + `/memory/recall` and saves the exchange
+      // with `/memory/turn`. It runs no tools and reads no raw data, so memory
+      // is the whole grant.
       return [MEMORY_SCOPE];
     default:
       // Includes `hermes-agent`: the upstream Hermes image declares the memory
@@ -117,8 +127,8 @@ export function scopesForApp(appUrn: string): string[] {
  * `DEFAULT_API_KEY_CAPABILITY` — an authority level nobody had picked for these
  * apps, and one that would move under them if that default ever changed.
  *
- * The chat agents (`ci-openclaw`, `ci-hermes`) are on `full`; everything else on
- * `write`. Both chosen, not inherited:
+ * The chat agents (`ci-openclaw`, `ci-hermes`) are on `full`; everything else
+ * (including the memory-scoped `ci-mentra` glasses bridge) on `write`. Both chosen, not inherited:
  *
  * - the chat agents record as well as recall, so `read` would break them
  *   (`POST /memory/write` and `/memory/turn` are `@RequireCapability(write)`).
@@ -161,6 +171,16 @@ export function capabilityForApp(appUrn: string): ApiKeyCapability {
       // destructive attempt into an approval card rather than running it. Paired
       // with the `managed-app` rule in resolveToolGate; see the docblock above.
       return FULL_CAPABILITY;
+    case 'ci-mentra':
+      // Glasses bridge: reads context/recall and writes turns/fragments
+      // (`POST /memory/turn` and `/memory/write` need `write`). Not paired with
+      // the confirmation gate, so never `full`. Stated explicitly rather than
+      // riding the default so a change there cannot move it.
+      return WRITE_CAPABILITY;
+    case 'ci-ha-voice':
+      // Home Assistant voice: `/memory/turn` needs `write`, and a speaker in the
+      // kitchen has no business deleting memories. Explicit for the same reason.
+      return WRITE_CAPABILITY;
     default:
       // Capture apps, glasses bridge, un-enumerated apps: write, destroy nothing.
       return WRITE_CAPABILITY;

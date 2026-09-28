@@ -14,7 +14,14 @@
  * PKCE is persisted to localStorage before Safari opens because iOS often kills
  * the webview while the user is on the Portal, then cold-starts us from the callback.
  */
-import { addAppUrlOpenListener, apiFetch, closeBrowser, getLaunchUrl, openExternalUrl } from '@ci/common';
+import {
+  addAppUrlOpenListener,
+  apiFetch,
+  AuthSessionCancelledError,
+  closeBrowser,
+  getLaunchUrl,
+  openAuthSession,
+} from '@ci/common';
 
 import { DEFAULT_PORTAL_URL } from './portal-client';
 
@@ -442,9 +449,10 @@ async function exchangeCode(portal: string, code: string, codeVerifier: string):
 }
 
 /**
- * Run the full OIDC PKCE login against the Portal. Opens the system browser and
- * resolves once the user finishes and the `companion://auth/callback` deep link is
- * captured and exchanged for tokens.
+ * Run the full OIDC PKCE login against the Portal. On iOS the Portal page is an
+ * in-app authentication sheet; elsewhere it is the system browser. Resolves once
+ * the user finishes and the `companion://auth/callback` deep link is captured and
+ * exchanged for tokens.
  */
 export async function loginWithPortalOidc(
   portalUrl = DEFAULT_PORTAL_URL,
@@ -468,8 +476,35 @@ export async function loginWithPortalOidc(
   exchangeByCode.clear();
   persistPendingOidc({ verifier: codeVerifier, state, portal, startedAt: Date.now() });
 
-  const callback = awaitOidcCallback(state, options.signal);
-  await openExternalUrl(authorizeUrl.toString());
+  // `addEventListener` does not fire for a signal that is already aborted, and
+  // opening the sheet after the caller has given up is pointless.
+  if (options.signal?.aborted) {
+    await clearPendingOidc();
+    throw new OidcCancelledError();
+  }
+
+  const abortOnDismiss = new AbortController();
+  const onCallerAbort = () => abortOnDismiss.abort();
+  options.signal?.addEventListener('abort', onCallerAbort);
+  const callback = awaitOidcCallback(state, abortOnDismiss.signal);
+
+  try {
+    await openAuthSession(authorizeUrl.toString());
+  } catch (err) {
+    // The sheet (or the browser open) failed before a callback arrived. Stop the
+    // waiter so its timeout does not keep running, then surface a cancel as the
+    // same quiet error the abort path already uses.
+    abortOnDismiss.abort();
+    options.signal?.removeEventListener('abort', onCallerAbort);
+    await callback.catch(() => undefined);
+
+    if (err instanceof AuthSessionCancelledError) {
+      await clearPendingOidc();
+      throw new OidcCancelledError();
+    }
+
+    throw err;
+  }
 
   try {
     const { code } = await callback;
@@ -483,6 +518,8 @@ export async function loginWithPortalOidc(
     }
 
     throw err;
+  } finally {
+    options.signal?.removeEventListener('abort', onCallerAbort);
   }
 }
 

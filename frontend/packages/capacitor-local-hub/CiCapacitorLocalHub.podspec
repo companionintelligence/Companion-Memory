@@ -26,6 +26,9 @@ Pod::Spec.new do |s|
   s.source_files = 'ios/Sources/**/*.{swift,h,m,c,cc,mm,cpp}'
   s.ios.deployment_target = '15.0'
   s.dependency 'Capacitor'
+  # Sign-in sheet (`ASWebAuthenticationSession`). A system framework, so this only
+  # tells CocoaPods to link it into the pod — it is not a third-party dependency.
+  s.framework = 'AuthenticationServices'
   # swisspol/GCDWebServer -- embedded HTTP server. Only the default 'Core' subspec is
   # needed (plain routing + JSON responses); we don't use the WebDAV/WebUploader
   # subspecs. Pinned to the 3.5.x line (latest tagged release at the time of writing is

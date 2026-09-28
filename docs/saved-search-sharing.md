@@ -13,7 +13,7 @@
 > there via `public/_redirects`). The
 > screenshots below are captured from the CI-Server Storybook stories via
 > `CI-Docs/scripts/capture-component-screenshots.sh` and committed to both repos so they
-> stay in sync.
+> stay in sync — except the share modal, which is deliberately not committed here (see §3).
 
 ## Screenshots / live UI
 
@@ -55,7 +55,9 @@ immediately opens the share modal on it — no trip to the Saved Searches page.
 
 ### 3. Share modal  ·  story `saved-search-share-modal--link-shared`
 
-![Share modal](images/saved-search/share-modal.jpg)
+> No screenshot here, on purpose: a capture of this story prints the Storybook dev origin into the
+> link and embed fields (`http://localhost:6006/shared/…`, because `shareUrl` in `shareLink.ts`
+> defaults to `window.location.origin`). Open the story live instead.
 
 - **Visibility** toggle: _Not shared_ / _Link shared_.
 - Turning on **Link shared** mints an unguessable token and shows the **capability link**

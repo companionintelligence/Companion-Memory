@@ -18,9 +18,10 @@ import { FilterValuePicker } from './FilterValuePicker';
 // distinct event types present for the user, and confined to that list: the
 // backend matches the selection exactly, so free text is refused and a
 // URL-carried type the list no longer holds is flagged. Event-scoped: the
-// search only applies it to rows of kind `event`, so the explorer toolbar
-// mounts this picker only while events are among the kinds in play (see
-// eventsInPlay).
+// search only applies it to rows of kind `event` and lets every other kind
+// through, so the explorer pins the browse to events while one is set
+// (resolveExplorerTypes) and mounts this picker only while events are among
+// the kinds in play (see eventsInPlay).
 //
 // Not to be confused with the toolbar's "How" picker (ConnectorFilter), which
 // is the data-source dimension (`?connectors=`, matched on source_system).

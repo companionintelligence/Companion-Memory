@@ -178,8 +178,8 @@ client uses. (`CI-Demo-Companions-John-Smith` was the other candidate and is not
 usable: it is ten markdown *companion personas*, not a dataset.)
 
 **Box A** gets a bounded subset of the owner's real archive. Verified end to
-end: `--source apple --limit 1` stages the 1.8MB `calendar/liam.broza@gmail.com
-.ics` into `.federation-harness/staging/`, `ci` uploads *that copy*, and
+end: `--source apple --limit 1` stages the 1.8MB `calendar/<owner's address>.ics`
+into `.federation-harness/staging/`, `ci` uploads *that copy*, and
 the run walks unpack → parse → media → push to `completed` with **1,143 real
 calendar events** in box A's memory. The archive is byte-for-byte unchanged
 afterwards.

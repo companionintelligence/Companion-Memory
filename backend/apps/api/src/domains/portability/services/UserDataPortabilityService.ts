@@ -2,9 +2,11 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import type { Request, Response } from 'express';
 import { DataSource, QueryRunner } from 'typeorm';
+import { v4 as uuidv4 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 import { FileService } from '@ci/domains/files';
 import { UserService } from '@ci/domains/user';
 
@@ -22,17 +24,65 @@ import type {
   UserProfileSnapshot,
   UserScopedTable,
 } from '../types';
-import { DISCOVER_USER_TABLES_SQL, USER_DATA_SCHEMAS, isExcluded, qualifiedName } from '../userDataTables';
+import {
+  DISCOVER_USER_TABLES_SQL,
+  USER_DATA_SCHEMAS,
+  isExcluded,
+  qualifiedName,
+  quoteIdentifier,
+} from '../userDataTables';
 
 const ARCHIVE_VERSION = 1 as const;
 const INSERT_CHUNK_SIZE = 200;
+/** The one user-scoped table whose rows point at object storage. */
+const FILES_TABLE = 'ci.files';
 const EXPORT_ROW_PAGE_SIZE = 500;
 
 interface PendingFileImport {
-  bucket: string;
-  key: string;
+  /** The key the ARCHIVE names — resolved through the import's FileKeyMap at write time. */
+  archivedKey: string;
   total: number;
   parts: Map<number, string>;
+}
+
+/**
+ * Decides, for one import, which object-store key each archived file lands
+ * under — and thereby which `ci.files` row points where.
+ *
+ * The archive names a `bucket` and `key` per file. Neither may be trusted:
+ * the bucket is always this appliance's configured one, and a key is honoured
+ * only if THIS account already owned a file at that key on THIS box before the
+ * import began (so a same-box restore rewrites the person's own objects in
+ * place, exactly as before). Any other key — another account's, a guess, a
+ * value from a different appliance — is replaced by a freshly minted UUID, the
+ * same way an upload mints one. The replacement is stable within the import,
+ * so a file's row and its chunks agree on the key whichever arrives first.
+ *
+ * What this closes: with the archive's key written verbatim, an import could
+ * overwrite any object in the store (write), and a `ci.files` row carrying
+ * someone else's key was then served back as the importer's own file by every
+ * by-key reader, export included (read). A foreign key now never survives the
+ * import, in either direction.
+ */
+class FileKeyMap {
+  private readonly minted = new Map<string, string>();
+
+  constructor(private readonly ownedKeys: ReadonlySet<string>) {}
+
+  resolve(archivedKey: string): string {
+    if (this.ownedKeys.has(archivedKey)) {
+      return archivedKey;
+    }
+
+    let key = this.minted.get(archivedKey);
+
+    if (!key) {
+      key = uuidv4();
+      this.minted.set(archivedKey, key);
+    }
+
+    return key;
+  }
 }
 
 @Injectable()
@@ -111,6 +161,7 @@ export class UserDataPortabilityService {
     let rowsImported = 0;
     let filesRestored = 0;
     let started = false;
+    let keyMap: FileKeyMap | null = null;
 
     try {
       await readPortabilityNdjsonStream(req, async (record) => {
@@ -125,6 +176,10 @@ export class UserDataPortabilityService {
 
           await this.setReplicationRole(queryRunner, 'replica');
 
+          // Must precede the deletes: "owned" means owned before this import
+          // touched anything, and the archive has no say in it.
+          keyMap = new FileKeyMap(await this.snapshotOwnedFileKeys(queryRunner, context.userId));
+
           for (const table of [...tables].reverse()) {
             await this.deleteUserRows(queryRunner, context.userId, table);
           }
@@ -134,7 +189,7 @@ export class UserDataPortabilityService {
           return;
         }
 
-        if (!started) {
+        if (!started || !keyMap) {
           throw new BadRequestException('Archive manifest must be the first record');
         }
 
@@ -145,7 +200,7 @@ export class UserDataPortabilityService {
             throw new BadRequestException(`Unknown table in archive: ${record.table}`);
           }
 
-          rowsImported += await this.insertUserRows(queryRunner, context.userId, table, [record.row]);
+          rowsImported += await this.insertUserRows(queryRunner, context.userId, table, [record.row], keyMap);
           touchedTables.add(record.table);
 
           return;
@@ -154,8 +209,7 @@ export class UserDataPortabilityService {
         const pending =
           pendingFiles.get(record.id) ??
           ({
-            bucket: record.bucket,
-            key: record.key,
+            archivedKey: record.key,
             total: record.total,
             parts: new Map<number, string>(),
           } satisfies PendingFileImport);
@@ -176,8 +230,8 @@ export class UserDataPortabilityService {
 
           await this.fileService.putObject(
             context,
-            pending.bucket,
-            pending.key,
+            config.staticfiles.bucket,
+            keyMap.resolve(pending.archivedKey),
             Buffer.concat(ordered.map((part) => Buffer.from(part, 'base64'))),
           );
           filesRestored += 1;
@@ -249,16 +303,19 @@ export class UserDataPortabilityService {
       await this.setReplicationRole(queryRunner, 'replica');
 
       const tables = await this.discoverUserTables();
+      // Before the deletes — see FileKeyMap.
+      const keyMap = new FileKeyMap(await this.snapshotOwnedFileKeys(queryRunner, context.userId));
+
       for (const table of [...tables].reverse()) {
         await this.deleteUserRows(queryRunner, context.userId, table);
       }
 
       for (const table of tables) {
         const rows = archive.tables[qualifiedName(table)] ?? [];
-        rowsImported += await this.insertUserRows(queryRunner, context.userId, table, rows);
+        rowsImported += await this.insertUserRows(queryRunner, context.userId, table, rows, keyMap);
       }
 
-      filesRestored = await this.restoreFileBlobs(context, archive.fileBlobs);
+      filesRestored = await this.restoreFileBlobs(context, archive.fileBlobs, keyMap);
 
       await this.setReplicationRole(queryRunner, 'origin');
       await queryRunner.commitTransaction();
@@ -309,6 +366,7 @@ export class UserDataPortabilityService {
       schema: string;
       table: string;
       user_column: string;
+      columns?: string[] | null;
     }>;
 
     return discovered
@@ -317,6 +375,8 @@ export class UserDataPortabilityService {
         schema: row.schema,
         table: row.table,
         userColumn: row.user_column as UserScopedTable['userColumn'],
+        // Fail closed: a row without a column list can accept no imported rows.
+        columns: Array.isArray(row.columns) ? row.columns : [],
       }));
   }
 
@@ -412,7 +472,10 @@ export class UserDataPortabilityService {
     };
   }
 
-  private async selectUserRows(userId: string, table: UserScopedTable): Promise<Record<string, unknown>[]> {
+  private async selectUserRows(
+    userId: string,
+    table: Pick<UserScopedTable, 'schema' | 'table' | 'userColumn'>,
+  ): Promise<Record<string, unknown>[]> {
     return this.dataSource.query(
       `SELECT * FROM "${table.schema}"."${table.table}" WHERE ${table.userColumn} = $1`,
       [userId],
@@ -434,27 +497,35 @@ export class UserDataPortabilityService {
     userId: string,
     table: UserScopedTable,
     rows: Record<string, unknown>[],
+    keyMap: FileKeyMap,
   ): Promise<number> {
     if (rows.length === 0) {
       return 0;
     }
 
     let inserted = 0;
+    const target = `${quoteIdentifier(table.schema)}.${quoteIdentifier(table.table)}`;
+    const knownColumns = new Set(table.columns);
 
     for (let offset = 0; offset < rows.length; offset += INSERT_CHUNK_SIZE) {
       const chunk = rows.slice(offset, offset + INSERT_CHUNK_SIZE);
 
       for (const row of chunk) {
-        const normalized = this.normalizeImportRow(row, userId, table.userColumn);
+        const normalized = this.normalizeImportRow(row, userId, table, keyMap);
         const columns = Object.keys(normalized);
+
+        // The archive's keys become identifiers in the statement below. Only
+        // names the catalog reports for this table may get there: anything else
+        // is either drift between the exporting and importing schema (which the
+        // INSERT would have rejected anyway, just later and less clearly) or an
+        // attempt to break out of the identifier position. Reject before SQL.
+        this.assertKnownColumns(table, columns, knownColumns);
+
         const values = Object.values(normalized);
         const placeholders = columns.map((_, index) => `$${index + 1}`).join(', ');
-        const columnList = columns.map((column) => `"${column}"`).join(', ');
+        const columnList = columns.map(quoteIdentifier).join(', ');
 
-        await queryRunner.query(
-          `INSERT INTO "${table.schema}"."${table.table}" (${columnList}) VALUES (${placeholders})`,
-          values,
-        );
+        await queryRunner.query(`INSERT INTO ${target} (${columnList}) VALUES (${placeholders})`, values);
         inserted += 1;
       }
     }
@@ -462,12 +533,65 @@ export class UserDataPortabilityService {
     return inserted;
   }
 
+  private assertKnownColumns(
+    table: UserScopedTable,
+    columns: string[],
+    knownColumns: ReadonlySet<string>,
+  ): void {
+    const unknown = columns.filter((column) => !knownColumns.has(column));
+
+    if (unknown.length === 0) {
+      return;
+    }
+
+    // Name a few so a genuine schema-drift case is diagnosable, but keep the
+    // message bounded: the keys are caller-controlled and can be arbitrarily
+    // long or numerous.
+    const shown = unknown
+      .slice(0, 5)
+      .map((column) => JSON.stringify(column.length > 80 ? `${column.slice(0, 80)}…` : column))
+      .join(', ');
+    const more = unknown.length > 5 ? ` (+${unknown.length - 5} more)` : '';
+
+    throw new BadRequestException(
+      `Archive row for ${qualifiedName(table)} names column(s) that do not exist: ${shown}${more}`,
+    );
+  }
+
   private normalizeImportRow(
     row: Record<string, unknown>,
     userId: string,
-    userColumn: UserScopedTable['userColumn'],
+    table: UserScopedTable,
+    keyMap: FileKeyMap,
   ): Record<string, unknown> {
-    return { ...row, [userColumn]: userId };
+    const normalized: Record<string, unknown> = { ...row, [table.userColumn]: userId };
+
+    // A file row's storage pointer is rewritten alongside its bytes so the two
+    // stay consistent — see FileKeyMap for why neither is taken from the archive.
+    if (qualifiedName(table) === FILES_TABLE) {
+      if (typeof normalized.key === 'string' && normalized.key !== '') {
+        normalized.key = keyMap.resolve(normalized.key);
+      }
+
+      if (normalized.bucket != null) {
+        normalized.bucket = config.staticfiles.bucket;
+      }
+    }
+
+    return normalized;
+  }
+
+  /**
+   * The object keys this account's files pointed at before the import — the
+   * only keys an archive is allowed to write to in place. Read inside the
+   * import transaction, before its deletes.
+   */
+  private async snapshotOwnedFileKeys(queryRunner: QueryRunner, userId: string): Promise<Set<string>> {
+    const rows = (await queryRunner.query(`SELECT key FROM ci.files WHERE user_id = $1 AND key IS NOT NULL`, [
+      userId,
+    ])) as Array<{ key: string }> | undefined;
+
+    return new Set((rows ?? []).map((row) => String(row.key)));
   }
 
   private serializeRow(row: Record<string, unknown>): Record<string, unknown> {
@@ -521,15 +645,19 @@ export class UserDataPortabilityService {
     return blobs;
   }
 
-  private async restoreFileBlobs(context: UserServiceContext, blobs: FileBlobSnapshot[]): Promise<number> {
+  private async restoreFileBlobs(
+    context: UserServiceContext,
+    blobs: FileBlobSnapshot[],
+    keyMap: FileKeyMap,
+  ): Promise<number> {
     let restored = 0;
 
     for (const blob of blobs) {
       try {
         await this.fileService.putObject(
           context,
-          blob.bucket,
-          blob.key,
+          config.staticfiles.bucket,
+          keyMap.resolve(blob.key),
           Buffer.from(blob.contentBase64, 'base64'),
         );
         restored += 1;

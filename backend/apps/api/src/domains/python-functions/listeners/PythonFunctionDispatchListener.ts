@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
+import { sidecarAuthHeaders } from '@ci/common/sidecar/sidecarAuth';
 import config from '@ci/configuration';
 import { OnEvent, type Acknowledgement } from '@ci/domains/events';
 
 import { PythonFunctionRunEvent } from '../events';
+import { PythonFunctionTokenService } from '../services/PythonFunctionTokenService';
 import {
   PYTHON_FUNCTION_QUEUE_OPTIONS,
   PYTHON_FUNCTION_QUEUES,
@@ -46,7 +48,10 @@ export class PythonFunctionDispatchListener {
   /** One in-flight-or-settled catalog probe per target; see `preflight()`. */
   private readonly preflights = new Map<PythonFunctionTarget, Promise<void>>();
 
-  constructor(private readonly logger: LoggerService) {
+  constructor(
+    private readonly logger: LoggerService,
+    private readonly tokens: PythonFunctionTokenService,
+  ) {
     this.logger.setContext(PythonFunctionDispatchListener.name);
   }
 
@@ -79,18 +84,23 @@ export class PythonFunctionDispatchListener {
     await this.preflight(target, baseUrl);
 
     try {
+      const queue = PYTHON_FUNCTION_QUEUES[target];
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // The shared bearer gets the request past the sidecar's door.
+        headers: { 'Content-Type': 'application/json', ...sidecarAuthHeaders() },
         body: JSON.stringify({
           function: payload.function,
           args: payload.args,
+          // What the run may act as: this job's user, until shortly after the job
+          // would time out. The only credential the sidecar ever holds.
+          access_token: this.tokens.issueRunToken({ userId: payload.userId, jobId: ack.jobId, queue }),
           // From the ACK: this is pg-boss's job id, which is what the sidecar
           // hands back to PythonFunctionCallbackController and what
           // `boss.complete(queue, jobId)` needs. The wire field name is
           // unchanged — the sidecars' pytest suites pin `job_id`.
           job_id: ack.jobId,
-          queue: PYTHON_FUNCTION_QUEUES[target],
+          queue,
         }),
         signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS),
       });
@@ -163,7 +173,10 @@ export class PythonFunctionDispatchListener {
     const expected = PYTHON_FUNCTIONS[target];
 
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS) });
+      const response = await fetch(url, {
+        headers: sidecarAuthHeaders(),
+        signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS),
+      });
 
       if (!response.ok) {
         this.logger.error('Python sidecar does not serve its function catalog', {
@@ -216,6 +229,7 @@ export class PythonFunctionDispatchListener {
   private async reportedVersion(baseUrl: string): Promise<string> {
     try {
       const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/health`, {
+        headers: sidecarAuthHeaders(),
         signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS),
       });
 

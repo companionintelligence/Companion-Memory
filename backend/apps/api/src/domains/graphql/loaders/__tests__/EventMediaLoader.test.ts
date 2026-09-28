@@ -28,13 +28,23 @@ function signedFile(partial: Partial<SignedFile> & { id: string }): SignedFile {
   } as SignedFile;
 }
 
-function makeServices(opts: { links: MediaLink[]; originals: SignedFile[]; previews: SignedFile[] }) {
+function makeServices(opts: {
+  links: MediaLink[];
+  originals: SignedFile[];
+  previews: SignedFile[];
+  playbacks?: SignedFile[];
+}) {
   const findMediaFilesByEventIds = jest.fn(async () => opts.links);
   const findByIds = jest.fn(async (_ctx: unknown, ids: string[]) =>
     ids.map((id) => opts.originals.find((f) => f.id === id) ?? null),
   );
-  const findVariantsByParentIds = jest.fn(async (_ctx: unknown, parentIds: string[]) =>
-    parentIds.map((pid) => opts.previews.find((f) => f.parentId === pid) ?? null),
+  const findVariantsByParentIds = jest.fn(async (_ctx: unknown, parentIds: string[], variant: FileVariant) =>
+    parentIds.map(
+      (pid) =>
+        (variant === FileVariant.PLAYBACK ? (opts.playbacks ?? []) : opts.previews).find(
+          (f) => f.parentId === pid,
+        ) ?? null,
+    ),
   );
 
   const contentService = { findMediaFilesByEventIds } as unknown as ContentService;
@@ -68,6 +78,8 @@ describe('EventMediaLoader', () => {
     expect(media).toEqual({
       previewUrl: '/companion/prev?sig',
       mediaUrl: '/companion/orig?sig',
+      playbackUrl: null,
+      playbackContentType: null,
       // The original file's content type wins over the content row's mimetype.
       contentType: 'image/png',
       width: null,
@@ -94,6 +106,32 @@ describe('EventMediaLoader', () => {
     expect(media?.previewUrl).toBeNull();
     expect(media?.mediaUrl).toBe('/companion/vid?sig');
     expect(media?.contentType).toBe('video/mp4');
+  });
+
+  it('carries the PLAYBACK rendition beside the original for a video that has one', async () => {
+    const { loader, findVariantsByParentIds } = makeServices({
+      links: [{ eventId: 'evt-hevc', fileId: 'file-3', mimetype: 'video/quicktime' }],
+      originals: [signedFile({ id: 'file-3', contentType: 'video/quicktime', url: '/companion/hevc?sig' })],
+      previews: [],
+      playbacks: [
+        signedFile({
+          id: 'play-3',
+          parentId: 'file-3',
+          variant: FileVariant.PLAYBACK,
+          contentType: 'video/mp4',
+          url: '/companion/h264?sig',
+        }),
+      ],
+    });
+
+    const media = await loader.load(CTX, 'evt-hevc');
+
+    // The original stays the download; the rendition is what the player uses.
+    expect(media?.mediaUrl).toBe('/companion/hevc?sig');
+    expect(media?.contentType).toBe('video/quicktime');
+    expect(media?.playbackUrl).toBe('/companion/h264?sig');
+    expect(media?.playbackContentType).toBe('video/mp4');
+    expect(findVariantsByParentIds).toHaveBeenCalledWith(CTX, ['file-3'], FileVariant.PLAYBACK);
   });
 
   it('falls back to the content row mimetype when the original is unresolvable', async () => {
@@ -141,7 +179,8 @@ describe('EventMediaLoader', () => {
     // One round-trip each, not one per event.
     expect(findMediaFilesByEventIds).toHaveBeenCalledTimes(1);
     expect(findByIds).toHaveBeenCalledTimes(1);
-    expect(findVariantsByParentIds).toHaveBeenCalledTimes(1);
+    // PREVIEW and PLAYBACK are two variant hops, each batched once.
+    expect(findVariantsByParentIds).toHaveBeenCalledTimes(2);
     expect(findMediaFilesByEventIds).toHaveBeenCalledWith(CTX, ['a', 'b', 'c']);
   });
 });

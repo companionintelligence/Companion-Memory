@@ -38,6 +38,9 @@ if [ -f "$SECRETS_FILE" ]; then
   ensure_secret POWERSYNC_DATABASE_USERNAME powersync
   ensure_secret POWERSYNC_DATABASE_PASSWORD "$(random_password)"
   ensure_secret POWERSYNC_JWT_SECRET "$(random_password)"
+  # Shared bearer the API presents to the Python sidecars (and they require).
+  # Added 2026-09-24; existing appliances pick it up here on their next boot.
+  ensure_secret SIDECAR_AUTH_SECRET "$(random_password)"
   exit 0
 fi
 
@@ -59,6 +62,7 @@ JWT_REFRESH_SECRET=$(head -c 64 /dev/urandom | base64 | tr -d '\n')
 SESSION_PEPPER=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 ENCRYPTION_KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 CSRF_SECRET=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
+SIDECAR_SECRET=$(random_password)
 
 # ── Write Secrets File ───────────────────────────
 
@@ -111,6 +115,7 @@ AUTH_REFRESH_TOKEN_SECRET=${JWT_REFRESH_SECRET}
 AUTH_SESSION_PEPPER=${SESSION_PEPPER}
 AUTH_FIELD_ENCRYPTION_KEY=${ENCRYPTION_KEY}
 AUTH_CSRF_TOKEN_SECRET=${CSRF_SECRET}
+SIDECAR_AUTH_SECRET=${SIDECAR_SECRET}
 EOF
 
 chmod 644 "$SECRETS_FILE"

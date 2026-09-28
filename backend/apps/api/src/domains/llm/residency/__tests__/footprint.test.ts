@@ -20,6 +20,7 @@ import {
   sameModel,
   type ModelGeometry,
   type PlanInputs,
+  trustworthyObservation,
 } from '../footprint';
 
 /** `/api/show` for gemma4:e4b, the keys the parser reads. */
@@ -550,5 +551,58 @@ describe('planChatContext', () => {
       gpu: { totalBytes: 4 * GIB, usedBytes: 0, source: 'sysfs' },
     });
     expect(plan).toMatchObject({ kind: 'unknown' });
+  });
+});
+
+describe('trustworthyObservation', () => {
+  const CARD = 25_753_026_560;
+  const legit = {
+    numCtx: 32_768,
+    sizeVramBytes: 17_399_734_598,
+    weightBytes: 17_741_872_154,
+    cardBytes: 22_961 * MIB,
+    totalTokens: 32_768,
+  };
+  // The 2026-09-22 calibration file: the whole card, 23.7 GiB, recorded as the 27B's
+  // footprint at 32k after its runner had leaked ~1.9 MiB per request for hours.
+  const poisoned = { ...legit, cardBytes: 25_421_131_449 };
+  const capacity = CARD - GIB;
+
+  it('keeps a card sighting the card can actually hold', () => {
+    expect(trustworthyObservation(legit, capacity)).toBe(legit);
+  });
+
+  it('strikes a card sighting that says the model needs more than the card gave it at that very window', () => {
+    expect(trustworthyObservation(poisoned, capacity)).toEqual({
+      numCtx: 32_768,
+      sizeVramBytes: 17_399_734_598,
+      weightBytes: 17_741_872_154,
+    });
+    expect(trustworthyObservation(null, capacity)).toBeNull();
+  });
+
+  it('planChatContext plans 32k, not 4k, from the poisoned file — the reload loop of 2026-09-22', () => {
+    const inputs = {
+      chatModel: 'qwen3.8:27b-mtp-q4_K_M',
+      residents: [],
+      gpu: { totalBytes: CARD, usedBytes: 0, source: 'sysfs' as const },
+      embedReserveBytes: 0,
+      safetyMarginBytes: GIB,
+    };
+
+    expect(
+      planChatContext({
+        ...inputs,
+        candidate: { weightBytes: poisoned.weightBytes, geometry: qwen35, observation: poisoned },
+      }),
+    ).toMatchObject({ kind: 'planned', numCtx: 32_768 });
+    // A sighting the card can hold is still honoured in full (the two-slot case above steps to 16k).
+    expect(
+      planChatContext({
+        ...inputs,
+        parallelSlots: 2,
+        candidate: { weightBytes: legit.weightBytes, geometry: qwen35, observation: legit },
+      }),
+    ).toMatchObject({ kind: 'planned', numCtx: 16_384 });
   });
 });

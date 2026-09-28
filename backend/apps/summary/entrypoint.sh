@@ -57,8 +57,19 @@ export DATABASE_URL
 # ── API JWT Secret ────────────────────────────────
 # Needed by the function runner to self-sign the JWT on run-completion
 # callbacks to the NestJS API. Same pattern as the HBPE entrypoint.
-: "${API_JWT_SECRET:=$(get_secret AUTH_TOKEN_SECRET)}"
-[ -n "$API_JWT_SECRET" ] && export API_JWT_SECRET
+# The bearer the API presents on every request; this service refuses requests
+# without it. Replaces API_JWT_SECRET (the API's token-signing secret, which the
+# runner used to self-sign callback tokens with); the runner now echoes the
+# per-run token the API hands it instead.
+: "${SIDECAR_AUTH_SECRET:=$(get_secret SIDECAR_AUTH_SECRET)}"
+export SIDECAR_AUTH_SECRET
+if [ -z "$SIDECAR_AUTH_SECRET" ]; then
+  echo "Error: SIDECAR_AUTH_SECRET is not set."
+  echo ""
+  echo "  1. Add SIDECAR_AUTH_SECRET to $SECRETS_FILE (setup-secrets does this), or"
+  echo "  2. Set the SIDECAR_AUTH_SECRET environment variable"
+  exit 1
+fi
 
 # ── LLM ──────────────────────────────────────────
 # Only export when a key is actually configured. Exporting an empty string

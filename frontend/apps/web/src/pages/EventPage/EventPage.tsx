@@ -20,6 +20,7 @@ import { namedChatContext } from '@/lib/agentChat';
 import {
   EntityMedia,
   resolveStaticUrl,
+  MediaRefreshProvider,
 } from '@/pages/MemoryPage/Components/EntityDetails/EntityDetailScaffold';
 
 import { EventContentGrid } from './EventContentGrid';
@@ -43,6 +44,8 @@ export const GET_EVENT = gql(`
       # file (null for non-media events), plus the content rows attached to it.
       mediaContentType
       mediaUrl
+      playbackUrl
+      playbackContentType
       previewUrl
       contents(first: 60) {
         edges {
@@ -103,6 +106,16 @@ export function EventPage() {
       id: GlobalUID.encode('event', id!),
     },
   });
+
+  const refreshMedia = async (): Promise<boolean> => {
+    try {
+      const result = await refetch();
+
+      return result.data?.event != null;
+    } catch {
+      return false;
+    }
+  };
 
   const [updateEventFields] = useMutation(UPDATE_EVENT_FIELDS);
 
@@ -179,12 +192,26 @@ export function EventPage() {
                 }
               }}
             >
-              <EntityMedia
-                src={resolveStaticUrl(event.mediaUrl ?? event.previewUrl)}
-                previewSrc={resolveStaticUrl(event.previewUrl)}
-                contentType={event.mediaContentType}
-                alt={event.title ?? ''}
-              />
+              {/* The page's own query re-mints the signed links when one has
+                  expired under an open tab — the drawer does the same through
+                  its scaffold; see MediaRefreshProvider. */}
+              <MediaRefreshProvider refresh={refreshMedia}>
+                <EntityMedia
+                  // The browser-playable rendition when the server made one
+                  // (HEVC originals); the original stays the open/save target.
+                  src={resolveStaticUrl(event.playbackUrl ?? event.mediaUrl ?? event.previewUrl)}
+                  previewSrc={resolveStaticUrl(event.previewUrl)}
+                  contentType={
+                    event.playbackUrl
+                      ? (event.playbackContentType ?? event.mediaContentType)
+                      : event.mediaContentType
+                  }
+                  alt={event.title ?? ''}
+                  fallbackHref={
+                    event.mediaContentType?.startsWith('video/') ? resolveStaticUrl(event.mediaUrl) : null
+                  }
+                />
+              </MediaRefreshProvider>
             </EntityFieldsCard>
 
             <EventContentGrid contents={event.contents.edges.map((edge) => edge.node)} />
