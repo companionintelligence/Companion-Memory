@@ -3,10 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useOnboardingProgress } from './useOnboardingProgress';
 
-const h = vi.hoisted(() => ({ authToken: 'jwt-abc' as string | null }));
+const h = vi.hoisted(() => ({
+  authToken: 'jwt-abc' as string | null,
+  authenticated: true,
+}));
 
 vi.mock('@/hooks', () => ({
-  useAuth: () => [{ authToken: h.authToken }],
+  useAuth: () => [{ authToken: h.authToken, authenticated: h.authenticated }],
 }));
 
 const fetchJson = vi.hoisted(() => vi.fn());
@@ -18,6 +21,7 @@ vi.mock('@ci/common', async (importOriginal) => ({
 
 beforeEach(() => {
   h.authToken = 'jwt-abc';
+  h.authenticated = true;
   fetchJson.mockReset();
 });
 
@@ -59,8 +63,23 @@ describe('useOnboardingProgress — fetchProgress', () => {
     expect(result.current.error).toBeNull();
   });
 
+  it('reads progress with the API key alone when the phone has no JWT', async () => {
+    h.authToken = null;
+    h.authenticated = true;
+    fetchJson.mockResolvedValue({ stepKey: 'intro', draft: {}, updatedAt: null });
+
+    const { result } = renderHook(() => useOnboardingProgress());
+
+    await act(async () => {
+      await result.current.fetchProgress();
+    });
+
+    expect(fetchJson).toHaveBeenCalledWith('/api/onboarding/progress', { headers: {} });
+  });
+
   it('skips the request and resolves null when there is no session yet', async () => {
     h.authToken = null;
+    h.authenticated = false;
 
     const { result } = renderHook(() => useOnboardingProgress());
 
@@ -126,8 +145,27 @@ describe('useOnboardingProgress — saveProgress', () => {
     });
   });
 
+  it('PUTs without a bearer when the session is an API key', async () => {
+    h.authToken = null;
+    h.authenticated = true;
+    fetchJson.mockResolvedValue({});
+
+    const { result } = renderHook(() => useOnboardingProgress());
+
+    await act(async () => {
+      await result.current.saveProgress('trust-dial', { trust_mode: 'balanced' });
+    });
+
+    expect(fetchJson).toHaveBeenCalledWith('/api/onboarding/progress', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stepKey: 'trust-dial', draft: { trust_mode: 'balanced' } }),
+    });
+  });
+
   it('does nothing without a session — no request, no throw', async () => {
     h.authToken = null;
+    h.authenticated = false;
 
     const { result } = renderHook(() => useOnboardingProgress());
 

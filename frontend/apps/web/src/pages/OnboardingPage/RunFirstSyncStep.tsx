@@ -13,7 +13,7 @@ export function RunFirstSyncStep() {
   async function finish() {
     void fetchJson('/api/connections/sync-now', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${authToken}` },
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
     }).catch(() => undefined);
 
     await onboard();

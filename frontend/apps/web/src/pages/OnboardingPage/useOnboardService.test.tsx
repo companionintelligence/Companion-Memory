@@ -75,6 +75,23 @@ describe('useOnboardService', () => {
     await waitFor(() => expect(result.current[0].loading).toBe(false));
   });
 
+  it('omits the bearer header when the session is an API key, so the key is the credential', async () => {
+    h.authToken = null;
+    fetchJson.mockResolvedValue({ onboarded: true });
+
+    const { result } = renderHook(() => useOnboardService(), { wrapper });
+
+    await act(async () => {
+      await result.current[1].onboard();
+    });
+
+    expect(fetchJson).toHaveBeenCalledWith('/api/onboarding/onboard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'J Smith', trust_mode: 'balanced' }),
+    });
+  });
+
   it('captures the failure and refetches nothing, rather than silently reporting success', async () => {
     const failure = new Error('server exploded');
     fetchJson.mockRejectedValue(failure);

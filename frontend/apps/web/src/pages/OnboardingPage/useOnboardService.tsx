@@ -37,7 +37,10 @@ export function useOnboardService(): ReturnType {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`,
+          // Native has no JWT. `fetchJson` attaches `x-api-key` on that
+          // platform; sending `Bearer null` would make the guard try a junk
+          // token before the key.
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
         body: JSON.stringify(form.getValues()),
       });
