@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { OnboardingStepKey } from './constants';
+import { OnboardingNav } from './OnboardingNav';
 import { OnboardingPage } from './OnboardingPage';
 
 const h = vi.hoisted(() => ({
@@ -86,5 +87,22 @@ describe('OnboardingPage source-step navigation', () => {
     const scroll = await screen.findByTestId('onboarding-scroll');
     const nav = await screen.findByTestId('onboarding-nav');
     expect(scroll).not.toContainElement(nav);
+  });
+});
+
+describe('OnboardingNav primary width', () => {
+  it('keeps Next the same width whether or not Back is in the row', () => {
+    const { rerender } = render(
+      <OnboardingNav canGoBack={false} onBack={() => {}} onSkip={() => {}} onNext={() => {}} />,
+    );
+
+    const withoutBack = screen.getByRole('button', { name: 'Next' });
+
+    expect(withoutBack.className).toContain('w-44');
+    expect(withoutBack.className).not.toContain('flex-1');
+
+    rerender(<OnboardingNav canGoBack onBack={() => {}} onSkip={() => {}} onNext={() => {}} />);
+
+    expect(screen.getByRole('button', { name: 'Next' }).className).toContain('w-44');
   });
 });

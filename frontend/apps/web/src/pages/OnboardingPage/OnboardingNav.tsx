@@ -35,13 +35,11 @@ export function OnboardingNav({ canGoBack, onBack, onSkip, onNext }: OnboardingN
   return (
     <div
       data-testid="onboarding-nav"
-      // `w-full` + `min-w-0` children: the primary's label is supplied by the
-      // step and can be long ("Continue → 12 selected"), which at 375px used to
-      // push Back off the left edge and the primary off the right — the row was
-      // centred with no width of its own, so it just overflowed both ways.
-      // Now the row owns the width, Back/Skip stay at their intrinsic size, and
-      // the primary takes what is left and ellipsizes rather than pushing.
-      className="mb-5 flex w-full items-center justify-center gap-1 px-4 device:mb-6 device:gap-3"
+      // Next keeps one width on a phone. It used to be `flex-1`, so the moment
+      // Back appeared on step 2 the primary shrank. Back and Skip are the only
+      // things that come and go. A long step label still ellipsizes inside that
+      // fixed width. Desktop sizes the primary to its label again.
+      className="mb-5 flex w-full items-center justify-between gap-1 px-4 device:mb-6 device:justify-center device:gap-3"
     >
       {backHandler && (
         <Button
@@ -69,7 +67,7 @@ export function OnboardingNav({ canGoBack, onBack, onSkip, onNext }: OnboardingN
         // The label is the step's own words when it has any, so the button says
         // what pressing it will do rather than a generic "Next" over a flow
         // that is really about to pick, upload or sync.
-        className="h-12 min-w-0 max-w-full flex-1 px-4 text-base device:flex-none device:px-14 device:text-lg"
+        className="ml-auto h-12 w-44 shrink-0 px-4 text-base device:ml-0 device:w-auto device:px-14 device:text-lg"
         disabled={nav?.primaryDisabled}
         onClick={primaryHandler}
       >
