@@ -263,6 +263,22 @@ describe('ConnectService.rotateByApp', () => {
     expect(result?.key).toBe('rotated-key');
   });
 
+  it("re-mints Companion Scan's key on the capture tier, so a rotation keeps its uploads working", async () => {
+    // Scan's existing key predates per-app tiers (minted `[]`). The Hub rotates
+    // it without asking the user again, so whatever this derives is what Scan
+    // pushes with from then on: memory/intents/mcp would 403 /files/upload.
+    const { service, apiKeyService } = makeDeps();
+    apiKeyService.findUserIdByName.mockResolvedValue('user-1');
+    apiKeyService.createOrRotate.mockResolvedValue({ key: 'rotated-key' });
+
+    await service.rotateByApp('ci-web-xr-scan:ci-marketplace');
+
+    const [, data] = apiKeyService.createOrRotate.mock.calls[0];
+    expect(data.name).toBe('app:ci-web-xr-scan:ci-marketplace');
+    expect(data.scopes).toEqual(['capture']);
+    expect(data.capability).toBe('write');
+  });
+
   it('returns null (no rotate) when the owner is unresolvable (unknown or multi-owner)', async () => {
     const { service, apiKeyService } = makeDeps();
     apiKeyService.findUserIdByName.mockResolvedValue(null);
@@ -349,5 +365,41 @@ describe('scopesForApp (two-tier least-privilege)', () => {
 
   it('keys on the app name segment, ignoring the store', () => {
     expect(scopesForApp('ci-openclaw:some-other-store')).toEqual(['memory', 'intents', 'mcp']);
+  });
+
+  /**
+   * Every CI-Marketplace app that declares `hub_integration.memory`, and the
+   * scopes the routes it calls need. A change here is a change to a key those
+   * apps ALREADY hold: CI-Hub rotates connected keys on a timer and
+   * `rotateByApp` re-derives from `scopesForApp`, so a wrong entry breaks a
+   * working connection silently at its next rotation. That is how Companion
+   * Scan lost `capture` when the default became the chat-agent tier. Adding an
+   * app to the marketplace with a memory integration means adding a row here.
+   */
+  const MARKETPLACE_MEMORY_CONSUMERS: Record<string, string[]> = {
+    // /memory/*, /v1/agent/jobs, /intents (+ execute), /mcp
+    'ci-openclaw': ['memory', 'intents', 'mcp'],
+    'ci-hermes': ['memory', 'intents', 'mcp'],
+    // POST /files/upload + POST /v1/events (CI-Spatial server/memory_push.ts)
+    'ci-web-xr-scan': ['capture'],
+    // /files/upload, PATCH /files/:id, /v1/events
+    'ci-capture': ['capture'],
+    // POST /memory/recall + POST /memory/turn (CI-Even-Realities agent-hub)
+    'ci-glasses-bridge': ['memory'],
+    // Nothing reads the token yet; the default (chat-agent) tier, as for ci-hermes.
+    'hermes-agent': ['memory', 'intents', 'mcp'],
+  };
+
+  it.each(Object.entries(MARKETPLACE_MEMORY_CONSUMERS))('mints %s exactly %j', (appName, scopes) => {
+    expect(scopesForApp(`${appName}:ci-marketplace`)).toEqual(scopes);
+  });
+
+  it('never hands a capture app the chat-agent tier, which 403s both of its upload routes', () => {
+    // FilesController.upload and BulkIngestController both require `capture`;
+    // memory/intents/mcp reach neither.
+    for (const appName of ['ci-web-xr-scan', 'ci-capture']) {
+      expect(scopesForApp(`${appName}:ci-marketplace`)).toContain('capture');
+      expect(capabilityForApp(`${appName}:ci-marketplace`)).toBe('write');
+    }
   });
 });
