@@ -9,6 +9,7 @@ import {
   isDiscordAttachmentOnly,
   isRedditComment,
   isRedditPost,
+  isRepresentedElsewhere,
   isSocialAffiliation,
   kindFor,
   redditMediaUrl,
@@ -742,6 +743,58 @@ describe('a contact card is a person, not a document', () => {
     // passed if the file rule regressed from ['content'] to ['events'] --
     // exactly what this test's name claims to guard.
     expect(destinationsFor(contactRecord({ kind: kindFor('file', null) }))).toEqual(['content']);
+  });
+});
+
+describe('isRepresentedElsewhere — routed nowhere, and not a loss', () => {
+  /**
+   * `destinationsFor` returns `[]` for two kinds of record that mean opposite
+   * things to the run's gap list. A contact card is routed nowhere because its
+   * Person arrived on the entity lane; an undated GPS fix is routed nowhere
+   * because it has nothing left to file. Counting both as `no_destination` made
+   * every address-book import report a loss it had not had — 341 of them on
+   * one Takeout, beside the 337 Persons the same run resolved.
+   */
+  it('says a contact card is carried by the entity lane', () => {
+    const card = recordFor({ dataSource: 'vcard', classification: 'contact', occurredAt: null });
+
+    expect(destinationsFor(card)).toEqual([]);
+    expect(isRepresentedElsewhere(card)).toBe(true);
+  });
+
+  it('says a rolled-up subscription line is carried by its order’s itemised receipt', () => {
+    const line = recordFor({
+      dataSource: 'amazon',
+      classification: 'purchase',
+      metadata: { Product: 'Prime Membership', Subscription: true, ReceiptRollupId: 'order-1' },
+    });
+
+    expect(destinationsFor(line)).toEqual([]);
+    expect(isRepresentedElsewhere(line)).toBe(true);
+  });
+
+  it('does not excuse an undated raw GPS fix — nothing else carries it', () => {
+    const fix = recordFor({
+      dataSource: 'nmea',
+      classification: 'location',
+      occurredAt: null,
+      latitude: 1,
+      longitude: 2,
+    });
+
+    expect(destinationsFor(fix)).toEqual([]);
+    expect(isRepresentedElsewhere(fix)).toBe(false);
+  });
+
+  it('has nothing to say about a social affiliation, which keeps its event and never reaches []', () => {
+    const connection = recordFor({
+      dataSource: 'linkedin',
+      classification: 'social',
+      metadata: { Kind: 'connection' },
+    });
+
+    expect(isSocialAffiliation(connection)).toBe(true);
+    expect(destinationsFor(connection)).toEqual(['events']);
   });
 });
 

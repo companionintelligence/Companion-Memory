@@ -176,6 +176,12 @@ function makeStage(
         return [{ count: String(rows.length) }];
       }
 
+      // refileUnrouted: rows an EARLIER attempt routed nowhere. Ahead of the
+      // batch read below, which selects the same columns.
+      if (sql.includes("push_status = 'skipped' AND push_error = $2")) {
+        return [];
+      }
+
       if (sql.includes('media_type AS "mediaType"')) {
         if (servedBatch) {
           return [];

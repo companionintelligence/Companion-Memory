@@ -70,6 +70,10 @@ function makeStage(
     selfEntityId?: string | null;
     /** Rows the staged-edge join returns, i.e. the resolved participants. */
     relationships?: Array<{ item_id: string; relation: string | null; server_entity_id: string }>;
+    /** Rows an earlier attempt filed as routed nowhere. */
+    legacyUnrouted?: StagedItem[];
+    /** What earlier attempts settled, as `settledCounts` reads it. Default: nothing. */
+    settled?: Array<{ kind: string; status: string; reason: string | null; count: string }>;
   } = {},
 ): Harness {
   let servedBatch = false;
@@ -124,7 +128,7 @@ function makeStage(
       }
 
       if (sql.includes("'item' AS kind")) {
-        return [];
+        return options.settled ?? [];
       }
 
       if (sql.includes('identity_key AS "identityKey"')) {
@@ -133,6 +137,12 @@ function makeStage(
 
       if (sql.includes('count(*)')) {
         return [{ count: String(rows.length) }];
+      }
+
+      // refileUnrouted: rows an EARLIER attempt routed nowhere. Ahead of the
+      // batch read below, which selects the same columns.
+      if (sql.includes("push_status = 'skipped' AND push_error = $2")) {
+        return options.legacyUnrouted ?? [];
       }
 
       if (sql.includes('media_type AS "mediaType"')) {
@@ -240,6 +250,91 @@ describe('a batched write still says which rows it wrote', () => {
 
     expect(pushed?.params[0]).toHaveLength(3);
     expect(skipped?.params[0]).toHaveLength(3);
+  });
+});
+
+describe('a row routed nowhere says whether that is a loss', () => {
+  it('files a contact card as carried elsewhere and an undated GPS fix as unrouted', async () => {
+    // Both come back from `destinationsFor` as []. The card's Person arrived on
+    // the entity lane; the fix has nothing left to file. Only the second is a
+    // gap, and the ledger reason is what the summary tells them apart by.
+    const card = messageRow('card', {
+      dataSource: 'vcard',
+      classification: 'contact',
+      occurredAt: null,
+      metadata: { Name: 'Sam Example' },
+    });
+    const fix = messageRow('fix', {
+      dataSource: 'nmea',
+      classification: 'location',
+      occurredAt: null,
+      latitude: 1,
+      longitude: 2,
+      metadata: {},
+    });
+    const { stage, callSizes, updates } = makeStage([card, fix]);
+
+    await stage.run(context);
+
+    // Neither was offered to anything.
+    expect(callSizes).toEqual([]);
+
+    const skipped = updates
+      .filter((update) => update.sql.includes("push_status = 'skipped'"))
+      .map((update) => ({ ids: update.params[0], reason: update.params[1] }));
+
+    expect(skipped).toEqual(
+      expect.arrayContaining([
+        { ids: [card.id], reason: 'represented elsewhere by design' },
+        { ids: [fix.id], reason: 'no destination for this record' },
+      ]),
+    );
+    expect(skipped).toHaveLength(2);
+  });
+});
+
+describe('a re-driven push re-files what an earlier attempt called unrouted', () => {
+  it('moves a contact card an old push filed as a gap to carried-elsewhere, and leaves a real gap alone', async () => {
+    // A run pushed before the distinction existed carries its contact cards as
+    // `no destination`. Retrying that run's failed rows re-runs the push, and
+    // the summary it ends on must not still call 341 arrived Persons a loss.
+    const card = messageRow('card', {
+      dataSource: 'vcard',
+      classification: 'contact',
+      occurredAt: null,
+      metadata: { Name: 'Sam Example' },
+    });
+    const fix = messageRow('fix', {
+      dataSource: 'nmea',
+      classification: 'location',
+      occurredAt: null,
+      latitude: 1,
+      longitude: 2,
+      metadata: {},
+    });
+    const { stage, updates } = makeStage([], {
+      legacyUnrouted: [card, fix],
+      settled: [{ kind: 'item', status: 'skipped', reason: null, count: '2' }],
+    });
+
+    await stage.run(context);
+
+    const refiled = updates.filter((update) => update.sql.includes('SET push_error = $2::text'));
+
+    expect(refiled).toHaveLength(1);
+    expect(refiled[0].params).toEqual([[card.id], 'represented elsewhere by design']);
+  });
+
+  it('does not go looking on a first push, which has settled nothing yet', async () => {
+    const { stage, updates } = makeStage([messageRow('a')], {
+      legacyUnrouted: [
+        messageRow('card', { dataSource: 'vcard', classification: 'contact', occurredAt: null }),
+      ],
+    });
+
+    await stage.run(context);
+
+    expect(updates.filter((update) => update.sql.includes('SET push_error = $2::text'))).toEqual([]);
   });
 });
 

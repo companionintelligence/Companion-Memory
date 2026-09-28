@@ -3,6 +3,13 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
+import {
+  isTransientDatabaseError,
+  isTransientDatabaseMessage,
+  retryOnTransientDatabaseError,
+  TransientDatabaseError,
+  type TransientRetryPolicy,
+} from '@ci/common/persistence';
 import { BrowserActivityService } from '@ci/domains/browser-activity';
 import { UNFURL_SWEEP_QUEUE, UnfurlSweepRequestEvent } from '@ci/domains/embed/events';
 import { EventService } from '@ci/domains/events';
@@ -36,6 +43,7 @@ import {
   backfillEntityTypesFor,
   destinationsFor,
   edgeProjectionSourcesFor,
+  isRepresentedElsewhere,
   toCanonical,
   type CanonicalRecord,
   type Destination,
@@ -92,6 +100,14 @@ type TrustMode = 'cautious' | 'balanced' | 'hands_off';
 /** Staged rows read (and pushed) per batch. */
 const PUSH_BATCH = 500;
 
+/** The `staged_items` columns a {@link StagedItem} is built from, camel-cased. */
+const STAGED_ITEM_COLUMNS = `id, run_id AS "runId", user_id AS "userId", data_source AS "dataSource",
+              classification, content_hash AS "contentHash", occurred_at AS "occurredAt",
+              timespan_end AS "timespanEnd", latitude, longitude, filename,
+              media_type AS "mediaType", original_location AS "originalLocation",
+              intermediate_location AS "intermediateLocation", metadata,
+              created_at AS "createdAt"`;
+
 /**
  * `staged_entities.push_error` for an entity `skipped` because it had neither
  * a handle nor a name to resolve by — see {@link toGraphEntity}.
@@ -110,9 +126,10 @@ const UNRESOLVED_ENTITY_REASON = 'no stable name or handle to resolve by';
  *
  * Not an error, and not a duplicate either — the third thing hiding inside
  * `deduped`. `destinationsFor` legitimately returns `[]` for records this
- * appliance has decided have no home: an Amazon subscription fee line, whose
- * `metadata.Subscription` marks it as a service rather than a thing, is the
- * shipping example. Such a row reaches no destination, so `plan.wrote` stays
+ * appliance has decided have no home: an undated raw GPS fix, which is
+ * (lat, lon, time) with the time missing and so nothing left to file, is the
+ * shipping example (an Amazon subscription fee line was, until subscriptions
+ * got their receipt). Such a row reaches no destination, so `plan.wrote` stays
  * false, so `recordOutcomes` files it under `skipped`, so it was counted as
  * `deduped` and reported as "the record is in ci.*, it just arrived earlier".
  *
@@ -123,8 +140,54 @@ const UNRESOLVED_ENTITY_REASON = 'no stable name or handle to resolve by';
  * Written as `push_error` on a `skipped` row, exactly as
  * {@link UNRESOLVED_ENTITY_REASON} is for entities, so a RESUMED push can
  * still separate the two from rows a dead attempt settled.
+ *
+ * Only for a row nothing CLAIMED. A row routed nowhere because what it records
+ * already lives somewhere else by design is {@link REPRESENTED_ELSEWHERE_REASON}
+ * instead — the two are the same `[]` from `destinationsFor` and opposite
+ * answers to "did this import lose anything?".
  */
 const NO_DESTINATION_REASON = 'no destination for this record';
+
+/**
+ * `staged_items.push_error` for a row routed nowhere ON PURPOSE, because the
+ * thing it records is already carried by another lane — see
+ * {@link isRepresentedElsewhere}.
+ *
+ * The contact card is the live case: `vcard.ts` stages each card twice, once as
+ * a Person on the entity lane and once as an item, and `destinationsFor`
+ * deliberately sends the item nowhere because a body row would be a second,
+ * empty copy of the person. Counted under {@link NO_DESTINATION_REASON} those
+ * rows were reported as a GAP on every import that carried an address book —
+ * 341 of them on one Takeout, beside 337 contact Persons the same run had
+ * resolved — so the gap list said "lost" about records that had arrived.
+ *
+ * Still recorded, and still counted under its own reason in `dropsByReason`:
+ * a routing decision stays visible. It just is not a loss.
+ */
+const REPRESENTED_ELSEWHERE_REASON = 'represented elsewhere by design';
+
+/**
+ * How long the push waits out a database that stopped answering, before it
+ * gives up and fails the stage with every unwritten row still `pending`.
+ *
+ * Three minutes, because that is comfortably longer than the crash recovery
+ * that motivated it: Postgres answered a live push with 57P03 ("in recovery
+ * mode", then "not yet accepting connections") for a few seconds, and without
+ * any wait at all the per-row quarantine marked 437 good rows `failed`. Pauses
+ * double from one second to a thirty-second ceiling, so a blip costs a second
+ * and a real outage costs ~10 attempts, not a tight loop against a server that
+ * is trying to come back.
+ *
+ * Past the budget the stage FAILS rather than waiting on: a failed stage keeps
+ * its rows `pending`, and the stage retry (or `retryFailedPush`) re-drives
+ * exactly what is left. What it never does is quarantine a row for a reason
+ * that had nothing to do with the row.
+ */
+const PUSH_TRANSIENT_RETRY: TransientRetryPolicy = {
+  initialDelayMs: 1_000,
+  maxDelayMs: 30_000,
+  budgetMs: 180_000,
+};
 
 /**
  * The slug this skip reason is reported under.
@@ -330,6 +393,23 @@ type DestinationCounts = Partial<Record<Destination, number>>;
  * floor, or SQLSTATE 53100 from any row. Stopping leaves the untouched rows
  * `pending`, which is exactly the state the push resumes from once somebody
  * frees space.
+ *
+ * ## A database that stopped answering is a WAIT, then a stage failure
+ *
+ * The same trap from the other side. A Postgres crash-restart mid-push answered
+ * every statement for a few seconds with SQLSTATE 57P03 — "in recovery mode",
+ * then "not yet accepting connections" — and the per-row quarantine, seeing a
+ * batch fail and then each of its rows fail, marked 437 good rows `failed`
+ * across six data sources. Nothing about those rows was wrong, and nothing in
+ * the product would ever look at them again.
+ *
+ * So every database step here goes through {@link PushStage.retrying}: a
+ * failure classified as the database being away (`isTransientDatabaseError`,
+ * code-first) is retried on a doubling backoff for up to
+ * {@link PUSH_TRANSIENT_RETRY}'s budget BEFORE a batch degrades to per-row or a
+ * row is quarantined. If the database is still away after that, the stage
+ * fails and every unwritten row stays `pending` for the retry to pick up. A
+ * row is `failed` only for something the database said about THAT row.
  */
 @Injectable()
 export class PushStage implements ImportStageRunner {
@@ -337,6 +417,13 @@ export class PushStage implements ImportStageRunner {
 
   /** When {@link assertDatabaseHasRoom} last measured. See SPACE_CHECK_INTERVAL_MS. */
   private lastSpaceCheck = 0;
+
+  /**
+   * How long to wait out a database that stopped answering — see
+   * {@link PUSH_TRANSIENT_RETRY}. A property rather than the bare constant so a
+   * test can hand it a clock that does not really sleep.
+   */
+  transientRetry: TransientRetryPolicy = PUSH_TRANSIENT_RETRY;
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
@@ -357,15 +444,56 @@ export class PushStage implements ImportStageRunner {
     this.logger.setContext(PushStage.name);
   }
 
+  /**
+   * Run one step of the push, waiting out a database that is not answering.
+   *
+   * Every step wrapped in this is safe to repeat — a read, a ledger UPDATE by
+   * id, or a destination write that upserts on its provenance triple — which is
+   * the promise {@link retryOnTransientDatabaseError} needs. A failure that is
+   * not the database being away is rethrown on the attempt it happened, so the
+   * caller's own handling is untouched; one that outlasts
+   * {@link PUSH_TRANSIENT_RETRY} becomes a `DatabaseUnavailableError`, which no
+   * caller here quarantines a row for.
+   */
+  private retrying<T>(context: StageRunContext, operation: string, op: () => Promise<T>): Promise<T> {
+    return retryOnTransientDatabaseError(operation, op, this.transientRetry, (notice) => {
+      this.logger.warn('The database is not answering; waiting before trying again', {
+        runId: context.runId,
+        operation,
+        attempt: notice.attempt,
+        delayMs: notice.delayMs,
+        waitedMs: notice.waitedMs,
+        error: notice.error instanceof Error ? notice.error.message : String(notice.error),
+      });
+    });
+  }
+
   async run(context: StageRunContext): Promise<StageOutcome> {
     // The other half of the disk budget. `archive/unpack` preflights the
     // SCRATCH volume before extracting; this is the volume the rows land on,
     // and until now nothing measured it at all.
-    const space = await this.assertDatabaseHasRoom(context);
+    const space = await this.retrying(context, 'measuring the database volume', () =>
+      this.assertDatabaseHasRoom(context),
+    );
 
     // What earlier attempts already settled — read BEFORE `pushEntities` moves
     // rows off 'pending', or this attempt's own work would be counted twice.
-    const prior = await this.settledCounts(context.runId);
+    const prior = await this.retrying(context, 'reading what earlier attempts settled', () =>
+      this.settledCounts(context.runId),
+    );
+
+    // A re-driven push re-files what an earlier attempt called unrouted, so the
+    // summary it ends on uses today's rule for the whole run — see refileUnrouted.
+    // Only when an earlier attempt settled something `skipped`: a first push has
+    // nothing to re-file, and should not pay for the read.
+    const refiled = prior.items.deduped > 0 ? await this.refileUnrouted(context) : 0;
+
+    if (refiled > 0) {
+      this.logger.log('Re-filed rows an earlier push routed nowhere as carried elsewhere', {
+        runId: context.runId,
+        refiled,
+      });
+    }
 
     // Who "me" is, resolved ONCE for the whole run. WhatsApp and Messenger
     // decide each message's direction by matching its sender against the owner
@@ -373,8 +501,12 @@ export class PushStage implements ImportStageRunner {
     // cannot be a per-record, or even a per-batch, lookup. Also drives owner
     // contact → self Person redirect during entity push.
     const isSelf = await this.resolveIsSelf(context);
-    const selfEntityId = await this.resolveSelfEntityId(context.userId);
-    const trustMode = await this.resolveTrustMode(context.userId);
+    const selfEntityId = await this.retrying(context, 'reading the owner', () =>
+      this.resolveSelfEntityId(context.userId),
+    );
+    const trustMode = await this.retrying(context, 'reading the owner’s trust mode', () =>
+      this.resolveTrustMode(context.userId),
+    );
 
     // Entities first, always. A communication names its participants by server
     // entity id, so the people have to exist — and be recorded in
@@ -391,7 +523,11 @@ export class PushStage implements ImportStageRunner {
     // What was skipped for want of a key, named. Read from the ledger so it
     // covers a resume, and only when there is something to say.
     const unresolvedEntities =
-      entities.unresolved > 0 ? await this.unresolvedEntityReport(context.runId) : null;
+      entities.unresolved > 0
+        ? await this.retrying(context, 'naming the unresolved entities', () =>
+            this.unresolvedEntityReport(context.runId),
+          )
+        : null;
 
     if (unresolvedEntities) {
       // Logged as a warning because it no longer shows up as `partial` — see
@@ -427,18 +563,25 @@ export class PushStage implements ImportStageRunner {
     let failed = prior.items.failed;
     let contentHandled = 0;
 
-    const total = (await this.pendingCount(context.runId)) + entitiesProcessed + pushed + deduped + failed;
+    const pending = await this.retrying(context, 'counting the rows left to push', () =>
+      this.pendingCount(context.runId),
+    );
+    const total = pending + entitiesProcessed + pushed + deduped + failed;
 
-    await context.progress({
-      processed: entitiesProcessed + pushed + failed + deduped,
-      total,
-      phase: 'pushing',
-    });
+    await this.retrying(context, 'recording progress', () =>
+      context.progress({
+        processed: entitiesProcessed + pushed + failed + deduped,
+        total,
+        phase: 'pushing',
+      }),
+    );
 
     let latestSpace = space;
 
     for (;;) {
-      const batch = await this.nextBatch(context.runId);
+      const batch = await this.retrying(context, 'reading the next batch', () =>
+        this.nextBatch(context.runId),
+      );
 
       if (batch.length === 0) {
         break;
@@ -451,17 +594,23 @@ export class PushStage implements ImportStageRunner {
       deduped += outcome.deduped;
       contentHandled += outcome.contentHandled;
 
-      await context.progress({
-        processed: entitiesProcessed + pushed + failed + deduped,
-        total,
-        phase: 'pushing',
-      });
+      await this.retrying(context, 'recording progress', () =>
+        context.progress({
+          processed: entitiesProcessed + pushed + failed + deduped,
+          total,
+          phase: 'pushing',
+        }),
+      );
 
       // On a timer, not per batch. `pg_database_size` stats every file the
       // database owns, so at 500 rows a batch a 460k-row import would run it
       // ~920 times; a volume with gigabytes of headroom cannot cross the floor
       // inside fifteen seconds of pushing.
-      latestSpace = await this.assertDatabaseHasRoom(context, latestSpace);
+      const previousSpace = latestSpace;
+
+      latestSpace = await this.retrying(context, 'measuring the database volume', () =>
+        this.assertDatabaseHasRoom(context, previousSpace),
+      );
     }
 
     // Everything is in ci.* now; make it searchable. Bulk-pushed rows emit no
@@ -559,7 +708,9 @@ export class PushStage implements ImportStageRunner {
         // keep their exact meaning; this is the per-data-source, reconciled
         // account, and the only place `deduped`'s three constituent outcomes
         // are told apart.
-        [SUMMARY_KEY]: await this.summarize(context.runId),
+        [SUMMARY_KEY]: await this.retrying(context, 'summarizing the push', () =>
+          this.summarize(context.runId),
+        ),
       },
     };
   }
@@ -577,10 +728,12 @@ export class PushStage implements ImportStageRunner {
    *    in-process counters cannot give: `counts` is keyed by destination table,
    *    and one Takeout push writes thirteen sources into six tables. The row
    *    carries its own `data_source`, so the group is free.
-   *  - it separates the three outcomes that `deduped` merged: already in the
-   *    destination, routed nowhere at all (NO_DESTINATION_REASON), and
-   *    quarantined. That merge is the reason a re-import and a total failure to
-   *    produce anything read identically in the run detail.
+   *  - it separates the outcomes that `deduped` merged: already in the
+   *    destination, routed nowhere because nothing claimed the record
+   *    (NO_DESTINATION_REASON, a gap), routed nowhere because another lane
+   *    carries it (REPRESENTED_ELSEWHERE_REASON, expected), and quarantined.
+   *    That merge is the reason a re-import and a total failure to produce
+   *    anything read identically in the run detail.
    *  - it is O(sources), not O(rows). This stage's largest single run on the QA
    *    corpus is 703,956 staged items.
    *
@@ -592,7 +745,13 @@ export class PushStage implements ImportStageRunner {
    */
   private async summarize(runId: string): Promise<StageSummary> {
     const itemRows = await this.dataSource.query<
-      Array<{ dataSource: string | null; status: string; unrouted: boolean; count: string }>
+      Array<{
+        dataSource: string | null;
+        status: string;
+        unrouted: boolean;
+        representedElsewhere?: boolean;
+        count: string;
+      }>
     >(
       `SELECT data_source AS "dataSource",
               push_status AS status,
@@ -601,11 +760,12 @@ export class PushStage implements ImportStageRunner {
               -- false. Plain equality therefore split every already-present row
               -- into its own NULL group and made the flag three-valued.
               (push_status = 'skipped' AND push_error IS NOT DISTINCT FROM $2::text) AS unrouted,
+              (push_status = 'skipped' AND push_error IS NOT DISTINCT FROM $3::text) AS "representedElsewhere",
               count(*) AS count
          FROM ci_import.staged_items
         WHERE run_id = $1::uuid
-        GROUP BY 1, 2, 3`,
-      [runId, NO_DESTINATION_REASON],
+        GROUP BY 1, 2, 3, 4`,
+      [runId, NO_DESTINATION_REASON, REPRESENTED_ELSEWHERE_REASON],
     );
 
     const entityRows = await this.dataSource.query<
@@ -630,7 +790,14 @@ export class PushStage implements ImportStageRunner {
       } else if (row.status === 'failed') {
         entry.drops.row_push_failed = (entry.drops.row_push_failed ?? 0) + count;
       } else if (row.status === 'skipped') {
-        const slug = row.unrouted ? 'no_destination' : 'already_in_destination';
+        // Three things share `skipped`, and only the first is a loss: routed
+        // nowhere because nothing claimed the record, routed nowhere because
+        // another lane already carries it, and already in the destination.
+        const slug = row.unrouted
+          ? 'no_destination'
+          : row.representedElsewhere === true
+            ? 'represented_elsewhere'
+            : 'already_in_destination';
 
         entry.drops[slug] = (entry.drops[slug] ?? 0) + count;
       } else {
@@ -1010,22 +1177,42 @@ export class PushStage implements ImportStageRunner {
     trustMode: TrustMode,
     selfEntityId: string | null,
   ): Promise<{ resolved: number; skipped: number; unresolved: number; failed: number }> {
-    await context.progress({ processed: 0, total: null, phase: 'resolving people' });
+    // Every ledger write below is by row id and idempotent, so each is safe to
+    // repeat across a database restart. See `retrying`.
+    const mark = (stagedEntityId: string, status: 'pushed' | 'failed' | 'skipped', error: string | null) =>
+      this.retrying(context, 'recording an entity outcome', () =>
+        this.markEntity(stagedEntityId, status, error),
+      );
+    const map = (stagedEntityId: string, serverEntityId: string) =>
+      this.retrying(context, 'recording an entity mapping', () =>
+        this.recordEntityMapping(stagedEntityId, context.userId, serverEntityId),
+      );
 
-    const staged = await this.dataSource.query<StagedEntity[]>(
-      `SELECT id, run_id AS "runId", user_id AS "userId", type, name, metadata,
-              identity_key AS "identityKey", data_source AS "dataSource"
-         FROM ci_import.staged_entities
-        WHERE run_id = $1::uuid AND push_status = 'pending'
-        ORDER BY id`,
-      [context.runId],
+    await this.retrying(context, 'recording progress', () =>
+      context.progress({ processed: 0, total: null, phase: 'resolving people' }),
     );
 
-    const identity = await readSelfIdentity(this.dataSource, context.userId).catch(
-      (): SelfIdentity => ({
-        names: [],
-        email: null,
-        phones: [],
+    const staged = await this.retrying(context, 'reading the staged entities', () =>
+      this.dataSource.query<StagedEntity[]>(
+        `SELECT id, run_id AS "runId", user_id AS "userId", type, name, metadata,
+                identity_key AS "identityKey", data_source AS "dataSource"
+           FROM ci_import.staged_entities
+          WHERE run_id = $1::uuid AND push_status = 'pending'
+          ORDER BY id`,
+        [context.runId],
+      ),
+    );
+
+    // Fail-safe to "nobody is the owner" — but not when the reason is that the
+    // database was away. Swallowing THAT would mint the owner's own contact
+    // card as a stranger for the rest of this run, which no retry undoes.
+    const identity = await this.retrying(context, 'reading the owner identity', () =>
+      readSelfIdentity(this.dataSource, context.userId).catch((err: unknown): SelfIdentity => {
+        if (isTransientDatabaseError(err)) {
+          throw err;
+        }
+
+        return { names: [], email: null, phones: [] };
       }),
     );
 
@@ -1047,7 +1234,7 @@ export class PushStage implements ImportStageRunner {
       // and a resumed push does not reconsider it.
       if (isGraphExcluded(row)) {
         skipped += 1;
-        await this.markEntity(row.id, 'skipped', null);
+        await mark(row.id, 'skipped', null);
         continue;
       }
 
@@ -1060,7 +1247,7 @@ export class PushStage implements ImportStageRunner {
         // graph, and `unresolved` is what rolls the run up to `partial` for it.
         skipped += 1;
         unresolved += 1;
-        await this.markEntity(row.id, 'skipped', UNRESOLVED_ENTITY_REASON);
+        await mark(row.id, 'skipped', UNRESOLVED_ENTITY_REASON);
         continue;
       }
 
@@ -1071,8 +1258,8 @@ export class PushStage implements ImportStageRunner {
         input.entityType === 'Person' &&
         this.isOwnerContactInput(identity, input, trustMode)
       ) {
-        await this.recordEntityMapping(row.id, context.userId, selfEntityId);
-        await this.markEntity(row.id, 'pushed', null);
+        await map(row.id, selfEntityId);
+        await mark(row.id, 'pushed', null);
         resolved += 1;
         continue;
       }
@@ -1100,38 +1287,71 @@ export class PushStage implements ImportStageRunner {
       return { resolved, skipped, unresolved, failed: 0 };
     }
 
-    const result = await this.graph.ingest(
-      { userId: context.userId },
-      { entities: inputs, relationships: [] },
-    );
+    // Keys ingest refused for a reason that was about the ENTITY. The rest of
+    // what ingest does not echo back — the database being away — is retried,
+    // never recorded here.
+    const refused = new Map<string, string>();
 
-    for (const mapping of result.entities) {
-      for (const row of byKey.get(mapping.key) ?? []) {
-        await this.recordEntityMapping(row.id, context.userId, mapping.entityId);
-        await this.markEntity(row.id, 'pushed', null);
-        resolved += 1;
+    await this.retrying(context, `resolving ${inputs.length} staged entities`, async () => {
+      // Each attempt sends only what is still open, so a retry after a partial
+      // success does not re-resolve (and re-count) the entities it already has.
+      const open = inputs.filter((input) => byKey.has(input.key) && !refused.has(input.key));
+      const result = await this.graph.ingest(
+        { userId: context.userId },
+        { entities: open, relationships: [] },
+      );
+
+      for (const mapping of result.entities) {
+        for (const row of byKey.get(mapping.key) ?? []) {
+          await map(row.id, mapping.entityId);
+          await mark(row.id, 'pushed', null);
+          resolved += 1;
+        }
+
+        byKey.delete(mapping.key);
       }
 
-      byKey.delete(mapping.key);
-    }
+      // Whatever ingest did not echo back failed. Ingest reports each failure as
+      // `entity <key>: <message>`, so each row is given ITS OWN entry. It used to
+      // get the whole list joined: a batch-level failure yields one entry per
+      // input, so a 4,873-entity Takeout push wrote a ~500KB reason into every
+      // failed row and every log line below — quadratic in the batch, 552MB of
+      // log, and a worker that died mid-loop with the run stuck at 'running'.
+      const reasonByKey = entityErrorsByKey(result.errors);
+      const fallback = boundedReason(
+        result.errors.length > 0 ? result.errors[0] : 'entity not resolved by graph ingest',
+      );
+      let transient: string | null = null;
 
-    // Whatever ingest did not echo back failed. Ingest reports each failure as
-    // `entity <key>: <message>`, so each row is given ITS OWN entry. It used to
-    // get the whole list joined: a batch-level failure yields one entry per
-    // input, so a 4,873-entity Takeout push wrote a ~500KB reason into every
-    // failed row and every log line below — quadratic in the batch, 552MB of
-    // log, and a worker that died mid-loop with the run stuck at 'running'.
-    const reasonByKey = entityErrorsByKey(result.errors);
-    const fallback = boundedReason(
-      result.errors.length > 0 ? result.errors[0] : 'entity not resolved by graph ingest',
-    );
+      for (const input of open) {
+        if (!byKey.has(input.key)) {
+          continue;
+        }
+
+        const reason = reasonByKey.get(input.key) ?? fallback;
+
+        // Ingest catches a batch-level failure and reports it per entity as
+        // TEXT, so the error object — and its SQLSTATE — is gone by the time it
+        // gets here. The wording is all that is left to tell "the database was
+        // restarting" from "this entity cannot be written", and only the second
+        // belongs in the ledger.
+        if (isTransientDatabaseMessage(reason)) {
+          transient ??= reason;
+        } else {
+          refused.set(input.key, reason);
+        }
+      }
+
+      if (transient != null) {
+        throw new TransientDatabaseError(transient);
+      }
+    });
+
     let failed = 0;
 
-    for (const [key, rows] of byKey.entries()) {
-      const reason = reasonByKey.get(key) ?? fallback;
-
-      for (const row of rows) {
-        await this.markEntity(row.id, 'failed', reason);
+    for (const [key, reason] of refused) {
+      for (const row of byKey.get(key) ?? []) {
+        await mark(row.id, 'failed', reason);
         failed += 1;
 
         // Logged, not just recorded: an entity that will not resolve costs every
@@ -1487,12 +1707,7 @@ export class PushStage implements ImportStageRunner {
    */
   private async nextBatch(runId: string): Promise<StagedItem[]> {
     return this.dataSource.query<StagedItem[]>(
-      `SELECT id, run_id AS "runId", user_id AS "userId", data_source AS "dataSource",
-              classification, content_hash AS "contentHash", occurred_at AS "occurredAt",
-              timespan_end AS "timespanEnd", latitude, longitude, filename,
-              media_type AS "mediaType", original_location AS "originalLocation",
-              intermediate_location AS "intermediateLocation", metadata,
-              created_at AS "createdAt"
+      `SELECT ${STAGED_ITEM_COLUMNS}
          FROM ci_import.staged_items
         WHERE run_id = $1::uuid AND push_status = 'pending'
         ORDER BY id
@@ -1502,10 +1717,84 @@ export class PushStage implements ImportStageRunner {
   }
 
   /**
+   * Re-file, under today's rule, the rows an EARLIER attempt of this push
+   * routed nowhere.
+   *
+   * Before {@link REPRESENTED_ELSEWHERE_REASON} existed every routed-nowhere row
+   * was written as {@link NO_DESTINATION_REASON}, so a run pushed then carries
+   * its contact cards as a gap for good. A push that runs again over such a run
+   * — `retryFailedPush` re-driving its failed rows, or a resume — settles only
+   * `pending` rows, and would summarize those old ones unchanged: the run would
+   * come back from its retry still reporting 341 "lost" contact cards beside
+   * the 337 Persons it resolved.
+   *
+   * So the rows are re-decided here, from what they are, by the same
+   * `destinationsFor` + `isRepresentedElsewhere` the batch path uses. Only the
+   * reason moves — the row stays `skipped` and keeps its settle time — and only
+   * for rows that still route nowhere; one whose routing has changed since is
+   * left alone, because re-pushing it is a different decision from re-filing
+   * it. Keyset-paged by id so a run of any size is read a batch at a time, and
+   * cheap in practice: only rows already filed as unrouted are read.
+   */
+  private async refileUnrouted(context: StageRunContext): Promise<number> {
+    let after = '00000000-0000-0000-0000-000000000000';
+    let refiled = 0;
+
+    for (;;) {
+      const cursor = after;
+      const rows = await this.retrying(context, 'reading rows an earlier push routed nowhere', () =>
+        this.dataSource.query<StagedItem[]>(
+          `SELECT ${STAGED_ITEM_COLUMNS}
+             FROM ci_import.staged_items
+            WHERE run_id = $1::uuid AND push_status = 'skipped' AND push_error = $2::text
+              AND id > $3::uuid
+            ORDER BY id
+            LIMIT $4`,
+          [context.runId, NO_DESTINATION_REASON, cursor, PUSH_BATCH],
+        ),
+      );
+
+      if (rows.length === 0) {
+        break;
+      }
+
+      after = rows[rows.length - 1].id;
+
+      const elsewhere = rows
+        .filter((row) => {
+          const record = toCanonical(row);
+
+          return destinationsFor(record).length === 0 && isRepresentedElsewhere(record);
+        })
+        .map((row) => row.id);
+
+      if (elsewhere.length > 0) {
+        await this.retrying(context, 'refiling rows carried elsewhere', () =>
+          this.dataSource.query(
+            `UPDATE ci_import.staged_items
+                SET push_error = $2::text
+              WHERE id = ANY($1::uuid[]) AND push_status = 'skipped'`,
+            [elsewhere, REPRESENTED_ELSEWHERE_REASON],
+          ),
+        );
+        refiled += elsewhere.length;
+      }
+
+      if (rows.length < PUSH_BATCH) {
+        break;
+      }
+    }
+
+    return refiled;
+  }
+
+  /**
    * The owner's own display names, as a predicate — one query for the run.
    *
-   * FAIL SAFE, deliberately: a lookup that finds nothing, or one that throws,
-   * yields {@link NOBODY_IS_SELF}, so every WhatsApp/Messenger message keeps
+   * FAIL SAFE, deliberately: a lookup that finds nothing, or one that throws
+   * for any reason but the database being away (that one is waited out and,
+   * past the budget, fails the stage), yields {@link NOBODY_IS_SELF}, so every
+   * WhatsApp/Messenger message keeps
    * the `inbound` default this repo shipped before the mappers were wired in.
    * The alternatives are both worse than a blank — failing the push over a
    * missing display name strands an import that is otherwise fine, and
@@ -1515,7 +1804,9 @@ export class PushStage implements ImportStageRunner {
    */
   private async resolveIsSelf(context: StageRunContext): Promise<IsSelf> {
     try {
-      const identity = await readSelfIdentity(this.dataSource, context.userId);
+      const identity = await this.retrying(context, 'reading the owner identity', () =>
+        readSelfIdentity(this.dataSource, context.userId),
+      );
       const isSelf = makeIsSelf(identity);
 
       if (isSelf === NOBODY_IS_SELF) {
@@ -1527,6 +1818,13 @@ export class PushStage implements ImportStageRunner {
 
       return isSelf;
     } catch (err) {
+      // Not while the database is away. The fail-safe exists for an owner with
+      // no name on file; applied to an outage it would stamp every WhatsApp and
+      // Messenger message in this run `inbound` for good.
+      if (isTransientDatabaseError(err)) {
+        throw err;
+      }
+
       this.logger.warn('Owner lookup failed; chat messages stay inbound', {
         runId: context.runId,
         userId: context.userId,
@@ -1630,7 +1928,9 @@ export class PushStage implements ImportStageRunner {
     const ctx = { userId: context.userId, importRunId: context.runId };
 
     // ONE query for the batch's edges, not one per row.
-    const participantsByItem = await this.participantsForMany(batch.map((row) => row.id));
+    const participantsByItem = await this.retrying(context, 'reading the batch’s participants', () =>
+      this.participantsForMany(batch.map((row) => row.id)),
+    );
 
     const plans: RowPlan[] = batch.map((row) => {
       const record = toCanonical(row);
@@ -1726,6 +2026,11 @@ export class PushStage implements ImportStageRunner {
    *
    * Out of disk is rethrown without the retry: nothing about the next row
    * avoids it, and 500 more attempts only delay the stage failing with a cause.
+   *
+   * The database being AWAY is neither of those. It is waited out first —
+   * batch and row alike, see {@link retrying} — and if it outlasts the wait
+   * the stage fails with the rows still `pending`. A row is only ever marked
+   * `failed` for something the database said about that row.
    */
   private async sendGroup(
     ctx: { userId: string; importRunId?: string },
@@ -1737,7 +2042,13 @@ export class PushStage implements ImportStageRunner {
     context: StageRunContext,
   ): Promise<void> {
     try {
-      const wrote = await this.sendMany(ctx, destination, group, counts, isSelf, selfEntityId);
+      // A batch that failed because the database was AWAY is sent again as a
+      // batch once it is back — the rows were never the problem, and degrading
+      // to per-row would only multiply the statements aimed at a server that is
+      // still recovering.
+      const wrote = await this.retrying(context, `writing ${group.length} ${destination} record(s)`, () =>
+        this.sendMany(ctx, destination, group, counts, isSelf, selfEntityId),
+      );
 
       for (const [index, plan] of group.entries()) {
         if (wrote[index]) {
@@ -1755,6 +2066,13 @@ export class PushStage implements ImportStageRunner {
         );
       }
 
+      // Still away after the whole budget. Not the rows' fault, so none of them
+      // is quarantined: the stage fails with every one of them still `pending`,
+      // which is exactly the state a retried stage resumes from.
+      if (isTransientDatabaseError(err)) {
+        throw err;
+      }
+
       this.logger.warn('Batched push failed; retrying the group row by row', {
         runId: context.runId,
         destination,
@@ -1765,7 +2083,13 @@ export class PushStage implements ImportStageRunner {
 
     for (const plan of group) {
       try {
-        if (await this.send(ctx, destination, plan.record, plan.participants, counts, isSelf, selfEntityId)) {
+        const wrote = await this.retrying(
+          context,
+          `writing ${plan.record.sourceSystem} record ${plan.row.id} to ${destination}`,
+          () => this.send(ctx, destination, plan.record, plan.participants, counts, isSelf, selfEntityId),
+        );
+
+        if (wrote) {
           counts[destination] = (counts[destination] ?? 0) + 1;
           plan.wrote = true;
         }
@@ -1782,6 +2106,13 @@ export class PushStage implements ImportStageRunner {
             await readDatabaseSpace(this.dataSource),
             `the database refused a write while saving ${plan.record.sourceSystem} record ${plan.row.id}`,
           );
+        }
+
+        // The per-row quarantine is for a record the database REJECTED. One it
+        // could not take because it was restarting is not poisoned, and marking
+        // it `failed` is what stranded 437 good rows behind a crash recovery.
+        if (isTransientDatabaseError(err)) {
+          throw err;
         }
 
         plan.failure = (err as Error).message;
@@ -1813,6 +2144,9 @@ export class PushStage implements ImportStageRunner {
     // Rows `destinationsFor` routed nowhere. Kept apart from `skipped` from
     // here down — see NO_DESTINATION_REASON.
     const unrouted: string[] = [];
+    // …and the ones it routed nowhere because another lane carries them. See
+    // REPRESENTED_ELSEWHERE_REASON.
+    const elsewhere: string[] = [];
     const failures: Array<{ id: string; error: string }> = [];
 
     for (const plan of plans) {
@@ -1841,8 +2175,12 @@ export class PushStage implements ImportStageRunner {
       // A row with NO destinations was never offered to anything, so "already
       // there" is not what happened to it. Both are terminal and neither is a
       // failure, but only one of them means the record exists.
+      //
+      // And "never offered" is itself two things. A contact card goes nowhere
+      // because its person arrived on the entity lane; that is the design, not
+      // a loss, and must not read as one on every address-book import.
       if (plan.destinations.length === 0) {
-        unrouted.push(plan.row.id);
+        (isRepresentedElsewhere(plan.record) ? elsewhere : unrouted).push(plan.row.id);
 
         continue;
       }
@@ -1855,16 +2193,27 @@ export class PushStage implements ImportStageRunner {
 
     let pushed = 0;
 
+    // Every write below is an UPDATE by id to a terminal state, so repeating
+    // one after the database comes back is exact.
     for (const [key, ids] of pushedByDestinations) {
-      await this.markPushedMany(ids, JSON.parse(key) as Destination[]);
+      await this.retrying(context, 'recording pushed rows', () =>
+        this.markPushedMany(ids, JSON.parse(key) as Destination[]),
+      );
       pushed += ids.length;
     }
 
-    await this.markSkippedMany(skipped, null);
-    await this.markSkippedMany(unrouted, NO_DESTINATION_REASON);
+    await this.retrying(context, 'recording skipped rows', () => this.markSkippedMany(skipped, null));
+    await this.retrying(context, 'recording unrouted rows', () =>
+      this.markSkippedMany(unrouted, NO_DESTINATION_REASON),
+    );
+    await this.retrying(context, 'recording rows carried elsewhere', () =>
+      this.markSkippedMany(elsewhere, REPRESENTED_ELSEWHERE_REASON),
+    );
 
     for (const failure of failures) {
-      await this.markFailed(failure.id, failure.error);
+      await this.retrying(context, 'recording a failed row', () =>
+        this.markFailed(failure.id, failure.error),
+      );
     }
 
     if (failures.length > 0) {
@@ -1880,7 +2229,7 @@ export class PushStage implements ImportStageRunner {
     return {
       pushed,
       failed: failures.length,
-      deduped: skipped.length + unrouted.length,
+      deduped: skipped.length + unrouted.length + elsewhere.length,
       unrouted: unrouted.length,
     };
   }
@@ -2478,10 +2827,12 @@ export class PushStage implements ImportStageRunner {
    * Considered and deliberately not written.
    *
    * `reason` is NULL for the ordinary case — the destination already held the
-   * record — and {@link NO_DESTINATION_REASON} for a row nothing was willing to
-   * take. Both are `skipped`, because both are terminal and neither is a
+   * record — {@link NO_DESTINATION_REASON} for a row nothing was willing to
+   * take, and {@link REPRESENTED_ELSEWHERE_REASON} for one another lane already
+   * carries. All are `skipped`, because all are terminal and none is a
    * failure; the reason is what lets a resumed push, and the stage summary,
-   * tell "already there" from "never offered to anything".
+   * tell "already there" from "never offered to anything" from "arrived by
+   * another route".
    */
   private async markSkippedMany(stagedItemIds: string[], reason: string | null): Promise<void> {
     if (stagedItemIds.length === 0) {

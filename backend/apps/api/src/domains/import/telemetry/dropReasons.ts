@@ -77,6 +77,12 @@ export const DROP_REASONS = [
   'already_present',
   /** Routing produced no destination at all — the record was never offered to anything. */
   'no_destination',
+  /**
+   * Routed to no destination ON PURPOSE, because another lane already carries
+   * what the record says — a contact card whose Person arrived on the entity
+   * lane. Expected: the thing is in the memory, by another route.
+   */
+  'represented_elsewhere',
   /** An exception quarantined this one row; the rest of the batch went. */
   'row_failed',
   /** An entity with neither a handle nor a name. It will not resolve on a retry either. */
@@ -119,6 +125,7 @@ const DROP_SEVERITY: Readonly<Record<DropReason, DropSeverity>> = {
   duplicate_in_run: 'expected',
   already_present: 'expected',
   entity_excluded: 'expected',
+  represented_elsewhere: 'expected',
   // Everything below here means the appliance was handed something it could
   // not turn into a memory. Some are the export's fault and some are ours;
   // both are worth a person's attention, and neither should be summed into a
@@ -300,6 +307,12 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
    * PushStage summary comment.
    */
   no_destination: 'no_destination',
+  /**
+   * PushStage: `destinationsFor` returned an empty list BY DESIGN, because the
+   * record is carried by another lane (`isRepresentedElsewhere`) — a contact
+   * card, whose Person the entity lane resolves.
+   */
+  represented_elsewhere: 'represented_elsewhere',
   /** PushStage: the row threw and was quarantined; the batch continued. */
   row_push_failed: 'row_failed',
   /** PushStage: an entity with neither a handle nor a name to resolve by. */

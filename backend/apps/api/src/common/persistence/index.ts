@@ -41,3 +41,13 @@ export type {
   SchemaIntegrityReport,
   SchemaProbe,
 } from './schemaIntegrity';
+export {
+  DatabaseUnavailableError,
+  TRANSIENT_NETWORK_CODES,
+  TRANSIENT_SQLSTATES,
+  TransientDatabaseError,
+  isTransientDatabaseError,
+  isTransientDatabaseMessage,
+  retryOnTransientDatabaseError,
+} from './transientDatabaseError';
+export type { TransientRetryNotice, TransientRetryPolicy } from './transientDatabaseError';

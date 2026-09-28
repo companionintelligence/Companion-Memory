@@ -29,7 +29,13 @@ const RUN_ID = '11111111-1111-4111-8111-111111111111';
  * what the numbers mean.
  */
 function stageOver(
-  items: Array<{ dataSource: string | null; status: string; unrouted?: boolean; count: number }>,
+  items: Array<{
+    dataSource: string | null;
+    status: string;
+    unrouted?: boolean;
+    representedElsewhere?: boolean;
+    count: number;
+  }>,
   entities: Array<{ status: string; reason: string | null; count: number }> = [],
   failures: Array<{ dataSource: string; id: string; error: string }> = [],
 ) {
@@ -116,8 +122,8 @@ describe('PushStage summary', () => {
   it('tells a row routed nowhere apart from a row that was already there', async () => {
     // Both are `skipped` in the ledger, both were reported as `deduped`, and
     // only one of them means the record exists. `destinationsFor` returns []
-    // for an Amazon subscription fee line — the row was never offered to any
-    // destination at all.
+    // for an undated raw GPS fix — the row was never offered to any
+    // destination at all, and nothing else carries it.
     const summary = await stageOver([
       { dataSource: 'amazon', status: 'pushed', count: 100 },
       { dataSource: 'amazon', status: 'skipped', unrouted: false, count: 17 },
@@ -128,6 +134,26 @@ describe('PushStage summary', () => {
     // And only one of the two is something to look at.
     expect(summary.gaps).toEqual([{ reason: 'no_destination', count: 43 }]);
     expect(summary.consumed).toBe(160);
+  });
+
+  it('keeps a row carried by another lane visible, and out of the gaps', async () => {
+    // The Takeout that motivated this: 341 vCard contact items routed nowhere
+    // BY DESIGN — each card's Person arrived on the entity lane, 337 of them
+    // resolved in the same run — reported as a gap beside the real losses.
+    const summary = await stageOver(
+      [
+        { dataSource: 'vcard', status: 'skipped', representedElsewhere: true, count: 341 },
+        { dataSource: 'google_voice', status: 'pushed', count: 1_000 },
+        { dataSource: 'nmea', status: 'skipped', unrouted: true, count: 2 },
+      ],
+      [{ status: 'pushed', reason: null, count: 337 }],
+    ).summarize(RUN_ID);
+
+    // Still counted, under its own name…
+    expect(summary.dropsByReason).toEqual({ represented_elsewhere: 341, no_destination: 2 });
+    // …and not a loss. The routed-nowhere row nothing claimed still is.
+    expect(summary.gaps).toEqual([{ reason: 'no_destination', count: 2 }]);
+    expect(summary).toMatchObject({ consumed: 1_343 + 337, reconciled: true });
   });
 
   it('says a re-import is a re-import, not a push that produced nothing', async () => {

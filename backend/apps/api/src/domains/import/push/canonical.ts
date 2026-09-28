@@ -946,6 +946,42 @@ export function destinationsFor(rec: CanonicalRecord): Destination[] {
 }
 
 /**
+ * Is this record, which {@link destinationsFor} routed NOWHERE, carried by
+ * another lane BY DESIGN?
+ *
+ * `destinationsFor` returns `[]` for two different kinds of record, and they
+ * answer "did the import lose it?" oppositely:
+ *
+ *  - **represented elsewhere** — the thing the row records already arrives by
+ *    another route, so a body row would be a second, empty copy of it. A
+ *    contact card is a Person, and the parser emits it as one on the entity
+ *    lane (`vcard.ts`, `contactlist.ts`, `applecontacts.ts`); a rolled-up
+ *    subscription line is already a line on its order's itemised receipt
+ *    (`ReceiptRollupId`). Not a loss.
+ *  - **nothing to file** — an undated raw GPS fix is (lat, lon, time) with the
+ *    time missing, and no table can hold it honestly. That IS a loss, and so is
+ *    any `[]` a future branch produces without saying why.
+ *
+ * `PushStage` asks this ONLY of a row whose destination list came back empty,
+ * and records the first kind under `represented_elsewhere` (expected) and the
+ * second under `no_destination` (a gap). So the default is the safe one: a new
+ * `[]` branch that is not listed here reads as a gap until someone decides
+ * otherwise, and listing a kind here can never hide a row that was routed.
+ *
+ * Kept beside `baseDestinationsFor` so the two branches it names are one
+ * scroll away from the code that makes them. Social affiliations
+ * (`isSocialAffiliation`) are deliberately not here: they keep their `events`
+ * home and never reach `[]`.
+ */
+export function isRepresentedElsewhere(rec: CanonicalRecord): boolean {
+  if (rec.kind === 'contact.card') {
+    return true;
+  }
+
+  return rec.kind === 'commerce.purchase' && rec.metadata.Subscription === true && isRolledUp(rec);
+}
+
+/**
  * Strip the `position` donation from an UNDATED record, whatever branch of
  * {@link baseDestinationsFor} put it there.
  *
@@ -1157,8 +1193,9 @@ function baseDestinationsFor(rec: CanonicalRecord): Destination[] {
   // Routing it nowhere is the same answer `isSocialAffiliation` gives a LinkedIn
   // connection, and for the same reason: the row records a thing that already
   // exists somewhere honest, so a body row is a second, empty copy of it.
-  // `NO_DESTINATION_REASON` counts these as routed-nowhere rather than hiding
-  // them in `deduped`, so the decision stays visible in the run.
+  // `PushStage` records these under `represented_elsewhere` (see
+  // isRepresentedElsewhere) rather than hiding them in `deduped` — visible in
+  // the run, and not counted as a gap, because the person did arrive.
   //
   // Measured on a fresh full-corpus import carrying every fix merged 2026-08-19:
   // 4,870 `ci.content` rows with `type='file'` from vcard, 2,085 of them with no
