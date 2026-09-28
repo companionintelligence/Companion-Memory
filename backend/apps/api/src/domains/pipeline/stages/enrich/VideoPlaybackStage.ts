@@ -5,7 +5,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 // The files domain's PUBLIC barrel, as FilePreviewStage does: the generator is
 // exported there precisely so this stage and the upload listener share it.
-import { FileVariant, VideoPlaybackService } from '@ci/domains/files';
+import { FileVariant, PlaybackEnvironmentError, VideoPlaybackService } from '@ci/domains/files';
 
 import { PIPELINE_QUEUES, STAGE_IDS } from '../../constants';
 import type { Stage, StageResult, StageSource } from '../../types';
@@ -100,14 +100,20 @@ export class VideoPlaybackStage implements Stage {
           };
       }
     } catch (err: unknown) {
-      // The service throws only for IO — the object-storage read and the
-      // spool to disk — which is exactly the retryable class. An input ffmpeg
-      // cannot handle comes back as `skipped: transcode_failed` above.
+      // The service throws only for what a retry can fix without the file
+      // changing: IO (the object-storage read, the spool to disk) and a fault
+      // of the machine — a missing ffmpeg filter or binary, a full disk, the
+      // encode timeout. An input ffmpeg cannot handle comes back as
+      // `skipped: transcode_failed` above. None of these is TRANSIENT in the
+      // ledger's sense (a missing filter stays missing until someone fixes
+      // it), so they spend the attempt budget and quarantine visibly.
       const message = err instanceof Error ? err.message : String(err);
+      const reason =
+        err instanceof PlaybackEnvironmentError ? `transcode_${err.reason}` : 'object_storage_read_failed';
 
-      this.logger.warn('Playback rendition failed', { fileId, error: message });
+      this.logger.warn('Playback rendition failed', { fileId, reason, error: message });
 
-      return { outcome: 'failed', reason: 'object_storage_read_failed', detail: { message } };
+      return { outcome: 'failed', reason, detail: { message } };
     }
   }
 }

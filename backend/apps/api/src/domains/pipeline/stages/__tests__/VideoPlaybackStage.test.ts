@@ -1,3 +1,5 @@
+import { PlaybackEnvironmentError } from '@ci/domains/files';
+
 import { PIPELINE_QUEUES, STAGE_IDS } from '../../constants';
 import { stageSchedule } from '../../schedule';
 import { STAGE_VERSIONS } from '../../versions';
@@ -95,6 +97,30 @@ describe('VideoPlaybackStage.run', () => {
       detail: { message: 'S3 object body was empty' },
     });
     expect(results.get('f2')?.outcome).toBe('done');
+  });
+
+  // A missing zscale filter or a timed-out encode is the machine's fault: a
+  // `skipped` row would never be re-offered after the machine was fixed.
+  it('records an environment fault or a timeout as a failure named for it, not a skip', async () => {
+    const { stage, videoPlaybackService } = build();
+    videoPlaybackService.generate
+      .mockRejectedValueOnce(
+        new PlaybackEnvironmentError('environment', 'Error opening output files: Filter not found'),
+      )
+      .mockRejectedValueOnce(new PlaybackEnvironmentError('timeout', 'transcode exceeded 110 min'));
+
+    const results = await stage.run(ctx, ['f1', 'f2']);
+
+    expect(results.get('f1')).toEqual({
+      outcome: 'failed',
+      reason: 'transcode_environment',
+      detail: { message: 'Error opening output files: Filter not found' },
+    });
+    expect(results.get('f2')).toEqual({
+      outcome: 'failed',
+      reason: 'transcode_timeout',
+      detail: { message: 'transcode exceeded 110 min' },
+    });
   });
 
   it('runs one transcode at a time', async () => {

@@ -198,6 +198,50 @@ describe('FileService.create — hash dedup', () => {
   });
 });
 
+describe('FileService.create — a write a unique index refuses', () => {
+  // At most one live PLAYBACK per original (files_one_playback_per_parent_uniq).
+  // The bytes are PUT before the row, so a refused insert strands them unless
+  // create() removes them — and a 23505 proves no row names that key.
+  it('deletes the object it just put, then rethrows the violation', async () => {
+    const repo = makeRepo();
+    const violation = Object.assign(new Error('duplicate key value'), { code: '23505' });
+    repo.save.mockRejectedValueOnce(violation);
+    const { service, s3Send } = makeService(repo);
+
+    await expect(
+      service.create(ownerCtx, {
+        buffer: Buffer.from('a rendition'),
+        contentType: 'video/mp4',
+        variant: FileVariant.PLAYBACK,
+        parentId: 'parent-1',
+      }),
+    ).rejects.toBe(violation);
+
+    const key = (repo.create.mock.results[0].value as { key: string }).key;
+
+    expect(s3Send).toHaveBeenCalledTimes(2);
+    expect(s3Send.mock.calls[1][0].input).toMatchObject({ Delete: { Objects: [{ Key: key }] } });
+  });
+
+  // Any other failure may have committed the row after all (a connection lost
+  // mid-commit); deleting its bytes then would leave a row naming nothing.
+  it('keeps the object when the save failed for any other reason', async () => {
+    const repo = makeRepo();
+    repo.save.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+    const { service, s3Send } = makeService(repo);
+
+    await expect(
+      service.create(ownerCtx, {
+        buffer: Buffer.from('a rendition'),
+        contentType: 'video/mp4',
+        variant: FileVariant.PLAYBACK,
+        parentId: 'parent-1',
+      }),
+    ).rejects.toThrow('Connection terminated unexpectedly');
+    expect(s3Send).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('FileService.findVariantsOfKindsByParentIds', () => {
   it('fetches every kind in one query, each aligned with the parent ids and owner-scoped', async () => {
     const repo = makeRepo() as ReturnType<typeof makeRepo> & { find: jest.Mock };

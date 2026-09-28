@@ -17,6 +17,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, type FindOptionsWhere } from 'typeorm';
 import { v4 as uuidv4, v7 as uuidv7 } from 'uuid';
 
+import { isUniqueViolation } from '@ci/common/constants';
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { serves } from '@ci/common/roles';
@@ -187,8 +188,12 @@ export class FileService implements OnModuleInit {
     // object that does not exist — a phantom that poisons its own repair.
     // This order fails the other way: a save that dies after a successful PUT
     // strands an unreferenced object in the store, which wastes bytes but
-    // breaks nothing and lies to nobody.
-    if (file.externalId == null && bucket != null && key != null) {
+    // breaks nothing and lies to nobody. The one save failure that PROVES no
+    // row was written — a unique index refusing it (at most one PLAYBACK per
+    // original) — deletes the object it just put, below.
+    const uploaded = file.externalId == null && bucket != null && key != null;
+
+    if (uploaded) {
       const putOptions = {
         Bucket: bucket,
         Key: key,
@@ -212,7 +217,26 @@ export class FileService implements OnModuleInit {
       }
     }
 
-    const result = await this.fileRepository.save(entity);
+    let result: FileEntity;
+
+    try {
+      result = await this.fileRepository.save(entity);
+    } catch (err: unknown) {
+      // Only a unique violation: any other failure (a dropped connection
+      // mid-commit) may have written the row after all, and deleting its
+      // bytes then would make exactly the phantom described above.
+      if (uploaded && isUniqueViolation(err)) {
+        await this.deleteObjects(bucket, [key]).catch((cleanupErr: unknown) => {
+          this.logger.warn('Could not delete the object of a file row a unique index refused', {
+            bucket,
+            key,
+            error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+          });
+        });
+      }
+
+      throw err;
+    }
 
     return this.signFile(result);
   }

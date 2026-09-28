@@ -80,6 +80,7 @@ export {
 export type { VideoPlaybackRequestPayload, VideoPlaybackSweepRequestPayload } from './events';
 export {
   VideoPlaybackService,
+  PlaybackEnvironmentError,
   BROWSER_SAFE_VIDEO_CODECS,
   PLAYBACK_MAX_EDGE,
   ORIGINAL_RESOLUTION,

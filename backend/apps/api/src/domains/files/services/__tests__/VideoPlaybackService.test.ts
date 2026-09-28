@@ -6,9 +6,15 @@ import {
   BROWSER_SAFE_VIDEO_CODECS,
   ORIGINAL_RESOLUTION,
   PLAYBACK_MAX_EDGE,
+  PlaybackEnvironmentError,
+  isEnvironmentFault,
   needsPlaybackRendition,
+  pickAudioStream,
   playbackFilterChain,
+  playbackOutputOptions,
+  transcodeTimeoutMs,
   VideoPlaybackService,
+  type VideoStreamProbe,
 } from '../VideoPlaybackService';
 
 /**
@@ -18,8 +24,11 @@ import {
  * stubbed probe/transcode: existing rendition short-circuits, non-stored and
  * non-video skip before any bytes move, browser-safe codecs skip as
  * `not_needed`, a transcode that ffmpeg rejects is `transcode_failed`
- * (completed, not retried), and a successful run writes a PLAYBACK child of
- * the original.
+ * (completed, not retried), a fault of the machine throws, a rendition the
+ * other caller wrote first is `exists` at every point it can be found, and a
+ * successful run writes a PLAYBACK child of the original. The ffmpeg runs
+ * themselves — which stream is mapped, the silent retry, the timeout — are in
+ * VideoPlaybackService.ffmpeg.test.ts.
  */
 function makeLogger() {
   return { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() };
@@ -45,6 +54,30 @@ function build(file: Record<string, unknown> | null = HEVC_FILE) {
 }
 
 const ctx = { userId: 'user-1' } as never;
+
+const HEVC_PROBE: VideoStreamProbe = {
+  codec: 'hevc',
+  pixFmt: 'yuv420p',
+  transfer: 'bt709',
+  width: 3840,
+  height: 2160,
+  durationSeconds: 4,
+  audioStreamIndex: 1,
+};
+
+/** A transcode stub that writes an output, as ffmpeg would, and succeeds. */
+function stubTranscode(service: VideoPlaybackService) {
+  return jest
+    .spyOn(
+      service as unknown as { transcode: (input: string, output: string) => Promise<boolean> },
+      'transcode',
+    )
+    .mockImplementation(async (_input, output) => {
+      await fs.writeFile(output, Buffer.alloc(1234));
+
+      return true;
+    });
+}
 
 describe('codec rule', () => {
   it('leaves what every browser already decodes alone and renders everything else', () => {
@@ -103,6 +136,108 @@ describe('filter chain', () => {
   });
 });
 
+describe('audio track choice', () => {
+  const video = { index: 0, codec_type: 'video', codec_name: 'hevc' };
+
+  // iPhone 16/17 Pro Spatial Audio: stereo AAC plus an APAC track nothing can
+  // decode. Mapping every audio stream (`0:a?`) failed the whole encode.
+  it('keeps the decodable track of a Spatial Audio clip and never the APAC one', () => {
+    for (const apac of ['apple_apac', 'apac', 'none', 'unknown']) {
+      expect(
+        pickAudioStream([
+          video,
+          { index: 1, codec_type: 'audio', codec_name: apac, disposition: { default: 1 } },
+          { index: 2, codec_type: 'audio', codec_name: 'aac', disposition: { default: 0 } },
+        ]),
+      ).toBe(2);
+    }
+  });
+
+  it('prefers the default-flagged track, else the first decodable one', () => {
+    expect(
+      pickAudioStream([
+        video,
+        { index: 1, codec_type: 'audio', codec_name: 'aac', disposition: { default: 0 } },
+        { index: 2, codec_type: 'audio', codec_name: 'ac3', disposition: { default: 1 } },
+      ]),
+    ).toBe(2);
+    expect(
+      pickAudioStream([
+        video,
+        { index: 1, codec_type: 'audio', codec_name: 'aac' },
+        { index: 2, codec_type: 'audio', codec_name: 'ac3' },
+      ]),
+    ).toBe(1);
+  });
+
+  it('is none for a silent clip or one whose only audio cannot be decoded', () => {
+    expect(pickAudioStream([video])).toBeNull();
+    expect(pickAudioStream([video, { index: 1, codec_type: 'audio', codec_name: 'apple_apac' }])).toBeNull();
+    expect(pickAudioStream([video, { index: 1, codec_type: 'audio' }])).toBeNull();
+  });
+});
+
+describe('ffmpeg output options', () => {
+  it('maps the first video stream and exactly the chosen audio stream', () => {
+    const options = playbackOutputOptions({ transfer: 'bt709' }, 2);
+
+    expect(options.filter((option) => option.startsWith('-map'))).toEqual(['-map 0:v:0', '-map 0:2']);
+    expect(options).toEqual(expect.arrayContaining(['-c:a aac', '-b:a 128k']));
+    expect(options).not.toContain('-an');
+  });
+
+  it('writes a silent rendition when there is no audio track to keep', () => {
+    const options = playbackOutputOptions({ transfer: 'bt709' }, null);
+
+    expect(options.filter((option) => option.startsWith('-map'))).toEqual(['-map 0:v:0']);
+    expect(options).toContain('-an');
+    expect(options.some((option) => option.startsWith('-c:a'))).toBe(false);
+  });
+});
+
+describe('transcode timeout', () => {
+  const MINUTE = 60_000;
+
+  it('gives short and unknown-length clips the 45-minute floor', () => {
+    expect(transcodeTimeoutMs(null)).toBe(45 * MINUTE);
+    expect(transcodeTimeoutMs(4)).toBe(45 * MINUTE);
+  });
+
+  // A flat 45 minutes called an hour-long recording "stuck" when encoding
+  // runs at about real time.
+  it('scales with the clip: three times its length plus a margin', () => {
+    expect(transcodeTimeoutMs(20 * 60)).toBe(70 * MINUTE);
+  });
+
+  it('stays under the two-hour job deadline, so the timer and not the deadline stops a runaway encode', () => {
+    expect(transcodeTimeoutMs(60 * 60)).toBe(110 * MINUTE);
+    expect(transcodeTimeoutMs(6 * 60 * 60)).toBe(110 * MINUTE);
+  });
+});
+
+describe('environment faults', () => {
+  it.each([
+    "[AVFilterGraph @ 0x1] No such filter: 'zscale'",
+    'Error opening output files: Filter not found',
+    'Unknown encoder libx264',
+    'Cannot find ffmpeg',
+    'spawn ffprobe ENOENT',
+    'av_interleaved_write_frame(): No space left on device',
+    'ffmpeg was killed with signal SIGKILL',
+  ])('blames the machine for %p', (text) => {
+    expect(isEnvironmentFault(text)).toBe(true);
+  });
+
+  it.each([
+    'Decoding requested, but no decoder found for: apple_apac',
+    'Decoder (codec none) not found for input stream #0:2',
+    'Invalid data found when processing input',
+    'moov atom not found',
+  ])('blames the input for %p', (text) => {
+    expect(isEnvironmentFault(text)).toBe(false);
+  });
+});
+
 describe('VideoPlaybackService.generate', () => {
   it('returns the existing rendition without reading the original', async () => {
     const { service, fileService } = build();
@@ -150,6 +285,7 @@ describe('VideoPlaybackService.generate', () => {
       width: 1920,
       height: 1080,
       durationSeconds: 4,
+      audioStreamIndex: 1,
     });
 
     await expect(service.generate(ctx, { fileId: 'file-1' })).resolves.toEqual({
@@ -169,6 +305,7 @@ describe('VideoPlaybackService.generate', () => {
       width: 3840,
       height: 2160,
       durationSeconds: 4,
+      audioStreamIndex: 1,
     });
     jest
       .spyOn(service as unknown as { transcode: () => Promise<boolean> }, 'transcode')
@@ -193,6 +330,7 @@ describe('VideoPlaybackService.generate', () => {
         width: 3840,
         height: 2160,
         durationSeconds: 4,
+        audioStreamIndex: 1,
       })
       .mockResolvedValueOnce({
         codec: 'h264',
@@ -201,6 +339,7 @@ describe('VideoPlaybackService.generate', () => {
         width: 1920,
         height: 1080,
         durationSeconds: 4,
+        audioStreamIndex: 1,
       });
     const transcode = jest
       .spyOn(
@@ -239,5 +378,94 @@ describe('VideoPlaybackService.generate', () => {
     fileService.getFileStream.mockRejectedValueOnce(new Error('S3 object body was empty'));
 
     await expect(service.generate(ctx, { fileId: 'file-1' })).rejects.toThrow('S3 object body was empty');
+  });
+
+  // A missing filter or a timed-out encode is not the file's fault: returned
+  // as `transcode_failed` it would never be offered again.
+  it('lets a fault of the machine throw rather than recording a skip', async () => {
+    const { service, fileService } = build();
+    jest.spyOn(service, 'probe').mockResolvedValue(HEVC_PROBE);
+    const transcode = jest
+      .spyOn(
+        service as unknown as { transcode: (input: string, output: string) => Promise<boolean> },
+        'transcode',
+      )
+      .mockRejectedValue(new PlaybackEnvironmentError('environment', "No such filter: 'zscale'"));
+
+    await expect(service.generate(ctx, { fileId: 'file-1' })).rejects.toBeInstanceOf(
+      PlaybackEnvironmentError,
+    );
+    expect(fileService.create).not.toHaveBeenCalled();
+    await expect(fs.stat(transcode.mock.calls[0][0])).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // The upload listener (worker) and the sweep (API process) both run this.
+  // Hours can pass between the first check and the write — the spool, the
+  // wait for the encode slot, the encode — so the check is asked again.
+  describe('when the other caller writes the rendition first', () => {
+    it('does not encode once the slot is ours and the rendition exists', async () => {
+      const { service, fileService } = build();
+      jest.spyOn(service, 'probe').mockResolvedValue(HEVC_PROBE);
+      const transcode = stubTranscode(service);
+      fileService.findVariantByParentId
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'play-other' });
+
+      await expect(service.generate(ctx, { fileId: 'file-1' })).resolves.toEqual({
+        outcome: 'exists',
+        playbackId: 'play-other',
+      });
+      expect(transcode).not.toHaveBeenCalled();
+      expect(fileService.create).not.toHaveBeenCalled();
+    });
+
+    it('does not upload a second one when it appeared during the encode', async () => {
+      const { service, fileService } = build();
+      jest.spyOn(service, 'probe').mockResolvedValue(HEVC_PROBE);
+      const transcode = stubTranscode(service);
+      fileService.findVariantByParentId
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'play-other' });
+
+      await expect(service.generate(ctx, { fileId: 'file-1' })).resolves.toEqual({
+        outcome: 'exists',
+        playbackId: 'play-other',
+      });
+      expect(transcode).toHaveBeenCalledTimes(1);
+      expect(fileService.create).not.toHaveBeenCalled();
+    });
+
+    it('reports the winner when the unique index refuses this write', async () => {
+      const { service, fileService } = build();
+      jest.spyOn(service, 'probe').mockResolvedValue(HEVC_PROBE);
+      stubTranscode(service);
+      fileService.findVariantByParentId
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'play-other' });
+      fileService.create.mockRejectedValueOnce(
+        Object.assign(new Error('duplicate key value violates unique constraint'), {
+          driverError: { code: '23505' },
+        }),
+      );
+
+      await expect(service.generate(ctx, { fileId: 'file-1' })).resolves.toEqual({
+        outcome: 'exists',
+        playbackId: 'play-other',
+      });
+    });
+
+    it('still throws a write failure that is not that race', async () => {
+      const { service, fileService } = build();
+      jest.spyOn(service, 'probe').mockResolvedValue(HEVC_PROBE);
+      stubTranscode(service);
+      fileService.create.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+
+      await expect(service.generate(ctx, { fileId: 'file-1' })).rejects.toThrow(
+        'Connection terminated unexpectedly',
+      );
+    });
   });
 });
