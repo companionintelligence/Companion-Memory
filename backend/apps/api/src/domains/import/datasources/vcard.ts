@@ -801,6 +801,146 @@ export function handlesFromNote(note: string): { emails: string[]; phones: strin
 }
 
 /**
+ * X-SOCIALPROFILE services whose profile URLs have a known shape: the domain a
+ * real profile lives on, and the URL Apple itself writes for an `x-user` handle
+ * (`X-SOCIALPROFILE;type=linkedin;x-user=jdoe:https\://www.linkedin.com/in/jdoe`).
+ * Keyed on the lowercased TYPE / X-SERVICE-TYPE / X-ABLabel.
+ */
+const SOCIAL_PROFILE_SERVICES: Record<string, { domain: string; profileUrl: (user: string) => string }> = {
+  linkedin: { domain: 'linkedin.com', profileUrl: (user) => `https://www.linkedin.com/in/${user}` },
+  twitter: { domain: 'twitter.com', profileUrl: (user) => `https://twitter.com/${user}` },
+  facebook: { domain: 'facebook.com', profileUrl: (user) => `https://www.facebook.com/${user}` },
+};
+
+/**
+ * A character that continues a host label or a path segment. A URL that extends
+ * a value with one of these means the value was cut mid-token; one that extends
+ * it with `/` is a different, longer page on a value that was already whole.
+ */
+const URL_TOKEN_CHAR = /[A-Za-z0-9_%-]/;
+
+/** The http(s) URLs written inside free text, trailing sentence punctuation removed. */
+function urlsInText(text: string): string[] {
+  return [...text.matchAll(/https?:\/\/[^\s<>"]+/gi)].map((m) => m[0].replace(/[.,;:!?)\]]+$/, ''));
+}
+
+/**
+ * The comparable form of a URL: lowercased, scheme removed. A value that is
+ * nothing but a (possibly partial) scheme — `https:`, `https:/` — keys as ''.
+ */
+function urlKey(url: string): string {
+  const lower = url.trim().toLowerCase();
+  if ('https://'.startsWith(lower) || 'http://'.startsWith(lower)) {
+    return '';
+  }
+
+  return lower.replace(/^https?:\/\//, '');
+}
+
+function isOnDomain(url: string, domain: string): boolean {
+  try {
+    const host = new URL(/^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`).hostname.toLowerCase();
+
+    return host === domain || host.endsWith(`.${domain}`);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when `value` stops before a profile could begin: it is a prefix of the
+ * service's own profile URL with no handle (`https://www.linkedin.com/in/`), so
+ * it names the service and nothing else. Covers a cut anywhere in the scheme,
+ * the host or the fixed path.
+ */
+function isTruncatedProfileUrl(value: string, service: { profileUrl: (user: string) => string }): boolean {
+  const key = urlKey(value);
+  const base = urlKey(service.profileUrl(''));
+
+  return base.startsWith(key) || base.replace(/^www\./, '').startsWith(key);
+}
+
+/**
+ * The profile an IMPP / X-SOCIALPROFILE line names, or '' when it names none.
+ *
+ * The developer's real 78 MB Contacts export holds 576 X-SOCIALPROFILE lines.
+ * 552 are `type=linkedin`, written by a LinkedIn sync, and NOT ONE of those
+ * holds a complete URL. The physical line stops, almost always at exactly
+ * 74 bytes, and the next line is an ordinary property (529 times the card's
+ * NOTE), never a ` `-prefixed continuation. So the rest of the URL is not in the
+ * file at all, and no unfold rule can recover it: an RFC 6350 fold of the same
+ * line unfolds fine (see the tests). An `x-displayname=<name>` parameter sits
+ * ahead of the value, so the cut lands at a different point on every card:
+ * `https://www.lin`, `https://www.linked`, `https://www.`. Every one of them was
+ * stored as a profile.
+ *
+ * So for a service whose URLs have a known shape, a value that is cut short is
+ * repaired, in order:
+ *   1. from the line's own `x-user` handle, which Apple writes beside the URL;
+ *   2. from the one URL on the same card, in a URL property or in the NOTE (the
+ *      LinkedIn sync's `URL: …\nPosition: …` record, see the header), that is
+ *      on the service's domain and that the value is a prefix of.
+ * A value still unresolved after that is dropped, not stored: a fragment that
+ * looks like a link but resolves nowhere is worse than no link.
+ *
+ * "Cut short" means either the value carries no handle at all (see
+ * isTruncatedProfileUrl), or a longer URL from 1/2 continues it mid-token: a
+ * value that ends inside a slug (`/in/some-inv`) looks whole on its own.
+ *
+ * An unknown service, and every IMPP line (`xmpp:` / `aim:` handles, not
+ * pages), keeps its value exactly as written. When that value is empty, the
+ * `x-user` handle stands in for it.
+ */
+function resolveSocialProfile(line: ContentLine, service: string | undefined, cardUrls: string[]): string {
+  const value = unescapeVCardText(line.value).trim();
+  const user = line.params['X-USER']?.[0]?.trim() ?? '';
+  const known =
+    line.name === 'X-SOCIALPROFILE'
+      ? [service, ...(line.params.TYPE ?? []), ...(line.params['X-SERVICE-TYPE'] ?? [])]
+          .map((key) => (key ? SOCIAL_PROFILE_SERVICES[key.toLowerCase()] : undefined))
+          .find(Boolean)
+      : undefined;
+
+  if (!known) {
+    return value || user;
+  }
+
+  const truncated = isTruncatedProfileUrl(value, known);
+  const key = urlKey(value);
+  const continues = (url: string): boolean => {
+    const k = urlKey(url);
+
+    return (
+      k.length > key.length &&
+      k.startsWith(key) &&
+      (truncated || URL_TOKEN_CHAR.test(k[key.length])) &&
+      isOnDomain(url, known.domain) &&
+      !isTruncatedProfileUrl(url, known)
+    );
+  };
+
+  const own = user ? known.profileUrl(user) : '';
+  if (own && continues(own)) {
+    return own;
+  }
+
+  // Keyed on urlKey so `http://` and `https://` spellings of one page count
+  // once; the first spelling wins, and URL properties come before the NOTE's.
+  const onCard = new Map<string, string>();
+  for (const url of cardUrls.filter(continues)) {
+    if (!onCard.has(urlKey(url))) {
+      onCard.set(urlKey(url), url);
+    }
+  }
+
+  if (onCard.size === 1) {
+    return [...onCard.values()][0];
+  }
+
+  return truncated ? '' : value;
+}
+
+/**
  * The accumulating entity-metadata keys. A contact that resolves to an entity
  * some earlier source already created must be able to ADD to it — an email the
  * mail headers never showed, the person's employer, their address — rather than
@@ -858,6 +998,7 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
   const nicknames: string[] = [];
   const categories: string[] = [];
   const socials: string[] = [];
+  const pendingSocials: { line: ContentLine; service?: string }[] = [];
   let fn = '';
   let structuredName = '';
   let birthday = '';
@@ -1011,18 +1152,12 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
 
         break;
       case 'IMPP':
-      case 'X-SOCIALPROFILE': {
-        const v = text();
-        if (!v) {
-          break;
-        }
-
-        const service = line.params['X-SERVICE-TYPE']?.[0] ?? label;
-        socials.push(service ? `${service}: ${v}` : v);
-        attributes.push({ name: 'social_profile', value: v, ...(service ? { label: service } : {}) });
+      case 'X-SOCIALPROFILE':
+        // Resolved after the loop, not here: repairing a truncated profile URL
+        // reads the card's URL and NOTE values, and a real export writes the
+        // NOTE after this line. See resolveSocialProfile.
+        pendingSocials.push({ line, service: line.params['X-SERVICE-TYPE']?.[0] ?? label });
         break;
-      }
-
       case 'UID':
         if (!uid) {
           uid = text();
@@ -1032,6 +1167,17 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
       default:
         break;
     }
+  }
+
+  const cardUrls = [...urls, ...notes.flatMap(urlsInText)];
+  for (const { line, service } of pendingSocials) {
+    const v = resolveSocialProfile(line, service, cardUrls);
+    if (!v) {
+      continue;
+    }
+
+    socials.push(service ? `${service}: ${v}` : v);
+    attributes.push({ name: 'social_profile', value: v, ...(service ? { label: service } : {}) });
   }
 
   if (birthday) {
