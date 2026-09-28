@@ -12,6 +12,7 @@ import type {
   OrchestrateStage,
   OrchestrateSummary,
   PathRecognition,
+  RetryFailedPushResult,
   RunDetail,
   RunSummary,
   SourceCatalogEntry,
@@ -175,6 +176,11 @@ export class ImportApiClient {
 
   startPush(runIds?: string[]): Promise<{ runs: RunSummary[] }> {
     return this.request('/import/push', { method: 'POST', body: runIds ? { runIds } : {} });
+  }
+
+  /** Put a run's `failed` push rows back to `pending` and re-queue its push. */
+  retryFailedPush(runId: string): Promise<RetryFailedPushResult> {
+    return this.request(`/import/runs/${encodeURIComponent(runId)}/push/retry`, { method: 'POST', body: {} });
   }
 
   // ---------------------------------------------------------------------------

@@ -573,7 +573,7 @@ The importer ported out of the retired CI-Import-Tools runs **inside this server
 | GET  | `/import/runs/:runId/recognized`            | `:358` | What that run recognized.                                  |
 | POST | `/import/runs/:runId/cancel`                | `:387` | Cancel a run.                                              |
 | POST | `/import/push`                              | `:417` | Push parsed data into memory.                              |
-| POST | `/import/runs/:runId/push/retry`            | `:441` | Retry a failed push.                                       |
+| POST | `/import/runs/:runId/push/retry`            | `:441` | Re-push a run's failed rows; 409 while a stage is working. |
 | POST | `/import/runs/:runId/stages/:stageId/retry` | `:457` | Retry one stage.                                           |
 
 Import stage work is dispatched over **per-kind pg-boss queues** — `import-unpack`, `import-parse`, `import-media`, `import-push` (`domains/import/constants.ts` `IMPORT_STAGE_QUEUE_BY_KIND`). The old single `import-stages` queue (`IMPORT_QUEUE`, `constants.ts:33`) is kept as a **drain** for jobs an older release left queued, and its worker is still registered (`listeners/ImportStageListener.ts:169`). New work goes to the per-kind queues with **one exception**: when a stage's `kind` cannot be resolved — a deleted stage racing the enqueue — `ImportRunService.enqueueStage` falls back to `IMPORT_QUEUE` (`services/ImportRunService.ts:1485`), so `import-stages` does still receive new jobs on that path rather than dropping them.

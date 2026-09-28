@@ -159,7 +159,8 @@ export interface DropSummary {
 }
 
 // ---------------------------------------------------------------------------
-// GET|POST /import/runs, /import/runs/:id, /import/runs/unpushed, /import/push
+// GET|POST /import/runs, /import/runs/:id, /import/runs/unpushed, /import/push,
+// /import/runs/:id/push/retry
 // Mirrors RunSummary / StageSummary / RunDetail / UnpushedRunSummary in
 // domains/import/controllers/ImportRunsController.ts
 // ---------------------------------------------------------------------------
@@ -218,6 +219,18 @@ export interface RunDetail extends RunSummary {
 export interface UnpushedRunSummary extends RunSummary {
   pendingItems: number;
   pendingEntities: number;
+}
+
+/**
+ * POST /import/runs/:runId/push/retry — mirrors the return of
+ * `ImportRunsController.retryFailedPush`. `items`/`entities` are the rows moved
+ * from `failed` back to `pending`; `requeued` says whether a push was put back
+ * on the queue for them (false with zeros means nothing was stranded).
+ */
+export interface RetryFailedPushResult {
+  items: number;
+  entities: number;
+  requeued: boolean;
 }
 
 // ---------------------------------------------------------------------------

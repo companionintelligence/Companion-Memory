@@ -172,6 +172,7 @@ export function buildProgram(deps: ProgramDeps): Command {
     .description('Push staged rows into ci.* — the deferred half of an import')
     .option('--run <id>', 'restrict to this run (repeatable)', collect, [])
     .option('--dry-run', 'list what would be pushed')
+    .option('--retry-failed', 're-push the rows a finished push could not write (needs --run)')
     .option('--wait', 'follow the runs until they finish')
     .option('--timeout <seconds>', 'give up waiting after this long')
     .option('--json', 'machine-readable output')

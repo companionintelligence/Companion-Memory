@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 
 import type { RequestContext } from '@ci/common/context';
 
@@ -82,6 +82,7 @@ function makeController(
     retry?: boolean;
     batch?: null;
     discarded?: null;
+    retryFailedPush?: { items: number; entities: number; requeued: boolean } | null;
   } = {},
 ) {
   const runs = {
@@ -101,6 +102,12 @@ function makeController(
     >(async () => [{ run: RUN, stage: STAGES[0] }]),
     cancel: jest.fn(async () => overrides.cancel ?? true),
     retryStage: jest.fn(async () => overrides.retry ?? true),
+    retryFailedPush: jest.fn(
+      async (): Promise<{ items: number; entities: number; requeued: boolean } | null> =>
+        overrides.retryFailedPush === undefined
+          ? { items: 437, entities: 0, requeued: true }
+          : overrides.retryFailedPush,
+    ),
     activeBatch: jest.fn(async () =>
       overrides.batch === undefined
         ? {
@@ -301,6 +308,63 @@ describe('ImportRunsController.cancel and retry', () => {
     await expect(controller.retryStage(ctx, 'run-1', 'stage-unpack')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+});
+
+/**
+ * The operator's way back for rows a push could not write — `ci push --run <id>
+ * --retry-failed`. What may be retried is the service's rule (and is asserted
+ * against real Postgres in `failedPushRecovery.integration.spec.ts`); the edge
+ * owes the caller the counts, a 404 for a run that is not theirs, and the
+ * service's 409 unchanged, since its message names the stage still working.
+ */
+describe('ImportRunsController.retryFailedPush', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('reports how many rows went back to the queue, for the caller only', async () => {
+    const { controller, runs } = makeController();
+
+    expect(await controller.retryFailedPush(ctx, 'run-1')).toEqual({
+      items: 437,
+      entities: 0,
+      requeued: true,
+    });
+    expect(runs.retryFailedPush).toHaveBeenCalledWith({ userId: 'user-1' }, 'run-1');
+  });
+
+  it('answers nothing-stranded with zero counts, not an error', async () => {
+    const { controller } = makeController({ retryFailedPush: { items: 0, entities: 0, requeued: false } });
+
+    expect(await controller.retryFailedPush(ctx, 'run-1')).toEqual({
+      items: 0,
+      entities: 0,
+      requeued: false,
+    });
+  });
+
+  it('404s a run that is not this user’s', async () => {
+    const { controller } = makeController({ retryFailedPush: null });
+
+    await expect(controller.retryFailedPush(ctx, 'run-1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('passes the refusal for a run still pushing through as a 409', async () => {
+    const { controller, runs } = makeController();
+
+    runs.retryFailedPush.mockRejectedValueOnce(
+      new ConflictException('Import run run-1 is still pushing (its push stage is running).'),
+    );
+
+    await expect(controller.retryFailedPush(ctx, 'run-1')).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('refuses an unauthenticated caller before touching the service', async () => {
+    const { controller, runs } = makeController();
+
+    await expect(controller.retryFailedPush({} as RequestContext, 'run-1')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(runs.retryFailedPush).not.toHaveBeenCalled();
   });
 });
 

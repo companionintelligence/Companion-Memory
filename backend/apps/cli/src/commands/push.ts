@@ -1,6 +1,8 @@
+import { ApiError } from '../client';
 import { CliError, type CliContext } from '../context';
 import { json, stamp, table } from '../output';
 import { waitForRuns } from '../wait';
+import type { RetryFailedPushResult } from '../wire';
 
 import { parseTimeout } from './import';
 
@@ -8,6 +10,11 @@ export interface PushOptions {
   /** Restrict to these run ids. Absent means every eligible run. */
   run?: string[];
   dryRun?: boolean;
+  /**
+   * Re-drive the named runs' push instead: rows it could not write go back from
+   * `failed` to `pending`, and the run's own push stage is re-queued for them.
+   */
+  retryFailed?: boolean;
   wait?: boolean;
   timeout?: string;
   json?: boolean;
@@ -25,8 +32,17 @@ export interface PushOptions {
  *
  * A run with nothing pending is not eligible and is not an error: "nothing to
  * push" is the state you wanted to be in.
+ *
+ * `--retry-failed` is the other door, for a run whose push already RAN — see
+ * {@link retryFailedPush}.
  */
 export async function pushCommand(ctx: CliContext, options: PushOptions = {}): Promise<void> {
+  if (options.retryFailed) {
+    await retryFailedPush(ctx, options);
+
+    return;
+  }
+
   const unpushed = await ctx.client.listUnpushed();
   const wanted = options.run == null || options.run.length === 0 ? null : new Set(options.run);
   const selected = wanted == null ? unpushed : unpushed.filter((run) => wanted.has(run.id));
@@ -86,6 +102,130 @@ export async function pushCommand(ctx: CliContext, options: PushOptions = {}): P
       ctx.term,
       runs.map((run) => run.id),
       { timeoutMs: parseTimeout(options.timeout), quiet: options.json },
+    );
+  }
+}
+
+/**
+ * `ci push --run <id> --retry-failed`: push the rows a finished push could not
+ * write.
+ *
+ * The plain `push` cannot reach them, and that is by design rather than
+ * oversight: it only offers a run that has never had a push stage, and the
+ * stage itself reads only `pending` rows. So a row the push marked `failed`
+ * sat there for good — which is how a Postgres crash-restart mid-import left
+ * 437 perfectly good rows behind on a run that otherwise worked. This asks the
+ * appliance (`POST /import/runs/:id/push/retry`) to move them back to
+ * `pending` and re-queue the run's push stage, which then pushes those rows
+ * and nothing else. It also re-drives a push that FAILED with rows still
+ * pending, so it is the one command for "finish this run's push".
+ *
+ * Explicit run ids only. Re-pushing is safe — every destination upserts — but
+ * "retry everything that ever failed, everywhere" is not a thing anyone should
+ * be able to type by accident.
+ *
+ * A run still pushing is refused by the appliance with a 409 naming the stage;
+ * that and a run that is not yours are reported per run, and the others go
+ * ahead. `--wait` follows the re-queued runs to their close-out, which is where
+ * the run's status is recomputed.
+ */
+async function retryFailedPush(ctx: CliContext, options: PushOptions): Promise<void> {
+  const runIds = options.run ?? [];
+
+  if (runIds.length === 0) {
+    throw new CliError(
+      '--retry-failed needs the run to retry: `ci push --run <id> --retry-failed`. ' +
+        '`ci runs` lists runs; a run with failed push rows ends `partial`.',
+    );
+  }
+
+  if (options.dryRun) {
+    throw new CliError(
+      '--retry-failed does not take --dry-run. `ci runs <id> --json` shows how many rows the push ' +
+        'failed (the push stage’s `detail.failed`) without changing anything.',
+    );
+  }
+
+  const results: Array<{ runId: string; result?: RetryFailedPushResult; error?: string }> = [];
+
+  for (const runId of runIds) {
+    try {
+      results.push({ runId, result: await ctx.client.retryFailedPush(runId) });
+    } catch (err) {
+      // A refusal is about THAT run — still pushing, or not this account's —
+      // and says so. Anything else (the appliance unreachable, a 500) is not a
+      // per-run answer, and goes up to the entry point as it always has.
+      if (err instanceof ApiError && (err.status === 404 || err.status === 409)) {
+        results.push({ runId, error: err.message });
+        continue;
+      }
+
+      throw err;
+    }
+  }
+
+  const requeued = results.filter((entry) => entry.result?.requeued === true);
+  const refused = results.filter((entry) => entry.error != null);
+
+  if (options.json) {
+    json(
+      ctx.term,
+      results.map((entry) => ({
+        runId: entry.runId,
+        ...(entry.result ?? {}),
+        ...(entry.error ? { error: entry.error } : {}),
+      })),
+    );
+  } else {
+    ctx.term.out(
+      table(results, [
+        { header: 'id', value: (entry) => entry.runId },
+        {
+          header: 'items',
+          value: (entry) => (entry.result ? String(entry.result.items) : ''),
+          align: 'right',
+        },
+        {
+          header: 'entities',
+          value: (entry) => (entry.result ? String(entry.result.entities) : ''),
+          align: 'right',
+        },
+        {
+          header: 'push',
+          value: (entry) =>
+            entry.error != null ? 'refused' : entry.result?.requeued ? 'queued' : 'nothing to retry',
+        },
+      ]),
+    );
+
+    for (const entry of refused) {
+      ctx.term.err(`${entry.runId}: ${entry.error}`);
+    }
+
+    const items = requeued.reduce((sum, entry) => sum + (entry.result?.items ?? 0), 0);
+    const entities = requeued.reduce((sum, entry) => sum + (entry.result?.entities ?? 0), 0);
+
+    ctx.term.out(
+      requeued.length > 0
+        ? `\n${requeued.length} run(s) queued for push; ${items} item(s) and ${entities} entit(ies) ` +
+            `moved from failed back to pending.`
+        : '\nNothing to retry: no failed push rows on the run(s) named.',
+    );
+  }
+
+  if (options.wait && requeued.length > 0) {
+    await waitForRuns(
+      ctx.client,
+      ctx.term,
+      requeued.map((entry) => entry.runId),
+      { timeoutMs: parseTimeout(options.timeout), quiet: options.json },
+    );
+  }
+
+  if (refused.length > 0) {
+    throw new CliError(
+      `${refused.length} of ${results.length} run(s) could not be retried.`,
+      requeued.length > 0 ? 2 : 1,
     );
   }
 }

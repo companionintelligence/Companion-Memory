@@ -255,12 +255,24 @@ two audiences — `ci_import.import_runs` in a vocabulary the person who uploade
 the archive recognizes, and pg-boss under `/jobs` for whoever is asked why the
 queue is deep. This command is the first. The second is deliberately not wrapped.
 
-### `push [--run <id>] [--dry-run] [--wait] [--timeout] [--json]`
+### `push [--run <id>] [--dry-run] [--retry-failed] [--wait] [--timeout] [--json]`
 
 The wizard's Sync step: append a `push` stage to every run whose rows are staged
 and uncommitted. Same name as upstream's command, entirely different thing —
 see the drop table below. Exists for the case `--stages` creates. "Nothing to
 push" is a state, not an error.
+
+`--retry-failed` (with `--run <id>`, repeatable) is the other door, for a run
+whose push already ran: `POST /import/runs/:id/push/retry` moves that run's
+`failed` rows — items and entities — back to `pending` and re-queues the run's
+own push stage, which then pushes those rows and nothing else. It also re-drives
+a push stage that failed with rows still `pending` (how a push ends when the
+database stays away past its wait). The plain `push` cannot do either: it only
+offers a run that never had a push stage. A run with a stage still working is
+refused per run (409) and the others go ahead; `--wait` follows the re-queued
+runs to close-out, which is where the run's `completed`/`partial` is recomputed.
+Explicit run ids only, by design, and no `--dry-run` — `ci runs <id> --json`
+shows the push stage's `detail.failed` without changing anything.
 
 ### `stats [--json]`
 

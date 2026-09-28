@@ -1,5 +1,7 @@
+import { ApiError } from '../client';
 import { pushCommand } from '../commands/push';
 import { CliError } from '../context';
+import { buildProgram } from '../program';
 
 import { harness } from './support/harness';
 
@@ -77,5 +79,126 @@ describe('ci push', () => {
     await pushCommand(ctx, { run: ['run-1'] });
 
     expect(asked).toEqual([['run-1']]);
+  });
+});
+
+/**
+ * `ci push --run <id> --retry-failed` — the way back for rows a finished push
+ * could not write. The case that motivated it: a Postgres crash-restart during
+ * a Takeout push left 437 rows `failed` with "the database system is in
+ * recovery mode", on a run the plain `push` will never offer again because it
+ * already has a push stage.
+ */
+describe('ci push --retry-failed', () => {
+  const RUN = '68bffe0a-1dbe-4783-a226-49149f45ec4f';
+
+  const detail = (id: string, status: string) => ({ ...unpushed(id, { status }), stages: [] });
+
+  it('re-queues the named run and says how many rows went back', async () => {
+    const asked: string[] = [];
+    const ctx = harness({
+      retryFailedPush: async (runId: string) => {
+        asked.push(runId);
+
+        return { items: 437, entities: 0, requeued: true };
+      },
+    });
+
+    await pushCommand(ctx, { run: [RUN], retryFailed: true });
+
+    // The retry route, never Sync: `listUnpushed` is not stubbed and would throw.
+    expect(asked).toEqual([RUN]);
+    expect(ctx.term.text()).toContain('437');
+    expect(ctx.term.text()).toContain('1 run(s) queued for push; 437 item(s) and 0 entit(ies)');
+  });
+
+  it('follows the re-queued run to its close-out with --wait', async () => {
+    const polled: string[] = [];
+    const ctx = harness({
+      retryFailedPush: async () => ({ items: 437, entities: 0, requeued: true }),
+      getRun: async (runId: string) => {
+        polled.push(runId);
+
+        return detail(runId, 'completed');
+      },
+    });
+
+    await pushCommand(ctx, { run: [RUN], retryFailed: true, wait: true });
+
+    expect(polled).toEqual([RUN]);
+    expect(ctx.term.text()).toContain('completed');
+  });
+
+  it('says so when nothing was stranded, and does not wait on a run it did not re-queue', async () => {
+    // `getRun` is not stubbed: a wait here would throw.
+    const ctx = harness({ retryFailedPush: async () => ({ items: 0, entities: 0, requeued: false }) });
+
+    await pushCommand(ctx, { run: [RUN], retryFailed: true, wait: true });
+
+    expect(ctx.term.text()).toContain('Nothing to retry');
+  });
+
+  it('needs the run it is retrying', async () => {
+    const ctx = harness({});
+
+    await expect(pushCommand(ctx, { retryFailed: true })).rejects.toBeInstanceOf(CliError);
+    await expect(pushCommand(ctx, { retryFailed: true })).rejects.toThrow(/--run <id> --retry-failed/);
+  });
+
+  it('refuses --dry-run rather than silently resetting rows', async () => {
+    const ctx = harness({});
+
+    await expect(pushCommand(ctx, { run: [RUN], retryFailed: true, dryRun: true })).rejects.toThrow(
+      /does not take --dry-run/,
+    );
+  });
+
+  it('reports a run still pushing, carries on with the others, and exits non-zero', async () => {
+    const ctx = harness({
+      retryFailedPush: async (runId: string) => {
+        if (runId === 'run-busy') {
+          throw new ApiError(409, 'Import run run-busy is still pushing (its push stage is running).', '/x');
+        }
+
+        return { items: 5, entities: 1, requeued: true };
+      },
+    });
+
+    const failure = await pushCommand(ctx, { run: ['run-busy', 'run-2'], retryFailed: true }).catch(
+      (err: unknown) => err,
+    );
+
+    expect(failure).toBeInstanceOf(CliError);
+    expect((failure as CliError).message).toContain('1 of 2 run(s) could not be retried');
+    // Something did go back to the queue, so this is the partial-success code.
+    expect((failure as CliError).exitCode).toBe(2);
+    expect(ctx.term.errorText()).toContain('still pushing');
+    expect(ctx.term.text()).toContain('1 run(s) queued for push');
+  });
+
+  it('lets an appliance fault through rather than reporting it as a refusal', async () => {
+    const ctx = harness({
+      retryFailedPush: async () => {
+        throw new ApiError(500, 'Internal server error', '/x');
+      },
+    });
+
+    await expect(pushCommand(ctx, { run: [RUN], retryFailed: true })).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('is wired as a flag on `ci push`', async () => {
+    const asked: string[] = [];
+    const ctx = harness({
+      retryFailedPush: async (runId: string) => {
+        asked.push(runId);
+
+        return { items: 1, entities: 0, requeued: true };
+      },
+    });
+    const program = buildProgram({ term: ctx.term, makeClient: () => ctx.client }).exitOverride();
+
+    await program.parseAsync(['node', 'ci', 'push', '--run', RUN, '--retry-failed']);
+
+    expect(asked).toEqual([RUN]);
   });
 });

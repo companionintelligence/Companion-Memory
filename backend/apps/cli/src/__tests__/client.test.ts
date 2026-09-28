@@ -91,6 +91,25 @@ describe('ImportApiClient', () => {
     });
   });
 
+  it('POSTs a failed-push retry to the run’s own route, id encoded', async () => {
+    const { fetchImpl, calls } = stubFetch(() => json({ items: 437, entities: 0, requeued: true }));
+    const client = new ImportApiClient({ baseUrl: 'http://box:3030', apiKey: 'secret', fetchImpl });
+
+    expect(await client.retryFailedPush('68bffe0a-1dbe-4783-a226-49149f45ec4f')).toEqual({
+      items: 437,
+      entities: 0,
+      requeued: true,
+    });
+    expect(calls[0]).toMatchObject({
+      url: 'http://box:3030/import/runs/68bffe0a-1dbe-4783-a226-49149f45ec4f/push/retry',
+      method: 'POST',
+    });
+
+    await client.retryFailedPush('a/b');
+
+    expect(calls[1].url).toBe('http://box:3030/import/runs/a%2Fb/push/retry');
+  });
+
   it('turns a 401 into the one-line fix', async () => {
     const { fetchImpl } = stubFetch(() => json({ message: 'Unauthorized' }, 401));
     const client = new ImportApiClient({ baseUrl: 'http://box:3030', apiKey: null, fetchImpl });

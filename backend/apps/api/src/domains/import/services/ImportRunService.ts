@@ -109,6 +109,18 @@ export interface UnpushedRun {
   pendingEntities: number;
 }
 
+/** What {@link ImportRunService.retryFailedPush} reads under the run's row lock. */
+interface RetryPushState {
+  /** The first stage still in flight, if any — the reason to refuse. */
+  liveKind: string | null;
+  liveStatus: string | null;
+  /** The run's last push stage, the one a retry re-queues. */
+  pushStageId: string | null;
+  pushStatus: string | null;
+  /** Rows already `pending` before this retry reset anything. */
+  hadPending: boolean;
+}
+
 /**
  * What a run does when the caller does not say: the whole import.
  *
@@ -948,6 +960,23 @@ export class ImportRunService {
    * the ordinary {@link startPush} route instead, which now finds pending rows
    * and appends one.
    *
+   * It also re-drives a push that FAILED with rows still `pending` and none
+   * marked `failed` — which is how a push now ends when the database stays
+   * away past `PushStage`'s wait: it fails the stage rather than quarantine
+   * rows for an outage. One command therefore recovers both shapes, and the
+   * operator does not need to know which one the run is in.
+   *
+   * Refused (409) while any stage of the run is still working. Resetting rows
+   * under a push that is running would hand the same rows to two writers, and
+   * re-queuing a stage a worker holds would let a second worker claim it. The
+   * check and the reset happen under the run's row lock, in one transaction —
+   * the same lock `startPush` takes — so a push cannot start in between.
+   *
+   * The run's status is recomputed when the re-driven push finishes, by the
+   * ordinary `advance` → {@link finishRun}: the run is reopened here
+   * (`finished_at` NULL) precisely so that close-out runs again, and a push
+   * that writes every reset row completes with `partial: false`.
+   *
    * Re-running the push over these rows is safe by the same argument the stage
    * itself rests on: every destination upserts on its provenance triple, so a
    * row whose failure was transient writes, and one whose failure was the
@@ -957,26 +986,120 @@ export class ImportRunService {
     ctx: UserServiceContext,
     runId: string,
   ): Promise<{ items: number; entities: number; requeued: boolean } | null> {
-    const run = await this.getRun(ctx, runId);
+    const plan = await this.dataSource.transaction(async (manager) => {
+      const [locked] = await manager.query<Array<{ id: string }>>(
+        `SELECT r.id
+           FROM ci_import.import_runs r
+          WHERE r.id = $1::uuid AND r.user_id = $2::uuid
+            FOR UPDATE OF r`,
+        [runId, ctx.userId],
+      );
 
-    if (run == null) {
+      if (locked == null) {
+        return null;
+      }
+
+      // A second statement, with the lock already held, so it reads a snapshot
+      // taken AFTER any push that committed while this waited on the lock —
+      // see ImportRetentionService.claimForDiscard for the READ COMMITTED
+      // detail that makes the split necessary.
+      const [state] = await manager.query<RetryPushState[]>(
+        `SELECT live.kind AS "liveKind", live.status AS "liveStatus",
+                push.id AS "pushStageId", push.status AS "pushStatus",
+                EXISTS (SELECT 1 FROM ci_import.staged_items i
+                         WHERE i.run_id = r.id AND i.push_status = 'pending')
+                  OR EXISTS (SELECT 1 FROM ci_import.staged_entities e
+                              WHERE e.run_id = r.id AND e.push_status = 'pending') AS "hadPending"
+           FROM ci_import.import_runs r
+           -- In flight: a stage that is running, or one that is queued in a run
+           -- that has not finished (a finished run can hold a queued stage the
+           -- worker never reached, after an earlier stage failed — that is a
+           -- leftover, not work in progress).
+           LEFT JOIN LATERAL (
+             SELECT s.kind, s.status
+               FROM ci_import.import_stages s
+              WHERE s.run_id = r.id
+                AND (s.status = 'running' OR (s.status = 'queued' AND r.finished_at IS NULL))
+              ORDER BY s.seq
+              LIMIT 1
+           ) live ON true
+           LEFT JOIN LATERAL (
+             SELECT x.id, x.status
+               FROM ci_import.import_stages x
+              WHERE x.run_id = r.id AND x.kind = 'push'
+              ORDER BY x.seq DESC
+              LIMIT 1
+           ) push ON true
+          WHERE r.id = $1::uuid`,
+        [runId],
+      );
+
+      if (state.liveKind != null) {
+        throw new ConflictException(
+          state.liveKind === 'push'
+            ? `Import run ${runId} is still pushing (its push stage is ${state.liveStatus}). ` +
+              'Wait for it to finish, then retry the rows it could not write.'
+            : `Import run ${runId} is still working (its ${state.liveKind} stage is ${state.liveStatus}). ` +
+              'Wait for it to finish, then retry its failed push rows.',
+        );
+      }
+
+      // Both lanes: `pushEntities` marks a staged entity `failed` the same way,
+      // and an unresolved person costs every record that names them.
+      const items = await this.resetFailedRows(manager, 'staged_items', runId);
+      const entities = await this.resetFailedRows(manager, 'staged_entities', runId);
+
+      // Nothing was failed, but a push that itself FAILED left rows pending —
+      // the shape a database outage past PushStage's wait now produces. Only a
+      // push that failed or was cancelled: a completed one has nothing left,
+      // and a push that never ran (an earlier stage failed) is not this
+      // method's to start ahead of the stage that stopped it.
+      const strandedByStage =
+        items + entities === 0 &&
+        state.hadPending &&
+        (state.pushStatus === 'failed' || state.pushStatus === 'cancelled');
+
+      if (items + entities === 0 && !strandedByStage) {
+        return { items, entities, stageId: null, append: false };
+      }
+
+      if (state.pushStageId == null) {
+        // Appended after commit: `startPush` takes this same row lock itself.
+        return { items, entities, stageId: null, append: true };
+      }
+
+      await this.reopenPushStage(manager, runId, state.pushStageId);
+
+      return { items, entities, stageId: state.pushStageId, append: false };
+    });
+
+    if (plan == null) {
       return null;
     }
 
-    // Both lanes: `pushEntities` marks a staged entity `failed` the same way,
-    // and an unresolved person costs every record that names them.
-    const items = await this.resetFailedRows('staged_items', runId);
-    const entities = await this.resetFailedRows('staged_entities', runId);
+    let requeued = false;
 
-    if (items + entities === 0) {
-      return { items: 0, entities: 0, requeued: false };
+    if (plan.stageId != null) {
+      // The run finished at percent = 100 and the reopen alone would leave that
+      // stale — the same reason startPush refreshes before enqueueing.
+      await this.refreshRunRollup(plan.stageId);
+      await this.enqueueStage(ctx.userId, runId, { id: plan.stageId, kind: 'push' });
+      requeued = true;
+    } else if (plan.append) {
+      requeued = (await this.startPush(ctx, { runIds: [runId] })).length > 0;
     }
 
-    const requeued = await this.requeuePushStage(ctx, runId);
+    if (requeued || plan.items + plan.entities > 0) {
+      this.logger.log('Re-queued failed push rows', {
+        runId,
+        userId: ctx.userId,
+        items: plan.items,
+        entities: plan.entities,
+        requeued,
+      });
+    }
 
-    this.logger.log('Re-queued failed push rows', { runId, userId: ctx.userId, items, entities, requeued });
-
-    return { items, entities, requeued };
+    return { items: plan.items, entities: plan.entities, requeued };
   }
 
   /**
@@ -987,10 +1110,14 @@ export class ImportRunService {
    * two call sites and Postgres takes no parameter in that position; the run id
    * — the only caller-influenced value — is bound.
    */
-  private async resetFailedRows(table: 'staged_items' | 'staged_entities', runId: string): Promise<number> {
+  private async resetFailedRows(
+    manager: EntityManager,
+    table: 'staged_items' | 'staged_entities',
+    runId: string,
+  ): Promise<number> {
     // CTE-wrapped so the outer command is a SELECT — see the note on the claim
     // in `startRun`; a bare UPDATE resolves as `[rows, rowCount]` here.
-    const rows = await this.dataSource.query<Array<{ id: string }>>(
+    const rows = await manager.query<Array<{ id: string }>>(
       `WITH reset AS (
          UPDATE ci_import.${table}
             SET push_status = 'pending', push_error = NULL, pushed_at = NULL
@@ -1004,49 +1131,39 @@ export class ImportRunService {
   }
 
   /**
-   * Make the run's push stage runnable again, however it ended.
+   * Make the run's push stage runnable again, however it ended, and reopen the
+   * run around it.
    *
    * The LAST push stage by seq, because a run can accumulate more than one —
    * the deferred Sync appends its own. Re-queued rather than appended: a second
    * stage row for the same work would double the weight the rollup divides by
    * and leave the bar reading half done over a finished import.
    *
-   * A run with no push stage at all (parse-only, then a failure that never got
-   * that far) falls through to `startPush`, which appends one.
+   * Reopening the run (`finished_at` NULL) is what makes {@link finishRun}
+   * close it again when the push completes, recomputing `completed` /
+   * `partial` from what the new attempt recorded.
    */
-  private async requeuePushStage(ctx: UserServiceContext, runId: string): Promise<boolean> {
-    const rows = await this.dataSource.query<Array<{ id: string }>>(
+  private async reopenPushStage(manager: EntityManager, runId: string, stageId: string): Promise<void> {
+    await manager.query(
       `WITH requeued AS (
-         UPDATE ci_import.import_stages s
+         UPDATE ci_import.import_stages
             SET status = 'queued', error = NULL, started_at = NULL, finished_at = NULL,
                 processed = 0, duration_ms = NULL
-          WHERE s.id = (
-                SELECT x.id FROM ci_import.import_stages x
-                 WHERE x.run_id = $1::uuid AND x.kind = 'push'
-                 ORDER BY x.seq DESC
-                 LIMIT 1)
-      RETURNING s.id)
+          WHERE id = $1::uuid
+      RETURNING id)
        SELECT id FROM requeued`,
-      [runId],
+      [stageId],
     );
 
-    if (rows.length === 0) {
-      return (await this.startPush(ctx, { runIds: [runId] })).length > 0;
-    }
-
-    await this.dataSource.query(
-      `UPDATE ci_import.import_runs
-          SET status = 'queued', error = NULL, finished_at = NULL
-        WHERE id = $1::uuid`,
+    await manager.query(
+      `WITH reopened AS (
+         UPDATE ci_import.import_runs
+            SET status = 'queued', error = NULL, finished_at = NULL
+          WHERE id = $1::uuid
+      RETURNING id)
+       SELECT id FROM reopened`,
       [runId],
     );
-
-    // The run finished at percent = 100 and the reopen alone would leave that
-    // stale — the same reason startPush refreshes before enqueueing.
-    await this.refreshRunRollup(rows[0].id);
-    await this.enqueueStage(ctx.userId, runId, { id: rows[0].id } as ImportStage);
-
-    return true;
   }
 
   // -------------------------------------------------------------------------

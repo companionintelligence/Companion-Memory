@@ -286,8 +286,22 @@ pg-boss dead-letters it, but the redelivery is a deliberate no-op: `beginStage`
 only claims a `queued` stage, so a redelivered job for a `failed` stage logs and
 returns. Re-running a failed stage is a user action —
 `POST /import/runs/:runId/stages/:stageId/retry`, or
-`POST /import/runs/:runId/push/retry` for individual rows the push could not
-write.
+`POST /import/runs/:runId/push/retry` (`ci push --run <id> --retry-failed`) for
+individual rows the push could not write. The push retry also re-drives a push
+stage that failed with its rows still `pending`, and refuses (409) while any
+stage of the run is still working.
+
+**Inside the push, the database going away is waited out, not recorded.** Every
+database step in `PushStage` goes through `retryOnTransientDatabaseError`
+(`common/persistence/transientDatabaseError.ts`): a failure classified as the
+server being away — SQLSTATE 57P01/57P02/57P03, the 08xxx connection class,
+53300, a refused/reset socket, pg's "Connection terminated unexpectedly" — is
+retried on a doubling backoff (1s → 30s cap, three-minute budget) **before** a
+batch degrades to per-row or a row is quarantined. Past the budget the stage
+fails with every unwritten row still `pending`. A row is `failed` only for
+something the database said about that row. Before this, a Postgres
+crash-restart mid-push marked 437 good rows `failed` with "the database system
+is in recovery mode", on a run nothing would ever push again.
 
 **The sweep re-enqueues waiting stages, and only `policy: 'short'` stops it.**
 `resumeInterrupted` judges staleness from `import_stages.updated_at`, which
@@ -413,7 +427,14 @@ of each destination "what does this row *render* as there?" — and note that a
 routed-nowhere row is now recorded rather than hidden: `PushStage` marks it
 skipped with `NO_DESTINATION_REASON` and the stage summary counts it under the
 `no_destination` drop reason, which is classified a **gap**, not an expected
-outcome.
+outcome. The exception is a row routed nowhere **by design because another lane
+carries it** — a contact card (its Person arrives on the entity lane) or a
+rolled-up subscription line (its order's itemised receipt holds it). Those are
+named by `push/canonical.ts isRepresentedElsewhere`, marked with
+`REPRESENTED_ELSEWHERE_REASON`, and counted under `represented_elsewhere`, which
+is **expected**: still visible in `dropsByReason`, not in `gaps`. Adding a new
+`[]` branch to `destinationsFor` reads as a gap until you list it there on
+purpose — that default is deliberate.
 
 **A purchase ALWAYS produces a receipt**, and that is the third scar. The
 receipt is what carries the merchant, the money and the moment; an
@@ -1603,7 +1624,7 @@ Takeout's 56 parse entries read `0/0/{}` and the two were indistinguishable.
 **The drop vocabulary is closed and two-level** (`telemetry/dropReasons.ts`). The
 parsers' own slugs are kept verbatim as the human-facing detail — a few dozen of
 them across the datasource pack — and every slug is *also* classified through
-`DROP_SLUG_REASONS` into one of the **21** `DROP_REASONS` codes, which is what
+`DROP_SLUG_REASONS` into one of the **22** `DROP_REASONS` codes, which is what
 you group and compare by. Four parsers
 spell "the archive references bytes it does not contain" four different ways
 (`media_asset_missing`, `media_file_missing`, `missing_media`,
@@ -1613,9 +1634,9 @@ walks `datasources/` for `drop?.('…')` literals and fails on one this table ha
 not classified.
 
 Each reason is `expected` or a `gap` (`DROP_SEVERITY`). `cancelled`, `filtered`,
-`duplicate_in_run`, `already_present` and `entity_excluded` are expected; every
-other reason means the appliance was handed something it could not turn into a
-memory. `summary.gaps` is that subset, precomputed and sorted, and it is the one
+`duplicate_in_run`, `already_present`, `entity_excluded` and
+`represented_elsewhere` are expected; every other reason means the appliance was
+handed something it could not turn into a memory. `summary.gaps` is that subset, precomputed and sorted, and it is the one
 list to read first: a run that dropped 40,000 records under `filtered` worked, and
 a run that dropped 12 under `collapsed_ambiguous` lost twelve things nobody can
 name.

@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 
 import type { ImportRunService } from '../services/ImportRunService';
@@ -228,6 +229,109 @@ describeWithDatabase(`failed push rows (${importDatabase.target})`, () => {
         requeued: false,
       });
       expect(events.send).not.toHaveBeenCalled();
+    });
+
+    it('refuses while the push is running, and leaves the rows where they are', async () => {
+      const { runId, pushStageId } = await runWithFailedRows();
+
+      // A push in flight — its worker owns the stage and is reading `pending`.
+      await dataSource.query(
+        `UPDATE ci_import.import_stages SET status = 'running', finished_at = NULL WHERE id = $1::uuid`,
+        [pushStageId],
+      );
+
+      events.send.mockClear();
+
+      await expect(service.retryFailedPush({ userId }, runId)).rejects.toBeInstanceOf(ConflictException);
+      expect((await pushStatuses(runId)).items).toEqual(
+        expect.arrayContaining(['failed', 'failed', 'pushed']),
+      );
+      expect(await stageRow(pushStageId)).toMatchObject({ status: 'running' });
+      expect(events.send).not.toHaveBeenCalled();
+    });
+
+    it('re-drives a push that FAILED with its rows still pending', async () => {
+      // The shape PushStage now leaves when the database stays away past its
+      // wait: the stage fails, nothing is quarantined, every row is `pending`.
+      const dropId = await harness.stageDrop('outage.zip');
+      const { run, stages } = await harness.startRunForDrop(dropId, ['unpack', 'parse', 'push']);
+      const writer = new StagedWriter(dataSource.manager, {
+        userId,
+        runId: run.id,
+        dataSource: 'google_voice',
+      });
+
+      writer.push({
+        item: {
+          id: `sms-${run.id.slice(0, 8)}`,
+          classification: 'message',
+          timestamp: new Date('2019-03-01T09:00:00Z'),
+          metadata: { Text: 'see you at six' },
+        },
+      });
+      await writer.settled();
+
+      for (const stage of stages.slice(0, 2)) {
+        expect(await service.beginStage(stage.id)).toBe(true);
+        await service.completeStage(stage.id, { processed: 1, total: 1, detail: {} });
+      }
+
+      expect(await service.beginStage(stages[2].id)).toBe(true);
+      await service.failStage(
+        stages[2].id,
+        'the database was unavailable for 151s while reading the next batch',
+      );
+
+      events.send.mockClear();
+
+      expect(await service.retryFailedPush({ userId }, run.id)).toEqual({
+        items: 0,
+        entities: 0,
+        requeued: true,
+      });
+      expect(await stageRow(stages[2].id)).toMatchObject({ status: 'queued' });
+      expect(events.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('closes the run `completed` once the re-driven push writes every row', async () => {
+      const { runId, pushStageId } = await runWithFailedRows();
+
+      await service.retryFailedPush({ userId }, runId);
+
+      // The re-driven push, as the worker would run it: every reset row lands.
+      expect(await service.beginStage(pushStageId)).toBe(true);
+      await dataSource.query(
+        `UPDATE ci_import.staged_items SET push_status = 'pushed', pushed_at = now()
+          WHERE run_id = $1::uuid AND push_status = 'pending'`,
+        [runId],
+      );
+      await dataSource.query(
+        `UPDATE ci_import.staged_entities SET push_status = 'pushed', pushed_at = now()
+          WHERE run_id = $1::uuid AND push_status = 'pending'`,
+        [runId],
+      );
+      await service.completeStage(pushStageId, {
+        processed: 4,
+        total: 4,
+        partial: false,
+        detail: { failed: 0 },
+      });
+
+      const [push] = await dataSource.query<Array<{ seq: number }>>(
+        `SELECT seq FROM ci_import.import_stages WHERE id = $1::uuid`,
+        [pushStageId],
+      );
+
+      expect(await service.advance(userId, runId, push.seq)).toBeNull();
+
+      const [runAfter] = await dataSource.query<Array<{ status: string; finished_at: string | null }>>(
+        `SELECT status, finished_at FROM ci_import.import_runs WHERE id = $1::uuid`,
+        [runId],
+      );
+
+      // Recomputed by the ordinary close-out, which the reopen made run again.
+      expect(runAfter.status).toBe('completed');
+      expect(runAfter.finished_at).not.toBeNull();
     });
 
     it('is scoped to the caller — another user cannot revive this run', async () => {
