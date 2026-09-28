@@ -339,13 +339,13 @@ export function OnboardingPage() {
               ref={scrollRef}
               data-testid="onboarding-scroll"
               className={cn(
-                'relative flex-1 overflow-y-auto min-h-0 w-full mx-auto px-5 md:px-8',
+                'relative flex-1 overflow-x-hidden overflow-y-auto min-h-0 w-full min-w-0 mx-auto px-5 md:px-8',
                 contentMaxWidth,
               )}
             >
               <div
                 className={cn(
-                  'flex flex-col items-center text-center w-full py-2',
+                  'flex min-w-0 flex-col items-center text-center w-full py-2',
                   verticallyCenterStep ? 'justify-center min-h-full' : 'justify-start',
                 )}
               >
