@@ -27,8 +27,8 @@ vi.mock('@ci/common', async (importOriginal) => {
   };
 });
 
-function renderProtected() {
-  return render(
+function routeTree() {
+  return (
     <MemoryRouter initialEntries={['/secret']}>
       <Routes>
         <Route
@@ -42,8 +42,12 @@ function renderProtected() {
         <Route path="/login" element={<div>login page</div>} />
         <Route path="/device-connect" element={<div>device connect</div>} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+}
+
+function renderProtected() {
+  return render(routeTree());
 }
 
 describe('ProtectedRoute', () => {
@@ -126,5 +130,21 @@ describe('ProtectedRoute', () => {
 
     await waitFor(() => expect(screen.getByText('login page')).toBeInTheDocument());
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('keeps a signed-in page mounted when the profile blips empty', () => {
+    h.isNative = true;
+    h.auth = { authToken: null, expired: false, loading: false, error: null };
+    h.user = { user: { id: 'u1' }, loading: false };
+
+    const view = renderProtected();
+
+    expect(screen.getByText('secret content')).toBeInTheDocument();
+
+    h.user = { user: null, loading: true };
+    view.rerender(routeTree());
+
+    expect(screen.getByText('secret content')).toBeInTheDocument();
+    expect(screen.queryByText('device connect')).not.toBeInTheDocument();
   });
 });

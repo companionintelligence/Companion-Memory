@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 
 import { isNativePlatform, LoadingPage } from '@ci/common';
 import { Navigate, useLocation } from 'react-router-dom';
@@ -10,6 +10,10 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [{ expired, loading: authLoading, authToken }, { refresh }] = useAuth();
   const { user, loading: userLoading } = useCurrentUser();
   const [triedRecover, setTriedRecover] = useState(false);
+  // Once the signed-in app has been shown, a later `me` refetch must not swap
+  // this route for the loader or the login redirect. That unmounts onboarding
+  // and the welcome typing starts over when the profile comes back.
+  const shown = useRef(false);
   const canRecover = typeof refresh === 'function';
   // A previously-seen access token means this browser HAD a session that then
   // aged out — worth one silent `refresh()` attempt. A plain visitor who never
@@ -43,11 +47,20 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     };
   }, [expired, canRecover, hadSession, triedRecover, refresh, authLoading, userLoading]);
 
-  if (authLoading || userLoading || (expired && canRecover && hadSession && !triedRecover)) {
+  const recovering = expired && canRecover && hadSession && !triedRecover;
+  const blocking = (authLoading || userLoading) && !user;
+
+  if (!blocking && !recovering && user && !expired) {
+    shown.current = true;
+  }
+
+  if (!shown.current && (blocking || recovering)) {
     return <LoadingPage />;
   }
 
-  if (expired || !user) {
+  // A phone session stays valid when `me` blips to empty (no JWT to expire).
+  // Sending that through the signed-out redirect reloads onboarding.
+  if ((expired || !user) && !(shown.current && !expired)) {
     return (
       <Navigate
         to={isNativePlatform() ? '/device-connect' : '/login'}
