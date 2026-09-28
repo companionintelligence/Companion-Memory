@@ -181,17 +181,19 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Mirrors `yarn build`'s own pre-step in frontend/apps/desktop: it copies
-      # docker-compose.yml + docker-compose.production.yml from the repo root
-      # into src-tauri/resources/ (next to the checked-in
-      # docker-compose.desktop.yml) and resolves the image tag, writing it to
-      # resources/image-tag.txt. Using it rather than hand-rolling a `git
-      # describe` here buys the exact algorithm the shipped app was built with,
-      # including the GHCR completeness check — every image the desktop overlay
-      # names must actually exist at the tag, because a release can partially
-      # publish. `CI` is set on every runner, so any degraded outcome is a hard
-      # failure instead of a warning; an unresolvable or unpublished tag stops
-      # the job here rather than 40 minutes later as a skipped suite.
+      # Mirrors `yarn build`'s own pre-step in frontend/apps/desktop: it
+      # resolves the image tag, writing it to resources/image-tag.txt, and
+      # copies docker-compose.yml + docker-compose.production.yml AS OF THAT
+      # RELEASE into src-tauri/resources/ (next to the checked-in
+      # docker-compose.desktop.yml), so an untagged main runs the compose its
+      # images were released with, not HEAD's. Using it rather than
+      # hand-rolling a `git describe` here buys the exact algorithm the shipped
+      # app was built with, including the GHCR completeness check — every image
+      # the desktop overlay names must actually exist at the tag, because a
+      # release can partially publish. `CI` is set on every runner, so any
+      # degraded outcome is a hard failure instead of a warning; an
+      # unresolvable or unpublished tag stops the job here rather than 40
+      # minutes later as a skipped suite.
       #
       # An explicit `image_tag` input is passed straight through as
       # CI_SERVER_IMAGE_TAG, which that script treats as a pin that always wins

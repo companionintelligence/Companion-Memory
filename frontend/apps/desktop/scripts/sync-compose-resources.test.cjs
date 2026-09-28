@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Tests for sync-compose-resources.cjs's image-tag resolver.
+// Tests for sync-compose-resources.cjs's image-tag resolver, and for where the
+// bundled compose files come from (the same release as those images).
 //
 // WHY THIS FILE EXISTS: resolveImageTag() decides which server images a
 // SHIPPED desktop app will pull. Its output is baked into
@@ -36,10 +37,16 @@ const path = require('node:path');
 const {
   RELEASE_TAG_RE,
   MAX_ANCESTOR_TAGS_TO_CHECK,
+  COMPOSE_FILES,
   defaultIo,
   getRequiredImageNames,
   resolveImageTag,
+  resolveComposeRef,
+  syncResources,
 } = require('./sync-compose-resources.cjs');
+
+// Where the script reads the working tree's compose files from.
+const REPO_ROOT = path.resolve(__dirname, '../../../..');
 
 // The images a desktop stack needs; the exact list does not matter to the
 // resolver's logic, only that it is non-empty, so keep it short and readable.
@@ -51,11 +58,16 @@ const REQUIRED = ['api', 'database', 'gateway'];
 //
 // `published` is the set of `<image>:<tag>` pairs that exist on GHCR in this
 // fake world; anything not listed 404s, which is how a PARTIALLY published
-// release (some images pushed, one not) is modelled.
+// release (some images pushed, one not) is modelled. `tagCommits` maps a git
+// ref (v2026.8.26) to the commit it peels to, `headCommit` is HEAD's, and
+// `files` holds `git show` content keyed `<ref>:<file>`.
 function makeIo({
   exactTag = '',
   mergedTags = [],
   shortSha = 'abc1234',
+  headCommit = 'head000',
+  tagCommits = {},
+  files = {},
   docker = true,
   requiredImages = REQUIRED,
   published = [],
@@ -73,9 +85,14 @@ function makeIo({
       gitCalls.push(args.join(' '));
       if (args[0] === 'describe') return exactTag;
       if (args[0] === 'tag') return mergedTags.join('\n');
-      if (args[0] === 'rev-parse') return shortSha;
+      if (args[0] === 'rev-parse' && args[1] === '--short') return shortSha;
+      if (args[0] === 'rev-parse' && args[1] === '--verify') {
+        return tagCommits[args[3].replace(/\^\{commit\}$/, '')] ?? '';
+      }
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return headCommit;
       throw new Error(`unexpected git invocation in test: git ${args.join(' ')}`);
     },
+    gitShow: (ref, file) => files[`${ref}:${file}`] ?? null,
     hasDocker: () => docker,
     getRequiredImageNames: () => requiredImages,
     imagePublished(name, tag) {
@@ -101,15 +118,16 @@ function allPublished(tag, images = REQUIRED) {
 }
 
 // The resolver logs progress on stdout/stderr; swallow it so a passing run is
-// quiet, while still handing the messages back for assertions.
-function run(io) {
+// quiet, while still handing the messages back for assertions. `fn` defaults
+// to the resolver; its return value lands in `out.tag`.
+function run(io, fn = resolveImageTag) {
   const out = { warn: [], error: [], log: [], tag: undefined, failure: undefined };
   const original = { warn: console.warn, error: console.error, log: console.log };
   console.warn = (m) => out.warn.push(String(m));
   console.error = (m) => out.error.push(String(m));
   console.log = (m) => out.log.push(String(m));
   try {
-    out.tag = resolveImageTag(io);
+    out.tag = fn(io);
   } catch (err) {
     if (!err.isHardFailure) throw err;
     out.failure = err;
@@ -393,6 +411,121 @@ test('not a git checkout at all is a hard failure', () => {
   assert.match(out.failure.message, /not a git checkout/);
 });
 
+// --- where the compose files come from --------------------------------
+//
+// The bundle's compose files and the images image-tag.txt names must be ONE
+// release. Copying HEAD's compose unconditionally paired it with the previous
+// release's images on every untagged commit: when a compose change needed a
+// newer image (per-service secrets mounts only the new setup-secrets image
+// fills), every service in the desktop stack booted with an empty
+// /run/secrets. These run the whole sync against a scratch directory.
+
+// Distinguishable content per release, so an assertion can tell which one
+// landed in the bundle.
+function releaseFiles(ref) {
+  return Object.fromEntries(COMPOSE_FILES.map((name) => [`${ref}:${name}`, `# ${name} at ${ref}\n`]));
+}
+
+function syncInto(io) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-compose-resources-'));
+  const out = run(io, (i) => syncResources(i, dir));
+  const read = (name) => {
+    const file = path.join(dir, name);
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined;
+  };
+  const bundle = Object.fromEntries([...COMPOSE_FILES, 'image-tag.txt'].map((name) => [name, read(name)]));
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { ...out, bundle };
+}
+
+test('an ancestor-walk build bundles the compose files of the release it pins, not HEAD', () => {
+  // THE regression test: HEAD is past v2026.9.23.1, its images are the newest
+  // published, and HEAD's compose may need images that release lacks.
+  const io = makeIo({
+    mergedTags: ['v2026.9.23.1'],
+    published: allPublished('2026.9.23.1'),
+    tagCommits: { 'v2026.9.23.1': 'rel0001' },
+    headCommit: 'head999',
+    files: releaseFiles('v2026.9.23.1'),
+  });
+  const out = syncInto(io);
+  assert.equal(out.failure, undefined);
+  assert.equal(out.bundle['image-tag.txt'], '2026.9.23.1\n');
+  for (const name of COMPOSE_FILES) {
+    assert.equal(
+      out.bundle[name],
+      `# ${name} at v2026.9.23.1\n`,
+      `${name} must come from the pinned release`,
+    );
+  }
+});
+
+test("an explicit pin bundles that release's compose files too", () => {
+  // How desktop-release.yml's platform jobs receive the tag its `version` job
+  // resolved — so this is the path the signed release bundles take.
+  const io = makeIo({
+    env: { CI_SERVER_IMAGE_TAG: '2026.8.26' },
+    published: allPublished('2026.8.26'),
+    tagCommits: { 'v2026.8.26': 'rel0826' },
+    headCommit: 'head999',
+    files: releaseFiles('v2026.8.26'),
+  });
+  const out = syncInto(io);
+  assert.equal(out.failure, undefined);
+  assert.equal(out.bundle['image-tag.txt'], '2026.8.26\n');
+  assert.equal(
+    out.bundle['docker-compose.production.yml'],
+    '# docker-compose.production.yml at v2026.8.26\n',
+  );
+});
+
+test('an exact-HEAD release bundles the working tree, which IS that release', () => {
+  const io = makeIo({
+    exactTag: 'v2026.9.5',
+    tagCommits: { 'v2026.9.5': 'head999' },
+    headCommit: 'head999',
+  });
+  assert.equal(run(io, (i) => resolveComposeRef(resolveImageTag(i), i)).tag, null);
+  const out = syncInto(io);
+  assert.equal(out.bundle['image-tag.txt'], '2026.9.5\n');
+  for (const name of COMPOSE_FILES) {
+    assert.equal(out.bundle[name], fs.readFileSync(path.join(REPO_ROOT, name), 'utf8'));
+  }
+});
+
+test('the dev-<sha> last resort bundles the working tree without asking git for a tag', () => {
+  const io = makeIo({ mergedTags: [], shortSha: 'deadbee' });
+  const out = run(io, (i) => resolveComposeRef('dev-deadbee', i));
+  assert.equal(out.tag, null);
+  assert.ok(!io.gitCalls.some((c) => c.startsWith('rev-parse --verify')), io.gitCalls.join('; '));
+});
+
+test('a pin with no matching tag in the clone bundles the working tree, warned UNPAIRED, even under CI', () => {
+  // Unverifiable rather than known-bad (the images are real), so it warns
+  // like the other unverifiable paths instead of refusing.
+  const io = makeIo({
+    env: { CI_SERVER_IMAGE_TAG: '2026.8.26', CI: 'true' },
+    published: allPublished('2026.8.26'),
+  });
+  const out = run(io, (i) => resolveComposeRef(resolveImageTag(i), i));
+  assert.equal(out.failure, undefined);
+  assert.equal(out.tag, null);
+  assert.match(out.warn.join('\n'), /UNPAIRED/);
+});
+
+test('a pinned release missing a compose file is a hard failure, not a working-tree fallback', () => {
+  const io = makeIo({
+    mergedTags: ['v2026.9.23.1'],
+    published: allPublished('2026.9.23.1'),
+    tagCommits: { 'v2026.9.23.1': 'rel0001' },
+    files: { 'v2026.9.23.1:docker-compose.yml': 'services: {}\n' },
+  });
+  const out = syncInto(io);
+  assert.ok(out.failure, "must refuse rather than pair HEAD's compose with that release");
+  assert.match(out.failure.message, /docker-compose\.production\.yml at v2026\.9\.23\.1/);
+  assert.equal(out.bundle['image-tag.txt'], undefined, 'a failed sync must not write the image tag');
+});
+
 // --- the overlay parser ------------------------------------------------
 //
 // If this ever silently returns null, every GHCR completeness check above
@@ -503,6 +636,9 @@ test('defaultIo wires the resolver to the real implementations', () => {
   assert.equal(defaultIo.env, process.env);
   assert.equal(defaultIo.getRequiredImageNames, getRequiredImageNames);
   assert.match(defaultIo.git(['--version']), /^git version /);
+  // A ref no repository has: null with a repo or without one, so this too is
+  // safe from a tarball.
+  assert.equal(defaultIo.gitShow('no-such-ref-sync-compose-test', 'docker-compose.yml'), null);
   // hasDocker/imagePublished cannot be probed without a docker daemon or a
   // network round-trip to GHCR, so they only get the shape check.
   for (const key of ['hasDocker', 'imagePublished', 'fail']) {

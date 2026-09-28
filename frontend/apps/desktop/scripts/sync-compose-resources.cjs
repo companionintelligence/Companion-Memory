@@ -2,11 +2,7 @@
 // Zero-dependency sync step, run before every `tauri dev`/`tauri build`
 // (see package.json's dev/build scripts).
 //
-// 1. Copies the repo root's docker-compose.yml + docker-compose.production.yml
-//    into src-tauri/resources/ verbatim, so the bundled resources can never
-//    drift from the real compose files (they are gitignored here — see
-//    .gitignore — and always regenerated).
-// 2. Resolves the CI-Server image tag this build should default to pulling,
+// 1. Resolves the CI-Server image tag this build should default to pulling,
 //    and writes it to src-tauri/resources/image-tag.txt — a bundled resource
 //    stack_manager.rs reads at runtime as the default CI_SERVER_IMAGE_TAG.
 //    This deliberately never defaults to "latest": publish.sh's own comments
@@ -24,6 +20,17 @@
 //    (see README.md). A dev-<sha> tag is used only as the very last resort,
 //    when no fully-published release tag is reachable from HEAD at all (e.g.
 //    a shallow clone, or every reachable release tag is partial).
+// 2. Writes docker-compose.yml + docker-compose.production.yml into
+//    src-tauri/resources/ verbatim FROM THAT SAME RELEASE (`git show
+//    v<tag>:<file>`), so the bundle's compose and its images are always one
+//    release (they are gitignored here — see .gitignore — and always
+//    regenerated). The working tree's copies are used only when there is no
+//    other release to pair with: HEAD is the release itself, or the dev-<sha>
+//    last resort. Taking them from HEAD unconditionally paired a compose
+//    change with the previous release's images whenever HEAD was untagged —
+//    e.g. per-service secrets mounts only a newer setup-secrets image fills,
+//    which left every service booting with an empty /run/secrets. See
+//    resolveComposeRef().
 //
 // Environment variables:
 //   CI_SERVER_IMAGE_TAG          Explicit pin, always wins (the documented
@@ -79,16 +86,6 @@ const RELEASE_TAG_RE = /^v\d+(?:\.\d+)+$/;
 // entirely-unpublished tag history instead of looping forever.
 const MAX_ANCESTOR_TAGS_TO_CHECK = 20;
 
-function copyComposeFiles() {
-  fs.mkdirSync(RESOURCES_DIR, { recursive: true });
-  for (const name of COMPOSE_FILES) {
-    const src = path.join(REPO_ROOT, name);
-    const dest = path.join(RESOURCES_DIR, name);
-    fs.copyFileSync(src, dest);
-    console.log(`  synced ${name}`);
-  }
-}
-
 function git(args) {
   try {
     return execFileSync('git', args, { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'ignore'] })
@@ -96,6 +93,19 @@ function git(args) {
       .trim();
   } catch {
     return '';
+  }
+}
+
+// `git show <ref>:<file>`, untrimmed — it is file content, not a one-line
+// answer like git() returns — or null when git cannot produce it.
+function gitShow(ref, file) {
+  try {
+    return execFileSync('git', ['show', `${ref}:${file}`], {
+      cwd: REPO_ROOT,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).toString();
+  } catch {
+    return null;
   }
 }
 
@@ -172,6 +182,7 @@ function imagePublished(name, tag) {
 // throws. Callers treat it as terminal.
 const defaultIo = {
   git,
+  gitShow,
   hasDocker,
   imagePublished,
   getRequiredImageNames,
@@ -409,10 +420,88 @@ function resolveImageTag(io = defaultIo) {
   );
 }
 
-function writeImageTag(tag) {
-  fs.mkdirSync(RESOURCES_DIR, { recursive: true });
-  fs.writeFileSync(path.join(RESOURCES_DIR, 'image-tag.txt'), `${tag}\n`);
+// The git ref the bundled compose files come from, or null for the working
+// tree. The compose files must come from the SAME release as the images `tag`
+// names: every path through resolveImageTag() except the exact-HEAD one and
+// the dev-<sha> last resort (the ancestor walk, and an explicit pin — which is
+// how desktop-release.yml's platform jobs receive the tag its `version` job
+// resolved) can name an OLDER release than this checkout, and HEAD's compose
+// may already depend on images that release does not have. A compose change
+// that needs a newer image is exactly what lands between releases: per-service
+// secrets projections, filled only by the setup-secrets image of the same
+// change, paired with the previous release's setup-secrets left every
+// projection volume empty and every service failing its "is not set" check.
+function resolveComposeRef(tag, io = defaultIo) {
+  // dev-<sha> names no release, and the working tree IS <sha>.
+  if (tag.startsWith('dev-')) {
+    return null;
+  }
+
+  const ref = `v${tag}`;
+  const tagCommit = io.git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+  if (!tagCommit) {
+    // Only reachable through an explicit pin (every other tag came out of
+    // this clone's own tags). Warn rather than degrade(): the images are
+    // real, only the pairing is unconfirmed — the same UNVERIFIABLE-not-
+    // KNOWN-BAD line degrade() documents.
+    console.warn(
+      `  ⚠ There is no ${ref} tag in this clone to take the compose files from, so they ` +
+        `come from the working tree UNPAIRED with the ${tag} images — nothing confirms that ` +
+        `release's images fill what this compose mounts. Fetch the tags (git fetch --tags) ` +
+        `to pair them.`,
+    );
+    return null;
+  }
+
+  // HEAD is that release, so the working tree is its compose (and a local
+  // edit to it is the developer's own to test).
+  if (tagCommit === io.git(['rev-parse', 'HEAD'])) {
+    return null;
+  }
+  return ref;
+}
+
+// The bytes to bundle for one compose file: `ref`'s copy, or the working
+// tree's when `ref` is null. A release tag without the file is a hard failure,
+// never a quiet fall-back to the working tree — that fall-back IS the
+// mismatched pairing resolveComposeRef() exists to prevent.
+function readComposeFile(name, ref, io = defaultIo) {
+  if (!ref) {
+    return fs.readFileSync(path.join(REPO_ROOT, name), 'utf8');
+  }
+  const body = io.gitShow(ref, name);
+  if (body === null) {
+    io.fail(
+      `  ✗ Could not read ${name} at ${ref}, the release whose images this build pins. ` +
+        `Bundling the working tree's copy instead would pair it with images it was never ` +
+        `released with. Pin CI_SERVER_IMAGE_TAG to a release that has it.`,
+    );
+  }
+  return body;
+}
+
+function copyComposeFiles(ref, io = defaultIo, resourcesDir = RESOURCES_DIR) {
+  fs.mkdirSync(resourcesDir, { recursive: true });
+  for (const name of COMPOSE_FILES) {
+    fs.writeFileSync(path.join(resourcesDir, name), readComposeFile(name, ref, io));
+    console.log(ref ? `  synced ${name} from ${ref}` : `  synced ${name}`);
+  }
+}
+
+function writeImageTag(tag, resourcesDir = RESOURCES_DIR) {
+  fs.mkdirSync(resourcesDir, { recursive: true });
+  fs.writeFileSync(path.join(resourcesDir, 'image-tag.txt'), `${tag}\n`);
   console.log(`  image tag: ${tag}`);
+}
+
+// The whole sync. The tag is resolved FIRST because it decides where the
+// compose files come from. `io` and `resourcesDir` default to the real ones
+// and are parameters only so the test can run it against a scratch directory.
+function syncResources(io = defaultIo, resourcesDir = RESOURCES_DIR) {
+  const tag = resolveImageTag(io);
+  copyComposeFiles(resolveComposeRef(tag, io), io, resourcesDir);
+  writeImageTag(tag, resourcesDir);
+  return tag;
 }
 
 // Only sync when run as a script (`yarn sync`, and the dev/build scripts that
@@ -422,8 +511,7 @@ function writeImageTag(tag) {
 // import side effect.
 if (require.main === module) {
   console.log('Syncing desktop compose resources...');
-  copyComposeFiles();
-  writeImageTag(resolveImageTag());
+  syncResources();
   console.log('Done.');
 }
 
@@ -432,10 +520,14 @@ if (require.main === module) {
 module.exports = {
   RELEASE_TAG_RE,
   MAX_ANCESTOR_TAGS_TO_CHECK,
+  COMPOSE_FILES,
   defaultIo,
   getRequiredImageNames,
   findMissingImage,
   requiresPublishedTag,
   degrade,
   resolveImageTag,
+  resolveComposeRef,
+  readComposeFile,
+  syncResources,
 };

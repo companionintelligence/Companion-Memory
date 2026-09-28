@@ -9,9 +9,11 @@ node_modules
 src-tauri/target
 src-tauri/gen
 
-# Synced verbatim from the repo root by scripts/sync-compose-resources.cjs on
-# every dev/build — never hand-edit or commit these; they must always match
-# docker-compose.yml / docker-compose.production.yml exactly.
+# Synced verbatim by scripts/sync-compose-resources.cjs on every dev/build —
+# never hand-edit or commit these. The compose files are the repo root's
+# docker-compose.yml / docker-compose.production.yml AT THE RELEASE image-tag.txt
+# pins (the working tree's only when HEAD is that release, or on a dev-<sha>
+# fallback), so compose and images always come from one release.
 src-tauri/resources/docker-compose.yml
 src-tauri/resources/docker-compose.production.yml
 src-tauri/resources/image-tag.txt

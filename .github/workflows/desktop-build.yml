@@ -93,10 +93,10 @@ jobs:
         with:
           node-version: '22'
 
-      # Only syncs the bundled compose resources (verbatim copies of the root
-      # compose files + a resolved image tag) — no yarn install/web build
-      # needed, since the bootstrap page is static, unlike mobile-build.yml's
-      # real SPA build.
+      # Only syncs the bundled compose resources (a resolved image tag, plus
+      # verbatim copies of the root compose files at that same release) — no
+      # yarn install/web build needed, since the bootstrap page is static,
+      # unlike mobile-build.yml's real SPA build.
       - name: Sync compose resources
         working-directory: frontend/apps/desktop
         run: node scripts/sync-compose-resources.cjs

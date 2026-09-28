@@ -75,6 +75,12 @@ release tag, export one explicitly:
 CI_SERVER_IMAGE_TAG=<a tag publish.yml has pushed> yarn dev
 ```
 
+The bundled `docker-compose.yml` / `docker-compose.production.yml` come from
+that same release (`git show v<tag>:…`), **not your working tree**, unless HEAD
+is that release or the script fell back to `dev-<sha>`: a compose change can
+depend on images only a newer release has, so compose and images are always
+taken from one release. The sync log says which (`synced … from v<tag>`).
+
 Docker must be running (`docker info` should succeed) before launch.
 
 ## Build
