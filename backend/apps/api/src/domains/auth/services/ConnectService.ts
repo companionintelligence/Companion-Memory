@@ -94,19 +94,19 @@ export function scopesForApp(appUrn: string): string[] {
       // its GraphQL parse-status poll is not covered here and would need a
       // reviewed widening before it moves onto this key.
       return [CAPTURE_SCOPE];
+    // Memory-only tier. The labels stay adjacent so `no-fallthrough` reads them
+    // as one group (a comment between two cases makes it report each one).
+    //  - ci-glasses-bridge (CI-Even-Realities `agent-hub`) augments chat with
+    //    `POST /memory/recall` and writes the turn back with `POST /memory/turn`.
+    //  - ci-mentra (Mentra smart-glasses bridge) only reads context/recall and
+    //    records turns/fragments through `/memory/*`: no intents, no MCP, no
+    //    raw data plane.
+    //  - ci-ha-voice (CI-Home-Assistant-Voice-PE) grounds each spoken answer in
+    //    `/memory/context` + `/memory/recall` and saves the exchange with
+    //    `/memory/turn`. It runs no tools and reads no raw data.
     case 'ci-glasses-bridge':
-    // Companion Glasses Bridge (CI-Even-Realities `agent-hub`) augments chat
-    // with `POST /memory/recall` and writes the turn back with
-    // `POST /memory/turn`. Memory alone covers both.
     case 'ci-mentra':
-    // Mentra smart-glasses bridge: it only reads context/recall and records
-    // turns/fragments through `/memory/*`, so it is confined to the memory
-    // scope — no intents, no MCP, no raw data plane.
     case 'ci-ha-voice':
-      // Home Assistant voice (CI-Home-Assistant-Voice-PE): grounds each spoken
-      // answer in `/memory/context` + `/memory/recall` and saves the exchange
-      // with `/memory/turn`. It runs no tools and reads no raw data, so memory
-      // is the whole grant.
       return [MEMORY_SCOPE];
     default:
       // Includes `hermes-agent`: the upstream Hermes image declares the memory
