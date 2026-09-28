@@ -117,7 +117,9 @@ export const IMAGE_DESCRIPTION_QUEUE = 'image-description';
  * descriptions dispatched back to back the runner never went idle, Ollama
  * could not swap in the chat model, and two consecutive turns ended in the
  * empty-answer fallback after five minutes each. The running description
- * still finishes (8–25 s); only the NEXT one waits.
+ * still finishes (8–25 s); only the NEXT one waits. A video's description is
+ * several calls in one job (a call per frame, then the merge), so it asks the
+ * same gate between them itself — ImageDescriptionListener.standAsideForChat.
  */
 export const IMAGE_DESCRIPTION_QUEUE_OPTIONS: QueueOptions = {
   policy: 'short',

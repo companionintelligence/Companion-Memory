@@ -1,4 +1,12 @@
-import { IMAGE_DESCRIPTION_MAX_OUTPUT_TOKENS, ImageDescriptionListener } from '../ImageDescriptionListener';
+import { YieldGateRegistry } from '@ci/domains/events';
+
+import { INTERACTIVE_CHAT_YIELD_GATE } from '../../constants';
+import {
+  IMAGE_DESCRIPTION_MAX_OUTPUT_TOKENS,
+  ImageDescriptionListener,
+  VIDEO_YIELD_MAX_WAIT_MS,
+  VIDEO_YIELD_POLL_MS,
+} from '../ImageDescriptionListener';
 
 const USER = 'user-1';
 const PREVIEW_ID = 'preview-1';
@@ -431,5 +439,111 @@ describe('ImageDescriptionListener — videos', () => {
     expect(captureContextService.build).not.toHaveBeenCalled();
     const [, messages] = ollamaService.chat.mock.calls[0]!;
     expect(messages[0].content).toContain('Context: the video was recorded on 2023-10-27.');
+  });
+
+  // The queue's gate is asked only before a job is leased. A clip is up to
+  // seven calls in one job, so it asks between them itself: sent back to back
+  // they kept the runner busy until the chat turn waiting on a model swap
+  // timed out.
+  describe('standing aside for a chat turn', () => {
+    let pending = false;
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+      pending = false;
+      YieldGateRegistry.register(INTERACTIVE_CHAT_YIELD_GATE, () => pending);
+    });
+
+    afterEach(() => {
+      YieldGateRegistry.clear();
+      jest.useRealTimers();
+    });
+
+    it('waits between frames while a turn is pending, then carries on with the frames already described', async () => {
+      const { listener, ollamaService, fileService } = makeListener({
+        sample: { durationSeconds: 30, frames: FRAMES },
+        content: [frameAnswer(2), frameAnswer(3), MERGED],
+      });
+      // The turn arrives while frame 1 is with the model.
+      ollamaService.chat.mockImplementationOnce(async () => {
+        pending = true;
+
+        return { message: { role: 'assistant', content: frameAnswer(1) } };
+      });
+
+      const done = listener.handle({ userId: USER, previewId: PREVIEW_ID });
+
+      await jest.advanceTimersByTimeAsync(30 * VIDEO_YIELD_POLL_MS);
+      expect(ollamaService.chat).toHaveBeenCalledTimes(1);
+
+      pending = false;
+      await jest.advanceTimersByTimeAsync(VIDEO_YIELD_POLL_MS);
+      await done;
+
+      expect(ollamaService.chat).toHaveBeenCalledTimes(4);
+      expect(fileService.update).toHaveBeenCalledWith(expect.anything(), ORIGINAL_ID, {
+        title: 'Squirrel Climbing a Boulder',
+        description: 'A squirrel climbs a rock and pauses at the top.',
+      });
+    });
+
+    it('holds the merge too', async () => {
+      const { listener, ollamaService } = makeListener({ sample: { durationSeconds: 30, frames: FRAMES } });
+      ollamaService.chat.mockImplementationOnce(async () => ({
+        message: { role: 'assistant', content: frameAnswer(1) },
+      }));
+      ollamaService.chat.mockImplementationOnce(async () => ({
+        message: { role: 'assistant', content: frameAnswer(2) },
+      }));
+      ollamaService.chat.mockImplementationOnce(async () => {
+        pending = true;
+
+        return { message: { role: 'assistant', content: frameAnswer(3) } };
+      });
+      ollamaService.chat.mockImplementationOnce(async () => ({
+        message: { role: 'assistant', content: MERGED },
+      }));
+
+      const done = listener.handle({ userId: USER, previewId: PREVIEW_ID });
+
+      await jest.advanceTimersByTimeAsync(30 * VIDEO_YIELD_POLL_MS);
+      expect(ollamaService.chat).toHaveBeenCalledTimes(3);
+
+      pending = false;
+      await jest.advanceTimersByTimeAsync(VIDEO_YIELD_POLL_MS);
+      await done;
+
+      expect(ollamaService.chat).toHaveBeenCalledTimes(4);
+      expect(ollamaService.chat.mock.calls[3]![1][0]!.images).toBeUndefined();
+    });
+
+    it('does not hold a clip for longer than the cap, however long the conversation runs', async () => {
+      pending = true;
+      const { listener, ollamaService, fileService } = makeListener({
+        sample: { durationSeconds: 30, frames: FRAMES },
+        content: [frameAnswer(1), frameAnswer(2), frameAnswer(3), MERGED],
+      });
+
+      const done = listener.handle({ userId: USER, previewId: PREVIEW_ID });
+
+      await jest.advanceTimersByTimeAsync(VIDEO_YIELD_MAX_WAIT_MS - VIDEO_YIELD_POLL_MS);
+      expect(ollamaService.chat).not.toHaveBeenCalled();
+
+      // Three frames and the merge, each after one full stand-aside.
+      await jest.advanceTimersByTimeAsync(4 * VIDEO_YIELD_MAX_WAIT_MS);
+      await done;
+
+      expect(ollamaService.chat).toHaveBeenCalledTimes(4);
+      expect(fileService.update).toHaveBeenCalled();
+    });
+
+    it('costs a photo nothing: its one call was already gated before the job was leased', async () => {
+      pending = true;
+      const { listener, ollamaService } = makeListener();
+
+      await listener.handle({ userId: USER, previewId: PREVIEW_ID });
+
+      expect(ollamaService.chat).toHaveBeenCalledTimes(1);
+    });
   });
 });

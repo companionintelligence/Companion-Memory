@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { type UserServiceContext, toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { OnEvent } from '@ci/domains/events';
+import { OnEvent, YieldGateRegistry } from '@ci/domains/events';
 import {
   FileService,
   PreviewGeneratedEvent,
@@ -37,6 +37,22 @@ import { isNonMultimodalModelError } from '../visionErrors';
 export { IMAGE_DESCRIPTION_MAX_OUTPUT_TOKENS, buildPrompt } from '../descriptionPrompts';
 
 const VIDEO_MIME_PREFIX = 'video/';
+
+/**
+ * How often a clip standing aside re-asks its gate: the worker loop's own
+ * cadence while a whole queue stands aside (`backoffWhenYielding`).
+ */
+export const VIDEO_YIELD_POLL_MS = 1_000;
+
+/**
+ * The longest one stand-aside lasts before the next call goes ahead anyway.
+ * A chat turn runs seconds to a minute and a half (`llm.firstResponseTimeoutMs`);
+ * a gate still closed after this is a conversation carrying on turn after
+ * turn, and a clip held for its whole length would be walked toward the job
+ * deadline one frame at a time. Seven stand-asides at most (six frames and the
+ * merge) stay well inside that deadline.
+ */
+export const VIDEO_YIELD_MAX_WAIT_MS = 5 * 60_000;
 
 /** One model call's outcome: a label, nothing usable, or a model that takes no images at all. */
 type LabelAttempt =
@@ -208,6 +224,10 @@ export class ImageDescriptionListener {
    * rendition gets. When the sampler yields nothing — a container ffmpeg can
    * seek but not decode — the PREVIEW that triggered this job is itself a
    * frame, so the clip still gets a one-frame description rather than none.
+   *
+   * A clip is up to seven model calls in one job, and the queue's yield gate
+   * is asked only between jobs, so each call first stands aside for a pending
+   * chat turn itself — {@link standAsideForChat}.
    */
   private async describeVideo(
     context: UserServiceContext,
@@ -276,6 +296,8 @@ export class ImageDescriptionListener {
     const described: FrameDescription[] = [];
 
     for (const [index, messages] of frameMessages.entries()) {
+      await this.standAsideForChat({ parentFileId: video.id, frame: index });
+
       const attempt = await this.label(context, messages, model, numCtx, {
         previewId: payload.previewId,
         parentFileId: video.id,
@@ -301,22 +323,61 @@ export class ImageDescriptionListener {
       return;
     }
 
-    const label =
-      described.length === 1
-        ? described[0]!
-        : await this.merge(
-            context,
-            described,
-            sample.durationSeconds,
-            captureContext?.text ?? null,
-            model,
-            numCtx,
-            video.id,
-          );
+    let label: FileDescription = described[0]!;
+
+    if (described.length > 1) {
+      await this.standAsideForChat({ parentFileId: video.id, frame: 'merge' });
+
+      label = await this.merge(
+        context,
+        described,
+        sample.durationSeconds,
+        captureContext?.text ?? null,
+        model,
+        numCtx,
+        video.id,
+      );
+    }
 
     await this.applyLabel(context, video.id, payload.previewId, {
       title: label.title,
       description: label.description,
+    });
+  }
+
+  /**
+   * Waits while the queue's yield gate says a person is waiting on the chat
+   * model, re-asking every {@link VIDEO_YIELD_POLL_MS}, for at most
+   * {@link VIDEO_YIELD_MAX_WAIT_MS}.
+   *
+   * The gate (IMAGE_DESCRIPTION_QUEUE_OPTIONS.yieldsTo) exists because back-to-
+   * back vision calls never left the runner idle long enough for Ollama to
+   * swap the chat model in, and the turn ended in the empty-answer fallback.
+   * The worker loop asks it before leasing a job — enough for a photo, one
+   * call — but a clip's frames and merge went out back to back inside one job,
+   * which is that same pattern again. Asking here, before every call of the
+   * clip, gives a pending turn the idle gap between two of them. The frames
+   * already described are kept; nothing is re-run.
+   */
+  private async standAsideForChat(log: { parentFileId: string; frame: number | 'merge' }): Promise<void> {
+    const gate = IMAGE_DESCRIPTION_QUEUE_OPTIONS.yieldsTo;
+
+    if (gate == null || !(await YieldGateRegistry.shouldYield(gate))) {
+      return;
+    }
+
+    const startedAt = Date.now();
+
+    this.logger.log('Video description standing aside for a chat turn', { ...log, gate });
+
+    do {
+      await new Promise((resolve) => setTimeout(resolve, VIDEO_YIELD_POLL_MS));
+    } while (Date.now() - startedAt < VIDEO_YIELD_MAX_WAIT_MS && (await YieldGateRegistry.shouldYield(gate)));
+
+    this.logger.log('Video description resumed after standing aside', {
+      ...log,
+      gate,
+      waitedMs: Date.now() - startedAt,
     });
   }
 

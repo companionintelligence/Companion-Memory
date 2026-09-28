@@ -14,7 +14,9 @@
  * fetch the worker loop asks the named gate; while it answers `true` the loop
  * takes no lease — the jobs stay `created`, exactly as `paused` leaves them —
  * and re-asks on a short backoff. The job that was already running when the
- * gate closed finishes normally; yielding is between jobs, never inside one.
+ * gate closed finishes normally; the worker loop yields between jobs, never
+ * inside one. A job that is itself several generations in a row asks the
+ * gate between them (ImageDescriptionListener, for a video's frames).
  *
  * Gates are registered by NAME because the events domain must not import the
  * domain that knows what "an interactive chat turn is pending" means. The
