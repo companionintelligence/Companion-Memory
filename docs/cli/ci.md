@@ -266,11 +266,17 @@ push" is a state, not an error.
 whose push already ran: `POST /import/runs/:id/push/retry` moves that run's
 `failed` rows — items and entities — back to `pending` and re-queues the run's
 own push stage, which then pushes those rows and nothing else. It also re-drives
-a push stage that failed with rows still `pending` (how a push ends when the
-database stays away past its wait). The plain `push` cannot do either: it only
-offers a run that never had a push stage. A run with a stage still working is
-refused per run (409) and the others go ahead; `--wait` follows the re-queued
-runs to close-out, which is where the run's `completed`/`partial` is recomputed.
+a push stage that ran and failed — with rows still `pending` (how a push ends
+when the database stays away past its wait), or with every row settled (it died
+closing out); the table shows `queued (stage re-run)` for those. The plain `push`
+cannot do either: it only offers a run that never had a push stage. Refused per
+run (409), with the reason, and the others go ahead: a run with a stage still
+working; a run whose stage ahead of the push did not complete (cancelled
+mid-parse — retry that stage first); a push that never ran (cancelled before a
+worker claimed it). `--wait` follows the re-queued runs to close-out, which is
+where the run's `completed`/`partial` is recomputed. Rows quarantined as
+`crashed_database` (the database went down every time they were written) are
+reset too — fix what crashed the database before retrying them.
 Explicit run ids only, by design, and no `--dry-run` — `ci runs <id> --json`
 shows the push stage's `detail.failed` without changing anything.
 

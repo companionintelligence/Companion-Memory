@@ -65,14 +65,19 @@ test('imports a vCard export end-to-end and the contacts land in Memory', async 
   await page.getByRole('button', { name: 'Sync to my memory' }).click();
 
   // The push run also finishes — and, like the parse run above, correctly
-  // reports "0 records" pushed. Verified directly against the push stage's
-  // own persisted detail: {"pushed": 0, "deduped": 2, "entities":
-  // {"resolved": 2, ...}, "summary": {"gaps": [{"reason": "no_destination",
-  // "count": 2}]}}. `records`/`detail.pushed` counts item-level rows landed
-  // in ci.* (communications, events, content); a vCard contact resolves
-  // straight to a Person entity with no accompanying item, so it is
-  // correctly excluded — same rule as the ImportRunService.recordsFor()
-  // doc comment: entity resolutions are deliberately "not records at all".
+  // reports "0 records" pushed. The push stage's persisted detail reads
+  // {"pushed": 0, "deduped": 2, "entities": {"resolved": 2, ...}, "summary":
+  // {"dropsByReason": {"represented_elsewhere": 2}, "gaps": []}}.
+  // `records`/`detail.pushed` counts item-level rows landed in ci.*
+  // (communications, events, content); a vCard contact resolves straight to a
+  // Person entity with no accompanying item, so it is correctly excluded —
+  // same rule as the ImportRunService.recordsFor() doc comment: entity
+  // resolutions are deliberately "not records at all". The parser stages each
+  // card twice, as that Person and as an item `destinationsFor` routes
+  // nowhere ON PURPOSE (`isRepresentedElsewhere`), so the two items are an
+  // expected drop, not a gap. (Before that rule they were counted under
+  // `no_destination` and listed in `gaps` — a loss report about contacts
+  // that had arrived.)
   // The real proof this import worked is below: both contacts findable by
   // name in Memory.
   await expect(page.getByText(/0 records/).last()).toBeVisible({ timeout: 60_000 });

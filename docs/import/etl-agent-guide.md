@@ -288,8 +288,15 @@ returns. Re-running a failed stage is a user action —
 `POST /import/runs/:runId/stages/:stageId/retry`, or
 `POST /import/runs/:runId/push/retry` (`ci push --run <id> --retry-failed`) for
 individual rows the push could not write. The push retry also re-drives a push
-stage that failed with its rows still `pending`, and refuses (409) while any
-stage of the run is still working.
+stage that ran and failed — rows still `pending`, or all settled and it died in
+the close-out. It refuses (409) while any stage of the run is still working (a
+stage left `running` in a *finished* run and silent past `STALE_STAGE_MINUTES`
+does not count — `cancel()` closed the run while its worker died), while a stage
+ahead of the push did not complete (a run cancelled mid-parse is half staged;
+retry that stage first), and when the push itself never ran (cancelled or failed
+before a worker claimed it — the stage retry is the explicit way to run it). The
+push stage is reopened only from the status that was read, because `retryStage`
+and a claiming worker move stages without the run lock.
 
 **Inside the push, the database going away is waited out, not recorded.** Every
 database step in `PushStage` goes through `retryOnTransientDatabaseError`
@@ -302,6 +309,22 @@ fails with every unwritten row still `pending`. A row is `failed` only for
 something the database said about that row. Before this, a Postgres
 crash-restart mid-push marked 437 good rows `failed` with "the database system
 is in recovery mode", on a run nothing would ever push again.
+
+**…but a write the database keeps going down under is isolated, not resent.** A
+statement can *crash* Postgres (a TimescaleDB 2.28 segfault during a bulk upsert
+is the precedent), and waiting it out would resend it into every restart. So the
+destination writes count the failures that ended the session with the statement
+in flight (`isDatabaseCrashError`: 57P01/57P02, a reset socket, "Connection
+terminated unexpectedly") — never the wait for a server still in recovery
+(57P03, a refused socket). A batch in flight at two crashes is degraded to single
+rows; a single row in flight at two crashes of its own is quarantined `failed`
+with a `push_error` starting `crashed_database:`, written immediately so a stage
+that then fails does not leave it `pending` for the retry to crash on again. The
+batch waits at most the three-minute budget, and the row-by-row pass one more,
+shared by all its rows — never a fresh budget per row.
+`--retry-failed` resets `crashed_database` rows like any failed row, which costs
+up to four crashes per row before it is isolated again: fix what crashed the
+database first.
 
 **The sweep re-enqueues waiting stages, and only `policy: 'short'` stops it.**
 `resumeInterrupted` judges staleness from `import_stages.updated_at`, which
@@ -1224,6 +1247,7 @@ yarn workspace @ci/cli dev <command>          # or `ci <command>` once installed
 | `inbox [--start] [--only] [--skip] [--units]` | Scans the caller's inbox subtree; `--start` imports it, smallest unit first. `~3.0GB` / `49788+` mark a size the walk stopped measuring, and a unit listed with **no parsers** ran out of recognition budget — it will not match `--only` |
 | `runs [runId] [--wait]` | Runs and their stage bars |
 | `push [--run <id>] [--dry-run]` | Appends a `push` stage to every run whose rows are staged and uncommitted |
+| `push --run <id> --retry-failed [--wait]` | Re-drives a push that already **ran**: its `failed` rows (items and entities) go back to `pending` and its own push stage is re-queued; also re-runs a push stage that failed with nothing marked failed. Refused (409, per run) while a stage is working, when a stage ahead of the push did not complete, or when the push never ran. Explicit run ids only, no `--dry-run` |
 | `stats` | `ci.*` row counts, search-index coverage, queue depth, run rollup |
 | **`doctor [--list] [--check <id>] [--failures-only] [--timeout <ms>] [--json]`** | **The twenty-three data-quality checks over what the import actually wrote. See [§6](#6-what-to-measure--ci-doctor)** |
 | `backfill [stages…] [--list]` | The post-import enrichment chain via `POST /api/maintenance/orchestrate` (NDJSON-streamed, because a `search_index` backfill outlives undici's 300s headers timeout) |
