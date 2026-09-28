@@ -153,7 +153,18 @@ fail() {
 #     the only storage runtipi hands an app; the named volumes (db-data,
 #     object-data, secrets) and the operator bind mounts (CI_IMPORT_WORK_DIR,
 #     CI_REPO_DIR) have no equivalent here, so the api/worker get one /app-data
-#     mount instead.
+#     mount instead. The secrets volumes all map onto
+#     ${APP_DATA_DIR}/data/secrets: production's master `secrets` volume is
+#     that directory, mounted (read-write) into setup-secrets ONLY, and each
+#     `secrets-<svc>` projection volume is its services/<svc> subdirectory —
+#     where setup-secrets writes it (its SECRETS_PROJECTION_ROOT default,
+#     /run/secrets/services) and which that service alone mounts at
+#     /run/secrets. The <svc> names are the `project` calls in
+#     infrastructure/setup-secrets/entrypoint.sh; mount a name that map does
+#     not project and the service boots with an empty /run/secrets. The master
+#     is 0600 root, so pointing a non-root reader (hbpe, summary) at it instead
+#     is not a fallback: it cannot read it and exits. The gateway reads no
+#     secrets and mounts none, as in production.
 #   * `fix-db-permissions` exists only here: runtipi creates ${APP_DATA_DIR}
 #     as root, and postgres:18.4-bookworm runs as uid 999.
 #   * `setup-secrets` is production compose's `generate-secrets`, renamed after
@@ -211,6 +222,14 @@ fail() {
 #     `curl -f http://localhost:9000/minio/health/live` — and an unproven probe
 #     would leave the gateway waiting forever on a store install, so it is left
 #     to whoever can test a real install rather than guessed at here.
+#   * The /app-data mounts see ${APP_DATA_DIR}/data/secrets, so on a store
+#     install the per-service isolation is partial: api and worker (root) can
+#     read the master through it, and summary-service (uid 1000) every 0644
+#     projection, the api's AUTH_* secrets included. summary mounts /app-data
+#     only for llm-endpoint.json, which the api writes; a single-file bind is
+#     not the fix (Docker creates a DIRECTORY at an absent host path, and the
+#     api would then fail to write it). Moving that file out from beside
+#     data/secrets is an api + summary path change, not a mirror edit.
 #
 # It is also kept in step with CI-Marketplace's apps/ci-memory/docker-compose.json,
 # with one deliberate exception: the database volume.
@@ -240,9 +259,6 @@ generate_compose() {
       "internalPort": 8642,
       "addToMainNetwork": true,
       "restart": "unless-stopped",
-      "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
-      ],
       "dependsOn": {
         "api": { "condition": "service_healthy" }
       }
@@ -262,7 +278,7 @@ generate_compose() {
       "extraHosts": ["host.docker.internal:host-gateway"],
       "volumes": [
         { "hostPath": "\${APP_DATA_DIR}", "containerPath": "/app-data" },
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/api", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "healthCheck": {
         "test": "curl -f http://localhost:3030/health",
@@ -290,7 +306,7 @@ generate_compose() {
       "extraHosts": ["host.docker.internal:host-gateway"],
       "volumes": [
         { "hostPath": "\${APP_DATA_DIR}", "containerPath": "/app-data" },
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/api", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
         "migrate-database": { "condition": "service_completed_successfully" },
@@ -313,7 +329,7 @@ generate_compose() {
       "restart": "unless-stopped",
       "volumes": [
         { "hostPath": "\${APP_DATA_DIR}/data/db", "containerPath": "/var/lib/postgresql" },
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/database", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn" : {
         "fix-db-permissions": { "condition": "service_completed_successfully" },
@@ -332,7 +348,7 @@ generate_compose() {
       "restart": "unless-stopped",
       "volumes": [
         { "hostPath": "\${APP_DATA_DIR}/data/objects", "containerPath": "/data/objects" },
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/object-store", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
         "setup-secrets": { "condition": "service_completed_successfully" }
@@ -348,7 +364,7 @@ generate_compose() {
       ],
       "volumes": [
         { "hostPath": "\${APP_DATA_DIR}", "containerPath": "/app-data", "readOnly": true },
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/summary", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
         "database": { "condition": "service_healthy" },
@@ -361,7 +377,7 @@ generate_compose() {
       "image": "${reg}/companion/setup-database:${ver}",
       "restart": "no",
       "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/setup-database", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
         "database": { "condition": "service_healthy" },
@@ -383,7 +399,7 @@ generate_compose() {
       "volumes": [
         { "hostPath": "\${APP_DATA_DIR}/data/hbpe-models", "containerPath": "/app/models" },
         { "hostPath": "\${APP_DATA_DIR}/data/hbpe-corpus", "containerPath": "/app/data" },
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/hbpe", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
         "database": { "condition": "service_healthy" },
@@ -397,7 +413,7 @@ generate_compose() {
       "restart": "no",
       "command": ["yarn", "migrate"],
       "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/api", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
         "setup-secrets": { "condition": "service_completed_successfully" },
