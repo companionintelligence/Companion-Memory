@@ -907,13 +907,17 @@ function relateNames(
 const ONE_PERSON_RELATIONS: ReadonlySet<GivenNameRelation> = new Set(['same', 'initial']);
 
 /**
- * True when a record's name can be told apart from other holders' names: a
- * real, non-relational name that starts with a given name or an initial (a
- * placeholder has no name at all). Every other non-placeholder record is an
- * identity of its own in the line census.
+ * The first given name or initial a record's name can be told apart by: set
+ * for a real, non-relational name that starts with one, null otherwise (a
+ * placeholder has no name at all). Every non-placeholder record without one
+ * is an identity of its own in the line census.
  */
+function censusGiven(facts: PhoneFacts): string | null {
+  return facts.name != null && !facts.name.isRelational ? firstGiven(facts.name) : null;
+}
+
 function hasCensusName(facts: PhoneFacts): boolean {
-  return facts.name != null && !facts.name.isRelational && firstGiven(facts.name) != null;
+  return censusGiven(facts) != null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1218,6 +1222,14 @@ export class PhoneHolders {
    * and "Abe" — could be either of them, and makes the line `ambiguous`. Among
    * the holders that are not, "may be one person" is transitive (a failure of
    * transitivity IS such a holder), so the identities are its classes.
+   *
+   * An initial that starts two different full given names on the line makes
+   * it `ambiguous` as well, whether or not it folds with both. Folding is
+   * deliberately narrow — a Jr/Sr on one side only, or a different surname,
+   * holds a pair for review — and a pair held for review is not proven to be
+   * two people: an "A." beside "Abe Quill" and "Ada Quill Sr." folds with Abe
+   * alone, yet may still be that Ada. By classes alone that line holds two
+   * identities, and a same-given pair on it would grade exact.
    */
   lineCensus(
     line: string,
@@ -1256,7 +1268,12 @@ export class PhoneHolders {
           a !== h && fits[h][a] && named.some((_b, b) => b !== h && b !== a && fits[h][b] && !fits[a][b]),
       ),
     );
-    const ambiguous = bridging.includes(true);
+    const givens = named.flatMap((facts) => censusGiven(facts) ?? []);
+    const fullGivens = new Set(givens.filter((given) => given.length > 1));
+    const initialFitsTwo = givens.some(
+      (given) => given.length === 1 && [...fullGivens].filter((full) => full.startsWith(given)).length > 1,
+    );
+    const ambiguous = bridging.includes(true) || initialFitsTwo;
     const classes: number[] = [];
 
     named.forEach((_, index) => {
@@ -1265,7 +1282,7 @@ export class PhoneHolders {
       }
     });
 
-    // A bridge stands between two people who cannot be one: at least two identities.
+    // Either kind of ambiguity stands between two people who cannot be one: at least two identities.
     return { identities: (ambiguous ? Math.max(classes.length, 2) : classes.length) + unnamed, ambiguous };
   }
 

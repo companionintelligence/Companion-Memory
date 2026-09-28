@@ -380,6 +380,29 @@ describe('PhoneHolders.adjudicate — shared lines and names', () => {
     ).toMatchObject({ kind: 'review', reasons: ['shared_line'] });
   });
 
+  // Folding is narrow: a suffix on one side only, or a different surname, only
+  // holds a pair for review. It does not prove that an "A." on the line is not
+  // that Ada, so the initial still fits two given names and still holds the line.
+  it.each([
+    ['A.', 'A. Quill', ['Abe Quill', 'Ada Quill Sr.']],
+    ['A.', 'A.', ['Abe Quill', 'Ada Quill Jr.']],
+    ['A.', 'A. Brightwater', ['Abe', 'Ada Quill Sr.']],
+    ['Abe', 'Abe Quill', ['A. Quill', 'Ada Quill Jr.']],
+  ])('holds %s and %s for review beside %j: the initial may be either given name', (left, right, others) => {
+    const line = (name: string) => vcard(name, '(202) 555-0142');
+
+    expect(adjudicate(line(left), line(right), ...others.map(line))).toEqual({
+      kind: 'review',
+      numbers: [ADA_E164],
+      reasons: ['shared_line'],
+    });
+    expect(
+      holdersOf(
+        ...[left, right, ...others].map((name, index): [string, PhoneFacts] => [`h${index}`, line(name)]),
+      ).lineCensus(ADA_DIGITS, ADA_E164).ambiguous,
+    ).toBe(true);
+  });
+
   it('holds a same-given pair for review on a line with a third identity', () => {
     expect(
       adjudicate(
