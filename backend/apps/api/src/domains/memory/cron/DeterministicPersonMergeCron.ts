@@ -35,7 +35,7 @@ export const TICK_BUDGET_MS = 45 * 60_000;
 
 /**
  * Folds pending person pairs that share a deterministic identity — a mailbox,
- * an E.164-exact phone, or an exact LinkedIn profile URL — for every
+ * an adjudicated exact phone, or an exact LinkedIn profile URL — for every
  * onboarded user.
  *
  * `clean.duplicate_detect` only PROPOSES; before this job the only thing that
@@ -46,11 +46,22 @@ export const TICK_BUDGET_MS = 45 * 60_000;
  * the live rows first and demotes a pair that no longer qualifies to the
  * review queue rather than merging it on stale evidence.
  *
+ * ## The phone tier's live re-check
+ *
+ * A phone-only pair is re-graded by `PhoneHolders.adjudicate`
+ * (`memory/utils/phoneIdentity.ts`) on the endpoints as they are now,
+ * against the owner's whole phone corpus read once per drain and kept in
+ * step after every merge: a rename to another given name, a number that has
+ * since become over-common or gained a second real identity on its line, or
+ * a self endpoint each demote the pair to a labelled review row instead of
+ * merging it. A phone pair is never folded into the self Person.
+ *
  * ## Kill switch
  *
  * Disabling this schedule on the Jobs page stops it, AND stops the People
- * page's on-read fold of the profile-URL tier (`PersonResolver.mergeCandidates`
- * reads the same setting), which then shows those pairs for review instead.
+ * page's on-read fold of the phone and profile-URL tiers
+ * (`PersonResolver.mergeCandidates` reads the same setting), which then
+ * shows those pairs for review instead. Email pairs still fold on read.
  *
  * ## Role
  *

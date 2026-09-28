@@ -2,12 +2,22 @@ import { randomUUID } from 'node:crypto';
 
 import { DataSource, type QueryRunner } from 'typeorm';
 
-import { PROFILE_URL_MAX_HOLDERS } from '@ci/domains/memory';
+import { normalizePhone } from '@ci/domains/graph';
+import {
+  PHONE_MAX_HOLDERS,
+  PROFILE_URL_MAX_HOLDERS,
+  PhoneHolders,
+  parsePhone,
+  phoneCorpusFacts,
+  type PhoneClaimE164Row,
+  type PhoneFactsCorpusRow,
+} from '@ci/domains/memory';
 
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
 import { databaseAvailability, resolveConnection } from '../../__tests__/harness/pipelineHarness';
 import { PipelineStateService } from '../../services/PipelineStateService';
 import type { StageResult } from '../../types';
+import { STAGE_VERSIONS } from '../../versions';
 import {
   CLEAN_DUPLICATE_DETECT_STAGE_ID,
   DUPLICATE_DETECT_SOURCE,
@@ -21,9 +31,11 @@ import {
   type MergeCandidate,
   type ProfileFactsRow,
   type SharedClaim,
+  adjudicateCandidatePhones,
   adjudicateCandidateProfiles,
   buildCandidates,
   buildNameOverlapCandidates,
+  buildPhoneCandidates,
   buildProfileUrlCandidates,
   claimScore,
   duplicateDetectStageVersion,
@@ -31,6 +43,7 @@ import {
   profileFactsByEntity,
   scorePair,
 } from '../clean/DuplicateDetectStage';
+import { toE164 } from '../clean/IdentifierNormalizeStage';
 
 /**
  * `clean.duplicate_detect` — proposes, never merges.
@@ -104,10 +117,11 @@ describe('the version', () => {
   it('is monotone in each generation, so a bump can only go up', () => {
     // A hash would be uniformly distributed and would move the version DOWN half
     // the time, which pins the corpus to the abandoned high-water mark forever.
-    // A sum cannot. 5 = DUPLICATE_SCORING_GENERATION (4, profile_url evidence
-    // and its veto) + DUPLICATE_CANDIDATE_GENERATION (2, since
+    // A sum cannot. 6 = DUPLICATE_SCORING_GENERATION (5, the properties phone
+    // tier) + DUPLICATE_CANDIDATE_GENERATION (2, since
     // enrich.person_self_claim widened the evidence set) - 1.
-    expect(DUPLICATE_DETECT_VERSION).toBe(5);
+    expect(DUPLICATE_DETECT_VERSION).toBe(6);
+    expect(STAGE_VERSIONS[CLEAN_DUPLICATE_DETECT_STAGE_ID]).toBe(DUPLICATE_DETECT_VERSION);
   });
 });
 
@@ -711,6 +725,291 @@ describe('adjudicateCandidateProfiles — the veto', () => {
 });
 
 /* ===================================================================== *
+ * Phones — the properties pass and its adjudicator
+ * ===================================================================== */
+
+/*
+ * The duplicate this pass exists for: a Google Voice participant stub, named
+ * by its number with the ten-digit key in `phones`, and the contacts vCard of
+ * the same person, which kept the number as typed in `Phones`. Every number
+ * and name is invented: 555-01XX under real area codes, the toll-free range,
+ * and the UK drama range.
+ */
+const ADA_NUMBER = '+1 (202) 555-0142';
+const ADA_E164 = '+12025550142';
+const ADA_DIGITS = '2025550142';
+const UK_E164 = '+442079460958';
+const UK_DIGITS = '2079460958';
+
+const digitsOf = (value: string) => value.replace(/\D/g, '').slice(-10);
+
+function stubRow(n: number, number = ADA_NUMBER): PhoneFactsCorpusRow {
+  return {
+    entity_id: personId(n),
+    person_name: number,
+    phone_props: { phones: [digitsOf(number)] },
+    is_self: false,
+  };
+}
+
+function cardRow(n: number, name: string, ...typed: string[]): PhoneFactsCorpusRow {
+  return {
+    entity_id: personId(n),
+    person_name: name,
+    phone_props: { Phones: typed, phones: typed.map(digitsOf) },
+    is_self: false,
+  };
+}
+
+function phoneCorpus(
+  rows: PhoneFactsCorpusRow[],
+  owner: { timezone: string | null; selfEntityId: string | null } = {
+    timezone: 'America/Los_Angeles',
+    selfEntityId: null,
+  },
+  claims: Array<[string, string]> = [],
+) {
+  const { facts } = phoneCorpusFacts(rows, owner);
+
+  return { facts, holders: new PhoneHolders(facts, claims) };
+}
+
+function phoneCandidates(rows: PhoneFactsCorpusRow[], slice: number[]) {
+  const { facts, holders } = phoneCorpus(rows);
+
+  return buildPhoneCandidates(facts, holders, new Set(slice.map(personId)));
+}
+
+describe('buildPhoneCandidates', () => {
+  it('proposes a number-named stub against the vCard that states the number, at the auto-merge tier', () => {
+    const { candidates } = phoneCandidates([stubRow(1), cardRow(2, 'Ada Quill', '+1 202-555-0142')], [1]);
+
+    expect(candidates).toEqual([
+      {
+        entityIdA: personId(1),
+        entityIdB: personId(2),
+        score: 0.95,
+        evidence: [{ kind: 'phone', value: ADA_E164, score: 0.95 }],
+      },
+    ]);
+  });
+
+  it('finds a pair the name pass cannot pair at all', () => {
+    // The stub's only name is its number: no token in common with "Ada Quill".
+    const names = buildNameOverlapCandidates(
+      [
+        { entity_id: personId(1), name: ADA_NUMBER },
+        { entity_id: personId(2), name: 'Ada Quill' },
+      ],
+      new Set([personId(1)]),
+    );
+
+    expect(names.candidates).toEqual([]);
+    expect(
+      phoneCandidates([stubRow(1), cardRow(2, 'Ada Quill', '(202) 555-0142')], [1]).candidates,
+    ).toHaveLength(1);
+  });
+
+  it('holds a shared household line with two given names for review', () => {
+    const { candidates } = phoneCandidates(
+      [cardRow(1, 'Ada Quill', '(202) 555-0142'), cardRow(2, 'Bo Quill', '(202) 555-0142')],
+      [1],
+    );
+
+    expect(candidates).toEqual([
+      {
+        entityIdA: personId(1),
+        entityIdB: personId(2),
+        score: 0.85,
+        evidence: [
+          { kind: 'phone', value: ADA_E164, score: 0.85 },
+          { kind: 'phone_check', value: 'given_name_conflict', score: 0 },
+        ],
+      },
+    ]);
+  });
+
+  it.each([
+    ['a toll-free number', '(888) 555-0100'],
+    ['an invalid number', '(123) 555-0100'],
+    ['an extension', '(202) 555-0142 x12'],
+  ])('proposes nothing on %s', (_label, number) => {
+    expect(
+      phoneCandidates([cardRow(1, 'Ada Quill', number), cardRow(2, 'Ada Quill', number)], [1, 2]).candidates,
+    ).toEqual([]);
+  });
+
+  it('proposes nothing for the same digits in two countries', () => {
+    expect(
+      phoneCandidates(
+        [cardRow(1, 'Ada Quill', '+44 20 7946 0958'), cardRow(2, 'Ada Quill', '+1 207 946 0958')],
+        [1, 2],
+      ).candidates,
+    ).toEqual([]);
+  });
+
+  it('caps property phones at the same group size as every other shared value', () => {
+    expect(PHONE_MAX_HOLDERS).toBe(MAX_GROUP_MEMBERS);
+  });
+
+  it('suppresses a number more people hold than the group cap', () => {
+    const names = ['Ada', 'Bo', 'Cleo', 'Dov', 'Esme', 'Fitz', 'Gus'];
+    const rows = names.map((name, index) => cardRow(index + 1, `${name} Quill`, '(202) 555-0142'));
+
+    const { candidates, suppressed } = phoneCandidates(rows, [1]);
+
+    expect(rows).toHaveLength(MAX_GROUP_MEMBERS + 1);
+    expect(candidates).toEqual([]);
+    expect([...suppressed]).toEqual([personId(1)]);
+  });
+
+  it('collapses the two directions of one pair into one candidate', () => {
+    expect(
+      phoneCandidates([stubRow(1), cardRow(2, 'Ada Quill', ADA_NUMBER)], [1, 2]).candidates,
+    ).toHaveLength(1);
+  });
+
+  it('does not propose a pair that touches nobody in the slice', () => {
+    expect(phoneCandidates([stubRow(1), cardRow(2, 'Ada Quill', ADA_NUMBER)], [9]).candidates).toEqual([]);
+  });
+});
+
+describe('adjudicateCandidatePhones', () => {
+  /** What the claim pass writes for two claims stating the same E.164 — no name guard at all. */
+  const claimExact = (): MergeCandidate =>
+    scorePair([
+      claim({ kind: 'phone', value_normalized: ADA_DIGITS, subject_e164: ADA_E164, other_e164: ADA_E164 }),
+    ])!;
+
+  it('downgrades a claim-pass E.164 match between two given names on one line', () => {
+    expect(claimExact().score).toBe(PHONE_MATCH_SCORES.e164Exact);
+    const { facts, holders } = phoneCorpus([
+      cardRow(1, 'Ada Quill', '(202) 555-0142'),
+      cardRow(2, 'Bo Quill', '(202) 555-0142'),
+    ]);
+
+    const [graded] = adjudicateCandidatePhones([claimExact()], facts, holders);
+
+    expect(graded.score).toBe(0.85);
+    expect(graded.evidence).toEqual([
+      { kind: 'phone', value: ADA_E164, score: 0.85 },
+      { kind: 'phone_check', value: 'given_name_conflict', score: 0 },
+    ]);
+  });
+
+  it('caps a claim-pass E.164 match whose people carry no phone properties', () => {
+    const { facts, holders } = phoneCorpus([]);
+
+    const [graded] = adjudicateCandidatePhones([claimExact()], facts, holders);
+
+    expect(graded.score).toBe(0.85);
+    expect(kinds(graded)).toEqual(['phone', 'phone_check']);
+    expect(graded.evidence[1].value).toBe('unadjudicated');
+  });
+
+  it('keeps the review grade that mergeCandidateLists would otherwise lift', () => {
+    const { facts, holders } = phoneCorpus([
+      cardRow(1, 'Ada Quill', '(202) 555-0142'),
+      cardRow(2, 'Bo Quill', '(202) 555-0142'),
+    ]);
+    const { candidates: phone } = buildPhoneCandidates(facts, holders, new Set([personId(1)]));
+
+    const folded = mergeCandidateLists([claimExact()], phone);
+    expect(folded[0].score).toBe(0.95);
+
+    expect(adjudicateCandidatePhones(folded, facts, holders)[0].score).toBe(0.85);
+  });
+
+  it('removes a claim-pass match on a number that is not evidence at all', () => {
+    const tollFree = scorePair([claim({ kind: 'phone', value_normalized: '8885550100' })])!;
+    const { facts, holders } = phoneCorpus([
+      cardRow(1, 'Ada Quill', '(888) 555-0100'),
+      cardRow(2, 'Ada Quill', '(888) 555-0100'),
+    ]);
+
+    expect(adjudicateCandidatePhones([tollFree], facts, holders)[0]).toMatchObject({
+      score: 0,
+      evidence: [],
+    });
+  });
+
+  it('leaves a name-only pair with no phones exactly as it was', () => {
+    const namePair: MergeCandidate = {
+      entityIdA: personId(1),
+      entityIdB: personId(2),
+      score: 0.62,
+      evidence: [{ kind: 'name_overlap', value: 'quill', score: 0.62 }],
+    };
+    const { facts, holders } = phoneCorpus([cardRow(3, 'Someone Else', '(212) 555-0199')]);
+
+    expect(adjudicateCandidatePhones([namePair], facts, holders)).toEqual([namePair]);
+  });
+
+  it('lets the profile veto have the last word over an exact phone', () => {
+    const { facts, holders } = phoneCorpus([stubRow(1), cardRow(2, 'Ada Quill', ADA_NUMBER)]);
+    const profileFacts = profileFactsByEntity([
+      csvRow(1, ADA_NUMBER, SLUG_ADA),
+      vcardRow(2, 'Ada Quill', { url: SLUG_OTHER_ADA }),
+    ]);
+    const { candidates } = buildPhoneCandidates(facts, holders, new Set([personId(1)]));
+
+    const [graded] = adjudicateCandidateProfiles(
+      adjudicateCandidatePhones(candidates, facts, holders),
+      profileFacts,
+    );
+
+    expect(graded.score).toBe(0.8);
+    expect(kinds(graded)).toEqual(['phone', 'profile_url_conflict']);
+  });
+});
+
+describe('phone parity with the shared normalisers', () => {
+  const inputs = [
+    '+1 (202) 555-0142',
+    '202-555-0142',
+    '(202) 555-0142',
+    '12025550142',
+    '+44 20 7946 0958',
+    '0044 20 7946 0958',
+    '020 7946 0958',
+    '+33 1 23 45 67 89',
+    '+1 800 555 0100',
+    '555-0142',
+    '52886',
+    '‪+1 (202) 555‑0142‬',
+    '202.555.0142 x12',
+  ];
+
+  it.each(inputs)('keeps normalizePhone’s last ten digits for %p', (raw) => {
+    // The join key `properties.phones` and `identifier_claims.value_normalized`
+    // carry; a drift here would make holders of one number disagree on its key.
+    expect(parsePhone(raw, 'NANP').l10).toBe(normalizePhone(raw) ?? '');
+  });
+
+  it.each(inputs)('states exactly what toE164 states for %p', (raw) => {
+    const parsed = parsePhone(raw, null);
+
+    if (parsed.status === 'ok' && parsed.stated) {
+      expect(parsed.e164).toBe(toE164(raw));
+    } else {
+      // A value this rule refuses may still have a toE164 form (a toll-free
+      // number does), but nothing toE164 cannot state is stated here.
+      expect(parsed.e164).toBeNull();
+    }
+  });
+
+  it('never states a number toE164 would not', () => {
+    for (const raw of inputs) {
+      const parsed = parsePhone(raw, null);
+
+      if (toE164(raw) == null) {
+        expect(parsed.stated && parsed.status === 'ok').toBe(false);
+      }
+    }
+  });
+});
+
+/* ===================================================================== *
  * run() — the slice
  * ===================================================================== */
 
@@ -730,6 +1029,12 @@ function makeStage(
     profileRows?: ProfileFactsRow[];
     /** Rows the corpus-wide person-name query returns. */
     nameRows?: Array<{ entity_id: string; name: string | null }>;
+    /** Rows the corpus-wide phone-facts query returns. */
+    phoneRows?: PhoneFactsCorpusRow[];
+    /** The `ci.users` row. Defaults to a North American time zone and no self Person. */
+    owner?: { timezone: string | null; entity_id: string | null };
+    /** Stated E.164 forms the claims table carries. */
+    claimE164?: PhoneClaimE164Row[];
     writeError?: Error;
   } = {},
 ): RunHarness {
@@ -748,9 +1053,21 @@ function makeStage(
         .map((entity_id) => ({ entity_id, claim_count: opts.claimCounts?.[entity_id] ?? 1 }));
     }
 
-    // Ahead of the name branch: the facts query selects `e.name` too.
+    // Ahead of the name branch: the facts queries select `e.name` too.
     if (/profile_props/i.test(sql) && /FROM ci\.entities e/i.test(sql)) {
       return opts.profileRows ?? [];
+    }
+
+    if (/phone_props/i.test(sql) && /FROM ci\.entities e/i.test(sql)) {
+      return opts.phoneRows ?? [];
+    }
+
+    if (/FROM ci\.users/i.test(sql)) {
+      return [opts.owner ?? { timezone: 'America/Los_Angeles', entity_id: null }];
+    }
+
+    if (/value_e164 AS e164/i.test(sql)) {
+      return opts.claimE164 ?? [];
     }
 
     if (/e\.name/i.test(sql) && /FROM ci\.entities e/i.test(sql)) {
@@ -984,6 +1301,142 @@ describe('run', () => {
     for (const statement of statements) {
       expect(statement.params).toContain(USER);
     }
+  });
+});
+
+describe('run — the phone pass', () => {
+  it('writes a stub/vCard pair at the auto-merge tier and records the claim-less stub as done', async () => {
+    const { stage, insert } = makeStage({
+      present: [personId(1)],
+      claimCounts: { [personId(1)]: 0 },
+      phoneRows: [stubRow(1), cardRow(2, 'Ada Quill', '+1 202-555-0142')],
+    });
+
+    const results = await stage.run(CTX, [personId(1)]);
+
+    const params = insert()?.params ?? [];
+    expect(params[4]).toEqual([0.95]);
+    expect(JSON.parse((params[7] as string[])[0])).toEqual([{ kind: 'phone', value: ADA_E164, score: 0.95 }]);
+    expect(results.get(personId(1))).toMatchObject({ outcome: 'done', detail: { candidates: 1 } });
+  });
+
+  it('writes a shared household line with two given names at the review tier, labelled', async () => {
+    const { stage, insert } = makeStage({
+      present: [personId(1)],
+      phoneRows: [cardRow(1, 'Ada Quill', '(202) 555-0142'), cardRow(2, 'Bo Quill', '(202) 555-0142')],
+    });
+
+    await stage.run(CTX, [personId(1)]);
+
+    const params = insert()?.params ?? [];
+    expect(params[4]).toEqual([0.85]);
+    expect(JSON.parse((params[7] as string[])[0])).toEqual([
+      { kind: 'phone', value: ADA_E164, score: 0.85 },
+      { kind: 'phone_check', value: 'given_name_conflict', score: 0 },
+    ]);
+  });
+
+  it('downgrades the claim pass’s unguarded E.164 match before writing it', async () => {
+    const { stage, insert } = makeStage({
+      present: [personId(1), personId(2)],
+      claims: [
+        claim({
+          subject_id: personId(1),
+          other_id: personId(2),
+          kind: 'phone',
+          value_normalized: ADA_DIGITS,
+          subject_e164: ADA_E164,
+          other_e164: ADA_E164,
+        }),
+      ],
+      phoneRows: [cardRow(1, 'Ada Quill', '(202) 555-0142'), cardRow(2, 'Bo Quill', '(202) 555-0142')],
+    });
+
+    await stage.run(CTX, [personId(1), personId(2)]);
+
+    expect((insert()?.params ?? [])[4]).toEqual([0.85]);
+  });
+
+  it("never grades a pair with the owner's self Person exact", async () => {
+    const { stage, insert } = makeStage({
+      present: [personId(1)],
+      owner: { timezone: 'America/Los_Angeles', entity_id: personId(2) },
+      phoneRows: [stubRow(1), cardRow(2, 'Ada Quill', ADA_NUMBER)],
+    });
+
+    await stage.run(CTX, [personId(1)]);
+
+    const params = insert()?.params ?? [];
+    expect(params[4]).toEqual([0.85]);
+    expect(JSON.parse((params[7] as string[])[0])).toContainEqual({
+      kind: 'phone_check',
+      value: 'self_endpoint',
+      score: 0,
+    });
+  });
+
+  it('records a person whose only shared number is over-common as skipped', async () => {
+    const names = ['Ada', 'Bo', 'Cleo', 'Dov', 'Esme', 'Fitz', 'Gus'];
+    const { stage, insert } = makeStage({
+      present: [personId(1)],
+      phoneRows: names.map((name, index) => cardRow(index + 1, `${name} Quill`, '(202) 555-0142')),
+    });
+
+    const results = await stage.run(CTX, [personId(1)]);
+
+    expect(insert()).toBeUndefined();
+    expect(results.get(personId(1))).toMatchObject({ outcome: 'skipped', reason: 'identifiers_too_common' });
+  });
+
+  it('writes no exact tier for national numbers when the owner has no derivable region', async () => {
+    const { stage, insert } = makeStage({
+      present: [personId(1)],
+      owner: { timezone: 'UTC', entity_id: null },
+      phoneRows: [stubRow(1, ADA_DIGITS), cardRow(2, 'Ada Quill', '(202) 555-0142')],
+    });
+
+    await stage.run(CTX, [personId(1)]);
+
+    const params = insert()?.params ?? [];
+    expect(params[4]).toEqual([0.75]);
+    expect(JSON.parse((params[7] as string[])[0])).toEqual([
+      { kind: 'phone', value: ADA_DIGITS, score: 0.75 },
+    ]);
+  });
+
+  it('lets a claim that states the digits abroad block the North American reading', async () => {
+    const { stage, insert, statements } = makeStage({
+      present: [personId(1)],
+      phoneRows: [stubRow(1, UK_DIGITS), cardRow(2, 'Ada Quill', '(207) 946-0958')],
+      claimE164: [{ l10: UK_DIGITS, e164: UK_E164 }],
+    });
+
+    await stage.run(CTX, [personId(1)]);
+
+    expect((insert()?.params ?? [])[4]).toEqual([0.75]);
+    // Asked only about digits two people share.
+    const claimRead = statements.find((statement) => /value_e164 AS e164/.test(statement.sql));
+    expect(claimRead?.params).toEqual([USER, [UK_DIGITS]]);
+  });
+
+  it('drops a claim-pass match on a toll-free number instead of writing it', async () => {
+    const { stage, insert } = makeStage({
+      present: [personId(1), personId(2)],
+      claims: [
+        claim({
+          subject_id: personId(1),
+          other_id: personId(2),
+          kind: 'phone',
+          value_normalized: '8885550100',
+        }),
+      ],
+      phoneRows: [cardRow(1, 'Ada Quill', '(888) 555-0100'), cardRow(2, 'Ada Quill', '(888) 555-0100')],
+    });
+
+    const results = await stage.run(CTX, [personId(1), personId(2)]);
+
+    expect(insert()).toBeUndefined();
+    expect(results.get(personId(1))).toMatchObject({ outcome: 'done', detail: { candidates: 0 } });
   });
 });
 
@@ -1362,11 +1815,15 @@ describeWithDatabase(`clean.duplicate_detect against real Postgres (${availabili
     ).then((rows) => rows[0]);
   }
 
-  async function seedPerson(entityId: string, name: string): Promise<void> {
+  async function seedPerson(
+    entityId: string,
+    name: string | null,
+    properties: Record<string, unknown> = {},
+  ): Promise<void> {
     await q(
       `INSERT INTO ci.entities (entity_id, entity_type, name, properties, owner_user_id)
-       VALUES ($1, 'Person', $2, '{}'::jsonb, $3)`,
-      [entityId, name, ownerUserId],
+       VALUES ($1, 'Person', $2, $4::jsonb, $3)`,
+      [entityId, name, ownerUserId, JSON.stringify(properties)],
     );
   }
 
@@ -1421,8 +1878,17 @@ describeWithDatabase(`clean.duplicate_detect against real Postgres (${availabili
 
     ownerUserId = await createSyntheticTestUser((sql, params) => q(sql, params), 'DuplicateDetectStage');
 
+    // Since scoring generation 5 a claim pair's 0.95 survives only when the
+    // phone adjudicator grades it from the two people's OWN properties; a
+    // claim-only E.164 match is capped at 0.85 (see adjudicateCandidatePhones).
+    // So the exact pair states the number on both cards, as a contact import
+    // does, and is nameless on both sides: its names say nothing either way.
     for (const [role, entityId] of Object.entries(people)) {
-      await seedPerson(entityId, role);
+      if (entityId === people.exactA || entityId === people.exactB) {
+        await seedPerson(entityId, null, { Phones: ['+44 20 7946 0958'], phones: ['2079460958'] });
+      } else {
+        await seedPerson(entityId, role);
+      }
     }
 
     // Each pair gets its OWN last-ten value: a shared one would put all ten
@@ -1490,8 +1956,11 @@ describeWithDatabase(`clean.duplicate_detect against real Postgres (${availabili
   it('carries the evidence that produced the score', async () => {
     const exact = await candidateFor(people.exactA, people.exactB);
 
+    // The adjudicator's item replaces the claim pass's: the full number, not
+    // the ten-digit key, because it is the number that was judged — which
+    // also proves PHONE_FACTS_CORPUS_SQL ran against the real schema.
     expect(exact.evidence).toEqual([
-      { kind: 'phone', value: '2079460958', score: PHONE_MATCH_SCORES.e164Exact },
+      { kind: 'phone', value: '+442079460958', score: PHONE_MATCH_SCORES.e164Exact },
     ]);
   });
 

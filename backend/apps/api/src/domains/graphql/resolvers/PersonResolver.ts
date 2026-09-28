@@ -661,13 +661,14 @@ export class PersonResolver {
     }
 
     // Disabling the hourly drain on the Jobs page is the one kill switch for
-    // the profile-URL tier: it stops the cron AND this on-read fold, and the
-    // queue then shows exact profile-URL pairs for review instead of hiding
-    // them. Email and E.164-phone pairs fold here either way.
+    // the phone and profile-URL tiers: it stops the cron AND this on-read
+    // fold, and the queue then shows exact phone and profile-URL pairs for
+    // review instead of hiding them. Only email pairs fold here either way.
     const includeProfileUrl = JobControlStore.cronMode(DETERMINISTIC_MERGE_CRON) !== 'disabled';
+    const includePhone = includeProfileUrl;
 
-    // A shared email, an E.164-exact phone or an exact LinkedIn profile URL is
-    // the same person. Fold those before the queue is shown so "95% match" on
+    // A shared email, an adjudicated exact phone or an exact LinkedIn profile
+    // URL is the same person. Fold those before the queue is shown so "95% match" on
     // a shared mailbox never sits waiting for a click. Bounded by time, not
     // by rows: a detector re-sweep can leave ~2k deterministic pairs at once,
     // and draining them synchronously would turn one page load into minutes.
@@ -677,6 +678,7 @@ export class PersonResolver {
       await this.mergeCandidateService.autoMergeDeterministicPairs(serviceContext, {
         budgetMs: ON_READ_FOLD_BUDGET_MS,
         includeProfileUrl,
+        includePhone,
       });
     }
 
@@ -685,6 +687,7 @@ export class PersonResolver {
       limit: first ?? undefined,
       after: after ?? null,
       includeProfileUrl,
+      includePhone,
     });
 
     const edges = page.candidates.map((candidate) => ({

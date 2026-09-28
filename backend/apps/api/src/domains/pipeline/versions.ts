@@ -316,6 +316,16 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   [STAGE_IDS.CLEAN_TEMPORAL_REPAIR]: 2,
 
   /**
+   * v6 — DUPLICATE_SCORING_GENERATION bumped to 5: a properties-based phone
+   * tier (memory/utils/phoneIdentity.ts). Person `Phones`/`phones`/`phone` and
+   * numeric display names are parsed to E.164 — stated forms, or a valid
+   * geographic NANP number under a derived owner region that the corpus
+   * corroborates and that yields to any foreign-stated form — and graded by
+   * first given name, generational suffix, line census, holder cap and owner
+   * and self exclusion: 0.95 only on a clean exact, 0.85 + `phone_check`
+   * otherwise. The claim pass's unguarded E.164 tier is capped at 0.85, and
+   * the profile veto is still applied last.
+   *
    * v5 — DUPLICATE_SCORING_GENERATION bumped to 4: profile_url evidence
    * (LinkedIn /in/ URLs from URL/URLs/Notes `URL:` lines). Equal, corroborated
    * URL sets score 0.95 (folded by MergeCandidateService); a disjoint or
@@ -324,7 +334,7 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * widening the evidence set. A bump rescores pending candidates; it never
    * resurrects a rejected pair.
    */
-  [STAGE_IDS.CLEAN_DUPLICATE_DETECT]: 5,
+  [STAGE_IDS.CLEAN_DUPLICATE_DETECT]: 6,
 
   /**
    * v1 — initial owned-unit detector. A literal mirroring the derivation in

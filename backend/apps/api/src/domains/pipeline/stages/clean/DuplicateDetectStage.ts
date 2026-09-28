@@ -5,13 +5,23 @@ import { DataSource } from 'typeorm';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import {
+  PHONE_CLAIM_E164_SQL,
+  PHONE_FACTS_CORPUS_SQL,
   PROFILE_FACTS_CORPUS_SQL,
+  PhoneHolders,
   ProfileUrlHolders,
+  applyPhoneVerdict,
   applyProfileVerdict,
+  capUnadjudicatedPhones,
   compareTokenizedNames,
   extractProfileFacts,
   indexableTokens,
+  phoneCorpusFacts,
+  sharedPhoneLines,
   tokenizePersonName,
+  type PhoneClaimE164Row,
+  type PhoneFacts,
+  type PhoneFactsCorpusRow,
   type ProfileFacts,
   type ProfileFactsCorpusRow,
   type TokenizedPersonName,
@@ -45,10 +55,13 @@ const CANDIDATE_ENTITY_TYPE = 'Person';
 
 /**
  * Generation of the SCORING rule — {@link IDENTIFIER_KIND_SCORES},
- * {@link MAX_GROUP_MEMBERS}, which claim kinds count as evidence at all, and
- * the profile-URL rule in `memory/utils/profileUrls.ts` (its normaliser, its
+ * {@link MAX_GROUP_MEMBERS}, which claim kinds count as evidence at all, the
+ * profile-URL rule in `memory/utils/profileUrls.ts` (its normaliser, its
  * adjudicator and its `PROFILE_URL_MAX_HOLDERS` cap all change verdicts, so
- * editing any of them is a bump).
+ * editing any of them is a bump) and the phone rule in
+ * `memory/utils/phoneIdentity.ts` (its parser, its NANP tables, its time-zone
+ * list, its name and line-census guards and its `PHONE_MAX_HOLDERS` cap —
+ * likewise).
  *
  * Bump it in the same commit that edits any of them. A bump re-proposes: every
  * PENDING candidate is rescored, and every pair whose evidence no longer clears
@@ -67,8 +80,18 @@ const CANDIDATE_ENTITY_TYPE = 'Person';
  * URL held by more than `PROFILE_URL_MAX_HOLDERS` people is removed before
  * any of that, for every pair, so it neither lifts nor vetoes one.
  * See {@link buildProfileUrlCandidates} and {@link adjudicateCandidateProfiles}.
+ * 5 — properties phone tier: Person `Phones`/`phones`/`phone` and numeric
+ * display names are parsed to E.164 (stated forms, or a valid geographic NANP
+ * number under a derived, corpus-corroborated owner region; never toll-free,
+ * premium, service, invalid or an extension), and a shared number is graded
+ * 0.95 only on the same first given name or a placeholder side with a clean
+ * line census, 0.85 + `phone_check` otherwise, `phone_country_conflict` on
+ * disagreeing countries. The adjudicator is the only producer of a 0.95 phone
+ * item — the claim pass's unguarded E.164 tier is capped at 0.85 — and the
+ * profile veto still runs last. See {@link buildPhoneCandidates} and
+ * {@link adjudicateCandidatePhones}.
  */
-export const DUPLICATE_SCORING_GENERATION = 4;
+export const DUPLICATE_SCORING_GENERATION = 5;
 
 /**
  * Generation of the CANDIDATE SET — which subjects are compared, i.e. the
@@ -259,6 +282,17 @@ export const IDENTIFIER_KIND_SCORES: Readonly<Record<string, number>> = {
  *    is the one case where reading the column REMOVES a proposal rather than
  *    reordering one. {@link claimScore} returns null, exactly as it does for an
  *    uncalibrated kind.
+ *
+ * ── `e164Exact` no longer reaches the auto-merge tier on its own ───────────
+ *
+ * An equal E.164 on two claims says nothing about whether the two people are
+ * one person or two people on one household line, and this table has no name
+ * guard. Since scoring generation 5 the properties phone adjudicator
+ * (`memory/utils/phoneIdentity.ts`, via {@link adjudicateCandidatePhones})
+ * re-states the phone evidence of every pair whose two people carry phone
+ * properties, and caps any other phone item at 0.95 to 0.85 with a
+ * `phone_check: unadjudicated` marker. The claim pass still FINDS pairs with
+ * these scores; only the adjudicator can keep one at 0.95.
  */
 export const PHONE_MATCH_SCORES = {
   e164Exact: 0.95,
@@ -281,8 +315,10 @@ export const PHONE_MATCH_SCORES = {
  * person was examined and deliberately not proposed for.
  *
  * Profile URLs are capped by `PROFILE_URL_MAX_HOLDERS` in
- * `memory/utils/profileUrls.ts` instead, because the auto-merger applies that
- * cap too and cannot import this file. The spec pins the two equal.
+ * `memory/utils/profileUrls.ts` instead, and property phone numbers by
+ * `PHONE_MAX_HOLDERS` in `memory/utils/phoneIdentity.ts`, because the
+ * auto-merger applies those caps too and cannot import this file. The spec
+ * pins all three equal.
  */
 export const MAX_GROUP_MEMBERS = 6;
 
@@ -820,6 +856,124 @@ export function adjudicateCandidateProfiles(
   });
 }
 
+/**
+ * Propose pairs whose Person records carry the same phone number.
+ *
+ * The pass the claim pass cannot be: a Google Voice participant stub is
+ * named by its number and usually has no identifier claim, and the vCard
+ * copy of the same contact shares no name token with "+1 (202) 555-0142".
+ * They share the number in their own `properties`.
+ *
+ * A number whose digits more than `PHONE_MAX_HOLDERS` people carry (equal to
+ * {@link MAX_GROUP_MEMBERS}) is a switchboard, not an identity; the subject
+ * is marked suppressed exactly as an over-common email is. Every other pair
+ * sharing digits is graded by `PhoneHolders.adjudicate` — the same call the
+ * auto-merger re-runs on the live rows — and kept when its evidence clears
+ * the floor. Unusable numbers (toll-free, invalid, the owner's) and country
+ * conflicts weigh nothing, so they propose nothing.
+ *
+ * `facts` and `holders` must be the WHOLE corpus (`loadPhoneCorpus`), not the
+ * slice. Only pairs touching the slice are returned.
+ */
+export function buildPhoneCandidates(
+  facts: ReadonlyMap<string, PhoneFacts>,
+  holders: PhoneHolders,
+  sliceIds: ReadonlySet<string>,
+): { candidates: MergeCandidate[]; suppressed: Set<string> } {
+  const byPair = new Map<string, MergeCandidate>();
+  const seen = new Set<string>();
+  const suppressed = new Set<string>();
+
+  for (const subjectId of sliceIds) {
+    const subject = facts.get(subjectId);
+
+    if (subject == null) {
+      continue;
+    }
+
+    for (const line of subject.lines.keys()) {
+      if (holders.isOverCommon(line)) {
+        suppressed.add(subjectId);
+        continue;
+      }
+
+      for (const otherId of holders.holdersOf(line)) {
+        if (otherId === subjectId) {
+          continue;
+        }
+
+        const [entityIdA, entityIdB] = subjectId < otherId ? [subjectId, otherId] : [otherId, subjectId];
+        const key = `${entityIdA}|${entityIdB}`;
+
+        if (seen.has(key)) {
+          continue;
+        }
+
+        seen.add(key);
+
+        const left = facts.get(entityIdA);
+        const right = facts.get(entityIdB);
+
+        if (left == null || right == null) {
+          continue;
+        }
+
+        // Adjudicated in (a, b) order, so the evidence text is the same from
+        // whichever end of the pair the sweep found it.
+        const graded = applyPhoneVerdict(
+          { score: 0, evidence: [] as CandidateEvidence[] },
+          holders.adjudicate(left, right),
+        );
+
+        if (graded.score >= MIN_CANDIDATE_SCORE) {
+          byPair.set(key, { entityIdA, entityIdB, ...graded });
+        }
+      }
+    }
+  }
+
+  return { candidates: [...byPair.values()], suppressed };
+}
+
+/**
+ * Re-state every candidate's phone evidence under the verdict for its two
+ * people, and hold every phone item the adjudicator did not write below the
+ * auto-merge tier.
+ *
+ * Runs over the MERGED list, after {@link mergeCandidateLists} and BEFORE
+ * {@link adjudicateCandidateProfiles}, for three reasons:
+ *
+ *  - A claim pair graded `e164Exact` (0.95) by {@link claimScore} has passed
+ *    no name guard at all. Where both people carry phone properties, the
+ *    adjudicator's verdict replaces it (a household line with two given names
+ *    becomes review); where they do not, it is capped at 0.85 and marked
+ *    `unadjudicated`. So the ONLY 0.95 phone item that can reach the
+ *    auto-merger is one `PhoneHolders.adjudicate` wrote.
+ *  - {@link mergeCandidateLists} rescores a folded pair to its strongest item,
+ *    which would lift a reviewed phone pair back to 0.95 if the claim pass
+ *    found the same number; re-applying the verdict afterwards restores it.
+ *  - The profile veto must have the last word: a phone match can never lift a
+ *    pair past `profile_url_conflict`.
+ *
+ * `facts` and `holders` are the whole corpus, as {@link buildPhoneCandidates}.
+ */
+export function adjudicateCandidatePhones(
+  candidates: readonly MergeCandidate[],
+  facts: ReadonlyMap<string, PhoneFacts>,
+  holders: PhoneHolders,
+): MergeCandidate[] {
+  return candidates.map((candidate) => {
+    const left = facts.get(candidate.entityIdA);
+    const right = facts.get(candidate.entityIdB);
+    const graded =
+      left != null && right != null
+        ? applyPhoneVerdict(candidate, holders.adjudicate(left, right))
+        : capUnadjudicatedPhones(candidate);
+
+    return { ...candidate, ...graded };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // The stage
 // ---------------------------------------------------------------------------
@@ -831,7 +985,7 @@ export function adjudicateCandidateProfiles(
  *
  * Clean proposes; a human disposes. There is no merge path in this file, no
  * auto-merge floor to raise, and no configuration that would create one. (The
- * deterministic tiers — a shared email, an E.164-exact phone, an exact
+ * deterministic tiers — a shared email, an adjudicated exact phone, an exact
  * `profile_url` — are folded by `MergeCandidateService`, which re-adjudicates
  * the live rows before every merge; this stage only writes the evidence.) That
  * is not caution about the scoring being imperfect — it is that a merge is
@@ -872,7 +1026,7 @@ export function adjudicateCandidateProfiles(
  *    identifiers and no duplicate" — and it is the reason coverage is
  *    meaningful. It must never be confused with the next line.
  *  - `skipped: no_identifier_claims` — the person has NO claims at all and
- *    neither the name pass nor the profile-URL pass proposed anything for
+ *    none of the name, profile-URL and phone passes proposed anything for
  *    them, so there was nothing to compare on. Countable, and it is the number
  *    that says how much of the corpus `enrich.person_link` has not reached yet.
  *  - `skipped: identifiers_too_common` — every shared value this person has is
@@ -959,14 +1113,31 @@ export class DuplicateDetectStage implements Stage {
       new Set(examined),
     );
 
-    for (const id of [...nameSuppressed, ...profileSuppressed]) {
+    const phoneCorpus = await this.loadPhoneCorpus(ctx.userId);
+    const { candidates: phoneCandidates, suppressed: phoneSuppressed } = buildPhoneCandidates(
+      phoneCorpus.facts,
+      phoneCorpus.holders,
+      new Set(examined),
+    );
+
+    for (const id of [...nameSuppressed, ...profileSuppressed, ...phoneSuppressed]) {
       suppressed.add(id);
     }
 
+    // Phone before profile: the profile veto has the last word on the score.
+    // The floor is re-applied because the phone verdict can REMOVE evidence —
+    // a claim pair whose only shared number turns out to be toll-free, say.
     const candidates = adjudicateCandidateProfiles(
-      mergeCandidateLists(mergeCandidateLists(exactCandidates, nameCandidates), profileCandidates),
+      adjudicateCandidatePhones(
+        mergeCandidateLists(
+          mergeCandidateLists(mergeCandidateLists(exactCandidates, nameCandidates), profileCandidates),
+          phoneCandidates,
+        ),
+        phoneCorpus.facts,
+        phoneCorpus.holders,
+      ),
       profileFacts,
-    );
+    ).filter((candidate) => candidate.score >= MIN_CANDIDATE_SCORE);
 
     /** How many surviving pairs each swept subject appears in. */
     const proposedFor = new Map<string, number>();
@@ -1019,9 +1190,9 @@ export class DuplicateDetectStage implements Stage {
       // corpus, and it would make the ledger read as "identity has not reached
       // these people" when identity has reached them and found nothing.
       //
-      // A person with no claims who was still PROPOSED — by name or by profile
-      // URL, neither of which needs a claim — was examined and answered, so it
-      // is `done`, not a coverage gap.
+      // A person with no claims who was still PROPOSED — by name, by profile
+      // URL or by a phone in their own properties, none of which needs a
+      // claim — was examined and answered, so it is `done`, not a coverage gap.
       if ((subjects.get(id) ?? 0) === 0 && proposed === 0) {
         results.set(id, { outcome: 'skipped', reason: 'no_identifier_claims' });
 
@@ -1132,6 +1303,51 @@ export class DuplicateDetectStage implements Stage {
    */
   private loadProfileFacts(userId: string): Promise<ProfileFactsRow[]> {
     return this.dataSource.query<ProfileFactsRow[]>(PROFILE_FACTS_CORPUS_SQL, [userId]);
+  }
+
+  /**
+   * The phone facts of every live Person that carries a phone value or is
+   * named by a number, the owner's region derived from them, and the holder
+   * index over them — the input to {@link buildPhoneCandidates} and
+   * {@link adjudicateCandidatePhones}.
+   *
+   * Corpus-wide, like {@link loadProfileFacts}: the other copy of a slice
+   * subject can be anyone, and the holder cap, the owner's lines and the line
+   * census are all corpus counts. Three statements, none per-row:
+   *
+   *  - `ci.users` for the time zone and `users.entity_id` (a self Person that
+   *    is not flagged `is_self` is still the owner);
+   *  - `PHONE_FACTS_CORPUS_SQL`, the auto-merger's population too;
+   *  - `PHONE_CLAIM_E164_SQL` for the stated forms claims carry, asked only
+   *    about digits two or more people share (the only ones a pair can form
+   *    on), so the foreign-stated guard sees `value_e164` as well.
+   */
+  private async loadPhoneCorpus(userId: string): Promise<{
+    facts: Map<string, PhoneFacts>;
+    holders: PhoneHolders;
+  }> {
+    const [owner] = await this.dataSource.query<Array<{ timezone: string | null; entity_id: string | null }>>(
+      `SELECT u.timezone, u.entity_id FROM ci.users u WHERE u.id = $1::uuid`,
+      [userId],
+    );
+    const rows = await this.dataSource.query<PhoneFactsCorpusRow[]>(PHONE_FACTS_CORPUS_SQL, [userId]);
+    const { facts } = phoneCorpusFacts(rows, {
+      timezone: owner?.timezone ?? null,
+      selfEntityId: owner?.entity_id ?? null,
+    });
+    const shared = sharedPhoneLines(facts);
+    const claims =
+      shared.length === 0
+        ? []
+        : await this.dataSource.query<PhoneClaimE164Row[]>(PHONE_CLAIM_E164_SQL, [userId, shared]);
+
+    return {
+      facts,
+      holders: new PhoneHolders(
+        facts,
+        claims.map((row) => [row.l10, row.e164] as const),
+      ),
+    };
   }
 
   /**

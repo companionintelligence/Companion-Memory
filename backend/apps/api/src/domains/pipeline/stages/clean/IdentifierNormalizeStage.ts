@@ -201,6 +201,16 @@ const NANP_LENGTH = 11;
  * "otherwise" is counted rather than guessed. Adding `ci.users.phone_region` and
  * bumping {@link E164_RULE_GENERATION} converts those nulls in one commit —
  * which is what the ledger is for.
+ *
+ * The duplicate detector's phone tier (`memory/utils/phoneIdentity.ts`) does
+ * infer a country, and it is not a contradiction of the above: it infers only
+ * NANP, only under a region derived from the owner's own numbers or an
+ * explicit list of North American time zones AND corroborated by the corpus,
+ * only for a valid geographic number, and never where anything in the corpus
+ * states the same digits with another country. A stated form always
+ * overrides that inference, and it writes nothing back: `value_e164` stays
+ * stated-only. `DuplicateDetectStage.spec` pins that module's stated form to
+ * this function's.
  */
 export function toE164(raw: string | null | undefined): string | null {
   if (raw == null) {

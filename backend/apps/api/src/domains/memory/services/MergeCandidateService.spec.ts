@@ -1,9 +1,11 @@
 import type { UserServiceContext } from '@ci/common/context';
 
 import { PersonEntity } from '../entities/PersonEntity';
+import { PHONE_CLAIM_E164_SQL, PHONE_FACTS_CORPUS_SQL, PHONE_MAX_HOLDERS } from '../utils/phoneIdentity';
 import { PROFILE_FACTS_CORPUS_SQL, PROFILE_URL_MAX_HOLDERS } from '../utils/profileUrls';
 
 import {
+  chooseMergeTarget,
   decodeMergeCandidateCursor,
   encodeMergeCandidateCursor,
   hasEmailEvidence,
@@ -85,7 +87,7 @@ describe('MergeCandidateService', () => {
     expect(hasEmailEvidence([{ kind: 'phone', value: '9145826767', score: 0.85 }])).toBe(false);
   });
 
-  it('treats E.164-exact phone evidence as deterministic too', () => {
+  it('treats adjudicated exact phone evidence as deterministic too', () => {
     expect(hasExactPhoneEvidence([{ kind: 'phone', value: '9145826767', score: 0.95 }])).toBe(true);
     expect(hasExactPhoneEvidence([{ kind: 'phone', value: '9145826767', score: 0.85 }])).toBe(false);
   });
@@ -194,6 +196,26 @@ describe('MergeCandidateService', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  describe('chooseMergeTarget', () => {
+    const at = (id: string, name: string | null, isSelf = false) => ({ id, name, isSelf });
+
+    it('keeps the self Person', () => {
+      expect(chooseMergeTarget(at(PERSON_A, 'Ada Quillfeather'), at(PERSON_B, 'Ada', true))).toBe(PERSON_B);
+    });
+
+    it('keeps a real name over a placeholder, even when the placeholder sorts first', () => {
+      expect(chooseMergeTarget(at(PERSON_A, '+1 (202) 555-0142'), at(PERSON_B, 'Ada Quill'))).toBe(PERSON_B);
+      expect(chooseMergeTarget(at(PERSON_A, 'ada@example.com'), at(PERSON_B, 'Ada'))).toBe(PERSON_B);
+      expect(chooseMergeTarget(at(PERSON_A, null), at(PERSON_B, 'Ada'))).toBe(PERSON_B);
+      expect(chooseMergeTarget(at(PERSON_A, 'Ada'), at(PERSON_B, '2025550142'))).toBe(PERSON_A);
+    });
+
+    it('keeps the fuller name, then entity_id_a', () => {
+      expect(chooseMergeTarget(at(PERSON_A, 'Ada'), at(PERSON_B, 'Ada Quill'))).toBe(PERSON_B);
+      expect(chooseMergeTarget(at(PERSON_A, 'Ada Quill'), at(PERSON_B, 'Ada Quill'))).toBe(PERSON_A);
+    });
+  });
+
   describe('the deterministic predicate', () => {
     /** Index of the paren that closes the one opened at `open`. */
     function closingParen(text: string, open: number): number {
@@ -235,6 +257,25 @@ describe('MergeCandidateService', () => {
       expect(SHARES_DETERMINISTIC_IDENTITY).not.toMatch(/name_overlap|name_cluster|'name'/);
     });
 
+    it('selects a phone only on the adjudicated exact item, never on a claims E.164 join', () => {
+      // Two claims agreeing on an E.164 say nothing about whether their people
+      // are one person or a household on one line; that clause folded such
+      // pairs with no name guard.
+      expect(SHARES_DETERMINISTIC_IDENTITY).toMatch(/ev->>'kind' = 'phone'[\s\S]*>= 0\.95/);
+      expect(SHARES_DETERMINISTIC_IDENTITY).not.toMatch(/value_e164/);
+    });
+
+    it('shows exact phone pairs for review while their tier is switched off', async () => {
+      const { service, query } = makeService([], []);
+
+      await service.findCandidates(CONTEXT, { includePhone: false });
+
+      const sql = String(query.mock.calls[0]?.[0]);
+      expect(sql).not.toContain(`ev->>'kind' = 'phone'`);
+      expect(sql).toContain(`ev->>'kind' = 'profile_url'`);
+      expect(sql).toContain(`'[{"kind":"email"}]'`);
+    });
+
     it('hides deterministic pairs from the pending queue, vetoed ones excepted', async () => {
       const { service, query } = makeService([], []);
 
@@ -267,6 +308,7 @@ describe('MergeCandidateService', () => {
       entity_id: string;
       person_name: string | null;
       profile_props: Record<string, unknown> | null;
+      phone_props: Record<string, unknown> | null;
       is_self: boolean;
     }
 
@@ -275,8 +317,15 @@ describe('MergeCandidateService', () => {
       name: string,
       props: Record<string, unknown> = {},
       isSelf = false,
+      phoneProps: Record<string, unknown> = {},
     ): Endpoint {
-      return { entity_id: id, person_name: name, profile_props: props, is_self: isSelf };
+      return {
+        entity_id: id,
+        person_name: name,
+        profile_props: props,
+        phone_props: phoneProps,
+        is_self: isSelf,
+      };
     }
 
     function pageRow(overrides: Record<string, unknown> = {}) {
@@ -286,20 +335,22 @@ describe('MergeCandidateService', () => {
         entity_id_b: PERSON_B,
         score: 0.95,
         evidence: [{ kind: 'email', value: 'ada@example.com', score: 0.95 }],
-        via_identifier: true,
+        via_email: true,
+        via_phone: false,
         ...overrides,
       };
     }
 
     /**
      * Routes each statement by its text: the self lookup, keyset pages (served
-     * in order, then empty), the corpus-wide holder read, the live-endpoint
+     * in order, then empty), the corpus-wide holder reads, the live-endpoint
      * read, demotions and the accepted-stamp. `endpoints` may be swapped
-     * mid-run to model a merge; the corpus read serves every live endpoint
+     * mid-run to model a merge; each corpus read serves every live endpoint
      * that states anything, as the prefiltered query would.
      */
     function makeDrain(opts: {
       selfId?: string | null;
+      timezone?: string | null;
       pages?: Array<Array<Record<string, unknown>>>;
       endpoints?: Endpoint[];
     }) {
@@ -315,14 +366,15 @@ describe('MergeCandidateService', () => {
       }> = [];
       const accepted: string[][] = [];
       const corpusCalls: unknown[][] = [];
+      const phoneCorpusCalls: unknown[][] = [];
 
       query.mockReset();
       query.mockImplementation(async (sql: string, params: unknown[] = []) => {
         if (/FROM ci\.users/.test(sql)) {
-          return [{ entity_id: opts.selfId ?? null }];
+          return [{ entity_id: opts.selfId ?? null, timezone: opts.timezone ?? 'America/Los_Angeles' }];
         }
 
-        if (/AS via_identifier/.test(sql)) {
+        if (/AS via_email/.test(sql)) {
           pageCalls.push(params);
 
           return pages.shift() ?? [];
@@ -332,6 +384,18 @@ describe('MergeCandidateService', () => {
           corpusCalls.push(params);
 
           return state.endpoints.filter((row) => Object.keys(row.profile_props ?? {}).length > 0);
+        }
+
+        if (sql === PHONE_FACTS_CORPUS_SQL) {
+          phoneCorpusCalls.push(params);
+
+          return state.endpoints.filter(
+            (row) => Object.keys(row.phone_props ?? {}).length > 0 || !/[a-z]/i.test(row.person_name ?? ''),
+          );
+        }
+
+        if (sql === PHONE_CLAIM_E164_SQL) {
+          return [];
         }
 
         if (/profile_props/.test(sql)) {
@@ -369,6 +433,7 @@ describe('MergeCandidateService', () => {
         demotions,
         accepted,
         corpusCalls,
+        phoneCorpusCalls,
         state,
       };
     }
@@ -389,22 +454,36 @@ describe('MergeCandidateService', () => {
       expect(drain.accepted).toEqual([[PERSON_A, PERSON_B]]);
     });
 
-    it('selects on the email and E.164 tiers it always had', async () => {
+    it('selects on the email tier and the adjudicated phone tier, not on a claims E.164 join', async () => {
       const drain = makeDrain({ pages: [] });
 
       await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
 
       const pageSql = String(
-        drain.query.mock.calls.find((call) => /AS via_identifier/.test(String(call[0])))?.[0],
+        drain.query.mock.calls.find((call) => /AS via_email/.test(String(call[0])))?.[0],
       );
       expect(pageSql).toMatch(/evidence @> '\[\{"kind":"email"\}\]'/);
-      expect(pageSql).toMatch(/value_e164/);
+      expect(pageSql).toMatch(/ev->>'kind' = 'phone'[\s\S]*>= 0\.95/);
+      expect(pageSql).not.toMatch(/value_e164/);
     });
 
-    it('keeps entity_id_a when neither person is self', async () => {
+    it('keeps the fuller name when neither person is self', async () => {
+      // PersonMergeService keeps the TARGET's display name, so the target is
+      // the fuller one, not whichever uuid sorts first.
       const drain = makeDrain({
         pages: [[pageRow()]],
         endpoints: [endpoint(PERSON_A, 'Ada Q'), endpoint(PERSON_B, 'Ada Quillfeather')],
+      });
+
+      await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+      expect(drain.personMerge.mergePeople).toHaveBeenCalledWith(CONTEXT, [PERSON_A], PERSON_B);
+    });
+
+    it('keeps entity_id_a on a tie', async () => {
+      const drain = makeDrain({
+        pages: [[pageRow()]],
+        endpoints: [endpoint(PERSON_A, 'Ada Quill'), endpoint(PERSON_B, 'Ada Quill')],
       });
 
       await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
@@ -431,7 +510,7 @@ describe('MergeCandidateService', () => {
         pages: [
           [
             pageRow({
-              via_identifier: false,
+              via_email: false,
               evidence: [{ kind: 'profile_url', value: 'linkedin.com/in/ada-quillfeather-7x2', score: 0.95 }],
             }),
           ],
@@ -471,7 +550,7 @@ describe('MergeCandidateService', () => {
         pages: [
           [
             pageRow({
-              via_identifier: false,
+              via_email: false,
               evidence: [{ kind: 'profile_url', value: 'linkedin.com/in/ada-quillfeather-7x2', score: 0.95 }],
             }),
           ],
@@ -499,7 +578,7 @@ describe('MergeCandidateService', () => {
         pages: [
           [
             pageRow({
-              via_identifier: false,
+              via_email: false,
               evidence: [{ kind: 'profile_url', value: 'linkedin.com/in/ada-quillfeather-7x2', score: 0.95 }],
             }),
           ],
@@ -548,7 +627,7 @@ describe('MergeCandidateService', () => {
         pages: [
           [
             pageRow({
-              via_identifier: false,
+              via_email: false,
               evidence: [{ kind: 'profile_url', value: 'linkedin.com/in/ada-quillfeather-7x2', score: 0.95 }],
             }),
           ],
@@ -570,7 +649,7 @@ describe('MergeCandidateService', () => {
         pages: [
           [
             pageRow({
-              via_identifier: false,
+              via_email: false,
               evidence: [{ kind: 'profile_url', value: 'linkedin.com/in/ada-quillfeather-7x2', score: 0.95 }],
             }),
           ],
@@ -589,7 +668,7 @@ describe('MergeCandidateService', () => {
       expect(result).toMatchObject({ merged: 0, skipped: 1, demoted: 0 });
       expect(drain.personMerge.mergePeople).not.toHaveBeenCalled();
       const pageSql = String(
-        drain.query.mock.calls.find((call) => /AS via_identifier/.test(String(call[0])))?.[0],
+        drain.query.mock.calls.find((call) => /AS via_email/.test(String(call[0])))?.[0],
       );
       expect(pageSql).not.toContain(`ev->>'kind' = 'profile_url'`);
     });
@@ -681,7 +760,7 @@ describe('MergeCandidateService', () => {
           merge_candidate_id: '00000000-0000-0000-0000-0000000000c2',
           entity_id_a: HOLDER_IDS[0],
           entity_id_b: HOLDER_IDS[1],
-          via_identifier: false,
+          via_email: false,
           evidence: [
             { kind: 'profile_url', value: DESK_KEY, score: 0.95 },
             { kind: 'name_cluster', value: 'zed', score: 0.5 },
@@ -765,6 +844,218 @@ describe('MergeCandidateService', () => {
 
         expect(result.merged).toBe(1);
         expect(drain.corpusCalls).toEqual([]);
+      });
+    });
+
+    describe('the phone tier', () => {
+      // Invented: the 555-01XX fiction range under a real area code.
+      const NUMBER = '+1 (202) 555-0142';
+      const E164 = '+12025550142';
+      const DIGITS = '2025550142';
+      const PERSON_C = '00000000-0000-0000-0000-0000000000b3';
+
+      /** A Google Voice stub: named by its number, the ten-digit key in `phones`. */
+      const stub = (id: string) => endpoint(id, NUMBER, {}, false, { phones: [DIGITS] });
+      /** A contacts vCard that kept the number as typed. */
+      const card = (id: string, name: string, isSelf = false) =>
+        endpoint(id, name, {}, isSelf, { Phones: ['(202) 555-0142'], phones: [DIGITS] });
+
+      /** The row the detector wrote: phone-only, graded exact. */
+      const phoneRow = (overrides: Record<string, unknown> = {}) =>
+        pageRow({
+          score: 0.95,
+          via_email: false,
+          via_phone: true,
+          evidence: [{ kind: 'phone', value: E164, score: 0.95 }],
+          ...overrides,
+        });
+
+      it('merges a phone-exact pair after the live re-check, keeping the real name', async () => {
+        // The stub is entity_id_a; folding the vCard INTO it would leave the
+        // contact named by a phone number.
+        const drain = makeDrain({
+          pages: [[phoneRow()]],
+          endpoints: [stub(PERSON_A), card(PERSON_B, 'Ada Quill')],
+        });
+
+        const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+        expect(result).toMatchObject({ merged: 1, demoted: 0 });
+        expect(drain.personMerge.mergePeople).toHaveBeenCalledWith(CONTEXT, [PERSON_A], PERSON_B);
+        expect(drain.phoneCorpusCalls).toEqual([[USER]]);
+      });
+
+      it('demotes a pair whose live names are now two different given names, and does not merge it', async () => {
+        // Graded exact at detection; a re-import since renamed one side.
+        const drain = makeDrain({
+          pages: [[phoneRow()]],
+          endpoints: [card(PERSON_A, 'Ada Quill'), card(PERSON_B, 'Bo Quill')],
+        });
+
+        const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+        expect(result).toMatchObject({ merged: 0, demoted: 1 });
+        expect(drain.personMerge.mergePeople).not.toHaveBeenCalled();
+        expect(drain.demotions[0]).toEqual({
+          id: '00000000-0000-0000-0000-0000000000c1',
+          score: 0.85,
+          evidence: [
+            { kind: 'phone', value: E164, score: 0.85 },
+            { kind: 'phone_check', value: 'given_name_conflict', score: 0 },
+          ],
+        });
+      });
+
+      it('demotes a stub pair whose line gained a second real identity after detection', async () => {
+        const drain = makeDrain({
+          pages: [[phoneRow()]],
+          endpoints: [stub(PERSON_A), card(PERSON_B, 'Ada Quill'), card(PERSON_C, 'Bo Quill')],
+        });
+
+        const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+        expect(result).toMatchObject({ merged: 0, demoted: 1 });
+        expect(drain.demotions[0].evidence).toContainEqual({
+          kind: 'phone_check',
+          value: 'shared_line',
+          score: 0,
+        });
+      });
+
+      it('demotes a pair whose number became over-common after detection', async () => {
+        const others = Array.from({ length: PHONE_MAX_HOLDERS - 1 }, (_, index) =>
+          card(`00000000-0000-0000-0000-0000000000e${index + 1}`, `Holder${index} Quill`),
+        );
+        const drain = makeDrain({
+          pages: [[phoneRow()]],
+          endpoints: [stub(PERSON_A), card(PERSON_B, 'Ada Quill'), ...others],
+        });
+
+        const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+        expect(result).toMatchObject({ merged: 0, demoted: 1 });
+        expect(drain.personMerge.mergePeople).not.toHaveBeenCalled();
+        // Nothing weighs any more: floored, not scored 0.
+        expect(drain.demotions[0]).toMatchObject({ score: 0.5, evidence: [] });
+      });
+
+      it('never folds a phone-only pair into the self Person', async () => {
+        const drain = makeDrain({
+          pages: [[phoneRow()]],
+          endpoints: [stub(PERSON_A), card(PERSON_B, 'Ada Quill', true)],
+        });
+
+        const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+        expect(result).toMatchObject({ merged: 0, demoted: 1 });
+        expect(drain.personMerge.mergePeople).not.toHaveBeenCalled();
+        expect(drain.demotions[0].evidence).toContainEqual({
+          kind: 'phone_check',
+          value: 'self_endpoint',
+          score: 0,
+        });
+      });
+
+      it('lets a profile veto win over an exact phone without reading the phone corpus', async () => {
+        const drain = makeDrain({
+          pages: [[phoneRow()]],
+          endpoints: [
+            endpoint(PERSON_A, 'Ada Quill', { URL: ADA_URL }, false, { Phones: ['(202) 555-0142'] }),
+            endpoint(PERSON_B, 'Ada Quill', { Notes: [`URL: ${OTHER_ADA_URL}`] }, false, {
+              phones: [DIGITS],
+            }),
+          ],
+        });
+
+        const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+        expect(result).toMatchObject({ merged: 0, demoted: 1 });
+        expect(drain.demotions[0].score).toBe(0.8);
+        expect(drain.demotions[0].evidence.map((item) => item.kind)).toEqual([
+          'phone',
+          'profile_url_conflict',
+        ]);
+        expect(drain.phoneCorpusCalls).toEqual([]);
+      });
+
+      it('with the phone tier off, leaves a phone-only row untouched', async () => {
+        const drain = makeDrain({
+          pages: [[phoneRow()]],
+          endpoints: [stub(PERSON_A), card(PERSON_B, 'Ada Quill')],
+        });
+
+        const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, {
+          ...BUDGET,
+          includePhone: false,
+          includeProfileUrl: false,
+        });
+
+        expect(result).toMatchObject({ merged: 0, skipped: 1, demoted: 0 });
+        expect(drain.personMerge.mergePeople).not.toHaveBeenCalled();
+        expect(drain.phoneCorpusCalls).toEqual([]);
+        const pageSql = String(
+          drain.query.mock.calls.find((call) => /AS via_email/.test(String(call[0])))?.[0],
+        );
+        // The select list still reports via_phone; the WHERE must not select on it.
+        expect(pageSql.slice(pageSql.indexOf('WHERE mc.owner_user_id'))).not.toContain(
+          `ev->>'kind' = 'phone'`,
+        );
+      });
+
+      it('merges an email pair without reading the phone corpus', async () => {
+        const drain = makeDrain({
+          pages: [[pageRow()]],
+          endpoints: [stub(PERSON_A), card(PERSON_B, 'Ada Quill')],
+        });
+
+        await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+        expect(drain.personMerge.mergePeople).toHaveBeenCalledTimes(1);
+        expect(drain.phoneCorpusCalls).toEqual([]);
+      });
+
+      it('keeps the phone index in step with merges made after it was loaded', async () => {
+        // Seven people carry the number: two copies of Ada and five stubs of
+        // it. The first row loads the index while the number is over-common
+        // (it demotes); the email pair then folds one Ada into the other,
+        // leaving six; the last row must be judged on six, not on the seven
+        // the index was loaded with.
+        const stubs = ['e1', 'e2', 'e3', 'e4'].map((suffix) =>
+          stub(`00000000-0000-0000-0000-0000000000${suffix}`),
+        );
+        const adaA = card(PERSON_A, 'Ada Quill');
+        const adaB = card(PERSON_B, 'Ada Quill');
+        const drain = makeDrain({
+          pages: [
+            [
+              phoneRow({
+                merge_candidate_id: '00000000-0000-0000-0000-0000000000c1',
+                entity_id_a: PERSON_C,
+                entity_id_b: stubs[0].entity_id,
+              }),
+              pageRow({ merge_candidate_id: '00000000-0000-0000-0000-0000000000c2' }),
+              phoneRow({
+                merge_candidate_id: '00000000-0000-0000-0000-0000000000c3',
+                entity_id_a: PERSON_A,
+                entity_id_b: PERSON_C,
+              }),
+            ],
+          ],
+          endpoints: [adaA, adaB, stub(PERSON_C), ...stubs],
+        });
+        drain.personMerge.mergePeople.mockImplementationOnce(async () => {
+          drain.state.endpoints = [adaA, stub(PERSON_C), ...stubs];
+        });
+
+        const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+        expect(drain.demotions.map((demotion) => demotion.id)).toEqual([
+          '00000000-0000-0000-0000-0000000000c1',
+        ]);
+        expect(drain.personMerge.mergePeople).toHaveBeenNthCalledWith(1, CONTEXT, [PERSON_B], PERSON_A);
+        expect(drain.personMerge.mergePeople).toHaveBeenNthCalledWith(2, CONTEXT, [PERSON_C], PERSON_A);
+        expect(result).toMatchObject({ merged: 2, demoted: 1 });
+        expect(drain.phoneCorpusCalls).toHaveLength(1);
       });
     });
 

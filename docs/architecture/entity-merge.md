@@ -359,9 +359,27 @@ pairs in three deterministic tiers:
 
 | Tier | Evidence | Where it is graded |
 |------|----------|--------------------|
-| Email | a shared normalized mailbox (evidence, claims or `properties`) | `SHARES_EXACT_IDENTIFIER` |
-| Phone | an E.164-exact phone (0.95), never a last-ten-only match | `SHARES_EXACT_IDENTIFIER` |
+| Email | a shared normalized mailbox (evidence, claims or `properties`) | `SHARES_EXACT_EMAIL` |
+| Phone | one equal, valid, ordinary number in both people's own `properties`, names compatible, line not shared (`phone` 0.95) — see the rule table below | `utils/phoneIdentity.ts` `PhoneHolders.adjudicate` |
 | Profile URL | equal LinkedIn `/in/` URL sets, corroborated by a shared name token or an agreeing "Connected On" date, contradicted by neither (`profile_url` 0.95) | `utils/profileUrls.ts` `adjudicateProfileUrls` |
+
+The phone tier (`clean.duplicate_detect` v6, `DUPLICATE_SCORING_GENERATION` 5) reads `Phones`
+(the vCard's numbers as typed), the `phones`/`phone` ten-digit keys and a display name that is a
+number (the Google Voice participant stub). Its adjudicator is the only producer of a 0.95 phone
+item; the claim pass's unguarded E.164 tier is capped at 0.85 (`phone_check: unadjudicated`), and
+the drain no longer joins `identifier_claims.value_e164` at all.
+
+| Rule | Detail |
+|------|--------|
+| Parsing | Stated when the value says its country: `+`, `00`, `011` (NANP only), or eleven digits led by `1`. A national value is read as `+1` only under a NANP owner region and only when it is a valid geographic number. Toll-free (800/833/844/855/866/877/888, reserved 822/880–887/889), premium (900, NXX 976), personal/non-geographic (456, 500, 521–529, 533, 544, 566, 577, 588, 600, 622, 700, 710), N11 and 950/958/959 exchanges, reserved area codes (N11, N9X, 37X, 96X, 555), extensions, short codes and anything invalid are never evidence. |
+| Region | The owner's own stated numbers if unanimous, else an explicit list of North American IANA zones (`UTC` and `America/Mexico_City` give none). Once the corpus states ≥ 20 numbers, ≥ 50% must be `+1` or no region is used. No region: national numbers match at most as "country not confirmed" (0.75). |
+| Stated vs inferred | Per last ten digits a stated form beats an inferred one, two stated forms that disagree are unresolved, a refused raw value (a UK "020 …" number, an extension) beats the inferred reading of its own truncated `phones` key, and digits any person or claim states under another country are never read as `+1`. |
+| Country conflict | The same ten digits resolving to two E.164 numbers write `phone_country_conflict` and no match. |
+| Names | Exact needs the same first given name, an unambiguous initial, or a placeholder side (empty, email, @handle, or its own number in any formatting). A shared surname is never corroboration. Different given names, a prefix (Chris/Christine), a family-name conflict, a Jr/Sr (or suffix-on-one-side) mismatch, a relational or surname-only name, or a name that is someone else's number write 0.85 + `phone_check`. |
+| Line census | Distinct real identities on the number, by first given name: at most 1 for a placeholder or initial pair, at most 2 for a same-given pair (`PHONE_LINE_MAX_IDENTITIES`); an initial that fits two given names is ambiguous. Otherwise `phone_check: shared_line`. |
+| Holder cap | Digits more than six live people carry (`PHONE_MAX_HOLDERS`, pinned to `MAX_GROUP_MEMBERS`) are not evidence. |
+| Owner and self | The self Person's numbers are never evidence between two contacts; a pair with a self endpoint is graded review (`self_endpoint`) and the drain never folds a phone-only pair into self. |
+| Order | Phone verdict first, then the profile-URL veto, so `profile_url_conflict` caps a phone-exact pair at 0.8. |
 
 Guards, all on every merge:
 - **Veto.** Disjoint (`profile_url_conflict`) or overlapping-but-unequal (`profile_url_partial`)
@@ -378,13 +396,19 @@ Guards, all on every merge:
   now, runs on the live rows immediately before each merge; a pair that no longer qualifies —
   including one whose URL became over-common after detection — is rewritten to reviewable evidence
   (demoted) instead of merged on stale evidence or hidden forever.
+- **Phone live re-check.** A phone-only pair is re-graded by `PhoneHolders.adjudicate` on the live
+  endpoints against the owner's whole phone corpus (read once per drain, kept in step after every
+  merge); a rename, a number that became over-common or gained a second real identity, or a self
+  endpoint demotes it to a labelled review row.
 - **Self.** `users.entity_id` and any `is_self` row are always the target; a pair with two self
-  endpoints is skipped.
+  endpoints is skipped. Otherwise the target is a real name over a placeholder, then the fuller name
+  (`chooseMergeTarget`), because `PersonMergeService` keeps the target's display name.
 - **Name alone never merges.** No name clause exists in the auto-merge predicate.
 
 Two drains call it: the People review query folds for up to 5 s per load, and
 `DeterministicPersonMergeCron.drain` (hourly, worker) keyset-drains the backlog for up to 10 min per
-user. Disabling that cron on the Jobs page is the kill switch for the profile-URL tier in both.
+user. Disabling that cron on the Jobs page is the kill switch for the phone and profile-URL tiers in
+both; only email pairs keep folding on read.
 Every merge still writes its `ci.entity_merges` audit row.
 
 **P5 — Rejection is sticky.**
@@ -396,7 +420,8 @@ Every merge still writes its `ci.entity_merges` audit row.
 
 ### 5.1 Survivorship
 
-`PersonMergeService` today is target-wins-scalars plus union of `emails`/`phones`/`names`. That is
+`PersonMergeService` today is target-wins-scalars plus union of `emails`/`phones`/`names`, and of
+`Phones` (de-duplicated on the digit string) so a source's stated country survives the merge. That is
 adequate for a user-initiated merge of two rows and inadequate the moment merges are proposed
 automatically, because it has no notion of *which source* a field came from.
 

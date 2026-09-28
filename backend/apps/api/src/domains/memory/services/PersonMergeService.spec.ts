@@ -256,6 +256,32 @@ describe('PersonMergeService', () => {
     expect(propertiesUpdate[0].params?.[3]).toBe('Dana Q');
   });
 
+  it("keeps both cards' typed Phones, so a stated country survives the merge", async () => {
+    // Target-wins would drop the source's "+44 …" and keep only its ten-digit
+    // `phones` key, which the phone adjudicator would then read as a +1 number.
+    const harness = makeHarness([
+      personRow(TARGET, {
+        name: 'Dana',
+        properties: { Phones: ['+1 (202) 555-0142'], phones: ['2025550142'] },
+      }),
+      personRow(SOURCE_A, {
+        name: 'Dana Q',
+        properties: {
+          Phones: ['+44 20 7946 0958', '+1 (202) 555-0142', '12025550142'],
+          phones: ['2079460958'],
+        },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    // De-duplicated on the digit string; the first formatting seen is kept.
+    expect(folded.Phones).toEqual(['+1 (202) 555-0142', '+44 20 7946 0958']);
+    expect(folded.phones).toEqual(['2025550142', '2079460958']);
+  });
+
   it("never lets a source's is_self flag leak onto a non-self target", async () => {
     // SOURCE_A is a floating self-flagged stub (NOT the row users.entity_id
     // points at, so the self-source guard does not reject it).

@@ -79,7 +79,11 @@ describe('DeterministicPersonMergeCron.sweep', () => {
       seen.every((call) => call.options.budgetMs <= PER_USER_BUDGET_MS && call.options.budgetMs > 0),
     ).toBe(true);
     // The cron always folds every tier: the kill switch stops it before it runs.
-    expect(seen.every((call) => call.options.includeProfileUrl === undefined)).toBe(true);
+    expect(
+      seen.every(
+        (call) => call.options.includeProfileUrl === undefined && call.options.includePhone === undefined,
+      ),
+    ).toBe(true);
     expect(totals).toEqual({ merged: 8, skipped: 2, demoted: 4, considered: 14 });
   });
 

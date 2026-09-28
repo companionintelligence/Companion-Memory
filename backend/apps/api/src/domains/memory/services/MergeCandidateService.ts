@@ -6,6 +6,25 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
+import { pickFullerName } from '../utils/personNameTokens';
+import {
+  PHONE_CLAIM_E164_SQL,
+  PHONE_EVIDENCE,
+  PHONE_FACTS_CORPUS_SQL,
+  PHONE_IDENTITY_SCORES,
+  PhoneHolders,
+  applyPhoneVerdict,
+  extractPhoneFacts,
+  isPlaceholderPersonName,
+  phoneCorpusFacts,
+  phoneFactsSqlObject,
+  sharedPhoneLines,
+  type PhoneClaimE164Row,
+  type PhoneFacts,
+  type PhoneFactsCorpusRow,
+  type PhoneRegion,
+  type PhoneVerdict,
+} from '../utils/phoneIdentity';
 import {
   PROFILE_FACTS_CORPUS_SQL,
   PROFILE_URL_EVIDENCE,
@@ -79,10 +98,11 @@ const DEMOTED_FLOOR_SCORE = 0.5;
 /**
  * The scheduler name of `DeterministicPersonMergeCron.drain`.
  *
- * Also the KILL SWITCH for the profile-URL tier: disabling this schedule on
- * the Jobs page stops the hourly drain, and the People page's on-read fold
- * reads the same setting and stops folding profile-URL pairs too. Email and
- * E.164-phone pairs keep folding on read, as they did before the cron existed.
+ * Also the KILL SWITCH for the phone and profile-URL tiers: disabling this
+ * schedule on the Jobs page stops the hourly drain, and the People page's
+ * on-read fold reads the same setting and stops folding phone and profile-URL
+ * pairs too, which the queue then shows for review. Only email pairs keep
+ * folding on read unconditionally.
  */
 export const DETERMINISTIC_MERGE_CRON = 'DeterministicPersonMergeCron.drain';
 
@@ -91,6 +111,8 @@ export interface AutoMergeOptions {
   budgetMs: number;
   /** Fold pairs whose ONLY deterministic evidence is an exact profile URL. Default true. */
   includeProfileUrl?: boolean;
+  /** Fold pairs whose ONLY deterministic evidence is an adjudicated exact phone. Default true. */
+  includePhone?: boolean;
   /** Keyset page size. Default {@link AUTO_MERGE_PAGE_SIZE}. */
   pageSize?: number;
 }
@@ -110,9 +132,12 @@ export function hasEmailEvidence(evidence: readonly MergeCandidateEvidence[]): b
   return evidence.some((item) => item.kind === 'email');
 }
 
-/** Phone evidence at the E.164-exact tier — the same strength as an email. */
+/** Phone evidence at the adjudicated exact tier — the same strength as an email. */
 export function hasExactPhoneEvidence(evidence: readonly MergeCandidateEvidence[]): boolean {
-  return evidence.some((item) => item.kind === 'phone' && item.score != null && item.score >= 0.95);
+  return evidence.some(
+    (item) =>
+      item.kind === PHONE_EVIDENCE.match && item.score != null && item.score >= PHONE_IDENTITY_SCORES.exact,
+  );
 }
 
 /**
@@ -204,20 +229,16 @@ const LIVE_PAIR_PREDICATE = `EXISTS (
                AND blk.entity_id_b = mc.entity_id_b)`;
 
 /**
- * These two people already share an identifier — a mailbox or an
- * international phone number.
+ * These two people already share a mailbox.
  *
  * `ci.entity_identifiers` cannot answer this: it is unique on
  * `(owner, kind, value)`, so two live people cannot both hold the same email
  * there. Claims and properties still can, which is how the duplicates exist.
+ * The one tier with no kill switch: it folded on read before the drain
+ * existed.
  */
-const SHARES_EXACT_IDENTIFIER = `(
+const SHARES_EXACT_EMAIL = `(
             mc.evidence @> '[{"kind":"email"}]'::jsonb
-            OR EXISTS (
-              SELECT 1
-                FROM jsonb_array_elements(mc.evidence) ev
-               WHERE ev->>'kind' = 'phone'
-                 AND COALESCE((ev->>'score')::float, 0) >= 0.95)
             OR EXISTS (
               SELECT 1
                 FROM ci.identifier_claims ca
@@ -226,20 +247,6 @@ const SHARES_EXACT_IDENTIFIER = `(
                  AND ca.kind = 'email'
                  AND cb.kind = 'email'
                  AND ca.value_normalized = cb.value_normalized
-               WHERE ca.owner_user_id = mc.owner_user_id
-                 AND ca.entity_id = mc.entity_id_a
-                 AND cb.entity_id = mc.entity_id_b
-                 AND ca.disposition IS DISTINCT FROM 'rejected'
-                 AND cb.disposition IS DISTINCT FROM 'rejected')
-            OR EXISTS (
-              SELECT 1
-                FROM ci.identifier_claims ca
-                JOIN ci.identifier_claims cb
-                  ON ca.owner_user_id = cb.owner_user_id
-                 AND ca.kind = 'phone'
-                 AND cb.kind = 'phone'
-                 AND ca.value_e164 IS NOT NULL
-                 AND ca.value_e164 = cb.value_e164
                WHERE ca.owner_user_id = mc.owner_user_id
                  AND ca.entity_id = mc.entity_id_a
                  AND cb.entity_id = mc.entity_id_b
@@ -269,6 +276,23 @@ const SHARES_EXACT_IDENTIFIER = `(
           )`;
 
 /**
+ * The detector graded this pair's phone numbers `exact`: one equal, valid,
+ * ordinary number, names compatible, the line not shared. See
+ * `utils/phoneIdentity.ts` — its adjudicator is the only producer of a phone
+ * item at this score; the detector caps every other one at 0.85.
+ *
+ * Deliberately NOT a join on `identifier_claims.value_e164`, which this
+ * predicate used to carry: two claims agreeing on an E.164 say nothing about
+ * whether the two people are one person or a household on one line, and that
+ * clause folded such pairs with no name guard at all.
+ */
+const SHARES_EXACT_PHONE = `EXISTS (
+              SELECT 1
+                FROM jsonb_array_elements(mc.evidence) ev
+               WHERE ev->>'kind' = '${PHONE_EVIDENCE.match}'
+                 AND COALESCE((ev->>'score')::float, 0) >= ${PHONE_IDENTITY_SCORES.exact})`;
+
+/**
  * The detector graded this pair's LinkedIn profile URLs `exact`: equal sets,
  * corroborated by a name token or a connection date, contradicted by neither.
  * See `utils/profileUrls.ts`.
@@ -291,6 +315,12 @@ const PROFILE_URL_VETOED = `(
             mc.evidence @> '[{"kind":"${PROFILE_URL_EVIDENCE.conflict}"}]'::jsonb
             OR mc.evidence @> '[{"kind":"${PROFILE_URL_EVIDENCE.partial}"}]'::jsonb)`;
 
+/** Which switchable tiers are on. Email is always on. */
+interface DeterministicTiers {
+  profileUrl: boolean;
+  phone: boolean;
+}
+
 /**
  * These two people are the same person on deterministic evidence. That is
  * not a review question; it is a fold. Used both to select auto-merge work
@@ -299,27 +329,74 @@ const PROFILE_URL_VETOED = `(
  * Fully parenthesised on purpose: it is interpolated after `AND NOT`, and
  * `NOT a AND NOT b` is not `NOT (a AND NOT b)`.
  */
-function sharesDeterministicIdentity(includeProfileUrl: boolean): string {
-  const tiers = includeProfileUrl
-    ? `(${SHARES_EXACT_IDENTIFIER}) OR (${SHARES_EXACT_PROFILE_URL})`
-    : `(${SHARES_EXACT_IDENTIFIER})`;
+function sharesDeterministicIdentity(tiers: DeterministicTiers): string {
+  const clauses = [
+    SHARES_EXACT_EMAIL,
+    ...(tiers.phone ? [SHARES_EXACT_PHONE] : []),
+    ...(tiers.profileUrl ? [SHARES_EXACT_PROFILE_URL] : []),
+  ];
 
-  return `((${tiers}) AND NOT ${PROFILE_URL_VETOED})`;
+  return `((${clauses.map((clause) => `(${clause})`).join(' OR ')}) AND NOT ${PROFILE_URL_VETOED})`;
 }
 
-/** Every deterministic tier, the profile URL included. */
-export const SHARES_DETERMINISTIC_IDENTITY = sharesDeterministicIdentity(true);
+/** Every deterministic tier, the phone and the profile URL included. */
+export const SHARES_DETERMINISTIC_IDENTITY = sharesDeterministicIdentity({ profileUrl: true, phone: true });
+
+/** One endpoint as {@link chooseMergeTarget} reads it. */
+export interface MergeTargetEndpoint {
+  id: string;
+  name: string | null;
+  isSelf: boolean;
+}
+
+/**
+ * Which of two people survives an unattended merge.
+ *
+ *  1. The self Person, always (two self endpoints never reach here).
+ *  2. A real name over a placeholder: `PersonMergeService` keeps the
+ *     TARGET's display name, so folding a vCard into its Google Voice stub
+ *     would leave the contact named "+1 (202) 555-0142".
+ *  3. The fuller name (`pickFullerName`: more name tokens, then the longer
+ *     string), for the same reason.
+ *  4. `entity_id_a` — the first argument — on a tie, so the choice is stable.
+ */
+export function chooseMergeTarget(a: MergeTargetEndpoint, b: MergeTargetEndpoint): string {
+  if (a.isSelf) {
+    return a.id;
+  }
+
+  if (b.isSelf) {
+    return b.id;
+  }
+
+  const aPlaceholder = isPlaceholderPersonName(a.name);
+  const bPlaceholder = isPlaceholderPersonName(b.name);
+
+  if (aPlaceholder !== bPlaceholder) {
+    return aPlaceholder ? b.id : a.id;
+  }
+
+  const fuller = pickFullerName([a.name, b.name]);
+
+  return fuller != null && fuller === b.name && fuller !== a.name ? b.id : a.id;
+}
 
 /** One endpoint as the live re-check reads it. */
 interface LiveEndpointRow {
   entity_id: string;
   person_name: string | null;
   profile_props: Record<string, unknown> | null;
+  phone_props: Record<string, unknown> | null;
   is_self: boolean | null;
 }
 
 interface LiveEndpoint {
-  facts: ProfileFacts;
+  id: string;
+  name: string | null;
+  profile: ProfileFacts;
+  /** Raw phone fields. Read into `PhoneFacts` only once the phone corpus (and its region) is loaded. */
+  phoneProps: Record<string, unknown> | null;
+  /** `is_self`, or the row `users.entity_id` points at. */
   isSelf: boolean;
 }
 
@@ -329,7 +406,14 @@ interface DeterministicRow {
   entity_id_b: string;
   score: number | string;
   evidence: unknown;
-  via_identifier: boolean | null;
+  via_email: boolean | null;
+  via_phone: boolean | null;
+}
+
+/** The phone half of the drain's corpus state: loaded on first need, kept in step after every merge. */
+interface PhoneCorpus {
+  region: PhoneRegion | null;
+  holders: PhoneHolders;
 }
 
 interface CandidateRow {
@@ -375,50 +459,62 @@ export class MergeCandidateService {
    * against the LIVE rows immediately before it is merged.
    *
    * Three deterministic tiers qualify (see {@link SHARES_DETERMINISTIC_IDENTITY}):
-   * a shared mailbox, an E.164-exact phone, and an exact LinkedIn profile URL.
-   * Name overlap and last-ten-only phones stay on the queue for a human, and
-   * no name clause exists in the predicate at all.
+   * a shared mailbox, an adjudicated exact phone, and an exact LinkedIn
+   * profile URL. Name overlap, reviewed phones and last-ten-only phones stay
+   * on the queue for a human, and no name clause exists in the predicate at
+   * all.
    *
    * ── The live re-check ──────────────────────────────────────────────────────
    *
    * The stored evidence is as old as the detector's last sweep. Between that
    * sweep and this merge, earlier merges fold properties together and
    * re-imports rewrite them, so every pair is re-adjudicated with the same
-   * `ProfileUrlHolders.adjudicate` the detector used, on the endpoints as they
-   * are NOW. A pair that no longer qualifies is DEMOTED — its row rewritten
-   * with the live verdict's evidence — so it becomes visible for review
-   * rather than hidden forever as "deterministic" and never merged:
+   * `ProfileUrlHolders.adjudicate` and `PhoneHolders.adjudicate` the detector
+   * used, on the endpoints as they are NOW. A pair that no longer qualifies
+   * is DEMOTED — its row rewritten with the live verdicts' evidence — so it
+   * becomes visible for review rather than hidden forever as "deterministic"
+   * and never merged:
    *
    *  - disjoint or partial URL sets demote any pair, email pairs included;
-   *  - a pair that qualified ONLY through its profile URL demotes unless the
-   *    live verdict is still `exact`;
-   *  - with `includeProfileUrl: false` (the kill switch), a profile-only pair
-   *    is left exactly as it is.
+   *  - a pair that is not an email pair merges only when a tier that is ON
+   *    still says `exact` live: the profile URL, or the phone. Otherwise it
+   *    demotes — a rename to another given name, a number that became
+   *    over-common or gained a second real identity, a self endpoint;
+   *  - a pair whose only tier is switched off (`includeProfileUrl` /
+   *    `includePhone` false, the kill switch) is left exactly as it is.
    *
-   * ── The holder cap, on the live corpus ─────────────────────────────────────
+   * ── Corpus-wide counts, on the live corpus ─────────────────────────────────
    *
-   * A URL stated by more than `PROFILE_URL_MAX_HOLDERS` people is removed
-   * from both endpoints' facts before the verdict, exactly as the detector
-   * removes it. The detector will not have written `exact` on such a URL, but
-   * a URL can become over-common AFTER detection — a later import pastes it
-   * into more cards — and the stored 0.95 would then carry a merge on a URL
-   * that no longer identifies anyone. So the counts are read here, from the
-   * corpus as it is now (`PROFILE_FACTS_CORPUS_SQL`, the detector's own
-   * population), and such a pair's live verdict is `absent`: it demotes.
+   * Both adjudicators read corpus counts — the profile-URL and phone holder
+   * caps, the owner's own numbers, the phone line census, the foreign-stated
+   * guard — so each keeps one holder index per call, read from the same
+   * population the detector counts over (`PROFILE_FACTS_CORPUS_SQL`,
+   * `PHONE_FACTS_CORPUS_SQL`). A number or URL can become over-common, or a
+   * line gain a second identity, AFTER detection, and the stored 0.95 must not
+   * carry a merge the detector would no longer grade `exact`.
    *
-   * The corpus is read at most once per call, and only when a pair's two
-   * endpoints both state a URL (otherwise the verdict is `absent` whatever the
-   * counts are), so draining email pairs between people with no profile costs
-   * nothing extra. After each merge attempt both endpoints are re-read into
-   * it, so a merged-away source stops counting and the target counts what the
-   * merge folded into it.
+   * Each index is read at most once per call, and only when a row needs it:
+   * the URL index when both endpoints state a URL, the phone index (and the
+   * owner's region, derived from it) when a non-email row may merge on its
+   * phone. Draining email pairs costs nothing extra. After each merge attempt
+   * both endpoints are re-read into every loaded index, so a merged-away
+   * source stops counting and the target counts what the merge folded into it.
    *
    * ── The self person ────────────────────────────────────────────────────────
    *
    * `users.entity_id` and any `is_self` row are always the merge TARGET, never
    * the source. A pair with two self endpoints is skipped and logged: folding
-   * one "you" into another is a decision for the user, not a timer.
-   * `PersonMergeService` independently refuses `users.entity_id` as a source.
+   * one "you" into another is a decision for the user, not a timer. A pair
+   * whose only deterministic evidence is a phone is never folded into the
+   * self Person at all — the phone adjudicator grades a self endpoint
+   * `review` — so it demotes, labelled. `PersonMergeService` independently
+   * refuses `users.entity_id` as a source.
+   *
+   * ── The survivor ───────────────────────────────────────────────────────────
+   *
+   * {@link chooseMergeTarget}: self, then a real name over a placeholder,
+   * then the fuller name, then `entity_id_a`. The target keeps its display
+   * name, and a Google Voice stub is usually the smaller uuid.
    *
    * ── Paging and budget ──────────────────────────────────────────────────────
    *
@@ -433,34 +529,42 @@ export class MergeCandidateService {
     options: AutoMergeOptions,
   ): Promise<AutoMergeResult> {
     const includeProfileUrl = options.includeProfileUrl ?? true;
+    const includePhone = options.includePhone ?? true;
     const pageSize = Math.max(1, options.pageSize ?? AUTO_MERGE_PAGE_SIZE);
     const deadline = Date.now() + Math.max(0, options.budgetMs);
     const manager = this.personRepository.manager;
     const result: AutoMergeResult = { merged: 0, skipped: 0, demoted: 0, considered: 0 };
 
-    const [userRow]: Array<{ entity_id: string | null }> = await manager.query(
-      `SELECT entity_id FROM ci.users WHERE id = $1`,
+    const [userRow]: Array<{ entity_id: string | null; timezone: string | null }> = await manager.query(
+      `SELECT entity_id, timezone FROM ci.users WHERE id = $1`,
       [context.userId],
     );
-    const userSelfId = userRow?.entity_id ?? null;
+    const owner = { selfEntityId: userRow?.entity_id ?? null, timezone: userRow?.timezone ?? null };
 
     let cursor: { score: number; id: string } | null = null;
-    /** Corpus-wide profile-URL holder counts. Loaded on first need; see "The holder cap". */
-    let holders: ProfileUrlHolders | null = null;
+    /** Corpus-wide profile-URL holder counts. Loaded on first need; see "Corpus-wide counts". */
+    let urlHolders: ProfileUrlHolders | null = null;
+    /** Corpus-wide phone holders and the owner's region. Loaded on first need, likewise. */
+    let phone: PhoneCorpus | null = null;
 
-    /** Read `ids` live into `endpoints`, keeping `holders` (once loaded) in step. */
+    const phoneFactsOf = (endpoint: LiveEndpoint, region: PhoneRegion | null): PhoneFacts =>
+      extractPhoneFacts(endpoint.phoneProps, endpoint.name, endpoint.isSelf, region);
+
+    /** Read `ids` live into `endpoints`, keeping every loaded index in step. */
     const refresh = async (endpoints: Map<string, LiveEndpoint>, ids: string[]): Promise<void> => {
-      const fresh = await this.loadLiveEndpoints(context, ids);
+      const fresh = await this.loadLiveEndpoints(context, ids, owner.selfEntityId);
 
       for (const id of ids) {
         const endpoint = fresh.get(id);
 
         if (endpoint == null) {
           endpoints.delete(id);
-          holders?.delete(id);
+          urlHolders?.delete(id);
+          phone?.holders.delete(id);
         } else {
           endpoints.set(id, endpoint);
-          holders?.set(id, endpoint.facts.urls);
+          urlHolders?.set(id, endpoint.profile.urls);
+          phone?.holders.set(id, phoneFactsOf(endpoint, phone.region));
         }
       }
     };
@@ -468,12 +572,13 @@ export class MergeCandidateService {
     drain: while (Date.now() < deadline) {
       const rows: DeterministicRow[] = await manager.query(
         `SELECT mc.merge_candidate_id, mc.entity_id_a, mc.entity_id_b, mc.score, mc.evidence,
-                (${SHARES_EXACT_IDENTIFIER}) AS via_identifier
+                (${SHARES_EXACT_EMAIL}) AS via_email,
+                (${SHARES_EXACT_PHONE}) AS via_phone
            FROM ci.merge_candidates mc
           WHERE mc.owner_user_id = $1
             AND mc.entity_type = 'Person'
             AND mc.status = 'pending'
-            AND ${sharesDeterministicIdentity(includeProfileUrl)}
+            AND ${sharesDeterministicIdentity({ profileUrl: includeProfileUrl, phone: includePhone })}
             AND ${LIVE_PAIR_PREDICATE}
             AND ($2::float8 IS NULL
                  OR mc.score < $2::float8
@@ -519,35 +624,48 @@ export class MergeCandidateService {
           continue;
         }
 
-        let verdict = ABSENT;
+        let urlVerdict = ABSENT;
 
-        if (a.facts.urls.size > 0 && b.facts.urls.size > 0) {
-          holders ??= await this.loadProfileUrlHolders(context);
-          verdict = holders.adjudicate(a.facts, b.facts);
+        if (a.profile.urls.size > 0 && b.profile.urls.size > 0) {
+          urlHolders ??= await this.loadProfileUrlHolders(context);
+          urlVerdict = urlHolders.adjudicate(a.profile, b.profile);
         }
 
-        const viaIdentifier = row.via_identifier === true;
-
-        const demote =
-          verdict.kind === 'conflict' ||
-          verdict.kind === 'partial' ||
-          (!viaIdentifier && includeProfileUrl && verdict.kind !== 'exact');
-
-        if (demote) {
-          result[(await this.demote(context, row, verdict)) ? 'demoted' : 'skipped'] += 1;
+        if (urlVerdict.kind === 'conflict' || urlVerdict.kind === 'partial') {
+          result[(await this.demote(context, row, null, urlVerdict)) ? 'demoted' : 'skipped'] += 1;
           continue;
         }
 
-        if (!viaIdentifier && !includeProfileUrl) {
-          // The profile tier is switched off: leave the row exactly as it is.
-          result.skipped += 1;
-          continue;
+        if (row.via_email !== true) {
+          const phoneTier = includePhone && row.via_phone === true;
+
+          if (!phoneTier && !includeProfileUrl) {
+            // Its only tier is switched off: leave the row exactly as it is.
+            result.skipped += 1;
+            continue;
+          }
+
+          const viaUrl = includeProfileUrl && urlVerdict.kind === 'exact';
+          let phoneVerdict: PhoneVerdict | null = null;
+
+          if (!viaUrl && phoneTier) {
+            if (phone == null) {
+              phone = await this.loadPhoneCorpus(context, owner);
+            }
+
+            phoneVerdict = phone.holders.adjudicate(
+              phoneFactsOf(a, phone.region),
+              phoneFactsOf(b, phone.region),
+            );
+          }
+
+          if (!viaUrl && phoneVerdict?.kind !== 'exact') {
+            result[(await this.demote(context, row, phoneVerdict, urlVerdict)) ? 'demoted' : 'skipped'] += 1;
+            continue;
+          }
         }
 
-        const aSelf = a.isSelf || row.entity_id_a === userSelfId;
-        const bSelf = b.isSelf || row.entity_id_b === userSelfId;
-
-        if (aSelf && bSelf) {
+        if (a.isSelf && b.isSelf) {
           this.logger.warn('Deterministic auto-merge skipped a pair with two self endpoints', {
             entityIdA: row.entity_id_a,
             entityIdB: row.entity_id_b,
@@ -556,7 +674,7 @@ export class MergeCandidateService {
           continue;
         }
 
-        const targetId = bSelf ? row.entity_id_b : row.entity_id_a;
+        const targetId = chooseMergeTarget(a, b);
         const sourceId = targetId === row.entity_id_a ? row.entity_id_b : row.entity_id_a;
 
         try {
@@ -577,11 +695,11 @@ export class MergeCandidateService {
 
         // Both endpoints changed: the target's properties now hold the
         // source's, and the source is a tombstone. Force a re-read — now,
-        // when the holder counts are in use, so the cap sees the merge.
+        // when an index is in use, so its counts see the merge.
         endpoints.delete(sourceId);
         endpoints.delete(targetId);
 
-        if (holders != null) {
+        if (urlHolders != null || phone != null) {
           await refresh(endpoints, [sourceId, targetId]);
         }
       }
@@ -611,12 +729,41 @@ export class MergeCandidateService {
   }
 
   /**
-   * Live profile facts and self flags for `ids`, one query. Only live Persons
-   * are returned, so an id missing from the map is a pair that is moot.
+   * Who holds each phone number across the owner's corpus, and the owner's
+   * region derived from it — the same statements, in the same order, as
+   * `DuplicateDetectStage.loadPhoneCorpus`, so the holder cap, the owner's
+   * lines, the line census and the foreign-stated guard mean the same thing
+   * here as they did when the evidence was written.
+   */
+  private async loadPhoneCorpus(
+    context: UserServiceContext,
+    owner: { selfEntityId: string | null; timezone: string | null },
+  ): Promise<PhoneCorpus> {
+    const manager = this.personRepository.manager;
+    const rows: PhoneFactsCorpusRow[] = await manager.query(PHONE_FACTS_CORPUS_SQL, [context.userId]);
+    const { region, facts } = phoneCorpusFacts(rows, owner);
+    const shared = sharedPhoneLines(facts);
+    const claims: PhoneClaimE164Row[] =
+      shared.length === 0 ? [] : await manager.query(PHONE_CLAIM_E164_SQL, [context.userId, shared]);
+
+    return {
+      region,
+      holders: new PhoneHolders(
+        facts,
+        claims.map((row) => [row.l10, row.e164] as const),
+      ),
+    };
+  }
+
+  /**
+   * Live profile facts, raw phone fields, names and self flags for `ids`, one
+   * query. Only live Persons are returned, so an id missing from the map is a
+   * pair that is moot.
    */
   private async loadLiveEndpoints(
     context: UserServiceContext,
     ids: string[],
+    selfEntityId: string | null,
   ): Promise<Map<string, LiveEndpoint>> {
     const unique = [...new Set(ids)];
 
@@ -628,6 +775,7 @@ export class MergeCandidateService {
       `SELECT e.entity_id,
               e.name AS person_name,
               ${profileFactsSqlObject('e')} AS profile_props,
+              ${phoneFactsSqlObject('e')} AS phone_props,
               (e.is_self IS TRUE OR e.properties->>'is_self' = 'true') AS is_self
          FROM ci.entities e
         WHERE e.owner_user_id = $1
@@ -641,16 +789,25 @@ export class MergeCandidateService {
     return new Map(
       rows.map((row) => [
         row.entity_id,
-        { facts: extractProfileFacts(row.profile_props, row.person_name), isSelf: row.is_self === true },
+        {
+          id: row.entity_id,
+          name: row.person_name,
+          profile: extractProfileFacts(row.profile_props, row.person_name),
+          phoneProps: row.phone_props,
+          isSelf: row.is_self === true || row.entity_id === selfEntityId,
+        },
       ]),
     );
   }
 
   /**
-   * Rewrite a pending row's evidence under the LIVE verdict, so a pair that
+   * Rewrite a pending row's evidence under the LIVE verdicts, so a pair that
    * no longer qualifies becomes a visible review question instead of a
-   * "deterministic" row that is hidden and never merged. `status = 'pending'`
-   * guards a concurrent human decision.
+   * "deterministic" row that is hidden and never merged. The phone verdict,
+   * when one was taken, is applied first and the profile verdict last, as the
+   * detector applies them, so a profile veto's cap is the last word. A null
+   * phone verdict leaves the stored phone items as they were. `status =
+   * 'pending'` guards a concurrent human decision.
    *
    * Never throws: a failed rewrite leaves the row as it was, to be re-checked
    * on the next run, and must not fail the People page that triggered the
@@ -659,11 +816,13 @@ export class MergeCandidateService {
   private async demote(
     context: UserServiceContext,
     row: DeterministicRow,
-    verdict: ProfileVerdict,
+    phoneVerdict: PhoneVerdict | null,
+    urlVerdict: ProfileVerdict,
   ): Promise<boolean> {
+    const stored = { score: Number(row.score), evidence: parseEvidence(row.evidence) };
     const rewritten = applyProfileVerdict(
-      { score: Number(row.score), evidence: parseEvidence(row.evidence) },
-      verdict,
+      phoneVerdict == null ? stored : applyPhoneVerdict(stored, phoneVerdict),
+      urlVerdict,
     );
     const score = rewritten.score > 0 ? rewritten.score : DEMOTED_FLOOR_SCORE;
 
@@ -687,7 +846,8 @@ export class MergeCandidateService {
 
     this.logger.log('Demoted a deterministic merge candidate after a live re-check', {
       mergeCandidateId: row.merge_candidate_id,
-      verdict: verdict.kind,
+      verdict:
+        urlVerdict.kind === 'absent' && phoneVerdict != null ? `phone:${phoneVerdict.kind}` : urlVerdict.kind,
     });
 
     return true;
@@ -715,6 +875,8 @@ export class MergeCandidateService {
        * review instead of hidden. Default true.
        */
       includeProfileUrl?: boolean;
+      /** The same, for the adjudicated exact phone tier. Default true. */
+      includePhone?: boolean;
     } = {},
   ): Promise<MergeCandidatePage> {
     const status = options.status ?? 'pending';
@@ -725,7 +887,12 @@ export class MergeCandidateService {
     // not yet folded must not appear as "are these the same person?" on the
     // review queue. A VETOED pair is not deterministic, so it stays visible.
     const hideDeterministic =
-      status === 'pending' ? `AND NOT ${sharesDeterministicIdentity(options.includeProfileUrl ?? true)}` : '';
+      status === 'pending'
+        ? `AND NOT ${sharesDeterministicIdentity({
+            profileUrl: options.includeProfileUrl ?? true,
+            phone: options.includePhone ?? true,
+          })}`
+        : '';
 
     // One extra row answers hasNextPage without a second round-trip.
     const rows: CandidateRow[] = await this.personRepository.manager.query(

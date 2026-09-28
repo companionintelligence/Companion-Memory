@@ -66,12 +66,13 @@ export function groupMergeCandidates(candidates: readonly MergeCandidate[]): Mer
       continue;
     }
 
-    // A pair whose people state different LinkedIn profiles never joins a
-    // "which one is them?" picker: the picker shows no reason line, so the
-    // conflict would be invisible exactly where one click merges the pair.
+    // A pair whose people state different LinkedIn profiles, or the same
+    // phone digits in different countries, never joins a "which one is
+    // them?" picker: the picker shows no reason line, so the conflict would be
+    // invisible exactly where one click merges the pair.
     const clusterable = list.filter(
       (candidate) =>
-        !isProfileVetoed(candidate.evidence) &&
+        !isIdentityVetoed(candidate.evidence) &&
         candidate.evidence.some((item) => item.kind === 'name_cluster' || item.kind === 'name_overlap'),
     );
 
@@ -481,11 +482,54 @@ function HighlightedName({ name, shared }: { name: string | null | undefined; sh
 
 /**
  * The two people state different LinkedIn profiles (`profile_url_conflict`),
- * or one card lists a profile the other does not (`profile_url_partial`). The
- * server never auto-merges such a pair, whatever else it shares.
+ * one card lists a profile the other does not (`profile_url_partial`), or the
+ * same phone digits are two numbers in two countries
+ * (`phone_country_conflict`). Evidence that they are two people, which the
+ * reviewer must see before merging.
  */
-function isProfileVetoed(evidence: MergeCandidate['evidence']): boolean {
-  return evidence.some((item) => item.kind === 'profile_url_conflict' || item.kind === 'profile_url_partial');
+function isIdentityVetoed(evidence: MergeCandidate['evidence']): boolean {
+  return evidence.some(
+    (item) =>
+      item.kind === 'profile_url_conflict' ||
+      item.kind === 'profile_url_partial' ||
+      item.kind === 'phone_country_conflict',
+  );
+}
+
+/**
+ * Why a same-number pair was held for review, in words, most specific first.
+ * The reasons are `phone_check` values written by the server's phone
+ * adjudicator (`memory/utils/phoneIdentity.ts`).
+ */
+function phoneCheckReason(value: string): string {
+  const reasons = new Set(value.split(',').map((reason) => reason.trim()));
+
+  if (reasons.has('self_endpoint')) {
+    return 'one side is you';
+  }
+
+  if (reasons.has('suffix_conflict')) {
+    return 'names are a Jr/Sr pair';
+  }
+
+  if (
+    [
+      'given_name_conflict',
+      'given_name_prefix',
+      'family_name_conflict',
+      'relational_name',
+      'unknown_name',
+      'numeric_name_mismatch',
+    ].some((reason) => reasons.has(reason))
+  ) {
+    return 'names differ';
+  }
+
+  if (reasons.has('shared_line')) {
+    return 'shared household line';
+  }
+
+  return 'not yet checked against both records';
 }
 
 /**
@@ -494,7 +538,10 @@ function isProfileVetoed(evidence: MergeCandidate['evidence']): boolean {
  * Profile-URL verdicts are checked FIRST: a LinkedIn conflict outranks a
  * shared email (it is why an email pair is on the queue at all instead of
  * having been merged), and a contested profile match is the most specific
- * thing that can be said about a pair.
+ * thing that can be said about a pair. A phone country conflict comes next,
+ * for the same reason. A shared phone that the server held back
+ * (`phone_check`) says why; "country not confirmed" is only for a phone
+ * match below the exact tier with no such reason.
  */
 export function humanReason(evidence: MergeCandidate['evidence']): string {
   if (evidence.some((item) => item.kind === 'profile_url_conflict')) {
@@ -514,6 +561,10 @@ export function humanReason(evidence: MergeCandidate['evidence']): string {
     return `Same LinkedIn profile: ${profile.value}`;
   }
 
+  if (evidence.some((item) => item.kind === 'phone_country_conflict')) {
+    return 'Same digits, different countries — likely two people';
+  }
+
   const email = evidence.find((item) => item.kind === 'email');
   if (email != null) {
     return `Same email: ${email.value}`;
@@ -521,6 +572,11 @@ export function humanReason(evidence: MergeCandidate['evidence']): string {
 
   const phone = evidence.find((item) => item.kind === 'phone');
   if (phone != null) {
+    const check = evidence.find((item) => item.kind === 'phone_check');
+    if (check != null) {
+      return `Same phone number, but ${phoneCheckReason(check.value)}`;
+    }
+
     if ((phone.score ?? 0) >= 0.95) {
       return `Same phone: ${phone.value}`;
     }

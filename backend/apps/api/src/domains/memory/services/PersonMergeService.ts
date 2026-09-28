@@ -487,6 +487,37 @@ function foldProperties(
     }
   }
 
+  // The raw `Phones` a contact import kept as typed ("+44 20 7946 0958") are
+  // the only place a number's COUNTRY survives; `phones` holds ten-digit keys.
+  // Target-wins on this key would drop the source's stated forms while its
+  // keys were unioned above, and the phone adjudicator (utils/phoneIdentity.ts)
+  // would then read a UK key as an inferred +1. So union it too, de-duplicated
+  // on the digit string with the first-seen formatting kept.
+  const typedPhones: string[] = [];
+  const seenDigits = new Set<string>();
+
+  for (const props of [target, ...sources]) {
+    const raw = props.Phones;
+    const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
+
+    for (const item of list) {
+      if (typeof item !== 'string' || item.trim() === '') {
+        continue;
+      }
+
+      const key = item.replace(/\D/g, '') || item.trim();
+
+      if (!seenDigits.has(key)) {
+        seenDigits.add(key);
+        typedPhones.push(item);
+      }
+    }
+  }
+
+  if (typedPhones.length > 0) {
+    out.Phones = typedPhones;
+  }
+
   // A tombstone's self flag must never leak onto the target: gate on the
   // TARGET's original value, not the folded output (the scalar fold above may
   // have already copied a source's is_self into `out`).
