@@ -391,6 +391,99 @@ describe('PhoneHolders.adjudicate — shared lines and names', () => {
     ).toMatchObject({ kind: 'review', reasons: ['shared_line'] });
   });
 
+  describe('an office line: one given name, two surnames', () => {
+    // Two coworkers named Ada on one main number. The adjudicator says they
+    // are two people (family_name_conflict), so the census must count two.
+    const quill = vcard('Ada Quill', '(202) 555-0142');
+    const brightwater = vcard('Ada Brightwater', '(202) 555-0142');
+
+    it('counts two identities, and nothing ambiguous', () => {
+      const holders = holdersOf(['quill', quill], ['brightwater', brightwater], ['stub', stub()]);
+
+      expect(holders.adjudicate(quill, brightwater)).toMatchObject({
+        kind: 'review',
+        reasons: ['family_name_conflict'],
+      });
+      expect(holders.lineCensus(ADA_DIGITS, ADA_E164)).toEqual({ identities: 2, ambiguous: false });
+    });
+
+    it('holds a stub for review against both Adas', () => {
+      const line = stub();
+
+      for (const [one, other] of [
+        [quill, brightwater],
+        [brightwater, quill],
+      ]) {
+        expect(adjudicate(line, one, other)).toEqual({
+          kind: 'review',
+          numbers: [ADA_E164],
+          reasons: ['shared_line'],
+        });
+      }
+    });
+
+    it('holds a bare given name for review against both Adas: it could be either', () => {
+      const ada = vcard('Ada', '(202) 555-0142');
+
+      expect(adjudicate(ada, quill, brightwater)).toEqual({
+        kind: 'review',
+        numbers: [ADA_E164],
+        reasons: ['shared_line'],
+      });
+      expect(adjudicate(ada, brightwater, quill)).toMatchObject({ kind: 'review', reasons: ['shared_line'] });
+      expect(
+        holdersOf(['ada', ada], ['quill', quill], ['brightwater', brightwater]).lineCensus(
+          ADA_DIGITS,
+          ADA_E164,
+        ),
+      ).toEqual({ identities: 2, ambiguous: true });
+      // A surname initial is not read against the surnames: held, not guessed.
+      expect(adjudicate(vcard('Ada Q.', '(202) 555-0142'), quill, brightwater)).toMatchObject({
+        kind: 'review',
+        reasons: ['shared_line'],
+      });
+    });
+
+    it('still folds two copies of one of them', () => {
+      expect(adjudicate(quill, vcard('Ada Quill', '+1 202 555 0142'), brightwater)).toEqual({
+        kind: 'exact',
+        numbers: [ADA_E164],
+        basis: 'stated_one',
+      });
+    });
+
+    it('splits initials with conflicting surnames the same way', () => {
+      const aQuill = vcard('A. Quill', '(202) 555-0142');
+      const aBrightwater = vcard('A. Brightwater', '(202) 555-0142');
+
+      expect(adjudicate(stub(), aQuill, aBrightwater)).toMatchObject({
+        kind: 'review',
+        reasons: ['shared_line'],
+      });
+      expect(adjudicate(vcard('A.', '(202) 555-0142'), aQuill, aBrightwater)).toMatchObject({
+        kind: 'review',
+        reasons: ['shared_line'],
+      });
+    });
+
+    it('splits a Jr/Sr pair on a family landline', () => {
+      expect(
+        adjudicate(
+          stub(),
+          vcard('Ada Quill Jr.', '(202) 555-0142'),
+          vcard('Ada Quill Sr.', '(202) 555-0142'),
+        ),
+      ).toMatchObject({ kind: 'review', reasons: ['shared_line'] });
+    });
+
+    it('counts the pair being judged even when the caller never recorded it', () => {
+      const ada = vcard('Ada', '(202) 555-0142');
+      const holders = holdersOf(['quill', quill], ['brightwater', brightwater]);
+
+      expect(holders.adjudicate(ada, quill)).toMatchObject({ kind: 'review', reasons: ['shared_line'] });
+    });
+  });
+
   it('holds a stub named by SOMEONE ELSE’S number for review', () => {
     const odd = facts('+1 (212) 555-0199', { Phones: ['+1 (202) 555-0142'] });
 

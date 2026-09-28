@@ -43,8 +43,12 @@
  *    household has in common. The exact tier needs the same first given name
  *    (or an unambiguous initial), or one side that is only a placeholder — an
  *    empty name, an email, an @handle, or its own number — AND a line census
- *    that finds no second real identity on the number. Anything else is a
- *    review item labelled with the reason ({@link PHONE_EVIDENCE.check}).
+ *    that finds no second real identity on the number. The census counts
+ *    people by the same name rule, so two holders it would not fold ("Ada
+ *    Quill" and "Ada Brightwater" on one office line) are two identities, and
+ *    a name that fits both is ambiguous ({@link PhoneHolders.lineCensus}).
+ *    Anything else is a review item labelled with the reason
+ *    ({@link PHONE_EVIDENCE.check}).
  *  - A number held by more than {@link PHONE_MAX_HOLDERS} people, and any
  *    number the owner holds, is not evidence about anyone. A pair with a self
  *    endpoint is never graded exact: folding a contact into "you" on a phone
@@ -123,10 +127,13 @@ export const PHONE_MAX_HOLDERS = 6;
 /**
  * The lower cap: how many distinct real identities one number may carry
  * before a same-given-name pair on it stops being exact. Two, so a household
- * line with "Ada Quill" and "Bo Quill" still folds the two copies of Ada; a
- * third identity makes the line a switchboard. A placeholder or initial pair
- * gets no such slack — its only corroboration IS the line, so the line must
- * carry at most one real identity. See {@link PhoneHolders.lineCensus}.
+ * line with "Ada Quill" and "Bo Quill" still folds the two copies of Ada, and
+ * an office line with "Ada Quill" and "Ada Brightwater" the two copies of
+ * either; a third identity makes the line a switchboard. A placeholder or
+ * initial pair gets no such slack — its only corroboration IS the line, so
+ * the line must carry at most one real identity. Any line with a holder who
+ * could be either of two people is held for review whatever the count. See
+ * {@link PhoneHolders.lineCensus}.
  */
 export const PHONE_LINE_MAX_IDENTITIES = 2;
 
@@ -840,9 +847,20 @@ export function givenNameRelation(
   left: string | null | undefined,
   right: string | null | undefined,
 ): GivenNameRelation {
-  const a = tokenizePersonName(left);
-  const b = tokenizePersonName(right);
+  return relateNames(tokenizePersonName(left), tokenizePersonName(right), left, right);
+}
 
+/**
+ * {@link givenNameRelation} on names already tokenized. The raw names are still
+ * needed: the generational suffix is read from them, because the tokenizer
+ * drops it.
+ */
+function relateNames(
+  a: TokenizedPersonName | null,
+  b: TokenizedPersonName | null,
+  left: string | null | undefined,
+  right: string | null | undefined,
+): GivenNameRelation {
   if (a == null || b == null) {
     return 'unknown';
   }
@@ -883,6 +901,19 @@ export function givenNameRelation(
   }
 
   return hasFamilyConflict(a, b) ? 'family_conflict' : relation;
+}
+
+/** The relations under which two names may belong to one person — the only ones a pair folds on. */
+const ONE_PERSON_RELATIONS: ReadonlySet<GivenNameRelation> = new Set(['same', 'initial']);
+
+/**
+ * True when a record's name can be told apart from other holders' names: a
+ * real, non-relational name that starts with a given name or an initial (a
+ * placeholder has no name at all). Every other non-placeholder record is an
+ * identity of its own in the line census.
+ */
+function hasCensusName(facts: PhoneFacts): boolean {
+  return facts.name != null && !facts.name.isRelational && firstGiven(facts.name) != null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1163,15 +1194,37 @@ export class PhoneHolders {
   }
 
   /**
-   * How many distinct real identities carry `e164`: holders of its digits who
-   * read them as this number or cannot say, grouped by first given name. A
-   * placeholder is nobody in particular and is not counted; a holder with no
-   * usable given name counts as one identity of its own. An initial joins the
-   * given name it starts, or is ambiguous when it starts two.
+   * How many distinct real identities carry `e164`, and whether any holder of
+   * it could be more than one of them.
+   *
+   * Counted over the holders of its digits who read them as this number or
+   * cannot say, plus `pair` — the people being judged, so a verdict never
+   * depends on whether its caller recorded them. A placeholder is nobody in
+   * particular and is not counted; a holder with no usable given name (a lone
+   * surname, a relational name, a number that is not its own) is an identity
+   * of its own. `pair` adds named people only: a recorded one counted twice
+   * is harmless, because a name may be one person with itself.
+   *
+   * Two named holders MAY BE ONE PERSON exactly when {@link givenNameRelation}
+   * would let a pair of them fold — `same` or `initial`. Whatever it holds
+   * back (a different given name, a prefix, a family-name conflict, a Jr/Sr
+   * mismatch) is two identities here too, so the census never counts as one
+   * person two holders the adjudicator itself says are two: "Ada Quill" and
+   * "Ada Brightwater" on one office line are two Adas, and the same goes for
+   * "A. Quill" and "A. Brightwater".
+   *
+   * A holder that may be one person with each of two holders who may NOT be —
+   * a bare "Ada" or an "Ada Q." beside those two Adas, an "A." beside "Ada"
+   * and "Abe" — could be either of them, and makes the line `ambiguous`. Among
+   * the holders that are not, "may be one person" is transitive (a failure of
+   * transitivity IS such a holder), so the identities are its classes.
    */
-  lineCensus(line: string, e164: string): { identities: number; ambiguousInitial: boolean } {
-    const givens = new Set<string>();
-    const initials: string[] = [];
+  lineCensus(
+    line: string,
+    e164: string,
+    pair: readonly PhoneFacts[] = [],
+  ): { identities: number; ambiguous: boolean } {
+    const named: PhoneFacts[] = pair.filter(hasCensusName);
     let unnamed = 0;
 
     for (const id of this.holdersOf(line)) {
@@ -1187,31 +1240,33 @@ export class PhoneHolders {
         continue;
       }
 
-      const given = facts.name != null && !facts.name.isRelational ? firstGiven(facts.name) : null;
-
-      if (given == null) {
-        unnamed += 1;
-      } else if (given.length === 1) {
-        initials.push(given);
+      if (hasCensusName(facts)) {
+        named.push(facts);
       } else {
-        givens.add(given);
+        unnamed += 1;
       }
     }
 
-    const clusters = [...givens];
-    let ambiguousInitial = false;
+    const fits = named.map((a) =>
+      named.map((b) => ONE_PERSON_RELATIONS.has(relateNames(a.name, b.name, a.rawName, b.rawName))),
+    );
+    const bridging = named.map((_, h) =>
+      named.some(
+        (_a, a) =>
+          a !== h && fits[h][a] && named.some((_b, b) => b !== h && b !== a && fits[h][b] && !fits[a][b]),
+      ),
+    );
+    const ambiguous = bridging.includes(true);
+    const classes: number[] = [];
 
-    for (const initial of initials) {
-      const fits = clusters.filter((given) => given.startsWith(initial)).length;
-
-      if (fits === 0) {
-        clusters.push(initial);
-      } else if (fits > 1) {
-        ambiguousInitial = true;
+    named.forEach((_, index) => {
+      if (!bridging[index] && !classes.some((representative) => fits[index][representative])) {
+        classes.push(index);
       }
-    }
+    });
 
-    return { identities: clusters.length + unnamed, ambiguousInitial };
+    // A bridge stands between two people who cannot be one: at least two identities.
+    return { identities: (ambiguous ? Math.max(classes.length, 2) : classes.length) + unnamed, ambiguous };
   }
 
   /**
@@ -1316,10 +1371,10 @@ export class PhoneHolders {
 
     const passing = compatible
       ? equal.filter(({ line, e164 }) => {
-          const census = this.lineCensus(line, e164);
+          const census = this.lineCensus(line, e164, [left, right]);
           const limit = relation === 'same' ? PHONE_LINE_MAX_IDENTITIES : 1;
 
-          return !census.ambiguousInitial && census.identities <= limit;
+          return !census.ambiguous && census.identities <= limit;
         })
       : [];
 
