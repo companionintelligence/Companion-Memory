@@ -15,14 +15,17 @@ run() { SECRETS_FILE="$master" SECRETS_PROJECTION_ROOT="$root" sh "$here/entrypo
 fail() { echo "FAIL: $*" >&2; exit 1; }
 value() { grep -m1 "^$2=" "$1" | cut -d= -f2-; }
 has() { grep -q "^$2=" "$1"; }
+# Octal permission bits. GNU and busybox stat take -c %a; BSD/macOS stat
+# rejects -c and spells it -f %Lp, and `make test` runs this on both.
+mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 
 # ── first boot
 run
 [ -f "$master" ] || fail "master not created"
-[ "$(stat -c %a "$master")" = "600" ] || fail "master is $(stat -c %a "$master"), want 600"
+[ "$(mode "$master")" = "600" ] || fail "master is $(mode "$master"), want 600"
 for svc in api database setup-database object-store hbpe summary powersync tooling; do
   [ -f "$root/$svc/.env.secrets" ] || fail "no projection for $svc"
-  [ "$(stat -c %a "$root/$svc/.env.secrets")" = "644" ] || fail "$svc projection is not 644"
+  [ "$(mode "$root/$svc/.env.secrets")" = "644" ] || fail "$svc projection is not 644"
 done
 
 # The api holds the signing secrets; nothing else does.
@@ -56,7 +59,7 @@ rm -rf "$root"
 run
 [ "$(value "$master" AUTH_TOKEN_SECRET)" = "$before" ] || fail "upgrade rewrote AUTH_TOKEN_SECRET"
 has "$master" SIDECAR_AUTH_SECRET || fail "upgrade did not add SIDECAR_AUTH_SECRET"
-[ "$(stat -c %a "$master")" = "600" ] || fail "upgrade left the master at $(stat -c %a "$master")"
+[ "$(mode "$master")" = "600" ] || fail "upgrade left the master at $(mode "$master")"
 [ "$(value "$root/hbpe/.env.secrets" SIDECAR_AUTH_SECRET)" = "$(value "$master" SIDECAR_AUTH_SECRET)" ] || fail "hbpe projection missed the added key"
 
 # ── an operator-added key reaches exactly the services mapped to it.
