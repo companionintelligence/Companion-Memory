@@ -74,6 +74,10 @@ dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     implementation project(':capacitor-android')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    // Chrome Auth Tab (androidx.browser 1.9+). 1.10.0 is the current stable.
+    // Sign-in must not run in the app WebView; Auth Tab is the in-app sheet
+    // Play and Chrome document as the match for iOS ASWebAuthenticationSession.
+    implementation 'androidx.browser:browser:1.10.0'
 
     // Small, well-understood embedded HTTP server. Bound explicitly to 127.0.0.1 in
     // LocalHubServer -- see that file. Phase 2/3 (outbox, local inference) plug into the

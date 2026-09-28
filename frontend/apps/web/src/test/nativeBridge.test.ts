@@ -192,7 +192,7 @@ describe('nativeBridge — native uses the Capacitor plugins', () => {
     );
   });
 
-  it('openAuthSession on Android still opens the system browser', async () => {
+  it('openAuthSession on Android uses LocalHub.openUrl, where Chrome Auth Tab lives', async () => {
     const startAuthSession = vi.fn(async () => {});
     const hubOpenUrl = vi.fn(async () => {});
     const { win } = fakeNativeWindow();

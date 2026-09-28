@@ -180,22 +180,45 @@ class LocalHubPlugin : Plugin() {
         }
     }
 
-    /** Opens a URL in the system browser (Chrome Custom Tabs / default handler). */
+    /**
+     * Opens a sign-in URL in Chrome Auth Tab (in-app sheet). Falls back to the
+     * system browser when the activity never registered a launcher or nothing
+     * can handle the Auth Tab intent. `companion://` still comes back through
+     * `appUrlOpen` on both paths.
+     */
     @PluginMethod
     fun openUrl(call: PluginCall) {
         val url = call.getString("url")
-        if (url.isNullOrEmpty()) {
-            call.reject("A valid 'url' is required")
+        val uri = if (url.isNullOrEmpty()) null else Uri.parse(url)
+        val scheme = uri?.scheme?.lowercase()
+        if (uri == null || (scheme != "https" && scheme != "http")) {
+            call.reject("A valid http(s) url is required")
             return
         }
-        try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-            call.resolve()
-        } catch (e: Exception) {
-            call.reject(e.message ?: "Could not open URL", e)
+        val host = activity
+        if (host == null) {
+            call.reject("Could not open the sign-in sheet.")
+            return
         }
+        host.runOnUiThread {
+            try {
+                if (!AuthTabSession.launch(uri)) {
+                    openInSystemBrowser(host, uri)
+                }
+                call.resolve()
+            } catch (e: Exception) {
+                try {
+                    openInSystemBrowser(host, uri)
+                    call.resolve()
+                } catch (fallback: Exception) {
+                    call.reject(fallback.message ?: "Could not open URL", fallback)
+                }
+            }
+        }
+    }
+
+    private fun openInSystemBrowser(host: android.app.Activity, uri: Uri) {
+        host.startActivity(Intent(Intent.ACTION_VIEW, uri))
     }
 
     /**

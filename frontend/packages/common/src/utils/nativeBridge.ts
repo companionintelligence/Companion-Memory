@@ -494,12 +494,13 @@ async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): 
 }
 
 /**
- * Open a URL outside the app's webview: the system browser on native (so OAuth/OIDC
- * runs in Safari / Chrome, not the in-app webview), or a normal navigation on web.
+ * Open a sign-in URL outside the app webview, or navigate normally on web.
  *
- * iOS uses LocalHub.openUrl (`UIApplication.shared.open`) — never Capacitor Browser.
- * Browser presents SFSafariViewController, which swallows `companion://` and breaks
- * OIDC token handoff (and never appears under our UIScene SceneDelegate).
+ * Android LocalHub.openUrl presents Chrome Auth Tab (in-app sheet, shared Chrome
+ * cookies, `companion://` returned into `appUrlOpen`). iOS uses
+ * `UIApplication.shared.open` — never Capacitor Browser. Browser presents
+ * SFSafariViewController, which swallows `companion://` and breaks OIDC token
+ * handoff (and never appears under our UIScene SceneDelegate).
  *
  * Desktop (Tauri) is a third, distinct native shell — see isTauriPlatform's doc
  * comment for why it isn't folded into the isNativePlatform() checks above. Same
@@ -547,7 +548,8 @@ function isAuthSessionCancel(err: unknown): boolean {
 /**
  * Sign-in / registration in an in-app sheet on iOS (`ASWebAuthenticationSession`).
  * The sheet returns `companion://` to the app, which the existing deep-link
- * listener finishes. Android, desktop, and web keep opening the system browser.
+ * listener finishes. Android falls through to {@link openExternalUrl}, which
+ * presents Chrome Auth Tab. Desktop and web open the system browser.
  */
 export async function openAuthSession(url: string, callbackScheme = 'companion'): Promise<void> {
   if (!isIosPlatform()) {

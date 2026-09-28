@@ -2,7 +2,9 @@ package com.companionintelligence.app;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 
+import com.companionintelligence.localhub.AuthTabSession;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 import java.lang.reflect.Field;
@@ -15,8 +17,8 @@ import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 
 /**
- * MainActivity has exactly one line of logic, and it is an ordering constraint that
- * the language cannot express:
+ * MainActivity's plugin registration is an ordering constraint that the language
+ * cannot express:
  *
  * <pre>
  *     registerPlugin(FcmStatusPlugin.class);
@@ -84,6 +86,11 @@ public class MainActivityPluginRegistrationTest {
                 + "builder and later additions are silently ignored. Registered order was: " + registered,
             FcmStatusPlugin.class,
             registered.get(0)
+        );
+        assertTrue(
+            "Auth Tab must be registered in onCreate before the activity starts, or sign-in falls "
+                + "out to the system browser and never gets the in-app companion:// callback.",
+            AuthTabSession.isRegistered()
         );
     }
 

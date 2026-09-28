@@ -85,9 +85,10 @@ export interface LocalHubPlugin {
   secureRemove(options: { key: string }): Promise<void>;
 
   /**
-   * Opens `url` in the system browser (Safari / Chrome), not an in-app webview.
-   * Sign-in uses {@link LocalHubPlugin.startAuthSession} instead, so the Portal
-   * page stays inside the app.
+   * Opens `url` outside the app WebView.
+   * Android presents Chrome Auth Tab and replays `companion://` into `appUrlOpen`.
+   * Portal sign-in on Android lands here. iOS opens Safari; Portal sign-in there
+   * uses {@link startAuthSession} instead.
    */
   openUrl(options: { url: string }): Promise<void>;
 
@@ -95,7 +96,7 @@ export interface LocalHubPlugin {
    * iOS only. Presents an in-app Safari authentication sheet and resolves when it
    * finishes. The `companion://` callback is forwarded into the app; it does not
    * open Safari. Rejects with code `CANCELLED` when the user dismisses the sheet.
-   * Android and web reject as unavailable — callers there use `openUrl`.
+   * Android rejects as unavailable. Android sign-in goes through `openUrl`.
    */
   startAuthSession(options: { url: string; callbackScheme?: string }): Promise<void>;
 

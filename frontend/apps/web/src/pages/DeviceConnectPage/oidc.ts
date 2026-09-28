@@ -450,8 +450,8 @@ async function exchangeCode(portal: string, code: string, codeVerifier: string):
 
 /**
  * Run the full OIDC PKCE login against the Portal. On iOS the Portal page is an
- * in-app authentication sheet; elsewhere it is the system browser. Resolves once
- * the user finishes and the `companion://auth/callback` deep link is captured and
+ * in-app Safari sheet. On Android it is a Chrome Auth Tab. Resolves once the
+ * user finishes and the `companion://auth/callback` deep link is captured and
  * exchanged for tokens.
  */
 export async function loginWithPortalOidc(
