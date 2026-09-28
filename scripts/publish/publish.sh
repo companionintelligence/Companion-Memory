@@ -189,6 +189,17 @@ fail() {
 #     STRING, never compose's ["CMD", …] array form, hence the shell-form
 #     command). Getting a key name wrong fails bundle validation for every
 #     installer, so mirror spellings from that schema, not from compose.
+#   * The database healthCheck is production's, minus `init: true`: the
+#     schema has no `init` key, so here the postmaster stays PID 1 and
+#     inherits every orphan in the container. Postgres crash-restarts
+#     every backend when one of those exits above 1 (docker-compose.yml's
+#     database block has the measured case). Shell-form test strings run
+#     under `sh -c`, and dash forks rather than exec'ing the last command,
+#     so a probe that outran its timeout left pg_isready orphaned when Docker
+#     killed the shell. The leading `exec` swaps the shell for pg_isready, so
+#     the process Docker kills is the probe itself. This closes the probe
+#     path only; an orphan from a `docker exec` shell can still reach the
+#     postmaster until the schema grows `init`.
 #
 # Three things about the api/worker pair that are easy to break by halves:
 #
@@ -336,9 +347,9 @@ generate_compose() {
         "setup-secrets": { "condition": "service_completed_successfully" }
       },
       "healthCheck": {
-        "test": "pg_isready",
+        "test": "exec pg_isready -U postgres -d postgres",
         "interval": "5s",
-        "timeout": "5s",
+        "timeout": "10s",
         "retries": 5
       }
     },
