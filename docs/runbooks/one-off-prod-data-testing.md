@@ -142,12 +142,24 @@ unreadable ciphertext, because `setup-secrets` is idempotent and will quietly
 generate a *new* `AUTH_FIELD_ENCRYPTION_KEY` on a rebuilt box rather than fail.
 
 The fast path is [`scripts/backup/appliance-backup.sh`](../../scripts/backup/appliance-backup.sh),
-which dumps Postgres (database plus cluster globals), copies `.env.secrets`,
-verifies the dump is readable, and writes a `COVERAGE.md` next to it:
+which dumps Postgres (database plus cluster globals), copies the **master**
+`.env.secrets`, verifies the dump is readable, and writes a `COVERAGE.md` next
+to it:
 
 ```bash
 ./scripts/backup/appliance-backup.sh --project ci-memory_ci-marketplace ~/ci-backups
 ```
+
+The master is the one file that holds `AUTH_FIELD_ENCRYPTION_KEY`, and only the
+secrets generator mounts it — `setup-secrets` on a Hub install
+(`APP_DATA_DIR/data/secrets/.env.secrets`), `generate-secrets` in production
+compose (the `<project>_secrets` volume). Every other service, the database
+included, mounts a per-service projection under `data/secrets/services/<service>/`
+holding only its own keys, so the script copies the master out of the (exited)
+generator container. It **exits 3** when the snapshot ends up without the key,
+e.g. because that container was pruned — treat that as a failed backup, not a
+warning. On restore, put the file back as the master, never into a
+`services/` directory: setup-secrets rewrites those from the master on every boot.
 
 It deliberately does **not** cover object-store blobs or the HBPE model/corpus
 volumes — it is small and quick so that it actually gets run. When you need

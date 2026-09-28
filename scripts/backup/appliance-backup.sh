@@ -8,8 +8,8 @@
 # painful, and until this script there was nothing in the repo that addressed
 # either one:
 #
-#   - THE SECRETS VOLUME IS THE ENCRYPTION ROOT. `.env.secrets` carries
-#     AUTH_FIELD_ENCRYPTION_KEY and the session pepper (see
+#   - THE SECRETS VOLUME IS THE ENCRYPTION ROOT. Its MASTER `.env.secrets`
+#     carries AUTH_FIELD_ENCRYPTION_KEY and the session pepper (see
 #     infrastructure/setup-secrets/entrypoint.sh, which says so in the file's
 #     own header). Lose the volume and every encrypted column is ciphertext
 #     nobody can read again — restoring a database dump on its own does not
@@ -22,7 +22,20 @@
 #   - Postgres: a custom-format dump of the application database, plus the
 #     cluster's globals (roles and their passwords), which a restore needs
 #     before it can own anything.
-#   - The secrets file from the secrets volume.
+#   - The MASTER secrets file, copied out of the secrets generator container
+#     (`generate-secrets` in production compose, `setup-secrets` in the Hub
+#     manifest), the only one that mounts it. Every other service — the
+#     database included — mounts a per-service projection holding just the
+#     keys it reads; the database's is the three superuser keys and no
+#     AUTH_FIELD_ENCRYPTION_KEY, so it is only a fallback, for a stack that
+#     predates the projections and still mounts the master everywhere.
+#
+# EXIT STATUS
+#   0  complete: dump verified, and the master secrets file carries the key.
+#   1  failed; 2  bad usage.
+#   3  INCOMPLETE: the dump is written and verified, but the snapshot has no
+#      AUTH_FIELD_ENCRYPTION_KEY, so it cannot restore the encrypted columns
+#      on its own. Not a success — see the WARNING it prints.
 #
 # This is a TimescaleDB database (also postgis and pgvector), so a plain
 # `pg_restore` of the dump below is NOT sufficient — it has to be wrapped in
@@ -57,7 +70,9 @@
 #   - A running stack. The `database` container is located by its compose
 #     labels, exactly as the Makefile's db_host_port does, so this always
 #     targets the stack belonging to $COMPOSE_PROJECT_NAME and never a sibling
-#     worktree's.
+#     worktree's. The secrets generator is found by the same labels among ALL
+#     containers: it is a one-shot that has exited by now, and `docker cp`
+#     reads from a stopped container all the same.
 #   - Docker socket access. No Postgres client is needed on the host: pg_dump
 #     runs inside the container over the local socket.
 #
@@ -68,13 +83,16 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DATABASE_SERVICE="${DATABASE_SERVICE:-database}"
 DATABASE_NAME="${DATABASE_NAME:-companion}"
 SECRETS_FILE_IN_CONTAINER="${SECRETS_FILE:-/run/secrets/.env.secrets}"
+# Compose services that mount the master secrets file, tried in order.
+SECRETS_SERVICES="${SECRETS_SERVICES:-generate-secrets setup-secrets}"
 
 usage() {
   cat <<EOF
 Usage: $(basename "$0") [--project NAME] [--database NAME] <destination-dir>
 
-  Backs up the running appliance's Postgres database and secrets file into a
-  timestamped snapshot directory under <destination-dir>.
+  Backs up the running appliance's Postgres database and master secrets file
+  into a timestamped snapshot directory under <destination-dir>. Exits 3 if
+  the snapshot ends up without AUTH_FIELD_ENCRYPTION_KEY.
 
   --project NAME    Compose project to back up (default: \$COMPOSE_PROJECT_NAME,
                     else derived from this checkout the way the Makefile does)
@@ -279,10 +297,37 @@ fi
 printf 'ok\n'
 
 # ── Secrets ──────────────────────────────────────
+#
+# The MASTER, from the secrets generator: it is the only container that mounts
+# it (see the header). `docker ps -a` because the generator is a one-shot that
+# has exited. The database container goes last, for a stack that predates the
+# per-service projections and still mounts the master there — on a current
+# stack it holds only its own three-key projection, which the key check below
+# then reports rather than passing off as the encryption root.
 
-printf '  [3/3] secrets file … '
-secrets_status="copied"
-if docker cp "${container}:${SECRETS_FILE_IN_CONTAINER}" "${snapshot}/.env.secrets" 2>/dev/null; then
+secrets_sources=()
+for svc in $SECRETS_SERVICES; do
+  while IFS= read -r name; do
+    [ -n "$name" ] && secrets_sources+=("$name")
+  done < <(docker ps -a \
+    --filter "label=com.docker.compose.project=${PROJECT_NAME}" \
+    --filter "label=com.docker.compose.service=${svc}" \
+    --format '{{.Names}}' 2>/dev/null || true)
+done
+secrets_sources+=("$container")
+
+printf '  [3/3] master secrets file … '
+secrets_status="MISSING"
+secrets_container=""
+for source in "${secrets_sources[@]}"; do
+  if docker cp "${source}:${SECRETS_FILE_IN_CONTAINER}" "${snapshot}/.env.secrets" 2>/dev/null; then
+    secrets_container="$source"
+    break
+  fi
+done
+
+if [ -n "$secrets_container" ]; then
+  secrets_status="copied"
   chmod 600 "${snapshot}/.env.secrets"
   # A copy that succeeded is not the same as a copy worth having. The one line
   # that makes this file the encryption root is AUTH_FIELD_ENCRYPTION_KEY (see
@@ -290,14 +335,13 @@ if docker cp "${container}:${SECRETS_FILE_IN_CONTAINER}" "${snapshot}/.env.secre
   # dump's encrypted columns stay unreadable however the snapshot is restored,
   # and reporting "copied" would be the same false confidence as a 0-byte dump.
   if grep -q '^AUTH_FIELD_ENCRYPTION_KEY=.' "${snapshot}/.env.secrets"; then
-    printf 'done\n'
+    printf 'done (from %s)\n' "$secrets_container"
   else
     secrets_status="NO ENCRYPTION KEY"
-    printf 'copied, but it carries no AUTH_FIELD_ENCRYPTION_KEY\n'
+    printf 'copied from %s, but it carries no AUTH_FIELD_ENCRYPTION_KEY\n' "$secrets_container"
   fi
 else
-  secrets_status="MISSING"
-  printf 'not present in this container\n'
+  printf 'not present in %s\n' "${secrets_sources[*]}"
 fi
 
 # ── Coverage note, written next to the data ──────
@@ -327,10 +371,35 @@ extension_list="$(docker exec -u postgres "$container" psql -tA -F' ' -d "$DATAB
   | sed '/^$/d; s/^/- /' || true)"
 [ -n "$extension_list" ] || extension_list="- (could not be read from the source cluster)"
 
+# Where the master goes back, and the one place it must never go: a
+# services/<svc>/ projection, which setup-secrets rewrites from the master on
+# every boot. A snapshot without the key says so here too, since COVERAGE.md is
+# what gets read at restore time and the exit status is long gone by then.
+master_home="the root of the secrets volume (\`${PROJECT_NAME}_secrets\`, which
+\`generate-secrets\` mounts at /run/secrets) or, on a Hub install,
+\`\${APP_DATA_DIR}/data/secrets/.env.secrets\` — never a \`services/<service>/\`
+directory beside it: those hold per-service projections that setup-secrets
+rewrites from the master on every boot"
+if [ "$secrets_status" = "copied" ]; then
+  secrets_source_note="; master secrets file from \`${secrets_container}\`"
+  secrets_restore_note="Then restore \`.env.secrets\` as the MASTER secrets file **before** first
+boot: ${master_home}. setup-secrets is idempotent and will silently generate a
+fresh AUTH_FIELD_ENCRYPTION_KEY if the master is absent, after which the
+encrypted columns in the dump above can never be read again."
+else
+  secrets_source_note=""
+  secrets_restore_note="**This snapshot has no usable master secrets file (${secrets_status}).** Any
+\`.env.secrets\` here is NOT the master: do not restore it as one. Restore the
+deployment's master — backed up separately — **before** first boot, to
+${master_home}. Without it setup-secrets generates a fresh
+AUTH_FIELD_ENCRYPTION_KEY, and the encrypted columns in the dump above can
+never be read again."
+fi
+
 cat > "${snapshot}/COVERAGE.md" <<EOF
 # Appliance backup — ${PROJECT_NAME} — ${stamp}
 
-Taken by scripts/backup/appliance-backup.sh from container \`${container}\`.
+Taken by scripts/backup/appliance-backup.sh from container \`${container}\`${secrets_source_note}.
 
 ## Included
 
@@ -339,7 +408,7 @@ Taken by scripts/backup/appliance-backup.sh from container \`${container}\`.
 | \`${DATABASE_NAME}.dump\` | Custom-format pg_dump of the application database |
 | \`${DATABASE_NAME}.toc\` | Its table of contents — the inventory of the dump |
 | \`globals.sql\` | Cluster roles and their passwords (restore this FIRST) |
-| \`.env.secrets\` | Deployment secrets, incl. the field-encryption key (${secrets_status}) |
+| \`.env.secrets\` | The MASTER secrets file: every generated credential, incl. the field-encryption key (${secrets_status}) |
 
 ## NOT included
 
@@ -398,15 +467,16 @@ superuser), at these versions or newer:
 
 ${extension_list}
 
-Then restore \`.env.secrets\` to the secrets volume **before** first boot.
-setup-secrets is idempotent and will silently generate a fresh
-AUTH_FIELD_ENCRYPTION_KEY if the file is absent, after which the encrypted
-columns in the dump above can never be read again.
+${secrets_restore_note}
 EOF
 
 # ── Summary ──────────────────────────────────────
 
-printf '\n✓ Backup complete: %s\n\n' "$snapshot"
+if [ "$secrets_status" = "copied" ]; then
+  printf '\n✓ Backup complete: %s\n\n' "$snapshot"
+else
+  printf '\n⚠ Backup INCOMPLETE — no AUTH_FIELD_ENCRYPTION_KEY: %s\n\n' "$snapshot"
+fi
 du -ah "${snapshot}" 2>/dev/null | sed 's/^/    /'
 printf '\n  NOT backed up: object-store blobs (object-data), HBPE models and\n'
 printf '  corpus (hbpe-models, hbpe-corpus), and the import working area.\n'
@@ -414,13 +484,29 @@ printf '  This is a TimescaleDB database: a plain pg_restore of the dump will NO
 printf '  reproduce it. Follow the procedure in %s/COVERAGE.md.\n' "$snapshot"
 
 if [ "$secrets_status" = "MISSING" ]; then
-  printf '\n  WARNING: no %s in %s.\n' "$SECRETS_FILE_IN_CONTAINER" "$container"
+  printf '\n  WARNING: no %s in %s.\n' "$SECRETS_FILE_IN_CONTAINER" "${secrets_sources[*]}"
   printf '  This deployment keeps its credentials somewhere else (staging and local\n'
   printf '  read them from the repo .env). Back that file up separately — without\n'
   printf '  AUTH_FIELD_ENCRYPTION_KEY the dump above is only partly restorable.\n'
 elif [ "$secrets_status" != "copied" ]; then
-  printf '\n  WARNING: %s was copied but carries no AUTH_FIELD_ENCRYPTION_KEY.\n' "$SECRETS_FILE_IN_CONTAINER"
-  printf '  Find the file that does hold the key for this deployment and back it up\n'
-  printf '  separately — without it the encrypted columns in the dump above cannot\n'
-  printf '  be read after a restore.\n'
+  printf '\n  WARNING: %s from %s carries no AUTH_FIELD_ENCRYPTION_KEY.\n' \
+    "$SECRETS_FILE_IN_CONTAINER" "$secrets_container"
+  if head -n1 "${snapshot}/.env.secrets" | grep -q '^# Generated by setup-secrets for the'; then
+    # The fallback copied a per-service projection: no generator container
+    # (SECRETS_SERVICES) exists for this project, so nothing mounts the master.
+    printf '  That is a per-service projection, not the master: no %s\n' "${SECRETS_SERVICES// / or }"
+    printf '  container exists for project %s to copy the master from (a pruned\n' "$PROJECT_NAME"
+    printf '  one-shot?). Recreate it — setup-secrets keeps every existing value and\n'
+    printf '  only re-projects — and run this again, or back the master up by hand\n'
+    printf '  from the %s_secrets volume, or %s\n' "$PROJECT_NAME" "\${APP_DATA_DIR}/data/secrets/.env.secrets"
+    printf '  on a Hub install.\n'
+  else
+    printf '  Find the file that does hold the key for this deployment and back it up\n'
+    printf '  separately — without it the encrypted columns in the dump above cannot\n'
+    printf '  be read after a restore.\n'
+  fi
 fi
+
+# Not a success: the dump alone cannot bring the encrypted columns back, and
+# exit 0 here is what let automation treat a keyless snapshot as a backup.
+[ "$secrets_status" = "copied" ] || exit 3
