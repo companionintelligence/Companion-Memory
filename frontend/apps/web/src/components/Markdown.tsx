@@ -32,19 +32,40 @@ function MarkdownLink({ href, children, ...rest }: ComponentProps<'a'>) {
   );
 }
 
+/** What the URL parser deletes from anywhere in its input before reading it. */
+const URL_IGNORED = /[\t\n\r]/g;
+
+/**
+ * A site-relative path as the URL parser reads it: one slash, then neither a
+ * second slash nor a backslash — on an http(s) page `\` is read as `/`, so
+ * `/\host` is the protocol-relative `//host`.
+ */
+const SITE_RELATIVE_PATH = /^\/(?![/\\])/;
+
 /**
  * Is this image source one the appliance itself serves?
  *
  * A site-relative path, or an absolute URL on this origin. Anything else is
  * a remote host the model chose.
+ *
+ * The one rule for both renderers of model-authored text — {@link Markdown}
+ * for a stored message and the chat's streaming renderer
+ * (`Chat/streamingRenderer.ts`) for a reply as it arrives — so they cannot
+ * disagree about which images may load. The streaming renderer is handed the
+ * URL exactly as the model wrote it, with nothing percent-encoded the way
+ * mdast-util-to-hast encodes it on the Markdown path, which is why the path
+ * test reads the source the way the browser will: `/<TAB>/host` and `/\host`
+ * are both remote.
  */
-function isOwnOriginImage(src: string): boolean {
-  if (INTERNAL_PATH.test(src)) {
+export function isOwnOriginImage(src: string): boolean {
+  const source = src.replace(URL_IGNORED, '');
+
+  if (SITE_RELATIVE_PATH.test(source)) {
     return true;
   }
 
   try {
-    return new URL(src, window.location.origin).origin === window.location.origin;
+    return new URL(source, window.location.origin).origin === window.location.origin;
   } catch {
     return false;
   }

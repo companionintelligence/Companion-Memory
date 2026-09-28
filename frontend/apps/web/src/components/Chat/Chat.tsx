@@ -24,6 +24,7 @@ import { UserMessage } from './blocks/UserMessage';
 import { ChatInput, type FormData } from './ChatInput';
 import { ChatLoader } from './ChatLoader';
 import { ChatMessage } from './ChatMessage';
+import { streamingMarkdownRenderer } from './streamingRenderer';
 import { useConditionalAutoscroll } from './useConditionalAutoscroll';
 import { Channel, type Decoded, createStreamProcessor } from './utils';
 
@@ -114,7 +115,9 @@ export function Chat({
       return;
     }
 
-    const renderer = smd.default_renderer(el);
+    // Never `smd.default_renderer` directly: it fetches any image URL the
+    // model writes, as it streams. See streamingRenderer.ts.
+    const renderer = streamingMarkdownRenderer(el);
 
     textParserRef.current = smd.parser(renderer);
   }, []);
@@ -129,7 +132,7 @@ export function Chat({
       return;
     }
 
-    const renderer = smd.default_renderer(el);
+    const renderer = streamingMarkdownRenderer(el);
 
     thinkParserRef.current = smd.parser(renderer);
   }, []);

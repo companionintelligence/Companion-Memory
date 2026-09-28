@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
-import { Markdown } from './Markdown';
+import { Markdown, isOwnOriginImage } from './Markdown';
 
 describe('Markdown', () => {
   it('renders bold text and links', () => {
@@ -59,6 +59,24 @@ describe('Markdown', () => {
 
       expect(screen.queryByRole('img')).not.toBeInTheDocument();
       expect(screen.getByRole('link', { name: 'x' })).toBeInTheDocument();
+    });
+  });
+
+  describe('isOwnOriginImage', () => {
+    // The chat's streaming renderer hands this the URL exactly as the model
+    // wrote it — nothing has percent-encoded it the way the Markdown path does
+    // — so it must read a source the way the browser's URL parser will.
+    it.each([
+      ['a site-relative path', '/api/files/abc/thumbnail', true],
+      ['an absolute URL on this origin', `${window.location.origin}/api/files/abc/thumbnail`, true],
+      ['a remote URL', 'https://attacker.example/p.png', false],
+      ['a protocol-relative URL', '//attacker.example/p.png', false],
+      ['a backslash the parser reads as a second slash', '/\\attacker.example/p.png', false],
+      ['a tab the parser deletes', '/\t/attacker.example/p.png', false],
+      ['a newline the parser deletes', '/\n/attacker.example/p.png', false],
+      ['leading whitespace the parser trims', ' //attacker.example/p.png', false],
+    ])('%s → %s', (_label, src, expected) => {
+      expect(isOwnOriginImage(src)).toBe(expected);
     });
   });
 

