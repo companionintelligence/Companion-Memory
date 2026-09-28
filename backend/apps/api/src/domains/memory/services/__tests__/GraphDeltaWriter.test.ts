@@ -307,4 +307,36 @@ describe('GraphDeltaWriter', () => {
       expect(managerQuery).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('recordMany chunking', () => {
+    it('never binds more than the Postgres parameter limit in one statement', async () => {
+      // 4,873 rows is one real Google Takeout push. Unchunked it bound 68,222
+      // parameters, which the protocol's 16-bit count wrapped to "bind message
+      // has 2686 parameter formats but 0 parameters".
+      const { writer, query } = makeWriter();
+      const inputs: RecordGraphDeltaInput[] = Array.from({ length: 4_873 }, (_, i) => ({
+        nodeType: 'entity',
+        changeType: 'created',
+        entityId: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        entityType: 'Person',
+        ownerUserId: '00000000-0000-4000-8000-00000000aaaa',
+        changeSource: 'test',
+      }));
+
+      await writer.recordMany(inputs);
+
+      const calls = query.mock.calls as unknown as Array<[string, unknown[]]>;
+      expect(calls.length).toBeGreaterThan(1);
+
+      for (const [, bind] of calls) {
+        expect(bind.length).toBeLessThanOrEqual(65_535);
+      }
+
+      // Every row written exactly once, in order.
+      const all = calls.flatMap(([, bind]) =>
+        Array.from({ length: bind.length / BOUND_COLUMNS.length }, (_, r) => rowAt(bind, r).entityId),
+      );
+      expect(all).toEqual(inputs.map((input) => input.entityId));
+    });
+  });
 });

@@ -3,6 +3,7 @@ import { DataSource, type EntityManager } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
+import { computeChunkSize } from '@ci/common/persistence';
 
 export type GraphDeltaChangeType = 'created' | 'updated' | 'archived' | 'deleted' | 'merged';
 export type GraphDeltaNodeType = 'entity' | 'relationship';
@@ -39,6 +40,9 @@ export interface RecordGraphDeltaInput {
  * Uses SQL (not the audit-domain ORM entity) so MemoryModule can own the writer
  * without a Memory → Audit → Graph → Memory cycle.
  */
+/** Parameters one `ci.graph_deltas` row binds in {@link GraphDeltaWriter.recordMany}. */
+const BOUND_COLUMNS = 14;
+
 @Injectable()
 export class GraphDeltaWriter {
   constructor(
@@ -58,10 +62,28 @@ export class GraphDeltaWriter {
     }
 
     const runner = manager ?? this.dataSource;
+
+    // One statement per chunk, never one for the whole list: each row binds
+    // BOUND_COLUMNS parameters, and Postgres caps a statement at 65535. An
+    // unchunked call of 4,873 rows (one Google Takeout push) bound 68,222, which
+    // the wire protocol's 16-bit count wrapped to "bind message has 2686
+    // parameter formats but 0 parameters" — failing the caller's whole batch
+    // after its own rows were already written.
+    const chunkSize = computeChunkSize(BOUND_COLUMNS);
+
+    for (let offset = 0; offset < inputs.length; offset += chunkSize) {
+      await this.insertChunk(runner, inputs.slice(offset, offset + chunkSize));
+    }
+  }
+
+  private async insertChunk(
+    runner: EntityManager | DataSource,
+    inputs: RecordGraphDeltaInput[],
+  ): Promise<void> {
     const bind: unknown[] = [];
     const valueSql = inputs
       .map((input, i) => {
-        const b = i * 14;
+        const b = i * BOUND_COLUMNS;
         bind.push(
           uuidv7(),
           input.entityId ?? null,

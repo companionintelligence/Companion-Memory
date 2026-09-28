@@ -1115,14 +1115,21 @@ export class PushStage implements ImportStageRunner {
       byKey.delete(mapping.key);
     }
 
-    // Whatever ingest did not echo back failed; its reason is in `errors`, which
-    // is per-batch rather than per-entity, so the whole list is recorded against
-    // each unresolved row.
-    const reason =
-      result.errors.length > 0 ? result.errors.join('; ') : 'entity not resolved by graph ingest';
+    // Whatever ingest did not echo back failed. Ingest reports each failure as
+    // `entity <key>: <message>`, so each row is given ITS OWN entry. It used to
+    // get the whole list joined: a batch-level failure yields one entry per
+    // input, so a 4,873-entity Takeout push wrote a ~500KB reason into every
+    // failed row and every log line below — quadratic in the batch, 552MB of
+    // log, and a worker that died mid-loop with the run stuck at 'running'.
+    const reasonByKey = entityErrorsByKey(result.errors);
+    const fallback = boundedReason(
+      result.errors.length > 0 ? result.errors[0] : 'entity not resolved by graph ingest',
+    );
     let failed = 0;
 
-    for (const rows of byKey.values()) {
+    for (const [key, rows] of byKey.entries()) {
+      const reason = reasonByKey.get(key) ?? fallback;
+
       for (const row of rows) {
         await this.markEntity(row.id, 'failed', reason);
         failed += 1;
@@ -2546,4 +2553,43 @@ function isDuplicateKey(err: unknown): boolean {
   const wrapped = err as { code?: string; driverError?: { code?: string } };
 
   return wrapped?.code === '23505' || wrapped?.driverError?.code === '23505';
+}
+
+/** Longest reason recorded against one staged entity or logged for it. */
+const MAX_ENTITY_REASON_CHARS = 1_000;
+
+function boundedReason(reason: string): string {
+  return reason.length > MAX_ENTITY_REASON_CHARS ? `${reason.slice(0, MAX_ENTITY_REASON_CHARS)}…` : reason;
+}
+
+/**
+ * GraphIngestService reports a failed entity as `entity <key>: <message>`; map
+ * each key to its own (bounded) message so a row is never charged with every
+ * other entity's failure. Keys can contain `: ` (a contact named "a: b"), so the
+ * split is on the LAST `: ` whose left side is a key ingest was actually given —
+ * callers look keys up in their own map, and an unmatched key simply misses.
+ */
+export function entityErrorsByKey(errors: readonly string[]): Map<string, string> {
+  const byKey = new Map<string, string>();
+
+  for (const error of errors) {
+    if (!error.startsWith('entity ')) {
+      continue;
+    }
+
+    const body = error.slice('entity '.length);
+    let at = body.indexOf(': ');
+
+    while (at !== -1) {
+      const key = body.slice(0, at);
+
+      if (!byKey.has(key)) {
+        byKey.set(key, boundedReason(error));
+      }
+
+      at = body.indexOf(': ', at + 2);
+    }
+  }
+
+  return byKey;
 }
