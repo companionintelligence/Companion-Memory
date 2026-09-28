@@ -1,3 +1,6 @@
+import type { TransientRetryPolicy } from '@ci/common/persistence';
+
+import { DatabaseCrashedDuringPushError } from '../../stages/DatabaseCrashedDuringPushError';
 import { ImportStageListener } from '../ImportStageListener';
 
 /**
@@ -8,7 +11,9 @@ import { ImportStageListener } from '../ImportStageListener';
  *    one that already failed. Both would mean doing a 40GB unpack twice;
  *  - a cancelled or deleted run stops the chain rather than reviving it;
  *  - a failure is recorded against the stage BEFORE it is rethrown, so the run
- *    says what happened instead of stranding at `running`;
+ *    says what happened instead of stranding at `running` — waiting out a
+ *    database that is away to record it, because a stage left `running` is
+ *    one the recovery sweep runs again;
  *  - scratch is reclaimed exactly once, when the last stage completes.
  */
 
@@ -25,6 +30,7 @@ function makeListener(
     claimed?: boolean;
     next?: Record<string, unknown> | null;
     run?: jest.Mock;
+    pushRun?: jest.Mock;
     pulled?: boolean;
     unstoredMedia?: boolean;
     runBelongsTo?: boolean;
@@ -70,7 +76,7 @@ function makeListener(
 
   const pushStage = {
     kind: 'push' as const,
-    run: jest.fn(async () => ({ processed: 0, total: 0, detail: {} })),
+    run: overrides.pushRun ?? jest.fn(async () => ({ processed: 0, total: 0, detail: {} })),
   };
 
   const logger = {
@@ -81,22 +87,51 @@ function makeListener(
     error: jest.fn(),
   };
 
+  const listener = new ImportStageListener(
+    runs as never,
+    scratch as never,
+    unpackStage as never,
+    parseStage as never,
+    mediaStage as never,
+    pushStage as never,
+    logger as never,
+  );
+  const clock = fakeClock();
+
+  listener.failureRecordRetry = clock;
+
+  return { listener, runs, scratch, unpackStage, pushStage, logger, clock };
+}
+
+/** A clock that never really sleeps, with the listener's own budget and crash rule. */
+function fakeClock(): TransientRetryPolicy & { slept: number[] } {
+  let at = 0;
+  const slept: number[] = [];
+
   return {
-    listener: new ImportStageListener(
-      runs as never,
-      scratch as never,
-      unpackStage as never,
-      parseStage as never,
-      mediaStage as never,
-      pushStage as never,
-      logger as never,
-    ),
-    runs,
-    scratch,
-    unpackStage,
-    logger,
+    initialDelayMs: 1_000,
+    maxDelayMs: 30_000,
+    budgetMs: 600_000,
+    resendAfterCrash: true,
+    slept,
+    now: () => at,
+    sleep: async (ms) => {
+      slept.push(ms);
+      at += ms;
+    },
   };
 }
+
+/** TypeORM's QueryFailedError, as the listener actually receives it. */
+function queryFailed(code: string, message: string): Error {
+  return Object.assign(new Error(message), {
+    name: 'QueryFailedError',
+    code,
+    driverError: Object.assign(new Error(message), { code }),
+  });
+}
+
+const inRecovery = () => queryFailed('57P03', 'the database system is in recovery mode');
 
 describe('ImportStageListener claiming', () => {
   beforeEach(() => jest.clearAllMocks());
@@ -288,6 +323,136 @@ describe('ImportStageListener failure', () => {
       'Import stage failed',
       expect.objectContaining({ err: failure, runId: payload.runId, kind: 'unpack' }),
     );
+  });
+});
+
+/**
+ * The failure most likely to meet an absent database is the one the database
+ * caused: a push stage fails with DatabaseCrashedDuringPushError the moment
+ * Postgres crashes under it, and the listener's next statement — recording
+ * that — reaches a server in crash recovery. Unrecorded, the stage stays
+ * `running`; ten silent minutes later the recovery sweep re-queues it, the push
+ * runs again, and the poison write crashes the database again. Every sweep.
+ */
+describe('ImportStageListener recording a failure while the database is away', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const pushStageRow = { id: payload.stageId, runId: payload.runId, kind: 'push', seq: 2, status: 'queued' };
+  const crashedPush = () =>
+    new DatabaseCrashedDuringPushError(
+      payload.runId,
+      'writing 500 communications record(s)',
+      new Error('Connection terminated unexpectedly'),
+    );
+
+  it('waits for the database to come back, then records the crash against the stage', async () => {
+    const failure = crashedPush();
+    const { listener, runs, pushStage, clock } = makeListener({
+      stage: pushStageRow,
+      pushRun: jest.fn(async () => {
+        throw failure;
+      }),
+    });
+
+    runs.failStage.mockRejectedValueOnce(inRecovery()).mockRejectedValueOnce(inRecovery());
+
+    // The STAGE's error goes to pg-boss, not what the bookkeeping met.
+    await expect(listener.runStage(payload)).rejects.toBe(failure);
+
+    expect(pushStage.run).toHaveBeenCalledTimes(1);
+    expect(runs.failStage).toHaveBeenCalledTimes(3);
+    expect(runs.failStage).toHaveBeenLastCalledWith(
+      payload.stageId,
+      expect.stringContaining(`ci push --run ${payload.runId} --retry-failed`),
+      expect.objectContaining({ stage: 'push', name: 'DatabaseCrashedDuringPushError' }),
+    );
+    expect(clock.slept).toEqual([1_000, 2_000]);
+  });
+
+  it('waits through a crash under the record itself — bookkeeping cannot be what crashed it', async () => {
+    const { listener, runs, clock } = makeListener({
+      stage: pushStageRow,
+      pushRun: jest.fn(async () => {
+        throw crashedPush();
+      }),
+    });
+
+    runs.failStage
+      .mockRejectedValueOnce(new Error('Connection terminated unexpectedly'))
+      .mockRejectedValueOnce(inRecovery());
+
+    await expect(listener.runStage(payload)).rejects.toBeInstanceOf(DatabaseCrashedDuringPushError);
+
+    expect(runs.failStage).toHaveBeenCalledTimes(3);
+    expect(clock.slept).toEqual([1_000, 2_000]);
+  });
+
+  it('reads the failed stage for its phase through the same wait', async () => {
+    const { listener, runs } = makeListener({
+      stage: pushStageRow,
+      pushRun: jest.fn(async () => {
+        throw crashedPush();
+      }),
+    });
+
+    // The first read finds the stage; the one after the failure meets recovery.
+    runs.getStage
+      .mockResolvedValueOnce(pushStageRow as never)
+      .mockRejectedValueOnce(inRecovery())
+      .mockResolvedValueOnce({ ...pushStageRow, status: 'running', phase: 'pushing' } as never);
+
+    await expect(listener.runStage(payload)).rejects.toBeInstanceOf(DatabaseCrashedDuringPushError);
+
+    expect(runs.failStage).toHaveBeenCalledTimes(1);
+    expect(runs.failStage).toHaveBeenCalledWith(
+      payload.stageId,
+      expect.stringMatching(/^push \[phase=pushing\] the database crashed/),
+      expect.objectContaining({ phase: 'pushing' }),
+    );
+  });
+
+  it('gives up inside its budget, says so, and still rethrows the stage error', async () => {
+    const failure = crashedPush();
+    const { listener, runs, logger, clock } = makeListener({
+      stage: pushStageRow,
+      pushRun: jest.fn(async () => {
+        throw failure;
+      }),
+    });
+
+    runs.failStage.mockRejectedValue(inRecovery());
+
+    await expect(listener.runStage(payload)).rejects.toBe(failure);
+
+    expect(clock.slept.reduce((sum, ms) => sum + ms, 0)).toBeLessThanOrEqual(600_000);
+    expect(clock.slept.reduce((sum, ms) => sum + ms, 0)).toBeGreaterThan(500_000);
+    expect(logger.error).toHaveBeenCalledWith(
+      'Could not record the import stage failure; the stage stays running until the recovery sweep reclaims it',
+      expect.objectContaining({ runId: payload.runId, stageId: payload.stageId, kind: 'push' }),
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Import stage failed',
+      expect.objectContaining({ err: failure, failure: null }),
+    );
+  });
+
+  it('does not run the push again when pg-boss redelivers the job for the failed stage', async () => {
+    const { listener, runs, pushStage } = makeListener({
+      stage: pushStageRow,
+      pushRun: jest.fn(async () => {
+        throw crashedPush();
+      }),
+    });
+
+    await expect(listener.runStage(payload)).rejects.toBeInstanceOf(DatabaseCrashedDuringPushError);
+
+    // What the service answers once the failure is recorded: the run is
+    // finished (failed), and the stage is no longer `queued` to be claimed.
+    runs.isFinished.mockResolvedValue(true);
+    runs.beginStage.mockResolvedValue(false);
+
+    await expect(listener.runStage(payload)).resolves.toBeUndefined();
+    expect(pushStage.run).toHaveBeenCalledTimes(1);
   });
 });
 

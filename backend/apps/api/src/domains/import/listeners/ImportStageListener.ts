@@ -1,6 +1,7 @@
 import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
+import { retryOnTransientDatabaseError, type TransientRetryPolicy } from '@ci/common/persistence';
 import { serves } from '@ci/common/roles';
 import { Cron } from '@ci/common/schedule';
 import { OnEvent } from '@ci/domains/events';
@@ -11,6 +12,7 @@ import {
   IMPORT_STAGE_QUEUE_BY_KIND,
   IMPORT_STAGE_QUEUE_OPTIONS,
 } from '../constants';
+import type { ImportStage } from '../entities/ImportStageEntity';
 import { ImportStageEvent } from '../events';
 import { ImportRunService } from '../services/ImportRunService';
 import { ImportScratchService } from '../services/ImportScratchService';
@@ -19,6 +21,7 @@ import { ParseStage } from '../stages/ParseStage';
 import { PushStage } from '../stages/PushStage';
 import { UnpackStage } from '../stages/UnpackStage';
 import { describeStageFailure, stageFailureContext } from '../telemetry/stageError';
+import type { StageFailureContext } from '../telemetry/stageSummary';
 import { importStagePayloadSchema, type ImportStageRunner, type StageRunContext } from '../types';
 
 /** Minimum gap between progress writes, whatever a runner asks for. */
@@ -42,6 +45,37 @@ const STAGE_HEARTBEAT_MS = 30_000;
 const RESUME_SWEEP_CRON = '30 */5 * * * *';
 
 /**
+ * How long the worker waits for the database to come back so it can RECORD a
+ * stage failure.
+ *
+ * A failure that is not recorded leaves the stage `running`, and the recovery
+ * sweep reclaims a `running` stage once it has been silent for
+ * `STALE_STAGE_MINUTES` and runs it again — the very automatic retry
+ * "failure is recorded, not retried" rules out. The failure most likely to meet
+ * a database that is away is the one the database caused: a push stage fails
+ * with `DatabaseCrashedDuringPushError` the moment Postgres crashes under it,
+ * and the first thing that happens next is this write, against a server in
+ * crash recovery. Left unrecorded, a push whose write crashes the database
+ * would crash it again every sweep, forever.
+ *
+ * So the record waits — longer than the push's own three minutes, because
+ * holding a worker slot costs nothing while the database is away and giving up
+ * costs a re-run — and through a crash as well as a not-ready server: it is
+ * bookkeeping on the run's own rows (UPDATEs by id, the claim release, the
+ * percent rollup), which cannot be what crashed anything and
+ * lands the same however often it is repeated. The heartbeat keeps
+ * touching the stage meanwhile, so the sweep does not reclaim it under the
+ * wait. Past the budget the failure is logged unrecorded and the sweep's
+ * staleness rule applies as before.
+ */
+const STAGE_FAILURE_RECORD_RETRY: TransientRetryPolicy = {
+  initialDelayMs: 1_000,
+  maxDelayMs: 30_000,
+  budgetMs: 10 * 60_000,
+  resendAfterCrash: true,
+};
+
+/**
  * THE worker. One class runs every stage kind that will ever exist.
  *
  * A stage kind supplies `run(context) -> StageOutcome` and nothing else. Claiming
@@ -60,10 +94,23 @@ const RESUME_SWEEP_CRON = '30 */5 * * * *';
  * because object storage blipped is expensive and surprising, and the operator
  * still gets the dead letter. Re-running a failed stage is a user action, which
  * the import API surfaces.
+ *
+ * It holds only if the failure is actually RECORDED: a stage left `running`
+ * is what the recovery sweep re-runs. So recording it waits out a database
+ * that is away — see {@link STAGE_FAILURE_RECORD_RETRY} — which matters most
+ * for a push that failed because the database crashed under it, and would
+ * otherwise crash it again on every sweep.
  */
 @Injectable()
 export class ImportStageListener implements OnApplicationBootstrap {
   private readonly runners: Map<string, ImportStageRunner>;
+
+  /**
+   * How long to wait out an absent database to record a failure — see
+   * {@link STAGE_FAILURE_RECORD_RETRY}. A property so a test can hand it a
+   * clock that does not really sleep.
+   */
+  failureRecordRetry: TransientRetryPolicy = STAGE_FAILURE_RECORD_RETRY;
 
   constructor(
     private readonly runs: ImportRunService,
@@ -319,17 +366,7 @@ export class ImportStageListener implements OnApplicationBootstrap {
         next: next?.kind ?? null,
       });
     } catch (err) {
-      // What the stage was WORKING ON, not just what went wrong. A bare
-      // `(err as Error).message` was the whole of a failed import's record: on
-      // this corpus a parse failure would have been reported as "ENOENT: no
-      // such file or directory" over a 703,956-item, 13-source Takeout, with
-      // nothing saying which parser or which file — and the scratch tree that
-      // held the answer is reclaimed with the run. See telemetry/stageError.
-      const phase = (await this.runs.getStage(stage.id))?.phase ?? undefined;
-      const error = describeStageFailure(err, { stage: stage.kind, phase });
-      const failure = stageFailureContext(err, { stage: stage.kind, phase });
-
-      await this.runs.failStage(stage.id, error, failure);
+      const failure = await this.recordFailure(payload, stage, err);
 
       // Sentence first, error under `err` beside the context it is about —
       // `LoggerService` hoists that key so pino still serializes the stack.
@@ -349,6 +386,62 @@ export class ImportStageListener implements OnApplicationBootstrap {
       throw err;
     } finally {
       clearInterval(heartbeat);
+    }
+  }
+
+  /**
+   * Record a stage failure, waiting out a database that is away — see
+   * {@link STAGE_FAILURE_RECORD_RETRY}. Returns what was recorded, or null when
+   * the database never came back inside the wait (logged; the stage stays
+   * `running` for the sweep's staleness rule).
+   *
+   * Never throws: the caller rethrows the STAGE's error, which is the one
+   * pg-boss and the log should carry, not whatever the bookkeeping met.
+   */
+  private async recordFailure(
+    payload: { runId: string },
+    stage: Pick<ImportStage, 'id' | 'kind'>,
+    err: unknown,
+  ): Promise<StageFailureContext | null> {
+    try {
+      return await retryOnTransientDatabaseError(
+        'recording an import stage failure',
+        async () => {
+          // What the stage was WORKING ON, not just what went wrong. A bare
+          // `(err as Error).message` was the whole of a failed import's record:
+          // on this corpus a parse failure would have been reported as "ENOENT:
+          // no such file or directory" over a 703,956-item, 13-source Takeout,
+          // with nothing saying which parser or which file — and the scratch
+          // tree that held the answer is reclaimed with the run. See
+          // telemetry/stageError.
+          const phase = (await this.runs.getStage(stage.id))?.phase ?? undefined;
+          const error = describeStageFailure(err, { stage: stage.kind, phase });
+          const failure = stageFailureContext(err, { stage: stage.kind, phase });
+
+          await this.runs.failStage(stage.id, error, failure);
+
+          return failure;
+        },
+        this.failureRecordRetry,
+        (notice) => {
+          this.logger.warn('The database is away; waiting to record the import stage failure', {
+            runId: payload.runId,
+            stageId: stage.id,
+            kind: stage.kind,
+            attempt: notice.attempt,
+            delayMs: notice.delayMs,
+            waitedMs: notice.waitedMs,
+            error: notice.error instanceof Error ? notice.error.message : String(notice.error),
+          });
+        },
+      );
+    } catch (recordErr) {
+      this.logger.error(
+        'Could not record the import stage failure; the stage stays running until the recovery sweep reclaims it',
+        { err: recordErr, runId: payload.runId, stageId: stage.id, kind: stage.kind },
+      );
+
+      return null;
     }
   }
 

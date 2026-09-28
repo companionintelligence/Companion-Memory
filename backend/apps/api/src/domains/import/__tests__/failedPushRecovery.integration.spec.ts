@@ -1,7 +1,9 @@
 import { ConflictException } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 
+import { ImportStageListener } from '../listeners/ImportStageListener';
 import type { ImportRunService } from '../services/ImportRunService';
+import { DatabaseCrashedDuringPushError } from '../stages/DatabaseCrashedDuringPushError';
 import { StagedWriter } from '../staging/StagedWriter';
 
 import { createStagingHarness, importDatabase, type StagingHarness } from './support/stagingHarness';
@@ -476,6 +478,139 @@ describeWithDatabase(`failed push rows (${importDatabase.target})`, () => {
       expect((await pushStatuses(runId)).items).toEqual(
         expect.arrayContaining(['failed', 'failed', 'pushed']),
       );
+    });
+  });
+
+  /**
+   * A push whose write crashed the database fails its stage at once, rows
+   * `pending` (PushStage never resends a statement the database went down
+   * under). What must then NOT happen is the job system running it again on
+   * its own — each run of a poison write is another crash of the whole
+   * appliance's database. The way back is a person's: `--retry-failed`.
+   */
+  describe('a push the database crashed under', () => {
+    /** The sweep is appliance-wide; a parallel suite's runs can ride along. */
+    function sendsFor(runId: string): Array<Record<string, unknown>> {
+      return events.send.mock.calls
+        .map((call) => call[1] as Record<string, unknown>)
+        .filter((payload) => payload.runId === runId);
+    }
+
+    async function age(stageId: string): Promise<void> {
+      await dataSource.query(
+        `UPDATE ci_import.import_stages SET updated_at = now() - interval '20 minutes' WHERE id = $1::uuid`,
+        [stageId],
+      );
+    }
+
+    async function runReadyToPush(name: string) {
+      const run = await runWithOnePendingRow(name);
+
+      expect(await service.beginStage(run.parse.id)).toBe(true);
+      await service.completeStage(run.parse.id, { processed: 1, total: 1, detail: {} });
+
+      return run;
+    }
+
+    it('is recorded failed through the recovery, left alone by the sweep and a redelivery, and re-driven on request', async () => {
+      const { runId, push } = await runReadyToPush('crashed-push.zip');
+      const crash = new DatabaseCrashedDuringPushError(
+        runId,
+        'writing 1 communications record(s)',
+        new Error('Connection terminated unexpectedly'),
+      );
+      const pushRunner = {
+        kind: 'push' as const,
+        run: jest.fn(async () => {
+          throw crash;
+        }),
+      };
+      const idle = (kind: string) => ({ kind, run: jest.fn() });
+      const listener = new ImportStageListener(
+        service,
+        { ensureDir: jest.fn(async () => '/tmp/unused'), reclaim: jest.fn() } as never,
+        idle('unpack') as never,
+        idle('parse') as never,
+        idle('media') as never,
+        pushRunner as never,
+        {
+          setContext: jest.fn(),
+          log: jest.fn(),
+          warn: jest.fn(),
+          debug: jest.fn(),
+          error: jest.fn(),
+        } as never,
+      );
+
+      listener.failureRecordRetry = {
+        initialDelayMs: 1,
+        maxDelayMs: 1,
+        budgetMs: 5_000,
+        resendAfterCrash: true,
+      };
+
+      // The worker's next statement after the crash reaches a server still in
+      // crash recovery — twice — before it takes the record.
+      const recovering = () =>
+        Object.assign(new Error('the database system is in recovery mode'), { code: '57P03' });
+      const failStage = jest
+        .spyOn(service, 'failStage')
+        .mockRejectedValueOnce(recovering())
+        .mockRejectedValueOnce(recovering());
+      const payload = { runId, stageId: push.id, userId };
+
+      await expect(listener.runStage(payload)).rejects.toBe(crash);
+      expect(failStage).toHaveBeenCalledTimes(3);
+      failStage.mockRestore();
+
+      // Recorded, with the way back in it, and the row still `pending`.
+      const [stage] = await dataSource.query<Array<{ status: string; error: string }>>(
+        `SELECT status, error FROM ci_import.import_stages WHERE id = $1::uuid`,
+        [push.id],
+      );
+
+      expect(stage.status).toBe('failed');
+      expect(stage.error).toContain(`ci push --run ${runId} --retry-failed`);
+      expect(await runRow(runId)).toMatchObject({ status: 'failed' });
+      expect((await pushStatuses(runId)).items).toEqual(['pending']);
+
+      // The recovery sweep does not re-run it, however stale it reads…
+      await age(push.id);
+      events.send.mockClear();
+      await service.resumeInterrupted();
+
+      expect(sendsFor(runId)).toEqual([]);
+      expect(await stageRow(push.id)).toMatchObject({ status: 'failed' });
+
+      // …nor does pg-boss redelivering the job (retryLimit 3 on every queue).
+      await expect(listener.runStage(payload)).resolves.toBeUndefined();
+      expect(pushRunner.run).toHaveBeenCalledTimes(1);
+
+      // A person re-drives it once the database is healthy.
+      expect(await service.retryFailedPush({ userId }, runId)).toEqual({
+        items: 0,
+        entities: 0,
+        requeued: true,
+      });
+      expect(await stageRow(push.id)).toMatchObject({ status: 'queued' });
+      expect(sendsFor(runId).map((sent) => sent.stageId)).toEqual([push.id]);
+    });
+
+    it('is re-run by the sweep if the failure is never recorded — why the worker waits to record it', async () => {
+      // The shape the worker left before it waited: the failure write met the
+      // recovering database and was dropped, so the stage still says `running`.
+      const { runId, push } = await runReadyToPush('crashed-push-unrecorded.zip');
+
+      expect(await service.beginStage(push.id)).toBe(true);
+      await age(push.id);
+      events.send.mockClear();
+
+      await service.resumeInterrupted();
+
+      // Queued again with nobody asking: for a poison write, one more crash
+      // every sweep.
+      expect(await stageRow(push.id)).toMatchObject({ status: 'queued' });
+      expect(sendsFor(runId).map((sent) => sent.stageId)).toEqual([push.id]);
     });
   });
 });

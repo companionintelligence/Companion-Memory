@@ -274,6 +274,7 @@ media and push legs proceed meanwhile; they do not make the parses overlap. So:
 | `STAGE_HEARTBEAT_MS` | 30,000 ms | `ImportStageListener.ts` | Keeps the claim fresh through silent stretches (a giant archive mid-extract says nothing for minutes) |
 | `STALE_STAGE_MINUTES` | 10 | `ImportRunService.ts` | A live stage is never silent this long, so silence *is* death — whoever the worker was |
 | `RESUME_SWEEP_CRON` | `30 */5 * * * *` | `ImportStageListener.ts` | Recovery is periodic, not boot-only, so a crash is picked up without a restart |
+| `STAGE_FAILURE_RECORD_RETRY` | 10 min budget, 1s → 30s | `ImportStageListener.ts` | A failure is recorded through a database that is away (not ready *or* crashed), so the sweep never re-runs a stage whose failure write was lost |
 
 Every recovery gate is a **staleness test on `updated_at`**, never an assumption
 about who else is running. The comment on `resumeInterrupted` records why: the
@@ -284,7 +285,18 @@ progress writes with different totals on the same stage.
 **Failure is recorded, not retried.** A throw fails the stage and is rethrown so
 pg-boss dead-letters it, but the redelivery is a deliberate no-op: `beginStage`
 only claims a `queued` stage, so a redelivered job for a `failed` stage logs and
-returns. Re-running a failed stage is a user action —
+returns (the queue's `retryLimit: 3` with backoff therefore re-runs nothing, and
+neither does the recovery sweep, which leaves a `failed` stage alone). That
+holds only if the failure is actually *recorded* — a stage left `running` is
+exactly what the recovery sweep re-queues after `STALE_STAGE_MINUTES` — so
+`ImportStageListener` records it through an absent database:
+`STAGE_FAILURE_RECORD_RETRY` waits up to ten minutes (1s → 30s backoff), through
+a crash as well as a not-ready server, since the record is bookkeeping by id that
+cannot be what crashed anything. The failure most likely to meet an absent
+database is one the database caused (a push that crashed Postgres, below), and
+unrecorded it would crash the database again every sweep. Past the wait the
+failure is logged unrecorded and the staleness rule applies as before.
+Re-running a failed stage is a user action —
 `POST /import/runs/:runId/stages/:stageId/retry`, or
 `POST /import/runs/:runId/push/retry` (`ci push --run <id> --retry-failed`) for
 individual rows the push could not write. The push retry also re-drives a push
@@ -298,33 +310,53 @@ before a worker claimed it — the stage retry is the explicit way to run it). T
 push stage is reopened only from the status that was read, because `retryStage`
 and a claiming worker move stages without the run lock.
 
-**Inside the push, the database going away is waited out, not recorded.** Every
-database step in `PushStage` goes through `retryOnTransientDatabaseError`
-(`common/persistence/transientDatabaseError.ts`): a failure classified as the
-server being away — SQLSTATE 57P01/57P02/57P03, the 08xxx connection class,
-53300, a refused/reset socket, pg's "Connection terminated unexpectedly" — is
-retried on a doubling backoff (1s → 30s cap, three-minute budget) **before** a
-batch degrades to per-row or a row is quarantined. Past the budget the stage
-fails with every unwritten row still `pending`. A row is `failed` only for
-something the database said about that row. Before this, a Postgres
-crash-restart mid-push marked 437 good rows `failed` with "the database system
-is in recovery mode", on a run nothing would ever push again.
+**Inside the push, a database that is not ready is waited out, not recorded.**
+Every database step in `PushStage` goes through `retryOnTransientDatabaseError`
+(`common/persistence/transientDatabaseError.ts`), which classifies code-first. A
+server that never took the statement — SQLSTATE 57P03 ("in recovery mode", "not
+yet accepting connections"), 53300, 08001/08004, a refused or unreachable socket
+(ECONNREFUSED, EHOSTUNREACH, ENETUNREACH, EAI_AGAIN, a `connect` ETIMEDOUT), a
+pool connect timeout (`isDatabaseNotReadyError`) — is retried on a doubling
+backoff (1s → 30s cap, three-minute budget), batch as a batch. Past the budget the
+stage fails with every unwritten row still `pending`. No failure of the database
+being away (`isTransientDatabaseError`) ever degrades a batch to per-row or
+quarantines a row: a row is `failed` only for something the database said about
+that row. Before this, a Postgres crash-restart mid-push marked 437 good rows
+`failed` with "the database system is in recovery mode", on a run nothing would
+ever push again.
 
-**…but a write the database keeps going down under is isolated, not resent.** A
+**…but a database that crashed with a statement in flight stops the push.** A
 statement can *crash* Postgres (a TimescaleDB 2.28 segfault during a bulk upsert
-is the precedent), and waiting it out would resend it into every restart. So the
-destination writes count the failures that ended the session with the statement
-in flight (`isDatabaseCrashError`: 57P01/57P02, a reset socket, "Connection
-terminated unexpectedly") — never the wait for a server still in recovery
-(57P03, a refused socket). A batch in flight at two crashes is degraded to single
-rows; a single row in flight at two crashes of its own is quarantined `failed`
-with a `push_error` starting `crashed_database:`, written immediately so a stage
-that then fails does not leave it `pending` for the retry to crash on again. The
-batch waits at most the three-minute budget, and the row-by-row pass one more,
-shared by all its rows — never a fresh budget per row.
-`--retry-failed` resets `crashed_database` rows like any failed row, which costs
-up to four crashes per row before it is isolated again: fix what crashed the
-database first.
+is the precedent), and from the client "met a crash" and "caused one" are the
+same error. So a failure that ended the session with the statement possibly in
+flight (`isDatabaseCrashError`: 57P01/57P02, 08000/08003/08006, ECONNRESET,
+EPIPE, an ETIMEDOUT on an open socket, pg's bare "Connection terminated
+unexpectedly" — which pg also raises for a socket closed during connect, and
+which is a crash because nothing on the error tells the two apart) is **never
+resent in-process and never written off against a row**. Wherever it lands — a
+destination write, the entity lane (read from the message half of ingest's
+`entity <key>: <message>` text), the shared-content edge write, a read, a
+ledger write — the stage fails at once with `DatabaseCrashedDuringPushError`:
+
+```text
+the database crashed while this push was writing 500 communications record(s);
+rows are left pending — re-drive with `ci push --run <id> --retry-failed` once
+the database is healthy (last error: Connection terminated unexpectedly)
+```
+
+One crash per stage attempt, whatever caused it; every unsettled row stays
+`pending`; an error log line (`The database crashed with these staged rows in
+flight; the push stops here`) names the first and last staged item id and the
+data sources of the batch in flight. Re-drive it with `--retry-failed` once the
+database is back. If the re-driven push crashes the database again at the same
+place, the data in that batch is the suspect — it costs one crash per re-drive,
+so do not loop it. **Automatic poison-row isolation is a known follow-up, not
+done here.** An in-process version (resend the batch once, then each row alone,
+quarantine the row that crashed it twice) was tried and withdrawn: it crashed the
+server four times per poison row, never isolated the row when crash recovery
+took more than about a minute, crashed it dozens of times and quarantined good
+rows when *every* write crashed the server, and left the entity lane resending
+a crashing batch ten times.
 
 **The sweep re-enqueues waiting stages, and only `policy: 'short'` stops it.**
 `resumeInterrupted` judges staleness from `import_stages.updated_at`, which
