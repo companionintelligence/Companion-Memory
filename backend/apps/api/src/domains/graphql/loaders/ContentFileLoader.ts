@@ -24,7 +24,8 @@ export interface ContentFileMedia {
 
 /**
  * Batch-resolves `ci.content.external_id -> ci.files` (plus that file's PREVIEW
- * variant) for GraphQL, keyed by the file id the content row carries.
+ * and PLAYBACK variants) for GraphQL, keyed by the file id the content row
+ * carries.
  *
  * Media content rows store no `url`/`source_url` at all — the binary is only
  * reachable through `external_id`, which for `external_id_kind = 'file'` holds a
@@ -52,11 +53,16 @@ export class ContentFileLoader extends Loader<ContentFileMedia | null, string> {
   ): Promise<readonly (ContentFileMedia | null)[]> {
     const ids = [...fileIds];
 
-    const [originals, previews, playbacks] = await Promise.all([
-      this.fileService.findByIds(context, ids),
-      this.fileService.findVariantsByParentIds(context, ids, FileVariant.PREVIEW),
-      this.fileService.findVariantsByParentIds(context, ids, FileVariant.PLAYBACK),
-    ]);
+    // Both derivatives in the one variants query: a second call per kind is
+    // a third query per page (ContentResolver.batching.test.ts holds this).
+    const [originals, { [FileVariant.PREVIEW]: previews, [FileVariant.PLAYBACK]: playbacks }] =
+      await Promise.all([
+        this.fileService.findByIds(context, ids),
+        this.fileService.findVariantsOfKindsByParentIds(context, ids, [
+          FileVariant.PREVIEW,
+          FileVariant.PLAYBACK,
+        ]),
+      ]);
 
     // Indexed by id rather than zipped by position, for the same reason
     // AttachmentFileLoader does: a positional zip is correct only for as long

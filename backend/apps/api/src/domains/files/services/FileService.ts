@@ -487,25 +487,52 @@ export class FileService implements OnModuleInit {
     parentIds: string[],
     variant: FileVariant,
   ): Promise<(SignedFile | null)[]> {
-    if (parentIds.length === 0) {
-      return [];
+    const byKind = await this.findVariantsOfKindsByParentIds(context, parentIds, [variant]);
+
+    return byKind[variant];
+  }
+
+  /**
+   * Several variant kinds of each parent in ONE query — the PREVIEW and the
+   * PLAYBACK of a page of media originals, say. Each kind comes back aligned
+   * with `parentIds` (null where that parent has none), the shape
+   * {@link findVariantsByParentIds} returns for one kind.
+   *
+   * A loader that needs two derivatives calls this rather than
+   * `findVariantsByParentIds` once per kind, so a page stays one variants
+   * query per hop: PLAYBACK added beside PREVIEW as a second call doubled the
+   * content and event media loaders' query count
+   * (ContentResolver.batching.test.ts holds the count).
+   */
+  async findVariantsOfKindsByParentIds<V extends FileVariant>(
+    context: ServiceContext,
+    parentIds: string[],
+    variants: readonly V[],
+  ): Promise<Record<V, (SignedFile | null)[]>> {
+    // Keyed by the column's own type: `ci.files.variant` is a varchar.
+    const byKind = new Map<string, Map<string | null, SignedFile>>(
+      variants.map((variant) => [variant, new Map()]),
+    );
+
+    if (parentIds.length > 0 && variants.length > 0) {
+      const entities = await this.fileRepository.find({
+        where: {
+          parentId: In(parentIds),
+          variant: In([...variants]),
+          ...(context.userId !== SYSTEM_USER && {
+            userId: context.userId,
+          }),
+        },
+      });
+
+      for (const file of await this.signFiles(entities)) {
+        byKind.get(file.variant)?.set(file.parentId, file);
+      }
     }
 
-    const entities = await this.fileRepository.find({
-      where: {
-        parentId: In(parentIds),
-        variant,
-        ...(context.userId !== SYSTEM_USER && {
-          userId: context.userId,
-        }),
-      },
-    });
-
-    const signedFiles = await this.signFiles(entities);
-
-    const map = new Map(signedFiles.map((file) => [file.parentId, file]));
-
-    return parentIds.map((id) => map.get(id) ?? null);
+    return Object.fromEntries(
+      variants.map((variant) => [variant, parentIds.map((id) => byKind.get(variant)?.get(id) ?? null)]),
+    ) as Record<V, (SignedFile | null)[]>;
   }
 
   async upload(context: UserServiceContext, file: UploadFileDto): Promise<SignedFile> {

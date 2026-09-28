@@ -198,6 +198,55 @@ describe('FileService.create — hash dedup', () => {
   });
 });
 
+describe('FileService.findVariantsOfKindsByParentIds', () => {
+  it('fetches every kind in one query, each aligned with the parent ids and owner-scoped', async () => {
+    const repo = makeRepo() as ReturnType<typeof makeRepo> & { find: jest.Mock };
+    repo.find = jest.fn().mockResolvedValue([
+      // The planner's order, not the caller's.
+      { id: 'play-b', parentId: 'b', variant: FileVariant.PLAYBACK, bucket: null, key: null },
+      { id: 'prev-a', parentId: 'a', variant: FileVariant.PREVIEW, bucket: null, key: null },
+      { id: 'prev-b', parentId: 'b', variant: FileVariant.PREVIEW, bucket: null, key: null },
+    ]);
+    const { service } = makeService(repo);
+
+    const byKind = await service.findVariantsOfKindsByParentIds(
+      ownerCtx,
+      ['a', 'b', 'c'],
+      [FileVariant.PREVIEW, FileVariant.PLAYBACK],
+    );
+
+    expect(repo.find).toHaveBeenCalledTimes(1);
+    expect(repo.find.mock.calls[0][0].where).toMatchObject({ userId: 'owner-1' });
+    expect(byKind[FileVariant.PREVIEW].map((file) => file?.id ?? null)).toEqual(['prev-a', 'prev-b', null]);
+    expect(byKind[FileVariant.PLAYBACK].map((file) => file?.id ?? null)).toEqual([null, 'play-b', null]);
+  });
+
+  it('asks nothing for an empty page', async () => {
+    const repo = makeRepo() as ReturnType<typeof makeRepo> & { find: jest.Mock };
+    repo.find = jest.fn();
+    const { service } = makeService(repo);
+
+    await expect(
+      service.findVariantsOfKindsByParentIds(ownerCtx, [], [FileVariant.PREVIEW, FileVariant.PLAYBACK]),
+    ).resolves.toEqual({ [FileVariant.PREVIEW]: [], [FileVariant.PLAYBACK]: [] });
+    expect(repo.find).not.toHaveBeenCalled();
+  });
+
+  it('keeps the single-kind lookup’s shape', async () => {
+    const repo = makeRepo() as ReturnType<typeof makeRepo> & { find: jest.Mock };
+    repo.find = jest
+      .fn()
+      .mockResolvedValue([
+        { id: 'prev-b', parentId: 'b', variant: FileVariant.PREVIEW, bucket: null, key: null },
+      ]);
+    const { service } = makeService(repo);
+
+    const previews = await service.findVariantsByParentIds(ownerCtx, ['a', 'b'], FileVariant.PREVIEW);
+
+    expect(previews.map((file) => file?.id ?? null)).toEqual([null, 'prev-b']);
+  });
+});
+
 describe('FileService.uploadWithDedupInfo', () => {
   it('reports deduped:true and skips create() when the hash already exists', async () => {
     const repo = makeRepo();

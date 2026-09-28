@@ -173,8 +173,14 @@ const CASES: readonly LoaderCase[] = [
       const loader = new ContentFileLoader(
         stub({
           findByIds: async (_ctx: unknown, ids: string[]) => planner(ids, present, (id) => ({ id, url: id })),
-          findVariantsByParentIds: async (_ctx: unknown, ids: string[]) =>
-            planner(ids, present, (id) => ({ id: `pv-${id}`, parentId: id, url: `pv:${id}` })),
+          // PREVIEW and PLAYBACK from the one call, each list scrambled.
+          findVariantsOfKindsByParentIds: async (_ctx: unknown, ids: string[], kinds: readonly string[]) =>
+            Object.fromEntries(
+              kinds.map((kind) => [
+                kind,
+                planner(ids, present, (id) => ({ id: `${kind}-${id}`, parentId: id, url: `${kind}:${id}` })),
+              ]),
+            ),
         }),
         stub(LOGGER),
       );
@@ -242,8 +248,13 @@ const CASES: readonly LoaderCase[] = [
         stub({
           findByIds: async (_ctx: unknown, ids: string[]) =>
             ids.map((id) => ({ id, url: id.replace('file-of-', '') })).reverse(),
-          findVariantsByParentIds: async (_ctx: unknown, ids: string[]) =>
-            ids.map((id) => ({ id: `pv-${id}`, parentId: id, url: `pv:${id}` })).reverse(),
+          findVariantsOfKindsByParentIds: async (_ctx: unknown, ids: string[], kinds: readonly string[]) =>
+            Object.fromEntries(
+              kinds.map((kind) => [
+                kind,
+                ids.map((id) => ({ id: `${kind}-${id}`, parentId: id, url: `${kind}:${id}` })).reverse(),
+              ]),
+            ),
         }),
         stub(LOGGER),
       );

@@ -34,8 +34,9 @@ export interface EventMedia {
  * Photo/video events store their binary out-of-band: the importer's media pass
  * writes a `ci.content` row (type='media', external_id = the ORIGINAL `ci.files`
  * id) alongside the timeline event, and a thumbnail lives in that file's PREVIEW
- * variant (`parent_id` = original id). This loader walks
- *   event -> content -> ORIGINAL file -> PREVIEW file
+ * variant (`parent_id` = original id), beside a video's PLAYBACK rendition.
+ * This loader walks
+ *   event -> content -> ORIGINAL file -> PREVIEW + PLAYBACK files
  * with each hop batched once per request, so a page of N events costs three
  * queries, not 3N. Mirrors {@link PreviewLoader} but starts from an event id.
  */
@@ -70,11 +71,16 @@ export class EventMediaLoader extends Loader<EventMedia | null, string> {
 
     const originalIds = [...new Set(fileIdByEvent.values())];
 
-    const [originals, previews, playbacks] = await Promise.all([
-      this.fileService.findByIds(context, originalIds),
-      this.fileService.findVariantsByParentIds(context, originalIds, FileVariant.PREVIEW),
-      this.fileService.findVariantsByParentIds(context, originalIds, FileVariant.PLAYBACK),
-    ]);
+    // PREVIEW and PLAYBACK in one variants query, so the page stays three
+    // queries: one more call per kind is one more query per page.
+    const [originals, { [FileVariant.PREVIEW]: previews, [FileVariant.PLAYBACK]: playbacks }] =
+      await Promise.all([
+        this.fileService.findByIds(context, originalIds),
+        this.fileService.findVariantsOfKindsByParentIds(context, originalIds, [
+          FileVariant.PREVIEW,
+          FileVariant.PLAYBACK,
+        ]),
+      ]);
 
     const originalById = new Map(originals.filter((file) => file != null).map((file) => [file.id, file]));
     const previewByParent = new Map(
