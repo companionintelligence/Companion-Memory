@@ -45,89 +45,89 @@ export function SocialConnections() {
   const canAdd = count < 6;
 
   return (
-    <div className="space-y-6 w-full max-w-2xl mx-auto">
+    <div className="w-full min-w-0 max-w-2xl mx-auto space-y-5">
       <StepHeader title="Who are you usually around?" description="Let's start with up to 6 for now." />
 
-      <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_max-content_max-content] items-center gap-3 px-1 mx-auto">
+      <div className="space-y-3">
         {fields.map((field, index) => (
-          <Form.Field
+          <div
             key={field.id}
-            control={form.control}
-            // We don’t bind "name" here because we render 3 sub-fields below
-            name={`people.${index}.first` as const}
-            render={() => (
-              <>
-                {/* First Name */}
-                <Form.Item>
-                  <Form.Control>
-                    <Form.Field
-                      control={form.control}
-                      name={`people.${index}.first`}
-                      render={({ field }) => (
-                        <Input {...field} placeholder="First" className="w-full h-12 text-lg" />
-                      )}
-                    />
-                  </Form.Control>
-                  <Form.Message />
-                </Form.Item>
-
-                {/* Last Name */}
-                <Form.Item>
-                  <Form.Control>
-                    <Form.Field
-                      control={form.control}
-                      name={`people.${index}.last`}
-                      render={({ field }) => (
-                        <Input {...field} placeholder="Last" className="w-full h-12 text-lg" />
-                      )}
-                    />
-                  </Form.Control>
-                  <Form.Message />
-                </Form.Item>
-
-                {/* Relationship (Select) */}
+            className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2 device:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_11rem_auto] device:gap-3"
+          >
+            <Form.Field
+              control={form.control}
+              name={`people.${index}.first`}
+              render={({ field: nameField }) => (
                 <Form.Item className="min-w-0">
                   <Form.Control>
-                    <Form.Field
-                      control={form.control}
-                      name={`people.${index}.relationship`}
-                      render={({ field }) => (
-                        <Select value={field.value ?? ''} onValueChange={field.onChange}>
-                          <Select.Trigger className="w-full sm:w-44 h-12 min-h-12 data-[size=default]:h-12 text-lg px-3 overflow-hidden [&_svg:not([class*='size-'])]:size-5">
-                            <Select.Value placeholder="Relation" />
-                          </Select.Trigger>
-                          <Select.Content>
-                            {RELATIONSHIP_GROUPS.map((group) => (
-                              <Select.Group key={group.label}>
-                                <Select.Label className="text-sm">{group.label}</Select.Label>
-                                {group.options.map((opt) => (
-                                  <Select.Item key={opt.value} value={opt.value} className="text-lg py-2.5">
-                                    {opt.label}
-                                  </Select.Item>
-                                ))}
-                              </Select.Group>
-                            ))}
-                          </Select.Content>
-                        </Select>
-                      )}
+                    <Input
+                      {...nameField}
+                      placeholder="First"
+                      className="h-11 w-full min-w-0 text-base device:h-12 device:text-lg"
                     />
                   </Form.Control>
                   <Form.Message />
                 </Form.Item>
+              )}
+            />
 
-                <IconButton
-                  className="-ml-2 -mr-1 cursor-pointer"
-                  type="button"
-                  size="lg"
-                  variant="ghost"
-                  onClick={() => remove(index)}
-                  label={t('ONBOARDING_REMOVE_PERSON')}
-                >
-                  <X className="h-5 w-5" />
-                </IconButton>
-              </>
-            )}
-          />
+            <Form.Field
+              control={form.control}
+              name={`people.${index}.last`}
+              render={({ field: nameField }) => (
+                <Form.Item className="min-w-0">
+                  <Form.Control>
+                    <Input
+                      {...nameField}
+                      placeholder="Last"
+                      className="h-11 w-full min-w-0 text-base device:h-12 device:text-lg"
+                    />
+                  </Form.Control>
+                  <Form.Message />
+                </Form.Item>
+              )}
+            />
+
+            <IconButton
+              className="device:col-start-4 device:row-start-1"
+              type="button"
+              size="lg"
+              variant="ghost"
+              onClick={() => remove(index)}
+              label={t('ONBOARDING_REMOVE_PERSON')}
+            >
+              <X className="h-5 w-5" />
+            </IconButton>
+
+            <Form.Field
+              control={form.control}
+              name={`people.${index}.relationship`}
+              render={({ field: relationField }) => (
+                <Form.Item className="col-span-2 min-w-0 device:col-span-1 device:col-start-3 device:row-start-1">
+                  <Form.Control>
+                    <Select value={relationField.value ?? ''} onValueChange={relationField.onChange}>
+                      <Select.Trigger className="h-11 w-full min-w-0 overflow-hidden px-3 text-base data-[size=default]:h-11 device:h-12 device:min-h-12 device:text-lg device:data-[size=default]:h-12 [&_svg:not([class*='size-'])]:size-4">
+                        <Select.Value placeholder="Relation" />
+                      </Select.Trigger>
+                      <Select.Content>
+                        {RELATIONSHIP_GROUPS.map((group) => (
+                          <Select.Group key={group.label}>
+                            <Select.Label className="text-sm">{group.label}</Select.Label>
+                            {group.options.map((opt) => (
+                              <Select.Item key={opt.value} value={opt.value} className="py-2 text-base">
+                                {opt.label}
+                              </Select.Item>
+                            ))}
+                          </Select.Group>
+                        ))}
+                      </Select.Content>
+                    </Select>
+                  </Form.Control>
+                  <Form.Message />
+                </Form.Item>
+              )}
+            />
+          </div>
         ))}
       </div>
 
