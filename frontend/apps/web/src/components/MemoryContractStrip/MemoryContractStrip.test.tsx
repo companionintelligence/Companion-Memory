@@ -21,7 +21,9 @@ describe('MemoryContractStrip', () => {
 
     render(<MemoryContractStrip />);
 
-    expect(screen.getByTestId('memory-contract-notice')).toHaveTextContent('Please update your Memory server.');
+    expect(screen.getByTestId('memory-contract-notice')).toHaveTextContent(
+      'Please update your Memory server.',
+    );
   });
 
   it('says to update the app when the server no longer accepts this one', () => {

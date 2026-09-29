@@ -4,7 +4,6 @@ import { setApiBaseUrl, setApiKey } from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-
 import { FeaturesProvider, useFeatures } from './useFeatures';
 
 const h = vi.hoisted(() => ({
@@ -207,7 +206,12 @@ describe('useFeatures', () => {
     await waitFor(() => expect(result.current.isFeatureEnabled('insights.page')).toBe(true));
     const before = countUserFetches(fetchMock);
 
-    h.auth = { authToken: 'test-token-rotated', subject: 'user-a', initializing: false, authenticated: undefined };
+    h.auth = {
+      authToken: 'test-token-rotated',
+      subject: 'user-a',
+      initializing: false,
+      authenticated: undefined,
+    };
     rerender();
 
     expect(result.current.isFeatureEnabled('insights.page')).toBe(true);
