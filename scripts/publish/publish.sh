@@ -454,9 +454,15 @@ main() {
   # ── Step 1: Prepare bundle ──────────────────────────────────────────
   log "=== Step 1: Prepare app bundle ==="
 
+  # The tarball gets a mktemp -d directory, not a file template: BSD mktemp
+  # (macOS) randomizes only TRAILING X's, so /tmp/bundle-XXXXXX.tar.gz is
+  # created as that literal path. Concurrent runs collide on it, and a run
+  # killed before the trap fires leaves it behind to fail every later run with
+  # "File exists".
   BUNDLE_DIR=$(mktemp -d)
-  BUNDLE=$(mktemp /tmp/bundle-XXXXXX.tar.gz)
-  trap "rm -rf '$BUNDLE_DIR' '$BUNDLE'" EXIT
+  BUNDLE_OUT_DIR=$(mktemp -d)
+  BUNDLE="${BUNDLE_OUT_DIR}/bundle.tar.gz"
+  trap "rm -rf '$BUNDLE_DIR' '$BUNDLE_OUT_DIR'" EXIT
 
   # Copy static manifest files
   cp -r "${SCRIPT_DIR}/manifest/." "${BUNDLE_DIR}/"
