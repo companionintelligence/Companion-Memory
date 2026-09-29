@@ -149,6 +149,7 @@ export class HomeConfirmService {
           lat: Number.NaN,
           lng: Number.NaN,
           eventCount: 0,
+          sampleEvents: [],
           confidence: 0.8,
         }
       );

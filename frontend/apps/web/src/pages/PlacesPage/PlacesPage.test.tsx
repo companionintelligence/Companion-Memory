@@ -76,6 +76,11 @@ const GET_KNOWN_PLACES = gql(`
       lng
       eventCount
       confidence
+      sampleEvents {
+        id
+        title
+        startTime
+      }
     }
   }
 `);
@@ -187,6 +192,7 @@ function candidate(overrides: Record<string, unknown> = {}) {
     lng: -122.4194,
     eventCount: 12,
     confidence: 0.8,
+    sampleEvents: [] as Array<{ id: string; title: string; startTime: string }>,
     ...overrides,
   };
 }
@@ -503,6 +509,10 @@ describe('PlacesPage', () => {
                 kind: 'other',
                 lat: 34.0769,
                 lng: -118.4744,
+                sampleEvents: [
+                  { id: 'evt-1', title: 'Morning coffee', startTime: '2026-08-19T15:00:00.000Z' },
+                  { id: 'evt-2', title: 'Evening walk', startTime: '2026-08-18T02:00:00.000Z' },
+                ],
               }),
             ],
           }),
@@ -513,6 +523,8 @@ describe('PlacesPage', () => {
       expect(nameInput).toHaveValue('');
       // The coordinates are the only handle the user has on an unnamed cluster.
       expect(screen.getByText(/near 34\.0769, -118\.4744/)).toBeInTheDocument();
+      expect(screen.getByText(/Morning coffee/)).toBeInTheDocument();
+      expect(screen.getByText(/Evening walk/)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
 
       fireEvent.change(nameInput, { target: { value: '   ' } });

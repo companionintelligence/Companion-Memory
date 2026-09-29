@@ -95,6 +95,11 @@ const GET_KNOWN_PLACES = gql(`
       lng
       eventCount
       confidence
+      sampleEvents {
+        id
+        title
+        startTime
+      }
     }
   }
 `);
@@ -288,6 +293,23 @@ function KnownPlaceCandidateRow({
           onChange={(event) => setLabel(event.target.value)}
           disabled={saving}
         />
+        {candidate.sampleEvents.length > 0 && (
+          <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+            {candidate.sampleEvents.map((event) => {
+              const when = formatDate(event.startTime);
+
+              return (
+                <li key={event.id} className="truncate">
+                  {event.title}
+                  {when ? ` · ${when}` : ''}
+                </li>
+              );
+            })}
+            {candidate.eventCount > candidate.sampleEvents.length && (
+              <li>and {candidate.eventCount - candidate.sampleEvents.length} more</li>
+            )}
+          </ul>
+        )}
       </div>
       <select
         aria-label="Kind"

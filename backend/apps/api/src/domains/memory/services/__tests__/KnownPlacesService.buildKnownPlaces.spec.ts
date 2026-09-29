@@ -29,6 +29,8 @@ const WEEKDAY_NIGHT_HOUR = '2026-08-19T22:00:00.000Z'; // Wed, 22:00 UTC — nig
 const WEEKEND_WORK_HOUR = '2026-08-15T10:00:00.000Z'; // Sat, 10:00 UTC — neither signal
 
 interface RawRow {
+  event_id?: string | null;
+  title?: string | null;
   location_entity_id: string | null;
   location_name: string | null;
   lat: number;
@@ -342,6 +344,31 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
 
     expect(sql).toContain('event.user_id = $1');
     expect(sql).toContain('event.location_coordinates IS NOT NULL');
+    expect(sql).toContain('event.title');
+    expect(sql).toContain('event.event_id');
     expect(params).toEqual([USER]);
+  });
+
+  it('keeps the newest event titles so an unnamed cluster can be recognized', async () => {
+    const { service } = makeService([
+      row({
+        location_name: null,
+        event_id: 'evt-old',
+        title: 'Older coffee',
+        start_time: '2026-08-15T10:00:00.000Z',
+      }),
+      row({
+        location_name: null,
+        event_id: 'evt-new',
+        title: 'Morning run',
+        start_time: '2026-08-19T10:00:00.000Z',
+      }),
+    ]);
+
+    const [candidate] = await service.buildKnownPlaces(CONTEXT);
+
+    expect(candidate.label).toBe('Unknown place');
+    expect(candidate.eventCount).toBe(2);
+    expect(candidate.sampleEvents.map((event) => event.title)).toEqual(['Morning run', 'Older coffee']);
   });
 });

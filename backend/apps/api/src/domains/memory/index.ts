@@ -454,6 +454,7 @@ export type {
   KnownPlaceKind,
   KnownPlaceSource,
   KnownPlaceCandidate,
+  KnownPlaceSampleEvent,
 } from './services/KnownPlacesService';
 export type { Concept, Event, Item, ObjectCondition, Person, Communication, Place };
 export type {
