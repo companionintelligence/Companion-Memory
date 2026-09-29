@@ -1,8 +1,8 @@
 /**
  * xtask — the repo's build automation as a real program, run via `tsx`
- * (mirrors the `xtask` pattern from the `ratatui` project). It holds the three
- * Makefile targets that had grown real logic — `build`, `dev` and `test` —
- * whose recipes now just delegate to
+ * (mirrors the `xtask` pattern from the `ratatui` project). It holds the
+ * Makefile targets that had grown real logic — `build`, `dev`, `test` and
+ * `test-db` — whose recipes now just delegate to
  * `yarn tsx scripts/xtask/index.ts <command> ...`.
  *
  * Everything else stays in the Makefile, deliberately. `format`, `lint` and
@@ -18,6 +18,7 @@
 import { main as buildMain } from './commands/build';
 import { main as devMain } from './commands/dev';
 import { main as testMain } from './commands/test';
+import { main as testDbMain } from './commands/test-db';
 import { fail } from '../dev-stack/log';
 
 interface Command {
@@ -29,6 +30,10 @@ const COMMANDS: Record<string, Command> = {
   build: { main: buildMain, summary: 'Build images (ENV=local|staging|production, GPU=cpu|cuda|rocm)' },
   dev: { main: devMain, summary: 'Run the development environment locally' },
   test: { main: testMain, summary: 'Run the unit tests, both stacks' },
+  'test-db': {
+    main: testDbMain,
+    summary: 'Run the database-backed jest suites against a throwaway Postgres',
+  },
 };
 
 function printHelp(): void {

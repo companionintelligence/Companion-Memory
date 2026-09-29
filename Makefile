@@ -698,6 +698,10 @@ typecheck: ## Typecheck every JS/TS workspace that declares a typecheck script
 test: ## Run the unit tests, both stacks
 	@yarn tsx scripts/xtask/index.ts test
 
+.PHONY: test-db
+test-db: ## Run the database-backed jest suites against a throwaway Postgres (needs Docker)
+	@yarn tsx scripts/xtask/index.ts test-db $(if $(KEEP),--keep) $(if $(WORKERS),--workers $(WORKERS)) $(if $(DB_IMAGE),--image $(DB_IMAGE)) -- $(ARGS)
+
 .PHONY: test-android
 test-android: ## Run the Android native unit tests (JVM; no emulator needed)
 	@printf "$(call task_icon,test-android,🤖) Running Android unit tests...\n\n"

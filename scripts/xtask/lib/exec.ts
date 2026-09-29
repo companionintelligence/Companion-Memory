@@ -12,7 +12,7 @@
  * calls another in-process (e.g. `dev` calling `build`/`health`) can still
  * run its own cleanup instead of the whole process dying mid-composition.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 export interface RunOptions {
   cwd?: string;
@@ -66,4 +66,107 @@ export function which(cmd: string): string | null {
   const res = tryRun('which', [cmd]);
 
   return res.status === 0 && res.stdout.trim() ? res.stdout.trim() : null;
+}
+
+export interface RunAsyncResult {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  /** True when this process was asked to stop (SIGINT/SIGTERM) while the child ran. */
+  interrupted: boolean;
+  /** Combined stdout+stderr, only when `capture` was requested; otherwise empty. */
+  output: string;
+}
+
+/**
+ * Inherit stdio and wait for the child WITHOUT blocking the event loop, so a
+ * SIGINT/SIGTERM aimed at THIS process is handled while a long child runs —
+ * `spawnSync` cannot do that, and index.ts keeps the process alive through those
+ * signals on the assumption that Ctrl-C reaches the child too. That assumption
+ * fails for a plain `kill <pid>` (only this process is signalled), which would
+ * leave a command such as `test-db` unable to clean up until the child ended on
+ * its own, minutes later. Here the signal is forwarded to the child, and a child
+ * that ignores it is killed after `killAfterMs`. Resolves with what happened;
+ * never throws on a nonzero exit, because the caller usually has more to do with
+ * the answer (read a report, tear something down) than to abort on it.
+ */
+export function runAsync(
+  cmd: string,
+  args: string[] = [],
+  opts: RunOptions & { killAfterMs?: number; capture?: boolean } = {},
+): Promise<RunAsyncResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      stdio: opts.capture ? ['inherit', 'pipe', 'pipe'] : 'inherit',
+      cwd: opts.cwd,
+      env: opts.env ?? process.env,
+    });
+    const chunks: Buffer[] = [];
+    let interrupted = false;
+
+    if (opts.capture) {
+      child.stdout?.on('data', (c: Buffer) => chunks.push(c));
+      child.stderr?.on('data', (c: Buffer) => chunks.push(c));
+    }
+
+    let killTimer: NodeJS.Timeout | undefined;
+
+    const forward = (signal: NodeJS.Signals): void => {
+      interrupted = true;
+      child.kill(signal);
+      killTimer ??= setTimeout(() => child.kill('SIGKILL'), opts.killAfterMs ?? 10_000);
+    };
+
+    const onInt = (): void => forward('SIGINT');
+    const onTerm = (): void => forward('SIGTERM');
+
+    const detach = (): void => {
+      process.off('SIGINT', onInt);
+      process.off('SIGTERM', onTerm);
+
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+    };
+
+    process.on('SIGINT', onInt);
+    process.on('SIGTERM', onTerm);
+
+    child.once('error', (err) => {
+      detach();
+      reject(err);
+    });
+    child.once('close', (status, signal) => {
+      detach();
+      resolve({ status, signal, interrupted, output: Buffer.concat(chunks).toString('utf8') });
+    });
+  });
+}
+
+/**
+ * `runAsync`, throwing on a nonzero exit the way `run` does. With `capture` the
+ * child's output is held back and only surfaces (its last 40 lines) in the error,
+ * for a step whose success output is noise — `dbmate up` prints two lines per
+ * migration, several hundred of them.
+ */
+export async function runAsyncOrThrow(
+  cmd: string,
+  args: string[] = [],
+  opts: RunOptions & { capture?: boolean } = {},
+): Promise<RunAsyncResult> {
+  const res = await runAsync(cmd, args, opts);
+
+  if (res.interrupted) {
+    throw new Error(`${cmd} ${args.join(' ')} was interrupted`);
+  }
+
+  if (res.status !== 0) {
+    const tail = res.output.trim().split('\n').slice(-40).join('\n');
+
+    throw new Error(
+      `${cmd} ${args.join(' ')} ${res.signal ? `was killed by ${res.signal}` : `exited ${res.status}`}` +
+        (tail ? `. Last output:\n${tail}` : ''),
+    );
+  }
+
+  return res;
 }
