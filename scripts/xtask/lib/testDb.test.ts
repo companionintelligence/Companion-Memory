@@ -8,16 +8,21 @@ import {
   APP_DATABASE,
   CONTAINER_PREFIX,
   EMPTY_DATABASE,
+  KEEP_ENV_NAMES,
+  KEEP_ENV_PREFIXES,
   LABEL_KEY,
   LABEL_VALUE,
   LOCAL_IMAGE,
+  PS_FORMAT,
   STALE_AFTER_MS,
   TEST_ADMIN_URL_VARS,
   TEST_DATABASE_URL_VARS,
   assertOnlyThrowaway,
   buildTestEnv,
   chooseImage,
+  escapeRegex,
   formatDuration,
+  isDatabaseShaped,
   isOurs,
   jestChoosesWorkers,
   jestFiltersByName,
@@ -25,6 +30,7 @@ import {
   parseCiDatabaseImage,
   parseDockerPort,
   parseInspectContainers,
+  parsePsRows,
   parseTestDbArgs,
   randomPassword,
   scrubEnv,
@@ -150,6 +156,26 @@ test('parseDockerPort reads the host port off `docker port` output, including a 
   assert.throws(() => parseDockerPort('no ports here'), /could not read a published port/);
 });
 
+test('parsePsRows reads the rows of `docker ps --format PS_FORMAT`, splitting names and keeping the label', () => {
+  assert.equal(PS_FORMAT, '{{.ID}}|{{.Names}}|{{.Label "ci.test-db"}}');
+  assert.deepEqual(parsePsRows(`abc|ci-testdb-1|1\ndef|/other,linked/alias|\n\nnot a row\n|x|1\nghi||1\n`), [
+    { id: 'abc', names: ['ci-testdb-1'], label: '1' },
+    { id: 'def', names: ['other', 'linked/alias'], label: '' },
+  ]);
+  assert.deepEqual(parsePsRows(''), []);
+});
+
+test('escapeRegex makes a container name a literal in a --filter name= regular expression', () => {
+  assert.equal(escapeRegex('ci-testdb-ab12cd34'), 'ci-testdb-ab12cd34');
+  assert.equal(escapeRegex('ci-testdb-a.b'), 'ci-testdb-a\\.b');
+  assert.ok(new RegExp(`^${escapeRegex('ci-testdb-a.b')}$`).test('ci-testdb-a.b'));
+  assert.ok(!new RegExp(`^${escapeRegex('ci-testdb-a.b')}$`).test('ci-testdb-aXb'));
+  assert.equal(
+    escapeRegex('a+b(c)[d]{e}|f^g$h*i?j\\k'),
+    'a\\+b\\(c\\)\\[d\\]\\{e\\}\\|f\\^g\\$h\\*i\\?j\\\\k',
+  );
+});
+
 // -- image --------------------------------------------------------------------
 
 test("parseCiDatabaseImage reads the pin out of ci.yml's postgres service, from the real file", () => {
@@ -201,7 +227,7 @@ test('chooseImage does not read ci.yml unless it has to', () => {
 // -- arguments ----------------------------------------------------------------
 
 test('parseTestDbArgs: defaults', () => {
-  assert.deepEqual(parseTestDbArgs([]), { help: false, keep: false, workers: 4, jestArgs: [] });
+  assert.deepEqual(parseTestDbArgs([]), { help: false, keep: false, workers: 4, retry: true, jestArgs: [] });
 });
 
 test('parseTestDbArgs: own flags, in either value syntax', () => {
@@ -212,6 +238,17 @@ test('parseTestDbArgs: own flags, in either value syntax', () => {
   assert.deepEqual([b.keep, b.image, b.workers], [false, 'my/db:1', 6]);
   assert.equal(parseTestDbArgs(['-h']).help, true);
   assert.equal(parseTestDbArgs(['--help']).help, true);
+});
+
+test('parseTestDbArgs: --no-retry turns the flake retry off, and only that', () => {
+  const a = parseTestDbArgs(['--no-retry']);
+
+  assert.equal(a.retry, false);
+  assert.deepEqual([a.keep, a.workers, a.jestArgs], [false, 4, []]);
+  assert.equal(parseTestDbArgs(['--keep', '--no-retry', 'src/x']).retry, false);
+  // After `--` it is jest's, not ours.
+  assert.equal(parseTestDbArgs(['--', '--no-retry']).retry, true);
+  assert.deepEqual(parseTestDbArgs(['--', '--no-retry']).jestArgs, ['--no-retry']);
 });
 
 test('parseTestDbArgs: bare words are jest path patterns; everything after -- is jest verbatim', () => {
@@ -236,7 +273,7 @@ test('parseTestDbArgs: bare words are jest path patterns; everything after -- is
 test('parseTestDbArgs: an unknown flag before -- is an error that says how to reach jest', () => {
   assert.throws(
     () => parseTestDbArgs(['--kepp']),
-    /Unknown flag '--kepp'.*--help, --keep, --image, --workers.*after '--'/s,
+    /Unknown flag '--kepp'.*--help, --keep, --image, --workers, --no-retry.*after '--'/s,
   );
   assert.throws(() => parseTestDbArgs(['-t', 'x']), /Unknown flag '-t'/);
 });
@@ -288,14 +325,132 @@ const HOSTILE_PARENT: NodeJS.ProcessEnv = {
   OLLAMA_HOST: 'http://localhost:11434',
 };
 
+/**
+ * Names a name-regex of the first design did NOT catch, each pointing at the
+ * owner's real database (localhost:5432) the way an operator's shell might. The
+ * first five are the ones the reviewer injected and that reached jest unchanged.
+ */
+const HOSTILE_NAMES: Record<string, string> = {
+  HBPE_DATABASE_URL: 'postgres://hbpe:REALPW@localhost:5432/companion',
+  PS_REPLICATION_URI: 'postgres://repl:REALPW@localhost:5432/companion',
+  POWERSYNC_DATABASE_PASSWORD: 'REALPW',
+  DB_HOST: 'localhost',
+  COMPOSE_PROJECT_NAME: 'ci-server-nervous-jackson-7a51b2',
+  // Same family, other spellings.
+  HBPE_DB_HOST: 'localhost',
+  HBPE_DB_PORT: '5432',
+  REPORTING_DB: 'postgres://ro:REALPW@localhost:5432/companion',
+  PS_REPLICATION_HOST: 'localhost',
+  POWERSYNC_URL: 'http://localhost:8080',
+  POWERSYNC_DATABASE_HOST: 'localhost',
+  APP_POSTGRES_URI: 'postgresql://u:REALPW@localhost:5432/companion',
+  PGPORT: '5432',
+  PGSERVICE: 'companion',
+  PGDATABASE: 'companion',
+  COMPOSE_FILE: 'docker-compose.local.yml',
+  COMPOSE_PROFILES: 'all',
+  SEARCH_INDEX_URL: 'postgres://u:REALPW@localhost:5432/companion',
+  SOMETHING_URI: 'postgres://u:REALPW@localhost:5432/companion',
+  database_url: 'postgres://u:REALPW@localhost:5432/companion',
+  Db_Host: 'localhost',
+};
+
 test('scrubEnv removes every database-shaped variable and keeps the rest', () => {
   const env = scrubEnv(HOSTILE_PARENT);
 
   assert.deepEqual(Object.keys(env).sort(), ['HOME', 'OLLAMA_HOST', 'PATH']);
 });
 
+test('scrubEnv drops every hostile name, whatever spelling and case, including the ones a name regex missed', () => {
+  const env = scrubEnv({ ...HOSTILE_NAMES, PATH: '/usr/bin' });
+
+  assert.deepEqual(Object.keys(env), ['PATH']);
+
+  for (const name of Object.keys(HOSTILE_NAMES)) {
+    assert.equal(isDatabaseShaped(name), true, `${name} is database-shaped`);
+  }
+});
+
+test('the drop rule is deliberately broad: a name that merely resembles a connection setting goes too', () => {
+  // These are false positives, and cost nothing: nothing under test needs them.
+  for (const name of [
+    'ANTHROPIC_BASE_URL',
+    'ADB_SERVER_SOCKET',
+    'SENTRY_DSN_URL',
+    'PGP_KEY_ID',
+    'LEGACY_DB_',
+  ]) {
+    assert.equal(isDatabaseShaped(name), true, `${name} is dropped`);
+  }
+
+  // Not database-shaped: an ordinary variable, including one that is only PART of a word.
+  for (const name of [
+    'OLLAMA_HOST',
+    'LLM_API_BASE',
+    'NODE_ENV',
+    'FORCE_COLOR',
+    'JWT_SECRET',
+    'ADBLOCK',
+    'APP_BASE_URL_X',
+  ]) {
+    assert.equal(isDatabaseShaped(name), false, `${name} is kept`);
+  }
+});
+
+test('the keep-list: what yarn, jest and docker need survives, even where a heuristic would have dropped it', () => {
+  const parent: NodeJS.ProcessEnv = {};
+
+  for (const name of KEEP_ENV_NAMES) {
+    parent[name] = 'x';
+  }
+
+  for (const prefix of KEEP_ENV_PREFIXES) {
+    parent[`${prefix}SOMETHING`] = 'x';
+  }
+
+  // Names the keep-list exists to protect from the heuristic tier.
+  parent.YARN_NPM_REGISTRY_URL = 'https://registry.example.com';
+  parent.YARN_CACHE_DB_FOLDER = '/cache';
+  parent.LC_ALL = 'en_US.UTF-8';
+
+  const env = scrubEnv(parent);
+
+  assert.deepEqual(Object.keys(env).sort(), Object.keys(parent).sort(), 'every kept name survived');
+
+  for (const name of [
+    'PATH',
+    'HOME',
+    'TMPDIR',
+    'NODE_OPTIONS',
+    'TERM',
+    'CI',
+    'TZ',
+    'LANG',
+    'SHELL',
+    'USER',
+    'LOGNAME',
+    'DOCKER_HOST',
+    'DOCKER_CONFIG',
+  ]) {
+    assert.ok(KEEP_ENV_NAMES.includes(name), `${name} is on the keep-list`);
+  }
+
+  assert.ok(KEEP_ENV_PREFIXES.includes('YARN_') && KEEP_ENV_PREFIXES.includes('LC_'));
+});
+
+test('the keep-list cannot save a name that CONTAINS a database word', () => {
+  const env = scrubEnv({
+    YARN_DATABASE_URL: 'postgres://u:REALPW@localhost:5432/companion',
+    LC_POSTGRES_HOST: 'localhost',
+    YARN_POWERSYNC_TOKEN: 'x',
+    YARN_ENABLE_TELEMETRY: '0',
+  });
+
+  assert.deepEqual(Object.keys(env), ['YARN_ENABLE_TELEMETRY']);
+});
+
 test('buildTestEnv: nothing from the parent database configuration survives', () => {
-  const env = buildTestEnv(HOSTILE_PARENT, DB, NO_DOTENV);
+  const env = buildTestEnv({ ...HOSTILE_PARENT, ...HOSTILE_NAMES }, DB, NO_DOTENV);
   const dump = JSON.stringify(env);
 
   for (const leaked of [
@@ -303,11 +458,13 @@ test('buildTestEnv: nothing from the parent database configuration survives', ()
     'REALADMIN',
     'prod.example.com',
     ':5432',
+    'localhost:5432',
     '../../../.env',
     'SOME_NEW_TEST_DATABASE_URL',
     'PGHOST',
     'POSTGRES_PASSWORD',
     'DATABASE_QUERY_LOGGING',
+    ...Object.keys(HOSTILE_NAMES),
   ]) {
     assert.ok(!dump.includes(leaked), `${leaked} leaked into the test environment`);
   }
@@ -373,6 +530,50 @@ test('the env this builds passes its own throwaway check; a stray real URL does 
       `${key}=${value} must be refused`,
     );
   }
+});
+
+test('assertOnlyThrowaway refuses every hostile name even if the scrub had missed it — whatever it points at', () => {
+  const env = buildTestEnv({}, DB, NO_DOTENV);
+
+  for (const [key, value] of Object.entries(HOSTILE_NAMES)) {
+    assert.throws(
+      () => assertOnlyThrowaway({ ...env, [key]: value }, DB.port),
+      new RegExp(key),
+      `${key}=… must be refused`,
+    );
+  }
+
+  // Also when the value is one that LOOKS fine: a database-shaped variable this command did not set has no business being here.
+  for (const key of [
+    'HBPE_DATABASE_URL',
+    'PS_REPLICATION_URI',
+    'POWERSYNC_DATABASE_PASSWORD',
+    'DB_HOST',
+    'COMPOSE_PROJECT_NAME',
+  ]) {
+    assert.throws(
+      () => assertOnlyThrowaway({ ...env, [key]: `postgres://x:y@127.0.0.1:${DB.port}/companion` }, DB.port),
+      new RegExp(key),
+      `${key} pointing at the throwaway is still refused: nothing set it on purpose`,
+    );
+  }
+});
+
+test('assertOnlyThrowaway is not fooled by kept names, and does not refuse the environment the scrub leaves', () => {
+  const env = buildTestEnv(
+    {
+      ...HOSTILE_PARENT,
+      ...HOSTILE_NAMES,
+      YARN_NPM_REGISTRY_URL: 'https://r.example.com',
+      LC_ALL: 'C',
+      DOCKER_HOST: 'unix:///var/run/docker.sock',
+    },
+    DB,
+    NO_DOTENV,
+  );
+
+  assert.doesNotThrow(() => assertOnlyThrowaway(env, DB.port));
+  assert.equal(env.YARN_NPM_REGISTRY_URL, 'https://r.example.com');
 });
 
 test('assertOnlyThrowaway names the variable, never its value', () => {

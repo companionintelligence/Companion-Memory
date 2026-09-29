@@ -95,6 +95,43 @@ export function parseInspectContainers(output: string): ContainerInfo[] {
   return containers;
 }
 
+/** Escape `text` for use inside a regular expression (docker's `--filter name=` takes one). */
+export function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * The `--format` for a `docker ps` whose rows {@link parsePsRows} reads: id, every
+ * name, and the value of our label — so the CALLER can check the label itself
+ * rather than trust that a `--filter` did.
+ */
+export const PS_FORMAT = `{{.ID}}|{{.Names}}|{{.Label "${LABEL_KEY}"}}`;
+
+export interface PsRow {
+  id: string;
+  /** `docker ps` prints every name a container has, comma separated. */
+  names: string[];
+  /** The value of the ci.test-db label; empty when the container has none. */
+  label: string;
+}
+
+/** Rows of `docker ps --format PS_FORMAT`. A line that is not three `|`-separated fields is dropped, not guessed at. */
+export function parsePsRows(output: string): PsRow[] {
+  const rows: PsRow[] = [];
+
+  for (const line of output.split('\n')) {
+    const parts = line.trim().split('|');
+
+    if (parts.length !== 3 || !parts[0] || !parts[1]) {
+      continue;
+    }
+
+    rows.push({ id: parts[0], names: parts[1].split(',').map((n) => n.replace(/^\//, '')), label: parts[2] });
+  }
+
+  return rows;
+}
+
 /** A fresh container name: unguessable enough that two concurrent runs never collide. */
 export function newContainerName(): string {
   return `${CONTAINER_PREFIX}${randomBytes(4).toString('hex')}`;
@@ -167,6 +204,11 @@ export interface TestDbArgs {
   keep: boolean;
   image?: string;
   workers: number;
+  /**
+   * Re-run the test files that failed, once, serially, to tell a flake from a
+   * real failure. `--no-retry` turns it off.
+   */
+  retry: boolean;
   /** Everything destined for jest: path patterns, and anything after `--`. */
   jestArgs: string[];
 }
@@ -174,7 +216,7 @@ export interface TestDbArgs {
 export const DEFAULT_WORKERS = 4;
 const MAX_WORKERS = 32;
 
-const OWN_FLAGS = ['--help', '--keep', '--image', '--workers'];
+const OWN_FLAGS = ['--help', '--keep', '--image', '--workers', '--no-retry'];
 
 /**
  * Own flags come first; bare words are jest path patterns; everything after `--`
@@ -183,7 +225,7 @@ const OWN_FLAGS = ['--help', '--keep', '--image', '--workers'];
  * would otherwise reach jest as a filter and run zero tests.
  */
 export function parseTestDbArgs(argv: string[]): TestDbArgs {
-  const args: TestDbArgs = { help: false, keep: false, workers: DEFAULT_WORKERS, jestArgs: [] };
+  const args: TestDbArgs = { help: false, keep: false, workers: DEFAULT_WORKERS, retry: true, jestArgs: [] };
   const dashDash = argv.indexOf('--');
   const own = dashDash === -1 ? argv : argv.slice(0, dashDash);
   const rest = dashDash === -1 ? [] : argv.slice(dashDash + 1);
@@ -213,6 +255,8 @@ export function parseTestDbArgs(argv: string[]): TestDbArgs {
       args.help = true;
     } else if (flag === '--keep') {
       args.keep = true;
+    } else if (flag === '--no-retry') {
+      args.retry = false;
     } else if (flag === '--image') {
       let image: string;
 
@@ -303,9 +347,85 @@ export const APP_ROLE = 'companion';
 export const ADMIN_ROLE = 'postgres';
 export const LOOPBACK = '127.0.0.1';
 
-/** Names of parent-environment variables that could point a suite at some other database. */
-const DATABASE_SHAPED =
-  /^(DATABASE_|PG[A-Z_]*$|POSTGRES_|.*_TEST_(ADMIN_)?DATABASE_URL$|DOTENV_CONFIG_PATH$|CI_REQUIRE_DB$)/;
+/*
+ * Parent-environment variables are removed BY NAME, and the rule is deliberately
+ * broad, because the failure it guards against — a suite writing to the owner's
+ * real corpus — cannot be undone, while the failure of being too broad is that a
+ * variable nothing here needs goes missing. A reviewer injected
+ * `HBPE_DATABASE_URL`, `PS_REPLICATION_URI`, `POWERSYNC_DATABASE_PASSWORD`,
+ * `DB_HOST` and `COMPOSE_PROJECT_NAME` into the parent and every one reached
+ * jest under the previous, narrower rule.
+ *
+ * Two tiers, matched case-insensitively:
+ *
+ *  1. A name CONTAINING one of DATABASE_WORDS is always dropped — not even the
+ *     keep-list below can save it.
+ *  2. A name that merely LOOKS like a connection setting (CONNECTION_SHAPED) is
+ *     dropped unless it is on the keep-list: anything starting `PG` (libpq),
+ *     containing `DB_` or ending `_DB`, ending `_URI` or `_URL` (a connection
+ *     string is a URL by another name), or starting `COMPOSE_` (a docker compose
+ *     project name can point at the owner's stack). This is where the false
+ *     positives live — `ANTHROPIC_BASE_URL` goes, `ADB_SERVER_SOCKET` goes — and
+ *     they cost nothing: a jest suite that needs one of them is reading an
+ *     environment it should not be.
+ */
+const DATABASE_WORDS = /DATABASE|POSTGRES|REPLICATION|POWERSYNC/i;
+const CONNECTION_SHAPED = /(^PG|DB_|_DB$|_URI$|_URL$|^COMPOSE_)/i;
+
+/**
+ * Set by this command, so whatever the parent had is dropped first even though
+ * neither matches the rules above.
+ */
+const SET_BY_US = /^(DOTENV_CONFIG_PATH|CI_REQUIRE_DB)$/;
+
+/**
+ * The keep-list: names that must survive tier 2 because the toolchain needs
+ * them, checked against what yarn, jest and the docker CLI actually read. It is
+ * tiny on purpose — everything not matching a rule above already passes through,
+ * so this list only ever overrides the tier-2 heuristics.
+ *
+ *   PATH, HOME, TMPDIR, USER, LOGNAME, SHELL   process basics: yarn resolves its
+ *                                              binary and cache from them
+ *   NODE_OPTIONS                               yarn PnP injects `--require .pnp.cjs`
+ *                                              and its loader through it
+ *   YARN_*                                     yarn's own configuration
+ *   TERM, CI, TZ, LANG, LC_*                   output and locale behaviour of jest
+ *   DOCKER_HOST, DOCKER_CONFIG                 which daemon and credentials the
+ *                                              docker CLI (used by this command
+ *                                              and by suites that shell out) reaches
+ */
+export const KEEP_ENV_NAMES: readonly string[] = [
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'NODE_OPTIONS',
+  'TERM',
+  'CI',
+  'TZ',
+  'LANG',
+  'DOCKER_HOST',
+  'DOCKER_CONFIG',
+];
+export const KEEP_ENV_PREFIXES: readonly string[] = ['YARN_', 'LC_'];
+
+const isKept = (name: string): boolean =>
+  KEEP_ENV_NAMES.includes(name) || KEEP_ENV_PREFIXES.some((prefix) => name.startsWith(prefix));
+
+/**
+ * Could this variable name a database (or a way to reach one)? True means it
+ * must not reach jest or the migrations unless {@link buildTestEnv} set it
+ * itself. Names are matched case-insensitively.
+ */
+export function isDatabaseShaped(name: string): boolean {
+  if (DATABASE_WORDS.test(name) || SET_BY_US.test(name)) {
+    return true;
+  }
+
+  return !isKept(name) && CONNECTION_SHAPED.test(name);
+}
 
 export interface Throwaway {
   port: number;
@@ -318,9 +438,9 @@ export function randomPassword(): string {
   return randomBytes(24).toString('hex');
 }
 
-/** The parent environment with every database-shaped variable removed. */
+/** The parent environment with every {@link isDatabaseShaped} variable removed. */
 export function scrubEnv(parent: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(parent).filter(([key]) => !DATABASE_SHAPED.test(key)));
+  return Object.fromEntries(Object.entries(parent).filter(([key]) => !isDatabaseShaped(key)));
 }
 
 const urlFor = (user: string, password: string, port: number, database: string, query = ''): string =>
@@ -370,14 +490,49 @@ export function buildTestEnv(
   return env;
 }
 
+/** Every variable {@link buildTestEnv} sets on purpose: the only database-shaped names allowed in the final environment. */
+const THROWAWAY_VARS: ReadonlySet<string> = new Set([
+  'DATABASE_URL',
+  'DATABASE_HOST',
+  'DATABASE_PORT',
+  'DATABASE_USERNAME',
+  'DATABASE_PASSWORD',
+  'DATABASE_NAME',
+  'DATABASE_ADMIN_USERNAME',
+  'DATABASE_ADMIN_PASSWORD',
+  'CI_REQUIRE_DB',
+  'DOTENV_CONFIG_PATH',
+  ...TEST_DATABASE_URL_VARS,
+  ...TEST_ADMIN_URL_VARS,
+]);
+
 /**
- * Throw if any database-shaped variable in `env` names a host other than the
- * throwaway's loopback port. Reports the VARIABLE, never its value — the values
- * are connection strings with passwords in them.
+ * The last line of defence, run on the FINISHED environment before any child
+ * process starts, and independent of {@link scrubEnv}: it does not assume the
+ * scrub worked.
+ *
+ * Two rules. A variable this command sets must say what it should — a URL names
+ * the throwaway's loopback port, a `*HOST` is loopback, a `*PORT` is the port.
+ * And a database-shaped variable this command did NOT set must not be there at
+ * all, whatever its value: had it come from the parent, the scrub missed it, and
+ * `localhost:5432` is the owner's real database.
+ *
+ * Reports the VARIABLE, never its value — the values are connection strings
+ * with passwords in them.
  */
 export function assertOnlyThrowaway(env: NodeJS.ProcessEnv, port: number): void {
   for (const [key, value] of Object.entries(env)) {
-    if (value === undefined || !/^(DATABASE_|PG[A-Z_]*$|.*_TEST_(ADMIN_)?DATABASE_URL$)/.test(key)) {
+    if (value === undefined) {
+      continue;
+    }
+
+    if (!THROWAWAY_VARS.has(key)) {
+      if (isDatabaseShaped(key)) {
+        throw new Error(
+          `${key} is a database-shaped variable this command did not set — refusing to run tests with it`,
+        );
+      }
+
       continue;
     }
 

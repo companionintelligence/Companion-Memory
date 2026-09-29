@@ -13,7 +13,11 @@
  * connection variable pointing ONLY there and `CI_REQUIRE_DB=1` so a suite that
  * cannot find it FAILS instead of skipping, then judges the run: no unexplained
  * skips, no database crash in the container's log. The container is removed on
- * success, failure, an exception, SIGINT and SIGTERM.
+ * success, failure, an exception, SIGINT, SIGTERM and SIGHUP.
+ *
+ * A test file that fails the parallel run is re-run once, serially, before it is
+ * called a failure (lib/flakes.ts): it is a FLAKE if it then passes — a warning,
+ * not a failure — and REAL if it fails again.
  *
  * What it will not do: touch a container it did not create (names `ci-testdb-*`
  * that also carry the `ci.test-db=1` label — both, always), bind a fixed host
@@ -25,9 +29,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { fail, info, note, ok, step, table } from '../../dev-stack/log';
+import { ExitBackstop } from '../lib/backstop';
 import {
   containerLogs,
-  docker,
   dockerReachable,
   imagePresent,
   justCreated,
@@ -36,11 +40,21 @@ import {
   removeContainers,
   startContainer,
   waitUntilReady,
-  type CreatedContainer,
   type StartedContainer,
 } from '../lib/docker';
-import { runAsync, runAsyncOrThrow } from '../lib/exec';
+import { TERMINATION_SIGNALS, runAsync, runAsyncOrThrow } from '../lib/exec';
 import { findCrashSignatures, formatFindings, type CrashFinding } from '../lib/dbLogSentinel';
+import {
+  asUnretried,
+  classifyRetry,
+  decide,
+  failedFiles,
+  mergeRetryIntoReport,
+  planRetry,
+  retryJestArgs,
+  type ClassifiedFailure,
+  type Decision,
+} from '../lib/flakes';
 import {
   checkNoSkips,
   parseAllowList,
@@ -76,6 +90,9 @@ Flags:
   --image <ref>    Database image. Default: the local ci/database:latest when present
                    (what 'make dev' runs), else the pin in .github/workflows/ci.yml.
   --workers <n>    Jest worker processes (default 4; the machine is often shared).
+  --no-retry       Do not re-run failed test files. By default each file that fails the
+                   parallel run is re-run once, serially: it is a FLAKE if it then
+                   passes (a warning, not a failure) and REAL if it fails again.
   --help, -h       This text.
 
 Everything else is passed to jest: bare words are path patterns, and anything
@@ -85,12 +102,13 @@ after '--' is passed verbatim.
   make test-db ARGS='src/domains/import'           # one directory
   make test-db ARGS='-t revocation'                # a jest flag (the no-skip check is then off)
   make test-db KEEP=1 WORKERS=2 DB_IMAGE=my/db:1   # the flags above, as make variables
+  make test-db NO_RETRY=1                          # a failing file fails the run at once
 
 Every connection variable the suites read is pointed at the container, and
 CI_REQUIRE_DB=1 is set, so a suite that cannot reach it fails rather than skips.
-The run fails on: any jest failure, any skipped test that
-scripts/test-db/allowed-skips.json does not forgive, and any crash signature in
-the database's own log. Docker must be running.`;
+The run fails on: any jest failure that survives the serial retry, any skipped
+test that scripts/test-db/allowed-skips.json does not forgive, and any crash
+signature in the database's own log. Docker must be running.`;
 
 const READY_TIMEOUT_MS = 120_000;
 const API_WORKSPACE = '@ci/be-api';
@@ -105,6 +123,10 @@ interface RunSummary {
   jest?: string;
   skips?: NoSkipsResult;
   skipCheck: 'ran' | 'off-because-name-filter' | 'not-reached';
+  /** Every test file that failed the parallel run, and what the retry made of it. */
+  failures: ClassifiedFailure[];
+  /** Why nothing was retried, when files failed and that is so. */
+  retrySkipped?: string;
   sentinel?: { findings: CrashFinding[]; lines: number };
   container?: string;
   containerState: 'not-created' | 'removed' | 'kept' | 'REMOVAL FAILED';
@@ -173,14 +195,16 @@ async function reapStale(): Promise<void> {
     return;
   }
 
-  const { removed, failed } = removeContainers(stale);
+  const { removed, failed, unknown } = removeContainers(stale);
 
   note(
     `Removed ${removed.length} stale test database container(s) older than ${formatDuration(STALE_AFTER_MS)}: ${removed.join(', ')}`,
   );
 
   if (failed.length > 0) {
-    note(`Could not remove: ${failed.join(', ')}`);
+    note(
+      `Could not remove: ${failed.join(', ')}${unknown.length > 0 ? ` (docker would not confirm ${unknown.join(', ')})` : ''} — run: docker rm -f -v <name>`,
+    );
   }
 }
 
@@ -200,40 +224,40 @@ function pickImage(args: TestDbArgs, root: string): { ref: string; source: strin
 
 export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
   const startedAt = Date.now();
-  const summary: RunSummary = { skipCheck: 'not-reached', containerState: 'not-created', problems: [] };
+  const summary: RunSummary = {
+    skipCheck: 'not-reached',
+    containerState: 'not-created',
+    failures: [],
+    problems: [],
+  };
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-test-db-'));
   const reportPath = path.join(workDir, 'jest-report.json');
+  const retryReportPath = path.join(workDir, 'jest-retry-report.json');
   let interrupted = false;
 
+  // Ctrl-C, `kill <pid>`, and the terminal going away (SIGHUP) all mean the same
+  // thing here: forward it to jest (runAsync does), stop, remove the container,
+  // say so in the summary, exit nonzero.
   const onSignal = (): void => {
     interrupted = true;
   };
 
-  process.on('SIGINT', onSignal);
-  process.on('SIGTERM', onSignal);
+  for (const signal of TERMINATION_SIGNALS) {
+    process.on(signal, onSignal);
+  }
 
   // The backstop. Every normal path removes the container in withThrowaway's
   // finally, and startContainer removes what it created if it fails part-way;
-  // this catches what neither can — a removal that itself failed, or
-  // process.exit() from somewhere I did not write. It is synchronous, which
-  // 'exit' handlers must be.
-  //
-  // Two slots, because they are owed different things. `unclaimed` is a
-  // container `docker run` has created that startContainer has not yet handed
-  // back as a usable database: it is removed on exit even under --keep, since
-  // "keep" is a promise about a working database and this is not one.
-  // `liveContainer` is the working database, kept under --keep.
-  let unclaimed: CreatedContainer | null = null;
-  let liveContainer: StartedContainer | null = null;
-  const removeOnExit = (): void => {
-    for (const c of [unclaimed, args.keep ? null : liveContainer]) {
-      if (c !== null) {
-        docker(['rm', '-f', '-v', c.id], { timeoutMs: 30_000 });
-      }
-    }
+  // this catches what neither can — a removal that itself failed, an id that was
+  // never learned, or process.exit() from somewhere I did not write. It also
+  // removes THIS run's work directory. See lib/backstop.ts for what it is owed
+  // and why it lets go of a container only once its removal is confirmed.
+  const backstop = new ExitBackstop({ keep: args.keep, workDir });
+  const onExit = (): void => {
+    backstop.sweep();
   };
 
-  process.on('exit', removeOnExit);
+  process.on('exit', onExit);
 
   try {
     if (!fs.existsSync(path.join(root, '.pnp.cjs'))) {
@@ -277,16 +301,12 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
           step(`Starting a throwaway database (${name})`);
 
           const started = startContainer(image.ref, name, db.adminPassword, {
-            onCreated: (c) => {
-              unclaimed = c;
-            },
-            onRemoved: () => {
-              unclaimed = null;
-            },
+            onCreated: (c) => backstop.created(c),
+            onRemoved: (c) => backstop.released(c),
+            onUncertain: (n) => backstop.uncertainName(n),
           });
 
-          unclaimed = null;
-          liveContainer = started;
+          backstop.claimed(started);
           summary.container = started.name;
           summary.containerState = 'kept'; // provisional: corrected once removal is confirmed
 
@@ -310,12 +330,13 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
         remove: (started) => {
           const { failed } = removeContainers([justCreated(started)]);
 
-          summary.containerState = failed.length === 0 ? 'removed' : 'REMOVAL FAILED';
-
           if (failed.length === 0) {
-            liveContainer = null;
+            backstop.released(started);
+            summary.containerState = 'removed';
           } else {
-            summary.problems.push(`could not remove ${started.name} — run: docker rm -f -v ${started.name}`);
+            // Not confirmed gone, so the backstop still holds it; the sweep in the
+            // finally below tries once more and settles this state either way.
+            summary.containerState = 'REMOVAL FAILED';
           }
         },
       },
@@ -371,11 +392,13 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
           cwd: root,
           env,
           capture: true,
+          group: true,
         });
         await runAsyncOrThrow('yarn', ['workspace', API_WORKSPACE, 'pgboss:ensure'], {
           cwd: root,
           env,
           capture: true,
+          group: true,
         });
 
         const applied = psql(started.name, APP_DATABASE, {
@@ -404,7 +427,8 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
           ...(jestChoosesWorkers(args.jestArgs) ? [] : [`--maxWorkers=${args.workers}`]),
           ...args.jestArgs,
         ];
-        const jest = await runAsync('yarn', jestArgs, { cwd: root, env });
+        // `group`: yarn is only a wrapper, and a signal that reaches it alone leaves jest and its workers running.
+        const jest = await runAsync('yarn', jestArgs, { cwd: root, env, group: true });
 
         if (jest.interrupted) {
           throw new Error('interrupted');
@@ -416,8 +440,51 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
           );
         }
 
-        const report = JSON.parse(fs.readFileSync(reportPath, 'utf8')) as JestReport;
+        const firstReport = JSON.parse(fs.readFileSync(reportPath, 'utf8')) as JestReport;
 
+        // Files that failed under parallel load are re-run once, serially, before
+        // anything is called a failure. What the retry says is recorded per file.
+        const failed = failedFiles(firstReport, root);
+        const plan = planRetry(failed, { enabled: args.retry, interrupted });
+        let report = firstReport;
+
+        summary.failures = asUnretried(failed, plan.skipReason);
+        summary.retrySkipped = plan.skipReason;
+
+        if (plan.files.length > 0) {
+          step(
+            `Re-running ${plan.files.length} failed test file(s) once, serially, to tell flakes from real failures`,
+          );
+
+          const retry = await runAsync(
+            'yarn',
+            [
+              'workspace',
+              API_WORKSPACE,
+              'jest',
+              ...retryJestArgs(
+                retryReportPath,
+                plan.files.map((f) => f.file),
+                args.jestArgs,
+              ),
+            ],
+            { cwd: root, env, group: true },
+          );
+
+          if (retry.interrupted) {
+            throw new Error('interrupted');
+          }
+
+          const retryReport = fs.existsSync(retryReportPath)
+            ? (JSON.parse(fs.readFileSync(retryReportPath, 'utf8')) as JestReport)
+            : null;
+
+          summary.failures = classifyRetry(plan.files, retryReport);
+          report = mergeRetryIntoReport(firstReport, retryReport, summary.failures);
+        }
+
+        // From here the report is the one with flakes set aside; a REAL or
+        // UNRETRIED failure is still in it.
         summary.jest =
           `${report.numTotalTestSuites ?? '?'} suites (${report.numFailedTestSuites ?? 0} failed, ${report.numPendingTestSuites ?? 0} skipped), ` +
           `${report.numTotalTests ?? '?'} tests (${report.numPassedTests ?? 0} passed, ${report.numFailedTests ?? 0} failed, ` +
@@ -425,13 +492,18 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
 
         step('Checking the run: skips and failures');
 
+        // The first run exits nonzero whenever a file failed in it. That is
+        // accounted for as long as some file did; only a nonzero exit with NO
+        // failed file to show for it is a mystery worth reporting.
+        const exitUnexplained = jest.status !== 0 && failed.length === 0;
+
         if (jestFiltersByName(args.jestArgs)) {
           summary.skipCheck = 'off-because-name-filter';
           note(
             'A name filter (-t / --onlyChanged …) makes jest report every unselected test as skipped, so the no-skip check is off for this run.',
           );
 
-          if (jest.status !== 0) {
+          if (exitUnexplained) {
             summary.problems.push(`jest exited ${jest.status ?? jest.signal}`);
           }
         } else {
@@ -444,7 +516,7 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
 
           if (!verdict.ok) {
             summary.problems.push(...verdict.failures);
-          } else if (jest.status !== 0) {
+          } else if (exitUnexplained) {
             summary.problems.push(
               `jest exited ${jest.status ?? jest.signal} although its report shows no failure`,
             );
@@ -461,12 +533,31 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
 
     summary.problems.push(message);
   } finally {
-    process.off('SIGINT', onSignal);
-    process.off('SIGTERM', onSignal);
-    process.off('exit', removeOnExit);
-    removeOnExit();
+    for (const signal of TERMINATION_SIGNALS) {
+      process.off(signal, onSignal);
+    }
 
-    fs.rmSync(workDir, { recursive: true, force: true });
+    process.off('exit', onExit);
+
+    const swept = backstop.sweep();
+
+    if (swept.removed.length > 0) {
+      note(`The final sweep removed ${swept.removed.join(', ')}`);
+    }
+
+    // The final word on the container: gone, or still held because docker would
+    // not confirm it — and then the operator is told the command to run.
+    if (summary.container !== undefined && summary.containerState !== 'kept') {
+      const held = backstop.held();
+
+      summary.containerState = held.length === 0 ? 'removed' : 'REMOVAL FAILED';
+
+      if (held.length > 0) {
+        summary.problems.push(
+          `could not confirm ${held.join(', ')} was removed — run: docker rm -f -v ${held[0]}`,
+        );
+      }
+    }
   }
 
   // A run that never got as far as starting a database has nothing to summarise;
@@ -479,13 +570,20 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
     return;
   }
 
-  printSummary(summary, Date.now() - startedAt, interrupted);
+  const decision = decide({ problems: summary.problems, failures: summary.failures });
 
-  if (summary.problems.length > 0) {
+  printSummary(summary, decision, Date.now() - startedAt, interrupted);
+
+  if (!decision.pass) {
     throw new Error(
       interrupted
         ? 'test-db was interrupted'
-        : `test-db failed: ${summary.problems.length} problem(s) — see the summary above`,
+        : `test-db failed: ${[
+            summary.problems.length > 0 ? `${summary.problems.length} problem(s)` : '',
+            decision.blocking.length > 0 ? `${decision.blocking.length} test file(s) failed for good` : '',
+          ]
+            .filter(Boolean)
+            .join(', ')} — see the summary above`,
     );
   }
 }
@@ -501,7 +599,50 @@ function printKept(started: StartedContainer, appPassword: string): void {
   info('  (the next `make test-db` removes it anyway once it is more than two hours old)');
 }
 
-function printSummary(s: RunSummary, durationMs: number, interrupted: boolean): void {
+/** One line for the table: what the retry did. */
+function retryRow(s: RunSummary, decision: Decision): string {
+  if (s.failures.length === 0) {
+    return 'not needed (no test file failed)';
+  }
+
+  if (s.retrySkipped !== undefined) {
+    return `NOT RUN — ${s.retrySkipped}; ${s.failures.length} failed file(s) count as failures`;
+  }
+
+  const real = decision.blocking.length;
+
+  return `${s.failures.length} failed file(s) re-run once, serially: ${decision.flakes.length} FLAKE, ${real} REAL`;
+}
+
+function printFailureBlocks(decision: Decision): void {
+  if (decision.flakes.length > 0) {
+    note(
+      `WARNING — ${decision.flakes.length} FLAKE(S): failed the parallel run, PASSED when re-run serially. They do not fail this run, but they are not nothing:`,
+    );
+
+    for (const f of decision.flakes) {
+      console.log(`    ⚠ ${f.display}\n        first error: ${f.firstError}`);
+    }
+
+    console.log('');
+  }
+
+  if (decision.blocking.length > 0) {
+    fail(`${decision.blocking.length} test file(s) FAILED FOR GOOD:`);
+
+    for (const f of decision.blocking) {
+      const why = f.kind === 'real' ? 'failed again on the serial re-run' : 'not re-run';
+
+      console.log(
+        `    ✗ ${f.display} (${why}${f.note ? `: ${f.note}` : ''})\n        first error: ${f.firstError}`,
+      );
+    }
+
+    console.log('');
+  }
+}
+
+function printSummary(s: RunSummary, decision: Decision, durationMs: number, interrupted: boolean): void {
   console.log('');
   console.log('test-db summary');
 
@@ -531,6 +672,7 @@ function printSummary(s: RunSummary, durationMs: number, interrupted: boolean): 
     ]);
   }
 
+  rows.push(['retry', retryRow(s, decision)]);
   rows.push([
     'db crash sentinel',
     s.sentinel
@@ -572,9 +714,13 @@ function printSummary(s: RunSummary, durationMs: number, interrupted: boolean): 
     console.log('');
   }
 
-  if (s.problems.length === 0) {
+  printFailureBlocks(decision);
+
+  if (decision.pass) {
     ok(
-      'test-db passed: every database-backed suite ran, nothing skipped without a reason, the database stayed up.',
+      decision.flakes.length === 0
+        ? 'test-db passed: every database-backed suite ran, nothing skipped without a reason, the database stayed up.'
+        : `test-db passed WITH ${decision.flakes.length} FLAKE(S) (listed above): every database-backed suite ran and passed, ${decision.flakes.length} of them only on the serial re-run; nothing skipped without a reason, the database stayed up.`,
     );
   } else if (!interrupted) {
     for (const problem of s.problems) {

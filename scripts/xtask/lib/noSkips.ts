@@ -28,6 +28,8 @@ export interface JestAssertion {
   status: string;
   title?: string;
   fullName?: string;
+  /** Present on a failed assertion; the first entry starts with the error. */
+  failureMessages?: string[];
 }
 
 export interface JestSuiteResult {
@@ -48,6 +50,8 @@ export interface JestReport {
   numTotalTestSuites?: number;
   numPassedTestSuites?: number;
   numPendingTestSuites?: number;
+  /** Suites that failed to RUN (an error at load), as opposed to having a failing test. */
+  numRuntimeErrorTestSuites?: number;
   testResults?: JestSuiteResult[];
 }
 

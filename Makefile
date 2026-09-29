@@ -700,7 +700,7 @@ test: ## Run the unit tests, both stacks
 
 .PHONY: test-db
 test-db: ## Run the database-backed jest suites against a throwaway Postgres (needs Docker)
-	@yarn tsx scripts/xtask/index.ts test-db $(if $(KEEP),--keep) $(if $(WORKERS),--workers $(WORKERS)) $(if $(DB_IMAGE),--image $(DB_IMAGE)) -- $(ARGS)
+	@yarn tsx scripts/xtask/index.ts test-db $(if $(KEEP),--keep) $(if $(WORKERS),--workers $(WORKERS)) $(if $(DB_IMAGE),--image $(DB_IMAGE)) $(if $(NO_RETRY),--no-retry) -- $(ARGS)
 
 .PHONY: test-android
 test-android: ## Run the Android native unit tests (JVM; no emulator needed)

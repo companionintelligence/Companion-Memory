@@ -19,6 +19,7 @@ import { main as buildMain } from './commands/build';
 import { main as devMain } from './commands/dev';
 import { main as testMain } from './commands/test';
 import { main as testDbMain } from './commands/test-db';
+import { TERMINATION_SIGNALS, ignoreDeadTerminal } from './lib/exec';
 import { fail } from '../dev-stack/log';
 
 interface Command {
@@ -57,11 +58,18 @@ function printHelp(): void {
  *
  * These handlers keep the process alive while spawnSync's child finishes; the
  * child's own nonzero status then propagates through the normal error path.
+ * SIGHUP (the terminal closing, an SSH connection dropping) is treated the same
+ * as SIGTERM: without a handler it would kill this process outright, before any
+ * `finally` — a `test-db` container, `build`'s LICENSE copies — could run.
  */
 const onSignal = (): void => {};
 
-process.on('SIGINT', onSignal);
-process.on('SIGTERM', onSignal);
+for (const signal of TERMINATION_SIGNALS) {
+  process.on(signal, onSignal);
+}
+
+// A closed terminal answers every write with EIO; without this the process dies at its next status line.
+ignoreDeadTerminal();
 
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
