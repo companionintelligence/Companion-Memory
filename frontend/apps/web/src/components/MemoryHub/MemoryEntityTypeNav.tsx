@@ -512,9 +512,11 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
   return (
     <nav
       aria-label="What to show in Memory"
-      className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border px-2 py-1.5 md:gap-x-3 md:px-3"
+      // `items-start` keeps this one-line What strip on the first row when the
+      // When / How / sort controls beside it wrap onto a second line.
+      className="flex shrink-0 flex-wrap items-start gap-x-2 gap-y-1.5 border-b border-border px-2 py-1.5 md:gap-x-3 md:px-3"
     >
-      <div className="flex shrink-0 items-center gap-1.5 text-sm font-medium text-muted-foreground">
+      <div className="flex h-8 shrink-0 items-center gap-1.5 text-sm font-medium text-muted-foreground">
         <Shapes className="h-4 w-4" strokeWidth={1.5} aria-hidden />
         <span className="hidden sm:inline">What</span>
       </div>

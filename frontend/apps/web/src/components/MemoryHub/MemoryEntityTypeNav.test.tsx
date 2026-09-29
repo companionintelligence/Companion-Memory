@@ -59,6 +59,20 @@ function expectCollapsed(label: HTMLElement) {
   expect(label).toHaveClass('group-hover:max-w-[7rem]');
 }
 
+describe('MemoryEntityTypeNav — alignment', () => {
+  it('keeps the What strip on the top edge when the other filters wrap to a second line', () => {
+    renderNav();
+
+    const nav = screen.getByRole('navigation', { name: 'What to show in Memory' });
+
+    // `items-center` sat the one-line What strip in the middle of a filter
+    // block that had wrapped onto two rows. Top alignment keeps What on the
+    // first line with When / How / the rest.
+    expect(nav).toHaveClass('items-start');
+    expect(nav).not.toHaveClass('items-center');
+  });
+});
+
 describe('MemoryEntityTypeNav — label reveal', () => {
   it('keeps a selected category readable without hover', () => {
     renderNav(narrowedRoute(['Person']));
