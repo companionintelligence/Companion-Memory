@@ -34,6 +34,9 @@ export interface DockerOptions {
   timeoutMs?: number;
 }
 
+/** The shape of {@link docker}, so a caller can be handed a fake in a unit test. */
+export type DockerFn = (args: string[], opts?: DockerOptions) => DockerResult;
+
 /** `docker <args>`, captured, never throwing on a nonzero exit. */
 export function docker(args: string[], opts: DockerOptions = {}): DockerResult {
   const res = spawnSync('docker', args, {
@@ -92,6 +95,21 @@ export function listOurContainers(): ContainerInfo[] {
   return parseInspectContainers(inspected.stdout).filter(isOurs);
 }
 
+/** What we know about a container the moment `docker run` has returned its id. */
+export interface CreatedContainer {
+  id: string;
+  name: string;
+}
+
+/**
+ * A container this command has just created, described the way
+ * {@link removeContainers} wants it. Only for one whose creation we witnessed:
+ * `docker run` succeeded under a name and label of ours, so it IS ours.
+ */
+export function justCreated(c: CreatedContainer): ContainerInfo {
+  return { id: c.id, name: c.name, createdAt: Date.now(), labels: { [LABEL_KEY]: LABEL_VALUE } };
+}
+
 /**
  * Force-remove containers, and their anonymous volumes (`-v`): the image
  * declares `VOLUME /var/lib/postgresql`, so without it every throwaway database
@@ -100,7 +118,10 @@ export function listOurContainers(): ContainerInfo[] {
  * Refuses anything that is not verifiably ours, so a caller bug cannot turn this
  * into `docker rm -f <someone else's database>`.
  */
-export function removeContainers(containers: ContainerInfo[]): { removed: string[]; failed: string[] } {
+export function removeContainers(
+  containers: ContainerInfo[],
+  run: DockerFn = docker,
+): { removed: string[]; failed: string[] } {
   const removed: string[] = [];
   const failed: string[] = [];
 
@@ -111,12 +132,12 @@ export function removeContainers(containers: ContainerInfo[]): { removed: string
       );
     }
 
-    const res = docker(['rm', '-f', '-v', c.id], { timeoutMs: 60_000 });
+    const res = run(['rm', '-f', '-v', c.id], { timeoutMs: 60_000 });
     const gone =
       res.status === 0 ||
       /No such container|already in progress/i.test(res.stderr) ||
       // `--rm` may have beaten us to it.
-      docker(['ps', '-a', '-q', '--no-trunc', '--filter', `id=${c.id}`]).stdout.trim() === '';
+      run(['ps', '-a', '-q', '--no-trunc', '--filter', `id=${c.id}`]).stdout.trim() === '';
 
     (gone ? removed : failed).push(c.name);
   }
@@ -124,11 +145,24 @@ export function removeContainers(containers: ContainerInfo[]): { removed: string
   return { removed, failed };
 }
 
-export interface StartedContainer {
-  id: string;
-  name: string;
+export interface StartedContainer extends CreatedContainer {
   /** Host port on 127.0.0.1 that reaches the container's 5432. */
   port: number;
+}
+
+export interface StartOptions {
+  /**
+   * Called the instant `docker run` has returned the new container's id, BEFORE
+   * anything else that can throw — so a caller with an exit-time backstop can
+   * register the container there while it is not yet a usable handle.
+   */
+  onCreated?: (c: CreatedContainer) => void;
+  /** Called once a container reported through `onCreated` is confirmed gone, so the backstop can let go of it. */
+  onRemoved?: (c: CreatedContainer) => void;
+  /** The docker CLI. Tests substitute a fake. */
+  run?: DockerFn;
+  /** Blocking sleep between attempts to read the published port. Tests substitute a no-op. */
+  sleep?: (ms: number) => void;
 }
 
 /**
@@ -141,9 +175,24 @@ export interface StartedContainer {
  * `--shm-size=1g` matches docker-compose.yml, whose comment explains the
  * parallel-query failure the 64 MB default causes; `-p 127.0.0.1::5432` publishes
  * on loopback only, on a port Docker picks.
+ *
+ * Never leaves a container behind when it throws. `docker run -d` returns as
+ * soon as the container exists, and reading its published port afterwards can
+ * still fail (a daemon that is slow or unwell, an unparseable answer): from that
+ * point every failure removes the container it just created, by id, before
+ * rethrowing. That is deliberately not done when `docker run` itself fails —
+ * that is also what a name conflict looks like, and then the container holding
+ * the name is somebody else's.
  */
-export function startContainer(image: string, name: string, adminPassword: string): StartedContainer {
-  const res = docker(
+export function startContainer(
+  image: string,
+  name: string,
+  adminPassword: string,
+  opts: StartOptions = {},
+): StartedContainer {
+  const run = opts.run ?? docker;
+  const sleep = opts.sleep ?? sleepSync;
+  const res = run(
     [
       'run',
       '-d',
@@ -167,20 +216,45 @@ export function startContainer(image: string, name: string, adminPassword: strin
     throw new Error(`docker run failed: ${res.stderr.trim() || res.stdout.trim()}`);
   }
 
-  const id = res.stdout.trim().split('\n').pop()?.trim() ?? '';
-  // Publishing can lag the container's creation by a moment.
-  let portOut = docker(['port', name, '5432/tcp']);
+  // Ours from here on. Should `docker run -d` ever print no id, the name it
+  // just succeeded in claiming still identifies the container exactly.
+  const created: CreatedContainer = { id: res.stdout.trim().split('\n').pop()?.trim() || name, name };
 
-  for (let i = 0; i < 20 && portOut.status !== 0; i += 1) {
-    sleepSync(250);
-    portOut = docker(['port', name, '5432/tcp']);
+  opts.onCreated?.(created);
+
+  try {
+    // Publishing can lag the container's creation by a moment.
+    let portOut = run(['port', name, '5432/tcp']);
+
+    for (let i = 0; i < 20 && portOut.status !== 0; i += 1) {
+      sleep(250);
+      portOut = run(['port', name, '5432/tcp']);
+    }
+
+    if (portOut.status !== 0) {
+      throw new Error(`could not read the published port of ${name}: ${portOut.stderr.trim()}`);
+    }
+
+    return { ...created, port: parseDockerPort(portOut.stdout) };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    let removal: string;
+
+    try {
+      const { failed } = removeContainers([justCreated(created)], run);
+
+      if (failed.length === 0) {
+        opts.onRemoved?.(created);
+        removal = `${name} was removed`;
+      } else {
+        removal = `${name} could not be removed just now — if 'docker ps -a' still lists it, run: docker rm -f -v ${name}`;
+      }
+    } catch (removeErr) {
+      removal = `${name} could not be removed just now (${removeErr instanceof Error ? removeErr.message : String(removeErr)}) — if 'docker ps -a' still lists it, run: docker rm -f -v ${name}`;
+    }
+
+    throw new Error(`${reason} (${removal})`, { cause: err });
   }
-
-  if (portOut.status !== 0) {
-    throw new Error(`could not read the published port of ${name}: ${portOut.stderr.trim()}`);
-  }
-
-  return { id, name, port: parseDockerPort(portOut.stdout) };
 }
 
 export function sleepSync(ms: number): void {

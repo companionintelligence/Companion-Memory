@@ -30,11 +30,13 @@ import {
   docker,
   dockerReachable,
   imagePresent,
+  justCreated,
   listOurContainers,
   psql,
   removeContainers,
   startContainer,
   waitUntilReady,
+  type CreatedContainer,
   type StartedContainer,
 } from '../lib/docker';
 import { runAsync, runAsyncOrThrow } from '../lib/exec';
@@ -211,13 +213,23 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
   process.on('SIGTERM', onSignal);
 
   // The backstop. Every normal path removes the container in withThrowaway's
-  // finally; this catches what that cannot — an exception thrown between the
-  // container being created and the handle being returned, or process.exit()
-  // from somewhere I did not write. It is synchronous, which 'exit' handlers must be.
+  // finally, and startContainer removes what it created if it fails part-way;
+  // this catches what neither can — a removal that itself failed, or
+  // process.exit() from somewhere I did not write. It is synchronous, which
+  // 'exit' handlers must be.
+  //
+  // Two slots, because they are owed different things. `unclaimed` is a
+  // container `docker run` has created that startContainer has not yet handed
+  // back as a usable database: it is removed on exit even under --keep, since
+  // "keep" is a promise about a working database and this is not one.
+  // `liveContainer` is the working database, kept under --keep.
+  let unclaimed: CreatedContainer | null = null;
   let liveContainer: StartedContainer | null = null;
   const removeOnExit = (): void => {
-    if (liveContainer !== null && !args.keep) {
-      docker(['rm', '-f', '-v', liveContainer.id], { timeoutMs: 30_000 });
+    for (const c of [unclaimed, args.keep ? null : liveContainer]) {
+      if (c !== null) {
+        docker(['rm', '-f', '-v', c.id], { timeoutMs: 30_000 });
+      }
     }
   };
 
@@ -264,8 +276,16 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
         start: () => {
           step(`Starting a throwaway database (${name})`);
 
-          const started = startContainer(image.ref, name, db.adminPassword);
+          const started = startContainer(image.ref, name, db.adminPassword, {
+            onCreated: (c) => {
+              unclaimed = c;
+            },
+            onRemoved: () => {
+              unclaimed = null;
+            },
+          });
 
+          unclaimed = null;
           liveContainer = started;
           summary.container = started.name;
           summary.containerState = 'kept'; // provisional: corrected once removal is confirmed
@@ -288,14 +308,7 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
         },
 
         remove: (started) => {
-          const { failed } = removeContainers([
-            {
-              id: started.id,
-              name: started.name,
-              createdAt: Date.now(),
-              labels: { 'ci.test-db': '1' },
-            },
-          ]);
+          const { failed } = removeContainers([justCreated(started)]);
 
           summary.containerState = failed.length === 0 ? 'removed' : 'REMOVAL FAILED';
 
