@@ -1,5 +1,6 @@
 import {
   buildApiUrl,
+  clearPersistedApiBaseUrl,
   getApiBaseUrl,
   initApiBaseUrl,
   isIosPlatform,
@@ -17,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 // exercise the native code paths from the node test environment.
 interface FakeWindow {
   Capacitor?: { isNativePlatform: () => boolean; getPlatform?: () => string };
-  localStorage: Pick<Storage, 'getItem' | 'setItem'>;
+  localStorage: Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
 }
 
 function installFakeWindow(opts: {
@@ -39,6 +40,9 @@ function installFakeWindow(opts: {
     },
     localStorage: {
       getItem: (key) => store.get(key) ?? null,
+      removeItem: (key) => {
+        store.delete(key);
+      },
       setItem: (key, value) => {
         store.set(key, value);
       },
@@ -146,6 +150,17 @@ describe('apiBase — native detection + persistence', () => {
 
     expect(getApiBaseUrl()).toBe('https://new.example.com');
     expect(store.get('ci.apiBaseUrl')).toBe('https://new.example.com');
+  });
+
+  it('clearPersistedApiBaseUrl() forgets a paired origin so iOS returns to the device picker', () => {
+    const store = installFakeWindow({ native: true, platform: 'ios', stored: 'https://core7.example.com' });
+    setApiBaseUrl('https://core7.example.com');
+
+    clearPersistedApiBaseUrl();
+
+    expect(getApiBaseUrl()).toBe('');
+    expect(store.has('ci.apiBaseUrl')).toBe(false);
+    expect(needsNativeCloudConnect()).toBe(true);
   });
 
   it('subscribeApiBaseUrl() notifies when the origin changes', () => {

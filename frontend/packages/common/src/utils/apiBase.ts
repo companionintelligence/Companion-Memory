@@ -245,3 +245,17 @@ export function persistApiBaseUrl(url: string): void {
     // Storage unavailable — keep the in-memory override for this session only.
   }
 }
+
+/**
+ * Forget the paired Memory origin. Native logout calls this so iOS does not
+ * treat the previous box as already paired and skip `/device-connect`.
+ */
+export function clearPersistedApiBaseUrl(): void {
+  setApiBaseUrl('');
+
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Storage unavailable — the in-memory origin is already cleared for this session.
+  }
+}

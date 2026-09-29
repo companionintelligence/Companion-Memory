@@ -7,6 +7,7 @@ export { GlobalUID } from './src/utils/GlobalUID';
 export { apiKeyHeaders, getApiKey, setApiKey } from './src/utils/apiAuth';
 export {
   buildApiUrl,
+  clearPersistedApiBaseUrl,
   getApiBaseUrl,
   initApiBaseUrl,
   isIosPlatform,
