@@ -6,6 +6,7 @@ import { Outlet } from 'react-router-dom';
 
 import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
+import { MemoryContractStrip } from '@/components/MemoryContractStrip/MemoryContractStrip';
 import { useBackground, useTheme } from '@/components/ThemePicker';
 import { useUnsyncedImportsNotice } from '@/components/UnsyncedImports/useUnsyncedImportsNotice';
 
@@ -40,6 +41,7 @@ export function Main() {
             theme={themeState.mode}
           />
           <MobileTopBar />
+          <MemoryContractStrip />
           <main className="flex-1 min-w-0 overflow-hidden min-h-0 relative">
             {/* Boundary INSIDE Suspense so a failed lazy chunk is caught too,
                 and around the outlet ALONE so the bottom bar and the modal
@@ -97,6 +99,7 @@ export function Main() {
         <SecondaryNavigation />
 
         <div className="overflow-hidden min-w-0 min-h-0 flex flex-col">
+          <MemoryContractStrip />
           <Suspense fallback={<LoadingPage />}>
             <Toaster theme={themeState.mode} />
             <div className="flex flex-row h-full min-h-0">

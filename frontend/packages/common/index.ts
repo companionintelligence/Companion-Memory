@@ -5,6 +5,8 @@ export { Portal } from './src/components/portal';
 export { MOBILE_BREAKPOINT, DeviceLayoutProvider, useDeviceLayout, usePageTitle } from './src/hooks';
 export { GlobalUID } from './src/utils/GlobalUID';
 export { apiKeyHeaders, getApiKey, setApiKey } from './src/utils/apiAuth';
+export { API_CONTRACT, MIN_SERVER_CONTRACT, memoryContractNotice } from './src/utils/apiContract';
+export type { MemoryContractNotice } from './src/utils/apiContract';
 export {
   buildApiUrl,
   clearPersistedApiBaseUrl,

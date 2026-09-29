@@ -21,6 +21,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { memoryContractNotice, type MemoryContractNotice } from './apiContract';
 import { buildApiUrl, isNativePlatform } from './apiBase';
 import { createHookContext } from './createHookContext';
 import { fetchJson } from './fetchJson';
@@ -64,26 +65,26 @@ export const CONNECTION_REPROBE_INTERVAL_MS = 30_000;
  * `fetchJson` only installs its own timer when the caller passes no signal, so
  * handing it one is the supported way to take over.
  */
-async function probeHealth(
+type HealthProbe<T> = { ok: true; body: T | undefined } | { ok: false };
+
+async function probeHealth<T>(
   timeoutMs: number,
-  request: (signal: AbortSignal) => Promise<unknown>,
-): Promise<boolean> {
+  request: (signal: AbortSignal) => Promise<T | undefined>,
+): Promise<HealthProbe<T>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    await request(controller.signal);
-
-    return true;
+    return { ok: true, body: await request(controller.signal) };
   } catch {
-    return false;
+    return { ok: false };
   } finally {
     clearTimeout(timer);
   }
 }
 
 /** Probes the configured remote CI-Server origin's `/api/health` endpoint. */
-function probeRemote(): Promise<boolean> {
+function probeRemote(): Promise<HealthProbe<unknown>> {
   return probeHealth(REMOTE_PROBE_TIMEOUT_MS, (signal) => fetchJson(buildApiUrl('/api/health'), { signal }));
 }
 
@@ -105,13 +106,42 @@ async function probeLocal(): Promise<boolean> {
     return false;
   }
 
-  return probeHealth(LOCAL_PROBE_TIMEOUT_MS, (signal) =>
+  const probed = await probeHealth(LOCAL_PROBE_TIMEOUT_MS, (signal) =>
     fetchJson(`${session.baseUrl}/api/health`, {
       signal,
       skipApiKey: true,
       headers: localHubHeaders(session),
     }),
   );
+
+  return probed.ok;
+}
+
+interface ConnectionSnapshot {
+  mode: ConnectionMode;
+  /** Set only when the remote health body says the two sides cannot talk. */
+  contractNotice: MemoryContractNotice | null;
+}
+
+async function inspectConnection(): Promise<ConnectionSnapshot> {
+  const remote = probeRemote();
+  const local = isNativePlatform() ? probeLocal() : Promise.resolve(false);
+  const remoteResult = await remote;
+
+  if (remoteResult.ok) {
+    return { mode: 'connected', contractNotice: memoryContractNotice(remoteResult.body) };
+  }
+
+  if (await local) {
+    return { mode: 'local', contractNotice: null };
+  }
+
+  // TODO(cached-detection): once a durable local cache/outbox exists (LocalHub
+  // Phase 2+ SQLite outbox, or the PowerSync local DB), check here whether it
+  // holds any data and resolve "cached" instead of "fresh". There is no such
+  // signal yet, so — per this pass's scope — we do not invent one and always
+  // fall through to "fresh".
+  return { mode: 'fresh', contractNotice: null };
 }
 
 /**
@@ -120,23 +150,7 @@ async function probeLocal(): Promise<boolean> {
  * {@link useConnectionMode}.
  */
 export async function resolveConnectionMode(): Promise<ConnectionMode> {
-  const remote = probeRemote();
-  const local = isNativePlatform() ? probeLocal() : Promise.resolve(false);
-
-  if (await remote) {
-    return 'connected';
-  }
-
-  if (await local) {
-    return 'local';
-  }
-
-  // TODO(cached-detection): once a durable local cache/outbox exists (LocalHub
-  // Phase 2+ SQLite outbox, or the PowerSync local DB), check here whether it
-  // holds any data and resolve "cached" instead of "fresh". There is no such
-  // signal yet, so — per this pass's scope — we do not invent one and always
-  // fall through to "fresh".
-  return 'fresh';
+  return (await inspectConnection()).mode;
 }
 
 // Nothing bounds a resolve as a whole. `fetchJson` clears its abort timer the
@@ -155,12 +169,14 @@ export const CONNECTION_RESOLVE_TIMEOUT_MS = 2 * REMOTE_PROBE_TIMEOUT_MS;
  * that hangs or throws resolves "fresh" — the same verdict an unreachable server
  * gets — so the caller's bookkeeping always runs.
  */
-function resolveConnectionModeBounded(): Promise<ConnectionMode> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve('fresh'), CONNECTION_RESOLVE_TIMEOUT_MS);
+const UNREACHABLE: ConnectionSnapshot = { mode: 'fresh', contractNotice: null };
 
-    void resolveConnectionMode()
-      .then(resolve, () => resolve('fresh'))
+function resolveConnectionBounded(): Promise<ConnectionSnapshot> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(UNREACHABLE), CONNECTION_RESOLVE_TIMEOUT_MS);
+
+    void inspectConnection()
+      .then(resolve, () => resolve(UNREACHABLE))
       .finally(() => clearTimeout(timer));
   });
 }
@@ -176,11 +192,13 @@ interface ConnectionModeState {
    * it (the outbox drain) need no change, since they only act on "connected".
    */
   isResolved: boolean;
+  contractNotice: MemoryContractNotice | null;
   refresh: () => void;
 }
 
 function useConnectionModeState(): ConnectionModeState {
   const [mode, setMode] = useState<ConnectionMode>('fresh');
+  const [contractNotice, setContractNotice] = useState<MemoryContractNotice | null>(null);
   const [isResolved, setIsResolved] = useState(false);
 
   // Coalesces overlapping refreshes (e.g. an `online` event firing while a
@@ -204,13 +222,14 @@ function useConnectionModeState(): ConnectionModeState {
       return;
     }
 
-    const run = resolveConnectionModeBounded()
+    const run = resolveConnectionBounded()
       .then((resolved) => {
         if (!mountedRef.current) {
           return;
         }
 
-        setMode(resolved);
+        setMode(resolved.mode);
+        setContractNotice(resolved.contractNotice);
         setIsResolved(true);
       })
       .finally(() => {
@@ -289,7 +308,7 @@ function useConnectionModeState(): ConnectionModeState {
     };
   }, [refresh]);
 
-  return { mode, isResolved, refresh };
+  return { mode, contractNotice, isResolved, refresh };
 }
 
 const { Provider, useHookContext } = createHookContext(useConnectionModeState, 'useConnectionMode');
