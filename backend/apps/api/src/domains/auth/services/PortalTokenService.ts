@@ -1,7 +1,7 @@
 import * as crypto from 'node:crypto';
 
 import { Injectable } from '@nestjs/common';
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
+import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload } from 'jose';
 
 import { SYSTEM_USER } from '@ci/common/context';
 import type { PortalTokenVerifier } from '@ci/common/guards/PortalTokenVerifier';
@@ -16,6 +16,55 @@ import {
 } from '../utils/serviceAccountToken';
 
 import { FederatedIdentityService } from './FederatedIdentityService';
+
+/**
+ * Ceiling on one HTTP fetch of the Portal JWKS. jose defaults to 5s; stated here
+ * so the number is ours and visible rather than inherited from a library default.
+ */
+export const PORTAL_JWKS_FETCH_TIMEOUT_MS = 3_000;
+
+/** Minimum gap between JWKS reloads triggered by an unknown `kid` (jose's default, made explicit). */
+export const PORTAL_JWKS_COOLDOWN_MS = 30_000;
+
+/**
+ * Hard ceiling on verifying one Bearer token against the Portal, for the whole
+ * `jwtVerify` including the key fetch.
+ *
+ * This is a backstop ABOVE the fetch timeout, not a replacement for it. jose's
+ * remote key set shares ONE in-flight fetch across every caller
+ * (`pendingFetch ||= fetch(...)`), and the `AbortSignal` timeout only helps if
+ * the transport honours it. A fetch that never settles therefore leaves every
+ * later verification awaiting the same promise forever — and because the guard
+ * verifies a bearer against the Portal before the local strategies, that took
+ * every bearer-authenticated route down until the process restarted.
+ */
+export const PORTAL_VERIFY_TIMEOUT_MS = 5_000;
+
+/**
+ * JWS algorithms a JWKS can hold a key for — the asymmetric ones. Deliberately
+ * the whole family rather than just the EdDSA the Portal signs with today, so a
+ * key-type rotation on the Portal is not silently turned into a 401 here.
+ */
+const PORTAL_JWS_ALGS: ReadonlySet<string> = new Set([
+  'EdDSA',
+  'ES256',
+  'ES384',
+  'ES512',
+  'RS256',
+  'RS384',
+  'RS512',
+  'PS256',
+  'PS384',
+  'PS512',
+]);
+
+class PortalVerifyTimeoutError extends Error {
+  readonly code = 'ERR_PORTAL_VERIFY_TIMEOUT';
+
+  constructor() {
+    super(`Portal token verification exceeded ${PORTAL_VERIFY_TIMEOUT_MS}ms`);
+  }
+}
 
 /**
  * Validates CI-Portal-issued OIDC tokens and maps them to a CI-Server user.
@@ -89,10 +138,113 @@ export class PortalTokenService implements PortalTokenVerifier {
 
   private getJwks(): ReturnType<typeof createRemoteJWKSet> {
     if (!this.jwks) {
-      this.jwks = createRemoteJWKSet(new URL(config.auth.portal.jwksUri));
+      this.jwks = createRemoteJWKSet(new URL(config.auth.portal.jwksUri), {
+        timeoutDuration: PORTAL_JWKS_FETCH_TIMEOUT_MS,
+        cooldownDuration: PORTAL_JWKS_COOLDOWN_MS,
+      });
     }
 
     return this.jwks;
+  }
+
+  /**
+   * Whether `token` could possibly be a Portal token — decided from its
+   * protected header alone, before any network I/O.
+   *
+   * A JWKS holds public keys, so only an asymmetric alg can ever verify against
+   * it. The web app's own session JWT is HS256 and reaches this service on every
+   * authenticated request; jose would still fetch the Portal's key set for it
+   * (the fetch happens before the alg is rejected), tying a local request's
+   * latency to the Portal's availability. Not JWT-shaped at all is also "not a
+   * Portal token": `jwtVerify` rejects it before fetching anything, so the
+   * outcome is unchanged, just reached without building the JWKS first.
+   *
+   * This only ever NARROWS what reaches `jwtVerify`; it never accepts anything
+   * `jwtVerify` would not.
+   */
+  private mayBePortalToken(token: string): boolean {
+    try {
+      const { alg } = decodeProtectedHeader(token);
+
+      return typeof alg === 'string' && PORTAL_JWS_ALGS.has(alg);
+    } catch (error) {
+      this.logRejection(error);
+
+      return false;
+    }
+  }
+
+  private logRejection(error: unknown): void {
+    // Log the reason. Returning a bare null made every rejection identical to
+    // "no portal token present", which is why a misconfigured audience or
+    // issuer surfaced only as a blanket 401 with nothing to go on — the
+    // single hardest thing to diagnose in this auth path. `jose` codes are
+    // specific (ERR_JWT_EXPIRED, ERR_JWT_CLAIM_VALIDATION_FAILED,
+    // ERR_JWKS_NO_MATCHING_KEY), and none of them contain the token.
+    this.logger.debug('Portal token rejected', {
+      code: (error as { code?: string })?.code ?? 'unknown',
+      reason: (error as Error)?.message,
+      issuer: config.auth.portal.issuer,
+      audience: config.auth.portal.audience,
+    });
+  }
+
+  /**
+   * Verify `token` against the Portal JWKS and return its claims, or null when
+   * it is not a valid Portal token — including when the Portal cannot be
+   * reached in time. Never throws and never waits longer than
+   * {@link PORTAL_VERIFY_TIMEOUT_MS}, so a Portal outage degrades to "not a
+   * Portal token" (the caller falls through to the legacy strategies) instead
+   * of a hung request.
+   */
+  private async verifyPortalJwt(token: string, audience: string[]): Promise<JWTPayload | null> {
+    if (!this.mayBePortalToken(token)) {
+      return null;
+    }
+
+    const jwks = this.getJwks();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new PortalVerifyTimeoutError()), PORTAL_VERIFY_TIMEOUT_MS);
+    });
+
+    try {
+      // The verification keeps running in the background if the deadline wins;
+      // `race` has already subscribed to it, so a late rejection is not unhandled.
+      const { payload } = await Promise.race([
+        jwtVerify(token, jwks, { issuer: config.auth.portal.issuer, audience }),
+        deadline,
+      ]);
+
+      return payload;
+    } catch (error) {
+      const code = (error as { code?: string })?.code;
+      const hitDeadline = error instanceof PortalVerifyTimeoutError;
+
+      // The shared in-flight fetch inside this key set may never settle, and
+      // every later request would join it. Discard the set so the next one
+      // builds a fresh fetch — but only if a concurrent request has not already
+      // replaced it. (jose's own ERR_JWKS_TIMEOUT clears its fetch itself.)
+      if (hitDeadline && this.jwks === jwks) {
+        this.jwks = undefined;
+      }
+
+      if (hitDeadline || code === 'ERR_JWKS_TIMEOUT') {
+        this.logger.warn('Portal token verification timed out; treating it as not a portal token', {
+          code: code ?? 'unknown',
+          timeoutMs: PORTAL_VERIFY_TIMEOUT_MS,
+          jwksUri: config.auth.portal.jwksUri,
+        });
+      } else {
+        // Wrong signer / issuer / audience / expired — not a valid portal token,
+        // so the caller falls through to the legacy strategies.
+        this.logRejection(error);
+      }
+
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -105,30 +257,9 @@ export class PortalTokenService implements PortalTokenVerifier {
       return null;
     }
 
-    let payload: JWTPayload;
-    try {
-      ({ payload } = await jwtVerify(token, this.getJwks(), {
-        issuer: config.auth.portal.issuer,
-        // First-party client ids plus the issuer URL (better-auth access tokens).
-        audience: this.acceptedAudiences(),
-      }));
-    } catch (error) {
-      // Wrong signer / issuer / audience / expired — not a valid portal token,
-      // so fall through to the legacy strategies.
-      //
-      // Log the reason. Returning a bare null made every rejection identical to
-      // "no portal token present", which is why a misconfigured audience or
-      // issuer surfaced only as a blanket 401 with nothing to go on — the
-      // single hardest thing to diagnose in this auth path. `jose` codes are
-      // specific (ERR_JWT_EXPIRED, ERR_JWT_CLAIM_VALIDATION_FAILED,
-      // ERR_JWKS_NO_MATCHING_KEY), and none of them contain the token.
-      this.logger.debug('Portal token rejected', {
-        code: (error as { code?: string })?.code ?? 'unknown',
-        reason: (error as Error)?.message,
-        issuer: config.auth.portal.issuer,
-        audience: config.auth.portal.audience,
-      });
-
+    // First-party client ids plus the issuer URL (better-auth access tokens).
+    const payload = await this.verifyPortalJwt(token, this.acceptedAudiences());
+    if (!payload) {
       return null;
     }
 
@@ -187,18 +318,14 @@ export class PortalTokenService implements PortalTokenVerifier {
     const audience =
       options?.audience && options.audience.length > 0 ? options.audience : this.acceptedAudiences();
 
-    try {
-      const { payload } = await jwtVerify(token, this.getJwks(), {
-        issuer: config.auth.portal.issuer,
-        audience,
-      });
-
-      const issuer = payload.iss ?? config.auth.portal.issuer;
-
-      return payload.sub && issuer ? { issuer, subject: payload.sub } : null;
-    } catch {
+    const payload = await this.verifyPortalJwt(token, audience);
+    if (!payload) {
       return null;
     }
+
+    const issuer = payload.iss ?? config.auth.portal.issuer;
+
+    return payload.sub && issuer ? { issuer, subject: payload.sub } : null;
   }
 
   /**

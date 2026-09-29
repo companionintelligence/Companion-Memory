@@ -195,6 +195,13 @@ Browser                    CI-Server                         CI-Portal (IdP)
 
 When enabled, `JwtOrApiKeyAuthGuard` first verifies an `Authorization: Bearer` as a **Portal-issued JWT** (against the Portal JWKS) and resolves it to a local user before falling back to the legacy `jwt`/`api-key` strategies (`JwtOrApiKeyAuthGuard.ts:30-46`). A Portal principal carries full user authority and no API-key scopes, so scope/capability enforcement does not apply on that path.
 
+**That check is bounded, so a Portal outage cannot hang the API.** It runs before the local strategies on every bearer request, so it must never wait on the network indefinitely (`PortalTokenService.verifyPortalJwt`):
+
+- A bearer whose protected-header `alg` is not asymmetric — notably the web app's own HS256 session JWT — cannot verify against a public-key set, so it skips the Portal entirely and no JWKS is fetched.
+- The JWKS fetch times out after 3 s (`PORTAL_JWKS_FETCH_TIMEOUT_MS`), and the whole verification is capped at 5 s (`PORTAL_VERIFY_TIMEOUT_MS`). On the cap the token is treated as "not a Portal token", a `warn` is logged, the request falls through to the legacy strategies, and the cached JWKS set is discarded so the next request starts a fresh fetch.
+
+The cap exists because jose's remote key set shares one in-flight fetch across all callers: on 2026-09-28 a single fetch that never settled made every bearer-authenticated route hang until the API process was restarted, while api-key, cookie and unauthenticated routes stayed fast. A Portal token presented while the Portal is unreachable now gets a 401 within 5 s instead.
+
 **Who this path admits** (`PortalTokenService.provisionUser`): a Portal identity already bound to a local account, or a verified email that links a not-yet-bound local account exactly once — and, in one case only, an identity nobody here has bound: when the appliance has **no accounts at all**, the sign-in claims it and becomes the owner/admin. On a claimed appliance an unbound Portal identity gets a 401, full stop. The model is one Portal identity per appliance (the owner); household members are email-and-password accounts the owner invites through the browser flow, which is where invitations are checked. Until 2026-09-24 this path created an account for *any* valid Portal token, which on a tunnelled Hub install meant anyone with a Portal login could sign up.
 
 Three other server-to-server credentials exist alongside it:

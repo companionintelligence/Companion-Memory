@@ -18,8 +18,13 @@ jest.mock('@ci/configuration', () => {
   };
 });
 
+// Only the parts that verify a signature or touch the network are mocked. The
+// service reads the protected header itself (to skip the Portal for tokens it can
+// never have signed), so that stays real — which is why the tokens below have to
+// be JWT-shaped.
 jest.mock('jose', () => ({
   __esModule: true,
+  decodeProtectedHeader: jest.requireActual('jose').decodeProtectedHeader,
   jwtVerify: jest.fn(),
   createRemoteJWKSet: jest.fn(),
 }));
@@ -29,10 +34,20 @@ import { resolve as resolvePath } from 'node:path';
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
-import { PortalTokenService } from '../services/PortalTokenService';
+import {
+  PORTAL_JWKS_COOLDOWN_MS,
+  PORTAL_JWKS_FETCH_TIMEOUT_MS,
+  PortalTokenService,
+} from '../services/PortalTokenService';
 
 const mockJwtVerify = jwtVerify as unknown as jest.Mock;
 const mockCreateRemoteJWKSet = createRemoteJWKSet as unknown as jest.Mock;
+
+// jwtVerify is mocked, so the signature is never checked: only the header has to
+// parse, and carry an alg a Portal JWKS could serve.
+const b64 = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
+const fakeJwt = (alg: string) => `${b64({ alg, kid: 'k1' })}.${b64({ sub: 's' })}.sig`;
+const TOKEN = fakeJwt('EdDSA');
 
 describe('PortalTokenService', () => {
   let userService: { findByEmail: jest.Mock; create: jest.Mock; findById: jest.Mock; hasNoUsers: jest.Mock };
@@ -70,9 +85,9 @@ describe('PortalTokenService', () => {
     userService.hasNoUsers.mockResolvedValue(true);
     userService.create.mockResolvedValue({ id: 'u1' });
 
-    await service.verifyAndProvision('the-token');
+    await service.verifyAndProvision(TOKEN);
 
-    expect(mockJwtVerify).toHaveBeenCalledWith('the-token', 'JWKS', {
+    expect(mockJwtVerify).toHaveBeenCalledWith(TOKEN, 'JWKS', {
       issuer: 'https://hub.test',
       // PORTAL_OIDC_AUDIENCE plus the issuer URL (better-auth access-token default).
       audience: ['ci-server', 'ci-import-tools', 'ci-even', 'https://hub.test'],
@@ -86,7 +101,7 @@ describe('PortalTokenService', () => {
     federatedIdentityService.findUserId.mockResolvedValue('u-bound');
     userService.findById.mockResolvedValue({ id: 'u-bound' });
 
-    expect(await service.verifyAndProvision('t')).toEqual({ id: 'u-bound' });
+    expect(await service.verifyAndProvision(TOKEN)).toEqual({ id: 'u-bound' });
     expect(federatedIdentityService.findUserId).toHaveBeenCalledWith('https://hub.test', 's1');
     expect(userService.findByEmail).not.toHaveBeenCalled();
     expect(userService.create).not.toHaveBeenCalled();
@@ -100,7 +115,7 @@ describe('PortalTokenService', () => {
     userService.hasNoUsers.mockResolvedValue(true);
     userService.create.mockResolvedValue({ id: 'u-new' });
 
-    const user = await service.verifyAndProvision('t');
+    const user = await service.verifyAndProvision(TOKEN);
 
     expect(user).toEqual({ id: 'u-new' });
     expect(federatedIdentityService.bind).toHaveBeenCalledWith(
@@ -123,7 +138,7 @@ describe('PortalTokenService', () => {
     userService.findByEmail.mockResolvedValue(null);
     userService.hasNoUsers.mockResolvedValue(false);
 
-    expect(await service.verifyAndProvision('t')).toBeNull();
+    expect(await service.verifyAndProvision(TOKEN)).toBeNull();
     expect(userService.create).not.toHaveBeenCalled();
     expect(federatedIdentityService.bind).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/already has an owner/));
@@ -135,7 +150,7 @@ describe('PortalTokenService', () => {
     });
     userService.findByEmail.mockResolvedValue({ id: 'u-existing' });
 
-    expect(await service.verifyAndProvision('t')).toEqual({ id: 'u-existing' });
+    expect(await service.verifyAndProvision(TOKEN)).toEqual({ id: 'u-existing' });
     expect(userService.create).not.toHaveBeenCalled();
     // The link is recorded so every LATER request for this (iss,sub) skips email.
     expect(federatedIdentityService.bind).toHaveBeenCalledWith(
@@ -159,7 +174,7 @@ describe('PortalTokenService', () => {
       { id: 'fed-1', userId: 'u-existing', issuer: 'https://hub.test', subject: 'first-sub' },
     ]);
 
-    expect(await service.verifyAndProvision('t')).toBeNull();
+    expect(await service.verifyAndProvision(TOKEN)).toBeNull();
     expect(federatedIdentityService.bind).not.toHaveBeenCalled();
   });
 
@@ -173,7 +188,7 @@ describe('PortalTokenService', () => {
     });
     userService.findByEmail.mockResolvedValue({ id: 'u-victim' });
 
-    expect(await service.verifyAndProvision('t')).toBeNull();
+    expect(await service.verifyAndProvision(TOKEN)).toBeNull();
     expect(userService.create).not.toHaveBeenCalled();
     expect(federatedIdentityService.bind).not.toHaveBeenCalled();
   });
@@ -183,7 +198,7 @@ describe('PortalTokenService', () => {
     userService.hasNoUsers.mockResolvedValue(true);
     userService.create.mockResolvedValue({ id: 'u2' });
 
-    await service.verifyAndProvision('t');
+    await service.verifyAndProvision(TOKEN);
 
     expect(userService.create).toHaveBeenCalledWith(
       expect.anything(),
@@ -194,15 +209,77 @@ describe('PortalTokenService', () => {
   it('returns null for an invalid token (bad signature / issuer / audience / expiry)', async () => {
     mockJwtVerify.mockRejectedValue(new Error('signature verification failed'));
 
-    expect(await service.verifyAndProvision('bad')).toBeNull();
+    expect(await service.verifyAndProvision(TOKEN)).toBeNull();
     expect(userService.create).not.toHaveBeenCalled();
+  });
+
+  it('builds the JWKS with explicit fetch timeout + cooldown, once, lazily', async () => {
+    mockJwtVerify.mockRejectedValue(new Error('nope'));
+
+    expect(mockCreateRemoteJWKSet).not.toHaveBeenCalled();
+
+    await service.verifyAndProvision(TOKEN);
+    await service.verifyClaims(TOKEN);
+
+    expect(mockCreateRemoteJWKSet).toHaveBeenCalledTimes(1);
+    expect(mockCreateRemoteJWKSet).toHaveBeenCalledWith(new URL('https://hub.test/api/auth/jwks'), {
+      timeoutDuration: PORTAL_JWKS_FETCH_TIMEOUT_MS,
+      cooldownDuration: PORTAL_JWKS_COOLDOWN_MS,
+    });
+  });
+
+  it.each(['HS256', 'HS384', 'HS512', 'none'])(
+    'never consults the Portal for a %s token — it cannot verify against a JWKS',
+    async (alg) => {
+      const token = fakeJwt(alg);
+
+      expect(await service.verifyAndProvision(token)).toBeNull();
+      expect(await service.verifyClaims(token)).toBeNull();
+
+      expect(mockJwtVerify).not.toHaveBeenCalled();
+      expect(mockCreateRemoteJWKSet).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['EdDSA', 'ES256', 'RS256', 'PS256'])('still sends a %s token to the Portal JWKS', async (alg) => {
+    mockJwtVerify.mockResolvedValue({ payload: { iss: 'https://hub.test', sub: 'peer-sub' } });
+
+    expect(await service.verifyClaims(fakeJwt(alg))).toEqual({
+      issuer: 'https://hub.test',
+      subject: 'peer-sub',
+    });
+    expect(mockJwtVerify).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a bearer that is not JWT-shaped without building the JWKS, and says why', async () => {
+    expect(await service.verifyAndProvision('opaque-api-token')).toBeNull();
+
+    expect(mockJwtVerify).not.toHaveBeenCalled();
+    expect(mockCreateRemoteJWKSet).not.toHaveBeenCalled();
+    expect(logger.debug).toHaveBeenCalledWith(
+      'Portal token rejected',
+      expect.objectContaining({ code: expect.any(String) }),
+    );
+    expect(JSON.stringify(logger.debug.mock.calls)).not.toContain('opaque-api-token');
+  });
+
+  it('warns (not just debug) when jose itself reports a JWKS timeout', async () => {
+    mockJwtVerify.mockRejectedValue(
+      Object.assign(new Error('request timed out'), { code: 'ERR_JWKS_TIMEOUT' }),
+    );
+
+    expect(await service.verifyAndProvision(TOKEN)).toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/timed out/i),
+      expect.objectContaining({ code: 'ERR_JWKS_TIMEOUT' }),
+    );
   });
 
   describe('verifyClaims', () => {
     it('returns claims WITHOUT provisioning a local user (peer path)', async () => {
       mockJwtVerify.mockResolvedValue({ payload: { iss: 'https://hub.test', sub: 'peer-sub' } });
 
-      expect(await service.verifyClaims('t')).toEqual({
+      expect(await service.verifyClaims(TOKEN)).toEqual({
         issuer: 'https://hub.test',
         subject: 'peer-sub',
       });
@@ -214,7 +291,7 @@ describe('PortalTokenService', () => {
     it('returns null for an invalid token', async () => {
       mockJwtVerify.mockRejectedValue(new Error('bad'));
 
-      expect(await service.verifyClaims('bad')).toBeNull();
+      expect(await service.verifyClaims(TOKEN)).toBeNull();
     });
   });
 
@@ -228,7 +305,7 @@ describe('PortalTokenService', () => {
     });
     mockJwtVerify.mockRejectedValue(err);
 
-    expect(await service.verifyAndProvision('bad-token')).toBeNull();
+    expect(await service.verifyAndProvision(TOKEN)).toBeNull();
 
     expect(logger.debug).toHaveBeenCalledWith(
       'Portal token rejected',
@@ -238,7 +315,7 @@ describe('PortalTokenService', () => {
       }),
     );
     // The token itself must never reach the logs.
-    expect(JSON.stringify(logger.debug.mock.calls)).not.toContain('bad-token');
+    expect(JSON.stringify(logger.debug.mock.calls)).not.toContain(TOKEN);
   });
 });
 
