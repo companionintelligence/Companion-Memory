@@ -344,7 +344,8 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
 
     expect(sql).toContain('event.user_id = $1');
     expect(sql).toContain('event.location_coordinates IS NOT NULL');
-    expect(sql).toContain('event.title');
+    expect(sql).toContain('entity.name');
+    expect(sql).toContain("entity.entity_type = 'Event'");
     expect(sql).toContain('event.event_id');
     expect(params).toEqual([USER]);
   });

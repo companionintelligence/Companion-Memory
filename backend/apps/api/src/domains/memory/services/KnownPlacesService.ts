@@ -215,7 +215,8 @@ export class KnownPlacesService {
     }> = await this.dataSource.query(
       `SELECT
          event.event_id            AS event_id,
-         event.title               AS title,
+         -- The title lives on the CTI base row (ci.entities.name), not ci.events.
+         entity.name               AS title,
          event.location_entity_id  AS location_entity_id,
          event.location_name       AS location_name,
          ST_Y(event.location_coordinates::geometry) AS lat,
@@ -223,6 +224,9 @@ export class KnownPlacesService {
          event.start_time          AS start_time,
          (SELECT u.timezone FROM ci.users u WHERE u.id = $1) AS timezone
        FROM ci.events event
+       LEFT JOIN ci.entities entity
+         ON entity.entity_id = event.event_id
+        AND entity.entity_type = 'Event'
        WHERE event.user_id = $1
          AND event.location_coordinates IS NOT NULL`,
       [context.userId],
