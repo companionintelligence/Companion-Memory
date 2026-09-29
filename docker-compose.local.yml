@@ -9,7 +9,7 @@ services:
       - 127.0.0.1:${DB_HOST_PORT:-5432}:5432
 
   # Every host port in this overlay binds to loopback. The sidecars have no
-  # inbound auth beyond a shared bearer and Postgres/Minio carry dev passwords;
+  # inbound auth beyond a shared bearer, and Postgres and the object store carry dev passwords;
   # none of them should be reachable from the LAN (Docker bypasses ufw).
   hbpe-service:
     environment:

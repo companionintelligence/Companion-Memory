@@ -230,7 +230,7 @@ fail() {
 # KNOWN REMAINING DRIFT (deliberately left, needs more than a mirror edit):
 #   * Production's gateway also waits on `object-store: service_healthy`. That
 #     needs an object-store healthCheck here first — docker-compose.yml's is
-#     `curl -f http://localhost:9000/minio/health/live` — and an unproven probe
+#     `curl -f http://localhost:9000/health` — and an unproven probe
 #     would leave the gateway waiting forever on a store install, so it is left
 #     to whoever can test a real install rather than guessed at here.
 #   * The /app-data mounts see ${APP_DATA_DIR}/data/secrets, so on a store
@@ -358,7 +358,7 @@ generate_compose() {
       "image": "${reg}/companion/object-store:${ver}",
       "restart": "unless-stopped",
       "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}/data/objects", "containerPath": "/data/objects" },
+        { "hostPath": "\${APP_DATA_DIR}/data/objects", "containerPath": "/data" },
         { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/object-store", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {

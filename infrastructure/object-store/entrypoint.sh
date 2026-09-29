@@ -2,20 +2,21 @@
 set -e
 
 # ──────────────────────────────────────────────────
-# Secrets-aware entrypoint for MinIO (object storage).
+# Secrets-aware entrypoint for the object store (RustFS).
 #
-# Loads credentials from a shared secrets file when
-# present, then falls back to environment variables
-# already set by Docker Compose or the shell.
+# Loads credentials from the secrets file when present, then falls back to
+# environment variables set by Docker Compose.
 #
-# Maps canonical names to MinIO-native env vars
-# (MINIO_ROOT_USER, MINIO_ROOT_PASSWORD) before
-# delegating to the minio binary.
+# Maps the names the rest of Memory uses (OBJECT_STORE_USERNAME,
+# OBJECT_STORE_PASSWORD) onto RustFS's own (RUSTFS_ACCESS_KEY,
+# RUSTFS_SECRET_KEY), then drops to uid 10001 and execs the upstream
+# entrypoint. That entrypoint starts `rustfs` and appends RUSTFS_VOLUMES.
 #
-# Priority: Shell env  >  Secrets file  >  (fail)
+# Priority: shell env  >  secrets file  >  (fail)
 # ──────────────────────────────────────────────────
 
 SECRETS_FILE="${SECRETS_FILE:-/run/secrets/.env.secrets}"
+DATA_DIR="${RUSTFS_VOLUMES:-/data}"
 
 get_secret() {
   [ -f "$SECRETS_FILE" ] || return 0
@@ -33,15 +34,16 @@ get_secret() {
 : "${USERNAME:=$(get_secret OBJECT_STORE_USERNAME)}"
 : "${PASSWORD:=$(get_secret OBJECT_STORE_PASSWORD)}"
 
-export MINIO_ROOT_USER="$USERNAME"
-export MINIO_ROOT_PASSWORD="$PASSWORD"
+export RUSTFS_ACCESS_KEY="$USERNAME"
+export RUSTFS_SECRET_KEY="$PASSWORD"
+unset USERNAME PASSWORD
 
 # ── Validation ───────────────────────────────────
 
 fail=0
 
-if [ -z "$MINIO_ROOT_PASSWORD" ]; then
-  echo "Error: PASSWORD is not set."
+if [ -z "$RUSTFS_SECRET_KEY" ]; then
+  echo "Error: OBJECT_STORE_PASSWORD is not set."
   echo ""
   echo "Please set the object storage password in one of the following ways:"
   echo ""
@@ -50,8 +52,8 @@ if [ -z "$MINIO_ROOT_PASSWORD" ]; then
   fail=1
 fi
 
-if [ -z "$MINIO_ROOT_USER" ]; then
-  echo "Error: USERNAME is not set."
+if [ -z "$RUSTFS_ACCESS_KEY" ]; then
+  echo "Error: OBJECT_STORE_USERNAME is not set."
   echo ""
   echo "Please set the object storage username in one of the following ways:"
   echo ""
@@ -62,6 +64,24 @@ fi
 
 [ "$fail" -eq 1 ] && exit 1
 
-# ── Launch ───────────────────────────────────────
+# ── Data directory ───────────────────────────────
+#
+# A single absolute path. A comma-separated RUSTFS_VOLUMES is a multi-drive
+# layout this wrapper does not chown; set that only when every path is already
+# writable by uid 10001.
 
-exec minio "$@"
+case "$DATA_DIR" in
+  /*)
+    mkdir -p "$DATA_DIR/.rustfs/events" "$DATA_DIR/.rustfs/audit"
+    if ! su-exec rustfs:rustfs test -w "$DATA_DIR"; then
+      chown rustfs:rustfs "$DATA_DIR"
+    fi
+    if ! su-exec rustfs:rustfs test -w "$DATA_DIR/.rustfs"; then
+      chown -R rustfs:rustfs "$DATA_DIR/.rustfs"
+    fi
+    ;;
+esac
+
+export RUSTFS_VOLUMES="$DATA_DIR"
+
+exec su-exec rustfs:rustfs /entrypoint.sh "$@"

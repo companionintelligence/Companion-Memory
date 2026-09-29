@@ -128,7 +128,7 @@ services:
   object-store:
     image: ci/object-store
     volumes:
-      - object-data:/data/objects
+      - object-data:/data
     networks:
       - ci
     restart: unless-stopped
@@ -138,7 +138,7 @@ services:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -136,8 +136,8 @@ jobs:
 
       # The Postgres image bundles TimescaleDB + PostGIS + pgvector and the role
       # bootstrap, which a stock pgvector image lacks — build the project's own.
-      # object-store is minio + infrastructure/object-store/entrypoint.sh (which
-      # maps OBJECT_STORE_USERNAME/PASSWORD onto MINIO_ROOT_*), so it is a
+      # object-store is RustFS + infrastructure/object-store/entrypoint.sh (which
+      # maps OBJECT_STORE_USERNAME/PASSWORD onto RUSTFS_ACCESS_KEY/SECRET_KEY), so it is a
       # seconds-long build, not a real one. Same three `docker build` lines the
       # Makefile's `build` target runs for ENV=local.
       - name: Build database and object-store images
@@ -217,14 +217,14 @@ jobs:
             echo "waiting for postgres ($i)…"; sleep 2
           done
 
-      # Fails the job rather than letting the suite discover it: without minio
-      # the import spec dies deep inside the wizard with a UI-level timeout that
-      # reads as a frontend regression. `up -d` returns as soon as the container
-      # is created, which is well before minio is answering.
+      # Fails the job rather than letting the suite discover it: without the
+      # object store the import spec dies deep inside the wizard with a UI-level
+      # timeout that reads as a frontend regression. `up -d` returns as soon as
+      # the container is created, which is well before it is answering.
       - name: Wait for the object store
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS http://localhost:9000/minio/health/live >/dev/null 2>&1; then
+            if curl -fsS http://localhost:9000/health >/dev/null 2>&1; then
               echo "object store is live"; exit 0
             fi
             echo "waiting for object store ($i)…"; sleep 2
