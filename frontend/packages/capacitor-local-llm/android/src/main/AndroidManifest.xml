@@ -1,20 +1,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- The model download runs as a foreground WorkManager service (large, resumable
-         transfer) so it survives backgrounding; Android 14+ (API 34) requires declaring
-         the specific foreground service type permission alongside FOREGROUND_SERVICE.
-         The same pair also covers LocalLlmGenerationService below — one in-flight
-         generation, same "long-running, keep the process alive" justification. -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-
+    <!-- LocalLlmGenerationService and ModelDownloadWorker still call startForeground
+         with type dataSync. The permissions and foregroundServiceType are omitted
+         until the app has a screen that downloads or runs the on-device model.
+         Shipping them makes Play require a declaration and a demo of a feature
+         the user cannot open. Background location keeps FOREGROUND_SERVICE via
+         @capacitor-community/background-geolocation. When the UI ships, declare
+         FOREGROUND_SERVICE_DATA_SYNC again and set
+         android:foregroundServiceType="dataSync" on the service below. -->
     <application>
         <!-- Protects an in-flight generate()/generateStream() call from being killed if the
              app is briefly backgrounded mid-answer. See LocalLlmGenerationService's doc
              comment; started/stopped by LocalLlmPlugin around each call, never by itself. -->
         <service
             android:name=".LocalLlmGenerationService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:exported="false" />
     </application>
 </manifest>
