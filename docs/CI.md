@@ -202,6 +202,79 @@ grep -rn -B1 '^[[:space:]]*#\[(tokio::)?test\]' -E frontend/apps/desktop/src-tau
   --include='*.rs' | grep 'target_os'
 ```
 
+### Running the database-backed suites locally: `make test-db`
+
+Most of `@ci/be-api`'s integration suites need a real Postgres, and without one
+every one of them **skips** — with jest still exiting 0. So a green `make test`
+(or a green CI run with no database) can have executed none of them. Pointing
+them at "the database `.env` names" is worse: that is your real corpus, and they
+write to it.
+
+`make test-db` is the third way. It starts a throwaway container of the
+appliance's own database image (the local `ci/database:latest` when you have
+built it, else the pin in `ci.yml`'s backend job) on a random loopback port with
+random passwords, bootstraps it with `scripts/test-db/bootstrap.sql` — the same
+file `ci.yml` runs, so the two cannot drift — migrates it, runs the `be-api` jest
+suite against it, judges the run, and removes the container. **Docker is the only
+prerequisite.** It never reads `.env`, never binds a fixed host port, and only
+ever touches containers it created itself (name `ci-testdb-*` *and* label
+`ci.test-db=1`).
+
+```bash
+make test-db                                  # the whole be-api suite
+make test-db ARGS='src/domains/import'        # jest path patterns; any jest flag works too
+make test-db KEEP=1                           # leave the container up (prints how to connect)
+make test-db WORKERS=2 DB_IMAGE=my/db:tag     # jest workers (default 4); another image
+```
+
+The run **fails** on any of:
+
+| Check | What it catches |
+|---|---|
+| jest's own verdict | a failing test, or a suite that failed to *run* |
+| no unexplained skip | any `skipped` / `pending` / `todo` test not forgiven by `scripts/test-db/allowed-skips.json` |
+| database crash sentinel | crash-restart signatures in the container's own log (`untracked child process … exited with exit code 2`, `terminating any other active server processes`, `was terminated by signal`, `PANIC`, `in recovery` …) |
+
+The allow-list exists because "zero skips" is not achievable — a suite that needs
+`vips`, or `pdftotext`, or a real archive legitimately skips on a machine without
+it. Every entry needs a **reason**, and where the reason is environmental it
+states the condition (`when`: a missing binary, a platform, an unset opt-in), so a
+skip is forgiven only while that condition is true. A vips suite that skips on a
+machine that *has* vips fails the run. Add an entry only for a real environmental
+need; if a suite skips for any other reason, fix the suite.
+
+The sentinel exists because a run whose database crash-restarted underneath it can
+still exit 0 — the suites mid-query fail with connection errors that read like
+bugs in the code under test, and the rest pass. Its evidence is only in the
+container's log. If it trips, the fault is the database or the harness, not
+(usually) the tests: look at the reported log lines first.
+
+Kept containers (`KEEP=1`) and the leftovers of a killed run are removed by the
+next `make test-db` once they are more than two hours old.
+
+#### The `CI_REQUIRE_DB` contract
+
+`CI_REQUIRE_DB=1` turns "no database here" from a **skip** into a **failure**. It
+is read by the two availability helpers every DB-backed suite goes through
+(`databaseAvailability()` and `scratchDatabaseAvailability()` in
+`backend/apps/api/src/domains/__tests__/support/`): with it set, a missing or
+unreachable database makes the suite throw at load, jest reports *Test suite
+failed to run*, and the message names the variable to set and the target it tried.
+Unset, behaviour is unchanged — the suite skips and prints a `SKIPPED —` line — so
+a laptop with no stack running still works.
+
+Set it in any run that provisions a database and means to use it; `make test-db`
+does. Separately, the reachability probe now tries three times, a fraction of a
+second apart, before believing "nothing is listening": one dropped handshake on a
+loaded machine used to skip a whole suite silently.
+
+`ci.yml`'s backend job does **not** set it yet, deliberately: its seven
+scratch-database suites need `DATABASE_ADMIN_PASSWORD`, which that job leaves
+unset as a cost decision (see the comment in the workflow), and under
+`CI_REQUIRE_DB=1` they would fail rather than skip. Decide that first. Other
+gaps in this area: `consent-path-gate.yml` still carries its own copy of the
+role/extension bootstrap, and none of the workflows runs the no-skip check.
+
 ---
 
 Default branch: `main`
