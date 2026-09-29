@@ -12,9 +12,9 @@ const boom = (name: string, log: string[], message = 'exited 1'): Step => ({
   },
 });
 
-test('runSteps: a failing step does not stop the ones after it — the whole point of the aggregate', () => {
+test('runSteps: a failing step does not stop the ones after it — the whole point of the aggregate', async () => {
   const log: string[] = [];
-  const results = runSteps([ok('a', log), boom('b', log), ok('c', log), boom('d', log), ok('e', log)]);
+  const results = await runSteps([ok('a', log), boom('b', log), ok('c', log), boom('d', log), ok('e', log)]);
 
   assert.deepEqual(log, ['a', 'b', 'c', 'd', 'e']);
   assert.deepEqual(
@@ -29,8 +29,8 @@ test('runSteps: a failing step does not stop the ones after it — the whole poi
   );
 });
 
-test('runSteps: records why a step failed, whether it threw an Error or something else', () => {
-  const results = runSteps([
+test('runSteps: records why a step failed, whether it threw an Error or something else', async () => {
+  const results = await runSteps([
     boom('err', [], 'yarn workspace @ci/x run test exited 2'),
     {
       name: 'str',
@@ -44,9 +44,9 @@ test('runSteps: records why a step failed, whether it threw an Error or somethin
   assert.equal(results[1].detail, 'plain string');
 });
 
-test('runSteps: measures each step with the injected clock', () => {
+test('runSteps: measures each step with the injected clock', async () => {
   let t = 1000;
-  const results = runSteps(
+  const results = await runSteps(
     [
       { name: 'slow', run: () => void (t += 250) },
       { name: 'fast', run: () => void (t += 5) },
@@ -60,10 +60,10 @@ test('runSteps: measures each step with the injected clock', () => {
   );
 });
 
-test('runSteps: shouldStop cuts the run short, and the cut-off steps are reported, not dropped', () => {
+test('runSteps: shouldStop cuts the run short, and the cut-off steps are reported, not dropped', async () => {
   const log: string[] = [];
   let stop = false;
-  const results = runSteps(
+  const results = await runSteps(
     [ok('a', log), { name: 'b', run: () => void (stop = true) }, ok('c', log), ok('d', log)],
     { shouldStop: () => stop },
   );
@@ -81,11 +81,11 @@ test('runSteps: shouldStop cuts the run short, and the cut-off steps are reporte
   assert.equal(results[2].detail, 'interrupted');
 });
 
-test('runSteps: hooks fire once per step, in order, with the running index', () => {
+test('runSteps: hooks fire once per step, in order, with the running index', async () => {
   const started: string[] = [];
   const done: string[] = [];
 
-  runSteps([ok('a', []), boom('b', [])], {
+  await runSteps([ok('a', []), boom('b', [])], {
     onStart: (s, i, n) => started.push(`${i + 1}/${n} ${s.name}`),
     onDone: (r) => done.push(`${r.name}:${r.outcome}`),
   });
@@ -94,16 +94,16 @@ test('runSteps: hooks fire once per step, in order, with the running index', () 
   assert.deepEqual(done, ['a:pass', 'b:fail']);
 });
 
-test('unsuccessful: anything but a pass makes the run red, including a step an interrupt cut off', () => {
-  const results = runSteps([ok('a', []), boom('b', [])]);
+test('unsuccessful: anything but a pass makes the run red, including a step an interrupt cut off', async () => {
+  const results = await runSteps([ok('a', []), boom('b', [])]);
 
   assert.deepEqual(
     unsuccessful(results).map((r) => r.name),
     ['b'],
   );
-  assert.deepEqual(unsuccessful(runSteps([ok('a', []), ok('b', [])])), []);
+  assert.deepEqual(unsuccessful(await runSteps([ok('a', []), ok('b', [])])), []);
   assert.deepEqual(
-    unsuccessful(runSteps([ok('a', [])], { shouldStop: () => true })).map((r) => r.outcome),
+    unsuccessful(await runSteps([ok('a', [])], { shouldStop: () => true })).map((r) => r.outcome),
     ['not-run'],
   );
 });

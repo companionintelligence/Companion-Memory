@@ -25,8 +25,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { run, tryRun } from '../lib/exec';
-import { fail, info, ok, step as logStep, table } from '../../dev-stack/log';
+import { TERMINATION_SIGNALS, TSX_RELAY_WARNING, run, tryRun, underTsxRelay } from '../lib/exec';
+import { fail, info, note, ok, step as logStep, table } from '../../dev-stack/log';
 
 const YELLOW = '\x1b[0;33m';
 const RESET = '\x1b[0m';
@@ -108,7 +108,7 @@ export function untestedWorkspaces(workspaces: Workspace[]): string[] {
  * contract `exec.run()` already has, so a step is usually a one-line closure. */
 export interface Step {
   name: string;
-  run: () => void;
+  run: () => void | Promise<void>;
 }
 
 export type Outcome = 'pass' | 'fail' | 'not-run';
@@ -128,7 +128,26 @@ export interface RunStepsHooks {
   shouldStop?: () => boolean;
   /** Injectable clock, for tests. */
   now?: () => number;
+  /**
+   * Awaited after every step, so a signal that arrived while the step ran gets delivered before
+   * `shouldStop` is asked. Injectable for tests; see {@link yieldToEventLoop} for why the default is not
+   * a no-op.
+   */
+  yieldToEventLoop?: () => Promise<void>;
 }
+
+/**
+ * Let node deliver the signals that arrived while a step blocked the event loop.
+ *
+ * Every step here is a `spawnSync`, which parks the loop until the child exits. A Ctrl-C (or a hangup)
+ * reaches the child, which dies, and `spawnSync` returns — but node has not yet RUN its own handler for the
+ * same signal: that happens on a later turn of the loop, and a plain `forEach` never takes one. The flag
+ * `shouldStop` reads was therefore still false, and every remaining step started. One `setImmediate` is
+ * not enough either — it can fire in the same turn before the signal pipe is polled — so it is two: the
+ * second is only reached on the following turn, whose poll phase has read the pending signal.
+ */
+export const yieldToEventLoop = (): Promise<void> =>
+  new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
 
 /**
  * Run every step in order. A step that throws is a FAILED step, never a reason
@@ -137,12 +156,13 @@ export interface RunStepsHooks {
  * it cuts off are reported as `not-run`, not dropped, so the summary still
  * accounts for every step that was supposed to happen.
  */
-export function runSteps(steps: Step[], hooks: RunStepsHooks = {}): StepResult[] {
+export async function runSteps(steps: Step[], hooks: RunStepsHooks = {}): Promise<StepResult[]> {
   const now = hooks.now ?? Date.now;
+  const yielder = hooks.yieldToEventLoop ?? yieldToEventLoop;
   const results: StepResult[] = [];
   let stopped = false;
 
-  steps.forEach((s, index) => {
+  for (const [index, s] of steps.entries()) {
     if (!stopped && hooks.shouldStop?.()) {
       stopped = true;
     }
@@ -153,7 +173,7 @@ export function runSteps(steps: Step[], hooks: RunStepsHooks = {}): StepResult[]
       results.push(result);
       hooks.onDone?.(result);
 
-      return;
+      continue;
     }
 
     hooks.onStart?.(s, index, steps.length);
@@ -162,7 +182,7 @@ export function runSteps(steps: Step[], hooks: RunStepsHooks = {}): StepResult[]
     let result: StepResult;
 
     try {
-      s.run();
+      await s.run();
       result = { name: s.name, outcome: 'pass', durationMs: now() - started };
     } catch (err) {
       result = {
@@ -175,7 +195,9 @@ export function runSteps(steps: Step[], hooks: RunStepsHooks = {}): StepResult[]
 
     results.push(result);
     hooks.onDone?.(result);
-  });
+
+    await yielder();
+  }
 
   return results;
 }
@@ -257,19 +279,22 @@ export async function runTest(root: string): Promise<void> {
   // Ctrl-C reaches the whole foreground group, so the running step's child dies
   // on its own. index.ts keeps THIS process alive through it (see the note
   // there) — which, without this flag, would read as "that step failed" and
-  // march on into the next one. An interrupt means stop.
+  // march on into the next one. An interrupt means stop. All of
+  // TERMINATION_SIGNALS, not just Ctrl-C: index.ts swallows SIGHUP for every
+  // command, so a closed terminal would otherwise be ignored here.
   let interrupted = false;
   const onInterrupt = (): void => {
     interrupted = true;
   };
 
-  process.on('SIGINT', onInterrupt);
-  process.on('SIGTERM', onInterrupt);
+  for (const signal of TERMINATION_SIGNALS) {
+    process.on(signal, onInterrupt);
+  }
 
   let results: StepResult[];
 
   try {
-    results = runSteps(steps, {
+    results = await runSteps(steps, {
       shouldStop: () => interrupted,
       onStart: (s, index, total) => {
         logStep(`[${index + 1}/${total}] ${s.name}`);
@@ -283,8 +308,9 @@ export async function runTest(root: string): Promise<void> {
       },
     });
   } finally {
-    process.off('SIGINT', onInterrupt);
-    process.off('SIGTERM', onInterrupt);
+    for (const signal of TERMINATION_SIGNALS) {
+      process.off(signal, onInterrupt);
+    }
   }
 
   console.log('Summary');
@@ -349,6 +375,10 @@ export async function main(argv: string[]): Promise<void> {
     );
 
     return;
+  }
+
+  if (underTsxRelay()) {
+    note(TSX_RELAY_WARNING);
   }
 
   await runTest(process.cwd());
