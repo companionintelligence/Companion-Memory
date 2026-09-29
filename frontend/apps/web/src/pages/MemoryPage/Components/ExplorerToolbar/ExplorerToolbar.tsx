@@ -1036,12 +1036,10 @@ function SortControl() {
         setSort(option?.sortBy || undefined, option?.sortOrder || undefined);
       }}
     >
-      {/* 150px clipped "Relevance" (and "Name (A–Z)" / "Newest first") at every
-          viewport: the width is the label plus the sort icon and the caret.
-          `w-max` follows the selected label; `min-w-[13rem]` is the floor that
-          fits the longest preset even if the value's line clamp reports a
-          narrower max-content. */}
-      <Select.Trigger className={cn('w-max min-w-[13rem] shrink-0', reason && 'opacity-70')}>
+      {/* Hug the selected label. A fixed width either clipped it or left a
+          gap that `justify-between` used to center the word between the icon
+          and the caret. */}
+      <Select.Trigger className={cn('w-fit shrink-0 justify-start text-left', reason && 'opacity-70')}>
         <ArrowUpDown className="mr-2 h-4 w-4 text-muted-foreground" />
         <Select.Value placeholder="Sort" />
       </Select.Trigger>

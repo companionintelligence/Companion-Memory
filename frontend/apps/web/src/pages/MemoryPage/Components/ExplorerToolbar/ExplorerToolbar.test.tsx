@@ -365,15 +365,16 @@ describe('ExplorerToolbar', () => {
       expect(screen.getByRole('combobox', { name: 'Sort' })).toHaveValue('name-desc');
     });
 
-    it('keeps the trigger wide enough for Relevance, Name (A–Z), and Newest first', () => {
+    it('sizes the trigger to the label and keeps that label left-aligned', () => {
       renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory?view=list' });
 
       const trigger = screen.getByTestId('sort-trigger');
 
-      expect(trigger).toHaveClass('w-max');
-      expect(trigger).toHaveClass('min-w-[13rem]');
+      expect(trigger).toHaveClass('w-fit');
       expect(trigger).toHaveClass('shrink-0');
-      expect(trigger.className).not.toMatch(/w-\[150px\]/);
+      expect(trigger).toHaveClass('justify-start');
+      expect(trigger).toHaveClass('text-left');
+      expect(trigger.className).not.toMatch(/min-w-\[13rem\]|w-\[150px\]/);
     });
 
     it('defaults to Relevance on /memory and offers no time sort without a When filter', () => {
