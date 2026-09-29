@@ -250,6 +250,10 @@ describe('useAuth', () => {
 
     const fetchMock = setFetch((url) => {
       if (url.endsWith('/api/keys')) {
+        // The picked origin must not be live until the new key exists, or `me`
+        // races the mint and the previous box's key is what demo1 rejects.
+        expect(getApiBaseUrl()).not.toBe('https://memory.example.com');
+
         return jsonResponse({ id: 'key-portal', key: 'portal-minted-key' });
       }
 

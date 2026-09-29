@@ -266,6 +266,15 @@ interface CreateApiKeyResponse {
   key: string;
 }
 
+// Keystore restore is async. Logout and a new device connect have to win if
+// they finish while that read is still in flight, or the previous box's key
+// comes back and the next `me` is Unauthorized.
+let nativeCredentialEpoch = 0;
+
+function bumpNativeCredentialEpoch(): void {
+  nativeCredentialEpoch += 1;
+}
+
 // Exchange a freshly-issued JWT for a long-lived API key (the /api/keys endpoint is
 // JWT-guarded, so this must run while we still hold the login JWT), persist it to the
 // keystore, and activate it for subsequent requests. Returns the raw key, or null.
@@ -439,16 +448,13 @@ function useAuth(): ReturnValue {
 
   const completePortalMemoryConnect = useCallback(
     async (portalBearer: string, memoryOrigin?: string): Promise<boolean> => {
-      // CapacitorHttp cannot follow relative `/api/...` paths. Point the
-      // in-memory origin at the picked server *before* minting so the `me`
-      // query and feature flags that fire on `setNativeApiKey` have an
-      // absolute URL. Persist only after a key comes back — a leftover origin
-      // with no key used to skip cloud-connect and dump Safari returns on /login.
+      // Do not point the app at the picked server until its key is stored.
+      // The picker can still be "authenticated" by the previous box's key
+      // (a keystore read that landed after logout). Setting the origin first
+      // makes `me` run with that key, and the new server answers Unauthorized
+      // even though minting a key for this account succeeded.
+      bumpNativeCredentialEpoch();
       const previousOrigin = getApiBaseUrl();
-
-      if (memoryOrigin) {
-        setApiBaseUrl(memoryOrigin);
-      }
 
       try {
         const key = await mintAndStoreApiKey(portalBearer, memoryOrigin);
@@ -515,6 +521,15 @@ function useAuth(): ReturnValue {
   );
 
   const logout = useCallback(async () => {
+    // Drop the in-memory key before the replica wipe. A late keystore restore
+    // must not put the previous box's key back under the next account.
+    bumpNativeCredentialEpoch();
+
+    if (isNativePlatform()) {
+      setApiKey(null);
+      setNativeApiKey(null);
+    }
+
     // Bounded: a replica that cannot be dropped (worker never came up) must not
     // leave the user stuck signed in. Everything below still runs on timeout.
     await disconnectAndClearPowerSyncForLogout();
@@ -620,13 +635,22 @@ function useAuth(): ReturnValue {
           // Native restore: origin first, then the API key. A key without an
           // origin makes every `/api/...` call relative, which CapacitorHttp
           // rejects — the cloud-connect picker then looks like a failed mint.
+          const epoch = nativeCredentialEpoch;
           const storedOrigin = await secureStorageGet('ci.apiBaseUrl');
+
+          if (epoch !== nativeCredentialEpoch) {
+            return;
+          }
 
           if (storedOrigin) {
             persistApiBaseUrl(storedOrigin);
           }
 
           const storedKey = await secureStorageGet(API_KEY_STORAGE);
+
+          if (epoch !== nativeCredentialEpoch) {
+            return;
+          }
 
           if (storedKey) {
             setApiKey(storedKey);

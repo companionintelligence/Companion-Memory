@@ -62,6 +62,7 @@ vi.mock('@/hooks', () => ({
       h.profileUser !== undefined ? h.profileUser : h.authenticated ? { id: 'u1', onboarded: true } : null,
     loading: false,
     error: h.profileError,
+    refetch: vi.fn(async () => ({})),
   }),
 }));
 

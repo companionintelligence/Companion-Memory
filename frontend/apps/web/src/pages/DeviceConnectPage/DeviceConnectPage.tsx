@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { isIosPlatform, persistApiBaseUrl, resolveHttpOrigin } from '@ci/common';
 import { Button, Card, LoadingButton } from '@ci/shadcn';
@@ -90,7 +90,7 @@ function readStoredPortalAuth(): PortalAuth | null {
 export function DeviceConnectPage() {
   const navigate = useNavigate();
   const [{ authenticated, initializing }, { completePortalMemoryConnect }] = useAuth();
-  const { user, loading: userLoading, error: userError } = useCurrentUser();
+  const { user, loading: userLoading, error: userError, refetch } = useCurrentUser();
 
   // Do not leave this page until Memory has accepted the minted key and `me`
   // resolved. Navigating to `/` earlier makes RedirectKnownUser treat a missing
@@ -105,6 +105,9 @@ export function DeviceConnectPage() {
   const [signInError, setSignInError] = useState<string | null>(null);
   const [awaitingProfile, setAwaitingProfile] = useState(false);
   const accountEmail = emailFromIdToken(auth?.idToken);
+  // `me` can already be sitting on Unauthorized from the previous box's key.
+  // That object must not be reported as the result of this tap.
+  const profileErrorBeforeConnect = useRef<unknown>(null);
 
   useEffect(() => {
     if (!initializing && authenticated && user) {
@@ -113,7 +116,15 @@ export function DeviceConnectPage() {
   }, [authenticated, initializing, navigate, user]);
 
   useEffect(() => {
-    if (!awaitingProfile || connectingId == null || initializing || userLoading || !authenticated || user) {
+    if (
+      !awaitingProfile ||
+      connectingId == null ||
+      initializing ||
+      userLoading ||
+      !authenticated ||
+      user ||
+      (userError != null && userError === profileErrorBeforeConnect.current)
+    ) {
       return;
     }
 
@@ -261,6 +272,7 @@ export function DeviceConnectPage() {
 
     setConnectingId(device.id);
     setSignInError(null);
+    profileErrorBeforeConnect.current = userError;
 
     try {
       const origin = resolveHttpOrigin(device.memoryUrl);
@@ -296,6 +308,7 @@ export function DeviceConnectPage() {
           await completePortalMemoryConnect(bearer, origin);
           persistApiBaseUrl(origin);
           setAwaitingProfile(true);
+          void refetch();
 
           return;
         } catch (err) {
