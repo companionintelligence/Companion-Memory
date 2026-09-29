@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -307,21 +307,56 @@ export class PlaceService {
     context: UserServiceContext,
     input: { name: string; lat: number; lng: number },
   ): Promise<{ id: string }> {
+    const name = normalizePlaceName(input.name);
     const id = uuidv7();
 
-    await this.placeRepository.manager.query(
-      `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name, properties, location_point, place_kind)
-       VALUES ($1, 'Location', $2, $3, $4::jsonb,
-               ST_SetSRID(ST_MakePoint($5, $6), 4326)::geography, 'venue')`,
-      [
-        id,
-        context.userId,
-        input.name.trim(),
-        JSON.stringify({ source: 'known_place', lat: input.lat, lng: input.lng }),
-        input.lng,
-        input.lat,
-      ],
-    );
+    try {
+      await this.placeRepository.manager.query(
+        `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name, properties, location_point, place_kind)
+         VALUES ($1, 'Location', $2, $3, $4::jsonb,
+                 ST_SetSRID(ST_MakePoint($5, $6), 4326)::geography, 'venue')`,
+        [
+          id,
+          context.userId,
+          name,
+          JSON.stringify({ source: 'known_place', lat: input.lat, lng: input.lng }),
+          input.lng,
+          input.lat,
+        ],
+      );
+    } catch (err) {
+      if (!isUniqueViolation(err)) {
+        throw err;
+      }
+
+      // A geocoded place already owns this name in the same cell. Naming the
+      // cluster should land on that row, the same way findOrCreateForGeocode
+      // converges a rename, instead of surfacing the unique-index failure as
+      // an internal server error.
+      const existing: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
+        `SELECT entity_id
+           FROM ci.entities
+          WHERE entity_type = 'Location'
+            AND owner_user_id = $1
+            AND merged_into_entity_id IS NULL
+            AND lower(btrim(name)) = lower(btrim($2))
+            AND location_point IS NOT NULL
+            AND ST_DWithin(
+                  location_point,
+                  ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography,
+                  $5)
+          LIMIT 1`,
+        [context.userId, name, input.lng, input.lat, SAME_NAME_MERGE_METRES],
+      );
+
+      if (existing.length > 0) {
+        return { id: existing[0].entity_id };
+      }
+
+      throw new ConflictException(
+        'A place with that name already exists nearby. Choose a different name, or edit the existing place.',
+      );
+    }
 
     await this.eventService.send(PlaceCreatedEvent, { placeId: id });
 
@@ -1018,6 +1053,17 @@ export class PlaceService {
 
     if (place) {
       const props = Object.assign({}, place.properties, { ...properties });
+      // entities_reverse_geocode_dedup_idx casts properties.lat/lng to numeric
+      // on every update of a geocoded place. A non-numeric value (a degree
+      // mark, a label that landed in the coordinate field) aborts the UPDATE
+      // with 22P02, which the GraphQL layer masks as "Internal server error".
+      // Coerce what we can and drop the rest so a rename still saves; the
+      // typed location_point column keeps the real coordinate.
+      sanitizeGeocodeCoordinates(props);
+
+      if (typeof rest.name === 'string') {
+        rest.name = normalizePlaceName(rest.name);
+      }
 
       // Typed place columns: only touch what was provided.
       const typed: Partial<Pick<PlaceEntity, 'locationPoint' | 'placeKind' | 'parentPlaceId'>> = {};
@@ -1035,22 +1081,34 @@ export class PlaceService {
           : null;
       }
 
-      const result = await this.placeRepository.update(
-        {
-          id,
-          ...(context.userId !== SYSTEM_USER && {
-            user: {
-              id: context.userId,
-            },
-          }),
-        },
-        {
-          ...rest,
-          ...typed,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          properties: props as any, // TypeORM will handle JSON serialization
-        },
-      );
+      let result: { affected?: number | null };
+
+      try {
+        result = await this.placeRepository.update(
+          {
+            id,
+            ...(context.userId !== SYSTEM_USER && {
+              user: {
+                id: context.userId,
+              },
+            }),
+          },
+          {
+            ...rest,
+            ...typed,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            properties: props as any, // TypeORM will handle JSON serialization
+          },
+        );
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          throw new ConflictException(
+            'A place with that name already exists at this location. Choose a different name, or edit the existing place.',
+          );
+        }
+
+        throw err;
+      }
 
       if (result.affected === 0) {
         return null;
@@ -1120,6 +1178,66 @@ export class PlaceService {
  * envelope wrapping most of the globe, which would then "contain" every
  * coordinate the user has.
  */
+/**
+ * A place name is free text: apostrophes, accents, and symbols are stored as
+ * typed. The only values Postgres rejects inside `text` are null bytes, and an
+ * empty name is not a useful rename. Both used to fall through to a masked
+ * internal server error.
+ */
+function normalizePlaceName(name: string): string {
+  if (name.includes('\u0000')) {
+    throw new BadRequestException('A place name can’t include a null character.');
+  }
+
+  const trimmed = name.trim();
+
+  if (trimmed === '') {
+    throw new BadRequestException('A place name can’t be empty.');
+  }
+
+  return trimmed;
+}
+
+/**
+ * Keep `properties.lat` / `properties.lng` numeric so the reverse-geocode
+ * unique index can evaluate them. Non-numeric leftovers are removed.
+ */
+function sanitizeGeocodeCoordinates(props: Record<string, unknown>): void {
+  for (const key of ['lat', 'lng'] as const) {
+    if (!(key in props)) {
+      continue;
+    }
+
+    const coerced = coerceStoredCoordinate(props[key]);
+
+    if (coerced === undefined) {
+      delete props[key];
+    } else {
+      props[key] = coerced;
+    }
+  }
+}
+
+function coerceStoredCoordinate(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim().replace(/°/g, '');
+
+  if (!/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(trimmed)) {
+    return undefined;
+  }
+
+  const numeric = Number(trimmed);
+
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
 function normalizeBounds(
   bounds: { north: number; south: number; east: number; west: number } | null | undefined,
 ): { north: number; south: number; east: number; west: number } | null {
