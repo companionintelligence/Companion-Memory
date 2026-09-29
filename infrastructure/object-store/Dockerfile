@@ -36,5 +36,13 @@ ENV RUSTFS_VOLUMES=/data/objects \
     RUSTFS_ADDRESS=:9000 \
     RUSTFS_CONSOLE_ADDRESS=:9001
 
+# The probe lives with the server it probes: /health is RustFS's own, and
+# MinIO answers it 403 (RustFS also answers MinIO's /minio/health/live, but
+# that is a compatibility shim, not its documented probe). Compose's
+# `service_healthy` dependencies and `up --wait` use this, as does any Hub
+# install. start-period covers the first boot's ownership walk.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=5 \
+  CMD curl -f http://localhost:9000/health || exit 1
+
 ENTRYPOINT ["/usr/local/bin/ci-object-store-entrypoint.sh"]
 CMD ["rustfs"]

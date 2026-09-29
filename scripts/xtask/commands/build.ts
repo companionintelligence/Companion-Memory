@@ -30,6 +30,7 @@ import {
   SETUP_SECRETS_REPO,
   SUMMARY_REPO,
   computeTag,
+  contextStamp,
   sidecarStamp,
   versionedTagArgs,
 } from '../lib/images';
@@ -66,8 +67,32 @@ export interface BuildStep {
   dockerfile: string; // relative to root
   context: string; // relative to root
   repo: string;
-  extraBuildArgs: string[]; // flat --build-arg/--label pairs, before the versioned-tag/-t/context
+  extraBuildArgs: string[]; // flat --build-arg pairs, before the label/versioned-tag/-t/context
+  // The `ci.source-tree` label value, for the images `dev` staleness-checks.
+  // Kept on the step (not buried in extraBuildArgs) so `dev` compares a warm
+  // image against exactly the stamp a build would give it.
+  sourceTree?: string;
   warning?: string;
+}
+
+/** An image built from nothing but its own directory — its Dockerfile lives
+ * there and it is the whole build context — stamped with that directory's
+ * tree hash. */
+function contextOnlyStep(root: string, key: ImageKey, label: string, dir: string, repo: string): BuildStep {
+  return {
+    key,
+    label,
+    dockerfile: `${dir}/Dockerfile`,
+    context: dir,
+    repo,
+    extraBuildArgs: [],
+    sourceTree: contextStamp(root, dir),
+  };
+}
+
+/** `--label ci.source-tree=<stamp>` for a stamped step, else nothing. */
+function sourceTreeLabelArgs(step: BuildStep): string[] {
+  return step.sourceTree === undefined ? [] : ['--label', `ci.source-tree=${step.sourceTree}`];
 }
 
 export interface BuildPlan {
@@ -112,41 +137,31 @@ function buildStepFor(root: string, key: ImageKey, gpu: Gpu, uvVersion: string):
         extraBuildArgs: [],
       };
     case 'setup-database':
-      return {
+      return contextOnlyStep(
+        root,
         key,
-        label: 'database setup image',
-        dockerfile: 'infrastructure/setup-database/Dockerfile',
-        context: 'infrastructure/setup-database',
-        repo: SETUP_DATABASE_REPO(),
-        extraBuildArgs: [],
-      };
+        'database setup image',
+        'infrastructure/setup-database',
+        SETUP_DATABASE_REPO(),
+      );
     case 'database':
-      return {
-        key,
-        label: 'database image',
-        dockerfile: 'infrastructure/database/Dockerfile',
-        context: 'infrastructure/database',
-        repo: DATABASE_REPO(),
-        extraBuildArgs: [],
-      };
+      return contextOnlyStep(root, key, 'database image', 'infrastructure/database', DATABASE_REPO());
     case 'object-store':
-      return {
+      return contextOnlyStep(
+        root,
         key,
-        label: 'object store image',
-        dockerfile: 'infrastructure/object-store/Dockerfile',
-        context: 'infrastructure/object-store',
-        repo: OBJECT_STORE_REPO(),
-        extraBuildArgs: [],
-      };
+        'object store image',
+        'infrastructure/object-store',
+        OBJECT_STORE_REPO(),
+      );
     case 'setup-secrets':
-      return {
+      return contextOnlyStep(
+        root,
         key,
-        label: 'setup secrets image',
-        dockerfile: 'infrastructure/setup-secrets/Dockerfile',
-        context: 'infrastructure/setup-secrets',
-        repo: SETUP_SECRETS_REPO(),
-        extraBuildArgs: [],
-      };
+        'setup secrets image',
+        'infrastructure/setup-secrets',
+        SETUP_SECRETS_REPO(),
+      );
     case 'summary':
       return {
         key,
@@ -154,12 +169,8 @@ function buildStepFor(root: string, key: ImageKey, gpu: Gpu, uvVersion: string):
         dockerfile: 'backend/apps/summary/Dockerfile',
         context: '.',
         repo: SUMMARY_REPO(),
-        extraBuildArgs: [
-          '--build-arg',
-          `UV_VERSION=${uvVersion}`,
-          '--label',
-          `ci.source-tree=${sidecarStamp(root, 'summary')}`,
-        ],
+        extraBuildArgs: ['--build-arg', `UV_VERSION=${uvVersion}`],
+        sourceTree: sidecarStamp(root, 'summary'),
       };
     case 'hbpe': {
       const hbpe = computeHbpeBuildConfig(root, gpu, uvVersion);
@@ -171,7 +182,8 @@ function buildStepFor(root: string, key: ImageKey, gpu: Gpu, uvVersion: string):
         dockerfile: `backend/apps/hbpe/${hbpe.dockerfile}`,
         context: '.',
         repo: HBPE_REPO(),
-        extraBuildArgs: [...hbpe.buildArgs, '--label', `ci.source-tree=${sidecarStamp(root, 'hbpe')}`],
+        extraBuildArgs: hbpe.buildArgs,
+        sourceTree: sidecarStamp(root, 'hbpe'),
         warning: hbpe.warning ?? undefined,
       };
     }
@@ -183,9 +195,9 @@ export function computeBuildPlan(
   env: Env,
   gpu: Gpu,
   uvVersion: string,
-  imageFilter?: ImageKey,
+  images?: readonly ImageKey[],
 ): BuildPlan {
-  const requested = new Set<ImageKey>(imageFilter ? [imageFilter] : defaultImageKeys(env));
+  const requested = new Set<ImageKey>(images && images.length > 0 ? images : defaultImageKeys(env));
   const steps = IMAGE_ORDER.filter((k) => requested.has(k)).map((k) => buildStepFor(root, k, gpu, uvVersion));
 
   return { steps, needsFrontendBuild: requested.has('gateway') };
@@ -205,6 +217,7 @@ function printPlan(plan: BuildPlan, env: Env, tag: string): void {
       '-f',
       step.dockerfile,
       ...step.extraBuildArgs,
+      ...sourceTreeLabelArgs(step),
       ...tagArgs,
       '-t',
       `${step.repo}:latest`,
@@ -222,7 +235,9 @@ function printPlan(plan: BuildPlan, env: Env, tag: string): void {
 export interface BuildOptions {
   env: Env;
   gpu: Gpu;
-  image?: ImageKey;
+  // Just these images, in build order, regardless of ENV; empty or absent
+  // builds the ENV-appropriate set.
+  images?: readonly ImageKey[];
   dryRun?: boolean;
 }
 
@@ -241,7 +256,7 @@ export async function runBuild(root: string, opts: BuildOptions): Promise<void> 
     throw new Error('Could not read the uv pin from required-version in pyproject.toml.');
   }
 
-  const plan = computeBuildPlan(root, opts.env, opts.gpu, uvVersion, opts.image);
+  const plan = computeBuildPlan(root, opts.env, opts.gpu, uvVersion, opts.images);
   const tag = computeTag(root);
 
   if (opts.dryRun) {
@@ -295,6 +310,7 @@ export async function runBuild(root: string, opts: BuildOptions): Promise<void> 
           '-f',
           step.dockerfile,
           ...step.extraBuildArgs,
+          ...sourceTreeLabelArgs(step),
           ...versionedTagArgs(step.repo, tag),
           '-t',
           `${step.repo}:latest`,
@@ -353,5 +369,10 @@ export async function main(argv: string[]): Promise<void> {
     throw new Error(`Unknown image '${image}'. Choose one of: ${IMAGE_ORDER.join(' ')}`);
   }
 
-  await runBuild(root, { env, gpu, image, dryRun: values['dry-run'] as boolean | undefined });
+  await runBuild(root, {
+    env,
+    gpu,
+    images: image ? [image] : undefined,
+    dryRun: values['dry-run'] as boolean | undefined,
+  });
 }
