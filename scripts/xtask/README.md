@@ -50,7 +50,7 @@ paths against.
 | `build [image]` | `--env local\|staging\|production` (default `local`), `--gpu cpu\|cuda\|rocm` (default: `scripts/detect-gpu.sh`), `--dry-run` | With no `[image]`, builds the ENV-appropriate set: `setup-database database object-store summary hbpe`, plus `api gateway` when ENV is not `local`, plus `setup-secrets` on `production`. `[image]` builds exactly one of `api, gateway, setup-database, database, object-store, setup-secrets, summary, hbpe`, regardless of ENV. |
 | `dev` | `--gpu`, `--rebuild` | Shells out to `make health` and `make init`, checks overmind/caddy/ollama, pulls the two required ollama models, rebuilds when a local image is missing or a sidecar's `ci.source-tree` label no longer matches HEAD, then hands off to `scripts/dev-stack/index.ts up`. |
 | `test` | — | One step per workspace that declares a `test` script (`yarn workspace <name> run test`), then `node --test` over `frontend/apps/desktop/scripts/**/*.test.cjs` (excluded from the workspaces, so no workspace step can see it), `uv run pytest`, and the gateway and setup-secrets `sh` suites. **Every step runs even if an earlier one fails**; a summary table says which did not pass and the exit status is nonzero if any did. Ctrl-C stops the run. Reports workspaces that declare no `test` script. |
-| `test-db [jest args]` | `--keep`, `--image <ref>`, `--workers <n>`; bare words are jest path patterns, everything after `--` goes to jest verbatim | Starts a throwaway container of the appliance's database image, bootstraps it with `scripts/test-db/bootstrap.sql`, migrates it, runs the `@ci/be-api` jest suite against it with `CI_REQUIRE_DB=1` and every connection variable pointing only there, then judges the run (jest verdict, no unexplained skip per `scripts/test-db/allowed-skips.json`, no crash signature in the database's own log) and removes the container. Docker is the only prerequisite. See `docs/CI.md`. |
+| `test-db [jest args]` | `--keep`, `--image <ref>`, `--workers <n>`, `--no-retry`; bare words are jest path patterns, everything after `--` goes to jest verbatim | Starts a throwaway container of the appliance's database image, bootstraps it with `scripts/test-db/bootstrap.sql`, migrates it, runs the `@ci/be-api` jest suite against it with `CI_REQUIRE_DB=1` and every connection variable pointing only there, then judges the run (jest verdict, no unexplained skip per `scripts/test-db/allowed-skips.json`, no crash signature in the database's own log) and removes the container. A test file that fails the parallel run is re-run once, serially: FLAKE if it then passes (a warning), REAL if it fails again (`--no-retry` turns this off). Removed on SIGINT, SIGTERM and SIGHUP too. Docker is the only prerequisite. See `docs/CI.md`. |
 
 Every subcommand takes `--help`, and unknown values for `--env`, `--gpu` and `[image]`
 are rejected with the valid list rather than passed to Docker.
@@ -58,7 +58,7 @@ are rejected with the valid list rather than passed to Docker.
 ## Layout
 
 ```
-index.ts              subcommand dispatch, --help, SIGINT/SIGTERM handling
+index.ts              subcommand dispatch, --help, SIGINT/SIGTERM/SIGHUP handling
 commands/build.ts     computeBuildPlan (no Docker; reads files+git) + the build loop
 commands/dev.ts       prerequisite checks, image staleness, dev-stack handoff
 commands/test.ts      the step list, runSteps (keep-going) + summary table, coverage report
@@ -70,6 +70,9 @@ lib/uv.ts             the uv pin, from required-version in pyproject.toml
 lib/identity.ts       REPO / PROJECT_NAME derivation
 lib/testDb.ts         test-db's pure parts: args, image choice, container ownership, the env
 lib/docker.ts         the few docker CLI calls test-db makes (exec form, ours-only removal)
+lib/backstop.ts       test-db's exit-time backstop (container by id or by name, the run's own temp dir)
+lib/flakes.ts         the serial-retry policy: classify FLAKE / REAL / UNRETRIED, merge, exit decision
+lib/fakeDocker.ts     a model docker daemon for the unit tests (not imported by any command)
 lib/noSkips.ts        judges a jest --json report against scripts/test-db/allowed-skips.json
 lib/dbLogSentinel.ts  crash-restart signatures in a Postgres log
 ```

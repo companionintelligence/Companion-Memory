@@ -218,20 +218,26 @@ file `ci.yml` runs, so the two cannot drift — migrates it, runs the `be-api` j
 suite against it, judges the run, and removes the container. **Docker is the only
 prerequisite.** It never reads `.env`, never binds a fixed host port, and only
 ever touches containers it created itself (name `ci-testdb-*` *and* label
-`ci.test-db=1`).
+`ci.test-db=1`). Ctrl-C, `kill` and the terminal going away (**SIGHUP** — closing
+the window, an SSH connection dropping) are all handled the same way: the signal
+is forwarded to jest's whole process tree (`yarn` is only a wrapper, and a signal
+sent to it alone would leave jest and its workers running), the container and
+this run's temp directory are removed, the summary is still printed, and the exit
+is nonzero.
 
 ```bash
 make test-db                                  # the whole be-api suite
 make test-db ARGS='src/domains/import'        # jest path patterns; any jest flag works too
 make test-db KEEP=1                           # leave the container up (prints how to connect)
 make test-db WORKERS=2 DB_IMAGE=my/db:tag     # jest workers (default 4); another image
+make test-db NO_RETRY=1                       # a failing test file fails the run at once (see below)
 ```
 
 The run **fails** on any of:
 
 | Check | What it catches |
 |---|---|
-| jest's own verdict | a failing test, or a suite that failed to *run* |
+| jest's own verdict | a failing test, or a suite that failed to *run*, **that also fails again on the serial retry** (see [Flaky tests](#flaky-tests-the-serial-retry)) |
 | no unexplained skip | any `skipped` / `pending` / `todo` test not forgiven by `scripts/test-db/allowed-skips.json` |
 | database crash sentinel | crash-restart signatures in the container's own log (`untracked child process … exited with exit code 2`, `terminating any other active server processes`, `was terminated by signal`, `PANIC`, `in recovery` …) |
 
@@ -251,6 +257,79 @@ container's log. If it trips, the fault is the database or the harness, not
 
 Kept containers (`KEEP=1`) and the leftovers of a killed run are removed by the
 next `make test-db` once they are more than two hours old.
+
+**If Docker itself misbehaves**, the command says what it does and does not know.
+Every docker call on the start-up and clean-up path has a time limit (a daemon
+that accepts a call and never answers fails the call in seconds — 10 s for a
+lookup, 30 s for a removal — instead of hanging the run), and a container counts
+as removed only when the daemon said so or a verification that *succeeded* found
+it absent. A removal whose verification also failed is reported as **unknown**,
+the container stays tracked by the exit-time backstop, and the message gives the
+exact `docker rm -f -v ci-testdb-…` to run. The same holds when `docker run`
+itself dies after the daemon created the container: it is found again by its
+exact name and removed only if it carries the `ci.test-db=1` label.
+
+#### Flaky tests: the serial retry
+
+Under parallel load a few suites fail for reasons that have nothing to do with the
+change: an swc `failed printing to stderr … (os error 35)` while a suite loads, a
+`deadlock detected` between two suites inserting into the same table, a
+timing-sensitive controller test. So the policy is explicit, and it is **not** a
+search for a green tick:
+
+1. After the parallel run, each test **file** that failed is re-run **once**,
+   serially (`--runInBand`, by exact path), against the same database. A `-t`
+   name filter is carried over so the retry runs the same tests; nothing else
+   from your jest arguments is.
+2. A file that failed the parallel run and **passed** serially is a **FLAKE**. It
+   does not fail the run, but it is printed as a warning block naming the file
+   and the first line of its error, and the final line says
+   `passed WITH n FLAKE(S)` — it is never folded into a plain "passed".
+3. A file that failed **both** times is **REAL** and fails the run (the summary
+   shows the serial run's error, which has no load noise in it).
+4. A file nobody re-ran is **UNRETRIED**, which also fails the run: not knowing
+   is not passing. That happens with `--no-retry` (`NO_RETRY=1`), when the run
+   was interrupted, and when **more than 20 files** failed — that is a broken
+   run or a dead database, not flaky tests, and re-running them serially would
+   take longer than the run did.
+
+The exit code is 0 only if everything passed or was a FLAKE. A flake can never
+excuse a REAL failure beside it, a crash-sentinel hit, or an unexplained skip.
+The no-skip check is run on the report with each flaked file's entry replaced by
+what its serial re-run reported, so a test that *skipped* on the retry is still
+caught. There is no separate JSON summary: the summary is the printed table plus
+the FLAKE/REAL blocks, and jest's own `--json` report is a temp file that is
+removed with the run.
+
+A flake is a defect report with a low priority, not a non-event: a file that
+keeps showing up in the FLAKE block has a real race in it (or in the code it
+tests) and deserves a ticket.
+
+#### The environment the suites see
+
+`buildTestEnv` starts from your shell's environment, **removes** every variable
+whose name could reach a database, and only then sets its own. The rule is
+deliberately broad, because writing to your real corpus cannot be undone and a
+false positive merely removes a variable nothing here needs. It drops (case
+insensitively) any name that
+
+- contains `DATABASE`, `POSTGRES`, `REPLICATION` or `POWERSYNC` — always, even
+  on the keep-list; or
+- starts `PG`, contains `DB_`, ends `_DB`, `_URI` or `_URL`, or starts `COMPOSE_`
+  — unless it is on the keep-list.
+
+So `HBPE_DATABASE_URL`, `PS_REPLICATION_URI`, `POWERSYNC_DATABASE_PASSWORD`,
+`DB_HOST` and `COMPOSE_PROJECT_NAME` never reach jest — and neither, as a cost
+of the breadth, do things like `ANTHROPIC_BASE_URL`. The keep-list is tiny and
+exists for what yarn, jest and docker need: `PATH`, `HOME`, `TMPDIR`, `USER`,
+`LOGNAME`, `SHELL`, `NODE_OPTIONS`, `TERM`, `CI`, `TZ`, `LANG`, `LC_*`, `YARN_*`,
+`DOCKER_HOST`, `DOCKER_CONFIG`. Everything else passes through.
+
+Then the throwaway's values are set, and `assertOnlyThrowaway` checks the
+finished environment before any child process starts. It does not trust the
+scrub: a variable it sets must name the container's loopback port, and any
+database-shaped variable it did *not* set is refused outright, whatever its
+value. It names the variable, never the value.
 
 #### The `CI_REQUIRE_DB` contract
 
