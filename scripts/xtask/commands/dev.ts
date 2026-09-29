@@ -12,15 +12,8 @@ import { parseArgs } from 'node:util';
 import { run, tryRun, which } from '../lib/exec';
 import { detectGpu, type Gpu } from '../lib/gpu';
 import { computeProjectName } from '../lib/identity';
-import {
-  DATABASE_REPO,
-  HBPE_REPO,
-  OBJECT_STORE_REPO,
-  SETUP_DATABASE_REPO,
-  SUMMARY_REPO,
-  sidecarStamp,
-} from '../lib/images';
-import { runBuild } from './build';
+import { readUvVersion } from '../lib/uv';
+import { computeBuildPlan, runBuild, type BuildStep } from './build';
 import { ok, note } from '../../dev-stack/log';
 
 const GREEN = '\x1b[0;32m';
@@ -179,41 +172,27 @@ function imageSourceTreeLabel(repo: string): string {
 }
 
 /**
+ * Which of the local ENV's images to (re)build: missing ones, and warm ones
+ * whose `ci.source-tree` label differs from the stamp a build at HEAD would
+ * give them — every image in the local set carries one (see `sourceTree` in
+ * build.ts), so a committed change to any of their sources is noticed, not
+ * just the two Python sidecars'. The stamps come from the same
+ * `computeBuildPlan` that `build` runs, so the two cannot disagree about what
+ * an image is built from.
+ *
  * Missing takes priority over stale (an image already flagged missing is
  * never also flagged stale — the pre-port Makefile's `case " $$missing " in ...
  * continue`), and an unreadable stamp means "skip the staleness judgment",
- * not "assume stale" (the pre-port Makefile). Only `summary`/`hbpe` are
- * staleness-checked via their `ci.source-tree` label — `setup-database`/
- * `database`/`object-store` are missing-checked only, since `sidecar_stamp`
- * is only meaningful for the two Python services built from this repo's
- * own source.
+ * not "assume stale" (the pre-port Makefile). An image built before it was
+ * stamped has no label, so it reads as stale once and is rebuilt.
  */
-function checkImagesNeedBuild(root: string): { missing: string[]; stale: string[] } {
-  const localImages = [
-    SETUP_DATABASE_REPO(),
-    DATABASE_REPO(),
-    OBJECT_STORE_REPO(),
-    SUMMARY_REPO(),
-    HBPE_REPO(),
-  ];
-  const missing = localImages.filter((img) => !imageExists(img));
-
-  const sidecarPairs: Array<[string, string]> = [
-    [SUMMARY_REPO(), sidecarStamp(root, 'summary')],
-    [HBPE_REPO(), sidecarStamp(root, 'hbpe')],
-  ];
-
-  const stale: string[] = [];
-
-  for (const [img, want] of sidecarPairs) {
-    if (missing.includes(img) || !want) {
-      continue;
-    }
-
-    if (imageSourceTreeLabel(img) !== want) {
-      stale.push(img);
-    }
-  }
+function checkImagesNeedBuild(root: string, gpu: Gpu): { missing: BuildStep[]; stale: BuildStep[] } {
+  const { steps } = computeBuildPlan(root, 'local', gpu, readUvVersion(root));
+  const missing = steps.filter((step) => !imageExists(step.repo));
+  const stale = steps.filter(
+    (step) =>
+      !missing.includes(step) && step.sourceTree && imageSourceTreeLabel(step.repo) !== step.sourceTree,
+  );
 
   return { missing, stale };
 }
@@ -241,20 +220,28 @@ export async function runDev(root: string, opts: DevOptions): Promise<void> {
 
   run('make', ['init'], { cwd: root });
 
-  const { missing, stale } = checkImagesNeedBuild(root);
+  const { missing, stale } = checkImagesNeedBuild(root, opts.gpu);
 
-  if (opts.rebuild || missing.length > 0 || stale.length > 0) {
+  if (opts.rebuild) {
+    await runBuild(root, { env: 'local', gpu: opts.gpu });
+  } else if (missing.length > 0 || stale.length > 0) {
     if (missing.length > 0) {
-      note(`building — missing image(s):${missing.map((m) => ` ${m}`).join('')}`);
+      note(`building — missing image(s):${missing.map((m) => ` ${m.repo}`).join('')}`);
       console.log('');
     }
 
     if (stale.length > 0) {
-      note(`building — sidecar image(s) built from other source:${stale.map((m) => ` ${m}`).join('')}`);
+      note(`building — image(s) built from other source:${stale.map((m) => ` ${m.repo}`).join('')}`);
       console.log('');
     }
 
-    await runBuild(root, { env: 'local', gpu: opts.gpu });
+    // Only those: an edit to the object store's entrypoint should not cost an
+    // HBPE rebuild. REBUILD=1 above still rebuilds the whole set.
+    await runBuild(root, {
+      env: 'local',
+      gpu: opts.gpu,
+      images: [...missing, ...stale].map((step) => step.key),
+    });
   } else {
     ok(`Reusing existing local images (set ${YELLOW}REBUILD=1${RESET} to rebuild)`);
     console.log('');

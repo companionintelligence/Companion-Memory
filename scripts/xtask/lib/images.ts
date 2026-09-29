@@ -5,7 +5,9 @@
  * `smoke-api`/`smoke-stack`, not ported, still read them directly, so they
  * remain the source of truth; reading them here via `process.env` with the
  * same literal fallback just means both sides agree without either
- * declaring the other), the pre-port Makefile's `versioned_tag` and `sidecar_stamp` helpers.
+ * declaring the other), the pre-port Makefile's `versioned_tag` and `sidecar_stamp` helpers,
+ * plus `contextStamp`, which extends the staleness stamp to the images built
+ * from a single infrastructure/ directory.
  */
 import { tryRun } from './exec';
 
@@ -53,4 +55,19 @@ export function sidecarStamp(root: string, appDir: 'summary' | 'hbpe'): string {
   );
 
   return res.stdout.replace(/\n/g, '-');
+}
+
+/**
+ * The `ci.source-tree` label value for an image built from nothing but its
+ * own directory (the Docker build context, e.g. `infrastructure/object-store`)
+ * — git's tree hash for that directory at HEAD, which changes with any
+ * committed edit to any file in it, the base-image pin in its Dockerfile
+ * included. `''` when git cannot resolve it (a shallow clone, a directory
+ * not in HEAD), which `dev` reads as "skip the staleness judgment". Like
+ * `sidecarStamp` it stamps HEAD, so uncommitted edits do not count.
+ */
+export function contextStamp(root: string, contextDir: string): string {
+  const res = tryRun('git', ['rev-parse', '--verify', '--quiet', `HEAD:${contextDir}`], { cwd: root });
+
+  return res.status === 0 ? res.stdout.trim() : '';
 }

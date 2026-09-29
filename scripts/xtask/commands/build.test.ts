@@ -7,7 +7,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { computeBuildPlan } from './build';
+import { contextStamp } from '../lib/images';
+import { computeBuildPlan, runBuild } from './build';
 
 const ROOT = process.cwd();
 
@@ -42,7 +43,7 @@ test('ENV=production additionally adds setup-secrets', () => {
 });
 
 test('an explicit image bypasses the ENV gate: "api" alone under ENV=local, no frontend build needed', () => {
-  const plan = computeBuildPlan(ROOT, 'local', 'cpu', '0.9.17', 'api');
+  const plan = computeBuildPlan(ROOT, 'local', 'cpu', '0.9.17', ['api']);
 
   assert.deepEqual(
     plan.steps.map((s) => s.key),
@@ -52,7 +53,7 @@ test('an explicit image bypasses the ENV gate: "api" alone under ENV=local, no f
 });
 
 test('an explicit "gateway" alone still needs the frontend build (its Dockerfile copies the dist)', () => {
-  const plan = computeBuildPlan(ROOT, 'local', 'cpu', '0.9.17', 'gateway');
+  const plan = computeBuildPlan(ROOT, 'local', 'cpu', '0.9.17', ['gateway']);
 
   assert.deepEqual(
     plan.steps.map((s) => s.key),
@@ -62,7 +63,7 @@ test('an explicit "gateway" alone still needs the frontend build (its Dockerfile
 });
 
 test('an explicit "setup-secrets" builds under ENV=local, even though it defaults to production-only', () => {
-  const plan = computeBuildPlan(ROOT, 'local', 'cpu', '0.9.17', 'setup-secrets');
+  const plan = computeBuildPlan(ROOT, 'local', 'cpu', '0.9.17', ['setup-secrets']);
 
   assert.deepEqual(
     plan.steps.map((s) => s.key),
@@ -109,3 +110,60 @@ for (const gpu of ['cuda', 'rocm'] as const) {
     assert.doesNotMatch(wheelArg, /:-|--|-$/, `${gpu} wheel tag has an empty component: ${wheelArg}`);
   });
 }
+
+test('an explicit list builds just those images, in build order whatever order they were given', () => {
+  const plan = computeBuildPlan(ROOT, 'local', 'cpu', '0.9.17', ['hbpe', 'object-store']);
+
+  assert.deepEqual(
+    plan.steps.map((s) => s.key),
+    ['object-store', 'hbpe'],
+  );
+});
+
+test('an empty list builds the ENV-appropriate set, as no list does', () => {
+  const plan = computeBuildPlan(ROOT, 'local', 'cpu', '0.9.17', []);
+
+  assert.deepEqual(
+    plan.steps.map((s) => s.key),
+    ['setup-database', 'database', 'object-store', 'summary', 'hbpe'],
+  );
+});
+
+// `dev` rebuilds a warm image when its label differs from this stamp, so an
+// image in the local set without one would never be noticed as stale — the
+// reason object-store kept serving MinIO after the switch to RustFS.
+test('every image dev builds carries a source-tree stamp, and the infrastructure ones stamp their own directory', () => {
+  const plan = computeBuildPlan(ROOT, 'local', 'cpu', '0.9.17');
+
+  for (const step of plan.steps) {
+    assert.ok(step.sourceTree, `${step.key} has no source-tree stamp`);
+  }
+
+  for (const key of ['setup-database', 'database', 'object-store'] as const) {
+    const step = plan.steps.find((s) => s.key === key);
+
+    assert.ok(step);
+    assert.equal(step.sourceTree, contextStamp(ROOT, step.context));
+  }
+});
+
+test('the dry-run command line labels the image with its stamp', async () => {
+  const lines: string[] = [];
+  const log = console.log;
+
+  console.log = (...args: unknown[]) => {
+    lines.push(args.join(' '));
+  };
+
+  try {
+    await runBuild(ROOT, { env: 'local', gpu: 'cpu', images: ['object-store'], dryRun: true });
+  } finally {
+    console.log = log;
+  }
+
+  const stamp = contextStamp(ROOT, 'infrastructure/object-store');
+  const cmd = lines.find((l) => l.includes('docker build'));
+
+  assert.ok(cmd, 'a docker build line was printed');
+  assert.ok(cmd.includes(`--label ci.source-tree=${stamp}`), cmd);
+});
