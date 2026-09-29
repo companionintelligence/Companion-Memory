@@ -210,7 +210,10 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
             }
 
             session.presentationContextProvider = self
-            session.prefersEphemeralWebBrowserSession = false
+            // A shared cookie jar signs the next attempt in as whoever was here last
+            // and never shows the email field. Ephemeral drops those cookies when
+            // the sheet closes, so the next Log in starts empty.
+            session.prefersEphemeralWebBrowserSession = true
             self.authSession = session
 
             if !session.start() {

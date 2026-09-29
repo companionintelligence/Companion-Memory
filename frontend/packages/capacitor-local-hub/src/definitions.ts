@@ -94,8 +94,9 @@ export interface LocalHubPlugin {
 
   /**
    * iOS only. Presents an in-app Safari authentication sheet and resolves when it
-   * finishes. The `companion://` callback is forwarded into the app; it does not
-   * open Safari. Rejects with code `CANCELLED` when the user dismisses the sheet.
+   * finishes. The sheet does not keep Portal cookies, so the next sign-in asks
+   * for the account again. The `companion://` callback is forwarded into the app;
+   * it does not open Safari. Rejects with code `CANCELLED` when the user dismisses the sheet.
    * Android rejects as unavailable. Android sign-in goes through `openUrl`.
    */
   startAuthSession(options: { url: string; callbackScheme?: string }): Promise<void>;
