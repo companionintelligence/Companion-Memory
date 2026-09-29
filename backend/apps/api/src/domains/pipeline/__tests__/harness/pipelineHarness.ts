@@ -246,11 +246,16 @@ export class HarnessQueue extends EventService {
     );
   }
 
-  async failJob(queue: string, jobId: string): Promise<void> {
+  async failJob(queue: string, jobId: string): Promise<boolean> {
     throw new Error(
       `HarnessQueue.failJob(${queue}, ${jobId}) — no pipeline stage defers its job. ` +
         `Stage failure is recorded through PipelineStateService.fail, not the queue.`,
     );
+  }
+
+  /** Nothing in the pipeline reads a job back; there is no row to report. */
+  async getJob(): Promise<null> {
+    return null;
   }
 
   async sendMany(

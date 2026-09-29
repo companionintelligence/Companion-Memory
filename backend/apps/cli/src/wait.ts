@@ -171,6 +171,9 @@ function describe(run: RunDetail, prefixId: boolean): string {
   const where = active == null ? '' : ` ${active.kind}${active.phase ? `/${active.phase}` : ''}`;
   const counted = active?.total != null && active.total > 0 ? ` ${active.processed}/${active.total}` : '';
   const prefix = prefixId ? `[${run.id.slice(0, 8)}] ` : '';
+  // A line of its own when the stage goes quiet: the percentage stops moving
+  // either way, and only this says whether that is slow work or no work.
+  const stalled = active?.stalled === true ? '  stalled: no heartbeat' : '';
 
-  return `${prefix}${String(run.percent).padStart(3)}%  ${run.status}${where}${counted}`;
+  return `${prefix}${String(run.percent).padStart(3)}%  ${run.status}${where}${counted}${stalled}`;
 }

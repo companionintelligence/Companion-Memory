@@ -1,6 +1,7 @@
 import { CliError, type CliContext } from '../context';
 import { duration, json, stamp, table } from '../output';
 import { waitForRuns } from '../wait';
+import type { StageSummary } from '../wire';
 
 import { parseTimeout } from './import';
 
@@ -50,7 +51,9 @@ export async function runsCommand(
       [
         { header: 'id', value: (run) => run.id },
         { header: 'label', value: (run) => run.label ?? '' },
-        { header: 'status', value: (run) => run.status },
+        // `running` is the run row's CACHED status, written on transitions — it
+        // cannot notice a worker that died. The server's `stalled` can.
+        { header: 'status', value: (run) => (run.stalled === true ? `${run.status} (stalled)` : run.status) },
         { header: '%', value: (run) => String(run.percent), align: 'right' },
         { header: 'sources', value: (run) => run.dataSources.slice(0, 4).join(' ') },
         { header: 'started', value: (run) => stamp(run.startedAt) },
@@ -72,8 +75,8 @@ async function showRun(ctx: CliContext, runId: string, options: RunsOptions): Pr
   if (!options.json) {
     ctx.term.out(`${detail.id}  ${detail.label ?? ''}`);
     ctx.term.out(
-      `status ${detail.status}  ${detail.percent}%  source ${detail.source}  ` +
-        `stages ${detail.requestedStages.join(' → ')}`,
+      `status ${detail.status}${detail.stalled === true ? ' (stalled)' : ''}  ${detail.percent}%  ` +
+        `source ${detail.source}  stages ${detail.requestedStages.join(' → ')}`,
     );
 
     if (detail.dataSources.length > 0) {
@@ -89,7 +92,7 @@ async function showRun(ctx: CliContext, runId: string, options: RunsOptions): Pr
       table(detail.stages, [
         { header: 'seq', value: (stage) => String(stage.seq), align: 'right' },
         { header: 'kind', value: (stage) => stage.kind },
-        { header: 'status', value: (stage) => stage.status },
+        { header: 'status', value: (stage) => (stage.stalled === true ? 'stalled' : stage.status) },
         { header: 'phase', value: (stage) => stage.phase ?? '' },
         { header: 'processed', value: (stage) => String(stage.processed), align: 'right' },
         // Null total is "not yet countable", which must not print as 0 — a bar
@@ -103,6 +106,10 @@ async function showRun(ctx: CliContext, runId: string, options: RunsOptions): Pr
         { header: 'error', value: (stage) => stage.error ?? '' },
       ]),
     );
+
+    for (const note of livenessNotes(detail.stages)) {
+      ctx.term.out(note);
+    }
   }
 
   if (options.wait) {
@@ -115,4 +122,71 @@ async function showRun(ctx: CliContext, runId: string, options: RunsOptions): Pr
       json(ctx.term, final ?? detail);
     }
   }
+}
+
+/**
+ * What the stage table cannot say on its own: that a `running` stage has gone
+ * silent, and that a `queued` one is there because its worker died.
+ *
+ * Both used to be invisible — a stage frozen mid-parse read `running` with no
+ * error for as long as recovery took, and after recovery it read `queued` with
+ * its counters at zero and nothing to say why. One line each, in the words a
+ * person watching an import would use.
+ */
+function livenessNotes(stages: readonly StageSummary[], now: Date = new Date()): string[] {
+  const notes: string[] = [];
+
+  for (const stage of stages) {
+    if (stage.stalled === true) {
+      const silentFor =
+        stage.heartbeatAt == null ? null : now.getTime() - new Date(stage.heartbeatAt).getTime();
+
+      notes.push(
+        `${stage.kind} stalled: no heartbeat${silentFor == null ? '' : ` for ${duration(silentFor)}`}` +
+          `${stage.heartbeatAt == null ? '' : ` (since ${stamp(stage.heartbeatAt)})`} — its worker is gone or ` +
+          'wedged. A stage whose worker is gone is retried automatically within minutes.',
+      );
+    }
+
+    const interrupted = interruption(stage);
+
+    if (interrupted != null && (stage.status === 'queued' || stage.status === 'running')) {
+      const retry =
+        interrupted.retry != null && interrupted.retryLimit != null
+          ? `retry ${interrupted.retry} of ${interrupted.retryLimit}`
+          : 'a fresh attempt';
+
+      notes.push(
+        `${stage.kind} was interrupted${interrupted.processed == null ? '' : ` at ${interrupted.processed} processed`}` +
+          `${interrupted.at == null ? '' : ` (${stamp(interrupted.at)})`}: its worker stopped heartbeating. ` +
+          `${stage.status === 'running' ? `Running again as ${retry}.` : `Queued for ${retry}.`}`,
+      );
+    }
+  }
+
+  return notes;
+}
+
+/** `detail.interrupted`, as the server's orphan reaper records it — read defensively. */
+function interruption(stage: StageSummary): {
+  at: string | null;
+  processed: number | null;
+  retry: number | null;
+  retryLimit: number | null;
+} | null {
+  const value = stage.detail?.interrupted;
+
+  if (value == null || typeof value !== 'object') {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const number = (key: string) => (typeof record[key] === 'number' ? (record[key] as number) : null);
+
+  return {
+    at: typeof record.at === 'string' ? record.at : null,
+    processed: number('processed'),
+    retry: number('retry'),
+    retryLimit: number('retryLimit'),
+  };
 }

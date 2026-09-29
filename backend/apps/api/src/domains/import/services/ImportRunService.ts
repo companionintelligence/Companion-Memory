@@ -11,7 +11,9 @@ import { EventService } from '@ci/domains/events';
 import {
   IMPORT_QUEUE,
   IMPORT_STAGE_KINDS,
+  IMPORT_STAGE_ORPHAN_SECONDS,
   IMPORT_STAGE_QUEUE_BY_KIND,
+  IMPORT_STAGE_STALLED_SECONDS,
   IMPORT_STAGE_WEIGHTS,
   type ImportStageKindName,
 } from '../constants';
@@ -107,6 +109,53 @@ export interface UnpushedRun {
   run: ImportRun;
   pendingItems: number;
   pendingEntities: number;
+}
+
+/**
+ * The pg-boss delivery making a claim — recorded by
+ * {@link ImportRunService.claimStage} so that, if the stage goes silent, the
+ * orphan reaper can fail THAT job and let pg-boss retry it. Absent for
+ * in-process runs, which have no job.
+ */
+export interface StageDelivery {
+  jobId: string;
+  queue: string;
+}
+
+/**
+ * What became of one stage {@link ImportRunService.reclaimOrphanedStages} took back.
+ *
+ *  - `retried` — the dead worker's job was failed through pg-boss, which queued
+ *    its retry in place.
+ *  - `awaiting` — a delivery for the stage was already waiting (`created` /
+ *    `retry`); re-queuing the stage was all it needed.
+ *  - `reenqueued` — no job could carry the stage any more, so a fresh one was
+ *    enqueued.
+ *  - `deadLettered` — the job had no retries left: the stage failed, and
+ *    pg-boss dead-lettered the job.
+ */
+export type OrphanOutcome = 'retried' | 'awaiting' | 'reenqueued' | 'deadLettered';
+
+export interface ReclaimedStage {
+  stageId: string;
+  runId: string;
+  kind: ImportStageKindName;
+  outcome: OrphanOutcome;
+}
+
+/** A silent stage, as the reaper's candidate query reads it. */
+interface OrphanCandidate {
+  stageId: string;
+  runId: string;
+  userId: string;
+  kind: ImportStageKindName;
+  phase: string | null;
+  claimToken: string;
+  jobId: string;
+  queue: string;
+  heartbeatAt: Date;
+  /** bigint, so the driver hands it back as a string. */
+  processed: string | number;
 }
 
 /** What {@link ImportRunService.retryFailedPush} reads under the run's row lock. */
@@ -560,25 +609,44 @@ export class ImportRunService {
    * a redelivery already gets. Nothing is lost by a requeue: every stage
    * resumes from durable state (the run-keyed scratch tree, the within-run
    * dedupe on staged rows, the per-row push ledger).
+   *
+   * **The ten-minute reclaim below is now the BACKSTOP, not the first
+   * responder.** A stage claimed through a pg-boss delivery is taken back by
+   * {@link reclaimOrphanedStages} — run first, here and every minute on its own
+   * — within {@link IMPORT_STAGE_ORPHAN_SECONDS}, with its job handed back to
+   * pg-boss. What reaches the ten-minute rule is a claim no job holds (the
+   * in-process connector runs, and claims from before claim ownership was
+   * recorded), or one the fast path failed to handle. Stages in `liveStageIds`
+   * — the ones the calling process is running this minute — are exempt from
+   * both, because a process knows for certain that its own work is alive,
+   * however long its event loop was blocked or its database away.
    */
-  async resumeInterrupted(): Promise<void> {
+  async resumeInterrupted(options: { liveStageIds?: Iterable<string> } = {}): Promise<void> {
+    const liveStageIds = [...(options.liveStageIds ?? [])];
+
+    await this.reclaimOrphanedStages({ liveStageIds });
+
     // CTE-wrapped — see the note on the claim in `startRun`. The reclaim
     // deliberately does NOT touch `updated_at`: the requeued stage must still
     // read as stale so the enqueue pass below picks it up in the same sweep.
+    // The claim columns ARE cleared, so a worker that was only slow is fenced
+    // out of the stage from here on (see `claimStage`).
     const reclaimed = await this.dataSource.query<Array<{ stageId: string; runId: string }>>(
       `WITH reclaimed AS (
          UPDATE ci_import.import_stages s
             SET status = 'queued', error = NULL, started_at = NULL, finished_at = NULL,
-                processed = 0, duration_ms = NULL
+                processed = 0, duration_ms = NULL,
+                claim_token = NULL, claim_job_id = NULL, claim_queue = NULL
           WHERE s.status = 'running'
             AND s.updated_at < now() - make_interval(mins => $1::int)
+            AND NOT (s.id = ANY($2::uuid[]))
             AND EXISTS (
               SELECT 1 FROM ci_import.import_runs r
                WHERE r.id = s.run_id AND r.finished_at IS NULL
             )
       RETURNING s.id, s.run_id)
        SELECT id AS "stageId", run_id AS "runId" FROM reclaimed`,
-      [STALE_STAGE_MINUTES],
+      [STALE_STAGE_MINUTES, liveStageIds],
     );
 
     const unfinished = await this.dataSource.query<
@@ -665,19 +733,332 @@ export class ImportRunService {
   }
 
   /**
+   * Take back every stage whose pg-boss worker has gone silent, and hand its
+   * job back to pg-boss.
+   *
+   * ## What this replaced
+   *
+   * A worker restarted mid-parse (reproduced 2026-09-29) left its stage
+   * `running` with `processed` frozen and no error, and its pg-boss job
+   * `active` with a twelve-hour lease (`IMPORT_STAGE_EXPIRE_SECONDS`).
+   * Recovery was the ten-minute rule in {@link resumeInterrupted}'s
+   * five-minute sweep — twelve minutes, in the reproduction — which re-queued
+   * the stage behind a FRESH job, at the back of its kind's queue (on a
+   * thirteen-run batch, behind every parse that queued after it), and left the
+   * orphan `active` until its lease expired, when its retry no-oped against
+   * the claim. Nothing surfaced any of it: `ci runs` said `running` throughout.
+   *
+   * ## What this does instead
+   *
+   * A candidate is a `running` stage of an unfinished run whose claim a pg-boss
+   * delivery made (`claim_job_id`), silent for {@link IMPORT_STAGE_ORPHAN_SECONDS},
+   * and not in `liveStageIds`. For each, what pg-boss says about that job
+   * decides the remedy:
+   *
+   *  - **`active` with retries left** — the common case, a worker that died
+   *    holding the lease. The stage goes back to `queued` and the job is
+   *    FAILED through pg-boss, whose policy re-inserts it as `retry` with the
+   *    same id and `created_on`: it keeps its place at the head of the queue
+   *    and runs after the first backoff (10–20 s), where a fresh job would
+   *    have queued behind everything else. Hand-writing `pgboss.job.state`
+   *    would skip pg-boss's retry accounting; asking it to fail the job keeps
+   *    the dead-letter bound doing its job.
+   *  - **`active` with no retries left** — the same worker death, for the
+   *    fourth time. pg-boss will dead-letter this job, so the STAGE fails to
+   *    match, with a message saying what kept happening. Re-queuing it instead
+   *    would have the ten-minute sweep enqueue a brand-new job with a brand-new
+   *    retry budget, and a stage that kills its worker would do so forever.
+   *  - **`created` / `retry`** — a delivery is already on its way; re-queuing
+   *    the stage is all it needs to be able to claim it.
+   *  - **finished, or gone** — nothing will carry the stage, so a fresh job is
+   *    enqueued (the old behaviour, now the rare fallback).
+   *
+   * ## Why a short window is safe
+   *
+   * See {@link IMPORT_STAGE_ORPHAN_SECONDS}. In brief: the caller passes the
+   * stages its own process is running as `liveStageIds`, and those are never
+   * candidates — so the owner's own event-loop stalls and database blips,
+   * the usual reasons a live stage misses beats, cannot reach this. Every take
+   * is also fenced (see {@link claimStage}): the reclaim only lands if the
+   * claim token is still the one read AND the stage is still silent, so a
+   * worker that beats in between keeps its stage; and one that beats after
+   * finds its token gone, and stops.
+   *
+   * Idempotent and safe to run concurrently with itself and with
+   * {@link resumeInterrupted}: every decision is a conditional UPDATE, and only
+   * its winner touches the job.
+   */
+  async reclaimOrphanedStages(options: { liveStageIds?: Iterable<string> } = {}): Promise<ReclaimedStage[]> {
+    const liveStageIds = [...(options.liveStageIds ?? [])];
+    const reclaimed: ReclaimedStage[] = [];
+
+    const candidates = await this.dataSource.query<OrphanCandidate[]>(
+      `SELECT s.id AS "stageId", s.run_id AS "runId", r.user_id AS "userId", s.kind, s.phase,
+              s.claim_token AS "claimToken", s.claim_job_id AS "jobId", s.claim_queue AS "queue",
+              s.updated_at AS "heartbeatAt", s.processed
+         FROM ci_import.import_stages s
+         JOIN ci_import.import_runs r ON r.id = s.run_id
+        WHERE s.status = 'running'
+          AND s.claim_token IS NOT NULL
+          AND s.claim_job_id IS NOT NULL
+          AND s.claim_queue IS NOT NULL
+          AND s.updated_at < now() - make_interval(secs => $1::int)
+          AND r.finished_at IS NULL
+          AND NOT (s.id = ANY($2::uuid[]))
+        ORDER BY s.updated_at`,
+      [IMPORT_STAGE_ORPHAN_SECONDS, liveStageIds],
+    );
+
+    for (const candidate of candidates) {
+      try {
+        const outcome = await this.reclaimOrphan(candidate);
+
+        if (outcome != null) {
+          reclaimed.push({
+            stageId: candidate.stageId,
+            runId: candidate.runId,
+            kind: candidate.kind,
+            outcome,
+          });
+        }
+      } catch (err) {
+        // One stage's failure must not strand the others behind it. It is
+        // still `running` and still silent, so the next tick meets it again.
+        this.logger.error('Could not reclaim an orphaned import stage; the next sweep will try again', {
+          err,
+          runId: candidate.runId,
+          stageId: candidate.stageId,
+          kind: candidate.kind,
+          jobId: candidate.jobId,
+        });
+      }
+    }
+
+    return reclaimed;
+  }
+
+  /**
+   * Reclaim one candidate. Returns what became of it, or null when the stage
+   * turned out not to be orphaned after all — its worker beat, completed or
+   * failed it between the candidate query and the fenced UPDATE.
+   */
+  private async reclaimOrphan(candidate: OrphanCandidate): Promise<OrphanOutcome | null> {
+    const job = await this.eventService.getJob(candidate.queue, candidate.jobId);
+    const heartbeatAt = new Date(candidate.heartbeatAt);
+    const silentForMs = Date.now() - heartbeatAt.getTime();
+    const context = {
+      runId: candidate.runId,
+      stageId: candidate.stageId,
+      kind: candidate.kind,
+      jobId: candidate.jobId,
+      queue: candidate.queue,
+      jobState: job?.state ?? 'missing',
+      lastHeartbeatAt: heartbeatAt.toISOString(),
+      silentForMs,
+    };
+    const jobOutput = {
+      message:
+        `import ${candidate.kind} stage ${candidate.stageId} stopped heartbeating ` +
+        `(last beat ${heartbeatAt.toISOString()}); its worker is gone`,
+      reason: 'import-stage-worker-lost',
+      runId: candidate.runId,
+      stageId: candidate.stageId,
+      lastHeartbeatAt: heartbeatAt.toISOString(),
+      reclaimedAt: new Date().toISOString(),
+    };
+
+    if (job?.state === 'active' && job.retryCount >= job.retryLimit) {
+      // Seize the claim first, so the decision is made exactly once and a
+      // worker that beats in between keeps its stage; then fail the stage under
+      // the seized token, then let pg-boss dead-letter the job to match.
+      const seized = await this.seizeOrphanedClaim(candidate);
+
+      if (seized == null) {
+        return null;
+      }
+
+      const attempts = job.retryLimit + 1;
+      const message =
+        `${candidate.kind} stopped: the worker running it went silent ${attempts} times ` +
+        `(last heartbeat ${heartbeatAt.toISOString()}, ${Number(candidate.processed)} processed), ` +
+        `and its job was dead-lettered after ${job.retryLimit} retries. Something is killing the ` +
+        `worker on this stage — check its log for a crash or an out-of-memory kill, then retry the ` +
+        `stage (History → Retry, or POST /import/runs/${candidate.runId}/stages/${candidate.stageId}/retry).`;
+
+      await this.failStage(
+        candidate.stageId,
+        message,
+        {
+          stage: candidate.kind,
+          ...(candidate.phase != null ? { phase: candidate.phase } : {}),
+          message,
+          name: 'ImportStageWorkerLostError',
+        },
+        seized,
+      );
+      await this.eventService.failJob(candidate.queue, candidate.jobId, jobOutput);
+
+      this.logger.error(
+        'An import stage lost its worker once too often; failed it and dead-lettered its job',
+        {
+          ...context,
+          attempts,
+        },
+      );
+
+      return 'deadLettered';
+    }
+
+    const retry = job?.state === 'active' ? job.retryCount + 1 : null;
+    const requeued = await this.requeueOrphanedStage(candidate, {
+      jobState: job?.state ?? null,
+      retry,
+      retryLimit: job?.retryLimit ?? null,
+    });
+
+    if (!requeued) {
+      return null;
+    }
+
+    // The stage's own counters were just zeroed; the run's percent is a cache
+    // over them and would otherwise go on claiming the dead attempt's progress.
+    await this.refreshRunRollup(candidate.stageId);
+
+    let outcome: OrphanOutcome;
+
+    if (
+      job?.state === 'active' &&
+      (await this.eventService.failJob(candidate.queue, candidate.jobId, jobOutput))
+    ) {
+      outcome = 'retried';
+    } else if (job?.state === 'created' || job?.state === 'retry') {
+      outcome = 'awaiting';
+    } else {
+      // No job will carry the stage: it finished or vanished — or it was
+      // `active` and finished between the read above and the fail, which
+      // `failJob`'s false says. Either way a fresh delivery is the only way on.
+      await this.enqueueStage(candidate.userId, candidate.runId, {
+        id: candidate.stageId,
+        kind: candidate.kind,
+      });
+      outcome = 'reenqueued';
+    }
+
+    this.logger.warn('An import stage stopped heartbeating; reclaimed it for a retry', {
+      ...context,
+      outcome,
+      retry,
+      retryLimit: job?.retryLimit ?? null,
+    });
+
+    return outcome;
+  }
+
+  /**
+   * Put an orphaned stage back to `queued`, recording what happened on it.
+   *
+   * Fenced twice, in one statement: the claim token must still be the one the
+   * candidate query read, and the stage must still be silent. The first stops
+   * a reclaim racing another; the second stops one racing the owner's own
+   * heartbeat, which does not change the token.
+   *
+   * `updated_at` is bumped, unlike the ten-minute backstop's reclaim: this path
+   * arranges its own delivery, so the queued stage must read as FRESH — not as
+   * a lost job for `resumeInterrupted` to enqueue a duplicate of.
+   *
+   * `detail.interrupted` is what a person or `ci runs` reads to learn why the
+   * stage went back to the queue with its counters at zero. It lives until the
+   * stage next completes, whose outcome replaces `detail`.
+   */
+  private async requeueOrphanedStage(
+    candidate: OrphanCandidate,
+    retry: { jobState: string | null; retry: number | null; retryLimit: number | null },
+  ): Promise<boolean> {
+    const rows = await this.dataSource.query<unknown[]>(
+      `WITH requeued AS (
+         UPDATE ci_import.import_stages s
+            SET status = 'queued', error = NULL, started_at = NULL, finished_at = NULL,
+                processed = 0, duration_ms = NULL, updated_at = now(),
+                claim_token = NULL, claim_job_id = NULL, claim_queue = NULL,
+                detail = COALESCE(s.detail, '{}'::jsonb) || jsonb_build_object('interrupted', jsonb_build_object(
+                  'at', now(),
+                  'reason', 'worker stopped heartbeating',
+                  'lastHeartbeatAt', s.updated_at,
+                  'processed', s.processed,
+                  'phase', s.phase,
+                  'jobId', s.claim_job_id,
+                  'queue', s.claim_queue,
+                  'jobState', $3::text,
+                  'retry', $4::int,
+                  'retryLimit', $5::int))
+          WHERE s.id = $1::uuid
+            AND s.status = 'running'
+            AND s.claim_token = $2::uuid
+            AND s.updated_at < now() - make_interval(secs => $6::int)
+      RETURNING s.id)
+       SELECT id FROM requeued`,
+      [
+        candidate.stageId,
+        candidate.claimToken,
+        retry.jobState,
+        retry.retry,
+        retry.retryLimit,
+        IMPORT_STAGE_ORPHAN_SECONDS,
+      ],
+    );
+
+    return rows.length > 0;
+  }
+
+  /**
+   * Replace a silent stage's claim token with a fresh one, and return it — the
+   * dead-letter path's way of taking the stage atomically before failing it.
+   * Null when the claim moved or the stage beat in the meantime.
+   */
+  private async seizeOrphanedClaim(candidate: OrphanCandidate): Promise<string | null> {
+    const rows = await this.dataSource.query<Array<{ claimToken: string }>>(
+      `WITH seized AS (
+         UPDATE ci_import.import_stages
+            SET claim_token = gen_random_uuid()
+          WHERE id = $1::uuid
+            AND status = 'running'
+            AND claim_token = $2::uuid
+            AND updated_at < now() - make_interval(secs => $3::int)
+      RETURNING claim_token)
+       SELECT claim_token AS "claimToken" FROM seized`,
+      [candidate.stageId, candidate.claimToken, IMPORT_STAGE_ORPHAN_SECONDS],
+    );
+
+    return rows[0]?.claimToken ?? null;
+  }
+
+  /**
    * Refresh a running stage's claim.
    *
    * The listener calls this on a timer for as long as a runner is inside the
    * stage, so a stage that is alive but quiet — a giant archive mid-extract
    * says nothing for minutes — never reads as abandoned to the sweep.
+   *
+   * With `claimToken` the beat is fenced (see {@link claimStage}), and false
+   * is how a worker learns its stage was taken back: the one signal that
+   * reaches it even while its runner is deep in a parser and reporting nothing.
    */
-  async touchStage(stageId: string): Promise<void> {
-    await this.dataSource.query(
-      `UPDATE ci_import.import_stages
-          SET updated_at = now()
-        WHERE id = $1::uuid AND status = 'running'`,
-      [stageId],
+  async touchStage(stageId: string, claimToken?: string): Promise<boolean> {
+    // CTE-wrapped so the fence can be read back — see the note on the claim in
+    // `startRun`.
+    const rows = await this.dataSource.query<unknown[]>(
+      `WITH touched AS (
+         UPDATE ci_import.import_stages
+            SET updated_at = now()
+          WHERE id = $1::uuid
+            AND status = 'running'
+            AND ($2::uuid IS NULL OR claim_token = $2::uuid)
+      RETURNING id)
+       SELECT id FROM touched`,
+      [stageId, claimToken ?? null],
     );
+
+    return rows.length > 0;
   }
 
   // -------------------------------------------------------------------------
@@ -731,7 +1112,7 @@ export class ImportRunService {
        */
       before?: { createdAt: Date; id: string };
     } = {},
-  ): Promise<(ImportRun & { records: number })[]> {
+  ): Promise<(ImportRun & { records: number; stalled: boolean })[]> {
     const query = this.dataSource
       .getRepository(ImportRunEntity)
       .createQueryBuilder('run')
@@ -773,9 +1154,44 @@ export class ImportRunService {
     // `recordsFor` so the active snapshot reports the same number by the same
     // rule rather than growing a second, subtly different definition of
     // "records imported".
-    const recordsByRun = await this.recordsFor(runs.map((run) => run.id));
+    const runIds = runs.map((run) => run.id);
+    const [recordsByRun, stalledRuns] = await Promise.all([
+      this.recordsFor(runIds),
+      this.stalledRunsFor(runIds),
+    ]);
 
-    return runs.map((run) => ({ ...run, records: recordsByRun.get(run.id) ?? 0 }));
+    return runs.map((run) => ({
+      ...run,
+      records: recordsByRun.get(run.id) ?? 0,
+      stalled: stalledRuns.has(run.id),
+    }));
+  }
+
+  /**
+   * Which of these runs has a `running` stage that has stopped heartbeating —
+   * silent past {@link IMPORT_STAGE_STALLED_SECONDS}.
+   *
+   * For the run LIST, which reads the cached `status` off the run row and so
+   * would otherwise say `running` for as long as recovery takes. One query for
+   * the page, like {@link recordsFor}; the stage-level answer, for a run whose
+   * stages are already loaded, is `isStageStalled` (`stageLiveness.ts`), over
+   * the same threshold.
+   */
+  async stalledRunsFor(runIds: readonly string[]): Promise<Set<string>> {
+    if (runIds.length === 0) {
+      return new Set();
+    }
+
+    const rows = await this.dataSource.query<Array<{ run_id: string }>>(
+      `SELECT DISTINCT run_id
+         FROM ci_import.import_stages
+        WHERE run_id = ANY($1::uuid[])
+          AND status = 'running'
+          AND updated_at < now() - make_interval(secs => $2::int)`,
+      [[...runIds], IMPORT_STAGE_STALLED_SECONDS],
+    );
+
+    return new Set(rows.map((row) => row.run_id));
   }
 
   /** One run with its stage bar, or null when it is not this user's. */
@@ -1259,12 +1675,14 @@ export class ImportRunService {
     // the guard this could flip a stage a worker had JUST claimed back to
     // `queued` for a second worker to claim. `updated_at` is bumped so the
     // recovery sweep reads the re-queued stage as fresh, not as a job lost ten
-    // minutes ago that needs another enqueue.
+    // minutes ago that needs another enqueue. The claim is cleared, so a worker
+    // still holding an abandoned `running` push is fenced out (see claimStage).
     const requeued = await manager.query<Array<{ id: string }>>(
       `WITH requeued AS (
          UPDATE ci_import.import_stages
             SET status = 'queued', error = NULL, started_at = NULL, finished_at = NULL,
-                processed = 0, duration_ms = NULL, updated_at = now()
+                processed = 0, duration_ms = NULL, updated_at = now(),
+                claim_token = NULL, claim_job_id = NULL, claim_queue = NULL
           WHERE id = $1::uuid
             AND (status IN ('completed', 'failed')
                  OR (status = 'running' AND updated_at < now() - make_interval(mins => $2::int)))
@@ -1443,23 +1861,48 @@ export class ImportRunService {
    * Constrained to `queued`, so a redelivered pg-boss job cannot restart a stage
    * another worker already owns, and the caller learns it lost by getting
    * `false` rather than by trampling a run in flight.
+   *
+   * The boolean face of {@link claimStage}, for callers that run a stage
+   * in-process and have no delivery to record or token to carry.
    */
   async beginStage(stageId: string): Promise<boolean> {
+    return (await this.claimStage(stageId)) != null;
+  }
+
+  /**
+   * Claim a queued stage, returning the token that proves the claim — or null
+   * when the stage is not `queued` (someone else runs it, or it has finished).
+   *
+   * The token is minted fresh on every claim and is what FENCES the claim: pass
+   * it to {@link touchStage}, {@link recordProgress}, {@link completeStage} and
+   * {@link failStage}, and each of them lands only while it still matches. That
+   * is what makes it safe for {@link reclaimOrphanedStages} to take a silent
+   * stage back — a worker that was merely slow finds its token gone, and can no
+   * longer write progress into the attempt that replaced it, complete it, fail
+   * the run, or advance the pipeline behind it.
+   *
+   * `delivery` names the pg-boss job making the claim. Recorded so that if the
+   * stage goes quiet, the reaper can fail THAT job — pg-boss then retries it in
+   * place, or dead-letters it — instead of leaving it `active` for the rest of
+   * a twelve-hour lease while a duplicate queues behind everything else.
+   */
+  async claimStage(stageId: string, delivery?: StageDelivery): Promise<string | null> {
     // CTE-wrapped — see the note on the claim in `startRun`. Without it this
     // returns `[[], 0]`, whose length is 2, and every redelivered job would
     // "win" the claim and unpack the same 40GB archive again.
-    const rows = await this.dataSource.query<unknown[]>(
+    const rows = await this.dataSource.query<Array<{ claimToken: string }>>(
       `WITH claimed AS (
          UPDATE ci_import.import_stages
-            SET status = 'running', started_at = COALESCE(started_at, now()), updated_at = now()
+            SET status = 'running', started_at = COALESCE(started_at, now()), updated_at = now(),
+                claim_token = gen_random_uuid(), claim_job_id = $2::uuid, claim_queue = $3::text
           WHERE id = $1::uuid AND status = 'queued'
-      RETURNING id)
-       SELECT id FROM claimed`,
-      [stageId],
+      RETURNING claim_token)
+       SELECT claim_token AS "claimToken" FROM claimed`,
+      [stageId, delivery?.jobId ?? null, delivery?.queue ?? null],
     );
 
     if (rows.length === 0) {
-      return false;
+      return null;
     }
 
     await this.dataSource.query(
@@ -1470,40 +1913,66 @@ export class ImportRunService {
       [stageId],
     );
 
-    return true;
+    return rows[0].claimToken;
   }
 
-  /** Update a running stage's counters. Also refreshes the run's percent cache. */
+  /**
+   * Update a running stage's counters. Also refreshes the run's percent cache.
+   *
+   * With `claimToken`, the write is fenced (see {@link claimStage}) and the
+   * return value says whether it landed: false means the claim is gone and the
+   * caller no longer owns this stage. Without one — the in-process connector
+   * path — it writes unconditionally, as it always has.
+   */
   async recordProgress(
     stageId: string,
     update: { processed: number; total?: number | null; phase?: string },
-  ): Promise<void> {
-    await this.dataSource.query(
+    claimToken?: string,
+  ): Promise<boolean> {
+    // CTE-wrapped so the fence can be read back — see the note on the claim in
+    // `startRun`.
+    const rows = await this.dataSource.query<unknown[]>(
       // Every parameter cast, and `$2` cast at BOTH sites. It feeds `processed`
       // (bigint) and a division (double precision), and Postgres will not deduce
       // one type for a parameter used two ways — it raises "inconsistent types
       // deduced for parameter $2" on the first tick, which killed the unpack
       // stage the moment it reported progress. Same fault as `completeStage`;
       // this statement was simply never exercised.
-      `UPDATE ci_import.import_stages
-          SET processed = $2::bigint,
-              total = COALESCE($3::bigint, total),
-              phase = COALESCE($4::text, phase),
-              updated_at = now(),
-              items_per_sec = CASE
-                WHEN started_at IS NULL THEN items_per_sec
-                WHEN EXTRACT(EPOCH FROM (now() - started_at)) <= 0 THEN items_per_sec
-                ELSE $2::double precision / EXTRACT(EPOCH FROM (now() - started_at))
-              END
-        WHERE id = $1::uuid`,
-      [stageId, update.processed, update.total ?? null, update.phase ?? null],
+      `WITH progressed AS (
+         UPDATE ci_import.import_stages
+            SET processed = $2::bigint,
+                total = COALESCE($3::bigint, total),
+                phase = COALESCE($4::text, phase),
+                updated_at = now(),
+                items_per_sec = CASE
+                  WHEN started_at IS NULL THEN items_per_sec
+                  WHEN EXTRACT(EPOCH FROM (now() - started_at)) <= 0 THEN items_per_sec
+                  ELSE $2::double precision / EXTRACT(EPOCH FROM (now() - started_at))
+                END
+          WHERE id = $1::uuid
+            AND ($5::uuid IS NULL OR claim_token = $5::uuid)
+      RETURNING id)
+       SELECT id FROM progressed`,
+      [stageId, update.processed, update.total ?? null, update.phase ?? null, claimToken ?? null],
     );
 
+    if (rows.length === 0) {
+      return false;
+    }
+
     await this.refreshRunRollup(stageId);
+
+    return true;
   }
 
-  /** Finish a stage that did its work, wholly or partly. */
-  async completeStage(stageId: string, outcome: StageOutcome): Promise<void> {
+  /**
+   * Finish a stage that did its work, wholly or partly.
+   *
+   * Fenced by `claimToken` when one is given (see {@link claimStage}); false
+   * means the claim was taken back before the work finished, so this result is
+   * not the stage's and the caller must not advance the run on it.
+   */
+  async completeStage(stageId: string, outcome: StageOutcome, claimToken?: string): Promise<boolean> {
     // `outcome.partial` is a SIBLING of `detail` on `StageOutcome` (see
     // types.ts) — but `detail` is the only part of the outcome that survives
     // past this call, and `finishRun` rolls a run up to `partial` by reading
@@ -1514,26 +1983,41 @@ export class ImportRunService {
     // stage's `partial: true` ever reached it.
     const detail = { ...(outcome.detail ?? {}), partial: outcome.partial === true };
 
-    await this.dataSource.query(
+    const rows = await this.dataSource.query<unknown[]>(
       // Every parameter cast explicitly: `$2` feeds both `processed` and the
       // COALESCE for `total`, and Postgres refuses to deduce one type for a
       // parameter used in two positions ("inconsistent types deduced").
-      `UPDATE ci_import.import_stages
-          SET status = 'completed',
-              updated_at = now(),
-              processed = $2::bigint,
-              total = COALESCE($3::bigint, $2::bigint),
-              detail = $4::jsonb,
-              finished_at = now(),
-              duration_ms = CASE
-                WHEN started_at IS NULL THEN duration_ms
-                ELSE (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::bigint
-              END
-        WHERE id = $1::uuid`,
-      [stageId, outcome.processed, outcome.total, JSON.stringify(detail)],
+      //
+      // The claim ends here, so its token goes with it: a heartbeat or a
+      // throttled progress tick that fires after completion is fenced out
+      // rather than rewriting a finished stage's counters.
+      `WITH completed AS (
+         UPDATE ci_import.import_stages
+            SET status = 'completed',
+                updated_at = now(),
+                processed = $2::bigint,
+                total = COALESCE($3::bigint, $2::bigint),
+                detail = $4::jsonb,
+                finished_at = now(),
+                claim_token = NULL,
+                duration_ms = CASE
+                  WHEN started_at IS NULL THEN duration_ms
+                  ELSE (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::bigint
+                END
+          WHERE id = $1::uuid
+            AND ($5::uuid IS NULL OR claim_token = $5::uuid)
+      RETURNING id)
+       SELECT id FROM completed`,
+      [stageId, outcome.processed, outcome.total, JSON.stringify(detail), claimToken ?? null],
     );
 
+    if (rows.length === 0) {
+      return false;
+    }
+
     await this.refreshRunRollup(stageId);
+
+    return true;
   }
 
   /**
@@ -1547,21 +2031,42 @@ export class ImportRunService {
    * has one place to look whether the stage completed or died. jsonb_set with
    * `create_missing` builds the path on a stage whose detail is still `{}`,
    * which is every stage that failed before producing anything.
+   *
+   * Fenced by `claimToken` when one is given (see {@link claimStage}). False
+   * means the claim was taken back first: the failure belongs to an attempt
+   * that no longer owns the stage, so neither the stage nor the run is failed
+   * on its account — the attempt that replaced it decides how this ends.
    */
-  async failStage(stageId: string, error: string, failure?: StageFailureContext): Promise<void> {
-    await this.dataSource.query(
-      `UPDATE ci_import.import_stages
-          SET status = 'failed', error = $2, finished_at = now(), updated_at = now(),
-              detail = CASE
-                WHEN $3::jsonb IS NULL THEN detail
-                ELSE jsonb_set(
-                  jsonb_set(COALESCE(detail, '{}'::jsonb), '{summary}',
-                            COALESCE(detail->'summary', '{}'::jsonb), true),
-                  '{summary,failure}', $3::jsonb, true)
-              END
-        WHERE id = $1::uuid`,
-      [stageId, error, failure == null ? null : JSON.stringify(failure)],
+  async failStage(
+    stageId: string,
+    error: string,
+    failure?: StageFailureContext,
+    claimToken?: string,
+  ): Promise<boolean> {
+    // CTE-wrapped so the fence can be read back — see the note on the claim in
+    // `startRun`. The claim ends here, so its token is cleared with it.
+    const failed = await this.dataSource.query<unknown[]>(
+      `WITH failed AS (
+         UPDATE ci_import.import_stages
+            SET status = 'failed', error = $2, finished_at = now(), updated_at = now(),
+                claim_token = NULL,
+                detail = CASE
+                  WHEN $3::jsonb IS NULL THEN detail
+                  ELSE jsonb_set(
+                    jsonb_set(COALESCE(detail, '{}'::jsonb), '{summary}',
+                              COALESCE(detail->'summary', '{}'::jsonb), true),
+                    '{summary,failure}', $3::jsonb, true)
+                END
+          WHERE id = $1::uuid
+            AND ($4::uuid IS NULL OR claim_token = $4::uuid)
+      RETURNING id)
+       SELECT id FROM failed`,
+      [stageId, error, failure == null ? null : JSON.stringify(failure), claimToken ?? null],
     );
+
+    if (claimToken != null && failed.length === 0) {
+      return false;
+    }
 
     await this.dataSource.query(
       `UPDATE ci_import.import_runs
@@ -1584,6 +2089,8 @@ export class ImportRunService {
     }
 
     await this.refreshRunRollup(stageId);
+
+    return true;
   }
 
   /**

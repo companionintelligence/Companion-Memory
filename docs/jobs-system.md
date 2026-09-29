@@ -22,7 +22,7 @@ PR list. Companion documents: [`jobs-schedule-review.md`](jobs-schedule-review.m
 | Listener bindings | **119** `@OnEvent` methods across 59 files |
 | Distinct event names consumed | **99** |
 | pg-boss queues created at boot | **42** (41 from listeners + `dead-letter`) |
-| Scheduled methods | **59** `@Cron` methods across 34 files — all via the `@ci/common/schedule` wrapper |
+| Scheduled methods | **60** `@Cron` methods across 34 files — all via the `@ci/common/schedule` wrapper |
 | Crons pinned to the worker role | **14** |
 | Queues pinned to the worker role | **6** (5 import + `derivation-run`) |
 | Pipeline stages behind one `pipeline.slice` event | **43** |
@@ -421,7 +421,7 @@ from `@nestjs/schedule`. It adds three things Nest's own wrapper does not:
 The tick is swallowed after logging, matching the framework's behaviour: the tick
 is lost, the schedule keeps running.
 
-> The wrapper's own docstring still says "~34 scheduled methods". It is 59.
+> The wrapper's own docstring still says "~34 scheduled methods". It is 60.
 
 ### 1.10 Observability
 
@@ -504,14 +504,29 @@ pins it, parsing both `expireInHours` and the fallback out of the files that set
 them so the assertion cannot be reverted along with the fix.
 
 Deadlines are **not** how liveness is detected on the import lane, and never
-were: `ImportStageListener` heartbeats the stage claim every 30 s and
-`ImportRunService.resumeInterrupted` re-enqueues anything silent for
-`STALE_STAGE_MINUTES` (10), on boot and every fifth minute. That reads a signal
-the work itself emits and catches a wedged stage in minutes; the deadline is the
-catastrophe backstop underneath it, sized to be unreachable by healthy work.
-`runStage` also claims through `beginStage`, so a redelivery of a stage a live
-owner still holds logs and returns instead of doing the work twice — which
-bounds the damage of an expiry without making one harmless.
+were: `ImportStageListener` heartbeats the stage claim every 30 s, and
+`ImportRunService.reclaimOrphanedStages` takes back a stage whose pg-boss worker
+has been silent for `IMPORT_STAGE_ORPHAN_SECONDS` (180 s) — every minute, and at
+boot — failing the dead worker's job **through pg-boss**, so pg-boss's own retry
+(same job id, same place in line) or dead-letter decides what happens next.
+`resumeInterrupted`'s ten-minute rule (`STALE_STAGE_MINUTES`, every fifth
+minute) stays beneath it as the backstop for claims no pg-boss job holds. That
+reads a signal the work itself emits and catches a dead worker in about four
+minutes; the deadline is the catastrophe backstop underneath it, sized to be
+unreachable by healthy work. Before the reaper, a worker restarted mid-parse
+took twelve minutes to recover (reproduced 2026-09-29), behind a brand-new job
+at the back of the queue, and its own job sat `active` until this deadline
+expired it into a no-op retry.
+
+`runStage` claims through `claimStage`, so a redelivery of a stage a live owner
+still holds logs and returns instead of doing the work twice. The claim carries
+a **fencing token**: the owner's heartbeat, progress, completion and failure
+writes land only while it matches, so an owner that was merely slow and lost
+its stage stops at its next report, cannot complete it or advance the run
+behind its replacement, and acknowledges its delivery with `defer` (pg-boss
+re-issues a failed job under the same id; completing it would complete the
+replacement). Neither recovery pass ever takes a stage the calling process is
+running.
 
 #### The 34 queues that declared nothing, and the verdict on each
 
@@ -739,9 +754,11 @@ declare it is never held back (`domains/pipeline/schedule.ts:1070,1077`).
 | `connectionSyncJob.execute` | `etl` | Claim a job atomically, fetch one page from a provider, write the raw payload | `SyncOrchestrator.executeSyncJobs` cron only |
 | `connectionSyncJob.transform` | `etl` | Claim atomically (1 h stale-claim window), map the provider payload into the memory model | `SyncOrchestrator.executeTransformJobs` cron only |
 
-Every stage runs under a shared `runStage` spine: claim → scratch dir → 30 s
-heartbeat → runner → `completeStage` → `advance` (which enqueues the successor),
-or `failStage` + rethrow.
+Every stage runs under a shared `runStage` spine: claim (with its fencing
+token and delivering job) → scratch dir → 30 s heartbeat → runner →
+`completeStage` → `advance` (which enqueues the successor), or `failStage` +
+rethrow — every write fenced on the claim, and a claim lost to the orphan
+reaper ending the delivery with `defer`.
 
 ### LLM
 
@@ -783,7 +800,7 @@ or `failStage` + rethrow.
 
 ## 4. Schedules
 
-59 `@Cron` methods. All use the wrapper. Expressions are 6-field (second-first)
+60 `@Cron` methods. All use the wrapper. Expressions are 6-field (second-first)
 unless marked **5f**, in which case they fire on second 0 — the crowded second
 the 6-field schedules were deliberately staggered off.
 
@@ -803,7 +820,8 @@ the 6-field schedules were deliberately staggered off.
 | `5 * * * * *` | `SyncOrchestrator.orchestrateSyncJobs` | web | Every minute — walk active connections × endpoints × iteration types and create pending sync jobs. In-process `orchestrating` flag is the only overlap guard |
 | `8,38 * * * * *` | `SyncOrchestrator.executeSyncJobs` | web | Twice a minute — dispatch up to `5 − inFlight` pending jobs. **The only executor of pending sync jobs, including user-initiated Sync Now** |
 | `15 * * * * *` | `SyncOrchestrator.executeTransformJobs` | web | Every minute — dispatch at most **2** transforms appliance-wide, oldest-first |
-| `30 */5 * * * *` | `ImportStageListener.sweepOnSchedule` | **worker** | Reclaim stages stuck `running` >10 min back to `queued`, then re-enqueue **at most one** stage per unfinished run — the lowest-`seq` queued one, picked by a `LEFT JOIN LATERAL … ORDER BY s.seq LIMIT 1`, and only when no stage of that run is currently `running` (a queued stage behind a running one is waiting *by design*) |
+| `15 * * * * *` | `ImportStageListener.reapOrphansOnSchedule` | **worker** | The orphan reaper (`ImportRunService.reclaimOrphanedStages`): a `running` stage claimed through a pg-boss job, silent for `IMPORT_STAGE_ORPHAN_SECONDS` (180 s) and not running in this process, goes back to `queued` and its job is failed through pg-boss — retried in place, or at the retry limit dead-lettered with the stage failed to match. Reads a partial index of running stages. `exclusive` |
+| `30 */5 * * * *` | `ImportStageListener.sweepOnSchedule` | **worker** | The reaper pass above first; then reclaim stages stuck `running` >10 min back to `queued` (the backstop, for claims no pg-boss job holds), then re-enqueue **at most one** stage per unfinished run — the lowest-`seq` queued one, picked by a `LEFT JOIN LATERAL … ORDER BY s.seq LIMIT 1`, and only when no stage of that run is currently `running` (a queued stage behind a running one is waiting *by design*). Stages this process is running are exempt from both reclaims |
 | `0 17 * * * *` | `StagedUploadPurgeCron.runOnSchedule` | **worker** | Restage orphaned claims, purge expired staged uploads, walk the uploads root for orphans |
 | `50 40 6 * * *` | `ImportRetentionCron.runOnSchedule` | **worker** | Reclaim staged payload for drained runs >7 d, prune run history >90 d |
 | `0 */10 * * * *` | `BlueBubblesSyncCron.runOnSchedule` | **worker** | iMessage pull for the first onboarded account. Guard is a claim on the config row (`BlueBubblesConfigService.claimSync`), not an in-process flag — the old per-process flag couldn't span the web/worker split and double-ran |
@@ -950,7 +968,7 @@ never produce a job.
   metric.
 - **`last run` is not `last success`.** The wrapper stamps `ci.cron_runs` twice
   for exactly this reason; read the success column.
-- **`pgboss.schedule` is permanently empty** while ~59 real crons run beside it.
+- **`pgboss.schedule` is permanently empty** while ~60 real crons run beside it.
 
 ### Structural notes
 

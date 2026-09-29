@@ -629,7 +629,12 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
       runId: context.runId,
       stageId: context.stageId,
       scratchDir: context.scratchDir,
-      progress: (update) => this.importRunService.recordProgress(context.stageId, update),
+      // Unfenced (no claim token): an in-process run holds no pg-boss job, so
+      // nothing reclaims it out from under this pass but the ten-minute sweep,
+      // which these progress writes are what keep at bay.
+      progress: async (update) => {
+        await this.importRunService.recordProgress(context.stageId, update);
+      },
     };
 
     try {
