@@ -128,7 +128,7 @@ services:
   object-store:
     image: ci/object-store
     volumes:
-      - object-data:/data
+      - object-data:/data/objects
     networks:
       - ci
     restart: unless-stopped

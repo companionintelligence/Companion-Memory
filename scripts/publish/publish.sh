@@ -358,7 +358,7 @@ generate_compose() {
       "image": "${reg}/companion/object-store:${ver}",
       "restart": "unless-stopped",
       "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}/data/objects", "containerPath": "/data" },
+        { "hostPath": "\${APP_DATA_DIR}/data/objects", "containerPath": "/data/objects" },
         { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/object-store", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {

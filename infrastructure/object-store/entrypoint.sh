@@ -16,7 +16,7 @@ set -e
 # ──────────────────────────────────────────────────
 
 SECRETS_FILE="${SECRETS_FILE:-/run/secrets/.env.secrets}"
-DATA_DIR="${RUSTFS_VOLUMES:-/data}"
+DATA_DIR="${RUSTFS_VOLUMES:-/data/objects}"
 
 get_secret() {
   [ -f "$SECRETS_FILE" ] || return 0
@@ -67,17 +67,48 @@ fi
 # ── Data directory ───────────────────────────────
 #
 # A single absolute path. A comma-separated RUSTFS_VOLUMES is a multi-drive
-# layout this wrapper does not chown; set that only when every path is already
-# writable by uid 10001.
+# layout this wrapper neither checks nor chowns; set that only when every path
+# is a mounted volume already writable by uid 10001.
 
 case "$DATA_DIR" in
   /*)
-    mkdir -p "$DATA_DIR/.rustfs/events" "$DATA_DIR/.rustfs/audit"
-    if ! su-exec rustfs:rustfs test -w "$DATA_DIR"; then
-      chown rustfs:rustfs "$DATA_DIR"
+    # Must be a mount point. Otherwise the upstream entrypoint mkdirs it inside
+    # the image's anonymous /data volume and RustFS serves an empty store: the
+    # API recreates its bucket, every existing file 404s, and new uploads land
+    # in a volume that is discarded with the container. mountinfo, not
+    # `mountpoint`: that compares device numbers, and a bind mount from the
+    # filesystem Docker's own volumes live on shares one.
+    if ! awk -v d="$DATA_DIR" '$5 == d { found = 1 } END { exit !found }' /proc/self/mountinfo; then
+      echo "Error: $DATA_DIR is not a mounted volume."
+      echo ""
+      echo "Mount the object store's volume at $DATA_DIR (compose:"
+      echo "object-data:$DATA_DIR). Refusing to start on the container's own"
+      echo "filesystem, where objects would be lost when it is recreated."
+      exit 1
     fi
-    if ! su-exec rustfs:rustfs test -w "$DATA_DIR/.rustfs"; then
-      chown -R rustfs:rustfs "$DATA_DIR/.rustfs"
+
+    mkdir -p "$DATA_DIR/.rustfs/events" "$DATA_DIR/.rustfs/audit"
+
+    # Anything not owned by rustfs is readable but not writable by it: PUTs
+    # fail with "File access denied" and DELETEs with AccessDenied. MinIO ran
+    # as root, so this is every object on a volume it wrote.
+    #
+    # The full walk costs ~0.9 s warm / ~1.25 s cold per ~47k objects on NVMe
+    # (far more on slower disks), so it runs once, then again only if MinIO
+    # has run on this volume since — a rollback writes root-owned objects
+    # again, and MinIO rewrites .minio.sys on every start. Files a root
+    # process drops in here some other way are not caught; delete the marker
+    # to force a re-check.
+    OWNERSHIP_MARKER="$DATA_DIR/.rustfs/ownership-checked"
+    if [ ! -f "$OWNERSHIP_MARKER" ] || {
+      [ -d "$DATA_DIR/.minio.sys" ] &&
+        [ -n "$(find "$DATA_DIR/.minio.sys" -newer "$OWNERSHIP_MARKER" -print -quit)" ]
+    }; then
+      if [ -n "$(find "$DATA_DIR" -xdev \( ! -user rustfs -o ! -group rustfs \) -print -quit)" ]; then
+        echo "Giving rustfs ownership of $DATA_DIR (found files it does not own)"
+        chown -R rustfs:rustfs "$DATA_DIR"
+      fi
+      su-exec rustfs:rustfs touch "$OWNERSHIP_MARKER"
     fi
     ;;
 esac
