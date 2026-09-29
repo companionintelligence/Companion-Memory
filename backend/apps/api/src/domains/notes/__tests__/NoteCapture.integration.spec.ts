@@ -5,6 +5,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
 
+import { databaseAvailability, dataSourceConnection } from '../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../__tests__/support/schemaLock';
 import { NoteEntity } from '../entities/NoteEntity';
 import { NoteService } from '../services/NoteService';
@@ -41,8 +42,13 @@ import { NoteService } from '../services/NoteService';
  * and cleans up after itself like every other DB-backed domain spec.
  */
 
-const DATABASE_URL = process.env.NOTES_TEST_DATABASE_URL;
-const describeWithDb = DATABASE_URL ? describe : describe.skip;
+const DATABASE_ENV = { urlEnvVar: 'NOTES_TEST_DATABASE_URL' };
+const availability = databaseAvailability(DATABASE_ENV);
+const describeWithDb = availability.available ? describe : describe.skip;
+
+if (!availability.available) {
+  console.warn(`[notes/NoteCapture.integration] SKIPPED — ${availability.reason}`);
+}
 
 describeWithDb('NoteService.captureMany — the guards, in Postgres', () => {
   let dataSource: DataSource;
@@ -67,7 +73,7 @@ describeWithDb('NoteService.captureMany — the guards, in Postgres', () => {
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...dataSourceConnection(DATABASE_ENV),
       entities: [NoteEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },

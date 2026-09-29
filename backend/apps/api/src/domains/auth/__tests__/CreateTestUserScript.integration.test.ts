@@ -8,6 +8,11 @@ import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
 import { UserEntity, UserService } from '@ci/domains/user';
 
+import {
+  databaseAvailability,
+  dataSourceConnection,
+  resolveConnection,
+} from '../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../__tests__/support/schemaLock';
 import { ApiKeyEntity } from '../entities/ApiKeyEntity';
 import { ApiKeyService } from '../services/ApiKeyService';
@@ -41,8 +46,13 @@ import { ApiKeyStrategy } from '../services/ApiKeyStrategy';
  * under a user it creates and removes itself, like the other house-pattern specs.
  */
 
-const DATABASE_URL = process.env.AUTH_TEST_DATABASE_URL;
-const describeWithDb = DATABASE_URL ? describe : describe.skip;
+const DATABASE_ENV = { urlEnvVar: 'AUTH_TEST_DATABASE_URL' };
+const availability = databaseAvailability(DATABASE_ENV);
+const describeWithDb = availability.available ? describe : describe.skip;
+
+if (!availability.available) {
+  console.warn(`[auth/CreateTestUserScript.integration] SKIPPED — ${availability.reason}`);
+}
 
 /** Minimal express-like request — mirrors ApiKeyStrategy.test.ts's helper. */
 function requestWith(headers: Record<string, string>) {
@@ -79,7 +89,7 @@ describeWithDb('create-test-user.ts — the printed credentials, against the rea
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...dataSourceConnection(DATABASE_ENV),
       entities: [UserEntity, ApiKeyEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
@@ -96,7 +106,11 @@ describeWithDb('create-test-user.ts — the printed credentials, against the rea
     // this suite proves the actual write path, not a re-implementation of it.
     // Explicit DATABASE_* env vars win over any repo-root `.env` the "exec" yarn
     // script tries to load (dotenv never overrides an already-set variable).
-    const url = new URL(DATABASE_URL!);
+    const connection = resolveConnection(DATABASE_ENV);
+
+    if (connection == null) {
+      throw new Error('databaseAvailability passed but no connection resolved');
+    }
 
     const stdout = execFileSync('yarn', ['run', 'exec', '--', 'scripts/create-test-user.ts'], {
       cwd: apiRoot,
@@ -104,10 +118,10 @@ describeWithDb('create-test-user.ts — the printed credentials, against the rea
       env: {
         ...process.env,
         DOTENV_CONFIG_PATH: '/dev/null',
-        DATABASE_HOST: url.hostname,
-        DATABASE_PORT: url.port || '5432',
-        DATABASE_USERNAME: decodeURIComponent(url.username),
-        DATABASE_PASSWORD: decodeURIComponent(url.password),
+        DATABASE_HOST: connection.host,
+        DATABASE_PORT: String(connection.port),
+        DATABASE_USERNAME: connection.username,
+        DATABASE_PASSWORD: connection.password,
         TEST_USER_EMAIL: email,
         TEST_USER_PASSWORD: password,
         TEST_KEY_NAME: keyName,
