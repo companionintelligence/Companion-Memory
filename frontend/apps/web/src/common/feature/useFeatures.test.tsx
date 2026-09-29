@@ -1,7 +1,9 @@
 import { type ReactNode } from 'react';
 
+import { setApiBaseUrl, setApiKey } from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 
 import { FeaturesProvider, useFeatures } from './useFeatures';
 
@@ -10,13 +12,23 @@ const h = vi.hoisted(() => ({
     authToken: 'test-token' as string | null,
     subject: 'user-a' as string | null,
     initializing: false,
+    authenticated: undefined as boolean | undefined,
   },
 }));
 
 // useFeatures pulls useAuth from the @/hooks barrel — mock just that surface so
 // the real (heavy) hook barrel never loads.
 vi.mock('@/hooks', () => ({
-  useAuth: () => [{ ...h.auth, expired: false, loading: false, error: null }, {}],
+  useAuth: () => [
+    {
+      ...h.auth,
+      authenticated: h.auth.authenticated ?? Boolean(h.auth.authToken),
+      expired: false,
+      loading: false,
+      error: null,
+    },
+    {},
+  ],
 }));
 
 /** Per-user flags keyed by subject, so a session change is observable. */
@@ -76,7 +88,10 @@ function countUserFetches(mock: ReturnType<typeof setFetch>) {
 }
 
 beforeEach(() => {
-  h.auth = { authToken: 'test-token', subject: 'user-a', initializing: false };
+  h.auth = { authToken: 'test-token', subject: 'user-a', initializing: false, authenticated: undefined };
+  delete (window as unknown as { Capacitor?: unknown }).Capacitor;
+  setApiKey(null);
+  setApiBaseUrl('');
 });
 
 const wrapper = ({ children }: { children: ReactNode }) => (
@@ -132,7 +147,7 @@ describe('useFeatures', () => {
   });
 
   it('stays loading while the session handshake is still in flight', async () => {
-    h.auth = { authToken: null, subject: null, initializing: true };
+    h.auth = { authToken: null, subject: null, initializing: true, authenticated: undefined };
     setFetch();
 
     const { result } = renderHook(() => useFeatures(), { wrapper });
@@ -144,7 +159,7 @@ describe('useFeatures', () => {
   });
 
   it('settles for a signed-out visitor once the handshake finishes with no token', async () => {
-    h.auth = { authToken: null, subject: null, initializing: false };
+    h.auth = { authToken: null, subject: null, initializing: false, authenticated: undefined };
     setFetch();
 
     const { result } = renderHook(() => useFeatures(), { wrapper });
@@ -160,7 +175,7 @@ describe('useFeatures', () => {
 
     await waitFor(() => expect(result.current.isFeatureEnabled('insights.page')).toBe(true));
 
-    h.auth = { authToken: 'token-b', subject: 'user-b', initializing: false };
+    h.auth = { authToken: 'token-b', subject: 'user-b', initializing: false, authenticated: undefined };
     rerender();
 
     await waitFor(() => expect(result.current.isFeatureEnabled('stats.page')).toBe(true));
@@ -173,7 +188,7 @@ describe('useFeatures', () => {
 
     await waitFor(() => expect(result.current.isFeatureEnabled('insights.page')).toBe(true));
 
-    h.auth = { authToken: null, subject: null, initializing: false };
+    h.auth = { authToken: null, subject: null, initializing: false, authenticated: undefined };
     rerender();
 
     await waitFor(() => expect(result.current.isFeatureEnabled('insights.page')).toBe(false));
@@ -192,7 +207,7 @@ describe('useFeatures', () => {
     await waitFor(() => expect(result.current.isFeatureEnabled('insights.page')).toBe(true));
     const before = countUserFetches(fetchMock);
 
-    h.auth = { authToken: 'test-token-rotated', subject: 'user-a', initializing: false };
+    h.auth = { authToken: 'test-token-rotated', subject: 'user-a', initializing: false, authenticated: undefined };
     rerender();
 
     expect(result.current.isFeatureEnabled('insights.page')).toBe(true);
@@ -209,7 +224,7 @@ describe('useFeatures', () => {
 
     await waitFor(() => expect(pending).toHaveLength(1));
 
-    h.auth = { authToken: 'token-b', subject: 'user-b', initializing: false };
+    h.auth = { authToken: 'token-b', subject: 'user-b', initializing: false, authenticated: undefined };
     rerender();
 
     await waitFor(() => expect(pending).toHaveLength(2));
@@ -224,6 +239,40 @@ describe('useFeatures', () => {
 
     await waitFor(() => expect(result.current.isFeatureEnabled('stats.page')).toBe(true));
     expect(result.current.loading).toBe(false);
+  });
+
+  it('loads Jobs, Tasks, and Profile from the API key when the phone has no session token', async () => {
+    (window as unknown as { Capacitor?: { isNativePlatform: () => boolean } }).Capacitor = {
+      isNativePlatform: () => true,
+    };
+    setApiBaseUrl('https://memory.example.com');
+    setApiKey('native-key');
+    h.auth = { authToken: null, subject: null, initializing: false, authenticated: true };
+
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      void init;
+
+      return Promise.resolve(
+        ok(
+          isGlobal(input)
+            ? { 'require.signup.codes': false }
+            : { 'jobs.page': true, 'planning.page': true, 'self.page': true },
+        ),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useFeatures(), { wrapper });
+
+    await waitFor(() => expect(result.current.isFeatureEnabled('jobs.page')).toBe(true));
+    expect(result.current.isFeatureEnabled('planning.page')).toBe(true);
+    expect(result.current.isFeatureEnabled('self.page')).toBe(true);
+
+    const userCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/api/_internal/features'));
+    const headers = (userCall?.[1]?.headers ?? {}) as Record<string, string>;
+
+    expect(headers['x-api-key']).toBe('native-key');
+    expect(headers.Authorization ?? headers.authorization).toBeUndefined();
   });
 
   it('refresh forces a refetch', async () => {

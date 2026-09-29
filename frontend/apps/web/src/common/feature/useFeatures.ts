@@ -25,7 +25,7 @@ type ReturnValue = {
 };
 
 function useFeatures(): ReturnValue {
-  const [{ authToken, initializing, subject }] = useAuth();
+  const [{ authToken, authenticated, initializing, subject }] = useAuth();
   const origin = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
   const nativeOriginReady = !isNativePlatform() || Boolean(origin);
 
@@ -45,10 +45,13 @@ function useFeatures(): ReturnValue {
   // captures the subject of the render that created it, which may be a session
   // ago by the time the response lands.
   const liveSubject = useRef(subject);
+  const liveOrigin = useRef(origin);
 
   const fetchFeatures = useCallback(
     async (force = false) => {
-      if (!authToken) {
+      // Desktop sends its session token. The phone has no session token; it is
+      // signed in with an API key, which fetchJson attaches as x-api-key.
+      if (!authenticated) {
         return;
       }
 
@@ -61,18 +64,24 @@ function useFeatures(): ReturnValue {
       }
 
       const forSubject = subject;
+      const forOrigin = origin;
 
       try {
-        const data = await fetchJson<Features>('/api/_internal/features', {
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
-        });
+        const data = await fetchJson<Features>(
+          '/api/_internal/features',
+          authToken
+            ? {
+                headers: {
+                  Authorization: `Bearer ${authToken}`,
+                },
+              }
+            : undefined,
+        );
 
-        // The session can end, or change hands, while this is in flight — and
-        // the reset effect below has already cleared the cache by then. A late
-        // response must not land on top of that.
-        if (liveSubject.current !== forSubject) {
+        // The session can end, or the phone can pair a different box, while
+        // this is in flight. The reset effect has already cleared the cache
+        // by then. A late response must not land on top of that.
+        if (liveSubject.current !== forSubject || liveOrigin.current !== forOrigin) {
           return;
         }
 
@@ -85,12 +94,12 @@ function useFeatures(): ReturnValue {
       } finally {
         // Same reasoning: settling here would report the *new* session's flags
         // as known on the strength of a fetch made for the previous one.
-        if (liveSubject.current === forSubject) {
+        if (liveSubject.current === forSubject && liveOrigin.current === forOrigin) {
           setUserSettled(true);
         }
       }
     },
-    [authToken, nativeOriginReady, subject],
+    [authToken, authenticated, nativeOriginReady, origin, subject],
   );
 
   const fetchGlobalFeatures = useCallback(
@@ -135,10 +144,11 @@ function useFeatures(): ReturnValue {
   // assigns are the ones already there.
   useEffect(() => {
     liveSubject.current = subject;
+    liveOrigin.current = origin;
     hasFetched.current = false;
     setFeatures({});
     setUserSettled(false);
-  }, [subject]);
+  }, [authenticated, origin, subject]);
 
   useEffect(() => {
     fetchFeatures();
@@ -163,10 +173,10 @@ function useFeatures(): ReturnValue {
     [features, globalFeatures],
   );
 
-  // The per-user set needs a token, so "no token" is only an answer once the
-  // session handshake has finished — until then one may still arrive. The global
+  // The full map needs a signed-in principal (session token or API key), so
+  // "signed out" is only an answer once the handshake has finished. The global
   // set is unauthenticated and always fetched.
-  const userPending = initializing || (Boolean(authToken) && !userSettled);
+  const userPending = initializing || (authenticated && !userSettled);
 
   return {
     isFeatureEnabled,
