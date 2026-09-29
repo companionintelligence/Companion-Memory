@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 
-import { setApiBaseUrl } from '@ci/common';
+import { getApiBaseUrl, needsNativeCloudConnect, setApiBaseUrl } from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { jwtDecode } from 'jwt-decode';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
@@ -463,6 +463,55 @@ describe('useAuth', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/authenticate/logout'))).toBe(
       true,
     );
+  });
+
+  it('native logout forgets the paired Memory origin so the next account can pick a device', async () => {
+    const secureStore = new Map<string, string>([
+      ['ci.apiKey', 'stored-api-key'],
+      ['ci.apiBaseUrl', 'https://core7.example.com'],
+    ]);
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      getPlatform: () => 'ios',
+      Plugins: {
+        SecureStoragePlugin: {
+          get: vi.fn(async ({ key }: { key: string }) => {
+            if (!secureStore.has(key)) {
+              throw new Error('not found');
+            }
+
+            return { value: secureStore.get(key) };
+          }),
+          set: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+            secureStore.set(key, value);
+
+            return { value: true };
+          }),
+          remove: vi.fn(async ({ key }: { key: string }) => {
+            secureStore.delete(key);
+
+            return { value: true };
+          }),
+        },
+      },
+    };
+
+    setFetch(() => emptyResponse());
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+    expect(getApiBaseUrl()).toBe('https://core7.example.com');
+
+    await act(async () => {
+      await result.current[1].logout();
+    });
+
+    expect(result.current[0].authenticated).toBe(false);
+    expect(getApiBaseUrl()).toBe('');
+    expect(localStorage.getItem('ci.apiBaseUrl')).toBeNull();
+    expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
+    expect(secureStore.has('ci.apiKey')).toBe(false);
+    expect(needsNativeCloudConnect()).toBe(true);
   });
 
   it('still logs out when dropping the local PowerSync replica fails', async () => {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   addAppUrlOpenListener,
+  clearPersistedApiBaseUrl,
   createHookContext,
   fetchJson,
   FetchJsonError,
@@ -526,6 +527,11 @@ function useAuth(): ReturnValue {
       await secureStorageRemove(API_KEY_STORAGE);
       await secureStorageRemove(API_KEY_ID_STORAGE);
       await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+      // A saved public origin makes iOS skip the device picker, so the next
+      // Companion login would still talk to the previous box and never list
+      // the new account's Memory servers. Drop the pairing with the key.
+      clearPersistedApiBaseUrl();
+      await syncNativeIntentConfig();
       setNativeApiKey(null);
       setAccessToken(null);
       setLoginLoading(false);
