@@ -33,19 +33,19 @@ function makeContent(overrides: Record<string, unknown> = {}) {
 
 describe('ContentGridItem', () => {
   it('renders an image tile for image content (relative URL → /static)', () => {
-    renderWithProviders(
+    const { container } = renderWithProviders(
       <ContentGridItem content={makeContent({ mimetype: 'image/png', contentUrl: '/c/x.png' })} />,
     );
 
-    expect(screen.getByRole('img')).toHaveAttribute('src', '/static/c/x.png');
+    expect(container.querySelector('img')).toHaveAttribute('src', '/static/c/x.png');
   });
 
   it('passes through absolute image URLs', () => {
-    renderWithProviders(
+    const { container } = renderWithProviders(
       <ContentGridItem content={makeContent({ mimetype: 'image/png', contentUrl: 'https://cdn/x.png' })} />,
     );
 
-    expect(screen.getByRole('img')).toHaveAttribute('src', 'https://cdn/x.png');
+    expect(container.querySelector('img')).toHaveAttribute('src', 'https://cdn/x.png');
   });
 
   it('renders a text tile for non-image content', () => {
@@ -77,7 +77,7 @@ describe('ContentGridItem', () => {
   // enrich.unfurl stage has cached its poster, the tile should show it
   // instead of falling to the plain text card.
   it("shows the unfurl stage's cached poster for a non-image row (Spotify cover art)", () => {
-    renderWithProviders(
+    const { container } = renderWithProviders(
       <ContentGridItem
         content={makeContent({
           mimetype: 'audio/ogg',
@@ -90,11 +90,11 @@ describe('ContentGridItem', () => {
       />,
     );
 
-    expect(screen.getByRole('img')).toHaveAttribute('src', 'https://i.scdn.co/image/ab67616d00001e02abc');
+    expect(container.querySelector('img')).toHaveAttribute('src', 'https://i.scdn.co/image/ab67616d00001e02abc');
   });
 
   it("falls back to the player's templated poster when there is no unfurl thumbnail", () => {
-    renderWithProviders(
+    const { container } = renderWithProviders(
       <ContentGridItem
         content={makeContent({
           mimetype: 'video/mp4',
@@ -106,7 +106,7 @@ describe('ContentGridItem', () => {
       />,
     );
 
-    expect(screen.getByRole('img')).toHaveAttribute('src', 'https://i.ytimg.com/vi/abc/hqdefault.jpg');
+    expect(container.querySelector('img')).toHaveAttribute('src', 'https://i.ytimg.com/vi/abc/hqdefault.jpg');
   });
 
   it('does not show a picture for a non-image row before the unfurl stage has visited it', () => {

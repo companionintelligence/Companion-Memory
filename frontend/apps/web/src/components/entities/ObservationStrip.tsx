@@ -4,6 +4,7 @@ import { GlobalUID } from '@ci/common';
 import { Badge, cn } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
+import { PendingImage } from '@/components/PendingImage';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 import type { ObservationStripDataFragment } from '@/graphql/graphql';
 import { humanizeEnum } from '@/lib/utils';
@@ -122,7 +123,7 @@ function ObservationThumbnail({
   return (
     <div className="relative aspect-square w-full overflow-hidden rounded-md bg-muted">
       {src ? (
-        <img src={src} alt={label} className="h-full w-full object-cover" />
+        <PendingImage src={src} />
       ) : (
         <div className="flex h-full w-full items-center justify-center px-2 text-center text-xs text-muted-foreground">
           No image

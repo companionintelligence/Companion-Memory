@@ -1,6 +1,7 @@
 import { type MouseEvent, useMemo } from 'react';
 
 import { ContentIcon } from '@/components/icons';
+import { PendingImage } from '@/components/PendingImage';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 import { RICH_MEDIA_FRAGMENT } from '@/pages/MemoryPage/Components/EntityDetails/RichMediaCard';
 
@@ -67,7 +68,7 @@ export function ContentGridItem({ content, onClick }: Props) {
     return (
       <EntityGridItem className="relative p-0" onClick={onClick}>
         <div className="rounded-md overflow-hidden min-h-0 grow inset-0">
-          <img src={imageUrl} alt={data.title || ''} className="w-full h-full object-cover" />
+          <PendingImage src={imageUrl} />
           {data.title && (
             <div className="absolute bottom-0 w-full truncate bg-gradient-to-t from-black/70 to-transparent p-2 px-3 text-sm text-white">
               {data.title}
