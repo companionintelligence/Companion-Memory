@@ -29,8 +29,32 @@ const TOUCH = 'min-h-[44px]';
 const PORTAL_AUTH_KEY = 'ci.deviceConnect.portalAuth';
 
 function writePortalAuth(auth: PortalAuth): void {
+  const raw = JSON.stringify(auth);
+
   try {
-    sessionStorage.setItem(PORTAL_AUTH_KEY, JSON.stringify(auth));
+    sessionStorage.setItem(PORTAL_AUTH_KEY, raw);
+  } catch {
+    /* ignore */
+  }
+
+  // sessionStorage dies when iOS reclaims the webview. The Portal token has to
+  // outlive that, or the next launch forgets who just signed in.
+  try {
+    localStorage.setItem(PORTAL_AUTH_KEY, raw);
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearStoredPortalAuth(): void {
+  try {
+    sessionStorage.removeItem(PORTAL_AUTH_KEY);
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    localStorage.removeItem(PORTAL_AUTH_KEY);
   } catch {
     /* ignore */
   }
@@ -38,7 +62,7 @@ function writePortalAuth(auth: PortalAuth): void {
 
 function readStoredPortalAuth(): PortalAuth | null {
   try {
-    const raw = sessionStorage.getItem(PORTAL_AUTH_KEY);
+    const raw = sessionStorage.getItem(PORTAL_AUTH_KEY) ?? localStorage.getItem(PORTAL_AUTH_KEY);
 
     if (!raw) {
       return null;
@@ -186,6 +210,10 @@ export function DeviceConnectPage() {
   };
 
   const handleOidcLogin = async () => {
+    // The picker restores whatever Portal token is still in this tab. Drop it
+    // before the sheet opens so a cancelled switch cannot snap back to it.
+    clearStoredPortalAuth();
+    setAuth(null);
     const controller = new AbortController();
     setOidcController(controller);
     setBusy(true);
@@ -430,7 +458,12 @@ export function DeviceConnectPage() {
                     variant="ghost"
                     size="sm"
                     className={TOUCH}
-                    onClick={() => setStep('sign-in')}
+                    onClick={() => {
+                      clearStoredPortalAuth();
+                      setAuth(null);
+                      setDevices([]);
+                      setStep('sign-in');
+                    }}
                     disabled={connectingId !== null}
                   >
                     Back

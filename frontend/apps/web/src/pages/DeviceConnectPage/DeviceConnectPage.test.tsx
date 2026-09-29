@@ -191,6 +191,27 @@ describe('DeviceConnectPage', () => {
     expect(await screen.findByTestId('portal-account')).toHaveTextContent('Signed in as demo-1@lifescope.io');
   });
 
+  it('Back forgets the Portal token so the next Log in is not that account', async () => {
+    h.loginWithPortalOidc.mockResolvedValue({
+      accessToken: 'oidc-at',
+      idToken: null,
+      tokenType: 'Bearer',
+      expiresIn: 3600,
+    });
+    h.listMemoryServers.mockResolvedValue([]);
+
+    render(<DeviceConnectPage />);
+    fireEvent.click(screen.getByTestId('oidc-login-btn'));
+    expect(await screen.findByText('Pick a Memory Server')).toBeInTheDocument();
+    expect(sessionStorage.getItem('ci.deviceConnect.portalAuth')).toContain('oidc-at');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+
+    expect(sessionStorage.getItem('ci.deviceConnect.portalAuth')).toBeNull();
+    expect(localStorage.getItem('ci.deviceConnect.portalAuth')).toBeNull();
+    expect(screen.getByTestId('oidc-login-btn')).toBeInTheDocument();
+  });
+
   it('after Portal OIDC, picking a server mints a Memory key and skips /login', async () => {
     h.loginWithPortalOidc.mockResolvedValue({
       accessToken: 'oidc-at',
