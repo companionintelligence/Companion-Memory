@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { TERMINATION_SIGNALS, ignoreDeadTerminal, reapGroup, runAsync } from './exec';
+import { TERMINATION_SIGNALS, ignoreDeadTerminal, reapGroup, runAsync, runAsyncOrThrow } from './exec';
 
 test('the termination signals are Ctrl-C, kill, and the terminal going away', () => {
   assert.deepEqual([...TERMINATION_SIGNALS].sort(), ['SIGHUP', 'SIGINT', 'SIGTERM']);
@@ -313,4 +313,76 @@ test('ignoreDeadTerminal by default guards the real stdout and stderr, and undoe
   );
   undo();
   assert.deepEqual([process.stdout.listenerCount('error'), process.stderr.listenerCount('error')], before);
+});
+
+// -- timeoutMs: a child that never finishes is stopped, and that is not an "interruption" -------------------------
+//
+// The children are `sh`, not node: the limit's clock starts when the child is spawned, and a node child on a
+// loaded machine can take longer than a short limit just to start — which would make these tests race their own
+// handlers. `sh` is up in milliseconds.
+
+test('runAsync with timeoutMs stops a child that never finishes, and reports timedOut — not interrupted', async () => {
+  const started = Date.now();
+  const res = await runAsync('sh', ['-c', 'exec sleep 120'], { timeoutMs: 300, killAfterMs: 30_000 });
+
+  assert.equal(res.timedOut, true);
+  assert.equal(res.interrupted, false, 'nobody signalled us: this is a time limit, not a Ctrl-C');
+  assert.notEqual(res.status, 0);
+  assert.ok(Date.now() - started < 60_000, `took ${Date.now() - started} ms`);
+});
+
+test('runAsync with timeoutMs SIGKILLs a child that ignores the polite signal', async () => {
+  // The limit is not tiny: the trap has to be installed before the SIGTERM arrives, or the child simply dies of it.
+  // The loop ends by itself after two minutes, so a regression (a limit that is never enforced) FAILS this test
+  // instead of hanging the runner for ever.
+  const res = await runAsync(
+    'sh',
+    ['-c', 'trap "" TERM; i=0; while [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done'],
+    {
+      timeoutMs: 5_000,
+      killAfterMs: 300,
+    },
+  );
+
+  assert.equal(res.timedOut, true);
+  assert.equal(res.signal, 'SIGKILL', 'SIGTERM was ignored, so it took the SIGKILL that follows');
+});
+
+test('runAsync with timeoutMs and group takes the whole tree down, wrapper and worker alike', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runasync-timeout-'));
+  const workerPidFile = path.join(dir, 'worker.pid');
+
+  try {
+    // A "wrapper" that starts a long-lived worker and waits for it: the shape of `yarn … jest`.
+    const running = runAsync('sh', ['-c', `sleep 300 & echo $! > ${JSON.stringify(workerPidFile)}; wait`], {
+      group: true,
+      timeoutMs: 8_000,
+      killAfterMs: 5_000,
+    });
+    const workerPid = await readPid(workerPidFile, "the wrapper's worker pid");
+
+    assert.equal(pidAlive(workerPid), true);
+
+    const res = await running;
+
+    assert.equal(res.timedOut, true);
+    await until(() => !pidAlive(workerPid), "the worker to die with the wrapper's group");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runAsync without timeoutMs never reports timedOut, and a finished child leaves no timer behind', async () => {
+  const res = await runAsync('sh', ['-c', 'exit 0'], { timeoutMs: 600_000 });
+
+  assert.equal(res.status, 0);
+  assert.equal(res.timedOut, false);
+  // Were the limit's timer not cleared, this process could not exit for ten minutes and the runner would say so.
+});
+
+test('runAsyncOrThrow turns a timeout into an error that says how long it waited', async () => {
+  await assert.rejects(
+    runAsyncOrThrow('sh', ['-c', 'exec sleep 120'], { timeoutMs: 300 }),
+    /did not finish within 300 ms and was stopped/,
+  );
 });

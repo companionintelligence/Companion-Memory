@@ -112,6 +112,8 @@ export interface RunAsyncResult {
   signal: NodeJS.Signals | null;
   /** True when this process was asked to stop (any of {@link TERMINATION_SIGNALS}) while the child ran. */
   interrupted: boolean;
+  /** True when the child outlived `timeoutMs` and was stopped for it. Not an interruption: nobody asked. */
+  timedOut: boolean;
   /** Combined stdout+stderr, only when `capture` was requested; otherwise empty. */
   output: string;
 }
@@ -175,11 +177,17 @@ export async function reapGroup(
  * Ctrl-C reaches it only through this forwarding — which is the point. And once
  * an interrupted group's leader has exited, {@link reapGroup} kills whatever is
  * left in it.
+ *
+ * `timeoutMs` bounds a child that never finishes (a `docker pull` against a
+ * daemon that accepted the call and went quiet): it is stopped exactly as a
+ * SIGTERM would stop it — the signal, then SIGKILL after `killAfterMs` — and
+ * reported as `timedOut`, not as `interrupted`. It is a ceiling, not an
+ * expectation: pick one no healthy run reaches.
  */
 export function runAsync(
   cmd: string,
   args: string[] = [],
-  opts: RunOptions & { killAfterMs?: number; capture?: boolean; group?: boolean } = {},
+  opts: RunOptions & { killAfterMs?: number; capture?: boolean; group?: boolean; timeoutMs?: number } = {},
 ): Promise<RunAsyncResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
@@ -206,6 +214,7 @@ export function runAsync(
 
     const chunks: Buffer[] = [];
     let interrupted = false;
+    let timedOut = false;
 
     if (opts.capture) {
       child.stdout?.on('data', (c: Buffer) => chunks.push(c));
@@ -214,11 +223,23 @@ export function runAsync(
 
     let killTimer: NodeJS.Timeout | undefined;
 
-    const forward = (signal: NodeJS.Signals): void => {
-      interrupted = true;
+    const stop = (signal: NodeJS.Signals): void => {
       signalChild(signal);
       killTimer ??= setTimeout(() => signalChild('SIGKILL'), opts.killAfterMs ?? 10_000);
     };
+
+    const forward = (signal: NodeJS.Signals): void => {
+      interrupted = true;
+      stop(signal);
+    };
+
+    const limitTimer =
+      opts.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            stop('SIGTERM');
+          }, opts.timeoutMs);
 
     const listeners = TERMINATION_SIGNALS.map((signal) => [signal, (): void => forward(signal)] as const);
 
@@ -229,6 +250,10 @@ export function runAsync(
 
       if (killTimer) {
         clearTimeout(killTimer);
+      }
+
+      if (limitTimer) {
+        clearTimeout(limitTimer);
       }
     };
 
@@ -243,12 +268,12 @@ export function runAsync(
     child.once('close', (status, signal) => {
       const finish = (): void => {
         detach();
-        resolve({ status, signal, interrupted, output: Buffer.concat(chunks).toString('utf8') });
+        resolve({ status, signal, interrupted, timedOut, output: Buffer.concat(chunks).toString('utf8') });
       };
 
-      // The leader is gone; anything still in its group is a straggler. When we were interrupted the whole group
-      // is wanted dead, so reap it — see reapGroup for why one SIGKILL is not enough.
-      if (opts.group && interrupted && child.pid !== undefined) {
+      // The leader is gone; anything still in its group is a straggler. When we were interrupted, or ran out of
+      // time, the whole group is wanted dead, so reap it — see reapGroup for why one SIGKILL is not enough.
+      if (opts.group && (interrupted || timedOut) && child.pid !== undefined) {
         void reapGroup(child.pid).then(finish);
       } else {
         finish();
@@ -266,12 +291,16 @@ export function runAsync(
 export async function runAsyncOrThrow(
   cmd: string,
   args: string[] = [],
-  opts: RunOptions & { capture?: boolean; group?: boolean } = {},
+  opts: RunOptions & { capture?: boolean; group?: boolean; timeoutMs?: number } = {},
 ): Promise<RunAsyncResult> {
   const res = await runAsync(cmd, args, opts);
 
   if (res.interrupted) {
     throw new Error(`${cmd} ${args.join(' ')} was interrupted`);
+  }
+
+  if (res.timedOut) {
+    throw new Error(`${cmd} ${args.join(' ')} did not finish within ${opts.timeoutMs} ms and was stopped`);
   }
 
   if (res.status !== 0) {

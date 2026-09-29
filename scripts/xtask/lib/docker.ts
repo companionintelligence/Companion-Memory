@@ -33,12 +33,27 @@ import {
  * already treats as "unknown", never as "fine".
  */
 
-/** `docker run -d`. The image is already local by then, so this is generous rather than expected. */
-export const DOCKER_RUN_TIMEOUT_MS = 120_000;
+/**
+ * `docker run -d`. The image is already local, so a healthy run takes about a second; the limit is generous
+ * because it was MEASURED to be exceeded on a heavily loaded shared machine (load average ~440): the call ran
+ * past 120 s, the CLI was killed, and the daemon had by then created the container — which the by-name sweep
+ * after a failed run found and removed. A limit that tight fails a healthy-but-slow run for nothing.
+ */
+export const DOCKER_RUN_TIMEOUT_MS = 300_000;
 /** `docker rm -f -v`: a running Postgres is SIGKILLed and its volume goes with it. Slow removals are retried, not waited on. */
-export const DOCKER_RM_TIMEOUT_MS = 30_000;
-/** Read-only lookups (`ps`, `port`, `inspect`): the daemon answers these from memory. */
-export const DOCKER_QUERY_TIMEOUT_MS = 10_000;
+export const DOCKER_RM_TIMEOUT_MS = 40_000;
+/**
+ * Read-only lookups (`ps`, `port`, `inspect`): the daemon answers these from memory, in tens of
+ * milliseconds. The limit is generous anyway, because it was MEASURED on a busy shared machine
+ * (load average ~400) that `docker ps -q` took 8.8 s: a limit that tight fails a healthy run.
+ */
+export const DOCKER_QUERY_TIMEOUT_MS = 20_000;
+/** Listing every container of ours, or asking whether an image is present: a little more work than one lookup. */
+export const DOCKER_LIST_TIMEOUT_MS = 30_000;
+/** The readiness probe run inside the container (`pg_isready`). */
+export const DOCKER_PROBE_TIMEOUT_MS = 15_000;
+/** SQL run inside the container, and reading its whole log: bootstrap is a few statements, a heavy run's log is megabytes. */
+export const DOCKER_SQL_TIMEOUT_MS = 120_000;
 /** Attempts at removing one container, each followed (when it did not succeed) by a verification. */
 export const REMOVE_ATTEMPTS = 3;
 export const REMOVE_RETRY_DELAY_MS = 1_000;
@@ -92,36 +107,107 @@ export function docker(args: string[], opts: DockerOptions = {}): DockerResult {
 
 /** Is a Docker daemon answering? `detail` is the reason when it is not. */
 export function dockerReachable(): { ok: boolean; detail: string } {
-  const res = docker(['version', '--format', '{{.Server.Version}}'], { timeoutMs: 20_000 });
+  const res = docker(['version', '--format', '{{.Server.Version}}'], { timeoutMs: DOCKER_QUERY_TIMEOUT_MS });
 
   return res.status === 0
     ? { ok: true, detail: res.stdout.trim() }
     : { ok: false, detail: (res.stderr || res.stdout).trim().split('\n')[0] || 'no output' };
 }
 
-export function imagePresent(ref: string): boolean {
-  return docker(['image', 'inspect', '--format', '{{.Id}}', ref], { timeoutMs: 30_000 }).status === 0;
+const firstLineOf = (res: DockerResult): string =>
+  (res.stderr || res.stdout).trim().split('\n')[0] || `exit ${res.status}`;
+
+/** Attempts at asking whether an image is present, before "the daemon would not say" is reported as such. */
+export const IMAGE_PROBE_ATTEMPTS = 3;
+const IMAGE_PROBE_DELAY_MS = 1_000;
+
+/**
+ * What the daemon says about a local image.
+ *
+ * `unknown` is a first-class answer, exactly as it is for a container: a `docker
+ * image inspect` that timed out or could not reach the daemon says nothing about
+ * the image. Read as "absent" it silently swaps the local dev image for CI's pin
+ * — or sends a `docker pull` after an image that only exists locally, which
+ * fails with "pull access denied", a message about the wrong problem. This was
+ * seen on a heavily loaded machine.
+ */
+export type ImageState = { state: 'present' } | { state: 'absent' } | { state: 'unknown'; detail: string };
+
+/**
+ * Only the daemon's own "No such image" is an answer of "absent"; success is
+ * "present"; anything else (a timeout, a refused connection, an error nobody
+ * anticipated) is asked again, a bounded number of times, and then reported as
+ * `unknown`.
+ */
+export function imageState(
+  ref: string,
+  run: DockerFn = docker,
+  opts: { attempts?: number; sleep?: (ms: number) => void } = {},
+): ImageState {
+  const attempts = Math.max(1, opts.attempts ?? IMAGE_PROBE_ATTEMPTS);
+  const sleep = opts.sleep ?? sleepSync;
+  let detail = '';
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (attempt > 1) {
+      sleep(IMAGE_PROBE_DELAY_MS);
+    }
+
+    const res = run(['image', 'inspect', '--format', '{{.Id}}', ref], { timeoutMs: DOCKER_LIST_TIMEOUT_MS });
+
+    if (res.status === 0) {
+      return { state: 'present' };
+    }
+
+    if (res.status !== null && /no such image/i.test(`${res.stderr}${res.stdout}`)) {
+      return { state: 'absent' };
+    }
+
+    detail = firstLineOf(res);
+  }
+
+  return { state: 'unknown', detail };
+}
+
+/** Every container of ours the daemon listed — or the reason it would not say, which is NOT the same as "there are none". */
+export interface OurContainers {
+  containers: ContainerInfo[];
+  /** Set when a lookup failed: `containers` may then be incomplete, and a caller must not report "none". */
+  problem?: string;
 }
 
 /** Every container carrying our label — filtered again by {@link isOurs}, which also wants the name prefix. */
-export function listOurContainers(): ContainerInfo[] {
-  const ids = docker(['ps', '-a', '-q', '--no-trunc', '--filter', `label=${LABEL_KEY}=${LABEL_VALUE}`], {
-    timeoutMs: 30_000,
-  })
-    .stdout.split('\n')
+export function listOurContainers(run: DockerFn = docker): OurContainers {
+  const listed = run(['ps', '-a', '-q', '--no-trunc', '--filter', `label=${LABEL_KEY}=${LABEL_VALUE}`], {
+    timeoutMs: DOCKER_LIST_TIMEOUT_MS,
+  });
+
+  if (listed.status !== 0) {
+    return { containers: [], problem: `docker ps failed: ${firstLineOf(listed)}` };
+  }
+
+  const ids = listed.stdout
+    .split('\n')
     .map((s) => s.trim())
     .filter(Boolean);
 
   if (ids.length === 0) {
-    return [];
+    return { containers: [] };
   }
 
-  const inspected = docker(
+  const inspected = run(
     ['inspect', '--format', '{{.Id}}|{{.Name}}|{{.Created}}|{{json .Config.Labels}}', ...ids],
-    { timeoutMs: 30_000 },
+    { timeoutMs: DOCKER_LIST_TIMEOUT_MS },
   );
+  const containers = parseInspectContainers(inspected.stdout).filter(isOurs);
 
-  return parseInspectContainers(inspected.stdout).filter(isOurs);
+  // `docker inspect a b` prints what it found and exits 1 when one has gone since the listing (a concurrent
+  // run finishing, `--rm`): that is normal. Any OTHER failure means the containers could not be read.
+  if (inspected.status !== 0 && !/no such (object|container)/i.test(inspected.stderr)) {
+    return { containers, problem: `docker inspect failed: ${firstLineOf(inspected)}` };
+  }
+
+  return { containers };
 }
 
 /** What we know about a container the moment `docker run` has returned its id. */
@@ -556,7 +642,7 @@ export function waitUntilReady(name: string, timeoutMs: number): { ready: boolea
       docker(
         ['exec', name, 'pg_isready', '-h', '127.0.0.1', '-p', '5432', '-U', 'postgres', '-d', 'postgres'],
         {
-          timeoutMs: 15_000,
+          timeoutMs: DOCKER_PROBE_TIMEOUT_MS,
         },
       ).status === 0
     ) {
@@ -597,12 +683,12 @@ export function psql(
     args.push('-c', opts.command);
   }
 
-  return docker(args, { input: opts.sql, timeoutMs: 120_000 });
+  return docker(args, { input: opts.sql, timeoutMs: DOCKER_SQL_TIMEOUT_MS });
 }
 
 /** The container's whole log, both streams. */
 export function containerLogs(name: string): string {
-  const res = docker(['logs', name], { timeoutMs: 120_000 });
+  const res = docker(['logs', name], { timeoutMs: DOCKER_SQL_TIMEOUT_MS });
 
   // Postgres logs to stderr; the entrypoint's own chatter goes to stdout.
   return `${res.stdout}${res.stderr}`;

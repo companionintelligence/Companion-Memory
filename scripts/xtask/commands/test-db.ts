@@ -33,7 +33,7 @@ import { ExitBackstop } from '../lib/backstop';
 import {
   containerLogs,
   dockerReachable,
-  imagePresent,
+  imageState,
   justCreated,
   listOurContainers,
   psql,
@@ -64,6 +64,7 @@ import {
 } from '../lib/noSkips';
 import {
   APP_DATABASE,
+  LOCAL_IMAGE,
   LOOPBACK,
   STALE_AFTER_MS,
   assertOnlyThrowaway,
@@ -111,6 +112,12 @@ test that scripts/test-db/allowed-skips.json does not forgive, and any crash
 signature in the database's own log. Docker must be running.`;
 
 const READY_TIMEOUT_MS = 120_000;
+/**
+ * The first-run image pull is the one docker call whose duration is the network's, so its ceiling is
+ * far above any healthy pull (a multi-gigabyte image on a slow line) and exists only so that a daemon
+ * that accepted the call and went quiet cannot hold the run for ever. Ctrl-C stops it sooner.
+ */
+export const PULL_TIMEOUT_MS = 30 * 60_000;
 const API_WORKSPACE = '@ci/be-api';
 
 /** Where the summary is built up as the run goes, so a failure part-way still reports what it had. */
@@ -187,10 +194,21 @@ function firstLine(text: string): string {
 }
 
 async function reapStale(): Promise<void> {
-  const stale = selectStale(listOurContainers(), Date.now(), STALE_AFTER_MS);
+  const listing = listOurContainers();
+
+  // A lookup that failed is not "there are none": say so instead of a green tick that checked nothing.
+  if (listing.problem !== undefined) {
+    note(
+      `Could not check for stale test databases (${listing.problem}) — carrying on; the next run will look again`,
+    );
+  }
+
+  const stale = selectStale(listing.containers, Date.now(), STALE_AFTER_MS);
 
   if (stale.length === 0) {
-    ok('No stale test databases to reap');
+    if (listing.problem === undefined) {
+      ok('No stale test databases to reap');
+    }
 
     return;
   }
@@ -208,15 +226,34 @@ async function reapStale(): Promise<void> {
   }
 }
 
-function pickImage(args: TestDbArgs, root: string): { ref: string; source: string } {
+/**
+ * Is `ref` an image the daemon has? "Could not tell" is an ERROR here and never a "no": a wrong "no"
+ * quietly picks another image or attempts a pull that cannot work (see {@link imageState}).
+ */
+function imageIsLocal(ref: string): boolean {
+  const seen = imageState(ref);
+
+  if (seen.state === 'unknown') {
+    throw new Error(
+      `could not tell whether the image ${ref} is present locally (${seen.detail}). Not guessing: a wrong "absent" would ` +
+        'swap it for another image or try to pull one that only exists here. Run this again once docker is answering.',
+    );
+  }
+
+  return seen.state === 'present';
+}
+
+function pickImage(args: TestDbArgs, root: string): { ref: string; source: string; isLocal: boolean } {
   const choice = chooseImage({
     flag: args.image,
-    localPresent: imagePresent('ci/database:latest'),
+    // Not asked at all when --image names the image: the answer would not be used.
+    localPresent: args.image === undefined && imageIsLocal(LOCAL_IMAGE),
     ciPin: () => parseCiDatabaseImage(fs.readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8')),
   });
 
   return {
     ref: choice.ref,
+    isLocal: choice.source === 'local',
     source:
       choice.source === 'flag' ? 'from --image' : choice.source === 'local' ? 'local dev image' : "CI's pin",
   };
@@ -284,9 +321,10 @@ export async function runTestDb(root: string, args: TestDbArgs): Promise<void> {
     summary.image = image.ref;
     summary.imageSource = image.source;
 
-    if (!imagePresent(image.ref)) {
+    // The local dev image was just found; anything else is looked for before it is pulled.
+    if (!image.isLocal && !imageIsLocal(image.ref)) {
       step(`Pulling ${image.ref} (first run only)`);
-      await runAsyncOrThrow('docker', ['pull', image.ref]);
+      await runAsyncOrThrow('docker', ['pull', image.ref], { timeoutMs: PULL_TIMEOUT_MS });
     }
 
     info(`Image ${image.ref} (${image.source})`);

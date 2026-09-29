@@ -5,12 +5,18 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  DOCKER_LIST_TIMEOUT_MS,
+  DOCKER_PROBE_TIMEOUT_MS,
   DOCKER_QUERY_TIMEOUT_MS,
   DOCKER_RM_TIMEOUT_MS,
   DOCKER_RUN_TIMEOUT_MS,
+  DOCKER_SQL_TIMEOUT_MS,
+  IMAGE_PROBE_ATTEMPTS,
   PORT_LOOKUP_BUDGET_MS,
   REMOVE_ATTEMPTS,
   docker,
+  imageState,
+  listOurContainers,
   ourContainerNamed,
   removeContainers,
   removeOursByName,
@@ -128,7 +134,7 @@ test('hung `docker port` calls do not multiply: the whole lookup has a time budg
   const d = creating({
     override: {
       port: () => {
-        clock += 10_000; // each call burns its whole timeout
+        clock += DOCKER_QUERY_TIMEOUT_MS; // each call burns its whole timeout
 
         return timedOut('port');
       },
@@ -140,9 +146,9 @@ test('hung `docker port` calls do not multiply: the whole lookup has a time budg
     () => startContainer('img', NAME, 'pw', { ...h.opts, run: d.run, now: () => clock }),
     /could not read the published port/,
   );
-  // 10 s per call against a 30 s budget: the third call exhausts it, not the 21st.
-  assert.equal(PORT_LOOKUP_BUDGET_MS, 30_000);
-  assert.equal(d.sub('port').length, 3);
+  // Each call burns its whole timeout, so the budget is spent after ceil(budget / timeout) calls — not after the 21st.
+  assert.equal(d.sub('port').length, Math.ceil(PORT_LOOKUP_BUDGET_MS / DOCKER_QUERY_TIMEOUT_MS));
+  assert.ok(d.sub('port').length < 21);
   assert.equal(d.containers.length, 0);
 });
 
@@ -524,9 +530,22 @@ test('every docker call startContainer, removeContainers and the sweep make carr
 });
 
 test('the timeout constants are sane: lookups are fast, removals are bounded, and a full removal fits in minutes', () => {
-  assert.ok(DOCKER_QUERY_TIMEOUT_MS <= 15_000);
+  assert.ok(DOCKER_QUERY_TIMEOUT_MS >= 15_000, 'a busy machine takes seconds to answer a docker ps');
+  assert.ok(DOCKER_QUERY_TIMEOUT_MS <= 30_000);
   assert.ok(DOCKER_RM_TIMEOUT_MS <= 60_000);
   assert.ok(DOCKER_RUN_TIMEOUT_MS <= 5 * 60_000);
+  // Every constant is a real, finite limit — a zero or a NaN would mean "no limit" to spawnSync.
+  for (const limit of [
+    DOCKER_QUERY_TIMEOUT_MS,
+    DOCKER_LIST_TIMEOUT_MS,
+    DOCKER_PROBE_TIMEOUT_MS,
+    DOCKER_SQL_TIMEOUT_MS,
+    DOCKER_RM_TIMEOUT_MS,
+    DOCKER_RUN_TIMEOUT_MS,
+  ]) {
+    assert.ok(Number.isFinite(limit) && limit > 0 && limit <= 10 * 60_000, `${limit} is not a sane limit`);
+  }
+
   // The worst case for one removal: every attempt hangs on both rm and its verification.
   assert.ok(REMOVE_ATTEMPTS * (DOCKER_RM_TIMEOUT_MS + DOCKER_QUERY_TIMEOUT_MS) <= 3 * 60_000);
 });
@@ -589,4 +608,137 @@ test('a hung docker does not hang startContainer: port, rm and ps all time out, 
     assert.ok(Date.now() - started < 15_000, `took ${Date.now() - started} ms`);
     assert.deepEqual(h.events, [`created ${ID}`], 'still registered for the backstop');
   });
+});
+
+// -- a failed lookup is UNKNOWN, never "absent" / "none": the image and the stale-container listing -----------
+
+test('imageState: present, absent, and unknown are three different answers', () => {
+  assert.deepEqual(imageState('img', new FakeDaemon().run, { sleep: noSleep }), { state: 'present' });
+  assert.deepEqual(
+    imageState(
+      'img',
+      new FakeDaemon({ override: { image: () => failed('Error response from daemon: No such image: img') } })
+        .run,
+      {
+        sleep: noSleep,
+      },
+    ),
+    { state: 'absent' },
+  );
+  assert.deepEqual(
+    imageState(
+      'img',
+      new FakeDaemon({ override: { image: () => failed('Cannot connect to the Docker daemon') } }).run,
+      {
+        sleep: noSleep,
+      },
+    ),
+    { state: 'unknown', detail: 'Cannot connect to the Docker daemon' },
+  );
+});
+
+test('imageState: a TIMED-OUT lookup is unknown after a bounded number of asks — not "absent" (the defect seen on a loaded machine)', () => {
+  const d = new FakeDaemon({ override: { image: () => timedOut('image') } });
+  const slept: number[] = [];
+  const seen = imageState('img', d.run, { sleep: (ms) => slept.push(ms) });
+
+  assert.equal(seen.state, 'unknown');
+  assert.equal(d.sub('image').length, IMAGE_PROBE_ATTEMPTS);
+  assert.equal(slept.length, IMAGE_PROBE_ATTEMPTS - 1);
+  assert.ok(
+    d.calls.every((c) => typeof c.opts?.timeoutMs === 'number' && c.opts.timeoutMs > 0),
+    'every ask has a timeout',
+  );
+});
+
+test('imageState: one failed ask followed by a success is "present" — a hiccup is not an absence', () => {
+  let asks = 0;
+  const d = new FakeDaemon({
+    override: { image: () => (++asks === 1 ? timedOut('image') : ok('sha256:abc\n')) },
+  });
+
+  assert.deepEqual(imageState('img', d.run, { sleep: noSleep }), { state: 'present' });
+  assert.equal(asks, 2, 'stopped at the first answer');
+});
+
+test('imageState: only the daemon\'s own "No such image" (with a real exit status) says absent; a timeout that mentions it does not', () => {
+  const d = new FakeDaemon({
+    override: {
+      image: () => ({ status: null, stdout: '', stderr: 'docker image timed out; last said: No such image' }),
+    },
+  });
+
+  assert.equal(imageState('img', d.run, { sleep: noSleep }).state, 'unknown');
+});
+
+test('listOurContainers: a failed `docker ps` is a PROBLEM, not "none of ours exist"', () => {
+  const d = new FakeDaemon({ override: { ps: () => failed('Cannot connect to the Docker daemon') } });
+  const listing = listOurContainers(d.run);
+
+  assert.deepEqual(listing.containers, []);
+  assert.match(listing.problem ?? '', /docker ps failed: Cannot connect to the Docker daemon/);
+  assert.ok(
+    d.calls.every((c) => typeof c.opts?.timeoutMs === 'number'),
+    'and it asked with a timeout',
+  );
+});
+
+test('listOurContainers: a timed-out `docker ps` is a problem too', () => {
+  const listing = listOurContainers(new FakeDaemon({ override: { ps: () => timedOut('ps') } }).run);
+
+  assert.match(listing.problem ?? '', /docker ps failed: docker ps timed out/);
+});
+
+test('listOurContainers: nothing listed, and no failure, is honestly "none" — no problem', () => {
+  assert.deepEqual(listOurContainers(new FakeDaemon({ override: { ps: () => ok('') } }).run), {
+    containers: [],
+  });
+});
+
+const INSPECT_LINE = `${ID}|/${NAME}|2026-09-01T00:00:00Z|{"ci.test-db":"1"}\n`;
+
+test('listOurContainers: reads what `docker inspect` printed, and only ours', () => {
+  const d = new FakeDaemon({
+    override: {
+      ps: () => ok(`${ID}\n${'b'.repeat(64)}\n`),
+      inspect: () => ok(`${INSPECT_LINE}${'b'.repeat(64)}|/postgres|2026-09-01T00:00:00Z|{}\n`),
+    },
+  });
+  const listing = listOurContainers(d.run);
+
+  assert.equal(listing.problem, undefined);
+  assert.deepEqual(
+    listing.containers.map((c) => c.name),
+    [NAME],
+  );
+});
+
+test('listOurContainers: a container that vanished between the listing and the inspect is normal, not a problem', () => {
+  const d = new FakeDaemon({
+    override: {
+      ps: () => ok(`${ID}\n${'b'.repeat(64)}\n`),
+      inspect: () => ({
+        status: 1,
+        stdout: INSPECT_LINE,
+        stderr: `Error: No such object: ${'b'.repeat(64)}`,
+      }),
+    },
+  });
+  const listing = listOurContainers(d.run);
+
+  assert.equal(listing.problem, undefined);
+  assert.equal(listing.containers.length, 1);
+});
+
+test('listOurContainers: an inspect that fails for any OTHER reason is a problem, and keeps what it could read', () => {
+  const d = new FakeDaemon({
+    override: {
+      ps: () => ok(`${ID}\n`),
+      inspect: () => ({ status: null, stdout: '', stderr: 'docker inspect timed out after 30000 ms' }),
+    },
+  });
+  const listing = listOurContainers(d.run);
+
+  assert.match(listing.problem ?? '', /docker inspect failed: docker inspect timed out/);
+  assert.deepEqual(listing.containers, []);
 });

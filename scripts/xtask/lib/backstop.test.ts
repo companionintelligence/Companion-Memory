@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 
 import { ExitBackstop } from './backstop';
 import { startContainer, type CreatedContainer } from './docker';
@@ -13,8 +13,21 @@ const ID = 'f'.repeat(64);
 const C: CreatedContainer = { id: ID, name: NAME };
 const noSleep = (): void => undefined;
 
+// Every directory a test makes is removed when the file is done, whatever the test did with it: the sweep
+// removes it in most, but a test that stubs the removal, or never sweeps, would otherwise leave it in the OS
+// temp folder — where it looks exactly like the leftover of a hard-killed run, the thing this code exists to avoid.
+const made: string[] = [];
+
+after(() => {
+  for (const dir of made) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function setup(opts: { keep?: boolean; daemon?: FakeDaemon } = {}) {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-test-db-backstop-'));
+
+  made.push(workDir);
   const warnings: string[] = [];
   const daemon = opts.daemon ?? new FakeDaemon({ containers: [ours(ID, NAME)] });
   const backstop = new ExitBackstop({

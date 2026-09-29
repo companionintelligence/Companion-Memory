@@ -259,15 +259,21 @@ Kept containers (`KEEP=1`) and the leftovers of a killed run are removed by the
 next `make test-db` once they are more than two hours old.
 
 **If Docker itself misbehaves**, the command says what it does and does not know.
-Every docker call on the start-up and clean-up path has a time limit (a daemon
-that accepts a call and never answers fails the call in seconds — 10 s for a
-lookup, 30 s for a removal — instead of hanging the run), and a container counts
-as removed only when the daemon said so or a verification that *succeeded* found
-it absent. A removal whose verification also failed is reported as **unknown**,
-the container stays tracked by the exit-time backstop, and the message gives the
+Every docker call on the start-up and clean-up path has a time limit — a daemon
+that accepts a call and never answers fails the call after a bounded time (20 s
+for a lookup, 40 s for a removal, 5 minutes for `docker run`) instead of hanging
+the run; even the first-run image pull, whose duration is the network's, has a
+30-minute ceiling — and a container counts as removed only when the daemon said
+so or a verification that *succeeded* found it absent. A removal whose
+verification also failed is reported as **unknown**, the container stays tracked
+by the exit-time backstop, and the message gives the
 exact `docker rm -f -v ci-testdb-…` to run. The same holds when `docker run`
 itself dies after the daemon created the container: it is found again by its
-exact name and removed only if it carries the `ci.test-db=1` label.
+exact name and removed only if it carries the `ci.test-db=1` label. The rule is
+the same for every question put to the daemon: *could not tell* is never read as
+*no*. A failed image lookup stops the run with that message rather than pulling
+or picking another image on a guess, and a failed listing of stale containers is
+reported instead of printing a tick for a check that did not happen.
 
 #### Flaky tests: the serial retry
 
