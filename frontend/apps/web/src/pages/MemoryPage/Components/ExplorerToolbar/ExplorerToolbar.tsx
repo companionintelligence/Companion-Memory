@@ -471,7 +471,7 @@ function FilterDropArea() {
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         <div
           aria-label="Filter drop area"
           onDragEnter={(event) => {
@@ -506,162 +506,151 @@ function FilterDropArea() {
             }
           }}
           className={cn(
-            'relative flex h-9 min-h-9 min-w-0 flex-1 select-none items-center gap-1.5 overflow-hidden transition-colors',
+            // w-full on a phone so this row wraps and Clear all lands on the
+            // next line, outside this scroller. overflow-hidden here used to
+            // clip that button once the save controls took the remaining width.
+            'relative flex h-9 min-h-9 min-w-0 w-full select-none items-center gap-1.5 transition-colors device:w-auto device:flex-1',
             isDropTarget && 'rounded-md bg-accent/40',
           )}
         >
           {hasSelections ? (
-            <>
-              <div className="scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-x-contain">
-                {selectedTypes !== null && (
-                  <FilterChip
-                    icon={Shapes}
-                    label={
-                      selectedTypes.length === 1
-                        ? selectedTypes[0]
-                        : `${selectedTypes.length} of ${AVAILABLE_ENTITY_TYPES.length} types`
-                    }
-                    removeLabel="Remove entity types"
-                    inactiveReason={reasonFor('entityTypes')}
-                    onRemove={() =>
-                      setSearchParams((params) => {
-                        params.delete('includedEntityTypes');
-                        params.delete('excludedEntityTypes');
+            <div className="scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-x-contain">
+              {selectedTypes !== null && (
+                <FilterChip
+                  icon={Shapes}
+                  label={
+                    selectedTypes.length === 1
+                      ? selectedTypes[0]
+                      : `${selectedTypes.length} of ${AVAILABLE_ENTITY_TYPES.length} types`
+                  }
+                  removeLabel="Remove entity types"
+                  inactiveReason={reasonFor('entityTypes')}
+                  onRemove={() =>
+                    setSearchParams((params) => {
+                      params.delete('includedEntityTypes');
+                      params.delete('excludedEntityTypes');
 
-                        return params;
-                      })
-                    }
-                  />
-                )}
-                {(Object.keys(DROP_FILTER_ICONS) as FilterDragKind[]).flatMap((kind) =>
-                  selections[kind].map((name) => (
-                    <FilterChip
-                      key={`${kind}:${name}`}
-                      icon={DROP_FILTER_ICONS[kind]}
-                      label={kind === 'tag' ? `#${name}` : name}
-                      removeLabel={`Remove ${name}`}
-                      inactiveReason={reasonFor(
-                        kind === 'person' ? 'people' : kind === 'place' ? 'places' : 'tags',
-                      )}
-                      onRemove={() => remove(kind, name)}
-                    />
-                  )),
-                )}
-                {sources.map((name) => (
+                      return params;
+                    })
+                  }
+                />
+              )}
+              {(Object.keys(DROP_FILTER_ICONS) as FilterDragKind[]).flatMap((kind) =>
+                selections[kind].map((name) => (
                   <FilterChip
-                    key={`source:${name}`}
-                    icon={Database}
-                    label={name}
-                    removeLabel={`Remove source ${name}`}
-                    inactiveReason={reasonFor('connectors')}
-                    onRemove={() => removeCsvValue('connectors', name)}
+                    key={`${kind}:${name}`}
+                    icon={DROP_FILTER_ICONS[kind]}
+                    label={kind === 'tag' ? `#${name}` : name}
+                    removeLabel={`Remove ${name}`}
+                    inactiveReason={reasonFor(
+                      kind === 'person' ? 'people' : kind === 'place' ? 'places' : 'tags',
+                    )}
+                    onRemove={() => remove(kind, name)}
                   />
-                ))}
-                {activities.map((name) => (
-                  <FilterChip
-                    key={`activity:${name}`}
-                    icon={Activity}
-                    label={name}
-                    removeLabel={`Remove activity ${name}`}
-                    inactiveReason={reasonFor('eventTypes')}
-                    onRemove={() => removeCsvValue('eventTypes', name)}
-                  />
-                ))}
-                {direction != null && (
-                  <FilterChip
-                    icon={MessageSquare}
-                    label={`${MESSAGE_DIRECTION_LABELS[direction]} only`}
-                    removeLabel="Remove message direction"
-                    inactiveReason={reasonFor('direction')}
-                    onRemove={() =>
-                      setSearchParams((params) => {
-                        params.delete('direction');
+                )),
+              )}
+              {sources.map((name) => (
+                <FilterChip
+                  key={`source:${name}`}
+                  icon={Database}
+                  label={name}
+                  removeLabel={`Remove source ${name}`}
+                  inactiveReason={reasonFor('connectors')}
+                  onRemove={() => removeCsvValue('connectors', name)}
+                />
+              ))}
+              {activities.map((name) => (
+                <FilterChip
+                  key={`activity:${name}`}
+                  icon={Activity}
+                  label={name}
+                  removeLabel={`Remove activity ${name}`}
+                  inactiveReason={reasonFor('eventTypes')}
+                  onRemove={() => removeCsvValue('eventTypes', name)}
+                />
+              ))}
+              {direction != null && (
+                <FilterChip
+                  icon={MessageSquare}
+                  label={`${MESSAGE_DIRECTION_LABELS[direction]} only`}
+                  removeLabel="Remove message direction"
+                  inactiveReason={reasonFor('direction')}
+                  onRemove={() =>
+                    setSearchParams((params) => {
+                      params.delete('direction');
 
-                        return params;
-                      })
-                    }
-                  />
-                )}
-                {hasDateRange && (
-                  <FilterChip
-                    icon={CalendarIcon}
-                    label={
-                      isRollingDatePreset(whenPreset)
-                        ? (datePresetLabel(whenPreset) ?? 'When')
-                        : formatDateLabel(dateFrom, dateTo)
-                    }
-                    removeLabel="Remove date range"
-                    inactiveReason={reasonFor('date')}
-                    onRemove={() =>
-                      setSearchParams((params) => {
-                        params.delete('from');
-                        params.delete('to');
-                        params.delete('when');
+                      return params;
+                    })
+                  }
+                />
+              )}
+              {hasDateRange && (
+                <FilterChip
+                  icon={CalendarIcon}
+                  label={
+                    isRollingDatePreset(whenPreset)
+                      ? (datePresetLabel(whenPreset) ?? 'When')
+                      : formatDateLabel(dateFrom, dateTo)
+                  }
+                  removeLabel="Remove date range"
+                  inactiveReason={reasonFor('date')}
+                  onRemove={() =>
+                    setSearchParams((params) => {
+                      params.delete('from');
+                      params.delete('to');
+                      params.delete('when');
 
-                        return params;
-                      })
-                    }
-                  />
-                )}
-                {hasLocation && (
-                  <FilterChip
-                    icon={MapPin}
-                    label="Has a location"
-                    removeLabel="Remove has a location"
-                    inactiveReason={reasonFor('hasLocation')}
-                    onRemove={() =>
-                      setSearchParams((params) => {
-                        params.delete('hasLocation');
+                      return params;
+                    })
+                  }
+                />
+              )}
+              {hasLocation && (
+                <FilterChip
+                  icon={MapPin}
+                  label="Has a location"
+                  removeLabel="Remove has a location"
+                  inactiveReason={reasonFor('hasLocation')}
+                  onRemove={() =>
+                    setSearchParams((params) => {
+                      params.delete('hasLocation');
 
-                        return params;
-                      })
-                    }
-                  />
-                )}
-                {semantic && (
-                  <FilterChip
-                    icon={Sparkles}
-                    label="Semantic"
-                    removeLabel="Remove semantic"
-                    inactiveReason={reasonFor('semantic')}
-                    onRemove={() =>
-                      setSearchParams((params) => {
-                        params.delete('semantic');
+                      return params;
+                    })
+                  }
+                />
+              )}
+              {semantic && (
+                <FilterChip
+                  icon={Sparkles}
+                  label="Semantic"
+                  removeLabel="Remove semantic"
+                  inactiveReason={reasonFor('semantic')}
+                  onRemove={() =>
+                    setSearchParams((params) => {
+                      params.delete('semantic');
 
-                        return params;
-                      })
-                    }
-                  />
-                )}
-                {hasMapArea && (
-                  <FilterChip
-                    icon={MapIcon}
-                    label="Map area"
-                    removeLabel="Remove map area"
-                    inactiveReason={reasonFor('bbox')}
-                    onRemove={() =>
-                      setSearchParams((params) => {
-                        params.delete('bbox');
+                      return params;
+                    })
+                  }
+                />
+              )}
+              {hasMapArea && (
+                <FilterChip
+                  icon={MapIcon}
+                  label="Map area"
+                  removeLabel="Remove map area"
+                  inactiveReason={reasonFor('bbox')}
+                  onRemove={() =>
+                    setSearchParams((params) => {
+                      params.delete('bbox');
 
-                        return params;
-                      })
-                    }
-                  />
-                )}
-              </div>
-              <Button
-                // Explicit: the drop area can render inside the header SearchBox's
-                // <form>, where a default (submit) button would commit the search
-                // right after clearing.
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-7 shrink-0 px-2 text-xs text-muted-foreground"
-                onClick={clearAll}
-              >
-                Clear all
-              </Button>
-            </>
+                      return params;
+                    })
+                  }
+                />
+              )}
+            </div>
           ) : (
             // pointer-events-none keeps the icon swap from firing its own
             // dragenter/dragleave and corrupting the depth counter mid-drag.
@@ -671,6 +660,21 @@ function FilterDropArea() {
             </div>
           )}
         </div>
+        {hasSelections && (
+          <Button
+            // Explicit: the drop area can render inside the header SearchBox's
+            // <form>, where a default (submit) button would commit the search
+            // right after clearing. Kept outside the chip scroller so a phone
+            // width cannot clip it behind the save controls.
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 shrink-0 px-2 text-xs text-muted-foreground"
+            onClick={clearAll}
+          >
+            Clear all
+          </Button>
+        )}
         <div className="flex shrink-0 items-center gap-2">
           <FilterCountLabel />
           <SavedSearchPicker />

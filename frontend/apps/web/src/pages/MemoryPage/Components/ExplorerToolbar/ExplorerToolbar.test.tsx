@@ -410,6 +410,25 @@ describe('ExplorerToolbar', () => {
       expect(screen.queryByRole('button', { name: 'Remove has a location' })).not.toBeInTheDocument();
     });
 
+    it('keeps Clear all outside the scrolling chip row and clears every filter', () => {
+      renderToolbar(<ExplorerToolbar open />, {
+        route: '/?people=Ada%20Lovelace&tags=space',
+      });
+
+      const clear = screen.getByRole('button', { name: 'Clear all' });
+      const drop = screen.getByLabelText('Filter drop area');
+
+      expect(drop).not.toContainElement(clear);
+      expect(drop.className).not.toContain('overflow-hidden');
+
+      fireEvent.click(clear);
+
+      const params = screen.getByTestId('params').textContent ?? '';
+
+      expect(params).not.toContain('people=');
+      expect(params).not.toContain('tags=');
+    });
+
     it('removes an already-applied person filter chip, leaving the rest of the URL untouched', () => {
       renderToolbar(<ExplorerToolbar open />, {
         route: '/?people=Ada%20Lovelace&tags=space',
