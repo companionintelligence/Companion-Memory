@@ -216,7 +216,10 @@ built it, else the pin in `ci.yml`'s backend job) on a random loopback port with
 random passwords, bootstraps it with `scripts/test-db/bootstrap.sql` — the same
 file `ci.yml` runs, so the two cannot drift — migrates it, runs the `be-api` jest
 suite against it, judges the run, and removes the container. **Docker is the only
-prerequisite.** It never reads `.env`, never binds a fixed host port, and only
+prerequisite.** It scrubs every database-shaped name out of the environment its
+children inherit, so nothing points them at your real corpus (`migrate` loads the
+repo-root `.env`, but a value the command has already set wins over it); it never
+binds a fixed host port, and only
 ever touches containers it created itself (name `ci-testdb-*` *and* label
 `ci.test-db=1`). Ctrl-C, `kill` and the terminal going away (**SIGHUP** — closing
 the window, an SSH connection dropping) are all handled the same way: the signal
@@ -224,6 +227,18 @@ is forwarded to jest's whole process tree (`yarn` is only a wrapper, and a signa
 sent to it alone would leave jest and its workers running), the container and
 this run's temp directory are removed, the summary is still printed, and the exit
 is nonzero.
+
+**Start it with `make test-db`, not `yarn tsx scripts/xtask/index.ts test-db`.**
+The `tsx` CLI wrapper relays Ctrl-C and `kill` to its child and SIGKILLs it if it
+has not answered within about 60 ms — which a command blocked in Docker or jest
+cannot do. Measured through the wrapper, a signal at start-up leaked the container
+2 of 2 times, and 10 of 11 signals during jest killed the command with no summary
+and its temp directory left behind (the container leaked in some of those);
+started as `node --import tsx` (which is what the Makefile runs), 27 of 27 signals
+were handled cleanly. `scripts/xtask/makefile.test.ts` fails if a recipe goes
+back, and the command prints a warning when it finds itself under the wrapper.
+Anything a leak does leave is removed by the stale-container reaper on the next
+run (a `ci-testdb-*` container older than two hours that also carries the label).
 
 ```bash
 make test-db                                  # the whole be-api suite
@@ -285,8 +300,8 @@ search for a green tick:
 
 1. After the parallel run, each test **file** that failed is re-run **once**,
    serially (`--runInBand`, by exact path), against the same database. A `-t`
-   name filter is carried over so the retry runs the same tests; nothing else
-   from your jest arguments is.
+   name filter and a `--testTimeout` are carried over so the retry runs the same
+   tests at the same limit; nothing else from your jest arguments is.
 2. A file that failed the parallel run and **passed** serially is a **FLAKE**. It
    does not fail the run, but it is printed as a warning block naming the file
    and the first line of its error, and the final line says

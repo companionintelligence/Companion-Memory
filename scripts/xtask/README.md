@@ -43,6 +43,13 @@ yarn tsx scripts/xtask/index.ts build api --env staging --gpu cuda --dry-run
 Run from the repo root either way: `process.cwd()` is the root every command resolves
 paths against.
 
+`test` and `test-db` have to clean up after Ctrl-C and `kill`, so the Makefile starts them as
+`yarn node --import tsx scripts/xtask/index.ts <command>`. Use that form, not `yarn tsx`, when you
+call them directly: the tsx CLI wrapper SIGKILLs its child if it does not answer a relayed signal
+within about 60 ms, and a command blocked in Docker or jest cannot. (`build` and `dev` still use the
+wrapper; neither holds a container.) `make test` stops at the step in flight on an interrupt and
+reports the rest as `not run`.
+
 ## Subcommands
 
 | Command  | Flags | Notes |

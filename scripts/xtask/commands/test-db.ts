@@ -42,7 +42,13 @@ import {
   waitUntilReady,
   type StartedContainer,
 } from '../lib/docker';
-import { TERMINATION_SIGNALS, runAsync, runAsyncOrThrow } from '../lib/exec';
+import {
+  TERMINATION_SIGNALS,
+  TSX_RELAY_WARNING,
+  runAsync,
+  runAsyncOrThrow,
+  underTsxRelay,
+} from '../lib/exec';
 import { findCrashSignatures, formatFindings, type CrashFinding } from '../lib/dbLogSentinel';
 import {
   asUnretried,
@@ -776,6 +782,11 @@ export async function main(argv: string[]): Promise<void> {
     console.log(HELP);
 
     return;
+  }
+
+  if (underTsxRelay()) {
+    // Not a refusal: it works, and the 2-hour reaper covers a leak. But say so BEFORE a container exists.
+    note(TSX_RELAY_WARNING);
   }
 
   await runTestDb(process.cwd(), args);

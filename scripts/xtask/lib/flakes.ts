@@ -110,7 +110,7 @@ export function failedFiles(report: JestReport, root: string): FailedFile[] {
  * the run it is checking. Without them a `-t foo` run would be retried against
  * every test in the file, and a test nobody selected could fail the run.
  * Path patterns and every other flag are deliberately not carried over: the
- * retry names its files exactly.
+ * retry names its files exactly. The one exception is {@link timeoutArgs}.
  */
 export function nameFilterArgs(jestArgs: string[]): string[] {
   const out: string[] = [];
@@ -129,6 +129,28 @@ export function nameFilterArgs(jestArgs: string[]): string[] {
   return out;
 }
 
+/**
+ * `--testTimeout`, so a run the user widened is retried at the same width. Left out, a test that needs 6 s
+ * and passed under `--testTimeout=30000` was retried at jest's 5 s default and reported as a REAL failure
+ * on the strength of a limit nobody had asked for.
+ */
+export function timeoutArgs(jestArgs: string[]): string[] {
+  const out: string[] = [];
+
+  for (let i = 0; i < jestArgs.length; i += 1) {
+    const arg = jestArgs[i];
+
+    if (arg === '--testTimeout' && i + 1 < jestArgs.length) {
+      out.push(arg, jestArgs[i + 1]);
+      i += 1;
+    } else if (arg.startsWith('--testTimeout=')) {
+      out.push(arg);
+    }
+  }
+
+  return out;
+}
+
 /** What follows `jest` on the retry's command line. `--runTestsByPath` because a file name is not a regular expression. */
 export function retryJestArgs(reportPath: string, files: string[], jestArgs: string[]): string[] {
   return [
@@ -137,6 +159,7 @@ export function retryJestArgs(reportPath: string, files: string[], jestArgs: str
     `--outputFile=${reportPath}`,
     '--runInBand',
     ...nameFilterArgs(jestArgs),
+    ...timeoutArgs(jestArgs),
     '--runTestsByPath',
     ...files,
   ];

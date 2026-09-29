@@ -107,6 +107,22 @@ export function ignoreDeadTerminal(
   };
 }
 
+/**
+ * True when this process was started by the tsx CLI wrapper (`yarn tsx <script>`) and not by `node --import tsx
+ * <script>`. The wrapper starts the script as a child with `--require .../tsx/dist/preflight.cjs`, then relays
+ * SIGINT and SIGTERM to it and SIGKILLs it if it has not acknowledged within ~60 ms — which a command blocked
+ * in a child process cannot do. So a command that must clean up after an interrupt (`test-db`) is not safe to
+ * start that way, and this is how it notices. Best-effort by nature: it reads tsx's own start-up flag.
+ */
+export function underTsxRelay(execArgv: readonly string[] = process.execArgv): boolean {
+  return execArgv.some((arg) => /tsx[\\/]dist[\\/]preflight\.cjs$/.test(arg));
+}
+
+/** The one-line warning for a command that is not safe under {@link underTsxRelay}; the same text everywhere. */
+export const TSX_RELAY_WARNING =
+  'Started through the tsx CLI wrapper (`yarn tsx ...`): it kills this process on Ctrl-C or `kill` before it can ' +
+  'clean up. Use `make <target>` or `yarn node --import tsx scripts/xtask/index.ts <command>`.';
+
 export interface RunAsyncResult {
   status: number | null;
   signal: NodeJS.Signals | null;

@@ -12,6 +12,7 @@ import {
   nameFilterArgs,
   planRetry,
   retryJestArgs,
+  timeoutArgs,
   type ClassifiedFailure,
   type FailedFile,
 } from './flakes';
@@ -186,6 +187,22 @@ test('retryJestArgs: serial, by exact path, same name filter, its own report', (
     '--runInBand',
     '-t',
     'revocation',
+    '--runTestsByPath',
+    '/a/x.test.ts',
+  ]);
+});
+
+test("the retry runs at the timeout the run was given, not at jest's default", () => {
+  assert.deepEqual(timeoutArgs(['--testTimeout=30000', 'src/x', '--maxWorkers=2']), ['--testTimeout=30000']);
+  assert.deepEqual(timeoutArgs(['--testTimeout', '30000']), ['--testTimeout', '30000']);
+  assert.deepEqual(timeoutArgs(['--testTimeout']), [], 'a flag with no value is not invented a value');
+  assert.deepEqual(timeoutArgs(['src/x']), []);
+  assert.deepEqual(retryJestArgs('/tmp/r.json', ['/a/x.test.ts'], ['--testTimeout=30000', 'src']), [
+    '--ci',
+    '--json',
+    '--outputFile=/tmp/r.json',
+    '--runInBand',
+    '--testTimeout=30000',
     '--runTestsByPath',
     '/a/x.test.ts',
   ]);

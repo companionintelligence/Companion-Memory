@@ -3,9 +3,17 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 
-import { TERMINATION_SIGNALS, ignoreDeadTerminal, reapGroup, runAsync, runAsyncOrThrow } from './exec';
+import {
+  TERMINATION_SIGNALS,
+  ignoreDeadTerminal,
+  reapGroup,
+  runAsync,
+  runAsyncOrThrow,
+  underTsxRelay,
+} from './exec';
 
 test('the termination signals are Ctrl-C, kill, and the terminal going away', () => {
   assert.deepEqual([...TERMINATION_SIGNALS].sort(), ['SIGHUP', 'SIGINT', 'SIGTERM']);
@@ -385,4 +393,31 @@ test('runAsyncOrThrow turns a timeout into an error that says how long it waited
     runAsyncOrThrow('sh', ['-c', 'exec sleep 120'], { timeoutMs: 300 }),
     /did not finish within 300 ms and was stopped/,
   );
+});
+
+test('underTsxRelay: read from the flags the tsx CLI wrapper starts its child with', () => {
+  assert.equal(
+    underTsxRelay(['--require', '/x/tsx/dist/preflight.cjs', '--import', 'file:///x/tsx/dist/loader.mjs']),
+    true,
+  );
+  assert.equal(underTsxRelay(['--require', 'C:\\x\\tsx\\dist\\preflight.cjs']), true);
+  assert.equal(
+    underTsxRelay(['--import', 'tsx']),
+    false,
+    '`node --import tsx` has no wrapper in front of it',
+  );
+  assert.equal(underTsxRelay([]), false);
+});
+
+test('underTsxRelay: tells the two real ways of starting a script apart', () => {
+  // The unit above trusts flags I read off a real process; this one keeps them honest across a tsx upgrade.
+  const fixture = path.join(process.cwd(), 'scripts/xtask/lib/exec.tsxrelay.fixture.ts');
+  const viaWrapper = spawnSync('yarn', ['tsx', fixture], { encoding: 'utf8', cwd: process.cwd() });
+  const viaImport = spawnSync(process.execPath, ['--import', 'tsx', fixture], {
+    encoding: 'utf8',
+    cwd: process.cwd(),
+  });
+
+  assert.equal(viaWrapper.stdout.trim(), 'true', viaWrapper.stderr);
+  assert.equal(viaImport.stdout.trim(), 'false', viaImport.stderr);
 });

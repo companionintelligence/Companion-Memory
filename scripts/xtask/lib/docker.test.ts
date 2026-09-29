@@ -25,6 +25,7 @@ import {
   type DockerFn,
 } from './docker';
 import { FakeDaemon, failed, ok, ours, timedOut, type FakeDaemonOptions } from './fakeDocker';
+import { LABEL_KEY, LABEL_VALUE } from './testDb';
 
 const NAME = 'ci-testdb-deadbeef';
 const ID = 'f'.repeat(64);
@@ -88,6 +89,25 @@ test('the published port shows up late: retried, and nothing removed', () => {
   assert.equal(started.port, 50000);
   assert.equal(slept.length, 3);
   assert.equal(d.sub('rm').length, 0);
+});
+
+test('`docker run` is labelled as ours, published on loopback only, and reaped by docker on exit', () => {
+  // Two mutations of the command survived the whole suite: dropping the label (which is what every removal
+  // and the stale-container reaper trust) and publishing on every interface (`-p 5432`, an unauthenticated
+  // superuser database on the LAN). Both are one-token changes nothing else would notice.
+  const d = creating();
+
+  startContainer('img', NAME, 'pw', { ...hooks().opts, run: d.run });
+
+  const argv = d.sub('run')[0];
+  const at = (flag: string): string => argv[argv.indexOf(flag) + 1];
+
+  assert.equal(at('--label'), `${LABEL_KEY}=${LABEL_VALUE}`);
+  assert.equal(at('-p'), '127.0.0.1::5432');
+  assert.equal(at('--name'), NAME);
+  assert.ok(argv.includes('--rm'), 'without --rm a stopped container is left behind');
+  assert.ok(argv.includes('--init'), 'without --init an orphaned process reads as a crashed backend');
+  assert.ok(!argv.some((a) => a === 'pw'), 'the admin password must not be on the command line');
 });
 
 // -- the port lookup fails AFTER a successful run --------------------------------------------
