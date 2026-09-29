@@ -9,6 +9,7 @@ import { useAuth, useCurrentUser } from '@/hooks';
 import { BrainMark, CONNECT_MARK_SIZE, Reveal, SplashShell } from '@/pages/SplashPage/SplashChrome';
 
 import {
+  emailFromIdToken,
   loginWithPortalOidc,
   OidcCancelledError,
   resumePendingOidcLogin,
@@ -79,6 +80,7 @@ export function DeviceConnectPage() {
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [signInError, setSignInError] = useState<string | null>(null);
   const [awaitingProfile, setAwaitingProfile] = useState(false);
+  const accountEmail = emailFromIdToken(auth?.idToken);
 
   useEffect(() => {
     if (!initializing && authenticated && user) {
@@ -366,6 +368,11 @@ export function DeviceConnectPage() {
       </div>
       <div className="flex flex-1 flex-col items-center justify-center">
         <div className="w-full max-w-md">
+          {accountEmail ? (
+            <p className="text-muted-foreground mb-3 text-center text-sm" data-testid="portal-account">
+              Signed in as {accountEmail}
+            </p>
+          ) : null}
           <Card>
             <Card.Header>
               <Card.Title>Pick a Memory Server</Card.Title>
