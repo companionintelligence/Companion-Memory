@@ -71,9 +71,9 @@ describe('failIfRequired', () => {
 
   it('throws when the database is required, naming the switch, the suite, the reason, the target and the fix', () => {
     expect(() =>
-      failIfRequired(missing, 'the suite that reads X_TEST_DATABASE_URL', { CI_REQUIRE_DB: '1' }),
+      failIfRequired(missing, 'the suite that reads SUITE_OVERRIDE_URL', { CI_REQUIRE_DB: '1' }),
     ).toThrow(
-      /CI_REQUIRE_DB=1 forbids skipping the suite that reads X_TEST_DATABASE_URL.*nothing accepting connections.*target 127\.0\.0\.1:5999\/companion.*make test-db/s,
+      /CI_REQUIRE_DB=1 forbids skipping the suite that reads SUITE_OVERRIDE_URL.*nothing accepting connections.*target 127\.0\.0\.1:5999\/companion.*make test-db/s,
     );
   });
 });
@@ -125,9 +125,9 @@ describe('resolveConnection with an injected environment', () => {
   });
 
   it("prefers the suite's own variable over DATABASE_URL", () => {
-    const env = { DATABASE_URL: APP_URL, X_TEST_DATABASE_URL: 'postgres://u:p@other:1/db2' };
+    const env = { DATABASE_URL: APP_URL, SUITE_OVERRIDE_URL: 'postgres://u:p@other:1/db2' };
 
-    expect(resolveConnection({ urlEnvVar: 'X_TEST_DATABASE_URL' }, env)?.host).toBe('other');
+    expect(resolveConnection({ urlEnvVar: 'SUITE_OVERRIDE_URL' }, env)?.host).toBe('other');
   });
 
   it('takes the first SET variable of a list, then DATABASE_URL', () => {
@@ -174,18 +174,18 @@ describe('dataSourceConnection', () => {
   });
 
   it('returns the URL when one was supplied, so query parameters survive', () => {
-    process.env.DS_TEST_DATABASE_URL = APP_URL;
+    process.env.DS_OVERRIDE_URL = APP_URL;
 
-    expect(dataSourceConnection({ urlEnvVar: 'DS_TEST_DATABASE_URL' })).toEqual({ url: APP_URL });
+    expect(dataSourceConnection({ urlEnvVar: 'DS_OVERRIDE_URL' })).toEqual({ url: APP_URL });
   });
 
   it('returns discrete fields when only DATABASE_PASSWORD is configured', () => {
     delete process.env.DATABASE_URL;
-    delete process.env.DS_TEST_DATABASE_URL;
+    delete process.env.DS_OVERRIDE_URL;
     process.env.DATABASE_PASSWORD = 'pw';
     process.env.DATABASE_HOST = 'somewhere';
 
-    expect(dataSourceConnection({ urlEnvVar: 'DS_TEST_DATABASE_URL' })).toMatchObject({
+    expect(dataSourceConnection({ urlEnvVar: 'DS_OVERRIDE_URL' })).toMatchObject({
       host: 'somewhere',
       password: 'pw',
     });
@@ -194,10 +194,10 @@ describe('dataSourceConnection', () => {
   it('throws, naming the variables, when no connection resolves — a suite that skipped its own guard', () => {
     delete process.env.DATABASE_URL;
     delete process.env.DATABASE_PASSWORD;
-    delete process.env.DS_TEST_DATABASE_URL;
+    delete process.env.DS_OVERRIDE_URL;
 
-    expect(() => dataSourceConnection({ urlEnvVar: 'DS_TEST_DATABASE_URL' })).toThrow(
-      /DS_TEST_DATABASE_URL or DATABASE_URL/,
+    expect(() => dataSourceConnection({ urlEnvVar: 'DS_OVERRIDE_URL' })).toThrow(
+      /DS_OVERRIDE_URL or DATABASE_URL/,
     );
   });
 });
