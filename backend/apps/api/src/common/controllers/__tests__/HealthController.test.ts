@@ -77,6 +77,13 @@ describe('HealthController', () => {
       expect(typeof res.body.portalAuthEnabled).toBe('boolean');
     });
 
+    it('advertises the API contract so an older app or server can say which side to update', async () => {
+      const res = await request(app.getHttpServer()).get('/health');
+
+      expect(res.body.apiVersion).toBe(1);
+      expect(res.body.minClientVersion).toBe(1);
+    });
+
     it('responds to repeated calls (liveness probe semantics)', async () => {
       // Sequential, not Promise.all: parallel supertest requests each spin up a
       // fresh ephemeral listener on the same un-listened server and race to bind,
@@ -110,7 +117,12 @@ describe('HealthController', () => {
       const res = await request(app.getHttpServer()).get('/health');
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ status: 'ok', portalAuthEnabled: expect.any(Boolean) });
+      expect(res.body).toEqual({
+        status: 'ok',
+        portalAuthEnabled: expect.any(Boolean),
+        apiVersion: 1,
+        minClientVersion: 1,
+      });
       expect(dataSource.query).not.toHaveBeenCalled();
     });
   });

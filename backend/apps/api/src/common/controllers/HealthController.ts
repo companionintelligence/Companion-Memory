@@ -5,6 +5,8 @@ import { DataSource } from 'typeorm';
 import config from '@ci/configuration';
 import { OllamaService } from '@ci/domains/llm';
 
+import { API_VERSION, MIN_CLIENT_VERSION } from '../apiContract';
+
 /**
  * How long any ONE dependency probe may take before it is reported as timed
  * out. A monitor polling this endpoint needs an answer about every dependency,
@@ -142,6 +144,11 @@ export class HealthController {
       // indistinguishable from an absent one. Surfacing it here turns a silent
       // total failure into something a client can check and report.
       portalAuthEnabled: config.auth.portal.enabled === true,
+      // What this process speaks, and the oldest app it still accepts. A client
+      // that does not see `apiVersion` treats the server as 0. The route stays
+      // `/api/health`: the number is a floor, not a second API to keep alive.
+      apiVersion: API_VERSION,
+      minClientVersion: MIN_CLIENT_VERSION,
     };
   }
 
