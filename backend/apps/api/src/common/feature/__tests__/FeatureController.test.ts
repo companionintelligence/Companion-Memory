@@ -1,3 +1,7 @@
+import { GUARDS_METADATA } from '@nestjs/common/constants';
+
+import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+
 import { FeatureController } from '../controllers/FeatureController';
 import { FeatureService, PUBLIC_FEATURES } from '../services/FeatureService';
 
@@ -11,6 +15,14 @@ describe('FeatureController', () => {
     for (const value of Object.values(global)) {
       expect(typeof value).toBe('boolean');
     }
+  });
+
+  it('accepts a session token or an API key on the full map', () => {
+    const guards = Reflect.getMetadata(GUARDS_METADATA, FeatureController.prototype.features) as
+      | unknown[]
+      | undefined;
+
+    expect(guards).toContain(JwtOrApiKeyAuthGuard);
   });
 
   it('keeps the full map behind the guarded route', async () => {

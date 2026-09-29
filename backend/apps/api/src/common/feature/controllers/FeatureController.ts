@@ -1,6 +1,6 @@
 import { Controller, Get, HttpCode, UseGuards } from '@nestjs/common';
 
-import { JwtAuthGuard } from '@ci/common/guards';
+import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 
 import { FeatureService } from '../services/FeatureService';
 
@@ -8,7 +8,12 @@ import { FeatureService } from '../services/FeatureService';
 export class FeatureController {
   constructor(private readonly featureService: FeatureService) {}
 
-  @UseGuards(JwtAuthGuard)
+  /**
+   * Any signed-in principal of this appliance. The phone holds an API key, not
+   * a desktop session, and this map is what decides whether Jobs, Tasks, and
+   * Profile exist. A session-only guard hid those pages on mobile.
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
   @Get('features')
   @HttpCode(200)
   async features() {
