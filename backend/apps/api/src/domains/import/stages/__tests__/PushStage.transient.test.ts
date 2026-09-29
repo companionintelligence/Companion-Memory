@@ -84,6 +84,34 @@ function messageRow(text: string): StagedItem {
   } as unknown as StagedItem;
 }
 
+/**
+ * A receipt that STATES a place (`Address`) and names no staged place entity, so
+ * the push must resolve one through `graph.ingest` — the lookup under test.
+ * Routed to `receipts` alone (`commerce.receipt`).
+ */
+function receiptRow(address: string): StagedItem {
+  nextId += 1;
+
+  return {
+    id: `55555555-5555-4555-8555-${String(nextId).padStart(12, '0')}`,
+    runId: RUN_ID,
+    userId: USER_ID,
+    dataSource: 'gmail',
+    classification: 'receipt',
+    contentHash: `hash-${nextId}`,
+    occurredAt: new Date('2024-05-01T12:00:00Z'),
+    timespanEnd: null,
+    latitude: null,
+    longitude: null,
+    filename: null,
+    mediaType: null,
+    originalLocation: null,
+    intermediateLocation: null,
+    metadata: { Merchant: 'Blue Bottle', Total: '4.50', Currency: 'USD', Address: address },
+    createdAt: new Date('2026-09-27T00:00:00Z'),
+  } as unknown as StagedItem;
+}
+
 function stagedEntity(i: number) {
   return {
     id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
@@ -310,13 +338,15 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
     error: jest.fn(),
   };
 
+  const receipts = { upsertFromExtraction: jest.fn(async (..._args: unknown[]): Promise<void> => undefined) };
+
   const stage = new PushStage(
     dataSource as never,
     communications as never,
     noop as never,
     noop as never,
     noop as never,
-    { upsertFromExtraction: jest.fn(async () => undefined) } as never,
+    receipts as never,
     noop as never,
     { createMany: jest.fn(async () => undefined) } as never,
     { upsertForSubjects: jest.fn(async () => 0) } as never,
@@ -341,6 +371,7 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
     stage,
     db,
     graph,
+    receipts,
     callSizes,
     updates,
     itemUpdates,
@@ -869,6 +900,161 @@ describe('the entity lane', () => {
     // No wait: nothing about that refusal would change in a minute.
     expect(ingested).toHaveLength(1);
     expect(clock.slept).toEqual([]);
+  });
+});
+
+describe('the receipts lane place lookup', () => {
+  // `receiptPlacesFor` asks the graph for the place a receipt states. Ingest
+  // catches a batch-level failure — a crash included — and reports it per
+  // entity as `entity <key>: <message>`; the lookup used to read only the
+  // resolved entities. The receipt write right behind it then met the
+  // recovering server (57P03), which reads as "not ready", so the WHOLE group
+  // was waited for and resent — the place lookup with it, crashing the database
+  // again, 2-6 times per stage attempt until the 180s budget was spent.
+
+  /** Whatever the receipt write was handed, by call. */
+  const written = (receipts: { upsertFromExtraction: jest.Mock }) =>
+    receipts.upsertFromExtraction.mock.calls.map(([, input]) => input as { placeEntityId?: string });
+
+  it('crashes the database ONCE and fails the stage when ingest reports the crash as text', async () => {
+    const rows = [receiptRow('1 Infinite Loop, Cupertino')];
+    const { stage, db, receipts, ingested, stagedItemUpdates, clock } = makeStage(rows, {
+      // The place upsert is what takes the server down — on EVERY attempt.
+      ingest: (keys, _call, server) => {
+        server.crash(60_000);
+
+        return {
+          entities: [],
+          errors: keys.map((key) => `entity ${key}: Connection terminated unexpectedly`),
+        };
+      },
+    });
+
+    // The very next statement the old code sent: the recovering server.
+    receipts.upsertFromExtraction.mockImplementation(async () => {
+      db.gate();
+    });
+
+    const failure = (await stage.run(context).catch((err: unknown) => err)) as DatabaseCrashedDuringPushError;
+
+    expect(failure).toBeInstanceOf(DatabaseCrashedDuringPushError);
+    expect(failure.message).toContain('while this push was resolving 1 receipt place(s)');
+    expect(failure.message).toContain('(last error: Connection terminated unexpectedly)');
+    // ONE crash: the lookup was not resent, nor the group it belongs to, and
+    // nothing was sent into the recovering server after it.
+    expect(db.crashes()).toBe(1);
+    expect(ingested).toHaveLength(1);
+    expect(receipts.upsertFromExtraction).not.toHaveBeenCalled();
+    expect(clock.slept).toEqual([]);
+    // Every row still `pending`: nothing in the ledger was touched.
+    expect(stagedItemUpdates()).toEqual([]);
+  });
+
+  it('does the same on the row-by-row pass, after a batch refused for a reason of its own', async () => {
+    // The batch is REJECTED (a real refusal, so it degrades to single rows) and
+    // the single row's own lookup is what crashes the server.
+    const rows = [receiptRow('1 Infinite Loop, Cupertino')];
+    const { stage, db, receipts, ingested, stagedItemUpdates, clock } = makeStage(rows, {
+      ingest: (keys, call, server) => {
+        if (call === 1) {
+          return { entities: [], errors: [] };
+        }
+
+        server.crash(60_000);
+
+        return {
+          entities: [],
+          errors: keys.map((key) => `entity ${key}: Connection terminated unexpectedly`),
+        };
+      },
+    });
+
+    receipts.upsertFromExtraction.mockImplementation(async () => {
+      db.gate();
+
+      // The batch call: refused for its own reasons.
+      if (receipts.upsertFromExtraction.mock.calls.length === 1) {
+        throw notNull();
+      }
+    });
+
+    const failure = await stage.run(context).catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(DatabaseCrashedDuringPushError);
+    expect((failure as Error).message).toContain(`while this push was resolving 1 receipt place(s)`);
+    expect(db.crashes()).toBe(1);
+    // Once in the batch, once alone — and no third time after the crash.
+    expect(ingested).toHaveLength(2);
+    expect(receipts.upsertFromExtraction).toHaveBeenCalledTimes(1);
+    expect(clock.slept).toEqual([]);
+    expect(stagedItemUpdates()).toEqual([]);
+  });
+
+  it('waits out a place lookup the database was not ready for, and writes the receipt WITH its place', async () => {
+    const rows = [receiptRow('1 Infinite Loop, Cupertino')];
+    const { stage, receipts, ingested, itemUpdates, clock } = makeStage(rows, {
+      ingest: (keys, call) =>
+        call === 1
+          ? {
+              entities: [],
+              errors: keys.map((key) => `entity ${key}: the database system is in recovery mode`),
+            }
+          : { entities: keys.map((key) => ({ key, entityId: 'place-entity-1' })), errors: [] },
+    });
+
+    const outcome = await stage.run(context);
+
+    // Refused once, waited for, resolved: the receipt is NOT written without a
+    // place because the first ask met a server that was not up.
+    expect(ingested).toHaveLength(2);
+    expect(clock.slept).toEqual([1_000]);
+    expect(written(receipts)).toEqual([expect.objectContaining({ placeEntityId: 'place-entity-1' })]);
+    expect(itemUpdates('failed')).toEqual([]);
+    expect(itemUpdates('pushed')[0].params[0]).toEqual([rows[0].id]);
+    expect(outcome.partial).toBe(false);
+    expect(outcome.detail).toMatchObject({ pushed: 1, failed: 0 });
+  });
+
+  it('fails the stage, rows pending, when the place lookup keeps meeting a server that is not ready', async () => {
+    const { stage, receipts, itemUpdates, stagedItemUpdates, clock } = makeStage(
+      [receiptRow('1 Infinite Loop, Cupertino')],
+      {
+        ingest: (keys) => ({
+          entities: [],
+          errors: keys.map((key) => `entity ${key}: the database system is not yet accepting connections`),
+        }),
+      },
+    );
+
+    const failure = await stage.run(context).catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(DatabaseUnavailableError);
+    expect(receipts.upsertFromExtraction).not.toHaveBeenCalled();
+    expect(itemUpdates('failed')).toEqual([]);
+    expect(stagedItemUpdates()).toEqual([]);
+    expect(totalSlept(clock)).toBeLessThanOrEqual(180_000);
+  });
+
+  it('still writes the receipt WITHOUT a place for a refusal about the place itself', async () => {
+    const rows = [receiptRow('1 Infinite Loop, Cupertino')];
+    const { stage, receipts, ingested, itemUpdates, clock } = makeStage(rows, {
+      ingest: (keys) => ({
+        entities: [],
+        errors: keys.map((key) => `entity ${key}: value too long for type character varying(255)`),
+      }),
+    });
+
+    const outcome = await stage.run(context);
+
+    // A place that will not resolve costs the receipt its place, never its
+    // import — and nothing about that refusal would change in a minute.
+    expect(ingested).toHaveLength(1);
+    expect(clock.slept).toEqual([]);
+    expect(written(receipts)).toHaveLength(1);
+    expect(written(receipts)[0].placeEntityId).toBeUndefined();
+    expect(itemUpdates('failed')).toEqual([]);
+    expect(itemUpdates('pushed')[0].params[0]).toEqual([rows[0].id]);
+    expect(outcome.detail).toMatchObject({ pushed: 1, failed: 0 });
   });
 });
 

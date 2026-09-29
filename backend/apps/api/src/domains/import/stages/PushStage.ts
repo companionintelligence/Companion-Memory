@@ -1523,7 +1523,17 @@ export class PushStage implements ImportStageRunner {
    * one that later does costs nothing more to wire).
    *
    * A failure to resolve is not a failure to import: the receipt is written
-   * without a place, which is what it had before.
+   * without a place, which is what it had before — for a refusal about the
+   * place itself, and never for the database being away. `ingest` catches a
+   * batch-level failure and reports it per entity as text (`entity <key>:
+   * <message>`), so a crash met by this lookup arrives as data, not as a throw,
+   * and reading only `entities` would carry on to `upsertFromExtraction`, meet
+   * the recovering server there (57P03, "not ready"), wait, and resend the
+   * whole group — this lookup included — crashing the database again for the
+   * whole retry budget. So the errors are read the way the entity lane reads
+   * its own: a crash fails the stage without a resend, a server that was not
+   * ready is waited out and the group sent again
+   * ({@link throwIfIngestFoundDatabaseAway}).
    */
   private async receiptPlacesFor(
     ctx: { userId: string; importRunId?: string },
@@ -1580,6 +1590,15 @@ export class PushStage implements ImportStageRunner {
         })),
         relationships: [],
       },
+    );
+
+    // Before anything is read from the result: a batch that met the database
+    // going away resolved nothing, and carrying on would send the very next
+    // statement (the receipt write) into a server that is still recovering.
+    throwIfIngestFoundDatabaseAway(
+      `resolving ${pending.size} receipt place(s)`,
+      result.errors,
+      new Set(pending.keys()),
     );
 
     for (const mapping of result.entities) {
@@ -3098,6 +3117,60 @@ export function entityErrorMessagesByKey(errors: readonly string[]): Map<string,
   }
 
   return byKey;
+}
+
+/**
+ * Raise the database verdict that `GraphIngestService.ingest` reported as TEXT.
+ *
+ * `ingest` catches a batch-level failure — including the database crashing
+ * under it — and returns it as `entity <key>: <message>` in `errors` rather
+ * than throwing, so the SQLSTATE is gone and only the wording is left. A
+ * caller that inspects `entities` and ignores `errors` treats a crash as "this
+ * name did not resolve" and carries on. So a caller inside {@link
+ * PushStage.retrying} that wants a refusal to be fail-soft calls this first:
+ *
+ *  - a message that reads as a CRASH (`Connection terminated unexpectedly`,
+ *    57P01/57P02 wording, a reset socket…) throws {@link DatabaseCrashedError},
+ *    which `retrying` turns into a {@link DatabaseCrashedDuringPushError} — the
+ *    operation is never resent, whatever else is in the list;
+ *  - one that reads as NOT READY (recovery mode, too many clients, a refused
+ *    socket) throws {@link DatabaseNotReadyError}, so `retrying` waits and
+ *    sends the operation again;
+ *  - anything else — a refusal about the entity itself — returns, and the
+ *    caller keeps its own policy for it.
+ *
+ * `keys` are the entity keys the call sent, and the MESSAGE half is what is
+ * classified: a key is a name or a handle, which is data, and a venue named
+ * after a not-ready message must not turn a plain refusal into an outage (see
+ * {@link entityErrorMessage}).
+ */
+export function throwIfIngestFoundDatabaseAway(
+  operation: string,
+  errors: readonly string[],
+  keys: ReadonlySet<string>,
+): void {
+  let notReady: string | null = null;
+
+  for (const error of errors) {
+    // Classified whole, bounded only for what is carried out: the wording that
+    // names the crash can sit anywhere in a long message.
+    const message = entityErrorMessage(error, keys);
+
+    switch (classifyDatabaseMessage(message)) {
+      case 'crashed':
+        // Checked across the whole list before any not-ready verdict is
+        // raised: a batch that met both was in flight for the crash.
+        throw new DatabaseCrashedError(operation, new Error(boundedReason(message)));
+      case 'not_ready':
+        notReady ??= boundedReason(message);
+        break;
+      default:
+    }
+  }
+
+  if (notReady != null) {
+    throw new DatabaseNotReadyError(notReady);
+  }
 }
 
 /**

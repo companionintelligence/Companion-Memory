@@ -334,9 +334,11 @@ EPIPE, an ETIMEDOUT on an open socket, pg's bare "Connection terminated
 unexpectedly" — which pg also raises for a socket closed during connect, and
 which is a crash because nothing on the error tells the two apart) is **never
 resent in-process and never written off against a row**. Wherever it lands — a
-destination write, the entity lane (read from the message half of ingest's
-`entity <key>: <message>` text), the shared-content edge write, a read, a
-ledger write — the stage fails at once with `DatabaseCrashedDuringPushError`:
+destination write, the entity lane and the receipt place lookup (both read from
+the message half of ingest's `entity <key>: <message>` text — ingest catches a
+batch-level failure and returns it as data, so a crash there is not a throw), the
+shared-content edge write, a read, a ledger write — the stage fails at once with
+`DatabaseCrashedDuringPushError`:
 
 ```text
 the database crashed while this push was writing 500 communications record(s);
@@ -357,6 +359,20 @@ server four times per poison row, never isolated the row when crash recovery
 took more than about a minute, crashed it dozens of times and quarantined good
 rows when *every* write crashed the server, and left the entity lane resending
 a crashing batch ten times.
+
+**Known follow-up, pre-existing and not fixed here: `GraphIngestService.indexIdentifiers`
+swallows any error, a crash included.** After the entities are upserted, ingest indexes
+their email/phone/name identifiers in one more statement that only logs (`Failed to
+index entity identifiers`) and returns, so `ingest` still reports every entity as
+resolved and the push marks the staged row `pushed`. A crash in that statement is
+therefore not a stage failure and the push carries on — so it breaks the "one crash per
+stage attempt" promise above, and if the identifier insert is what takes the server
+down, every batch does it again. The rows' identifiers are silently missing rather
+than the run reporting anything; `EntityIdentifierBackfillService` (maintenance) can
+rebuild the index for Person rows from their `properties`. Making the swallow raise
+would have to distinguish a crash from a refusal there without failing an ingest whose
+entities did land — the same message-half reading the two lanes above use is the
+starting point.
 
 **The sweep re-enqueues waiting stages, and only `policy: 'short'` stops it.**
 `resumeInterrupted` judges staleness from `import_stages.updated_at`, which

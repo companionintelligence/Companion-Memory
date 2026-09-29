@@ -1,6 +1,13 @@
+import {
+  DatabaseCrashedError,
+  DatabaseNotReadyError,
+  isDatabaseCrashError,
+  isDatabaseNotReadyError,
+} from '@ci/common/persistence';
+
 import type { StagedItem } from '../../entities/StagedItemEntity';
 import { toCanonical, type CanonicalRecord } from '../../push/canonical';
-import { PushStage } from '../PushStage';
+import { PushStage, throwIfIngestFoundDatabaseAway } from '../PushStage';
 
 /*
  * WHERE an imported receipt happened.
@@ -28,6 +35,19 @@ function graphResolving(byKey: Record<string, string>): IngestMock {
   return jest.fn(async (_ctx: { userId: string }, input: IngestInput) => ({
     entities: input.entities.flatMap((e) => (byKey[e.key] ? [{ key: e.key, entityId: byKey[e.key] }] : [])),
     errors: [],
+  }));
+}
+
+/**
+ * A graph double that resolves nothing and reports `message` against every
+ * entity it was given — `GraphIngestService.upsertEntities`' own shape for a
+ * batch-level failure: it catches, and returns `entity <key>: <message>` as
+ * data rather than throwing.
+ */
+function graphReporting(message: string): IngestMock {
+  return jest.fn(async (_ctx: { userId: string }, input: IngestInput) => ({
+    entities: [],
+    errors: input.entities.map((e) => `entity ${e.key}: ${message}`),
   }));
 }
 
@@ -160,5 +180,134 @@ describe('PushStage receipt places', () => {
     ]);
 
     expect(links).toEqual([{}]);
+  });
+
+  describe('a database that was away, reported by ingest as text', () => {
+    // `GraphIngestService` catches a batch-level failure — a crash included —
+    // and returns it per entity as `entity <key>: <message>`. Reading only
+    // `result.entities` turned a crash into "no place", and the receipt write
+    // that followed met the recovering server and got the whole group resent.
+    const stated = [
+      {
+        record: recordFor({ Merchant: 'Apple', Address: '1 Infinite Loop, Cupertino' }),
+        participants: new Map(),
+      },
+    ];
+
+    it.each([
+      ['pg with no code at all', 'Connection terminated unexpectedly'],
+      ['57P01 admin shutdown', 'terminating connection due to administrator command'],
+      ['57P02 crash shutdown', 'terminating connection because of crash of another server process'],
+      ['a reset socket', 'read ECONNRESET'],
+      ['a broken pipe', 'write EPIPE'],
+    ])('raises a crash after %s, so the group is never resent', async (_label, message) => {
+      const ingest = graphReporting(message);
+      const failure = await stageWith(ingest)
+        .receiptPlacesFor({ userId: 'u1' }, stated)
+        .catch((err: unknown) => err);
+
+      expect(failure).toBeInstanceOf(DatabaseCrashedError);
+      expect(isDatabaseCrashError(failure)).toBe(true);
+      expect((failure as DatabaseCrashedError).operation).toBe('resolving 1 receipt place(s)');
+      // The MESSAGE half is what is carried: the key is data, not a symptom.
+      expect(((failure as DatabaseCrashedError).cause as Error).message).toBe(message);
+      expect(ingest).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['recovery mode', 'the database system is in recovery mode'],
+      ['not yet accepting connections', 'the database system is not yet accepting connections'],
+      ['too many clients', 'sorry, too many clients already'],
+      ['a refused socket', 'connect ECONNREFUSED 172.18.0.2:5432'],
+      ['a pool connect timeout', 'timeout exceeded when trying to connect'],
+    ])('raises not-ready after %s, so the group is waited out and sent again', async (_label, message) => {
+      const failure = await stageWith(graphReporting(message))
+        .receiptPlacesFor({ userId: 'u1' }, stated)
+        .catch((err: unknown) => err);
+
+      expect(failure).toBeInstanceOf(DatabaseNotReadyError);
+      expect(isDatabaseNotReadyError(failure)).toBe(true);
+      expect((failure as Error).message).toBe(message);
+    });
+
+    it('raises the crash when one batch reported both moments', async () => {
+      const ingest = jest.fn(async (_ctx: { userId: string }, input: IngestInput) => ({
+        entities: [],
+        errors: [
+          `entity ${input.entities[0].key}: the database system is in recovery mode`,
+          `entity ${input.entities[1].key}: Connection terminated unexpectedly`,
+        ],
+      })) as IngestMock;
+
+      const failure = await stageWith(ingest)
+        .receiptPlacesFor({ userId: 'u1' }, [
+          { record: recordFor({ Merchant: 'A', Place: 'North Shop' }), participants: new Map() },
+          { record: recordFor({ Merchant: 'B', Place: 'South Shop' }), participants: new Map() },
+        ])
+        .catch((err: unknown) => err);
+
+      expect(failure).toBeInstanceOf(DatabaseCrashedError);
+    });
+
+    it('raises even when some places did resolve before the server went away', async () => {
+      const ingest = jest.fn(async (_ctx: { userId: string }, input: IngestInput) => ({
+        entities: [{ key: input.entities[0].key, entityId: 'entity-place-9' }],
+        errors: [`entity ${input.entities[1].key}: Connection terminated unexpectedly`],
+      })) as IngestMock;
+
+      await expect(
+        stageWith(ingest).receiptPlacesFor({ userId: 'u1' }, [
+          { record: recordFor({ Merchant: 'A', Place: 'North Shop' }), participants: new Map() },
+          { record: recordFor({ Merchant: 'B', Place: 'South Shop' }), participants: new Map() },
+        ]),
+      ).rejects.toBeInstanceOf(DatabaseCrashedError);
+    });
+
+    it('stays fail-soft for a refusal about the place itself: the receipt gets no place', async () => {
+      const ingest = graphReporting('value too long for type character varying(255)');
+      const links = await stageWith(ingest).receiptPlacesFor({ userId: 'u1' }, stated);
+
+      expect(links).toEqual([{}]);
+      expect(ingest).toHaveBeenCalledTimes(1);
+    });
+
+    it('stays fail-soft for an unresolved id, which is not the database at all', async () => {
+      const links = await stageWith(
+        graphReporting('could not resolve entity id after upsert'),
+      ).receiptPlacesFor({ userId: 'u1' }, stated);
+
+      expect(links).toEqual([{}]);
+    });
+
+    it('reads only the message half, never the key, when deciding the database was away', async () => {
+      // The key is the place's own name — data. A venue whose name is a
+      // not-ready message must not turn a plain refusal into an outage.
+      const name = 'the database system is in recovery mode diner';
+      const ingest = graphReporting('value too long for type character varying(255)');
+      const links = await stageWith(ingest).receiptPlacesFor({ userId: 'u1' }, [
+        { record: recordFor({ Merchant: 'Diner', Place: name }), participants: new Map() },
+      ]);
+
+      expect(ingest.mock.calls[0]?.[1].entities[0].key).toBe(`place:${name}`);
+      expect(links).toEqual([{}]);
+    });
+
+    it('splits at the right `: ` when the place name contains one', async () => {
+      const name = 'Suite 5: Main St';
+      const ingest = graphReporting('Connection terminated unexpectedly');
+
+      await expect(
+        stageWith(ingest).receiptPlacesFor({ userId: 'u1' }, [
+          { record: recordFor({ Merchant: 'Shop', Address: name }), participants: new Map() },
+        ]),
+      ).rejects.toBeInstanceOf(DatabaseCrashedError);
+      expect(ingest.mock.calls[0]?.[1].entities[0].key).toBe('place:suite 5: main st');
+    });
+
+    it('is quiet for a clean ingest', () => {
+      expect(() =>
+        throwIfIngestFoundDatabaseAway('resolving 1 receipt place(s)', [], new Set(['place:x'])),
+      ).not.toThrow();
+    });
   });
 });

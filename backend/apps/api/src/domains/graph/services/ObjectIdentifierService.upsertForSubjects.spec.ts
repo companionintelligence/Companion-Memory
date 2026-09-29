@@ -1,3 +1,5 @@
+import { classifyDatabaseError } from '@ci/common/persistence';
+
 import { ObjectIdentifierService } from './ObjectIdentifierService';
 
 const OWNER = '00000000-0000-0000-0000-0000000000aa';
@@ -235,5 +237,71 @@ describe('ObjectIdentifierService.upsertForSubjects', () => {
     );
     // Both chunks were attempted despite the first failing.
     expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  describe('when several chunks fail, the failure named is the one the import push must act on', () => {
+    // The push tells "wait and resend" (not ready), "stop, never resend" (a
+    // crash with the statement in flight) and "a refusal about the data" apart
+    // from the error alone. Naming the FIRST failure let an early refusal hide
+    // the crash a later chunk met, and the batch was degraded to per-row and
+    // resent — into the same crash.
+    const failing = (...failures: Error[]) => {
+      const insertBuilder = makeInsertBuilder();
+      const execute = jest.fn();
+
+      for (const failure of failures) {
+        execute.mockRejectedValueOnce(failure);
+      }
+
+      insertBuilder.builder.execute = execute;
+
+      const { service } = makeService({ insertBuilder, columnsPerRow: 20000 }); // 3 rows/chunk
+      const entries = Array.from({ length: failures.length * 3 }, (_, i) => ({
+        subjectType: 'object_instance' as const,
+        subjectId: SUBJECT_A,
+        identifiers: [{ namespace: 'serial' as const, value: `SN-${3000 + i}` }],
+      }));
+
+      return service.upsertForSubjects(OWNER, entries).then(
+        () => {
+          throw new Error('expected upsertForSubjects to reject');
+        },
+        (err: unknown) => err as Error,
+      );
+    };
+
+    const refusal = () => new Error('deadlock detected');
+    const notReady = () => new Error('the database system is in recovery mode');
+    const crash = () => new Error('Connection terminated unexpectedly');
+
+    it('a crash in a later chunk is not hidden by a refusal in an earlier one', async () => {
+      const failure = await failing(refusal(), crash());
+
+      expect(classifyDatabaseError(failure)).toBe('crashed');
+      expect(failure.message).toMatch(/2 object-identifier insert chunk\(s\) failed.*Connection terminated/);
+    });
+
+    it('a crash outranks a not-ready failure, which outranks a refusal', async () => {
+      expect(classifyDatabaseError(await failing(refusal(), notReady()))).toBe('not_ready');
+      expect(classifyDatabaseError(await failing(notReady(), crash(), refusal()))).toBe('crashed');
+    });
+
+    it('keeps the SQLSTATE of a crash whose wording says nothing about one', async () => {
+      // 08006 (connection_failure) carries no phrase the message classifier
+      // knows; only the code says the session ended under the statement.
+      const failure = await failing(
+        refusal(),
+        Object.assign(new Error('connection failure'), { code: '08006' }),
+      );
+
+      expect(classifyDatabaseError(failure)).toBe('crashed');
+    });
+
+    it('leaves refusals alone: still no verdict, and the first refusal is what is named', async () => {
+      const failure = await failing(new Error('deadlock detected'), new Error('value too long for type'));
+
+      expect(classifyDatabaseError(failure)).toBeNull();
+      expect(failure.message).toMatch(/2 object-identifier insert chunk\(s\) failed.*deadlock detected/);
+    });
   });
 });

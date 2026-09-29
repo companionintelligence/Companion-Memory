@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { type EntityManager, In, Repository } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
-import { computeChunkSize } from '@ci/common/persistence';
+import { computeChunkSize, isDatabaseCrashError, isDatabaseNotReadyError } from '@ci/common/persistence';
 
 import { ObjectIdentifierEntity, type ObjectIdentifierSubjectType } from '../entities/ObjectIdentifierEntity';
 import {
@@ -86,9 +86,15 @@ export class ObjectIdentifierService {
    * carrying them, which also keeps a multi-row INSERT from tripping the unique
    * index against itself.
    *
-   * A failed chunk is recorded and the remaining chunks still run, then the
-   * first failure is rethrown so callers that treat identifier indexing as
-   * non-fatal still see it.
+   * A failed chunk is recorded and the remaining chunks still run, then ONE
+   * failure is rethrown so callers that treat identifier indexing as non-fatal
+   * still see it. Which one matters: the import push decides between "wait and
+   * resend" (the database was not ready), "stop, never resend" (it crashed with
+   * the statement in flight) and "that is a refusal about the data" from the
+   * error alone. So a crash outranks a not-ready failure, which outranks a
+   * refusal — a refusal in an early chunk must not hide the crash a later one
+   * met — and the failure named is also the error's `cause`, keeping the
+   * SQLSTATE the message alone would lose.
    *
    * Returns the number of rows actually inserted.
    */
@@ -155,7 +161,7 @@ export class ObjectIdentifierService {
 
     const chunkSize = computeChunkSize(this.repository.metadata.columns.length);
     let inserted = 0;
-    const failures: string[] = [];
+    const failures: unknown[] = [];
     const repository = manager ? manager.withRepository(this.repository) : this.repository;
 
     for (let offset = 0; offset < rows.length; offset += chunkSize) {
@@ -170,13 +176,19 @@ export class ObjectIdentifierService {
 
         inserted += result.identifiers.length;
       } catch (err) {
-        failures.push((err as Error).message);
+        failures.push(err);
       }
     }
 
     if (failures.length > 0) {
+      const decisive =
+        failures.find(isDatabaseCrashError) ?? failures.find(isDatabaseNotReadyError) ?? failures[0];
+
       throw new Error(
-        `${failures.length} object-identifier insert chunk(s) failed (${inserted} rows inserted): ${failures[0]}`,
+        `${failures.length} object-identifier insert chunk(s) failed (${inserted} rows inserted): ${
+          (decisive as Error).message
+        }`,
+        { cause: decisive },
       );
     }
 
