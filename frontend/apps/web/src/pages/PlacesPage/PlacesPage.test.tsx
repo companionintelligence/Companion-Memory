@@ -522,9 +522,10 @@ describe('PlacesPage', () => {
       const nameInput = await screen.findByPlaceholderText('Name this place');
       expect(nameInput).toHaveValue('');
       // The coordinates are the only handle the user has on an unnamed cluster.
+      // The supporting events open from the map pin, not a list under the name.
       expect(screen.getByText(/near 34\.0769, -118\.4744/)).toBeInTheDocument();
-      expect(screen.getByText(/Morning coffee/)).toBeInTheDocument();
-      expect(screen.getByText(/Evening walk/)).toBeInTheDocument();
+      expect(screen.queryByText(/Morning coffee/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Evening walk/)).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
 
       fireEvent.change(nameInput, { target: { value: '   ' } });
@@ -556,7 +557,11 @@ describe('PlacesPage', () => {
 
       const locate = await screen.findByRole('button', { name: 'Locate' });
       expect(locate).toHaveAttribute('aria-pressed', 'false');
-      expect(document.querySelector('.leaflet-container')).toBeNull();
+      // The candidate is already a pin, so the map is up before Locate highlights it.
+      await waitFor(() => {
+        expect(document.querySelector('.leaflet-container')).not.toBeNull();
+      });
+      expect(screen.queryByText('Unknown place · 12 events')).not.toBeInTheDocument();
 
       fireEvent.click(locate);
 
@@ -572,6 +577,35 @@ describe('PlacesPage', () => {
       await waitFor(() => {
         expect(screen.queryByText('Unknown place · 12 events')).not.toBeInTheDocument();
       });
+    });
+
+    it('opens the place details from an unknown place pin when that cluster is already a place', async () => {
+      navigate.mockClear();
+      renderWithProviders(<PlacesPage />, {
+        mocks: [
+          noDuplicatesMock(),
+          emptyPlacesMock(),
+          knownPlacesMock({
+            knownPlaceCandidates: [
+              candidate({
+                locationId: PLACE_UUID,
+                label: 'Unknown place',
+                lat: 34.0769,
+                lng: -118.4744,
+              }),
+            ],
+          }),
+        ],
+      });
+
+      await screen.findByPlaceholderText('Name this place');
+      await waitFor(() => {
+        expect(document.querySelector('.leaflet-marker-icon')).not.toBeNull();
+      });
+
+      fireEvent.click(document.querySelector('.leaflet-marker-icon') as Element);
+
+      expect(navigate).toHaveBeenCalledWith(`/memory/places/${PLACE_UUID}`);
     });
 
     it('shows a real error and keeps the candidate listed when the confirm mutation fails', async () => {

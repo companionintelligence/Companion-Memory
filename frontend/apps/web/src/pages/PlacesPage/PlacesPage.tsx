@@ -224,6 +224,8 @@ export interface LocatedCandidate {
   lng: number;
   label: string;
   eventCount: number;
+  /** Place entity id when this cluster is already a place. Null for a coordinate-only cluster. */
+  locationId: string | null;
 }
 
 /** Close enough to read street-level context around one cluster. */
@@ -293,23 +295,6 @@ function KnownPlaceCandidateRow({
           onChange={(event) => setLabel(event.target.value)}
           disabled={saving}
         />
-        {candidate.sampleEvents.length > 0 && (
-          <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-            {candidate.sampleEvents.map((event) => {
-              const when = formatDate(event.startTime);
-
-              return (
-                <li key={event.id} className="truncate">
-                  {event.title}
-                  {when ? ` · ${when}` : ''}
-                </li>
-              );
-            })}
-            {candidate.eventCount > candidate.sampleEvents.length && (
-              <li>and {candidate.eventCount - candidate.sampleEvents.length} more</li>
-            )}
-          </ul>
-        )}
       </div>
       <select
         aria-label="Kind"
@@ -349,9 +334,12 @@ function KnownPlaceCandidateRow({
 function KnownPlacesCard({
   located,
   onLocate,
+  onCandidates,
 }: {
   located: LocatedCandidate | null;
   onLocate: (candidate: LocatedCandidate | null) => void;
+  /** The candidates on screen, so the map can open the same details a named place does. */
+  onCandidates: (candidates: LocatedCandidate[]) => void;
 }) {
   const { data, refetch } = useQuery(GET_KNOWN_PLACES);
   const [confirmKnownPlace, { loading }] = useMutation(CONFIRM_KNOWN_PLACE);
@@ -390,6 +378,24 @@ function KnownPlacesCard({
       }),
     [data, knownPlaces, confirmedLocationIds],
   );
+
+  const pins = useMemo(
+    () =>
+      candidates.slice(0, 6).map((candidate) => ({
+        lat: candidate.lat,
+        lng: candidate.lng,
+        label: candidate.label,
+        eventCount: candidate.eventCount,
+        locationId: candidate.locationId ?? null,
+      })),
+    [candidates],
+  );
+
+  useEffect(() => {
+    onCandidates(pins);
+
+    return () => onCandidates([]);
+  }, [pins, onCandidates]);
 
   if (knownPlaces.length === 0 && candidates.length === 0) {
     return null;
@@ -466,7 +472,13 @@ function KnownPlacesCard({
               onLocate(
                 sameSpot(located, target)
                   ? null
-                  : { lat: target.lat, lng: target.lng, label: target.label, eventCount: target.eventCount },
+                  : {
+                      lat: target.lat,
+                      lng: target.lng,
+                      label: target.label,
+                      eventCount: target.eventCount,
+                      locationId: target.locationId ?? null,
+                    },
               )
             }
             onSave={(target, draft) => void confirm(target, draft)}
@@ -488,6 +500,7 @@ export function PlacesPage() {
   const [searchParams] = useSearchParams();
   const searchQuery = searchParams.get('search') ?? '';
   const [locatedCandidate, setLocatedCandidate] = useState<LocatedCandidate | null>(null);
+  const [candidatePins, setCandidatePins] = useState<LocatedCandidate[]>([]);
   const mapRef = useRef<HTMLDivElement>(null);
 
   // Bring the map on screen when a pin is dropped: on narrow layouts it sits
@@ -513,6 +526,16 @@ export function PlacesPage() {
   const { search: queryString } = useLocation();
   const openPlace = useCallback(
     (globalId: string) => navigate(`/memory/places/${GlobalUID.parse('place', globalId)}${queryString}`),
+    [navigate, queryString],
+  );
+  // A known-place candidate's locationId is already the raw place uuid the
+  // route expects. Named-place markers pass a global id through openPlace.
+  const openCandidatePlace = useCallback(
+    (locationId: string | null) => {
+      if (locationId) {
+        navigate(`/memory/places/${locationId}${queryString}`);
+      }
+    },
     [navigate, queryString],
   );
   const closePlace = useCallback(() => navigate(`/memory/places${queryString}`), [navigate, queryString]);
@@ -576,6 +599,27 @@ export function PlacesPage() {
     return [lat, lng];
   }, [locatedPlaces]);
 
+  const mappedPlaceIds = useMemo(() => {
+    const ids = new Set<string>();
+
+    for (const place of locatedPlaces.slice(0, MAX_MAP_MARKERS)) {
+      try {
+        ids.add(GlobalUID.parse('place', place.id));
+      } catch {
+        // A marker that is not a place global id stays on the map either way.
+      }
+    }
+
+    return ids;
+  }, [locatedPlaces]);
+
+  // Candidates already drawn as named-place markers open that marker. The rest
+  // get their own pin so an unknown place can be opened the same way.
+  const extraCandidatePins = useMemo(
+    () => candidatePins.filter((pin) => pin.locationId == null || !mappedPlaceIds.has(pin.locationId)),
+    [candidatePins, mappedPlaceIds],
+  );
+
   let content: ReactNode | null = null;
 
   if (loading && view == null) {
@@ -610,12 +654,16 @@ export function PlacesPage() {
                 <div className="text-sm text-muted-foreground">{pagination.totalCount} places</div>
               </div>
 
-              <KnownPlacesCard located={locatedCandidate} onLocate={setLocatedCandidate} />
+              <KnownPlacesCard
+                located={locatedCandidate}
+                onLocate={setLocatedCandidate}
+                onCandidates={setCandidatePins}
+              />
 
               <PlaceDuplicatesCard onMerged={handleChanged} />
 
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-                {(locatedPlaces.length > 0 || locatedCandidate != null) && (
+                {(locatedPlaces.length > 0 || locatedCandidate != null || extraCandidatePins.length > 0) && (
                   <div ref={mapRef} className="flex-1 lg:sticky lg:top-4">
                     <div className="h-72 overflow-hidden rounded-md border lg:h-[calc(100vh-14rem)] lg:min-h-72">
                       <Map center={mapCenter} zoom={locatedPlaces.length === 1 ? 13 : 3}>
@@ -626,12 +674,21 @@ export function PlacesPage() {
                             variant="default"
                             position={[locatedCandidate.lat, locatedCandidate.lng]}
                             zIndexOffset={1000}
+                            onClick={() => openCandidatePlace(locatedCandidate.locationId)}
                           >
                             <Tooltip permanent direction="top" offset={[0, -56]}>
                               {locatedCandidate.label} · {locatedCandidate.eventCount} events
                             </Tooltip>
                           </Map.Marker>
                         )}
+                        {extraCandidatePins.map((pin) => (
+                          <Map.Marker
+                            key={`candidate:${pin.locationId ?? ''}:${pin.lat}:${pin.lng}`}
+                            variant="place"
+                            position={[pin.lat, pin.lng]}
+                            onClick={() => openCandidatePlace(pin.locationId)}
+                          />
+                        ))}
                         {locatedPlaces.slice(0, MAX_MAP_MARKERS).map((place) => (
                           <Map.Marker
                             key={place.id}
