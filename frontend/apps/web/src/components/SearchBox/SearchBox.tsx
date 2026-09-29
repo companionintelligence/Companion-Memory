@@ -672,11 +672,13 @@ function SearchBox(
       );
     } else if (results.length > 0) {
       body = (
-        <div className="flex max-h-[60vh]">
+        <div className="flex max-h-[60vh] min-w-0 overflow-x-hidden">
           {selectedResult && selectedResult.preview && (
-            <div className="flex-1 p-4 overflow-hidden">{selectedResult.preview}</div>
+            <div className="min-w-0 flex-1 overflow-hidden p-4">{selectedResult.preview}</div>
           )}
-          <ScrollArea className="flex-1/2" ref={scrollAreaRef}>
+          {/* collapseX: the scroll viewport's inner table otherwise grows to the
+              row's min-content width and paints past the search box. */}
+          <ScrollArea className="min-w-0 flex-1" collapseX ref={scrollAreaRef}>
             <div className="py-1">
               {results.map((result, index) => (
                 <div
@@ -685,7 +687,7 @@ function SearchBox(
                     resultItemsRef.current[index] = el;
                   }}
                   className={`
-                        px-2 py-1.5 cursor-pointer border-l-4
+                        min-w-0 overflow-hidden px-2 py-1.5 cursor-pointer border-l-4
                         ${index === selectedIndex ? 'bg-accent text-accent-foreground border-blue-500' : 'hover:bg-muted/50 border-transparent'}
                       `}
                   // Keep the input focused so the focus-driven panel doesn't close
@@ -944,7 +946,7 @@ function SearchBox(
           </div>
 
           {panelVisible && (
-            <div className="absolute top-full left-0 right-0 z-50 bg-background border border-t-0 rounded-b-md shadow-xs">
+            <div className="absolute top-full left-0 right-0 z-50 max-w-full overflow-x-hidden bg-background border border-t-0 rounded-b-md shadow-xs">
               {panelHeader}
               {resultsNode}
               {panelFooter && (
