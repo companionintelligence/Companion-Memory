@@ -68,6 +68,7 @@ describe('OnboardingService onboard', () => {
       onboarded: false,
       role: 'user',
       timezone: 'UTC',
+      timeFormat: 'auto',
       onboardingProgress: { stepKey: 'run-first-sync', draft: {}, updatedAt: new Date().toISOString() },
       entityId: null,
       createdAt: new Date(),

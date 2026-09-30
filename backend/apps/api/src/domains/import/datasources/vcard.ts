@@ -53,6 +53,8 @@ import fs from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { FAX_ATTRIBUTE_NAME, markSharedContactHandles, normalizeHandle } from '../staging/identity';
+
 import { unescapeIcsText as unescapeVCardText } from './calendar';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -196,6 +198,7 @@ export class VCardFileImporter implements FileImporter {
     // through a truncated card or a stray END with no matching BEGIN.
     const photos = extractCardPhotos(raw);
     let cardIndex = 0;
+    const cards: { lines: ContentLine[]; photo?: CardPhoto }[] = [];
 
     for (const line of unfoldContentLines(raw)) {
       const trimmed = line.trim();
@@ -214,7 +217,7 @@ export class VCardFileImporter implements FileImporter {
         cardIndex += 1;
 
         if (card) {
-          this.emitCard(card, file, params, photo);
+          cards.push({ lines: card, photo });
         }
 
         card = null;
@@ -234,23 +237,94 @@ export class VCardFileImporter implements FileImporter {
     if (card) {
       params.pipeline.drop?.('no_end_marker', file);
     }
+
+    this.emitCards(cards, file, params);
   }
 
-  private emitCard(lines: ContentLine[], file: string, params: ImportParams, photo?: CardPhoto): void {
-    const contact = buildContact(lines, file, photo);
-    if (!contact) {
-      // A card with neither a name nor one usable attribute. Rare, but it is a
-      // record we chose not to keep — never a silent `continue`.
-      params.pipeline.drop?.('empty_card', file);
+  /**
+   * Build every card of one file, then emit them in file order.
+   *
+   * Two passes, because a card cannot tell on its own which of its numbers are
+   * its own. Colleagues' cards all list the office switchboard and the office
+   * fax; each card alone just lists some numbers. Only the file shows that the
+   * same line sits on three people's cards, and so must not be the one handle
+   * that keys any of them — see `markSharedContactHandles`. The file is already
+   * read whole (and every photo already extracted), so waiting for the last
+   * card costs no extra read and little extra memory.
+   */
+  private emitCards(
+    cards: { lines: ContentLine[]; photo?: CardPhoto }[],
+    file: string,
+    params: ImportParams,
+  ): void {
+    const built: BuiltContact[] = [];
+    const faxes: string[] = [];
 
-      return;
+    for (const { lines, photo } of cards) {
+      const contact = buildContact(lines, file, photo);
+      if (!contact) {
+        // A card with neither a name nor one usable attribute. Rare, but it is a
+        // record we chose not to keep — never a silent `continue`.
+        params.pipeline.drop?.('empty_card', file);
+        continue;
+      }
+
+      built.push(contact);
+      faxes.push(...faxNumbersOf(lines));
     }
 
-    params.pipeline.push({
-      item: contact.item,
-      edges: [{ relation: 'contact', to: { entity: contact.entity } }],
+    const entities = markSharedContactHandles(
+      built.map((contact) => contact.entity),
+      faxes,
+    );
+    const faxHandles = new Set(faxes.map(normalizeHandle).filter(Boolean));
+
+    built.forEach((contact, index) => {
+      params.pipeline.push({
+        item: fileExportFaxes(contact.item, faxHandles),
+        edges: [{ relation: 'contact', to: { entity: fileExportFaxes(entities[index], faxHandles) } }],
+      });
     });
   }
+}
+
+/**
+ * A card's record with the EXPORT's faxes filed as faxes: every `Phones` entry
+ * whose number the export types as a fax on any card moves to `Faxes`.
+ *
+ * `buildContact` files by the card's own TYPE, and one person's duplicate
+ * cards disagree: a real export types the same firm number FAX on one copy
+ * and leaves it bare on the next. Left in `Phones`, the bare copy is a line of
+ * that person's to the duplicate detector, and every colleague whose card
+ * lists it bare "shares a phone number" with them — the phone adjudicator
+ * refuses only what a record files under `Faxes`
+ * (`FAX_FACT_PROPERTY_KEYS` in `memory/utils/phoneIdentity.ts`). The same
+ * export-wide reading `markSharedContactHandles` takes for the key.
+ *
+ * The number stays on the card, as a fax: it is still how to reach the office.
+ */
+function fileExportFaxes<T extends { metadata?: Metadata }>(record: T, faxHandles: ReadonlySet<string>): T {
+  const listed = record.metadata?.Phones;
+
+  if (faxHandles.size === 0 || !Array.isArray(listed)) {
+    return record;
+  }
+
+  const phones = listed.filter((value): value is string => typeof value === 'string');
+  const moved = phones.filter((value) => faxHandles.has(normalizeHandle(value)));
+
+  if (moved.length === 0) {
+    return record;
+  }
+
+  const { Phones: _phones, Faxes: filed, ...rest } = record.metadata as Record<string, unknown>;
+  const kept = phones.filter((value) => !moved.includes(value));
+  const faxes = uniq([...(Array.isArray(filed) ? (filed as string[]) : []), ...moved]);
+
+  return {
+    ...record,
+    metadata: { ...rest, ...(kept.length ? { Phones: kept } : {}), Faxes: faxes } as Metadata,
+  };
 }
 
 // ── Tokenizer ────────────────────────────────────────────────────────────────
@@ -364,7 +438,7 @@ const PHOTO_MIME_BY_TYPE: Record<string, string> = {
  * BEGIN/END bookkeeping `parseVCards`'s main loop does — a second BEGIN before
  * an END drops the card in progress without emitting, a file that ends mid-card
  * emits nothing for it — so the result lines up 1:1 with the cards
- * {@link unfoldContentLines}'s consumer actually calls `emitCard` for.
+ * {@link unfoldContentLines}'s consumer actually hands to `emitCards`.
  *
  * Line folding only, deliberately not the full tokenizer above: a PHOTO's
  * value is opaque base64, so unlike TEXT properties it needs no CHARSET/
@@ -397,7 +471,7 @@ export function extractCardPhotos(raw: string): (CardPhoto | undefined)[] {
     const trimmed = line.trim();
     if (/^BEGIN:VCARD$/i.test(trimmed)) {
       // A second BEGIN before an END means the previous card was truncated —
-      // parseVCards drops it without calling emitCard, so this pass must not
+      // parseVCards drops it without keeping it for emitCards, so this pass must not
       // push an entry for it either.
       chunks = null;
       mimeType = '';
@@ -444,7 +518,7 @@ export function extractCardPhotos(raw: string): (CardPhoto | undefined)[] {
 
   // An unterminated final card (no closing END:VCARD) — parseVCards drops it
   // too, via the `if (card) drop('no_end_marker')` after its own loop, and
-  // never calls emitCard for it, so this pass must not push a trailing entry.
+  // never keeps it for emitCards, so this pass must not push a trailing entry.
 
   return photos;
 }
@@ -666,6 +740,61 @@ function cleanLabel(value: string): string {
     .trim();
 }
 
+/**
+ * Each property group's `X-ABLabel`: `item1.X-ABLabel:_$!<School>!$_` names
+ * what `item1.EMAIL` is FOR. Both orders occur in real files, so the map is
+ * built from the whole card before anything reads it.
+ */
+function groupLabelsOf(lines: ContentLine[]): Map<string, string> {
+  const groupLabels = new Map<string, string>();
+  for (const line of lines) {
+    if (!line.group || line.binary || line.name !== 'X-ABLABEL') {
+      continue;
+    }
+
+    const label = cleanLabel(line.value);
+    if (label) {
+      groupLabels.set(line.group, label);
+    }
+  }
+
+  return groupLabels;
+}
+
+/**
+ * The numbers a card files as a FAX, as written: a TEL typed `FAX` in any case,
+ * alone or beside WORK/HOME (vCard 2.1's bare `;FAX` lands in TYPE too), or one
+ * whose group label says fax — Apple's own `_$!<WorkFAX>!$_` and a custom
+ * `X-ABLabel:Office fax` alike.
+ *
+ * Read by the file-level pass, not by `buildContact`: a fax is office
+ * equipment, so every card from one office lists it, and whether a number is a
+ * fax is a fact about the NUMBER — true on every card that lists it once any
+ * card says so. Real exports type the same number FAX on one copy of a card
+ * and leave it untyped on the next.
+ */
+export function faxNumbersOf(lines: ContentLine[]): string[] {
+  const groupLabels = groupLabelsOf(lines);
+  const faxes: string[] = [];
+
+  for (const line of lines) {
+    if (line.name !== 'TEL' || line.binary) {
+      continue;
+    }
+
+    const label = line.group ? groupLabels.get(line.group) : undefined;
+
+    if (isFaxLine(line, label)) {
+      const value = unescapeVCardText(line.value).trim();
+      if (value) {
+        faxes.push(value);
+      }
+    }
+  }
+
+  return faxes;
+}
+
 /** Parameter values that describe the transport, not the human's label. */
 const NON_LABEL_TYPES = new Set(['INTERNET', 'VOICE', 'PREF', 'X-INTERNET', 'OTHER']);
 
@@ -696,6 +825,25 @@ function isPreferred(line: ContentLine): boolean {
   }
 
   return (line.params.TYPE ?? []).some((t) => t.toUpperCase() === 'PREF');
+}
+
+/**
+ * A TEL line that files its number as a FAX: `TYPE=FAX` in any case, alone or
+ * beside WORK/HOME/OTHER (vCard 2.1's bare `;FAX` lands in TYPE too), or a
+ * label that says so — Apple's built-in `_$!<WorkFAX>!$_` and a custom
+ * `X-ABLabel:Office fax` alike.
+ *
+ * Why it matters: a fax is office equipment, and every card from one office
+ * lists the office fax. Filed among a contact's `Phones`, it made two
+ * colleagues "the same phone number" to the duplicate detector — see
+ * `FAX_FACT_PROPERTY_KEYS` in `memory/utils/phoneIdentity.ts`.
+ */
+function isFaxLine(line: ContentLine, label: string | undefined): boolean {
+  if ((line.params.TYPE ?? []).some((t) => t.toUpperCase() === 'FAX')) {
+    return true;
+  }
+
+  return label != null && /fax/i.test(label);
 }
 
 /**
@@ -951,6 +1099,7 @@ const ACCUMULATED_KEYS = [
   'Names',
   'Emails',
   'Phones',
+  'Faxes',
   'URLs',
   'Organizations',
   'JobTitles',
@@ -975,21 +1124,12 @@ export interface BuiltContact {
 export function buildContact(lines: ContentLine[], file: string, photo?: CardPhoto): BuiltContact | null {
   // Labels first: `item1.X-ABLabel` names what `item1.EMAIL` is FOR, and both
   // orders occur in real files, so the map must be complete before it is read.
-  const groupLabels = new Map<string, string>();
-  for (const line of lines) {
-    if (!line.group || line.binary || line.name !== 'X-ABLABEL') {
-      continue;
-    }
-
-    const label = cleanLabel(line.value);
-    if (label) {
-      groupLabels.set(line.group, label);
-    }
-  }
+  const groupLabels = groupLabelsOf(lines);
 
   const attributes: ContactAttribute[] = [];
   const emails: string[] = [];
   const phones: string[] = [];
+  const faxes: string[] = [];
   const urls: string[] = [];
   const orgs: string[] = [];
   const titles: string[] = [];
@@ -1034,8 +1174,21 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
           break;
         }
 
-        phones.push(v);
-        attributes.push({ name: 'phone', value: v, identity: true, ...labelled, ...preferred });
+        // A fax is filed apart from the person's lines (`Faxes`, not `Phones`)
+        // so the phone adjudicator can refuse it, and named `fax` so staging
+        // never records it among the contact's own numbers. It stays an
+        // identity ATTRIBUTE: `legacyEntityIdentityKey` still reads it to find
+        // a row an older import keyed on it, and the file-level pass
+        // (`faxNumbersOf`, then `markSharedContactHandles`) marks it shared,
+        // which keeps it from keying the card now.
+        if (isFaxLine(line, label)) {
+          faxes.push(v);
+          attributes.push({ name: FAX_ATTRIBUTE_NAME, value: v, identity: true, ...labelled, ...preferred });
+        } else {
+          phones.push(v);
+          attributes.push({ name: 'phone', value: v, identity: true, ...labelled, ...preferred });
+        }
+
         break;
       }
 
@@ -1189,7 +1342,12 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
   // and phones into NOTE instead of into properties, and a card whose ONLY
   // content is such a note has nothing for entity resolution to key on at all.
   // Per kind and fallback-only — structured properties always win.
-  if (notes.length > 0 && (emails.length === 0 || phones.length === 0)) {
+  // A fax TEL counts as "the card has a number" here, as it did when faxes
+  // were filed in `phones`: recovering note phones onto a fax-only card would
+  // add identity attributes, and so move its natural key.
+  const hasTel = phones.length > 0 || faxes.length > 0;
+
+  if (notes.length > 0 && (emails.length === 0 || !hasTel)) {
     const recovered = handlesFromNote(notes.join('\n'));
 
     if (emails.length === 0) {
@@ -1199,7 +1357,7 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
       }
     }
 
-    if (phones.length === 0) {
+    if (!hasTel) {
       for (const value of recovered.phones) {
         phones.push(value);
         attributes.push({ name: 'phone', value, identity: true });
@@ -1241,6 +1399,7 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
       ...(titles.length ? { JobTitle: titles[0] } : {}),
       ...(emails.length ? { Emails: uniq(emails) } : {}),
       ...(phones.length ? { Phones: uniq(phones) } : {}),
+      ...(faxes.length ? { Faxes: uniq(faxes) } : {}),
       ...(urls.length ? { URLs: uniq(urls) } : {}),
       ...(addresses.length ? { Addresses: uniq(addresses) } : {}),
       ...(categories.length ? { Categories: uniq(categories) } : {}),
@@ -1269,6 +1428,7 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
       ...(name ? { Names: [name] } : {}),
       ...(emails.length ? { Emails: uniq(emails) } : {}),
       ...(phones.length ? { Phones: uniq(phones) } : {}),
+      ...(faxes.length ? { Faxes: uniq(faxes) } : {}),
       ...(urls.length ? { URLs: uniq(urls) } : {}),
       ...(orgs.length ? { Organizations: uniq(orgs) } : {}),
       ...(titles.length ? { JobTitles: uniq(titles) } : {}),

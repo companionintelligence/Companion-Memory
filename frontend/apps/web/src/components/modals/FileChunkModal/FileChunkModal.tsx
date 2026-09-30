@@ -1,6 +1,7 @@
 import { Button, Dialog } from '@ci/shadcn';
 
 import { type FragmentType, useFragment } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { FILE_CHUNK_CARD_FRAGMENT } from '@/pages/MemoryPage/Components/EntityCard/FileChunkCard';
 import { getFileChunkPreview, getFileChunkSubtitle, getFileChunkTitle } from '@/pages/MemoryPage/fileChunks';
 
@@ -11,6 +12,7 @@ interface Props {
 
 export function FileChunkModal({ entity, onClose }: Props) {
   const data = useFragment(FILE_CHUNK_CARD_FRAGMENT, entity);
+  const fmt = useDateTimeFormat();
 
   if (!data) {
     return null;
@@ -41,7 +43,7 @@ export function FileChunkModal({ entity, onClose }: Props) {
               <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Indexed at
               </div>
-              <div className="text-sm">{new Date(data.createdAt).toLocaleString()}</div>
+              <div className="text-sm">{fmt.dateTime(data.createdAt)}</div>
             </section>
           )}
 

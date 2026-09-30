@@ -46,6 +46,8 @@ coverage/
 
 # Per-worktree overmind sockets created by scripts/dev-stack.ts
 .overmind*.sock
+# Its one-supervisor-per-worktree lock (scripts/dev-stack/supervisor-lock.ts)
+.dev-stack.lock
 
 # Python (uv workspace). One virtual environment at the root, shared by
 # every member; uv.lock beside it is committed.

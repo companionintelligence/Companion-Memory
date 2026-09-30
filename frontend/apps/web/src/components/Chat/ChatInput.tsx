@@ -24,6 +24,7 @@ import {
   useToast,
 } from '@ci/shadcn';
 import { Paperclip, Send, Square, X } from '@ci/shadcn/icons';
+import { v7 as uuid7 } from 'uuid';
 
 import type { File as FileData } from '@/api/types';
 import { useUploadFile } from '@/api/useUploadFile';
@@ -32,6 +33,8 @@ import { ModelSelector } from '@/components/ModelSelector';
 const FormSchema = s.object({
   message: s.string(),
   fileIds: s.array(s.string()).optional(),
+  /** Bare base64 JPEG/PNG for an on-device vision model. Never uploaded; see `localImages`. */
+  images: s.array(s.string()).optional(),
 });
 
 export type FormData = s.infer<typeof FormSchema>;
@@ -45,6 +48,33 @@ const handleEnterSubmit = (e: KeyboardEvent<HTMLTextAreaElement>) => {
 
 const ATTACH_ACCEPT = 'image/*,application/pdf,text/plain,text/markdown,text/csv,.txt,.md,.pdf,.json';
 
+/** A phone photo is 3–12 MB; the native side downsizes before the vision encoder, so this is only a sanity cap. */
+const MAX_LOCAL_IMAGES = 4;
+const MAX_LOCAL_IMAGE_BYTES = 20 * 1024 * 1024;
+
+interface LocalImage {
+  id: string;
+  name: string;
+  /** Bare base64, no `data:` prefix — the shape the native plugin takes. */
+  data: string;
+}
+
+/** Read a picked image as bare base64 (the part of a data URL after the comma). */
+function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read that image.'));
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+
+      resolve(result.slice(result.indexOf(',') + 1));
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
 interface Props {
   disabled?: boolean;
   loading?: boolean;
@@ -53,6 +83,11 @@ interface Props {
   initialDraft?: string;
   /** Tools / thinking / model row. Off in Capture, which has its own selector. */
   showModelControls?: boolean;
+  /**
+   * The on-device vision model answers this chat, so "attach" picks photos to read locally as base64
+   * instead of uploading files to the appliance — nothing leaves the phone, and it works offline.
+   */
+  localImages?: boolean;
   onStop?: (e: MouseEvent<HTMLButtonElement>) => void | Promise<void>;
   onSubmit?: (data: FormData, e?: FormEvent<HTMLFormElement>) => boolean | void | Promise<boolean | void>;
 }
@@ -65,6 +100,7 @@ function ChatInput(
     placeholder,
     initialDraft = '',
     showModelControls = true,
+    localImages: localImagesMode = false,
     onSubmit,
     onStop,
   }: Props,
@@ -75,6 +111,7 @@ function ChatInput(
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [attachments, setAttachments] = useState<FileData[]>([]);
+  const [localImages, setLocalImages] = useState<LocalImage[]>([]);
   const [{ files: uploadedFiles, loading: uploading }, { upload }] = useUploadFile();
 
   const form = useForm<FormData>({
@@ -122,14 +159,55 @@ function ChatInput(
         return;
       }
 
+      if (localImagesMode) {
+        const images = selected.filter((file) => file.type.startsWith('image/'));
+
+        if (images.length < selected.length) {
+          toast.error('This on-device model can read photos only.');
+        }
+
+        const room = MAX_LOCAL_IMAGES - localImages.length;
+
+        if (images.length > room) {
+          toast.error(`You can attach up to ${MAX_LOCAL_IMAGES} photos.`);
+        }
+
+        try {
+          const read = await Promise.all(
+            images
+              .slice(0, Math.max(0, room))
+              .filter((file) => {
+                if (file.size > MAX_LOCAL_IMAGE_BYTES) {
+                  toast.error(`${file.name} is too large to read on this device.`);
+
+                  return false;
+                }
+
+                return true;
+              })
+              .map(async (file) => ({ id: uuid7(), name: file.name, data: await readAsBase64(file) })),
+          );
+
+          setLocalImages((current) => [...current, ...read]);
+        } catch {
+          toast.error('Could not read that photo. Try again.');
+        }
+
+        return;
+      }
+
       const success = await upload(selected);
 
       if (!success) {
         toast.error('Could not attach that file. Try again.');
       }
     },
-    [toast, upload],
+    [localImages.length, localImagesMode, toast, upload],
   );
+
+  const handleRemoveLocalImage = useCallback((imageId: string) => {
+    setLocalImages((current) => current.filter((image) => image.id !== imageId));
+  }, []);
 
   const handleRemoveAttachment = useCallback((fileId: string) => {
     setAttachments((current) => current.filter((file) => file.id !== fileId));
@@ -142,14 +220,19 @@ function ChatInput(
       const message = data.message.trim();
       const fileIds = attachments.map((file) => file.id);
 
-      if (!message && fileIds.length === 0) {
+      const images = localImages.map((image) => image.data);
+
+      if (!message && fileIds.length === 0 && images.length === 0) {
         return;
       }
 
       const success = await onSubmit?.(
         {
-          message: message || 'Please look at the attached file(s).',
+          message:
+            message ||
+            (images.length > 0 ? 'Describe the attached photo(s).' : 'Please look at the attached file(s).'),
           fileIds,
+          ...(images.length > 0 ? { images } : {}),
         },
         e as FormEvent<HTMLFormElement>,
       );
@@ -157,9 +240,10 @@ function ChatInput(
       if (success === true) {
         form.reset({ message: '', fileIds: [] });
         setAttachments([]);
+        setLocalImages([]);
       }
     },
-    [attachments, form, onSubmit],
+    [attachments, form, localImages, onSubmit],
   );
 
   const inputDisabled = loading || streaming || disabled || uploading;
@@ -242,8 +326,24 @@ function ChatInput(
               )}
             />
 
-            {attachments.length > 0 && (
+            {(attachments.length > 0 || localImages.length > 0) && (
               <ul className="flex flex-wrap gap-1.5 px-1.5">
+                {localImages.map((image) => (
+                  <li
+                    key={image.id}
+                    className="flex max-w-full items-center gap-1 rounded-md border bg-muted/60 px-2 py-0.5 text-xs"
+                  >
+                    <span className="truncate">{image.name}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${image.name}`}
+                      className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                      onClick={() => handleRemoveLocalImage(image.id)}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </li>
+                ))}
                 {attachments.map((file) => (
                   <li
                     key={file.id}
@@ -271,20 +371,22 @@ function ChatInput(
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept={ATTACH_ACCEPT}
+                  accept={localImagesMode ? 'image/*' : ATTACH_ACCEPT}
                   className="sr-only"
                   onChange={(event) => void handleFilesSelected(event)}
                 />
 
                 <Tooltip>
-                  <Tooltip.Content side="bottom">Attach files or images</Tooltip.Content>
+                  <Tooltip.Content side="bottom">
+                    {localImagesMode ? 'Attach a photo' : 'Attach files or images'}
+                  </Tooltip.Content>
                   <Tooltip.Trigger asChild>
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
                       disabled={inputDisabled}
-                      aria-label="Attach files or images"
+                      aria-label={localImagesMode ? 'Attach a photo' : 'Attach files or images'}
                       className="h-8 w-8 p-0"
                       onClick={handleAttachClick}
                     >

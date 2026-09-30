@@ -73,6 +73,8 @@ interface Overrides {
   utilityModel?: string;
   chatModel?: string;
   openAi?: boolean;
+  /** What the OpenAI-compatible endpoint's `/v1/models` lists; absent, the driver has no `listModels`. */
+  servedModels?: string[] | Error;
   loadWatchdogMs?: number;
   cooldownMs?: number;
   calibration?: CalibrationStore;
@@ -131,7 +133,20 @@ function loadService(overrides: Overrides = {}) {
   const endpoint = {
     getOllamaHost: () => 'http://localhost:11434',
     usesOpenAiDriver: () => overrides.openAi === true,
-    getOpenAiDriver: () => (overrides.openAi ? {} : null),
+    getOpenAiDriver: () =>
+      overrides.openAi
+        ? overrides.servedModels === undefined
+          ? {}
+          : {
+              listModels: jest.fn(async () => {
+                if (overrides.servedModels instanceof Error) {
+                  throw overrides.servedModels;
+                }
+
+                return overrides.servedModels;
+              }),
+            }
+        : null,
   };
   const calibration = overrides.calibration ?? memoryStore().store;
   const service = new ResidencyPlannerService(endpoint as any, logger as any, calibration);
@@ -298,6 +313,46 @@ describe('ResidencyPlannerService on the wedge box', () => {
 
     await expect(service.resolveUtilityModel()).resolves.toEqual({ model: 'gemma4:e4b' });
     expect(psMock).not.toHaveBeenCalled();
+  });
+
+  // A Lemonade-only node (2026-09-29): `gemma4:e4b` is the unset default and Lemonade does not serve
+  // it, so every utility job failed "Invalid model specified". Same rule as the Ollama planner:
+  // not served → the chat model.
+  it('runs utility calls on the chat model when the OpenAI-compatible endpoint does not serve the utility model', async () => {
+    const { service, logger } = loadService({
+      openAi: true,
+      chatModel: 'Qwen3.8-27B-GGUF',
+      servedModels: ['Qwen3.8-27B-GGUF', 'nomic-embed-text-v1.5-GGUF'],
+    });
+
+    await expect(service.resolveUtilityModel()).resolves.toEqual({ model: 'Qwen3.8-27B-GGUF' });
+    await expect(service.resolveUtilityModel()).resolves.toEqual({ model: 'Qwen3.8-27B-GGUF' });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(psMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps a served utility model, and the configured id when the list cannot be read or names neither', async () => {
+    await expect(
+      loadService({
+        openAi: true,
+        chatModel: 'Qwen3.8-27B-GGUF',
+        servedModels: ['Qwen3.8-27B-GGUF', 'gemma4:e4b'],
+      }).service.resolveUtilityModel(),
+    ).resolves.toEqual({ model: 'gemma4:e4b' });
+    await expect(
+      loadService({
+        openAi: true,
+        chatModel: 'Qwen3.8-27B-GGUF',
+        servedModels: new Error('502'),
+      }).service.resolveUtilityModel(),
+    ).resolves.toEqual({ model: 'gemma4:e4b' });
+    await expect(
+      loadService({
+        openAi: true,
+        chatModel: 'Qwen3.8-27B-GGUF',
+        servedModels: ['something-else'],
+      }).service.resolveUtilityModel(),
+    ).resolves.toEqual({ model: 'gemma4:e4b' });
   });
 });
 

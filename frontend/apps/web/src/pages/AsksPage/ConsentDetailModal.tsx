@@ -3,6 +3,8 @@ import type { ComponentType, ReactNode } from 'react';
 import { Badge, Dialog } from '@ci/shadcn';
 import { KeyRound, Radio, ShieldAlert } from '@ci/shadcn/icons';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+
 import { rungLabel, type DisclosureRung, type GrantMode } from './askPresentation';
 import { ConsentLock } from './ConsentLock';
 import {
@@ -75,6 +77,7 @@ interface Props {
  * unsigned" from "we did not record how it arrived" cannot act on either.
  */
 export function ConsentDetailModal({ record, onClose }: Props) {
+  const fmt = useDateTimeFormat();
   const channelRecorded = record.channelRecorded ?? true;
   const state = consentLockState({
     consent: record.consent,
@@ -139,7 +142,10 @@ export function ConsentDetailModal({ record, onClose }: Props) {
                     value={<code className="break-all">{record.channel.keyThumbprint}</code>}
                     icon={KeyRound}
                   />
-                  <Row term="Verified by you at" value={formatMoment(record.channel.verifiedAt as string)} />
+                  <Row
+                    term="Verified by you at"
+                    value={formatMoment(record.channel.verifiedAt as string, fmt)}
+                  />
                   <Row term="Algorithm" value="Ed25519 (RFC 9421 HTTP Message Signatures)" />
                 </dl>
 
@@ -177,7 +183,7 @@ export function ConsentDetailModal({ record, onClose }: Props) {
           <section className="flex flex-col gap-2">
             <SectionHeading>When and how it was collected</SectionHeading>
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
-              <Row term="Arrived" value={formatMoment(record.arrivedAt)} icon={Radio} />
+              <Row term="Arrived" value={formatMoment(record.arrivedAt, fmt)} icon={Radio} />
               <Row term="Path" value={pathLabel(record.direction)} />
               <Row term="Asked by" value={record.askerName} />
             </dl>

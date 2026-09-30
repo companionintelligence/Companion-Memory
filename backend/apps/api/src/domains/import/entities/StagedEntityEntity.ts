@@ -66,6 +66,21 @@ export class StagedEntityEntity {
   identityKey!: string | null;
 
   /**
+   * The identity key the rule BEFORE shared handles were passed over gave this
+   * entity — its smallest handle, shared or not, an extension line read as the
+   * truncation it used to key as, of those its parser read then — when that
+   * differs from `identityKey`; NULL when they agree, and for rows staged
+   * before the column existed.
+   *
+   * Rows already in `ci.entities` were minted under that key, and a moved key
+   * would mint a second Person on the next import. The push uses this to move
+   * the old row onto the new key in place — see `push/legacyKeys.ts` and
+   * `staging/identity.ts legacyEntityIdentityKey`.
+   */
+  @Column({ type: 'text', name: 'legacy_identity_key', nullable: true })
+  legacyIdentityKey!: string | null;
+
+  /**
    * Dedup key for entities that have NO identity_key — a sha256 of
    * `entityKey(entity)`, unique per run. Handle-less entities cannot share the
    * identity index (they would all collapse on NULL), and holding their dedup

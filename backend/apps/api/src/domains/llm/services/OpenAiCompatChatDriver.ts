@@ -9,6 +9,8 @@ import type {
 
 import config from '@ci/configuration';
 
+import { type ServedModel, servedModelFromRow } from './servedModels';
+
 /**
  * OpenAI-protocol transport for the chat path, used when `LLM_API_BASE` points
  * at a non-Ollama backend (a Hub-selected vLLM instance, or any other
@@ -44,8 +46,58 @@ export function vllmThinkingExtraBody(enableThinking?: boolean): {
   };
 }
 
+type ResponseFormat =
+  | { type: 'json_object' }
+  | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown> } };
+
+/**
+ * Ollama's `format` as an OpenAI `response_format`. A JSON Schema goes over as `json_schema`, which
+ * vLLM, llama.cpp (so Lemonade), SGLang and Ollama's own `/v1` all enforce during decoding; plain
+ * `json_object` only promises some valid JSON, which is what structured callers used to get on every
+ * OpenAI-compatible backend. Once a backend has rejected `json_schema`, schemas degrade to
+ * `json_object` for it.
+ */
+export function toResponseFormat(
+  format: string | Record<string, unknown> | undefined,
+  jsonSchemaRejected = false,
+): ResponseFormat | undefined {
+  if (format === 'json') {
+    return { type: 'json_object' };
+  }
+
+  if (format == null || typeof format !== 'object') {
+    return undefined;
+  }
+
+  return jsonSchemaRejected
+    ? { type: 'json_object' }
+    : { type: 'json_schema', json_schema: { name: 'response', schema: format } };
+}
+
+/**
+ * A 4xx that blames the response format — how a backend without structured-output support refuses
+ * `json_schema` (vLLM started without guided decoding, older llama.cpp builds). Anything else
+ * (overflow, unknown model, auth) is not retried here.
+ */
+export function isResponseFormatRejection(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+
+  if (typeof status !== 'number' || status < 400 || status >= 500) {
+    return false;
+  }
+
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+
+  return ['response_format', 'json_schema', 'structured output', 'guided decoding', 'grammar'].some(
+    (marker) => message.includes(marker),
+  );
+}
+
 export class OpenAiCompatChatDriver {
   private readonly client: OpenAI;
+
+  /** Set once this endpoint has refused a `json_schema` response format; see {@link toResponseFormat}. */
+  private jsonSchemaRejected = false;
 
   constructor(baseURL: string, apiKey: string) {
     this.client = new OpenAI({
@@ -63,16 +115,28 @@ export class OpenAiCompatChatDriver {
 
   /** Model ids served by the backend (`GET /v1/models`). */
   async listModels(): Promise<string[]> {
+    return (await this.listServedModels()).map((model) => model.id);
+  }
+
+  /**
+   * Served models with whatever each backend adds to its `/v1/models` rows: capability labels
+   * (Lemonade) and the context window it runs the model with (Lemonade, vLLM). See
+   * {@link servedModelFromRow}; a backend that adds nothing yields empty labels and a `null` window.
+   */
+  async listServedModels(): Promise<ServedModel[]> {
     const models = await this.client.models.list();
 
-    return models.data.map((model) => model.id);
+    return models.data.map((model) =>
+      servedModelFromRow(model as unknown as { id: string } & Record<string, unknown>),
+    );
   }
 
   async chat(request: {
     model: string;
     messages: OllamaMessage[];
     tools?: Tool[];
-    format?: string;
+    /** Ollama's `format`: `'json'`, or a JSON Schema object the reply must match. */
+    format?: string | Record<string, unknown>;
     enableThinking?: boolean;
     signal?: AbortSignal;
     /**
@@ -83,18 +147,34 @@ export class OpenAiCompatChatDriver {
     maxTokens?: number;
   }): Promise<ChatResponse> {
     const extraBody = vllmThinkingExtraBody(request.enableThinking);
-    const response = await this.client.chat.completions.create(
-      {
-        model: request.model,
-        messages: toOpenAiMessages(request.messages),
-        ...(request.tools && request.tools.length > 0 && { tools: toOpenAiTools(request.tools) }),
-        // Ollama's `format: 'json'` maps onto the OpenAI json_object response format.
-        ...(request.format === 'json' && { response_format: { type: 'json_object' as const } }),
-        ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
-        ...extraBody,
-      },
-      { signal: request.signal, timeout: config.llm.firstResponseTimeoutMs, maxRetries: 0 },
-    );
+    const create = (format: ResponseFormat | undefined) =>
+      this.client.chat.completions.create(
+        {
+          model: request.model,
+          messages: toOpenAiMessages(request.messages),
+          ...(request.tools && request.tools.length > 0 && { tools: toOpenAiTools(request.tools) }),
+          ...(format && { response_format: format }),
+          ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
+          ...extraBody,
+        },
+        { signal: request.signal, timeout: config.llm.firstResponseTimeoutMs, maxRetries: 0 },
+      );
+
+    const format = toResponseFormat(request.format, this.jsonSchemaRejected);
+    let response: Awaited<ReturnType<typeof create>>;
+
+    try {
+      response = await create(format);
+    } catch (err) {
+      if (format?.type !== 'json_schema' || !isResponseFormatRejection(err)) {
+        throw err;
+      }
+
+      // Remembered for this driver's life (one per configured endpoint), so a backend without
+      // schema support costs one rejected request, not one per structured call.
+      this.jsonSchemaRejected = true;
+      response = await create({ type: 'json_object' });
+    }
 
     const choice = response.choices[0];
     const structured = (choice?.message?.tool_calls ?? [])

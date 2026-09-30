@@ -1364,7 +1364,45 @@ describe('JobsPage phone layout', () => {
     });
 
     expect(screen.getByText('Generate chat reply')).toBeInTheDocument();
-    expect(screen.getByText(/chat\.generate/)).toBeInTheDocument();
+  });
+
+  it('keeps the event and queue names out of the phone card summary and shows them in its details', async () => {
+    setViewport(true);
+    render({
+      list: list({
+        items: [job({ label: 'Generate chat reply', event: 'chat.generate', queue: 'chat' })],
+        total: 1,
+      }),
+    });
+
+    const card = await screen.findByRole('button', { name: 'Details for Generate chat reply' });
+
+    expect(screen.queryByText(/chat\.generate/)).not.toBeInTheDocument();
+
+    fireEvent.click(card);
+
+    expect(await screen.findByText('chat.generate')).toBeInTheDocument();
+    expect(screen.getByText('Event')).toBeInTheDocument();
+    expect(screen.getByText('Queue')).toBeInTheDocument();
+  });
+
+  it('counts retries on a phone card only once there have been some', async () => {
+    setViewport(true);
+    render({
+      list: list({
+        items: [
+          job({ id: 'job-1', label: 'Fresh job', retryCount: 0, retryLimit: 3 }),
+          job({ id: 'job-2', label: 'Second job', retryCount: 1, retryLimit: 3 }),
+        ],
+        total: 2,
+      }),
+    });
+
+    await screen.findByText('Second job');
+
+    expect(screen.getByText(/Retried 1 of 3/)).toBeInTheDocument();
+    expect(screen.queryByText(/0\/3/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Retried/)).toHaveLength(1);
   });
 
   it('asks the server for a shorter page so a phone is a scan, not a novel', async () => {

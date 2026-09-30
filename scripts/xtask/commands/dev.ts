@@ -15,6 +15,7 @@ import { computeProjectName } from '../lib/identity';
 import { readUvVersion } from '../lib/uv';
 import { computeBuildPlan, runBuild, type BuildStep } from './build';
 import { ok, note } from '../../dev-stack/log';
+import { liveStackMessage, readLiveHolder, socketIsLive } from '../../dev-stack/supervisor-lock';
 
 const GREEN = '\x1b[0;32m';
 const YELLOW = '\x1b[0;33m';
@@ -204,6 +205,13 @@ export interface DevOptions {
 
 export async function runDev(root: string, opts: DevOptions): Promise<void> {
   console.log('🧑‍💻 Starting development environment...\n');
+
+  // The supervisor refuses a second stack in this worktree anyway; asking here
+  // saves the health checks and any image rebuild before it says so.
+  const holder = readLiveHolder(root);
+  if (holder || (await socketIsLive(`${root}/.overmind.sock`))) {
+    throw new Error(liveStackMessage(holder, '.overmind.sock'));
+  }
 
   // `make health`, not an in-process call: health is the toolchain diagnostic,
   // so it stays pure shell in the Makefile and must keep working on a checkout

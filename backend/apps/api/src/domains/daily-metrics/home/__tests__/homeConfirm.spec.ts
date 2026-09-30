@@ -135,6 +135,15 @@ describe('HomeConfirmService.candidateOptions / topHomeCandidate', () => {
 
     expect(top?.locationId).toBe('home');
   });
+
+  it('returns null, not the busiest candidate, when none is tagged home', () => {
+    expect(
+      service.topHomeCandidate([
+        candidate({ locationId: 'loc-busy', label: 'Taipei TPE', kind: 'other', eventCount: 12 }),
+        candidate({ locationId: 'loc-work', label: 'Office', kind: 'work', eventCount: 6 }),
+      ]),
+    ).toBeNull();
+  });
 });
 
 describe('HomeConfirmService.confirmFromResponse', () => {
@@ -208,6 +217,17 @@ describe('HomeConfirmService.confirmFromResponse', () => {
       CONTEXT,
       expect.objectContaining({ locationId: 'home', label: 'Oak St' }),
     );
+  });
+
+  it('does not confirm the busiest candidate on "yes" when none is tagged home', async () => {
+    const { service, knownPlaces, logger } = makeService();
+    const busiest = candidate({ locationId: 'loc-busy', label: 'Taipei TPE', kind: 'other', eventCount: 12 });
+
+    const result = await service.confirmFromResponse(CONTEXT, 'yes', [busiest]);
+
+    expect(result).toBe(false);
+    expect(knownPlaces.updateKnownPlace).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith('Home confirm had no resolvable place', expect.anything());
   });
 
   it('resolves a free-text response by case-insensitive label match', async () => {
@@ -321,12 +341,39 @@ describe('HomeConfirmService.ensureAction', () => {
     });
   });
 
-  it('falls back to the first candidate as the prompt subject when none is kind:home', async () => {
-    // topHomeCandidate only returns null for an empty pool, and ensureAction already returns
-    // early on an empty pool — so with no home-kind candidate present it still names candidates[0]
-    // rather than falling back to the generic "which of these" prompt.
+  it('asks which named place is home, naming none, when no candidate is tagged home', async () => {
+    // KnownPlacesService tags Home only on nights that recur over weeks. Without that tag, the
+    // busiest candidate is a guess, so the ask lists the named places instead of "Is <it> home?".
     const query = jest.fn().mockResolvedValue([]);
-    const gridCell = candidate({ locationId: null, label: 'Grid cell', kind: 'other' });
+    const airport = candidate({ locationId: 'loc-airport', label: 'Airport', kind: 'other', eventCount: 12 });
+    const gridCell = candidate({ locationId: null, label: 'Unknown place', kind: 'other', eventCount: 8 });
+    const office = candidate({ locationId: 'loc-office', label: 'Office', kind: 'work', eventCount: 6 });
+    const { service, actionService } = makeService({
+      dataSource: { query },
+      knownPlaces: { buildKnownPlaces: jest.fn().mockResolvedValue([airport, gridCell, office]) },
+    });
+
+    await service.ensureAction(CONTEXT);
+
+    expect(actionService.create).toHaveBeenCalledWith(CONTEXT, {
+      title: 'Confirm home',
+      text: 'Which of these places is home?',
+      priority: 2,
+      source: 'suggestion',
+      metadata: {
+        key: CONFIRM_HOME_ACTION_KEY,
+        questionId: HOME_QUESTION_ID,
+        candidateIds: ['loc-airport', 'loc-office'],
+        candidateLabel: undefined,
+        locationId: undefined,
+      },
+    });
+  });
+
+  it('asks nothing when no candidate is tagged home and none is a named place', async () => {
+    // Previously this named candidates[0]: "Is Unknown place home?" about an unnamed grid cell.
+    const query = jest.fn().mockResolvedValue([]);
+    const gridCell = candidate({ locationId: null, label: 'Unknown place', kind: 'other' });
     const { service, actionService } = makeService({
       dataSource: { query },
       knownPlaces: { buildKnownPlaces: jest.fn().mockResolvedValue([gridCell]) },
@@ -334,12 +381,7 @@ describe('HomeConfirmService.ensureAction', () => {
 
     await service.ensureAction(CONTEXT);
 
-    expect(actionService.create).toHaveBeenCalledWith(
-      CONTEXT,
-      expect.objectContaining({
-        text: 'Is Grid cell home?',
-        metadata: expect.objectContaining({ locationId: null }),
-      }),
-    );
+    expect(actionService.create).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
   });
 });

@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { normalizeIcsRecurrenceId } from '@ci/domains/memory';
 
+import { htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -77,6 +78,39 @@ export function unescapeIcsText(value: string): string {
         return ch;
     }
   });
+}
+
+/**
+ * A tag only HTML would write. Deliberately a closed list, not `<[a-z]…>`: a
+ * plain-text DESCRIPTION may hold `Bob <bob@example.com>`, and an HTML parser
+ * handed that would delete the address as an unknown element.
+ *
+ * Migration 20260930021227_convert_ics_html_descriptions_to_text selects the
+ * rows it repairs with this same list — change the two together.
+ */
+const ICS_HTML_TAG =
+  /<\/?(?:a|b|body|br|div|em|font|h[1-6]|hr|html|i|img|li|ol|p|span|strong|table|tbody|td|th|thead|tr|u|ul)\b[^>]*>/i;
+
+/**
+ * An .ics DESCRIPTION as plain text.
+ *
+ * RFC 5545 §3.8.1.5 makes DESCRIPTION plain TEXT, but Google Calendar writes
+ * the event's rich-text body into it as HTML — `<b>Booked by</b>`, `<br>`,
+ * `<a href>`, lists, tables — and mixes real newlines in with the markup. 194 of
+ * the 1,260 descriptions in the reference Apple + Takeout exports carry tags,
+ * and they reached the Memory UI, the search index and the embeddings as raw
+ * markup.
+ *
+ * Only a description with a real HTML tag is converted: a plain one keeps its
+ * `<`, `&` and `<address@host>` exactly as written. Newlines survive
+ * (`<b>Booked by</b>\nName` is two lines, not one) and a link keeps its
+ * destination (`here (https://…)`) — in an invitation the link is often the
+ * one thing worth keeping.
+ */
+export function icsDescriptionText(description: string): string {
+  return ICS_HTML_TAG.test(description)
+    ? htmlToText(description, { preserveNewlines: true, keepLinkUrls: true })
+    : description;
 }
 
 /**
@@ -166,7 +200,9 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
       : rawDescription;
     const rawLocation = map['LOCATION'];
     const summary = unescapeIcsText(rawSummary);
-    const description = unescapeIcsText(descriptionNoCid);
+    // Unescaped FIRST: `\n` is an RFC 5545 escape, and htmlToText only keeps a
+    // newline it can see.
+    const description = icsDescriptionText(unescapeIcsText(descriptionNoCid));
     const location = rawLocation !== undefined ? unescapeIcsText(rawLocation) : undefined;
     const dtStart = parseICSDate(map['DTSTART'], paramsMap['DTSTART']);
     const dtEnd = parseICSDate(map['DTEND'], paramsMap['DTEND']);

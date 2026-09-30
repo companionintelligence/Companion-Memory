@@ -472,7 +472,7 @@ make reset
 
 Run `make` from the project root to see all available commands with descriptions.
 
-Three of those targets — `build`, `dev` and `test` — are
+Four of those targets — `build`, `dev`, `test` and `test-db` — are
 one-line delegations to a TypeScript program at [`scripts/xtask/`](scripts/xtask),
 run through `tsx` (`yarn tsx scripts/xtask/index.ts <command> ...`). The `make`
 targets stay the documented entry point and still take the variables they always
@@ -697,7 +697,8 @@ The `make` targets cover **both stacks** — the TypeScript one and the Python o
 |---------|-------------|
 | `make lint` | `yarn lint` + `yarn format:check`, then `ruff check`, `ruff format --check`, `mypy`, `uv lock --check` (catches a stale lockfile) and the `ci.*` namespace guard |
 | `make format` | `prettier --write` across the JS/TS sources, then `ruff format` and `ruff check --fix` |
-| `make test` | `yarn workspaces foreach --all run test`, then `uv run pytest` |
+| `make test` | `yarn workspace <name> run test` for every workspace that declares one, then the desktop `node --test` pass, `uv run pytest` and the two `sh` suites. Every step runs even if an earlier one fails, and a summary table says which did not pass |
+| `make test-db` | The database-backed `be-api` jest suites, against a throwaway Postgres container (Docker only; never your `.env` database). Fails on any unexplained skip or any database crash. `ARGS=` selects jest paths/flags, `KEEP=1` leaves the container up, `NO_RETRY=1` skips the serial re-run of failed files — see [`docs/CI.md`](docs/CI.md#running-the-database-backed-suites-locally-make-test-db) |
 
 The repo root now declares `test` and `typecheck` scripts of its own: `yarn test`
 runs the xtask unit suite (`tsx --test "scripts/xtask/**/*.test.ts"`), and

@@ -7,6 +7,8 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
 import { PullToRefresh } from '@/components/PullToRefresh';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import { describeCron } from './cronDescriptor';
 import { describeCronExpression } from './cronSchedule';
@@ -328,6 +330,7 @@ function SchedulesCard({
   onSave: (patch: JobControlsPatch) => Promise<boolean>;
 }) {
   const phone = usePhone();
+  const fmt = useDateTimeFormat();
   // Joined by name, which is the key both payloads agree on. A schedule the
   // controls endpoint does not know about (older server, or one registered
   // since the controls were read) keeps its row and loses only its switch —
@@ -359,7 +362,7 @@ function SchedulesCard({
     const registered = crons.map((cron) => ({
       cron,
       descriptor: describeCron(cron.name, jobTypes),
-      schedule: describeCronExpression(cron.cron),
+      schedule: describeCronExpression(cron.cron, fmt),
       control: controlByName.get(cron.name) ?? null,
     }));
     // Only reached against a server that predates the monitor listing these
@@ -384,12 +387,12 @@ function SchedulesCard({
           overdue: false,
         } as JobsDashboardResponse['crons'][number],
         descriptor: describeCron(control.name, jobTypes),
-        schedule: describeCronExpression(control.cron),
+        schedule: describeCronExpression(control.cron, fmt),
         control,
       }));
 
     return [...registered, ...elsewhere];
-  }, [crons, jobTypes, controlByName, cronControls]);
+  }, [crons, jobTypes, controlByName, cronControls, fmt]);
 
   // Zero on a single-process appliance (CI_ROLE=all), which is the default, so
   // the note stays silent unless the split is actually in use.
@@ -560,9 +563,9 @@ function ScheduleStatus({ cron, className }: { cron: ScheduleRow['cron']; classN
  * attempted one, because a cron that fires on time and fails every time is
  * exactly the case both "scheduled" and "last run" report as healthy.
  */
-function lastSucceeded(cron: ScheduleRow['cron']): string {
+function lastSucceeded(cron: ScheduleRow['cron'], fmt: DateTimeFormatter): string {
   if (cron.lastSuccessAt) {
-    return new Date(cron.lastSuccessAt).toLocaleTimeString();
+    return fmt.time(cron.lastSuccessAt);
   }
 
   return cron.lastRunAt ? 'never' : '—';
@@ -629,6 +632,7 @@ function SchedulesTable({
   saving: boolean;
   onSave: (patch: JobControlsPatch) => Promise<boolean>;
 }) {
+  const fmt = useDateTimeFormat();
   // Only offer the column when something in it can actually be switched.
   const switchable = rows.some((row) => row.control != null);
 
@@ -699,12 +703,14 @@ function SchedulesTable({
                 <ScheduleStatus cron={cron} />
               </td>
               <td className="py-1.5 pr-3 text-right tabular-nums text-muted-foreground">
-                {cron.nextRunAt ? new Date(cron.nextRunAt).toLocaleTimeString() : '—'}
+                {cron.nextRunAt ? fmt.time(cron.nextRunAt) : '—'}
               </td>
               <td className="py-1.5 pr-3 text-right tabular-nums text-muted-foreground">
-                {cron.lastRunAt ? new Date(cron.lastRunAt).toLocaleTimeString() : '—'}
+                {cron.lastRunAt ? fmt.time(cron.lastRunAt) : '—'}
               </td>
-              <td className="py-1.5 text-right tabular-nums text-muted-foreground">{lastSucceeded(cron)}</td>
+              <td className="py-1.5 text-right tabular-nums text-muted-foreground">
+                {lastSucceeded(cron, fmt)}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -722,6 +728,7 @@ function SchedulesPhoneList({
   saving: boolean;
   onSave: (patch: JobControlsPatch) => Promise<boolean>;
 }) {
+  const fmt = useDateTimeFormat();
   const groups = useMemo(() => {
     const map = new Map<string, ScheduleRow[]>();
 
@@ -777,9 +784,9 @@ function SchedulesPhoneList({
                       {schedule.frequency}
                       {schedule.when ? ` · ${schedule.when}` : ''}
                       {' · next '}
-                      {cron.nextRunAt ? new Date(cron.nextRunAt).toLocaleTimeString() : '—'}
+                      {cron.nextRunAt ? fmt.time(cron.nextRunAt) : '—'}
                       {' · succeeded '}
-                      {lastSucceeded(cron)}
+                      {lastSucceeded(cron, fmt)}
                     </p>
                   </li>
                 ))}

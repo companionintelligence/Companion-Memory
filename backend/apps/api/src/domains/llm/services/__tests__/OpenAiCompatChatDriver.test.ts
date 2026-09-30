@@ -2,8 +2,11 @@ import type { Message as OllamaMessage, Tool } from 'ollama';
 
 import {
   extractEmbeddedToolCalls,
+  isResponseFormatRejection,
+  OpenAiCompatChatDriver,
   toOpenAiMessages,
   toOpenAiTools,
+  toResponseFormat,
   vllmThinkingExtraBody,
 } from '../OpenAiCompatChatDriver';
 
@@ -191,5 +194,92 @@ place
 
     expect(prose).not.toContain('<toolcall>');
     expect(toolCalls[0].function.name).toBe('memory_remember');
+  });
+});
+
+const SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] };
+
+describe('toResponseFormat', () => {
+  it("maps Ollama's format onto the OpenAI response_format", () => {
+    expect(toResponseFormat(undefined)).toBeUndefined();
+    expect(toResponseFormat('json')).toEqual({ type: 'json_object' });
+    expect(toResponseFormat(SCHEMA)).toEqual({
+      type: 'json_schema',
+      json_schema: { name: 'response', schema: SCHEMA },
+    });
+  });
+
+  it('degrades a schema to json_object once the backend has refused schemas', () => {
+    expect(toResponseFormat(SCHEMA, true)).toEqual({ type: 'json_object' });
+  });
+});
+
+describe('isResponseFormatRejection', () => {
+  const apiError = (status: number, message: string) => Object.assign(new Error(message), { status });
+
+  it('recognises a 4xx that blames the response format', () => {
+    expect(isResponseFormatRejection(apiError(400, '400 response_format json_schema is not supported'))).toBe(
+      true,
+    );
+    expect(isResponseFormatRejection(apiError(400, '400 Failed to parse grammar'))).toBe(true);
+  });
+
+  it('leaves every other failure alone', () => {
+    expect(
+      isResponseFormatRejection(apiError(400, '400 the request exceeds the available context size')),
+    ).toBe(false);
+    expect(isResponseFormatRejection(apiError(500, '500 json_schema backend crashed'))).toBe(false);
+    expect(isResponseFormatRejection(new Error('fetch failed'))).toBe(false);
+  });
+});
+
+describe('OpenAiCompatChatDriver.chat with a JSON Schema format', () => {
+  function driverWith(create: jest.Mock) {
+    const driver = new OpenAiCompatChatDriver('http://backend.invalid/v1', 'key');
+    (
+      driver as unknown as { client: { chat: { completions: { create: jest.Mock } } } }
+    ).client.chat.completions.create = create;
+
+    return driver;
+  }
+
+  const reply = { choices: [{ message: { role: 'assistant', content: '{"ok":true}' } }] };
+  const request = { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }], format: SCHEMA };
+
+  it('sends json_schema', async () => {
+    const create = jest.fn(async (_body: Record<string, unknown>) => reply);
+
+    await driverWith(create).chat(request);
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0]).toMatchObject({
+      response_format: { type: 'json_schema', json_schema: { name: 'response', schema: SCHEMA } },
+    });
+  });
+
+  it('retries once with json_object when the backend refuses schemas, then stops asking', async () => {
+    const create = jest
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('400 json_schema not supported'), { status: 400 }))
+      .mockResolvedValue(reply);
+    const driver = driverWith(create);
+
+    await expect(driver.chat(request)).resolves.toMatchObject({ message: { content: '{"ok":true}' } });
+    await driver.chat(request);
+
+    expect(create.mock.calls.map(([body]) => body.response_format.type)).toEqual([
+      'json_schema',
+      'json_object',
+      'json_object',
+    ]);
+  });
+
+  it('does not retry an unrelated failure', async () => {
+    const create = jest
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('404 model not found'), { status: 404 }));
+
+    await expect(driverWith(create).chat(request)).rejects.toThrow('model not found');
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });

@@ -5,9 +5,11 @@ import path from 'node:path';
 
 import Database from 'better-sqlite3';
 
+import { markSharedContactHandles } from '../staging/identity';
+
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { EntityAttribute, ImportParams } from './timeline';
+import type { Entity, EntityAttribute, ImportParams } from './timeline';
 
 type AppleContactsOptions = Record<string, never>;
 
@@ -74,6 +76,27 @@ interface PragmaColumnRow {
   name: string;
 }
 
+/**
+ * The accumulating entity-metadata keys, as vcard.ts declares its own (see
+ * Entity.accumulate): a card that resolves to a row an earlier sighting created
+ * GROWS it instead of vanishing into it.
+ *
+ * `Phones` and `Emails` are the ones that matter most. They are every number
+ * and address on the card AS TYPED, and they are the only durable copy: the
+ * identity attributes are read once for `identity_key` and never persisted, and
+ * the staged run they describe is retention-swept. A row that keeps nothing but
+ * its derived key cannot be re-keyed when the key rule changes — the phone
+ * extension fix could prove a truncated `(212) 555-0147;229` key for vCard rows
+ * and for no Apple Contacts row, because vcard.ts kept `Phones` and this parser
+ * did not (migration 20260930020117).
+ */
+const ACCUMULATED_KEYS = ['Names', 'Emails', 'Phones', 'URLs'];
+
+/** Unique, order-preserving, empties removed. */
+function uniq(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
 /** One contact accumulated across its joined phone/email/url rows. */
 interface ContactAccumulator {
   id?: number;
@@ -130,29 +153,36 @@ export class AppleContactsFileImporter implements FileImporter {
       return;
     }
 
+    // Every contact this call reads, emitted together at the end: whether a
+    // number is one person's or an office line several cards list can only be
+    // seen across all of them — see markSharedContactHandles. The per-account
+    // databases count as one address book for that, since colleagues are as
+    // likely to be split between a work account and iCloud as not.
+    const contacts: Entity[] = [];
+
     const stat = fs.statSync(start);
     if (stat.isDirectory()) {
       const dbPath = path.join(start, ADDRESS_BOOK_DB);
       if (fs.existsSync(dbPath)) {
-        await this.processDB(dbPath, params);
+        await this.processDB(dbPath, params, contacts);
       }
 
       // Each per-account database is independent: one account's corrupt or
       // unreadable db must not stop the others (processDB isolates its own
       // errors per call already).
       for (const sourceDb of findSourceDbs(start)) {
-        await this.processDB(sourceDb, params);
+        await this.processDB(sourceDb, params, contacts);
       }
-
-      return;
+    } else if (path.basename(start) === ADDRESS_BOOK_DB) {
+      await this.processDB(start, params, contacts);
     }
 
-    if (path.basename(start) === ADDRESS_BOOK_DB) {
-      await this.processDB(start, params);
+    for (const entity of markSharedContactHandles(contacts)) {
+      params.pipeline.push({ entity });
     }
   }
 
-  private processDB(dbPath: string, params: ImportParams): void {
+  private processDB(dbPath: string, params: ImportParams, contacts: Entity[]): void {
     let db: Database.Database | undefined;
     try {
       db = new Database(dbPath, { readonly: true });
@@ -201,7 +231,7 @@ export class AppleContactsFileImporter implements FileImporter {
       let current: ContactAccumulator = { phones: [], emails: [], urls: [], nameParts: [] };
       for (const row of db.prepare(query).iterate() as IterableIterator<ContactRow>) {
         if (row.Z_PK !== currentId) {
-          this.flushEntity(currentId, current, params, dbPath);
+          this.flushEntity(currentId, current, dbPath, contacts);
           currentId = row.Z_PK;
           current = {
             id: row.Z_PK,
@@ -228,7 +258,7 @@ export class AppleContactsFileImporter implements FileImporter {
         }
       }
 
-      this.flushEntity(currentId, current, params, dbPath);
+      this.flushEntity(currentId, current, dbPath, contacts);
     } catch (e) {
       params.log?.('error', 'contacts query failed', { error: (e as Error).message });
       params.pipeline.drop?.('query_failed', path.basename(dbPath));
@@ -241,7 +271,7 @@ export class AppleContactsFileImporter implements FileImporter {
     }
   }
 
-  private flushEntity(id: number | undefined, c: ContactAccumulator, params: ImportParams, dbPath: string) {
+  private flushEntity(id: number | undefined, c: ContactAccumulator, dbPath: string, contacts: Entity[]) {
     if (!id) {
       return;
     }
@@ -250,16 +280,22 @@ export class AppleContactsFileImporter implements FileImporter {
       ?.filter((p): p is string => !!p)
       .join(' ')
       .trim();
+    // The query LEFT JOINs three tables, so a contact with two phones and two
+    // emails comes back as four rows and each value was accumulated once per row
+    // it rode in on. A card's numbers are a set.
+    const phones = uniq(c.phones);
+    const emails = uniq(c.emails);
+    const urls = uniq(c.urls);
     const attributes: EntityAttribute[] = [];
-    for (const p of c.phones) {
+    for (const p of phones) {
       attributes.push({ name: 'phone', value: p, identity: true });
     }
 
-    for (const e of c.emails) {
+    for (const e of emails) {
       attributes.push({ name: 'email', value: e, identity: true });
     }
 
-    for (const u of c.urls) {
+    for (const u of urls) {
       attributes.push({ name: 'url', value: u });
     }
 
@@ -288,19 +324,25 @@ export class AppleContactsFileImporter implements FileImporter {
         ? path.basename(path.dirname(dbPath))
         : undefined;
 
-    params.pipeline.push({
+    contacts.push({
+      name,
       // See vcard.ts: an Address Book card is a contact regardless of which
       // optional fields it happens to fill.
-      entity: {
-        name,
-        type: 'contact',
-        attributes,
-        metadata: {
-          Source: 'AppleContacts',
-          DB: path.basename(dbPath),
-          ...(accountId ? { AccountID: accountId } : {}),
-        },
+      type: 'contact',
+      attributes,
+      // Every handle as typed, not only the one `identity_key` keeps — see
+      // ACCUMULATED_KEYS. `push/entities.ts` spreads this bag into
+      // `ci.entities.properties`.
+      metadata: {
+        Source: 'AppleContacts',
+        DB: path.basename(dbPath),
+        ...(accountId ? { AccountID: accountId } : {}),
+        ...(name ? { Names: [name] } : {}),
+        ...(emails.length ? { Emails: emails } : {}),
+        ...(phones.length ? { Phones: phones } : {}),
+        ...(urls.length ? { URLs: urls } : {}),
       },
+      accumulate: ACCUMULATED_KEYS,
     });
   }
 }

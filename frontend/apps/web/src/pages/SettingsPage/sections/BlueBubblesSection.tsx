@@ -13,6 +13,8 @@ import {
 } from '@ci/shadcn/icons';
 
 import { useAuth, useCurrentUser } from '@/hooks';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 interface BlueBubblesConfigResponse {
   host: string;
@@ -43,13 +45,13 @@ interface TestConnectionResult {
 
 const DEFAULT_PORT = '1234';
 
-function formatTimestamp(value: string | null): string {
+function formatTimestamp(value: string | null, fmt: DateTimeFormatter): string {
   if (!value) {
     return 'never';
   }
 
   try {
-    return new Date(value).toLocaleString();
+    return fmt.dateTime(value);
   } catch {
     return value;
   }
@@ -67,6 +69,7 @@ function formatTimestamp(value: string | null): string {
  */
 export function BlueBubblesSection() {
   const [{ authToken }] = useAuth();
+  const fmt = useDateTimeFormat();
   // The BlueBubbles connection is one configuration for the whole appliance, and "test
   // connection" makes the appliance dial an arbitrary host. Both are administrator actions on
   // the server (ApplianceAdminGuard); reading the current settings is not.
@@ -493,11 +496,11 @@ export function BlueBubblesSection() {
             <dl className="grid gap-1 text-sm text-muted-foreground">
               <div className="flex justify-between gap-4">
                 <dt>Last sync</dt>
-                <dd>{formatTimestamp(config.lastSyncCursor)}</dd>
+                <dd>{formatTimestamp(config.lastSyncCursor, fmt)}</dd>
               </div>
               <div className="flex justify-between gap-4">
                 <dt>Last webhook received</dt>
-                <dd>{formatTimestamp(config.lastWebhookReceivedAt)}</dd>
+                <dd>{formatTimestamp(config.lastWebhookReceivedAt, fmt)}</dd>
               </div>
             </dl>
           </Card.Content>

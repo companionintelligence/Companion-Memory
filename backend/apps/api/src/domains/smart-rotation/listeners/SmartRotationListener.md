@@ -33,8 +33,9 @@ each work type to its owning domain while keeping expensive work on pg-boss.
 
 ### `findNextUnansweredQuestionId`
 
-- **Does**: Selects the least-recently-attempted eligible question outside the retry cooldown.
-- **Interacts with**: Live and archived pg-boss attempt rows.
+- **Does**: Selects the least-recently-attempted eligible question outside the retry cooldown; among untried questions, the catalogue's rotation order — tier, batch age, then a round-robin across categories in the order the seed files list them (`ci.questions.seed_position`).
+- **Interacts with**: Live and archived pg-boss attempt rows; `QUESTION_ROTATION_RANK_SQL` / `QUESTION_ROTATION_ORDER_SQL` from `domains/intelligence/questionOrder.ts`.
+- **Rationale**: The order is shared with `QuestionService.findUnansweredByUserId` rather than copied. This copy had drifted — no tier rank, and a `question_id` tiebreak that is a different shuffle on every appliance, because the seeded catalogue carries random v4 ids under one `created_at`.
 
 ## Contracts
 
@@ -45,6 +46,7 @@ each work type to its owning domain while keeping expensive work on pg-boss.
 | Summary sidecar | The hourly digest is dispatched on every tick, whatever the dossier does | Restoring an either/or dispatch, or gating `hourly_summary` on anything |
 | Summary sidecar | Once a dossier has been built, `dossier_refresh` arrives only when a summary has been stored since — but every unknown state (including a user who has never produced one) still dispatches every tick | Making the dossier unconditional (an hourly LLM rebuild), or gating it on a clock, a run history, or `entities.updated_at` |
 | Insight sidecar | It is the authoritative novelty gate | Adding a scheduler-side novelty gate |
+| `QuestionService.findUnansweredByUserId` | Both inference selectors ask in one order, from `questionOrder.ts` | Giving either selector its own ORDER BY, or breaking a tie on `question_id` before the rotation keys |
 
 ## Notes
 

@@ -8,7 +8,12 @@ import { useCaptureModal } from '@/hooks';
 
 import { usePowerRail } from '../PowerRailContext';
 import { PowerRailWordmark } from '../PowerRailToggle';
-import { HELP_LINKS, useVisibleRailDestinations } from '../railDestinations';
+import {
+  HELP_LINKS,
+  type RailDestination,
+  railClusters,
+  useVisibleRailDestinations,
+} from '../railDestinations';
 import { RailEdgeToggle } from '../RailEdgeToggle';
 
 import { CaptureRailButton } from './CaptureRailButton';
@@ -16,6 +21,14 @@ import { DestinationWithChildrenSubmenu } from './DestinationWithChildrenSubmenu
 import { MemorySubmenu } from './MemorySubmenu';
 import { NavLink } from './NavLink';
 import { PlanningSubmenu } from './PlanningSubmenu';
+import {
+  RAIL_CHILD_HEIGHT,
+  RAIL_CHILD_INSET,
+  RAIL_SECTION_HEIGHT,
+  RAIL_SECTION_INSET,
+  RailChildren,
+  railRowTone,
+} from './railRow';
 import { SelfSubmenu } from './SelfSubmenu';
 
 interface ExternalNavLinkProps {
@@ -24,31 +37,27 @@ interface ExternalNavLinkProps {
   children: ReactNode;
 }
 
+/**
+ * One of Help's rows — a child row, like Tasks under Planning. Only the open
+ * rail shows them: collapsed, Help is a single icon (see {@link HelpSubmenu}).
+ */
 function ExternalNavLink({ href, label, children }: ExternalNavLinkProps) {
-  const { expanded } = usePowerRail();
-
-  const link = (
+  return (
     <a
       href={href}
       target="_blank"
       rel="noopener noreferrer"
       aria-label={label}
-      className="relative flex items-center gap-3 rounded-md px-2 py-2 transition will-change-transform hover:bg-accent hover:text-accent-foreground active:scale-95"
+      className={cn(
+        'relative flex min-w-0 items-center gap-2.5 rounded-md text-sm transition will-change-transform active:scale-95',
+        RAIL_CHILD_HEIGHT,
+        RAIL_CHILD_INSET,
+        railRowTone(false),
+      )}
     >
       {children}
-      {expanded && <span className="truncate text-sm">{label}</span>}
+      <span className="truncate">{label}</span>
     </a>
-  );
-
-  if (expanded) {
-    return link;
-  }
-
-  return (
-    <Tooltip>
-      <Tooltip.Trigger asChild>{link}</Tooltip.Trigger>
-      <Tooltip.Content side="right">{label}</Tooltip.Content>
-    </Tooltip>
   );
 }
 
@@ -72,7 +81,11 @@ function HelpSubmenu() {
             target="_blank"
             rel="noopener noreferrer"
             aria-label="Help"
-            className="relative flex items-center justify-center rounded-md p-2 transition hover:bg-accent hover:text-accent-foreground active:scale-95"
+            className={cn(
+              'relative flex items-center justify-center rounded-md transition active:scale-95',
+              RAIL_SECTION_HEIGHT,
+              railRowTone(false),
+            )}
           >
             <CircleHelp className="h-6 w-6 shrink-0" strokeWidth={1.25} />
           </a>
@@ -84,18 +97,23 @@ function HelpSubmenu() {
 
   return (
     <Collapsible>
-      <Collapsible.Trigger className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition hover:bg-accent hover:text-accent-foreground [&[data-state=open]>svg:last-child]:rotate-90">
-        {/* Same 32px leading cell as the account avatar so "Help" and the
-            name share one left edge, instead of each label padding off its
-            own icon width. */}
-        <span className="grid size-8 shrink-0 place-items-center">
-          <CircleHelp className="h-6 w-6" strokeWidth={1.25} />
-        </span>
+      {/* A section row like the ones above it: its icon on their icon column,
+          "Help" on their label column — which is also where the account row
+          below starts its name. */}
+      <Collapsible.Trigger
+        className={cn(
+          'flex w-full items-center gap-3 rounded-md text-left transition [&[data-state=open]>svg:last-child]:rotate-90',
+          RAIL_SECTION_HEIGHT,
+          RAIL_SECTION_INSET,
+          railRowTone(false),
+        )}
+      >
+        <CircleHelp className="h-6 w-6 shrink-0" strokeWidth={1.25} />
         <span className="flex-1 truncate text-sm">Help</span>
         <ChevronRight className="h-4 w-4 shrink-0 transition-transform duration-200" />
       </Collapsible.Trigger>
       <Collapsible.Content className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
-        <div className="flex flex-col gap-1 pl-6 pt-1">
+        <RailChildren>
           {HELP_LINKS.map((link) => {
             const Icon = link.icon;
 
@@ -105,7 +123,7 @@ function HelpSubmenu() {
               </ExternalNavLink>
             );
           })}
-        </div>
+        </RailChildren>
       </Collapsible.Content>
     </Collapsible>
   );
@@ -122,11 +140,49 @@ function HelpSubmenu() {
  */
 function OverlayRailHeader({ closeOverlay }: { closeOverlay: () => void }) {
   return (
-    // Same inset as a nav row (`border-l-2` + `px-2 py-2`) so the mark sits on
-    // the same left edge as Capture / Planning instead of hugging the pane.
+    // `border-l-2` + `px-2` matches the rows' inset to their icon
+    // (`RAIL_SECTION_INSET`), so the mark centres on the icon column below
+    // instead of hugging the pane edge. The border is transparent and never
+    // coloured: it is only spacing here.
     <div className="flex min-w-0 items-center border-l-2 border-transparent px-2 py-2">
       <PowerRailWordmark />
       <RailEdgeToggle open onClick={closeOverlay} className="ml-auto shrink-0" />
+    </div>
+  );
+}
+
+/**
+ * The part of the rail that scrolls: every destination above the footer.
+ *
+ * Its bottom edge fades out, so a list that runs on under the footer's divider
+ * says so; the padding under the last row lets that row scroll clear of the
+ * fade. A mask rather than a gradient painted over the list, because the
+ * desktop rail's surface is translucent and no single colour would match it.
+ */
+function RailScrollArea({ children }: { children: ReactNode }) {
+  return (
+    <div
+      data-testid="rail-scroll"
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-7 [mask-image:linear-gradient(to_bottom,black_calc(100%-1.75rem),transparent)] [scrollbar-gutter:stable]"
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Help and the account, pinned under a divider at the foot of the rail while
+ * everything above them scrolls — the two are what you reach for from any
+ * page, so they never scroll out of reach.
+ */
+function RailFooter({ showSelf }: { showSelf: boolean }) {
+  return (
+    <div
+      data-testid="rail-footer"
+      className="mt-1 flex shrink-0 flex-col gap-0.5 border-t border-border pb-2 pt-2"
+    >
+      <HelpSubmenu />
+      {showSelf ? <SelfSubmenu /> : null}
     </div>
   );
 }
@@ -154,22 +210,49 @@ function OverlayRail({
         }
       }}
       className={cn(
-        'fixed inset-y-0 left-0 z-40 flex w-56 flex-col overflow-x-hidden px-2 pb-[max(0.5rem,var(--safe-area-bottom))] pt-[var(--safe-area-top)] transition-transform duration-200',
-        'border-r border-white/55 bg-white/35 shadow-xl backdrop-blur-xl dark:border-white/20 dark:bg-white/10',
+        // 300px, less a 56px strip of page on the narrowest phones, so there
+        // is always some scrim left to tap.
+        'fixed inset-y-0 left-0 z-40 flex w-[min(300px,calc(100vw-56px))] flex-col overflow-x-hidden px-2 pb-[max(0.5rem,var(--safe-area-bottom))] pt-[var(--safe-area-top)] transition-transform duration-200',
+        // Opaque. A translucent pane let whatever sat behind it — a bright
+        // card, the chat page's empty-state icon — bleed through between the
+        // rows.
+        'border-r border-border bg-background shadow-xl',
         expanded ? 'translate-x-0' : 'pointer-events-none -translate-x-full',
       )}
     >
       <Tooltip.Provider>
         <OverlayRailHeader closeOverlay={closeOverlay} />
-        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto [scrollbar-gutter:stable]">
-          {destinationsList}
-        </div>
-        <div className="mt-auto flex flex-col gap-1 pb-2">
-          <HelpSubmenu />
-          {showSelf ? <SelfSubmenu /> : null}
-        </div>
+        <RailScrollArea>{destinationsList}</RailScrollArea>
+        <RailFooter showSelf={showSelf} />
       </Tooltip.Provider>
     </nav>
+  );
+}
+
+function RailDestinationRow({ destination }: { destination: RailDestination }) {
+  if (destination.id === 'memory') {
+    return <MemorySubmenu />;
+  }
+
+  if (destination.id === 'plan') {
+    return <PlanningSubmenu />;
+  }
+
+  // Any destination carrying children (currently Saved Searches, with Asks
+  // beside it) gets the group treatment: a chevron reveals them. A gated group
+  // whose flag is off never reaches here — its children are promoted to plain
+  // top-level rows by `visibleRailDestinations` and fall through to the
+  // NavLink below.
+  if (destination.children && destination.children.length > 0) {
+    return <DestinationWithChildrenSubmenu destination={destination} />;
+  }
+
+  const Icon = destination.icon;
+
+  return (
+    <NavLink to={destination.to} label={destination.label} end={destination.end}>
+      <Icon className="h-6 w-6 shrink-0" strokeWidth={1.25} />
+    </NavLink>
   );
 }
 
@@ -180,39 +263,25 @@ export function SecondaryNavigation() {
   const overlay = variant === 'overlay';
   const showSelf = destinations.some((destination) => destination.id === 'self');
 
+  // Self is the account row in the footer, not a destination in the list.
+  const clusters = railClusters(destinations.filter((destination) => destination.id !== 'self'));
+
   const destinationsList = (
-    <div className="flex flex-col gap-1">
-      <CaptureRailButton />
-      {destinations.map((destination) => {
-        if (destination.id === 'self') {
-          return null;
-        }
-
-        if (destination.id === 'memory') {
-          return <MemorySubmenu key={destination.id} />;
-        }
-
-        if (destination.id === 'plan') {
-          return <PlanningSubmenu key={destination.id} />;
-        }
-
-        // Any destination carrying children (currently Saved Searches, with
-        // Asks beside it) gets the group treatment: a chevron reveals them.
-        // A gated group whose flag is off never reaches here — its children
-        // are promoted to plain top-level rows by `visibleRailDestinations`
-        // and fall through to the NavLink below.
-        if (destination.children && destination.children.length > 0) {
-          return <DestinationWithChildrenSubmenu key={destination.id} destination={destination} />;
-        }
-
-        const Icon = destination.icon;
-
-        return (
-          <NavLink key={destination.id} to={destination.to} label={destination.label} end={destination.end}>
-            <Icon className="h-6 w-6 shrink-0" strokeWidth={1.25} />
-          </NavLink>
-        );
-      })}
+    <div className="flex flex-col">
+      {clusters.map((cluster, index) => (
+        // Space and a hairline between clusters, and no label: the rows say
+        // what they are, and a heading would be one more row to scroll past.
+        <div
+          key={cluster[0].id}
+          data-testid="rail-cluster"
+          className={cn('flex flex-col gap-0.5', index > 0 && 'mt-2.5 border-t border-border pt-2.5')}
+        >
+          {index === 0 ? <CaptureRailButton /> : null}
+          {cluster.map((destination) => (
+            <RailDestinationRow key={destination.id} destination={destination} />
+          ))}
+        </div>
+      ))}
     </div>
   );
 
@@ -262,14 +331,8 @@ export function SecondaryNavigation() {
           )}
         >
           <Tooltip.Provider>
-            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto [scrollbar-gutter:stable]">
-              {destinationsList}
-            </div>
-
-            <div className="mt-auto flex flex-col gap-1 pb-2">
-              <HelpSubmenu />
-              {showSelf ? <SelfSubmenu /> : null}
-            </div>
+            <RailScrollArea>{destinationsList}</RailScrollArea>
+            <RailFooter showSelf={showSelf} />
           </Tooltip.Provider>
         </nav>
       </div>

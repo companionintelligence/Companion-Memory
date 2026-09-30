@@ -25,7 +25,7 @@ from pydantic_ai import Agent, NativeOutput, PromptedOutput, ToolOutput
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from .config import resolve_llm_model, settings
+from .config import resolve_llm_model, resolve_output_mode, settings
 
 logger = structlog.get_logger()
 
@@ -38,9 +38,9 @@ def wrap_output(response_type):
     rejects), and small models fumble strict schemas. 'native' uses Ollama's
     json_schema response_format (server-enforced); 'prompted' puts the schema in
     the prompt and parses the text reply. Both avoid tool calls. See
-    settings.output_mode (SUMMARY_OUTPUT_MODE).
+    resolve_output_mode (SUMMARY_OUTPUT_MODE, else chosen from the endpoint).
     """
-    mode = (settings.output_mode or "native").lower()
+    mode = resolve_output_mode()
     if mode == "tool":
         return ToolOutput(response_type)
     if mode == "prompted":

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import { createDateTimeFormatter, DEVICE_DATE_TIME_FORMATTER } from '@/lib/dateTimeFormat';
+
 import { describePendingChange, formatSlot } from './pendingRationale';
+
+/** Today's behaviour: the locale's own hour cycle. */
+const AUTO = DEVICE_DATE_TIME_FORMATTER;
 
 const LA = 'America/Los_Angeles';
 const NY = 'America/New_York';
@@ -15,25 +20,37 @@ describe('formatSlot', () => {
   it('reads the instant on the given zone’s clock', () => {
     const start = new Date(START);
 
-    expect(formatSlot(start, 'UTC', NOW, 'en-US')).toMatch(/^Mon, Sep 28 at 4:00\sPM$/);
-    expect(formatSlot(start, NY, NOW, 'en-US')).toMatch(/^Mon, Sep 28 at 12:00\sPM$/);
-    expect(formatSlot(start, LA, NOW, 'en-US')).toMatch(/^Mon, Sep 28 at 9:00\sAM$/);
+    expect(formatSlot(start, 'UTC', AUTO, NOW, 'en-US')).toMatch(/^Mon, Sep 28 at 4:00\sPM$/);
+    expect(formatSlot(start, NY, AUTO, NOW, 'en-US')).toMatch(/^Mon, Sep 28 at 12:00\sPM$/);
+    expect(formatSlot(start, LA, AUTO, NOW, 'en-US')).toMatch(/^Mon, Sep 28 at 9:00\sAM$/);
   });
 
   it('names the zone-local day across midnight', () => {
     const start = new Date('2026-09-29T02:30:00.000Z');
 
-    expect(formatSlot(start, LA, NOW, 'en-US')).toMatch(/^Mon, Sep 28 at 7:30\sPM$/);
-    expect(formatSlot(start, SYDNEY, NOW, 'en-US')).toMatch(/^Tue, Sep 29 at 12:30\sPM$/);
+    expect(formatSlot(start, LA, AUTO, NOW, 'en-US')).toMatch(/^Mon, Sep 28 at 7:30\sPM$/);
+    expect(formatSlot(start, SYDNEY, AUTO, NOW, 'en-US')).toMatch(/^Tue, Sep 29 at 12:30\sPM$/);
+  });
+
+  it('writes the time in the chosen hour cycle, still on the given zone’s clock', () => {
+    const start = new Date(START);
+    // The formatter's own zone is not the surface's: the zone passed in wins.
+    const h23 = createDateTimeFormatter({ timeFormat: 'h23', timeZone: 'Asia/Tokyo' });
+    const h12 = createDateTimeFormatter({ timeFormat: 'h12', timeZone: 'Asia/Tokyo' });
+
+    expect(formatSlot(start, 'UTC', h23, NOW, 'en-US')).toBe('Mon, Sep 28 at 16:00');
+    expect(formatSlot(start, LA, h23, NOW, 'en-US')).toBe('Mon, Sep 28 at 09:00');
+    // A 24-hour locale forced to 12-hour (the date half is the locale's own, whatever ICU makes it).
+    expect(formatSlot(start, 'UTC', h12, NOW, 'en-GB')).toMatch(/ at 4:00\spm$/i);
   });
 
   it('adds the year only when it is not this year in that zone', () => {
     const start = new Date('2027-01-04T17:00:00.000Z');
 
-    expect(formatSlot(start, LA, new Date('2026-12-30T12:00:00.000Z'), 'en-US')).toMatch(
+    expect(formatSlot(start, LA, AUTO, new Date('2026-12-30T12:00:00.000Z'), 'en-US')).toMatch(
       /^Mon, Jan 4, 2027 at 9:00\sAM$/,
     );
-    expect(formatSlot(start, LA, new Date('2027-01-02T12:00:00.000Z'), 'en-US')).toMatch(
+    expect(formatSlot(start, LA, AUTO, new Date('2027-01-02T12:00:00.000Z'), 'en-US')).toMatch(
       /^Mon, Jan 4 at 9:00\sAM$/,
     );
   });
@@ -48,26 +65,26 @@ describe('describePendingChange', () => {
   };
 
   it('words a schedule suggestion from its start instant, in the owner’s zone', () => {
-    const text = describePendingChange(legacy, LA, NOW, 'en-US');
+    const text = describePendingChange(legacy, LA, AUTO, NOW, 'en-US');
 
     expect(text).toMatch(/^Place on the calendar on Mon, Sep 28 at 9:00\sAM\?$/);
     expect(text).not.toMatch(ISO_INSTANT);
   });
 
   it('follows the zone it is given, not the one the row was filed in', () => {
-    expect(describePendingChange(legacy, NY, NOW, 'en-US')).toMatch(/at 12:00\sPM\?$/);
+    expect(describePendingChange(legacy, NY, AUTO, NOW, 'en-US')).toMatch(/at 12:00\sPM\?$/);
   });
 
   it('reads a row the server already worded the same way', () => {
     const current = { ...legacy, rationale: 'Place on the calendar on Mon, Sep 28 at 9:00 AM?' };
 
-    expect(describePendingChange(current, LA, NOW, 'en-US')).toMatch(
+    expect(describePendingChange(current, LA, AUTO, NOW, 'en-US')).toMatch(
       /^Place on the calendar on Mon, Sep 28 at 9:00\sAM\?$/,
     );
   });
 
   it('never shows a raw ISO instant even when the patch carries no start', () => {
-    const text = describePendingChange({ ...legacy, startTime: null }, LA, NOW, 'en-US');
+    const text = describePendingChange({ ...legacy, startTime: null }, LA, AUTO, NOW, 'en-US');
 
     expect(text).not.toMatch(ISO_INSTANT);
     // "on", not "at Mon, Sep 28 at 9:00 AM": the legacy "at " goes with the instant.
@@ -79,6 +96,7 @@ describe('describePendingChange', () => {
       describePendingChange(
         { kind: 'mutate', rationale: 'Moved from 2026-09-28T16:00:00Z after a conflict.' },
         NY,
+        AUTO,
         NOW,
         'en-US',
       ),
@@ -86,7 +104,7 @@ describe('describePendingChange', () => {
   });
 
   it('ignores a start instant it cannot parse', () => {
-    const text = describePendingChange({ ...legacy, startTime: 'not a time' }, LA, NOW, 'en-US');
+    const text = describePendingChange({ ...legacy, startTime: 'not a time' }, LA, AUTO, NOW, 'en-US');
 
     expect(text).toMatch(/Mon, Sep 28 at 9:00\sAM/);
   });
@@ -96,6 +114,7 @@ describe('describePendingChange', () => {
       describePendingChange(
         { kind: 'complete', rationale: 'Looks like this may be done.' },
         LA,
+        AUTO,
         NOW,
         'en-US',
       ),
@@ -107,6 +126,7 @@ describe('describePendingChange', () => {
       describePendingChange(
         { kind: 'mutate', rationale: 'Move the due date to 2026-10-02?' },
         LA,
+        AUTO,
         NOW,
         'en-US',
       ),
@@ -114,6 +134,6 @@ describe('describePendingChange', () => {
   });
 
   it('shows nothing when there is nothing to say', () => {
-    expect(describePendingChange({ kind: 'complete', rationale: null }, LA, NOW, 'en-US')).toBeNull();
+    expect(describePendingChange({ kind: 'complete', rationale: null }, LA, AUTO, NOW, 'en-US')).toBeNull();
   });
 });

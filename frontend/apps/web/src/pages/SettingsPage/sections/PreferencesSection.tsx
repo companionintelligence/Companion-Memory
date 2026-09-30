@@ -2,10 +2,18 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { Button, Card, Label, Select } from '@ci/shadcn';
-import { Check, Globe } from '@ci/shadcn/icons';
+import { Check, Clock, Globe } from '@ci/shadcn/icons';
 
 import { gql } from '@/graphql';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import {
+  createDateTimeFormatter,
+  HOUR_MINUTE,
+  isTimeFormat,
+  TIME_FORMATS,
+  type TimeFormat,
+} from '@/lib/dateTimeFormat';
 import { detectBrowserTimeZone, formatTimeZoneLabel, getAvailableTimeZones } from '@/lib/timezone';
 
 const UPDATE_CURRENT_USER = gql(`
@@ -17,18 +25,46 @@ const UPDATE_CURRENT_USER = gql(`
   }
 `);
 
+/**
+ * A document of its own rather than `timeFormat` added to the one above: a server that predates
+ * the field fails validation for any document selecting it, and the phone apps can be newer than
+ * the server they talk to — so a timezone save must never depend on it.
+ */
+const UPDATE_CURRENT_USER_TIME_FORMAT = gql(`
+  mutation UpdateCurrentUserTimeFormat($input: UpdateCurrentUserInput!) {
+    updateCurrentUser(input: $input) {
+      id
+      timeFormat
+    }
+  }
+`);
+
+const TIME_FORMAT_LABELS: Record<TimeFormat, string> = {
+  auto: 'Automatic (from this device)',
+  h12: '12-hour',
+  h23: '24-hour',
+};
+
 export function PreferencesSection() {
   const { user, loading } = useCurrentUser();
-  const [updateCurrentUser, { loading: saving }] = useMutation(UPDATE_CURRENT_USER);
+  const savedFormatter = useDateTimeFormat();
+  const [updateCurrentUser, { loading: savingTimezone }] = useMutation(UPDATE_CURRENT_USER);
+  const [updateTimeFormat, { loading: savingTimeFormat }] = useMutation(UPDATE_CURRENT_USER_TIME_FORMAT);
+  const saving = savingTimezone || savingTimeFormat;
 
   const zones = useMemo(() => getAvailableTimeZones(), []);
   const detected = useMemo(() => detectBrowserTimeZone(), []);
   const currentTimezone = user?.timezone ?? 'UTC';
+  const currentTimeFormat = savedFormatter.timeFormat;
 
   const [selected, setSelected] = useState<string>('');
+  const [selectedTimeFormat, setSelectedTimeFormat] = useState<TimeFormat>(currentTimeFormat);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const savedTimeout = useRef<number | null>(null);
+  // The example is "what a time will look like", so it shows one: the minute the page opened,
+  // on the person's own clock, re-written as they move through the options.
+  const [exampleInstant] = useState(() => new Date());
 
   // Prefill (and re-sync after a successful save) from the loaded user.
   useEffect(() => {
@@ -36,6 +72,10 @@ export function PreferencesSection() {
       setSelected(user.timezone);
     }
   }, [user?.timezone]);
+
+  useEffect(() => {
+    setSelectedTimeFormat(currentTimeFormat);
+  }, [currentTimeFormat]);
 
   // Cancel the "Saved" reset timer if the section unmounts (e.g. modal closed).
   useEffect(
@@ -54,7 +94,14 @@ export function PreferencesSection() {
     [zones, detected, currentTimezone],
   );
 
-  const dirty = selected !== '' && selected !== currentTimezone;
+  const example = createDateTimeFormatter({
+    timeFormat: selectedTimeFormat,
+    timeZone: savedFormatter.timeZone,
+  }).time(exampleInstant, HOUR_MINUTE);
+
+  const timezoneDirty = selected !== '' && selected !== currentTimezone;
+  const timeFormatDirty = selectedTimeFormat !== currentTimeFormat;
+  const dirty = timezoneDirty || timeFormatDirty;
 
   const handleSave = async () => {
     if (!dirty) {
@@ -63,16 +110,31 @@ export function PreferencesSection() {
 
     setError(null);
     try {
-      await updateCurrentUser({ variables: { input: { timezone: selected } } });
-      setSaved(true);
-      if (savedTimeout.current) {
-        window.clearTimeout(savedTimeout.current);
+      if (timezoneDirty) {
+        await updateCurrentUser({ variables: { input: { timezone: selected } } });
       }
-
-      savedTimeout.current = window.setTimeout(() => setSaved(false), 2500);
     } catch {
       setError('Failed to save timezone. Please try again.');
+
+      return;
     }
+
+    try {
+      if (timeFormatDirty) {
+        await updateTimeFormat({ variables: { input: { timeFormat: selectedTimeFormat } } });
+      }
+    } catch {
+      setError('Failed to save time format. Please try again.');
+
+      return;
+    }
+
+    setSaved(true);
+    if (savedTimeout.current) {
+      window.clearTimeout(savedTimeout.current);
+    }
+
+    savedTimeout.current = window.setTimeout(() => setSaved(false), 2500);
   };
 
   return (
@@ -80,7 +142,8 @@ export function PreferencesSection() {
       <div className="mb-6">
         <h2 className="text-xl font-semibold">Preferences</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Set your timezone so predictions, summaries, and insights line up with your local day.
+          Set your timezone so predictions, summaries, and insights line up with your local day, and choose
+          how times are written.
         </p>
       </div>
 
@@ -115,6 +178,38 @@ export function PreferencesSection() {
               >
                 {formatTimeZoneLabel(detected)}
               </button>
+            </p>
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="time-format" className="flex items-center gap-2">
+              <Clock className="h-4 w-4" />
+              Time format
+            </Label>
+
+            <Select
+              value={selectedTimeFormat}
+              onValueChange={(value) => {
+                if (isTimeFormat(value)) {
+                  setSelectedTimeFormat(value);
+                }
+              }}
+              disabled={loading}
+            >
+              <Select.Trigger id="time-format" className="w-full">
+                <Select.Value />
+              </Select.Trigger>
+              <Select.Content>
+                {TIME_FORMATS.map((format) => (
+                  <Select.Item key={format} value={format}>
+                    {TIME_FORMAT_LABELS[format]}
+                  </Select.Item>
+                ))}
+              </Select.Content>
+            </Select>
+
+            <p className="text-xs text-muted-foreground" data-testid="time-format-example">
+              Times will look like <span className="tabular-nums text-foreground">{example}</span>
             </p>
           </div>
 

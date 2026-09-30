@@ -1,6 +1,7 @@
 import { axisPadEraFromRange, partsOf } from '@/components/TimelineJs/dates';
 import type { TimelineJsData, TimelineSlide } from '@/components/TimelineJs/types';
 import { useFragment as readFragment } from '@/graphql';
+import { HOUR_MINUTE, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import { BROWSER_ACTIVITY_FRAGMENT } from '../Components/EntityCard/BrowserActivityCard';
 import { COMMUNICATION_FRAGMENT } from '../Components/EntityCard/CommunicationCard';
@@ -95,7 +96,7 @@ function imageMediaUrl(entity: EntityItem): string | undefined {
   return media.thumbUrl ?? media.fullUrl;
 }
 
-function slideFromEntity(entity: EntityItem): DatedSlide | null {
+function slideFromEntity(entity: EntityItem, fmt: DateTimeFormatter): DatedSlide | null {
   const time = getEntityTimestamp(entity);
   if (!time) {
     return null;
@@ -110,7 +111,7 @@ function slideFromEntity(entity: EntityItem): DatedSlide | null {
         locationName: data.locationName,
         mediaContentType: data.mediaContentType,
       });
-      const when = time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      const when = fmt.time(time, HOUR_MINUTE);
       const bodyBits = [
         when,
         data.locationName,
@@ -141,7 +142,7 @@ function slideFromEntity(entity: EntityItem): DatedSlide | null {
       const fromName = data.from?.name?.trim();
       const headline = data.subject?.trim() || data.preview?.trim() || 'Message';
       const bodyBits = [
-        time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        fmt.time(time, HOUR_MINUTE),
         fromName ? `From ${fromName}` : null,
         data.subject?.trim() ? data.preview?.trim() : null,
       ].filter(Boolean);
@@ -161,9 +162,7 @@ function slideFromEntity(entity: EntityItem): DatedSlide | null {
       const data = readFragment(BROWSER_ACTIVITY_FRAGMENT, entity);
       const headline = data.title?.trim() || 'Untitled page';
       const durationSeconds = typeof data.duration === 'number' ? data.duration : 0;
-      const bodyBits = [time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), data.url].filter(
-        Boolean,
-      );
+      const bodyBits = [fmt.time(time, HOUR_MINUTE), data.url].filter(Boolean);
       const slide: TimelineSlide = {
         start_date: partsOf(time),
         text: { headline, text: bodyBits.join(' · ') },
@@ -282,12 +281,13 @@ export function isTimelineFilling({
  */
 export function buildMemoryTimelineData(
   entities: readonly EntityItem[],
+  fmt: DateTimeFormatter,
   now = new Date(),
   options: MemoryTimelineOptions = {},
 ): MemoryTimelineDeck {
   const { anchor = 'now', focusId = null, maxSlides = MEMORY_TIMELINE_MAX_SLIDES } = options;
   const dated = entities
-    .map(slideFromEntity)
+    .map((entity) => slideFromEntity(entity, fmt))
     .filter((item): item is DatedSlide => item != null)
     .sort((a, b) => a.time.getTime() - b.time.getTime());
 

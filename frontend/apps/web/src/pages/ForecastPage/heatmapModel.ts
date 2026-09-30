@@ -23,6 +23,8 @@
  * into the viewer's local day, exactly as the strip renders it.
  */
 
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
+
 export const HEATMAP_COLUMNS = 96;
 export const MINUTES_PER_SLOT = 15;
 
@@ -154,14 +156,14 @@ export function utcDateKey(instant: Date | string): string | null {
   return d.toISOString().slice(0, 10);
 }
 
-/** Format minutes-since-local-midnight as a clock label (510 → "8:30 AM"). */
-export function formatClock(minutesOfDay: number): string {
+/**
+ * Format minutes-since-local-midnight as a clock label (510 → "8:30 AM", or "08:30" in 24-hour).
+ * A column position, not an instant, so only the hour cycle applies.
+ */
+export function formatClock(minutesOfDay: number, fmt: DateTimeFormatter): string {
   const m = ((minutesOfDay % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
 
-  return new Date(2000, 0, 1, Math.floor(m / 60), m % 60).toLocaleTimeString([], {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return fmt.clock(Math.floor(m / 60), m % 60);
 }
 
 /** Row label like "Mon 7/14" from a YYYY-MM-DD key, or the key when malformed. */

@@ -69,6 +69,22 @@ function correlationId(): string | null {
 }
 
 /**
+ * The machine-readable half of a deliberate error, for a client that has to act
+ * on it rather than print it: an exception raised as
+ * `new BadRequestException({ message, details })` sends `details` out as
+ * `extensions.details`. Opt-in and exact — this promotes that one key and
+ * nothing else from the body, so a client can rely on the name without reading
+ * whatever else the framework attaches.
+ */
+function detailsOf(exception: HttpException): unknown {
+  const body = exception.getResponse();
+
+  return typeof body === 'object' && body !== null && 'details' in body
+    ? (body as { details: unknown }).details
+    : undefined;
+}
+
+/**
  * Apollo `formatError`. Passes deliberate application errors through untouched
  * and replaces everything else with {@link MASKED_MESSAGE}.
  */
@@ -83,13 +99,17 @@ export function formatError(formattedError: GraphQLFormattedError, error: unknow
   const originalError = unwrap(error);
 
   // Raised on purpose by a resolver or guard. The message is part of the
-  // contract — clients render it — so it passes through verbatim.
+  // contract — clients render it — so it passes through verbatim, and so do
+  // the details its author attached for them.
   if (originalError instanceof HttpException) {
+    const details = detailsOf(originalError);
+
     return {
       ...formattedError,
       extensions: {
         ...extensions,
         code: CODES_BY_STATUS[originalError.getStatus()] ?? INTERNAL_SERVER_ERROR,
+        ...(details !== undefined ? { details } : {}),
       },
     };
   }

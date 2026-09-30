@@ -204,10 +204,11 @@ export class GeocodeBatchListener {
   }
 
   /**
-   * Reverse-geocode backfill: events that have coordinates (photo EXIF / GPS /
-   * estimation) but no readable location_name get one, so a bare map pin gains a
-   * label. Idempotent — a resolved row now HAS a name and drops out of the
-   * candidate set; re-runs serve negative results from the geocode cache.
+   * Reverse-geocode backfill: events that have MEASURED coordinates (photo EXIF /
+   * GPS) but no readable location_name get one, so a bare map pin gains a label.
+   * An estimated coordinate is never named — see {@link selectReverseCandidates}.
+   * Idempotent — a resolved row now HAS a name and drops out of the candidate
+   * set; re-runs serve negative results from the geocode cache.
    */
   private async handleReverseBatch(
     userId: string,
@@ -303,6 +304,20 @@ export class GeocodeBatchListener {
    * Select the reverse-backfill candidate set: events for this user that HAVE
    * coordinates but no usable location_name. lat/lng are projected out of the
    * geography Point with ST_Y/ST_X (PostGIS stores [lng, lat]).
+   *
+   * An ESTIMATED coordinate (metadata.location_source = 'estimated') is never a
+   * candidate, in the auto-selection or in an explicit eventIds set — which
+   * otherwise bypasses every filter here, the name check included. The
+   * estimator copies a temporally-neighbouring fix onto an event that had none,
+   * so naming it turns "probably somewhere near here" into "at this address",
+   * and linkPlace then records a visit to that Place that never happened. The
+   * 'reverse_geocoded' tag written afterwards also replaces the 'estimated'
+   * marker, after which nothing downstream can tell the row from a measured
+   * one: the estimator takes it as a donor, and EventReverseStage — which
+   * refuses estimates with `skipped: coordinates_estimated` for exactly this
+   * reason — treats its name as one it owns. COALESCE because a measured row
+   * usually has no location_source at all, and `NULL <> 'estimated'` is NULL,
+   * not true.
    */
   private async selectReverseCandidates(
     userId: string,
@@ -315,7 +330,8 @@ export class GeocodeBatchListener {
       .addSelect('ST_Y(event.location_coordinates::geometry)', 'lat')
       .addSelect('ST_X(event.location_coordinates::geometry)', 'lng')
       .where('event.user_id = :userId', { userId })
-      .andWhere('event.location_coordinates IS NOT NULL');
+      .andWhere('event.location_coordinates IS NOT NULL')
+      .andWhere("COALESCE(event.metadata->>'location_source', '') <> 'estimated'");
 
     if (opts.eventIds && opts.eventIds.length > 0) {
       query.andWhere('event.event_id IN (:...eventIds)', { eventIds: opts.eventIds });

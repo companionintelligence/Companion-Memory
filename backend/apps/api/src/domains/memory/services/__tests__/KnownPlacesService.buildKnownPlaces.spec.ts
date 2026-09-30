@@ -3,6 +3,7 @@ import type { DataSource } from 'typeorm';
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 
+import { LIVE_EVENT_SQL } from '../CalendarEventService';
 import { KnownPlacesService } from '../KnownPlacesService';
 import type { PlaceService } from '../PlaceService';
 
@@ -48,6 +49,25 @@ function row(overrides: Partial<RawRow> = {}): RawRow {
     start_time: WEEKEND_WORK_HOUR,
     ...overrides,
   };
+}
+
+const DAY_MS = 86_400_000;
+
+/** `iso` moved by a whole number of days, keeping its UTC time of day. */
+function plusDays(iso: string, days: number): string {
+  return new Date(Date.parse(iso) + days * DAY_MS).toISOString();
+}
+
+/**
+ * One row a week for `weeks` weeks, each at `start_time`'s time of week. A
+ * place needs its night (or office-hours) signal in three different weeks
+ * before it can be Home (or Work), so a fixture that should be tagged is
+ * spread out this way.
+ */
+function weekly(weeks: number, overrides: Partial<RawRow> & { start_time: string }): RawRow[] {
+  return Array.from({ length: weeks }, (_, week) =>
+    row({ ...overrides, start_time: plusDays(overrides.start_time, week * 7) }),
+  );
 }
 
 function makeService(rows: RawRow[]) {
@@ -169,17 +189,25 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
     }
   });
 
-  it('tags the cluster with the highest night-time share as home', async () => {
+  it('tags a place with nights in three weeks as home, and one with office hours in three as work', async () => {
     const { service } = makeService([
-      // Cluster A: entirely night-time events → strong home signal. Distinct
+      // Cluster A: a night-time event in each of three weeks → home. Distinct
       // coordinates from cluster B — id-anchored candidates resolve by
       // locationId regardless of centroid, but keeping these distinct avoids
       // conflating this test with the colliding-centroid case covered below.
-      row({ location_entity_id: 'loc-home', lat: 40.7128, lng: -74.006, start_time: WEEKDAY_NIGHT_HOUR }),
-      row({ location_entity_id: 'loc-home', lat: 40.7128, lng: -74.006, start_time: WEEKDAY_NIGHT_HOUR }),
-      // Cluster B: entirely weekday work-hours events → strong work signal.
-      row({ location_entity_id: 'loc-work', lat: 34.0522, lng: -118.2437, start_time: WEEKDAY_WORK_HOUR }),
-      row({ location_entity_id: 'loc-work', lat: 34.0522, lng: -118.2437, start_time: WEEKDAY_WORK_HOUR }),
+      ...weekly(3, {
+        location_entity_id: 'loc-home',
+        lat: 40.7128,
+        lng: -74.006,
+        start_time: WEEKDAY_NIGHT_HOUR,
+      }),
+      // Cluster B: a weekday work-hours event in each of three weeks → work.
+      ...weekly(3, {
+        location_entity_id: 'loc-work',
+        lat: 34.0522,
+        lng: -118.2437,
+        start_time: WEEKDAY_WORK_HOUR,
+      }),
     ]);
 
     const candidates = await service.buildKnownPlaces(CONTEXT);
@@ -190,34 +218,20 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
   });
 
   it("buckets night/work hours on the user's wall clock, not UTC", async () => {
-    // 05:00 UTC on a Wednesday is 22:00 Tuesday in Los Angeles: a night event
+    // 06:00 UTC on a Thursday is 23:00 Wednesday in Los Angeles: a night event
     // locally, but neither night nor work-hours in UTC. 17:00 UTC Wednesday is
     // 10:00 local: work hours locally, outside 9-17 in UTC.
-    const LA_NIGHT = '2026-08-19T05:00:00.000Z';
+    const LA_NIGHT = '2026-08-20T06:00:00.000Z';
     const LA_WORK = '2026-08-19T17:00:00.000Z';
     const { service } = makeService([
-      row({
+      ...weekly(3, {
         location_entity_id: 'loc-home',
         lat: 34.07,
         lng: -118.47,
         start_time: LA_NIGHT,
         timezone: 'America/Los_Angeles',
       }),
-      row({
-        location_entity_id: 'loc-home',
-        lat: 34.07,
-        lng: -118.47,
-        start_time: LA_NIGHT,
-        timezone: 'America/Los_Angeles',
-      }),
-      row({
-        location_entity_id: 'loc-work',
-        lat: 33.68,
-        lng: -117.82,
-        start_time: LA_WORK,
-        timezone: 'America/Los_Angeles',
-      }),
-      row({
+      ...weekly(3, {
         location_entity_id: 'loc-work',
         lat: 33.68,
         lng: -117.82,
@@ -235,8 +249,8 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
 
   it('falls back to UTC when the stored timezone is missing or unknown', async () => {
     const { service } = makeService([
-      row({ location_entity_id: 'loc-a', start_time: WEEKDAY_NIGHT_HOUR, timezone: 'Not/AZone' }),
-      row({
+      ...weekly(3, { location_entity_id: 'loc-a', start_time: WEEKDAY_NIGHT_HOUR, timezone: 'Not/AZone' }),
+      ...weekly(3, {
         location_entity_id: 'loc-b',
         lat: 1,
         lng: 1,
@@ -271,13 +285,27 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
     // be surprised here, which is exactly why this needs to be pinned rather
     // than left to find out in production.
     const { service } = makeService([
-      row({ location_entity_id: 'loc-mixed', lat: 40.7128, lng: -74.006, start_time: WEEKDAY_NIGHT_HOUR }),
-      row({ location_entity_id: 'loc-mixed', lat: 40.7128, lng: -74.006, start_time: WEEKDAY_WORK_HOUR }),
+      ...weekly(3, {
+        location_entity_id: 'loc-mixed',
+        lat: 40.7128,
+        lng: -74.006,
+        start_time: WEEKDAY_NIGHT_HOUR,
+      }),
+      ...weekly(3, {
+        location_entity_id: 'loc-mixed',
+        lat: 40.7128,
+        lng: -74.006,
+        start_time: WEEKDAY_WORK_HOUR,
+      }),
       // A second cluster with real support but NEITHER signal — must not be
       // promoted to "work" merely for being the runner-up. Distinct
       // coordinates from loc-mixed (see the home/work test above for why).
-      row({ location_entity_id: 'loc-other', lat: 34.0522, lng: -118.2437, start_time: WEEKEND_WORK_HOUR }),
-      row({ location_entity_id: 'loc-other', lat: 34.0522, lng: -118.2437, start_time: WEEKEND_WORK_HOUR }),
+      ...weekly(3, {
+        location_entity_id: 'loc-other',
+        lat: 34.0522,
+        lng: -118.2437,
+        start_time: WEEKEND_WORK_HOUR,
+      }),
     ]);
 
     const candidates = await service.buildKnownPlaces(CONTEXT);
@@ -300,26 +328,14 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
 
     const { service } = makeService([
       // loc-home: entirely night-time events, but shares its centroid with loc-work.
-      row({
-        location_entity_id: 'loc-home',
-        lat: SHARED_LAT,
-        lng: SHARED_LNG,
-        start_time: WEEKDAY_NIGHT_HOUR,
-      }),
-      row({
+      ...weekly(3, {
         location_entity_id: 'loc-home',
         lat: SHARED_LAT,
         lng: SHARED_LNG,
         start_time: WEEKDAY_NIGHT_HOUR,
       }),
       // loc-work: entirely weekday work-hours events, identical centroid to loc-home.
-      row({
-        location_entity_id: 'loc-work',
-        lat: SHARED_LAT,
-        lng: SHARED_LNG,
-        start_time: WEEKDAY_WORK_HOUR,
-      }),
-      row({
+      ...weekly(3, {
         location_entity_id: 'loc-work',
         lat: SHARED_LAT,
         lng: SHARED_LNG,
@@ -335,6 +351,194 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
     expect(byId.get('loc-work')).toBe('work');
   });
 
+  describe('Home and Work need evidence that recurs over weeks', () => {
+    const kindsById = (candidates: Array<{ locationId: string | null; kind: string }>) =>
+      new Map(candidates.map((c) => [c.locationId, c.kind]));
+
+    it('does not let one late-night event outrank a home with nights in three weeks', async () => {
+      // The defect this rule replaced: tagging by night SHARE crowned a single
+      // 23:00 event (share 1.0) over a real home at 0.75.
+      const { service } = makeService([
+        // Home: a night in each of three weeks, plus a daytime visit. 3 of 4 at night.
+        ...weekly(3, { location_entity_id: 'loc-home', start_time: WEEKDAY_NIGHT_HOUR }),
+        row({ location_entity_id: 'loc-home', start_time: WEEKEND_WORK_HOUR }),
+        // Elsewhere: one pickup at 23:00.
+        row({
+          location_entity_id: 'loc-pickup',
+          lat: 37.78,
+          lng: -122.4,
+          start_time: '2026-08-21T23:00:00.000Z',
+        }),
+      ]);
+
+      const kinds = kindsById(await service.buildKnownPlaces(CONTEXT));
+
+      expect(kinds.get('loc-home')).toBe('home');
+      expect(kinds.get('loc-pickup')).toBe('other');
+    });
+
+    it('tags nothing when no place recurs across three weeks, as on the reference corpus', async () => {
+      // The reference corpus in miniature: its old Home was one late pickup in
+      // another city, and its old Work two pickups at an airport, in two
+      // different weeks. Two nights of one trip complete it.
+      const { service } = makeService([
+        row({
+          location_entity_id: 'loc-pickup',
+          lat: 37.78,
+          lng: -122.4,
+          start_time: '2026-08-21T23:00:00.000Z',
+        }),
+        row({ location_entity_id: 'loc-airport', lat: 33.68, lng: -117.86, start_time: WEEKDAY_WORK_HOUR }),
+        row({
+          location_entity_id: 'loc-airport',
+          lat: 33.68,
+          lng: -117.86,
+          start_time: plusDays(WEEKDAY_WORK_HOUR, 9),
+        }),
+        row({ location_entity_id: 'loc-trip', lat: 42.36, lng: -71.09, start_time: WEEKDAY_NIGHT_HOUR }),
+        row({
+          location_entity_id: 'loc-trip',
+          lat: 42.36,
+          lng: -71.09,
+          start_time: plusDays(WEEKDAY_NIGHT_HOUR, 1),
+        }),
+      ]);
+
+      const candidates = await service.buildKnownPlaces(CONTEXT);
+
+      expect(candidates).toHaveLength(3);
+      expect(candidates.map((c) => c.kind)).toEqual(['other', 'other', 'other']);
+    });
+
+    it.each([
+      ['home', WEEKDAY_NIGHT_HOUR],
+      ['work', WEEKDAY_WORK_HOUR],
+    ] as const)('needs a third week before tagging a place %s', async (kind, startTime) => {
+      const { service: twoWeeks } = makeService(
+        weekly(2, { location_entity_id: 'loc-1', start_time: startTime }),
+      );
+      const { service: threeWeeks } = makeService(
+        weekly(3, { location_entity_id: 'loc-1', start_time: startTime }),
+      );
+
+      expect((await twoWeeks.buildKnownPlaces(CONTEXT))[0].kind).toBe('other');
+      expect((await threeWeeks.buildKnownPlaces(CONTEXT))[0].kind).toBe(kind);
+    });
+
+    it('treats a trip as one burst, however many nights it lasts', async () => {
+      const { service } = makeService([
+        // A hotel: six nights running from Monday, two events a night, all in one week.
+        ...[0, 1, 2, 3, 4, 5].flatMap((night) => [
+          row({
+            location_entity_id: 'loc-hotel',
+            lat: 1,
+            lng: 1,
+            start_time: plusDays('2026-08-17T21:30:00.000Z', night),
+          }),
+          row({
+            location_entity_id: 'loc-hotel',
+            lat: 1,
+            lng: 1,
+            start_time: plusDays('2026-08-17T23:30:00.000Z', night),
+          }),
+        ]),
+        ...weekly(3, { location_entity_id: 'loc-home', start_time: WEEKDAY_NIGHT_HOUR }),
+      ]);
+
+      const kinds = kindsById(await service.buildKnownPlaces(CONTEXT));
+
+      expect(kinds.get('loc-home')).toBe('home');
+      expect(kinds.get('loc-hotel')).toBe('other');
+    });
+
+    it('does not make a week-long business trip Work, however many weekdays it fills', async () => {
+      const { service } = makeService([
+        // A conference: every weekday of one week, twice a day.
+        ...[0, 1, 2, 3, 4].flatMap((day) => [
+          row({
+            location_entity_id: 'loc-conference',
+            lat: 1,
+            lng: 1,
+            start_time: plusDays('2026-08-17T10:00:00.000Z', day),
+          }),
+          row({
+            location_entity_id: 'loc-conference',
+            lat: 1,
+            lng: 1,
+            start_time: plusDays('2026-08-17T14:00:00.000Z', day),
+          }),
+        ]),
+        ...weekly(3, { location_entity_id: 'loc-office', start_time: WEEKDAY_WORK_HOUR }),
+      ]);
+
+      const kinds = kindsById(await service.buildKnownPlaces(CONTEXT));
+
+      expect(kinds.get('loc-office')).toBe('work');
+      expect(kinds.get('loc-conference')).toBe('other');
+    });
+
+    it('ranks qualifying places by nights, not by the share of their events at night', async () => {
+      const { service } = makeService([
+        // Home: nights in five weeks, and ten weekend daytime events besides. A third at night.
+        ...weekly(5, { location_entity_id: 'loc-home', start_time: WEEKDAY_NIGHT_HOUR }),
+        ...weekly(5, { location_entity_id: 'loc-home', start_time: WEEKEND_WORK_HOUR }),
+        ...weekly(5, { location_entity_id: 'loc-home', start_time: plusDays(WEEKEND_WORK_HOUR, 1) }),
+        // A weekly night out: three weeks, every event at night.
+        ...weekly(3, {
+          location_entity_id: 'loc-bar',
+          lat: 1,
+          lng: 1,
+          start_time: '2026-08-21T22:30:00.000Z',
+        }),
+      ]);
+
+      const kinds = kindsById(await service.buildKnownPlaces(CONTEXT));
+
+      expect(kinds.get('loc-home')).toBe('home');
+      expect(kinds.get('loc-bar')).toBe('other');
+    });
+
+    it('counts a busy evening as one night', async () => {
+      const { service } = makeService([
+        // Three nights in three weeks, four events each night: twelve night events.
+        ...['22:00', '22:30', '23:00', '23:30'].flatMap((time) =>
+          weekly(3, {
+            location_entity_id: 'loc-party',
+            lat: 1,
+            lng: 1,
+            start_time: `2026-08-21T${time}:00.000Z`,
+          }),
+        ),
+        // Four nights in four weeks, one event each.
+        ...weekly(4, { location_entity_id: 'loc-home', start_time: WEEKDAY_NIGHT_HOUR }),
+      ]);
+
+      const kinds = kindsById(await service.buildKnownPlaces(CONTEXT));
+
+      expect(kinds.get('loc-home')).toBe('home');
+      expect(kinds.get('loc-party')).toBe('other');
+    });
+
+    it('counts an after-midnight event toward the evening before when it counts weeks', async () => {
+      // 2026-08-16 is a Sunday. Sunday 23:30 and Monday 00:30 are one Sunday
+      // night, so these three events are two nights in two weeks. Keyed by
+      // their calendar dates they would span three weeks, and read as Home.
+      const sundayNights = [
+        '2026-08-16T23:30:00.000Z',
+        '2026-08-17T00:30:00.000Z',
+        '2026-08-24T00:30:00.000Z',
+      ].map((start_time) => row({ location_entity_id: 'loc-home', start_time }));
+      const { service: twoWeeks } = makeService(sundayNights);
+      const { service: threeWeeks } = makeService([
+        ...sundayNights,
+        row({ location_entity_id: 'loc-home', start_time: '2026-08-31T00:30:00.000Z' }),
+      ]);
+
+      expect((await twoWeeks.buildKnownPlaces(CONTEXT))[0].kind).toBe('other');
+      expect((await threeWeeks.buildKnownPlaces(CONTEXT))[0].kind).toBe('home');
+    });
+  });
+
   it('queries only this user’s geolocated events, scoped by user_id in the WHERE clause', async () => {
     const { service, query } = makeService([]);
 
@@ -347,7 +551,42 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
     expect(sql).toContain('entity.name');
     expect(sql).toContain("entity.entity_type = 'Event'");
     expect(sql).toContain('event.event_id');
-    expect(params).toEqual([USER]);
+    expect(params?.[0]).toBe(USER);
+  });
+
+  it('leaves temporal estimates out of the read, including ones the legacy reverse leg relabelled', async () => {
+    // The filtering is SQL, so what it does is proven against Postgres in
+    // KnownPlacesService.integration.spec.ts. This pins the tokens, which are
+    // copies of the estimator's (see LOCATION_SOURCE_ESTIMATED): a drift
+    // there turns the filter off, and nothing else would notice.
+    const { service, query } = makeService([]);
+
+    await service.buildKnownPlaces(CONTEXT);
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+
+    expect(sql).toContain("COALESCE(event.metadata->>'location_source', '') <> $2");
+    expect(sql).toContain("COALESCE(event.inference_sources->>'method', '') = $4");
+    expect(params?.slice(0, 4)).toEqual([USER, 'estimated', 'reverse_geocoded', 'temporal_nn']);
+  });
+
+  it('leaves deleted, predicted and did-not-happen events out of the read', async () => {
+    // Also proven against Postgres in KnownPlacesService.integration.spec.ts.
+    // The status test is the calendar's own LIVE_EVENT_SQL rather than a copy,
+    // because DEAD_EVENT_STATUSES is shared precisely so its copies cannot
+    // drift apart. The reservation key IS a copy (see
+    // RESERVATION_CANCELED_KEY), so it is pinned here.
+    const { service, query } = makeService([]);
+
+    await service.buildKnownPlaces(CONTEXT);
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+
+    expect(sql).toContain('event.is_deleted IS NOT TRUE');
+    expect(sql).toContain('event.is_predicted IS NOT TRUE');
+    expect(sql).toContain(LIVE_EVENT_SQL);
+    expect(sql).toContain("COALESCE(event.metadata->>$5, '') <> 'true'");
+    expect(params[4]).toBe('Canceled');
   });
 
   it('keeps the newest event titles so an unnamed cluster can be recognized', async () => {

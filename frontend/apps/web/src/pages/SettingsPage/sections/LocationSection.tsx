@@ -10,6 +10,7 @@ import { AlertDialog, Button, Card, cn } from '@ci/shadcn';
 import { MapPin } from '@ci/shadcn/icons';
 
 import { useAuth, useLocationTracking } from '@/hooks';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 interface PositionStats {
   total: number;
@@ -40,6 +41,7 @@ const MODES: Array<{
  */
 export function LocationSection() {
   const [{ authToken, authenticated }] = useAuth();
+  const fmt = useDateTimeFormat();
   const { mode, setMode, needsSettingsUpgrade } = useLocationTracking({ watch: false });
   const [stats, setStats] = useState<PositionStats | null>(null);
   const [pendingMode, setPendingMode] = useState<Exclude<LocationTrackingMode, 'off'> | null>(null);
@@ -162,7 +164,7 @@ export function LocationSection() {
           <div className="text-sm text-muted-foreground">
             <div>{trackedCount} fixes recorded from your devices</div>
             <div>{stats ? `${stats.total} position fixes total` : 'Loading position stats…'}</div>
-            {stats?.lastFixAt && <div>Last fix {new Date(stats.lastFixAt).toLocaleString()}</div>}
+            {stats?.lastFixAt && <div>Last fix {fmt.dateTime(stats.lastFixAt)}</div>}
           </div>
 
           <div>

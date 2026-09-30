@@ -2,6 +2,7 @@ import { useMutation, useQuery } from '@apollo/client';
 import { Link } from 'react-router-dom';
 
 import { gql, useFragment } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import type { MemoryEntityOf } from '../../useEntityService';
 import { COMMUNICATION_FRAGMENT } from '../EntityCard/CommunicationCard';
@@ -75,6 +76,7 @@ interface Props {
 export function CommunicationDetails({ entity }: Props) {
   const data = useFragment(COMMUNICATION_FRAGMENT, entity);
   const [updateCommunication] = useMutation(UPDATE_COMMUNICATION);
+  const fmt = useDateTimeFormat();
 
   const { data: attachmentData } = useQuery(GET_COMMUNICATION_ATTACHMENTS, {
     variables: { id: entity.id },
@@ -175,7 +177,7 @@ export function CommunicationDetails({ entity }: Props) {
       metaItems={[
         { label: 'Type', value: capitalize(data.type) },
         { label: 'Direction', value: capitalize(data.direction) },
-        { label: 'When', value: data.time ? new Date(data.time).toLocaleString() : null },
+        { label: 'When', value: data.time ? fmt.dateTime(data.time) : null },
         { label: 'From', value: data.from?.name },
         { label: 'To', value: recipients || null },
         { label: 'Link', value: permalink ? externalLink(permalink) : null },

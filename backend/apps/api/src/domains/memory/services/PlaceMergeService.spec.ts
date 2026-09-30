@@ -49,9 +49,57 @@ interface Harness {
   send: jest.Mock;
 }
 
+/**
+ * Rows each counting write "touched", keyed by a fragment of its statement —
+ * distinct values, so a count wired to the wrong field shows up as a wrong
+ * number rather than an equal one.
+ */
+const REPOINTED: Array<[fragment: string, count: number]> = [
+  ['UPDATE ci.events SET location_entity_id', 2],
+  ['UPDATE ci.position SET location_entity_id', 3],
+  ['UPDATE ci.position SET reference_entity_id', 5],
+  ['SET parent_place_id = $3', 7],
+  ['UPDATE ci.objects SET last_seen_place_entity_id', 11],
+  ['UPDATE ci.objects SET acquired_from_entity_id', 13],
+  ['UPDATE ci.object_observations SET place_entity_id', 17],
+  ['UPDATE ci.receipts SET place_entity_id', 19],
+  ['UPDATE ci.receipts SET merchant_entity_id', 23],
+  ['UPDATE ci.entity_identifiers SET entity_id', 29],
+  ['UPDATE ci.relationships r SET from_entity_id', 31],
+  ['UPDATE ci.relationships r SET to_entity_id', 37],
+  ['DELETE FROM ci_search.embeddings', 41],
+  ['DELETE FROM ci_search.vectors', 43],
+  ['UPDATE ci_search.entity_tag', 47],
+];
+
+/** The three relationship DELETEs, in the order the merge issues them; they sum to relationshipsDropped. */
+const DROPPED = [1, 2, 4];
+
+const EXPECTED_COUNTS = {
+  events: 2,
+  positions: 3 + 5,
+  childPlaces: 7,
+  objects: 11 + 13,
+  observations: 17,
+  receipts: 19 + 23,
+  identifiers: 29,
+  relationshipsFrom: 31,
+  relationshipsTo: 37,
+  relationshipsDropped: 1 + 2 + 4,
+  searchRowsDeleted: 41 + 43,
+  tagLinksMoved: 47,
+};
+
 function makeHarness(entityRows: LocationRow[], ancestorsOfTarget: string[] = []): Harness {
   const statements: Array<{ sql: string; params: unknown[] | undefined }> = [];
+  const dropped = [...DROPPED];
 
+  // Answers each statement the way TypeORM's Postgres runner does, so this
+  // mock cannot flatter the service: a SELECT — which is what a counting CTE
+  // is — gets rows, while a bare UPDATE/DELETE gets the PAIR [rows, rowCount].
+  // Every count used to be `….length` of that pair, a constant in production;
+  // a statement that loses its CTE wrapper now makes countAffected throw here
+  // too.
   const query = jest.fn(async (sql: string, params?: unknown[]) => {
     statements.push({ sql, params });
 
@@ -65,6 +113,18 @@ function makeHarness(entityRows: LocationRow[], ancestorsOfTarget: string[] = []
       const sources = (params?.[2] as string[]) ?? [];
 
       return ancestorsOfTarget.filter((id) => sources.includes(id)).map((entity_id) => ({ entity_id }));
+    }
+
+    if (/SELECT count\(\*\)::int AS count FROM/.test(sql)) {
+      const count = sql.includes('DELETE FROM ci.relationships')
+        ? dropped.shift()
+        : REPOINTED.find(([fragment]) => sql.includes(fragment))?.[1];
+
+      return [{ count: count ?? 0 }];
+    }
+
+    if (/^\s*(UPDATE|DELETE)\b/.test(sql)) {
+      return [[], 0];
     }
 
     return [];
@@ -172,6 +232,8 @@ describe('PlaceMergeService', () => {
     const result = await harness.service.mergePlaces(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
 
     expect(result.target.id).toBe(TARGET);
+    // The payload reports what the statements touched, per field.
+    expect(result.counts).toEqual(EXPECTED_COUNTS);
 
     // Hypertable decompression cap lifted inside the txn.
     expect(statementsMatching(harness, 'max_tuples_decompressed_per_dml_transaction')).toHaveLength(1);
@@ -233,11 +295,15 @@ describe('PlaceMergeService', () => {
     expect(tagMove[0].sql).toContain(`entity_type = 'place'`);
     expect(statementsMatching(harness, 'DELETE FROM ci_search.entity_tag')).toHaveLength(1);
 
-    // One audit row per source, typed Location.
+    // One audit row per source, typed Location, carrying the same counts.
     const audits = statementsMatching(harness, 'INSERT INTO ci.entity_merges');
     expect(audits).toHaveLength(2);
     expect(audits.map((a) => a.params?.[1])).toEqual([SOURCE_A, SOURCE_B]);
     expect(audits[0].params?.[3]).toBe('Location');
+    for (const audit of audits) {
+      const details = JSON.parse(audit.params?.[4] as string) as { counts: unknown };
+      expect(details.counts).toEqual(EXPECTED_COUNTS);
+    }
 
     // The target re-indexes after commit.
     expect(harness.send).toHaveBeenCalledWith('place.updated', { placeId: TARGET });

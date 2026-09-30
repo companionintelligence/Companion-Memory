@@ -87,6 +87,125 @@ export interface GraphEntityMappingDto {
   entityId: string;
 }
 
+/**
+ * An import coordinate: what {@link GraphIngestService.ingest} resolves an
+ * entity by, less the owner — the row with this entity type, under
+ * `import:<sourceSystem>`, whose linked_id is `uuidv5(key)`.
+ */
+export interface ImportedEntityRef {
+  entityType: string;
+  sourceSystem: string;
+  key: string;
+}
+
+/** A row merged into another one: a merge tombstone. */
+export interface MergedAwayEntity {
+  entityId: string;
+  name: string | null;
+  properties: Record<string, unknown>;
+}
+
+/** A row holding an {@link ImportedEntityRef}. */
+export interface ImportedEntityMatch extends ImportedEntityRef {
+  entityId: string;
+  name: string | null;
+  properties: Record<string, unknown>;
+  mergedIntoEntityId: string | null;
+  /** The rows merged into this one. Empty for a tombstone: its sources point past it. */
+  mergedFrom: MergedAwayEntity[];
+}
+
+/** Move the row holding `fromKey` onto `toKey`, same type and source. */
+export interface ImportedEntityRekey {
+  entityType: string;
+  sourceSystem: string;
+  fromKey: string;
+  toKey: string;
+  /**
+   * Empty the row's properties as it moves, so the ingest that follows builds
+   * them from scratch out of what the source now says. For a row the importer
+   * has learned was several things at once: whatever {@link ingest} does with a
+   * row's existing properties — replace them, or union the lists — must not
+   * carry the others' details into the one it now belongs to.
+   *
+   * Emptied, that is, of what the SOURCE put there. The identity values the
+   * row's standing Person merges brought in stay: a merge was a separate
+   * decision, that another row is this row's person, and the row keeps its
+   * merges. See {@link rekeyImportedEntities} for the rule.
+   */
+  resetProperties?: boolean;
+  /**
+   * With `resetProperties`: rows merged into this one whose values the reset
+   * drops too, because the caller has shown them to be someone else.
+   */
+  dropMergedFrom?: readonly string[];
+}
+
+/**
+ * The plural identity keys `PersonMergeService.foldProperties` carries from a
+ * merged-away row to its survivor, and so what a reset keeps of the merges a
+ * row absorbed. The same list as `IDENTITY_LIST_KEYS` in the ingest's
+ * refresh-as-merge change (`utils/ingestedProperties.ts`): import that one once
+ * it lands, rather than keep two lists that have to agree.
+ */
+const MERGED_IDENTITY_LIST_KEYS: readonly string[] = ['emails', 'phones', 'names', 'Phones', 'Faxes'];
+
+/**
+ * What JavaScript's `String.prototype.trim` strips (the WhiteSpace and
+ * LineTerminator code points), which is how `foldProperties` tells a blank
+ * member from a value. Bound as `btrim`'s character set, so the database's
+ * locale has no say in it.
+ */
+const JS_TRIM_CHARACTERS = String.fromCodePoint(
+  0x09,
+  0x0a,
+  0x0b,
+  0x0c,
+  0x0d,
+  0x20,
+  0xa0,
+  0x1680,
+  ...Array.from({ length: 11 }, (_, i) => 0x2000 + i),
+  0x2028,
+  0x2029,
+  0x202f,
+  0x205f,
+  0x3000,
+  0xfeff,
+);
+
+/** A stored list key as a list: an array as it is, a lone value as one member, absent or null as none. */
+function asListSql(value: string): string {
+  return (
+    `(CASE WHEN jsonb_typeof(${value}) = 'array' THEN ${value} ` +
+    `WHEN ${value} IS NULL OR jsonb_typeof(${value}) = 'null' THEN '[]'::jsonb ` +
+    `ELSE jsonb_build_array(${value}) END)`
+  );
+}
+
+/**
+ * What two members of list `key` must share to be the same value, as
+ * `foldProperties` compares them: the typed `Phones` / `Faxes` by digit string
+ * (the trimmed text when there are no digits), a non-string matching nothing;
+ * every other list by jsonb equality. `[^0-9]` rather than `\D`, which follows
+ * the locale in Postgres.
+ */
+function foldedMemberSql(key: string, member: string, trimCharacters: string): string {
+  return (
+    `(CASE WHEN ${key} NOT IN ('Phones', 'Faxes') THEN ${member} ` +
+    `WHEN jsonb_typeof(${member}) = 'string' THEN to_jsonb(COALESCE(` +
+    `NULLIF(regexp_replace(${member} #>> '{}', '[^0-9]', '', 'g'), ''), ` +
+    `btrim(${member} #>> '{}', ${trimCharacters}))) END)`
+  );
+}
+
+/** Coordinates per `findImportedEntities` SELECT — three bind parameters each. */
+const IMPORTED_LOOKUP_CHUNK = 1000;
+
+function importCoordKey(entityType: string, linkedTable: string, linkedId: string): string {
+  return `${entityType}||${linkedTable}||${linkedId}`;
+}
+
 export interface GraphIngestResult {
   entitiesProcessed: number;
   relationshipsProcessed: number;
@@ -295,6 +414,238 @@ export class GraphIngestService {
     }
 
     return { entitiesProcessed, relationshipsProcessed, errors, entities };
+  }
+
+  /**
+   * The rows that hold the given import coordinates — the same
+   * `(entity type, import:<sourceSystem>, uuidv5(key))` {@link ingest} resolves
+   * by — for a caller that must know what a key resolves to BEFORE ingesting
+   * under it. A merge tombstone comes back as itself, not as its canonical row:
+   * it is the row holding the coordinate.
+   */
+  async findImportedEntities(
+    context: UserServiceContext,
+    refs: ImportedEntityRef[],
+  ): Promise<ImportedEntityMatch[]> {
+    const refsByCoord = new Map<string, ImportedEntityRef[]>();
+
+    for (const ref of refs) {
+      const coord = importCoordKey(
+        ref.entityType,
+        `import:${ref.sourceSystem}`,
+        GraphIngestService.linkedIdFor(ref.key),
+      );
+      const list = refsByCoord.get(coord);
+
+      if (list) {
+        list.push(ref);
+      } else {
+        refsByCoord.set(coord, [ref]);
+      }
+    }
+
+    const coords = [...refsByCoord.values()].map(([ref]) => ({
+      entityType: ref.entityType,
+      linkedTable: `import:${ref.sourceSystem}`,
+      linkedId: GraphIngestService.linkedIdFor(ref.key),
+    }));
+    const matches: ImportedEntityMatch[] = [];
+
+    // Three bind parameters per coordinate in one OR-chain, so bounded well
+    // under Postgres' 65,535.
+    for (let offset = 0; offset < coords.length; offset += IMPORTED_LOOKUP_CHUNK) {
+      const rows = await this.findExistingNodes(
+        context.userId,
+        coords.slice(offset, offset + IMPORTED_LOOKUP_CHUNK),
+      );
+
+      for (const row of rows) {
+        for (const ref of refsByCoord.get(importCoordKey(row.entityType, row.linkedTable!, row.linkedId!)) ??
+          []) {
+          matches.push({
+            ...ref,
+            entityId: row.entityId,
+            name: row.name,
+            properties: row.properties ?? {},
+            mergedIntoEntityId: row.mergedIntoEntityId,
+            mergedFrom: [],
+          });
+        }
+      }
+    }
+
+    // Who was merged into each live row: a caller about to rebuild one (a
+    // re-key's `resetProperties`) has to tell the merges that are the row's own
+    // person from any that are not. One statement, and only for live rows,
+    // since path compression points a tombstone's sources past it.
+    const live = [...new Set(matches.filter((m) => m.mergedIntoEntityId == null).map((m) => m.entityId))];
+
+    if (live.length > 0) {
+      const merged: Array<{
+        entity_id: string;
+        merged_into_entity_id: string;
+        name: string | null;
+        properties: Record<string, unknown> | null;
+      }> = await this.nodeRepository.query(
+        `SELECT entity_id, merged_into_entity_id, name, properties
+           FROM ci.entities
+          WHERE owner_user_id = $1::uuid
+            AND merged_into_entity_id = ANY($2::uuid[])
+          ORDER BY entity_id`,
+        [context.userId, live],
+      );
+
+      for (const match of matches) {
+        match.mergedFrom = merged
+          .filter((row) => row.merged_into_entity_id === match.entityId)
+          .map((row) => ({ entityId: row.entity_id, name: row.name, properties: row.properties ?? {} }));
+      }
+    }
+
+    return matches;
+  }
+
+  /**
+   * Move rows from one import key to another IN PLACE, for an importer whose
+   * natural key for a thing changed. The row keeps its `entity_id`, so every
+   * edge, identifier, merge and search-index row that points at it still does;
+   * the next {@link ingest} under the new key then resolves to it rather than
+   * minting a second row beside it.
+   *
+   * Only ever onto a FREE coordinate. The statement re-checks that itself, so a
+   * row that landed on the destination in the meantime is left where it is
+   * rather than raising a unique violation; such a move is simply absent from
+   * the result. Tombstones move like any row — ingest resolves through them.
+   *
+   * No graph delta: the coordinate is provenance, not something a reader of the
+   * entity sees, and whatever the following ingest changes about the row is
+   * recorded there as usual. A move with `resetProperties` empties the row's
+   * properties in the same statement, under the same guard.
+   *
+   * Except what the row's standing Person merges brought in. Of the identity
+   * lists `PersonMergeService.foldProperties` unions (`emails`, `phones`,
+   * `names`, `Phones`, `Faxes`), a member the row holds stays when a merge
+   * that still stands brought it in: the merge's source is still a Person
+   * tombstone pointing at this row, its target is this row or one merged into
+   * it, and the source held the member both when it was merged (the bag
+   * `ci.entity_merges.details.sourceProperties` recorded) and on its tombstone
+   * today. That is the rule #2796's survivor repair restores by, so a reset
+   * after that one-shot repair does not lose again what it put back. Members
+   * are compared the way the fold compares them, and keep the row's order. A
+   * source in `dropMergedFrom` vouches for nothing. The rule runs inside this
+   * statement, not in the caller's plan, so a merge that commits between the
+   * two is kept too.
+   *
+   * Returns the moves that happened, each with the row it moved.
+   */
+  async rekeyImportedEntities(
+    context: UserServiceContext,
+    moves: ImportedEntityRekey[],
+  ): Promise<Array<ImportedEntityRekey & { entityId: string }>> {
+    if (moves.length === 0) {
+      return [];
+    }
+
+    const linkedTables = moves.map((move) => `import:${move.sourceSystem}`);
+    const fromIds = moves.map((move) => GraphIngestService.linkedIdFor(move.fromKey));
+    const toIds = moves.map((move) => GraphIngestService.linkedIdFor(move.toKey));
+    const resets = moves.map((move) => move.resetProperties === true);
+    // One comma-separated list per move: unnest cannot take a ragged uuid[][].
+    const dropped = moves.map((move) => (move.dropMergedFrom ?? []).join(','));
+    const member = (value: string) => foldedMemberSql('k.key', value, '$9::text');
+
+    // A CTE rather than a bare UPDATE … RETURNING: through TypeORM's postgres
+    // driver `query()` hands an UPDATE back as the pair `[rows, rowCount]`, not
+    // as its RETURNING rows (see EstimateLocationStage).
+    const rows: Array<{ entity_id: string; entity_type: string; linked_table: string; from_id: string }> =
+      await this.nodeRepository.query(
+        `WITH moved AS (
+           UPDATE ci.entities e
+              SET linked_id = m.to_id,
+                  properties = CASE
+                    WHEN m.reset THEN COALESCE((
+                      SELECT jsonb_object_agg(kept.key, kept.members)
+                        FROM (SELECT k.key, jsonb_agg(held.value ORDER BY held.position) AS members
+                                FROM unnest($8::text[]) AS k(key)
+                               CROSS JOIN LATERAL jsonb_array_elements(${asListSql('e.properties -> k.key')})
+                                     WITH ORDINALITY AS held(value, position)
+                               CROSS JOIN LATERAL (SELECT ${member('held.value')} AS match) AS h
+                               WHERE jsonb_typeof(held.value) = 'string'
+                                 AND btrim(held.value #>> '{}', $9::text) <> ''
+                                 AND EXISTS (
+                                       SELECT 1
+                                         FROM ci.entities src
+                                         JOIN ci.entity_merges mg
+                                           ON mg.owner_user_id = src.owner_user_id
+                                          AND mg.source_entity_id = src.entity_id
+                                         JOIN ci.entities target
+                                           ON target.owner_user_id = mg.owner_user_id
+                                          AND target.entity_id = mg.target_entity_id
+                                        WHERE src.owner_user_id = e.owner_user_id
+                                          AND src.merged_into_entity_id = e.entity_id
+                                          AND src.entity_type = 'Person'
+                                          AND mg.entity_type = 'Person'
+                                          AND target.entity_type = 'Person'
+                                          AND COALESCE(target.merged_into_entity_id, target.entity_id) = e.entity_id
+                                          AND src.entity_id <> ALL (string_to_array(m.dropped, ',')::uuid[])
+                                          AND EXISTS (
+                                                SELECT 1
+                                                  FROM jsonb_array_elements(CASE
+                                                         WHEN jsonb_typeof(mg.details -> 'sourceProperties' -> k.key) = 'array'
+                                                           THEN mg.details -> 'sourceProperties' -> k.key
+                                                         WHEN k.key IN ('Phones', 'Faxes')
+                                                          AND jsonb_typeof(mg.details -> 'sourceProperties' -> k.key) = 'string'
+                                                           THEN jsonb_build_array(mg.details -> 'sourceProperties' -> k.key)
+                                                         ELSE '[]'::jsonb
+                                                       END) AS given(value)
+                                                 WHERE ${member('given.value')} = h.match)
+                                          AND EXISTS (
+                                                SELECT 1
+                                                  FROM jsonb_array_elements(${asListSql('src.properties -> k.key')}) AS still(value)
+                                                 WHERE ${member('still.value')} = h.match))
+                               GROUP BY k.key) AS kept
+                    ), '{}'::jsonb)
+                    ELSE e.properties
+                  END,
+                  updated_at = now()
+             FROM unnest($2::text[], $3::text[], $4::uuid[], $5::uuid[], $6::boolean[], $7::text[])
+                  AS m(entity_type, linked_table, from_id, to_id, reset, dropped)
+            WHERE e.owner_user_id = $1::uuid
+              AND e.entity_type = m.entity_type
+              AND e.linked_table = m.linked_table
+              AND e.linked_id = m.from_id
+              AND NOT EXISTS (
+                    SELECT 1
+                      FROM ci.entities t
+                     WHERE t.owner_user_id = $1::uuid
+                       AND t.entity_type = m.entity_type
+                       AND t.linked_table = m.linked_table
+                       AND t.linked_id = m.to_id)
+        RETURNING e.entity_id, m.entity_type, m.linked_table, m.from_id
+         )
+         SELECT entity_id, entity_type, linked_table, from_id::text AS from_id FROM moved`,
+        [
+          context.userId,
+          moves.map((move) => move.entityType),
+          linkedTables,
+          fromIds,
+          toIds,
+          resets,
+          dropped,
+          MERGED_IDENTITY_LIST_KEYS,
+          JS_TRIM_CHARACTERS,
+        ],
+      );
+
+    const movedByCoord = new Map(
+      rows.map((row) => [importCoordKey(row.entity_type, row.linked_table, row.from_id), row.entity_id]),
+    );
+
+    return moves.flatMap((move, index) => {
+      const entityId = movedByCoord.get(importCoordKey(move.entityType, linkedTables[index], fromIds[index]));
+
+      return entityId ? [{ ...move, entityId }] : [];
+    });
   }
 
   /**

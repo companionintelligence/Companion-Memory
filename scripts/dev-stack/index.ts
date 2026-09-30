@@ -37,6 +37,7 @@ import { buildOvermindEnv } from './overmind-env';
 import { allocStackPorts, dockerPublishedPorts } from './ports';
 import { ensureSidecarAuthSecret } from './sidecar-secret';
 import { removeStaleContainers } from './stale-containers';
+import { acquireSupervisorLock, liveStackMessage, readLiveHolder, socketIsLive } from './supervisor-lock';
 
 const ROOT = process.cwd();
 dotenv.config({ path: path.join(ROOT, '.env'), quiet: true });
@@ -48,6 +49,13 @@ if (ensureSidecarAuthSecret(path.join(ROOT, '.env'))) {
 }
 
 const caddy = new CaddyClient();
+
+// overmind's control socket lives in this worktree's dir (overmind runs with
+// cwd = ROOT) as a RELATIVE path. Relative keeps the bound sun_path short — an
+// absolute path in a deep worktree dir overflows sun_path (104 bytes on macOS).
+// The per-worktree cwd already isolates concurrent stacks, so no key suffix is
+// needed (it was what pushed the path over the limit).
+const OVERMIND_SOCKET = '.overmind.sock';
 
 /**
  * Whether this host can pass an AMD GPU into a container.
@@ -362,6 +370,23 @@ function migrate(dbPort: number, env: NodeJS.ProcessEnv): void {
 // --- lifecycle --------------------------------------------------------------
 
 async function up(key: string): Promise<void> {
+  // One supervisor per worktree, before anything is touched — see
+  // supervisor-lock.ts for what a second one did to the first.
+  const lock = acquireSupervisorLock(ROOT, key);
+  if (!lock.acquired) {
+    fail(liveStackMessage(lock.holder, OVERMIND_SOCKET));
+    process.exit(1);
+  }
+
+  process.on('exit', lock.release);
+
+  // A supervisor from before the lock existed holds no lock file; its overmind
+  // still answers on the socket.
+  if (await socketIsLive(path.join(ROOT, OVERMIND_SOCKET))) {
+    fail(liveStackMessage(null, OVERMIND_SOCKET));
+    process.exit(1);
+  }
+
   if (await caddy.hasRoute(routeId(key))) {
     fail(`Already routed at ${key}.localhost. Tear it down first with \`make dev-down\`.`);
     process.exit(1);
@@ -407,6 +432,7 @@ async function up(key: string): Promise<void> {
       composeStop(key);
     }
 
+    lock.release();
     ok('Teardown complete');
   };
 
@@ -435,13 +461,7 @@ async function up(key: string): Promise<void> {
 
     const host = await caddyUp(key, ports);
 
-    // overmind's control socket lives in this worktree's dir (overmind runs
-    // with cwd = ROOT) as a RELATIVE path. Relative keeps the bound sun_path
-    // short — an absolute path in a deep worktree dir overflows sun_path (104
-    // bytes on macOS). The per-worktree cwd already isolates concurrent stacks,
-    // so no key suffix is needed (it was what pushed the path over the limit).
-    const overmindSocket = '.overmind.sock';
-    const overmindEnv = buildOvermindEnv(process.env, ports, { host, socket: overmindSocket });
+    const overmindEnv = buildOvermindEnv(process.env, ports, { host, socket: OVERMIND_SOCKET });
 
     console.log('');
 
@@ -465,7 +485,8 @@ async function up(key: string): Promise<void> {
 
     console.log('');
 
-    fs.rmSync(path.join(ROOT, overmindSocket), { force: true }); // clear a stale socket from a crashed run
+    // Stale for certain: we hold the lock and nothing answered on it above.
+    fs.rmSync(path.join(ROOT, OVERMIND_SOCKET), { force: true });
 
     await new Promise<void>((resolve) => {
       overmind = spawn('overmind', ['start', '-f', 'Procfile'], {
@@ -490,6 +511,14 @@ async function up(key: string): Promise<void> {
 }
 
 async function down(key: string): Promise<void> {
+  // `dev-down` clears a STALE route. Removing a live stack's route is what let
+  // a second supervisor start on top of it (supervisor-lock.ts).
+  const holder = readLiveHolder(ROOT);
+  if (holder || (await socketIsLive(path.join(ROOT, OVERMIND_SOCKET)))) {
+    fail(`${liveStackMessage(holder, OVERMIND_SOCKET)} \`make dev-down\` only clears a stale route.`);
+    process.exit(1);
+  }
+
   await caddyDown(key);
 }
 

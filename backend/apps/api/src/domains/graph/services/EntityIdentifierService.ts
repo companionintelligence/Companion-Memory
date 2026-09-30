@@ -24,6 +24,30 @@ export interface EntityIdentifierBatchEntry {
 }
 
 /**
+ * The entries of `desired` that {@link EntityIdentifierService.replaceForEntity}
+ * can store nothing for: a value of a reconciled kind that the shared rule
+ * refuses even though the caller actually sent something. Today that is a phone
+ * carrying an extension (see `hasPhoneExtension` — a real number, refused only
+ * because it cannot identify anybody) or a "phone" with no digits. A blank value
+ * is not listed: there is nothing in it to lose.
+ *
+ * `replaceForEntity` reports these as `unusable`. This is the same rule as a
+ * pure function, so a caller that has to REFUSE such input rather than save
+ * around it can ask before anything is written.
+ */
+export function unusableIdentifiers<T extends { kind: IdentifierKind; value: string }>(
+  kinds: readonly IdentifierKind[],
+  desired: readonly T[],
+): T[] {
+  return desired.filter(
+    (entry) =>
+      kinds.includes(entry.kind) &&
+      entry.value.trim() !== '' &&
+      normalizeIdentifier(entry.kind, entry.value) == null,
+  );
+}
+
+/**
  * Read/write surface for `ci.entity_identifiers`: the normalized
  * email/phone/name -> graph entity_id index that powers people-linking.
  *
@@ -328,6 +352,59 @@ export class EntityIdentifierService {
   }
 
   /**
+   * The `conflicts` {@link replaceForEntity} would report for the same
+   * arguments — values of the reconciled kinds that ANOTHER entity already
+   * holds — found with a read, so a caller that has to refuse the whole edit
+   * can ask before anything is written. `replaceForEntity` only meets a
+   * conflict at the insert, after it has deleted every row missing from
+   * `desired`.
+   *
+   * Same normalize-and-de-dupe rule, so the same values come back: the first
+   * spelling of each, in `desired` order. A value this entity already holds is
+   * not a conflict, and neither is one that does not normalize —
+   * `replaceForEntity` stores nothing for it.
+   *
+   * A read, not a lock: a value another writer claims between this call and
+   * the write is still reported by `replaceForEntity` itself.
+   */
+  async findConflicts(
+    ownerUserId: string,
+    entityId: string,
+    kinds: readonly IdentifierKind[],
+    desired: ReadonlyArray<{ kind: IdentifierKind; value: string }>,
+  ): Promise<Array<{ kind: IdentifierKind; value: string }>> {
+    const firstSpelling = new Map<string, IdentifierKey & { value: string }>();
+
+    for (const entry of desired) {
+      if (!kinds.includes(entry.kind)) {
+        continue;
+      }
+
+      const valueNormalized = normalizeIdentifier(entry.kind, entry.value);
+      if (valueNormalized == null) {
+        continue;
+      }
+
+      const key = `${entry.kind}:${valueNormalized}`;
+      if (!firstSpelling.has(key)) {
+        firstSpelling.set(key, { kind: entry.kind, valueNormalized, value: entry.value });
+      }
+    }
+
+    const holders = await this.findEntityIdsByIdentifiers(ownerUserId, [...firstSpelling.values()]);
+
+    const conflicts: Array<{ kind: IdentifierKind; value: string }> = [];
+    for (const [key, { kind, value }] of firstSpelling) {
+      const holder = holders.get(key);
+      if (holder != null && holder !== entityId) {
+        conflicts.push({ kind, value });
+      }
+    }
+
+    return conflicts;
+  }
+
+  /**
    * Reconcile ONE entity's contact methods of the given kinds against `desired`
    * — the set-shaped counterpart to {@link addForEntity}, for a form that edits
    * the whole contact list at once.
@@ -341,14 +418,23 @@ export class EntityIdentifierService {
    * same as ingest and {@link addForEntity}); it is returned in `conflicts` so
    * the caller can surface "already belongs to X" instead of silently dropping
    * the user's input.
+   *
+   * A value the shared rule refuses (see {@link unusableIdentifiers}) is not
+   * stored either, and is returned in `unusable` for the same reason: a phone
+   * carrying an extension used to be kept under its last ten digits, which is
+   * somebody else's number, and now simply has nowhere to go here.
    */
   async replaceForEntity(
     ownerUserId: string,
     entityId: string,
     kinds: IdentifierKind[],
     desired: Array<{ kind: IdentifierKind; value: string; label?: string | null; isPrimary?: boolean }>,
-  ): Promise<{ conflicts: Array<{ kind: IdentifierKind; value: string }> }> {
+  ): Promise<{
+    conflicts: Array<{ kind: IdentifierKind; value: string }>;
+    unusable: Array<{ kind: IdentifierKind; value: string }>;
+  }> {
     const conflicts: Array<{ kind: IdentifierKind; value: string }> = [];
+    const unusable = unusableIdentifiers(kinds, desired).map(({ kind, value }) => ({ kind, value }));
     const kindSet = new Set(kinds);
 
     // Normalize + de-dupe first: the form can legitimately submit the same
@@ -369,6 +455,7 @@ export class EntityIdentifierService {
 
       const valueNormalized = normalizeIdentifier(entry.kind, entry.value);
       if (valueNormalized == null) {
+        // Already in `unusable` unless it was blank.
         continue;
       }
 
@@ -462,7 +549,7 @@ export class EntityIdentifierService {
       }
     }
 
-    return { conflicts };
+    return { conflicts, unusable };
   }
 
   /**

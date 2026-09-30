@@ -83,6 +83,43 @@ const GENERIC_SOURCE_KEYS = ['import:importer', 'importer', 'import:'];
  */
 const NODE_SEARCH_MAX_LIMIT = 500;
 
+/**
+ * A node's place in `entities_linked_uniq`, less the owner: the index is on
+ * `(owner_user_id, entity_type, linked_table, linked_id)`.
+ */
+export interface LinkedKey {
+  entityType: string;
+  linkedTable: string | null;
+  linkedId: string | null;
+}
+
+function linkedKeyOf(node: GraphNodeEntity): LinkedKey {
+  return { entityType: node.entity_type, linkedTable: node.linked_table, linkedId: node.linked_id };
+}
+
+/**
+ * The properties bag a node or relationship write leaves behind: `properties`
+ * merged over `stored` (or replacing it when `mergeProperties === false`), then
+ * each `removeProperties` key deleted. With no `properties` at all there is
+ * nothing to merge or replace with, so `stored` survives and only the removals
+ * apply — `mergeProperties: false` alone never empties a bag.
+ */
+function nextProperties(
+  stored: Record<string, unknown> | null | undefined,
+  write: { properties?: Record<string, unknown>; mergeProperties?: boolean; removeProperties?: string[] },
+): Record<string, unknown> {
+  const next =
+    write.properties && write.mergeProperties === false
+      ? { ...write.properties }
+      : { ...(stored ?? {}), ...(write.properties ?? {}) };
+
+  for (const key of write.removeProperties ?? []) {
+    delete next[key];
+  }
+
+  return next;
+}
+
 @Injectable()
 export class GraphUtilityService {
   constructor(
@@ -159,6 +196,33 @@ export class GraphUtilityService {
         linked_table: linkedTable,
         linked_id: linkedId,
         is_active: true,
+      },
+    });
+  }
+
+  /**
+   * The owner's row holding this linked key, active or not. `entities_linked_uniq`
+   * allows one row per `(owner_user_id, entity_type, linked_table, linked_id)` and
+   * is partial on `linked_table IS NOT NULL` alone, so a forgotten or merged-away
+   * row still holds its key. Unlike {@link getNodeByLinkedRecord} the type is part
+   * of the match: a row of another type on the same linked record is on a key of
+   * its own.
+   *
+   * Nothing holds a key the index does not: one with no `linked_table` is outside
+   * its predicate, and one with no `linked_id` never equals another, since a
+   * unique index treats NULLs as distinct.
+   */
+  async findLinkedKeyHolder(ownerUserId: string, key: LinkedKey): Promise<GraphNodeEntity | null> {
+    if (key.linkedTable == null || key.linkedId == null) {
+      return null;
+    }
+
+    return this.entityRepo.findOne({
+      where: {
+        owner_user_id: ownerUserId,
+        entity_type: key.entityType,
+        linked_table: key.linkedTable,
+        linked_id: key.linkedId,
       },
     });
   }
@@ -591,6 +655,25 @@ export class GraphUtilityService {
       .getMany();
   }
 
+  /**
+   * Insert a node, or update the one `entityId` already names.
+   *
+   * On update, a field left `undefined` keeps its stored value and `null`
+   * clears it — so a caller relaying a partial write must pass omitted fields
+   * through as `undefined`, never `?? null`. That matters most for
+   * `linkedTable`/`linkedId`: an importer upserts on
+   * `(owner, entity_type, linked_table, linked_id)`, so clearing either one (or
+   * changing `entityType`) detaches the row, and the next import of the same
+   * source mints a duplicate beside it.
+   *
+   * `properties` merges over the stored bag unless `mergeProperties === false`,
+   * which replaces it; `removeProperties` keys are deleted afterwards. Both are
+   * applied to the row as read here, not to a copy a caller read earlier.
+   *
+   * A write that would put the row on a linked key another row already holds —
+   * by retyping it, re-keying it, or inserting it there — fails before anything
+   * is written. See {@link assertLinkedKeyFree}.
+   */
   async createOrUpdateNode(
     ownerUserId: string,
     payload: {
@@ -603,14 +686,14 @@ export class GraphUtilityService {
       linkedTable?: string | null;
       linkedId?: string | null;
       mergeProperties?: boolean;
+      removeProperties?: string[];
     },
   ): Promise<{ node: GraphNodeEntity; created: boolean }> {
     const entityId = payload.entityId ?? uuidv7();
-    let node = await this.entityRepo.findOne({
-      where: { entity_id: entityId, owner_user_id: ownerUserId },
-    });
+    let node = await this.findNodeToWrite(ownerUserId, entityId);
 
     const created = !node;
+    const heldKey = node && linkedKeyOf(node);
     if (!node) {
       if (!payload.entityType) {
         throw new Error('entityType is required when creating a graph node');
@@ -622,7 +705,7 @@ export class GraphUtilityService {
         entity_type: payload.entityType,
         name: payload.name ?? null,
         description: payload.description ?? payload.name ?? null,
-        properties: payload.properties ?? {},
+        properties: nextProperties({}, payload),
         search_content: payload.searchContent ?? payload.name ?? null,
         linked_table: payload.linkedTable ?? null,
         linked_id: payload.linkedId ?? null,
@@ -654,20 +737,112 @@ export class GraphUtilityService {
         node.linked_id = payload.linkedId;
       }
 
-      if (payload.properties) {
-        node.properties =
-          payload.mergeProperties === false
-            ? payload.properties
-            : { ...(node.properties ?? {}), ...payload.properties };
+      if (payload.properties || payload.removeProperties?.length) {
+        node.properties = nextProperties(node.properties, payload);
       }
 
       node.is_active = true;
       node.is_archived = false;
     }
 
-    const saved = await this.entityRepo.save(node);
+    await this.assertLinkedKeyFree(ownerUserId, node, heldKey);
+
+    // Only a row this call found and checked may go through save(); see insertNode.
+    const saved = created ? await this.insertNode(node) : await this.entityRepo.save(node);
 
     return { node: saved, created };
+  }
+
+  /**
+   * Throw when saving `node` would put it on a linked key another row holds.
+   * Retyping a row, re-keying it or inserting one moves it onto a
+   * `(entity_type, linked_table, linked_id)` it does not hold yet, and
+   * `entities_linked_uniq` allows one of an owner's rows there: the statement
+   * used to violate it, GraphEventListener threw, and the job dead-lettered —
+   * after `memory.remember` had reported the entity updated or created. Checking
+   * first names the row in the way and fails no statement, so a surrounding
+   * transaction survives it. A writer that lands on the key between this read
+   * and the save still meets the index.
+   *
+   * The two rows are not merged instead. That would retire one of them — what
+   * `memory.forget` does, behind its own confirmation — and pick between two
+   * rows' names and properties with nobody to ask. WriteKnowledgeTool refuses a
+   * write onto a held key before queueing it; this is for a row that lands there
+   * after the tool looked, and for any other writer.
+   *
+   * `heldKey` is the key the row held before this write, or `null` for an
+   * insert. A row that keeps its key needs no check, active or not: the index is
+   * not partial on `is_active`, so no other row can be on it, and bringing a
+   * forgotten row back moves it nowhere.
+   */
+  private async assertLinkedKeyFree(
+    ownerUserId: string,
+    node: GraphNodeEntity,
+    heldKey: LinkedKey | null,
+  ): Promise<void> {
+    const target = linkedKeyOf(node);
+    const staysPut =
+      heldKey !== null &&
+      heldKey.entityType === target.entityType &&
+      heldKey.linkedTable === target.linkedTable &&
+      heldKey.linkedId === target.linkedId;
+
+    if (staysPut) {
+      return;
+    }
+
+    const holder = await this.findLinkedKeyHolder(ownerUserId, target);
+
+    if (!holder) {
+      return;
+    }
+
+    throw new Error(
+      `Entity ${node.entity_id} cannot become the ${target.entityType} linked to ${target.linkedTable} record ` +
+        `${target.linkedId}: entity ${holder.entity_id} already is` +
+        (holder.is_active ? '' : ', although it is no longer active'),
+    );
+  }
+
+  /**
+   * The row a node write for `ownerUserId` lands on, or `null` when no row
+   * holds `entityId`.
+   *
+   * Looked up by primary key alone, because `entity_id` is the whole key: a
+   * row holding the id is the row the write would reach, whoever owns it, so
+   * an owner filter here only hid it — the write went on as an insert and
+   * TypeORM's save() turned that into an UPDATE of the other owner's row. A row
+   * that belongs to anyone else — another user, or no one once its owner was
+   * deleted — is refused, forgotten or not.
+   */
+  private async findNodeToWrite(ownerUserId: string, entityId: string): Promise<GraphNodeEntity | null> {
+    const node = await this.entityRepo.findOne({ where: { entity_id: entityId } });
+
+    if (node && node.owner_user_id !== ownerUserId) {
+      throw new Error(`Graph node ${entityId} is not owned by ${ownerUserId}; refusing to write it`);
+    }
+
+    return node;
+  }
+
+  /**
+   * INSERT a node {@link findNodeToWrite} found no row for, and return it with
+   * the defaults Postgres filled in. Not save(): that loads the primary key
+   * alone and UPDATEs whatever row it finds, so a row that took the id after
+   * the lookup — another owner's included — would be overwritten. A plain
+   * INSERT fails on `entities_pkey` instead.
+   */
+  private async insertNode(node: GraphNodeEntity): Promise<GraphNodeEntity> {
+    await this.entityRepo
+      .createQueryBuilder()
+      .insert()
+      // `metadata.target`, as in PlaceService: the entity class would narrow
+      // `.values()` to `_QueryDeepPartialEntity`, which rejects jsonb `properties`.
+      .into(this.entityRepo.metadata.target)
+      .values(node)
+      .execute();
+
+    return node;
   }
 
   async softDeleteNode(entityId: string, ownerUserId: string): Promise<void> {
@@ -731,6 +906,66 @@ export class GraphUtilityService {
     return query.getMany();
   }
 
+  /**
+   * The active relationship a write of this edge lands on when no row is named
+   * by id: the one on its `(from, to, type)` coordinate — the columns of
+   * `relationships_unique_directed_idx`, which allows one active edge there —
+   * or, failing that, a bidirectional edge stored the other way round, which
+   * states the same fact. `isBidirectional: false` asks for this orientation
+   * only: a one-way B→A is not the A↔B already stored, and merging it in would
+   * make that edge one-way A→B.
+   *
+   * Only the owner's own edges match. Every edge writer stamps `owner_user_id`
+   * with the owner of both endpoints, so an edge between the owner's entities
+   * that belongs to someone else is not something to write onto.
+   */
+  async findActiveRelationship(
+    ownerUserId: string,
+    edge: { fromEntityId: string; toEntityId: string; relationshipType: string; isBidirectional?: boolean },
+  ): Promise<RelationshipEntity | null> {
+    const directed = await this.findActiveDirectedRelationship(
+      ownerUserId,
+      edge.fromEntityId,
+      edge.toEntityId,
+      edge.relationshipType,
+    );
+
+    if (directed || edge.isBidirectional === false) {
+      return directed;
+    }
+
+    return this.relationshipRepo.findOne({
+      where: {
+        owner_user_id: ownerUserId,
+        from_entity_id: edge.toEntityId,
+        to_entity_id: edge.fromEntityId,
+        relationship_type: edge.relationshipType,
+        is_bidirectional: true,
+        is_active: true,
+      },
+    });
+  }
+
+  /**
+   * Insert a relationship, or update the one it already is: the row
+   * `relationshipId` names, or — when it names none, or none is given — the
+   * active edge {@link findActiveRelationship} finds on the write's coordinate.
+   *
+   * The coordinate is the half that used to be missing. A producer re-asserting
+   * an edge that already exists (an agent restating what an import wrote, a
+   * retried write, a sync pass) sends no id, or a fresh one, and a plain INSERT
+   * of that violates `relationships_unique_directed_idx`: GraphEventListener
+   * threw, the job dead-lettered, and every property the write carried was lost
+   * — after `memory.remember` had already reported the relationship created.
+   *
+   * On update an `undefined` field keeps its stored value, and `properties` /
+   * `mergeProperties` / `removeProperties` behave as in {@link createOrUpdateNode}.
+   * An edge found by its coordinate also keeps its stored endpoints and type
+   * spelling; only a row named by id is moved or retyped by a write that says so.
+   * That write fails, before anything is written, when another active edge
+   * already holds the coordinate it is moving the row to — see
+   * {@link assertCoordinateFree}.
+   */
   async createOrUpdateRelationship(
     ownerUserId: string,
     payload: {
@@ -744,62 +979,201 @@ export class GraphUtilityService {
       startDate?: Date;
       endDate?: Date;
       mergeProperties?: boolean;
+      removeProperties?: string[];
     },
   ): Promise<{ relationship: RelationshipEntity; created: boolean }> {
-    const relationshipId = payload.relationshipId ?? uuidv7();
-    let relationship = await this.relationshipRepo.findOne({
-      where: { relationship_id: relationshipId, owner_user_id: ownerUserId },
-    });
+    const byId = payload.relationshipId
+      ? await this.relationshipRepo.findOne({
+          where: { relationship_id: payload.relationshipId, owner_user_id: ownerUserId },
+        })
+      : null;
 
-    const created = !relationship;
+    let relationship = byId ?? (await this.findActiveRelationship(ownerUserId, payload));
+
     if (!relationship) {
-      relationship = this.relationshipRepo.create({
-        relationship_id: relationshipId,
-        owner_user_id: ownerUserId,
-        from_entity_id: payload.fromEntityId,
-        to_entity_id: payload.toEntityId,
-        relationship_type: payload.relationshipType,
-        properties: payload.properties ?? {},
-        strength: payload.strength ?? 1,
-        is_bidirectional: payload.isBidirectional ?? false,
-        start_date: payload.startDate ?? null,
-        end_date: payload.endDate ?? null,
-        is_active: true,
-      });
-    } else {
-      relationship.from_entity_id = payload.fromEntityId ?? relationship.from_entity_id;
-      relationship.to_entity_id = payload.toEntityId ?? relationship.to_entity_id;
-      relationship.relationship_type = payload.relationshipType ?? relationship.relationship_type;
+      const inserted = await this.insertRelationshipUnlessActive(
+        ownerUserId,
+        payload.relationshipId ?? uuidv7(),
+        payload,
+      );
 
-      if (payload.properties) {
-        relationship.properties =
-          payload.mergeProperties === false
-            ? payload.properties
-            : { ...(relationship.properties ?? {}), ...payload.properties };
+      if (inserted) {
+        return { relationship: inserted, created: true };
       }
 
-      if (payload.strength !== undefined) {
-        relationship.strength = payload.strength;
-      }
+      // The insert yielded: another writer put an active edge on exactly this
+      // coordinate between the read above and the INSERT. Merge into that one.
+      relationship = await this.findActiveDirectedRelationship(
+        ownerUserId,
+        payload.fromEntityId,
+        payload.toEntityId,
+        payload.relationshipType,
+      );
 
-      if (payload.isBidirectional !== undefined) {
-        relationship.is_bidirectional = payload.isBidirectional;
+      if (!relationship) {
+        throw new Error(
+          `An active ${payload.relationshipType} relationship from ${payload.fromEntityId} to ` +
+            `${payload.toEntityId} exists but does not belong to owner ${ownerUserId}`,
+        );
       }
-
-      if (payload.startDate !== undefined) {
-        relationship.start_date = payload.startDate;
-      }
-
-      if (payload.endDate !== undefined) {
-        relationship.end_date = payload.endDate;
-      }
-
-      relationship.is_active = true;
     }
+
+    if (byId) {
+      const target = {
+        fromEntityId: payload.fromEntityId ?? byId.from_entity_id,
+        toEntityId: payload.toEntityId ?? byId.to_entity_id,
+        relationshipType: payload.relationshipType ?? byId.relationship_type,
+      };
+
+      await this.assertCoordinateFree(ownerUserId, byId, target);
+
+      relationship.from_entity_id = target.fromEntityId;
+      relationship.to_entity_id = target.toEntityId;
+      relationship.relationship_type = target.relationshipType;
+    }
+
+    if (payload.properties || payload.removeProperties?.length) {
+      relationship.properties = nextProperties(relationship.properties, payload);
+    }
+
+    if (payload.strength !== undefined) {
+      relationship.strength = payload.strength;
+    }
+
+    if (payload.isBidirectional !== undefined) {
+      relationship.is_bidirectional = payload.isBidirectional;
+    }
+
+    if (payload.startDate !== undefined) {
+      relationship.start_date = payload.startDate;
+    }
+
+    if (payload.endDate !== undefined) {
+      relationship.end_date = payload.endDate;
+    }
+
+    relationship.is_active = true;
 
     const saved = await this.relationshipRepo.save(relationship);
 
-    return { relationship: saved, created };
+    return { relationship: saved, created: false };
+  }
+
+  private findActiveDirectedRelationship(
+    ownerUserId: string,
+    fromEntityId: string,
+    toEntityId: string,
+    relationshipType: string,
+  ): Promise<RelationshipEntity | null> {
+    return this.relationshipRepo.findOne({
+      where: {
+        owner_user_id: ownerUserId,
+        from_entity_id: fromEntityId,
+        to_entity_id: toEntityId,
+        relationship_type: relationshipType,
+        is_active: true,
+      },
+    });
+  }
+
+  /**
+   * Throw when a write by id would put `row` on a coordinate another active
+   * edge already holds. Moving the row, retyping it, or bringing a forgotten
+   * one back puts it on a `(from, to, type)` coordinate it does not hold yet,
+   * and `relationships_unique_directed_idx` allows one active edge there: the
+   * UPDATE used to violate it, GraphEventListener threw, and the job
+   * dead-lettered — after `memory.remember` had reported the relationship
+   * updated. Checking first names the edge in the way and fails no statement,
+   * so a surrounding transaction survives it. A writer that lands on the
+   * coordinate between this read and the save still meets the index.
+   *
+   * The two edges are not merged instead. That would retire the row the write
+   * names — what `memory.forget` does, behind its own confirmation — and pick
+   * between two edges' properties with nobody to ask. WriteKnowledgeTool
+   * refuses a retype onto a held coordinate before queueing it; this is for an
+   * edge that lands there after the tool looked, and for any other writer.
+   *
+   * Every owner's edges count: the index is not scoped to an owner.
+   */
+  private async assertCoordinateFree(
+    ownerUserId: string,
+    row: RelationshipEntity,
+    target: { fromEntityId: string; toEntityId: string; relationshipType: string },
+  ): Promise<void> {
+    // An active row already holds its own coordinate, so no other row can.
+    const staysPut =
+      row.is_active &&
+      row.from_entity_id === target.fromEntityId &&
+      row.to_entity_id === target.toEntityId &&
+      row.relationship_type === target.relationshipType;
+
+    if (staysPut) {
+      return;
+    }
+
+    const holder = await this.relationshipRepo.findOne({
+      where: {
+        from_entity_id: target.fromEntityId,
+        to_entity_id: target.toEntityId,
+        relationship_type: target.relationshipType,
+        is_active: true,
+      },
+    });
+
+    if (!holder) {
+      return;
+    }
+
+    throw new Error(
+      `Relationship ${row.relationship_id} cannot become ${target.fromEntityId} ` +
+        `-[${target.relationshipType}]-> ${target.toEntityId}: ` +
+        (holder.owner_user_id === ownerUserId
+          ? `relationship ${holder.relationship_id} is already the active edge there`
+          : `the active edge there does not belong to owner ${ownerUserId}`),
+    );
+  }
+
+  /**
+   * INSERT the edge unless an active one already holds its coordinate; returns
+   * the new row, or `null` when the insert yielded. The conflict target names
+   * the columns of `relationships_unique_directed_idx` and repeats its
+   * predicate (the shape GraphIngestService and KnownPlacesService use), so it
+   * absorbs a clash on that index and nothing else: a `relationship_id` that is
+   * already taken still raises. Not raising matters beyond the log line — a
+   * failed statement would abort a surrounding transaction.
+   */
+  private async insertRelationshipUnlessActive(
+    ownerUserId: string,
+    relationshipId: string,
+    payload: Parameters<GraphUtilityService['createOrUpdateRelationship']>[1],
+  ): Promise<RelationshipEntity | null> {
+    const relationship = this.relationshipRepo.create({
+      relationship_id: relationshipId,
+      owner_user_id: ownerUserId,
+      from_entity_id: payload.fromEntityId,
+      to_entity_id: payload.toEntityId,
+      relationship_type: payload.relationshipType,
+      properties: nextProperties({}, payload),
+      strength: payload.strength ?? 1,
+      is_bidirectional: payload.isBidirectional ?? false,
+      start_date: payload.startDate ?? null,
+      end_date: payload.endDate ?? null,
+      is_active: true,
+    });
+
+    const result = await this.relationshipRepo
+      .createQueryBuilder()
+      .insert()
+      // `metadata.target`, as in PlaceService: the entity class would narrow
+      // `.values()` to `_QueryDeepPartialEntity`, which rejects jsonb `properties`.
+      .into(this.relationshipRepo.metadata.target)
+      .values(relationship)
+      .onConflict('(from_entity_id, to_entity_id, relationship_type) WHERE is_active = TRUE DO NOTHING')
+      .returning(['relationship_id'])
+      .execute();
+
+    // Postgres hands back the RETURNING rows, and a yielded insert returns none.
+    return (result.raw as unknown[]).length > 0 ? relationship : null;
   }
 
   async softDeleteRelationship(relationshipId: string, ownerUserId: string): Promise<void> {

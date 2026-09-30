@@ -5,6 +5,10 @@ import timelineCssUrl from '@knight-lab/timelinejs/dist/css/timeline.css?url';
 import timelineLocaleUrl from '@knight-lab/timelinejs/dist/js/locale/en.json?url';
 import timelineJsUrl from '@knight-lab/timelinejs/dist/js/timeline.js?url';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { TimeFormat } from '@/lib/dateTimeFormat';
+
+import timelineLocaleH23Url from './locale/en-h23.json?url';
 import {
   TIMELINE_HEIGHT_PX,
   inertTimeline,
@@ -79,6 +83,19 @@ function syncTimelineEvents(instance: TimelineInstance, events: readonly Timelin
 }
 
 type Rgb = { r: number; g: number; b: number };
+
+/**
+ * The locale TimelineJS writes its own slide dates and axis ticks in.
+ *
+ * Those labels never pass through `useDateTimeFormat()`: the library formats them from the
+ * `dateformats` of a locale file, and its English one is 12-hour ("3:43 PM", "3 PM"). So 24-hour
+ * loads `locale/en-h23.json` — the same patterns with the clock written 24-hour ("15:43",
+ * "15:00") and everything else inherited from the built-in English. 'auto' and 12-hour keep the
+ * library's own file, which is what every timeline showed before the preference existed.
+ */
+function timelineLocaleFor(timeFormat: TimeFormat): string {
+  return timeFormat === 'h23' ? timelineLocaleH23Url : timelineLocaleUrl;
+}
 
 let timelineLoad: Promise<TimelineCtor> | null = null;
 
@@ -214,15 +231,23 @@ export function TimelineJsHost({
   onSlideOpenRef.current = onSlideOpen;
   const deckKey = timelineDeckKey(data, startAtSlide);
   const [generation, setGeneration] = useState(0);
-  const mountKey = `${sessionKey ?? deckKey}:${generation}`;
-  const payloadRef = useRef({ data, startAtSlide, fallbackHeightPx });
-  payloadRef.current = { data, startAtSlide, fallbackHeightPx };
+  const { timeFormat } = useDateTimeFormat();
+  // TimelineJS reads its locale once, at construction, so a new time format means a new instance.
+  const languageUrl = timelineLocaleFor(timeFormat);
+  const mountKey = `${sessionKey ?? deckKey}:${languageUrl}:${generation}`;
+  const payloadRef = useRef({ data, startAtSlide, fallbackHeightPx, languageUrl });
+  payloadRef.current = { data, startAtSlide, fallbackHeightPx, languageUrl };
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     const host = hostRef.current;
-    const { data: deck, startAtSlide: landing, fallbackHeightPx: minHeight } = payloadRef.current;
+    const {
+      data: deck,
+      startAtSlide: landing,
+      fallbackHeightPx: minHeight,
+      languageUrl: language,
+    } = payloadRef.current;
     if (!host || deck.events.length === 0) {
       return;
     }
@@ -277,7 +302,7 @@ export function TimelineJsHost({
                 height,
                 startAtSlide: landing,
                 bg: timelineBgFromTheme(),
-                languageUrl: timelineLocaleUrl,
+                languageUrl: language,
               }),
             );
             instanceRef.current = instance;

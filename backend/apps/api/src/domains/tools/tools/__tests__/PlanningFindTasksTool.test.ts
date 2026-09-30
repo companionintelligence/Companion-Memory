@@ -72,10 +72,12 @@ describe('PlanningFindTasksTool', () => {
   });
 
   it('filters by a case-insensitive title substring', async () => {
-    const findAll = jest.fn().mockResolvedValue([
-      task({ id: 'a', title: 'Draft the Fenwick contract' }),
-      task({ id: 'b', title: 'Buy milk' }),
-    ]);
+    const findAll = jest
+      .fn()
+      .mockResolvedValue([
+        task({ id: 'a', title: 'Draft the Fenwick contract' }),
+        task({ id: 'b', title: 'Buy milk' }),
+      ]);
     const tool = makeTool(findAll);
 
     const result = await tool.execute(CONTEXT, { query: 'fenwick' });
@@ -85,11 +87,13 @@ describe('PlanningFindTasksTool', () => {
   });
 
   it('excludes tasks with no dueAt when a due-date bound is given', async () => {
-    const findAll = jest.fn().mockResolvedValue([
-      task({ id: 'a', dueAt: new Date('2026-09-20T00:00:00.000Z') }),
-      task({ id: 'b', dueAt: null }),
-      task({ id: 'c', dueAt: new Date('2026-10-05T00:00:00.000Z') }),
-    ]);
+    const findAll = jest
+      .fn()
+      .mockResolvedValue([
+        task({ id: 'a', dueAt: new Date('2026-09-20T00:00:00.000Z') }),
+        task({ id: 'b', dueAt: null }),
+        task({ id: 'c', dueAt: new Date('2026-10-05T00:00:00.000Z') }),
+      ]);
     const tool = makeTool(findAll);
 
     const result = await tool.execute(CONTEXT, { dueBefore: '2026-09-30T00:00:00.000Z' });
@@ -98,10 +102,12 @@ describe('PlanningFindTasksTool', () => {
   });
 
   it('applies dueAfter as an inclusive lower bound', async () => {
-    const findAll = jest.fn().mockResolvedValue([
-      task({ id: 'a', dueAt: new Date('2026-09-20T00:00:00.000Z') }),
-      task({ id: 'b', dueAt: new Date('2026-09-25T00:00:00.000Z') }),
-    ]);
+    const findAll = jest
+      .fn()
+      .mockResolvedValue([
+        task({ id: 'a', dueAt: new Date('2026-09-20T00:00:00.000Z') }),
+        task({ id: 'b', dueAt: new Date('2026-09-25T00:00:00.000Z') }),
+      ]);
     const tool = makeTool(findAll);
 
     const result = await tool.execute(CONTEXT, { dueAfter: '2026-09-25T00:00:00.000Z' });

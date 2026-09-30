@@ -20,6 +20,8 @@
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 		5A10919A3ADEB85C8AB3C577 /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADB153D656E4389829CBEB21 /* Message.swift */; };
+		5B1C7E2A9D4F63808A1E0C11 /* LocalLLMPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1C7E2A9D4F63808A1E0C12 /* LocalLLMPolicy.swift */; };
+		5B1C7E2A9D4F63808A1E0C21 /* LocalLLMStreaming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1C7E2A9D4F63808A1E0C22 /* LocalLLMStreaming.swift */; };
 		5E155DC47A7982368273BC0C /* ToolManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 746697B2AFBED88C9F36DEF7 /* ToolManager.swift */; };
 		6C050FDEE31C0F3E96580C60 /* Engine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B902B4C5FECEC34661FCD651 /* Engine.swift */; };
 		7DBB6A437899BB12D9E4D608 /* Benchmark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC6607478F912D895268AC0 /* Benchmark.swift */; };
@@ -93,6 +95,8 @@
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		504EC3131FED79650016851F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
+		5B1C7E2A9D4F63808A1E0C12 /* LocalLLMPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LocalLLMPolicy.swift; sourceTree = "<group>"; };
+		5B1C7E2A9D4F63808A1E0C22 /* LocalLLMStreaming.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LocalLLMStreaming.swift; sourceTree = "<group>"; };
 		5C3DE9223BC9DA6763EC88D3 /* Config.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
 		5EC15E818EF60E37B4693D1C /* ExperimentalFlags.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ExperimentalFlags.swift; sourceTree = "<group>"; };
 		746697B2AFBED88C9F36DEF7 /* ToolManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ToolManager.swift; sourceTree = "<group>"; };
@@ -242,6 +246,8 @@
 				8DAB1E76987713E0189D1BC1 /* CompanionIntentClient.swift */,
 				32D0FB10CF41EEB4CF5F66F0 /* CompanionIntentTools.swift */,
 				A28A8A2180EC92EA8160113A /* LocalLLMModels.swift */,
+				5B1C7E2A9D4F63808A1E0C12 /* LocalLLMPolicy.swift */,
+				5B1C7E2A9D4F63808A1E0C22 /* LocalLLMStreaming.swift */,
 				103C568D3125B3C480E28C5E /* ModelDownloader.swift */,
 			);
 			path = LocalLLM;
@@ -458,6 +464,8 @@
 				38BC98B99BC297D38472EC7D /* Tool.swift in Sources */,
 				5E155DC47A7982368273BC0C /* ToolManager.swift in Sources */,
 				1F763EDCBA47DDEB4C9078BF /* LocalLLMModels.swift in Sources */,
+				5B1C7E2A9D4F63808A1E0C11 /* LocalLLMPolicy.swift in Sources */,
+				5B1C7E2A9D4F63808A1E0C21 /* LocalLLMStreaming.swift in Sources */,
 				980EA5B2D011577922CDE281 /* ModelDownloader.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

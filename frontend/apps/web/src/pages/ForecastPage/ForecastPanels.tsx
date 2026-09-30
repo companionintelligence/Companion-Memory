@@ -4,7 +4,9 @@ import { Card, cn } from '@ci/shadcn';
 
 import type { ForecastBucket } from '@/api/useForecastService';
 import { l0Background } from '@/components/ForecastStrip/ForecastStrip';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { normalizeClass } from '@/lib/activityPalette';
+import { HOUR_MINUTE, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { placeVisible } from '@/lib/forecastDisplay';
 
 import { COMMIT_MASS, branchPick, formatSlotClock, pickOpenSlot, rankSaccades } from './forageModel';
@@ -117,13 +119,14 @@ export function OccupancyHonestyPanel() {
 }
 
 export function BranchTexturePanel({ buckets, nowMs }: { buckets: ForecastBucket[]; nowMs?: number }) {
+  const fmt = useDateTimeFormat();
   const slot = useMemo(() => pickOpenSlot(buckets, nowMs ?? Date.now()), [buckets, nowMs]);
   if (!slot) {
     return null;
   }
 
   const pick = branchPick(slot);
-  const clock = formatSlotClock(slot.startTime);
+  const clock = formatSlotClock(slot.startTime, fmt);
 
   return (
     <Card data-testid="branch-texture">
@@ -196,6 +199,7 @@ export function SaccadePanel({
   historyDays?: HistoryDay[];
   nowMs?: number;
 }) {
+  const fmt = useDateTimeFormat();
   const slot = useMemo(() => pickOpenSlot(buckets, nowMs ?? Date.now()), [buckets, nowMs]);
   const ranked = useMemo(
     () => (slot ? rankSaccades(historyDays, slot.bucketIndex, slot.l0Probs) : []),
@@ -205,7 +209,7 @@ export function SaccadePanel({
     return null;
   }
 
-  const clock = formatSlotClock(slot.startTime);
+  const clock = formatSlotClock(slot.startTime, fmt);
 
   return (
     <Card className="lg:col-span-2" data-testid="saccade-panel">
@@ -250,6 +254,7 @@ export function NextUpPanel({
   buckets: ForecastBucket[];
   historyDays?: HistoryDay[];
 }) {
+  const fmt = useDateTimeFormat();
   const now = Date.now();
   const upcoming = buckets
     .filter((bucket) => new Date(bucket.startTime).getTime() >= now)
@@ -280,7 +285,7 @@ export function NextUpPanel({
         {upcoming.map(({ bucket, top, l1, deltaPp }) => (
           <div key={bucket.bucketIndex} className="flex items-baseline justify-between gap-3 text-sm">
             <span className="w-16 shrink-0 text-muted-foreground">
-              {new Date(bucket.startTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+              {fmt.time(bucket.startTime, HOUR_MINUTE)}
             </span>
             <span className="min-w-0 flex-1 truncate font-medium">
               {top?.label}
@@ -424,8 +429,8 @@ function cellColor(label: string): string {
   return l0Background(normalizeClass(label));
 }
 
-function cellTitle(cell: HeatmapCell, rowLabel: string): string {
-  const window = `${rowLabel} ${formatClock(cell.localMin)}–${formatClock(cell.localMin + MINUTES_PER_SLOT)}`;
+function cellTitle(cell: HeatmapCell, rowLabel: string, fmt: DateTimeFormatter): string {
+  const window = `${rowLabel} ${formatClock(cell.localMin, fmt)}–${formatClock(cell.localMin + MINUTES_PER_SLOT, fmt)}`;
   const probability = cell.predictedProbs.find((entry) => entry.label === cell.predictedDominant);
   const confidence = `${Math.round((probability?.probability ?? 0) * 100)}%`;
 
@@ -443,6 +448,8 @@ function cellTitle(cell: HeatmapCell, rowLabel: string): string {
 }
 
 function HeatmapCellView({ cell, rowLabel }: { cell: HeatmapCell | null; rowLabel: string }) {
+  const fmt = useDateTimeFormat();
+
   if (!cell) {
     return <div className="h-5 bg-muted-foreground/10" />;
   }
@@ -452,7 +459,7 @@ function HeatmapCellView({ cell, rowLabel }: { cell: HeatmapCell | null; rowLabe
       // A native title rather than 300-odd Radix tooltip roots: this grid is an
       // order of magnitude denser than the strip above, and its accessible
       // reading is carried by the summary line and the grid's aria-label.
-      title={cellTitle(cell, rowLabel)}
+      title={cellTitle(cell, rowLabel, fmt)}
       className={cn('h-5 cursor-default', cell.divergent && 'ring-2 ring-inset ring-foreground')}
       style={{ backgroundColor: cellColor(cell.colorLabel), opacity: cell.opacity }}
       data-testid={cell.divergent ? 'heatmap-cell-divergent' : 'heatmap-cell'}
@@ -483,6 +490,7 @@ export function DivergenceHeatmapPanel({
   buckets?: ForecastBucket[];
   className?: string;
 }) {
+  const fmt = useDateTimeFormat();
   const rows = useMemo(
     () =>
       buildHeatmapRows(
@@ -536,7 +544,7 @@ export function DivergenceHeatmapPanel({
           >
             {Array.from({ length: HEATMAP_COLUMNS }, (_, column) => (
               <span key={column} className="whitespace-nowrap">
-                {column % COLUMN_LABEL_EVERY === 0 ? formatClock(column * MINUTES_PER_SLOT) : ''}
+                {column % COLUMN_LABEL_EVERY === 0 ? formatClock(column * MINUTES_PER_SLOT, fmt) : ''}
               </span>
             ))}
           </div>

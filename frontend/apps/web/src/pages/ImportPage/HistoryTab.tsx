@@ -10,6 +10,8 @@ const RUNS_PAGE = 100;
 import { Alert, Button, Card, cn } from '@ci/shadcn';
 import { AlertTriangle } from '@ci/shadcn/icons';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+
 import { runStatusLabel, serviceLabels } from './runFormat';
 import { RunPipeline } from './RunPipeline';
 import { ServiceBadges } from './ServiceBadges';
@@ -25,6 +27,7 @@ import { useImportApi, useRunProgress, type ImportRun, type ImportSource } from 
  */
 export function HistoryTab() {
   const api = useImportApi();
+  const fmt = useDateTimeFormat();
   const [sources, setSources] = useState<readonly ImportSource[]>([]);
   const [runs, setRuns] = useState<readonly ImportRun[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -147,7 +150,7 @@ export function HistoryTab() {
                     <div className="min-w-0 space-y-1">
                       <p className="truncate font-medium">{entry.label ?? 'Import'}</p>
                       <p className="truncate text-sm text-muted-foreground">
-                        {new Date(entry.createdAt).toLocaleString()}
+                        {fmt.dateTime(entry.createdAt)}
                         {/* What the run actually yielded. This is the one place
                             the number is true of the thing it is next to: a run
                             has one record count, where a per-SOURCE figure could

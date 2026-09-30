@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "tsc --build ../../packages/tool-core/tsconfig.build.json && DOTENV_CONFIG_PATH=../../../.env nodemon --watch src --watch config --watch ../../../.env --exec ts-node -r tsconfig-paths/register -r @swc/register src/main.ts",
+    "dev": "tsc --build ../../packages/tool-core/tsconfig.build.json && DOTENV_CONFIG_PATH=../../../.env nodemon --watch src --watch config --watch ../../../.env --ignore 'src/**/__tests__/**' --ignore 'src/**/__testHelpers__/**' --ignore 'src/**/*.spec.ts' --ignore 'src/**/*.test.ts' --exec ts-node -r tsconfig-paths/register -r @swc/register src/main.ts",
     "build": "yarn tsc --build --verbose && yarn tsc-alias --verbose",
     "clean": "rimraf dist",
     "exec": "tsc --build ../../packages/tool-core/tsconfig.build.json && DOTENV_CONFIG_PATH=../../../.env ts-node -r tsconfig-paths/register -r @swc/register",

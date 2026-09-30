@@ -104,12 +104,15 @@ export function MergeCandidateCard({
   candidate: MergeCandidate;
   onMerged: (outcome: MergeOutcome) => Promise<unknown>;
 }) {
+  const sharedPhones = useMemo(() => sharedPhoneNumbers(candidate.evidence), [candidate.evidence]);
+
   return (
     <MergeSuggestionCard
       people={candidate.people}
+      sharedPhones={sharedPhones}
       onMerged={onMerged}
       heading={<CandidateHeading candidate={candidate} />}
-      note={<CandidateDiff people={candidate.people} />}
+      note={<CandidateDiff people={candidate.people} sharedPhones={sharedPhones} />}
     />
   );
 }
@@ -175,7 +178,12 @@ export function MergeClusterCard({
       </div>
 
       <div className="mb-3 rounded-md bg-muted/50 px-3 py-2">
-        <PersonSummary person={anchor} shared={new Set()} counterpart={null} />
+        <PersonSummary
+          person={anchor}
+          shared={new Set()}
+          counterpart={null}
+          sharedPhones={NO_SHARED_PHONES}
+        />
       </div>
 
       <div className="flex flex-col gap-2">
@@ -189,6 +197,7 @@ export function MergeClusterCard({
                 person={person}
                 shared={sharedNameTokens(anchor.name, person.name)}
                 counterpart={anchor}
+                sharedPhones={NO_SHARED_PHONES}
               />
             </div>
             <Button
@@ -231,11 +240,13 @@ export function MergeClusterCard({
 
 function MergeSuggestionCard({
   people,
+  sharedPhones,
   heading,
   note,
   onMerged,
 }: {
   people: readonly MergablePerson[];
+  sharedPhones: readonly SharedPhone[];
   heading: ReactNode;
   note?: ReactNode;
   onMerged: (outcome: MergeOutcome) => Promise<unknown>;
@@ -302,6 +313,7 @@ function MergeSuggestionCard({
                 person={person}
                 shared={shared}
                 counterpart={orderedPeople.find((other) => other.id !== person.id) ?? null}
+                sharedPhones={sharedPhones}
               />
             </div>
 
@@ -375,8 +387,14 @@ function CandidateHeading({ candidate }: { candidate: MergeCandidate }) {
   );
 }
 
-function CandidateDiff({ people }: { people: readonly MergablePerson[] }) {
-  const differences = describeDifferences(people);
+function CandidateDiff({
+  people,
+  sharedPhones,
+}: {
+  people: readonly MergablePerson[];
+  sharedPhones: readonly SharedPhone[];
+}) {
+  const differences = describeDifferences(people, sharedPhones);
   if (differences.length === 0) {
     return null;
   }
@@ -394,13 +412,32 @@ function PersonSummary({
   person,
   shared,
   counterpart,
+  sharedPhones,
 }: {
   person: MergablePerson;
   shared: Set<string>;
   counterpart: MergablePerson | null;
+  /**
+   * The numbers the pair's phone evidence says BOTH records carry. The server
+   * re-checks that evidence against the live records before the queue is
+   * shown, so a number here is on both people — even when this person's
+   * contact list cannot show it: `identifiers` is read from an index that can
+   * hold a number for only one person, and from `phone`/`phones`, never from a
+   * contact card's full typed list.
+   */
+  sharedPhones: readonly SharedPhone[];
 }) {
   const identifiers = person.identifiers ?? [];
   const counterpartKeys = new Set((counterpart?.identifiers ?? []).map(identifierKey));
+  const sharedPhoneKeys = new Set(sharedPhones.map((phone) => phone.key));
+  const listedPhoneKeys = new Set(
+    identifiers
+      .filter((identifier) => identifier.kind === 'phone')
+      .map((identifier) => phoneKey(identifier.value)),
+  );
+  // The evidence number this person's list does not show: listed here so the
+  // card never claims a shared number it then shows on one side only.
+  const unlistedShared = sharedPhones.filter((phone) => !listedPhoneKeys.has(phone.key));
   const channels = channelLabels(person);
   const stats = person.interactionStats;
 
@@ -421,10 +458,13 @@ function PersonSummary({
         ))}
       </div>
 
-      {identifiers.length > 0 && (
+      {(identifiers.length > 0 || unlistedShared.length > 0) && (
         <div className="mt-1 flex flex-col gap-0.5 text-sm text-muted-foreground">
           {identifiers.map((identifier) => {
-            const unique = counterpart != null && !counterpartKeys.has(identifierKey(identifier));
+            const unique =
+              counterpart != null &&
+              !counterpartKeys.has(identifierKey(identifier)) &&
+              !(identifier.kind === 'phone' && sharedPhoneKeys.has(phoneKey(identifier.value)));
 
             return (
               <div key={`${identifier.kind}:${identifier.value}`}>
@@ -434,6 +474,12 @@ function PersonSummary({
               </div>
             );
           })}
+          {unlistedShared.map((phone) => (
+            <div key={`shared-phone:${phone.key}`}>
+              {phone.display}
+              <span className="ml-1 text-xs">shared</span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -443,7 +489,7 @@ function PersonSummary({
         </div>
       )}
 
-      {person.description && identifiers.length === 0 && (
+      {person.description && identifiers.length === 0 && unlistedShared.length === 0 && (
         <div className="truncate text-sm text-muted-foreground">{person.description}</div>
       )}
     </div>
@@ -566,22 +612,47 @@ export function humanReason(evidence: MergeCandidate['evidence']): string {
   }
 
   const email = evidence.find((item) => item.kind === 'email');
+
+  // The server holds a shared email back from its automatic merge when the
+  // names say two people (`email_check`, written by
+  // `memory/utils/emailIdentity.ts`): one side is you and the other side's
+  // name is someone else's (`self_endpoint`), or two names share nothing
+  // (`name_conflict`) — a card that lists one person's address under
+  // another person's name.
+  const emailCheck = evidence.find((item) => item.kind === 'email_check');
+  if (emailCheck != null) {
+    if (emailCheck.value === 'self_endpoint') {
+      return email != null
+        ? `Same email ${email.value}, but one side is you and the names differ`
+        : 'Shares an email with you, but the names differ';
+    }
+
+    return email != null
+      ? `Same email ${email.value}, but the names differ`
+      : 'Same email, but the names differ';
+  }
+
   if (email != null) {
     return `Same email: ${email.value}`;
   }
 
   const phone = evidence.find((item) => item.kind === 'phone');
   if (phone != null) {
+    // Always name the number: a "same phone" line that does not say which one
+    // leaves the reviewer comparing two lists of different numbers.
+    const numbers = phoneNumbersIn(phone.value)
+      .map((number) => number.display)
+      .join(', ');
     const check = evidence.find((item) => item.kind === 'phone_check');
     if (check != null) {
-      return `Same phone number, but ${phoneCheckReason(check.value)}`;
+      return `Same phone number ${numbers}, but ${phoneCheckReason(check.value)}`;
     }
 
     if ((phone.score ?? 0) >= 0.95) {
-      return `Same phone: ${phone.value}`;
+      return `Same phone: ${numbers}`;
     }
 
-    return `Same phone digits: ${phone.value} — country not confirmed`;
+    return `Same phone digits: ${numbers} — country not confirmed`;
   }
 
   const overlap = evidence.find((item) => item.kind === 'name_overlap');
@@ -607,10 +678,17 @@ export function humanReason(evidence: MergeCandidate['evidence']): string {
   return 'Proposed as the same person';
 }
 
-function describeDifferences(people: readonly MergablePerson[]): string[] {
+function describeDifferences(
+  people: readonly MergablePerson[],
+  sharedPhones: readonly SharedPhone[],
+): string[] {
   if (people.length < 2) {
     return [];
   }
+
+  const sharedPhoneKeys = new Set(sharedPhones.map((phone) => phone.key));
+  const isSharedPhone = (item: PersonIdentifier) =>
+    item.kind === 'phone' && sharedPhoneKeys.has(phoneKey(item.value));
 
   const [left, right] = people;
   const lines: string[] = [];
@@ -630,8 +708,12 @@ function describeDifferences(people: readonly MergablePerson[]): string[] {
 
   const leftKeys = new Set((left.identifiers ?? []).map(identifierKey));
   const rightKeys = new Set((right.identifiers ?? []).map(identifierKey));
-  const onlyLeft = (left.identifiers ?? []).filter((item) => !rightKeys.has(identifierKey(item)));
-  const onlyRight = (right.identifiers ?? []).filter((item) => !leftKeys.has(identifierKey(item)));
+  const onlyLeft = (left.identifiers ?? []).filter(
+    (item) => !rightKeys.has(identifierKey(item)) && !isSharedPhone(item),
+  );
+  const onlyRight = (right.identifiers ?? []).filter(
+    (item) => !leftKeys.has(identifierKey(item)) && !isSharedPhone(item),
+  );
 
   if (onlyLeft.length > 0 || onlyRight.length > 0) {
     const leftBit =
@@ -656,6 +738,71 @@ function describeDifferences(people: readonly MergablePerson[]): string[] {
 
 function identifierKey(identifier: PersonIdentifier): string {
   return `${identifier.kind}:${identifier.value}`;
+}
+
+/** One number a pair's phone evidence names: its join key and how a reviewer reads it. */
+export interface SharedPhone {
+  /** The last ten digits — the server's join key for a phone, and what `identifiers[].value` holds. */
+  key: string;
+  display: string;
+}
+
+const NO_SHARED_PHONES: readonly SharedPhone[] = [];
+
+function phoneKey(value: string): string {
+  const digits = value.replace(/\D/g, '');
+
+  return digits.length > 10 ? digits.slice(-10) : digits;
+}
+
+/**
+ * A phone number as a reviewer reads it. North American E.164 — the only
+ * country the server ever infers — gets its usual grouping; ten bare digits
+ * (a number whose country was NOT confirmed) are grouped without inventing
+ * one; anything else is shown as stored.
+ */
+export function formatPhoneNumber(value: string): string {
+  const trimmed = value.trim();
+  const nanp = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(trimmed);
+
+  if (nanp != null) {
+    return `+1 (${nanp[1]}) ${nanp[2]}-${nanp[3]}`;
+  }
+
+  const ten = /^(\d{3})(\d{3})(\d{4})$/.exec(trimmed);
+
+  return ten != null ? `${ten[1]}-${ten[2]}-${ten[3]}` : trimmed;
+}
+
+/** The numbers in one evidence value — every writer joins several with `, `. */
+function phoneNumbersIn(value: string): SharedPhone[] {
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => phoneKey(part).length > 0)
+    .map((part) => ({ key: phoneKey(part), display: formatPhoneNumber(part) }));
+}
+
+/**
+ * The numbers a pair's `phone` evidence says both records carry, once each.
+ * Markers (`phone_check`, `phone_country_conflict`) name no shared number.
+ */
+export function sharedPhoneNumbers(evidence: MergeCandidate['evidence']): SharedPhone[] {
+  const byKey = new Map<string, SharedPhone>();
+
+  for (const item of evidence) {
+    if (item.kind !== 'phone') {
+      continue;
+    }
+
+    for (const number of phoneNumbersIn(item.value)) {
+      if (!byKey.has(number.key)) {
+        byKey.set(number.key, number);
+      }
+    }
+  }
+
+  return [...byKey.values()];
 }
 
 function formatIdentifier(identifier: PersonIdentifier): string {

@@ -1,17 +1,98 @@
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 
-import { Brain, MessageSquare } from '@ci/shadcn/icons';
+import { cn } from '@ci/shadcn';
+import { Brain, ChevronRight } from '@ci/shadcn/icons';
 import { useLocation } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
 import { MEMORY_HUB_SECTIONS, isMemoryHubPath } from '@/components/MemoryHub/memoryHubSections';
-import { CHAT_BASE } from '@/pages/ChatPage/chatPaths';
+import { CHAT_BASE, chatThreadPath } from '@/pages/ChatPage/chatPaths';
+import type { Thread } from '@/pages/ChatPage/types';
 import { threadLabel, useRecentThreads } from '@/pages/ChatPage/useRecentThreads';
 
 import { usePowerRail } from '../PowerRailContext';
 
-import { RailSubmenuHead, RailSubmenuRow, RailSubmenuShell } from './RailSubmenuShell';
+import { RAIL_LEAF_HEIGHT, RAIL_LEAF_INSET, railRowTone } from './railRow';
+import { RailSubmenuHead, RailSubmenuLeaf, RailSubmenuRow, RailSubmenuShell } from './RailSubmenuShell';
 import { useRailSubmenuOpen } from './useRailSubmenuOpen';
+
+/**
+ * How many recent threads Chat shows before "All chats". Three is enough to
+ * get back into what you were just doing; the rest of the list stays one tap
+ * away instead of pushing Saved Searches and Sources off the screen.
+ */
+const RAIL_THREAD_PREVIEW = 3;
+
+/**
+ * Chat's recent threads, one level under Chat.
+ *
+ * "All chats" opens the rest of the list in place rather than linking to the
+ * Chat page: on a phone that page is a composer, not a list (its sidebar
+ * portals to a slot the phone layout never renders), so this list is the only
+ * way to reach an older thread there.
+ *
+ * The thread you are in always shows, even when it is older than the preview.
+ */
+function RecentThreads({
+  threads,
+  loading,
+  pathname,
+}: {
+  threads: Thread[];
+  loading: boolean;
+  pathname: string;
+}) {
+  const [showAll, setShowAll] = useState(false);
+
+  if (threads.length === 0) {
+    return loading ? (
+      <span
+        className={cn('flex items-center text-xs text-muted-foreground', RAIL_LEAF_HEIGHT, RAIL_LEAF_INSET)}
+      >
+        Loading threads…
+      </span>
+    ) : null;
+  }
+
+  const current = threads.find((thread) => pathname === chatThreadPath(thread.id));
+  const preview = threads.slice(0, RAIL_THREAD_PREVIEW);
+  const folded = current && !preview.includes(current) ? [...preview, current] : preview;
+  const shown = showAll ? threads : folded;
+
+  return (
+    <>
+      {shown.map((thread) => {
+        const to = chatThreadPath(thread.id);
+
+        return (
+          <RailSubmenuLeaf key={thread.id} to={to} label={threadLabel(thread)} active={pathname === to} />
+        );
+      })}
+
+      {threads.length > RAIL_THREAD_PREVIEW ? (
+        // Says what a tap will do, like "Show more" / "Show less", so its name
+        // changes with the list rather than carrying an expanded state.
+        <button
+          type="button"
+          onClick={() => setShowAll((value) => !value)}
+          className={cn(
+            'flex items-center gap-1.5 rounded-md text-left text-xs font-medium text-primary transition',
+            RAIL_LEAF_HEIGHT,
+            RAIL_LEAF_INSET,
+            railRowTone(false),
+            'hover:text-primary',
+          )}
+        >
+          {showAll ? 'Fewer chats' : 'All chats'}
+          <ChevronRight
+            aria-hidden
+            className={cn('h-3.5 w-3.5 shrink-0 transition-transform duration-200', showAll && '-rotate-90')}
+          />
+        </button>
+      ) : null}
+    </>
+  );
+}
 
 /**
  * Power Rail Memory entry with hub section children.
@@ -79,32 +160,7 @@ export function MemorySubmenu() {
             />
 
             {isChat && expanded && (
-              <>
-                {threads.length > 0 && (
-                  <span className="px-2 pb-0.5 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                    Recent
-                  </span>
-                )}
-
-                {threads.map((thread) => {
-                  const to = `${CHAT_BASE}/${thread.id}`;
-                  const label = threadLabel(thread);
-
-                  return (
-                    <RailSubmenuRow
-                      key={thread.id}
-                      to={to}
-                      label={label}
-                      active={pathname === to}
-                      icon={<MessageSquare className="h-4 w-4 text-muted-foreground" strokeWidth={1.25} />}
-                    />
-                  );
-                })}
-
-                {threadsLoading && threads.length === 0 && (
-                  <span className="px-2 py-1 text-xs text-muted-foreground">Loading threads…</span>
-                )}
-              </>
+              <RecentThreads threads={threads} loading={threadsLoading} pathname={pathname} />
             )}
           </Fragment>
         );

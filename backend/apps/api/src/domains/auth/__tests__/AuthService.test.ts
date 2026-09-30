@@ -271,3 +271,50 @@ describe('AuthService — session id binding', () => {
     });
   });
 });
+
+/**
+ * The signup intent carries a first-time OIDC sign-in from the callback to the confirm step. When
+ * the callback waived the signup code only because the appliance had no accounts, the confirm step
+ * must re-decide that as it creates the account — so the fact has to survive the round trip, and
+ * must not appear on an intent where nothing was waived.
+ */
+describe('AuthService — signup intent', () => {
+  const service = new AuthService(jwtService, {} as unknown as Repository<SessionEntity>);
+  const identity = { issuer: 'https://hub.test', subject: 'portal-sub-1' };
+
+  it('carries firstAccountOnly through to the confirm step', () => {
+    const token = service.issueSignupIntentToken('new@example.com', 'New', identity, {
+      firstAccountOnly: true,
+    });
+
+    expect(service.verifySignupIntentToken(token)).toEqual({
+      email: 'new@example.com',
+      name: 'New',
+      ...identity,
+      firstAccountOnly: true,
+    });
+  });
+
+  it.each([
+    ['not asked for', undefined],
+    ['false', { firstAccountOnly: false }],
+  ])('leaves it off an intent where nothing was waived (%s)', (_label, admission) => {
+    const token = service.issueSignupIntentToken('new@example.com', 'New', identity, admission);
+
+    expect(jwtService.decode<Record<string, unknown>>(token)).not.toHaveProperty('firstAccountOnly');
+    expect(service.verifySignupIntentToken(token)).toEqual({
+      email: 'new@example.com',
+      name: 'New',
+      ...identity,
+    });
+  });
+
+  it('reads an intent minted before the field existed as one that waived nothing', () => {
+    const legacy = jwtService.sign(
+      { email: 'new@example.com', purpose: 'signup_intent', ...identity },
+      { secret: REFRESH_SECRET, expiresIn: '10m' },
+    );
+
+    expect(service.verifySignupIntentToken(legacy).firstAccountOnly).toBeUndefined();
+  });
+});

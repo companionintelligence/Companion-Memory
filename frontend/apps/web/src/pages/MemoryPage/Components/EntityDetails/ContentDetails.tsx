@@ -3,6 +3,7 @@ import { useMutation } from '@apollo/client';
 import { CONTENT_FRAGMENT } from '@/components/entities/grid/ContentGridItem';
 import { formatEntityLabel, formatEntityTimestamp } from '@/components/EntityFields';
 import { gql, useFragment } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import type { MemoryEntityOf } from '../../useEntityService';
 
@@ -31,6 +32,7 @@ function originHref(...candidates: Array<string | null | undefined>): string | u
 export function ContentDetails({ entity }: Props) {
   const data = useFragment(CONTENT_FRAGMENT, entity);
   const [updateContent] = useMutation(UPDATE_CONTENT);
+  const fmt = useDateTimeFormat();
 
   // The ORIGINAL renders (mediaUrl — the linked file's full-resolution
   // variant), with the PREVIEW painted while it downloads, same as the event
@@ -109,7 +111,7 @@ export function ContentDetails({ entity }: Props) {
         },
         {
           label: 'Created',
-          value: data.createdAt ? formatEntityTimestamp(String(data.createdAt)) : null,
+          value: data.createdAt ? formatEntityTimestamp(String(data.createdAt), fmt) : null,
         },
       ]}
       rawData={data}

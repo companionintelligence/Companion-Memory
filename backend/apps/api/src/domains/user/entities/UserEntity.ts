@@ -19,6 +19,18 @@ export interface OnboardingProgress {
  */
 export type UserRole = 'admin' | 'user' | 'readonly' | 'api_only';
 
+/**
+ * How the apps write a time of day for this user — `ci.users.time_format`.
+ *
+ * `'auto'` leaves the hour cycle to the device's language settings, which is what every page
+ * did before the preference existed; `'h12'` ("3:43 PM") and `'h23'` ("15:43") force it. The
+ * values are the Intl `hourCycle` names, so the web app hands them to its formatters as they are.
+ * The column has a CHECK constraint on exactly this list.
+ */
+export const TIME_FORMATS = ['auto', 'h12', 'h23'] as const;
+
+export type TimeFormat = (typeof TIME_FORMATS)[number];
+
 @Entity({ schema: 'ci', name: 'users' })
 export class UserEntity {
   @PrimaryColumn()
@@ -60,6 +72,10 @@ export class UserEntity {
    */
   @Column({ type: 'text', default: 'UTC' })
   timezone!: string;
+
+  /** See {@link TimeFormat}. Column default is `'auto'`; not nullable at the DB layer. */
+  @Column({ type: 'text', name: 'time_format', default: 'auto' })
+  timeFormat!: TimeFormat;
 
   @Column({ type: 'jsonb', name: 'onboarding_progress', nullable: true })
   onboardingProgress?: OnboardingProgress | null;
@@ -104,6 +120,7 @@ export class UserEntity {
       onboardedAt: entity.onboardedAt ?? null,
       role: entity.role,
       timezone: entity.timezone,
+      timeFormat: entity.timeFormat,
       onboardingProgress: entity.onboardingProgress ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,

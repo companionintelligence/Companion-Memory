@@ -167,6 +167,18 @@ interface ControlOptions {
 
   /** Make any statement matching this throw, the way a dead connection would. */
   failOn?: RegExp;
+
+  /**
+   * Stage ids whose `source` declares a `changedAtColumn`, so the tick asks
+   * `PipelineStateService.reopenChangedSources` about them when they are due.
+   */
+  changedAt?: string[];
+
+  /** What each `reopenChangedSources` call answers with. */
+  sourceReopens?: number;
+
+  /** Make `reopenChangedSources` throw, the way a declared column the table lacks would. */
+  reopenThrows?: boolean;
 }
 
 const USER_A = '00000000-0000-4000-8000-0000000000a1';
@@ -304,7 +316,13 @@ function makeControl(options: ControlOptions = {}) {
         version: 1,
         queue: 'pipeline-index',
         entityTypes: entityTypesFor(stageId as StageId),
-        source: { schema: 'ci', table: 'events', idColumn: 'id', userColumn: 'user_id' },
+        source: {
+          schema: 'ci',
+          table: 'events',
+          idColumn: 'id',
+          userColumn: 'user_id',
+          ...((options.changedAt ?? []).includes(stageId) ? { changedAtColumn: 'updated_at' } : {}),
+        },
         run: async () => new Map(),
       };
     }),
@@ -313,9 +331,14 @@ function makeControl(options: ControlOptions = {}) {
   const stale = new Set(options.stale ?? []);
   const retryDue = new Set(options.retryDue ?? []);
 
+  /** `probe:<stage>` / `reopen:<stage>`, in call order — for ORDER assertions across the two. */
+  const ledgerCalls: string[] = [];
+
   const stateService = {
     selectStale: jest.fn(
       async (stage: Stage, userId: string, _cursor: unknown, limit: number, entityType: string) => {
+        ledgerCalls.push(`probe:${stage.id}`);
+
         if (options.probeThrowsForUser === userId) {
           throw new Error('probe exploded');
         }
@@ -331,6 +354,15 @@ function makeControl(options: ControlOptions = {}) {
     ),
     hasOverdueRetry: jest.fn(async (stage: { id: string }, entityType: string) => {
       return retryDue.has(stage.id) || retryDue.has(`${stage.id}|${entityType}`);
+    }),
+    reopenChangedSources: jest.fn(async (stage: Stage) => {
+      ledgerCalls.push(`reopen:${stage.id}`);
+
+      if (options.reopenThrows === true) {
+        throw new Error('column s.updated_at does not exist');
+      }
+
+      return options.sourceReopens ?? 0;
     }),
   };
 
@@ -411,6 +443,7 @@ function makeControl(options: ControlOptions = {}) {
     dispatchService,
     stageRegistry,
     windowService,
+    ledgerCalls,
     /** Stage ids the tick actually dispatched a sweep for, in order. */
     swept: (): string[] =>
       dispatchService.startSweep.mock.calls.map((call) => (call[0] as { stage: string }).stage),
@@ -457,6 +490,28 @@ describe('PipelineControlService', () => {
           graph[STAGE_IDS.ENRICH_GEOCODE] = original;
         }
       }
+    });
+
+    it('refuses a STAGE_REOPENS edge that STAGE_DEPENDENCIES does not also order', () => {
+      // A consumer re-opened by a producer's output re-reads that output, so it
+      // must also wait for it. Without the ordering it would decide the row on
+      // the producer's own tick, and the re-open would be the only repair — a
+      // day late, on every row, by design.
+      const graph = STAGE_DEPENDENCIES as Record<string, readonly StageId[]>;
+      const original = graph[STAGE_IDS.PROMOTE_EDGE_EVENT];
+      graph[STAGE_IDS.PROMOTE_EDGE_EVENT] = (original ?? []).filter(
+        (producer) => producer !== STAGE_IDS.PROMOTE_PLACE,
+      );
+
+      try {
+        expect(() => assertStagePolicy()).toThrow(
+          /STAGE_REOPENS has "promote\.place" re-opening "promote\.edge_event", but STAGE_DEPENDENCIES does not order/,
+        );
+      } finally {
+        graph[STAGE_IDS.PROMOTE_EDGE_EVENT] = original;
+      }
+
+      expect(() => assertStagePolicy()).not.toThrow();
     });
 
     it('orders every producer ahead of every consumer', () => {
@@ -1371,6 +1426,97 @@ describe('PipelineControlService', () => {
   });
 
   // -------------------------------------------------------------------------
+  // A source row that changed after its decision
+  // -------------------------------------------------------------------------
+
+  describe('re-opening decisions whose source row changed', () => {
+    const SELF_CLAIM = STAGE_IDS.ENRICH_PERSON_SELF_CLAIM;
+
+    it('re-opens a due leg that declares a change stamp, before its candidates are counted', async () => {
+      const h = makeControl({ users: [runningRun()], changedAt: [SELF_CLAIM], sourceReopens: 4 });
+
+      const report = await h.service.tick();
+
+      expect(h.stateService.reopenChangedSources).toHaveBeenCalledTimes(1);
+      expect(h.stateService.reopenChangedSources).toHaveBeenCalledWith(
+        expect.objectContaining({ id: SELF_CLAIM }),
+        USER_A,
+        'event',
+      );
+      expect(report.sourcesReopened).toBe(4);
+
+      // Before the leg's own staleness probe, so the re-opened rows are
+      // candidates in THIS tick rather than the next one.
+      expect(h.ledgerCalls.indexOf(`reopen:${SELF_CLAIM}`)).toBeGreaterThanOrEqual(0);
+      expect(h.ledgerCalls.indexOf(`reopen:${SELF_CLAIM}`)).toBeLessThan(
+        h.ledgerCalls.indexOf(`probe:${SELF_CLAIM}`),
+      );
+    });
+
+    it('never asks a leg that declares no change stamp', async () => {
+      const h = makeControl({ users: [runningRun()], stale: [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS] });
+
+      const report = await h.service.tick();
+
+      expect(h.stateService.reopenChangedSources).not.toHaveBeenCalled();
+      expect(report.sourcesReopened).toBe(0);
+    });
+
+    it('does not ask a leg swept inside its minInterval', async () => {
+      // A nightly leg started an hour ago: anything it re-opened could not be
+      // swept before tomorrow, and the same rows are found then.
+      const h = makeControl({
+        users: [runningRun()],
+        changedAt: [SELF_CLAIM],
+        sourceReopens: 4,
+        lastStartedAt: { [SELF_CLAIM]: new Date(Date.now() - 60 * 60 * 1000) },
+      });
+
+      const report = await h.service.tick();
+
+      expect(stageSchedule(SELF_CLAIM).minInterval).toBeGreaterThan(60 * 60);
+      expect(h.stateService.reopenChangedSources).not.toHaveBeenCalled();
+      expect(report.sourcesReopened).toBe(0);
+    });
+
+    it('does not ask a nightly leg while the window is shut', async () => {
+      const lastStartedAt = new Date(Date.now() - 36 * 60 * 60 * 1000);
+      const h = makeControl({
+        users: [runningRun()],
+        changedAt: [SELF_CLAIM],
+        lastStartedAt: { [SELF_CLAIM]: lastStartedAt },
+        windowOpen: false,
+      });
+
+      await h.service.tick();
+
+      // Past its interval, inside its maxStaleness: waiting for the window.
+      expect(stageDueness({ stageId: SELF_CLAIM, lastStartedAt, windowOpen: false }).reason).toBe(
+        'outside_window',
+      );
+      expect(h.stateService.reopenChangedSources).not.toHaveBeenCalled();
+    });
+
+    it("contains a failing re-open: logged, and the user's tick still sweeps", async () => {
+      const h = makeControl({
+        users: [runningRun()],
+        changedAt: [SELF_CLAIM],
+        reopenThrows: true,
+        stale: [SELF_CLAIM, STAGE_IDS.ENRICH_MEDIA_DIMENSIONS],
+      });
+
+      const report = await h.service.tick();
+
+      expect(h.logger.error).toHaveBeenCalledWith(
+        expect.stringContaining(`"${SELF_CLAIM}"`),
+        expect.objectContaining({ message: 'column s.updated_at does not exist' }),
+      );
+      expect(report.sourcesReopened).toBe(0);
+      expect(h.swept()).toEqual(expect.arrayContaining([SELF_CLAIM, STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]));
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Re-entrancy
   // -------------------------------------------------------------------------
 
@@ -1991,6 +2137,7 @@ describeWithDatabase('PipelineControlService — shard leases (real Postgres)', 
         leasesReaped: 0,
         usersServiced: 0,
         claimsReopened: 0,
+        sourcesReopened: 0,
         runsStarted: 0,
         runsFinalized: 0,
         runsPaused: 0,

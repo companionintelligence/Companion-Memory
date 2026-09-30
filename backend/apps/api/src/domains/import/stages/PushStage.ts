@@ -76,6 +76,7 @@ import {
   productModelIdentifiers,
   type ReceiptEntityLinks,
 } from '../push/inputs';
+import { claimedCoordinates, legacyKeyClaims, planLegacyKeyMoves } from '../push/legacyKeys';
 import {
   type IsSelf,
   makeIsSelf,
@@ -85,6 +86,11 @@ import {
   shouldMapContactToSelf,
   type SelfIdentity,
 } from '../push/self';
+import {
+  repairTruncatedPhoneKeys,
+  truncatedPhoneKeyFor,
+  type TruncatedPhoneRepair,
+} from '../push/truncatedPhoneKeys';
 import {
   DATABASE_FREE_FLOOR_BYTES,
   DatabaseVolumeFullError,
@@ -1242,7 +1248,8 @@ export class PushStage implements ImportStageRunner {
     const staged = await this.retrying(context, 'reading the staged entities', () =>
       this.dataSource.query<StagedEntity[]>(
         `SELECT id, run_id AS "runId", user_id AS "userId", type, name, metadata,
-                identity_key AS "identityKey", data_source AS "dataSource", accumulate
+                identity_key AS "identityKey", data_source AS "dataSource",
+                legacy_identity_key AS "legacyIdentityKey", accumulate
            FROM ci_import.staged_entities
           WHERE run_id = $1::uuid AND push_status = 'pending'
           ORDER BY id`,
@@ -1333,6 +1340,9 @@ export class PushStage implements ImportStageRunner {
 
       return { resolved, skipped, unresolved, failed: 0 };
     }
+
+    await this.moveLegacyKeys(context, inputs, byKey);
+    await this.repairTruncatedPhoneKeys(context, inputs, byKey);
 
     // Keys ingest refused for a reason that was about the ENTITY. The rest of
     // what ingest does not echo back — the database being away — is never
@@ -1451,6 +1461,136 @@ export class PushStage implements ImportStageRunner {
     });
 
     return { resolved, skipped, unresolved, failed };
+  }
+
+  /**
+   * Move the `ci.entities` rows minted under contacts' OLD keys onto their new
+   * ones, before ingest looks them up.
+   *
+   * The re-key half of `entityIdentityKey` passing over shared handles: a
+   * contact whose smallest handle was an office line or a fax now resolves
+   * under another key, and ingest finds rows by key alone, so without this
+   * every such contact would be minted a second time beside its old row on the
+   * next import of the same export. Moving the row keeps its id, and the
+   * ingest right after rewrites it with what the card now says — which is also
+   * what takes the other colleagues' names off a Person that had collapsed
+   * several of them. See `push/legacyKeys.ts` for who inherits a row.
+   *
+   * Idempotent: a row moves only while it still sits on the old key and the
+   * new one is free, so a retried push, or the next import, finds nothing left
+   * to do.
+   */
+  private async moveLegacyKeys(
+    context: StageRunContext,
+    inputs: GraphEntityInputDto[],
+    byKey: Map<string, StagedEntity[]>,
+  ): Promise<void> {
+    const claims = legacyKeyClaims(inputs.map((input) => ({ input, rows: byKey.get(input.key) ?? [] })));
+
+    if (claims.length === 0) {
+      return;
+    }
+
+    const scope = { userId: context.userId };
+    const found = await this.retrying(context, 'reading entities under their old keys', () =>
+      this.graph.findImportedEntities(scope, claimedCoordinates(claims)),
+    );
+    const plan = planLegacyKeyMoves(claims, found);
+    const moved =
+      plan.moves.length > 0
+        ? await this.retrying(context, 'moving entities onto their new keys', () =>
+            this.graph.rekeyImportedEntities(scope, plan.moves),
+          )
+        : [];
+
+    this.logger.log('Moved entities onto their new keys', {
+      runId: context.runId,
+      claimed: claims.length,
+      moved: moved.length,
+      kept: plan.kept,
+      // Rows merged into a collapsed Person that were a colleague, not its
+      // heir: the reset dropped their values, and the merges still stand.
+      mergesOfSomeoneElse: moved.reduce((count, move) => count + (move.dropMergedFrom?.length ?? 0), 0),
+    });
+  }
+
+  /**
+   * Undo what a contact's TRUNCATED phone key had reached, now that its row
+   * sits under the card's own key — see `push/truncatedPhoneKeys.ts`.
+   *
+   * `moveLegacyKeys` just above put the row there. This is the half a key moved
+   * by the phone-extension fix needs and one moved by shared handles does not:
+   * a shared line is somebody's real number, while `(212) 555-0147;229` keyed as
+   * `5550147229` belongs to nobody on the card — and its identifier, self claim
+   * and every call matched to it came along with the row.
+   *
+   * Best effort. A failure that is about the rows rather than the database is
+   * logged and the push goes on, the row keeping what it had, as before this
+   * existed. A database that is away fails here the way it would fail the
+   * ingest a line later.
+   */
+  private async repairTruncatedPhoneKeys(
+    context: StageRunContext,
+    inputs: GraphEntityInputDto[],
+    byKey: Map<string, StagedEntity[]>,
+  ): Promise<void> {
+    const repairs: TruncatedPhoneRepair[] = [];
+
+    for (const input of inputs) {
+      if (input.entityType !== 'Person') {
+        continue;
+      }
+
+      for (const row of byKey.get(input.key) ?? []) {
+        // A row of another source riding on this input names a coordinate the
+        // ingest never looks at — the rule `legacyKeyClaims` applies too.
+        if ((row.dataSource ?? 'unknown') !== input.sourceSystem) {
+          continue;
+        }
+
+        const proof = truncatedPhoneKeyFor(row);
+
+        if (proof != null) {
+          repairs.push({ input, stagedType: row.type, dataSource: row.dataSource, proof });
+        }
+      }
+    }
+
+    if (repairs.length === 0) {
+      return;
+    }
+
+    try {
+      const result = await this.retrying(context, 'undoing what truncated phone keys reached', () =>
+        repairTruncatedPhoneKeys(this.dataSource, context, repairs),
+      );
+
+      this.logger.log('Undid what truncated phone keys had reached', {
+        runId: context.runId,
+        candidates: repairs.length,
+        repaired: result.repaired.length,
+        repairedEntityIds: result.repaired,
+        skipped: result.skipped,
+        rewritten: result.rewritten,
+        identifiersDeleted: result.identifiersDeleted,
+        selfClaimsDeleted: result.selfClaimsDeleted,
+        linksWithdrawn: result.linksWithdrawn,
+        edgesDeleted: result.edgesDeleted,
+        freedIdentifiersIndexed: result.freedIdentifiersIndexed,
+      });
+    } catch (err) {
+      // Every verdict class (not ready, unavailable, crashed) and every coded
+      // absence: the database being away is the stage's to handle, not ours.
+      if (isTransientDatabaseError(err)) {
+        throw err;
+      }
+
+      this.logger.warn('Could not undo what truncated phone keys had reached; the rows keep it', {
+        runId: context.runId,
+        candidates: repairs.length,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private async recordEntityMapping(

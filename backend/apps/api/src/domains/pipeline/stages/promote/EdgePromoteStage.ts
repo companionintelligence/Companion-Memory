@@ -223,8 +223,17 @@ export const PROMOTE_EDGE_COMMUNICATION_SOURCE: StageSource = {
     `OR jsonb_array_length(s.attachments) > 0)`,
 };
 
-/** Same shape over `ci.events`: any of the four linkage columns populated
- * (parent_event_id feeds the `event.child_of` PART_OF rule). */
+/**
+ * Same shape over `ci.events`: any of the four linkage columns populated
+ * (parent_event_id feeds the `event.child_of` PART_OF rule).
+ *
+ * Unlike the communication leg's, this OR spans two PRODUCERS, so "becomes a
+ * candidate the night the linker fills its columns" does not hold for every
+ * column: an event with participants is projected and recorded `done` before
+ * `promote.place` writes `location_entity_id`, and nothing here would ever
+ * offer it again. `STAGE_REOPENS` (`reopens.ts`) re-opens it when
+ * `promote.place` records the link, so its `event.happened_at` edge follows.
+ */
 export const PROMOTE_EDGE_EVENT_SOURCE: StageSource = {
   schema: 'ci',
   table: 'events',

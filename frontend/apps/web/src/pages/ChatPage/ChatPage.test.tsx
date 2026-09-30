@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 
+import { resetLocalLlmPrefsCache } from '@ci/common/src/utils/localLlmPrefs';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -24,6 +25,9 @@ const h = vi.hoisted(() => ({
   submit: vi.fn(async () => true),
   cancel: vi.fn(),
   deleteThread: vi.fn(),
+  reset: vi.fn(async () => {}),
+  selectedModel: 'llama3' as string | null,
+  local: null as null | { modelId: string; stats: Record<string, unknown> | null },
   threads: [
     { id: 't1', name: 'First', description: null },
     { id: 't2', name: 'Second', description: null, generationStatus: 'running' },
@@ -44,6 +48,7 @@ vi.mock('@ci/common', async (importOriginal) => {
   return {
     ...actual,
     usePageTitle: () => undefined,
+    resetLocalLlmConversation: (...args: unknown[]) => h.reset(...(args as [])),
     Portal: { Slot: ({ children }: { children: unknown }) => children },
   };
 });
@@ -63,10 +68,17 @@ vi.mock('@/hooks', async (importOriginal) => {
   return {
     ...actual,
     useChatRequester: () => [
-      { stream: null, loading: false, error: null, streaming: false, hasStartedReceiving: null },
+      {
+        stream: null,
+        loading: false,
+        error: null,
+        streaming: false,
+        hasStartedReceiving: null,
+        local: h.local,
+      },
       { submit: h.submit, attach: h.attach, detach: h.detach, stop: h.stop, cancel: h.cancel },
     ],
-    useModel: () => [{ selectedModel: 'llama3' }, {}],
+    useModel: () => [{ selectedModel: h.selectedModel }, {}],
     useCounter: () => [{ count: 0 }, { increment: vi.fn() }],
     // #2558 added `useAuth()` to ChatPageContent so a dispatch thread can call
     // /v1/agent/jobs. `renderWithProviders` deliberately provides no Auth
@@ -115,12 +127,18 @@ vi.mock('@/components/Chat', () => ({
     onStop,
     emptyState,
     messages,
+    disabled,
+    localImages,
   }: {
     onStop?: () => void;
     emptyState?: ReactNode;
     messages?: Message[];
+    disabled?: boolean;
+    localImages?: boolean;
   }) => (
     <>
+      <span data-testid="chat-disabled">{String(Boolean(disabled))}</span>
+      <span data-testid="chat-local-images">{String(Boolean(localImages))}</span>
       <button type="button" onClick={() => onStop?.()}>
         Stop
       </button>
@@ -141,6 +159,11 @@ describe('ChatPage', () => {
     h.attach.mockClear();
     h.cancel.mockClear();
     h.deleteThread.mockClear();
+    h.reset.mockClear();
+    h.selectedModel = 'llama3';
+    h.local = null;
+    localStorage.clear();
+    resetLocalLlmPrefsCache();
     h.thread = {
       id: 't1',
       name: 'First',
@@ -239,6 +262,139 @@ describe('ChatPage', () => {
     expect(h.cancel).toHaveBeenCalledWith('t2');
     expect(h.deleteThread).toHaveBeenCalledWith('t2');
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  describe('on-device model', () => {
+    const renderNew = () =>
+      renderWithProviders(<ChatPage />, { route: '/memory/chat', path: '/memory/chat' });
+
+    it('shows nothing about the phone when the appliance answered', () => {
+      renderNew();
+
+      expect(screen.queryByTestId('on-device-badge')).toBeNull();
+    });
+
+    it('says the last reply came from this phone, with the model and its decode speed', () => {
+      h.local = {
+        modelId: 'gemma-4-e2b-it',
+        stats: {
+          timeToFirstTokenMs: 900,
+          totalMs: 4000,
+          outputTokens: 60,
+          decodeTokensPerSecond: 19.24,
+          tokensEstimated: false,
+        },
+      };
+      renderNew();
+
+      const badge = screen.getByTestId('on-device-badge');
+
+      expect(badge).toHaveTextContent('Answered on this phone');
+      expect(badge).toHaveTextContent('Gemma 4 E2B');
+      expect(badge).toHaveTextContent('19.2 tok/s');
+      expect(badge).toHaveTextContent('0.9s to first token');
+    });
+
+    it('marks a token rate that was estimated from chunks rather than counted', () => {
+      h.local = {
+        modelId: 'qwen3-0.6b-int4',
+        stats: {
+          timeToFirstTokenMs: 300,
+          totalMs: 1000,
+          outputTokens: 10,
+          decodeTokensPerSecond: 12,
+          tokensEstimated: true,
+        },
+      };
+      renderNew();
+
+      expect(screen.getByTestId('on-device-badge')).toHaveTextContent('(est.)');
+    });
+
+    it('shows the badge without numbers while the turn is still streaming', () => {
+      h.local = { modelId: 'qwen3-0.6b-int4', stats: null };
+      renderNew();
+
+      const badge = screen.getByTestId('on-device-badge');
+
+      expect(badge).toHaveTextContent('Answered on this phone · Qwen3 0.6B');
+      expect(badge).not.toHaveTextContent('tok/s');
+    });
+
+    it('locks the composer with no appliance model — unless an on-device model can answer instead', () => {
+      h.selectedModel = null;
+      const locked = renderNew();
+
+      expect(screen.getByTestId('chat-disabled')).toHaveTextContent('true');
+      locked.unmount();
+
+      localStorage.setItem(
+        'ci.localLlm.prefs',
+        JSON.stringify({ mode: 'device', modelId: 'qwen3-0.6b-int4' }),
+      );
+      resetLocalLlmPrefsCache();
+      renderNew();
+
+      expect(screen.getByTestId('chat-disabled')).toHaveTextContent('false');
+    });
+
+    it('keeps the composer locked when the mode is appliance-only, even with a model chosen', () => {
+      h.selectedModel = null;
+      localStorage.setItem(
+        'ci.localLlm.prefs',
+        JSON.stringify({ mode: 'appliance', modelId: 'qwen3-0.6b-int4' }),
+      );
+      resetLocalLlmPrefsCache();
+      renderNew();
+
+      expect(screen.getByTestId('chat-disabled')).toHaveTextContent('true');
+    });
+
+    it('lets a starter prompt send with no appliance model when the phone can answer', () => {
+      h.selectedModel = null;
+      localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ mode: 'auto', modelId: 'qwen3-0.6b-int4' }));
+      resetLocalLlmPrefsCache();
+      renderNew();
+
+      fireEvent.click(screen.getByText(STARTER_PROMPTS[0]));
+
+      expect(h.submit).toHaveBeenCalledWith({ message: STARTER_PROMPTS[0] });
+    });
+
+    it('reads photos on the phone only when the phone alone answers and its model can see', () => {
+      const cases: Array<[string, string, string]> = [
+        ['device', 'gemma-4-e2b-it', 'true'],
+        ['device', 'qwen3-0.6b-int4', 'false'], // no vision
+        ['auto', 'gemma-4-e2b-it', 'false'], // the appliance may answer, so attach uploads there
+        ['appliance', 'gemma-4-e2b-it', 'false'],
+      ];
+
+      for (const [mode, modelId, expected] of cases) {
+        localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ mode, modelId }));
+        resetLocalLlmPrefsCache();
+
+        const view = renderNew();
+
+        expect(screen.getByTestId('chat-local-images'), `${mode}/${modelId}`).toHaveTextContent(expected);
+        view.unmount();
+      }
+    });
+
+    it('starts a fresh native conversation for a new chat, so turns do not leak between chats', () => {
+      renderWithProviders(<ChatPage />, { route: '/memory/chat/t1', path: '/memory/chat/:id' });
+
+      fireEvent.click(screen.getAllByText('New Thread')[0]);
+
+      expect(h.reset).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts a fresh native conversation when another thread is opened', () => {
+      renderWithProviders(<ChatPage />, { route: '/memory/chat/t1', path: '/memory/chat/:id' });
+
+      fireEvent.click(screen.getByText('Second'));
+
+      expect(h.reset).toHaveBeenCalledTimes(1);
+    });
   });
 
   /**
