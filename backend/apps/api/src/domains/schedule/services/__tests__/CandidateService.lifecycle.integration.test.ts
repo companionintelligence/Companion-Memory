@@ -12,6 +12,7 @@ import {
 } from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
+import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { EventCandidateEntity } from '../../entities/EventCandidateEntity';
 import { CandidateService } from '../CandidateService';
@@ -23,11 +24,31 @@ import { CandidateService } from '../CandidateService';
  * bug and the promotion-consistency ordering both shipped green. This locks the
  * full lifecycle against the actual constraints.
  *
- * Opt-in: set `SCHEDULE_TEST_DATABASE_URL` (or `PLANNING_TEST_DATABASE_URL`) to
- * a database with migrations applied.
+ * Needs a database with migrations applied: `SCHEDULE_TEST_DATABASE_URL`, else
+ * `PLANNING_TEST_DATABASE_URL`, else `DATABASE_URL`, else `.env`'s `DATABASE_*`
+ * values. `databaseAvailability()` decides whether that means run, skip or fail —
+ * see the table in its header.
+ *
+ * The helper takes ONE suite variable before `DATABASE_URL`, and this suite has
+ * always accepted two, so the choice between them is made here: the planning one
+ * only when it is set and the schedule one is not. That keeps the old
+ * `SCHEDULE_ ?? PLANNING_` precedence, and keeps a skip naming this suite's own
+ * variable when neither is set.
  */
-const DATABASE_URL = process.env.SCHEDULE_TEST_DATABASE_URL ?? process.env.PLANNING_TEST_DATABASE_URL;
-const describeWithDb = DATABASE_URL ? describe : describe.skip;
+const isSet = (name: string) => (process.env[name] ?? '').trim().length > 0;
+const ENV = {
+  urlEnvVar:
+    !isSet('SCHEDULE_TEST_DATABASE_URL') && isSet('PLANNING_TEST_DATABASE_URL')
+      ? 'PLANNING_TEST_DATABASE_URL'
+      : 'SCHEDULE_TEST_DATABASE_URL',
+  probeTimeoutEnvVar: 'SCHEDULE_TEST_PROBE_TIMEOUT_MS',
+};
+const availability = databaseAvailability(ENV);
+const describeWithDb = availability.available ? describe : describe.skip;
+
+if (!availability.available) {
+  console.warn(`[schedule/CandidateService.lifecycle.integration] SKIPPED — ${availability.reason}`);
+}
 
 describeWithDb('CandidateService — accept / returnToSlate lifecycle (integration)', () => {
   let dataSource: DataSource;
@@ -47,9 +68,23 @@ describeWithDb('CandidateService — accept / returnToSlate lifecycle (integrati
   } as unknown as LoggerService;
 
   beforeAll(async () => {
+    const connection = resolveConnection(ENV);
+
+    if (connection == null) {
+      throw new Error('databaseAvailability passed but no connection resolved');
+    }
+
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...(connection.url != null
+        ? { url: connection.url }
+        : {
+            host: connection.host,
+            port: connection.port,
+            username: connection.username,
+            password: connection.password,
+            database: connection.database,
+          }),
       // EventBaseEntity is a @ChildEntity of the ci.entities STI tree, so its
       // root has to be mapped alongside it for metadata to build. UserEntity is
       // needed too: EventEntity.user is a @ManyToOne(() => UserEntity), and

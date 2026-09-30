@@ -14,6 +14,7 @@ import {
 } from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
+import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { shiftLocalDate } from '../../engine/computePlacement';
 import { PLANNING_PREFS_DEFAULTS } from '../../entities/PlanningPrefsEntity';
@@ -41,11 +42,18 @@ import { TaskService } from '../TaskService';
  * `occupiedSpans` reads only startTime/endTime/isAllDay/plannedMinutes, so the
  * fixture stays small and every row in it is there to move the answer.
  *
- * Opt-in: set `PLANNING_TEST_DATABASE_URL` to a database with the migrations
- * applied (see TaskService.tenancy.integration.test.ts for the setup).
+ * Needs a database with the migrations applied: `PLANNING_TEST_DATABASE_URL`,
+ * else `DATABASE_URL`, else `.env`'s `DATABASE_*` values (see
+ * TaskService.tenancy.integration.test.ts for the setup). `databaseAvailability()`
+ * decides whether that means run, skip or fail — see the table in its header.
  */
-const DATABASE_URL = process.env.PLANNING_TEST_DATABASE_URL;
-const describeWithDb = DATABASE_URL ? describe : describe.skip;
+const ENV = { urlEnvVar: 'PLANNING_TEST_DATABASE_URL', probeTimeoutEnvVar: 'PLANNING_TEST_PROBE_TIMEOUT_MS' };
+const availability = databaseAvailability(ENV);
+const describeWithDb = availability.available ? describe : describe.skip;
+
+if (!availability.available) {
+  console.warn(`[planning/PlannedBlockService.gapSolver.integration] SKIPPED — ${availability.reason}`);
+}
 
 describeWithDb('PlannedBlockService — the gap solver over real calendar rows (integration)', () => {
   let dataSource: DataSource;
@@ -95,9 +103,23 @@ describeWithDb('PlannedBlockService — the gap solver over real calendar rows (
   }
 
   beforeAll(async () => {
+    const connection = resolveConnection(ENV);
+
+    if (connection == null) {
+      throw new Error('databaseAvailability passed but no connection resolved');
+    }
+
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...(connection.url != null
+        ? { url: connection.url }
+        : {
+            host: connection.host,
+            port: connection.port,
+            username: connection.username,
+            password: connection.password,
+            database: connection.database,
+          }),
       // EventBaseEntity is a @ChildEntity of the ci.entities STI tree, so its
       // root has to be mapped alongside it; UserEntity because EventEntity.user
       // and PlanningTimeService both resolve against it.

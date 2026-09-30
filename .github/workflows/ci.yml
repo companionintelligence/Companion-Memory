@@ -117,26 +117,23 @@ jobs:
       # suites cannot disagree about which database this is.
       DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       PGPASSWORD: ci_test_admin_pw
-      # EVERY ONE of the sixteen per-suite variables is enumerated below, and
-      # that is NOT redundant with `DATABASE_URL` above. Thirteen of the sixteen
-      # resolve through `domains/__tests__/support/databaseConnection.ts`, which
-      # checks the suite's own `<DOMAIN>_TEST_DATABASE_URL` FIRST and falls
-      # through to `DATABASE_URL` — for those, these lines are a restatement of
-      # the fallback. The other three read their variable DIRECTLY off
-      # `process.env` with no fallback at all, and gate `describe` on it:
-      #   PLANNING_ — planning/services/__tests__/TaskService.tenancy.integration.test.ts
-      #   NOTES_    — notes/__tests__/NoteCapture.integration.spec.ts
-      #   SCHEDULE_ — schedule/services/__tests__/CandidateService.lifecycle.integration.test.ts
-      #               (it chains `SCHEDULE_ ?? PLANNING_`, so PLANNING_ alone
-      #               would in fact cover it — set anyway, so nobody has to know)
-      # With only `DATABASE_URL` set those four `describe` blocks resolve to
-      # `describe.skip` and jest still exits 0 — the green-but-tested-nothing
-      # outcome this job exists to end. The list is enumerated in full rather
-      # than trimmed to the three so that a new suite written in either style is
-      # covered, and so nobody has to know which style each file uses. Keep it
-      # in step with the sixteen named in
-      # `docs/architecture/test-strategy.md` §3.
+      # EVERY ONE of the seventeen per-suite variables is enumerated below. Today
+      # that restates `DATABASE_URL` above: every DB-backed suite resolves
+      # through `domains/__tests__/support/databaseConnection.ts`, which checks
+      # the suite's own `<DOMAIN>_TEST_DATABASE_URL` FIRST and falls through to
+      # `DATABASE_URL`. Until 2026-09-30 eight suites did not — they read their
+      # variable straight off `process.env`, with no fallback, and gated
+      # `describe` on it, so with only `DATABASE_URL` set they resolved to
+      # `describe.skip` and jest still exited 0: the green-but-tested-nothing
+      # outcome this job exists to end. One of the eight,
+      # `auth/__tests__/CreateTestUserScript.integration.test.ts`, read
+      # `AUTH_TEST_DATABASE_URL`, which nothing set — not this job, not the
+      # documented recipe — so it ran only for someone who exported it by
+      # hand. The list stays enumerated in full so that a suite written that
+      # way again is still covered. Keep it in step with the variables named
+      # in `docs/architecture/test-strategy.md` §3.
       ASKS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      AUTH_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       BROWSER_ACTIVITY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       CONNECTIONS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       EVENTS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
