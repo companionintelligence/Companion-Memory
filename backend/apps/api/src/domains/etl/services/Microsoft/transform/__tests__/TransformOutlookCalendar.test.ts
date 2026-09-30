@@ -179,4 +179,34 @@ describe('OutlookCalendarTransformService.transformOutlookCalendar — every cal
 
     expect(skipped).toEqual(['cal-no-events', 'cal-null-events', 'cal-object-events', undefined]);
   });
+
+  it('bounds how many events are in flight at once, and still processes every one', async () => {
+    const { service, eventService } = makeIngestService();
+    let inFlight = 0;
+    let maxInFlight = 0;
+
+    eventService.create.mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setImmediate(resolve));
+      inFlight -= 1;
+
+      return [];
+    });
+
+    const subjects = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, i) => graphEvent(`${prefix}-${String(i).padStart(2, '0')}`));
+
+    await runTransform(service, {
+      calendars: [
+        { id: 'cal-work', events: subjects('work', 13) },
+        { id: 'cal-family', events: subjects('family', 12) },
+      ],
+    });
+
+    expect(eventService.create).toHaveBeenCalledTimes(25);
+    expect(new Set(createdTitles(eventService)).size).toBe(25);
+    // Two full batches of ten, then five: never the whole payload at once.
+    expect(maxInFlight).toBe(10);
+  });
 });

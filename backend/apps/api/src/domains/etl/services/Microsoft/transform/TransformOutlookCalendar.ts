@@ -84,6 +84,15 @@ interface Participant {
   isOrganizer: boolean;
 }
 
+/**
+ * Events processed concurrently. A job carries every calendar's events (see
+ * extractCalendarEvents), and each event is a create() plus two
+ * PromoteService.processParticipants calls; the same unbounded Promise.all in
+ * GoogleCalendarTransformService crash-looped the API on OOM until it was
+ * batched the same way.
+ */
+const CALENDAR_TRANSFORM_BATCH_SIZE = 10;
+
 @Injectable()
 export class OutlookCalendarTransformService {
   constructor(
@@ -124,16 +133,20 @@ export class OutlookCalendarTransformService {
         eventCount: events.length,
       });
 
-      await Promise.all(
-        events.map(
-          async (event) =>
-            await this.processCalendarEvent({
-              event,
-              connectionId: connection.id,
-              userId,
-            }),
-        ),
-      );
+      for (let i = 0; i < events.length; i += CALENDAR_TRANSFORM_BATCH_SIZE) {
+        const batch = events.slice(i, i + CALENDAR_TRANSFORM_BATCH_SIZE);
+
+        await Promise.all(
+          batch.map(
+            async (event) =>
+              await this.processCalendarEvent({
+                event,
+                connectionId: connection.id,
+                userId,
+              }),
+          ),
+        );
+      }
 
       this.logger.log('Outlook Calendar transformation completed', {
         userId,
