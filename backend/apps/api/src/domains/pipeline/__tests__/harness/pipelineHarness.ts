@@ -15,7 +15,6 @@ import {
 
 import {
   databaseAvailability as testDatabaseAvailability,
-  isPortOpen,
   resolveConnection as resolveTestConnection,
   type DatabaseAvailability,
   type TestDatabaseConnection,
@@ -134,24 +133,15 @@ export function resolveConnection(): HarnessConnection | null {
 }
 
 /**
- * Whether a Postgres is reachable for this test run. Cached by the shared
- * helper — the probe spawns a process, and a suite may consult it more than
- * once.
+ * Whether a Postgres is reachable for this test run — or a THROW, when a URL
+ * set for the run (`PIPELINE_TEST_DATABASE_URL`, else `DATABASE_URL`) names a
+ * database that is not there, or the probe could not answer. Cached by the
+ * shared helper — the probe spawns a process, and a suite may consult it more
+ * than once.
  */
 export function databaseAvailability(): DatabaseAvailability {
   return testDatabaseAvailability(PIPELINE_DATABASE_ENV);
 }
-
-/**
- * TCP reachability, SYNCHRONOUSLY — re-exported, not reimplemented.
- *
- * The probe itself moved to the shared helper with the rest of the connection
- * machinery. The NAME stays here because `scratchDatabase.ts` imports it from
- * this module to ask the same question about a server it reaches with different
- * (administrative) credentials, and a second copy of a `net.connect` probe is
- * precisely what moving it was undoing.
- */
-export { isPortOpen };
 
 // ---------------------------------------------------------------------------
 // The in-memory queue

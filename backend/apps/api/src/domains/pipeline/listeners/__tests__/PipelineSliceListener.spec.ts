@@ -70,11 +70,16 @@ interface HarnessOptions {
   claims?: (ids: string[]) => string[];
   /** Resolve the stage id to nothing, as an unregistered stage would. */
   unknownStage?: boolean;
+  /** Present the stage as a different one — its id is what `STAGE_REOPENS` is keyed on. */
+  stage?: { id: string; queue: string; entityTypes: string[] };
+  /** How `reopen()` answers. Defaults to "every id asked about moved". */
+  reopen?: (entityType: string, stageId: string, ids: string[]) => Promise<number>;
 }
 
 function makeListener(options: HarnessOptions = {}) {
-  const stage = makeStage();
+  const stage = { ...makeStage(), ...options.stage };
   const claimsOf = options.claims ?? ((ids: string[]) => ids);
+  const reopenImpl = options.reopen ?? (async (_type: string, _stage: string, ids: string[]) => ids.length);
 
   /** Every ledger call in order — the slice protocol, as observed. */
   const ledgerCalls: Array<{ method: string; args: unknown[] }> = [];
@@ -104,6 +109,11 @@ function makeListener(options: HarnessOptions = {}) {
     ),
     recordDeadLetter: jest.fn(async (entry: Record<string, unknown>) => {
       ledgerCalls.push({ method: 'recordDeadLetter', args: [entry] });
+    }),
+    reopen: jest.fn(async (entityType: string, stageId: string, ids: string[]) => {
+      ledgerCalls.push({ method: 'reopen', args: [entityType, stageId, ids] });
+
+      return reopenImpl(entityType, stageId, ids);
     }),
     coverage: jest.fn(async () => ({ done: 0, skipped: 0, failed: 0, pending: 0 })),
   };
@@ -399,5 +409,98 @@ describe('PipelineSliceListener', () => {
     await expect(h.handle({ stage: STAGE_ID, userId: 'not-a-uuid' })).rejects.toThrow();
     expect(h.stateService.claim).not.toHaveBeenCalled();
     expect(h.stage.run).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `STAGE_REOPENS`: a producer's `done` re-opens the consumer's decision on the
+ * same row. The stage never does it — it reports `done`, as always — so the
+ * listener is where the rule lives, and where it is tested without a database.
+ * `stages/__tests__/PlaceLinkReopensEdgeEvent.integration.spec.ts` runs the same
+ * slice protocol against real Postgres.
+ */
+describe('PipelineSliceListener — re-opening what a producer made stale', () => {
+  const PROMOTE_PLACE = { id: 'promote.place', queue: 'pipeline-index', entityTypes: ['event'] };
+
+  function placeSlice(ids: string[]) {
+    return { stage: PROMOTE_PLACE.id, entityType: 'event', userId: USER, ids };
+  }
+
+  function sliceLog(h: ReturnType<typeof makeListener>): Record<string, unknown> | undefined {
+    const call = h.logger.log.mock.calls.find(([message]) => message === 'Processed pipeline slice');
+
+    return call?.[1] as Record<string, unknown> | undefined;
+  }
+
+  it('re-opens promote.edge_event for exactly the events promote.place recorded done', async () => {
+    const h = makeListener({ stage: PROMOTE_PLACE });
+    h.stage.run.mockResolvedValueOnce(
+      new Map<string, StageResultLike>([
+        [srcId(1), { outcome: 'done', detail: { placeEntityId: srcId(90) } }],
+        // Another writer's link: this stage wrote nothing, so it re-opens nothing.
+        [srcId(2), { outcome: 'skipped', reason: 'place_link_not_owned' }],
+        // Retried on its own gate, and re-opens the day it succeeds.
+        [srcId(3), { outcome: 'failed', reason: 'place_resolve_failed' }],
+        [srcId(4), { outcome: 'done', detail: { placeEntityId: srcId(90) } }],
+      ]),
+    );
+
+    await h.handle(placeSlice([srcId(1), srcId(2), srcId(3), srcId(4)]), PROMOTE_PLACE.queue);
+
+    // Same entity type as the slice, the consumer's stage id, the done ids only.
+    expect(h.stateService.reopen.mock.calls).toEqual([['event', 'promote.edge_event', [srcId(1), srcId(4)]]]);
+    expect(sliceLog(h)).toEqual(expect.objectContaining({ reopened: 2, stage: 'promote.place' }));
+  });
+
+  it('re-opens BEFORE recording the producer, so no moment exists where it is done and the consumer untold', async () => {
+    const h = makeListener({ stage: PROMOTE_PLACE });
+
+    await h.handle(placeSlice([srcId(1)]), PROMOTE_PLACE.queue);
+
+    expect(h.ledgerCalls.map((call) => call.method)).toEqual(['claim', 'reopen', 'complete']);
+  });
+
+  it('fails the slice rather than recording it done when the re-open throws', async () => {
+    // The link is already written; what is lost if this is swallowed is the
+    // only signal the edge leg would ever get. Failing the claimed rows puts
+    // the producer back on its retry gate, and the retry re-opens again.
+    const h = makeListener({
+      stage: PROMOTE_PLACE,
+      reopen: async () => {
+        throw new Error('ledger unavailable');
+      },
+    });
+
+    await expect(h.handle(placeSlice([srcId(1), srcId(2)]), PROMOTE_PLACE.queue)).rejects.toThrow(
+      'ledger unavailable',
+    );
+
+    expect(h.stateService.complete).not.toHaveBeenCalled();
+    const [, entityType, ids, reason] = h.stateService.fail.mock.calls[0];
+    expect(entityType).toBe('event');
+    expect(ids).toEqual([srcId(1), srcId(2)]);
+    expect(String(reason)).toContain('ledger unavailable');
+  });
+
+  it('touches no other ledger when the producer recorded nothing done', async () => {
+    const h = makeListener({ stage: PROMOTE_PLACE });
+    h.stage.run.mockResolvedValueOnce(
+      new Map<string, StageResultLike>([[srcId(1), { outcome: 'skipped', reason: 'no_location_name' }]]),
+    );
+
+    await h.handle(placeSlice([srcId(1)]), PROMOTE_PLACE.queue);
+
+    expect(h.stateService.reopen).not.toHaveBeenCalled();
+    expect(sliceLog(h)).toEqual(expect.objectContaining({ reopened: 0 }));
+  });
+
+  it('never re-opens anything for a stage that declares no consumer', async () => {
+    const h = makeListener();
+
+    await h.handle(payloadFor());
+
+    expect(h.stateService.reopen).not.toHaveBeenCalled();
+    // And its log line is exactly what it was before re-opens existed.
+    expect(sliceLog(h)).not.toHaveProperty('reopened');
   });
 });

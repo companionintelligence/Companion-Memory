@@ -166,6 +166,14 @@ export class GraphQueryService {
     return this.graphUtility.getRelationships(ownerId, options);
   }
 
+  /** The active edge a write of this relationship would land on — {@link GraphUtilityService.findActiveRelationship}. */
+  findActiveRelationship(
+    ownerId: string,
+    edge: { fromEntityId: string; toEntityId: string; relationshipType: string; isBidirectional?: boolean },
+  ): Promise<RelationshipEntity | null> {
+    return this.graphUtility.findActiveRelationship(ownerId, edge);
+  }
+
   findConceptByName(ownerId: string, conceptName: string): Promise<GraphNodeEntity | null> {
     return this.graphUtility
       .queryNodes(

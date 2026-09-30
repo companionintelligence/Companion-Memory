@@ -76,6 +76,27 @@ interface PragmaColumnRow {
   name: string;
 }
 
+/**
+ * The accumulating entity-metadata keys, as vcard.ts declares its own (see
+ * Entity.accumulate): a card that resolves to a row an earlier sighting created
+ * GROWS it instead of vanishing into it.
+ *
+ * `Phones` and `Emails` are the ones that matter most. They are every number
+ * and address on the card AS TYPED, and they are the only durable copy: the
+ * identity attributes are read once for `identity_key` and never persisted, and
+ * the staged run they describe is retention-swept. A row that keeps nothing but
+ * its derived key cannot be re-keyed when the key rule changes — the phone
+ * extension fix could prove a truncated `(212) 555-0147;229` key for vCard rows
+ * and for no Apple Contacts row, because vcard.ts kept `Phones` and this parser
+ * did not (migration 20260930020117).
+ */
+const ACCUMULATED_KEYS = ['Names', 'Emails', 'Phones', 'URLs'];
+
+/** Unique, order-preserving, empties removed. */
+function uniq(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
 /** One contact accumulated across its joined phone/email/url rows. */
 interface ContactAccumulator {
   id?: number;
@@ -259,16 +280,22 @@ export class AppleContactsFileImporter implements FileImporter {
       ?.filter((p): p is string => !!p)
       .join(' ')
       .trim();
+    // The query LEFT JOINs three tables, so a contact with two phones and two
+    // emails comes back as four rows and each value was accumulated once per row
+    // it rode in on. A card's numbers are a set.
+    const phones = uniq(c.phones);
+    const emails = uniq(c.emails);
+    const urls = uniq(c.urls);
     const attributes: EntityAttribute[] = [];
-    for (const p of c.phones) {
+    for (const p of phones) {
       attributes.push({ name: 'phone', value: p, identity: true });
     }
 
-    for (const e of c.emails) {
+    for (const e of emails) {
       attributes.push({ name: 'email', value: e, identity: true });
     }
 
-    for (const u of c.urls) {
+    for (const u of urls) {
       attributes.push({ name: 'url', value: u });
     }
 
@@ -303,11 +330,19 @@ export class AppleContactsFileImporter implements FileImporter {
       // optional fields it happens to fill.
       type: 'contact',
       attributes,
+      // Every handle as typed, not only the one `identity_key` keeps — see
+      // ACCUMULATED_KEYS. `push/entities.ts` spreads this bag into
+      // `ci.entities.properties`.
       metadata: {
         Source: 'AppleContacts',
         DB: path.basename(dbPath),
         ...(accountId ? { AccountID: accountId } : {}),
+        ...(name ? { Names: [name] } : {}),
+        ...(emails.length ? { Emails: emails } : {}),
+        ...(phones.length ? { Phones: phones } : {}),
+        ...(urls.length ? { URLs: urls } : {}),
       },
+      accumulate: ACCUMULATED_KEYS,
     });
   }
 }

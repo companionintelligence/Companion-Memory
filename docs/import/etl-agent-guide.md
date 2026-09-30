@@ -1013,6 +1013,23 @@ gets missed under time pressure. Two real shapes:
 - **Amazon Appstore entitlements** — the code fix landed first; the 92 existing
   rows would have stayed typed `'media'` forever. Migration `20260818224249`,
   commit `5dafcf14b`, PR #2079.
+- **A contact's natural key** — the phone join key kept the last ten digits of
+  line + extension, so `(212) 555-0147;229` keyed a card as `contact:5550147229`.
+  Fixing the rule MOVES the key, so every affected card re-imports as a
+  duplicate beside its old row. Migration `20260930020117` could only re-key
+  the rows whose own `properties.Phones` still held the typed line (vCard); the
+  Apple Contacts and CSV parsers kept their numbers only in identity
+  ATTRIBUTES, which staging never persists. Two things close the gap: staging
+  records the key the card was minted under (`legacy_identity_key`, read with
+  the pre-fix rule) and the push moves the old row onto the new key
+  (`push/legacyKeys.ts`, PR #2795's mechanism for shared office lines); and
+  those parsers now keep `Phones` / `Emails`, so `push/truncatedPhoneKeys.ts`
+  can prove from the card that the old key was a truncation and undo what it
+  reached. `contactKeyRecomputable.test.ts` fails any contact parser whose key
+  cannot be rebuilt from its own metadata. **The rule for a new parser:** every
+  value its key is derived from must reach `metadata`, and a change to the key
+  rule must keep the OLD rule callable (`legacyEntityIdentityKey`) until every
+  stored row has been re-imported — or no fix can reach rows already stored.
 
 **Why it recurs:** the test suite goes green on the code fix, and green feels
 like done. It is not; the corpus is the deliverable.
@@ -1104,12 +1121,13 @@ already cleared (so the two must be disjoint), a `name` already NULL (so the
 migration is idempotent).
 
 The suite skips legibly when there is no database rather than failing every test
-on a connection error (`domains/__tests__/support/databaseConnection.ts`;
-`databaseAvailability()` prints the reason). Point it at a scratch database with
-the suite's own variable — `IMPORT_TEST_DATABASE_URL` for the import suites,
-`PIPELINE_TEST_DATABASE_URL`, `MEMORY_TEST_DATABASE_URL`, etc. Take the value
-from `make dburl`: the dev stack reallocates ports on every `up`, and a stale
-port reads as "no database".
+on a connection error (`domains/__tests__/support/databaseConnection.ts`; the
+end of the jest run lists every skipped file with its reason). Point it at a
+scratch database with the suite's own variable — `IMPORT_TEST_DATABASE_URL` for
+the import suites, `PIPELINE_TEST_DATABASE_URL`, `MEMORY_TEST_DATABASE_URL`,
+etc. Take the value from `make dburl`: the dev stack reallocates ports on every
+`up`, and a URL you set that nothing answers on now FAILS the suite, naming the
+variable, where it used to skip as "no database".
 
 ### 4.4 The commands
 

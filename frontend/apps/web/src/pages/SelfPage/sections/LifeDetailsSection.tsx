@@ -4,7 +4,7 @@ import { fetchJson } from '@ci/common';
 import { Button, Input, Textarea, ToggleGroup, cn } from '@ci/shadcn';
 import { Loader2, NotebookPen, Pencil } from '@ci/shadcn/icons';
 
-import { AnswerProvenance } from '@/components/AnswerProvenance';
+import { AnswerProvenance, ProvenanceLegend } from '@/components/AnswerProvenance';
 import { useAuth } from '@/hooks';
 import type { CatalogueAnswer, CataloguePage } from '@/pages/PromptsPage/catalogue';
 
@@ -23,6 +23,39 @@ const ANSWER_AUTOSAVE_DEBOUNCE_MS = 900;
 /** Mirrors `createAnswerSchema`/`updateAnswerSchema` on the API, which reject longer text. */
 const ANSWER_MAX_LENGTH = 5000;
 
+/** Tailwind's `max-sm`: below it each theme's grid collapses to a single column. */
+const STACKED_QUERY = '(width < 40rem)';
+
+/**
+ * Whether the rows are stacked (question above answer), i.e. a phone. Read at
+ * first render and kept current, so the provenance badge is rendered once, in
+ * the place that suits the layout, rather than twice with one hidden.
+ */
+function useStacked(): boolean {
+  const [stacked, setStacked] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia(STACKED_QUERY).matches,
+  );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') {
+      return;
+    }
+
+    const query = window.matchMedia(STACKED_QUERY);
+    const update = () => setStacked(query.matches);
+
+    update();
+    query.addEventListener?.('change', update);
+
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+
+  return stacked;
+}
+
 /**
  * Both cells of one row, side by side in the theme's shared grid.
  *
@@ -39,11 +72,24 @@ const ANSWER_MAX_LENGTH = 5000;
  * the question's own rule is dropped there — otherwise every question would be
  * separated from its own answer by a divider.
  */
-function Row({ question, children }: { question: CuratedQuestion; children: React.ReactNode }) {
+function Row({
+  question,
+  status,
+  children,
+}: {
+  question: CuratedQuestion;
+  /** The answer's provenance badge, when the rows are stacked. */
+  status?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className="contents" data-question-key={question.key}>
-      <div className="pt-2.5 text-sm text-muted-foreground sm:border-b sm:border-border/60 sm:pb-2.5 sm:pr-6">
-        {question.text}
+      <div className="flex items-start justify-between gap-2 pt-2.5 text-sm text-muted-foreground sm:block sm:border-b sm:border-border/60 sm:pb-2.5 sm:pr-6">
+        <span>{question.text}</span>
+        {/* Stacked (a phone), the answer sits under its question at full width,
+            so the badge moves up onto the question's line instead of wrapping
+            onto a line of its own under the answer. */}
+        {status ? <span className="mt-1 flex shrink-0">{status}</span> : null}
       </div>
       <div className="border-b border-border/60 pb-2.5 pt-1 sm:pt-2.5">{children}</div>
     </div>
@@ -60,10 +106,13 @@ function AnswerDisplay({
   question,
   answer,
   onEdit,
+  showBadge,
 }: {
   question: CuratedQuestion;
   answer: CatalogueAnswer;
   onEdit: () => void;
+  /** False when stacked: the badge is on the question's line instead. */
+  showBadge: boolean;
 }) {
   return (
     // Side by side once there is width for it, so the badges line up as their
@@ -95,20 +144,39 @@ function AnswerDisplay({
           `onEdit` hands straight back to `startEdit`, the SAME inline editor the
           answer text opens, which PATCHes `{text}` alone and re-stamps the row as
           the user's. There is deliberately no second write path in the drawer. */}
-      <AnswerProvenance
-        source={answer.source}
-        confidence={answer.confidence}
-        rationale={answer.rationale}
-        details={{
-          question: question.text,
-          answerText: answer.text,
-          answeredAt: answer.answeredAt,
-          record: answer,
-          onEdit,
-        }}
-        className="shrink-0 sm:mt-px"
-      />
+      {showBadge ? (
+        <AnswerBadge question={question} answer={answer} onEdit={onEdit} className="shrink-0 sm:mt-px" />
+      ) : null}
     </div>
+  );
+}
+
+/** One answer's provenance badge: beside the answer, or on its question's line when stacked. */
+function AnswerBadge({
+  question,
+  answer,
+  onEdit,
+  className,
+}: {
+  question: CuratedQuestion;
+  answer: CatalogueAnswer;
+  onEdit: () => void;
+  className?: string;
+}) {
+  return (
+    <AnswerProvenance
+      source={answer.source}
+      confidence={answer.confidence}
+      rationale={answer.rationale}
+      details={{
+        question: question.text,
+        answerText: answer.text,
+        answeredAt: answer.answeredAt,
+        record: answer,
+        onEdit,
+      }}
+      className={className}
+    />
   );
 }
 
@@ -327,6 +395,7 @@ function AnswerPrompt({
 /** A fixed, hand-curated slice of your Reflections answers — see lifeDetails.ts for why these questions and not a generic category browse. */
 export function LifeDetailsSection() {
   const [{ authToken }] = useAuth();
+  const stacked = useStacked();
   const [rows, setRows] = useState<CuratedAnswers>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -494,6 +563,7 @@ export function LifeDetailsSection() {
 
       {!loading && !error && (
         <div className="flex flex-col gap-4">
+          <ProvenanceLegend className="-mt-1" />
           {LIFE_DETAIL_THEMES.map((theme) => {
             // Only questions the catalogue actually returned a row for. An
             // input with no question behind it cannot save, so rendering one
@@ -527,7 +597,19 @@ export function LifeDetailsSection() {
                     const busy = submittingKeys.has(question.key);
 
                     return (
-                      <Row key={question.key} question={question}>
+                      <Row
+                        key={question.key}
+                        question={question}
+                        status={
+                          stacked && answer && editingKey !== question.key ? (
+                            <AnswerBadge
+                              question={question}
+                              answer={answer}
+                              onEdit={() => startEdit(question.key)}
+                            />
+                          ) : undefined
+                        }
+                      >
                         {answer && editingKey === question.key ? (
                           <AnswerEditor
                             question={question}
@@ -543,6 +625,7 @@ export function LifeDetailsSection() {
                             question={question}
                             answer={answer}
                             onEdit={() => startEdit(question.key)}
+                            showBadge={!stacked}
                           />
                         ) : (
                           // Same two-part shape as AnswerDisplay so the status
@@ -561,7 +644,12 @@ export function LifeDetailsSection() {
                               />
                             </div>
 
-                            <AnswerProvenance answered={false} className="shrink-0 sm:mt-px" />
+                            {/* Not on a phone: the empty field already says there is no
+                                answer, and a marker under every one read as an error. */}
+                            <AnswerProvenance
+                              answered={false}
+                              className="hidden shrink-0 sm:mt-px sm:inline-flex"
+                            />
                           </div>
                         )}
                       </Row>

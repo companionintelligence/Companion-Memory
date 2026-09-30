@@ -275,8 +275,14 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * coordinate, so improving the geocoder makes every estimate stale. Bumping
    * the provider generation therefore bumps BOTH stages — which is the point,
    * and means this line moves whenever `enrich.geocode`'s does.
+   *
+   * v2 — ESTIMATE_RULE_GENERATION 2: an event with its own `location_name` is
+   * skipped (`has_location_name`) instead of borrowing a neighbour's coordinate.
+   * The bump re-decides every row under the new rule; the estimates v1 wrote
+   * onto named events, and the place links built on them, are withdrawn by
+   * migration 20260930035044_clear_estimates_on_events_with_own_location.
    */
-  [STAGE_IDS.ENRICH_ESTIMATE_LOCATION]: 1,
+  [STAGE_IDS.ENRICH_ESTIMATE_LOCATION]: 2,
 
   /**
    * v1 — initial conversion of the three participant backfills.
@@ -302,20 +308,46 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * the column instead of replacing it (see PersonLinkStage.ts). The bump
    * re-links every row under the merge, which also repairs the rows v1 cut
    * down to a single recipient.
+   *
+   * v3 — IDENTIFIER_RULE_GENERATION 2: the shared `normalizePhone` refuses a
+   * value carrying an extension. Every claim is re-adjudicated against an index
+   * that no longer holds keys truncated from office lines (see migration
+   * 20260930020117_refuse_phone_extension_join_keys).
    */
-  [STAGE_IDS.ENRICH_PERSON_LINK]: 2,
-  [STAGE_IDS.ENRICH_EVENT_PERSON_LINK]: 2,
+  [STAGE_IDS.ENRICH_PERSON_LINK]: 3,
+  [STAGE_IDS.ENRICH_EVENT_PERSON_LINK]: 3,
 
   /**
+   * v2 — self claims track the record (a claim the record no longer states is
+   * retracted), and records now state every email and phone a contact card
+   * gives (staging's contactIdentifiers; migration 20260930022046 for rows
+   * already imported), so every Person is re-read.
+   *
+   * v3 — PERSON_SELF_CLAIM_GENERATION 3: the shared `normalizePhone` refuses a
+   * value carrying an extension. Generation 2 already shipped for the tracking
+   * change, so this bump is what re-reads a Person whose claim is still the
+   * truncation (migration 20260930020117 deletes those claims).
+   *
    * v1 — initial self-claim producer (PERSON_SELF_CLAIM_GENERATION in
    * PersonSelfClaimStage.ts). Bump alongside that generation.
    */
-  [STAGE_IDS.ENRICH_PERSON_SELF_CLAIM]: 1,
+  [STAGE_IDS.ENRICH_PERSON_SELF_CLAIM]: 3,
 
   /** v2 — reddit added to SOURCE_TIME_SPECS. Bump when it gains a source; only a bump re-opens a skip. */
   [STAGE_IDS.CLEAN_TEMPORAL_REPAIR]: 2,
 
   /**
+   * v8 — DUPLICATE_CANDIDATE_GENERATION bumped to 3: the claim population
+   * changed under the detector — self claims now carry every email and phone
+   * a contact card states, and stale ones are retracted — so every person is
+   * re-examined (behind enrich.person_self_claim, which STAGE_DEPENDENCIES
+   * orders first). Released together with v7; both bumps are in the sum.
+   *
+   * v7 — DUPLICATE_SCORING_GENERATION bumped to 6: a number a Person's record
+   * files as a fax (`properties.Faxes`, from the vCard parser's `TEL;TYPE=FAX`)
+   * is never phone evidence. One office's fax is on every card from that
+   * office, and it had proposed two colleagues as one person at 0.85.
+   *
    * v6 — DUPLICATE_SCORING_GENERATION bumped to 5: a properties-based phone
    * tier (memory/utils/phoneIdentity.ts). Person `Phones`/`phones`/`phone` and
    * numeric display names are parsed to E.164 — stated forms, or a valid
@@ -334,7 +366,7 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * widening the evidence set. A bump rescores pending candidates; it never
    * resurrects a rejected pair.
    */
-  [STAGE_IDS.CLEAN_DUPLICATE_DETECT]: 6,
+  [STAGE_IDS.CLEAN_DUPLICATE_DETECT]: 8,
 
   /**
    * v1 — initial owned-unit detector. A literal mirroring the derivation in
@@ -346,8 +378,16 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    */
   [STAGE_IDS.CLEAN_OBJECT_DUPLICATE_DETECT]: 1,
 
-  /** v1 — initial identifier canonicaliser. Deliberately NOT tied to IDENTITY_SPEC_VERSION, which versions the object identity ladder. */
-  [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: 1,
+  /**
+   * v1 — initial identifier canonicaliser. Deliberately NOT tied to
+   * IDENTITY_SPEC_VERSION, which versions the object identity ladder.
+   *
+   * v3 — a literal mirroring the derivation in `IdentifierNormalizeStage.ts`
+   * (IDENTIFIER_RULE_GENERATION + E164_RULE_GENERATION - 1), which throws at
+   * module load if this line disagrees. Both generations moved to 2 together:
+   * `normalizePhone` and `toE164` refuse a value carrying an extension.
+   */
+  [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: 3,
 
   /**
    * v1 — initial single-valued contradiction audit. A literal mirroring the
@@ -419,8 +459,13 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   // plural projection merges instead of replacing), and these legs derive
   // their version from it, so the edges are re-projected from the repaired
   // link columns. The other legs have no person producer and stay at 6.
-  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 7,
-  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 7,
+  //
+  // v8 for the same two legs: PERSON_LINK_VERSION moved 2 -> 3 (the shared
+  // phone key refuses extensions). The projection only ever adds edges, so the
+  // ones a truncated key had produced are deleted by migration
+  // 20260930020117_refuse_phone_extension_join_keys, not by this re-run.
+  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 8,
+  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 8,
   [STAGE_IDS.PROMOTE_EDGE_CONTENT]: 6,
   [STAGE_IDS.PROMOTE_EDGE_OBJECT]: 6,
   [STAGE_IDS.PROMOTE_EDGE_RECEIPT]: 6,

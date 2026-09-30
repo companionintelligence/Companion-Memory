@@ -419,7 +419,9 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       this.contentService.findByIds(context, contentIds),
       this.eventService.findByIds(context, eventIds),
       this.fileChunkService.findByIds(fileChunkIds),
-      this.fileService.findByIds(context, fileIds).then((files) => files.map((f) => f && stripStorageAddress(f))),
+      this.fileService
+        .findByIds(context, fileIds)
+        .then((files) => files.map((f) => f && stripStorageAddress(f))),
       this.itemService.findByIds(context, itemIds),
       this.noteService.findByIds(context, noteIds),
       this.personService.findByIds(context, peopleIds),

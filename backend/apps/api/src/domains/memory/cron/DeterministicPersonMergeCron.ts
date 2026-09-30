@@ -92,7 +92,7 @@ export class DeterministicPersonMergeCron {
   async sweep(budgets: { perUserMs?: number; tickMs?: number } = {}): Promise<AutoMergeResult> {
     const perUserMs = budgets.perUserMs ?? PER_USER_BUDGET_MS;
     const tickDeadline = Date.now() + (budgets.tickMs ?? TICK_BUDGET_MS);
-    const totals: AutoMergeResult = { merged: 0, skipped: 0, demoted: 0, considered: 0 };
+    const totals: AutoMergeResult = { merged: 0, skipped: 0, demoted: 0, retired: 0, considered: 0 };
     const userIds = await this.listOnboardedUserIds();
     let users = 0;
 
@@ -117,6 +117,7 @@ export class DeterministicPersonMergeCron {
         totals.merged += result.merged;
         totals.skipped += result.skipped;
         totals.demoted += result.demoted;
+        totals.retired += result.retired;
         totals.considered += result.considered;
       } catch (error) {
         // Per-user, like every other fan-out here: one account's failed drain

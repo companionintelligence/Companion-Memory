@@ -28,6 +28,17 @@ export interface SignupIntentIdentity {
 export interface SignupIntent extends Partial<SignupIntentIdentity> {
   email: string;
   name?: string;
+  /**
+   * The callback waived the signup code for this person only because the
+   * appliance had no accounts. That was true when the intent was minted, which
+   * can be its whole lifetime before the confirm step runs — so the confirm step
+   * creates the account only if it is still the first, and decides that
+   * atomically with the insert (`UserService.createFirstAccount`).
+   *
+   * Absent on an intent where nothing was waived: codes are off, or the person
+   * holds an invitation.
+   */
+  firstAccountOnly?: boolean;
 }
 
 const SESSION_EXPIRES_IN = parseDuration(config.auth.session.duration) ?? 0;
@@ -87,9 +98,22 @@ export class AuthService {
    * so the confirm endpoint can create the account without re-trusting inputs.
    * The `purpose` claim prevents it being accepted anywhere a session token is.
    */
-  issueSignupIntentToken(email: string, name?: string, identity?: SignupIntentIdentity): string {
+  issueSignupIntentToken(
+    email: string,
+    name?: string,
+    identity?: SignupIntentIdentity,
+    admission?: Pick<SignupIntent, 'firstAccountOnly'>,
+  ): string {
     return this.jwtService.sign(
-      { email, name, purpose: 'signup_intent', issuer: identity?.issuer, subject: identity?.subject },
+      {
+        email,
+        name,
+        purpose: 'signup_intent',
+        issuer: identity?.issuer,
+        subject: identity?.subject,
+        // Only ever `true` or absent, so an intent that waived nothing reads exactly as before.
+        firstAccountOnly: admission?.firstAccountOnly === true ? true : undefined,
+      },
       { secret: config.auth.jwt.refreshTokenSecret, expiresIn: '10m' },
     );
   }
@@ -101,6 +125,7 @@ export class AuthService {
       purpose?: string;
       issuer?: string;
       subject?: string;
+      firstAccountOnly?: boolean;
     }>(token, {
       secret: config.auth.jwt.refreshTokenSecret,
     });
@@ -109,7 +134,13 @@ export class AuthService {
       throw new UnauthorizedException('Invalid signup intent token');
     }
 
-    return { email: payload.email, name: payload.name, issuer: payload.issuer, subject: payload.subject };
+    return {
+      email: payload.email,
+      name: payload.name,
+      issuer: payload.issuer,
+      subject: payload.subject,
+      ...(payload.firstAccountOnly === true ? { firstAccountOnly: true } : {}),
+    };
   }
 
   async rotateSessionToken(userId: string, token: string, meta: SessionMetadata): Promise<RotationResult> {

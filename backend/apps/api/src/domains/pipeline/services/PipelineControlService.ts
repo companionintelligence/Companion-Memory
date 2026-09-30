@@ -7,6 +7,7 @@ import { DataSource } from 'typeorm';
 import { LoggerService } from '@ci/common/logging';
 
 import { SHARD_LEASE_SECONDS, STAGE_ID_LIST, STAGE_IDS, type StageId } from '../constants';
+import { STAGE_REOPENS } from '../reopens';
 import {
   automaticStageIds,
   isMeteredStage as scheduleIsMeteredStage,
@@ -368,12 +369,16 @@ export const STAGE_DEPENDENCIES: Readonly<Partial<Record<StageId, readonly Stage
   // event leg additionally reads `location_entity_id`, which `promote.place`
   // writes. THIS graph is the whole of the ordering between them — the shared
   // nightly cadence that used to double as ordering is gone (the projections
-  // are hourly and unwindowed now, see `STAGE_SCHEDULES`), and it was never
-  // load-bearing: an unlinked source row fails every edge leg's
-  // `StageSource.predicate`, so a projection that outruns its producer skips it
-  // rather than marking it `done`. What this graph still buys is that on a tick
-  // where a producer is due WITH candidates, its consumer waits one tick rather
-  // than projecting a slice the producer is about to widen.
+  // are hourly and unwindowed now, see `STAGE_SCHEDULES`). What it buys is that
+  // on a tick where a producer is due WITH candidates, its consumer waits one
+  // tick rather than projecting a slice the producer is about to widen.
+  //
+  // It cannot stop a projection outrunning a producer ACROSS ticks, and for a
+  // leg whose predicate is ONE linkage column it does not need to: an unlinked
+  // row fails the predicate, so it is skipped rather than marked `done`. The
+  // event leg's predicate is an OR over four columns and two producers, so an
+  // event with participants is decided before `promote.place` links it — and
+  // that row is re-opened by `STAGE_REOPENS` (`reopens.ts`), not by this graph.
   [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: [STAGE_IDS.ENRICH_PERSON_LINK],
   [STAGE_IDS.PROMOTE_EDGE_EVENT]: [STAGE_IDS.ENRICH_EVENT_PERSON_LINK, STAGE_IDS.PROMOTE_PLACE],
   [STAGE_IDS.PROMOTE_EDGE_OBJECT]: [STAGE_IDS.PROMOTE_OBJECT],
@@ -505,13 +510,16 @@ export function orderStages(stageIds: readonly StageId[]): StageId[] {
 }
 
 /**
- * Module-load guard over the two declarations above.
+ * Module-load guard over the two declarations above, and over how
+ * `STAGE_REOPENS` (`reopens.ts`) relates to the first of them.
  *
  * Same reasoning as `assertStageRegistryComplete`, and run at module load for the
  * same reason: every one of these mistakes is silent at runtime. An edge naming a
  * stage id that does not exist is an edge that never blocks anything; a cycle
  * makes the ordering arbitrary; a metered stage that slipped into the default set
- * is a recurring charge nobody authorised. The earliest failure is the cheapest.
+ * is a recurring charge nobody authorised; a re-open with no ordering behind it
+ * repairs, a day late, a decision the ordering should have prevented. The
+ * earliest failure is the cheapest.
  */
 export function assertStagePolicy(): void {
   const declared = new Set<string>(STAGE_ID_LIST);
@@ -538,6 +546,22 @@ export function assertStagePolicy(): void {
   for (const stageId of METERED_STAGES) {
     if (!declared.has(stageId)) {
       problems.push(`"${stageId}" is in METERED_STAGES but is not a declared stage id`);
+    }
+  }
+
+  // A consumer re-opened by a producer's `done` re-reads that producer's
+  // output, so it must be ORDERED after it too. A re-open edge with no matching
+  // dependency would let the consumer run on the producer's tick and decide
+  // the row a moment before the write it is waiting for — and the re-open would
+  // then be the only thing that ever fixed it, a day late.
+  for (const [producer, consumers] of Object.entries(STAGE_REOPENS)) {
+    for (const consumer of consumers ?? []) {
+      if (!(STAGE_DEPENDENCIES[consumer] ?? []).includes(producer as StageId)) {
+        problems.push(
+          `STAGE_REOPENS has "${producer}" re-opening "${consumer}", but STAGE_DEPENDENCIES does not ` +
+            `order "${consumer}" after "${producer}"`,
+        );
+      }
     }
   }
 
@@ -613,10 +637,18 @@ export interface ControlTickReport {
   sweepsStarted: number;
 
   /**
-   * Ledger rows re-opened because an identifier registered since could answer
-   * one of their unresolved claims (see IdentifierArrivalService).
+   * Ledger rows re-opened by new identifier evidence: an identifier registered
+   * since could answer one of their unresolved claims, or a merge moved claims
+   * onto the person they decided about (see IdentifierArrivalService).
    */
   claimsReopened: number;
+
+  /**
+   * Ledger rows re-opened because their source row changed after they were
+   * decided (a stage declaring `source.changedAtColumn`; see
+   * `PipelineStateService.reopenChangedSources`).
+   */
+  sourcesReopened: number;
 
   /** Stage legs with stale rows that were held back behind an undrained producer. */
   legsBlocked: number;
@@ -679,6 +711,7 @@ function emptyReport(): ControlTickReport {
     runsPaused: 0,
     sweepsStarted: 0,
     claimsReopened: 0,
+    sourcesReopened: 0,
     legsBlocked: 0,
     legsDrained: 0,
     legsNotDue: 0,
@@ -843,7 +876,8 @@ export class PipelineControlService {
       report.sweepsStarted > 0 ||
       report.runsFinalized > 0 ||
       report.leasesReaped > 0 ||
-      report.claimsReopened > 0
+      report.claimsReopened > 0 ||
+      report.sourcesReopened > 0
     ) {
       this.logger.log('Pipeline control tick', { ...report });
     }
@@ -882,14 +916,26 @@ export class PipelineControlService {
     // ── 2. New evidence re-opens old decisions, before the candidates are counted ──
     //
     // An identifier registered since a person-link decision was recorded makes
-    // that decision provisional again. Done here so the re-opened rows count as
-    // candidates in the very same tick, rather than one tick later.
+    // that decision provisional again, and so does a merge into the person a
+    // self-claim or duplicate decision was about. Done here so the re-opened
+    // rows count as candidates in the very same tick, rather than one tick later.
     if (this.identifierArrival != null) {
       report.claimsReopened += await this.identifierArrival.reopenForUser(userId);
     }
 
     const stageIds = this.stageSetFor(row);
     const legs = this.legsFor(stageIds);
+
+    // ONE read per user per tick, not one per leg: a user has at most a dozen
+    // rows here and the tick already issues a staleness probe per leg, so a
+    // second per-leg round trip would double the tick's statement count to
+    // answer a question one `WHERE user_id = $1` covers. Read before the
+    // candidates, because the source-change re-open below is gated on it.
+    const lastStartedAt = await this.legScheduleFor(userId);
+
+    // So is a source row that changed after its decision — for a stage that
+    // declares `source.changedAtColumn`. Same placement, same reason.
+    report.sourcesReopened += await this.reopenChangedSources(legs, userId, lastStartedAt, conditions);
 
     // ── 2. What is worth sweeping ──────────────────────────────────────────
     const candidates = new Map<string, boolean>();
@@ -900,12 +946,6 @@ export class PipelineControlService {
 
     // ── 3. WHICH of those may run right now ────────────────────────────────
     //
-    // ONE read per user per tick, not one per leg: a user has at most a dozen
-    // rows here and the tick already issues a staleness probe per leg, so a
-    // second per-leg round trip would double the tick's statement count to
-    // answer a question one `WHERE user_id = $1` covers.
-    const lastStartedAt = await this.legScheduleFor(userId);
-
     // A due retry can make a leg due before its `minInterval` elapses (see
     // `stageDueness`'s "Why `hasOverdueRetry` is a THIRD input" note), so it
     // has to be known before dueness is computed, not read out of the result.
@@ -1372,6 +1412,65 @@ export class PipelineControlService {
 
       return { windowOpen: false, now };
     }
+  }
+
+  /**
+   * Re-open this user's decisions whose source row changed after they were
+   * made, on every leg whose stage declares `source.changedAtColumn`.
+   *
+   * GATED ON THE CLOCK. A re-opened row cannot be swept before its leg is due,
+   * so a leg that is not due by its clock and window is not asked: the rows it
+   * would re-open are found the same on the first tick it is due, and re-opened
+   * there before the candidates are counted. What that saves is the day after
+   * a nightly leg's sweep started, and the daytime hours before its
+   * `maxStaleness` — not the converged steady state, where a leg that never
+   * starts a sweep is overdue on every tick. There the query costs what
+   * {@link hasCandidates} already spends on the same leg (every applicable row,
+   * one ledger probe each), once more. `hasOverdueRetry` is not consulted: a
+   * leg due only to retry its failed rows is swept for THOSE, and the changed
+   * ones wait for its next clock-due tick.
+   *
+   * CONTAINED per leg. A declared column the table lacks — or anything else
+   * failing here — costs that leg its re-open, logged on every tick until it is
+   * fixed, and never the user's tick: new evidence not yet applied is the state
+   * the leg was already in.
+   */
+  private async reopenChangedSources(
+    legs: readonly StageLeg[],
+    userId: string,
+    lastStartedAt: Map<string, Date>,
+    conditions: TickConditions,
+  ): Promise<number> {
+    let reopened = 0;
+
+    for (const leg of legs) {
+      if (leg.stage.source.changedAtColumn == null) {
+        continue;
+      }
+
+      const dueness = stageDueness({
+        stageId: leg.stageId,
+        lastStartedAt: lastStartedAt.get(this.legKey(leg)) ?? null,
+        windowOpen: conditions.windowOpen,
+        now: conditions.now,
+      });
+
+      if (!dueness.due) {
+        continue;
+      }
+
+      try {
+        reopened += await this.stateService.reopenChangedSources(leg.stage, userId, leg.entityType);
+      } catch (err: unknown) {
+        this.logger.error(
+          `Could not re-open changed sources for stage "${leg.stageId}" (${leg.entityType}); its ` +
+            `decisions stand until the next tick`,
+          err instanceof Error ? err : new Error(String(err)),
+        );
+      }
+    }
+
+    return reopened;
   }
 
   /**

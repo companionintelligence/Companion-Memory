@@ -12,7 +12,7 @@ import {
 } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 
 import { DirectionToggle, readMessageDirection } from './DirectionToggle';
-import { FilterValuePicker } from './FilterValuePicker';
+import { FilterValuePicker, type FilterValuePickerProps } from './FilterValuePicker';
 import { usePersonNameSuggestions, usePlaceNameSuggestions } from './useNameSuggestions';
 
 // "Who" / "Where" — the explorer's person and place name dimensions
@@ -43,9 +43,11 @@ const KINDS = {
 interface Props {
   kind: keyof typeof KINDS;
   modal?: boolean;
+  /** Opens the picker from the caller's own element (the phone filter sheet's row). */
+  renderTrigger?: FilterValuePickerProps['renderTrigger'];
 }
 
-export function EntityNameFilter({ kind, modal = true }: Props) {
+export function EntityNameFilter({ kind, modal = true, renderTrigger }: Props) {
   const { label, icon, useSuggestions, searchPlaceholder, emptyText, hint } = KINDS[kind];
   const [searchParams, setSearchParams] = useSearchParams();
   const [open, setOpen] = useState(false);
@@ -116,6 +118,7 @@ export function EntityNameFilter({ kind, modal = true }: Props) {
         ) : undefined
       }
       hint={hint}
+      renderTrigger={renderTrigger}
     />
   );
 }

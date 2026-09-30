@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, QueryRunner } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
+import { countAffected } from '@ci/common/persistence';
 import config from '@ci/configuration';
 
 import { PURGE_OBJECT_STORE, type PurgeObjectStore } from '../purge/objectStore';
@@ -459,25 +460,33 @@ export class AccountPurgeService {
     detachedRows: Record<string, number>,
     deletedObjects: number,
   ): Promise<void> {
-    const updated = (await runner.query(
-      `UPDATE ci.account_purges
-          SET completed_at = NOW(),
-              deleted_rows = $2::jsonb,
-              detached_rows = $3::jsonb,
-              deleted_objects = $4,
-              last_error = NULL,
-              next_attempt_after = NULL,
-              updated_at = NOW()
-        WHERE user_id = $1
-      RETURNING user_id`,
+    // Counted through a CTE for the reason `countingWrapper` in purgeSql.ts
+    // gives: a bare `UPDATE … RETURNING` comes back from TypeORM as the pair
+    // `[rows, rowCount]`, whose length is 2 whether or not the row was found —
+    // which left the check below unable to fire.
+    const updated = await countAffected(
+      runner,
+      `WITH completed AS (
+         UPDATE ci.account_purges
+            SET completed_at = NOW(),
+                deleted_rows = $2::jsonb,
+                detached_rows = $3::jsonb,
+                deleted_objects = $4,
+                last_error = NULL,
+                next_attempt_after = NULL,
+                updated_at = NOW()
+          WHERE user_id = $1
+         RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM completed`,
       [userId, JSON.stringify(deletedRows), JSON.stringify(detachedRows), deletedObjects],
-    )) as unknown[];
+    );
 
     // A purge that cannot record itself has destroyed an account's data and left
     // no evidence the request was honoured, which is the one outcome worse than
     // failing. It happened once already: `ci.account_purges.user_id` matched the
     // user-scoped naming convention, so the purge deleted its own audit row.
-    if (updated.length === 0) {
+    if (updated === 0) {
       throw new Error(
         `Purge of ${userId} completed but its audit record is missing — refusing to report success`,
       );

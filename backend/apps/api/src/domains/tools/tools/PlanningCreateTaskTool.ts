@@ -102,7 +102,10 @@ export class PlanningCreateTaskTool extends BaseTool<PlanningCreateTaskInput, Ta
     return PlanningCreateTaskInputSchema.parse(input);
   }
 
-  protected async executeInternal(context: ToolExecutionContext, input: PlanningCreateTaskInput): Promise<Task> {
+  protected async executeInternal(
+    context: ToolExecutionContext,
+    input: PlanningCreateTaskInput,
+  ): Promise<Task> {
     const serviceContext = toServiceContext(context);
 
     const task = await this.taskService.create(serviceContext, {

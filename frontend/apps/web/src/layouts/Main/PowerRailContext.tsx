@@ -24,7 +24,7 @@ interface PowerRailContextValue {
    * stray mouseleave reaching it — would collapse the rail mid-click.
    */
   holdOpen: boolean;
-  /** `overlay` is the mobile glass drawer; `dock` is the desktop lane. */
+  /** `overlay` is the phone drawer; `dock` is the desktop lane. */
   variant: PowerRailVariant;
   /** Pin it open, or unpin it. On overlay, opens or closes the drawer. */
   toggle: () => void;
@@ -71,7 +71,7 @@ export function PowerRailProvider({
   // opened it also unpins the rail.
   //
   // Overlay (phone) is a third case: a swipe or the edge control opens a
-  // glass drawer. It is not pinned and not stored.
+  // drawer over the page. It is not pinned and not stored.
   const [pinned, setPinned] = useState(variant === 'dock' ? readStoredExpanded : false);
   const [holdOpen, setHoldOpen] = useState(false);
   const [overlayOpen, setOverlayOpen] = useState(false);

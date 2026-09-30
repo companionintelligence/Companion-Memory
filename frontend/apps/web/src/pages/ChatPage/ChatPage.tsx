@@ -1,8 +1,14 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
-import { Portal, usePageTitle } from '@ci/common';
+import {
+  findLocalLlmModel,
+  Portal,
+  resetLocalLlmConversation,
+  usePageTitle,
+  type LocalLlmGenerationStats,
+} from '@ci/common';
 import { Button, Card } from '@ci/shadcn';
-import { RefreshCw, Send, Sparkles, X } from '@ci/shadcn/icons';
+import { RefreshCw, Send, Smartphone, Sparkles, X } from '@ci/shadcn/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import { v7 as uuid7 } from 'uuid';
 
@@ -12,6 +18,7 @@ import { Chat, type FormData } from '@/components/Chat';
 import { ErrorState } from '@/components/ErrorState';
 import { MemoryHubShell } from '@/components/MemoryHub';
 import { useAuth, useChatRequester, useCounter, useModel } from '@/hooks';
+import { useLocalLlmPrefs } from '@/hooks/useOnDeviceModel';
 import { clearAgentChatContext, formatAgentChatDraft, readAgentChatContext } from '@/lib/agentChat';
 
 import { CHAT_BASE, chatThreadPath } from './chatPaths';
@@ -19,6 +26,31 @@ import { ChatSidebar } from './ChatSidebar';
 import { STARTER_PROMPTS } from './starterPrompts';
 import { type Message } from './types';
 import { useThreadListService } from './useThreadListService';
+
+/**
+ * Says the last reply came from this phone rather than the Companion, and how fast. The speed is the same
+ * time-to-first-token / decode-rate pair Google AI Edge Gallery shows under a reply; it is the one honest
+ * signal of whether this device is coping with the model it chose.
+ */
+function OnDeviceBadge({ modelId, stats }: { modelId: string; stats: LocalLlmGenerationStats | null }) {
+  const label = findLocalLlmModel(modelId)?.label ?? modelId;
+
+  return (
+    <p
+      role="status"
+      data-testid="on-device-badge"
+      className="text-muted-foreground border-border mx-auto mb-2 flex w-full max-w-xl items-center gap-2 rounded-md border px-3 py-1.5 text-xs"
+    >
+      <Smartphone className="h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">
+        Answered on this phone · {label}
+        {stats
+          ? ` · ${stats.decodeTokensPerSecond.toFixed(1)} tok/s${stats.tokensEstimated ? ' (est.)' : ''} · ${(stats.timeToFirstTokenMs / 1000).toFixed(1)}s to first token`
+          : ''}
+      </span>
+    </p>
+  );
+}
 
 function ChatPageContent() {
   const resolvedThreadId = useRef<string | null>(null);
@@ -32,6 +64,14 @@ function ChatPageContent() {
   const [initialMessages, setInitialMessages] = useState<Message[]>([]);
   const [chatDraft, setChatDraft] = useState('');
   const [{ selectedModel }] = useModel();
+  const [localPrefs] = useLocalLlmPrefs();
+  // With a phone model chosen and routing on, chat works with no appliance model at all — the case where
+  // the appliance is unreachable and `useModel` has nothing to select.
+  const localChatEnabled = localPrefs.mode !== 'appliance' && localPrefs.modelId !== null;
+  // Photos are read on the phone (never uploaded) only when the phone alone answers and its model can see.
+  const localImages =
+    localPrefs.mode === 'device' &&
+    Boolean(localPrefs.modelId && findLocalLlmModel(localPrefs.modelId)?.capabilities.includes('vision'));
 
   const [
     { threads, loading: threadsLoading, error: threadsError },
@@ -57,7 +97,7 @@ function ChatPageContent() {
   );
 
   const [
-    { stream, loading: chatRequestLoading, streaming: chatRequestStreaming, hasStartedReceiving },
+    { stream, loading: chatRequestLoading, streaming: chatRequestStreaming, hasStartedReceiving, local },
     {
       submit: submitChatRequest,
       stop: stopChatRequest,
@@ -73,6 +113,8 @@ function ChatPageContent() {
   const navigateToChatList = useCallback(() => {
     incrementNewThreadCount();
     detachChatStream();
+    // A new chat must not inherit the previous one's turns, which the native conversation keeps.
+    void resetLocalLlmConversation();
     resolvedThreadId.current = null;
     navigate(CHAT_BASE);
   }, [incrementNewThreadCount, detachChatStream, navigate]);
@@ -124,6 +166,7 @@ function ChatPageContent() {
     (threadId: string) => {
       if (resolvedThreadId.current !== threadId) {
         detachChatStream();
+        void resetLocalLlmConversation();
         navigate(chatThreadPath(threadId));
       }
     },
@@ -216,7 +259,7 @@ function ChatPageContent() {
    */
   const handleStarterPrompt = useCallback(
     (prompt: string) => {
-      if (selectedModel == null || chatRequestLoading) {
+      if ((selectedModel == null && !localChatEnabled) || chatRequestLoading) {
         return;
       }
 
@@ -224,7 +267,7 @@ function ChatPageContent() {
         ...prev,
         {
           id: uuid7(),
-          model: selectedModel,
+          model: selectedModel ?? localPrefs.modelId ?? '',
           role: 'user',
           content: prompt,
           mimetype: null,
@@ -235,11 +278,11 @@ function ChatPageContent() {
 
       void submitChatRequest({ message: prompt });
     },
-    [chatRequestLoading, selectedModel, submitChatRequest],
+    [chatRequestLoading, localChatEnabled, localPrefs.modelId, selectedModel, submitChatRequest],
   );
 
   const loading = threadsLoading || threadLoading || chatRequestLoading;
-  const isSubmitDisabled = selectedModel == null;
+  const isSubmitDisabled = selectedModel == null && !localChatEnabled;
   const inputPlaceholder =
     resolvedThreadId.current == null
       ? 'Ask about Memory, Plan, Forecast, Brief…'
@@ -341,12 +384,14 @@ function ChatPageContent() {
         </Portal.Slot>
 
         <div className="flex min-h-0 flex-1 flex-col">
+          {local ? <OnDeviceBadge modelId={local.modelId} stats={local.stats} /> : null}
           <Chat
             key={initialThreadId ?? `new-thread-${newThreadCount}`}
             loading={loading}
             streaming={chatRequestStreaming}
             hasStartedReceiving={hasStartedReceiving}
             disabled={isSubmitDisabled}
+            localImages={localImages}
             placeholder={inputPlaceholder}
             initialDraft={chatDraft}
             messages={initialMessages}

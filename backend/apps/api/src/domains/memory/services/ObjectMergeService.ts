@@ -4,6 +4,7 @@ import { EntityManager, Repository } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { countAffected } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
 import { ItemUpdatedEvent, ProductUpdatedEvent } from '@ci/domains/memory/events';
@@ -874,39 +875,6 @@ export class ObjectMergeService {
       ],
     );
   }
-}
-
-/**
- * Run a counting write and get the number of rows it actually touched.
- *
- * ── Why every one of these is wrapped in a CTE ─────────────────────────────
- *
- * `EntityManager.query()` returns the driver's ROWS for a `SELECT` and for an
- * `INSERT … RETURNING`, but for an `UPDATE … RETURNING` or a
- * `DELETE … RETURNING` TypeORM's Postgres runner special-cases the command and
- * resolves the PAIR `[rows, rowCount]` instead
- * (`driver/postgres/PostgresQueryRunner.ts`). A bare `UPDATE … RETURNING 1`
- * therefore has `.length === 2` no matter how many rows it hit — including
- * ZERO — so counting it that way reports a constant.
- *
- * That is not cosmetic here: these numbers are written into
- * `ci.entity_merges.details`, which is the only record of what a merge moved
- * and the thing anyone reads when asking whether a merge did what it claimed. A
- * hardcoded 2 in that column is worse than no column.
- *
- * Nothing caught it, because the unit suite stubs `query` with a `jest.fn` that
- * returns a one-element array for anything containing `RETURNING 1` — a shape
- * the real driver never produces. `ObjectMergeService.integration.spec.ts` is
- * where these counts are now checked against rows.
- *
- * Wrapping as `WITH … AS (UPDATE … RETURNING 1) SELECT COUNT(*) FROM …` makes
- * the outer command a SELECT, which is the remedy `EstimateLocationStage`,
- * `GeocodeStage` and `PipelineRunService` all use for the same trap.
- */
-async function countAffected(em: EntityManager, sql: string, params: unknown[]): Promise<number> {
-  const [row] = await em.query<Array<{ count: number | string }>>(sql, params);
-
-  return Number(row?.count ?? 0);
 }
 
 /** The earliest non-null date, or null when there is none. */

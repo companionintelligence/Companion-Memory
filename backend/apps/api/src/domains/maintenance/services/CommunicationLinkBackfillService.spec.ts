@@ -49,11 +49,7 @@ function makeDataSource(rows: FakeRow[]) {
     return [];
   });
 
-  // The service wraps each page's UPDATE in dataSource.transaction(); route the
-  // entity-manager's query() back to the same mock so SET LOCAL + UPDATE land here.
-  const transaction = jest.fn(async (cb: (em: { query: typeof query }) => Promise<unknown>) => cb({ query }));
-
-  return { dataSource: { query, transaction }, updates, query };
+  return { dataSource: { query }, updates, query };
 }
 
 function makeIdentifierService(map: Record<string, string>) {
@@ -260,14 +256,11 @@ describe('CommunicationLinkBackfillService.backfill', () => {
       return [];
     });
 
-    const transaction = jest.fn(async (cb: (em: { query: typeof query }) => Promise<unknown>) =>
-      cb({ query }),
-    );
     const ids = makeIdentifierService({ 'email:sender@example.com': FROM_ENTITY });
     const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
     const service = new CommunicationLinkBackfillService(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { query, transaction } as any,
+      { query } as any,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ids as any,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
