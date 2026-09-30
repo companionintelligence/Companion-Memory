@@ -65,6 +65,10 @@ export class UpdatePersonInput {
    * Reconciles this person's email/phone identifiers against the list: adds,
    * relabels, and DROPS what is missing. Omit to leave contact methods
    * untouched; send an empty list to clear them.
+   *
+   * A value another person already holds fails the whole update (CONFLICT)
+   * before anything is written, the other fields included: the fix is a merge,
+   * not a re-point.
    */
   @Field(() => [PersonContactInput], { nullable: true })
   contacts?: PersonContactInput[];
