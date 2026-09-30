@@ -14,6 +14,7 @@ import {
 } from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
+import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { shiftLocalDate } from '../../engine/computePlacement';
 import { PLANNING_PREFS_DEFAULTS } from '../../entities/PlanningPrefsEntity';
@@ -44,8 +45,13 @@ import { TaskService } from '../TaskService';
  * Opt-in: set `PLANNING_TEST_DATABASE_URL` to a database with the migrations
  * applied (see TaskService.tenancy.integration.test.ts for the setup).
  */
-const DATABASE_URL = process.env.PLANNING_TEST_DATABASE_URL;
-const describeWithDb = DATABASE_URL ? describe : describe.skip;
+const DATABASE_ENV = { urlEnvVar: 'PLANNING_TEST_DATABASE_URL' };
+const availability = databaseAvailability(DATABASE_ENV);
+const describeWithDb = availability.available ? describe : describe.skip;
+
+if (!availability.available) {
+  console.warn(`[planning/PlannedBlockService.gapSolver] SKIPPED — ${availability.reason}`);
+}
 
 describeWithDb('PlannedBlockService — the gap solver over real calendar rows (integration)', () => {
   let dataSource: DataSource;
@@ -97,7 +103,7 @@ describeWithDb('PlannedBlockService — the gap solver over real calendar rows (
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...dataSourceConnection(DATABASE_ENV),
       // EventBaseEntity is a @ChildEntity of the ci.entities STI tree, so its
       // root has to be mapped alongside it; UserEntity because EventEntity.user
       // and PlanningTimeService both resolve against it.

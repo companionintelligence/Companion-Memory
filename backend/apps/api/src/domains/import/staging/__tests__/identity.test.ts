@@ -1,7 +1,11 @@
 import type { Entity, Item } from '../../datasources/timeline';
 import {
+  CONTACT_IDENTIFIER_KEYS,
+  CONTACT_NAMES_KEY,
+  contactIdentifiers,
   entityIdentityKey,
   entityKey,
+  FAX_ATTRIBUTE_NAME,
   hasContactIdentity,
   hashItem,
   isOrganizationalAddress,
@@ -14,6 +18,7 @@ import {
   normalizeHandle,
   ORGANIZATIONAL_STAGED_TYPE,
   resolveEntityType,
+  withContactIdentifiers,
 } from '../identity';
 
 /**
@@ -384,6 +389,128 @@ describe('isOrganizationalAddress', () => {
 
   it('is false for a value with no @ at all', () => {
     expect(isOrganizationalAddress('not-an-email')).toBe(false);
+  });
+});
+
+describe('contactIdentifiers — every method a contact states as its own', () => {
+  // Invented: the 555-01XX fiction range, and `.example` mail domains.
+  const card = (attributes: Entity['attributes'], type = 'contact'): Entity => ({
+    name: 'Ada Quill',
+    type,
+    attributes,
+  });
+
+  it('keeps every email and phone, not just the one handle the natural key takes', () => {
+    // Digits sort before letters: the key is the phone, and before this the
+    // email was never indexed at all.
+    const entity = card([
+      { name: 'phone', value: '(202) 555-0142', identity: true },
+      { name: 'phone', value: '+1 212 555 0199', identity: true },
+      { name: 'email', value: 'Ada.Quill@Example.com', identity: true },
+    ]);
+
+    expect(entityIdentityKey(entity)).toBe('2025550142');
+    expect(contactIdentifiers(entity)).toEqual({
+      emails: ['ada.quill@example.com'],
+      phones: ['2025550142', '2125550199'],
+    });
+  });
+
+  it('leaves out a fax, an extension number, a role inbox and a value that is not a number', () => {
+    const entity = card([
+      { name: 'phone', value: '(212) 555-0110;229', identity: true },
+      { name: 'phone', value: '(212) 555-0110 x12', identity: true },
+      { name: FAX_ATTRIBUTE_NAME, value: '(212) 555-0118', identity: true },
+      { name: 'phone', value: 'Office: 212 555 0111', identity: true },
+      { name: 'email', value: 'info@quill-legal.example', identity: true },
+      { name: 'email', value: 'ada@quill-legal.example', identity: true },
+    ]);
+
+    expect(contactIdentifiers(entity)).toEqual({ emails: ['ada@quill-legal.example'], phones: [] });
+    // Every one of them still counts toward the natural key, which must never
+    // move — here the "Office:" value's digits sort smallest.
+    expect(entityIdentityKey(entity)).toBe('2125550111');
+  });
+
+  it('reads URI and display forms the way the identity index does', () => {
+    const entity = card([
+      { name: 'phone', value: 'tel:+1-202-555-0142', identity: true },
+      { name: 'email', value: 'mailto:ada@example.com', identity: true },
+      { name: 'email', value: 'Ada Quill <ADA@example.com>', identity: true },
+    ]);
+
+    expect(contactIdentifiers(entity)).toEqual({ emails: ['ada@example.com'], phones: ['2025550142'] });
+  });
+
+  it('is empty for anything that does not become a Person', () => {
+    const place = card([{ name: 'phone', value: '(202) 555-0142' }], 'place');
+
+    expect(contactIdentifiers(place)).toEqual({ emails: [], phones: [] });
+    expect(withContactIdentifiers(place)).toBe(place);
+  });
+
+  it('records both lists on a Person, empty ones included, and makes them accumulate', () => {
+    // An empty `phones` is information: this contact states no line of its
+    // own, so its handle (a fax, here) must not be indexed as one.
+    const faxOnly = card([{ name: FAX_ATTRIBUTE_NAME, value: '(212) 555-0118', identity: true }]);
+    const staged = withContactIdentifiers({ ...faxOnly, accumulate: ['Names'] });
+
+    expect(staged.metadata).toEqual({ emails: [], phones: [], [CONTACT_NAMES_KEY]: ['Ada Quill'] });
+    expect(staged.accumulate).toEqual(['Names', ...CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY]);
+    expect(entityIdentityKey(staged)).toBe(entityIdentityKey(faxOnly));
+  });
+
+  it('grows a repeat sighting by what it adds', () => {
+    const first = withContactIdentifiers(card([{ name: 'phone', value: '(202) 555-0142', identity: true }]));
+    const second = withContactIdentifiers(
+      card([
+        { name: 'phone', value: '202.555.0142', identity: true },
+        { name: 'email', value: 'ada@example.com', identity: true },
+      ]),
+    );
+
+    expect(mergeAccumulatedMetadata(first.metadata as Record<string, unknown>, second)).toEqual({
+      emails: ['ada@example.com'],
+      phones: ['2025550142'],
+      [CONTACT_NAMES_KEY]: ['Ada Quill'],
+    });
+  });
+
+  it("records every sighting's name, so the push can see a row that is two people", () => {
+    // A household on one home line: #2795 keeps them together, and staging
+    // collapses them onto one row that only knows the first sighting's name.
+    const ana = withContactIdentifiers({
+      ...card([
+        { name: 'phone', value: '(415) 555-0100', identity: true },
+        { name: 'email', value: 'ana.ruiz@example.com', identity: true },
+      ]),
+      name: 'Ana Ruiz',
+    });
+    const luis = withContactIdentifiers({
+      ...card([
+        { name: 'phone', value: '(415) 555-0100', identity: true },
+        { name: 'email', value: 'luis.ruiz@example.org', identity: true },
+      ]),
+      name: 'Luis Ruiz',
+    });
+
+    expect(entityIdentityKey(ana)).toBe(entityIdentityKey(luis));
+    expect(mergeAccumulatedMetadata(ana.metadata as Record<string, unknown>, luis)).toMatchObject({
+      emails: ['ana.ruiz@example.com', 'luis.ruiz@example.org'],
+      [CONTACT_NAMES_KEY]: ['Ana Ruiz', 'Luis Ruiz'],
+    });
+  });
+
+  it('reads each value of a Google CSV cell that joins them with :::', () => {
+    const entity = card([
+      { name: 'email', value: 'ada@example.com ::: Ada.Q@Example.org', identity: true },
+      { name: 'phone', value: '+1 202-555-0142 ::: +1 202-555-0177', identity: true },
+    ]);
+
+    expect(contactIdentifiers(entity)).toEqual({
+      emails: ['ada@example.com', 'ada.q@example.org'],
+      phones: ['2025550142', '2025550177'],
+    });
   });
 });
 

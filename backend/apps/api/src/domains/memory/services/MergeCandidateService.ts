@@ -6,18 +6,27 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
+import {
+  EMAIL_EVIDENCE,
+  emailHoldReason,
+  holdEmailEvidence,
+  type EmailCheckReason,
+} from '../utils/emailIdentity';
 import { pickFullerName } from '../utils/personNameTokens';
 import {
   PHONE_CLAIM_E164_SQL,
   PHONE_EVIDENCE,
   PHONE_FACTS_CORPUS_SQL,
   PHONE_IDENTITY_SCORES,
+  PHONE_MAX_HOLDERS,
   PhoneHolders,
   applyPhoneVerdict,
+  carriedPhoneLines,
   extractPhoneFacts,
   isPlaceholderPersonName,
   phoneCorpusFacts,
   phoneFactsSqlObject,
+  revalidatePhoneEvidence,
   sharedPhoneLines,
   type PhoneClaimE164Row,
   type PhoneFacts,
@@ -124,9 +133,34 @@ export interface AutoMergeResult {
   skipped: number;
   /** Pairs whose live re-check failed and were rewritten to reviewable evidence. */
   demoted: number;
+  /**
+   * Pairs whose live re-check left NO evidence at all — nothing that weighs and
+   * no veto to reject — and whose pending row was therefore removed rather than
+   * shown as a reasonless "Proposed as the same person". See {@link MergeCandidateService.revalidatePhoneEvidence}.
+   */
+  retired: number;
   /** Candidate rows read. */
   considered: number;
 }
+
+export interface PhoneRevalidationOptions {
+  /** Wall-clock budget. The pass stops reading new pages once it is spent. */
+  budgetMs: number;
+  /** Keyset page size. Default {@link AUTO_MERGE_PAGE_SIZE}. */
+  pageSize?: number;
+}
+
+export interface PhoneRevalidationResult {
+  /** Pending rows carrying phone evidence that were read. */
+  considered: number;
+  /** Rows whose phone evidence partly stopped holding, rewritten to what still does. */
+  rewritten: number;
+  /** Rows left with no evidence at all, removed from the queue. */
+  retired: number;
+}
+
+/** The outcome of writing one re-checked row back. */
+type RecheckOutcome = 'rewritten' | 'retired' | 'failed';
 
 export function hasEmailEvidence(evidence: readonly MergeCandidateEvidence[]): boolean {
   return evidence.some((item) => item.kind === 'email');
@@ -315,6 +349,37 @@ const PROFILE_URL_VETOED = `(
             mc.evidence @> '[{"kind":"${PROFILE_URL_EVIDENCE.conflict}"}]'::jsonb
             OR mc.evidence @> '[{"kind":"${PROFILE_URL_EVIDENCE.partial}"}]'::jsonb)`;
 
+/**
+ * A shared-mailbox pair held for a human (`utils/emailIdentity.ts`): one side
+ * is the owner and the other's name contradicts theirs, or two contacts'
+ * names share nothing. Folding it would join two people on one card's say-so,
+ * so, like a profile veto, it blocks every fold and keeps the pair visible on
+ * the queue, labelled.
+ */
+const EMAIL_HELD = `mc.evidence @> '[{"kind":"${EMAIL_EVIDENCE.check}"}]'::jsonb`;
+
+/**
+ * The row carries any phone evidence item — a match, the reason one was held
+ * for review, or a country conflict. The population the review queue's phone
+ * re-check reads ({@link MergeCandidateService.revalidatePhoneEvidence}).
+ */
+const CARRIES_PHONE_EVIDENCE = `(
+            mc.evidence @> '[{"kind":"${PHONE_EVIDENCE.match}"}]'::jsonb
+            OR mc.evidence @> '[{"kind":"${PHONE_EVIDENCE.check}"}]'::jsonb
+            OR mc.evidence @> '[{"kind":"${PHONE_EVIDENCE.conflict}"}]'::jsonb)`;
+
+/**
+ * Evidence kinds that say "these are two people". A row whose live re-check
+ * leaves one of them and nothing that weighs stays on the queue at
+ * {@link DEMOTED_FLOOR_SCORE}, labelled, so the human can reject it and make
+ * the rejection sticky; a row left with nothing at all is retired.
+ */
+const VETO_EVIDENCE_KINDS: ReadonlySet<string> = new Set([
+  PROFILE_URL_EVIDENCE.conflict,
+  PROFILE_URL_EVIDENCE.partial,
+  PHONE_EVIDENCE.conflict,
+]);
+
 /** Which switchable tiers are on. Email is always on. */
 interface DeterministicTiers {
   profileUrl: boolean;
@@ -336,7 +401,7 @@ function sharesDeterministicIdentity(tiers: DeterministicTiers): string {
     ...(tiers.profileUrl ? [SHARES_EXACT_PROFILE_URL] : []),
   ];
 
-  return `((${clauses.map((clause) => `(${clause})`).join(' OR ')}) AND NOT ${PROFILE_URL_VETOED})`;
+  return `((${clauses.map((clause) => `(${clause})`).join(' OR ')}) AND NOT ${PROFILE_URL_VETOED} AND NOT (${EMAIL_HELD}))`;
 }
 
 /** Every deterministic tier, the phone and the profile URL included. */
@@ -410,10 +475,59 @@ interface DeterministicRow {
   via_phone: boolean | null;
 }
 
+/** One pending row as the review queue's phone re-check reads it. */
+interface RecheckRow {
+  merge_candidate_id: string;
+  entity_id_a: string;
+  entity_id_b: string;
+  score: number | string;
+  evidence: unknown;
+}
+
 /** The phone half of the drain's corpus state: loaded on first need, kept in step after every merge. */
 interface PhoneCorpus {
   region: PhoneRegion | null;
   holders: PhoneHolders;
+}
+
+/** The values two people BOTH hold. Either side missing means nothing is shared. */
+function sharedLines(
+  left: ReadonlySet<string> | undefined,
+  right: ReadonlySet<string> | undefined,
+): Set<string> {
+  if (left == null || right == null) {
+    return new Set();
+  }
+
+  return new Set([...left].filter((line) => right.has(line)));
+}
+
+/**
+ * The phone numbers two live people BOTH carry: each one's own record
+ * (`carriedPhoneLines` — the fields the adjudicator reads, less what the
+ * record itself refuses, a fax above all) plus the numbers each was observed
+ * with (`observed`, from `loadObservedPhoneClaims`, self claims excluded).
+ * Read with no region: this asks whether a number is on the record, not how
+ * good an identifier it is, so it needs nothing corpus-wide.
+ */
+function carriedByBoth(
+  a: LiveEndpoint,
+  b: LiveEndpoint,
+  observed: ReadonlyMap<string, ReadonlySet<string>>,
+): Set<string> {
+  const carried = (endpoint: LiveEndpoint): Set<string> => {
+    const lines = carriedPhoneLines(
+      extractPhoneFacts(endpoint.phoneProps, endpoint.name, endpoint.isSelf, null),
+    );
+
+    for (const line of observed.get(endpoint.id) ?? []) {
+      lines.add(line);
+    }
+
+    return lines;
+  };
+
+  return sharedLines(carried(a), carried(b));
 }
 
 interface CandidateRow {
@@ -533,13 +647,8 @@ export class MergeCandidateService {
     const pageSize = Math.max(1, options.pageSize ?? AUTO_MERGE_PAGE_SIZE);
     const deadline = Date.now() + Math.max(0, options.budgetMs);
     const manager = this.personRepository.manager;
-    const result: AutoMergeResult = { merged: 0, skipped: 0, demoted: 0, considered: 0 };
-
-    const [userRow]: Array<{ entity_id: string | null; timezone: string | null }> = await manager.query(
-      `SELECT entity_id, timezone FROM ci.users WHERE id = $1`,
-      [context.userId],
-    );
-    const owner = { selfEntityId: userRow?.entity_id ?? null, timezone: userRow?.timezone ?? null };
+    const result: AutoMergeResult = { merged: 0, skipped: 0, demoted: 0, retired: 0, considered: 0 };
+    const owner = await this.loadOwner(context);
 
     let cursor: { score: number; id: string } | null = null;
     /** Corpus-wide profile-URL holder counts. Loaded on first need; see "Corpus-wide counts". */
@@ -632,7 +741,7 @@ export class MergeCandidateService {
         }
 
         if (urlVerdict.kind === 'conflict' || urlVerdict.kind === 'partial') {
-          result[(await this.demote(context, row, null, urlVerdict)) ? 'demoted' : 'skipped'] += 1;
+          result[await this.demote(context, row, null, urlVerdict)] += 1;
           continue;
         }
 
@@ -660,7 +769,22 @@ export class MergeCandidateService {
           }
 
           if (!viaUrl && phoneVerdict?.kind !== 'exact') {
-            result[(await this.demote(context, row, phoneVerdict, urlVerdict)) ? 'demoted' : 'skipped'] += 1;
+            result[await this.demote(context, row, phoneVerdict, urlVerdict, { a, b })] += 1;
+            continue;
+          }
+        }
+
+        if (row.via_email === true) {
+          // The guards a shared mailbox needs, on the rows as they are now:
+          // never fold a differently named person into the owner, nor two
+          // contacts whose names share nothing.
+          const hold = emailHoldReason(
+            { name: a.name, isSelf: a.isSelf },
+            { name: b.name, isSelf: b.isSelf },
+          );
+
+          if (hold != null) {
+            result[await this.holdEmail(context, row, hold)] += 1;
             continue;
           }
         }
@@ -705,11 +829,293 @@ export class MergeCandidateService {
       }
     }
 
-    if (result.merged > 0 || result.demoted > 0) {
+    if (result.merged > 0 || result.demoted > 0 || result.retired > 0) {
       this.logger.log('Auto-merged deterministic people', { ...result });
     }
 
     return result;
+  }
+
+  /**
+   * Re-check the phone evidence of every pending pair on the review queue
+   * against the LIVE records, and take out whatever no longer holds.
+   *
+   * ── Why the queue needs this ─────────────────────────────────────────────
+   *
+   * The detector writes a pair's evidence once per scoring generation, never
+   * withdraws a pair, and is not re-run for a person whose record changes. The
+   * drain above re-checks only the pairs it is about to fold. So a review-tier
+   * phone pair ("Same phone number, but names differ") kept its evidence
+   * forever, however the two records changed underneath it — a re-import
+   * rewrites `properties` from that source's own card and drops what a merge
+   * folded in, a user edits a contact, a number becomes over-common or turns
+   * out to be the office fax. The card then asserted a shared number one of
+   * the two people did not carry.
+   *
+   * ── What "still holds" means ─────────────────────────────────────────────
+   *
+   * The card's claim, checked as a fact: BOTH people still carry the number —
+   * on their own record (the fields the phone adjudicator reads, minus a line
+   * the record files as its fax), or as a number they were observed with
+   * ({@link carriedByBoth}). NOT `ci.entity_identifiers`: it is unique per
+   * (owner, kind, value), so two people can never both hold a number there,
+   * and a check against it would call every genuinely shared number stale.
+   *
+   * Deliberately NOT a re-grade. Whether a number still carried by both is
+   * still GOOD evidence — since become over-common, or the owner's — needs
+   * the whole phone corpus, which costs a few hundred milliseconds to read at
+   * a real corpus's size; that stays with the detector's next sweep and with
+   * the drain, which reads the corpus anyway before it folds anything. This
+   * pass reads three small, indexed statements per page.
+   *
+   * `revalidatePhoneEvidence` (utils/phoneIdentity.ts) does the arithmetic and
+   * is subtractive — it removes numbers, never adds one or raises a score. A
+   * row whose evidence all holds is left exactly as it was: no write, no
+   * reorder under the reviewer. A row that lost some is rewritten; a row that
+   * lost everything is retired ({@link rewriteOrRetire}). Human decisions are
+   * never touched: every write is `WHERE status = 'pending'`.
+   *
+   * Keyset-paged on `merge_candidate_id` (a rewrite changes the score, so the
+   * review order is not stable under this pass) and bounded by `budgetMs`, like
+   * the drain.
+   *
+   * Never throws. It runs on the People page's read path, and a failed check
+   * must leave the queue exactly as it was rather than fail the page; what it
+   * managed before the failure is kept and counted.
+   */
+  async revalidatePhoneEvidence(
+    context: UserServiceContext,
+    options: PhoneRevalidationOptions,
+  ): Promise<PhoneRevalidationResult> {
+    const result: PhoneRevalidationResult = { considered: 0, rewritten: 0, retired: 0 };
+
+    try {
+      await this.recheckPhonePages(context, options, result);
+    } catch (err: unknown) {
+      this.logger.warn('Could not re-check phone evidence on the review queue; it is shown as stored', {
+        err,
+        ...result,
+      });
+    }
+
+    if (result.rewritten > 0 || result.retired > 0) {
+      this.logger.log('Re-checked phone evidence on the review queue', { ...result });
+    }
+
+    return result;
+  }
+
+  /** {@link revalidatePhoneEvidence}'s pages, counting into `result` as it goes. */
+  private async recheckPhonePages(
+    context: UserServiceContext,
+    options: PhoneRevalidationOptions,
+    result: PhoneRevalidationResult,
+  ): Promise<void> {
+    const pageSize = Math.max(1, options.pageSize ?? AUTO_MERGE_PAGE_SIZE);
+    const deadline = Date.now() + Math.max(0, options.budgetMs);
+    const manager = this.personRepository.manager;
+
+    let cursor: string | null = null;
+
+    while (Date.now() < deadline) {
+      const rows: RecheckRow[] = await manager.query(
+        `SELECT mc.merge_candidate_id, mc.entity_id_a, mc.entity_id_b, mc.score, mc.evidence
+           FROM ci.merge_candidates mc
+          WHERE mc.owner_user_id = $1
+            AND mc.entity_type = 'Person'
+            AND mc.status = 'pending'
+            AND ${CARRIES_PHONE_EVIDENCE}
+            AND ${LIVE_PAIR_PREDICATE}
+            AND ($2::uuid IS NULL OR mc.merge_candidate_id > $2::uuid)
+          ORDER BY mc.merge_candidate_id ASC
+          LIMIT $3`,
+        [context.userId, cursor, pageSize],
+      );
+
+      if (rows.length === 0) {
+        break;
+      }
+
+      cursor = rows[rows.length - 1].merge_candidate_id;
+      result.considered += rows.length;
+
+      const ids = rows.flatMap((row) => [row.entity_id_a, row.entity_id_b]);
+      const endpoints = await this.loadLiveEndpoints(context, ids, null);
+      const observed = await this.loadObservedPhoneClaims(context, ids);
+
+      for (const row of rows) {
+        const a = endpoints.get(row.entity_id_a);
+        const b = endpoints.get(row.entity_id_b);
+
+        if (a == null || b == null) {
+          // Merged away since the page was read; LIVE_PAIR_PREDICATE drops it.
+          continue;
+        }
+
+        const checked = revalidatePhoneEvidence(
+          { score: Number(row.score), evidence: parseEvidence(row.evidence) },
+          { carried: carriedByBoth(a, b, observed) },
+        );
+
+        if (!checked.changed) {
+          continue;
+        }
+
+        const outcome = await this.rewriteOrRetire(context, row.merge_candidate_id, checked);
+
+        if (outcome !== 'failed') {
+          result[outcome] += 1;
+        }
+      }
+    }
+  }
+
+  /**
+   * The phone values each of `entityIds` was OBSERVED with — claims written by
+   * the linkers when a message or an event resolved to them — minus the
+   * values the claim pass would refuse as over-common: held by more than
+   * `PHONE_MAX_HOLDERS` people (the claim pass's `MAX_GROUP_MEMBERS`; the
+   * detector's spec pins the two equal). Non-rejected claims only, as the
+   * claim pass reads them.
+   *
+   * SELF claims (`subject_type = 'person' AND role = 'self'`) are left out of
+   * each person's own set, and only there: they are a copy of the person's
+   * record, which {@link carriedByBoth} reads live instead —
+   * `enrich.person_self_claim` never retracts one, so a number a re-import
+   * dropped from the record would otherwise keep "holding" through its own
+   * stale copy. They still count as holders, as they do in the claim pass's cap.
+   *
+   * The holder count is taken over (value, entity) groups, not with
+   * `count(DISTINCT entity_id)`: see `DuplicateDetectStage.loadEvidence` on
+   * TimescaleDB's skip-scan planner and that aggregate.
+   */
+  private async loadObservedPhoneClaims(
+    context: UserServiceContext,
+    entityIds: string[],
+  ): Promise<Map<string, Set<string>>> {
+    const unique = [...new Set(entityIds)];
+    const byEntity = new Map<string, Set<string>>();
+
+    if (unique.length === 0) {
+      return byEntity;
+    }
+
+    const rows: Array<{ entity_id: string; value_normalized: string; holders: number | string }> =
+      await this.personRepository.manager.query(
+        `WITH mine AS MATERIALIZED (
+           SELECT c.entity_id, c.value_normalized
+             FROM ci.identifier_claims c
+            WHERE c.owner_user_id = $1
+              AND c.entity_id = ANY($2::uuid[])
+              AND c.kind = 'phone'
+              AND c.disposition IS DISTINCT FROM 'rejected'
+              AND NOT (c.subject_type = 'person' AND c.role = 'self')
+            GROUP BY c.entity_id, c.value_normalized
+         ),
+         held AS MATERIALIZED (
+           SELECT o.value_normalized, o.entity_id
+             FROM (SELECT DISTINCT value_normalized FROM mine) v
+             JOIN ci.identifier_claims o
+               ON o.owner_user_id = $1
+              AND o.kind = 'phone'
+              AND o.value_normalized = v.value_normalized
+            WHERE o.entity_id IS NOT NULL
+              AND o.disposition IS DISTINCT FROM 'rejected'
+            GROUP BY o.value_normalized, o.entity_id
+         )
+         SELECT m.entity_id, m.value_normalized, count(*)::int AS holders
+           FROM mine m
+           JOIN held h ON h.value_normalized = m.value_normalized
+          GROUP BY m.entity_id, m.value_normalized`,
+        [context.userId, unique],
+      );
+
+    for (const row of rows) {
+      if (Number(row.holders) > PHONE_MAX_HOLDERS) {
+        continue;
+      }
+
+      const lines = byEntity.get(row.entity_id) ?? new Set<string>();
+      lines.add(row.value_normalized);
+      byEntity.set(row.entity_id, lines);
+    }
+
+    return byEntity;
+  }
+
+  /**
+   * Write a re-checked row back, or retire it. Only ever a PENDING row: a
+   * human decision is never rewritten.
+   *
+   *  - anything left that weighs → rewritten with that score;
+   *  - only a veto left (a profile conflict or partial, a phone country
+   *    conflict) → kept at {@link DEMOTED_FLOOR_SCORE}, labelled, so the human
+   *    can reject it and make the rejection sticky;
+   *  - nothing left at all → DELETED. A pending row with no evidence renders
+   *    as "Proposed as the same person" with no reason, which is a claim the
+   *    records do not make. The detector re-proposes the pair if evidence
+   *    returns on a later sweep; nothing a human decided is lost.
+   *
+   * Never throws: a failed write leaves the row as it was, to be re-checked
+   * next time, and must not fail the People page that triggered the check.
+   */
+  private async rewriteOrRetire(
+    context: UserServiceContext,
+    mergeCandidateId: string,
+    rewritten: { score: number; evidence: Array<{ kind: string; value: string; score: number | null }> },
+  ): Promise<RecheckOutcome> {
+    const manager = this.personRepository.manager;
+    const weighs = rewritten.score > 0;
+    const vetoed = rewritten.evidence.some((item) => VETO_EVIDENCE_KINDS.has(item.kind));
+
+    try {
+      if (!weighs && !vetoed) {
+        await manager.query(
+          `DELETE FROM ci.merge_candidates
+            WHERE owner_user_id = $1
+              AND merge_candidate_id = $2
+              AND status = 'pending'`,
+          [context.userId, mergeCandidateId],
+        );
+
+        return 'retired';
+      }
+
+      await manager.query(
+        `UPDATE ci.merge_candidates
+            SET score = $3, evidence = $4::jsonb, updated_at = now()
+          WHERE owner_user_id = $1
+            AND merge_candidate_id = $2
+            AND status = 'pending'`,
+        [
+          context.userId,
+          mergeCandidateId,
+          weighs ? rewritten.score : DEMOTED_FLOOR_SCORE,
+          JSON.stringify(rewritten.evidence),
+        ],
+      );
+
+      return 'rewritten';
+    } catch (err: unknown) {
+      this.logger.warn('Could not write a re-checked merge candidate back; it stays as it was', {
+        err,
+        mergeCandidateId,
+      });
+
+      return 'failed';
+    }
+  }
+
+  /** `users.entity_id` and the time zone: who "self" is, and what region the phone rule may infer. */
+  private async loadOwner(
+    context: UserServiceContext,
+  ): Promise<{ selfEntityId: string | null; timezone: string | null }> {
+    const [userRow]: Array<{ entity_id: string | null; timezone: string | null }> =
+      await this.personRepository.manager.query(`SELECT entity_id, timezone FROM ci.users WHERE id = $1`, [
+        context.userId,
+      ]);
+
+    return { selfEntityId: userRow?.entity_id ?? null, timezone: userRow?.timezone ?? null };
   }
 
   /**
@@ -801,6 +1207,36 @@ export class MergeCandidateService {
   }
 
   /**
+   * Hold a shared-mailbox pair for review instead of folding it: its email
+   * item capped and an `email_check` marker added ({@link holdEmailEvidence}),
+   * which {@link EMAIL_HELD} keeps out of every later fold. Never throws, like
+   * {@link demote}.
+   */
+  private async holdEmail(
+    context: UserServiceContext,
+    row: DeterministicRow,
+    reason: EmailCheckReason,
+  ): Promise<'demoted' | 'skipped'> {
+    const stored = { score: Number(row.score), evidence: parseEvidence(row.evidence) };
+    const outcome = await this.rewriteOrRetire(
+      context,
+      row.merge_candidate_id,
+      holdEmailEvidence(stored, reason),
+    );
+
+    if (outcome === 'failed') {
+      return 'skipped';
+    }
+
+    this.logger.log('Held a shared-email pair for review instead of folding it', {
+      mergeCandidateId: row.merge_candidate_id,
+      reason,
+    });
+
+    return 'demoted';
+  }
+
+  /**
    * Rewrite a pending row's evidence under the LIVE verdicts, so a pair that
    * no longer qualifies becomes a visible review question instead of a
    * "deterministic" row that is hidden and never merged. The phone verdict,
@@ -809,48 +1245,81 @@ export class MergeCandidateService {
    * phone verdict leaves the stored phone items as they were. `status =
    * 'pending'` guards a concurrent human decision.
    *
+   * An `absent` phone verdict — the two records no longer share any number —
+   * is NOT handed to `applyPhoneVerdict`, which would keep the stored exact
+   * item, capped to 0.85 and marked `unadjudicated`: a "Same phone number"
+   * card for a number one side no longer carries. It goes through
+   * `revalidatePhoneEvidence` instead, which keeps the item only while both
+   * people still carry the number another way (an observed claim), held below
+   * the auto-merge tier, as the review queue's own re-check does
+   * ({@link revalidatePhoneEvidence}, {@link carriedByBoth}).
+   *
+   * Written back by {@link rewriteOrRetire}: a row left with nothing at all is
+   * retired rather than floored with empty evidence.
+   *
    * Never throws: a failed rewrite leaves the row as it was, to be re-checked
    * on the next run, and must not fail the People page that triggered the
-   * on-read fold. Returns whether the row was rewritten.
+   * on-read fold.
    */
   private async demote(
     context: UserServiceContext,
     row: DeterministicRow,
     phoneVerdict: PhoneVerdict | null,
     urlVerdict: ProfileVerdict,
-  ): Promise<boolean> {
+    live: { a: LiveEndpoint; b: LiveEndpoint } | null = null,
+  ): Promise<'demoted' | 'retired' | 'skipped'> {
     const stored = { score: Number(row.score), evidence: parseEvidence(row.evidence) };
-    const rewritten = applyProfileVerdict(
-      phoneVerdict == null ? stored : applyPhoneVerdict(stored, phoneVerdict),
-      urlVerdict,
-    );
-    const score = rewritten.score > 0 ? rewritten.score : DEMOTED_FLOOR_SCORE;
+    let phoneChecked: { score: number; evidence: MergeCandidateEvidence[] } = stored;
 
-    try {
-      await this.personRepository.manager.query(
-        `UPDATE ci.merge_candidates
-            SET score = $3, evidence = $4::jsonb, updated_at = now()
-          WHERE owner_user_id = $1
-            AND merge_candidate_id = $2
-            AND status = 'pending'`,
-        [context.userId, row.merge_candidate_id, score, JSON.stringify(rewritten.evidence)],
-      );
-    } catch (err: unknown) {
-      this.logger.warn('Could not demote a deterministic merge candidate; it stays as it was', {
-        err,
-        mergeCandidateId: row.merge_candidate_id,
+    if (phoneVerdict?.kind === 'absent' && live != null) {
+      let observed: Map<string, Set<string>>;
+
+      try {
+        observed = await this.loadObservedPhoneClaims(context, [live.a.id, live.b.id]);
+      } catch (err: unknown) {
+        this.logger.warn(
+          'Could not read claims to demote a deterministic merge candidate; it stays as it was',
+          {
+            err,
+            mergeCandidateId: row.merge_candidate_id,
+          },
+        );
+
+        return 'skipped';
+      }
+
+      phoneChecked = revalidatePhoneEvidence(stored, {
+        carried: carriedByBoth(live.a, live.b, observed),
+        capUnadjudicated: true,
       });
-
-      return false;
+    } else if (phoneVerdict != null) {
+      phoneChecked = applyPhoneVerdict(stored, phoneVerdict);
     }
 
-    this.logger.log('Demoted a deterministic merge candidate after a live re-check', {
-      mergeCandidateId: row.merge_candidate_id,
-      verdict:
-        urlVerdict.kind === 'absent' && phoneVerdict != null ? `phone:${phoneVerdict.kind}` : urlVerdict.kind,
-    });
+    const outcome = await this.rewriteOrRetire(
+      context,
+      row.merge_candidate_id,
+      applyProfileVerdict(phoneChecked, urlVerdict),
+    );
 
-    return true;
+    if (outcome === 'failed') {
+      return 'skipped';
+    }
+
+    this.logger.log(
+      outcome === 'retired'
+        ? 'Retired a deterministic merge candidate whose live re-check left no evidence'
+        : 'Demoted a deterministic merge candidate after a live re-check',
+      {
+        mergeCandidateId: row.merge_candidate_id,
+        verdict:
+          urlVerdict.kind === 'absent' && phoneVerdict != null
+            ? `phone:${phoneVerdict.kind}`
+            : urlVerdict.kind,
+      },
+    );
+
+    return outcome === 'retired' ? 'retired' : 'demoted';
   }
 
   /**

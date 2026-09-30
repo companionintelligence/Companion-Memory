@@ -282,6 +282,26 @@ describe('PersonMergeService', () => {
     expect(folded.phones).toEqual(['2025550142', '2079460958']);
   });
 
+  it("keeps the source's Faxes, so its office fax never reaches the target as a line", async () => {
+    // The source's `phones` key can BE its fax (a vCard keys on its smallest
+    // handle) and is unioned above; target-wins on `Faxes` would then leave
+    // the target carrying the fax as an ordinary number.
+    const harness = makeHarness([
+      personRow(TARGET, { name: 'Dana', properties: { Phones: ['(202) 555-0142'], phones: ['2025550142'] } }),
+      personRow(SOURCE_A, {
+        name: 'Dana Q',
+        properties: { Faxes: ['(212) 555-0118', '212.555.0118'], phones: ['2125550118'] },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    expect(folded.Faxes).toEqual(['(212) 555-0118']);
+    expect(folded.phones).toEqual(['2025550142', '2125550118']);
+  });
+
   it("never lets a source's is_self flag leak onto a non-self target", async () => {
     // SOURCE_A is a floating self-flagged stub (NOT the row users.entity_id
     // points at, so the self-source guard does not reject it).

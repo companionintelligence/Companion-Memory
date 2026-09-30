@@ -138,7 +138,9 @@ export {
 export {
   type IdentifierKind,
   type PersonNameParts,
+  PHONE_EXTENSION_PATTERN,
   classifyParticipant,
+  hasPhoneExtension,
   normalizeEmail,
   normalizeIdentifier,
   normalizeName,
