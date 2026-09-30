@@ -8,7 +8,11 @@ import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
 import { UserEntity, UserService } from '@ci/domains/user';
 
-import { databaseAvailability, resolveConnection } from '../../__tests__/support/databaseConnection';
+import {
+  databaseAvailability,
+  dataSourceConnection,
+  resolveConnection,
+} from '../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../__tests__/support/schemaLock';
 import { ApiKeyEntity } from '../entities/ApiKeyEntity';
 import { ApiKeyService } from '../services/ApiKeyService';
@@ -30,7 +34,7 @@ import { ApiKeyStrategy } from '../services/ApiKeyStrategy';
  *
  * Needs a database with the migrations applied: `AUTH_TEST_DATABASE_URL`, else
  * `DATABASE_URL`, else `.env`'s `DATABASE_*` values. `databaseAvailability()`
- * decides whether that means run, skip or fail — see the table in its header.
+ * decides whether that means run, skip or fail.
  *
  *   AUTH_TEST_DATABASE_URL=postgres://companion:pw@localhost:5432/companion \
  *     yarn workspace @ci/be-api test src/domains/auth/__tests__/CreateTestUserScript.integration.test.ts
@@ -47,8 +51,11 @@ import { ApiKeyStrategy } from '../services/ApiKeyStrategy';
  * under a user it creates and removes itself, like the other house-pattern specs.
  */
 
-const ENV = { urlEnvVar: 'AUTH_TEST_DATABASE_URL', probeTimeoutEnvVar: 'AUTH_TEST_PROBE_TIMEOUT_MS' };
-const availability = databaseAvailability(ENV);
+const DATABASE_ENV = {
+  urlEnvVar: 'AUTH_TEST_DATABASE_URL',
+  probeTimeoutEnvVar: 'AUTH_TEST_PROBE_TIMEOUT_MS',
+};
+const availability = databaseAvailability(DATABASE_ENV);
 const describeWithDb = availability.available ? describe : describe.skip;
 
 if (!availability.available) {
@@ -88,23 +95,9 @@ describeWithDb('create-test-user.ts — the printed credentials, against the rea
   const apiRoot = path.resolve(__dirname, '../../../../');
 
   beforeAll(async () => {
-    const connection = resolveConnection(ENV);
-
-    if (connection == null) {
-      throw new Error('databaseAvailability passed but no connection resolved');
-    }
-
     dataSource = new DataSource({
       type: 'postgres',
-      ...(connection.url != null
-        ? { url: connection.url }
-        : {
-            host: connection.host,
-            port: connection.port,
-            username: connection.username,
-            password: connection.password,
-            database: connection.database,
-          }),
+      ...dataSourceConnection(DATABASE_ENV),
       entities: [UserEntity, ApiKeyEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
@@ -123,6 +116,12 @@ describeWithDb('create-test-user.ts — the printed credentials, against the rea
     // script tries to load (dotenv never overrides an already-set variable).
     // NODE_CONFIG carries the database name, which has no variable of its own —
     // see the header.
+    const connection = resolveConnection(DATABASE_ENV);
+
+    if (connection == null) {
+      throw new Error('databaseAvailability passed but no connection resolved');
+    }
+
     const stdout = execFileSync('yarn', ['run', 'exec', '--', 'scripts/create-test-user.ts'], {
       cwd: apiRoot,
       encoding: 'utf8',

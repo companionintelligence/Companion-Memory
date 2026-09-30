@@ -54,10 +54,23 @@ import { UpdatePersonInput } from '../types/UpdatePersonInput';
 import { UpdatePersonPayload } from '../types/UpdatePersonPayload';
 import { memoryRelToGql } from '../utils/lifeGraphRelationships';
 import { Paginator } from '../utils/Paginator';
-import { contactMethodsFromPersonProperties, mergePersonIdentifiers } from '../utils/personContactMethods';
+import {
+  contactMethodsFromPersonProperties,
+  contactsToReconcile,
+  mergePersonIdentifiers,
+} from '../utils/personContactMethods';
 
 /** How long the review-queue query may spend folding deterministic pairs before it answers. */
 const ON_READ_FOLD_BUDGET_MS = 5_000;
+
+/**
+ * How long the review-queue query may spend re-checking stored phone evidence
+ * against the live records (`MergeCandidateService.revalidatePhoneEvidence`).
+ * Three small indexed statements per 100 pending phone pairs and no corpus
+ * read — about 25 ms for 200 pairs over 17k people, measured 2026-09-29. The
+ * budget bounds a pathological queue, not the ordinary one.
+ */
+const ON_READ_PHONE_RECHECK_BUDGET_MS = 3_000;
 
 /** Map the structured input fields onto the established properties JSONB keys. */
 function structuredPropertiesPatch(
@@ -347,16 +360,24 @@ export class PersonResolver {
         return { success: false };
       }
 
+      // The form re-submits every contact it was seeded with, property-only
+      // ones included. Only what the user asserted reaches the index: see
+      // contactsToReconcile.
+      const indexed = await this.entityIdentifierService.listForEntities(serviceContext.userId, [id]);
+
       const { conflicts } = await this.entityIdentifierService.replaceForEntity(
         serviceContext.userId,
         id,
         ['email', 'phone'],
-        input.contacts.map((contact) => ({
-          kind: parseContactKind(contact.kind),
-          value: contact.value,
-          label: contact.label,
-          isPrimary: contact.isPrimary,
-        })),
+        contactsToReconcile(
+          input.contacts.map((contact) => ({
+            kind: parseContactKind(contact.kind),
+            value: contact.value,
+            label: contact.label,
+            isPrimary: contact.isPrimary,
+          })),
+          { indexed: indexed.get(id) ?? [], stated: contactMethodsFromPersonProperties(owned) },
+        ),
       );
 
       this.personIdentifiersLoader.clear(serviceContext, id);
@@ -680,6 +701,19 @@ export class PersonResolver {
         includeProfileUrl,
         includePhone,
       });
+
+      // A card that says "Same phone number" must be about a number both
+      // people's records still carry. The detector never withdraws a pair and
+      // is not re-run when a record changes, so stored phone evidence is
+      // re-checked against the live records before the queue is shown —
+      // rewritten to what still holds, retired when nothing does. Not gated
+      // by the kill switch: it merges nothing. Once per visit, on the first
+      // page: it covers the whole queue, and later pages would only repeat it.
+      if (after == null) {
+        await this.mergeCandidateService.revalidatePhoneEvidence(serviceContext, {
+          budgetMs: ON_READ_PHONE_RECHECK_BUDGET_MS,
+        });
+      }
     }
 
     const page = await this.mergeCandidateService.findCandidates(serviceContext, {

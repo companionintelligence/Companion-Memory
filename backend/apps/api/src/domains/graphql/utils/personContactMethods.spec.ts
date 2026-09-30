@@ -1,6 +1,10 @@
 import type { PersonIdentifierType } from '../types/PersonIdentifierType';
 
-import { contactMethodsFromPersonProperties, mergePersonIdentifiers } from './personContactMethods';
+import {
+  contactMethodsFromPersonProperties,
+  contactsToReconcile,
+  mergePersonIdentifiers,
+} from './personContactMethods';
 
 describe('contactMethodsFromPersonProperties', () => {
   it('reads the named email field that egress strips out of properties', () => {
@@ -84,5 +88,62 @@ describe('mergePersonIdentifiers', () => {
     expect(merged).toHaveLength(2);
     expect(merged[0]?.source).toBe('user');
     expect(merged[1]?.kind).toBe('phone');
+  });
+});
+
+describe('contactsToReconcile', () => {
+  // The edit form seeds from `identifiers` — index rows AND the property-only
+  // rows above — and a save re-submits the lot. Only what the user asserted
+  // may reach `replaceForEntity`.
+  const person = {
+    indexed: [{ kind: 'email', valueNormalized: 'priya@example.org' }],
+    stated: contactMethodsFromPersonProperties({
+      properties: {
+        emails: ['priya@example.org', { value: 'p.castellano@example.com', type: 'work' }],
+        // An office line another card lists too: on the record, deliberately
+        // off the index (migration 20260930022046, step 2b).
+        phones: ['4155550188'],
+      },
+    }),
+  };
+
+  it('drops a property-only row the user did not touch', () => {
+    const submitted = [
+      { kind: 'email' as const, value: 'priya@example.org', label: '' },
+      { kind: 'email' as const, value: 'p.castellano@example.com', label: 'work' },
+      { kind: 'phone' as const, value: '4155550188', label: '' },
+    ];
+
+    expect(contactsToReconcile(submitted, person)).toEqual([submitted[0]]);
+  });
+
+  it('matches on the join key, so a reformatted spelling is still untouched', () => {
+    const submitted = [{ kind: 'phone' as const, value: '+1 (415) 555-0188', label: null }];
+
+    expect(contactsToReconcile(submitted, person)).toEqual([]);
+  });
+
+  it('keeps a property-only row the user relabelled — that is an assertion', () => {
+    const relabelled = { kind: 'phone' as const, value: '4155550188', label: 'Office' };
+
+    expect(contactsToReconcile([relabelled], person)).toEqual([relabelled]);
+  });
+
+  it('keeps a row the user typed', () => {
+    const typed = { kind: 'email' as const, value: 'tomasz.okafor@example.org', label: '' };
+
+    expect(contactsToReconcile([typed], person)).toEqual([typed]);
+  });
+
+  it('keeps every row already indexed for the person, so a label or primary edit still lands', () => {
+    const indexed = { kind: 'email' as const, value: 'Priya@Example.org', label: 'home' };
+
+    expect(contactsToReconcile([indexed], person)).toEqual([indexed]);
+  });
+
+  it('passes an unusable value through for replaceForEntity to skip', () => {
+    const blank = { kind: 'phone' as const, value: 'n/a', label: '' };
+
+    expect(contactsToReconcile([blank], person)).toEqual([blank]);
   });
 });

@@ -187,4 +187,58 @@ describe('PersonSelfClaimStage', () => {
     expect(results.size).toBe(0);
     expect(statements).toHaveLength(0);
   });
+
+  /**
+   * The claim set is a copy of the record, so it must shrink with it: before
+   * this, a number a re-import dropped (or a merge moved) kept its self claim
+   * for good, and the duplicate detector kept proposing pairs on it.
+   */
+  describe('retracting what the record no longer states', () => {
+    function retraction(statements: Harness['statements']) {
+      return statements.find(({ sql }) => sql.includes('DELETE FROM ci.identifier_claims'));
+    }
+
+    it('deletes, in the same pass, every self claim of the slice that is not one it just wrote', async () => {
+      const id = personId(7);
+      const { stage, statements } = makeHarness([
+        { entity_id: id, name: 'Ada Quill', properties: { phones: ['2025550142'] } },
+      ]);
+
+      await stage.run(CONTEXT, [id]);
+
+      const retract = retraction(statements);
+      expect(retract).toBeDefined();
+      // Never a claim a human confirmed or rejected, nor one another producer
+      // wrote in the same person/self shape (a contact importer's).
+      expect(retract!.sql).toContain('ic.disposition IS NULL');
+      expect(retract!.sql).toContain('ic.stage = $8');
+      expect(retract!.params).toEqual([
+        USER,
+        'person',
+        'self',
+        [id],
+        [id, id],
+        ['name', 'phone'],
+        ['ada quill', '2025550142'],
+        'enrich.person_self_claim',
+      ]);
+    });
+
+    it('retracts every self claim of a record that now states nothing', async () => {
+      const id = personId(8);
+      const { stage, statements } = makeHarness([{ entity_id: id, name: null, properties: {} }]);
+
+      await stage.run(CONTEXT, [id]);
+
+      expect(retraction(statements)!.params.slice(3)).toEqual([[id], [], [], [], 'enrich.person_self_claim']);
+    });
+
+    it('touches no claim of a subject it could not read', async () => {
+      const { stage, statements } = makeHarness([]);
+
+      await stage.run(CONTEXT, [personId(9)]);
+
+      expect(retraction(statements)).toBeUndefined();
+    });
+  });
 });

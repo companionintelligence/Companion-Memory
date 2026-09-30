@@ -13,7 +13,7 @@ import {
 } from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
-import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
+import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { PLANNING_PREFS_DEFAULTS } from '../../entities/PlanningPrefsEntity';
 import { TaskEntity } from '../../entities/TaskEntity';
@@ -35,16 +35,19 @@ import { TaskService } from '../TaskService';
  * whether Postgres accepts the values at all. This suite writes real rows and
  * reads them back with SQL.
  *
- * Same database as the sibling suite (`PLANNING_TEST_DATABASE_URL`, else
+ * Same database as the sibling suites (`PLANNING_TEST_DATABASE_URL`, else
  * `DATABASE_URL`, else `.env`'s `DATABASE_*`); see
  * TaskService.tenancy.integration.test.ts's header for how to stand one up.
  */
-const ENV = { urlEnvVar: 'PLANNING_TEST_DATABASE_URL', probeTimeoutEnvVar: 'PLANNING_TEST_PROBE_TIMEOUT_MS' };
-const availability = databaseAvailability(ENV);
+const DATABASE_ENV = {
+  urlEnvVar: 'PLANNING_TEST_DATABASE_URL',
+  probeTimeoutEnvVar: 'PLANNING_TEST_PROBE_TIMEOUT_MS',
+};
+const availability = databaseAvailability(DATABASE_ENV);
 const describeWithDb = availability.available ? describe : describe.skip;
 
 if (!availability.available) {
-  console.warn(`[planning/PlannedBlockService.eventsExtension.integration] SKIPPED — ${availability.reason}`);
+  console.warn(`[planning/PlannedBlockService.eventsExtension] SKIPPED — ${availability.reason}`);
 }
 
 describeWithDb('ci.events M3 extension (integration)', () => {
@@ -102,23 +105,9 @@ describeWithDb('ci.events M3 extension (integration)', () => {
   }
 
   beforeAll(async () => {
-    const connection = resolveConnection(ENV);
-
-    if (connection == null) {
-      throw new Error('databaseAvailability passed but no connection resolved');
-    }
-
     dataSource = new DataSource({
       type: 'postgres',
-      ...(connection.url != null
-        ? { url: connection.url }
-        : {
-            host: connection.host,
-            port: connection.port,
-            username: connection.username,
-            password: connection.password,
-            database: connection.database,
-          }),
+      ...dataSourceConnection(DATABASE_ENV),
       entities: [TaskEntity, TaskPendingChangeEntity, EventEntity, BaseEntity, EventBaseEntity, UserEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },

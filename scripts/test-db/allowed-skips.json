@@ -1,0 +1,39 @@
+{
+  "skips": [
+    {
+      "file": "domains/pipeline/__tests__/realData.integration.spec.ts",
+      "reason": "Measures the pipeline against an operator's REAL imported archive, which an automated run must not assume; opt-in with PIPELINE_REAL_CORPUS=1 on a database that has one. Forgiven only while that opt-in has not been made.",
+      "when": { "envNotSet": { "name": "PIPELINE_REAL_CORPUS" } }
+    },
+    {
+      "file": "domains/files/services/__tests__/VipsService.test.ts",
+      "reason": "Decodes real image bytes through the libvips CLI; the suite gates itself on `vips --version`. Forgiven only on a machine where vips is not on PATH.",
+      "when": { "missingBinaries": ["vips"] }
+    },
+    {
+      "file": "domains/files/services/__tests__/MediaDimensionsService.test.ts",
+      "reason": "Reads real image dimensions through the libvips CLI; the suite gates itself on `vips --version`. Forgiven only on a machine where vips is not on PATH.",
+      "when": { "missingBinaries": ["vips"] }
+    },
+    {
+      "file": "domains/files/listeners/__tests__/FilePreviewGenerationListener.test.ts",
+      "reason": "Generates real previews through the libvips CLI; the suite gates itself on `vips --version`. Forgiven only on a machine where vips is not on PATH.",
+      "when": { "missingBinaries": ["vips"] }
+    },
+    {
+      "file": "domains/import/archive/__tests__/systemExtract.test.ts",
+      "reason": "Exercises the system extractors (`unzip` on Linux, `ditto` on macOS); the suite runs when either is available. Forgiven only where NEITHER is on PATH.",
+      "when": { "missingBinaries": ["unzip", "ditto"] }
+    },
+    {
+      "file": "domains/import/datasources/__tests__/hulu.test.ts",
+      "reason": "The PDF-level tests shell out to poppler's `pdftotext`, which the appliance image ships; the suite gates itself on `pdftotext -v`. Forgiven only where it is not on PATH.",
+      "when": { "missingBinaries": ["pdftotext"] }
+    },
+    {
+      "file": "domains/import/datasources/__tests__/disney_plus.test.ts",
+      "reason": "The PDF-level tests shell out to poppler's `pdftotext`, which the appliance image ships; the suite gates itself on `pdftotext -v`. Forgiven only where it is not on PATH.",
+      "when": { "missingBinaries": ["pdftotext"] }
+    }
+  ]
+}

@@ -5,7 +5,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import { UserEntity } from '@ci/domains/user';
 
-import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
+import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { BaseEntity } from '../../entities/BaseEntity';
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
@@ -30,30 +30,17 @@ import { GraphDeltaWriter } from '../GraphDeltaWriter';
  *
  * Needs a database with migrations applied: `MEMORY_TEST_DATABASE_URL`, else
  * `PLANNING_TEST_DATABASE_URL`, else `DATABASE_URL`, else `.env`'s `DATABASE_*`
- * values. `databaseAvailability()` decides whether that means run, skip or fail —
- * see the table in its header.
- *
- * The helper takes ONE suite variable before `DATABASE_URL`, and this suite has
- * always accepted two, so the choice between them is made here: the planning one
- * only when it is set and the memory one is not. That keeps the old
- * `MEMORY_ ?? PLANNING_` precedence, and keeps a skip naming this suite's own
- * variable when neither is set.
+ * values. `databaseAvailability()` decides whether that means run, skip or fail.
  */
-const isSet = (name: string) => (process.env[name] ?? '').trim().length > 0;
-const ENV = {
-  urlEnvVar:
-    !isSet('MEMORY_TEST_DATABASE_URL') && isSet('PLANNING_TEST_DATABASE_URL')
-      ? 'PLANNING_TEST_DATABASE_URL'
-      : 'MEMORY_TEST_DATABASE_URL',
+const DATABASE_ENV = {
+  urlEnvVar: ['MEMORY_TEST_DATABASE_URL', 'PLANNING_TEST_DATABASE_URL'],
   probeTimeoutEnvVar: 'MEMORY_TEST_PROBE_TIMEOUT_MS',
 };
-const availability = databaseAvailability(ENV);
+const availability = databaseAvailability(DATABASE_ENV);
 const describeWithDb = availability.available ? describe : describe.skip;
 
 if (!availability.available) {
-  console.warn(
-    `[memory/CalendarEventService.plannedBlockRestore.integration] SKIPPED — ${availability.reason}`,
-  );
+  console.warn(`[memory/CalendarEventService.plannedBlockRestore] SKIPPED — ${availability.reason}`);
 }
 
 describeWithDb('CalendarEventService — re-placing a tombstoned planned block (integration)', () => {
@@ -96,23 +83,9 @@ describeWithDb('CalendarEventService — re-placing a tombstoned planned block (
   }
 
   beforeAll(async () => {
-    const connection = resolveConnection(ENV);
-
-    if (connection == null) {
-      throw new Error('databaseAvailability passed but no connection resolved');
-    }
-
     dataSource = new DataSource({
       type: 'postgres',
-      ...(connection.url != null
-        ? { url: connection.url }
-        : {
-            host: connection.host,
-            port: connection.port,
-            username: connection.username,
-            password: connection.password,
-            database: connection.database,
-          }),
+      ...dataSourceConnection(DATABASE_ENV),
       entities: [EventEntity, BaseEntity, EventBaseEntity, UserEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
