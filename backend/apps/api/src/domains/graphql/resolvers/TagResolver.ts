@@ -1,4 +1,4 @@
-import { UseGuards } from '@nestjs/common';
+import { NotFoundException, UseGuards } from '@nestjs/common';
 import { Args, ID, Int, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
 
 import { Context, type RequestContext, type ServiceContext, toServiceContext } from '@ci/common/context';
@@ -508,11 +508,15 @@ export class TagResolver {
    * single entity and at most three rows (`ENTITY_CATEGORY_CAP`) — unlike
    * `untagEntities`, which fans out over an arbitrary list of entities and
    * labels, this cannot touch more than one entity's assignments per call.
+   *
+   * The entity must be one of the caller's own: anything else — someone
+   * else's, or nothing at all — is a 404, never a write.
    */
   @Mutation(() => [TagType])
   // Same delete-then-reinsert replace shape as setTagDirections/setTagCategories, this time over
-  // EntityCategoryEntity — TagService.setEntityCategories unconditionally deletes every existing
-  // (entityType, entityId) row before re-inserting only the ids passed.
+  // EntityCategoryEntity — TagService.setEntityCategories deletes the entity's existing rows (those
+  // pointing at the caller's own category tags) before re-inserting only the ids passed. The
+  // entity is owner-checked first: its id is caller-named and entity_categories has no FK to it.
   @GraphqlPrivacy({ access: 'delete', destructive: true })
   async setEntityCategories(
     @Context() context: RequestContext,
@@ -529,6 +533,12 @@ export class TagResolver {
     const categoryIds = input.categoryIds.map((gid) => GlobalUID.parse('tag', gid));
 
     const categories = await this.tagService.setEntityCategories(serviceContext, { type, id }, categoryIds);
+
+    // Not found and not yours read the same, so the refusal is no existence
+    // oracle for another user's ids.
+    if (categories == null) {
+      throw new NotFoundException(`Entity ${input.entityId} not found`);
+    }
 
     return categories.map((tag) => TagType.toType(tag));
   }
