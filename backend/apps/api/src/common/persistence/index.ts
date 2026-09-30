@@ -11,6 +11,7 @@ export type {
   SourceLedgerOptions,
   SourceTriple,
 } from './bulkUpsert';
+export { countAffected } from './countAffected';
 export { appendRecordSources } from './recordSources';
 export type { RecordSourceRow } from './recordSources';
 export {

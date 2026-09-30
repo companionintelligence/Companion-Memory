@@ -39,8 +39,15 @@ const ENTITY_TYPE = 'Person';
  * rule applied to each. Bump in the same commit that changes any of them —
  * including the shared rule in `domains/graph` — because a change makes
  * every stored claim provisional.
+ *
+ * 2 — self claims TRACK the record: a claim the record no longer states is
+ * retracted (see {@link PersonSelfClaimStage.retractStale}). And the record
+ * now states more: staging records every email and phone a contact card
+ * gives (`import/staging/identity.ts` `contactIdentifiers`), and migration
+ * 20260930022046 wrote them into existing rows' `emails` / `phones`, so every
+ * Person is re-read.
  */
-export const PERSON_SELF_CLAIM_GENERATION = 1;
+export const PERSON_SELF_CLAIM_GENERATION = 2;
 
 export function personSelfClaimStageVersion(versions: Record<string, StageVersion> = STAGE_VERSIONS): number {
   const declared = versions[ENRICH_PERSON_SELF_CLAIM_STAGE_ID];
@@ -211,6 +218,11 @@ export class PersonSelfClaimStage implements Stage {
     }
 
     await this.writeClaims(ctx.userId, claims);
+    await this.retractStale(
+      ctx.userId,
+      subjects.map((subject) => subject.entity_id),
+      claims,
+    );
 
     for (const subject of subjects) {
       results.set(subject.entity_id, {
@@ -227,6 +239,55 @@ export class PersonSelfClaimStage implements Stage {
     }
 
     return results;
+  }
+
+  /**
+   * Delete the self claims a subject's record no longer states.
+   *
+   * Upserting alone only ever ADDS: a number a re-import dropped from the
+   * record, or a merge moved, kept its claim for good, and the duplicate
+   * detector's claim pass kept proposing pairs on it — "Same phone number"
+   * over a number one of the two people no longer had. The claim set is a
+   * copy of the record, so it must shrink with it.
+   *
+   * Only this stage's rows — `stage` is its id, which it has written on every
+   * row since it first ran; `subject_type = 'person'`, `role = 'self'` alone is
+   * also the shape the claims table reserves for a contact importer's own
+   * assertions, and those are not this stage's to take back. Only for the
+   * subjects just read (live Persons of this slice), and never a claim a human
+   * disposed: a confirmation or a rejection is a decision about the
+   * identifier, and outlives the record that first stated it.
+   */
+  private async retractStale(userId: string, subjectIds: string[], kept: ClaimRow[]): Promise<void> {
+    if (subjectIds.length === 0) {
+      return;
+    }
+
+    await this.dataSource.query(
+      `DELETE FROM ci.identifier_claims ic
+        WHERE ic.owner_user_id = $1::uuid
+          AND ic.subject_type = $2
+          AND ic.role = $3
+          AND ic.subject_id = ANY($4::uuid[])
+          AND ic.stage = $8
+          AND ic.disposition IS NULL
+          AND NOT EXISTS (
+                SELECT 1
+                  FROM unnest($5::uuid[], $6::text[], $7::text[]) AS k(subject_id, kind, value_normalized)
+                 WHERE k.subject_id = ic.subject_id
+                   AND k.kind = ic.kind
+                   AND k.value_normalized = ic.value_normalized)`,
+      [
+        userId,
+        SUBJECT_TYPE,
+        ROLE,
+        subjectIds,
+        kept.map((claim) => claim.entityId),
+        kept.map((claim) => claim.kind),
+        kept.map((claim) => claim.valueNormalized),
+        this.id,
+      ],
+    );
   }
 
   private loadSubjects(userId: string, ids: string[]): Promise<SubjectRow[]> {

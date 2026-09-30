@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { entityIdentityKey } from '../../staging/identity';
+import { entityIdentityKey, legacyEntityIdentityKey } from '../../staging/identity';
 import { ContactListFileImporter } from '../contactlist';
 import type { DirEntry } from '../registry';
-import type { EntityAttribute, Graph, ImportParams } from '../timeline';
+import type { Entity, EntityAttribute, Graph, ImportParams } from '../timeline';
 
 import type { EmittedGraph } from './support/emitted';
 
@@ -16,6 +16,238 @@ function makeParams() {
     params: { timeframe: undefined, pipeline: { push: (g: Graph) => collected.push(g as EmittedGraph) } },
     collected,
   };
+}
+
+/**
+ * The header Google Contacts has exported since 2023, as far as its second
+ * phone (a real export goes on with addresses, relations, websites and custom
+ * fields). There is no `Name` column.
+ */
+const GOOGLE_HEADER = [
+  'First Name',
+  'Middle Name',
+  'Last Name',
+  'Phonetic First Name',
+  'Phonetic Middle Name',
+  'Phonetic Last Name',
+  'Name Prefix',
+  'Name Suffix',
+  'Nickname',
+  'File As',
+  'Organization Name',
+  'Organization Title',
+  'Organization Department',
+  'Birthday',
+  'Notes',
+  'Photo',
+  'Labels',
+  'E-mail 1 - Label',
+  'E-mail 1 - Value',
+  'E-mail 2 - Label',
+  'E-mail 2 - Value',
+  'Phone 1 - Label',
+  'Phone 1 - Value',
+  'Phone 2 - Label',
+  'Phone 2 - Value',
+];
+
+/** The older Google Contacts header, as far as its first phone. */
+const LEGACY_GOOGLE_HEADER = [
+  'Name',
+  'Given Name',
+  'Additional Name',
+  'Family Name',
+  'Yomi Name',
+  'Given Name Yomi',
+  'Additional Name Yomi',
+  'Family Name Yomi',
+  'Name Prefix',
+  'Name Suffix',
+  'Initials',
+  'Nickname',
+  'Short Name',
+  'Maiden Name',
+  'Birthday',
+  'Gender',
+  'Location',
+  'Billing Information',
+  'Directory Server',
+  'Mileage',
+  'Occupation',
+  'Hobby',
+  'Sensitivity',
+  'Priority',
+  'Subject',
+  'Notes',
+  'Language',
+  'Photo',
+  'Group Membership',
+  'E-mail 1 - Type',
+  'E-mail 1 - Value',
+  'Phone 1 - Type',
+  'Phone 1 - Value',
+];
+
+/** Every column of an Outlook desktop export ("Export to a file" → CSV), in order. */
+const OUTLOOK_HEADER = [
+  'Title',
+  'First Name',
+  'Middle Name',
+  'Last Name',
+  'Suffix',
+  'Company',
+  'Department',
+  'Job Title',
+  'Business Street',
+  'Business Street 2',
+  'Business Street 3',
+  'Business City',
+  'Business State',
+  'Business Postal Code',
+  'Business Country/Region',
+  'Home Street',
+  'Home Street 2',
+  'Home Street 3',
+  'Home City',
+  'Home State',
+  'Home Postal Code',
+  'Home Country/Region',
+  'Other Street',
+  'Other Street 2',
+  'Other Street 3',
+  'Other City',
+  'Other State',
+  'Other Postal Code',
+  'Other Country/Region',
+  "Assistant's Phone",
+  'Business Fax',
+  'Business Phone',
+  'Business Phone 2',
+  'Callback',
+  'Car Phone',
+  'Company Main Phone',
+  'Home Fax',
+  'Home Phone',
+  'Home Phone 2',
+  'ISDN',
+  'Mobile Phone',
+  'Other Fax',
+  'Other Phone',
+  'Pager',
+  'Primary Phone',
+  'Radio Phone',
+  'TTY/TDD Phone',
+  'Telex',
+  'Account',
+  'Anniversary',
+  "Assistant's Name",
+  'Billing Information',
+  'Birthday',
+  'Business Address PO Box',
+  'Categories',
+  'Children',
+  'Directory Server',
+  'E-mail Address',
+  'E-mail Type',
+  'E-mail Display Name',
+  'E-mail 2 Address',
+  'E-mail 2 Type',
+  'E-mail 2 Display Name',
+  'E-mail 3 Address',
+  'E-mail 3 Type',
+  'E-mail 3 Display Name',
+  'Gender',
+  'Government ID Number',
+  'Hobby',
+  'Home Address PO Box',
+  'Initials',
+  'Internet Free Busy',
+  'Keywords',
+  'Language',
+  'Location',
+  "Manager's Name",
+  'Mileage',
+  'Notes',
+  'Office Location',
+  'Organizational ID Number',
+  'Other Address PO Box',
+  'Priority',
+  'Private',
+  'Profession',
+  'Referred By',
+  'Sensitivity',
+  'Spouse',
+  'User 1',
+  'User 2',
+  'User 3',
+  'User 4',
+  'Web Page',
+];
+
+/**
+ * What Outlook writes into an empty contact's columns: a blank date is
+ * `0/0/00`, not an empty cell. The Outlook dialect reads `Birthday`, so every
+ * named Outlook row carries a birth_date attribute, and one with no handle is
+ * kept by the usefulness filter and keyed on its name.
+ */
+const OUTLOOK_BLANKS = {
+  Anniversary: '0/0/00',
+  Birthday: '0/0/00',
+  Gender: 'Unspecified',
+  Priority: 'Normal',
+  Private: 'False',
+  Sensitivity: 'Normal',
+};
+
+/**
+ * A CSV of `records` under `header`, blank wherever a record names no value.
+ * Throws on a column the header lacks, so a misspelt column cannot drop a value
+ * and leave a test passing on nothing.
+ */
+function csvOf(header: readonly string[], records: ReadonlyArray<Record<string, string>>): string {
+  for (const record of records) {
+    for (const column of Object.keys(record)) {
+      if (!header.includes(column)) {
+        throw new Error(`the header has no "${column}" column`);
+      }
+    }
+  }
+
+  return [header, ...records.map((record) => header.map((column) => record[column] ?? ''))]
+    .map((cells) => cells.join(','))
+    .join('\n');
+}
+
+/** Import `csv` as one file: the contacts it emitted and the reasons it dropped rows. */
+async function importCsv(csv: string): Promise<{ entities: Entity[]; dropped: string[] }> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-contactlist-'));
+  const file = path.join(dir, 'contacts.csv');
+  const entities: Entity[] = [];
+  const dropped: string[] = [];
+  const params: ImportParams = {
+    timeframe: undefined,
+    pipeline: {
+      push: (g) => {
+        if (g.entity) {
+          entities.push(g.entity);
+        }
+      },
+      drop: (reason) => dropped.push(reason),
+    },
+  };
+
+  try {
+    fs.writeFileSync(file, csv);
+    await new ContactListFileImporter().fileImport(undefined, { fullPath: file } as DirEntry, params);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  return { entities, dropped };
+}
+
+function phonesOf(entity: Entity): EntityAttribute[] {
+  return (entity.attributes ?? []).filter((attribute) => attribute.name === 'phone');
 }
 
 describe('Contact List datasource', () => {
@@ -236,5 +468,318 @@ describe('Contact List datasource', () => {
     expect(entities.map((e) => e.name)).toEqual(['Priya Natarajan', 'Tom Becker', 'Lena Ortiz']);
     expect(entities.map(entityIdentityKey)).toEqual(['priya@example.com', 'tom@example.com', '5550100142']);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('Google Contacts export since 2023: no Name column', () => {
+  /**
+   * The Google dialect reads the older export's `Name`, and this export has
+   * none: its name is `First Name`, `Middle Name` and `Last Name`, beside `Name
+   * Prefix` and `Name Suffix`. Every row imported nameless, and a nameless row
+   * needs two attributes to pass the usefulness filter, so a contact with one
+   * email or one phone and nothing else, like Ben and Castellanos below, was
+   * dropped as `insufficient_attributes`. The handles are the ones this export
+   * always keyed on, so no key moves here.
+   */
+  it('names each contact from its name parts, and keeps the one-handle contacts it used to drop', async () => {
+    const { entities, dropped } = await importCsv(
+      csvOf(GOOGLE_HEADER, [
+        {
+          'First Name': 'Ana',
+          'Middle Name': 'Maria',
+          'Last Name': 'Ruiz',
+          Labels: '* myContacts',
+          'E-mail 1 - Label': '* Home',
+          'E-mail 1 - Value': 'ana.ruiz@example.com',
+          'Phone 1 - Label': 'Mobile',
+          'Phone 1 - Value': '+1 555-010-0101',
+        },
+        {
+          'Name Prefix': 'Dr.',
+          'First Name': 'Ben',
+          'Last Name': 'Okafor',
+          'Name Suffix': 'Jr.',
+          'E-mail 1 - Label': '* Work',
+          'E-mail 1 - Value': 'ben.okafor@example.org',
+        },
+        { 'Last Name': 'Castellanos', 'Phone 1 - Label': 'Home', 'Phone 1 - Value': '555-010-0103' },
+      ]),
+    );
+
+    expect(dropped).toEqual([]);
+    expect(entities.map((e) => e.name)).toEqual(['Ana Maria Ruiz', 'Dr. Ben Okafor Jr.', 'Castellanos']);
+    expect(entities.map(entityIdentityKey)).toEqual(['5550100101', 'ben.okafor@example.org', '5550100103']);
+    expect(entities.map(legacyEntityIdentityKey)).toEqual(entities.map(entityIdentityKey));
+  });
+
+  /**
+   * A business's card has no personal name. Google shows it under its
+   * organization, as the older export's `Name` column and a vCard's `FN` do,
+   * so that is its name here too. A person's card is named after the person
+   * whatever organization it lists.
+   */
+  it('names a card with no personal name after its organization', async () => {
+    const { entities, dropped } = await importCsv(
+      csvOf(GOOGLE_HEADER, [
+        {
+          'Organization Name': 'Harbor Plumbing',
+          'Phone 1 - Label': 'Work',
+          'Phone 1 - Value': '555-010-0104',
+        },
+        {
+          'First Name': 'Ana',
+          'Last Name': 'Ruiz',
+          'Organization Name': 'Harbor Plumbing',
+          'Organization Title': 'Dispatcher',
+          'E-mail 1 - Value': 'ana.ruiz@example.com',
+        },
+      ]),
+    );
+
+    expect(dropped).toEqual([]);
+    expect(entities.map((e) => e.name)).toEqual(['Harbor Plumbing', 'Ana Ruiz']);
+  });
+
+  /**
+   * A name is also what lets the shared-line rule see that two cards on one
+   * number are two people. Nameless, Priya's and Tom's rows both keyed on the
+   * office line and staged as ONE entity, and with no `accumulate` in this
+   * parser, Tom vanished into it. Named, they key apart. Both keys move, so each
+   * keeps the office line as its legacy key, and the push moves the row minted
+   * under it onto one of them rather than minting both afresh (see
+   * push/legacyKeys.ts).
+   */
+  it('keys colleagues on one office line apart, keeping the line as their legacy key', async () => {
+    const { entities } = await importCsv(
+      csvOf(GOOGLE_HEADER, [
+        {
+          'First Name': 'Priya',
+          'Last Name': 'Natarajan',
+          'E-mail 1 - Value': 'priya@example.com',
+          'Phone 1 - Label': 'Work',
+          'Phone 1 - Value': '555-010-0100',
+        },
+        {
+          'First Name': 'Tom',
+          'Last Name': 'Becker',
+          'E-mail 1 - Value': 'tom@example.com',
+          'Phone 1 - Label': 'Work',
+          'Phone 1 - Value': '555-010-0100',
+        },
+      ]),
+    );
+
+    expect(entities.map(entityIdentityKey)).toEqual(['priya@example.com', 'tom@example.com']);
+    expect(entities.map(legacyEntityIdentityKey)).toEqual(['5550100100', '5550100100']);
+  });
+});
+
+describe('Google Contacts, older export: Name column', () => {
+  /**
+   * The older export states the display name outright, and `Name` wins over
+   * the parts as it always did: the parts are borrowed only by a mapping with
+   * no name at all.
+   */
+  it('still names contacts from Name and keys them as before', async () => {
+    const { entities } = await importCsv(
+      csvOf(LEGACY_GOOGLE_HEADER, [
+        {
+          Name: 'Annie Ruiz',
+          'Given Name': 'Ana',
+          'Family Name': 'Ruiz',
+          'Group Membership': '* myContacts',
+          'E-mail 1 - Type': '* Home',
+          'E-mail 1 - Value': 'ana.ruiz@example.com',
+          'Phone 1 - Type': 'Mobile',
+          'Phone 1 - Value': '555-010-0101',
+        },
+      ]),
+    );
+
+    expect(entities.map((e) => e.name)).toEqual(['Annie Ruiz']);
+    expect(entities[0].attributes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'email', value: 'ana.ruiz@example.com' })]),
+    );
+    expect(entities.map(entityIdentityKey)).toEqual(['5550100101']);
+  });
+});
+
+describe('Outlook desktop export', () => {
+  /**
+   * Why the Google dialect's name parts are borrowed rather than listed as its
+   * own patterns. This header has `First Name`, `Middle Name`, `Last Name`,
+   * `Birthday` and `Gender`: a Google dialect listing the name parts would map
+   * five of its fields, tie the Outlook dialect's five, win the tie as the
+   * dialect listed first, and read none of the email and phone columns. The
+   * Outlook dialect still reads no `Middle Name`, so the name is the "First
+   * Last" it always was.
+   */
+  it('reads the whole export through the Outlook dialect', async () => {
+    const { entities } = await importCsv(
+      csvOf(OUTLOOK_HEADER, [
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Priya',
+          'Middle Name': 'K',
+          'Last Name': 'Natarajan',
+          'E-mail Address': 'priya@example.com',
+          'E-mail Type': 'SMTP',
+          'E-mail Display Name': 'Priya Natarajan (priya@example.com)',
+          'Mobile Phone': '555-010-0120',
+        },
+      ]),
+    );
+
+    expect(entities.map((e) => e.name)).toEqual(['Priya Natarajan']);
+    expect(entities[0].attributes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'email', value: 'priya@example.com' }),
+        expect.objectContaining({ name: 'phone', value: '555-010-0120' }),
+      ]),
+    );
+    expect(entities.map(entityIdentityKey)).toEqual(['5550100120']);
+  });
+
+  /**
+   * Outlook has nineteen number columns. The ones read are those that reach
+   * the contact; contactlist.ts says why each other one is left out (an
+   * assistant's line, a fax, a pager, a TTY relay, an ISDN data line, a
+   * callback, a telex). The four read since 2026-09 are marked, which keeps
+   * them out of the legacy key.
+   */
+  it('reads every phone column that reaches the contact, and no other', async () => {
+    const { entities } = await importCsv(
+      csvOf(OUTLOOK_HEADER, [
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Lena',
+          'Last Name': 'Ortiz',
+          "Assistant's Phone": '555-010-0130',
+          'Business Fax': '555-010-0131',
+          'Business Phone': '555-010-0132',
+          'Business Phone 2': '555-010-0133',
+          Callback: '555-010-0134',
+          'Car Phone': '555-010-0135',
+          'Company Main Phone': '555-010-0136',
+          'Home Fax': '555-010-0137',
+          'Home Phone': '555-010-0138',
+          'Home Phone 2': '555-010-0139',
+          ISDN: '555-010-0140',
+          'Mobile Phone': '555-010-0141',
+          'Other Fax': '555-010-0142',
+          'Other Phone': '555-010-0143',
+          Pager: '555-010-0144',
+          'Primary Phone': '555-010-0145',
+          'Radio Phone': '555-010-0146',
+          'TTY/TDD Phone': '555-010-0147',
+          Telex: '555-010-0148',
+        },
+      ]),
+    );
+
+    expect(phonesOf(entities[0]).map((phone) => [phone.value, phone.newSinceLegacyKey === true])).toEqual([
+      ['555-010-0132', false], // Business Phone
+      ['555-010-0133', true], // Business Phone 2
+      ['555-010-0135', true], // Car Phone
+      ['555-010-0136', false], // Company Main Phone
+      ['555-010-0138', false], // Home Phone
+      ['555-010-0139', true], // Home Phone 2
+      ['555-010-0141', false], // Mobile Phone
+      ['555-010-0143', false], // Other Phone
+      ['555-010-0145', false], // Primary Phone
+      ['555-010-0146', true], // Radio Phone
+    ]);
+  });
+
+  /**
+   * The cost of reading new columns: a contact keys on its smallest handle, and
+   * digits sort before letters.
+   *  - Lena was keyed on her email. Her second business line now sorts first.
+   *  - Omar's new home line sorts after his mobile, so his key stays.
+   *  - Rosa's car phone sorts below her mobile, so her key moves as well.
+   * A moved contact keeps the key its existing row was minted under as its
+   * legacy key. `StagedWriter` records it, and the push moves that row onto the
+   * new key (push/legacyKeys.ts) instead of minting a second Person.
+   */
+  it('moves the key of a contact whose newly-read number sorts first, and keeps the old one as its legacy key', async () => {
+    const { entities } = await importCsv(
+      csvOf(OUTLOOK_HEADER, [
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Lena',
+          'Last Name': 'Ortiz',
+          'E-mail Address': 'lena@example.com',
+          'Business Phone 2': '555-010-0142',
+        },
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Omar',
+          'Last Name': 'Haddad',
+          'Mobile Phone': '555-010-0150',
+          'Home Phone 2': '555-010-0190',
+        },
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Rosa',
+          'Last Name': 'Lindqvist',
+          'Mobile Phone': '555-010-0170',
+          'Car Phone': '555-010-0160',
+        },
+      ]),
+    );
+
+    expect(entities.map(entityIdentityKey)).toEqual(['5550100142', '5550100150', '5550100160']);
+    expect(entities.map(legacyEntityIdentityKey)).toEqual(['lena@example.com', '5550100150', '5550100170']);
+  });
+
+  /**
+   * The case the re-key cannot reach. With no email and no number in a column
+   * read before, Kofi's row had no handle, but Outlook's `0/0/00` birthday kept
+   * it, keyed on his NAME. Now it keys on his radio phone. A legacy key is a
+   * handle, and Kofi had none, so a row already minted for him stays where it is
+   * and the next import mints a second Person beside it.
+   */
+  it('keys a contact whose only number is newly read on that number, with no legacy key', async () => {
+    const { entities } = await importCsv(
+      csvOf(OUTLOOK_HEADER, [
+        { ...OUTLOOK_BLANKS, 'First Name': 'Kofi', 'Last Name': 'Mensah', 'Radio Phone': '555-010-0180' },
+      ]),
+    );
+
+    expect(entities.map((e) => e.name)).toEqual(['Kofi Mensah']);
+    expect(entities.map(entityIdentityKey)).toEqual(['5550100180']);
+    expect(entities.map(legacyEntityIdentityKey)).toEqual([null]);
+  });
+
+  /**
+   * A newly-read column is evidence for the shared-line rule as well. Tom's
+   * card files Priya's direct line as his second business number, so the line
+   * is not hers alone and stops keying her: her key moves to her email and the
+   * line stays her legacy key. Tom's key does not move. His second business line
+   * was not read when his row was keyed, so his legacy key is his email, not a
+   * number that would point the re-key at Priya's row.
+   */
+  it("lets a newly-read column mark another card's line as shared", async () => {
+    const { entities } = await importCsv(
+      csvOf(OUTLOOK_HEADER, [
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Priya',
+          'Last Name': 'Natarajan',
+          'E-mail Address': 'priya@example.com',
+          'Business Phone': '555-010-0100',
+        },
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Tom',
+          'Last Name': 'Becker',
+          'E-mail Address': 'tom@example.com',
+          'Business Phone 2': '555-010-0100',
+        },
+      ]),
+    );
+
+    expect(entities.map(entityIdentityKey)).toEqual(['priya@example.com', 'tom@example.com']);
+    expect(entities.map(legacyEntityIdentityKey)).toEqual(['5550100100', 'tom@example.com']);
   });
 });

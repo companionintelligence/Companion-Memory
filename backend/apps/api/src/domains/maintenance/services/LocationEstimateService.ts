@@ -115,6 +115,12 @@ export class LocationEstimateService {
    * candidates (the `location_coordinates IS NULL` filter is relaxed to admit
    * them, and the candidate-side `<> 'estimated'` exclusion is dropped). Donors
    * stay real either way — an estimate is never seeded from another estimate.
+   *
+   * An event that names its own location (non-blank `location_name`) is never a
+   * candidate, forced or not: its coordinate is the geocoder's to resolve, and a
+   * neighbour's fix is not an approximation of that text — it pinned a flight
+   * "Bangkok BKK" to the user's home. Same rule as `enrich.estimate_location`
+   * v2, which records these rows as `skipped: has_location_name`.
    */
   private candidatePredicate(gapParam: string, forcedParam: string): string {
     const window = `e.start_time - make_interval(secs => ${gapParam}) AND e.start_time + make_interval(secs => ${gapParam})`;
@@ -124,6 +130,7 @@ export class LocationEstimateService {
             e.location_coordinates IS NULL
             OR (${forcedParam}::bool AND e.metadata->>'location_source' = 'estimated')
           )
+          AND (e.location_name IS NULL OR btrim(e.location_name) = '')
           AND e.is_deleted = false
           AND COALESCE(e.is_predicted, false) = false
           AND e.source_system = ANY($2)

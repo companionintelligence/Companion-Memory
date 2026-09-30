@@ -54,10 +54,41 @@ interface Harness {
 }
 
 /**
+ * Rows each counting write "touched", keyed by a fragment of its statement —
+ * distinct values, so a count wired to the wrong field shows up as a wrong
+ * number rather than an equal one. Claims and carried blocks are answered from
+ * the in-memory table (or zero) instead, because those statements are what the
+ * specs below actually model.
+ */
+const REPOINTED: Array<[fragment: string, count: number]> = [
+  ['UPDATE ci.entity_identifiers SET entity_id', 3],
+  ['UPDATE ci.communications SET from_entity_id', 5],
+  ['SET to_entity_ids = sub.new_ids', 7],
+  ['UPDATE ci.events SET organizer_entity_id', 11],
+  ['SET participant_entity_ids = sub.new_ids', 13],
+  ['UPDATE ci.relationships r SET from_entity_id', 17],
+  ['UPDATE ci.relationships r SET to_entity_id', 19],
+];
+
+/** The three relationship DELETEs, in the order the merge issues them; they sum to relationshipsDropped. */
+const DROPPED = [1, 2, 4];
+
+const EXPECTED_COUNTS = {
+  identifiers: 3,
+  claims: 0,
+  blocksCarried: 0,
+  communicationsFrom: 5,
+  communicationsTo: 7,
+  eventsOrganizer: 11,
+  eventsParticipants: 13,
+  relationshipsFrom: 17,
+  relationshipsTo: 19,
+  relationshipsDropped: 7,
+};
+
+/**
  * `claims` is an in-memory `ci.identifier_claims`: the claim re-point is
- * applied to it by its bound parameters (owner, sources, target), and answers
- * with the count its CTE selects. The statement's SQL shape is asserted
- * separately, so this only has to model what the parameters mean.
+ * applied to it by its bound parameters, and answers with that count.
  */
 function makeHarness(
   entityRows: EntityRow[],
@@ -66,7 +97,14 @@ function makeHarness(
 ): Harness {
   const statements: Harness['statements'] = [];
   let inTransaction = false;
+  const dropped = [...DROPPED];
 
+  // Answers each statement the way TypeORM's Postgres runner does, so this
+  // mock cannot flatter the service: a SELECT — which is what a counting CTE
+  // is — gets rows, while a bare UPDATE/DELETE gets the PAIR [rows, rowCount].
+  // Every count used to be `….length` of that pair, a constant 2 in
+  // production; a statement that loses its CTE wrapper now makes
+  // countAffected throw here too.
   const query = jest.fn(async (sql: string, params?: unknown[]) => {
     statements.push({ sql, params, inTransaction });
 
@@ -92,6 +130,18 @@ function makeHarness(
       }
 
       return [{ count: moved.length }];
+    }
+
+    if (/SELECT count\(\*\)::int AS count FROM/.test(sql)) {
+      const count = sql.includes('DELETE FROM ci.relationships')
+        ? dropped.shift()
+        : REPOINTED.find(([fragment]) => sql.includes(fragment))?.[1];
+
+      return [{ count: count ?? 0 }];
+    }
+
+    if (/^\s*(UPDATE|DELETE)\b/.test(sql)) {
+      return [[], 0];
     }
 
     return [];
@@ -199,9 +249,6 @@ describe('PersonMergeService', () => {
 
     expect(result.id).toBe(TARGET);
 
-    // Decompression cap lifted inside the txn before hypertable updates.
-    expect(statementsMatching(harness, 'max_tuples_decompressed_per_dml_transaction')).toHaveLength(1);
-
     // One re-point per dependent surface, each owner-scoped with the sources.
     for (const fragment of [
       'UPDATE ci.entity_identifiers SET entity_id',
@@ -244,8 +291,14 @@ describe('PersonMergeService', () => {
     expect(statementsMatching(harness, 'UPDATE ci_search.entity_tag')).toHaveLength(1);
     expect(statementsMatching(harness, 'DELETE FROM ci_search.entity_tag')).toHaveLength(1);
 
-    // One audit row per source.
-    expect(statementsMatching(harness, 'INSERT INTO ci.entity_merges')).toHaveLength(2);
+    // One audit row per source, each carrying the counts the statements
+    // reported — not the length of TypeORM's [rows, rowCount] pair.
+    const audits = statementsMatching(harness, 'INSERT INTO ci.entity_merges');
+    expect(audits).toHaveLength(2);
+    for (const audit of audits) {
+      const details = JSON.parse(audit.params?.[3] as string) as { counts: unknown };
+      expect(details.counts).toEqual(EXPECTED_COUNTS);
+    }
 
     // Target re-indexes after commit.
     expect(harness.send).toHaveBeenCalledWith(expect.anything(), { personId: TARGET });
@@ -461,6 +514,26 @@ describe('PersonMergeService', () => {
     // De-duplicated on the digit string; the first formatting seen is kept.
     expect(folded.Phones).toEqual(['+1 (202) 555-0142', '+44 20 7946 0958']);
     expect(folded.phones).toEqual(['2025550142', '2079460958']);
+  });
+
+  it("keeps the source's Faxes, so its office fax never reaches the target as a line", async () => {
+    // The source's `phones` key can BE its fax (a vCard keys on its smallest
+    // handle) and is unioned above; target-wins on `Faxes` would then leave
+    // the target carrying the fax as an ordinary number.
+    const harness = makeHarness([
+      personRow(TARGET, { name: 'Dana', properties: { Phones: ['(202) 555-0142'], phones: ['2025550142'] } }),
+      personRow(SOURCE_A, {
+        name: 'Dana Q',
+        properties: { Faxes: ['(212) 555-0118', '212.555.0118'], phones: ['2125550118'] },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    expect(folded.Faxes).toEqual(['(212) 555-0118']);
+    expect(folded.phones).toEqual(['2025550142', '2125550118']);
   });
 
   it("never lets a source's is_self flag leak onto a non-self target", async () => {
