@@ -1,10 +1,24 @@
-import { Field, ObjectType, ID } from '@nestjs/graphql';
+import { Field, ObjectType, ID, registerEnumType } from '@nestjs/graphql';
 
 import { type User } from '@ci/domains/user';
 
 import { GlobalUID } from './GlobalUID';
 import { Node } from './Node';
 import { PersonType } from './PersonType';
+
+/** Mirrors `TIME_FORMATS` in the user domain — `ci.users.time_format`. */
+export enum TimeFormatEnum {
+  auto = 'auto',
+  h12 = 'h12',
+  h23 = 'h23',
+}
+
+registerEnumType(TimeFormatEnum, {
+  name: 'TimeFormat',
+  description:
+    "How the apps write a time of day. 'auto' leaves it to the device's language settings; " +
+    "'h12' always writes 3:43 PM and 'h23' always writes 15:43.",
+});
 
 @ObjectType({ implements: () => [Node] })
 export class UserType implements Node {
@@ -26,6 +40,13 @@ export class UserType implements Node {
 
   @Field(() => String)
   timezone!: string;
+
+  /**
+   * The hour cycle every time of day is written in, on the web and in the phone apps. Stored on
+   * the account rather than per device so the choice follows the person.
+   */
+  @Field(() => TimeFormatEnum)
+  timeFormat!: TimeFormatEnum;
 
   @Field(() => Boolean)
   needsIdentityStep!: boolean;
@@ -76,6 +97,7 @@ export class UserType implements Node {
       email: user.email,
       onboarded: user.onboarded,
       timezone: user.timezone,
+      timeFormat: user.timeFormat as TimeFormatEnum,
       needsIdentityStep: user.name === user.email,
       isAdmin: user.role === 'admin',
     };
