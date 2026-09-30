@@ -347,7 +347,23 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
     expect(sql).toContain('entity.name');
     expect(sql).toContain("entity.entity_type = 'Event'");
     expect(sql).toContain('event.event_id');
-    expect(params).toEqual([USER]);
+    expect(params?.[0]).toBe(USER);
+  });
+
+  it('leaves temporal estimates out of the read, including ones the legacy reverse leg relabelled', async () => {
+    // The filtering is SQL, so what it does is proven against Postgres in
+    // KnownPlacesService.integration.spec.ts. This pins the tokens, which are
+    // copies of the estimator's (see LOCATION_SOURCE_ESTIMATED): a drift
+    // there turns the filter off, and nothing else would notice.
+    const { service, query } = makeService([]);
+
+    await service.buildKnownPlaces(CONTEXT);
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+
+    expect(sql).toContain("COALESCE(event.metadata->>'location_source', '') <> $2");
+    expect(sql).toContain("COALESCE(event.inference_sources->>'method', '') = $4");
+    expect(params).toEqual([USER, 'estimated', 'reverse_geocoded', 'temporal_nn']);
   });
 
   it('keeps the newest event titles so an unnamed cluster can be recognized', async () => {

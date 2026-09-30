@@ -112,6 +112,7 @@ interface LoadedRow {
   id: string;
   has_coordinates: boolean;
   location_source: string | null;
+  has_location_name: boolean;
   is_deleted: boolean | null;
   is_predicted: boolean | null;
 }
@@ -121,6 +122,7 @@ function loadedRow(n: number, overrides: Partial<LoadedRow> = {}): LoadedRow {
     id: eventId(n),
     has_coordinates: false,
     location_source: null,
+    has_location_name: false,
     is_deleted: false,
     is_predicted: false,
     ...overrides,
@@ -782,6 +784,93 @@ describe('EstimateLocationStage.run — it never overwrites a location the row a
     });
 
     expect((await h.stage.run(ctx, [eventId(1)])).get(eventId(1))?.outcome).toBe('done');
+  });
+});
+
+describe("EstimateLocationStage.run — an event that names its own location is the geocoder's (v2)", () => {
+  const ctx = { userId: USER };
+
+  it("SKIPS a named row with no coordinate instead of lending it a neighbour's", async () => {
+    // The v1 defect: a calendar event "Bangkok BKK" with no geocode yet was
+    // filled from the nearest GPS fix — the user's home — and promote.place then
+    // linked it to the home Location.
+    const h = makeStage([loadedRow(1, { has_location_name: true })]);
+
+    const results = await h.stage.run(ctx, [eventId(1)]);
+
+    expect(results.get(eventId(1))).toEqual({
+      outcome: 'skipped',
+      reason: 'has_location_name',
+      detail: { locationSource: null },
+    });
+    expect(h.update()).toBeUndefined();
+  });
+
+  it('SKIPS a named row that still carries a v1 estimate, and leaves the estimate to the migration', async () => {
+    // Re-estimating it would re-pin it; withdrawing it here would strand
+    // promote.place's link on a row that stage can no longer select. The
+    // detail says which of these rows still carry one.
+    const h = makeStage([
+      loadedRow(1, { has_location_name: true, has_coordinates: true, location_source: 'estimated' }),
+    ]);
+
+    const results = await h.stage.run(ctx, [eventId(1)]);
+
+    expect(results.get(eventId(1))).toMatchObject({
+      outcome: 'skipped',
+      reason: 'has_location_name',
+      detail: { locationSource: 'estimated' },
+    });
+    expect(h.update()).toBeUndefined();
+  });
+
+  it('keeps `has_own_location` as the reason when a named row also has a real coordinate', async () => {
+    const h = makeStage([
+      loadedRow(1, { has_location_name: true, has_coordinates: true, location_source: 'geocoded' }),
+    ]);
+
+    expect((await h.stage.run(ctx, [eventId(1)])).get(eventId(1))).toMatchObject({
+      outcome: 'skipped',
+      reason: 'has_own_location',
+    });
+  });
+
+  it('estimates only the unnamed rows of a mixed slice', async () => {
+    const h = makeStage([loadedRow(1), loadedRow(2, { has_location_name: true }), loadedRow(3)], {
+      filled: [filledRow(1), filledRow(3)],
+    });
+
+    const results = await h.stage.run(ctx, [eventId(1), eventId(2), eventId(3)]);
+
+    expect(results.get(eventId(1))?.outcome).toBe('done');
+    expect(results.get(eventId(2))?.reason).toBe('has_location_name');
+    expect(results.get(eventId(3))?.outcome).toBe('done');
+    // The named row never reaches the write.
+    expect((h.update()!.params as [string[]])[0]).toEqual([eventId(1), eventId(3)]);
+  });
+
+  it("tests the name with GEOCODE_SOURCE's own expression, in the load and again in the write", async () => {
+    const h = makeStage([loadedRow(1)]);
+
+    await h.stage.run(ctx, [eventId(1)]);
+
+    // The load decides; the write re-checks, so a name that lands between the
+    // two still wins — the same shape as the is_predicted guard.
+    expect(h.statements[0].sql).toMatch(
+      /\(e\.location_name IS NOT NULL AND btrim\(e\.location_name\) <> ''\) AS has_location_name/i,
+    );
+    expect(h.update()!.sql).toMatch(
+      /AND \(tgt\.location_name IS NULL OR btrim\(tgt\.location_name\) = ''\)/i,
+    );
+  });
+
+  it('is decided per row, not by the sweep — the predicate still offers named rows', async () => {
+    // A recorded skip is countable and a generation bump re-opens it; a
+    // filtered-out row is neither. eventLocationProducers.spec.ts refuses a
+    // `location_name IS NULL` test in any ci.events predicate for that reason.
+    const { stage } = makeStage();
+
+    expect(stage.source.predicate).not.toMatch(/location_name/i);
   });
 });
 

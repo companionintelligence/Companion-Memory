@@ -42,6 +42,8 @@ describe('WriteKnowledgeTool Qwen argument shapes', () => {
         ids.map((id) => nodes.get(id)).filter(Boolean),
       ),
       searchNodesByPrefix: jest.fn(async () => []),
+      // Both entities are new in this batch, so no edge between them exists yet.
+      findActiveRelationship: jest.fn(async () => null),
     };
 
     const tool = new WriteKnowledgeTool(graphEvents as never, graphQuery as never, makeLogger() as never);

@@ -8,7 +8,13 @@ import type { PendingAction } from '../../entities/PendingActionEntity';
 import { PendingActionConfirmService } from '../PendingActionConfirmService';
 
 function makeLogger() {
-  return { setContext: jest.fn(), debug: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as any;
+  return {
+    setContext: jest.fn(),
+    debug: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  } as any;
 }
 
 const FORGET_SCHEMA: IntentDefinition = {
@@ -92,7 +98,7 @@ describe('PendingActionConfirmService.confirm — the confirming principal is th
     );
   });
 
-  it('re-dispatches with the ROW\'s principal, so the ledger still names the app that asked', async () => {
+  it("re-dispatches with the ROW's principal, so the ledger still names the app that asked", async () => {
     // Two different questions, and the ledger asks both: `capability` records
     // what authority ran the call (the owner's, always, on this path), and
     // `principal` records who asked for it. Carried from the confirming caller
@@ -100,9 +106,7 @@ describe('PendingActionConfirmService.confirm — the confirming principal is th
     // sent it themselves — the attribution erased at the one moment it matters
     // most, since a confirmed action is by definition one that needed asking
     // about.
-    const { service, executeTool } = harness(
-      row({ principalName: 'app:ci-openclaw:ci-marketplace' }),
-    );
+    const { service, executeTool } = harness(row({ principalName: 'app:ci-openclaw:ci-marketplace' }));
 
     await service.confirm('user-1', 'pa-1', FULL_CAPABILITY, NOW);
 

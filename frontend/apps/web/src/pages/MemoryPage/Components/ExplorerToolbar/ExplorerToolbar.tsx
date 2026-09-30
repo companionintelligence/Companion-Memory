@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
@@ -691,6 +691,31 @@ function FilterDropArea() {
 }
 
 /**
+ * A boolean URL flag (located-only / semantic): whether it is on, a toggle
+ * for it, and — via `dimension` — why the current view cannot apply it, if it
+ * can't. Shared by the toolbar's toggle chips and the phone filter sheet's
+ * switches, so both read and write the flag the same way.
+ */
+export function useFilterToggle(param: string, dimension: FilterDimension) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const active = searchParams.get(param) === '1';
+  const reason = unsupportedReason(readMemoryView(searchParams.get('view')), dimension);
+
+  const toggle = () =>
+    setSearchParams((params) => {
+      if (active) {
+        params.delete(param);
+      } else {
+        params.set(param, '1');
+      }
+
+      return params;
+    });
+
+  return { active, reason, toggle };
+}
+
+/**
  * A boolean URL flag rendered as a toggle button (used for located-only /
  * semantic). `dimension` lets the control say when the current view cannot
  * apply the flag: it stays clickable — the flag is a property of the query, not
@@ -708,9 +733,7 @@ function ToggleChip({
   icon: React.ReactNode;
   dimension: FilterDimension;
 }) {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const active = searchParams.get(param) === '1';
-  const reason = unsupportedReason(readMemoryView(searchParams.get('view')), dimension);
+  const { active, reason, toggle } = useFilterToggle(param, dimension);
 
   const button = (
     <Button
@@ -718,17 +741,7 @@ function ToggleChip({
       variant={active ? 'secondary' : 'outline'}
       className={cn(reason && 'opacity-70')}
       aria-label={reason ? `${label} — not applied in this view. ${reason}` : undefined}
-      onClick={() =>
-        setSearchParams((params) => {
-          if (active) {
-            params.delete(param);
-          } else {
-            params.set(param, '1');
-          }
-
-          return params;
-        })
-      }
+      onClick={toggle}
     >
       {icon}
       <span className={cn('ml-1', reason && 'line-through')}>{label}</span>
@@ -748,8 +761,18 @@ function ToggleChip({
   );
 }
 
-/** Date-range picker bound to the `when` / `from` / `to` URL params. */
-function DateControl() {
+/**
+ * Date-range picker bound to the `when` / `from` / `to` URL params.
+ * `renderTrigger` swaps the button for the caller's own element (the phone
+ * filter sheet's row), given the applied range's label, or null for none; it
+ * becomes the popover trigger, so it must pass its props and ref on to a button.
+ * `modal` is for a caller that is itself modal (that sheet): only a modal
+ * popover can scroll its own content under the sheet's scroll lock.
+ */
+export function DateControl({
+  renderTrigger,
+  modal = false,
+}: { renderTrigger?: (value: string | null) => ReactElement; modal?: boolean } = {}) {
   const [{ dateFrom, dateTo, whenPreset }, { setDateRange, setDatePreset }] = useDropdown();
   const [open, setOpen] = useState(false);
   const [customMode, setCustomMode] = useState(
@@ -834,17 +857,19 @@ function DateControl() {
       ? 'custom'
       : null;
 
-  const triggerLabel = isRollingDatePreset(whenPreset)
+  const appliedLabel = isRollingDatePreset(whenPreset)
     ? datePresetLabel(whenPreset)
     : dateFrom || dateTo
       ? formatDateLabel(dateFrom, dateTo)
-      : 'When';
+      : null;
+  const triggerLabel = appliedLabel ?? 'When';
 
   const showCustomPicker = customMode || activePreset === 'custom';
 
   return (
     <Popover
       open={open}
+      modal={modal}
       onOpenChange={(next) => {
         setOpen(next);
 
@@ -856,13 +881,25 @@ function DateControl() {
       }}
     >
       <Popover.Trigger asChild>
-        <Button variant="outline" className="group">
-          <CalendarIcon className="mr-2 h-4 w-4 text-muted-foreground" />
-          {triggerLabel}
-          <ChevronDown className="ml-2 h-4 w-4 opacity-50 transition-transform group-data-[state=open]:rotate-180" />
-        </Button>
+        {renderTrigger ? (
+          renderTrigger(appliedLabel)
+        ) : (
+          <Button variant="outline" className="group">
+            <CalendarIcon className="mr-2 h-4 w-4 text-muted-foreground" />
+            {triggerLabel}
+            <ChevronDown className="ml-2 h-4 w-4 opacity-50 transition-transform group-data-[state=open]:rotate-180" />
+          </Button>
+        )}
       </Popover.Trigger>
-      <Popover.Content className="w-64 p-0" align="start">
+      <Popover.Content
+        className={cn(
+          'w-64 p-0',
+          // From a phone sheet row the calendar can outgrow the room beside
+          // the row: stay on screen and scroll instead.
+          renderTrigger && 'max-h-(--radix-popover-content-available-height) overflow-y-auto',
+        )}
+        align="start"
+      >
         <div className="grid grid-cols-2 gap-2 p-2">
           {WHEN_PRESET_GRID.map(({ value, label }) => {
             const selected = activePreset === value;
@@ -1011,14 +1048,29 @@ function DateControl() {
   );
 }
 
+/** What the phone filter sheet's Sort row needs to draw itself. */
+interface SortTriggerState {
+  /** The selected preset's label. */
+  label: string;
+  /** Whether the selection is something other than the list's default. */
+  active: boolean;
+  /** Why the current view ignores the sort, or null when it applies. */
+  reason: string | null;
+}
+
 /**
  * Sort preset selector bound to the `sortBy`/`sortOrder` URL params. Which
  * presets it offers depends on where it is: the everything browse on `/memory`
  * defaults to relevance and only offers Newest / Oldest inside a When filter
  * (see sortOptions). The graph has no result order to sort, so there the
  * control says so instead of accepting a choice that quietly does nothing.
+ *
+ * `renderTrigger` replaces the trigger (the phone filter sheet's row) and
+ * must return a `Select.Trigger`; the caller then shows `reason` itself.
  */
-function SortControl() {
+export function SortControl({
+  renderTrigger,
+}: { renderTrigger?: (state: SortTriggerState) => ReactElement } = {}) {
   const [{ sortBy, sortOrder }, { setSort }] = useDropdown();
   const [searchParams] = useSearchParams();
   const { pathname } = useLocation();
@@ -1036,13 +1088,22 @@ function SortControl() {
         setSort(option?.sortBy || undefined, option?.sortOrder || undefined);
       }}
     >
-      {/* Hug the selected label. A fixed width either clipped it or left a
-          gap that `justify-between` used to center the word between the icon
-          and the caret. */}
-      <Select.Trigger className={cn('w-fit shrink-0 justify-start text-left', reason && 'opacity-70')}>
-        <ArrowUpDown className="mr-2 h-4 w-4 text-muted-foreground" />
-        <Select.Value placeholder="Sort" />
-      </Select.Trigger>
+      {renderTrigger ? (
+        renderTrigger({
+          label: options.find((option) => option.value === currentSort)?.label ?? currentSort,
+          // The first preset is the list's own default (Default, or Relevance on /memory).
+          active: currentSort !== options[0]?.value,
+          reason,
+        })
+      ) : (
+        // Hug the selected label. A fixed width either clipped it or left a
+        // gap that `justify-between` used to center the word between the icon
+        // and the caret.
+        <Select.Trigger className={cn('w-fit shrink-0 justify-start text-left', reason && 'opacity-70')}>
+          <ArrowUpDown className="mr-2 h-4 w-4 text-muted-foreground" />
+          <Select.Value placeholder="Sort" />
+        </Select.Trigger>
+      )}
       <Select.Content>
         {options.map((option) => (
           <Select.Item key={option.value} value={option.value}>
@@ -1053,7 +1114,7 @@ function SortControl() {
     </Select>
   );
 
-  if (!reason) {
+  if (!reason || renderTrigger) {
     return select;
   }
 
@@ -1214,8 +1275,10 @@ function FilterCountLabel() {
 /**
  * "Save" — captures a name and persists the current query + selected
  * entity types + tags as a SavedSearch (shown on the Saved Searches page).
+ * `trigger` replaces the Save button (the phone filter sheet's "Save search");
+ * it becomes the dialog trigger, so it must pass its props and ref on.
  */
-function SaveSearchButton() {
+export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
   const [searchParams] = useSearchParams();
   const [{ selectedEntityTypes }] = useDropdown();
   const { toast } = useToast();
@@ -1289,10 +1352,12 @@ function SaveSearchButton() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
-        <Button>
-          <Save className="mr-2 h-4 w-4" />
-          Save
-        </Button>
+        {trigger ?? (
+          <Button>
+            <Save className="mr-2 h-4 w-4" />
+            Save
+          </Button>
+        )}
       </Dialog.Trigger>
       <Dialog.Content className="sm:max-w-[420px]">
         <Dialog.Header>

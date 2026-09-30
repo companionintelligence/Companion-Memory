@@ -13,6 +13,9 @@ const AutonomySection = lazy(() =>
   import('./sections/AutonomySection').then((m) => ({ default: m.AutonomySection })),
 );
 const ModelSection = lazy(() => import('./sections/ModelSection').then((m) => ({ default: m.ModelSection })));
+const OnDeviceModelSection = lazy(() =>
+  import('./sections/OnDeviceModelSection').then((m) => ({ default: m.OnDeviceModelSection })),
+);
 const LocationSection = lazy(() =>
   import('./sections/LocationSection').then((m) => ({ default: m.LocationSection })),
 );
@@ -44,6 +47,8 @@ function sectionElement(section: string): ReactNode {
       return <AutonomySection />;
     case 'model':
       return <ModelSection />;
+    case 'on-device':
+      return <OnDeviceModelSection />;
     case 'location':
       return <LocationSection />;
     case 'safari':

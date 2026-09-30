@@ -1,4 +1,4 @@
-import { useState, type ComponentType, type ReactNode } from 'react';
+import { useState, type ComponentType, type ReactElement, type ReactNode } from 'react';
 
 import { Badge, Button, Input, Label, Popover, Tooltip, cn } from '@ci/shadcn';
 import { AlertTriangle, Check, ChevronDown, Plus, X } from '@ci/shadcn/icons';
@@ -53,6 +53,13 @@ export interface FilterValuePickerProps {
    * chip list and an "Add…" trigger, for the saved-search editor.
    */
   variant: 'toolbar' | 'field';
+  /**
+   * The caller's own trigger in place of the variant's, given the selected
+   * values — the phone filter sheet opens this same picker from a row. It
+   * becomes the popover trigger, so it must pass its props and ref on to a
+   * button.
+   */
+  renderTrigger?: (values: string[]) => ReactElement;
 }
 
 function includesValue(values: string[], value: string): boolean {
@@ -80,6 +87,7 @@ export function FilterValuePicker({
   hint,
   modal = true,
   variant,
+  renderTrigger,
 }: FilterValuePickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -246,11 +254,25 @@ export function FilterValuePicker({
   const popover = (trigger: ReactNode) => (
     <Popover open={open} onOpenChange={changeOpen} modal={modal}>
       <Popover.Trigger asChild>{trigger}</Popover.Trigger>
-      <Popover.Content align="start" sideOffset={4} className="w-72 p-0">
+      <Popover.Content
+        align="start"
+        sideOffset={4}
+        className={cn(
+          'w-72 p-0',
+          // Opened from a row in the phone filter sheet, there can be less room
+          // above or below it than the panel needs once its list fills: stay
+          // on screen and scroll, as the menus and selects already do.
+          renderTrigger && 'max-h-(--radix-popover-content-available-height) overflow-y-auto',
+        )}
+      >
         {panel}
       </Popover.Content>
     </Popover>
   );
+
+  if (renderTrigger) {
+    return popover(renderTrigger(values));
+  }
 
   if (variant === 'toolbar') {
     return popover(

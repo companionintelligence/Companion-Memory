@@ -1841,7 +1841,7 @@ export function savedKnowledgeWrapUp(messages: OllamaMessage[]): string | null {
     return null;
   }
 
-  let created = 0;
+  let saved = 0;
   for (const message of messages) {
     if (message.role !== 'tool' || !message.content) {
       continue;
@@ -1854,16 +1854,24 @@ export function savedKnowledgeWrapUp(messages: OllamaMessage[]): string | null {
         error?: unknown;
         createdNodes?: number;
         createdRelationships?: number;
+        updatedNodes?: number;
+        updatedRelationships?: number;
       };
       if (parsed.error) {
         continue;
       }
 
-      created += (parsed.createdNodes ?? 0) + (parsed.createdRelationships ?? 0);
+      // An update is a save too — and `memory.remember` reports a create that
+      // reused an existing id as one.
+      saved +=
+        (parsed.createdNodes ?? 0) +
+        (parsed.createdRelationships ?? 0) +
+        (parsed.updatedNodes ?? 0) +
+        (parsed.updatedRelationships ?? 0);
     } catch {
       // Tool payloads that are not JSON are not a save summary.
     }
   }
 
-  return created > 0 ? 'Saved.' : null;
+  return saved > 0 ? 'Saved.' : null;
 }

@@ -105,6 +105,14 @@ export const ESTIMATE_MAX_GAP_HOURS = 24;
  * geocoded coordinate by HBPE, RAG and known-place clustering. It is also the
  * value `GeocodeService` calls `APPROXIMATE` — a coincidence, but a useful one:
  * 0.4 means "roughly, somewhere near here" throughout the appliance.
+ *
+ * Known-place clustering discounts estimates to zero, not to 0.4:
+ * `KnownPlacesService.buildKnownPlaces` does not read them at all. Its doc has
+ * the measurement: at a 0.4 weight, estimates still filled the top candidates
+ * and still chose Home. It recognises an estimate by
+ * {@link LOCATION_SOURCE_ESTIMATED}, and by `temporal_nn` in
+ * `inference_sources` once the legacy reverse-geocode leg has overwritten that
+ * token. Renaming either one turns its filter off.
  */
 export const ESTIMATED_CONFIDENCE = 0.4;
 
@@ -127,10 +135,18 @@ const LOCATION_SOURCE_ESTIMATED = 'estimated';
  *
  * Bump when the answer for an unchanged corpus changes: the donor preference
  * order, {@link ESTIMATE_MAX_GAP_HOURS}, {@link ESTIMATED_CONFIDENCE}, or the
- * decision about which coordinates may be overwritten. Not for a refactor of the
- * SQL that produces the same donor.
+ * decision about which rows get an estimate at all and which coordinates may be
+ * overwritten. Not for a refactor of the SQL that produces the same donor.
+ *
+ * v2 — an event that names its own location is no longer estimated
+ * (`skipped: has_location_name`, see {@link EstimateLocationStage.decideLocally}).
+ * v1 copied the nearest donor onto it, so a calendar invite reading "Bangkok BKK"
+ * was placed at whatever the user's phone reported that morning — home, on the
+ * reference corpus — and `promote.place` then linked it to that Location. The
+ * rows v1 wrote that way are repaired by migration
+ * `20260930035044_clear_estimates_on_events_with_own_location`.
  */
-export const ESTIMATE_RULE_GENERATION = 1;
+export const ESTIMATE_RULE_GENERATION = 2;
 
 /**
  * The stage version, derived from this stage's rule AND the forward-geocode
@@ -276,6 +292,15 @@ function quotedSourceSystems(systems: readonly string[] = ESTIMATE_SOURCE_SYSTEM
  * `StageRegistry.assertApplicabilityPredicate` rejects a predicate that aliases
  * `p.` — the alias `ci.position` conventionally uses — because that is how a
  * predicate reaches into the ledger.)
+ *
+ * Nor is "the row names its own location" (v2). A row with non-blank
+ * `location_name` belongs to `enrich.geocode`, and this stage declines it — but
+ * as a recorded `skipped: has_location_name` in `decideLocally`, beside
+ * `has_own_location`, not as a WHERE clause. It is a decision of this stage's
+ * RULE, so it must be countable and re-openable by a generation bump, which a
+ * filtered-out row never is. (`location_name` is also `enrich.event_reverse`'s
+ * output column, and `__tests__/eventLocationProducers.spec.ts` refuses a
+ * `location_name IS NULL` test in any `ci.events` predicate for that reason.)
  */
 export const ESTIMATE_LOCATION_SOURCE: StageSource = {
   schema: 'ci',
@@ -327,6 +352,8 @@ interface CandidateRow {
   id: string;
   has_coordinates: boolean;
   location_source: string | null;
+  /** Non-blank `location_name`, by the exact test `GEOCODE_SOURCE` applies. */
+  has_location_name: boolean;
   is_deleted: boolean | null;
   is_predicted: boolean | null;
 }
@@ -382,6 +409,10 @@ interface EstimatedRow {
  *    re-open them automatically; it is speculative, and not built.
  *  - `has_own_location` — the row already has a real (non-estimated) coordinate.
  *    Skipped, and the surviving half of `location_coordinates IS NULL`.
+ *  - `has_location_name` — the row names its own place, so its location is
+ *    `enrich.geocode`'s to resolve, not a neighbour's to lend. Skipped, geocoded
+ *    or not: when the geocoder has nothing (not configured, `ZERO_RESULTS`) the
+ *    row stays unlocated rather than being pinned where its text says it is not.
  *  - `estimate_write_failed` — the one statement did not commit. FAILED, so the
  *    retry gate and the attempt budget apply: a locked table or a dead connection
  *    reads as a failure count going UP rather than a coverage number that quietly
@@ -505,10 +536,10 @@ export class EstimateLocationStage implements Stage {
 
       if (row == null) {
         // Not returned by the UPDATE, so the LATERAL found no donor inside the
-        // window. (It also covers a row that flipped to `is_predicted` between the
-        // load and the write, which the statement's own guard excludes — rare
-        // enough that a shared reason is better than a second round trip to tell
-        // the two apart.)
+        // window. (It also covers a row that flipped to `is_predicted`, or gained
+        // a `location_name`, between the load and the write, which the
+        // statement's own guards exclude — rare enough that a shared reason is
+        // better than a second round trip to tell them apart.)
         results.set(id, { outcome: 'skipped', reason: 'no_donor_in_window' });
 
         continue;
@@ -568,6 +599,26 @@ export class EstimateLocationStage implements Stage {
       };
     }
 
+    if (row.has_location_name) {
+      // v2. The row says where it happened, so its coordinate is
+      // `enrich.geocode`'s to find. A temporal neighbour's coordinate is not an
+      // approximation of that text, it is a different claim: v1 pinned a
+      // "Bangkok BKK" flight to the user's home, and `promote.place` then
+      // linked it to the home Location because that is where the pin was.
+      //
+      // Checked AFTER `has_own_location` so a row carrying both a real
+      // coordinate and a name keeps its more fundamental reason. A row that
+      // still carries a v1 estimate is skipped here too, and its estimate is
+      // left in place: withdrawing it would strand `promote.place`'s link, which
+      // this stage does not own, on a row that stage can no longer select. The
+      // migration named on ESTIMATE_RULE_GENERATION withdraws both together.
+      return {
+        outcome: 'skipped',
+        reason: 'has_location_name',
+        detail: { locationSource: row.location_source },
+      };
+    }
+
     return null;
   }
 
@@ -584,10 +635,13 @@ export class EstimateLocationStage implements Stage {
    * is not yours" and writing someone else's whereabouts onto this user's event.
    */
   private loadRows(userId: string, ids: string[]): Promise<CandidateRow[]> {
+    // `has_location_name` is `GEOCODE_SOURCE.predicate`'s test, verbatim, so the
+    // rows this stage declines are exactly the rows the geocoder claims.
     return this.dataSource.query<CandidateRow[]>(
       `SELECT e.event_id AS id,
               (e.location_coordinates IS NOT NULL) AS has_coordinates,
               e.metadata->>'location_source' AS location_source,
+              (e.location_name IS NOT NULL AND btrim(e.location_name) <> '') AS has_location_name,
               e.is_deleted,
               e.is_predicted
          FROM ci.events e
@@ -649,6 +703,9 @@ export class EstimateLocationStage implements Stage {
    *    and, on `ci.position`, exclude every hypertable chunk outside the window.
    *  - **{@link ESTIMATE_INVARIANT}** — the `<> 'estimated'` clause on the event
    *    donor branch. Read that constant before touching this statement.
+   *  - **The target re-checks `location_name`**, so the `has_location_name` rule is
+   *    transactional rather than advisory: a name written between the load and
+   *    this statement still wins. Same shape as the `is_predicted` guard beside it.
    */
   private async writeEstimates(userId: string, ids: string[]): Promise<EstimatedRow[]> {
     const maxGapSeconds = Math.round(ESTIMATE_MAX_GAP_HOURS * 3600);
@@ -713,6 +770,7 @@ export class EstimateLocationStage implements Stage {
          ) d
         WHERE tgt.event_id = c.event_id
           AND COALESCE(tgt.is_predicted, false) = false
+          AND (tgt.location_name IS NULL OR btrim(tgt.location_name) = '')
        RETURNING tgt.event_id,
                  d.donor,
                  d.donor_id,

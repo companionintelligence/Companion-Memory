@@ -2,6 +2,7 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { PIPELINE_QUEUE_NAMES, STAGE_ID_LIST, type StageId } from '../constants';
+import { STAGE_REOPENS, assertStageReopens } from '../reopens';
 import { STAGE_REGISTRY } from '../services/StageRegistry';
 import type { Stage } from '../types';
 import { STAGE_VERSIONS, stageVersion } from '../versions';
@@ -339,4 +340,65 @@ describe('every stage agrees with the central declarations', () => {
       }
     },
   );
+});
+
+/**
+ * `STAGE_REOPENS` (`reopens.ts`) re-opens the consumer's ledger row for THE SAME
+ * `(entity_type, id)` the producer recorded `done`. Which rows those are is only
+ * visible on the constructed stages — their sources and entity types are class
+ * fields — so it is checked here, against the real classes, rather than at
+ * module load where only ids exist.
+ *
+ * Get it wrong and nothing fails at runtime: `reopen()` under an entity type or
+ * over ids the consumer never keys on matches no row, moves nothing, and the
+ * decision it was meant to re-open stays stale — the bug the map exists to fix,
+ * reintroduced silently.
+ */
+describe('every STAGE_REOPENS edge re-opens the row its producer decided', () => {
+  const EDGES = Object.entries(STAGE_REOPENS).flatMap(([producer, consumers]) =>
+    (consumers ?? []).map((consumer) => [`${producer} → ${consumer}`, producer, consumer] as const),
+  );
+
+  it('declares at least one edge', () => {
+    // Otherwise the it.each below is vacuous and this block passes for nothing.
+    expect(EDGES.length).toBeGreaterThan(0);
+  });
+
+  it.each(EDGES)('%s: both stages sweep the same table by the same id', (_label, producer, consumer) => {
+    const from = DISCOVERED_BY_ID.get(producer)?.instance;
+    const to = DISCOVERED_BY_ID.get(consumer)?.instance;
+
+    expect(from).toBeDefined();
+    expect(to).toBeDefined();
+
+    const key = (stage: Stage) => ({
+      schema: stage.source.schema,
+      table: stage.source.table,
+      idColumn: stage.source.idColumn,
+    });
+
+    expect(key(to as Stage)).toEqual(key(from as Stage));
+  });
+
+  it.each(EDGES)(
+    '%s: the consumer keys its ledger under every entity type the producer records',
+    (_label, producer, consumer) => {
+      const from = DISCOVERED_BY_ID.get(producer)?.instance as Stage;
+      const to = DISCOVERED_BY_ID.get(consumer)?.instance as Stage;
+
+      // The listener re-opens under the producer's SLICE entity type.
+      expect([...to.entityTypes]).toEqual(expect.arrayContaining([...from.entityTypes]));
+    },
+  );
+
+  it('refuses an undeclared id or a stage that re-opens itself, at module load', () => {
+    expect(() => assertStageReopens({ 'promote.plaice': ['promote.edge_event'] })).toThrow(
+      /"promote\.plaice" is a key of STAGE_REOPENS but is not a declared stage id/,
+    );
+    expect(() => assertStageReopens({ 'promote.place': ['promote.edge_evnt'] })).toThrow(
+      /re-opens "promote\.edge_evnt", which is not a declared stage id/,
+    );
+    expect(() => assertStageReopens({ 'promote.place': ['promote.place'] })).toThrow(/re-opens itself/);
+    expect(() => assertStageReopens()).not.toThrow();
+  });
 });

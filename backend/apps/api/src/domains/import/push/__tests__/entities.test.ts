@@ -1,5 +1,12 @@
 import type { StagedEntity } from '../../entities/StagedEntityEntity';
-import { entityTypeFor, isGraphExcluded, naturalKeyFor, toGraphEntity } from '../entities';
+import {
+  contactMethodsFor,
+  describesSeveralPeople,
+  entityTypeFor,
+  isGraphExcluded,
+  naturalKeyFor,
+  toGraphEntity,
+} from '../entities';
 
 /**
  * The entity lane, tested at the mapper.
@@ -103,6 +110,21 @@ describe('entityTypeFor', () => {
   });
 });
 
+describe('toGraphEntity — staging bookkeeping', () => {
+  it("never writes the sightings' names into the Person's properties", () => {
+    const input = toGraphEntity({
+      type: 'contact',
+      identityKey: '4155550100',
+      name: 'Ana Ruiz',
+      dataSource: 'vcard',
+      metadata: { phones: ['4155550100'], emails: [], contactNames: ['Ana Ruiz'] },
+    } as never);
+
+    expect(input?.properties).not.toHaveProperty('contactNames');
+    expect(input?.properties).toMatchObject({ phones: ['4155550100'], phone: '4155550100' });
+  });
+});
+
 describe('toGraphEntity', () => {
   it('never puts a handle where a uuid belongs', () => {
     // The whole bug in one assertion: the identity travels as a natural KEY,
@@ -154,6 +176,106 @@ describe('toGraphEntity', () => {
 
   it('returns null only for an entity with nothing to key on', () => {
     expect(toGraphEntity(staged({ name: null, identityKey: null }))).toBeNull();
+  });
+
+  it('indexes every email and phone staging recorded, not only the key', () => {
+    // A contact keyed on its phone used to reach ci.entity_identifiers with
+    // that one number: its email never did, so mail from it minted a stub.
+    const input = toGraphEntity(
+      staged({
+        identityKey: '2025550142',
+        metadata: { emails: ['ada@example.com'], phones: ['2125550199', '2025550142'] },
+      }),
+    );
+
+    expect(input?.key).toBe('contact:2025550142');
+    expect(input?.properties).toMatchObject({
+      email: 'ada@example.com',
+      emails: ['ada@example.com'],
+      phone: '2025550142',
+      phones: ['2025550142', '2125550199'],
+    });
+  });
+
+  it('keys on a fax or an extension handle but never indexes it as a line', () => {
+    // Staging recorded the contact's own numbers and the handle is not one of
+    // them: it is the office fax (or a number with an extension).
+    const input = toGraphEntity(staged({ identityKey: '2125550118', metadata: { emails: [], phones: [] } }));
+
+    expect(input?.key).toBe('contact:2125550118');
+    expect(input?.properties).not.toHaveProperty('phone');
+    expect(input?.properties).not.toHaveProperty('phones');
+    expect(input?.properties).not.toHaveProperty('emails');
+  });
+});
+
+describe('contactMethodsFor', () => {
+  it('puts the handle first when it is one of the contact’s own', () => {
+    expect(contactMethodsFor({ emails: ['bo@example.com', 'ada@example.com'] }, 'ada@example.com')).toEqual({
+      emails: ['ada@example.com', 'bo@example.com'],
+      phones: [],
+    });
+  });
+
+  it('keeps a row staged before the lists existed exactly as it was: its handle is its identifier', () => {
+    expect(contactMethodsFor({ Source: 'vCard' }, '2025550142')).toEqual({
+      emails: [],
+      phones: ['2025550142'],
+    });
+  });
+
+  it('always keeps an email handle, even one staging would not record', () => {
+    // A role-mailbox contact is nothing but its address.
+    expect(contactMethodsFor({ emails: [], phones: [] }, 'support@acme.example')).toEqual({
+      emails: ['support@acme.example'],
+      phones: [],
+    });
+  });
+
+  // Invented: a household on one home line, collapsed by staging onto one row.
+  const household = {
+    emails: ['ana.ruiz@example.com', 'luis.ruiz@example.org'],
+    phones: ['4155550100', '4155550111', '4155550122'],
+  };
+
+  it("indexes a row that is several people on its handle alone — never one member's address as another's", () => {
+    expect(
+      contactMethodsFor({ ...household, contactNames: ['Ana Ruiz', 'Luis Ruiz'] }, '4155550100'),
+    ).toEqual({
+      emails: [],
+      phones: ['4155550100'],
+    });
+  });
+
+  it("reads the vCard parser's Names for a row staged before the sightings' names were kept", () => {
+    expect(contactMethodsFor({ ...household, Names: ['Ana Ruiz', 'Luis Ruiz'] }, '4155550100')).toEqual({
+      emails: [],
+      phones: ['4155550100'],
+    });
+  });
+
+  it('keeps every method of one person seen under two spellings', () => {
+    expect(
+      contactMethodsFor({ ...household, contactNames: ['Ana Ruiz', 'Ana M. Ruiz'] }, '4155550100'),
+    ).toEqual(household);
+  });
+});
+
+describe('describesSeveralPeople', () => {
+  it('is false for one name, or one person under several spellings', () => {
+    expect(describesSeveralPeople([])).toBe(false);
+    expect(describesSeveralPeople(['Ana Ruiz'])).toBe(false);
+    expect(describesSeveralPeople(['Ana Ruiz', 'Ana Ruiz ', 'A. Ruiz', 'Ana M Ruiz'])).toBe(false);
+    // A nickname prefix.
+    expect(describesSeveralPeople(['Dani Ruiz', 'Danielle Ruiz'])).toBe(false);
+  });
+
+  it('is true for two first names, a Jr/Sr pair, or a placeholder among names', () => {
+    expect(describesSeveralPeople(['Ana Ruiz', 'Luis Ruiz'])).toBe(true);
+    expect(describesSeveralPeople(['Luis Ruiz Sr.', 'Luis Ruiz Jr.'])).toBe(true);
+    // A card named with a number says nothing about who it is.
+    expect(describesSeveralPeople(['Ana Ruiz', '(415) 555-0100'])).toBe(true);
+    expect(describesSeveralPeople(['Ana Ruiz', 'luis.ruiz@example.org'])).toBe(true);
   });
 });
 

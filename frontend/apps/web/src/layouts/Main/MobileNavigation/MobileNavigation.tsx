@@ -21,10 +21,11 @@ const FOCUSABLE_SELECTOR = [
 ].join(',');
 
 /**
- * Phone chrome around the glass Power Rail.
+ * Phone chrome around the Power Rail drawer.
  *
  * Closed: a chevron in the top bar and a swipe right from the left edge.
- * Open: the same rail as desktop, glassed. Search lives in the top bar.
+ * Open: the same rail as desktop, as an opaque drawer over a scrim. Search
+ * lives in the top bar.
  */
 export function MobileNavigation() {
   const { expanded, openOverlay, closeOverlay } = usePowerRail();
@@ -141,7 +142,10 @@ export function MobileNavigation() {
       }
 
       const fromEdge = touch.clientX <= EDGE_PX;
-      const fromRail = expanded && touch.clientX <= 224;
+      // Measured, not a constant: the drawer is 300px, narrower on the
+      // smallest phones, and a swipe that starts anywhere on it may close it.
+      const railRight = document.getElementById('power-rail')?.getBoundingClientRect().right ?? 0;
+      const fromRail = expanded && touch.clientX <= railRight;
 
       start.current = {
         x: touch.clientX,

@@ -6,6 +6,7 @@ import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY
 import type { GraphLink, GraphNode } from '@/api/useGraphOverview';
 import { colorForRawType } from '@/components/entities/entityVisuals';
 
+import { type Camera, cameraAfterPointersMove, zoomAt } from './cameraGestures';
 import { clampScale, fitTransform } from './fitTransform';
 import {
   CONTEXT_LINK_OPACITY,
@@ -26,6 +27,7 @@ import {
   standingLabelIds,
   truncateLabel,
 } from './labelLayout';
+import { ZoomControls } from './ZoomControls';
 
 type ForceNode = GraphNode & {
   x: number;
@@ -118,6 +120,20 @@ interface ForceGraphProps {
    * rare cool reheat so the constellation never feels frozen. Cheap — sleeps between breaths.
    */
   ambientBreath?: boolean;
+  /**
+   * What a one-finger vertical swipe on a touch screen does.
+   *
+   * 'page' (the default) leaves it to the browser, so the page scrolls past the graph. An entity
+   * page stacks the graph between other cards, and a graph that swallows the swipe traps the reader
+   * behind it. The graph still pans with a sideways drag or two fingers, and still pinches.
+   *
+   * 'graph' keeps every gesture on the canvas, for a caller whose canvas IS the view (the graph
+   * explorer). There is no page around it to scroll, so a swipe handed to the browser would just be
+   * a drag that does nothing.
+   */
+  verticalSwipe?: 'page' | 'graph';
+  /** Extra classes for the zoom buttons, which sit in the canvas's bottom-right corner by default. */
+  controlsClassName?: string;
 }
 
 /**
@@ -311,6 +327,44 @@ function getSpringLengthFromStrength(value: number): number {
 const CAMERA_FLIGHT_MS = 700;
 /** Minimum magnification a flight lands at, so "focus this node" always reads as a close-up. */
 const FLIGHT_MIN_SCALE = 1.25;
+/** One press of a zoom button. From an overview fit, one press in crosses the LOD label threshold. */
+const ZOOM_STEP = 1.5;
+/** A button zoom is a short hop rather than a flight, so it keeps up with repeated presses. */
+const ZOOM_STEP_MS = 250;
+
+type ClientPoint = { x: number; y: number };
+
+/** A pointer driving the camera, in client coordinates. */
+type CameraPointer = {
+  pointerType: string;
+  /** Where it landed, which is what tells a pan from a click. */
+  start: ClientPoint;
+  /** Where it was when the camera last caught up with it. */
+  applied: ClientPoint;
+  /** Where it is now. */
+  last: ClientPoint;
+};
+
+/** A camera flight in progress: where it is headed, and how long it was given to get there. */
+type CameraFlight = { target: Camera; durationMs: number };
+
+/** A pointer dragging a node. */
+type NodeDrag = {
+  node: ForceNode;
+  pointerId: number;
+  pointerType: string;
+  startClientX: number;
+  startClientY: number;
+  /** Where the pointer is now, for handing the finger over to a pinch. */
+  lastClientX: number;
+  lastClientY: number;
+  /**
+   * The node as the drag found it: where the drag measures from, and what goes back when the drag
+   * turns out not to be one.
+   */
+  before: Pick<ForceNode, 'x' | 'y' | 'vx' | 'vy' | 'fx' | 'fy' | 'pinned'>;
+  moved: boolean;
+};
 
 /*
  * LOD ("dots") mode — the Webbed Feet explore-page pattern at CI scale. Past a node count no label
@@ -433,6 +487,8 @@ function ForceGraphBase({
   onViewportChange,
   forceLod = false,
   ambientBreath = false,
+  verticalSwipe = 'page',
+  controlsClassName,
 }: ForceGraphProps) {
   const { ref, width } = useContainerWidth(720);
   /** Dots/LOD rendering — auto past the threshold, or forced by the progressive overview. */
@@ -458,8 +514,6 @@ function ForceGraphBase({
   const linkElsRef = useRef<Map<string, SVGGElement>>(new Map());
   const fontProbeRef = useRef<SVGTextElement | null>(null);
   const measurerRef = useRef<TextMetricsProbe | null>(null);
-  const panStartRef = useRef({ x: 0, y: 0 });
-  const translateStartRef = useRef({ x: 0, y: 0 });
   const previousPositionsRef = useRef<Map<string, ForceNode>>(new Map());
   const anchoredKey = useMemo(() => anchoredNodeIds.join('|'), [anchoredNodeIds]);
   const nodesKey = useMemo(() => nodes.map((node) => node.id).join('|'), [nodes]);
@@ -472,10 +526,35 @@ function ForceGraphBase({
   const simNodesRef = useRef(simNodes);
   simNodesRef.current = simNodes;
   const cameraFrameRef = useRef<number | null>(null);
+  /** The flight `cameraFrameRef` is animating, if any. */
+  const flightRef = useRef<CameraFlight | null>(null);
   /** Reheats the current simulation (drag re-tension); rebound by each layout effect. */
   const reheatRef = useRef<((alpha: number) => void) | null>(null);
+  /**
+   * The frame the layout settles the camera into; rebound by each layout effect. The fit button
+   * returns to exactly this, so "show the whole graph" is the picture the graph opened with.
+   */
+  const fitFrameRef = useRef<(() => Camera | null) | null>(null);
   // Distinguishes a click on the canvas from the end of a pan; only the former clears selections.
   const panMovedRef = useRef(false);
+  /**
+   * Pointers driving the camera, in the order they landed: one pans, two pinch. A finger that lands
+   * on empty canvas starts a pan; any further finger joins the camera wherever it landed.
+   */
+  const cameraPointersRef = useRef(new Map<number, CameraPointer>());
+  /** The frame that will move the camera to catch up with `cameraPointersRef`, once scheduled. */
+  const gestureFrameRef = useRef<number | null>(null);
+  /**
+   * The camera as the current gesture found it, for handing it back when the browser takes a
+   * one-finger pan over to scroll the page (see `endCameraPointer`).
+   */
+  const gestureOriginRef = useRef<{
+    camera: Camera;
+    viewerMoved: boolean;
+    flight: CameraFlight | null;
+  } | null>(null);
+  /** Whether the current gesture has had two fingers down; a pinch is never handed back. */
+  const gesturePinchedRef = useRef(false);
 
   /**
    * The zoom-LOD view: whether the camera is past the label threshold, and which nodes get a label.
@@ -574,7 +653,7 @@ function ForceGraphBase({
 
   /** Eased camera flight to a target frame; a new flight (or manual input) replaces the current one. */
   const animateCamera = useCallback(
-    (toScale: number, toTranslate: { x: number; y: number }) => {
+    (toScale: number, toTranslate: { x: number; y: number }, durationMs = CAMERA_FLIGHT_MS) => {
       if (cameraFrameRef.current != null) {
         cancelAnimationFrame(cameraFrameRef.current);
       }
@@ -582,9 +661,10 @@ function ForceGraphBase({
       const fromScale = scaleRef.current;
       const fromTranslate = { ...translateRef.current };
       const start = performance.now();
+      flightRef.current = { target: { scale: toScale, translate: { ...toTranslate } }, durationMs };
 
       const step = (now: number) => {
-        const progress = Math.min(1, (now - start) / CAMERA_FLIGHT_MS);
+        const progress = Math.min(1, (now - start) / durationMs);
         const eased = 1 - Math.pow(1 - progress, 3);
 
         scaleRef.current = fromScale + (toScale - fromScale) * eased;
@@ -595,12 +675,25 @@ function ForceGraphBase({
         applyCamera();
 
         cameraFrameRef.current = progress < 1 ? requestAnimationFrame(step) : null;
+        if (cameraFrameRef.current == null) {
+          flightRef.current = null;
+        }
       };
 
       cameraFrameRef.current = requestAnimationFrame(step);
     },
     [applyCamera],
   );
+
+  /** Manual input takes the camera back from an in-progress flight. */
+  const stopCameraFlight = useCallback(() => {
+    if (cameraFrameRef.current != null) {
+      cancelAnimationFrame(cameraFrameRef.current);
+      cameraFrameRef.current = null;
+    }
+
+    flightRef.current = null;
+  }, []);
 
   useEffect(
     () => () => {
@@ -1008,23 +1101,39 @@ function ForceGraphBase({
     };
 
     /**
+     * The frame this layout settles into, from wherever its nodes are now.
+     * LOD caps fit-zoom so type islands stay grouped, not one magnified clump.
+     */
+    const fittedFrame = (): Camera | null => {
+      const anchor = centerNodeId ? { x: boundsWidth / 2, y: boundsHeight / 2 } : null;
+      const fitted = fitTransform(nodeCopies, canvasWidth, canvasHeight, anchor);
+      if (!fitted) {
+        return null;
+      }
+
+      return {
+        scale: lodMode ? Math.min(fitted.scale, LOD_MAX_FIT_ZOOM) : fitted.scale,
+        translate: fitted.translate,
+      };
+    };
+
+    fitFrameRef.current = fittedFrame;
+
+    /**
      * While the picture is settling and the viewer has not taken the camera, drift the frame toward
      * the fit a little each tick — the camera breathes with the web instead of snapping after it.
-     * LOD caps fit-zoom so type islands stay grouped, not one magnified clump.
      */
     const trackCamera = (fraction: number) => {
       if (viewerMovedCameraRef.current || cameraFrameRef.current != null) {
         return;
       }
 
-      const anchor = centerNodeId ? { x: boundsWidth / 2, y: boundsHeight / 2 } : null;
-      const fitted = fitTransform(nodeCopies, canvasWidth, canvasHeight, anchor);
+      const fitted = fittedFrame();
       if (!fitted) {
         return;
       }
 
-      const targetScale = lodMode ? Math.min(fitted.scale, LOD_MAX_FIT_ZOOM) : fitted.scale;
-      scaleRef.current += (targetScale - scaleRef.current) * fraction;
+      scaleRef.current += (fitted.scale - scaleRef.current) * fraction;
       translateRef.current = {
         x: translateRef.current.x + (fitted.translate.x - translateRef.current.x) * fraction,
         y: translateRef.current.y + (fitted.translate.y - translateRef.current.y) * fraction,
@@ -1177,6 +1286,7 @@ function ForceGraphBase({
 
       simulation.stop();
       reheatRef.current = null;
+      fitFrameRef.current = null;
       previousPositionsRef.current = new Map(nodeCopies.map((node) => [node.id, { ...node }]));
     };
   }, [
@@ -1201,11 +1311,7 @@ function ForceGraphBase({
         event.preventDefault();
       }
 
-      // Manual input takes the camera back from an in-progress flight.
-      if (cameraFrameRef.current != null) {
-        cancelAnimationFrame(cameraFrameRef.current);
-        cameraFrameRef.current = null;
-      }
+      stopCameraFlight();
 
       const svgElement = svgRef.current;
       if (!svgElement) {
@@ -1213,23 +1319,17 @@ function ForceGraphBase({
       }
 
       const rect = svgElement.getBoundingClientRect();
-      const cursorX = event.clientX - rect.left;
-      const cursorY = event.clientY - rect.top;
-
-      const prevScale = scaleRef.current;
+      const cursor = { x: event.clientX - rect.left, y: event.clientY - rect.top };
       const delta = -event.deltaY * 0.0015;
-      const nextScale = clampScale(prevScale * (1 + delta));
+      const next = zoomAt({ scale: scaleRef.current, translate: translateRef.current }, cursor, 1 + delta);
 
-      scaleRef.current = nextScale;
-      translateRef.current = {
-        x: cursorX - ((cursorX - translateRef.current.x) * nextScale) / prevScale,
-        y: cursorY - ((cursorY - translateRef.current.y) * nextScale) / prevScale,
-      };
+      scaleRef.current = next.scale;
+      translateRef.current = next.translate;
       applyCamera();
 
       viewerMovedCameraRef.current = true;
     },
-    [applyCamera],
+    [applyCamera, stopCameraFlight],
   );
 
   useEffect(() => {
@@ -1249,81 +1349,317 @@ function ForceGraphBase({
     };
   }, [handleWheel]);
 
-  const handlePointerDown = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
-    if (event.button !== 0) {
+  /*
+   * Touch: who owns a swipe that starts on the graph.
+   *
+   * In 'page' mode the SVG is `touch-action: pan-y` (see the render). The browser keeps vertical
+   * one-finger swipes and scrolls the page with them; everything else (a sideways drag, a pinch, a
+   * two-finger pan) still arrives here as pointer events. `pan-y` leaves out `pinch-zoom`, so a pinch
+   * on the graph never zooms the page either.
+   *
+   * What `pan-y` alone does not stop is the browser reading a two-finger gesture whose midpoint
+   * drifts up or down as a scroll (iOS Safari scrolls with two fingers), which would cancel the pinch
+   * halfway through. So while two fingers are on the graph their touchmoves are cancelled, which
+   * keeps the browser out of it. It has to be a native listener: React registers touch listeners as
+   * passive, and a passive listener cannot cancel anything.
+   */
+  useEffect(() => {
+    const svgElement = svgRef.current;
+    if (!svgElement || verticalSwipe !== 'page') {
       return;
     }
 
-    const target = event.target as HTMLElement | null;
-    if (target && (target.closest('[data-force-node]') || target.closest('[data-force-link]'))) {
-      return;
-    }
-
-    if (cameraFrameRef.current != null) {
-      cancelAnimationFrame(cameraFrameRef.current);
-      cameraFrameRef.current = null;
-    }
-
-    capturePointer(event.currentTarget, event.pointerId);
-    panStartRef.current = { x: event.clientX, y: event.clientY };
-    translateStartRef.current = { ...translateRef.current };
-    panMovedRef.current = false;
-    setIsPanning(true);
-  }, []);
-
-  const handlePointerMove = useCallback(
-    (event: ReactPointerEvent<SVGSVGElement>) => {
-      if (!isPanning) {
-        return;
+    const listener = (event: TouchEvent) => {
+      let fingersOnGraph = 0;
+      for (const touch of event.touches) {
+        if (touch.target instanceof Node && svgElement.contains(touch.target)) {
+          fingersOnGraph += 1;
+        }
       }
 
-      const dx = event.clientX - panStartRef.current.x;
-      const dy = event.clientY - panStartRef.current.y;
-
-      if (dx !== 0 || dy !== 0) {
-        viewerMovedCameraRef.current = true;
+      if (fingersOnGraph >= 2 && event.cancelable) {
+        event.preventDefault();
       }
+    };
 
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-        panMovedRef.current = true;
-      }
+    svgElement.addEventListener('touchmove', listener, { passive: false });
 
-      translateRef.current = {
-        x: translateStartRef.current.x + dx,
-        y: translateStartRef.current.y + dy,
-      };
-      applyCamera();
-    },
-    [applyCamera, isPanning],
-  );
-
-  const handlePointerUp = useCallback(
-    (event: ReactPointerEvent<SVGSVGElement>) => {
-      if (!isPanning) {
-        return;
-      }
-
-      releasePointer(event.currentTarget, event.pointerId);
-      setIsPanning(false);
-    },
-    [isPanning],
-  );
+    return () => {
+      svgElement.removeEventListener('touchmove', listener);
+    };
+  }, [verticalSwipe]);
 
   /*
    * Node dragging, ported from Webbed Feet: dragging pins the node under the pointer (fx/fy) and
    * reheats the simulation a little on every move, so the rest of the web visibly re-tensions
    * around the hand. The node stays pinned where it is dropped — arranging the web is the point.
    */
-  const nodeDragRef = useRef<{
-    node: ForceNode;
-    startClientX: number;
-    startClientY: number;
-    startX: number;
-    startY: number;
-    moved: boolean;
-  } | null>(null);
+  const nodeDragRef = useRef<NodeDrag | null>(null);
   /** Set when a pointer-up ended a drag; the click that follows it must not select. */
   const suppressClickRef = useRef(false);
+
+  /**
+   * Puts a node back as it was before a drag that turned out not to be one: the browser took the
+   * finger to scroll the page, or a second finger made the gesture a pinch. Its position as well as
+   * its pin, since the ticks in between have already pulled it toward the finger; the reheat only
+   * repaints and lets the rest of the web, stirred by those same ticks, settle back.
+   */
+  const undoNodeDrag = useCallback((drag: NodeDrag) => {
+    if (!drag.moved) {
+      return;
+    }
+
+    Object.assign(drag.node, drag.before);
+    reheatRef.current?.(REHEAT_ALPHA);
+  }, []);
+
+  /** A camera gesture starts: remember the camera it found, and take it back from any flight. */
+  const beginCameraGesture = useCallback(() => {
+    gestureOriginRef.current = {
+      camera: { scale: scaleRef.current, translate: { ...translateRef.current } },
+      viewerMoved: viewerMovedCameraRef.current,
+      flight: flightRef.current,
+    };
+    gesturePinchedRef.current = false;
+    panMovedRef.current = false;
+    stopCameraFlight();
+    setIsPanning(true);
+  }, [stopCameraFlight]);
+
+  /**
+   * Moves the camera by however far its pointers have travelled since it last caught up with them.
+   *
+   * Once a frame rather than on every pointer event: a pinch's fingers report one at a time, and
+   * the steps have to see them move together (see `cameraAfterPointersMove`), or a two-finger pan at
+   * full zoom slowly zooms out. Input is delivered before the frame's callbacks run, so this costs no
+   * latency. Whatever changes the set of pointers calls it first, so a step never mixes two sets.
+   */
+  const flushCameraPointers = useCallback(() => {
+    if (gestureFrameRef.current != null) {
+      cancelAnimationFrame(gestureFrameRef.current);
+      gestureFrameRef.current = null;
+    }
+
+    const svgElement = svgRef.current;
+    const pointers = cameraPointersRef.current;
+    if (!svgElement || pointers.size === 0) {
+      return;
+    }
+
+    // A pinch pivots in canvas space. Converting every position against the same rect at the same
+    // moment keeps each step pure pointer travel, even if the page moved under the gesture.
+    const rect = svgElement.getBoundingClientRect();
+    const toCanvas = (point: ClientPoint) => ({ x: point.x - rect.left, y: point.y - rect.top });
+    const from = new Map<number, ClientPoint>();
+    const to = new Map<number, ClientPoint>();
+
+    for (const [pointerId, pointer] of pointers) {
+      from.set(pointerId, toCanvas(pointer.applied));
+      to.set(pointerId, toCanvas(pointer.last));
+      pointer.applied = pointer.last;
+    }
+
+    const current = { scale: scaleRef.current, translate: translateRef.current };
+    const next = cameraAfterPointersMove(current, from, to);
+
+    if (
+      next.scale === current.scale &&
+      next.translate.x === current.translate.x &&
+      next.translate.y === current.translate.y
+    ) {
+      return;
+    }
+
+    scaleRef.current = next.scale;
+    translateRef.current = next.translate;
+    viewerMovedCameraRef.current = true;
+    applyCamera();
+  }, [applyCamera]);
+
+  useEffect(
+    () => () => {
+      if (gestureFrameRef.current != null) {
+        cancelAnimationFrame(gestureFrameRef.current);
+      }
+    },
+    [],
+  );
+
+  const trackCameraPointer = useCallback(
+    (svgElement: SVGSVGElement, pointerId: number, pointerType: string, at: ClientPoint) => {
+      flushCameraPointers();
+      capturePointer(svgElement, pointerId);
+      cameraPointersRef.current.set(pointerId, { pointerType, start: at, applied: at, last: at });
+    },
+    [flushCameraPointers],
+  );
+
+  /**
+   * A further finger always joins the camera, whatever it lands on: two fingers on the graph are a
+   * pinch, never a node drag and a pan fighting over the picture. This runs in the capture phase so
+   * it can claim the pointer before a node's own handler starts a drag with it.
+   */
+  const handlePointerDownCapture = useCallback(
+    (event: ReactPointerEvent<SVGSVGElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      const pointers = cameraPointersRef.current;
+
+      if (event.isPrimary) {
+        // A primary pointer starts a fresh gesture for its kind of input. Anything still tracked for
+        // that input lost its pointer-up somewhere, and must not make this touch half of a pinch with
+        // a finger that is no longer there.
+        for (const [pointerId, tracked] of pointers) {
+          if (tracked.pointerType === event.pointerType) {
+            pointers.delete(pointerId);
+          }
+        }
+
+        if (nodeDragRef.current?.pointerType === event.pointerType) {
+          nodeDragRef.current = null;
+        }
+
+        if (pointers.size === 0) {
+          setIsPanning(false);
+        }
+
+        return;
+      }
+
+      const drag = nodeDragRef.current;
+      if (!drag && pointers.size === 0) {
+        // Nothing to pinch with (the first finger went to a link, say), so this one starts afresh.
+        return;
+      }
+
+      event.stopPropagation();
+      const svgElement = event.currentTarget;
+
+      if (drag) {
+        // The first finger landed on a node. With a second one down this is a pinch rather than a
+        // drag, so the node goes back as it was and that finger becomes one end of the pinch.
+        nodeDragRef.current = null;
+        undoNodeDrag(drag);
+        beginCameraGesture();
+        trackCameraPointer(svgElement, drag.pointerId, drag.pointerType, {
+          x: drag.lastClientX,
+          y: drag.lastClientY,
+        });
+      }
+
+      trackCameraPointer(svgElement, event.pointerId, event.pointerType, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+      gesturePinchedRef.current = true;
+      // Two fingers are never a click on the canvas, and always the viewer taking the camera: the
+      // settle-time tracking must not nudge the frame out from under the pinch's first step.
+      panMovedRef.current = true;
+      viewerMovedCameraRef.current = true;
+    },
+    [beginCameraGesture, trackCameraPointer, undoNodeDrag],
+  );
+
+  /** The first finger on empty canvas starts a pan. */
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent<SVGSVGElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      if (target && (target.closest('[data-force-node]') || target.closest('[data-force-link]'))) {
+        return;
+      }
+
+      beginCameraGesture();
+      trackCameraPointer(event.currentTarget, event.pointerId, event.pointerType, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+    },
+    [beginCameraGesture, trackCameraPointer],
+  );
+
+  const handlePointerMove = useCallback(
+    (event: ReactPointerEvent<SVGSVGElement>) => {
+      const tracked = cameraPointersRef.current.get(event.pointerId);
+      if (!tracked) {
+        return;
+      }
+
+      tracked.last = { x: event.clientX, y: event.clientY };
+
+      if (
+        Math.abs(tracked.last.x - tracked.start.x) > DRAG_THRESHOLD_PX ||
+        Math.abs(tracked.last.y - tracked.start.y) > DRAG_THRESHOLD_PX
+      ) {
+        panMovedRef.current = true;
+      }
+
+      gestureFrameRef.current ??= requestAnimationFrame(flushCameraPointers);
+    },
+    [flushCameraPointers],
+  );
+
+  /**
+   * A pointer driving the camera lifted, left or was cancelled.
+   *
+   * `pointercancel` is the browser saying it took the pointer for itself. In 'page' mode that is the
+   * vertical swipe it is now scrolling the page with, and by the time it decides, the swipe's first
+   * few pixels have already been delivered here and panned the picture. So the camera goes back to
+   * where the gesture found it, still tracking the layout if it was: the page moves, the graph does
+   * not. A pinch is never handed back; it was deliberate, whatever ended it.
+   */
+  const endCameraPointer = useCallback(
+    (event: ReactPointerEvent<SVGSVGElement>, cancelled: boolean) => {
+      const pointers = cameraPointersRef.current;
+      if (!pointers.has(event.pointerId)) {
+        return;
+      }
+
+      // Let the camera catch up with this pointer's last moves before it stops counting.
+      flushCameraPointers();
+      pointers.delete(event.pointerId);
+      releasePointer(event.currentTarget, event.pointerId);
+
+      // With a finger still down the gesture goes on, as a pan from wherever that finger is.
+      if (pointers.size > 0) {
+        return;
+      }
+
+      setIsPanning(false);
+      const origin = gestureOriginRef.current;
+      gestureOriginRef.current = null;
+
+      if (!cancelled || !origin || gesturePinchedRef.current) {
+        return;
+      }
+
+      scaleRef.current = origin.camera.scale;
+      translateRef.current = origin.camera.translate;
+      viewerMovedCameraRef.current = origin.viewerMoved;
+      applyCamera();
+
+      // A flight the swipe interrupted (a zoom button's hop, say) lands as if nothing had happened.
+      if (origin.flight) {
+        animateCamera(origin.flight.target.scale, origin.flight.target.translate, origin.flight.durationMs);
+      }
+    },
+    [animateCamera, applyCamera, flushCameraPointers],
+  );
+
+  const handlePointerUp = useCallback(
+    (event: ReactPointerEvent<SVGSVGElement>) => endCameraPointer(event, false),
+    [endCameraPointer],
+  );
+
+  const handlePointerCancel = useCallback(
+    (event: ReactPointerEvent<SVGSVGElement>) => endCameraPointer(event, true),
+    [endCameraPointer],
+  );
 
   const handleNodePointerDown = useCallback(
     (node: ForceNode) => (event: ReactPointerEvent<SVGGElement>) => {
@@ -1335,10 +1671,21 @@ function ForceGraphBase({
       capturePointer(event.currentTarget, event.pointerId);
       nodeDragRef.current = {
         node,
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
         startClientX: event.clientX,
         startClientY: event.clientY,
-        startX: node.x,
-        startY: node.y,
+        lastClientX: event.clientX,
+        lastClientY: event.clientY,
+        before: {
+          x: node.x,
+          y: node.y,
+          vx: node.vx,
+          vy: node.vy,
+          fx: node.fx,
+          fy: node.fy,
+          pinned: node.pinned,
+        },
         moved: false,
       };
     },
@@ -1347,10 +1694,12 @@ function ForceGraphBase({
 
   const handleNodePointerMove = useCallback((event: ReactPointerEvent<SVGGElement>) => {
     const drag = nodeDragRef.current;
-    if (!drag) {
+    if (!drag || event.pointerId !== drag.pointerId) {
       return;
     }
 
+    drag.lastClientX = event.clientX;
+    drag.lastClientY = event.clientY;
     const screenDx = event.clientX - drag.startClientX;
     const screenDy = event.clientY - drag.startClientY;
 
@@ -1360,8 +1709,8 @@ function ForceGraphBase({
 
     drag.moved = true;
     // Pointer deltas are screen pixels; the node lives in world coordinates behind the camera.
-    drag.node.fx = drag.startX + screenDx / scaleRef.current;
-    drag.node.fy = drag.startY + screenDy / scaleRef.current;
+    drag.node.fx = drag.before.x + screenDx / scaleRef.current;
+    drag.node.fy = drag.before.y + screenDy / scaleRef.current;
     // Keep label relaxation from shoving the dragged node off the pin.
     drag.node.pinned = true;
     reheatRef.current?.(REHEAT_ALPHA);
@@ -1369,7 +1718,7 @@ function ForceGraphBase({
 
   const handleNodePointerUp = useCallback((event: ReactPointerEvent<SVGGElement>) => {
     const drag = nodeDragRef.current;
-    if (!drag) {
+    if (!drag || event.pointerId !== drag.pointerId) {
       return;
     }
 
@@ -1380,6 +1729,54 @@ function ForceGraphBase({
 
     nodeDragRef.current = null;
   }, []);
+
+  /** The browser took the finger (in 'page' mode, to scroll the page), so the node goes back. */
+  const handleNodePointerCancel = useCallback(
+    (event: ReactPointerEvent<SVGGElement>) => {
+      const drag = nodeDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) {
+        return;
+      }
+
+      releasePointer(event.currentTarget, event.pointerId);
+      nodeDragRef.current = null;
+      undoNodeDrag(drag);
+    },
+    [undoNodeDrag],
+  );
+
+  /** A zoom button: a short hop about the middle of the canvas. */
+  const zoomBy = useCallback(
+    (factor: number) => {
+      const { width: canvasWidth, height: viewHeight } = canvasSizeRef.current;
+      // Chain from where a running hop is headed rather than where it has got to, so a quick double
+      // press zooms twice rather than losing whatever of the first press had not landed yet.
+      const from = flightRef.current?.target ?? { scale: scaleRef.current, translate: translateRef.current };
+      const target = zoomAt(from, { x: canvasWidth / 2, y: viewHeight / 2 }, factor);
+
+      viewerMovedCameraRef.current = true;
+      animateCamera(target.scale, target.translate, ZOOM_STEP_MS);
+    },
+    [animateCamera],
+  );
+
+  const zoomIn = useCallback(() => zoomBy(ZOOM_STEP), [zoomBy]);
+  const zoomOut = useCallback(() => zoomBy(1 / ZOOM_STEP), [zoomBy]);
+
+  /**
+   * The fit button flies back to the frame the layout settles into, and hands the camera back to
+   * the layout: a graph that is still settling carries on tracking the fit, as it did before anyone
+   * touched it.
+   */
+  const fitToView = useCallback(() => {
+    const fitted = fitFrameRef.current?.();
+    if (!fitted) {
+      return;
+    }
+
+    viewerMovedCameraRef.current = false;
+    animateCamera(fitted.scale, fitted.translate);
+  }, [animateCamera]);
 
   /**
    * Hovering or selecting picks out one node's own corner of the graph: it and its direct
@@ -1443,16 +1840,18 @@ function ForceGraphBase({
   }, [highlightedNodeId, hoveredNodeId, selectedNodeId, simNodes]);
 
   return (
-    <div ref={ref} className="w-full">
+    <div ref={ref} className="relative w-full">
       <svg
         ref={svgRef}
         width={width}
         height={canvasHeight}
         role="img"
         aria-label="Knowledge graph overview"
+        onPointerDownCapture={handlePointerDownCapture}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
         onPointerLeave={(event) => {
           setHoveredNodeId(null);
           handlePointerUp(event);
@@ -1469,7 +1868,24 @@ function ForceGraphBase({
 
           onBackgroundClick?.();
         }}
-        style={{ cursor: isPanning ? 'grabbing' : 'grab', touchAction: 'none' }}
+        style={{
+          cursor: isPanning ? 'grabbing' : 'grab',
+          /*
+           * Which touch gestures the browser keeps for itself. `none` hands every one of them to the
+           * handlers above, which is right where the canvas is the whole view (the explorer) and
+           * wrong where it sits in a page: on a phone the person page's graph is half the screen,
+           * and a swipe that started on it could never scroll the page past it.
+           *
+           * So in 'page' mode the browser keeps vertical one-finger swipes (`pan-y`) and scrolls
+           * with them, cancelling the pointer (see `endCameraPointer` and `handleNodePointerCancel`,
+           * which put back whatever its first few pixels had already moved). A drag that starts
+           * sideways still pans the graph, in any direction once under way; two fingers pinch and
+           * pan it; and a pinch never zooms the page, because `pan-y` does not include `pinch-zoom`.
+           * The touchmove guard above keeps a pinch whose midpoint drifts vertically from being read
+           * as a two-finger scroll.
+           */
+          touchAction: verticalSwipe === 'page' ? 'pan-y' : 'none',
+        }}
         className="fill-foreground text-foreground"
       >
         {/* Same class as a real label; the measurer reads its resolved font. */}
@@ -1498,6 +1914,7 @@ function ForceGraphBase({
         </defs>
         <g
           ref={cameraGroupRef}
+          data-testid="force-camera"
           transform={`translate(${translateRef.current.x}, ${translateRef.current.y}) scale(${scaleRef.current})`}
         >
           <g stroke="rgba(148, 163, 184, 0.35)" strokeWidth={1.1} strokeLinecap="round">
@@ -1661,6 +2078,7 @@ function ForceGraphBase({
                   onPointerDown={handleNodePointerDown(node)}
                   onPointerMove={handleNodePointerMove}
                   onPointerUp={handleNodePointerUp}
+                  onPointerCancel={handleNodePointerCancel}
                   onClick={(clickEvent) => {
                     clickEvent.stopPropagation();
                     if (suppressClickRef.current) {
@@ -1742,6 +2160,11 @@ function ForceGraphBase({
           </g>
         </g>
       </svg>
+      {/* Wheel zoom needs a mouse and a pinch needs two fingers. These buttons do the same for one
+          thumb or a keyboard, and "show the whole graph" is the way back from any of them. */}
+      {nodes.length > 0 && (
+        <ZoomControls onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={fitToView} className={controlsClassName} />
+      )}
     </div>
   );
 }

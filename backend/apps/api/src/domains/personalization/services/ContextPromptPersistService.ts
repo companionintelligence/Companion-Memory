@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { type RequestContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { countAffected } from '@ci/common/persistence';
 import { todayInTZ } from '@ci/common/time/zoned';
 import {
   DailyMetricsService,
@@ -340,17 +341,23 @@ export class ContextPromptPersistService {
           plan.writer === 'write_place_properties'
             ? { ...properties, whatIDoHere: text }
             : { ...properties, role: text };
-        const result = (await this.dataSource.query(
+        // Counted through a CTE: a bare `UPDATE … RETURNING` comes back from
+        // TypeORM as the pair `[rows, rowCount]`, whose length is never 0.
+        const updated = await countAffected(
+          this.dataSource,
           `
-          UPDATE ci.entities
-          SET properties = COALESCE(properties, '{}'::jsonb) || $2::jsonb,
-              updated_at = NOW()
-          WHERE entity_id = $1 AND owner_user_id = $3
-          RETURNING entity_id
+          WITH updated AS (
+            UPDATE ci.entities
+            SET properties = COALESCE(properties, '{}'::jsonb) || $2::jsonb,
+                updated_at = NOW()
+            WHERE entity_id = $1 AND owner_user_id = $3
+            RETURNING 1
+          )
+          SELECT count(*)::int AS count FROM updated
           `,
           [entityId, JSON.stringify(merged), context.userId],
-        )) as Array<{ entity_id: string }>;
-        if (result.length === 0) {
+        );
+        if (updated === 0) {
           throw new Error('property write matched no entity');
         }
 
