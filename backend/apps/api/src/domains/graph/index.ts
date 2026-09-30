@@ -25,6 +25,7 @@ import {
   type EntityIdentifierBatchEntry,
   EntityIdentifierService,
   type IdentifierKey,
+  unusableIdentifiers,
 } from './services/EntityIdentifierService';
 import { GraphExpansionService } from './services/GraphExpansionService';
 import { GraphIngestService } from './services/GraphIngestService';
@@ -94,6 +95,7 @@ export {
   ObjectIdentifierService,
   RelationshipService,
 };
+export { unusableIdentifiers };
 export {
   EntityIdentifierEntity,
   ItemRelationshipEntity,

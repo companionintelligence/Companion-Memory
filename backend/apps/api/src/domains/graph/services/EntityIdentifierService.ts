@@ -24,6 +24,30 @@ export interface EntityIdentifierBatchEntry {
 }
 
 /**
+ * The entries of `desired` that {@link EntityIdentifierService.replaceForEntity}
+ * can store nothing for: a value of a reconciled kind that the shared rule
+ * refuses even though the caller actually sent something. Today that is a phone
+ * carrying an extension (see `hasPhoneExtension` — a real number, refused only
+ * because it cannot identify anybody) or a "phone" with no digits. A blank value
+ * is not listed: there is nothing in it to lose.
+ *
+ * `replaceForEntity` reports these as `unusable`. This is the same rule as a
+ * pure function, so a caller that has to REFUSE such input rather than save
+ * around it can ask before anything is written.
+ */
+export function unusableIdentifiers<T extends { kind: IdentifierKind; value: string }>(
+  kinds: readonly IdentifierKind[],
+  desired: readonly T[],
+): T[] {
+  return desired.filter(
+    (entry) =>
+      kinds.includes(entry.kind) &&
+      entry.value.trim() !== '' &&
+      normalizeIdentifier(entry.kind, entry.value) == null,
+  );
+}
+
+/**
  * Read/write surface for `ci.entity_identifiers`: the normalized
  * email/phone/name -> graph entity_id index that powers people-linking.
  *
@@ -394,14 +418,23 @@ export class EntityIdentifierService {
    * same as ingest and {@link addForEntity}); it is returned in `conflicts` so
    * the caller can surface "already belongs to X" instead of silently dropping
    * the user's input.
+   *
+   * A value the shared rule refuses (see {@link unusableIdentifiers}) is not
+   * stored either, and is returned in `unusable` for the same reason: a phone
+   * carrying an extension used to be kept under its last ten digits, which is
+   * somebody else's number, and now simply has nowhere to go here.
    */
   async replaceForEntity(
     ownerUserId: string,
     entityId: string,
     kinds: IdentifierKind[],
     desired: Array<{ kind: IdentifierKind; value: string; label?: string | null; isPrimary?: boolean }>,
-  ): Promise<{ conflicts: Array<{ kind: IdentifierKind; value: string }> }> {
+  ): Promise<{
+    conflicts: Array<{ kind: IdentifierKind; value: string }>;
+    unusable: Array<{ kind: IdentifierKind; value: string }>;
+  }> {
     const conflicts: Array<{ kind: IdentifierKind; value: string }> = [];
+    const unusable = unusableIdentifiers(kinds, desired).map(({ kind, value }) => ({ kind, value }));
     const kindSet = new Set(kinds);
 
     // Normalize + de-dupe first: the form can legitimately submit the same
@@ -422,6 +455,7 @@ export class EntityIdentifierService {
 
       const valueNormalized = normalizeIdentifier(entry.kind, entry.value);
       if (valueNormalized == null) {
+        // Already in `unusable` unless it was blank.
         continue;
       }
 
@@ -515,7 +549,7 @@ export class EntityIdentifierService {
       }
     }
 
-    return { conflicts };
+    return { conflicts, unusable };
   }
 
   /**

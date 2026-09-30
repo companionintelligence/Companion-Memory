@@ -1,4 +1,4 @@
-import { EntityIdentifierService } from './EntityIdentifierService';
+import { EntityIdentifierService, unusableIdentifiers } from './EntityIdentifierService';
 
 const OWNER = '00000000-0000-0000-0000-0000000000aa';
 const ENTITY = '00000000-0000-0000-0000-0000000000bb';
@@ -236,5 +236,49 @@ describe('EntityIdentifierService.replaceForEntity', () => {
     );
 
     expect(rows).toEqual([]);
+  });
+
+  it('reports what it could not store instead of dropping it silently, blanks aside', async () => {
+    // The extension is the case that matters: the shared rule used to key it
+    // under its last ten digits (somebody else's number) and now refuses it, so
+    // without the report a number typed into the form would vanish on save.
+    const { service, rows } = makeService();
+
+    const { conflicts, unusable } = await service.replaceForEntity(
+      OWNER,
+      ENTITY,
+      ['email', 'phone'],
+      [
+        { kind: 'phone', value: '212-555-0148 x31', label: 'work' },
+        { kind: 'phone', value: 'not-a-number' },
+        { kind: 'email', value: '   ' },
+        { kind: 'phone', value: '(212) 555-0149' },
+      ],
+    );
+
+    expect(unusable).toEqual([
+      { kind: 'phone', value: '212-555-0148 x31' },
+      { kind: 'phone', value: 'not-a-number' },
+    ]);
+    expect(conflicts).toEqual([]);
+    // The usable one is still applied.
+    expect(rows.map((row) => row.valueNormalized)).toEqual(['2125550149']);
+  });
+});
+
+describe('unusableIdentifiers', () => {
+  it('is the rule replaceForEntity reports by, for a caller that must refuse before writing', () => {
+    const desired = [
+      { kind: 'phone' as const, value: '(212) 555-0147;229' },
+      { kind: 'phone' as const, value: '212 555 0149' },
+      { kind: 'phone' as const, value: '' },
+      { kind: 'email' as const, value: 'dana@example.com' },
+    ];
+
+    expect(unusableIdentifiers(['email', 'phone'], desired)).toEqual([desired[0]]);
+  });
+
+  it('ignores kinds outside the reconciled set', () => {
+    expect(unusableIdentifiers(['email'], [{ kind: 'phone', value: '212-555-0148 x31' }])).toEqual([]);
   });
 });

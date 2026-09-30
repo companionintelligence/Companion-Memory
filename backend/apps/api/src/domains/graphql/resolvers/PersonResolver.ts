@@ -5,7 +5,12 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { JobControlStore } from '@ci/common/job-controls';
 import { MaxArraySizePipe } from '@ci/common/pipes';
-import { EntityIdentifierService, hasPhoneExtension, type IdentifierKind } from '@ci/domains/graph';
+import {
+  EntityIdentifierService,
+  hasPhoneExtension,
+  type IdentifierKind,
+  unusableIdentifiers,
+} from '@ci/domains/graph';
 import { CreatePersonPayload } from '@ci/domains/graphql/types/CreatePersonPayload';
 import { DeleteByIdInput } from '@ci/domains/graphql/types/DeleteByIdInput';
 import { DeleteByIdPayload } from '@ci/domains/graphql/types/DeleteByIdPayload';
@@ -60,6 +65,7 @@ import {
   droppedContactsPatch,
   mergePersonIdentifiers,
   removedContactPatch,
+  unusableToSurface,
 } from '../utils/personContactMethods';
 
 /** How long the review-queue query may spend folding deterministic pairs before it answers. */
@@ -158,6 +164,74 @@ function addressPropertiesPatch(addresses: PersonAddressInput[]): Record<string,
 type ContactKind = Extract<IdentifierKind, 'email' | 'phone'>;
 
 const CONTACT_KINDS: ContactKind[] = ['email', 'phone'];
+
+/**
+ * Why a contact value was refused. `extension` is a real number that cannot
+ * identify anybody, so it is worth keeping somewhere else; `unusable` is not a
+ * number (or address) at all.
+ */
+type RefusedContactReason = 'extension' | 'unusable';
+
+/** `"a"`, `"a" and "b"`, `"a", "b" and "c"`. */
+function quotedList(values: readonly string[]): string {
+  const quoted = values.map((value) => `"${value}"`);
+
+  return quoted.length <= 1
+    ? quoted.join('')
+    : `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`;
+}
+
+/**
+ * The 400 for contact values the shared rule stores nothing for.
+ *
+ * An extension gets its own message because the number itself is fine: it just
+ * cannot identify anybody. Its last ten digits would run the office line and
+ * the extension together into someone else's number, and the main line alone is
+ * shared by everyone at that office.
+ *
+ * `details.refusedContacts` names each value exactly as it was sent, label
+ * included, so the person form can point at the row — and offer to move an
+ * extension number into the notes — instead of only printing the sentence. The
+ * label matters because relabelling a number the record holds is refused too
+ * (see unusableToSurface): once the user puts the label back, the row is no
+ * longer the one refused. `formatError` passes `details` through as
+ * `extensions.details`.
+ */
+function refusedContactsException(
+  refused: ReadonlyArray<{ kind: IdentifierKind; value: string; label?: string | null }>,
+): BadRequestException {
+  const refusedContacts = refused.map(({ kind, value, label }) => ({
+    kind,
+    value,
+    label: label?.trim() || null,
+    reason: (kind === 'phone' && hasPhoneExtension(value) ? 'extension' : 'unusable') as RefusedContactReason,
+  }));
+
+  const withExtension = refusedContacts
+    .filter((entry) => entry.reason === 'extension')
+    .map((entry) => entry.value);
+  const sentences: string[] = [];
+
+  if (withExtension.length === 1) {
+    sentences.push(
+      `${quotedList(withExtension)} includes an extension, so it can't be used to match this person to ` +
+        'calls and messages. Keep it in a note instead.',
+    );
+  } else if (withExtension.length > 1) {
+    sentences.push(
+      `${quotedList(withExtension)} include an extension, so they can't be used to match this person to ` +
+        'calls and messages. Keep them in a note instead.',
+    );
+  }
+
+  for (const entry of refusedContacts) {
+    if (entry.reason === 'unusable') {
+      sentences.push(`"${entry.value}" does not normalize to a usable ${entry.kind}.`);
+    }
+  }
+
+  return new BadRequestException({ message: sentences.join(' '), details: { refusedContacts } });
+}
 
 function parseContactKind(raw: string): ContactKind {
   if (raw !== 'email' && raw !== 'phone') {
@@ -302,7 +376,10 @@ export class PersonResolver {
     }
 
     // Register the initial contact methods so the new person resolves in
-    // people-linking immediately (non-fatal, same as ingest).
+    // people-linking immediately (non-fatal, same as ingest). What it reports
+    // `unusable` — a phone carrying an extension — is not lost, unlike in
+    // updatePerson: `properties.phones` above keeps every number as typed, and
+    // that is where the Details card shows it from, inert for matching.
     if (contacts.length > 0) {
       await this.entityIdentifierService
         .replaceForEntity(serviceContext.userId, entity.id, ['email', 'phone'], contacts)
@@ -390,6 +467,19 @@ export class PersonResolver {
       // one that leaves out rows the user kept without asserting them (an
       // untouched property-only contact) would call every such row removed.
       const dropped = droppedContactsPatch(owned, submitted);
+
+      // A value the shared rule stores nothing for is refused here, BEFORE
+      // anything is written. Contacts are written only to the index, so saving
+      // around it would lose it — and replaceForEntity has already dropped
+      // whatever it replaced by the time it reports: edit a number to add its
+      // extension, cancel on the error, and the number would be gone. Values
+      // the row itself states are let through (see unusableToSurface) — they
+      // arrive with every save. Checked on the whole submission: the index
+      // filter below cannot key an unusable value, so it would not drop one.
+      const refused = unusableToSurface(unusableIdentifiers(CONTACT_KINDS, submitted), owned);
+      if (refused.length > 0) {
+        throw refusedContactsException(refused);
+      }
 
       // The form re-submits every contact it was seeded with, property-only
       // ones included. Only what the user asserted reaches the index: see
@@ -574,16 +664,7 @@ export class PersonResolver {
     );
 
     if (owningEntityId == null) {
-      // An extension gets its own message because the number itself is fine:
-      // it just cannot identify anybody. Its last ten digits would run the
-      // office line and the extension together into someone else's number, and
-      // the main line alone is shared by everyone at that office.
-      throw new BadRequestException(
-        kind === 'phone' && hasPhoneExtension(input.value)
-          ? `"${input.value}" includes an extension, so it can't be used to match this person to ` +
-            'calls and messages. Keep it in a note instead.'
-          : `"${input.value}" does not normalize to a usable ${kind}`,
-      );
+      throw refusedContactsException([{ kind, value: input.value, label: input.label }]);
     }
 
     if (owningEntityId !== personId) {
