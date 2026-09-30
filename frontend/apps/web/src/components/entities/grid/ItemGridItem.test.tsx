@@ -40,11 +40,11 @@ describe('ItemGridItem', () => {
   });
 
   it('renders an image (prefixed with /static) when the item has a file', () => {
-    renderWithProviders(
+    const { container } = renderWithProviders(
       <ItemGridItem item={makeItem({ file: { __typename: 'FileType', id: 'f1', sourceUrl: '/u/d.jpg' } })} />,
     );
 
-    expect(screen.getByRole('img')).toHaveAttribute('src', '/static/u/d.jpg');
+    expect(container.querySelector('img')).toHaveAttribute('src', '/static/u/d.jpg');
   });
 
   it('shows how many of the thing there are, and only when it is more than one', () => {

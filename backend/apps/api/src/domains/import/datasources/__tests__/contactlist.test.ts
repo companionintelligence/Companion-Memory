@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { entityIdentityKey } from '../../staging/identity';
 import { ContactListFileImporter } from '../contactlist';
 import type { DirEntry } from '../registry';
 import type { EntityAttribute, Graph, ImportParams } from '../timeline';
@@ -203,5 +204,37 @@ describe('Contact List datasource', () => {
     );
 
     expect(collected[0].entity?.metadata?.avatar_url).toBeUndefined();
+  });
+
+  /**
+   * An Outlook export's "Company Main Phone" column puts the switchboard on
+   * every colleague's row. Keyed on its smallest handle, each row keyed on that
+   * number — digits sort before letters — and staging collapsed the rows into
+   * ONE entity. This parser declares no `accumulate`, so the second and third
+   * colleagues did not even survive as extra names: they vanished.
+   */
+  it('keys colleagues who share a company main line apart', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-contactlist-office-'));
+    const file = path.join(dir, 'contacts.csv');
+    fs.writeFileSync(
+      file,
+      [
+        'First Name,Last Name,E-mail Address,Company Main Phone,Mobile Phone',
+        'Priya,Natarajan,priya@example.com,555-010-0100,',
+        'Tom,Becker,tom@example.com,555-010-0100,',
+        'Lena,Ortiz,,555-010-0100,555-010-0142',
+      ].join('\n'),
+    );
+    const { params, collected } = makeParams();
+    await new ContactListFileImporter().fileImport(
+      undefined,
+      { fullPath: file } as DirEntry,
+      params as unknown as ImportParams,
+    );
+
+    const entities = collected.map((g) => g.entity!);
+    expect(entities.map((e) => e.name)).toEqual(['Priya Natarajan', 'Tom Becker', 'Lena Ortiz']);
+    expect(entities.map(entityIdentityKey)).toEqual(['priya@example.com', 'tom@example.com', '5550100142']);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

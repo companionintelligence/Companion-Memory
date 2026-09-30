@@ -315,9 +315,9 @@ export function GlobalSearchBox() {
             {
               id: CLEAR_FILTERS_ACTION_ID,
               content: (
-                <div className="flex items-center gap-2">
-                  <FilterX className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
-                  <span className="text-muted-foreground">Clear search filters</span>
+                <div className="flex min-w-0 items-center gap-2">
+                  <FilterX className="h-6 w-6 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+                  <span className="min-w-0 text-muted-foreground">Clear search filters</span>
                 </div>
               ),
             },
@@ -330,9 +330,9 @@ export function GlobalSearchBox() {
         {
           id: CLEAR_QUERY_ACTION_ID,
           content: (
-            <div className="flex items-center gap-2">
-              <SearchX className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
-              <span className="text-muted-foreground">Clear search query</span>
+            <div className="flex min-w-0 items-center gap-2">
+              <SearchX className="h-6 w-6 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+              <span className="min-w-0 text-muted-foreground">Clear search query</span>
             </div>
           ),
         },
@@ -340,12 +340,12 @@ export function GlobalSearchBox() {
         {
           id: SEARCH_ACTION_ID,
           content: (
-            <div className="flex items-center gap-2">
-              <Search className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+              <Search className="h-6 w-6 shrink-0 text-muted-foreground" strokeWidth={1.5} />
               <span className="text-muted-foreground">
                 {onMemoryExplorer ? 'Search Memory for' : 'Search all of Memory for'}
               </span>
-              <span className="font-medium">“{trimmed}”</span>
+              <span className="max-w-full min-w-0 truncate font-medium">“{trimmed}”</span>
             </div>
           ),
         },
@@ -364,9 +364,9 @@ export function GlobalSearchBox() {
       ...recentSearches.map((recent) => ({
         id: `${RECENT_PREFIX}${recent}`,
         content: (
-          <div className="flex items-center gap-2">
-            <Clock className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
-            <span className="flex-1 truncate">{recent}</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <Clock className="h-6 w-6 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+            <span className="min-w-0 flex-1 truncate">{recent}</span>
             <Tooltip delayDuration={600}>
               <Tooltip.Content>{t('SEARCH_RECENT_REMOVE', { query: recent })}</Tooltip.Content>
               <Tooltip.Trigger asChild>

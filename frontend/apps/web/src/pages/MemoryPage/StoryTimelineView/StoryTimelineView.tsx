@@ -246,7 +246,7 @@ export function StoryTimelineView() {
         />
       </ViewCrashBoundary>
 
-      <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
+      <div className="z-20 flex shrink-0 justify-center px-2 py-1.5 device:pointer-events-none device:absolute device:bottom-4 device:left-1/2 device:-translate-x-1/2 device:px-0 device:py-0">
         <div className="pointer-events-auto flex items-center gap-2 rounded-md border border-border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-md">
           <span>
             {formatLoadedCount({

@@ -1,6 +1,7 @@
 import type { TransientRetryPolicy } from '@ci/common/persistence';
 
 import { DatabaseCrashedDuringPushError } from '../../stages/DatabaseCrashedDuringPushError';
+import type { StageRunContext } from '../../types';
 import { ImportStageListener } from '../ImportStageListener';
 
 /**
@@ -22,6 +23,9 @@ const payload = {
   stageId: '22222222-2222-4222-8222-222222222222',
   userId: '33333333-3333-4333-8333-333333333333',
 };
+
+/** The token `claimStage` hands back — every fenced write must carry it. */
+const CLAIM_TOKEN = '44444444-4444-4444-8444-444444444444';
 
 function makeListener(
   overrides: {
@@ -46,12 +50,16 @@ function makeListener(
         : overrides.stage,
     ),
     isFinished: jest.fn(async () => overrides.finished ?? false),
-    beginStage: jest.fn(async () => overrides.claimed ?? true),
-    completeStage: jest.fn(async () => undefined),
-    failStage: jest.fn(async () => undefined),
+    claimStage: jest.fn(
+      async (): Promise<string | null> => ((overrides.claimed ?? true) ? CLAIM_TOKEN : null),
+    ),
+    touchStage: jest.fn(async () => true),
+    completeStage: jest.fn(async () => true),
+    failStage: jest.fn(async () => true),
     advance: jest.fn(async () => overrides.next ?? null),
-    recordProgress: jest.fn(async () => undefined),
+    recordProgress: jest.fn(async () => true),
     resumeInterrupted: jest.fn(async () => undefined),
+    reclaimOrphanedStages: jest.fn(async () => []),
   };
 
   const scratch = {
@@ -139,11 +147,11 @@ describe('ImportStageListener claiming', () => {
   it('runs the stage when it wins the claim', async () => {
     const { listener, runs, unpackStage } = makeListener();
 
-    await listener.runStage(payload);
+    await expect(listener.runStage(payload)).resolves.toBe('ran');
 
-    expect(runs.beginStage).toHaveBeenCalledWith(payload.stageId);
+    expect(runs.claimStage).toHaveBeenCalledWith(payload.stageId, undefined);
     expect(unpackStage.run).toHaveBeenCalledTimes(1);
-    expect(runs.completeStage).toHaveBeenCalledTimes(1);
+    expect(runs.completeStage).toHaveBeenCalledWith(payload.stageId, expect.anything(), CLAIM_TOKEN);
   });
 
   /**
@@ -159,7 +167,7 @@ describe('ImportStageListener claiming', () => {
     await listener.runStage(payload);
 
     expect(unpackStage.run).not.toHaveBeenCalled();
-    expect(runs.beginStage).not.toHaveBeenCalled();
+    expect(runs.claimStage).not.toHaveBeenCalled();
     expect(runs.failStage).toHaveBeenCalledWith(payload.stageId, expect.stringMatching(/different user/));
   });
 
@@ -178,7 +186,7 @@ describe('ImportStageListener claiming', () => {
 
     await listener.runStage(payload);
 
-    expect(runs.beginStage).not.toHaveBeenCalled();
+    expect(runs.claimStage).not.toHaveBeenCalled();
     expect(unpackStage.run).not.toHaveBeenCalled();
   });
 
@@ -187,7 +195,7 @@ describe('ImportStageListener claiming', () => {
 
     await listener.runStage(payload);
 
-    expect(runs.beginStage).not.toHaveBeenCalled();
+    expect(runs.claimStage).not.toHaveBeenCalled();
     expect(unpackStage.run).not.toHaveBeenCalled();
   });
 
@@ -201,7 +209,7 @@ describe('ImportStageListener claiming', () => {
     await listener.runStage(payload);
 
     expect(runs.failStage).toHaveBeenCalledWith(payload.stageId, expect.stringContaining('enrich'));
-    expect(runs.beginStage).not.toHaveBeenCalled();
+    expect(runs.claimStage).not.toHaveBeenCalled();
   });
 
   it('rejects a payload that is not a stage job', async () => {
@@ -285,6 +293,8 @@ describe('ImportStageListener failure', () => {
         name: 'Error',
         message: 'unzip: cannot find central directory',
       }),
+      // Fenced: a failure lands only while this delivery still owns the stage.
+      CLAIM_TOKEN,
     );
     expect(runs.completeStage).not.toHaveBeenCalled();
   });
@@ -365,6 +375,7 @@ describe('ImportStageListener recording a failure while the database is away', (
       payload.stageId,
       expect.stringContaining(`ci push --run ${payload.runId} --retry-failed`),
       expect.objectContaining({ stage: 'push', name: 'DatabaseCrashedDuringPushError' }),
+      CLAIM_TOKEN,
     );
     expect(clock.slept).toEqual([1_000, 2_000]);
   });
@@ -408,6 +419,7 @@ describe('ImportStageListener recording a failure while the database is away', (
       payload.stageId,
       expect.stringMatching(/^push \[phase=pushing\] the database crashed/),
       expect.objectContaining({ phase: 'pushing' }),
+      CLAIM_TOKEN,
     );
   });
 
@@ -449,9 +461,9 @@ describe('ImportStageListener recording a failure while the database is away', (
     // What the service answers once the failure is recorded: the run is
     // finished (failed), and the stage is no longer `queued` to be claimed.
     runs.isFinished.mockResolvedValue(true);
-    runs.beginStage.mockResolvedValue(false);
+    runs.claimStage.mockResolvedValue(null);
 
-    await expect(listener.runStage(payload)).resolves.toBeUndefined();
+    await expect(listener.runStage(payload)).resolves.toBe('skipped');
     expect(pushStage.run).toHaveBeenCalledTimes(1);
   });
 });
@@ -467,5 +479,282 @@ describe('ImportStageListener recovery', () => {
 
     await expect(listener.sweepOnSchedule()).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalledWith('Could not resume interrupted import runs', failure);
+  });
+});
+
+/**
+ * The orphan reaper takes a stage back from a worker it judged dead and hands
+ * the job to pg-boss, which re-issues it under the SAME id. A worker that was
+ * only slow must then stand down without touching anything the replacement
+ * attempt owns: not the stage's counters, not its completion, not the run's
+ * next stage, not its scratch tree, and not the job.
+ */
+describe('ImportStageListener when its stage is taken back', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  /** A runner that reports progress once it is let go, then finishes. */
+  function gatedRunner() {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const run = jest.fn(async (context: StageRunContext) => {
+      await gate;
+      await context.progress({ processed: 1, total: 2, phase: 'extracting' });
+
+      return { processed: 2, total: 2, detail: {} };
+    });
+
+    return { run, release };
+  }
+
+  it('stops the runner at its next progress report once a fenced write finds the claim gone', async () => {
+    const { run, release } = gatedRunner();
+    const { listener, runs, scratch } = makeListener({ run, next: null });
+
+    runs.recordProgress.mockResolvedValueOnce(false);
+    release();
+
+    await expect(listener.runStage(payload)).resolves.toBe('superseded');
+
+    expect(runs.recordProgress).toHaveBeenCalledWith(payload.stageId, expect.anything(), CLAIM_TOKEN);
+    expect(runs.completeStage).not.toHaveBeenCalled();
+    expect(runs.advance).not.toHaveBeenCalled();
+    expect(runs.failStage).not.toHaveBeenCalled();
+    expect(scratch.reclaim).not.toHaveBeenCalled();
+  });
+
+  it('learns of the loss from the heartbeat while the runner is silent', async () => {
+    // The case the heartbeat's fence exists for: a runner deep in one parser
+    // reports nothing for minutes, so no progress write is there to notice.
+    jest.useFakeTimers();
+
+    const { run, release } = gatedRunner();
+    const { listener, runs } = makeListener({ run });
+
+    runs.touchStage.mockResolvedValue(false);
+
+    const running = listener.runStage(payload);
+
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(runs.touchStage).toHaveBeenCalledWith(payload.stageId, CLAIM_TOKEN);
+
+    release();
+
+    await expect(running).resolves.toBe('superseded');
+    // Stopped BEFORE writing: the first progress report after the loss throws
+    // rather than landing a counter in the attempt that replaced this one.
+    expect(runs.recordProgress).not.toHaveBeenCalled();
+    expect(runs.completeStage).not.toHaveBeenCalled();
+  });
+
+  it('does not advance the run on a completion the fence refuses', async () => {
+    // A runner that swallowed the StageClaimLostError, or never reported
+    // progress at all, still reaches completeStage — and the fence is what
+    // stops the NEXT stage starting on top of the attempt now running this one.
+    const { listener, runs, scratch } = makeListener({ next: null });
+
+    runs.completeStage.mockResolvedValueOnce(false);
+
+    await expect(listener.runStage(payload)).resolves.toBe('superseded');
+
+    expect(runs.advance).not.toHaveBeenCalled();
+    expect(scratch.reclaim).not.toHaveBeenCalled();
+  });
+
+  it('neither records nor rethrows a failure the fence refuses', async () => {
+    const { listener, runs } = makeListener({
+      run: jest.fn(async () => {
+        throw new Error('ENOENT: the replacement attempt moved the tree');
+      }),
+    });
+
+    runs.failStage.mockResolvedValueOnce(false);
+
+    // Rethrowing would have pg-boss fail a job it has already re-issued to the
+    // attempt that replaced this one.
+    await expect(listener.runStage(payload)).resolves.toBe('superseded');
+    expect(runs.failStage).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops beating once the stage completes, so a late beat cannot read as a takeover', async () => {
+    // Completion clears the token. A beat landing afterwards — while `advance`
+    // runs, or a scratch reclaim of tens of gigabytes — would miss the fence,
+    // and nothing must mistake that for the stage being taken back.
+    jest.useFakeTimers();
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { listener, runs, logger } = makeListener();
+
+    runs.touchStage.mockResolvedValue(false);
+    runs.advance.mockImplementationOnce(async () => {
+      await gate;
+
+      return null;
+    });
+
+    const running = listener.runStage(payload);
+
+    await jest.advanceTimersByTimeAsync(90_000);
+    release();
+
+    await expect(running).resolves.toBe('ran');
+    expect(runs.touchStage).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringMatching(/lost its import stage/),
+      expect.anything(),
+    );
+  });
+
+  it('records a failure after completion unfenced, as it always has — it is not a takeover', async () => {
+    const failure = new Error('could not enqueue the next stage');
+    const { listener, runs } = makeListener();
+
+    runs.advance.mockRejectedValueOnce(failure);
+
+    await expect(listener.runStage(payload)).rejects.toBe(failure);
+    expect(runs.failStage).toHaveBeenCalledWith(
+      payload.stageId,
+      expect.stringContaining('could not enqueue the next stage'),
+      expect.anything(),
+      undefined,
+    );
+  });
+
+  it('completes the job instead of deferring it when the stage vanished rather than moved', async () => {
+    // A fenced write also misses when the run was deleted, which cascades its
+    // stages. Nobody re-issued the job then, and a deferred job would sit
+    // `active` for the rest of its twelve-hour lease.
+    const { listener, runs } = makeListener();
+
+    runs.completeStage.mockResolvedValueOnce(false);
+    runs.getStage
+      .mockResolvedValueOnce({
+        id: payload.stageId,
+        runId: payload.runId,
+        kind: 'unpack',
+        seq: 0,
+        status: 'queued',
+      })
+      .mockResolvedValueOnce(null);
+
+    await expect(listener.runStage(payload)).resolves.toBe('skipped');
+  });
+});
+
+describe('ImportStageListener acknowledging a delivery', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const JOB_ID = '55555555-5555-4555-8555-555555555555';
+
+  function ack() {
+    return { jobId: JOB_ID, done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
+  }
+
+  it('records the delivering job and its queue on the claim', async () => {
+    // What the orphan reaper fails if this worker goes silent. The queue is the
+    // handler's own, because pgboss.job is partitioned by queue name.
+    const { listener, runs } = makeListener();
+
+    await listener.handleParseStage(payload, ack());
+
+    expect(runs.claimStage).toHaveBeenCalledWith(payload.stageId, { jobId: JOB_ID, queue: 'import-parse' });
+  });
+
+  it('completes a delivery that ran, and one that had nothing to do', async () => {
+    const ran = makeListener();
+    const ranAck = ack();
+
+    await ran.listener.handleUnpackStage(payload, ranAck);
+    expect(ranAck.done).toHaveBeenCalledTimes(1);
+
+    const skipped = makeListener({ claimed: false });
+    const skippedAck = ack();
+
+    await skipped.listener.handleUnpackStage(payload, skippedAck);
+    expect(skippedAck.done).toHaveBeenCalledTimes(1);
+    expect(skippedAck.defer).not.toHaveBeenCalled();
+  });
+
+  it('fails a delivery whose stage failed, so pg-boss records it', async () => {
+    const failure = new Error('unzip: cannot find central directory');
+    const { listener } = makeListener({
+      run: jest.fn(async () => {
+        throw failure;
+      }),
+    });
+    const delivery = ack();
+
+    await listener.handleUnpackStage(payload, delivery);
+
+    expect(delivery.fail).toHaveBeenCalledWith(failure);
+    expect(delivery.done).not.toHaveBeenCalled();
+  });
+
+  it('defers a superseded delivery, leaving the job to the retry pg-boss re-issued under its id', async () => {
+    const { listener, runs } = makeListener();
+    const delivery = ack();
+
+    runs.completeStage.mockResolvedValueOnce(false);
+
+    await listener.handleMediaStage(payload, delivery);
+
+    expect(delivery.defer).toHaveBeenCalledTimes(1);
+    expect(delivery.done).not.toHaveBeenCalled();
+    expect(delivery.fail).not.toHaveBeenCalled();
+  });
+});
+
+describe('ImportStageListener orphan reaping', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('exempts the stages this process is running, and only while it runs them', async () => {
+    // The whole safety argument for a short orphan window: a process KNOWS its
+    // own work is alive, however long a parser blocked its event loop.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { listener, runs } = makeListener({
+      run: jest.fn(async () => {
+        await gate;
+
+        return { processed: 1, total: 1, detail: {} };
+      }),
+    });
+
+    const running = listener.runStage(payload);
+
+    // Let runStage reach the runner, past its handful of awaited lookups.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await listener.reapOrphansOnSchedule();
+    await listener.sweepOnSchedule();
+
+    expect(runs.reclaimOrphanedStages).toHaveBeenLastCalledWith({ liveStageIds: [payload.stageId] });
+    expect(runs.resumeInterrupted).toHaveBeenLastCalledWith({ liveStageIds: [payload.stageId] });
+
+    release();
+    await running;
+    await listener.reapOrphansOnSchedule();
+
+    expect(runs.reclaimOrphanedStages).toHaveBeenLastCalledWith({ liveStageIds: [] });
+  });
+
+  it('logs a failing reap rather than throwing it', async () => {
+    const failure = new Error('database is down');
+    const { listener, runs, logger } = makeListener();
+
+    runs.reclaimOrphanedStages.mockRejectedValueOnce(failure);
+
+    await expect(listener.reapOrphansOnSchedule()).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith('Could not reclaim orphaned import stages', failure);
   });
 });

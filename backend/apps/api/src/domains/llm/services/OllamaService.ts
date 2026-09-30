@@ -40,7 +40,9 @@ import { boundToolResultForPrompt, toolResultByteBudget } from '../toolResultBud
 import type { OllamaModel } from '../types';
 
 import { LlmEndpointService } from './LlmEndpointService';
+import type { OpenAiCompatChatDriver } from './OpenAiCompatChatDriver';
 import { ResidencyPlannerService } from './ResidencyPlannerService';
+import { isChatCapableModel, type ServedModel } from './servedModels';
 
 /**
  * Appended to the REQUEST (never stored) for the forced prose round — the one
@@ -340,6 +342,28 @@ interface ValidateModelResult {
   model: string;
   enableThinking: boolean;
   enableTools: boolean;
+}
+
+/**
+ * Served models with their `/v1/models` labels and context window. Falls back to bare ids for a
+ * driver without {@link OpenAiCompatChatDriver.listServedModels}, which is what a test double built
+ * before it existed provides.
+ */
+async function servedModels(driver: OpenAiCompatChatDriver): Promise<ServedModel[]> {
+  if (typeof driver.listServedModels === 'function') {
+    return driver.listServedModels();
+  }
+
+  return (await driver.listModels()).map((id) => ({ id, labels: [], contextTokens: null }));
+}
+
+/**
+ * Whether a served model can take a chat request: never the configured embedder, the Ollama
+ * embedders the appliance has shipped, or anything {@link isChatCapableModel} rules out by its
+ * labels or name (Lemonade lists rerankers, Whisper and TTS models beside its chat models).
+ */
+function isChatModel(model: { id: string; labels?: string[] }, name: string): boolean {
+  return !INTERNAL_MODELS.has(name) && isChatCapableModel(model, config.embedding.model);
 }
 
 /**
@@ -680,15 +704,15 @@ export class OllamaService implements OnModuleInit {
     const openAiDriver = this.llmEndpointService.getOpenAiDriver();
 
     if (openAiDriver) {
-      const modelIds = await openAiDriver.listModels();
+      const served = await servedModels(openAiDriver);
 
-      return modelIds
-        .map((id) => this.parseOllamaModel(id))
-        .filter((model) => !INTERNAL_MODELS.has(model.name))
-        .map((model) => ({
+      return served
+        .filter((row) => isChatModel(row, this.parseOllamaModel(row.id).name))
+        .map(({ id, labels }) => ({ model: this.parseOllamaModel(id), vision: labels.includes('vision') }))
+        .map(({ model, vision }) => ({
           ...model,
-          capabilities: OPENAI_MODE_CAPABILITIES,
-          vision: false,
+          capabilities: vision ? [...OPENAI_MODE_CAPABILITIES, 'vision'] : OPENAI_MODE_CAPABILITIES,
+          vision,
           tools: true,
           thinking: true,
         }));
@@ -696,7 +720,7 @@ export class OllamaService implements OnModuleInit {
 
     const result = await this.ollama.list();
     const models = result.models.map((model) => this.parseOllamaModel(model.name));
-    const visibleModels = models.filter((model) => !INTERNAL_MODELS.has(model.name));
+    const visibleModels = models.filter((model) => isChatModel({ id: model.model }, model.name));
 
     return await Promise.all(
       visibleModels.map(async (model) => {
@@ -1123,10 +1147,6 @@ export class OllamaService implements OnModuleInit {
     const availableTools = enableTools ? this.toolsWithinCapability(context) : [];
     const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
     const openAiDriver = this.llmEndpointService.getOpenAiDriver();
-    // vLLM / OpenAI-compat only honors `format: 'json'` (json_object). A JSON
-    // Schema object is still useful on the native Ollama path; collapse it here
-    // so structured callers still get JSON rather than prose.
-    const openAiFormat = typeof format === 'string' ? format : format != null ? 'json' : undefined;
 
     const accumulatedMessages: OllamaMessage[] = [];
 
@@ -1138,7 +1158,7 @@ export class OllamaService implements OnModuleInit {
             model,
             messages: inputMessages,
             tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
-            format: openAiFormat,
+            format,
             enableThinking,
             signal,
             maxTokens: maxOutputTokens,
@@ -1195,7 +1215,7 @@ export class OllamaService implements OnModuleInit {
         model,
         messages: inputMessages.concat(accumulatedMessages),
         tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
-        format: openAiFormat,
+        format,
         enableThinking,
         signal,
         maxTokens: maxOutputTokens,
@@ -1238,18 +1258,42 @@ export class OllamaService implements OnModuleInit {
   }
 
   /**
-   * The chat model's context window as the machine can carry it, from
-   * {@link ResidencyPlannerService.resolveChatContextTokens}. The chat path
-   * asks only when `CI_LLM_NUM_CTX` is absent; `null` (no planner, planner
-   * off, OpenAI-compatible backend, or nothing provable) leaves the static
-   * tier-profile fallback in place. Never throws.
+   * The chat model's context window as the machine can carry it: on Ollama from
+   * {@link ResidencyPlannerService.resolveChatContextTokens}, on an
+   * OpenAI-compatible backend from what its `/v1/models` row reports. The chat
+   * path asks only when `CI_LLM_NUM_CTX` is absent; `null` (no planner, planner
+   * off, a backend that reports no window, or nothing provable) leaves the
+   * static tier-profile fallback in place. Never throws.
    */
   async resolveChatContextTokens(model?: string): Promise<number | null> {
+    const openAiDriver = this.llmEndpointService.getOpenAiDriver();
+
+    if (openAiDriver) {
+      return this.servedContextTokens(openAiDriver, model ?? config.llm.chatModel);
+    }
+
     if (!this.residencyPlanner) {
       return null;
     }
 
     return this.residencyPlanner.resolveChatContextTokens(model);
+  }
+
+  /**
+   * The window an OpenAI-compatible backend says it runs `model` with — Lemonade's
+   * `context_length`, vLLM's `max_model_len` (see `servedModels.ts`). The residency planner
+   * cannot answer here (it reads Ollama's `/api/ps`), and without this the chat budget fell back to
+   * the static tier profile whatever the backend had actually loaded. `null` when the backend does
+   * not say, or cannot be asked.
+   */
+  private async servedContextTokens(driver: OpenAiCompatChatDriver, model: string): Promise<number | null> {
+    try {
+      const served = await servedModels(driver);
+
+      return served.find((row) => row.id === model)?.contextTokens ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1426,7 +1470,7 @@ export class OllamaService implements OnModuleInit {
     const served = await this.listServedChatModelIds();
 
     if (served.length === 0) {
-      throw new Error('No chat model is currently loaded on vLLM or Ollama');
+      throw new Error('No chat model is currently served by the inference backend');
     }
 
     const hasVisualContent = messages.some((message) => message.images && message.images.length > 0);
@@ -1534,12 +1578,17 @@ export class OllamaService implements OnModuleInit {
     const servedIds = served ?? (await this.listServedChatModelIds());
     const effectiveChatModel = await this.resolveEffectiveChatModel(userId, servedIds);
 
-    // vLLM/OpenAI-compat exposes one served chat id with no per-model
-    // capability probe (getAvailableModels hard-codes `vision: false` for
-    // that mode) — there is no second model to prefer, and no way to ask it
-    // whether it can see.
-    if (this.llmEndpointService.getOpenAiDriver()) {
-      return { model: effectiveChatModel, supportsVision: false };
+    // OpenAI-compat has no per-model capability probe, and there is no second
+    // model to prefer. The one signal is a `vision` label on the model's
+    // `/v1/models` row, which Lemonade publishes (and CI-Hub's pool passes
+    // through); without one — vLLM, Ollama's `/v1` — it cannot see.
+    const openAiDriver = this.llmEndpointService.getOpenAiDriver();
+
+    if (openAiDriver) {
+      const served = await servedModels(openAiDriver).catch(() => []);
+      const labels = served.find((model) => model.id === effectiveChatModel)?.labels ?? [];
+
+      return { model: effectiveChatModel, supportsVision: labels.includes('vision') };
     }
 
     if (UTILITY_MODEL_EXPLICITLY_CONFIGURED && servedIds.includes(UTILITY_MODEL)) {
@@ -1559,16 +1608,18 @@ export class OllamaService implements OnModuleInit {
     const openAiDriver = this.llmEndpointService.getOpenAiDriver();
 
     if (openAiDriver) {
-      const modelIds = await openAiDriver.listModels();
+      const served = await servedModels(openAiDriver);
 
-      return modelIds.filter((id) => !INTERNAL_MODELS.has(this.parseOllamaModel(id).name));
+      return served
+        .filter((row) => isChatModel(row, this.parseOllamaModel(row.id).name))
+        .map((row) => row.id);
     }
 
     const result = await this.ollama.list();
 
     return result.models
       .map((model: { name: string }) => model.name)
-      .filter((name: string) => !INTERNAL_MODELS.has(this.parseOllamaModel(name).name));
+      .filter((name: string) => isChatModel({ id: name }, this.parseOllamaModel(name).name));
   }
 
   private parseOllamaModel(model: string): OllamaModel {

@@ -1759,6 +1759,7 @@ type KnownPlaceCandidateType {
   lat: Float!
   lng: Float!
   locationId: String
+  sampleEvents: [KnownPlaceSampleEventType!]!
 }
 
 type KnownPlaceCoordinates {
@@ -1769,6 +1770,12 @@ type KnownPlaceCoordinates {
 input KnownPlaceCoordinatesInput {
   lat: Float!
   lng: Float!
+}
+
+type KnownPlaceSampleEventType {
+  id: String!
+  startTime: String!
+  title: String!
 }
 
 type KnownPlaceType {

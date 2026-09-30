@@ -1,6 +1,7 @@
 import { type MouseEvent, useMemo } from 'react';
 
 import { FileIcon } from '@/components/icons';
+import { PendingImage } from '@/components/PendingImage';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { resolveFileTileUrl } from '../resolveMediaUrl';
@@ -44,7 +45,7 @@ export function FileGridItem({ file, onClick }: Props) {
   return (
     <EntityGridItem className="relative p-0" onClick={onClick}>
       <div className="rounded-md overflow-hidden min-h-0 grow inset-0">
-        {url && <img src={url} alt={data.filename || ''} className="w-full h-full object-cover" />}
+        {url && <PendingImage src={url} />}
 
         {!url && (
           <>

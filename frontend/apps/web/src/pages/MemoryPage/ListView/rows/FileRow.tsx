@@ -2,6 +2,7 @@ import { type MouseEvent, type ReactNode, useMemo } from 'react';
 
 import { resolveFileTileUrl } from '@/components/entities/resolveMediaUrl';
 import { FileIcon } from '@/components/icons';
+import { PendingImage } from '@/components/PendingImage';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { EntityRow } from './EntityRow';
@@ -38,13 +39,7 @@ export function FileRow({ file, time, onClick }: Props) {
 
   return (
     <EntityRow
-      icon={
-        url ? (
-          <img src={url} alt={data.filename || ''} className="h-9 w-9 rounded-md bg-muted object-cover" />
-        ) : (
-          <FileIcon />
-        )
-      }
+      icon={url ? <PendingImage src={url} /> : <FileIcon />}
       title={data.title}
       subtitle={
         <>

@@ -2,7 +2,7 @@ import { DEFAULT_QUEUE } from '../constants';
 import { EventListenerRegistry } from '../event-registration';
 import { type EventPayloads } from '../event-registry';
 import type { EventRegistry } from '../registry';
-import type { EventSendOptions } from '../types';
+import type { EventSendOptions, QueuedJob } from '../types';
 
 export abstract class EventService {
   /**
@@ -51,10 +51,26 @@ export abstract class EventService {
   abstract completeJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<void>;
 
   /**
-   * Fail a deferred job so the queue's retry/dead-letter policy applies.
-   * The output is persisted with the job for diagnosis.
+   * Fail a job that is not running in this call stack, so the queue's
+   * retry/dead-letter policy applies: a deferred job whose executor reported
+   * failure, or an `active` job whose worker is gone (the import orphan
+   * reaper). The output is persisted with the job for diagnosis.
+   *
+   * Resolves true when the queue actually transitioned the job — to `retry`,
+   * or to `failed` and the dead-letter queue — and false when there was
+   * nothing to fail: already finished, or no such job (and always, for an
+   * implementation with no persistent queue). A caller that needs the work to
+   * happen again reads false as "no retry is coming" and acts on it.
    */
-  abstract failJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<void>;
+  abstract failJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<boolean>;
+
+  /**
+   * One job's current state on `queue`, or null when there is no such job
+   * there — or no persistent queue to have one (LocalEventService). Read-only:
+   * the transition itself goes through {@link failJob} / {@link completeJob},
+   * so the queue's own policy decides what a failure becomes.
+   */
+  abstract getJob(queue: string, jobId: string): Promise<QueuedJob | null>;
 
   /**
    * Every queue that exists — the union of all listener queues plus the default.

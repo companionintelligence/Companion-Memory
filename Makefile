@@ -499,10 +499,12 @@ health: ## Check the repository for prerequisites
 	@# the container and then fails every tile. Decode the repo's HEIC test
 	@# fixture the way VipsService does. `vips` exits 0 on that failure and
 	@# writes a black image, so the verdict is the tile warnings on stderr.
+	@# vips saves by suffix and BSD mktemp -t appends its own, hence DIR/out.jpg.
 	@HEIC=backend/apps/api/src/domains/files/services/__tests__/__fixtures__/64x40.heic; \
-	OUT=$$(mktemp -t ci-health-heic-XXXXXX.jpg); \
+	DIR=$$(mktemp -d) || exit 1; \
+	OUT=$$DIR/out.jpg; \
 	ERR=$$(vips thumbnail "$$HEIC[fail-on=error]" "$$OUT" 64 2>&1); STATUS=$$?; \
-	rm -f "$$OUT"; \
+	rm -rf "$$DIR"; \
 	if [ $$STATUS -ne 0 ] || printf '%s' "$$ERR" | grep -qE 'error in tile|Unsupported codec'; then \
 		printf "$(RED)✗$(RESET) vips cannot decode HEIC (no HEVC decoder in libheif). On Ubuntu 24.04 / Mint 22 install it with 'sudo apt install libheif-plugin-libde265'; on Debian and macOS it comes with libvips-tools / brew vips.\n\n"; \
 		exit 1; \

@@ -228,11 +228,12 @@ fail() {
 #      compose: it serves no port and nothing dependsOn it.
 #
 # KNOWN REMAINING DRIFT (deliberately left, needs more than a mirror edit):
-#   * Production's gateway also waits on `object-store: service_healthy`. That
-#     needs an object-store healthCheck here first — docker-compose.yml's is
-#     `curl -f http://localhost:9000/minio/health/live` — and an unproven probe
-#     would leave the gateway waiting forever on a store install, so it is left
-#     to whoever can test a real install rather than guessed at here.
+#   * Production's gateway also waits on `object-store: service_healthy`. The
+#     object-store image now carries its own HEALTHCHECK (`curl -f
+#     http://localhost:9000/health`, see infrastructure/object-store/Dockerfile),
+#     so only the gateway's dependsOn entry is missing here — but an unproven
+#     wait would leave the gateway stuck forever on a store install, so it is
+#     left to whoever can test a real install rather than guessed at here.
 #   * The /app-data mounts see ${APP_DATA_DIR}/data/secrets, so on a store
 #     install the per-service isolation is partial: api and worker (root) can
 #     read the master through it, and summary-service (uid 1000) every 0644
@@ -453,9 +454,15 @@ main() {
   # ── Step 1: Prepare bundle ──────────────────────────────────────────
   log "=== Step 1: Prepare app bundle ==="
 
+  # The tarball gets a mktemp -d directory, not a file template: BSD mktemp
+  # (macOS) randomizes only TRAILING X's, so /tmp/bundle-XXXXXX.tar.gz is
+  # created as that literal path. Concurrent runs collide on it, and a run
+  # killed before the trap fires leaves it behind to fail every later run with
+  # "File exists".
   BUNDLE_DIR=$(mktemp -d)
-  BUNDLE=$(mktemp /tmp/bundle-XXXXXX.tar.gz)
-  trap "rm -rf '$BUNDLE_DIR' '$BUNDLE'" EXIT
+  BUNDLE_OUT_DIR=$(mktemp -d)
+  BUNDLE="${BUNDLE_OUT_DIR}/bundle.tar.gz"
+  trap "rm -rf '$BUNDLE_DIR' '$BUNDLE_OUT_DIR'" EXIT
 
   # Copy static manifest files
   cp -r "${SCRIPT_DIR}/manifest/." "${BUNDLE_DIR}/"

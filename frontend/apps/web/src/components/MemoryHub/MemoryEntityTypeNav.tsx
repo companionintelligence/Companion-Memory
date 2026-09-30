@@ -10,6 +10,7 @@ import { AVAILABLE_ENTITY_TYPES, useDropdown } from '@/components/SearchBox/useD
 import { TagInput } from '@/components/TagInput';
 import { gql } from '@/graphql';
 import { MemoryExplorerFilterControls } from '@/pages/MemoryPage/Components/ExplorerToolbar/ExplorerToolbar';
+import { countActiveFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 
 import {
   WHAT_BAR_ICON_CLASS,
@@ -508,18 +509,50 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
     toggleEntityType,
     setTags,
   } = useWhatSelection();
+  const [searchParams] = useSearchParams();
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const activeFilterCount = countActiveFilters(searchParams);
+  const filtersLabel = activeFilterCount > 0 ? `Filters, ${activeFilterCount} active` : 'Filters';
 
   return (
-    <nav
-      aria-label="What to show in Memory"
-      className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border px-2 py-1.5 md:gap-x-3 md:px-3"
-    >
-      <div className="flex shrink-0 items-center gap-1.5 text-sm font-medium text-muted-foreground">
+    <div className="shrink-0 border-b border-border">
+      {/* Phone chrome only. The bar is pinned above the scrolling list, and
+          with What plus When / How / sort it covers about half a phone. It
+          stays open on desktop (`device:`) — this toggle is hidden there. */}
+      <button
+        type="button"
+        aria-expanded={filtersOpen}
+        aria-controls="memory-filter-bar"
+        aria-label={filtersLabel}
+        onClick={() => setFiltersOpen((open) => !open)}
+        className="flex h-11 w-full items-center gap-2 px-2 text-sm font-medium text-muted-foreground device:hidden"
+      >
         <Shapes className="h-4 w-4" strokeWidth={1.5} aria-hidden />
-        <span className="hidden sm:inline">What</span>
-      </div>
+        <span>Filters</span>
+        {activeFilterCount > 0 && <span className="tabular-nums text-foreground">{activeFilterCount}</span>}
+        <ChevronDown
+          className={cn('ml-auto h-4 w-4 transition-transform duration-100', filtersOpen && 'rotate-180')}
+          aria-hidden
+        />
+      </button>
+      <nav
+        id="memory-filter-bar"
+        aria-label="What to show in Memory"
+        // `items-start` keeps this one-line What strip on the first row when the
+        // When / How / sort controls beside it wrap onto a second line.
+        // `device:flex` keeps the bar open on desktop. Below that it stays
+        // closed until the toggle above opens it.
+        className={cn(
+          'shrink-0 flex-wrap items-start gap-x-2 gap-y-1.5 px-2 py-1.5 md:gap-x-3 md:px-3 device:flex',
+          filtersOpen ? 'flex' : 'max-device:hidden',
+        )}
+      >
+        <div className="flex h-8 shrink-0 items-center gap-1.5 text-sm font-medium text-muted-foreground">
+          <Shapes className="h-4 w-4" strokeWidth={1.5} aria-hidden />
+          <span className="hidden sm:inline">What</span>
+        </div>
 
-      {/* Below `xl` the strip takes the whole line (`basis-0`, grows) and scrolls
+        {/* Below `xl` the strip takes the whole line (`basis-0`, grows) and scrolls
           the categories inside it if it must; the filter controls sit on a
           line of their own and wrap there. From `xl` up the strip and the
           controls share the line: each has a floor (16rem here, 24rem there),
@@ -538,70 +571,71 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
           strip was left a 57 px sliver — one What button and part of the next,
           scrolling behind the controls — and below ~1,350 px the controls
           dropped to a second line and ran off the right edge. */}
-      <div className="scrollbar-none min-w-0 flex-1 basis-0 overflow-x-auto overscroll-x-contain xl:min-w-[16rem] xl:max-w-max">
-        <div className="flex w-max items-center gap-1 md:gap-1.5">
-          {categories.map((category) => {
-            if (category.kind === 'standalone') {
-              const types = entityTypesForCategory(category);
+        <div className="scrollbar-none min-w-0 flex-1 basis-0 overflow-x-auto overscroll-x-contain xl:min-w-[16rem] xl:max-w-max">
+          <div className="flex w-max items-center gap-1 md:gap-1.5">
+            {categories.map((category) => {
+              if (category.kind === 'standalone') {
+                const types = entityTypesForCategory(category);
 
-              return (
-                <StandaloneWhatButton
-                  key={category.id}
-                  category={category}
-                  onSelect={() => selectOnlyEntityType(category.entityType)}
-                  selected={isEntityTypeSelected(category.entityType)}
-                  active={isGroupActive(types)}
-                />
-              );
-            }
+                return (
+                  <StandaloneWhatButton
+                    key={category.id}
+                    category={category}
+                    onSelect={() => selectOnlyEntityType(category.entityType)}
+                    selected={isEntityTypeSelected(category.entityType)}
+                    active={isGroupActive(types)}
+                  />
+                );
+              }
 
-            if (category.kind === 'group') {
-              return (
-                <GroupWhatDropdown
-                  key={category.id}
-                  category={category}
-                  selectedEntityTypes={selectedEntityTypes}
-                  isFiltered={isFiltered}
-                  isGroupSelected={isGroupSelected}
-                  isGroupActive={isGroupActive}
-                  onSelectOnly={selectOnlyEntityType}
-                  onToggleType={toggleEntityType}
-                />
-              );
-            }
+              if (category.kind === 'group') {
+                return (
+                  <GroupWhatDropdown
+                    key={category.id}
+                    category={category}
+                    selectedEntityTypes={selectedEntityTypes}
+                    isFiltered={isFiltered}
+                    isGroupSelected={isGroupSelected}
+                    isGroupActive={isGroupActive}
+                    onSelectOnly={selectOnlyEntityType}
+                    onToggleType={toggleEntityType}
+                  />
+                );
+              }
 
-            if (category.kind === 'events') {
-              return (
-                <EventsWhatDropdown
-                  key={category.id}
-                  category={category}
-                  selected={isEntityTypeSelected(category.entityType)}
-                  active={isGroupActive(entityTypesForCategory(category))}
-                  onSelectOnly={() => selectOnlyEntityType(category.entityType)}
-                />
-              );
-            }
+              if (category.kind === 'events') {
+                return (
+                  <EventsWhatDropdown
+                    key={category.id}
+                    category={category}
+                    selected={isEntityTypeSelected(category.entityType)}
+                    active={isGroupActive(entityTypesForCategory(category))}
+                    onSelectOnly={() => selectOnlyEntityType(category.entityType)}
+                  />
+                );
+              }
 
-            return <TagWhatDropdown key={category.id} tags={tags} onTagsChange={setTags} />;
-          })}
+              return <TagWhatDropdown key={category.id} tags={tags} onTagsChange={setTags} />;
+            })}
+          </div>
         </div>
-      </div>
 
-      {/* Outside the scrolling strip so the create action stays reachable when
+        {/* Outside the scrolling strip so the create action stays reachable when
           the What categories overflow. */}
-      {actions && (
-        <div className="order-1 ml-auto flex shrink-0 items-center gap-2 xl:order-2">{actions}</div>
-      )}
+        {actions && (
+          <div className="order-1 ml-auto flex shrink-0 items-center gap-2 xl:order-2">{actions}</div>
+        )}
 
-      {/* The When / How / Who / Where / sort controls. Below `xl` they take a
+        {/* The When / How / Who / Where / sort controls. Below `xl` they take a
           line of their own (`basis-full`, ordered after the create action) and
           wrap within it; from `xl` up they sit inline between the strip and
           the create action with a 24rem floor, share the spare room with the
           strip, and wrap within their share — never their natural width, which
           is wider than most windows (see the strip's note above). */}
-      <div className="order-2 min-w-0 basis-full xl:order-1 xl:flex-1 xl:basis-[24rem]">
-        <MemoryExplorerFilterControls />
-      </div>
-    </nav>
+        <div className="order-2 min-w-0 basis-full xl:order-1 xl:flex-1 xl:basis-[24rem]">
+          <MemoryExplorerFilterControls />
+        </div>
+      </nav>
+    </div>
   );
 }

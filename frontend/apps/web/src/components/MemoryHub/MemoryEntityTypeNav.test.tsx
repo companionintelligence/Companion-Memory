@@ -59,6 +59,47 @@ function expectCollapsed(label: HTMLElement) {
   expect(label).toHaveClass('group-hover:max-w-[7rem]');
 }
 
+describe('MemoryEntityTypeNav — alignment', () => {
+  it('keeps the What strip on the top edge when the other filters wrap to a second line', () => {
+    renderNav();
+
+    const nav = screen.getByRole('navigation', { name: 'What to show in Memory' });
+
+    // `items-center` sat the one-line What strip in the middle of a filter
+    // block that had wrapped onto two rows. Top alignment keeps What on the
+    // first line with When / How / the rest.
+    expect(nav).toHaveClass('items-start');
+    expect(nav).not.toHaveClass('items-center');
+  });
+});
+
+describe('MemoryEntityTypeNav — phone accordion', () => {
+  it('keeps the filter bar collapsed until the chevron opens it', () => {
+    renderNav();
+
+    const toggle = screen.getByRole('button', { name: 'Filters' });
+    const nav = screen.getByRole('navigation', { name: 'What to show in Memory' });
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('aria-controls', 'memory-filter-bar');
+    expect(nav).toHaveClass('max-device:hidden');
+    expect(nav).toHaveClass('device:flex');
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(nav).toHaveClass('flex');
+    expect(nav).not.toHaveClass('max-device:hidden');
+    expect(nav).toHaveClass('device:flex');
+  });
+
+  it('reports how many filters are active while the bar is collapsed', () => {
+    renderNav('/memory?hasLocation=1&semantic=1');
+
+    expect(screen.getByRole('button', { name: 'Filters, 2 active' })).toBeInTheDocument();
+  });
+});
+
 describe('MemoryEntityTypeNav — label reveal', () => {
   it('keeps a selected category readable without hover', () => {
     renderNav(narrowedRoute(['Person']));

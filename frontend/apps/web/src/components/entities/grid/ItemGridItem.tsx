@@ -1,6 +1,7 @@
 import { type MouseEvent, useMemo } from 'react';
 
 import { ItemIcon } from '@/components/icons';
+import { PendingImage } from '@/components/PendingImage';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 import { formatAmount } from '@/lib/money';
 import { humanizeEnum } from '@/lib/utils';
@@ -97,11 +98,7 @@ export function ItemGridItem({ item, onClick, onSelectThing }: Props) {
 
         {url && (
           <div className="rounded-sm overflow-hidden min-h-0 grow">
-            <img
-              src={url}
-              alt={data.name ? `${data.name} image` : 'Thing image'}
-              className="object-cover w-full h-full"
-            />
+            <PendingImage src={url} />
           </div>
         )}
 

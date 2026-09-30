@@ -15,7 +15,7 @@ from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from .config import resolve_llm_model, settings
+from .config import resolve_llm_model, resolve_output_mode, settings
 from .summarizer import (
     ActionsResponse,
     DailySummaryResponse,
@@ -240,7 +240,7 @@ def create_llm_config() -> LLMConfig:
     # Prompted-mode fallbacks (see LLMConfig docstring). Skipped when prompted
     # is already the configured mode — there is nothing left to fall back to.
     prompted_agents = {}
-    if (settings.output_mode or "native").lower() != "prompted":
+    if resolve_output_mode() != "prompted":
         prompted_agents = {
             name: Agent(
                 model,
@@ -322,7 +322,7 @@ def run_agent_sync(
         logger.error(
             "structured_output_failed_falling_back_to_prompted",
             agent=agent_name,
-            output_mode=settings.output_mode,
+            output_mode=resolve_output_mode(),
             error=str(exc),
             error_type=type(exc).__name__,
         )

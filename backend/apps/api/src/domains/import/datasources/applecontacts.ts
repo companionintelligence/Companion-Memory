@@ -5,9 +5,11 @@ import path from 'node:path';
 
 import Database from 'better-sqlite3';
 
+import { markSharedContactHandles } from '../staging/identity';
+
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { EntityAttribute, ImportParams } from './timeline';
+import type { Entity, EntityAttribute, ImportParams } from './timeline';
 
 type AppleContactsOptions = Record<string, never>;
 
@@ -130,29 +132,36 @@ export class AppleContactsFileImporter implements FileImporter {
       return;
     }
 
+    // Every contact this call reads, emitted together at the end: whether a
+    // number is one person's or an office line several cards list can only be
+    // seen across all of them — see markSharedContactHandles. The per-account
+    // databases count as one address book for that, since colleagues are as
+    // likely to be split between a work account and iCloud as not.
+    const contacts: Entity[] = [];
+
     const stat = fs.statSync(start);
     if (stat.isDirectory()) {
       const dbPath = path.join(start, ADDRESS_BOOK_DB);
       if (fs.existsSync(dbPath)) {
-        await this.processDB(dbPath, params);
+        await this.processDB(dbPath, params, contacts);
       }
 
       // Each per-account database is independent: one account's corrupt or
       // unreadable db must not stop the others (processDB isolates its own
       // errors per call already).
       for (const sourceDb of findSourceDbs(start)) {
-        await this.processDB(sourceDb, params);
+        await this.processDB(sourceDb, params, contacts);
       }
-
-      return;
+    } else if (path.basename(start) === ADDRESS_BOOK_DB) {
+      await this.processDB(start, params, contacts);
     }
 
-    if (path.basename(start) === ADDRESS_BOOK_DB) {
-      await this.processDB(start, params);
+    for (const entity of markSharedContactHandles(contacts)) {
+      params.pipeline.push({ entity });
     }
   }
 
-  private processDB(dbPath: string, params: ImportParams): void {
+  private processDB(dbPath: string, params: ImportParams, contacts: Entity[]): void {
     let db: Database.Database | undefined;
     try {
       db = new Database(dbPath, { readonly: true });
@@ -201,7 +210,7 @@ export class AppleContactsFileImporter implements FileImporter {
       let current: ContactAccumulator = { phones: [], emails: [], urls: [], nameParts: [] };
       for (const row of db.prepare(query).iterate() as IterableIterator<ContactRow>) {
         if (row.Z_PK !== currentId) {
-          this.flushEntity(currentId, current, params, dbPath);
+          this.flushEntity(currentId, current, dbPath, contacts);
           currentId = row.Z_PK;
           current = {
             id: row.Z_PK,
@@ -228,7 +237,7 @@ export class AppleContactsFileImporter implements FileImporter {
         }
       }
 
-      this.flushEntity(currentId, current, params, dbPath);
+      this.flushEntity(currentId, current, dbPath, contacts);
     } catch (e) {
       params.log?.('error', 'contacts query failed', { error: (e as Error).message });
       params.pipeline.drop?.('query_failed', path.basename(dbPath));
@@ -241,7 +250,7 @@ export class AppleContactsFileImporter implements FileImporter {
     }
   }
 
-  private flushEntity(id: number | undefined, c: ContactAccumulator, params: ImportParams, dbPath: string) {
+  private flushEntity(id: number | undefined, c: ContactAccumulator, dbPath: string, contacts: Entity[]) {
     if (!id) {
       return;
     }
@@ -288,18 +297,16 @@ export class AppleContactsFileImporter implements FileImporter {
         ? path.basename(path.dirname(dbPath))
         : undefined;
 
-    params.pipeline.push({
+    contacts.push({
+      name,
       // See vcard.ts: an Address Book card is a contact regardless of which
       // optional fields it happens to fill.
-      entity: {
-        name,
-        type: 'contact',
-        attributes,
-        metadata: {
-          Source: 'AppleContacts',
-          DB: path.basename(dbPath),
-          ...(accountId ? { AccountID: accountId } : {}),
-        },
+      type: 'contact',
+      attributes,
+      metadata: {
+        Source: 'AppleContacts',
+        DB: path.basename(dbPath),
+        ...(accountId ? { AccountID: accountId } : {}),
       },
     });
   }

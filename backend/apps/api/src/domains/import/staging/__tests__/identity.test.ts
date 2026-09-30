@@ -6,7 +6,10 @@ import {
   hashItem,
   isOrganizationalAddress,
   isShortCode,
+  legacyEntityIdentityKey,
+  markSharedContactHandles,
   mergeAccumulatedMetadata,
+  namesDescribeDifferentPeople,
   needsContentDigest,
   normalizeHandle,
   ORGANIZATIONAL_STAGED_TYPE,
@@ -72,6 +75,208 @@ describe('entityIdentityKey', () => {
 
   it('is null for an entity with no handle at all', () => {
     expect(entityIdentityKey({ name: 'European Vacation', type: 'album' })).toBeNull();
+  });
+
+  it('passes over a shared handle even when it sorts first', () => {
+    // The office switchboard sorts below the person's own address — digits
+    // before letters — and used to be the key.
+    const entity: Entity = {
+      name: 'Priya Natarajan',
+      attributes: [
+        { name: 'phone', value: '(555) 010-0100', identity: true, shared: true },
+        { name: 'email', value: 'priya@example.com', identity: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('priya@example.com');
+    expect(legacyEntityIdentityKey(entity)).toBe('5550100100');
+  });
+
+  it('keys a named contact on its NAME when every handle it has is shared', () => {
+    const entity: Entity = {
+      name: 'Tom Becker',
+      attributes: [{ name: 'phone', value: '555-010-0100', identity: true, shared: true }],
+    };
+
+    // null here is what sends stagedNaturalKey to `contact:tom becker`.
+    expect(entityIdentityKey(entity)).toBeNull();
+    // Still a contact: the switchboard is still how to reach him.
+    expect(hasContactIdentity(entity)).toBe(true);
+  });
+
+  it('falls back to the smallest shared handle only for a nameless contact', () => {
+    const entity: Entity = {
+      name: '  ',
+      attributes: [
+        { name: 'phone', value: '555-010-0199', identity: true, shared: true },
+        { name: 'phone', value: '555-010-0100', identity: true, shared: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('5550100100');
+  });
+});
+
+describe('legacyEntityIdentityKey', () => {
+  it('is the smallest of every handle, shared or not — the rule existing rows were minted under', () => {
+    const entity: Entity = {
+      name: 'Lena Ortiz',
+      attributes: [
+        { name: 'email', value: 'lena@example.com', identity: true },
+        { name: 'phone', value: '555-010-0135', identity: true, shared: true },
+        { name: 'phone', value: '555-010-0142', identity: true },
+      ],
+    };
+
+    expect(legacyEntityIdentityKey(entity)).toBe('5550100135');
+    expect(entityIdentityKey(entity)).toBe('5550100142');
+  });
+
+  it('agrees with entityIdentityKey for an entity nothing was marked on', () => {
+    const entity: Entity = {
+      attributes: [
+        { name: 'phone', value: '555-010-0142' },
+        { name: 'email', value: 'lena@example.com' },
+      ],
+    };
+
+    expect(legacyEntityIdentityKey(entity)).toBe(entityIdentityKey(entity));
+  });
+});
+
+describe('namesDescribeDifferentPeople', () => {
+  it('is true for colleagues whose names share nothing', () => {
+    expect(namesDescribeDifferentPeople('Priya Natarajan', 'Tom Becker')).toBe(true);
+  });
+
+  it('is false for the ways ONE person is filed twice', () => {
+    // A nickname, a married name, a middle initial, a title, reversed order.
+    expect(namesDescribeDifferentPeople('Matt Okafor', 'Matthew Okafor')).toBe(false);
+    expect(namesDescribeDifferentPeople('Dana Reyes', 'Dana Whitfield')).toBe(false);
+    expect(namesDescribeDifferentPeople('Ann Lee', 'Ann B. Lee')).toBe(false);
+    expect(namesDescribeDifferentPeople('Dr. Omar Haddad', 'Omar Haddad PhD')).toBe(false);
+    expect(namesDescribeDifferentPeople('Haddad, Omar', 'Omar Haddad')).toBe(false);
+    expect(namesDescribeDifferentPeople('José Núñez', 'Jose Nunez')).toBe(false);
+  });
+
+  it('does not separate family members by a shared surname alone', () => {
+    // Deliberately: the name cannot tell this from a typo or a nickname.
+    expect(namesDescribeDifferentPeople('Ana Ruiz', 'Luis Ruiz')).toBe(false);
+  });
+
+  it('is never evidence for a missing name, a relation, or a handle in the name field', () => {
+    expect(namesDescribeDifferentPeople('', 'Tom Becker')).toBe(false);
+    expect(namesDescribeDifferentPeople(null, 'Tom Becker')).toBe(false);
+    expect(namesDescribeDifferentPeople("Tom's mom", 'Grace Whitaker')).toBe(false);
+    expect(namesDescribeDifferentPeople('tom@example.com', 'Grace Whitaker')).toBe(false);
+    expect(namesDescribeDifferentPeople('(555) 010-0100', 'Grace Whitaker')).toBe(false);
+  });
+
+  it('does not count a connective like "de" or "and" as a shared name', () => {
+    expect(namesDescribeDifferentPeople('Ines de Souza', 'Paul de Groot')).toBe(true);
+    expect(namesDescribeDifferentPeople('Front Desk and Billing', 'Mia and Theo')).toBe(true);
+  });
+});
+
+describe('markSharedContactHandles', () => {
+  const phone = (value: string) => ({ name: 'phone', value, identity: true });
+  const email = (value: string) => ({ name: 'email', value, identity: true });
+  const sharedOf = (entity: Entity) =>
+    (entity.attributes ?? []).filter((a) => a.shared).map((a) => normalizeHandle(a.value));
+
+  // One office: a switchboard and a fax on every card, and each person's own
+  // address. The shape that collapsed three colleagues into one Person.
+  const office: Entity[] = [
+    {
+      name: 'Priya Natarajan',
+      type: 'contact',
+      attributes: [phone('555-010-0100'), phone('555-010-0101'), email('priya@example.com')],
+    },
+    {
+      name: 'Tom Becker',
+      type: 'contact',
+      attributes: [phone('555-010-0101'), phone('555-010-0100'), email('tom@example.com')],
+    },
+    {
+      name: 'Lena Ortiz',
+      type: 'contact',
+      attributes: [phone('555-010-0100'), email('lena@example.com'), phone('555-010-0142')],
+    },
+  ];
+
+  it('keys every colleague apart when they share a switchboard and a fax', () => {
+    // Before: every one of them keyed on 5550100100.
+    expect(new Set(office.map(entityIdentityKey))).toEqual(new Set(['5550100100']));
+
+    const marked = markSharedContactHandles(office, ['(555) 010-0101']);
+
+    expect(marked.map(entityIdentityKey)).toEqual(['priya@example.com', 'tom@example.com', '5550100142']);
+    expect(marked.map(sharedOf)).toEqual([
+      ['5550100100', '5550100101'],
+      ['5550100101', '5550100100'],
+      ['5550100100'],
+    ]);
+  });
+
+  it('keeps the legacy key where it was, so the old row can be found and moved', () => {
+    const marked = markSharedContactHandles(office, ['(555) 010-0101']);
+
+    expect(marked.map(legacyEntityIdentityKey)).toEqual(['5550100100', '5550100100', '5550100100']);
+  });
+
+  it('never keys anyone on a number the export types as a fax — even on a card that did not type it', () => {
+    // One copy of a card typed the firm number FAX; the other left it untyped.
+    // A per-card rule gave the copies two different keys and split one person.
+    const copies: Entity[] = [
+      { name: 'Omar Haddad', attributes: [phone('555-010-0150'), phone('555-010-0177')] },
+      { name: 'Omar Haddad', attributes: [phone('555-010-0150'), phone('555-010-0177')] },
+    ];
+
+    const marked = markSharedContactHandles(copies, ['555-010-0150']);
+
+    expect(marked.map(entityIdentityKey)).toEqual(['5550100177', '5550100177']);
+  });
+
+  it('leaves one person’s duplicate cards collapsing on the line they share', () => {
+    const duplicates: Entity[] = [
+      { name: 'Matt Okafor', attributes: [phone('555-010-0160'), email('matt@example.com')] },
+      { name: 'Matthew Okafor', attributes: [phone('555-010-0160')] },
+    ];
+
+    const marked = markSharedContactHandles(duplicates);
+
+    expect(marked.map(entityIdentityKey)).toEqual(['5550100160', '5550100160']);
+    expect(marked[0]).toBe(duplicates[0]);
+    expect(marked[1]).toBe(duplicates[1]);
+  });
+
+  it('takes no evidence from a nameless card', () => {
+    const cards: Entity[] = [
+      { name: 'Grace Whitaker', attributes: [phone('555-010-0170')] },
+      { name: '', attributes: [phone('555-010-0170')] },
+    ];
+
+    expect(markSharedContactHandles(cards).map(entityIdentityKey)).toEqual(['5550100170', '5550100170']);
+  });
+
+  it('marks an email two different people list, not only a phone', () => {
+    const cards: Entity[] = [
+      { name: 'Priya Natarajan', attributes: [email('frontdesk@example.com'), phone('555-010-0102')] },
+      { name: 'Tom Becker', attributes: [email('frontdesk@example.com')] },
+    ];
+
+    const marked = markSharedContactHandles(cards);
+
+    expect(marked.map(entityIdentityKey)).toEqual(['5550100102', null]);
+    expect(sharedOf(marked[1])).toEqual(['frontdesk@example.com']);
+  });
+
+  it('does not mutate what it was given', () => {
+    const before = JSON.stringify(office);
+
+    markSharedContactHandles(office, ['555-010-0101']);
+
+    expect(JSON.stringify(office)).toBe(before);
   });
 });
 

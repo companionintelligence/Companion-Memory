@@ -24,13 +24,13 @@ function makeFile(overrides: Record<string, unknown> = {}) {
 
 describe('FileRow', () => {
   it('renders a thumb from previewUrl when present', () => {
-    renderWithProviders(<FileRow file={makeFile({ previewUrl: '/p/thumb.jpg' })} />);
+    const { container } = renderWithProviders(<FileRow file={makeFile({ previewUrl: '/p/thumb.jpg' })} />);
 
-    expect(screen.getByRole('img')).toHaveAttribute('src', '/static/p/thumb.jpg');
+    expect(container.querySelector('img')).toHaveAttribute('src', '/static/p/thumb.jpg');
   });
 
   it('falls back to sourceUrl for image/png when preview is missing', () => {
-    renderWithProviders(
+    const { container } = renderWithProviders(
       <FileRow
         file={makeFile({
           filename: 'capture.png',
@@ -41,7 +41,7 @@ describe('FileRow', () => {
       />,
     );
 
-    expect(screen.getByRole('img')).toHaveAttribute('src', '/static/u/shot.png');
+    expect(container.querySelector('img')).toHaveAttribute('src', '/static/u/shot.png');
   });
 
   /**

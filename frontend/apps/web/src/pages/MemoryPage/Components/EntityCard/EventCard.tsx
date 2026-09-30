@@ -1,6 +1,7 @@
 import { Card, Tooltip } from '@ci/shadcn';
 import { Calendar, Clock, MapPin, Play } from '@ci/shadcn/icons';
 
+import { PendingImage } from '@/components/PendingImage';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { useEntityService } from '../../useEntityService';
@@ -100,8 +101,8 @@ export function EventCard({ entity }: Props) {
       onClick={() => setActiveEntity({ ...data, __typename: 'EventType', bucketStartTime: data.startTime })}
     >
       {thumbUrl && (
-        <div className="relative -mx-2 mb-1 overflow-hidden rounded-md bg-muted">
-          <img src={thumbUrl} alt={title} loading="lazy" className="h-44 w-full object-cover" />
+        <div className="relative -mx-2 mb-1 h-44 overflow-hidden rounded-md">
+          <PendingImage src={thumbUrl} />
           {isVideo && (
             <span className="absolute inset-0 flex items-center justify-center">
               <span className="flex size-11 items-center justify-center rounded-full bg-black/55 text-white">

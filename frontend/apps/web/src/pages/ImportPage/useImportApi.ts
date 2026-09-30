@@ -133,6 +133,15 @@ export interface ActiveImportStage extends ImportStage {
    * long it took. Null for `blocked`, which is not waiting on anything yet.
    */
   readonly elapsedMs: number | null;
+  /** The claim's last sign of life — heartbeat or progress write. Absent from older servers. */
+  readonly heartbeatAt?: string | null;
+  /**
+   * `running`, but silent past the server's threshold: its worker is gone or
+   * wedged. Beside `queueState` rather than a fifth value of it, because the
+   * stage still holds its slot. The appliance retries a stage whose worker is
+   * gone within minutes; until then, this is the only honest word for it.
+   */
+  readonly stalled?: boolean;
 }
 
 export interface ActiveImportRun extends ImportRun {

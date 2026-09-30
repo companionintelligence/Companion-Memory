@@ -22,6 +22,7 @@
 .claude/
 .beads/
 .overmind*.sock
+.dev-stack.lock
 
 # JavaScript dependencies. The api image runs `yarn workspaces focus`
 # inside the build, so nothing installed locally needs to travel.

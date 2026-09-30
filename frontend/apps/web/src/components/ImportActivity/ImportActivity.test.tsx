@@ -392,6 +392,81 @@ describe('ImportActivityCard', () => {
     expect(screen.getByText('45m 34s')).toBeInTheDocument();
   });
 
+  /**
+   * Reproduced 2026-09-29: a worker restarted mid-parse, and this line went on
+   * pulsing "running" over counts frozen at 8141, with no error, for the twelve
+   * minutes recovery took to notice. The server now says when a running
+   * stage's heartbeat has gone silent; the line has to say it too.
+   */
+  it('says a running stage has stalled, instead of pulsing over frozen counts', () => {
+    render(
+      <ImportActivityCard
+        snapshot={snapshot({
+          runs: [
+            run({
+              stages: [
+                stage({
+                  id: 'stalled-parse',
+                  kind: 'parse',
+                  status: 'running',
+                  queueState: 'running',
+                  phase: 'parsing google_activity (3/56)',
+                  processed: 8_141,
+                  total: null,
+                  itemsPerSec: 12,
+                  etaSeconds: 600,
+                  durationMs: null,
+                  finishedAt: null,
+                  elapsedMs: 9 * 60_000,
+                  heartbeatAt: '2026-08-19T01:20:00.000Z',
+                  stalled: true,
+                }),
+              ],
+            }),
+          ],
+        })}
+      />,
+    );
+
+    // The reason to look first, and no ETA — a stalled stage's is a lie.
+    expect(
+      screen.getByText('Stalled — no heartbeat · parsing google_activity (3/56) · 8.1k · 12/s'),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('stalled')).toBeInTheDocument();
+    expect(screen.queryByLabelText('running')).not.toBeInTheDocument();
+  });
+
+  it('says why a stage that was halfway through is back in the queue', () => {
+    render(
+      <ImportActivityCard
+        snapshot={snapshot({
+          runs: [
+            run({
+              stages: [
+                stage({
+                  id: 'requeued-parse',
+                  kind: 'parse',
+                  status: 'queued',
+                  queueState: 'waiting',
+                  queuePosition: 1,
+                  processed: 0,
+                  total: null,
+                  durationMs: null,
+                  startedAt: null,
+                  finishedAt: null,
+                  elapsedMs: 20_000,
+                  detail: { interrupted: { reason: 'worker stopped heartbeating', processed: 8141 } },
+                }),
+              ],
+            }),
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByText('Next in the read queue · retrying, its worker stopped')).toBeInTheDocument();
+  });
+
   it("puts a failed stage error on the stage, in the stage's own words", () => {
     render(
       <ImportActivityCard

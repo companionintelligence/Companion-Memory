@@ -55,7 +55,7 @@ ensure_secret() {
 # operator-only LLM_API_KEY) is simply absent, and the reader's own fallback
 # applies. Written to a temp file and renamed, so a reader never sees a
 # half-written projection. 0644 like the old shared file: several images read
-# it as a non-root user (powersync uid 901, hbpe, memorizer, postgres, minio).
+# it as a non-root user (powersync uid 901, hbpe, memorizer, postgres, rustfs uid 10001).
 project() {
   local svc="$1"; shift
   local dir="$PROJECTION_ROOT/$svc"
@@ -188,7 +188,7 @@ POWERSYNC_DATABASE_PASSWORD=${DB_SYNC_PASSWORD}
 POWERSYNC_JWT_SECRET=${PS_JWT_SECRET}
 
 # ──────────────────────────────
-# Object Store (MinIO)
+# Object Store (S3)
 # ──────────────────────────────
 OBJECT_STORE_USERNAME=${S3_USERNAME}
 OBJECT_STORE_PASSWORD=${S3_PASSWORD}

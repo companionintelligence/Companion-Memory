@@ -17,6 +17,7 @@ function candidate(overrides: Partial<KnownPlaceCandidate> = {}): KnownPlaceCand
     lat: 1,
     lng: 2,
     eventCount: 9,
+    sampleEvents: [],
     confidence: 0.7,
     ...overrides,
   };
@@ -90,6 +91,7 @@ describe('HomeConfirmService.candidateOptions / topHomeCandidate', () => {
         lat: 1,
         lng: 2,
         eventCount: 9,
+        sampleEvents: [],
         confidence: 0.7,
       },
       {
@@ -99,6 +101,7 @@ describe('HomeConfirmService.candidateOptions / topHomeCandidate', () => {
         lat: 3,
         lng: 4,
         eventCount: 2,
+        sampleEvents: [],
         confidence: 0.4,
       },
     ]);
@@ -115,6 +118,7 @@ describe('HomeConfirmService.candidateOptions / topHomeCandidate', () => {
         lat: 0,
         lng: 0,
         eventCount: 20,
+        sampleEvents: [],
         confidence: 0.8,
       },
       {
@@ -124,6 +128,7 @@ describe('HomeConfirmService.candidateOptions / topHomeCandidate', () => {
         lat: 1,
         lng: 2,
         eventCount: 9,
+        sampleEvents: [],
         confidence: 0.7,
       },
     ]);

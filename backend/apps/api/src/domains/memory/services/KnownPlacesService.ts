@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -9,6 +10,7 @@ import { isValidTimezone } from '@ci/common/time/zoned';
 import { hourDowInTz } from '@ci/domains/daily-metrics/places/transitionMath';
 
 import { PlaceService } from './PlaceService';
+import { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from './selfEntityProvisioner';
 
 /** Role a known place plays in the user's life. */
 export type KnownPlaceKind = 'home' | 'work' | 'school' | 'social' | 'other';
@@ -43,6 +45,15 @@ export interface KnownPlace {
   source: KnownPlaceSource;
 }
 
+/** One event that contributed to a known-place candidate, newest first. */
+export interface KnownPlaceSampleEvent {
+  /** ci.events.event_id */
+  id: string;
+  title: string;
+  /** ISO-8601 start time. */
+  startTime: string;
+}
+
 /** A candidate place discovered by the frequency / clustering pass. */
 export interface KnownPlaceCandidate {
   /** ci.entities Location node id when the cluster is anchored to one. */
@@ -57,6 +68,11 @@ export interface KnownPlaceCandidate {
   lng: number;
   /** Number of events supporting this cluster. */
   eventCount: number;
+  /**
+   * A few of the supporting events, newest first, so an "Unknown place" can
+   * be recognized from what happened there.
+   */
+  sampleEvents: KnownPlaceSampleEvent[];
   /** Heuristic confidence in the candidate (0..1). */
   confidence: number;
 }
@@ -68,6 +84,7 @@ interface Cluster {
   latSum: number;
   lngSum: number;
   eventCount: number;
+  samples: KnownPlaceSampleEvent[];
   /** Count of supporting events whose start hour is in 21:00–06:00 (home signal). */
   nightCount: number;
   /** Count of supporting events on weekdays in 09:00–17:00 (work signal). */
@@ -81,6 +98,26 @@ interface Cluster {
  * store.
  */
 const MAX_CANDIDATES = 50;
+
+/** How many supporting events to show on a candidate so the place is recognizable. */
+const SAMPLE_EVENT_LIMIT = 5;
+
+function rememberSampleEvent(
+  cluster: Cluster,
+  row: { event_id: string | null; title: string | null; start_time: Date | string },
+): void {
+  const start = new Date(row.start_time);
+  const startTime = Number.isNaN(start.getTime()) ? '' : start.toISOString();
+  const title = row.title?.trim() || 'Untitled event';
+  const id = row.event_id?.trim() || `${startTime}:${title}`;
+
+  cluster.samples.push({ id, title, startTime });
+  cluster.samples.sort((a, b) => b.startTime.localeCompare(a.startTime));
+
+  if (cluster.samples.length > SAMPLE_EVENT_LIMIT) {
+    cluster.samples.length = SAMPLE_EVENT_LIMIT;
+  }
+}
 
 /** Coordinate grid size (degrees) for snapping nearby events into one cluster (~1.1km). */
 const CLUSTER_PRECISION = 2;
@@ -157,6 +194,13 @@ export class KnownPlacesService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly logger: LoggerService,
     private readonly placeService: PlaceService,
+    /**
+     * For {@link SELF_ENTITY_PROVISIONER}, resolved lazily — see its doc for
+     * why it cannot be injected. Optional so a hand-built service (the unit
+     * specs) still constructs; without it a user who has no self entity gets
+     * the old error rather than a new one.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {
     this.logger.setContext(KnownPlacesService.name);
   }
@@ -169,6 +213,8 @@ export class KnownPlacesService {
    */
   async buildKnownPlaces(context: UserServiceContext): Promise<KnownPlaceCandidate[]> {
     const rows: Array<{
+      event_id: string | null;
+      title: string | null;
       location_entity_id: string | null;
       location_name: string | null;
       lat: number;
@@ -177,13 +223,19 @@ export class KnownPlacesService {
       timezone: string | null;
     }> = await this.dataSource.query(
       `SELECT
-         event.location_entity_id AS location_entity_id,
-         event.location_name      AS location_name,
+         event.event_id            AS event_id,
+         -- The title lives on the CTI base row (ci.entities.name), not ci.events.
+         entity.name               AS title,
+         event.location_entity_id  AS location_entity_id,
+         event.location_name       AS location_name,
          ST_Y(event.location_coordinates::geometry) AS lat,
          ST_X(event.location_coordinates::geometry) AS lng,
-         event.start_time         AS start_time,
+         event.start_time          AS start_time,
          (SELECT u.timezone FROM ci.users u WHERE u.id = $1) AS timezone
        FROM ci.events event
+       LEFT JOIN ci.entities entity
+         ON entity.entity_id = event.event_id
+        AND entity.entity_type = 'Event'
        WHERE event.user_id = $1
          AND event.location_coordinates IS NOT NULL`,
       [context.userId],
@@ -222,6 +274,7 @@ export class KnownPlacesService {
           latSum: 0,
           lngSum: 0,
           eventCount: 0,
+          samples: [],
           nightCount: 0,
           workHoursCount: 0,
         };
@@ -231,6 +284,7 @@ export class KnownPlacesService {
       cluster.latSum += lat;
       cluster.lngSum += lng;
       cluster.eventCount += 1;
+      rememberSampleEvent(cluster, row);
 
       const name = row.location_name?.trim();
       if (name) {
@@ -362,7 +416,7 @@ export class KnownPlacesService {
       ...(coordinates ? { coordinates: [coordinates.lng, coordinates.lat] } : {}),
     };
 
-    const relationshipId = await this.upsertSelfRelationship(context.userId, locationId, relationshipType, {
+    const relationshipId = await this.upsertSelfRelationship(context, locationId, relationshipType, {
       strength,
       startDate: input.activeFrom ?? null,
       endDate: input.activeTo ?? null,
@@ -414,6 +468,16 @@ export class KnownPlacesService {
   // Helpers
   // ---------------------------------------------------------------------------
 
+  private selfEntityProvisioner(): SelfEntityProvisioner | null {
+    try {
+      return this.moduleRef?.get<SelfEntityProvisioner>(SELF_ENTITY_PROVISIONER, { strict: false }) ?? null;
+    } catch {
+      // No binding (a container without GraphModule): fall through to the
+      // "no self entity" error, which names the actual problem.
+      return null;
+    }
+  }
+
   private rowToKnownPlace(row: KnownPlaceRow): KnownPlace {
     const props = row.properties ?? {};
     const coordsRaw = props.coordinates;
@@ -464,7 +528,7 @@ export class KnownPlacesService {
    * on the existing partial-unique index. Returns the relationship_id.
    */
   private async upsertSelfRelationship(
-    userId: string,
+    context: UserServiceContext,
     locationId: string,
     relationshipType: KnownPlaceRelationship,
     opts: {
@@ -474,11 +538,19 @@ export class KnownPlacesService {
       properties: Record<string, unknown>;
     },
   ): Promise<string> {
+    const userId = context.userId;
     const selfRows: Array<{ entity_id: string | null }> = await this.dataSource.query(
       `SELECT entity_id FROM ci.users WHERE id = $1`,
       [userId],
     );
-    const selfEntityId = selfRows[0]?.entity_id;
+    // `ci.users.entity_id` stays NULL until something self-anchored is
+    // ingested, and nothing guarantees that ever happens: after a full
+    // 13-source import of the reference corpus it was still NULL, so every
+    // Confirm on the Places page — and the daily "is this home?" answer, which
+    // lands here too — failed. Provision the self entity the way graph ingest
+    // does rather than refusing.
+    const selfEntityId =
+      selfRows[0]?.entity_id ?? (await this.selfEntityProvisioner()?.ensureSelfEntityForOwner(context))?.id;
     if (!selfEntityId) {
       throw new Error('Cannot write known-place relationship: user has no self entity');
     }
@@ -534,6 +606,7 @@ export class KnownPlacesService {
       lat: cluster.latSum / cluster.eventCount,
       lng: cluster.lngSum / cluster.eventCount,
       eventCount: cluster.eventCount,
+      sampleEvents: cluster.samples,
       confidence: Number(confidence.toFixed(3)),
     };
   }

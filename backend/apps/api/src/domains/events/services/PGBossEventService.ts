@@ -29,7 +29,7 @@ import {
 import { JobSlotPool } from '../jobSlotPool';
 import { queueInventory } from '../queueInventory';
 import { EventRegistry } from '../registry';
-import type { EventSendOptions, QueueOptions } from '../types';
+import type { EventSendOptions, QueuedJob, QueueOptions } from '../types';
 import { YieldGateRegistry } from '../yieldGates';
 
 import { EventService } from './EventService';
@@ -1616,12 +1616,61 @@ export class PGBossEventService
   }
 
   /**
-   * Fail a deferred job so pg-boss applies its retry/dead-letter policy. The
-   * output is persisted on the job row so the failure stays diagnosable.
+   * Fail a job this call stack is not running, so pg-boss applies its
+   * retry/dead-letter policy: a deferred job whose executor reported failure,
+   * or an `active` job whose worker is gone. The output is persisted on the job
+   * row so the failure stays diagnosable.
+   *
+   * pg-boss decides what the failure becomes, and nothing here second-guesses
+   * it: `retry_count < retry_limit` re-inserts the row as `retry` — same id,
+   * same `created_on`, so it keeps its place at the head of the queue — after
+   * the queue's backoff; otherwise it becomes `failed` and a copy goes to the
+   * dead-letter queue.
+   *
+   * The return value is pg-boss's own count, read past its type declaration:
+   * `fail()` is typed `Promise<void>` but resolves `{ jobs, requested,
+   * affected }` (manager.js `mapCommandResponse`), and `affected` is the only
+   * way to tell a job that transitioned from one that had already finished —
+   * the plan only touches `state < 'completed'`.
    */
-  async failJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<void> {
-    await this.boss.fail(queue, jobId, output);
-    this.logger.warn(`Failed deferred job ${jobId} on queue ${queue}`);
+  async failJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<boolean> {
+    const result = (await this.boss.fail(queue, jobId, output)) as unknown as
+      | { affected?: number }
+      | undefined;
+    const failed = (result?.affected ?? 0) > 0;
+
+    if (failed) {
+      this.logger.warn(
+        `Failed job ${jobId} on queue ${queue}; pg-boss's retry and dead-letter policy applies`,
+      );
+    } else {
+      this.logger.debug(
+        `failJob(${queue}, ${jobId}) found nothing to fail; the job was already finished or gone`,
+      );
+    }
+
+    return failed;
+  }
+
+  /**
+   * One job's state, read through pg-boss rather than off `pgboss.job`, so the
+   * table's column names stay this domain's business.
+   */
+  async getJob(queue: string, jobId: string): Promise<QueuedJob | null> {
+    const job = await this.boss.getJobById(queue, jobId);
+
+    if (job == null) {
+      return null;
+    }
+
+    return {
+      id: job.id,
+      queue: job.name,
+      state: job.state,
+      retryCount: job.retryCount,
+      retryLimit: job.retryLimit,
+      startedOn: job.startedOn ?? null,
+    };
   }
 
   private async executeJob(

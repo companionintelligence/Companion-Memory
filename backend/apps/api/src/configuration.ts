@@ -5,6 +5,7 @@ import path from 'node:path';
 import config from 'config';
 import { z } from 'zod';
 
+import { isDeclaredEmbedModel } from './common/embeddings/embedModelIdentity';
 import { resolveLlmUrlForRuntime } from './domains/llm/services/llmEndpointShared';
 
 /**
@@ -1469,6 +1470,31 @@ parsed.embedding.host = llmUrlForThisRuntime('OLLAMA_EMBED_HOST', parsed.embeddi
 // above first, so an inherited host arrives already right for this runtime.
 if (!parsed.embedding.host) {
   parsed.embedding.host = parsed.services.ollama.host;
+}
+
+// CI-Hub names the embedder it installed in LLM_DEFAULT_EMBEDDING_MODEL (its `embedding_model` handout,
+// which the Summary sidecar already reads). This process used to read only CI_EMBED_MODEL, so it asked
+// Hub's endpoint for `nomic-embed-text` whatever Hub had installed: fine beside Ollama, a failed embed
+// on every row on a Lemonade-only node, whose embedder is `nomic-embed-text-v1.5-GGUF` (the same
+// weights; see embedModelIdentity.ts). An operator's CI_EMBED_MODEL still wins, and is still held to
+// the declared generations at boot. A handed-out name with no declared generation is refused here
+// with an error line instead of failing boot: an older Hub hands out Lemonade's v1
+// (`nomic-embed-text-v1-GGUF`), a different vector space from every existing index, and embedding
+// with it would scramble search rather than fix it.
+if (!process.env.CI_EMBED_MODEL?.trim()) {
+  const handedOut = process.env.LLM_DEFAULT_EMBEDDING_MODEL?.trim();
+
+  if (handedOut && handedOut !== parsed.embedding.model) {
+    if (isDeclaredEmbedModel(handedOut)) {
+      parsed.embedding.model = handedOut;
+    } else {
+      console.error(
+        `[config] LLM_DEFAULT_EMBEDDING_MODEL=${handedOut} has no declared embedding generation ` +
+          `(EMBED_MODEL_GENERATIONS in common/embeddings/embedModelIdentity.ts); embedding with ` +
+          `${parsed.embedding.model} instead. Update CI-Hub, or set CI_EMBED_MODEL deliberately.`,
+      );
+    }
+  }
 }
 
 if (!parsed.llm.apiBase) {

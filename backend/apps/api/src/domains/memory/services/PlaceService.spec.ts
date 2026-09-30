@@ -1,3 +1,5 @@
+import { BadRequestException, ConflictException } from '@nestjs/common';
+
 import type { UserServiceContext } from '@ci/common/context';
 
 import { PlaceEntity } from '../entities/PlaceEntity';
@@ -120,5 +122,95 @@ describe('PlaceService single create still emits', () => {
     await service.create(CONTEXT, { id: 'pl1', name: 'Home' }, { emitCreated: false });
 
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe('PlaceService.update', () => {
+  const PLACE_ID = '00000000-0000-0000-0000-0000000000bb';
+
+  function place(properties: Record<string, unknown> = {}) {
+    return Object.assign(new PlaceEntity(), {
+      id: PLACE_ID,
+      entityType: 'Location',
+      name: 'Cafe',
+      properties,
+    });
+  }
+
+  function makeUpdateService(existing: PlaceEntity) {
+    const update = jest.fn(
+      async (_criteria: unknown, _patch: { properties: Record<string, unknown>; name?: string }) => ({
+        affected: 1,
+      }),
+    );
+    const findOne = jest.fn(async () => existing);
+    const send = jest.fn(async () => []);
+    const repository = {
+      update,
+      findOne,
+      metadata: { target: PlaceEntity, columns: { length: 8 } },
+    };
+    const service = new PlaceService(
+      repository as never,
+      { send } as never,
+      {
+        entityCreated: jest.fn(async () => undefined),
+        entityUpdated: jest.fn(async () => undefined),
+        entityDeleted: jest.fn(async () => undefined),
+        recordMany: jest.fn(async () => undefined),
+      } as never,
+    );
+
+    return { service, update };
+  }
+
+  it('stores punctuation and symbols in the name as typed', async () => {
+    const existing = place({ source: 'reverse_geocode', lat: 37.7, lng: -122.4 });
+    const { service, update } = makeUpdateService(existing);
+
+    await service.update(CONTEXT, PLACE_ID, {
+      name: "Mom's café & co.",
+      properties: existing.properties,
+    });
+
+    expect(update).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ name: "Mom's café & co." }),
+    );
+  });
+
+  it('drops a non-numeric geocode coordinate so a rename does not abort the index cast', async () => {
+    const existing = place({ source: 'reverse_geocode', lat: '37°', lng: 'not-a-number' });
+    const { service, update } = makeUpdateService(existing);
+
+    await service.update(CONTEXT, PLACE_ID, {
+      name: 'Home',
+      properties: {},
+    });
+
+    const written = update.mock.calls[0][1];
+
+    expect(written.properties.lat).toBe(37);
+    expect(written.properties.lng).toBeUndefined();
+  });
+
+  it('turns a duplicate-name unique violation into a conflict instead of an internal error', async () => {
+    const existing = place({ source: 'reverse_geocode', lat: 37.7, lng: -122.4 });
+    const { service, update } = makeUpdateService(existing);
+
+    update.mockRejectedValueOnce(Object.assign(new Error('duplicate key'), { code: '23505' }));
+
+    await expect(
+      service.update(CONTEXT, PLACE_ID, { name: 'Home', properties: existing.properties }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('refuses an empty name', async () => {
+    const { service, update } = makeUpdateService(place());
+
+    await expect(service.update(CONTEXT, PLACE_ID, { name: '   ', properties: {} })).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(update).not.toHaveBeenCalled();
   });
 });

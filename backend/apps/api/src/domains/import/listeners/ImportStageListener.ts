@@ -4,17 +4,18 @@ import { LoggerService } from '@ci/common/logging';
 import { retryOnTransientDatabaseError, type TransientRetryPolicy } from '@ci/common/persistence';
 import { serves } from '@ci/common/roles';
 import { Cron } from '@ci/common/schedule';
-import { OnEvent } from '@ci/domains/events';
+import { OnEvent, type Acknowledgement } from '@ci/domains/events';
 
 import {
   IMPORT_QUEUE,
   IMPORT_QUEUE_OPTIONS,
+  IMPORT_STAGE_HEARTBEAT_SECONDS,
   IMPORT_STAGE_QUEUE_BY_KIND,
   IMPORT_STAGE_QUEUE_OPTIONS,
 } from '../constants';
 import type { ImportStage } from '../entities/ImportStageEntity';
 import { ImportStageEvent } from '../events';
-import { ImportRunService } from '../services/ImportRunService';
+import { ImportRunService, type StageDelivery } from '../services/ImportRunService';
 import { ImportScratchService } from '../services/ImportScratchService';
 import { MediaStage } from '../stages/MediaStage';
 import { ParseStage } from '../stages/ParseStage';
@@ -28,14 +29,11 @@ import { importStagePayloadSchema, type ImportStageRunner, type StageRunContext 
 const PROGRESS_THROTTLE_MS = 1_000;
 
 /**
- * How often a running stage's claim is refreshed while a runner is inside it.
- *
- * Progress writes already touch the claim while work moves; the heartbeat is
- * for the silent stretches — a giant archive mid-extract says nothing for
- * minutes — so liveness never depends on how chatty a stage kind happens to
- * be. Well inside the sweep's staleness window.
+ * How often a running stage's claim is refreshed while a runner is inside it —
+ * see {@link IMPORT_STAGE_HEARTBEAT_SECONDS}, which the stalled and orphan
+ * thresholds are multiples of.
  */
-const STAGE_HEARTBEAT_MS = 30_000;
+const STAGE_HEARTBEAT_MS = IMPORT_STAGE_HEARTBEAT_SECONDS * 1_000;
 
 /**
  * The recovery sweep's cadence — second 30, every fifth minute, offset from
@@ -43,6 +41,43 @@ const STAGE_HEARTBEAT_MS = 30_000;
  * stage is picked up within staleness-plus-a-tick even when nothing restarts.
  */
 const RESUME_SWEEP_CRON = '30 */5 * * * *';
+
+/**
+ * The orphan reaper's cadence — second 15 of every minute, clear of the sweep
+ * above (second 30) and of the crons that pile up on second 0. Every minute
+ * because it bounds how long a dead worker's stage waits past the orphan
+ * window; the query behind it reads a partial index of the handful of running
+ * stages, so the tick costs next to nothing when there is nothing to find.
+ */
+const ORPHAN_REAP_CRON = '15 * * * * *';
+
+/**
+ * How one delivery of a stage job ended, as far as its queue is concerned.
+ *
+ *  - `ran` — this delivery owned the stage and saw it through. (A failure
+ *    throws instead, so pg-boss records it.)
+ *  - `skipped` — nothing to do: the stage was gone, its run finished, someone
+ *    else owned it, or it was refused. The job is done.
+ *  - `superseded` — this delivery owned the stage and LOST it: the orphan
+ *    reaper took it back from a worker it judged dead, and handed the job back
+ *    to pg-boss. Neither completing nor failing the job is this delivery's
+ *    call any more — pg-boss re-uses the job id for its retry, so an ack from
+ *    here would land on the attempt that replaced this one.
+ */
+export type StageDeliveryOutcome = 'ran' | 'skipped' | 'superseded';
+
+/**
+ * Thrown out of a runner's `progress` callback once its claim is gone, so the
+ * runner stops at its next report instead of finishing work that is no longer
+ * its to finish. A runner that swallows it is still harmless: its completion
+ * is fenced by the same claim token, and cannot land.
+ */
+export class StageClaimLostError extends Error {
+  constructor(readonly stageId: string) {
+    super(`Import stage ${stageId} was reclaimed from this worker; stopping`);
+    this.name = 'StageClaimLostError';
+  }
+}
 
 /**
  * How long the worker waits for the database to come back so it can RECORD a
@@ -100,10 +135,40 @@ const STAGE_FAILURE_RECORD_RETRY: TransientRetryPolicy = {
  * that is away — see {@link STAGE_FAILURE_RECORD_RETRY} — which matters most
  * for a push that failed because the database crashed under it, and would
  * otherwise crash it again on every sweep.
+ *
+ * ## A worker that dies is retried, not waited out
+ *
+ * The one retry that IS real is a stage whose worker vanished mid-run — a
+ * restart, a crash, an OOM kill. Its claim goes silent, and within
+ * `IMPORT_STAGE_ORPHAN_SECONDS` the orphan reaper (every minute, and at boot)
+ * takes the stage back and fails its job through pg-boss, which retries it in
+ * place — see `ImportRunService.reclaimOrphanedStages`. This class's part in
+ * that is threefold:
+ *
+ *  - it records WHICH delivery claimed the stage ({@link runStage} passes the
+ *    job id and queue to `claimStage`), which is what the reaper fails;
+ *  - it tells the reaper which stages THIS process is running
+ *    ({@link liveClaims}), and those are never taken back — a process knows
+ *    its own work is alive, however long a parser blocked its event loop;
+ *  - and it honours the claim token. Heartbeats and progress writes are fenced
+ *    on it, so a worker that was only slow learns it lost the stage, stops at
+ *    its next progress report, and acknowledges its delivery with `defer`
+ *    rather than completing a job pg-boss has already re-issued.
  */
 @Injectable()
 export class ImportStageListener implements OnApplicationBootstrap {
   private readonly runners: Map<string, ImportStageRunner>;
+
+  /**
+   * Stage id → claim token, for every stage this process is running right now.
+   *
+   * Handed to the reaper and the sweep as the stages they must not touch. Keyed
+   * by stage rather than by delivery, and only ever cleared by the claim that
+   * set it: after a takeover a retried delivery can land in this same process
+   * while the superseded runner is still winding down, and the loser's cleanup
+   * must not erase the winner's entry.
+   */
+  private readonly liveClaims = new Map<string, string>();
 
   /**
    * How long to wait out an absent database to record a failure — see
@@ -158,9 +223,33 @@ export class ImportStageListener implements OnApplicationBootstrap {
     await this.sweep();
   }
 
+  /**
+   * The orphan reaper alone, every minute: a stage whose pg-boss worker went
+   * silent is taken back and its job failed, so pg-boss retries it in place —
+   * about four minutes after the worker died, where the five-minute sweep's
+   * ten-minute rule took twelve and re-ran the stage behind a new job. The full
+   * sweep above runs the same pass first thing, so boot gets it too.
+   *
+   * `exclusive`: a tick landing on one still in progress would only re-read
+   * the same candidates, and every take is fenced anyway.
+   */
+  @Cron(ORPHAN_REAP_CRON, {
+    name: 'ImportStageListener.reapOrphansOnSchedule',
+    role: 'worker',
+    exclusive: true,
+  })
+  async reapOrphansOnSchedule(): Promise<void> {
+    try {
+      await this.runs.reclaimOrphanedStages({ liveStageIds: [...this.liveClaims.keys()] });
+    } catch (err) {
+      // Sentence first, error second — see `sweep`.
+      this.logger.error('Could not reclaim orphaned import stages', err as Error);
+    }
+  }
+
   private async sweep(): Promise<void> {
     try {
-      await this.runs.resumeInterrupted();
+      await this.runs.resumeInterrupted({ liveStageIds: [...this.liveClaims.keys()] });
     } catch (err) {
       // Sentence first, error second. `LoggerService.resolveArgs` takes a
       // leading Error as the message and pushes the second argument under
@@ -186,36 +275,43 @@ export class ImportStageListener implements OnApplicationBootstrap {
   // `role: 'worker'`: stage jobs run in the headless worker process (when a
   // deployment splits roles), so a parser's synchronous stretches cannot
   // stutter the web process serving buttons.
+  //
+  // `autoAcknowledge: false` because a stage delivery can end three ways, not
+  // two — see StageDeliveryOutcome and `deliver`.
   @OnEvent(ImportStageEvent, {
     queue: IMPORT_STAGE_QUEUE_BY_KIND.unpack,
     queueOptions: IMPORT_STAGE_QUEUE_OPTIONS.unpack,
+    autoAcknowledge: false,
   })
-  async handleUnpackStage(payload: unknown): Promise<void> {
-    await this.runStage(payload);
+  async handleUnpackStage(payload: unknown, ack?: Acknowledgement): Promise<void> {
+    await this.deliver(IMPORT_STAGE_QUEUE_BY_KIND.unpack, payload, ack);
   }
 
   @OnEvent(ImportStageEvent, {
     queue: IMPORT_STAGE_QUEUE_BY_KIND.parse,
     queueOptions: IMPORT_STAGE_QUEUE_OPTIONS.parse,
+    autoAcknowledge: false,
   })
-  async handleParseStage(payload: unknown): Promise<void> {
-    await this.runStage(payload);
+  async handleParseStage(payload: unknown, ack?: Acknowledgement): Promise<void> {
+    await this.deliver(IMPORT_STAGE_QUEUE_BY_KIND.parse, payload, ack);
   }
 
   @OnEvent(ImportStageEvent, {
     queue: IMPORT_STAGE_QUEUE_BY_KIND.media,
     queueOptions: IMPORT_STAGE_QUEUE_OPTIONS.media,
+    autoAcknowledge: false,
   })
-  async handleMediaStage(payload: unknown): Promise<void> {
-    await this.runStage(payload);
+  async handleMediaStage(payload: unknown, ack?: Acknowledgement): Promise<void> {
+    await this.deliver(IMPORT_STAGE_QUEUE_BY_KIND.media, payload, ack);
   }
 
   @OnEvent(ImportStageEvent, {
     queue: IMPORT_STAGE_QUEUE_BY_KIND.push,
     queueOptions: IMPORT_STAGE_QUEUE_OPTIONS.push,
+    autoAcknowledge: false,
   })
-  async handlePushStage(payload: unknown): Promise<void> {
-    await this.runStage(payload);
+  async handlePushStage(payload: unknown, ack?: Acknowledgement): Promise<void> {
+    await this.deliver(IMPORT_STAGE_QUEUE_BY_KIND.push, payload, ack);
   }
 
   // The pre-split shared queue, kept as a DRAIN: jobs are durable, and a
@@ -223,17 +319,58 @@ export class ImportStageListener implements OnApplicationBootstrap {
   // process left queued under the old name. New enqueues never target it
   // (except the deleted-stage fallback in enqueueStage); once a deployment
   // has drained it this handler is removable.
-  @OnEvent(ImportStageEvent, { queue: IMPORT_QUEUE, queueOptions: IMPORT_QUEUE_OPTIONS })
-  async handleStage(payload: unknown): Promise<void> {
-    await this.runStage(payload);
+  @OnEvent(ImportStageEvent, {
+    queue: IMPORT_QUEUE,
+    queueOptions: IMPORT_QUEUE_OPTIONS,
+    autoAcknowledge: false,
+  })
+  async handleStage(payload: unknown, ack?: Acknowledgement): Promise<void> {
+    await this.deliver(IMPORT_QUEUE, payload, ack);
+  }
+
+  /**
+   * Run one delivery and tell its queue how it ended.
+   *
+   * `ran`/`skipped` complete the job and a throw fails it — what the automatic
+   * acknowledgement did for these handlers until now. The third ending is why
+   * they acknowledge by hand: a `superseded` delivery DEFERS, which releases its
+   * worker slot and leaves the job alone. The reaper already failed that job
+   * through pg-boss, which re-issues it under the SAME id; completing it from
+   * here would mark the replacement attempt done while it is still running.
+   *
+   * With no `ack` (a direct call) the outcome is simply returned, and a
+   * failure rethrown — the same contract the automatic wrapper keeps.
+   */
+  private async deliver(queue: string, payload: unknown, ack?: Acknowledgement): Promise<void> {
+    let outcome: StageDeliveryOutcome;
+
+    try {
+      outcome = await this.runStage(payload, ack == null ? undefined : { jobId: ack.jobId, queue });
+    } catch (err) {
+      if (ack == null) {
+        throw err;
+      }
+
+      ack.fail(err);
+
+      return;
+    }
+
+    if (outcome === 'superseded') {
+      ack?.defer();
+    } else {
+      ack?.done();
+    }
   }
 
   /**
    * Run one stage.
    *
-   * Public so a test can drive a stage without a queue.
+   * Public so a test can drive a stage without a queue. `delivery` is the job
+   * carrying it, recorded on the claim so the orphan reaper can hand that job
+   * back to pg-boss if this worker goes silent; absent in a direct call.
    */
-  async runStage(rawPayload: unknown): Promise<void> {
+  async runStage(rawPayload: unknown, delivery?: StageDelivery): Promise<StageDeliveryOutcome> {
     // Parsed, not cast: this came out of `pgboss.job.data`, written by some
     // earlier release of this code or by a replayed dead letter.
     const payload = importStagePayloadSchema.parse(rawPayload);
@@ -246,7 +383,7 @@ export class ImportStageListener implements OnApplicationBootstrap {
       // cleanup operation.
       this.logger.debug('Stage no longer exists; dropping the job', payload);
 
-      return;
+      return 'skipped';
     }
 
     // The stage row is the authority on whose import this is; the payload is a
@@ -267,7 +404,7 @@ export class ImportStageListener implements OnApplicationBootstrap {
         payloadUserId: payload.userId,
       });
 
-      return;
+      return 'skipped';
     }
 
     if (await this.runs.isFinished(payload.runId)) {
@@ -277,7 +414,7 @@ export class ImportStageListener implements OnApplicationBootstrap {
         kind: stage.kind,
       });
 
-      return;
+      return 'skipped';
     }
 
     const runner = this.runners.get(stage.kind);
@@ -288,35 +425,120 @@ export class ImportStageListener implements OnApplicationBootstrap {
         `No runner is registered for the '${stage.kind}' stage in this build`,
       );
 
-      return;
+      return 'skipped';
     }
 
     // The claim. A redelivered job whose stage is already running (or finished)
-    // stops here rather than doing the work twice.
-    if (!(await this.runs.beginStage(stage.id))) {
+    // stops here rather than doing the work twice. The token it returns fences
+    // every write below — see ImportRunService.claimStage.
+    const claimToken = await this.runs.claimStage(stage.id, delivery);
+
+    if (claimToken == null) {
       this.logger.log('Stage was already claimed; leaving it to its owner', {
         runId: payload.runId,
         stageId: stage.id,
         status: stage.status,
       });
 
-      return;
+      return 'skipped';
     }
 
-    const scratchDir = await this.scratch.ensureDir(payload.userId, payload.runId);
+    this.liveClaims.set(stage.id, claimToken);
 
-    // The claim's pulse. Progress writes keep the stage fresh while work
-    // moves; this covers the silent stretches, so the recovery sweep can read
-    // staleness as death. Guarded by status = 'running' server-side, so a beat
-    // that fires after completion is a no-op.
-    const heartbeat = setInterval(() => {
-      this.runs.touchStage(stage.id).catch(() => undefined);
-    }, STAGE_HEARTBEAT_MS);
+    // Whether this worker still owns the stage. Flipped by a fenced heartbeat or
+    // progress write that finds the token gone — the orphan reaper decided this
+    // worker was dead and handed the stage to a retry. Logged once, when it is
+    // first noticed, because it is the line that explains everything after it.
+    let claimLost = false;
+    let claimEnded = false;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+
+    const loseClaim = () => {
+      if (claimLost || claimEnded) {
+        return;
+      }
+
+      claimLost = true;
+      this.logger.warn(
+        'This worker lost its import stage to the orphan reaper; stopping at the next checkpoint',
+        { runId: payload.runId, stageId: stage.id, kind: stage.kind },
+      );
+    };
+
+    // The claim is OVER: completed under this token, which the completion
+    // cleared. A beat landing after that — during `advance`, or a scratch
+    // reclaim of tens of gigabytes — would miss the fence and read as a
+    // takeover that never happened, so the pulse stops here and nothing this
+    // worker observes afterwards can mean it lost the stage.
+    const endClaim = () => {
+      claimEnded = true;
+      clearInterval(heartbeat);
+    };
 
     try {
-      const outcome = await runner.run(this.contextFor(payload, stage.id, scratchDir));
+      const scratchDir = await this.scratch.ensureDir(payload.userId, payload.runId);
 
-      await this.runs.completeStage(stage.id, outcome);
+      // The claim's pulse. Progress writes keep the stage fresh while work
+      // moves; this covers the silent stretches, so the reaper and the sweep can
+      // read staleness as death. Fenced by the claim token, so a beat that
+      // fires after completion is a no-op — and a beat that finds the token
+      // gone is how this worker learns the stage was taken back from it, even
+      // while its runner is deep in a parser and reporting nothing.
+      heartbeat = setInterval(() => {
+        this.runs
+          .touchStage(stage.id, claimToken)
+          .then((held) => {
+            if (!held) {
+              loseClaim();
+            }
+          })
+          .catch(() => undefined);
+      }, STAGE_HEARTBEAT_MS);
+
+      return await this.runClaimed(payload, stage, runner, scratchDir, claimToken, {
+        isLost: () => claimLost,
+        lose: loseClaim,
+        end: endClaim,
+      });
+    } finally {
+      clearInterval(heartbeat);
+
+      // Only the claim that set the entry clears it — see `liveClaims`.
+      if (this.liveClaims.get(stage.id) === claimToken) {
+        this.liveClaims.delete(stage.id);
+      }
+    }
+  }
+
+  /**
+   * The claimed half of {@link runStage}: run it, then complete and advance —
+   * or record the failure — all under the claim token.
+   */
+  private async runClaimed(
+    payload: { userId: string; runId: string },
+    stage: ImportStage,
+    runner: ImportStageRunner,
+    scratchDir: string,
+    claimToken: string,
+    claim: { isLost: () => boolean; lose: () => void; end: () => void },
+  ): Promise<StageDeliveryOutcome> {
+    let completed = false;
+
+    try {
+      const outcome = await runner.run(this.contextFor(payload, stage.id, scratchDir, claimToken, claim));
+
+      // Fenced: a result from an attempt that was taken back is not the
+      // stage's result, and must not advance the run — the attempt that
+      // replaced it is running the same stage, and advancing here would start
+      // the NEXT stage on top of it.
+      if (!(await this.runs.completeStage(stage.id, outcome, claimToken))) {
+        claim.lose();
+
+        return this.endSuperseded(payload, stage, 'completion');
+      }
+
+      completed = true;
+      claim.end();
 
       const next = await this.runs.advance(payload.userId, payload.runId, stage.seq);
 
@@ -365,8 +587,27 @@ export class ImportStageListener implements OnApplicationBootstrap {
         processed: outcome.processed,
         next: next?.kind ?? null,
       });
+
+      return 'ran';
     } catch (err) {
-      const failure = await this.recordFailure(payload, stage, err);
+      // A worker that lost its stage stopped because it was told to (or failed
+      // on the way out). Neither is the stage's failure: recording it would
+      // fail the run under the attempt that replaced this one.
+      if (!completed && (claim.isLost() || err instanceof StageClaimLostError)) {
+        return this.endSuperseded(payload, stage, 'runner');
+      }
+
+      // A failure AFTER the completion landed — in `advance`, or reclaiming the
+      // scratch tree — is recorded unfenced, exactly as it always was. The
+      // completion ended this claim, and a completed stage is one nobody else
+      // can claim, so there is no other attempt for the record to land on.
+      const recorded = await this.recordFailure(payload, stage, err, completed ? undefined : claimToken);
+
+      if (recorded === 'superseded') {
+        claim.lose();
+
+        return this.endSuperseded(payload, stage, 'failure');
+      }
 
       // Sentence first, error under `err` beside the context it is about —
       // `LoggerService` hoists that key so pino still serializes the stack.
@@ -378,22 +619,63 @@ export class ImportStageListener implements OnApplicationBootstrap {
         runId: payload.runId,
         stageId: stage.id,
         kind: stage.kind,
-        failure,
+        failure: recorded,
       });
 
       // Rethrown so pg-boss records it. The retry will find the stage `failed`
       // and no-op — see the class comment.
       throw err;
-    } finally {
-      clearInterval(heartbeat);
     }
   }
 
   /**
+   * Wind down an attempt whose claim is gone, and say which way it ended.
+   *
+   * Almost always the orphan reaper took the stage back and pg-boss re-issued
+   * the job, so the delivery defers (`superseded`). The one other way a fenced
+   * write can miss is the stage row itself disappearing — its run deleted,
+   * which cascades. Nobody re-issued anything then, and deferring would leave
+   * this job `active` for the rest of its twelve-hour lease: the very phantom
+   * the reaper exists to remove. So a vanished stage completes the job like any
+   * other delivery with nothing left to do. A read that fails defers, which is
+   * the answer that can never land on somebody else's attempt.
+   */
+  private async endSuperseded(
+    payload: { runId: string },
+    stage: Pick<ImportStage, 'id' | 'kind'>,
+    at: 'runner' | 'completion' | 'failure',
+  ): Promise<StageDeliveryOutcome> {
+    const current = await this.runs.getStage(stage.id).catch(() => undefined);
+
+    if (current === null) {
+      this.logger.log('Import stage vanished under its worker (its run was deleted); dropping the job', {
+        runId: payload.runId,
+        stageId: stage.id,
+        kind: stage.kind,
+      });
+
+      return 'skipped';
+    }
+
+    this.logger.warn(
+      'Import stage attempt was superseded; its result is discarded and its job left to the retry',
+      {
+        runId: payload.runId,
+        stageId: stage.id,
+        kind: stage.kind,
+        at,
+      },
+    );
+
+    return 'superseded';
+  }
+
+  /**
    * Record a stage failure, waiting out a database that is away — see
-   * {@link STAGE_FAILURE_RECORD_RETRY}. Returns what was recorded, or null when
+   * {@link STAGE_FAILURE_RECORD_RETRY}. Returns what was recorded; null when
    * the database never came back inside the wait (logged; the stage stays
-   * `running` for the sweep's staleness rule).
+   * `running` for the sweep's staleness rule); or `superseded` when the claim
+   * was taken back first, so the failure was not this attempt's to record.
    *
    * Never throws: the caller rethrows the STAGE's error, which is the one
    * pg-boss and the log should carry, not whatever the bookkeeping met.
@@ -402,7 +684,8 @@ export class ImportStageListener implements OnApplicationBootstrap {
     payload: { runId: string },
     stage: Pick<ImportStage, 'id' | 'kind'>,
     err: unknown,
-  ): Promise<StageFailureContext | null> {
+    claimToken?: string,
+  ): Promise<StageFailureContext | null | 'superseded'> {
     try {
       return await retryOnTransientDatabaseError(
         'recording an import stage failure',
@@ -418,7 +701,9 @@ export class ImportStageListener implements OnApplicationBootstrap {
           const error = describeStageFailure(err, { stage: stage.kind, phase });
           const failure = stageFailureContext(err, { stage: stage.kind, phase });
 
-          await this.runs.failStage(stage.id, error, failure);
+          if (!(await this.runs.failStage(stage.id, error, failure, claimToken))) {
+            return 'superseded' as const;
+          }
 
           return failure;
         },
@@ -453,11 +738,18 @@ export class ImportStageListener implements OnApplicationBootstrap {
    * import, which costs more than the parse it is describing. The final counts
    * come from `completeStage`, so a throttled-away tick loses nothing that
    * survives the stage.
+   *
+   * It is also where a superseded runner is STOPPED. Every write is fenced by
+   * the claim token, and once the claim is gone — seen here, or by the
+   * heartbeat — the callback throws {@link StageClaimLostError}, which a runner
+   * that reports progress between units of work propagates out of `run()`.
    */
   private contextFor(
     payload: { userId: string; runId: string },
     stageId: string,
     scratchDir: string,
+    claimToken: string,
+    claim: { isLost: () => boolean; lose: () => void },
   ): StageRunContext {
     let lastWrite = 0;
 
@@ -467,6 +759,10 @@ export class ImportStageListener implements OnApplicationBootstrap {
       stageId,
       scratchDir,
       progress: async (update) => {
+        if (claim.isLost()) {
+          throw new StageClaimLostError(stageId);
+        }
+
         const now = Date.now();
 
         if (now - lastWrite < PROGRESS_THROTTLE_MS) {
@@ -475,7 +771,11 @@ export class ImportStageListener implements OnApplicationBootstrap {
 
         lastWrite = now;
 
-        await this.runs.recordProgress(stageId, update);
+        if (!(await this.runs.recordProgress(stageId, update, claimToken))) {
+          claim.lose();
+
+          throw new StageClaimLostError(stageId);
+        }
       },
     };
   }

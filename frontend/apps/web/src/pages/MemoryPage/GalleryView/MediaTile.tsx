@@ -4,6 +4,7 @@ import { Tooltip, cn } from '@ci/shadcn';
 import { Music, Play } from '@ci/shadcn/icons';
 
 import { FileIcon } from '@/components/icons';
+import { PendingImage } from '@/components/PendingImage';
 
 import { providerLabel } from './EmbedPlayer';
 import type { EntityMedia } from './media';
@@ -43,20 +44,8 @@ export function MediaTile({ media, onClick }: Props) {
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
           )}
         >
-          {showThumb ? (
-            <img
-              src={media.thumbUrl ?? undefined}
-              alt={media.title}
-              loading="lazy"
-              decoding="async"
-              // Intrinsic-size hints (≈ the grid track) let the browser reserve the
-              // tile box and downscale to it — important when a thumbUrl is the
-              // full-resolution source (media with no PREVIEW variant yet).
-              width={240}
-              height={260}
-              onError={() => setBroken(true)}
-              className="h-full w-full object-cover"
-            />
+          {showThumb && media.thumbUrl ? (
+            <PendingImage src={media.thumbUrl} onError={() => setBroken(true)} />
           ) : embed ? (
             // Poster-less provider (Spotify publishes none at a predictable
             // address): a provider-badged placeholder, so the tile still reads

@@ -120,6 +120,64 @@ export const IMPORT_STAGE_WEIGHTS: Record<ImportStageKindName, number> = {
 };
 
 // ---------------------------------------------------------------------------
+// Liveness
+// ---------------------------------------------------------------------------
+
+/**
+ * How often a running stage's claim is refreshed while a runner is inside it.
+ *
+ * Progress writes already touch the claim while work moves; the heartbeat is
+ * for the silent stretches — a giant archive mid-extract says nothing for
+ * minutes — so liveness never depends on how chatty a stage kind happens to be.
+ * Everything below is stated as a multiple of this, so the thresholds cannot
+ * drift out of proportion with the pulse they read.
+ */
+export const IMPORT_STAGE_HEARTBEAT_SECONDS = 30;
+
+/**
+ * Silence after which a `running` stage is reported STALLED — on the run
+ * detail, the active snapshot and `ci runs`.
+ *
+ * Three missed beats. A report, not an action: nothing is reclaimed at this
+ * age. It exists because the alternative was the state this was built to end —
+ * a stage reading `running` with its progress frozen and no error, for as long
+ * as recovery took, which a person watching cannot tell from a slow parse.
+ * A stage this process is still running can read as stalled too (a parser's
+ * synchronous stretch blocks the heartbeat along with everything else), which
+ * is accurate: it is showing no signs of life, which is all the word claims.
+ */
+export const IMPORT_STAGE_STALLED_SECONDS = 3 * IMPORT_STAGE_HEARTBEAT_SECONDS;
+
+/**
+ * Silence after which the orphan reaper takes a stage back from the pg-boss
+ * delivery that claimed it, and fails that job so pg-boss's own retry and
+ * dead-letter policy decides what happens next.
+ *
+ * Six missed beats, against the ten minutes `resumeInterrupted` waits before
+ * its sweep — which stays, as the backstop — plus up to five more for that
+ * sweep's tick. A worker that died mid-parse is now retried within this
+ * window, one reaper tick and pg-boss's first retry delay: about four minutes,
+ * where the reproduction (a worker restarted mid-parse, 2026-09-29) took
+ * twelve, frozen at 8141 with no error showing anywhere.
+ *
+ * Short is safe here for a reason that has nothing to do with the number: the
+ * reaper never touches a stage its own process is running, and on every
+ * topology this appliance has (`all`, or one `worker` beside `web`) that
+ * process is the only one running stages. So the one false positive short
+ * windows are usually feared for — the owner's own event loop blocked by a
+ * parser, or its database connection away — cannot reach the reaper at all.
+ * What is left is a SECOND live worker (a dev restart that leaked the old
+ * process) going six beats without a pulse. The claim token fences that case:
+ * the superseded worker loses the right to write progress, complete, fail or
+ * advance the run, and stops at its next progress report.
+ *
+ * Deliberately NOT applied to in-process runs (BlueBubbles): they hold no
+ * pg-boss job, run in whichever process called them, and heartbeat only by
+ * reporting progress. They keep the ten-minute backstop they were built for.
+ */
+export const IMPORT_STAGE_ORPHAN_SECONDS = 6 * IMPORT_STAGE_HEARTBEAT_SECONDS;
+
+// ---------------------------------------------------------------------------
 // Queue options
 // ---------------------------------------------------------------------------
 
@@ -156,14 +214,21 @@ export const IMPORT_STAGE_WEIGHTS: Record<ImportStageKindName, number> = {
  * numbers exist to prevent.
  *
  * Liveness on this lane is not the deadline's job and never was.
- * `ImportStageListener` heartbeats the stage claim every 30 s and
- * `ImportRunService.resumeInterrupted` re-enqueues anything silent for
- * `STALE_STAGE_MINUTES` (10), on boot and every fifth minute. That detects a
- * genuinely wedged stage in minutes, against a signal the work itself emits,
- * where a wall-clock deadline can only guess. The deadline is the catastrophe
- * backstop underneath it — a listener wedged in a way that still heartbeats,
- * or one whose queue slot must be reclaimed for the process to keep working —
- * so it is sized to be unreachable by healthy work.
+ * `ImportStageListener` heartbeats the stage claim every
+ * {@link IMPORT_STAGE_HEARTBEAT_SECONDS}, and a stage whose worker went away is
+ * found by that silence: `ImportRunService.reclaimOrphanedStages` takes back a
+ * stage silent for {@link IMPORT_STAGE_ORPHAN_SECONDS} and fails its job, so
+ * pg-boss retries it — every minute, and on boot. (`resumeInterrupted`'s
+ * ten-minute sweep remains beneath it for claims no pg-boss job holds.) That
+ * detects a dead worker in minutes, against a signal the work itself emits,
+ * where a wall-clock deadline can only guess. Before the reaper, the dead
+ * worker's JOB was only ever retried by this deadline, twelve hours on: the
+ * ten-minute sweep re-queued the stage behind a fresh job at the back of its
+ * kind's queue and left the orphan `active` — reproduced with a worker
+ * restarted mid-parse. The deadline is the catastrophe backstop
+ * underneath it — a listener wedged in a way that still heartbeats, or one
+ * whose queue slot must be reclaimed for the process to keep working — so it
+ * is sized to be unreachable by healthy work.
  *
  * A retry is safe but not free: `runStage` claims through
  * `ImportRunService.beginStage`, so a redelivery of a stage still held by a

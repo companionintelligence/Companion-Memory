@@ -2,6 +2,8 @@ import { useMemo } from 'react';
 
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
+import { SearchResultRow } from './SearchResultRow';
+
 export const FILE_FRAGMENT = gql(`
   fragment SearchResultFileData on FileType {
     id
@@ -22,12 +24,10 @@ export function FileResult({ file }: Props) {
   }, [data.previewUrl]);
 
   return (
-    <div className="flex items-center justify-between gap-2">
-      <div className="flex items-center gap-2">
-        <img src={url} alt={data.filename || ''} className="h-6 w-6" />
-        <div className="font-medium">{data.filename}</div>
-      </div>
-      <div className="text-muted-foreground">File</div>
-    </div>
+    <SearchResultRow
+      icon={<img src={url} alt={data.filename || ''} className="h-6 w-6" />}
+      title={data.filename}
+      kind="File"
+    />
   );
 }

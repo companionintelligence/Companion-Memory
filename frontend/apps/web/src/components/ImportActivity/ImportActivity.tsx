@@ -422,7 +422,8 @@ function liveStages(stages: readonly ActiveImportStage[]): ActiveImportStage[] {
  *
  * What is being said, in priority order:
  *
- *  - `running`  → the phase the runner set, live counts, throughput, ETA.
+ *  - `running`  → the phase the runner set, live counts, throughput, ETA —
+ *    or, when its heartbeat has gone silent, that it has STALLED.
  *  - `waiting`  → that it is IN THE QUEUE and where, plus how long it has been
  *    there. This is the line that did not exist, and the reason a normal batch
  *    import looked broken.
@@ -503,10 +504,17 @@ export function describeStage(stage: ActiveImportStage): string {
   });
 
   if (queued != null) {
-    return queued;
+    // Back in the queue because its worker died — say so, or a stage that was
+    // halfway through reads as one that never started.
+    return stage.detail?.interrupted != null ? `${queued} · retrying, its worker stopped` : queued;
   }
 
   const parts: string[] = [];
+
+  // First, because it is the reason to look: the counts after it are frozen.
+  if (stage.stalled) {
+    parts.push('Stalled — no heartbeat');
+  }
 
   if (stage.phase) {
     parts.push(stage.phase);
@@ -525,8 +533,8 @@ export function describeStage(stage: ActiveImportStage): string {
   }
 
   // Only while it is actually moving: a finished stage's leftover ETA is a lie,
-  // and StageBar makes the same call for the same reason.
-  if (stage.queueState === 'running') {
+  // and StageBar makes the same call for the same reason. So is a stalled one's.
+  if (stage.queueState === 'running' && !stage.stalled) {
     const eta = formatEta(stage.etaSeconds);
 
     if (eta != null) {
@@ -544,6 +552,12 @@ function StageIcon({ stage }: { stage: ActiveImportStage }) {
 
   if (stage.queueState === 'done') {
     return <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-label="done" />;
+  }
+
+  // A pulsing "running" dot on a stage nothing is working on is the exact
+  // false reassurance the stall flag exists to remove.
+  if (stage.queueState === 'running' && stage.stalled) {
+    return <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-label="stalled" />;
   }
 
   if (stage.queueState === 'running') {

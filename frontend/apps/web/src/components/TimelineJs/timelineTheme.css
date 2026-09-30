@@ -616,6 +616,84 @@
   color: var(--tl-fg) !important;
 }
 
+/*
+ * On a phone the prev/next peek cards are wide enough to sit on top of the
+ * story. TimelineJS also hides them entirely once it decides the browser is
+ * mobile, which leaves no way to step to the previous or next event. Keep a
+ * pair of icon buttons at the bottom corners of the story, clear of the text.
+ */
+@media (max-width: 896px) {
+  .ci-timeline-js .tl-slidenav-previous,
+  .ci-timeline-js .tl-slidenav-next,
+  .ci-timeline-js .tl-mobile .tl-slidenav-previous,
+  .ci-timeline-js .tl-mobile .tl-slidenav-next,
+  .ci-timeline-js .tl-skinny .tl-slidenav-previous,
+  .ci-timeline-js .tl-skinny .tl-slidenav-next,
+  .ci-timeline-js .tl-skinny.tl-mobile .tl-slidenav-previous,
+  .ci-timeline-js .tl-skinny.tl-mobile .tl-slidenav-next {
+    display: block !important;
+    top: auto !important;
+    bottom: 0.5rem !important;
+    transform: none !important;
+    z-index: 20 !important;
+    margin: 0 !important;
+  }
+
+  .ci-timeline-js .tl-slidenav-previous {
+    left: 0.5rem !important;
+  }
+
+  .ci-timeline-js .tl-slidenav-next {
+    right: 0.5rem !important;
+  }
+
+  .ci-timeline-js .tl-slidenav-next .tl-slidenav-content-container,
+  .ci-timeline-js .tl-slidenav-previous .tl-slidenav-content-container,
+  .ci-timeline-js .tl-slidenav-next .tl-slidenav-content-container.tl-slidenav-inverted,
+  .ci-timeline-js .tl-slidenav-previous .tl-slidenav-content-container.tl-slidenav-inverted,
+  .ci-timeline-js .tl-skinny .tl-slidenav-previous .tl-slidenav-content-container,
+  .ci-timeline-js .tl-skinny .tl-slidenav-next .tl-slidenav-content-container {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 2.25rem !important;
+    max-width: 2.25rem !important;
+    height: 2.25rem !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    gap: 0 !important;
+    border-radius: 999px !important;
+  }
+
+  .ci-timeline-js .tl-slidenav-next .tl-slidenav-title,
+  .ci-timeline-js .tl-slidenav-previous .tl-slidenav-title,
+  .ci-timeline-js .tl-slidenav-next .tl-slidenav-description,
+  .ci-timeline-js .tl-slidenav-previous .tl-slidenav-description,
+  .ci-timeline-js .tl-skinny .tl-slidenav-previous .tl-slidenav-title,
+  .ci-timeline-js .tl-skinny .tl-slidenav-next .tl-slidenav-title,
+  .ci-timeline-js .tl-skinny .tl-slidenav-previous .tl-slidenav-description,
+  .ci-timeline-js .tl-skinny .tl-slidenav-next .tl-slidenav-description {
+    display: none !important;
+  }
+
+  .ci-timeline-js .tl-slidenav-next .tl-slidenav-icon,
+  .ci-timeline-js .tl-slidenav-previous .tl-slidenav-icon,
+  .ci-timeline-js .tl-skinny .tl-slidenav-next .tl-slidenav-icon,
+  .ci-timeline-js .tl-skinny .tl-slidenav-previous .tl-slidenav-icon {
+    width: 2.25rem !important;
+    height: 2.25rem !important;
+    margin: 0 !important;
+    opacity: 1 !important;
+  }
+
+  /* Last lines of the story sit above the buttons instead of underneath them. */
+  .ci-timeline-js .tl-slide-scrollable-container,
+  .ci-timeline-js .tl-slide-content {
+    padding-bottom: 3.25rem !important;
+    box-sizing: border-box !important;
+  }
+}
+
 /* Attribution lives in Hub OSS credits. */
 .ci-timeline-js .tl-attribution,
 .ci-timeline-js .tl-attribution * {

@@ -290,6 +290,11 @@ describe('isContextOverflowError', () => {
     'Requested token count exceeds the model context window',
     'context_length_exceeded',
     'prompt is too long: 12000 tokens > 8192',
+    // llama.cpp's server, and so Lemonade, as the openai client surfaces it.
+    '400 the request exceeds the available context size, try increasing it',
+    'exceed_context_size_error',
+    // Hugging Face TGI.
+    'Input validation error: `inputs` tokens + `max_new_tokens` must be <= 4096. Given: 4000 `inputs` tokens and 512 `max_new_tokens`',
   ])('classifies %s as an overflow', (message) => {
     expect(isContextOverflowError(new Error(message))).toBe(true);
   });

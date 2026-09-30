@@ -111,6 +111,16 @@ export interface EntityAttribute {
   name: string;
   value?: string | number | boolean | null;
   identity?: boolean;
+  /**
+   * The handle is this entity's, but not ITS ALONE: a fax, or a line another
+   * person's card in the same export also lists. It is still an identity — it
+   * is still how to reach them, and it still makes the entity a contact — but
+   * it is never the entity's KEY, because keying two people on one office
+   * number is what made them one Person. Set by the parser, which is the only
+   * place that can see the rest of the export; see
+   * `staging/identity.ts markSharedContactHandles`.
+   */
+  shared?: boolean;
 }
 export interface Entity {
   id?: string | number;

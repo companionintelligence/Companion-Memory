@@ -137,12 +137,11 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+    # No healthcheck here: the image carries its own HEALTHCHECK
+    # (infrastructure/object-store/Dockerfile). The probe URL belongs to the
+    # server inside the image, and `make dev` reuses an existing image rather
+    # than rebuilding it, so a probe written here fails whenever a checkout
+    # and its local image disagree about which server that is.
     profiles: [ "local", "staging", "production" ]
 
   summary-service:

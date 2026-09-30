@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Children, isValidElement, type ReactNode } from 'react';
 
 import { fireEvent, screen } from '@testing-library/react';
 import { useSearchParams } from 'react-router-dom';
@@ -26,6 +26,10 @@ vi.mock('@ci/shadcn', async (importOriginal) => {
   // keeps the same value/onValueChange contract, so SortControl's own wiring
   // (URL round-trip + option mapping) is still exercised for real; only the
   // unrelated Radix listbox internals are bypassed.
+  function SortTrigger({ className }: { className?: string }) {
+    return <span data-testid="sort-trigger" className={className} />;
+  }
+
   function FakeSelect({
     value,
     onValueChange,
@@ -35,14 +39,32 @@ vi.mock('@ci/shadcn', async (importOriginal) => {
     onValueChange?: (value: string) => void;
     children?: ReactNode;
   }) {
+    const outside: ReactNode[] = [];
+    const inside: ReactNode[] = [];
+
+    // The trigger is a sibling of the native select: a <span> nested in
+    // <select> is invalid and React warns on every toolbar render.
+    Children.forEach(children, (child) => {
+      if (isValidElement(child) && child.type === SortTrigger) {
+        outside.push(child);
+
+        return;
+      }
+
+      inside.push(child);
+    });
+
     return (
-      <select aria-label="Sort" value={value} onChange={(event) => onValueChange?.(event.target.value)}>
-        {children}
-      </select>
+      <>
+        {outside}
+        <select aria-label="Sort" value={value} onChange={(event) => onValueChange?.(event.target.value)}>
+          {inside}
+        </select>
+      </>
     );
   }
 
-  FakeSelect.Trigger = () => null;
+  FakeSelect.Trigger = SortTrigger;
   FakeSelect.Value = () => null;
   FakeSelect.Content = ({ children }: { children?: ReactNode }) => <>{children}</>;
   FakeSelect.Item = ({ value, children }: { value: string; children?: ReactNode }) => (
@@ -343,6 +365,18 @@ describe('ExplorerToolbar', () => {
       expect(screen.getByRole('combobox', { name: 'Sort' })).toHaveValue('name-desc');
     });
 
+    it('sizes the trigger to the label and keeps that label left-aligned', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory?view=list' });
+
+      const trigger = screen.getByTestId('sort-trigger');
+
+      expect(trigger).toHaveClass('w-fit');
+      expect(trigger).toHaveClass('shrink-0');
+      expect(trigger).toHaveClass('justify-start');
+      expect(trigger).toHaveClass('text-left');
+      expect(trigger.className).not.toMatch(/min-w-\[13rem\]|w-\[150px\]/);
+    });
+
     it('defaults to Relevance on /memory and offers no time sort without a When filter', () => {
       renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory?view=list' });
 
@@ -408,6 +442,25 @@ describe('ExplorerToolbar', () => {
 
       expect(screen.getByTestId('params').textContent).not.toContain('hasLocation');
       expect(screen.queryByRole('button', { name: 'Remove has a location' })).not.toBeInTheDocument();
+    });
+
+    it('keeps Clear all outside the scrolling chip row and clears every filter', () => {
+      renderToolbar(<ExplorerToolbar open />, {
+        route: '/?people=Ada%20Lovelace&tags=space',
+      });
+
+      const clear = screen.getByRole('button', { name: 'Clear all' });
+      const drop = screen.getByLabelText('Filter drop area');
+
+      expect(drop).not.toContainElement(clear);
+      expect(drop.className).not.toContain('overflow-hidden');
+
+      fireEvent.click(clear);
+
+      const params = screen.getByTestId('params').textContent ?? '';
+
+      expect(params).not.toContain('people=');
+      expect(params).not.toContain('tags=');
     });
 
     it('removes an already-applied person filter chip, leaving the rest of the URL untouched', () => {

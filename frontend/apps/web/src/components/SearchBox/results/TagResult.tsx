@@ -2,6 +2,8 @@ import { TagIcon } from '@/components/icons';
 
 import { startFilterDrag } from '../filterDrag';
 
+import { SearchResultRow } from './SearchResultRow';
+
 interface Props {
   label: string;
 }
@@ -15,16 +17,13 @@ export function TagResult({ label }: Props) {
   return (
     // Draggable onto the Memory explorer's filter drop area to add this tag
     // as a filter; clicking opens the explorer filtered to the tag.
-    <div
+    <SearchResultRow
       draggable
       onDragStart={(event) => startFilterDrag(event, 'tag', label)}
-      className="flex cursor-grab items-center justify-between gap-2 active:cursor-grabbing"
-    >
-      <div className="flex items-center gap-2">
-        <TagIcon />
-        <div className="font-medium">#{label}</div>
-      </div>
-      <div className="text-muted-foreground">Tag</div>
-    </div>
+      className="cursor-grab active:cursor-grabbing"
+      icon={<TagIcon />}
+      title={`#${label}`}
+      kind="Tag"
+    />
   );
 }

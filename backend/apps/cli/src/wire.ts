@@ -187,6 +187,13 @@ export interface RunSummary {
    * not its `processed`. Present on the LIST only; zero for a run yet to push.
    */
   records?: number;
+  /**
+   * A stage of this run is `running` but has stopped heartbeating: its worker
+   * is gone or wedged. The run's `status` is a cache, and goes on reading
+   * `running` meanwhile. On the list and the detail; absent from a server that
+   * predates the flag, which the CLI reads as "not stalled".
+   */
+  stalled?: boolean;
 }
 
 /** One box of the stage bar. */
@@ -209,6 +216,10 @@ export interface StageSummary {
   /** ISO 8601. `durationMs` is only written when a stage finishes; these are not. */
   startedAt: string | null;
   finishedAt: string | null;
+  /** ISO 8601. The claim's last sign of life — heartbeat or progress write. Absent from older servers. */
+  heartbeatAt?: string;
+  /** `running`, but silent past the server's stalled threshold. Absent from older servers. */
+  stalled?: boolean;
 }
 
 export interface RunDetail extends RunSummary {

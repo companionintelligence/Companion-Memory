@@ -1,6 +1,8 @@
 import { ThreadIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
+import { SearchResultRow } from './SearchResultRow';
+
 export const THREAD_FRAGMENT = gql(`
   fragment SearchResultThreadData on ThreadType {
     id
@@ -16,13 +18,5 @@ interface Props {
 export function ThreadResult({ thread }: Props) {
   const data = useFragment(THREAD_FRAGMENT, thread);
 
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <div className="flex items-center gap-2">
-        <ThreadIcon />
-        <div className="font-medium truncate">{data.name}</div>
-      </div>
-      <div className="text-muted-foreground">Thread</div>
-    </div>
-  );
+  return <SearchResultRow icon={<ThreadIcon />} title={data.name} kind="Thread" />;
 }

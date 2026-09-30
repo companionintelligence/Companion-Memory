@@ -7,7 +7,7 @@ import { LoggerService } from '@ci/common/logging';
 
 import { type EventPayloads } from '../event-registry';
 import { EventRegistry } from '../registry';
-import type { EventSendOptions } from '../types';
+import type { EventSendOptions, QueuedJob } from '../types';
 
 import { EventService } from './EventService';
 
@@ -186,10 +186,19 @@ export class LocalEventService extends EventService implements BeforeApplication
     this.logger.debug(`completeJob(${queue}, ${jobId}) is a no-op for LocalEventService`);
   }
 
-  async failJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<void> {
+  async failJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<boolean> {
     this.logger.warn(
       `failJob(${queue}, ${jobId}) is a no-op for LocalEventService${output ? `: ${JSON.stringify(output)}` : ''}`,
     );
+
+    // Nothing was transitioned, so no retry is coming — the contract a caller
+    // that needs the work redone relies on.
+    return false;
+  }
+
+  // Jobs run inline and leave nothing behind to look up.
+  async getJob(): Promise<QueuedJob | null> {
+    return null;
   }
 
   /**
