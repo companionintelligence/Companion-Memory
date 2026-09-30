@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -9,6 +10,7 @@ import { isValidTimezone } from '@ci/common/time/zoned';
 import { hourDowInTz } from '@ci/domains/daily-metrics/places/transitionMath';
 
 import { PlaceService } from './PlaceService';
+import { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from './selfEntityProvisioner';
 
 /** Role a known place plays in the user's life. */
 export type KnownPlaceKind = 'home' | 'work' | 'school' | 'social' | 'other';
@@ -192,6 +194,13 @@ export class KnownPlacesService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly logger: LoggerService,
     private readonly placeService: PlaceService,
+    /**
+     * For {@link SELF_ENTITY_PROVISIONER}, resolved lazily — see its doc for
+     * why it cannot be injected. Optional so a hand-built service (the unit
+     * specs) still constructs; without it a user who has no self entity gets
+     * the old error rather than a new one.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {
     this.logger.setContext(KnownPlacesService.name);
   }
@@ -407,7 +416,7 @@ export class KnownPlacesService {
       ...(coordinates ? { coordinates: [coordinates.lng, coordinates.lat] } : {}),
     };
 
-    const relationshipId = await this.upsertSelfRelationship(context.userId, locationId, relationshipType, {
+    const relationshipId = await this.upsertSelfRelationship(context, locationId, relationshipType, {
       strength,
       startDate: input.activeFrom ?? null,
       endDate: input.activeTo ?? null,
@@ -459,6 +468,16 @@ export class KnownPlacesService {
   // Helpers
   // ---------------------------------------------------------------------------
 
+  private selfEntityProvisioner(): SelfEntityProvisioner | null {
+    try {
+      return this.moduleRef?.get<SelfEntityProvisioner>(SELF_ENTITY_PROVISIONER, { strict: false }) ?? null;
+    } catch {
+      // No binding (a container without GraphModule): fall through to the
+      // "no self entity" error, which names the actual problem.
+      return null;
+    }
+  }
+
   private rowToKnownPlace(row: KnownPlaceRow): KnownPlace {
     const props = row.properties ?? {};
     const coordsRaw = props.coordinates;
@@ -509,7 +528,7 @@ export class KnownPlacesService {
    * on the existing partial-unique index. Returns the relationship_id.
    */
   private async upsertSelfRelationship(
-    userId: string,
+    context: UserServiceContext,
     locationId: string,
     relationshipType: KnownPlaceRelationship,
     opts: {
@@ -519,11 +538,19 @@ export class KnownPlacesService {
       properties: Record<string, unknown>;
     },
   ): Promise<string> {
+    const userId = context.userId;
     const selfRows: Array<{ entity_id: string | null }> = await this.dataSource.query(
       `SELECT entity_id FROM ci.users WHERE id = $1`,
       [userId],
     );
-    const selfEntityId = selfRows[0]?.entity_id;
+    // `ci.users.entity_id` stays NULL until something self-anchored is
+    // ingested, and nothing guarantees that ever happens: after a full
+    // 13-source import of the reference corpus it was still NULL, so every
+    // Confirm on the Places page — and the daily "is this home?" answer, which
+    // lands here too — failed. Provision the self entity the way graph ingest
+    // does rather than refusing.
+    const selfEntityId =
+      selfRows[0]?.entity_id ?? (await this.selfEntityProvisioner()?.ensureSelfEntityForOwner(context))?.id;
     if (!selfEntityId) {
       throw new Error('Cannot write known-place relationship: user has no self entity');
     }

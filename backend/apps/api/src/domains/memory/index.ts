@@ -290,6 +290,7 @@ export {
 };
 
 export type { Content } from './entities/ContentEntity';
+export { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from './services/selfEntityProvisioner';
 export type { MapPin } from './services/CalendarEventService';
 export { DEAD_EVENT_STATUSES, LIVE_EVENT_SQL } from './services/CalendarEventService';
 export { MAX_EXPANDED_OCCURRENCES, MAX_RECURRING_MASTERS } from './services/CalendarEventService';
