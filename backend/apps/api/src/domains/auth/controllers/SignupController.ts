@@ -1,5 +1,6 @@
 import { BadRequestException, Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { Request, Response } from 'express';
+import type { EntityManager } from 'typeorm';
 import { z } from 'zod';
 
 import { SYSTEM_USER } from '@ci/common/context';
@@ -79,6 +80,10 @@ export class SignupController {
         throw new BadRequestException('Must provide a valid signup code');
       }
 
+      // Refuses a code that is no invitation before anything else is looked at — whether the
+      // address is taken included, which is not for someone without one to find out. It can only
+      // refuse: two signups presenting the same code both pass here. Which of them the code admits
+      // is decided as the account is created, by redeeming it.
       const signupCodeLookup = await this.signupCodeService.findOne(signup_code);
 
       if (!signupCodeLookup) {
@@ -99,13 +104,8 @@ export class SignupController {
         email,
         password,
       },
+      isSignupCodeRequired ? (manager) => this.redeem(signup_code!, manager) : undefined,
     );
-
-    if (isSignupCodeRequired) {
-      await this.signupCodeService.update(signup_code!, {
-        used: true,
-      });
-    }
 
     const { sessionToken, sessionId } = await this.authService.issueSessionToken(
       user.id,
@@ -124,5 +124,19 @@ export class SignupController {
     return {
       accessToken,
     };
+  }
+
+  /**
+   * Spend the invitation inside the transaction creating the account it admits — or refuse, which
+   * rolls that account back.
+   *
+   * Of two signups presenting one code, the second to get here waits for the first to commit, then
+   * finds the code used and is refused exactly as a signup arriving after it would be. And the code
+   * is only spent if the account is created: a signup that fails leaves it for another try.
+   */
+  private async redeem(signupCode: string, manager: EntityManager): Promise<void> {
+    if (!(await this.signupCodeService.consume(signupCode, manager))) {
+      throw new BadRequestException('Must provide a valid signup code');
+    }
   }
 }

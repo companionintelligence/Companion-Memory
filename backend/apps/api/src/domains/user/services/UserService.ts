@@ -1,7 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import bcrypt from 'bcrypt';
-import { QueryDeepPartialEntity, Repository } from 'typeorm';
+import { EntityManager, QueryDeepPartialEntity, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { ServiceContext, SYSTEM_USER } from '@ci/common/context';
@@ -33,6 +33,13 @@ const purgeGraceDays = () => config.accountDeletion.graceDays;
  */
 const APPLIANCE_CLAIM_LOCK_KEY = 20260910133657;
 
+/**
+ * Work that must commit or roll back together with a new account, run inside the transaction that
+ * creates it — after the row is written, before anyone else can see it. Write through `manager`;
+ * anything written another way is outside the transaction.
+ */
+export type WithNewAccount = (manager: EntityManager, user: User) => Promise<unknown>;
+
 @Injectable()
 export class UserService {
   constructor(
@@ -41,7 +48,12 @@ export class UserService {
     private readonly eventService: EventService,
   ) {}
 
-  async create(context: ServiceContext, data: CreateUserDto): Promise<User> {
+  /**
+   * @param alongside work the account must not exist without — redeeming the invitation that
+   *   admitted it (`SignupCodeService.consume`) — run in the transaction that inserts the row. If it
+   *   throws, the account is rolled back and its error reaches the caller as thrown.
+   */
+  async create(context: ServiceContext, data: CreateUserDto, alongside?: WithNewAccount): Promise<User> {
     if (context.userId !== SYSTEM_USER) {
       throw new Error('Unauthorized');
     }
@@ -57,7 +69,17 @@ export class UserService {
       passwordSetAt: passwordChosenByUser ? new Date() : null,
     });
 
-    const entity = await this.userRepository.save(instance);
+    // A lone INSERT is atomic already; only work that has to commit with it needs a transaction.
+    const entity =
+      alongside == null
+        ? await this.userRepository.save(instance)
+        : await this.userRepository.manager.transaction(async (manager) => {
+            const saved = await manager.save(instance);
+
+            await alongside(manager, UserEntity.toEgressType(saved));
+
+            return saved;
+          });
 
     // Before the event, so nothing observing UserCreated can read a half-claimed appliance.
     entity.role = (await this.claimApplianceIfUnowned(entity.id)) ? 'admin' : entity.role;

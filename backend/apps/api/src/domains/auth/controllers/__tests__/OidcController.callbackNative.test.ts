@@ -16,7 +16,7 @@ import { OidcController } from '../OidcController';
  */
 function makeController() {
   const oidcNativeCodeService = { issue: jest.fn(), redeem: jest.fn() };
-  const signupCodeService = { findOne: jest.fn().mockResolvedValue(null), update: jest.fn() };
+  const signupCodeService = { findOne: jest.fn().mockResolvedValue(null), consume: jest.fn() };
   const logger = { setContext: jest.fn(), warn: jest.fn(), error: jest.fn(), log: jest.fn() };
 
   const controller = new OidcController(

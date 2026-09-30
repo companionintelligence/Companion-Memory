@@ -45,6 +45,26 @@ function jsonResponse(ok: boolean, status: number, body: unknown) {
 
 const TOKEN_OK = jsonResponse(true, 200, { access_token: 'portal-access-token', token_type: 'bearer' });
 
+/** The transaction `UserService.create` runs its `alongside` work in. */
+const accountTransaction = { name: 'the transaction creating the account' };
+
+/**
+ * `UserService.create` creating `user`, honouring its contract: `alongside` runs inside the
+ * transaction that inserts the account, and if it throws, the account is rolled back and the error
+ * reaches the caller as thrown.
+ */
+const createsAccount =
+  (user: { id: string }) =>
+  async (
+    _context: unknown,
+    _data: unknown,
+    alongside?: (manager: unknown, created: unknown) => Promise<unknown>,
+  ) => {
+    await alongside?.(accountTransaction, user);
+
+    return user;
+  };
+
 function makeController() {
   const userService = {
     findByEmail: jest.fn(),
@@ -66,7 +86,10 @@ function makeController() {
   const csrfService = { generateToken: jest.fn().mockReturnValue('new-csrf-token') };
   const featureService = { isFeatureEnabled: jest.fn().mockResolvedValue(false) };
   const oidcNativeCodeService = { issue: jest.fn().mockReturnValue('one-time-code'), redeem: jest.fn() };
-  const signupCodeService = { findOne: jest.fn().mockResolvedValue(null), update: jest.fn() };
+  const signupCodeService = {
+    findOne: jest.fn().mockResolvedValue(null),
+    consume: jest.fn().mockResolvedValue(true),
+  };
   const federatedIdentityService = {
     findUserId: jest.fn().mockResolvedValue(null),
     listForUser: jest.fn().mockResolvedValue([]),
@@ -311,6 +334,8 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       expect(userService.create).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ email: 'owner@example.com', name: 'Owner' }),
+        // No invitation to redeem alongside it.
+        undefined,
       );
       expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?code=one-time-code`);
     });
@@ -347,7 +372,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       userService.hasNoUsers.mockResolvedValue(false);
       featureService.isFeatureEnabled.mockResolvedValue(true);
       signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
-      userService.create.mockResolvedValue({ id: 'user-guest' });
+      userService.create.mockImplementation(createsAccount({ id: 'user-guest' }));
       oidcNativeCodeService.issue.mockReturnValue('one-time-code');
 
       await controller.callback(
@@ -361,8 +386,11 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       expect(userService.create).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ email: 'guest@example.com', name: 'Guest' }),
+        expect.any(Function),
       );
-      expect(signupCodeService.update).toHaveBeenCalledWith('invite-1', { used: true });
+      // Redeemed in the transaction creating the account, so a sign-in whose account cannot be
+      // created leaves the invitation unspent.
+      expect(signupCodeService.consume).toHaveBeenCalledWith('invite-1', accountTransaction);
       expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?code=one-time-code`);
       expect(res.redirect).not.toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=signup_required`);
     });
@@ -386,9 +414,101 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         res as never,
       );
 
-      // Not refused, and the invitation cannot be replayed by whoever arrives next.
-      expect(res.redirect).not.toHaveBeenCalledWith('/login?error=signup_code_required');
-      expect(signupCodeService.update).toHaveBeenCalledWith('invite-1', { used: true });
+      // Not refused, and the invitation cannot be replayed by whoever arrives next: it is redeemed
+      // here, before the confirmation page, not by the step that creates the account.
+      expect(res.redirect).toHaveBeenCalledWith('/api/authenticate/oidc/confirm-account');
+      expect(signupCodeService.consume).toHaveBeenCalledWith('invite-1');
+      expect(userService.create).not.toHaveBeenCalled();
+    });
+
+    // The look-up only refuses early: every sign-in presenting one code finds it unused until one of
+    // them redeems it. The rest are refused as a used code is — before anyone is admitted on it.
+    it('web: refuses, before the confirmation, an invitation another sign-in redeemed first', async () => {
+      const { controller, userService, signupCodeService, featureService, authService } = makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'guest@example.com' }));
+      userService.findByEmail.mockResolvedValue(null);
+      featureService.isFeatureEnabled.mockResolvedValue(true);
+      signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
+      signupCodeService.consume.mockResolvedValue(false);
+
+      await controller.callback(
+        'code-x',
+        'match',
+        undefined,
+        webReq({ oidc_signup_code: 'invite-1' }),
+        res as never,
+      );
+
+      expect(res.redirect).toHaveBeenCalledWith('/login?error=signup_code_required');
+      expect(authService.issueSignupIntentToken).not.toHaveBeenCalled();
+      expect(res.cookie).not.toHaveBeenCalledWith('oidc_signup_intent', expect.anything(), expect.anything());
+    });
+
+    it.each([
+      ['on', 'signup_code_required'],
+      ['off', 'signup_required'],
+    ])(
+      'native, codes %s: refuses an invitation another sign-in redeemed first, rolling its account back (%s)',
+      async (codes, refusal) => {
+        const {
+          controller,
+          userService,
+          signupCodeService,
+          featureService,
+          oidcNativeCodeService,
+          federatedIdentityService,
+        } = makeController();
+        const res = makeRes();
+        mockFetch
+          .mockResolvedValueOnce(TOKEN_OK)
+          .mockResolvedValueOnce(
+            jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'guest@example.com' }),
+          );
+        userService.findByEmail.mockResolvedValue(null);
+        featureService.isFeatureEnabled.mockResolvedValue(codes === 'on');
+        signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
+        signupCodeService.consume.mockResolvedValue(false);
+        userService.create.mockImplementation(createsAccount({ id: 'user-guest' }));
+
+        await controller.callback(
+          'code-x',
+          'match',
+          undefined,
+          nativeReq({ oidc_signup_code: 'invite-1' }),
+          res as never,
+        );
+
+        // Refused as it would be with a code that was already used when it was checked.
+        expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=${refusal}`);
+        // The losing redemption threw inside the account's transaction, rolling the account back.
+        await expect(userService.create.mock.results[0].value).rejects.toThrow('redeemed by another sign-in');
+        expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+        expect(oidcNativeCodeService.issue).not.toHaveBeenCalled();
+      },
+    );
+
+    it('web, codes off: spends no code, since nothing rests on it', async () => {
+      const { controller, userService, signupCodeService } = makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'guest@example.com' }));
+      userService.findByEmail.mockResolvedValue(null);
+      signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
+
+      await controller.callback(
+        'code-x',
+        'match',
+        undefined,
+        webReq({ oidc_signup_code: 'invite-1' }),
+        res as never,
+      );
+
+      expect(res.redirect).toHaveBeenCalledWith('/api/authenticate/oidc/confirm-account');
+      expect(signupCodeService.consume).not.toHaveBeenCalled();
     });
 
     it('refuses a code that is not a real invitation, and burns nothing', async () => {
@@ -411,7 +531,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       );
 
       expect(res.redirect).toHaveBeenCalledWith('/login?error=signup_code_required');
-      expect(signupCodeService.update).not.toHaveBeenCalled();
+      expect(signupCodeService.consume).not.toHaveBeenCalled();
       expect(userService.create).not.toHaveBeenCalled();
     });
 
@@ -500,7 +620,8 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
     });
 
     it('Hub-invited first login creates a Memory user without a signup code or confirm page', async () => {
-      const { controller, userService, hubBridge, featureService, authService } = makeController();
+      const { controller, userService, hubBridge, featureService, authService, signupCodeService } =
+        makeController();
       const res = makeRes();
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
@@ -517,9 +638,40 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       expect(userService.create).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ email: 'hello@lifescope.io' }),
+        // No invitation to redeem alongside it: the Hub is what admits this person.
+        undefined,
       );
       expect(authService.issueSessionToken).toHaveBeenCalledWith('user-hello', expect.any(Object));
       expect(res.redirect).not.toHaveBeenCalledWith('/login?error=signup_code_required');
+      // It presented no code, so there is none to spend. This used to "burn" `undefined`, which
+      // TypeORM drops from a `where` — spending whichever outstanding invitation came back first.
+      expect(signupCodeService.consume).not.toHaveBeenCalled();
+    });
+
+    it('Hub-invited first login leaves a code it presents unspent: the Hub is what admits it', async () => {
+      const { controller, userService, hubBridge, featureService, signupCodeService } = makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(
+          jsonResponse(true, 200, { sub: 'portal-sub-hello', email: 'hello@lifescope.io', name: 'Hello' }),
+        );
+      userService.findByEmail.mockResolvedValue(null);
+      featureService.isFeatureEnabled.mockResolvedValue(true);
+      hubBridge.verifyUsername.mockReturnValue('hello@lifescope.io');
+      signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
+      userService.create.mockImplementation(createsAccount({ id: 'user-hello' }));
+
+      await controller.callback(
+        'code-x',
+        'match',
+        undefined,
+        webReq({ oidc_signup_code: 'invite-1' }),
+        res as never,
+      );
+
+      expect(userService.create).toHaveBeenCalledWith(expect.anything(), expect.anything(), undefined);
+      expect(signupCodeService.consume).not.toHaveBeenCalled();
     });
   });
 });

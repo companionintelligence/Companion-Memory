@@ -77,7 +77,7 @@ const mockCsrfService = {
 
 const mockSignupCodeService = {
   findOne: jest.fn().mockResolvedValue({ signup_code: 'valid-code', used: false }),
-  update: jest.fn().mockResolvedValue(undefined),
+  consume: jest.fn().mockResolvedValue(true),
 };
 
 const mockFeatureService = {
