@@ -155,6 +155,24 @@ deliberately unset — a cost decision the workflow states in a comment rather
 than hides. `consent-path-gate.yml` remains the stronger guarantee for the
 consent path: it fails if any suite in scope skips.
 
+Since 2026-09-30 a skip needs *proof*, and only an unasked-for database may
+skip: the suite skips when nothing is configured, or when only `.env`'s discrete
+`DATABASE_*` values are set and the connection is refused (the dev stack is
+down). A URL you set for the run — the suite's `<DOMAIN>_TEST_DATABASE_URL` or
+`DATABASE_URL` — that refuses the connection **fails** the suite, naming the
+variable; so does a host that never answers, a URL that does not parse, and a
+probe that could not finish, however the database was configured. That last one
+is the hole this closed: the probe is a child process, and on a loaded machine
+(load ~300) a probe killed by its time limit read as "nothing listening", so a
+suite pointed at a healthy Postgres skipped in silence. The full table is in the
+header of `databaseConnection.ts`.
+
+Every file whose tests were *all* skipped is now listed, with the reason it
+gave, just above jest's totals (`skippedSuitesReporter.js`, wired in
+`jest.config.mjs`). Jest's own reporter drops such a file's console output, so
+until then a multi-file run showed a count — `Test Suites: 1 skipped` — and
+nothing else.
+
 **Trap 2 — a database without the migrations FAILS, and looks like your bug.**
 "Port open" and "schema correct" are different questions, and only the first is
 probed. Point any of those variables at a Postgres that has not been migrated to
