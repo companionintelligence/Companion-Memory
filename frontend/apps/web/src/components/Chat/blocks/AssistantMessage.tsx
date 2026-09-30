@@ -3,6 +3,7 @@ import { type RefObject, useMemo } from 'react';
 import { cn } from '@ci/shadcn';
 
 import { Markdown } from '@/components/Markdown';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 interface Props {
   content?: string;
@@ -14,6 +15,7 @@ interface Props {
 
 function AssistantMessage({ content, renderEmptyContent = false, streamingRef, createdAt, source }: Props) {
   const trimmedContent = useMemo(() => content?.trim(), [content]);
+  const fmt = useDateTimeFormat();
 
   if (!trimmedContent && !renderEmptyContent) {
     return null;
@@ -38,9 +40,7 @@ function AssistantMessage({ content, renderEmptyContent = false, streamingRef, c
       <div className="streaming-content prose dark:prose-invert max-w-none" ref={streamingRef}>
         {trimmedContent && <Markdown>{trimmedContent}</Markdown>}
         {createdAt && (
-          <div className={cn('pt-1 text-xs text-foreground text-right')}>
-            {new Date(createdAt).toLocaleString()}
-          </div>
+          <div className={cn('pt-1 text-xs text-foreground text-right')}>{fmt.dateTime(createdAt)}</div>
         )}
       </div>
     </div>

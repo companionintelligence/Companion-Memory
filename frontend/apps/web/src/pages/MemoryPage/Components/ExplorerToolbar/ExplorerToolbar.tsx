@@ -40,6 +40,8 @@ import {
 import { EntityNameFilter } from '@/components/SearchBox/NameFilter';
 import { AVAILABLE_ENTITY_TYPES, useDropdown } from '@/components/SearchBox/useDropdown';
 import { type FragmentType } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import { CREATE_SAVED_SEARCH } from '../../../SavedSearchesPage/CreateSavedSearchModal';
 import type { SavedSearchGridItemFragment } from '../../../SavedSearchesPage/SavedSearch';
@@ -157,7 +159,7 @@ function rangeHasDetailedTime(dateFrom: string, dateTo: string): boolean {
   return fromHasTime || toHasTime;
 }
 
-function formatDateLabel(dateFrom: string, dateTo: string): string {
+function formatDateLabel(dateFrom: string, dateTo: string, formatter: DateTimeFormatter): string {
   const includeTime = rangeHasDetailedTime(dateFrom, dateTo);
   const fmt = (value: string) => {
     const date = new Date(value);
@@ -167,7 +169,10 @@ function formatDateLabel(dateFrom: string, dateTo: string): string {
       return dateLabel;
     }
 
-    return `${dateLabel}, ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    // The time the person typed into this device's time input, read back on the same clock —
+    // so only the hour cycle applies. The profile zone would echo a different hour than the
+    // one they entered whenever the device is somewhere else.
+    return `${dateLabel}, ${formatter.clock(date.getHours(), date.getMinutes())}`;
   };
 
   if (dateFrom && dateTo) {
@@ -313,6 +318,7 @@ function readNativeFilterDrag(event: DragEvent): ReturnType<typeof readFilterDra
  */
 function FilterDropArea() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const dateTimeFormat = useDateTimeFormat();
   const selections = useMemo(
     () => ({
       person: readCsvParam(searchParams, 'people'),
@@ -590,7 +596,7 @@ function FilterDropArea() {
                   label={
                     isRollingDatePreset(whenPreset)
                       ? (datePresetLabel(whenPreset) ?? 'When')
-                      : formatDateLabel(dateFrom, dateTo)
+                      : formatDateLabel(dateFrom, dateTo, dateTimeFormat)
                   }
                   removeLabel="Remove date range"
                   inactiveReason={reasonFor('date')}
@@ -774,6 +780,7 @@ export function DateControl({
   modal = false,
 }: { renderTrigger?: (value: string | null) => ReactElement; modal?: boolean } = {}) {
   const [{ dateFrom, dateTo, whenPreset }, { setDateRange, setDatePreset }] = useDropdown();
+  const dateTimeFormat = useDateTimeFormat();
   const [open, setOpen] = useState(false);
   const [customMode, setCustomMode] = useState(
     () => whenPreset === 'custom' || (!isRollingDatePreset(whenPreset) && Boolean(dateFrom || dateTo)),
@@ -860,7 +867,7 @@ export function DateControl({
   const appliedLabel = isRollingDatePreset(whenPreset)
     ? datePresetLabel(whenPreset)
     : dateFrom || dateTo
-      ? formatDateLabel(dateFrom, dateTo)
+      ? formatDateLabel(dateFrom, dateTo, dateTimeFormat)
       : null;
   const triggerLabel = appliedLabel ?? 'When';
 

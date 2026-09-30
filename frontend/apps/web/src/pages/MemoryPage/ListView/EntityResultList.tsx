@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import {
   DateGroupHeader,
   ErrorState,
@@ -43,6 +44,7 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
     { data, loading, hasNextPage, loadingMore, loadMore, error, refetch, totalCount },
     { setActiveEntity },
   ] = useEntityService();
+  const fmt = useDateTimeFormat();
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -75,7 +77,7 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
 
   // Every row opens the same shared details drawer (incl. File/Item media).
   const renderRow = (item: EntityItem) => {
-    const time = formatRowTime(getEntityTimestamp(item));
+    const time = formatRowTime(getEntityTimestamp(item), fmt);
     let row: ReactNode;
 
     switch (item.__typename) {

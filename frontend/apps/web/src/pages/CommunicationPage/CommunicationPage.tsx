@@ -14,6 +14,7 @@ import { CommunicationIcon } from '@/components/icons';
 import { PageContent } from '@/components/layout';
 import { Tag } from '@/components/Tag';
 import { gql } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 // Exported for the colocated test, which mocks it failing.
 export const GET_COMMUNICATION = gql(`
@@ -74,6 +75,7 @@ export function CommunicationPage() {
   });
 
   const [updateCommunicationFields] = useMutation(UPDATE_COMMUNICATION_FIELDS);
+  const fmt = useDateTimeFormat();
 
   const communication = data?.communication;
 
@@ -139,7 +141,7 @@ export function CommunicationPage() {
               metaItems={[
                 { label: 'Type', value: formatEntityLabel(communication.type) },
                 { label: 'Direction', value: formatEntityLabel(communication.direction) },
-                { label: 'When', value: formatEntityTimestamp(communication.time) },
+                { label: 'When', value: formatEntityTimestamp(communication.time, fmt) },
               ]}
               onSave={async (values) => {
                 const result = await updateCommunicationFields({

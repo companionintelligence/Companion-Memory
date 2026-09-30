@@ -1,4 +1,5 @@
 import type { ScheduleEvent } from '@/api/useScheduleService';
+import { HOUR_MINUTE, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { detectBrowserTimeZone } from '@/lib/timezone';
 
 import { isBrowserCapture } from './scheduleClusters';
@@ -20,12 +21,13 @@ export interface NowNextPick {
 }
 
 /**
- * Day boundaries and clock reading, in the zone the surface draws in.
+ * Day boundaries, in the zone the surface draws in.
  *
  * `zone` defaults to the browser's so a caller with no profile zone to hand
- * (TaskSlate's slot label) keeps the reading it always had; the schedule
- * surface passes the owner's profile zone — see {@link ./zonedClock} for why
- * that is the source of truth.
+ * keeps the reading it always had; the schedule surface passes the owner's
+ * profile zone — see {@link ./zonedClock} for why that is the source of truth.
+ * The clock label ({@link formatClock}) takes its zone from the formatter
+ * instead, which inside the app is already that profile zone.
  */
 export function startOfLocalDay(date: Date, zone: string = detectBrowserTimeZone()): Date {
   return zonedStartOfDay(date, zone);
@@ -39,8 +41,12 @@ export function sameLocalDay(a: Date, b: Date, zone: string = detectBrowserTimeZ
   return zonedSameDay(a, b, zone);
 }
 
-export function formatClock(date: Date, zone: string = detectBrowserTimeZone()): string {
-  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: zone });
+/**
+ * "3:43 PM" / "15:43" — in the person's hour cycle, on `zone`'s clock. Without a `zone` it is the
+ * formatter's own (the profile zone, inside the app), which is the clock the grid draws on.
+ */
+export function formatClock(date: Date, fmt: DateTimeFormatter, zone?: string): string {
+  return fmt.time(date, zone ? { ...HOUR_MINUTE, timeZone: zone } : HOUR_MINUTE);
 }
 
 function eventEnd(event: ScheduleEvent): Date {

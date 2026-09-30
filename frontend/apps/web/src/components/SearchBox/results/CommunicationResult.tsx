@@ -1,5 +1,6 @@
 import { CommunicationIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import { SearchResultRow } from './SearchResultRow';
 
@@ -17,12 +18,13 @@ interface Props {
 
 export function CommunicationResult({ communication }: Props) {
   const data = useFragment(COMMUNICATION_FRAGMENT, communication);
+  const fmt = useDateTimeFormat();
 
   return (
     <SearchResultRow
       icon={<CommunicationIcon />}
       title={data.preview}
-      meta={new Date(data.time).toLocaleString()}
+      meta={fmt.dateTime(data.time)}
       kind="Communication"
     />
   );

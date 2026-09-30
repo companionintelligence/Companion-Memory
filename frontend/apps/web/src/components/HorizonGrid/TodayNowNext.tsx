@@ -1,6 +1,8 @@
 import { cn } from '@ci/shadcn';
 
 import type { ScheduleEvent } from '@/api/useScheduleService';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { detectBrowserTimeZone } from '@/lib/timezone';
 
 import { addDays, formatClock, pickNowNext, sameLocalDay, startOfLocalDay } from './nowNext';
@@ -16,7 +18,12 @@ interface TodayNowNextProps {
   onShowMore?: () => void;
 }
 
-function timeLabel(status: 'now' | 'next' | 'later', event: ScheduleEvent, zone: string): string {
+function timeLabel(
+  status: 'now' | 'next' | 'later',
+  event: ScheduleEvent,
+  zone: string,
+  fmt: DateTimeFormatter,
+): string {
   if (status === 'now') {
     return 'Now';
   }
@@ -25,7 +32,7 @@ function timeLabel(status: 'now' | 'next' | 'later', event: ScheduleEvent, zone:
     return 'All day';
   }
 
-  return formatClock(new Date(event.startTime), zone);
+  return formatClock(new Date(event.startTime), fmt, zone);
 }
 
 /**
@@ -34,6 +41,7 @@ function timeLabel(status: 'now' | 'next' | 'later', event: ScheduleEvent, zone:
  * title are already on the card; "+N more" is a real button.
  */
 export function TodayNowNext({ events, day, now = new Date(), timeZone, onShowMore }: TodayNowNextProps) {
+  const fmt = useDateTimeFormat();
   const zone = timeZone ?? detectBrowserTimeZone();
   const { items, remaining, done } = pickNowNext(events, day, now, 3, zone);
   const heading = day.toLocaleDateString([], {
@@ -62,7 +70,7 @@ export function TodayNowNext({ events, day, now = new Date(), timeZone, onShowMo
                   status === 'now' ? 'font-semibold text-primary' : 'text-muted-foreground',
                 )}
               >
-                {timeLabel(status, event, zone)}
+                {timeLabel(status, event, zone, fmt)}
               </span>
               <span className="min-w-0 flex-1 truncate font-medium text-foreground">{event.title}</span>
             </li>

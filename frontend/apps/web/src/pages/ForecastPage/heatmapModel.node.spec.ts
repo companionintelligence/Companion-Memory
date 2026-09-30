@@ -1,5 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { createDateTimeFormatter, DEVICE_DATE_TIME_FORMATTER } from '@/lib/dateTimeFormat';
+
 import {
   HEATMAP_COLUMNS,
   bucketInstant,
@@ -269,8 +271,20 @@ describe('formatting helpers', () => {
   });
 
   it('formats a column clock label', () => {
-    expect(formatClock(0)).toMatch(/12[:.]00/);
-    expect(formatClock(9 * 60 + 30)).toMatch(/9[:.]30/);
+    expect(formatClock(0, DEVICE_DATE_TIME_FORMATTER)).toMatch(/12[:.]00/);
+    expect(formatClock(9 * 60 + 30, DEVICE_DATE_TIME_FORMATTER)).toMatch(/9[:.]30/);
+  });
+
+  it('writes a column clock label in the chosen hour cycle, whatever zone the device is in', () => {
+    useZone('Asia/Kolkata'); // a half-hour offset would show up in the minutes if the label moved zones
+    const h12 = createDateTimeFormatter({ timeFormat: 'h12', timeZone: 'America/Los_Angeles' });
+    const h23 = createDateTimeFormatter({ timeFormat: 'h23', timeZone: 'America/Los_Angeles' });
+
+    expect(formatClock(15 * 60 + 45, h12)).toMatch(/^3:45\sPM$/i);
+    expect(formatClock(15 * 60 + 45, h23)).toBe('15:45');
+    expect(formatClock(0, h23)).toMatch(/^0?0:00$/);
+    // Wraps like a clock face rather than printing "24:30".
+    expect(formatClock(24 * 60 + 30, h23)).toMatch(/^0?0:30$/);
   });
 
   it('derives the UTC date key from an instant', () => {

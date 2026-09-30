@@ -2,6 +2,9 @@ import { IconButton } from '@ci/shadcn';
 import { Pencil } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import { HOUR_MINUTE } from '@/lib/dateTimeFormat';
+
 export interface DayEvent {
   id: string;
   title?: string | null;
@@ -16,12 +19,10 @@ interface Props {
   onEdit?: (event: DayEvent) => void;
 }
 
-function formatClock(iso: string): string {
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
-}
-
 export function DaySchedule({ events, onEdit }: Props) {
   const { t } = useTranslation();
+  const fmt = useDateTimeFormat();
+  const formatClock = (iso: string) => fmt.time(iso, HOUR_MINUTE);
 
   if (events.length === 0) {
     return (

@@ -1,3 +1,4 @@
+import { HOUR_MINUTE, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { labelForSource } from '@/lib/sourceNames';
 import { formatEnumLabel } from '@/lib/utils';
 
@@ -285,7 +286,11 @@ export function filterDisplayTags(tags: string[], entityType: string): string[] 
   });
 }
 
-export function formatCardWhen(recencyMs: number, now: Date = new Date()): string | null {
+export function formatCardWhen(
+  recencyMs: number,
+  fmt: DateTimeFormatter,
+  now: Date = new Date(),
+): string | null {
   if (!Number.isFinite(recencyMs) || recencyMs <= 0) {
     return null;
   }
@@ -301,7 +306,7 @@ export function formatCardWhen(recencyMs: number, now: Date = new Date()): strin
     date.getDate() === now.getDate();
 
   if (sameDay) {
-    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return fmt.time(date, HOUR_MINUTE, 'en-US');
   }
 
   if (date.getFullYear() === now.getFullYear()) {

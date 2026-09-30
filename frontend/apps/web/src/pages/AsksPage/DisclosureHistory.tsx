@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { Badge, Card } from '@ci/shadcn';
 
 import { PersonAvatar } from '@/components/PersonAvatar';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import { scopeSummary } from './askBinding';
 import { AskerQuote } from './AskerQuote';
@@ -70,6 +72,7 @@ export function DisclosureHistory({ rows }: Props) {
   // focused read of a single disclosure, and mounting a dialog per row would
   // put N of them in the tree for a list that is meant to be scanned.
   const [open, setOpen] = useState<ConsentRecord | null>(null);
+  const fmt = useDateTimeFormat();
 
   return (
     <ul className="flex flex-col gap-3">
@@ -96,7 +99,9 @@ export function DisclosureHistory({ rows }: Props) {
                   state={consentLockState({ consent: consentOf(row), channel: UNRECORDED_CHANNEL })}
                   onOpen={() => setOpen(recordFor(row))}
                 />
-                <span className="text-muted-foreground ml-auto text-xs">{formatWhen(row.createdAt)}</span>
+                <span className="text-muted-foreground ml-auto text-xs">
+                  {formatWhen(row.createdAt, fmt)}
+                </span>
               </div>
 
               <AskerQuote prompt={row.query.prompt} attribution={`${who} asked:`} />
@@ -176,12 +181,12 @@ function recordFor(row: DisclosureRow): ConsentRecord {
  * An unparseable value falls back to the raw string — showing what is stored
  * beats showing "Invalid Date" on the owner's own audit trail.
  */
-function formatWhen(iso: string): string {
+function formatWhen(iso: string, fmt: DateTimeFormatter): string {
   const at = new Date(iso);
 
   if (Number.isNaN(at.getTime())) {
     return iso;
   }
 
-  return at.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return fmt.dateTime(at, { dateStyle: 'medium', timeStyle: 'short' });
 }
