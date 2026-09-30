@@ -81,9 +81,7 @@ export interface ToolInvocationPage {
  * arbitrary offset into someone's history, and the shape is ours to change.
  */
 export function encodeCursor(cursor: ToolInvocationCursor): string {
-  return Buffer.from(`${cursor.occurredAt.toISOString()}|${cursor.id}`, 'utf8').toString(
-    'base64url',
-  );
+  return Buffer.from(`${cursor.occurredAt.toISOString()}|${cursor.id}`, 'utf8').toString('base64url');
 }
 
 /**
@@ -223,10 +221,10 @@ export class ToolInvocationLedgerService {
     }
 
     if (query.cursor) {
-      builder.andWhere(
-        '(invocation.occurred_at, invocation.id) < (:cursorAt, CAST(:cursorId AS uuid))',
-        { cursorAt: query.cursor.occurredAt, cursorId: query.cursor.id },
-      );
+      builder.andWhere('(invocation.occurred_at, invocation.id) < (:cursorAt, CAST(:cursorId AS uuid))', {
+        cursorAt: query.cursor.occurredAt,
+        cursorId: query.cursor.id,
+      });
     }
 
     // One more than asked for, so "is there a next page" is answered by the rows themselves

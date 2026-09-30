@@ -8,7 +8,13 @@ import type { PendingActionEntity } from '../../entities/PendingActionEntity';
 import { PendingActionService, DEFAULT_PENDING_ACTION_TTL_HOURS } from '../PendingActionService';
 
 function makeLogger() {
-  return { setContext: jest.fn(), debug: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as any;
+  return {
+    setContext: jest.fn(),
+    debug: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  } as any;
 }
 
 function schema(name: string, privacy: Partial<IntentDefinition['privacy']> = {}): IntentDefinition {
@@ -79,8 +85,9 @@ function makeRepository(rows: Partial<PendingActionEntity>[] = []) {
 
       return row;
     }),
-    findOne: jest.fn(async ({ where }: any) =>
-      store.find((r) => r.id === where.id && (where.userId == null || r.userId === where.userId)) ?? null,
+    findOne: jest.fn(
+      async ({ where }: any) =>
+        store.find((r) => r.id === where.id && (where.userId == null || r.userId === where.userId)) ?? null,
     ),
     // Equality on every `where` key — enough for `propose`'s open-card lookup,
     // which filters on plain columns only.
@@ -216,12 +223,7 @@ describe('PendingActionService.evaluate — the trust dial binding', () => {
 
   it('never consults the dial for an ordinary read, in any mode', async () => {
     const personalization = personalizationFor('cautious');
-    const service = new PendingActionService(
-      makeRepository(),
-      personalization,
-      features(true),
-      makeLogger(),
-    );
+    const service = new PendingActionService(makeRepository(), personalization, features(true), makeLogger());
 
     expect((await service.evaluate(RECALL, context())).decision).toBe('execute');
     expect(personalization.getProfile).not.toHaveBeenCalled();
@@ -339,7 +341,12 @@ describe('PendingActionService.propose — one card per open question', () => {
   function service(repository = makeRepository()) {
     return {
       repository,
-      service: new PendingActionService(repository, personalizationFor('balanced'), features(true), makeLogger()),
+      service: new PendingActionService(
+        repository,
+        personalizationFor('balanced'),
+        features(true),
+        makeLogger(),
+      ),
     };
   }
 
@@ -348,9 +355,23 @@ describe('PendingActionService.propose — one card per open question', () => {
     // its second round. Two identical cards means approving both sends twice.
     const { repository, service: pending } = service();
 
-    const first = await pending.propose(SEND, 'messaging_send', owner, { to: 'Sam', text: 'late' }, QUEUE, NOW);
+    const first = await pending.propose(
+      SEND,
+      'messaging_send',
+      owner,
+      { to: 'Sam', text: 'late' },
+      QUEUE,
+      NOW,
+    );
     // Same arguments in a different key order: jsonb does not keep the order.
-    const second = await pending.propose(SEND, 'messaging_send', owner, { text: 'late', to: 'Sam' }, QUEUE, NOW);
+    const second = await pending.propose(
+      SEND,
+      'messaging_send',
+      owner,
+      { text: 'late', to: 'Sam' },
+      QUEUE,
+      NOW,
+    );
 
     expect(second.id).toBe(first.id);
     expect(repository.store).toHaveLength(1);
@@ -405,7 +426,11 @@ describe('PendingActionService.propose — one card per open question', () => {
 
   it('keeps an installed app’s card apart from the owner’s — approval replays as whoever asked', async () => {
     const { repository, service: pending } = service();
-    const app = { ...owner, principal: 'managed-app', principalName: 'app:ci-openclaw:ci-marketplace' } as const;
+    const app = {
+      ...owner,
+      principal: 'managed-app',
+      principalName: 'app:ci-openclaw:ci-marketplace',
+    } as const;
 
     const mine = await pending.propose(SEND, 'messaging_send', owner, { to: 'Sam' }, QUEUE, NOW);
     const theirs = await pending.propose(SEND, 'messaging_send', app, { to: 'Sam' }, QUEUE, NOW);

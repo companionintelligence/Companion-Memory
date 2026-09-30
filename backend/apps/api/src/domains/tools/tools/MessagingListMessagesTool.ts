@@ -34,12 +34,16 @@ export interface MessagingListMessagesOutput {
  * it into `ci.*` yet.
  */
 @Injectable()
-export class MessagingListMessagesTool extends BaseTool<MessagingListMessagesInput, MessagingListMessagesOutput> {
+export class MessagingListMessagesTool extends BaseTool<
+  MessagingListMessagesInput,
+  MessagingListMessagesOutput
+> {
   readonly schema: IntentDefinition = {
     name: 'messaging.listMessages',
     domain: 'messaging',
     title: 'List messages in a chat',
-    description: 'List recent iMessage/SMS messages in one chat on the connected BlueBubbles server, newest first.',
+    description:
+      'List recent iMessage/SMS messages in one chat on the connected BlueBubbles server, newest first.',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: true },
     localCapable: false,
     phrases: ['What did $person say', 'Show me my texts with $person'],

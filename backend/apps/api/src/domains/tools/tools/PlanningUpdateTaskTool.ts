@@ -108,7 +108,11 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
     },
     examples: [
       {
-        input: { taskId: '11111111-1111-1111-1111-111111111111', priority: 0, dueAt: '2026-09-25T17:00:00.000Z' },
+        input: {
+          taskId: '11111111-1111-1111-1111-111111111111',
+          priority: 0,
+          dueAt: '2026-09-25T17:00:00.000Z',
+        },
         output: { id: '11111111-1111-1111-1111-111111111111', priority: 0 },
         description: 'Raise a task to top priority and push its due date',
       },
@@ -127,7 +131,10 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
     return PlanningUpdateTaskInputSchema.parse(input);
   }
 
-  protected async executeInternal(context: ToolExecutionContext, input: PlanningUpdateTaskInput): Promise<Task> {
+  protected async executeInternal(
+    context: ToolExecutionContext,
+    input: PlanningUpdateTaskInput,
+  ): Promise<Task> {
     const serviceContext = toServiceContext(context);
     const { taskId, dueAt, ...rest } = input;
 
