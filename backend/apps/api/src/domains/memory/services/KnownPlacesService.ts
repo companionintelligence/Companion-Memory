@@ -66,7 +66,11 @@ export interface KnownPlaceCandidate {
   lat: number;
   /** Cluster centroid longitude. */
   lng: number;
-  /** Number of events supporting this cluster. */
+  /**
+   * Number of events supporting this cluster. Only events whose coordinate is
+   * their own count; a temporal estimate never does (see
+   * {@link KnownPlacesService.buildKnownPlaces}).
+   */
   eventCount: number;
   /**
    * A few of the supporting events, newest first, so an "Unknown place" can
@@ -121,6 +125,45 @@ function rememberSampleEvent(
 
 /** Coordinate grid size (degrees) for snapping nearby events into one cluster (~1.1km). */
 const CLUSTER_PRECISION = 2;
+
+/**
+ * `metadata.location_source` on a coordinate the location estimator copied onto
+ * an event from the nearest-in-time GPS fix or located event. Both estimators
+ * write it: `enrich.estimate_location` and the legacy `LocationEstimateService`.
+ *
+ * This is a copy of the literal, as `EventReverseStage` has one.
+ * `EstimateLocationStage` keeps its copy private. The pipeline domain also
+ * imports this one, so importing from it here would be a cycle. The copies
+ * MUST stay identical. If they drift, estimates start counting as places
+ * again, and nothing fails.
+ */
+const LOCATION_SOURCE_ESTIMATED = 'estimated';
+
+/**
+ * `inference_sources.method` that both estimators write next to
+ * {@link LOCATION_SOURCE_ESTIMATED}. Unlike the token, it survives the legacy
+ * reverse-geocode leg (below).
+ */
+const ESTIMATE_METHOD = 'temporal_nn';
+
+/**
+ * The token the legacy reverse-geocode leg writes over
+ * {@link LOCATION_SOURCE_ESTIMATED}. `GeocodeBatchListener` with
+ * `direction: 'reverse'` picked up every coordinate that had no name,
+ * estimates included. It named the event, linked a Location, and set
+ * `location_source` to this, while `inference_sources` still said
+ * {@link ESTIMATE_METHOD}. Ingest self-heal runs that leg, so this is not
+ * limited to manual maintenance.
+ *
+ * `EventReverseStage`, which replaces the leg, refuses estimates
+ * (`skipped: coordinates_estimated`), and PR #2823 adds the same guard to the
+ * leg itself. Neither repairs rows that were already relabelled. Such a row is
+ * an estimate with a name and a Location, and it looks like a measured visit.
+ * Only the pair of this token and {@link ESTIMATE_METHOD} identifies it. The
+ * token alone does not: `EventReverseStage` writes it on measured coordinates,
+ * and those must still count.
+ */
+const LOCATION_SOURCE_REVERSE_GEOCODED = 'reverse_geocoded';
 
 /** The graph relationship types that express a known place. */
 const KNOWN_PLACE_RELATIONSHIP_TYPES = ['LIVES_IN', 'WORKS_AT', 'VISITED'] as const;
@@ -184,9 +227,11 @@ interface KnownPlaceRow {
  * user's self node to a `ci.entities` Location node, with `strength` as the
  * confidence, `start_date`/`end_date` as the era, and `properties` for the rest.
  *
- * Building is read-only and idempotent (pure aggregation over events with
- * coordinates). Confirmation (updateKnownPlace) upserts the relationship in
- * place on the existing partial-unique index, so re-confirming never duplicates.
+ * Building is read-only and idempotent: a pure aggregation over events whose
+ * coordinates are their own (never a temporal estimate; see
+ * {@link KnownPlacesService.buildKnownPlaces}). Confirmation (updateKnownPlace)
+ * upserts the relationship in place on the existing partial-unique index, so
+ * re-confirming never duplicates.
  */
 @Injectable()
 export class KnownPlacesService {
@@ -210,6 +255,52 @@ export class KnownPlacesService {
    * events. Returns the user's most-common places as Home/Work/other candidates,
    * ranked by support. Pure read — surfaces confirmable insights; persistence
    * happens in {@link updateKnownPlace}.
+   *
+   * ── Estimates are not evidence ─────────────────────────────────────────────
+   *
+   * A located event counts only if the coordinate is its own: measured,
+   * imported or geocoded. An `approximate` geocode (a city centroid at 0.4)
+   * counts too; it is coarse, but it is still the event's own claim. A temporal
+   * estimate does not count. `enrich.estimate_location` fills an event that has
+   * no location with the coordinate of the nearest GPS fix or located event
+   * within 24 h. That tells us nothing new about where the user was: the donor
+   * already said it. What the estimate does add is a time, the event's
+   * `start_time`, which can be up to a day from the donor's. The night and
+   * work-hours signals below are read from exactly that time. The estimator's
+   * own docs say known-place clustering must discount its output.
+   *
+   * Measured on the reference corpus after a complete estimator sweep, 2,007 of
+   * the 2,098 located events were estimates, 1,928 of them `google_fit`
+   * activities. Counted as measurements, estimates were the majority of every
+   * one of the top 15 candidates. Fourteen of those were unnamed grid cells of
+   * 19 to 84 rows such as "Walking" and "Activity … (N steps)". Home went to 8
+   * rows at LAX. Seven of them were estimates from flight days: pre-dawn airport
+   * walks, and daily step summaries stamped 00:00, which always count as night.
+   * Work went to 8 estimates in Manhattan.
+   *
+   * They are excluded rather than down-weighted, because down-weighting was
+   * measured too and did not help. With each estimate weighted by its 0.4
+   * confidence, the top eight candidates were still mostly estimates (2,007 ×
+   * 0.4 is nearly nine times the 91 measured rows). Home did not move at all,
+   * because {@link assignPrimaryKinds} picks by night SHARE, and a weight on
+   * every row of an all-estimate cluster cancels out of a share.
+   * `confidence_score` is also an event-level column that other writers set for
+   * reasons of their own.
+   *
+   * What this gives up: on that corpus the Google Maps "Home" address was the
+   * top candidate only because of 413 estimates copied from the Google Fit GPS
+   * tracks that start and end there. Without them it has 2 events. That GPS
+   * evidence is real, but it reaches this pass only after being copied onto
+   * other events' times. The right way to use it is to read `ci.position`
+   * directly, which is not built. Re-admitting estimates is not a substitute.
+   *
+   * An estimate is recognised by either of two markers. The first is
+   * {@link LOCATION_SOURCE_ESTIMATED}. The second is an estimate that the legacy
+   * reverse-geocode leg has renamed, which is what
+   * {@link LOCATION_SOURCE_REVERSE_GEOCODED} describes. Each side is
+   * COALESCEd. Without that, a row with no `location_source` key compares as
+   * NULL, and the WHERE drops it. That is most measured rows, because
+   * `metadata` defaults to `'{}'`.
    */
   async buildKnownPlaces(context: UserServiceContext): Promise<KnownPlaceCandidate[]> {
     const rows: Array<{
@@ -237,8 +328,11 @@ export class KnownPlacesService {
          ON entity.entity_id = event.event_id
         AND entity.entity_type = 'Event'
        WHERE event.user_id = $1
-         AND event.location_coordinates IS NOT NULL`,
-      [context.userId],
+         AND event.location_coordinates IS NOT NULL
+         AND COALESCE(event.metadata->>'location_source', '') <> $2
+         AND NOT (COALESCE(event.metadata->>'location_source', '') = $3
+                  AND COALESCE(event.inference_sources->>'method', '') = $4)`,
+      [context.userId, LOCATION_SOURCE_ESTIMATED, LOCATION_SOURCE_REVERSE_GEOCODED, ESTIMATE_METHOD],
     );
 
     if (rows.length === 0) {

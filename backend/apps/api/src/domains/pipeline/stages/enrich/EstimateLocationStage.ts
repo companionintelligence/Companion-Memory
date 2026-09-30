@@ -105,6 +105,14 @@ export const ESTIMATE_MAX_GAP_HOURS = 24;
  * geocoded coordinate by HBPE, RAG and known-place clustering. It is also the
  * value `GeocodeService` calls `APPROXIMATE` — a coincidence, but a useful one:
  * 0.4 means "roughly, somewhere near here" throughout the appliance.
+ *
+ * Known-place clustering discounts estimates to zero, not to 0.4:
+ * `KnownPlacesService.buildKnownPlaces` does not read them at all. Its doc has
+ * the measurement: at a 0.4 weight, estimates still filled the top candidates
+ * and still chose Home. It recognises an estimate by
+ * {@link LOCATION_SOURCE_ESTIMATED}, and by `temporal_nn` in
+ * `inference_sources` once the legacy reverse-geocode leg has overwritten that
+ * token. Renaming either one turns its filter off.
  */
 export const ESTIMATED_CONFIDENCE = 0.4;
 
