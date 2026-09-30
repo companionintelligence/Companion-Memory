@@ -9,6 +9,7 @@
  */
 import type { MockedResponse } from '@apollo/client/testing';
 import { fireEvent, screen } from '@testing-library/react';
+import { GraphQLError } from 'graphql';
 import { describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
@@ -175,5 +176,97 @@ describe('SelfProfileTab — the inline person editor', () => {
     fireEvent.change(screen.getByLabelText('Job title'), { target: { value: 'Staff Engineer' } });
 
     expect(await screen.findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent(/network down/i);
+  });
+});
+
+describe('SelfProfileTab — a number the server will not store', () => {
+  const EXTENSION = '212-555-0148 x31';
+
+  type Input = { contacts?: Array<{ value: string }>; jobTitle?: string; description?: string };
+
+  /** Longer than two autosave debounces (900 ms): time enough for a retry to have fired. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 2_000));
+
+  it('points at the row, stops re-sending it, and saves once it is kept in a note', async () => {
+    const attempts: Input[] = [];
+
+    await renderTab(personRecord(), [
+      {
+        request: { query: UPDATE_PERSON },
+        variableMatcher: (variables: { input: Input }) =>
+          (variables.input.contacts ?? []).some((contact) => contact.value === EXTENSION),
+        maxUsageCount: Number.POSITIVE_INFINITY,
+        result: (variables: { input: Input }) => {
+          attempts.push(variables.input);
+
+          return {
+            errors: [
+              new GraphQLError(`"${EXTENSION}" includes an extension`, {
+                extensions: {
+                  code: 'BAD_USER_INPUT',
+                  details: {
+                    refusedContacts: [{ kind: 'phone', value: EXTENSION, label: null, reason: 'extension' }],
+                  },
+                },
+              }),
+            ],
+          };
+        },
+      } as unknown as MockedResponse,
+      {
+        request: { query: UPDATE_PERSON },
+        variableMatcher: (variables: { input: Input }) =>
+          (variables.input.contacts ?? []).length === 0 &&
+          variables.input.description === 'Phone: 212-555-0148 x31',
+        result: {
+          data: {
+            updatePerson: { success: true, person: personRecord({ description: 'Phone: 212-555-0148 x31' }) },
+          },
+        },
+      } as unknown as MockedResponse,
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: /Add phone/ }));
+    fireEvent.change(screen.getByLabelText('Phone number'), { target: { value: EXTENSION } });
+
+    expect(await screen.findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent(
+      'includes an extension',
+    );
+    expect(screen.getByLabelText('Phone number')).toHaveAttribute('aria-invalid', 'true');
+
+    // An edit elsewhere would only be refused over the same number again.
+    fireEvent.change(screen.getByLabelText('Job title'), { target: { value: 'Staff Engineer' } });
+    await settle();
+    expect(attempts).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /Keep it in a note/ }));
+
+    expect(await screen.findByText('Saved', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('does not retry a failed save in a loop when nothing was refused', async () => {
+    let calls = 0;
+
+    await renderTab(personRecord(), [
+      {
+        request: { query: UPDATE_PERSON },
+        variableMatcher: () => true,
+        maxUsageCount: Number.POSITIVE_INFINITY,
+        result: () => {
+          calls += 1;
+
+          return { errors: [new GraphQLError('Internal server error')] };
+        },
+      } as unknown as MockedResponse,
+    ]);
+
+    fireEvent.change(screen.getByLabelText('Job title'), { target: { value: 'Staff Engineer' } });
+
+    expect(await screen.findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent(
+      'Internal server error',
+    );
+    await settle();
+    expect(calls).toBe(1);
   });
 });

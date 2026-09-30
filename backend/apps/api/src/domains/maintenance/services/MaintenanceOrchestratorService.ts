@@ -452,10 +452,14 @@ export class MaintenanceOrchestratorService {
         countQuery.andWhere("COALESCE(event.metadata->>'location_source', '') <> 'virtual'");
       }
     } else {
-      // Reverse: coordinates present, name missing.
+      // Reverse: coordinates present, name missing, coordinate not an estimate.
+      // The listener refuses estimated coordinates (see
+      // GeocodeBatchListener.selectReverseCandidates), so counting them would
+      // report — and enqueue — a batch with nothing in it the listener may name.
       countQuery
         .andWhere('event.location_coordinates IS NOT NULL')
-        .andWhere("(event.location_name IS NULL OR btrim(event.location_name) = '')");
+        .andWhere("(event.location_name IS NULL OR btrim(event.location_name) = '')")
+        .andWhere("COALESCE(event.metadata->>'location_source', '') <> 'estimated'");
     }
 
     const estimatedEventCount = Math.min(await countQuery.getCount(), limit);

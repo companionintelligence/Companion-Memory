@@ -623,9 +623,9 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
    * sit on exactly this tier, and they drained 777,340 communications in a day
    * on the corpus that defeated this one.
    *
-   * The premature-`done` hazard the nightly tier was also guarding against does
-   * not exist here, and not by luck: every leg's `StageSource.predicate`
-   * requires its linkage column to be POPULATED, so an unlinked row is not a
+   * The premature-`done` hazard the nightly tier was also guarding against is
+   * mostly absent here, and not by luck: every leg's `StageSource.predicate`
+   * requires a linkage column to be POPULATED, so an unlinked row is not a
    * candidate and cannot be marked `done` by a sweep that outruns its producer.
    * It becomes a candidate — never-run, immediately due — the moment the linker
    * fills the column. Ordering against the producers stays where it belongs, in
@@ -633,6 +633,12 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
    * is due WITH candidates; outside the enrichment window the nightly producers
    * are not due, so the projection runs on its own clock and the two never
    * fight.
+   *
+   * "Mostly": the event leg's predicate is an OR over four columns filled by two
+   * producers, so an event with participants IS decided before `promote.place`
+   * links it — hourly against nightly, that is the usual order. Its place link
+   * is re-opened by `STAGE_REOPENS` (`reopens.ts`) when `promote.place` records
+   * it, which is what keeps this cadence safe for that leg.
    *
    * `maxStaleness` of 6 h for the same reason `index.embed` has it: a stage this
    * cheap to start has no business being a day behind the rows it projects.

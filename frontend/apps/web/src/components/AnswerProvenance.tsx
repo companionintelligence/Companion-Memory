@@ -48,8 +48,11 @@ export { confidenceLabel, isInferred };
 type ProvenanceState = 'unanswered' | 'inferred' | 'manual';
 
 /**
- * The status light, on a traffic-light mapping the user asked for: red nothing
- * here yet, amber the appliance guessed, green a person confirmed it.
+ * The status light: an empty ring for nothing here yet, amber the appliance
+ * guessed, green a person confirmed it. Unanswered used to be red, on a
+ * traffic-light mapping; on a phone, where a row stacks, that put a red dot under
+ * every empty field and read as a validation error, so "not yet" is a neutral
+ * ring instead.
  *
  * The dot is NOT graded by confidence band — it answers "where did this come
  * from?", and the word beside it answers "how sure was it?". `aria-hidden`
@@ -59,12 +62,37 @@ function ProvenanceDot({ state }: { state: ProvenanceState }) {
   return (
     <span
       className={cn('inline-block size-1.5 shrink-0 rounded-full', {
-        'bg-red-500': state === 'unanswered',
+        'border border-muted-foreground/70': state === 'unanswered',
         'bg-amber-500': state === 'inferred',
         'bg-emerald-500': state === 'manual',
       })}
       aria-hidden="true"
     />
+  );
+}
+
+/**
+ * The dots' meaning in words, shown once above a list of them. Touch screens
+ * cannot hover, so a dot's own tooltip never appears there; this is the only way
+ * a phone learns what the colours mean. The "no answer yet" entry shows only
+ * where unanswered rows carry the ring (from `sm` up).
+ */
+export function ProvenanceLegend({ className }: { className?: string }) {
+  return (
+    <p className={cn('flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground', className)}>
+      <span className="inline-flex items-center gap-1.5">
+        <ProvenanceDot state="manual" />
+        Answered by you
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <ProvenanceDot state="inferred" />
+        Inferred by Memory
+      </span>
+      <span className="hidden items-center gap-1.5 sm:inline-flex">
+        <ProvenanceDot state="unanswered" />
+        No answer yet
+      </span>
+    </p>
   );
 }
 

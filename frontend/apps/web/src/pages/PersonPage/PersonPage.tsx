@@ -140,82 +140,92 @@ export function PersonPage() {
   } else {
     content = (
       <PageContent>
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+        {/* One row on a wide screen: name, then the graph steppers and the actions.
+            A phone has room for about half of that, so there the header is a
+            two-row grid — name and actions on top, Hops and Nodes below — and the
+            controls wrapper steps aside (`contents`) so both groups can be placed
+            in it. The two groups sit in the same gap-2 flex as before, so the
+            wide layout is unchanged. */}
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 device:flex device:justify-between">
+          <div className="flex min-w-0 items-center gap-2 device:min-w-auto">
             <PersonIcon />
             <h1 className="text-2xl font-bold">{person.name}</h1>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 rounded-md border border-border/60 bg-background/60 px-2 py-1">
-              <span className="text-xs text-muted-foreground">Hops</span>
-              <IconButton
-                size="sm"
-                variant="ghost"
-                className="h-6 w-6 p-0"
-                disabled={hopDepth <= MIN_HOP_DEPTH}
-                onClick={() => setHopDepth((prev) => Math.max(MIN_HOP_DEPTH, prev - 1))}
-                label={t('PERSON_GRAPH_FEWER_HOPS')}
-              >
-                -
-              </IconButton>
-              <span className="w-5 text-center text-sm font-medium">{hopDepth}</span>
-              <IconButton
-                size="sm"
-                variant="ghost"
-                className="h-6 w-6 p-0"
-                disabled={hopDepth >= MAX_HOP_DEPTH}
-                onClick={() => setHopDepth((prev) => Math.min(MAX_HOP_DEPTH, prev + 1))}
-                label={t('PERSON_GRAPH_MORE_HOPS')}
-              >
-                +
-              </IconButton>
-            </div>
-            <div className="flex items-center gap-1 rounded-md border border-border/60 bg-background/60 px-2 py-1">
-              <span className="text-xs text-muted-foreground">Nodes</span>
-              <IconButton
-                size="sm"
-                variant="ghost"
-                className="h-6 w-6 p-0"
-                disabled={nodeLimit <= MIN_NODE_LIMIT}
-                onClick={() => setNodeLimit((prev) => Math.max(MIN_NODE_LIMIT, prev - NODE_LIMIT_STEP))}
-                label={t('PERSON_GRAPH_FEWER_NODES')}
-              >
-                -
-              </IconButton>
-              <span className="w-8 text-center text-sm font-medium">{nodeLimit}</span>
-              <IconButton
-                size="sm"
-                variant="ghost"
-                className="h-6 w-6 p-0"
-                disabled={nodeLimit >= MAX_NODE_LIMIT}
-                onClick={() => setNodeLimit((prev) => Math.min(MAX_NODE_LIMIT, prev + NODE_LIMIT_STEP))}
-                label={t('PERSON_GRAPH_MORE_NODES')}
-              >
-                +
-              </IconButton>
-            </div>
-            <Tooltip>
-              <Tooltip.Trigger asChild>
-                <Button
+          <div className="contents device:flex device:items-center device:gap-2">
+            <div className="col-span-2 row-start-2 flex items-center gap-2">
+              <div className="flex items-center gap-1 rounded-md border border-border/60 bg-background/60 px-2 py-1">
+                <span className="text-xs text-muted-foreground">Hops</span>
+                <IconButton
                   size="sm"
-                  variant="outline"
-                  onClick={() => setAddRelationshipModalOpen(true)}
-                  aria-label="Add relationship"
+                  variant="ghost"
+                  className="size-8 p-0 device:size-6"
+                  disabled={hopDepth <= MIN_HOP_DEPTH}
+                  onClick={() => setHopDepth((prev) => Math.max(MIN_HOP_DEPTH, prev - 1))}
+                  label={t('PERSON_GRAPH_FEWER_HOPS')}
                 >
-                  <LinkIcon />
-                </Button>
-              </Tooltip.Trigger>
-              <Tooltip.Content>Add relationship</Tooltip.Content>
-            </Tooltip>
-            <ChatWithAgentMenu
-              context={namedChatContext({
-                title: person.name,
-                body: person.description,
-                sourceKind: 'PersonType',
-                sourceId: person.id,
-              })}
-            />
-            <EntityEditToggle pressed={editMode} onPressedChange={setEditMode} />
+                  -
+                </IconButton>
+                <span className="w-5 text-center text-sm font-medium">{hopDepth}</span>
+                <IconButton
+                  size="sm"
+                  variant="ghost"
+                  className="size-8 p-0 device:size-6"
+                  disabled={hopDepth >= MAX_HOP_DEPTH}
+                  onClick={() => setHopDepth((prev) => Math.min(MAX_HOP_DEPTH, prev + 1))}
+                  label={t('PERSON_GRAPH_MORE_HOPS')}
+                >
+                  +
+                </IconButton>
+              </div>
+              <div className="flex items-center gap-1 rounded-md border border-border/60 bg-background/60 px-2 py-1">
+                <span className="text-xs text-muted-foreground">Nodes</span>
+                <IconButton
+                  size="sm"
+                  variant="ghost"
+                  className="size-8 p-0 device:size-6"
+                  disabled={nodeLimit <= MIN_NODE_LIMIT}
+                  onClick={() => setNodeLimit((prev) => Math.max(MIN_NODE_LIMIT, prev - NODE_LIMIT_STEP))}
+                  label={t('PERSON_GRAPH_FEWER_NODES')}
+                >
+                  -
+                </IconButton>
+                <span className="w-8 text-center text-sm font-medium">{nodeLimit}</span>
+                <IconButton
+                  size="sm"
+                  variant="ghost"
+                  className="size-8 p-0 device:size-6"
+                  disabled={nodeLimit >= MAX_NODE_LIMIT}
+                  onClick={() => setNodeLimit((prev) => Math.min(MAX_NODE_LIMIT, prev + NODE_LIMIT_STEP))}
+                  label={t('PERSON_GRAPH_MORE_NODES')}
+                >
+                  +
+                </IconButton>
+              </div>
+            </div>
+            <div className="col-start-2 row-start-1 flex items-center gap-2">
+              <Tooltip>
+                <Tooltip.Trigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setAddRelationshipModalOpen(true)}
+                    aria-label="Add relationship"
+                  >
+                    <LinkIcon />
+                  </Button>
+                </Tooltip.Trigger>
+                <Tooltip.Content>Add relationship</Tooltip.Content>
+              </Tooltip>
+              <ChatWithAgentMenu
+                context={namedChatContext({
+                  title: person.name,
+                  body: person.description,
+                  sourceKind: 'PersonType',
+                  sourceId: person.id,
+                })}
+              />
+              <EntityEditToggle pressed={editMode} onPressedChange={setEditMode} />
+            </div>
           </div>
         </div>
 

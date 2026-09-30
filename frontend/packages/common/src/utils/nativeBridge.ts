@@ -172,12 +172,14 @@ interface LocalNotificationsPlugin {
 }
 
 /**
- * On-device LLM plugin (Android only; see `frontend/packages/capacitor-local-llm`).
+ * On-device LLM plugin (Android + iOS; see `frontend/packages/capacitor-local-llm`).
  * Declared locally rather than imported from that package — same reason every other
  * plugin interface here is: it keeps the web bundle free of `@capacitor/*` deps.
  */
 interface LocalLlmPlugin {
   isAvailable(): Promise<{ available: boolean; reason?: string }>;
+  /** Absent on a native build older than the model-management contract; treated as "loaded". */
+  getLoadedModel?(): Promise<{ loaded: boolean }>;
   generate(options: { prompt: string }): Promise<{ text: string }>;
   generateStream(options: { prompt: string }): Promise<void>;
   addListener(
@@ -1318,7 +1320,9 @@ export async function generateOffline(
     try {
       const { available } = await llm.isAvailable();
 
-      if (available) {
+      // `available` is a capability probe (RAM, OS version), not "a model is loaded" — a device that
+      // clears the floor with nothing downloaded would otherwise fail here and only then fall back.
+      if (available && (await isModelResident(llm))) {
         const text = options.onToken
           ? await generateLocalStreaming(llm, prompt, options.onToken)
           : (await llm.generate({ prompt })).text;
@@ -1333,6 +1337,15 @@ export async function generateOffline(
   const text = await generateRemote(prompt, options);
 
   return { text, source: 'remote' };
+}
+
+/** Whether a model is loaded. A native build without `getLoadedModel` predates it, so we cannot tell and try. */
+async function isModelResident(llm: LocalLlmPlugin): Promise<boolean> {
+  if (!llm.getLoadedModel) {
+    return true;
+  }
+
+  return (await llm.getLoadedModel()).loaded;
 }
 
 /** Drives `generateStream` + the `llmToken` event into a single buffered result, forwarding partials. */

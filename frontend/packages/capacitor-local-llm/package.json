@@ -2,7 +2,7 @@
   "name": "@ci/capacitor-local-llm",
   "version": "0.0.0",
   "private": true,
-  "description": "Capacitor plugin (Android-only) for on-device LLM inference via Google's LiteRT-LM. Lets the mobile shell answer prompts fully offline once a model is downloaded and the device clears the RAM/storage floor; @ci/common's nativeBridge.ts (generateOffline) falls back to the CI-Server /api/llm/generate endpoint otherwise. No ios/ folder — this is a supported partial-platform Capacitor plugin.",
+  "description": "Capacitor plugin (Android-only) for on-device LLM inference via Google's LiteRT-LM. Downloads, loads and runs the catalog models in LOCAL_LLM_MODELS (Qwen3, Qwen2.5, Gemma 4) fully offline once a model is on disk, on CPU or GPU, with an optional reasoning channel, photo input for Gemma 4, and per-turn speed stats. This package ships the Android half only: iOS implements the identical JS contract as an in-app Swift plugin (frontend/apps/ios/ios/App/App/LocalLLM) and capacitorPluginContract.test.ts keeps the two in step. The web layer reaches either through @ci/common's localLlm.ts.",
   "scripts": {
     "typecheck": "tsc --noEmit"
   },

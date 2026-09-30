@@ -356,15 +356,64 @@ describe('LifeDetailsSection', () => {
     expect(within(rowFor(HOBBY_KEY)).getByText('Answered by you')).toBeInTheDocument();
   });
 
-  it('marks a question with no answer yet with the red status dot', async () => {
+  it('marks a question with no answer yet with a neutral ring from `sm` up, and with nothing on a phone', async () => {
     fetchJson.mockResolvedValue(fullCataloguePage());
 
     render(<LifeDetailsSection />);
 
     await screen.findByText('What is your blood type?');
     const row = rowFor(BLOOD_TYPE_KEY);
-    expect(within(row).getByText('No answer yet')).toBeInTheDocument();
-    expect(row.querySelector('span.rounded-full')).toHaveClass('bg-red-500');
+    const status = within(row).getByText('No answer yet').closest('[title="No answer yet"]');
+    const dot = row.querySelector('span.rounded-full');
+
+    // Red under every empty field read as a validation error on a phone.
+    expect(dot).toHaveClass('border');
+    expect(dot).not.toHaveClass('bg-red-500');
+    expect(status).toHaveClass('hidden', 'sm:inline-flex');
+  });
+
+  it('explains the dots once, above the questions, since a phone cannot hover for the tooltip', async () => {
+    fetchJson.mockResolvedValue(fullCataloguePage());
+
+    render(<LifeDetailsSection />);
+
+    const legend = (await screen.findByText('Inferred by Memory')).closest('p');
+
+    expect(legend).toHaveTextContent('Answered by you');
+    expect(legend).toHaveTextContent('No answer yet');
+  });
+
+  it("puts an answer's badge on its question's line when the rows stack on a phone", async () => {
+    const realMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === '(width < 40rem)',
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+
+    try {
+      fetchJson.mockResolvedValue(
+        cataloguePage([
+          catalogueEntry(BLOOD_TYPE_KEY, 'O negative', { source: 'inferred', confidence: 0.72 }),
+        ]),
+      );
+
+      render(<LifeDetailsSection />);
+
+      const badge = await screen.findByText('good');
+      const [questionLine, answerCell] = Array.from(rowFor(BLOOD_TYPE_KEY).children);
+
+      expect(questionLine).toContainElement(badge);
+      expect(answerCell).not.toContainElement(badge);
+      expect(screen.getAllByText('good')).toHaveLength(1);
+    } finally {
+      window.matchMedia = realMatchMedia;
+    }
   });
 
   it('edits an existing answer with a PATCH carrying text alone, so the API re-stamps it as user-authored', async () => {

@@ -7,6 +7,7 @@ import { speechPlugin } from '@ci/common/src/utils/speech';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { LocalHubWeb } from '../../../../packages/capacitor-local-hub/src/web';
+import { LOCAL_LLM_MODELS } from '../../../../packages/capacitor-local-llm/src/definitions';
 import { LocalLlmWeb } from '../../../../packages/capacitor-local-llm/src/web';
 import { SpeechWeb } from '../../../../packages/capacitor-speech/src/web';
 
@@ -98,8 +99,10 @@ const PLUGINS: PluginUnderTest[] = [
     pkg: 'capacitor-local-llm',
     interfaceName: 'LocalLlmPlugin',
     androidPlugin: 'android/src/main/java/com/companionintelligence/localllm/LocalLlmPlugin.kt',
-    // Deliberately Android-only — see the package description. If an iOS half is ever
-    // added, this null (and the "no ios/ directory" assertion below) must change with it.
+    // The PACKAGE is Android-only (no `ios/`, not in the Podfile). iOS ships the same JS contract as
+    // an in-app Swift plugin instead, which the dedicated `LocalLLM — the iOS half` block below checks
+    // against the same `definitions.ts`. If the Swift half ever moves into this package, this null
+    // (and the "no ios/ directory" assertion above) must change with it.
     iosPlugin: null,
     anchorMethod: 'generate',
   },
@@ -270,6 +273,100 @@ describe.each(PLUGINS)('$pkg — every declared method exists natively', (plugin
   });
 });
 
+describe('LocalLLM — the in-app iOS half and the native catalogs', () => {
+  const IOS_LLM_DIR = join(ROOT, 'frontend/apps/ios/ios/App/App/LocalLLM');
+  const KOTLIN_MODELS = join(
+    PACKAGES,
+    'capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/LocalLlmModels.kt',
+  );
+
+  const declared = declaredMethods('capacitor-local-llm', 'LocalLlmPlugin');
+
+  it('iOS registers under the same bridge name as registerPlugin(…)', () => {
+    const swift = read(join(IOS_LLM_DIR, 'LocalLLMPlugin.swift'));
+
+    expect(/\bjsName\s*=\s*"([^"]+)"/.exec(swift)?.[1]).toBe(registeredName('capacitor-local-llm'));
+  });
+
+  it('iOS lists every declared method in pluginMethods — an unlisted @objc func is unreachable from JS', () => {
+    const listed = swiftPluginMethods(read(join(IOS_LLM_DIR, 'LocalLLMPlugin.swift')));
+    const required = declared.filter((m) => !BRIDGE_PROVIDED.includes(m));
+
+    // The methods this change added must be in both halves — name them so a regression reads clearly.
+    for (const method of ['cancelDownload', 'getLoadedModel', 'resetConversation']) {
+      expect(declared).toContain(method);
+      expect(listed).toContain(method);
+    }
+
+    expect(required.filter((m) => !listed.includes(m))).toEqual([]);
+  });
+
+  /** `field: "value"` / `field = "value"` → the value, within one model block. */
+  const stringField = (block: string, field: string) =>
+    new RegExp(`\\b${field}\\s*[:=]\\s*"([^"]*)"`).exec(block)?.[1];
+
+  /** `field: 4_294_967_296` / `field = 4_294_967_296L` → the number. */
+  const numberField = (block: string, field: string) => {
+    const match = new RegExp(`\\b${field}\\s*[:=]\\s*([\\d_]+)L?`).exec(block)?.[1];
+
+    return match === undefined ? undefined : Number(match.replace(/_/g, ''));
+  };
+
+  /** Split a native catalog into one text block per `modelId`, so each field is read from its own model. */
+  const modelBlocks = (source: string) => {
+    const starts = [...source.matchAll(/\bmodelId\s*[:=]\s*"([^"]+)"/g)];
+
+    return starts.map((match, i) => ({
+      modelId: match[1],
+      block: source.slice(match.index, starts[i + 1]?.index ?? source.length),
+    }));
+  };
+
+  const expectedFor = (platform: 'android' | 'ios') =>
+    Object.values(LOCAL_LLM_MODELS)
+      .filter((model) => (model.platforms as readonly string[]).includes(platform))
+      .map((model) => model.modelId);
+
+  it.each([
+    ['Kotlin', KOTLIN_MODELS, 'android' as const],
+    ['Swift', join(IOS_LLM_DIR, 'LocalLLMModels.swift'), 'ios' as const],
+  ])(
+    'the %s catalog carries exactly the models its platform ships, with matching id, size, commit and RAM floor',
+    (_label, file, platform) => {
+      const blocks = modelBlocks(read(file));
+
+      // Vacuity guard: a regex that matched nothing would make every comparison below pass on empty sets.
+      expect(blocks.length).toBeGreaterThan(0);
+      expect(blocks.map((b) => b.modelId).sort()).toEqual(expectedFor(platform).sort());
+
+      for (const { modelId, block } of blocks) {
+        const spec = LOCAL_LLM_MODELS[modelId as keyof typeof LOCAL_LLM_MODELS];
+
+        expect(numberField(block, 'sizeBytes'), `${modelId} sizeBytes`).toBe(spec.sizeBytes);
+        expect(stringField(block, 'commitHash'), `${modelId} commitHash`).toBe(spec.commitHash);
+        expect(numberField(block, 'minDeviceMemoryBytes'), `${modelId} minDeviceMemoryBytes`).toBe(
+          spec.minDeviceMemoryBytes,
+        );
+
+        // The file name is the last path segment of the pinned URL — the one the download is written to.
+        const fileName = spec.url.split('/').pop()?.split('?')[0];
+
+        expect(stringField(block, 'fileName'), `${modelId} fileName`).toBe(fileName);
+      }
+    },
+  );
+
+  it('iOS pins each download to the same URL the JS catalog offers', () => {
+    const swift = read(join(IOS_LLM_DIR, 'LocalLLMModels.swift'));
+
+    for (const { modelId, block } of modelBlocks(swift)) {
+      const url = /string:\s*"([^"]+)"/.exec(block)?.[1];
+
+      expect(url, `${modelId} url`).toBe(LOCAL_LLM_MODELS[modelId as keyof typeof LOCAL_LLM_MODELS].url);
+    }
+  });
+});
+
 describe('the bridge key @ci/common reads matches the registered name', () => {
   const originalCapacitor = (window as unknown as { Capacitor?: unknown }).Capacitor;
 
@@ -372,6 +469,13 @@ describe('LocalLlmWeb — the fallback generateOffline() checks before going rem
     await expect(llm.unloadModel()).resolves.toBeUndefined();
     await expect(llm.cancel()).resolves.toBeUndefined();
     await expect(llm.deleteModel()).resolves.toBeUndefined();
+    await expect(llm.cancelDownload()).resolves.toBeUndefined();
+    // "New chat" calls this unconditionally, whether or not a model is loaded.
+    await expect(llm.resetConversation()).resolves.toBeUndefined();
+  });
+
+  it('getLoadedModel() reports nothing loaded rather than throwing', async () => {
+    await expect(llm.getLoadedModel()).resolves.toEqual({ loaded: false });
   });
 
   it('the methods that need a real engine reject as unavailable', async () => {

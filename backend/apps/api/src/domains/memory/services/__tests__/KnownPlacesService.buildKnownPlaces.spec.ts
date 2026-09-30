@@ -3,6 +3,7 @@ import type { DataSource } from 'typeorm';
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 
+import { LIVE_EVENT_SQL } from '../CalendarEventService';
 import { KnownPlacesService } from '../KnownPlacesService';
 import type { PlaceService } from '../PlaceService';
 
@@ -550,7 +551,42 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
     expect(sql).toContain('entity.name');
     expect(sql).toContain("entity.entity_type = 'Event'");
     expect(sql).toContain('event.event_id');
-    expect(params).toEqual([USER]);
+    expect(params?.[0]).toBe(USER);
+  });
+
+  it('leaves temporal estimates out of the read, including ones the legacy reverse leg relabelled', async () => {
+    // The filtering is SQL, so what it does is proven against Postgres in
+    // KnownPlacesService.integration.spec.ts. This pins the tokens, which are
+    // copies of the estimator's (see LOCATION_SOURCE_ESTIMATED): a drift
+    // there turns the filter off, and nothing else would notice.
+    const { service, query } = makeService([]);
+
+    await service.buildKnownPlaces(CONTEXT);
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+
+    expect(sql).toContain("COALESCE(event.metadata->>'location_source', '') <> $2");
+    expect(sql).toContain("COALESCE(event.inference_sources->>'method', '') = $4");
+    expect(params?.slice(0, 4)).toEqual([USER, 'estimated', 'reverse_geocoded', 'temporal_nn']);
+  });
+
+  it('leaves deleted, predicted and did-not-happen events out of the read', async () => {
+    // Also proven against Postgres in KnownPlacesService.integration.spec.ts.
+    // The status test is the calendar's own LIVE_EVENT_SQL rather than a copy,
+    // because DEAD_EVENT_STATUSES is shared precisely so its copies cannot
+    // drift apart. The reservation key IS a copy (see
+    // RESERVATION_CANCELED_KEY), so it is pinned here.
+    const { service, query } = makeService([]);
+
+    await service.buildKnownPlaces(CONTEXT);
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+
+    expect(sql).toContain('event.is_deleted IS NOT TRUE');
+    expect(sql).toContain('event.is_predicted IS NOT TRUE');
+    expect(sql).toContain(LIVE_EVENT_SQL);
+    expect(sql).toContain("COALESCE(event.metadata->>$5, '') <> 'true'");
+    expect(params[4]).toBe('Canceled');
   });
 
   it('keeps the newest event titles so an unnamed cluster can be recognized', async () => {

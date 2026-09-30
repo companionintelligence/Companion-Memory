@@ -20,8 +20,16 @@ import { isJobsPath, JOBS_CATEGORY_SECTIONS, JOBS_SECTIONS } from '@/pages/JobsP
 import { isSourcesPath, SOURCES_SECTIONS } from '@/pages/SourcesPage/sourcesSections';
 
 /**
+ * The rail's two clusters, drawn apart by space and a hairline rather than a
+ * label: the places you work, then the machinery behind them — where data
+ * comes from (Sources), what the appliance runs for itself (Jobs), and what
+ * software did or wants to do on your behalf (Approvals).
+ */
+export type RailCluster = 'work' | 'system';
+
+/**
  * Destinations in the Power Rail, top to bottom (and on the phone, the same
- * list inside the glass overlay drawer).
+ * list inside the overlay drawer).
  */
 export interface RailDestination {
   readonly id: string;
@@ -41,6 +49,12 @@ export interface RailDestination {
    * disappearing with it (see {@link visibleRailDestinations}).
    */
   readonly children?: readonly RailDestination[];
+  /**
+   * Which cluster a top-level row sits in; `work` when unset. Children render
+   * inside their head and never read it — a child promoted to the top level
+   * (its head gated off) takes its head's.
+   */
+  readonly cluster?: RailCluster;
 }
 
 export const RAIL_DESTINATIONS: readonly RailDestination[] = [
@@ -88,6 +102,7 @@ export const RAIL_DESTINATIONS: readonly RailDestination[] = [
     icon: Cable,
     end: false,
     match: isSourcesPath,
+    cluster: 'system',
     children: SOURCES_SECTIONS.map((section) => ({
       id: section.id,
       to: section.to,
@@ -116,6 +131,7 @@ export const RAIL_DESTINATIONS: readonly RailDestination[] = [
     flag: 'jobs.page',
     end: false,
     match: isJobsPath,
+    cluster: 'system',
     children: [
       ...JOBS_SECTIONS.filter((section) => section.id !== 'overview').map((section) => ({
         id: section.id,
@@ -153,11 +169,21 @@ export const RAIL_DESTINATIONS: readonly RailDestination[] = [
     to: '/approvals',
     label: 'Approvals',
     icon: ShieldCheck,
+    cluster: 'system',
     children: [{ id: 'activity', to: '/activity', label: 'Activity', icon: History }],
   },
   // Below Jobs, off the primary six, while its flag ships false — turning it
-  // on later should not disturb the places you actually work.
-  { id: 'forecast', to: '/forecast', label: 'Forecast', icon: CloudSun, flag: 'forecast.page' },
+  // on later should not disturb the places you actually work. That includes
+  // the cluster: it joins the one it already sits at the foot of, rather than
+  // opening a third under its own hairline.
+  {
+    id: 'forecast',
+    to: '/forecast',
+    label: 'Forecast',
+    icon: CloudSun,
+    flag: 'forecast.page',
+    cluster: 'system',
+  },
   // Combines the former About You / Account settings and the Stats page —
   // one destination for "who I am to the system", rendered as the user tile
   // at the foot of the rail rather than in the destination list.
@@ -191,21 +217,48 @@ function isVisible(destination: RailDestination, isFeatureEnabled: (flag: string
   return !destination.flag || isFeatureEnabled(destination.flag);
 }
 
-export function visibleRailDestinations(isFeatureEnabled: (flag: string) => boolean): RailDestination[] {
-  return RAIL_DESTINATIONS.flatMap((destination) => {
+export function visibleRailDestinations(
+  isFeatureEnabled: (flag: string) => boolean,
+  destinations: readonly RailDestination[] = RAIL_DESTINATIONS,
+): RailDestination[] {
+  return destinations.flatMap((destination): RailDestination[] => {
     const children = (destination.children ?? []).filter((child) => isVisible(child, isFeatureEnabled));
 
     // A group head going dark must not take its children with it — Saved
     // Searches itself is ungated, but this still matters for any future group
     // head that carries a flag: its children ride their own flags (Asks rides
     // `ask`, not a parent's flag) and stay reachable rather than becoming a
-    // page you can only type at.
+    // page you can only type at. They keep their head's cluster, so a promoted
+    // child stays where its head stood instead of opening a hairline of its own.
     if (!isVisible(destination, isFeatureEnabled)) {
-      return children;
+      return children.map((child) => ({ ...child, cluster: child.cluster ?? destination.cluster }));
     }
 
     return [{ ...destination, children }];
   });
+}
+
+/**
+ * Top-level rows split into the rail's clusters: consecutive runs that share
+ * one, in rail order. A run, not a bucket, so the rail can never reorder rows
+ * to gather a cluster together.
+ */
+export function railClusters(destinations: readonly RailDestination[]): RailDestination[][] {
+  const clusters: RailDestination[][] = [];
+  let current: RailCluster | null = null;
+
+  for (const destination of destinations) {
+    const cluster = destination.cluster ?? 'work';
+
+    if (cluster !== current) {
+      clusters.push([]);
+      current = cluster;
+    }
+
+    clusters[clusters.length - 1].push(destination);
+  }
+
+  return clusters;
 }
 
 /** Every destination, group heads and their children alike, flat. */

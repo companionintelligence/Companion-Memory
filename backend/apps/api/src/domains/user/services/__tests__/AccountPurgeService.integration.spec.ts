@@ -380,4 +380,55 @@ describeWithDatabase(`account purge, against the real schema (${availability.tar
       expect(outcome.detachedRows).toEqual({});
     }, 120_000);
   });
+
+  describe('a purge that destroys its own audit record', () => {
+    // The failure `markCompleted` guards against, reproduced: something in the
+    // purge's own statements takes out the `ci.account_purges` row, as the
+    // plan once did when that table's `user_id` matched the owner naming
+    // convention. A trigger stands in for that plan, scoped to one account.
+    //
+    // The guard read `.length` of a bare `UPDATE … RETURNING`, which TypeORM
+    // resolves to `[rows, rowCount]` — 2 whether or not the row was found — so
+    // until it counted through a CTE this purge reported success.
+    const selfErasing = randomUUID();
+
+    beforeAll(async () => {
+      await query(
+        `INSERT INTO ci.users (id, email, name, deleted_at, purge_after)
+         VALUES ($1, $2, 'Self-erasing', NOW() - INTERVAL '31 days', NOW() - INTERVAL '1 day')`,
+        [selfErasing, `self-erasing-${selfErasing}@example.test`],
+      );
+      await query(`
+        CREATE FUNCTION public.purge_spec_drop_audit_record() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          DELETE FROM ci.account_purges WHERE user_id = OLD.id;
+          RETURN OLD;
+        END
+        $$
+      `);
+      await query(`
+        CREATE TRIGGER purge_spec_drop_audit_record
+        AFTER DELETE ON ci.users
+        FOR EACH ROW WHEN (OLD.id = '${selfErasing}'::uuid)
+        EXECUTE FUNCTION public.purge_spec_drop_audit_record()
+      `);
+    }, 60_000);
+
+    afterAll(async () => {
+      await query(`DROP TRIGGER IF EXISTS purge_spec_drop_audit_record ON ci.users`);
+      await query(`DROP FUNCTION IF EXISTS public.purge_spec_drop_audit_record()`);
+    }, 60_000);
+
+    it('refuses to report the account as purged', async () => {
+      const outcome = await service.purgeAccount(selfErasing, new Date(), new Date());
+
+      expect(outcome.status).toBe('failed');
+      expect(outcome.error).toMatch(/audit record is missing/);
+      // The data really is gone — which is why the outcome must not say so
+      // with no record behind it.
+      expect(await countWhere('ci.users', 'id = $1', [selfErasing])).toBe(0);
+      expect(await countWhere('ci.account_purges', 'user_id = $1', [selfErasing])).toBe(0);
+    }, 120_000);
+  });
 });

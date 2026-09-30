@@ -9,6 +9,7 @@ import {
   planLegacyKeyMoves,
   type ImportedEntityRow,
   type LegacyKeyClaim,
+  type MergedAwayRow,
 } from '../legacyKeys';
 
 /**
@@ -60,6 +61,7 @@ const found = (
   key: string,
   name: string | null,
   properties: Record<string, unknown> = {},
+  mergedFrom: MergedAwayRow[] = [],
 ): ImportedEntityRow => ({
   entityType: 'Person',
   sourceSystem: 'vcard',
@@ -67,14 +69,31 @@ const found = (
   entityId: `entity:${key}`,
   name,
   properties,
+  mergedFrom,
 });
 
-const claim = (key: string, legacyKey: string, name: string | null): LegacyKeyClaim => ({
+const claim = (
+  key: string,
+  legacyKey: string,
+  name: string | null,
+  handles: string[] = [],
+): LegacyKeyClaim => ({
   entityType: 'Person',
   sourceSystem: 'vcard',
   key,
   legacyKey,
   name,
+  handles,
+});
+
+const merged = (
+  entityId: string,
+  name: string | null,
+  properties: Record<string, unknown>,
+): MergedAwayRow => ({
+  entityId,
+  name,
+  properties,
 });
 
 describe('legacyNaturalKeyFor', () => {
@@ -104,7 +123,32 @@ describe('legacyKeyClaims', () => {
         key: 'contact:priya@example.com',
         legacyKey: 'contact:5550100100',
         name: 'Priya Natarajan',
+        handles: ['priya@example.com', '5550100100'],
       },
+    ]);
+  });
+
+  it('carries every handle the card lists, normalized the way staging compares them', () => {
+    const [made] = legacyKeyClaims(
+      batchOf(
+        staged({
+          metadata: {
+            Emails: ['Priya@Example.com'],
+            Phones: ['(555) 010-0100', '+1 555 010 0199'],
+            Faxes: '555-010-0101',
+          },
+        }),
+      ),
+    );
+
+    expect(made.handles).toEqual(['priya@example.com', '5550100100', '5550100199', '5550100101']);
+  });
+
+  it('adds the handles of a second row making the same claim to the first', () => {
+    const batch = batchOf(staged({ id: 'a' }), staged({ id: 'b', metadata: { Phones: ['(555) 010-0133'] } }));
+
+    expect(legacyKeyClaims(batch)).toEqual([
+      expect.objectContaining({ handles: ['priya@example.com', '5550100100', '5550100133'] }),
     ]);
   });
 
@@ -156,6 +200,7 @@ describe('planLegacyKeyMoves', () => {
           toKey: 'contact:5550100177',
           // One person's row, claimed by that person: nothing to rebuild.
           resetProperties: false,
+          dropMergedFrom: [],
         },
       ],
       kept: 0,
@@ -268,5 +313,129 @@ describe('planLegacyKeyMoves', () => {
     );
 
     expect(plan.moves).toEqual([expect.objectContaining({ toKey: 'contact:first@example.com' })]);
+  });
+});
+
+describe('planLegacyKeyMoves, for a collapsed row that others were merged into', () => {
+  // The office again, with each card's handles as staging read them.
+  const office = [
+    claim('contact:tom@example.com', 'contact:5550100100', 'Tom Becker', [
+      'tom@example.com',
+      '5550100100',
+      '5550100188',
+    ]),
+    claim('contact:priya@example.com', 'contact:5550100100', 'Priya Natarajan', [
+      'priya@example.com',
+      '5550100100',
+    ]),
+    claim('contact:5550100142', 'contact:5550100100', 'Lena Ortiz', ['5550100142', '5550100100']),
+  ];
+
+  it('keeps the merges that are the heir’s and names the ones that are a colleague’s', () => {
+    const plan = planLegacyKeyMoves(office, [
+      found('contact:5550100100', 'Priya Natarajan', {}, [
+        // Her own mail and chat stubs, merged into what showed as her card.
+        merged('priya-mail', 'Priya Natarajan', { emails: ['priya.n@mail.example'] }),
+        merged('priya-chat', 'Priya', { names: ['Priya'] }),
+        // The switchboard is on her card as well as her colleagues'.
+        merged('switchboard', '+1 555-010-0100', { phones: ['5550100100'] }),
+        // Nothing says whose this is, so the merge keeps what it brought.
+        merged('unknown', null, { phones: ['5550100177'] }),
+        // Named after a colleague.
+        merged('tom-mail', 'Tom Becker', { emails: ['tom.b@mail.example'] }),
+        // Named after nothing, but holding what only a colleague's card lists:
+        // the stub a shared-email auto-merge folds in.
+        merged('tom-bare', 'tom@example.com', { emails: ['tom@example.com'] }),
+        merged('tom-cell', '(555) 010-0188', { Phones: ['+1 (555) 010-0188'] }),
+        merged('lena-voice', '+1 555-010-0142', { phone: '5550100142', phones: ['5550100142'] }),
+      ]),
+    ]);
+
+    expect(plan.moves).toEqual([
+      expect.objectContaining({
+        toKey: 'contact:priya@example.com',
+        resetProperties: true,
+        dropMergedFrom: ['tom-mail', 'tom-bare', 'tom-cell', 'lena-voice'],
+      }),
+    ]);
+  });
+
+  it('names none for a move that is not reset', () => {
+    const plan = planLegacyKeyMoves(
+      [claim('contact:5550100177', 'contact:5550100150', 'Omar Haddad', ['5550100177', '5550100150'])],
+      [
+        found('contact:5550100150', 'Omar Haddad', {}, [
+          merged('other', 'Grace Whitaker', { names: ['Grace'] }),
+        ]),
+      ],
+    );
+
+    expect(plan.moves).toEqual([expect.objectContaining({ resetProperties: false, dropMergedFrom: [] })]);
+  });
+
+  it('does not count the heir’s other copies of the card as colleagues', () => {
+    const plan = planLegacyKeyMoves(
+      [
+        claim('contact:matt@example.com', 'contact:5550100160', 'Matt Okafor', [
+          'matt@example.com',
+          '5550100160',
+        ]),
+        claim('contact:5550100161', 'contact:5550100160', 'Matthew Okafor', ['5550100161', '5550100160']),
+        claim('contact:tom@example.com', 'contact:5550100160', 'Tom Becker', [
+          'tom@example.com',
+          '5550100160',
+        ]),
+      ],
+      [
+        found('contact:5550100160', 'Matt Okafor', {}, [
+          merged('matthew-voice', '+1 555-010-0161', { phones: ['5550100161'] }),
+          merged('tom-bare', 'tom@example.com', { emails: ['tom@example.com'] }),
+        ]),
+      ],
+    );
+
+    expect(plan.moves).toEqual([
+      expect.objectContaining({ resetProperties: true, dropMergedFrom: ['tom-bare'] }),
+    ]);
+  });
+
+  it('judges by the row’s own name when the heir’s card has none', () => {
+    const plan = planLegacyKeyMoves(
+      [
+        claim('contact:priya@example.com', 'contact:5550100100', null, ['priya@example.com', '5550100100']),
+        claim('contact:tom@example.com', 'contact:5550100100', 'Tom Becker', [
+          'tom@example.com',
+          '5550100100',
+        ]),
+      ],
+      [
+        found('contact:5550100100', 'Priya Natarajan', {}, [
+          merged('priya-mail', 'Priya Natarajan', { emails: ['priya.n@mail.example'] }),
+          merged('tom-bare', 'tom@example.com', { emails: ['tom@example.com'] }),
+        ]),
+      ],
+    );
+
+    expect(plan.moves).toEqual([
+      expect.objectContaining({ toKey: 'contact:priya@example.com', dropMergedFrom: ['tom-bare'] }),
+    ]);
+  });
+
+  it('can go by names alone when no colleague’s card is in the export', () => {
+    // Reset for the Names the row accumulated; with no card of Tom's to
+    // compare against, a stub named by its address says nothing either way.
+    const plan = planLegacyKeyMoves(
+      [claim('contact:priya@example.com', 'contact:5550100100', 'Priya Natarajan', ['priya@example.com'])],
+      [
+        found('contact:5550100100', 'Priya Natarajan', { Names: ['Priya Natarajan', 'Tom Becker'] }, [
+          merged('tom-mail', 'Tom Becker', { emails: ['tom.b@mail.example'] }),
+          merged('tom-bare', 'tom@example.com', { emails: ['tom@example.com'] }),
+        ]),
+      ],
+    );
+
+    expect(plan.moves).toEqual([
+      expect.objectContaining({ resetProperties: true, dropMergedFrom: ['tom-mail'] }),
+    ]);
   });
 });

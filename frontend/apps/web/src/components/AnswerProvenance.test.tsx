@@ -44,10 +44,11 @@ describe('AnswerProvenance', () => {
     expect(visible).toHaveTextContent(/^good$/);
   });
 
-  it('shows a red dot and no band when the question has no answer yet', () => {
+  it('shows a neutral ring, not a red dot, and no band when the question has no answer yet', () => {
     render(<AnswerProvenance answered={false} />);
 
-    expect(dot()).toHaveClass('bg-red-500');
+    expect(dot()).toHaveClass('border');
+    expect(dot()).not.toHaveClass('bg-red-500');
     expect(screen.getByText('No answer yet')).toHaveClass('sr-only');
   });
 

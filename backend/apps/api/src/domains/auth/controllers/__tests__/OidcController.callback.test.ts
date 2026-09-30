@@ -54,6 +54,7 @@ function makeController() {
     // about the gates, not the one-account-wide exemption that lets someone
     // claim a box with an empty user table.
     hasNoUsers: jest.fn().mockResolvedValue(false),
+    createFirstAccount: jest.fn().mockResolvedValue(null),
   };
   const authService = {
     issueSessionToken: jest
@@ -99,6 +100,27 @@ function makeController() {
     hubBridge,
     logger,
   };
+}
+
+/** Stands in for the transaction `UserService.createFirstAccount` runs its `alongside` work in. */
+const CLAIM_TRANSACTION = { transaction: 'first-account' };
+
+/**
+ * The appliance is empty and this sign-in claims it: `createFirstAccount` creates the account, runs
+ * the controller's `alongside` work (the binding) in its transaction, and returns the account.
+ */
+function claimsTheAppliance(userService: { createFirstAccount: jest.Mock }, user: { id: string }) {
+  userService.createFirstAccount.mockImplementation(
+    async (
+      _context: unknown,
+      _data: unknown,
+      alongside?: (manager: unknown, created: unknown) => Promise<unknown>,
+    ) => {
+      await alongside?.(CLAIM_TRANSACTION, { ...user, role: 'admin' });
+
+      return user;
+    },
+  );
 }
 
 function makeRes() {
@@ -268,10 +290,13 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       expect(userService.create).not.toHaveBeenCalled();
       // The intent carries the (issuer, subject) so confirm-account can bind the
       // account it creates to this identity — and recognise a concurrent tab.
-      expect(authService.issueSignupIntentToken).toHaveBeenCalledWith('new@example.com', 'New Person', {
-        issuer: expect.any(String),
-        subject: 'portal-sub-1',
-      });
+      // Signup codes are off, so nothing was waived for being first.
+      expect(authService.issueSignupIntentToken).toHaveBeenCalledWith(
+        'new@example.com',
+        'New Person',
+        { issuer: expect.any(String), subject: 'portal-sub-1' },
+        { firstAccountOnly: false },
+      );
       expect(res.cookie).toHaveBeenCalledWith('oidc_signup_intent', 'signup-intent-jwt', expect.any(Object));
       expect(res.redirect).toHaveBeenCalledWith('/api/authenticate/oidc/confirm-account');
     });
@@ -294,7 +319,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
     // last door out of a freshly installed appliance: no account, no way to mint
     // a signup code, and no web confirmation reachable from the deep-link flow.
     it('native: claims an unclaimed appliance instead of dead-ending on signup_required', async () => {
-      const { controller, userService, oidcNativeCodeService } = makeController();
+      const { controller, userService, federatedIdentityService, oidcNativeCodeService } = makeController();
       const res = makeRes();
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
@@ -303,15 +328,74 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         );
       userService.findByEmail.mockResolvedValue(null);
       userService.hasNoUsers.mockResolvedValue(true);
-      userService.create.mockResolvedValue({ id: 'user-first' });
+      claimsTheAppliance(userService, { id: 'user-first' });
       oidcNativeCodeService.issue.mockReturnValue('one-time-code');
 
       await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
 
-      expect(userService.create).toHaveBeenCalledWith(
+      // Created only as the first account — never through the create() that admits anyone — and
+      // bound in the same transaction.
+      expect(userService.createFirstAccount).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ email: 'owner@example.com', name: 'Owner' }),
+        expect.any(Function),
       );
+      expect(userService.create).not.toHaveBeenCalled();
+      expect(federatedIdentityService.bind).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-first', subject: 'portal-sub-1', bindMethod: 'sub' }),
+        CLAIM_TRANSACTION,
+      );
+      expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?code=one-time-code`);
+    });
+
+    // Two first sign-ins on an empty appliance used to both get accounts: each
+    // read `hasNoUsers()` as true and then created one. That answer is now only
+    // a way of sorting the request; the account is created only if it is still
+    // the first, and a sign-in that loses is answered as a later arrival would be.
+    it.each([
+      [false, 'signup_required'],
+      [true, 'signup_code_required'],
+    ])(
+      'native: a sign-in that loses the race for an empty appliance is refused like any uninvited one (codes required: %s)',
+      async (codesRequired, refusal) => {
+        const { controller, userService, featureService, oidcNativeCodeService } = makeController();
+        const res = makeRes();
+        mockFetch
+          .mockResolvedValueOnce(TOKEN_OK)
+          .mockResolvedValueOnce(
+            jsonResponse(true, 200, { sub: 'portal-sub-2', email: 'second@example.com' }),
+          );
+        userService.findByEmail.mockResolvedValue(null);
+        userService.hasNoUsers.mockResolvedValue(true);
+        featureService.isFeatureEnabled.mockResolvedValue(codesRequired);
+        userService.createFirstAccount.mockResolvedValue(null);
+
+        await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
+
+        expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=${refusal}`);
+        expect(userService.create).not.toHaveBeenCalled();
+        expect(oidcNativeCodeService.issue).not.toHaveBeenCalled();
+      },
+    );
+
+    it('native: a race lost to the SAME identity signs it in to the account it claimed', async () => {
+      const { controller, userService, federatedIdentityService, oidcNativeCodeService } = makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'owner@example.com' }));
+      userService.findByEmail.mockResolvedValue(null);
+      userService.hasNoUsers.mockResolvedValue(true);
+      userService.createFirstAccount.mockResolvedValue(null);
+      federatedIdentityService.findUserId
+        .mockResolvedValueOnce(null) // before the race
+        .mockResolvedValueOnce('user-first'); // committed, with its account, by the winner
+      userService.findById.mockResolvedValue({ id: 'user-first' });
+      oidcNativeCodeService.issue.mockReturnValue('one-time-code');
+
+      await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
+
+      expect(oidcNativeCodeService.issue).toHaveBeenCalledWith('user-first');
       expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?code=one-time-code`);
     });
 
@@ -362,13 +446,15 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         expect.anything(),
         expect.objectContaining({ email: 'guest@example.com', name: 'Guest' }),
       );
+      // The invitation admits them whether or not they are first.
+      expect(userService.createFirstAccount).not.toHaveBeenCalled();
       expect(signupCodeService.update).toHaveBeenCalledWith('invite-1', { used: true });
       expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?code=one-time-code`);
       expect(res.redirect).not.toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=signup_required`);
     });
 
     it('lets an invited identity in when the code the owner issued rides along, and burns it', async () => {
-      const { controller, userService, signupCodeService, featureService } = makeController();
+      const { controller, userService, signupCodeService, featureService, authService } = makeController();
       const res = makeRes();
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
@@ -389,6 +475,40 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       // Not refused, and the invitation cannot be replayed by whoever arrives next.
       expect(res.redirect).not.toHaveBeenCalledWith('/login?error=signup_code_required');
       expect(signupCodeService.update).toHaveBeenCalledWith('invite-1', { used: true });
+      // Admitted by the invitation, so confirm-account need not be the first account.
+      expect(authService.issueSignupIntentToken).toHaveBeenCalledWith(
+        'guest@example.com',
+        undefined,
+        expect.any(Object),
+        { firstAccountOnly: false },
+      );
+    });
+
+    // The web flow creates the account a page later, from confirm-account. When
+    // the only thing that let this person past the code gate was an empty
+    // appliance, the intent says so, and confirm-account re-decides it as it
+    // creates — the callback's answer is up to the intent's lifetime old.
+    it('web: an intent that skipped the code gate only for being first says so', async () => {
+      const { controller, userService, featureService, authService } = makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'owner@example.com' }));
+      userService.findByEmail.mockResolvedValue(null);
+      userService.hasNoUsers.mockResolvedValue(true);
+      featureService.isFeatureEnabled.mockResolvedValue(true);
+
+      await controller.callback('code-x', 'match', undefined, webReq(), res as never);
+
+      expect(userService.create).not.toHaveBeenCalled();
+      expect(userService.createFirstAccount).not.toHaveBeenCalled();
+      expect(authService.issueSignupIntentToken).toHaveBeenCalledWith(
+        'owner@example.com',
+        undefined,
+        { issuer: expect.any(String), subject: 'portal-sub-1' },
+        { firstAccountOnly: true },
+      );
+      expect(res.redirect).toHaveBeenCalledWith('/api/authenticate/oidc/confirm-account');
     });
 
     it('refuses a code that is not a real invitation, and burns nothing', async () => {

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 
+import { useDeviceLayout } from '@ci/common';
 import { cn } from '@ci/shadcn';
 import { ArrowRight } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
@@ -103,6 +104,12 @@ function countFor(path: SourcePath, counts: SourceCounts): { value: number; noun
  * and the switch went back to being a switch.
  */
 export function SourcePathTiles({ active, counts, paths }: Props) {
+  const { isMobile } = useDeviceLayout();
+
+  if (isMobile) {
+    return <SourcePathSwitch active={active} counts={counts} paths={paths} />;
+  }
+
   return (
     <section aria-label="Ways to add data" className="w-full">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -111,6 +118,75 @@ export function SourcePathTiles({ active, counts, paths }: Props) {
 
           return (
             <PathTile key={key} definition={SOURCE_PATH_INFO[key]} active={active === key} count={count} />
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/** Each path's icon at the size a one-line segment has room for. */
+const SEGMENT_ICON: Record<SourcePath, ReactNode> = Object.fromEntries(
+  SOURCES_SECTIONS.map((section) => {
+    const Icon = section.icon;
+
+    return [
+      section.path,
+      <Icon key={section.path} aria-hidden className="h-4 w-4 shrink-0" strokeWidth={1.5} />,
+    ];
+  }),
+) as Record<SourcePath, ReactNode>;
+
+/**
+ * The same switch on a phone: one row of segments instead of a tile per path.
+ *
+ * A phone stacks the tiles one per row, and because the switch stays on screen
+ * while the path's content scrolls under it (see `SourcesPage`), three stacked
+ * tiles pinned 374 of 814px and left the content half the screen. One row keeps
+ * the switch where it was promised to be at a line's height; the count shrinks to
+ * a number, with its noun kept for screen readers.
+ */
+function SourcePathSwitch({ active, counts, paths }: Props) {
+  return (
+    <section aria-label="Ways to add data" className="w-full">
+      <div
+        className={cn(
+          'grid gap-1 rounded-xl border border-border bg-muted/40 p-1',
+          paths.length === 2 ? 'grid-cols-2' : 'grid-cols-3',
+        )}
+      >
+        {paths.map((key) => {
+          const definition = SOURCE_PATH_INFO[key];
+          const count = countFor(key, counts);
+          const isActive = active === key;
+
+          return (
+            <Link
+              key={key}
+              to={definition.to}
+              aria-current={isActive ? 'page' : undefined}
+              className={cn(
+                'flex h-10 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-semibold transition',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                isActive
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {SEGMENT_ICON[key]}
+              <span className="truncate">{definition.title}</span>
+              {count.value > 0 ? (
+                <span
+                  className={cn(
+                    'shrink-0 rounded-full px-1.5 text-xs tabular-nums',
+                    isActive ? 'bg-primary-foreground/15' : 'bg-muted',
+                  )}
+                >
+                  {count.value}
+                  <span className="sr-only"> {count.noun}</span>
+                </span>
+              ) : null}
+            </Link>
           );
         })}
       </div>

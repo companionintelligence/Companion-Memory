@@ -8,6 +8,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { isValidTimezone, wallClockInTZ } from '@ci/common/time/zoned';
 
+import { LIVE_EVENT_SQL } from './CalendarEventService';
 import { PlaceService } from './PlaceService';
 import { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from './selfEntityProvisioner';
 
@@ -70,7 +71,12 @@ export interface KnownPlaceCandidate {
   lat: number;
   /** Cluster centroid longitude. */
   lng: number;
-  /** Number of events supporting this cluster. */
+  /**
+   * Number of events supporting this cluster. Only events that happened and
+   * whose coordinate is their own count. A temporal estimate never does, and
+   * nor does a deleted, predicted or cancelled event (see
+   * {@link KnownPlacesService.buildKnownPlaces}).
+   */
   eventCount: number;
   /**
    * A few of the supporting events, newest first, so an "Unknown place" can
@@ -150,6 +156,54 @@ function rememberSampleEvent(
 
 /** Coordinate grid size (degrees) for snapping nearby events into one cluster (~1.1km). */
 const CLUSTER_PRECISION = 2;
+
+/**
+ * `metadata.location_source` on a coordinate the location estimator copied onto
+ * an event from the nearest-in-time GPS fix or located event. Both estimators
+ * write it: `enrich.estimate_location` and the legacy `LocationEstimateService`.
+ *
+ * This is a copy of the literal, as `EventReverseStage` has one.
+ * `EstimateLocationStage` keeps its copy private. The pipeline domain also
+ * imports this one, so importing from it here would be a cycle. The copies
+ * MUST stay identical. If they drift, estimates start counting as places
+ * again, and nothing fails.
+ */
+const LOCATION_SOURCE_ESTIMATED = 'estimated';
+
+/**
+ * `inference_sources.method` that both estimators write next to
+ * {@link LOCATION_SOURCE_ESTIMATED}. Unlike the token, it survives the legacy
+ * reverse-geocode leg (below).
+ */
+const ESTIMATE_METHOD = 'temporal_nn';
+
+/**
+ * The token the legacy reverse-geocode leg writes over
+ * {@link LOCATION_SOURCE_ESTIMATED}. `GeocodeBatchListener` with
+ * `direction: 'reverse'` picked up every coordinate that had no name,
+ * estimates included. It named the event, linked a Location, and set
+ * `location_source` to this, while `inference_sources` still said
+ * {@link ESTIMATE_METHOD}. Ingest self-heal runs that leg, so this is not
+ * limited to manual maintenance.
+ *
+ * `EventReverseStage`, which replaces the leg, refuses estimates
+ * (`skipped: coordinates_estimated`), and PR #2823 adds the same guard to the
+ * leg itself. Neither repairs rows that were already relabelled. Such a row is
+ * an estimate with a name and a Location, and it looks like a measured visit.
+ * Only the pair of this token and {@link ESTIMATE_METHOD} identifies it. The
+ * token alone does not: `EventReverseStage` writes it on measured coordinates,
+ * and those must still count.
+ */
+const LOCATION_SOURCE_REVERSE_GEOCODED = 'reverse_geocoded';
+
+/**
+ * The `metadata` key a Google Takeout reservation (`google_purchases`) carries
+ * as `true` when it was cancelled. The importer leaves `status` at
+ * 'confirmed', so this key is the only record of the cancellation, and
+ * {@link LIVE_EVENT_SQL} cannot see it. This is a copy of the importer's key,
+ * like the tokens above. If they drift, cancelled reservations count again.
+ */
+const RESERVATION_CANCELED_KEY = 'Canceled';
 
 /**
  * How many different weeks a candidate must show the night-time signal in
@@ -243,9 +297,12 @@ interface KnownPlaceRow {
  * user's self node to a `ci.entities` Location node, with `strength` as the
  * confidence, `start_date`/`end_date` as the era, and `properties` for the rest.
  *
- * Building is read-only and idempotent (pure aggregation over events with
- * coordinates). Confirmation (updateKnownPlace) upserts the relationship in
- * place on the existing partial-unique index, so re-confirming never duplicates.
+ * Building is read-only and idempotent: a pure aggregation over events that
+ * happened and whose coordinates are their own (never a temporal estimate, nor
+ * a deleted, predicted or cancelled event; see
+ * {@link KnownPlacesService.buildKnownPlaces}). Confirmation (updateKnownPlace)
+ * upserts the relationship in place on the existing partial-unique index, so
+ * re-confirming never duplicates.
  */
 @Injectable()
 export class KnownPlacesService {
@@ -269,6 +326,96 @@ export class KnownPlacesService {
    * events. Returns the user's most-common places as Home/Work/other candidates,
    * ranked by support. Pure read — surfaces confirmable insights; persistence
    * happens in {@link updateKnownPlace}.
+   *
+   * ── Estimates are not evidence ─────────────────────────────────────────────
+   *
+   * A located event counts only if the coordinate is its own: measured,
+   * imported or geocoded. An `approximate` geocode (a city centroid at 0.4)
+   * counts too; it is coarse, but it is still the event's own claim. A temporal
+   * estimate does not count. `enrich.estimate_location` fills an event that has
+   * no location with the coordinate of the nearest GPS fix or located event
+   * within 24 h. That tells us nothing new about where the user was: the donor
+   * already said it. What the estimate does add is a time, the event's
+   * `start_time`, which can be up to a day from the donor's. The night and
+   * work-hours signals below are read from exactly that time. The estimator's
+   * own docs say known-place clustering must discount its output.
+   *
+   * Measured on the reference corpus after a complete estimator sweep, 2,007 of
+   * the 2,098 located events were estimates, 1,928 of them `google_fit`
+   * activities. Counted as measurements, estimates were the majority of every
+   * one of the top 15 candidates. Fourteen of those were unnamed grid cells of
+   * 19 to 84 rows such as "Walking" and "Activity … (N steps)". Home went to 8
+   * rows at LAX. Seven of them were estimates from flight days: pre-dawn airport
+   * walks, and daily step summaries stamped 00:00, which always count as night.
+   * Work went to 8 estimates in Manhattan.
+   *
+   * They are excluded rather than down-weighted, because down-weighting was
+   * measured too and did not help. With each estimate weighted by its 0.4
+   * confidence, the top eight candidates were still mostly estimates (2,007 ×
+   * 0.4 is nearly nine times the 91 measured rows). Home did not move at all,
+   * because {@link assignPrimaryKinds} picks by night SHARE, and a weight on
+   * every row of an all-estimate cluster cancels out of a share.
+   * `confidence_score` is also an event-level column that other writers set for
+   * reasons of their own.
+   *
+   * What this gives up: on that corpus the Google Maps "Home" address was the
+   * top candidate only because of 413 estimates copied from the Google Fit GPS
+   * tracks that start and end there. Without them it has 2 events. That GPS
+   * evidence is real, but it reaches this pass only after being copied onto
+   * other events' times. The right way to use it is to read `ci.position`
+   * directly, which is not built. Re-admitting estimates is not a substitute.
+   *
+   * An estimate is recognised by either of two markers. The first is
+   * {@link LOCATION_SOURCE_ESTIMATED}. The second is an estimate that the legacy
+   * reverse-geocode leg has renamed, which is what
+   * {@link LOCATION_SOURCE_REVERSE_GEOCODED} describes. Each side is
+   * COALESCEd. Without that, a row with no `location_source` key compares as
+   * NULL, and the WHERE drops it. That is most measured rows, because
+   * `metadata` defaults to `'{}'`.
+   *
+   * ── Nor is an event that did not happen ────────────────────────────────────
+   *
+   * Three more kinds of located event are left out. Their coordinates are
+   * their own, so the rule above lets them through, but none of them says the
+   * user was there.
+   *
+   *  - Deleted (`is_deleted`). The user removed it. The column's contract is
+   *    that a tombstoned row is left out of every read and never returned to a
+   *    client, and a candidate's `sampleEvents` go to the Places page, titles
+   *    included. Undo (`CalendarEventService.restore`) clears the flag, and
+   *    the event counts again.
+   *  - Predicted (`is_predicted`). A guess about where the user will be, not a
+   *    record of where they were. Suggestions stay in `ci.event_candidates`
+   *    until the user accepts one, which writes `is_predicted = false`, and
+   *    that event counts. Nothing writes `true` today except an account
+   *    import, which restores rows verbatim.
+   *  - Cancelled. The status test is the calendar's own {@link LIVE_EVENT_SQL},
+   *    so `no_show` and `skipped` go with `cancelled`. Google Calendar sync
+   *    keeps a cancelled meeting as a row and geocodes its venue, but the
+   *    user never went. A Google Takeout reservation records its cancellation
+   *    only in {@link RESERVATION_CANCELED_KEY}, so that key is read as well.
+   *    `tentative`, `planned`, `in_progress`, `rescheduled` and `completed`
+   *    still count, as they do on the calendar.
+   *
+   * Some rows that did not happen carry no marker, so they still count. An
+   * `.ics` import (Google Takeout, Apple) ignores STATUS, so its cancelled
+   * meetings arrive 'confirmed'. A cancellation that reaches the source after
+   * the first import never reaches the row, because events are not refreshed
+   * on re-import. A declined invitation is only a `responseStatus` inside
+   * `metadata.participants`. Each belongs in the importer, where fixing it
+   * corrects the calendar too.
+   *
+   * Every clause is NULL-safe without leaning on a constraint. `is_predicted`
+   * is nullable, and NULL counts as not predicted, as its default and every
+   * other reader of it have it. `is_deleted` and `status` are NOT NULL today,
+   * but their down migrations drop that, and `LIVE_EVENT_SQL` COALESCEs
+   * `status`. The reservation key is COALESCEd like `location_source`.
+   *
+   * None of this occurs among the reference corpus's located events, so its
+   * candidates do not change. It does hold five cancelled reservations. They
+   * have no coordinate only because `enrich.geocode` failed on all 42
+   * reservations there (`provider_unavailable`). Once geocoding succeeds,
+   * they would count without the reservation clause.
    */
   async buildKnownPlaces(context: UserServiceContext): Promise<KnownPlaceCandidate[]> {
     const rows: Array<{
@@ -296,8 +443,21 @@ export class KnownPlacesService {
          ON entity.entity_id = event.event_id
         AND entity.entity_type = 'Event'
        WHERE event.user_id = $1
-         AND event.location_coordinates IS NOT NULL`,
-      [context.userId],
+         AND event.location_coordinates IS NOT NULL
+         AND event.is_deleted IS NOT TRUE
+         AND event.is_predicted IS NOT TRUE
+         AND ${LIVE_EVENT_SQL}
+         AND COALESCE(event.metadata->>$5, '') <> 'true'
+         AND COALESCE(event.metadata->>'location_source', '') <> $2
+         AND NOT (COALESCE(event.metadata->>'location_source', '') = $3
+                  AND COALESCE(event.inference_sources->>'method', '') = $4)`,
+      [
+        context.userId,
+        LOCATION_SOURCE_ESTIMATED,
+        LOCATION_SOURCE_REVERSE_GEOCODED,
+        ESTIMATE_METHOD,
+        RESERVATION_CANCELED_KEY,
+      ],
     );
 
     if (rows.length === 0) {

@@ -111,7 +111,11 @@ describe('DatabaseSearchTool — honest counts', () => {
     const searchPage = jest.fn();
     const { tool } = makeTool({ search: { count, searchPage } });
 
-    const result = await tool.execute(CONTEXT, { query: 'rabbit', entityTypes: ['concept'], countOnly: true });
+    const result = await tool.execute(CONTEXT, {
+      query: 'rabbit',
+      entityTypes: ['concept'],
+      countOnly: true,
+    });
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual({
@@ -122,7 +126,10 @@ describe('DatabaseSearchTool — honest counts', () => {
       mode: 'count',
       items: [],
     });
-    expect(count).toHaveBeenCalledWith({ userId: CONTEXT.userId }, { query: 'rabbit', includeTypes: ['concept'] });
+    expect(count).toHaveBeenCalledWith(
+      { userId: CONTEXT.userId },
+      { query: 'rabbit', includeTypes: ['concept'] },
+    );
     expect(searchPage).not.toHaveBeenCalled();
   });
 
@@ -148,7 +155,10 @@ describe('DatabaseSearchTool — honest counts', () => {
     const result = await tool.execute(CONTEXT, { entityTypes: ['file'], countOnly: true });
 
     expect(result.success).toBe(true);
-    expect(count).toHaveBeenCalledWith({ userId: CONTEXT.userId }, { query: undefined, includeTypes: ['file'] });
+    expect(count).toHaveBeenCalledWith(
+      { userId: CONTEXT.userId },
+      { query: undefined, includeTypes: ['file'] },
+    );
     expect(result.data?.totalMatches).toBe(23_592);
     expect(result.data?.summary).toMatch(/^23592 file entries in Memory \(exact count/);
   });
@@ -160,7 +170,10 @@ describe('DatabaseSearchTool — honest counts', () => {
     const result = await tool.execute(CONTEXT, { query: '   ', entityTypes: ['file'], countOnly: true });
 
     expect(result.success).toBe(true);
-    expect(count).toHaveBeenCalledWith({ userId: CONTEXT.userId }, { query: undefined, includeTypes: ['file'] });
+    expect(count).toHaveBeenCalledWith(
+      { userId: CONTEXT.userId },
+      { query: undefined, includeTypes: ['file'] },
+    );
   });
 
   it('a page still requires a query — there is nothing to rank without one', async () => {
@@ -179,7 +192,11 @@ describe('DatabaseSearchTool — honest counts', () => {
     const searchPage = jest.fn();
     const { tool } = makeTool({ search: { count, searchPage } });
 
-    const result = await tool.execute(CONTEXT, { query: 'rabbit', entityTypes: ['concept'], countOnly: 'true' });
+    const result = await tool.execute(CONTEXT, {
+      query: 'rabbit',
+      entityTypes: ['concept'],
+      countOnly: 'true',
+    });
 
     expect(result.success).toBe(true);
     expect(result.data?.mode).toBe('count');
@@ -187,7 +204,13 @@ describe('DatabaseSearchTool — honest counts', () => {
   });
 
   it('the string "false" is false, not truthy', async () => {
-    const page: SearchPage = { items: [], totalMatches: 0, truncated: false, limit: 25, modeTaken: 'keyword' };
+    const page: SearchPage = {
+      items: [],
+      totalMatches: 0,
+      truncated: false,
+      limit: 25,
+      modeTaken: 'keyword',
+    };
     const count = jest.fn();
     const searchPage = jest.fn().mockResolvedValue(page);
     const { tool } = makeTool({ search: { count, searchPage } });
@@ -210,10 +233,18 @@ describe('DatabaseSearchTool — honest counts', () => {
     expect(withQuery.success).toBe(true);
     expect(withQuery.data?.totalMatches).toBe(5);
     expect(withQuery.data?.coverage).toEqual(COVERAGE);
-    expect(count).toHaveBeenNthCalledWith(1, { userId: CONTEXT.userId }, { query: 'rabbit', includeTypes: ['file'] });
+    expect(count).toHaveBeenNthCalledWith(
+      1,
+      { userId: CONTEXT.userId },
+      { query: 'rabbit', includeTypes: ['file'] },
+    );
 
     expect(all.success).toBe(true);
-    expect(count).toHaveBeenNthCalledWith(2, { userId: CONTEXT.userId }, { query: undefined, includeTypes: ['file'] });
+    expect(count).toHaveBeenNthCalledWith(
+      2,
+      { userId: CONTEXT.userId },
+      { query: undefined, includeTypes: ['file'] },
+    );
   });
 
   it('media.findPhotos without countOnly still requires a query', async () => {
@@ -228,7 +259,13 @@ describe('DatabaseSearchTool — honest counts', () => {
 
   it('the summary counts what was hydrated, not what the index returned', () => {
     // Five hits, one dropped by its resolver: the model must not be told all five are shown.
-    const page: SearchPage = { items: [], totalMatches: 5, truncated: false, limit: 25, modeTaken: 'keyword' };
+    const page: SearchPage = {
+      items: [],
+      totalMatches: 5,
+      truncated: false,
+      limit: 25,
+      modeTaken: 'keyword',
+    };
 
     expect(describePage(page, 4)).toBe(
       'Showing the top 4 of 5 matches (exact count). Report the total, not the number shown.',
@@ -237,7 +274,13 @@ describe('DatabaseSearchTool — honest counts', () => {
   });
 
   it('a full page from a mode that cannot count says "at least" and points at countOnly', () => {
-    const full: SearchPage = { items: [], totalMatches: null, truncated: true, limit: 25, modeTaken: 'semantic' };
+    const full: SearchPage = {
+      items: [],
+      totalMatches: null,
+      truncated: true,
+      limit: 25,
+      modeTaken: 'semantic',
+    };
     const short: SearchPage = { ...full, truncated: false };
 
     expect(describePage(full, 25)).toBe(
