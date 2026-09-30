@@ -11,6 +11,7 @@ import { GraphDeltaWriter } from '@ci/domains/memory';
 import { NodeEntity } from '../entities/NodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
 import {
+  IDENTITY_LIST_KEYS,
   mergedPropertiesSql,
   mergeIngestedProperties,
   stableJson,
@@ -140,15 +141,6 @@ export interface ImportedEntityRekey {
    */
   dropMergedFrom?: readonly string[];
 }
-
-/**
- * The plural identity keys `PersonMergeService.foldProperties` carries from a
- * merged-away row to its survivor, and so what a reset keeps of the merges a
- * row absorbed. The same list as `IDENTITY_LIST_KEYS` in the ingest's
- * refresh-as-merge change (`utils/ingestedProperties.ts`): import that one once
- * it lands, rather than keep two lists that have to agree.
- */
-const MERGED_IDENTITY_LIST_KEYS: readonly string[] = ['emails', 'phones', 'names', 'Phones', 'Faxes'];
 
 /**
  * What JavaScript's `String.prototype.trim` strips (the WhiteSpace and
@@ -632,7 +624,7 @@ export class GraphIngestService {
           toIds,
           resets,
           dropped,
-          MERGED_IDENTITY_LIST_KEYS,
+          IDENTITY_LIST_KEYS,
           JS_TRIM_CHARACTERS,
         ],
       );

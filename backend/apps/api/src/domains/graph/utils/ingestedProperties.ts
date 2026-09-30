@@ -46,7 +46,10 @@
  * whatever the source declared.
  *
  * This must cover every key `PersonMergeService`'s property fold unions, or a
- * re-import of the merge target undoes the merge for that key. Lowercase
+ * re-import of the merge target undoes the merge for that key. It is also what
+ * `GraphIngestService.rekeyImportedEntities` keeps of a row's standing merges
+ * when it resets the row's properties, so the two can never disagree about
+ * which values a merge brought in. Lowercase
  * `emails` / `phones` / `names` are the normalized handles `GraphIngestService`
  * indexes into `ci.entity_identifiers`; `Phones` is a contact card's numbers as
  * typed (the only place a number's country survives), and `Faxes` its fax
