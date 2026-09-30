@@ -70,4 +70,22 @@ describe('ChatGenerationBroker', () => {
 
     expect(res.end).toHaveBeenCalled();
   });
+
+  it('replays tool calls that already happened to a viewer who attaches late', () => {
+    const broker = new ChatGenerationBroker();
+    broker.ensure('thread-1');
+    broker.publish('thread-1', { channel: Channel.TEXT, text: 'Let me look.' });
+    broker.publish('thread-1', {
+      channel: Channel.TOOL,
+      text: JSON.stringify([{ function: { name: 'places_find' } }]),
+    });
+
+    const { res, chunks } = mockResponse();
+    broker.pipeToResponse(res as never, 'thread-1');
+
+    const raw = Buffer.concat(chunks).toString('utf8');
+
+    expect(raw).toContain('Let me look.');
+    expect(raw.indexOf('Let me look.')).toBeLessThan(raw.indexOf('places_find'));
+  });
 });
