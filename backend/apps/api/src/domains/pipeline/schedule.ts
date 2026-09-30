@@ -640,6 +640,15 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
    * is re-opened by `STAGE_REOPENS` (`reopens.ts`) when `promote.place` records
    * it, which is what keeps this cadence safe for that leg.
    *
+   * The communication leg is the same case, and was the costlier one: a
+   * message qualifies on a sender, a recipient OR an attachment, so the push's
+   * half-linked rows are decided hours before anything links the other half.
+   * On the reference appliance that stranded 17,417 messages without 19,889
+   * RECEIVED and 1,456 SENT edges (2026-09-30). Their late linkers now re-open
+   * the decision: `enrich.person_link` through `STAGE_REOPENS`, and the
+   * maintenance linkers (smart-rotation's two-hourly `graph_link`) through
+   * `EDGE_PROJECTION_REOPENER`, in the transaction that writes the link.
+   *
    * `maxStaleness` of 6 h for the same reason `index.embed` has it: a stage this
    * cheap to start has no business being a day behind the rows it projects.
    */

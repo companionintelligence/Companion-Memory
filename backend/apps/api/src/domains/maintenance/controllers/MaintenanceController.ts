@@ -861,6 +861,7 @@ export class MaintenanceController {
       examined: 0,
       fromLinked: 0,
       toLinked: 0,
+      edgeDecisionsReopened: 0,
       windows: 0,
       range: null,
     };
@@ -968,6 +969,7 @@ export class MaintenanceController {
       examined: 0,
       organizersLinked: 0,
       participantsLinked: 0,
+      edgeDecisionsReopened: 0,
       pages: 0,
     };
 

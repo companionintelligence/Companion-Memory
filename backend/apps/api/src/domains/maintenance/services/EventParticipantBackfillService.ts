@@ -1,9 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 import { EntityIdentifierService, type IdentifierKey, normalizeIdentifier } from '@ci/domains/graph';
+
+import { resolveEdgeProjectionReopener } from '../edgeProjectionReopener';
 
 /** Default cap on candidate rows examined per page (bounds memory + a query). */
 const DEFAULT_PAGE_SIZE = 2000;
@@ -23,6 +26,8 @@ export interface EventParticipantBackfillProgress {
   organizersLinked: number;
   /** Rows whose participant_entity_ids was filled so far (cumulative). */
   participantsLinked: number;
+  /** `promote.edge_event` decisions re-opened so far (cumulative). */
+  edgeDecisionsReopened: number;
   /** Pages whose writes have committed so far. */
   pagesDone: number;
 }
@@ -46,6 +51,11 @@ export interface EventParticipantBackfillResult {
   organizersLinked: number;
   /** Rows whose participant_entity_ids was filled. */
   participantsLinked: number;
+  /**
+   * `promote.edge_event` decisions re-opened because this run filled a column
+   * the edge leg had already projected without.
+   */
+  edgeDecisionsReopened: number;
   /** Pages processed. */
   pages: number;
 }
@@ -87,8 +97,16 @@ interface CandidateRow {
  * `events_user_time_idx` is enough. The PK is `event_id`, so the per-page
  * UPDATE joins on (user_id, event_id) and stays scoped to the candidate rows.
  *
- * Operator-invoked via POST /api/maintenance/link-events (see
- * MaintenanceController) — never auto-run, never in the hot ingest path.
+ * Reached through the orchestrator's `link_events` leg, which is NOT only
+ * operator-invoked (POST /api/maintenance/link-events and /orchestrate):
+ * smart-rotation's `graph_link` work runs it every two hours, and the `/v1`
+ * ingest coalesce runs it after a bulk load.
+ *
+ * Every page re-opens `promote.edge_event`'s decision for the events it wrote,
+ * in the same transaction, for the reason `CommunicationLinkBackfillService`
+ * gives: that leg's predicate is an OR over four linkage columns, so an event
+ * with a place or a parent can be projected and recorded `done` before this
+ * fills its people, and would then never get its PARTICIPATED_IN edges.
  */
 @Injectable()
 export class EventParticipantBackfillService {
@@ -96,6 +114,8 @@ export class EventParticipantBackfillService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly entityIdentifierService: EntityIdentifierService,
     private readonly logger: LoggerService,
+    /** For `EDGE_PROJECTION_REOPENER`; see `CommunicationLinkBackfillService`. */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {
     this.logger.setContext(EventParticipantBackfillService.name);
   }
@@ -109,6 +129,7 @@ export class EventParticipantBackfillService {
     let examined = 0;
     let organizersLinked = 0;
     let participantsLinked = 0;
+    let edgeDecisionsReopened = 0;
     let pages = 0;
 
     // Keyset cursor (start_time, event_id) DESC against events_user_time_idx.
@@ -229,47 +250,57 @@ export class EventParticipantBackfillService {
       }
 
       if (updIds.length > 0) {
+        // Resolved before the transaction opens, so a missing binding fails
+        // the page before it writes anything.
+        const reopener = resolveEdgeProjectionReopener(this.moduleRef);
+
         // One set-based UPDATE for the whole page. `participant_ids` rides as
         // jsonb (a uuid[][] can't be unnested element-wise); each row's array
         // is rebuilt in SQL. The CASE/COALESCE guards make re-runs idempotent
-        // even if a row was linked between SELECT and UPDATE.
-        await this.dataSource.query(
-          `UPDATE ci.events e
-              SET organizer_entity_id = COALESCE(u.organizer_id, e.organizer_entity_id),
-                  participant_entity_ids = CASE
-                                             WHEN u.participant_ids IS NULL THEN e.participant_entity_ids
-                                             ELSE ARRAY(
-                                               SELECT m.id
-                                                 FROM unnest(COALESCE(e.participant_entity_ids, '{}'::uuid[]) || u.participant_ids)
-                                                      WITH ORDINALITY AS m(id, ord)
-                                                GROUP BY m.id
-                                                ORDER BY min(m.ord))
-                                           END
-             FROM (
-               SELECT t.id,
-                      t.organizer_id,
-                      CASE
-                        WHEN t.participants_json IS NULL THEN NULL
-                        ELSE ARRAY(SELECT jsonb_array_elements_text(t.participants_json))::uuid[]
-                      END AS participant_ids
-                 FROM unnest($2::uuid[], $3::uuid[], $4::jsonb[])
-                        AS t(id, organizer_id, participants_json)
-             ) u
-            WHERE e.user_id = $1
-              AND e.event_id = u.id`,
-          [userId, updIds, updOrganizerIds, updParticipantIds],
-        );
+        // even if a row was linked between SELECT and UPDATE. The edge leg's
+        // decision re-opens in the same transaction (see the class doc).
+        edgeDecisionsReopened += await this.dataSource.transaction(async (em) => {
+          await em.query(
+            `UPDATE ci.events e
+                SET organizer_entity_id = COALESCE(u.organizer_id, e.organizer_entity_id),
+                    participant_entity_ids = CASE
+                                               WHEN u.participant_ids IS NULL THEN e.participant_entity_ids
+                                               ELSE ARRAY(
+                                                 SELECT m.id
+                                                   FROM unnest(COALESCE(e.participant_entity_ids, '{}'::uuid[]) || u.participant_ids)
+                                                        WITH ORDINALITY AS m(id, ord)
+                                                  GROUP BY m.id
+                                                  ORDER BY min(m.ord))
+                                             END
+               FROM (
+                 SELECT t.id,
+                        t.organizer_id,
+                        CASE
+                          WHEN t.participants_json IS NULL THEN NULL
+                          ELSE ARRAY(SELECT jsonb_array_elements_text(t.participants_json))::uuid[]
+                        END AS participant_ids
+                   FROM unnest($2::uuid[], $3::uuid[], $4::jsonb[])
+                          AS t(id, organizer_id, participants_json)
+               ) u
+              WHERE e.user_id = $1
+                AND e.event_id = u.id`,
+            [userId, updIds, updOrganizerIds, updParticipantIds],
+          );
+
+          return reopener.reopen('events', updIds, em);
+        });
       }
 
       pages += 1;
 
-      // This page's writes have committed (the UPDATE above awaited), so emit
-      // cumulative progress. Done AFTER the commit so a streaming consumer
+      // This page's writes have committed (the transaction above awaited), so
+      // emit cumulative progress. Done AFTER the commit so a streaming consumer
       // never sees progress ahead of durable state.
       options.onProgress?.({
         examined,
         organizersLinked,
         participantsLinked,
+        edgeDecisionsReopened,
         pagesDone: pages,
       });
 
@@ -290,10 +321,11 @@ export class EventParticipantBackfillService {
       examined,
       organizersLinked,
       participantsLinked,
+      edgeDecisionsReopened,
       pages,
     });
 
-    return { examined, organizersLinked, participantsLinked, pages };
+    return { examined, organizersLinked, participantsLinked, edgeDecisionsReopened, pages };
   }
 }
 

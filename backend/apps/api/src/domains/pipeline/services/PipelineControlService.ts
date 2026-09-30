@@ -379,6 +379,10 @@ export const STAGE_DEPENDENCIES: Readonly<Partial<Record<StageId, readonly Stage
   // event leg's predicate is an OR over four columns and two producers, so an
   // event with participants is decided before `promote.place` links it — and
   // that row is re-opened by `STAGE_REOPENS` (`reopens.ts`), not by this graph.
+  // The communication leg's is an OR too (sender, recipients, attachments), so
+  // a message is decided on whichever arrives first. Its late linkers re-open
+  // it the same way: `enrich.person_link` through `STAGE_REOPENS`, and the
+  // non-stage maintenance linkers through `EDGE_PROJECTION_REOPENER`.
   [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: [STAGE_IDS.ENRICH_PERSON_LINK],
   [STAGE_IDS.PROMOTE_EDGE_EVENT]: [STAGE_IDS.ENRICH_EVENT_PERSON_LINK, STAGE_IDS.PROMOTE_PLACE],
   [STAGE_IDS.PROMOTE_EDGE_OBJECT]: [STAGE_IDS.PROMOTE_OBJECT],

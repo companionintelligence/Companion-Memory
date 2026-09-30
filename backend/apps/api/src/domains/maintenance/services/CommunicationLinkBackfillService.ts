@@ -1,9 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 import { classifyParticipant, EntityIdentifierService, type IdentifierKey } from '@ci/domains/graph';
+
+import { resolveEdgeProjectionReopener } from '../edgeProjectionReopener';
 
 /** Default window width — one TimescaleDB-chunk-friendly slice per pass. */
 const DEFAULT_WINDOW_DAYS = 7;
@@ -25,6 +28,8 @@ export interface CommunicationLinkBackfillProgress {
   fromLinked: number;
   /** Rows whose to_entity_ids was filled so far (cumulative). */
   toLinked: number;
+  /** `promote.edge_communication` decisions re-opened so far (cumulative). */
+  edgeDecisionsReopened: number;
   /** Windows whose writes have committed so far (numerator). */
   windowsDone: number;
   /** Total windows this run will process (denominator), known up front. */
@@ -61,6 +66,12 @@ export interface CommunicationLinkBackfillResult {
   fromLinked: number;
   /** Rows whose to_entity_ids was filled (in whole or part). */
   toLinked: number;
+  /**
+   * `promote.edge_communication` decisions re-opened because this run filled a
+   * column the edge leg had already projected without. At most the number of
+   * rows written: a row the leg never decided is already a candidate.
+   */
+  edgeDecisionsReopened: number;
   /** Time windows processed. */
   windows: number;
   /** The resolved [start, end] actually scanned (ISO strings), or null if no data. */
@@ -96,8 +107,23 @@ interface CandidateRow {
  * that segfaulted TSDB 2.28. The service walks the requested (or data-derived)
  * range in windows of {@link CommunicationLinkBackfillOptions.windowDays}.
  *
- * Operator-invoked via POST /api/maintenance/link-communications (see
- * MaintenanceController) — never auto-run, never in the hot ingest path.
+ * Reached through the orchestrator's `link_communications` leg, and that leg
+ * is NOT only operator-invoked (POST /api/maintenance/link-communications and
+ * /orchestrate): smart-rotation's `graph_link` work runs it every two hours,
+ * and the `/v1` ingest coalesce runs it after a bulk load. Neither of those
+ * runs `materialize_edges` afterwards.
+ *
+ * ── Every column it fills re-opens the edge projection's decision ─────────
+ *
+ * `promote.edge_communication` may already have projected the row and recorded
+ * `done`: its predicate admits a message with a sender, a recipient OR an
+ * attachment, so a half-linked row is decided before this fills the other
+ * half. Nothing would ever offer it again, and the SENT / RECEIVED edges for
+ * the ids written here would never exist (17,417 such messages on the
+ * reference appliance, 2026-09-30). So each page re-opens the edge leg's
+ * decision for the rows it wrote, in the same transaction as the write —
+ * through `EDGE_PROJECTION_REOPENER` (`../edgeProjectionReopener.ts`), because
+ * this is not a stage and has no `done` for `STAGE_REOPENS` to act on.
  */
 @Injectable()
 export class CommunicationLinkBackfillService {
@@ -105,6 +131,13 @@ export class CommunicationLinkBackfillService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly entityIdentifierService: EntityIdentifierService,
     private readonly logger: LoggerService,
+    /**
+     * For `EDGE_PROJECTION_REOPENER`, resolved lazily: it is bound by
+     * PipelineModule, which imports this module. Optional only so a hand-built
+     * service still constructs; a write that needs it and cannot resolve it
+     * throws (see `resolveEdgeProjectionReopener`).
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {
     this.logger.setContext(CommunicationLinkBackfillService.name);
   }
@@ -118,7 +151,7 @@ export class CommunicationLinkBackfillService {
 
     const bounds = await this.resolveBounds(userId, options.startTime, options.endTime);
     if (bounds == null) {
-      return { examined: 0, fromLinked: 0, toLinked: 0, windows: 0, range: null };
+      return { examined: 0, fromLinked: 0, toLinked: 0, edgeDecisionsReopened: 0, windows: 0, range: null };
     }
 
     const { start, end } = bounds;
@@ -126,6 +159,7 @@ export class CommunicationLinkBackfillService {
     let examined = 0;
     let fromLinked = 0;
     let toLinked = 0;
+    let edgeDecisionsReopened = 0;
     let windows = 0;
 
     const windowMs = windowDays * 24 * 60 * 60 * 1000;
@@ -146,6 +180,7 @@ export class CommunicationLinkBackfillService {
       examined += windowResult.examined;
       fromLinked += windowResult.fromLinked;
       toLinked += windowResult.toLinked;
+      edgeDecisionsReopened += windowResult.edgeDecisionsReopened;
       windows += 1;
 
       // This window's writes have committed (backfillWindow awaited above), so
@@ -155,6 +190,7 @@ export class CommunicationLinkBackfillService {
         examined,
         fromLinked,
         toLinked,
+        edgeDecisionsReopened,
         windowsDone: windows,
         windowsTotal,
       });
@@ -169,6 +205,7 @@ export class CommunicationLinkBackfillService {
       examined,
       fromLinked,
       toLinked,
+      edgeDecisionsReopened,
       windows,
       start: start.toISOString(),
       end: end.toISOString(),
@@ -178,6 +215,7 @@ export class CommunicationLinkBackfillService {
       examined,
       fromLinked,
       toLinked,
+      edgeDecisionsReopened,
       windows,
       range: { start: start.toISOString(), end: end.toISOString() },
     };
@@ -235,10 +273,11 @@ export class CommunicationLinkBackfillService {
     windowStart: Date,
     windowEnd: Date,
     limit: number,
-  ): Promise<{ examined: number; fromLinked: number; toLinked: number }> {
+  ): Promise<{ examined: number; fromLinked: number; toLinked: number; edgeDecisionsReopened: number }> {
     let examined = 0;
     let fromLinked = 0;
     let toLinked = 0;
+    let edgeDecisionsReopened = 0;
 
     // Keyset cursor (time, id) DESC. A single LIMIT would strand every candidate
     // past the first page in a dense window (e.g. a high-volume sender whose
@@ -354,34 +393,48 @@ export class CommunicationLinkBackfillService {
         // uuid[][] can't be unnested element-wise); each row's array is rebuilt
         // in SQL. Bounded to this page's (user_id, time, id) rows; the NULL
         // guards keep it idempotent.
-        await this.dataSource.query(
-          `UPDATE ci.communications c
-            SET from_entity_id = COALESCE(u.from_id, c.from_entity_id),
-                to_entity_ids   = CASE
-                                    WHEN u.to_ids IS NULL THEN c.to_entity_ids
-                                    ELSE ARRAY(
-                                      SELECT m.id
-                                        FROM unnest(COALESCE(c.to_entity_ids, '{}'::uuid[]) || u.to_ids)
-                                             WITH ORDINALITY AS m(id, ord)
-                                       GROUP BY m.id
-                                       ORDER BY min(m.ord))
-                                  END
-           FROM (
-             SELECT t.id,
-                    t.time,
-                    t.from_id,
-                    CASE
-                      WHEN t.to_json IS NULL THEN NULL
-                      ELSE ARRAY(SELECT jsonb_array_elements_text(t.to_json))::uuid[]
-                    END AS to_ids
-               FROM unnest($2::uuid[], $3::timestamptz[], $4::uuid[], $5::jsonb[])
-                      AS t(id, time, from_id, to_json)
-           ) u
-          WHERE c.user_id = $1
-            AND c.time = u.time
-            AND c.id = u.id`,
-          [userId, updIds, updTimes, updFromIds, updToIds],
-        );
+        //
+        // Resolved before the transaction opens, so a missing binding fails
+        // the page before it writes anything rather than after.
+        const reopener = resolveEdgeProjectionReopener(this.moduleRef);
+
+        edgeDecisionsReopened += await this.dataSource.transaction(async (em) => {
+          await em.query(
+            `UPDATE ci.communications c
+              SET from_entity_id = COALESCE(u.from_id, c.from_entity_id),
+                  to_entity_ids   = CASE
+                                      WHEN u.to_ids IS NULL THEN c.to_entity_ids
+                                      ELSE ARRAY(
+                                        SELECT m.id
+                                          FROM unnest(COALESCE(c.to_entity_ids, '{}'::uuid[]) || u.to_ids)
+                                               WITH ORDINALITY AS m(id, ord)
+                                         GROUP BY m.id
+                                         ORDER BY min(m.ord))
+                                    END
+             FROM (
+               SELECT t.id,
+                      t.time,
+                      t.from_id,
+                      CASE
+                        WHEN t.to_json IS NULL THEN NULL
+                        ELSE ARRAY(SELECT jsonb_array_elements_text(t.to_json))::uuid[]
+                      END AS to_ids
+                 FROM unnest($2::uuid[], $3::timestamptz[], $4::uuid[], $5::jsonb[])
+                        AS t(id, time, from_id, to_json)
+             ) u
+            WHERE c.user_id = $1
+              AND c.time = u.time
+              AND c.id = u.id`,
+            [userId, updIds, updTimes, updFromIds, updToIds],
+          );
+
+          // Same transaction: the SENT / RECEIVED edges for what was just
+          // written exist only if the edge leg projects these rows again, and a
+          // row it already decided is never offered again unless re-opened.
+          // Re-opening a row whose new ids produce no edge (an inactive person,
+          // say) costs one idempotent projection.
+          return reopener.reopen('communications', updIds, em);
+        });
       }
 
       // Advance the keyset cursor to the oldest row in this page. Strictly
@@ -396,7 +449,7 @@ export class CommunicationLinkBackfillService {
       }
     }
 
-    return { examined, fromLinked, toLinked };
+    return { examined, fromLinked, toLinked, edgeDecisionsReopened };
   }
 }
 

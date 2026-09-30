@@ -13,7 +13,7 @@ the data model, the migration and backfill plan — is
 | `constants.ts` | Queues, stage ids, slice sizes, leases, retry policy. Everything DECLARED, nothing discovered. |
 | `versions.ts` | `STAGE_VERSIONS` — the re-run watermark. The point of the whole rebuild. |
 | `schedule.ts` | `STAGE_SCHEDULES` — per-stage `trigger` / `cost` / `window` / `minInterval` / `maxStaleness` / `perRunCap`, plus `stageDueness()` and the boot guard `assertStageSchedules()`. |
-| `reopens.ts` | `STAGE_REOPENS` — which consumers' decisions a producer's `done` re-opens, row for row (`promote.place` → `promote.edge_event`), applied by `PipelineSliceListener`. |
+| `reopens.ts` | `STAGE_REOPENS` — which consumers' decisions a producer's `done` re-opens, row for row (`promote.place` → `promote.edge_event`, `enrich.person_link` → `promote.edge_communication`, `enrich.event_person_link` → `promote.edge_event`), applied by `PipelineSliceListener`. |
 | `types.ts` | The `Stage` contract, `StageResult`, `StageSource`, `StageSchedule`, and the event payload schemas. |
 | `events.ts` | The pipeline's event surface: `pipeline.slice`, `pipeline.sweep`, `pipeline.dead_letter.reap`. |
 | `services/PipelineStateService.ts` | The ledger. The only writer of `ci.pipeline_state` and the home of THE ONE RULE. |
@@ -23,6 +23,7 @@ the data model, the migration and backfill plan — is
 | `services/PipelineRunService.ts` | `ci.pipeline_runs` / `ci.pipeline_shards` persistence behind the runner. |
 | `services/EnrichmentWindowService.ts` | Whether the nightly enrichment window is open, from a zoned wall clock + `ci.pipeline_turns`. |
 | `services/BackpressureService.ts` | `QUEUE_READY_CAPS` — the admission gate that stops the pipeline committing more work to a queue than it can re-decide. |
+| `services/EdgeProjectionReopenService.ts` | Bound to maintenance's `EDGE_PROJECTION_REOPENER`: a linkage writer that is NOT a stage (the `link_*` maintenance legs) re-opens the `promote.edge_*` leg's decision for the rows it wrote, in its own transaction. `STAGE_REOPENS`' counterpart for writers that report no `done`. |
 | `controllers/PipelineController.ts` | The operator HTTP surface (state, runs, pause/resume/cancel, dead letters + replay, quarantine release). |
 | `listeners/PipelineSliceListener.ts` | THE generic worker. One class serves every stage that will ever exist. |
 | `listeners/PipelineTickCron.ts` | The five-minute control tick (`20 */5 * * * *`), advisory-locked, calling whatever is bound to `PIPELINE_TICK`. |
