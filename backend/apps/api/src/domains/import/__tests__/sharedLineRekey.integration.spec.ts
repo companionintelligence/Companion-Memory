@@ -2,14 +2,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { DataSource, type DataSourceOptions } from 'typeorm';
+
 import {
   EntityIdentifierEntity,
   EntityIdentifierService,
   GraphIngestService,
+  type ImportedEntityRekey,
   NodeEntity,
   RelationshipEntity,
 } from '@ci/domains/graph';
-import { GraphDeltaWriter } from '@ci/domains/memory';
+import { BaseEntity, GraphDeltaWriter, PersonEntity, PersonMergeService } from '@ci/domains/memory';
 
 import type { ImportParams } from '../datasources/timeline';
 import { VCardFileImporter } from '../datasources/vcard';
@@ -33,7 +36,8 @@ import { createStagingHarness, importDatabase, type StagingHarness } from './sup
  *
  * The "before" world is written the way the old rule wrote it — one staged row
  * keyed on the switchboard carrying all three names — rather than by an old
- * build of the parser. Invented data throughout.
+ * build of the parser. Merges into such a row are made by the real
+ * `PersonMergeService`. Invented data throughout.
  */
 
 const describeWithDatabase = importDatabase.available ? describe : describe.skip;
@@ -342,5 +346,244 @@ describeWithDatabase(`contacts on a shared office line (${importDatabase.target}
       await runner.rollbackTransaction();
       await runner.release();
     }
+  });
+
+  describe('when the collapsed row is a merge survivor', () => {
+    let merging: DataSource;
+    let merges: PersonMergeService;
+
+    beforeAll(async () => {
+      const quiet = {
+        setContext: jest.fn(),
+        log: jest.fn(),
+        warn: jest.fn(),
+        debug: jest.fn(),
+        error: jest.fn(),
+      } as never;
+
+      // PersonMergeService works through PersonEntity, which the staging
+      // harness does not register: a second connection to the same database.
+      merging = new DataSource({
+        ...harness.dataSource.options,
+        entities: [BaseEntity, PersonEntity],
+      } as DataSourceOptions);
+      await merging.initialize();
+
+      merges = new PersonMergeService(
+        merging.getRepository(PersonEntity),
+        quiet,
+        { send: jest.fn(async () => undefined) } as never,
+        new GraphDeltaWriter(merging, quiet),
+      );
+    });
+
+    afterAll(async () => {
+      if (merging?.isInitialized) {
+        await merging.destroy();
+      }
+    });
+
+    const scope = () => ({ userId: harness.userId });
+
+    /** A Person another lane minted, a mail or phone participant, at no import coordinate. */
+    async function stub(name: string | null, properties: Record<string, unknown>): Promise<string> {
+      const [{ entity_id }] = await harness.dataSource.query<Array<{ entity_id: string }>>(
+        `INSERT INTO ci.entities (entity_type, name, properties, owner_user_id)
+         VALUES ('Person', $1, $2::jsonb, $3::uuid)
+         RETURNING entity_id`,
+        [name, JSON.stringify(properties), harness.userId],
+      );
+
+      return entity_id;
+    }
+
+    async function update(sql: string, params: unknown[]): Promise<void> {
+      await harness.dataSource.query(sql, params);
+    }
+
+    async function propertiesOf(entityId: string): Promise<Record<string, unknown>> {
+      const [row] = await harness.dataSource.query<Array<{ properties: Record<string, unknown> }>>(
+        `SELECT properties FROM ci.entities WHERE entity_id = $1::uuid`,
+        [entityId],
+      );
+
+      return row.properties;
+    }
+
+    async function mergedInto(entityIds: string[]): Promise<Array<string | null>> {
+      const rows = await harness.dataSource.query<
+        Array<{ entity_id: string; merged_into_entity_id: string | null }>
+      >(`SELECT entity_id, merged_into_entity_id FROM ci.entities WHERE entity_id = ANY($1::uuid[])`, [
+        entityIds,
+      ]);
+
+      return entityIds.map((id) => rows.find((row) => row.entity_id === id)?.merged_into_entity_id ?? null);
+    }
+
+    it('keeps what the heir’s own merges brought in, and lets go of what a colleague’s did', async () => {
+      await pushTheOldWay({
+        name: 'Mei Chen',
+        identityKey: '5550100300',
+        metadata: {
+          Source: 'vCard',
+          Names: ['Mei Chen', 'Arjun Rao'],
+          Emails: ['mei@example.org', 'arjun@example.org'],
+          Phones: ['(555) 010-0300', '(555) 010-0342'],
+        },
+      });
+      const collapsed = (await personAt('contact:5550100300'))!;
+
+      // Mei's own mail stub, merged into what showed as her card. And two of
+      // Arjun's, which the collapse itself pulled in because the row carried
+      // his address and his line: the auto-merge folds a shared email whatever
+      // the names say, and a stub named by its number says nothing.
+      const meiMail = await stub('Mei Chen', {
+        names: ['Mei Chen'],
+        emails: ['mei.chen@mail.example'],
+        phones: ['5550100377', '5550100399'],
+        Phones: ['+1 555-010-0377', '+1 555-010-0399'],
+      });
+      const arjunMail = await stub('Arjun Rao', { names: ['Arjun Rao'], emails: ['arjun@example.org'] });
+      const arjunLine = await stub('+1 (555) 010-0342', {
+        phones: ['5550100342'],
+        Phones: ['+1 (555) 010-0342'],
+      });
+
+      await merges.mergePeople(scope(), [meiMail, arjunMail, arjunLine], collapsed.entity_id);
+
+      // A later repair took 555-0399 off Mei's stub: it was never hers.
+      await update(
+        `UPDATE ci.entities
+            SET properties = properties || '{"phones": ["5550100377"], "Phones": ["+1 555-010-0377"]}'::jsonb
+          WHERE entity_id = $1::uuid`,
+        [meiMail],
+      );
+
+      // The row as the reset left it, read between the move and the ingest
+      // after it. What survives the whole push is the ingest's call: today it
+      // replaces the bag with the card's, and once refresh-as-merge lands it
+      // unions the card into this.
+      const rekey = graph.rekeyImportedEntities.bind(graph);
+      const planned: ImportedEntityRekey[] = [];
+      let rebuilt: Record<string, unknown> | null = null;
+      const spy = jest.spyOn(graph, 'rekeyImportedEntities').mockImplementation(async (context, moves) => {
+        planned.push(...moves);
+        const moved = await rekey(context, moves);
+        rebuilt = await propertiesOf(collapsed.entity_id);
+
+        return moved;
+      });
+
+      try {
+        await importVcf(
+          'BEGIN:VCARD\nFN:Mei Chen\nEMAIL:mei@example.org\nTEL;TYPE=WORK:(555) 010-0300\nEND:VCARD\n' +
+            'BEGIN:VCARD\nFN:Arjun Rao\nEMAIL:arjun@example.org\nTEL;TYPE=WORK:(555) 010-0300\n' +
+            'TEL;TYPE=CELL:(555) 010-0342\nEND:VCARD\n',
+        );
+      } finally {
+        spy.mockRestore();
+      }
+
+      // Both of Arjun's stubs were told apart from Mei's…
+      expect(planned).toEqual([
+        expect.objectContaining({ fromKey: 'contact:5550100300', toKey: 'contact:mei@example.org' }),
+      ]);
+      expect([...(planned[0].dropMergedFrom ?? [])].sort()).toEqual([arjunMail, arjunLine].sort());
+
+      // …so the reset kept what Mei's stub still vouches for, and nothing of
+      // the cards' or of Arjun's.
+      expect(rebuilt).toEqual({
+        emails: ['mei.chen@mail.example'],
+        phones: ['5550100377'],
+        names: ['Mei Chen'],
+        Phones: ['+1 555-010-0377'],
+      });
+
+      // The row is Mei's, with none of Arjun on it whichever way ingest folds…
+      const mei = (await personAt('contact:mei@example.org'))!;
+      expect(mei.entity_id).toBe(collapsed.entity_id);
+      expect(mei.name).toBe('Mei Chen');
+      expect(JSON.stringify(mei.properties)).not.toMatch(/arjun|0342/i);
+
+      // …Arjun is a person of his own, and every merge still stands.
+      expect((await personAt('contact:5550100342'))?.name).toBe('Arjun Rao');
+      expect(await mergedInto([meiMail, arjunMail, arjunLine])).toEqual([
+        collapsed.entity_id,
+        collapsed.entity_id,
+        collapsed.entity_id,
+      ]);
+    });
+
+    it('keeps only what a merge that still stands brought in, as the survivor repair reads one', async () => {
+      await pushTheOldWay({
+        name: 'Rosa Diaz',
+        identityKey: '5550100400',
+        metadata: { Source: 'vCard', Names: ['Rosa Diaz'], Phones: ['(555) 010-0455'] },
+      });
+      const row = (await personAt('contact:5550100400'))!;
+
+      // One hop. A stub was merged into another Person, and that Person into
+      // this row; in between, a pre-fix re-import of that Person's card erased
+      // the stub's address, and #2796's repair has since put it back on this
+      // row. A reset after the repair must not take it off again.
+      const middle = await stub('Rosa M. Diaz', { names: ['Rosa M. Diaz'], Phones: ['555.010.0455'] });
+      const hop = await stub('Rosa D.', { emails: ['rosa.d@mail.example'] });
+
+      await merges.mergePeople(scope(), [hop], middle);
+      await update(
+        `UPDATE ci.entities SET properties = '{"names": ["Rosa M. Diaz"], "Phones": ["555.010.0455"]}'::jsonb
+          WHERE entity_id = $1::uuid`,
+        [middle],
+      );
+
+      // And merges that no longer stand, or no longer vouch for a value.
+      const elsewhere = await stub('Somebody Else', {});
+      const repointed = await stub('Rosa', { phones: ['5550100411'] });
+      const retyped = await stub('Rosa Diaz', { Faxes: ['555-010-0419'] });
+      const renamed = await stub('Missed call from Rosa', { names: ['Missed call from Rosa'] });
+      const released = await stub('Rosa Diaz', { emails: ['rosa.diaz@mail.example'] });
+
+      await merges.mergePeople(scope(), [middle, repointed, retyped, renamed, released], row.entity_id);
+
+      // A tombstone that points somewhere else now…
+      await update(`UPDATE ci.entities SET merged_into_entity_id = $2::uuid WHERE entity_id = $1::uuid`, [
+        repointed,
+        elsewhere,
+      ]);
+      // …one a repair retyped out of Person…
+      await update(`UPDATE ci.entities SET entity_type = 'Concept' WHERE entity_id = $1::uuid`, [retyped]);
+      // …one whose junk name a repair rewrote, into a name the row holds anyway…
+      await update(
+        `UPDATE ci.entities SET properties = '{"names": ["Rosa Diaz"]}'::jsonb WHERE entity_id = $1::uuid`,
+        [renamed],
+      );
+      // …and the repair's restore of the one-hop address, as it leaves the row.
+      await update(
+        `UPDATE ci.entities
+            SET properties = jsonb_set(properties, '{emails}', (properties -> 'emails') || '["rosa.d@mail.example"]')
+          WHERE entity_id = $1::uuid`,
+        [row.entity_id],
+      );
+
+      const moved = await graph.rekeyImportedEntities(scope(), [
+        {
+          entityType: 'Person',
+          sourceSystem: 'vcard',
+          fromKey: 'contact:5550100400',
+          toKey: 'contact:rosa@example.org',
+          resetProperties: true,
+          dropMergedFrom: [released],
+        },
+      ]);
+
+      expect(moved).toEqual([expect.objectContaining({ entityId: row.entity_id })]);
+      // The typed number comes through in the row's own spelling: the fold
+      // compares `Phones` by digits and kept the first it saw.
+      expect(await propertiesOf(row.entity_id)).toEqual({
+        emails: ['rosa.d@mail.example'],
+        names: ['Rosa M. Diaz'],
+        Phones: ['(555) 010-0455'],
+      });
+    });
   });
 });

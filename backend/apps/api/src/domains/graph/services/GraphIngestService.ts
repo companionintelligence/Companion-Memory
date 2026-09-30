@@ -85,12 +85,21 @@ export interface ImportedEntityRef {
   key: string;
 }
 
+/** A row merged into another one: a merge tombstone. */
+export interface MergedAwayEntity {
+  entityId: string;
+  name: string | null;
+  properties: Record<string, unknown>;
+}
+
 /** A row holding an {@link ImportedEntityRef}. */
 export interface ImportedEntityMatch extends ImportedEntityRef {
   entityId: string;
   name: string | null;
   properties: Record<string, unknown>;
   mergedIntoEntityId: string | null;
+  /** The rows merged into this one. Empty for a tombstone: its sources point past it. */
+  mergedFrom: MergedAwayEntity[];
 }
 
 /** Move the row holding `fromKey` onto `toKey`, same type and source. */
@@ -105,8 +114,76 @@ export interface ImportedEntityRekey {
    * has learned was several things at once: whatever {@link ingest} does with a
    * row's existing properties — replace them, or union the lists — must not
    * carry the others' details into the one it now belongs to.
+   *
+   * Emptied, that is, of what the SOURCE put there. The identity values the
+   * row's standing Person merges brought in stay: a merge was a separate
+   * decision, that another row is this row's person, and the row keeps its
+   * merges. See {@link rekeyImportedEntities} for the rule.
    */
   resetProperties?: boolean;
+  /**
+   * With `resetProperties`: rows merged into this one whose values the reset
+   * drops too, because the caller has shown them to be someone else.
+   */
+  dropMergedFrom?: readonly string[];
+}
+
+/**
+ * The plural identity keys `PersonMergeService.foldProperties` carries from a
+ * merged-away row to its survivor, and so what a reset keeps of the merges a
+ * row absorbed. The same list as `IDENTITY_LIST_KEYS` in the ingest's
+ * refresh-as-merge change (`utils/ingestedProperties.ts`): import that one once
+ * it lands, rather than keep two lists that have to agree.
+ */
+const MERGED_IDENTITY_LIST_KEYS: readonly string[] = ['emails', 'phones', 'names', 'Phones', 'Faxes'];
+
+/**
+ * What JavaScript's `String.prototype.trim` strips (the WhiteSpace and
+ * LineTerminator code points), which is how `foldProperties` tells a blank
+ * member from a value. Bound as `btrim`'s character set, so the database's
+ * locale has no say in it.
+ */
+const JS_TRIM_CHARACTERS = String.fromCodePoint(
+  0x09,
+  0x0a,
+  0x0b,
+  0x0c,
+  0x0d,
+  0x20,
+  0xa0,
+  0x1680,
+  ...Array.from({ length: 11 }, (_, i) => 0x2000 + i),
+  0x2028,
+  0x2029,
+  0x202f,
+  0x205f,
+  0x3000,
+  0xfeff,
+);
+
+/** A stored list key as a list: an array as it is, a lone value as one member, absent or null as none. */
+function asListSql(value: string): string {
+  return (
+    `(CASE WHEN jsonb_typeof(${value}) = 'array' THEN ${value} ` +
+    `WHEN ${value} IS NULL OR jsonb_typeof(${value}) = 'null' THEN '[]'::jsonb ` +
+    `ELSE jsonb_build_array(${value}) END)`
+  );
+}
+
+/**
+ * What two members of list `key` must share to be the same value, as
+ * `foldProperties` compares them: the typed `Phones` / `Faxes` by digit string
+ * (the trimmed text when there are no digits), a non-string matching nothing;
+ * every other list by jsonb equality. `[^0-9]` rather than `\D`, which follows
+ * the locale in Postgres.
+ */
+function foldedMemberSql(key: string, member: string, trimCharacters: string): string {
+  return (
+    `(CASE WHEN ${key} NOT IN ('Phones', 'Faxes') THEN ${member} ` +
+    `WHEN jsonb_typeof(${member}) = 'string' THEN to_jsonb(COALESCE(` +
+    `NULLIF(regexp_replace(${member} #>> '{}', '[^0-9]', '', 'g'), ''), ` +
+    `btrim(${member} #>> '{}', ${trimCharacters}))) END)`
+  );
 }
 
 /** Coordinates per `findImportedEntities` SELECT — three bind parameters each. */
@@ -358,8 +435,37 @@ export class GraphIngestService {
             name: row.name,
             properties: row.properties ?? {},
             mergedIntoEntityId: row.mergedIntoEntityId,
+            mergedFrom: [],
           });
         }
+      }
+    }
+
+    // Who was merged into each live row: a caller about to rebuild one (a
+    // re-key's `resetProperties`) has to tell the merges that are the row's own
+    // person from any that are not. One statement, and only for live rows,
+    // since path compression points a tombstone's sources past it.
+    const live = [...new Set(matches.filter((m) => m.mergedIntoEntityId == null).map((m) => m.entityId))];
+
+    if (live.length > 0) {
+      const merged: Array<{
+        entity_id: string;
+        merged_into_entity_id: string;
+        name: string | null;
+        properties: Record<string, unknown> | null;
+      }> = await this.nodeRepository.query(
+        `SELECT entity_id, merged_into_entity_id, name, properties
+           FROM ci.entities
+          WHERE owner_user_id = $1::uuid
+            AND merged_into_entity_id = ANY($2::uuid[])
+          ORDER BY entity_id`,
+        [context.userId, live],
+      );
+
+      for (const match of matches) {
+        match.mergedFrom = merged
+          .filter((row) => row.merged_into_entity_id === match.entityId)
+          .map((row) => ({ entityId: row.entity_id, name: row.name, properties: row.properties ?? {} }));
       }
     }
 
@@ -383,6 +489,20 @@ export class GraphIngestService {
    * recorded there as usual. A move with `resetProperties` empties the row's
    * properties in the same statement, under the same guard.
    *
+   * Except what the row's standing Person merges brought in. Of the identity
+   * lists `PersonMergeService.foldProperties` unions (`emails`, `phones`,
+   * `names`, `Phones`, `Faxes`), a member the row holds stays when a merge
+   * that still stands brought it in: the merge's source is still a Person
+   * tombstone pointing at this row, its target is this row or one merged into
+   * it, and the source held the member both when it was merged (the bag
+   * `ci.entity_merges.details.sourceProperties` recorded) and on its tombstone
+   * today. That is the rule #2796's survivor repair restores by, so a reset
+   * after that one-shot repair does not lose again what it put back. Members
+   * are compared the way the fold compares them, and keep the row's order. A
+   * source in `dropMergedFrom` vouches for nothing. The rule runs inside this
+   * statement, not in the caller's plan, so a merge that commits between the
+   * two is kept too.
+   *
    * Returns the moves that happened, each with the row it moved.
    */
   async rekeyImportedEntities(
@@ -397,6 +517,9 @@ export class GraphIngestService {
     const fromIds = moves.map((move) => GraphIngestService.linkedIdFor(move.fromKey));
     const toIds = moves.map((move) => GraphIngestService.linkedIdFor(move.toKey));
     const resets = moves.map((move) => move.resetProperties === true);
+    // One comma-separated list per move: unnest cannot take a ragged uuid[][].
+    const dropped = moves.map((move) => (move.dropMergedFrom ?? []).join(','));
+    const member = (value: string) => foldedMemberSql('k.key', value, '$9::text');
 
     // A CTE rather than a bare UPDATE … RETURNING: through TypeORM's postgres
     // driver `query()` hands an UPDATE back as the pair `[rows, rowCount]`, not
@@ -406,10 +529,54 @@ export class GraphIngestService {
         `WITH moved AS (
            UPDATE ci.entities e
               SET linked_id = m.to_id,
-                  properties = CASE WHEN m.reset THEN '{}'::jsonb ELSE e.properties END,
+                  properties = CASE
+                    WHEN m.reset THEN COALESCE((
+                      SELECT jsonb_object_agg(kept.key, kept.members)
+                        FROM (SELECT k.key, jsonb_agg(held.value ORDER BY held.position) AS members
+                                FROM unnest($8::text[]) AS k(key)
+                               CROSS JOIN LATERAL jsonb_array_elements(${asListSql('e.properties -> k.key')})
+                                     WITH ORDINALITY AS held(value, position)
+                               CROSS JOIN LATERAL (SELECT ${member('held.value')} AS match) AS h
+                               WHERE jsonb_typeof(held.value) = 'string'
+                                 AND btrim(held.value #>> '{}', $9::text) <> ''
+                                 AND EXISTS (
+                                       SELECT 1
+                                         FROM ci.entities src
+                                         JOIN ci.entity_merges mg
+                                           ON mg.owner_user_id = src.owner_user_id
+                                          AND mg.source_entity_id = src.entity_id
+                                         JOIN ci.entities target
+                                           ON target.owner_user_id = mg.owner_user_id
+                                          AND target.entity_id = mg.target_entity_id
+                                        WHERE src.owner_user_id = e.owner_user_id
+                                          AND src.merged_into_entity_id = e.entity_id
+                                          AND src.entity_type = 'Person'
+                                          AND mg.entity_type = 'Person'
+                                          AND target.entity_type = 'Person'
+                                          AND COALESCE(target.merged_into_entity_id, target.entity_id) = e.entity_id
+                                          AND src.entity_id <> ALL (string_to_array(m.dropped, ',')::uuid[])
+                                          AND EXISTS (
+                                                SELECT 1
+                                                  FROM jsonb_array_elements(CASE
+                                                         WHEN jsonb_typeof(mg.details -> 'sourceProperties' -> k.key) = 'array'
+                                                           THEN mg.details -> 'sourceProperties' -> k.key
+                                                         WHEN k.key IN ('Phones', 'Faxes')
+                                                          AND jsonb_typeof(mg.details -> 'sourceProperties' -> k.key) = 'string'
+                                                           THEN jsonb_build_array(mg.details -> 'sourceProperties' -> k.key)
+                                                         ELSE '[]'::jsonb
+                                                       END) AS given(value)
+                                                 WHERE ${member('given.value')} = h.match)
+                                          AND EXISTS (
+                                                SELECT 1
+                                                  FROM jsonb_array_elements(${asListSql('src.properties -> k.key')}) AS still(value)
+                                                 WHERE ${member('still.value')} = h.match))
+                               GROUP BY k.key) AS kept
+                    ), '{}'::jsonb)
+                    ELSE e.properties
+                  END,
                   updated_at = now()
-             FROM unnest($2::text[], $3::text[], $4::uuid[], $5::uuid[], $6::boolean[])
-                  AS m(entity_type, linked_table, from_id, to_id, reset)
+             FROM unnest($2::text[], $3::text[], $4::uuid[], $5::uuid[], $6::boolean[], $7::text[])
+                  AS m(entity_type, linked_table, from_id, to_id, reset, dropped)
             WHERE e.owner_user_id = $1::uuid
               AND e.entity_type = m.entity_type
               AND e.linked_table = m.linked_table
@@ -424,7 +591,17 @@ export class GraphIngestService {
         RETURNING e.entity_id, m.entity_type, m.linked_table, m.from_id
          )
          SELECT entity_id, entity_type, linked_table, from_id::text AS from_id FROM moved`,
-        [context.userId, moves.map((move) => move.entityType), linkedTables, fromIds, toIds, resets],
+        [
+          context.userId,
+          moves.map((move) => move.entityType),
+          linkedTables,
+          fromIds,
+          toIds,
+          resets,
+          dropped,
+          MERGED_IDENTITY_LIST_KEYS,
+          JS_TRIM_CHARACTERS,
+        ],
       );
 
     const movedByCoord = new Map(
