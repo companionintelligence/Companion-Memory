@@ -1,5 +1,6 @@
 import type { Entity, Item } from '../../datasources/timeline';
 import {
+  declaredAccumulate,
   entityIdentityKey,
   entityKey,
   hasContactIdentity,
@@ -350,5 +351,29 @@ describe('mergeAccumulatedMetadata', () => {
 
   it('does nothing for an entity that declared no accumulating keys', () => {
     expect(mergeAccumulatedMetadata({ prices: ['1'] }, { metadata: { prices: ['2'] } })).toBeNull();
+  });
+});
+
+describe('declaredAccumulate', () => {
+  // What `staged_entities.accumulate` stores — the push needs the declaration,
+  // not just the values it grew, to union these keys into the graph row.
+
+  it('stores the keys a parser declared, cleaned', () => {
+    expect(declaredAccumulate({ accumulate: [' Phones', 'URLs', 'Phones', ''] })).toEqual(['Phones', 'URLs']);
+  });
+
+  it('is null when nothing was declared, which is most entity types', () => {
+    expect(declaredAccumulate({ name: 'Paris' })).toBeNull();
+    expect(declaredAccumulate({ accumulate: [] })).toBeNull();
+  });
+
+  it('keeps an earlier sighting’s keys when a later one declares others', () => {
+    // One person staged by two parsers in one run: each declaration is a
+    // promise about its own keys, so the row carries both.
+    expect(declaredAccumulate({ accumulate: ['Orders'] }, ['Phones', 'URLs'])).toEqual([
+      'Phones',
+      'URLs',
+      'Orders',
+    ]);
   });
 });

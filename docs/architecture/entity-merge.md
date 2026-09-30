@@ -452,6 +452,22 @@ Type-specific rules:
 - **Tags** (`ci_search.entity_tag`) → union, deduped on the `(entity_type, entity_id, tag_id)`
   unique index.
 
+**What a later import does to the survivor — built (2026-09-29).** The survivor is usually some
+source's own row, and that source keeps re-importing it. `GraphIngestService` used to refresh it
+with `properties = EXCLUDED.properties`, which quietly undid every merge into an imported contact:
+the next import of the survivor's card replaced the folded `phones`/`Phones`/`names` with the card's
+own. The refresh is now a merge, run inside the upsert against the locked row
+(`graph/utils/ingestedProperties.ts`):
+
+- keys the source does not send are left alone, and a JSON null says nothing;
+- the plural identity keys this fold unions (`IDENTITY_LIST_KEYS`) and the parser's own
+  `accumulate[]` keys (carried on `ci_import.staged_entities.accumulate`) are unioned;
+- any other key the source sends takes its new value, and `name`/`description` do too unless null.
+
+Two limits follow from there being no per-key provenance yet: an import cannot *remove* a member of
+a unioned list, and a key the source itself sends (`avatar_url` on a vCard) still overrides a user
+edit of it. The precedence scheme above is what resolves the second.
+
 ### 5.2 Relationship folding
 
 Two hazards, both already encoded as constraints on `ci.relationships`, and both already guarded in

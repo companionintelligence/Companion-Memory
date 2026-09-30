@@ -705,14 +705,19 @@ describeWithDatabase(`the import spine (${importDatabase.target})`, () => {
       await writer.settled();
 
       const [row] = await dataSource.query<
-        Array<{ metadata: Record<string, unknown>; graph_dirty: boolean }>
-      >(`SELECT metadata, graph_dirty FROM ci_import.staged_entities WHERE run_id = $1::uuid`, [runId]);
+        Array<{ metadata: Record<string, unknown>; graph_dirty: boolean; accumulate: string[] | null }>
+      >(`SELECT metadata, graph_dirty, accumulate FROM ci_import.staged_entities WHERE run_id = $1::uuid`, [
+        runId,
+      ]);
 
       expect(row.metadata.prices).toEqual(['10.19', '15.92']);
       // The push resumes from a high-water mark, so a row that changed after it
       // was already sent would never be revisited without this.
       expect(row.graph_dirty).toBe(true);
       expect(writer.totals.entitiesGrown).toBe(1);
+      // And the declaration itself is kept, so the push unions `prices` into
+      // the graph row too instead of replacing what an earlier run put there.
+      expect(row.accumulate).toEqual(['prices']);
     });
 
     it('does not collapse item→item edges that point at different items', async () => {

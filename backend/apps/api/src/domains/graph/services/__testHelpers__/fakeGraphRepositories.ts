@@ -8,16 +8,21 @@
  *     resolved with `.getMany()`, and
  *   - a batched `.createQueryBuilder().insert().into(...).values(rows)
  *     .onConflict('…').returning(cols).execute()` — DO UPDATE for nodes (a
- *     conflicting row keeps its id and takes the incoming name/description/
- *     properties), DO NOTHING for relationships.
+ *     conflicting row keeps its id, takes the incoming name/description unless
+ *     null, and MERGES the incoming properties by `mergeIngestedProperties` with
+ *     the `unionKeys` parameter the service binds; a merge tombstone is left
+ *     alone and not returned, as the conflict action's WHERE does), DO NOTHING
+ *     for relationships.
  *
  * The fakes ignore the exact SQL text and instead apply the service's actual
  * idempotency predicate (entities: (owner,type,linkedTable,linkedId); rels:
  * (owner,from,to,type)) to an in-memory row store, so a re-ingest dedups just as
  * Postgres' ON CONFLICT would. That keeps the specs asserting OBSERVABLE ingest
  * behaviour (dedup, mapping, error isolation) rather than a specific statement
- * shape.
+ * shape. The property merge the SQL performs is proven against real Postgres in
+ * GraphIngestService.propertyMerge.integration.spec.ts; here it is the TS twin.
  */
+import { mergeIngestedProperties } from '../../utils/ingestedProperties';
 
 interface StoredNode {
   entityId: string;
@@ -93,6 +98,7 @@ export function makeFakeNodeRepository(
     const wanted: Array<{ userId?: string; entityType: string; linkedTable: string; linkedId: string }> = [];
     let ownerId: string | undefined;
     let insertRows: StoredNode[] | null = null;
+    const parameters: Record<string, unknown> = {};
 
     const qb: Record<string, unknown> = {};
     Object.assign(qb, {
@@ -146,6 +152,11 @@ export function makeFakeNodeRepository(
         return qb;
       },
       onConflict: () => qb,
+      setParameter: (name: string, value: unknown) => {
+        parameters[name] = value;
+
+        return qb;
+      },
       returning: () => qb,
       execute: async () => {
         if (opts.failInsert) {
@@ -156,11 +167,28 @@ export function makeFakeNodeRepository(
         for (const row of insertRows ?? []) {
           const key = nodeCoord(row);
           const current = store.get(key);
+
+          // The conflict action's WHERE: a tombstone is neither updated nor
+          // returned.
+          if (current?.mergedIntoEntityId != null) {
+            continue;
+          }
+
           // ON CONFLICT DO UPDATE: the stored row keeps its entity_id (and every
-          // reference to it) and takes the incoming content. RETURNING yields
-          // the row that actually exists, which is what the service maps keys to.
+          // reference to it), takes the incoming name/description unless null,
+          // and merges the incoming properties. RETURNING yields the row that
+          // actually exists, which is what the service maps keys to.
           const landed = current
-            ? { ...current, name: row.name, description: row.description, properties: row.properties }
+            ? {
+                ...current,
+                name: row.name ?? current.name,
+                description: row.description ?? current.description,
+                properties: mergeIngestedProperties(
+                  current.properties,
+                  row.properties,
+                  (parameters.unionKeys as string[] | undefined) ?? [],
+                ),
+              }
             : row;
 
           store.set(key, landed);
@@ -170,6 +198,9 @@ export function makeFakeNodeRepository(
             entity_type: landed.entityType,
             linked_table: landed.linkedTable,
             linked_id: landed.linkedId,
+            name: landed.name,
+            description: landed.description,
+            properties: landed.properties,
           });
         }
 

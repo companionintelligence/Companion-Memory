@@ -1242,7 +1242,7 @@ export class PushStage implements ImportStageRunner {
     const staged = await this.retrying(context, 'reading the staged entities', () =>
       this.dataSource.query<StagedEntity[]>(
         `SELECT id, run_id AS "runId", user_id AS "userId", type, name, metadata,
-                identity_key AS "identityKey", data_source AS "dataSource"
+                identity_key AS "identityKey", data_source AS "dataSource", accumulate
            FROM ci_import.staged_entities
           WHERE run_id = $1::uuid AND push_status = 'pending'
           ORDER BY id`,
