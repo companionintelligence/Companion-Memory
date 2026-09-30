@@ -513,21 +513,30 @@ export class PlaceService {
     // no admin_area_level_1 is common outside the US), so the same city can be
     // resolved first without a parent and later with one; without this the
     // keyed lookup below would miss and mint a duplicate city node.
+    //
+    // Read back through a CTE: a bare UPDATE … RETURNING resolves to the pair
+    // [rows, rowCount], whose length is always 2 and whose [0] is the rows
+    // array — so every call with a parent used to return `undefined` without
+    // minting the node, and the chain broke below it (see
+    // __tests__/PlaceService.hierarchy.integration.spec.ts).
     if (parentId) {
       const adopted: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
-        `UPDATE ci.entities
-            SET parent_place_id = $4
-          WHERE entity_id = (
-            SELECT entity_id
-              FROM ci.entities
-             WHERE entity_type = 'Location'
-               AND owner_user_id = $1
-               AND place_kind = $2
-               AND lower(btrim(name)) = lower(btrim($3))
-               AND parent_place_id IS NULL
-             ORDER BY created_at ASC
-             LIMIT 1)
-          RETURNING entity_id`,
+        `WITH adopted AS (
+           UPDATE ci.entities
+              SET parent_place_id = $4
+            WHERE entity_id = (
+              SELECT entity_id
+                FROM ci.entities
+               WHERE entity_type = 'Location'
+                 AND owner_user_id = $1
+                 AND place_kind = $2
+                 AND lower(btrim(name)) = lower(btrim($3))
+                 AND parent_place_id IS NULL
+               ORDER BY created_at ASC
+               LIMIT 1)
+            RETURNING entity_id
+         )
+         SELECT entity_id FROM adopted`,
         [context.userId, kind, name, parentId],
       );
 
