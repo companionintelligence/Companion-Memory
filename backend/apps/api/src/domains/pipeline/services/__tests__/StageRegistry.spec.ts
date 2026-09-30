@@ -65,6 +65,7 @@ interface StageLike {
     idColumn?: string;
     userColumn?: string;
     predicate?: string;
+    changedAtColumn?: unknown;
   };
   run: unknown;
 }
@@ -400,4 +401,23 @@ describe('StageRegistry.get', () => {
 
     expect(registry.get(SAMPLE_STAGE_ID)).toBe(stage);
   });
+
+  it('accepts a plain changedAtColumn', () => {
+    const stage = validStage({ source: { ...validStage().source, changedAtColumn: 'updated_at' } });
+    const { registry } = makeRegistry(stage);
+
+    expect(registry.get(SAMPLE_STAGE_ID)).toBe(stage);
+  });
+
+  it.each([['updated_at; DROP TABLE ci.users'], ['s.updated_at'], [''], [42]])(
+    'rejects a changedAtColumn that is not a plain column name (%p)',
+    (changedAtColumn) => {
+      // It is interpolated into the re-open query as an identifier. The tick
+      // contains a failing re-open and only logs it, so a malformed one has to
+      // fail HERE, at first resolve, or it is an error line every five minutes.
+      const { registry } = makeRegistry(validStage({ source: { ...validStage().source, changedAtColumn } }));
+
+      expect(() => registry.get(SAMPLE_STAGE_ID)).toThrow(/changedAtColumn/);
+    },
+  );
 });

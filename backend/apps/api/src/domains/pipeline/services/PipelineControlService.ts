@@ -618,6 +618,13 @@ export interface ControlTickReport {
    */
   claimsReopened: number;
 
+  /**
+   * Ledger rows re-opened because their source row changed after they were
+   * decided (a stage declaring `source.changedAtColumn`; see
+   * `PipelineStateService.reopenChangedSources`).
+   */
+  sourcesReopened: number;
+
   /** Stage legs with stale rows that were held back behind an undrained producer. */
   legsBlocked: number;
 
@@ -679,6 +686,7 @@ function emptyReport(): ControlTickReport {
     runsPaused: 0,
     sweepsStarted: 0,
     claimsReopened: 0,
+    sourcesReopened: 0,
     legsBlocked: 0,
     legsDrained: 0,
     legsNotDue: 0,
@@ -843,7 +851,8 @@ export class PipelineControlService {
       report.sweepsStarted > 0 ||
       report.runsFinalized > 0 ||
       report.leasesReaped > 0 ||
-      report.claimsReopened > 0
+      report.claimsReopened > 0 ||
+      report.sourcesReopened > 0
     ) {
       this.logger.log('Pipeline control tick', { ...report });
     }
@@ -891,6 +900,17 @@ export class PipelineControlService {
     const stageIds = this.stageSetFor(row);
     const legs = this.legsFor(stageIds);
 
+    // ONE read per user per tick, not one per leg: a user has at most a dozen
+    // rows here and the tick already issues a staleness probe per leg, so a
+    // second per-leg round trip would double the tick's statement count to
+    // answer a question one `WHERE user_id = $1` covers. Read before the
+    // candidates, because the source-change re-open below is gated on it.
+    const lastStartedAt = await this.legScheduleFor(userId);
+
+    // So is a source row that changed after its decision — for a stage that
+    // declares `source.changedAtColumn`. Same placement, same reason.
+    report.sourcesReopened += await this.reopenChangedSources(legs, userId, lastStartedAt, conditions);
+
     // ── 2. What is worth sweeping ──────────────────────────────────────────
     const candidates = new Map<string, boolean>();
 
@@ -900,12 +920,6 @@ export class PipelineControlService {
 
     // ── 3. WHICH of those may run right now ────────────────────────────────
     //
-    // ONE read per user per tick, not one per leg: a user has at most a dozen
-    // rows here and the tick already issues a staleness probe per leg, so a
-    // second per-leg round trip would double the tick's statement count to
-    // answer a question one `WHERE user_id = $1` covers.
-    const lastStartedAt = await this.legScheduleFor(userId);
-
     // A due retry can make a leg due before its `minInterval` elapses (see
     // `stageDueness`'s "Why `hasOverdueRetry` is a THIRD input" note), so it
     // has to be known before dueness is computed, not read out of the result.
@@ -1372,6 +1386,65 @@ export class PipelineControlService {
 
       return { windowOpen: false, now };
     }
+  }
+
+  /**
+   * Re-open this user's decisions whose source row changed after they were
+   * made, on every leg whose stage declares `source.changedAtColumn`.
+   *
+   * GATED ON THE CLOCK. A re-opened row cannot be swept before its leg is due,
+   * so a leg that is not due by its clock and window is not asked: the rows it
+   * would re-open are found the same on the first tick it is due, and re-opened
+   * there before the candidates are counted. What that saves is the day after
+   * a nightly leg's sweep started, and the daytime hours before its
+   * `maxStaleness` — not the converged steady state, where a leg that never
+   * starts a sweep is overdue on every tick. There the query costs what
+   * {@link hasCandidates} already spends on the same leg (every applicable row,
+   * one ledger probe each), once more. `hasOverdueRetry` is not consulted: a
+   * leg due only to retry its failed rows is swept for THOSE, and the changed
+   * ones wait for its next clock-due tick.
+   *
+   * CONTAINED per leg. A declared column the table lacks — or anything else
+   * failing here — costs that leg its re-open, logged on every tick until it is
+   * fixed, and never the user's tick: new evidence not yet applied is the state
+   * the leg was already in.
+   */
+  private async reopenChangedSources(
+    legs: readonly StageLeg[],
+    userId: string,
+    lastStartedAt: Map<string, Date>,
+    conditions: TickConditions,
+  ): Promise<number> {
+    let reopened = 0;
+
+    for (const leg of legs) {
+      if (leg.stage.source.changedAtColumn == null) {
+        continue;
+      }
+
+      const dueness = stageDueness({
+        stageId: leg.stageId,
+        lastStartedAt: lastStartedAt.get(this.legKey(leg)) ?? null,
+        windowOpen: conditions.windowOpen,
+        now: conditions.now,
+      });
+
+      if (!dueness.due) {
+        continue;
+      }
+
+      try {
+        reopened += await this.stateService.reopenChangedSources(leg.stage, userId, leg.entityType);
+      } catch (err: unknown) {
+        this.logger.error(
+          `Could not re-open changed sources for stage "${leg.stageId}" (${leg.entityType}); its ` +
+            `decisions stand until the next tick`,
+          err instanceof Error ? err : new Error(String(err)),
+        );
+      }
+    }
+
+    return reopened;
   }
 
   /**

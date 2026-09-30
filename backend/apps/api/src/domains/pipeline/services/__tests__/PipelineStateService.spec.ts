@@ -1,4 +1,4 @@
-import { TRANSIENT_FAILURE_REASONS } from '../../constants';
+import { SOURCE_CHANGE_GRACE_SECONDS, TRANSIENT_FAILURE_REASONS } from '../../constants';
 import { PipelineStateService } from '../PipelineStateService';
 
 /**
@@ -673,6 +673,12 @@ describe('PipelineStateService.reopen', () => {
     expect(statements).toHaveLength(1);
     const { sql, params } = statements[0];
 
+    // Wrapped in a CTE with an outer SELECT: TypeORM resolves a bare UPDATE …
+    // RETURNING to `[rows, rowCount]`, whose length is 2 however many rows
+    // moved. A mock cannot see that; `sourceChangeReopen.integration.spec.ts`
+    // is what caught it.
+    expect(sql).toMatch(/^WITH reopened AS \( UPDATE/);
+    expect(sql).toMatch(/SELECT entity_id FROM reopened$/);
     expect(sql).toMatch(/UPDATE ci\.pipeline_state ps SET stage_version = 0/);
     // Only decided rows: a running row is a live claim, a failed row has its own gate.
     expect(sql).toMatch(/ps\.status IN \('done', 'skipped'\)/);
@@ -685,6 +691,94 @@ describe('PipelineStateService.reopen', () => {
     const { service, statements } = make([]);
 
     await expect(service.reopen(ENTITY_TYPE, STAGE_ID, [])).resolves.toBe(0);
+    expect(statements).toHaveLength(0);
+  });
+});
+
+describe('PipelineStateService.reopenChangedSources', () => {
+  /** The first statement answers `changed`; the re-open UPDATE answers what it moved. */
+  function make(changed: string[]) {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const query = jest.fn(async (raw: string, params: unknown[] = []) => {
+      const sql = raw.replace(/\s+/g, ' ').trim();
+
+      statements.push({ sql, params });
+
+      if (/UPDATE ci\.pipeline_state/.test(sql)) {
+        return (params[2] as string[]).map((entity_id) => ({ entity_id }));
+      }
+
+      return changed.map((id) => ({ id }));
+    });
+    const logger = {
+      setContext: jest.fn(),
+      log: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      debug: jest.fn(),
+    };
+
+    return { service: new PipelineStateService({ query } as never, logger as never), statements };
+  }
+
+  function changingStage(changedAtColumn: string | undefined = 'updated_at') {
+    const stage = makeStage(3);
+
+    return { ...stage, source: { ...stage.source, changedAtColumn } };
+  }
+
+  it('does nothing — not even a query — for a stage that declares no change stamp', async () => {
+    const { service, statements } = make([srcId(1)]);
+
+    await expect(service.reopenChangedSources(makeStage(3), USER)).resolves.toBe(0);
+    expect(statements).toHaveLength(0);
+  });
+
+  it('finds rows stamped after their decision, then re-opens them through reopen()', async () => {
+    const { service, statements } = make([srcId(1), srcId(2)]);
+
+    await expect(service.reopenChangedSources(changingStage(), USER)).resolves.toBe(2);
+
+    expect(statements).toHaveLength(2);
+    const [find, reopen] = statements;
+
+    // The source, scoped to the user and the stage's own predicate …
+    expect(find.sql).toMatch(/FROM "ci"\."files" s WHERE s\."user_id" = \$3/);
+    expect(find.sql).toContain("AND (s.content_type LIKE 'image/%')");
+    // … a decided row at the CURRENT version, done or skipped …
+    expect(find.sql).toMatch(/p\.stage_version >= \$4/);
+    expect(find.sql).toMatch(/p\.status IN \('done', 'skipped'\)/);
+    // … whose decision predates the declared stamp, less the grace.
+    expect(find.sql).toMatch(/p\.updated_at < s\."updated_at" \+ make_interval\(secs => \$5::float8\)/);
+    expect(find.params).toEqual([ENTITY_TYPE, STAGE_ID, USER, 3, SOURCE_CHANGE_GRACE_SECONDS, 20_000]);
+
+    // One definition of "re-open": the same statement reopen() issues.
+    expect(reopen.sql).toMatch(/^WITH reopened AS \( UPDATE ci\.pipeline_state ps SET stage_version = 0/);
+    expect(reopen.params).toEqual([ENTITY_TYPE, STAGE_ID, [srcId(1), srcId(2)]]);
+  });
+
+  it('issues no re-open when nothing changed', async () => {
+    const { service, statements } = make([]);
+
+    await expect(service.reopenChangedSources(changingStage(), USER)).resolves.toBe(0);
+    expect(statements).toHaveLength(1);
+  });
+
+  it('honours an explicit limit and refuses a nonsensical one', async () => {
+    const { service, statements } = make([]);
+
+    await service.reopenChangedSources(changingStage(), USER, undefined, 7);
+    expect(statements[0].params[5]).toBe(7);
+
+    await expect(service.reopenChangedSources(changingStage(), USER, undefined, 0)).rejects.toThrow(/limit/);
+  });
+
+  it('refuses a change stamp that is not a plain identifier', async () => {
+    const { service, statements } = make([]);
+
+    await expect(service.reopenChangedSources(changingStage('updated_at; --'), USER)).rejects.toThrow(
+      /changed-at column/,
+    );
     expect(statements).toHaveLength(0);
   });
 });
