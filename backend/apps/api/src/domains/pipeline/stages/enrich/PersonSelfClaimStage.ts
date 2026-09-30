@@ -39,8 +39,14 @@ const ENTITY_TYPE = 'Person';
  * rule applied to each. Bump in the same commit that changes any of them —
  * including the shared rule in `domains/graph` — because a change makes
  * every stored claim provisional.
+ *
+ * v2 — `normalizePhone` refuses a value carrying an extension. This stage
+ * upserts and never retracts, so a re-run alone would leave every self claim
+ * on a truncated key (`5550147229` from `(212) 555-0147;229`) in place;
+ * migration `20260930020117_refuse_phone_extension_join_keys` deletes those,
+ * and the re-run re-derives the rest from the repaired `properties`.
  */
-export const PERSON_SELF_CLAIM_GENERATION = 1;
+export const PERSON_SELF_CLAIM_GENERATION = 2;
 
 export function personSelfClaimStageVersion(versions: Record<string, StageVersion> = STAGE_VERSIONS): number {
   const declared = versions[ENRICH_PERSON_SELF_CLAIM_STAGE_ID];

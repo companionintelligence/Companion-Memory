@@ -9,15 +9,56 @@
  *   - email: trim + lowercase.
  *   - phone: last 10 digits of the digit string (drops country code, spaces,
  *     punctuation, '+', leading '1', etc.). Fewer than 10 digits → keep all
- *     digits as-is.
+ *     digits as-is. A value carrying an EXTENSION is refused outright — see
+ *     {@link hasPhoneExtension}.
  *
  * Returns `null` when the input is empty/whitespace or (for phone) has no
- * digits, so callers can skip non-matchable values rather than store empties.
+ * digits or carries an extension, so callers can skip non-matchable values
+ * rather than store empties.
  */
 
 import { isNonNameParticipant } from './participantSanity';
 
 export type IdentifierKind = 'email' | 'phone' | 'name';
+
+/**
+ * An extension, or a dial-string suffix that reaches one: `x229`, `x 229`,
+ * `ext. 229`, `extn 229`, `extension 229`, `Ext: 229`, and the `;` (wait),
+ * `,` (pause) and `#` a dial string uses — which covers the RFC 3966
+ * `;ext=229` and the form an Apple Contacts export writes an office line in,
+ * `TEL:(212) 555-0147\;229`. Plus Android's `p` (pause) / `w` (wait), which
+ * only mean that between digits.
+ *
+ * Deliberately a superset of the `EXTENSION` pattern the duplicate detector's
+ * `parsePhone` refuses (`memory/utils/phoneIdentity.ts`): that parser ALSO
+ * refuses any value with a letter in it, so a mid-string `…0147x229` never
+ * reaches it, while the join key has no letter rule (a vCard 4 `tel:+1…` URI
+ * keys fine) and has to name every form itself.
+ *
+ * Written in the subset of syntax JavaScript and PostgreSQL's ARE engine read
+ * identically (no lookbehind, `(?:…)`, `\s`, `\d`; case-insensitive in both via
+ * `i` / `~*`), because it is also a SQL predicate: `PersonDuplicateService`
+ * binds {@link PHONE_EXTENSION_PATTERN} and the migration that repaired the
+ * truncated keys embeds it verbatim — `normalizeIdentifier.spec.ts` pins that.
+ */
+export const PHONE_EXTENSION_PATTERN = String.raw`[;,#]|(?:^|[^a-z])(?:ext(?:ension|n)?|x)\.?\s*:?\s*\d|\d\s*[pw]\s*\d`;
+
+const PHONE_EXTENSION = new RegExp(PHONE_EXTENSION_PATTERN, 'i');
+
+/**
+ * True when a phone value carries an extension ({@link PHONE_EXTENSION_PATTERN}).
+ *
+ * Such a value is NOT one number, and its digits cannot be keyed: the join key
+ * is the last ten digits of the digit string, so `(212) 555-0147;229` became
+ * `5550147229` — the office's area code and exchange dropped, the extension
+ * appended. On the card that found this, what was left began with a real area
+ * code: a well-formed number that belongs to somebody else. The main line alone
+ * is no better: everybody at that office shares it, and a key that collapses
+ * colleagues is how contacts get merged.
+ */
+export function hasPhoneExtension(raw: string | null | undefined): boolean {
+  return raw != null && PHONE_EXTENSION.test(raw);
+}
 
 export function normalizeEmail(raw: string | null | undefined): string | null {
   if (raw == null) {
@@ -38,6 +79,13 @@ export function normalizeEmail(raw: string | null | undefined): string | null {
 
 export function normalizePhone(raw: string | null | undefined): string | null {
   if (raw == null) {
+    return null;
+  }
+
+  // Refused rather than truncated or stripped — see hasPhoneExtension. The
+  // duplicate detector's `parsePhone` and `toE164` refuse the same values, so
+  // this is the join key catching up with the two parsers that already knew.
+  if (hasPhoneExtension(raw)) {
     return null;
   }
 

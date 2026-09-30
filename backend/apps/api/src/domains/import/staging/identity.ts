@@ -8,6 +8,8 @@
  */
 import { createHash } from 'node:crypto';
 
+import { normalizePhone } from '@ci/domains/graph';
+
 import type { Entity, Item, Metadata } from '../datasources/timeline';
 
 const PHONE_ATTR_NAMES = new Set(['phone', 'tel', 'mobile', 'cell', 'sms']);
@@ -34,10 +36,23 @@ function looksLikeHandle(value: unknown): boolean {
 /**
  * Normalize a handle to a comparable key: lower-cased email, or the last ten
  * digits of a phone number. Returns '' for anything that is neither an email nor
- * a long-enough phone (a bare name).
+ * a long-enough phone (a bare name), and for a phone carrying an extension.
  *
  * The last-ten-digits rule is what makes `+1 (555) 010-9999`, `555-010-9999` and
  * `15550109999` one person rather than three.
+ *
+ * ## The phone key IS the shared join key, not a copy of it
+ *
+ * This handle becomes the entity's `properties.phones`, its
+ * `ci.entity_identifiers` row and its natural key (`contact:<handle>`, hashed
+ * into `linked_id`), so it must be byte-identical to what `normalizePhone`
+ * computes for a communication participant. It used to be a second
+ * implementation of the last-ten rule, and both copies shared one defect: an
+ * office line's extension was folded into the digits, so the vCard line
+ * `TEL:(212) 555-0147\;229` keyed as `5550147229` — a well-formed number
+ * belonging to somebody else. The digits are now the shared rule's, extension
+ * refusal included; the seven-digit floor stays here, because below it an
+ * all-digit value is a short code ({@link isShortCode}), not a handle.
  */
 export function normalizeHandle(value: unknown): string {
   if (typeof value !== 'string') {
@@ -54,9 +69,11 @@ export function normalizeHandle(value: unknown): string {
     return trimmed.toLowerCase();
   }
 
-  const digits = trimmed.replace(/\D/g, '');
+  if (trimmed.replace(/\D/g, '').length < 7) {
+    return '';
+  }
 
-  return digits.length >= 7 ? digits.slice(-10) : '';
+  return normalizePhone(trimmed) ?? '';
 }
 
 /**
@@ -80,6 +97,11 @@ const PHONE_SHAPED = /^[+()\-./\s\d]+$/;
  * A value carrying no digits is a NAME, not a short number, and is not a short
  * code: the distinction drawn here is between two kinds of phone. An email is
  * excluded for the same reason — `normalizeHandle` keys it, so it is a handle.
+ *
+ * `normalizeHandle` also refuses a phone carrying an extension, and that
+ * refusal cannot leak in here: every extension marker (`x`, `ext`, `;`, `,`,
+ * `#`, `p`/`w`) falls outside {@link PHONE_SHAPED}, so a value that reached the
+ * length test is one `normalizeHandle` refused for being short and nothing else.
  */
 export function isShortCode(value: unknown): boolean {
   if (typeof value !== 'string') {
@@ -228,7 +250,10 @@ export function stagedNaturalKey(
  * The normalized identity handles an entity carries — drawn from exactly the
  * attributes {@link hasContactIdentity} treats as a contact signal. Kept in
  * lockstep with it so every entity that resolves to 'contact' via an identity
- * also produces a key.
+ * also produces a key — with one deliberate exception: a phone carrying an
+ * extension is still evidence the entity is a contact (it is somebody's desk
+ * line), but {@link normalizeHandle} refuses to key on it, so an entity whose
+ * ONLY handle is one keys on its name instead, as a handle-less card does.
  */
 function identityHandles(entity: Entity): string[] {
   const out: string[] = [];

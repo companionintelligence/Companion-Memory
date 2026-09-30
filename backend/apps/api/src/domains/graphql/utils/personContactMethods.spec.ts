@@ -34,6 +34,29 @@ describe('contactMethodsFromPersonProperties', () => {
     ]);
   });
 
+  it('shows a phone carrying an extension as typed, with no fabricated join key', () => {
+    // The shared rule refuses these (their last ten digits run the office line
+    // and the extension together into somebody else's number), and the card
+    // must not lose the number along with the key: it is still how to reach
+    // this person. The value is the typed string, never the truncation.
+    const contacts = contactMethodsFromPersonProperties({
+      properties: {
+        phones: ['(212) 555-0147;229', { value: '212-555-0148 x31', type: 'work' }, '212 555 0149'],
+      },
+    });
+
+    expect(contacts).toEqual([
+      expect.objectContaining({ kind: 'phone', value: '(212) 555-0147;229', rawValue: '(212) 555-0147;229' }),
+      expect.objectContaining({ kind: 'phone', value: '212-555-0148 x31', label: 'work' }),
+      expect.objectContaining({ kind: 'phone', value: '2125550149' }),
+    ]);
+    expect(contacts.map((contact) => contact.value)).not.toContain('5550147229');
+  });
+
+  it('still drops a "phone" with no digits and no extension', () => {
+    expect(contactMethodsFromPersonProperties({ properties: { phones: ['n/a'] } })).toEqual([]);
+  });
+
   it('dedupes the same mailbox written as both email and emails[]', () => {
     const contacts = contactMethodsFromPersonProperties({
       email: 'dana@example.com',

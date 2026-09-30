@@ -14,7 +14,7 @@ import { LoggerService } from '@ci/common/logging';
 // lookup silently misses". A cleaner that normalised by its own rule would
 // rewrite `value_normalized` into a form no lookup in either repo computes, and
 // people-linking would stop matching with no error anywhere.
-import { normalizeIdentifier, type IdentifierKind } from '@ci/domains/graph';
+import { hasPhoneExtension, normalizeIdentifier, type IdentifierKind } from '@ci/domains/graph';
 
 import { PIPELINE_QUEUES } from '../../constants';
 import type { Stage, StageResult, StageSource } from '../../types';
@@ -49,8 +49,18 @@ const ENTITY_TYPE = 'entity';
  * copies together or the two would drift and the lookup would silently miss.
  * That repo is now retired (its import functionality is native here, in
  * `backend/apps/api/src/domains/import/`) and this is the only copy left.
+ *
+ * v2 — `normalizePhone` refuses a value carrying an extension
+ * (`hasPhoneExtension`) instead of keeping the last ten digits of number and
+ * extension run together: `(212) 555-0147;229` had keyed as `5550147229`. The
+ * bump re-opens every entity and restamps `spec_version`, but it CANNOT repair
+ * what this stage finds: a stored row whose `raw_value` carries the extension
+ * now normalizes to nothing and is reported `identifiers_unnormalizable` (this
+ * stage never deletes), and the importer's rows have `raw_value IS NULL` — their
+ * truncated key is a fixed point of the new rule. Migration
+ * `20260930020117_refuse_phone_extension_join_keys` removes both kinds.
  */
-export const IDENTIFIER_RULE_GENERATION = 1;
+export const IDENTIFIER_RULE_GENERATION = 2;
 
 /**
  * Generation of THIS stage's E.164 derivation — {@link toE164}.
@@ -58,8 +68,12 @@ export const IDENTIFIER_RULE_GENERATION = 1;
  * Separate from the rule generation because they improve independently: adding
  * a declared home region (see {@link toE164}) should not re-run email
  * normalization, and a fix to `normalizeName` should not re-derive phones.
+ *
+ * v2 — {@link toE164} refuses every extension form `hasPhoneExtension` names,
+ * not only a trailing `x`/`ext`: `+1 (212) 555-0147;229` had derived the
+ * fourteen-digit `+12125550147229`.
  */
-export const E164_RULE_GENERATION = 1;
+export const E164_RULE_GENERATION = 2;
 
 /**
  * The stage version, derived so improving EITHER re-runs history.
@@ -224,8 +238,11 @@ export function toE164(raw: string | null | undefined): string | null {
   }
 
   // An extension makes the subscriber number ambiguous and E.164 has no place to
-  // put one. Refused rather than truncated.
-  if (/\b(?:ext|x|extension)\.?\s*\d+\s*$/i.test(trimmed)) {
+  // put one. Refused rather than truncated — by the SAME test the join key uses,
+  // so the two can never disagree about which values are one number. (The
+  // private pattern this replaced caught only a trailing `x`/`ext`, and turned
+  // `+1 (212) 555-0147;229` into a fourteen-digit "E.164".)
+  if (hasPhoneExtension(trimmed)) {
     return null;
   }
 

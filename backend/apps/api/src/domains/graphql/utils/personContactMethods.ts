@@ -1,4 +1,4 @@
-import { normalizeIdentifier } from '@ci/domains/graph';
+import { hasPhoneExtension, normalizeIdentifier } from '@ci/domains/graph';
 
 import type { PersonIdentifierType } from '../types/PersonIdentifierType';
 
@@ -8,6 +8,11 @@ import type { PersonIdentifierType } from '../types/PersonIdentifierType';
  * `ci.entity_identifiers`. The Details card only reads identifiers, so those
  * contacts used to render as "No details yet" even when we had the address
  * from the message that created them.
+ *
+ * A phone carrying an extension is shown AS TYPED, with the typed string as its
+ * `value`. It has no join key — the shared rule refuses it, because keeping its
+ * last ten digits fabricated somebody else's number — but it is still the way to
+ * reach this person, and the display must not lose it along with the key.
  */
 export function contactMethodsFromPersonProperties(person: {
   email?: string | null;
@@ -18,7 +23,8 @@ export function contactMethodsFromPersonProperties(person: {
   const seen = new Set<string>();
 
   const push = (kind: 'email' | 'phone', raw: string, label: string | null) => {
-    const normalized = normalizeIdentifier(kind, raw);
+    const normalized =
+      normalizeIdentifier(kind, raw) ?? (kind === 'phone' && hasPhoneExtension(raw) ? raw.trim() : null);
     if (normalized == null) {
       return;
     }
