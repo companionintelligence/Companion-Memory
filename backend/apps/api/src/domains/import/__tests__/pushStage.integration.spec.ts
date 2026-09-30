@@ -17,7 +17,7 @@ import { GraphDeltaWriter } from '@ci/domains/memory';
 
 import { buildContact, parseContentLine, unfoldContentLines, type ContentLine } from '../datasources/vcard';
 import { PushStage } from '../stages/PushStage';
-import { markSharedContactHandles } from '../staging/identity';
+import { CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY, markSharedContactHandles } from '../staging/identity';
 import { StagedWriter } from '../staging/StagedWriter';
 import type { StageRunContext } from '../types';
 
@@ -547,7 +547,8 @@ describeWithDatabase(`the push stage (${importDatabase.target})`, () => {
       `SELECT accumulate FROM ci_import.staged_entities WHERE run_id = $1::uuid`,
       [first.runId],
     );
-    expect(staged.accumulate).toEqual(['Phones', 'URLs']);
+    // The parser's own keys, then the ones staging accumulates for every contact.
+    expect(staged.accumulate).toEqual(['Phones', 'URLs', ...CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY]);
 
     await stage.run(contextFor(first.runId));
     const gus = await personFor(first.runId);

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 
 import type { ImportRunService } from '../services/ImportRunService';
+import { CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY } from '../staging/identity';
 import { StagedWriter } from '../staging/StagedWriter';
 
 import { createStagingHarness, importDatabase, type StagingHarness } from './support/stagingHarness';
@@ -717,7 +718,9 @@ describeWithDatabase(`the import spine (${importDatabase.target})`, () => {
       expect(writer.totals.entitiesGrown).toBe(1);
       // And the declaration itself is kept, so the push unions `prices` into
       // the graph row too instead of replacing what an earlier run put there.
-      expect(row.accumulate).toEqual(['prices']);
+      // This entity is a contact (it has an email), and staging adds the keys it
+      // accumulates for every contact (`withContactIdentifiers`) to the parser's.
+      expect(row.accumulate).toEqual(['prices', ...CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY]);
     });
 
     it('does not collapse item→item edges that point at different items', async () => {
