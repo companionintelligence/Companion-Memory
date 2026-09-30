@@ -104,6 +104,7 @@
   "SEARCH_FILTERS_HIDE": "Hide filters",
   "SEARCH_SUBMIT": "Search",
   "SEARCH_RECENT_REMOVE": "Remove “{{query}}” from recent searches",
+  "SEARCH_RECENT_HEADING": "Recent",
   "CAPTURE_OPEN": "Capture",
   "CAPTURE_MODEL_SETTINGS": "Model settings",
   "CAPTURE_TITLE": "Save to Memory",

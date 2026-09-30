@@ -9,7 +9,7 @@
 import { GlobalUID } from '@ci/common';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { useLocation } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -39,6 +39,39 @@ vi.mock('./useSearchService', () => ({
 vi.mock('@/pages/MemoryPage/Components/ExplorerToolbar/ExplorerToolbar', () => ({
   SearchPanelFilters: () => <div>advanced filters</div>,
 }));
+
+// The phone footer (its sheets have their own suite); here, only what the box
+// hands it.
+vi.mock('@/pages/MemoryPage/Components/ExplorerToolbar/MobileSearchPanelFilters', () => ({
+  MobileSearchPanelFilters: ({
+    filterCount,
+    showSavedSearches,
+  }: {
+    filterCount: number;
+    showSavedSearches: boolean;
+  }) => (
+    <div>
+      phone filters: {filterCount}
+      {showSavedSearches && ', saved searches'}
+    </div>
+  ),
+}));
+
+const desktopMatchMedia = window.matchMedia;
+
+/** A phone-width viewport, as useDeviceLayout reads it (`max-width` queries match). */
+function asPhone() {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width'),
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
 
 function LocationProbe() {
   const location = useLocation();
@@ -79,6 +112,10 @@ function engage(input: HTMLElement) {
 beforeEach(() => {
   localStorage.clear();
   h.search = { data: [], tags: [], loading: false, error: undefined };
+});
+
+afterEach(() => {
+  window.matchMedia = desktopMatchMedia;
 });
 
 describe('GlobalSearchBox on /memory/events', () => {
@@ -311,5 +348,60 @@ describe('GlobalSearchBox suggestions', () => {
     fireEvent.click(await screen.findByText('Alice'));
 
     expect(path()).toBe('/people/42');
+  });
+});
+
+describe('GlobalSearchBox on a phone', () => {
+  it('swaps the row of filter controls for the Filters and Saved searches rows', () => {
+    asPhone();
+    renderAt('/dashboard?tags=vacation');
+
+    engage(screen.getByRole('textbox'));
+
+    expect(screen.getByText('phone filters: 1, saved searches')).toBeInTheDocument();
+    expect(screen.queryByText('advanced filters')).not.toBeInTheDocument();
+  });
+
+  it('keeps the Filters row alone under the suggestions once a query is typed', async () => {
+    asPhone();
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'latte' } });
+
+    await screen.findByText('Search all of Memory for');
+    expect(screen.getByText('phone filters: 0')).toBeInTheDocument();
+  });
+
+  it('shows no explorer filters on a list page, as at desktop widths', () => {
+    asPhone();
+    renderAt('/memory/people');
+
+    engage(screen.getByRole('textbox'));
+
+    expect(screen.queryByText(/phone filters/)).not.toBeInTheDocument();
+  });
+
+  it('captions the recent searches, which only a phone needs', () => {
+    localStorage.setItem('memoryRecentSearches', JSON.stringify(['latte', 'flat white']));
+    asPhone();
+    const { unmount } = renderAt('/dashboard');
+
+    engage(screen.getByRole('textbox'));
+
+    expect(screen.getAllByText('Recent')).toHaveLength(1);
+    expect(
+      screen.getByText('Recent').compareDocumentPosition(screen.getByText('latte')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    unmount();
+
+    window.matchMedia = desktopMatchMedia;
+    renderAt('/dashboard');
+    engage(screen.getByRole('textbox'));
+
+    expect(screen.getByText('latte')).toBeInTheDocument();
+    expect(screen.queryByText('Recent')).not.toBeInTheDocument();
   });
 });
