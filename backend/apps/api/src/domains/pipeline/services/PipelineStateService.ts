@@ -9,6 +9,8 @@ import {
   MAX_ATTEMPTS_BEFORE_QUARANTINE,
   RETRY_BACKOFF_BASE_SECONDS,
   RETRY_BACKOFF_MAX_SECONDS,
+  SOURCE_CHANGE_GRACE_SECONDS,
+  SOURCE_CHANGE_REOPEN_BATCH,
   TRANSIENT_FAILURE_REASONS,
   TRANSIENT_RETRY_BACKOFF_BASE_SECONDS,
   isTransientFailureReason,
@@ -427,9 +429,10 @@ export class PipelineStateService {
    * already claimed the messages naming it (see IdentifierArrivalService), or
    * a place link `promote.place` wrote after `promote.edge_event` had already
    * projected the event (see `STAGE_REOPENS`, applied by
-   * PipelineSliceListener). Nothing else re-visits a decided row, by design:
-   * "tried and produced nothing" is a recorded answer, not an invitation to
-   * try again every tick.
+   * PipelineSliceListener), or a source row that changed after it was decided
+   * ({@link reopenChangedSources}). Nothing else re-visits a decided row, by
+   * design: "tried and produced nothing" is a recorded answer, not an
+   * invitation to try again every tick.
    */
   async reopen(entityType: string, stageId: string, ids: string[]): Promise<number> {
     const uniqueIds = [...new Set(ids)];
@@ -461,6 +464,90 @@ export class PipelineStateService {
     );
 
     return rows.length;
+  }
+
+  /**
+   * Re-open this user's decided rows whose SOURCE ROW changed after the
+   * decision, for a stage that declares `source.changedAtColumn`. Returns how
+   * many rows moved; 0, with no statement, for a stage that declares none.
+   *
+   * THE ONE RULE re-selects a decided row only when the stage's version moves:
+   * it records which RULE produced an answer, not which INPUT. That is right
+   * for a stage over rows that never change after they land, and wrong for one
+   * whose output is a copy of a row that does — the answer outlives the row it
+   * describes until someone bumps a version for an unrelated reason.
+   *
+   * So this asks the one question the ledger cannot: was the source row
+   * stamped after this row was decided? The "when" of a decision is
+   * `ci.pipeline_state.updated_at`, which `complete()` writes and nothing else
+   * moves on a terminal row. {@link SOURCE_CHANGE_GRACE_SECONDS} widens the
+   * comparison for a change that committed while the slice was running; see
+   * its note.
+   *
+   * Scoped to what the sweep would do with the answer, so a re-open is never a
+   * lie in `coverage()`: rows the stage APPLIES to (its predicate — a row that
+   * stopped applying would sit at version 0, "stale", with nothing ever coming
+   * for it), decided at or above the CURRENT version (a row below it is already
+   * a candidate), and `done` / `skipped` only, the same rows {@link reopen}
+   * moves. The re-open itself is {@link reopen}, so there is one definition of
+   * it. Nothing here reads or names the column the stage WRITES.
+   */
+  async reopenChangedSources(
+    stage: Stage,
+    userId: string,
+    entityType?: string,
+    limit: number = SOURCE_CHANGE_REOPEN_BATCH,
+  ): Promise<number> {
+    const { schema, table, idColumn, userColumn, predicate, changedAtColumn } = stage.source;
+
+    if (changedAtColumn == null) {
+      return 0;
+    }
+
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new Error(`reopenChangedSources limit must be a positive integer, got ${String(limit)}`);
+    }
+
+    assertIdentifier('schema', schema);
+    assertIdentifier('table', table);
+    assertIdentifier('id column', idColumn);
+    assertIdentifier('user column', userColumn);
+    assertIdentifier('changed-at column', changedAtColumn);
+
+    const resolvedType = this.resolveEntityType(stage, entityType);
+    const applicability = predicate != null && predicate.trim().length > 0 ? predicate : 'TRUE';
+
+    // EXISTS rather than a JOIN for the reason selectStale gives for NOT EXISTS:
+    // the applicability predicate is written over the source alone, and a
+    // joined ledger would make its bare column names ambiguous (`entity_type`
+    // is on both tables).
+    const rows = await this.dataSource.query<Array<{ id: string }>>(
+      `SELECT s."${idColumn}" AS id
+         FROM "${schema}"."${table}" s
+        WHERE s."${userColumn}" = $3
+          AND (${applicability})
+          AND EXISTS (
+                SELECT 1
+                  FROM ci.pipeline_state p
+                 WHERE p.entity_type = $1
+                   AND p.entity_id = s."${idColumn}"
+                   AND p.stage = $2
+                   AND p.stage_version >= $4
+                   AND p.status IN ('done', 'skipped')
+                   AND p.updated_at < s."${changedAtColumn}" + make_interval(secs => $5::float8))
+        LIMIT $6`,
+      [resolvedType, stage.id, userId, stage.version, SOURCE_CHANGE_GRACE_SECONDS, limit],
+    );
+
+    if (rows.length === 0) {
+      return 0;
+    }
+
+    return this.reopen(
+      resolvedType,
+      stage.id,
+      rows.map((row) => String(row.id)),
+    );
   }
 
   /**
