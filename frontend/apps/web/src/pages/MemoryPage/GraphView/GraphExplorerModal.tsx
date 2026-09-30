@@ -872,6 +872,12 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
             onViewportChange={handleViewportChange}
             forceLod={dotsEligible && mode === 'overview'}
             ambientBreath={dotsEligible && mode === 'overview'}
+            // The canvas is the whole view here, with no page around it to scroll, so every swipe
+            // belongs to the graph.
+            verticalSwipe="graph"
+            // Zoom buttons clear of the floating chrome: stacked above the 2D/3D toggle on a desktop,
+            // and top-right on a phone, where the legend spans most of the bottom edge.
+            controlsClassName={variant === 'mobile' ? 'bottom-auto top-3' : 'bottom-9'}
           />
         ))}
 
