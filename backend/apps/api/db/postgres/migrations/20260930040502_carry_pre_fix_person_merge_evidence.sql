@@ -76,7 +76,10 @@
 -- it. A block with a tombstone endpoint that resolves to nobody is left
 -- alone.
 -- A pair that collapses to one person is not carried: the merge was the later
--- decision. LEAST/GREATEST meets `entity_merge_blocks_ordered` (a < b).
+-- decision, if a person made it. The auto-merge drain may have made it
+-- instead, acting past the very block this migration carries, and nothing
+-- records which (see "Blocks the merges collapsed" at the end).
+-- LEAST/GREATEST meets `entity_merge_blocks_ordered` (a < b).
 -- Several blocks can land on one canonical pair, and the earliest one's reason
 -- is carried. A block the pair already holds keeps its own (ON CONFLICT DO
 -- NOTHING): the first "no" carries the intent, as `EntityMergeBlockService`
@@ -217,6 +220,33 @@ UPDATE ci.pipeline_state ps
    AND ps.stage_version > 0;
 
 DROP TABLE _merge_evidence_canonical;
+
+-- ## Blocks the merges collapsed: for a person to review
+--
+-- Step 1 skips a block whose two ends now resolve to ONE person. That is right
+-- when a person merged them after saying no. But
+-- `MergeCandidateService.autoMergeDeterministicPairs` could have merged them
+-- too: it checks a block only on the exact pair, so a "no" left on a
+-- tombstone never stopped it. And nothing records which of the two made a
+-- merge, because both call `PersonMergeService.mergePeople` and mark the
+-- candidate accepted. The read-only query below lists these blocks, with the
+-- latest merge of either blocked record, for a person to judge; an empty
+-- result means there is nothing to judge. It follows one hop, as every reader
+-- does, and path compression (#1840) makes that exact for merges made since.
+--
+--   SELECT b.owner_user_id, b.entity_id_a, b.entity_id_b, b.reason,
+--          b.created_at AS blocked_at,
+--          COALESCE(ea.merged_into_entity_id, ea.entity_id) AS now_one_person,
+--          (SELECT max(m.created_at)
+--             FROM ci.entity_merges m
+--            WHERE m.owner_user_id = b.owner_user_id
+--              AND m.source_entity_id IN (b.entity_id_a, b.entity_id_b)) AS last_merged_at
+--     FROM ci.entity_merge_blocks b
+--     JOIN ci.entities ea ON ea.entity_id = b.entity_id_a AND ea.entity_type = 'Person'
+--     JOIN ci.entities eb ON eb.entity_id = b.entity_id_b AND eb.entity_type = 'Person'
+--    WHERE COALESCE(ea.merged_into_entity_id, ea.entity_id)
+--        = COALESCE(eb.merged_into_entity_id, eb.entity_id)
+--    ORDER BY b.created_at;
 
 -- migrate:down
 
