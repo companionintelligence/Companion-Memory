@@ -1,0 +1,24 @@
+{
+  "id": "conversation_holds_a_codeword",
+  "capability": "conversation",
+  "title": "A follow-up answer uses what the user said earlier in the thread",
+  "conversation": [
+    {
+      "role": "user",
+      "content": "For the rest of this chat the codeword is LARKSPUR. Reply with just OK."
+    },
+    {
+      "role": "user",
+      "content": "What codeword did I give you in this chat? Reply with the word only."
+    }
+  ],
+  "turns": [
+    {
+      "must_not_use": ["messaging", "import"]
+    },
+    {
+      "answer_contains": ["LARKSPUR"],
+      "must_not_use": ["messaging", "places", "calendar"]
+    }
+  ]
+}
