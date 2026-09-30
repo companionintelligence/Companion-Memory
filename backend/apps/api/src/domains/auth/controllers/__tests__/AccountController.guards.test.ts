@@ -14,6 +14,7 @@ import { ApiKeyStrategy } from '../../services/ApiKeyStrategy';
 import { AuthService } from '../../services/AuthService';
 import { capabilityForApp, scopesForApp } from '../../services/ConnectService';
 import { FederatedIdentityService } from '../../services/FederatedIdentityService';
+import { HubForwardAuthBridgeService } from '../../services/HubForwardAuthBridgeService';
 import { JwtStrategy } from '../../services/JwtStrategy';
 import { CONNECT_PROVENANCE, type ValidatedApiKey } from '../../types';
 import { AccountController } from '../AccountController';
@@ -109,6 +110,10 @@ const mockFederatedIdentityService = {
   listForUser: jest.fn(),
 };
 
+const mockHubBridge = {
+  namesAccount: jest.fn(),
+};
+
 const mockApiKeyService = {
   validateKey: jest.fn(),
 };
@@ -128,6 +133,7 @@ const mockPortalTokenVerifier = {
     { provide: UserService, useValue: mockUserService },
     { provide: AuthService, useValue: mockAuthService },
     { provide: FederatedIdentityService, useValue: mockFederatedIdentityService },
+    { provide: HubForwardAuthBridgeService, useValue: mockHubBridge },
     { provide: ApiKeyService, useValue: mockApiKeyService },
     { provide: PORTAL_TOKEN_VERIFIER, useValue: mockPortalTokenVerifier },
     // Instantiating these registers the real 'jwt' and 'api-key' passport strategies
@@ -187,6 +193,7 @@ describe('AccountController (real guards + real JwtStrategy and ApiKeyStrategy)'
     mockUserService.findById.mockResolvedValue(USER);
     mockUserService.requestDeletion.mockResolvedValue(true);
     mockFederatedIdentityService.listForUser.mockResolvedValue([]);
+    mockHubBridge.namesAccount.mockReturnValue(false);
     mockPortalTokenVerifier.verifyAndProvision.mockResolvedValue(null);
     mockApiKeyService.validateKey.mockImplementation(
       async (raw: string) => Object.values(KEYS).find((key) => key.raw === raw)?.validated ?? null,
@@ -255,7 +262,12 @@ describe('AccountController (real guards + real JwtStrategy and ApiKeyStrategy)'
       await request(app.getHttpServer())
         .get('/account')
         .set('Authorization', `Bearer ${sessionAccessToken()}`)
-        .expect(200, { email: USER.email, hasFederatedIdentity: false, hasOwnPassword: true });
+        .expect(200, {
+          email: USER.email,
+          hasFederatedIdentity: false,
+          hasOwnPassword: true,
+          emailManagedByHub: false,
+        });
     });
   });
 });

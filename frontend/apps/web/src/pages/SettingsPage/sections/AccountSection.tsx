@@ -6,11 +6,18 @@ import { TriangleAlert } from '@ci/shadcn/icons';
 
 import { useAuth, useCurrentUser } from '@/hooks';
 
-function messageFrom(error: unknown, fallback: string): string {
+/**
+ * What "sign in again" means for someone the Hub signs in: the bridge only mints a
+ * fresh session when there is no Memory session to keep, so reloading alone would
+ * keep the old one.
+ */
+const HUB_SIGN_IN_AGAIN = 'Sign out, then open Memory from your Hub again to make this change.';
+
+function messageFrom(error: unknown, fallback: string, signInAgain: string): string {
   if (error instanceof FetchJsonError && error.status === 401 && error.message === 'REAUTH_REQUIRED') {
-    // A Companion-signed-in account with no password of its own proves itself by a recent
-    // sign-in instead; the window has passed.
-    return 'Sign in again to make this change.';
+    // An account with no password of its own proves itself by a recent sign-in
+    // instead; the window has passed.
+    return signInAgain;
   }
 
   return error instanceof FetchJsonError ? error.message : fallback;
@@ -44,22 +51,27 @@ export function AccountSection() {
   // actually be accepted — the user should never meet the 400.
   const matches = email.length > 0 && confirmEmail.trim().toLowerCase() === email.trim().toLowerCase();
 
-  // OIDC-linked accounts (`ci.federated_identities`) were given a random 32-byte
-  // password at signup that the user has never seen — asking for a "current
-  // password" to change email/password would lock them out permanently, the same
-  // reason account deletion above doesn't require one either.
-  const [hasFederatedIdentity, setHasFederatedIdentity] = useState(false);
-  // A federated account that has set a password of its own is asked for it like any other.
-  const [hasOwnPassword, setHasOwnPassword] = useState(false);
-  const asksCurrentPassword = !hasFederatedIdentity || hasOwnPassword;
+  // Accounts provisioned by Portal/OIDC sign-in or by the Hub forward-auth bridge
+  // were given a random 32-byte password the user has never seen — asking for a
+  // "current password" to change email/password would lock them out permanently,
+  // the same reason account deletion above doesn't require one either. The server
+  // decides on exactly this flag (`AccountController.requireReauth`), whatever the
+  // sign-in method; until it answers, assume the common case and ask.
+  const [hasOwnPassword, setHasOwnPassword] = useState(true);
+  const asksCurrentPassword = hasOwnPassword;
+  // The Hub signs this session in by this address, so changing it here would strand
+  // the account (`AccountController.changeEmail`). It also means "sign in again"
+  // goes through the Hub.
+  const [emailManagedByHub, setEmailManagedByHub] = useState(false);
+  const signInAgain = emailManagedByHub ? HUB_SIGN_IN_AGAIN : 'Sign in again to make this change.';
 
   useEffect(() => {
-    fetchJson<{ email: string; hasFederatedIdentity: boolean; hasOwnPassword: boolean }>('/api/account', {
+    fetchJson<{ email: string; hasOwnPassword: boolean; emailManagedByHub: boolean }>('/api/account', {
       headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
     })
       .then((result) => {
-        setHasFederatedIdentity(result?.hasFederatedIdentity ?? false);
-        setHasOwnPassword(result?.hasOwnPassword ?? false);
+        setHasOwnPassword(result?.hasOwnPassword ?? true);
+        setEmailManagedByHub(result?.emailManagedByHub ?? false);
       })
       .catch(() => {});
   }, [authToken]);
@@ -94,7 +106,7 @@ export function AccountSection() {
       setEmailCurrentPassword('');
       await refetchUser();
     } catch (err) {
-      setEmailError(messageFrom(err, 'Could not update email.'));
+      setEmailError(messageFrom(err, 'Could not update email.', signInAgain));
     } finally {
       setEmailSaving(false);
     }
@@ -139,7 +151,7 @@ export function AccountSection() {
       setPasswordCurrentPassword('');
       setHasOwnPassword(true);
     } catch (err) {
-      setPasswordError(messageFrom(err, 'Could not update password.'));
+      setPasswordError(messageFrom(err, 'Could not update password.', signInAgain));
     } finally {
       setPasswordSaving(false);
     }
@@ -182,46 +194,55 @@ export function AccountSection() {
 
       <Card className="py-0">
         <Card.Content>
-          <form className="space-y-4" onSubmit={handleChangeEmail}>
+          {emailManagedByHub ? (
             <div className="space-y-1">
-              <h3 className="text-sm font-medium">Change email</h3>
-              <p className="text-sm text-muted-foreground">You'll use this address to sign in.</p>
+              <h3 className="text-sm font-medium">Email</h3>
+              <p className="text-sm text-muted-foreground">
+                Your Hub signs you in to Memory with this address, so it can't be changed here.
+              </p>
             </div>
+          ) : (
+            <form className="space-y-4" onSubmit={handleChangeEmail}>
+              <div className="space-y-1">
+                <h3 className="text-sm font-medium">Change email</h3>
+                <p className="text-sm text-muted-foreground">You'll use this address to sign in.</p>
+              </div>
 
-            {asksCurrentPassword && (
+              {asksCurrentPassword && (
+                <div className="grid gap-2">
+                  <Label htmlFor="emailCurrentPassword">Current password</Label>
+                  <PasswordInput
+                    id="emailCurrentPassword"
+                    autoComplete="current-password"
+                    value={emailCurrentPassword}
+                    onChange={(e) => setEmailCurrentPassword(e.target.value)}
+                    disabled={emailSaving}
+                    required
+                  />
+                </div>
+              )}
+
               <div className="grid gap-2">
-                <Label htmlFor="emailCurrentPassword">Current password</Label>
-                <PasswordInput
-                  id="emailCurrentPassword"
-                  autoComplete="current-password"
-                  value={emailCurrentPassword}
-                  onChange={(e) => setEmailCurrentPassword(e.target.value)}
+                <Label htmlFor="newEmail">New email</Label>
+                <Input
+                  id="newEmail"
+                  type="email"
+                  autoComplete="email"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
                   disabled={emailSaving}
                   required
                 />
               </div>
-            )}
 
-            <div className="grid gap-2">
-              <Label htmlFor="newEmail">New email</Label>
-              <Input
-                id="newEmail"
-                type="email"
-                autoComplete="email"
-                value={newEmail}
-                onChange={(e) => setNewEmail(e.target.value)}
-                disabled={emailSaving}
-                required
-              />
-            </div>
+              {emailError && <p className="text-sm text-destructive">{emailError}</p>}
+              {emailSavedNote && <p className="text-sm text-muted-foreground">{emailSavedNote}</p>}
 
-            {emailError && <p className="text-sm text-destructive">{emailError}</p>}
-            {emailSavedNote && <p className="text-sm text-muted-foreground">{emailSavedNote}</p>}
-
-            <Button type="submit" size="sm" disabled={emailSaving || newEmail.trim().length === 0}>
-              {emailSaving ? 'Saving…' : 'Update email'}
-            </Button>
-          </form>
+              <Button type="submit" size="sm" disabled={emailSaving || newEmail.trim().length === 0}>
+                {emailSaving ? 'Saving…' : 'Update email'}
+              </Button>
+            </form>
+          )}
         </Card.Content>
       </Card>
 
@@ -235,7 +256,7 @@ export function AccountSection() {
               <p className="text-sm text-muted-foreground">
                 {asksCurrentPassword
                   ? 'Changing your password signs out every other device.'
-                  : 'You signed in with a Companion account and have no password yet — set one to also sign in with email.'}
+                  : 'This account has no password yet — set one to also sign in with your email and password.'}
               </p>
             </div>
 
@@ -286,7 +307,7 @@ export function AccountSection() {
               size="sm"
               disabled={passwordSaving || newPassword.length === 0 || confirmNewPassword.length === 0}
             >
-              {passwordSaving ? 'Saving…' : hasFederatedIdentity ? 'Set password' : 'Update password'}
+              {passwordSaving ? 'Saving…' : asksCurrentPassword ? 'Update password' : 'Set password'}
             </Button>
           </form>
         </Card.Content>

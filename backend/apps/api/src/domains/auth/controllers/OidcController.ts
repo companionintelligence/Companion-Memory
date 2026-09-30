@@ -924,6 +924,9 @@ export class OidcController {
       name: name || email.split('@')[0],
       email,
       password: randomBytes(32).toString('hex'),
+      // Nobody has seen this password. Stamped as chosen, the account is asked
+      // for it before every email or password change.
+      passwordChosenByUser: false,
     };
   }
 

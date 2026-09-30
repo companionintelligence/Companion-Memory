@@ -172,6 +172,14 @@ describeWithDb('create-test-user.ts — the printed credentials, against the rea
     expect(user?.email).toBe(email);
   });
 
+  it('stamps password_set_at, so changing the email or password asks for the printed password', async () => {
+    // AccountController.requireReauth keys on this stamp alone: left null, the account
+    // would prove itself by a recent sign-in instead of the password it was given.
+    const user = await dataSource.getRepository(UserEntity).findOneBy({ id: createdUserId });
+
+    expect(user?.passwordSetAt).toBeInstanceOf(Date);
+  });
+
   it('authenticates with the printed password, via the real UserService.validatePassword', async () => {
     const user = await userService.validatePassword(email, password);
 

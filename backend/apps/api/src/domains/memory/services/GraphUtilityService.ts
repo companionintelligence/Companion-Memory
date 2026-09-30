@@ -84,6 +84,20 @@ const GENERIC_SOURCE_KEYS = ['import:importer', 'importer', 'import:'];
 const NODE_SEARCH_MAX_LIMIT = 500;
 
 /**
+ * A node's place in `entities_linked_uniq`, less the owner: the index is on
+ * `(owner_user_id, entity_type, linked_table, linked_id)`.
+ */
+export interface LinkedKey {
+  entityType: string;
+  linkedTable: string | null;
+  linkedId: string | null;
+}
+
+function linkedKeyOf(node: GraphNodeEntity): LinkedKey {
+  return { entityType: node.entity_type, linkedTable: node.linked_table, linkedId: node.linked_id };
+}
+
+/**
  * The properties bag a node or relationship write leaves behind: `properties`
  * merged over `stored` (or replacing it when `mergeProperties === false`), then
  * each `removeProperties` key deleted. With no `properties` at all there is
@@ -182,6 +196,33 @@ export class GraphUtilityService {
         linked_table: linkedTable,
         linked_id: linkedId,
         is_active: true,
+      },
+    });
+  }
+
+  /**
+   * The owner's row holding this linked key, active or not. `entities_linked_uniq`
+   * allows one row per `(owner_user_id, entity_type, linked_table, linked_id)` and
+   * is partial on `linked_table IS NOT NULL` alone, so a forgotten or merged-away
+   * row still holds its key. Unlike {@link getNodeByLinkedRecord} the type is part
+   * of the match: a row of another type on the same linked record is on a key of
+   * its own.
+   *
+   * Nothing holds a key the index does not: one with no `linked_table` is outside
+   * its predicate, and one with no `linked_id` never equals another, since a
+   * unique index treats NULLs as distinct.
+   */
+  async findLinkedKeyHolder(ownerUserId: string, key: LinkedKey): Promise<GraphNodeEntity | null> {
+    if (key.linkedTable == null || key.linkedId == null) {
+      return null;
+    }
+
+    return this.entityRepo.findOne({
+      where: {
+        owner_user_id: ownerUserId,
+        entity_type: key.entityType,
+        linked_table: key.linkedTable,
+        linked_id: key.linkedId,
       },
     });
   }
@@ -628,6 +669,10 @@ export class GraphUtilityService {
    * `properties` merges over the stored bag unless `mergeProperties === false`,
    * which replaces it; `removeProperties` keys are deleted afterwards. Both are
    * applied to the row as read here, not to a copy a caller read earlier.
+   *
+   * A write that would put the row on a linked key another row already holds —
+   * by retyping it, re-keying it, or inserting it there — fails before anything
+   * is written. See {@link assertLinkedKeyFree}.
    */
   async createOrUpdateNode(
     ownerUserId: string,
@@ -648,6 +693,7 @@ export class GraphUtilityService {
     let node = await this.findNodeToWrite(ownerUserId, entityId);
 
     const created = !node;
+    const heldKey = node && linkedKeyOf(node);
     if (!node) {
       if (!payload.entityType) {
         throw new Error('entityType is required when creating a graph node');
@@ -699,10 +745,63 @@ export class GraphUtilityService {
       node.is_archived = false;
     }
 
+    await this.assertLinkedKeyFree(ownerUserId, node, heldKey);
+
     // Only a row this call found and checked may go through save(); see insertNode.
     const saved = created ? await this.insertNode(node) : await this.entityRepo.save(node);
 
     return { node: saved, created };
+  }
+
+  /**
+   * Throw when saving `node` would put it on a linked key another row holds.
+   * Retyping a row, re-keying it or inserting one moves it onto a
+   * `(entity_type, linked_table, linked_id)` it does not hold yet, and
+   * `entities_linked_uniq` allows one of an owner's rows there: the statement
+   * used to violate it, GraphEventListener threw, and the job dead-lettered —
+   * after `memory.remember` had reported the entity updated or created. Checking
+   * first names the row in the way and fails no statement, so a surrounding
+   * transaction survives it. A writer that lands on the key between this read
+   * and the save still meets the index.
+   *
+   * The two rows are not merged instead. That would retire one of them — what
+   * `memory.forget` does, behind its own confirmation — and pick between two
+   * rows' names and properties with nobody to ask. WriteKnowledgeTool refuses a
+   * write onto a held key before queueing it; this is for a row that lands there
+   * after the tool looked, and for any other writer.
+   *
+   * `heldKey` is the key the row held before this write, or `null` for an
+   * insert. A row that keeps its key needs no check, active or not: the index is
+   * not partial on `is_active`, so no other row can be on it, and bringing a
+   * forgotten row back moves it nowhere.
+   */
+  private async assertLinkedKeyFree(
+    ownerUserId: string,
+    node: GraphNodeEntity,
+    heldKey: LinkedKey | null,
+  ): Promise<void> {
+    const target = linkedKeyOf(node);
+    const staysPut =
+      heldKey !== null &&
+      heldKey.entityType === target.entityType &&
+      heldKey.linkedTable === target.linkedTable &&
+      heldKey.linkedId === target.linkedId;
+
+    if (staysPut) {
+      return;
+    }
+
+    const holder = await this.findLinkedKeyHolder(ownerUserId, target);
+
+    if (!holder) {
+      return;
+    }
+
+    throw new Error(
+      `Entity ${node.entity_id} cannot become the ${target.entityType} linked to ${target.linkedTable} record ` +
+        `${target.linkedId}: entity ${holder.entity_id} already is` +
+        (holder.is_active ? '' : ', although it is no longer active'),
+    );
   }
 
   /**
@@ -863,6 +962,9 @@ export class GraphUtilityService {
    * `mergeProperties` / `removeProperties` behave as in {@link createOrUpdateNode}.
    * An edge found by its coordinate also keeps its stored endpoints and type
    * spelling; only a row named by id is moved or retyped by a write that says so.
+   * That write fails, before anything is written, when another active edge
+   * already holds the coordinate it is moving the row to — see
+   * {@link assertCoordinateFree}.
    */
   async createOrUpdateRelationship(
     ownerUserId: string,
@@ -917,9 +1019,17 @@ export class GraphUtilityService {
     }
 
     if (byId) {
-      relationship.from_entity_id = payload.fromEntityId ?? relationship.from_entity_id;
-      relationship.to_entity_id = payload.toEntityId ?? relationship.to_entity_id;
-      relationship.relationship_type = payload.relationshipType ?? relationship.relationship_type;
+      const target = {
+        fromEntityId: payload.fromEntityId ?? byId.from_entity_id,
+        toEntityId: payload.toEntityId ?? byId.to_entity_id,
+        relationshipType: payload.relationshipType ?? byId.relationship_type,
+      };
+
+      await this.assertCoordinateFree(ownerUserId, byId, target);
+
+      relationship.from_entity_id = target.fromEntityId;
+      relationship.to_entity_id = target.toEntityId;
+      relationship.relationship_type = target.relationshipType;
     }
 
     if (payload.properties || payload.removeProperties?.length) {
@@ -964,6 +1074,63 @@ export class GraphUtilityService {
         is_active: true,
       },
     });
+  }
+
+  /**
+   * Throw when a write by id would put `row` on a coordinate another active
+   * edge already holds. Moving the row, retyping it, or bringing a forgotten
+   * one back puts it on a `(from, to, type)` coordinate it does not hold yet,
+   * and `relationships_unique_directed_idx` allows one active edge there: the
+   * UPDATE used to violate it, GraphEventListener threw, and the job
+   * dead-lettered — after `memory.remember` had reported the relationship
+   * updated. Checking first names the edge in the way and fails no statement,
+   * so a surrounding transaction survives it. A writer that lands on the
+   * coordinate between this read and the save still meets the index.
+   *
+   * The two edges are not merged instead. That would retire the row the write
+   * names — what `memory.forget` does, behind its own confirmation — and pick
+   * between two edges' properties with nobody to ask. WriteKnowledgeTool
+   * refuses a retype onto a held coordinate before queueing it; this is for an
+   * edge that lands there after the tool looked, and for any other writer.
+   *
+   * Every owner's edges count: the index is not scoped to an owner.
+   */
+  private async assertCoordinateFree(
+    ownerUserId: string,
+    row: RelationshipEntity,
+    target: { fromEntityId: string; toEntityId: string; relationshipType: string },
+  ): Promise<void> {
+    // An active row already holds its own coordinate, so no other row can.
+    const staysPut =
+      row.is_active &&
+      row.from_entity_id === target.fromEntityId &&
+      row.to_entity_id === target.toEntityId &&
+      row.relationship_type === target.relationshipType;
+
+    if (staysPut) {
+      return;
+    }
+
+    const holder = await this.relationshipRepo.findOne({
+      where: {
+        from_entity_id: target.fromEntityId,
+        to_entity_id: target.toEntityId,
+        relationship_type: target.relationshipType,
+        is_active: true,
+      },
+    });
+
+    if (!holder) {
+      return;
+    }
+
+    throw new Error(
+      `Relationship ${row.relationship_id} cannot become ${target.fromEntityId} ` +
+        `-[${target.relationshipType}]-> ${target.toEntityId}: ` +
+        (holder.owner_user_id === ownerUserId
+          ? `relationship ${holder.relationship_id} is already the active edge there`
+          : `the active edge there does not belong to owner ${ownerUserId}`),
+    );
   }
 
   /**

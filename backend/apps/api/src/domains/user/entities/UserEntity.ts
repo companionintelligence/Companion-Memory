@@ -49,7 +49,8 @@ export class UserEntity {
    * When the password was last chosen by the user, or null for one they have
    * never seen (a random password from Portal, OIDC or Hub-bridge provisioning).
    * Read by `AccountController.requireReauth`: only a password the user knows
-   * can be asked for.
+   * can be asked for. Null is also the whole of its exemption from being asked, so
+   * anything that writes a password a person knows must stamp this too.
    */
   @Column({ type: 'timestamptz', name: 'password_set_at', nullable: true })
   passwordSetAt?: Date | null;

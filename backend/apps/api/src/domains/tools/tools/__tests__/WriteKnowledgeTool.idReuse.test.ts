@@ -182,6 +182,11 @@ function makePipeline(seed: { nodes?: GraphNodeEntity[]; edges?: RelationshipEnt
       (owner: string, edge: Parameters<GraphUtilityService['findActiveRelationship']>[1]) =>
         graphUtility.findActiveRelationship(owner, edge),
     ),
+    // Likewise the real linked-key lookup.
+    findLinkedKeyHolder: jest.fn(
+      (owner: string, key: Parameters<GraphUtilityService['findLinkedKeyHolder']>[1]) =>
+        graphUtility.findLinkedKeyHolder(owner, key),
+    ),
   };
 
   const tool = new WriteKnowledgeTool(
@@ -962,5 +967,456 @@ describe('memory.remember — relationship.update', () => {
       properties: { since: '2019', last_contact: '2026-09-01', context: 'dentist' },
     });
     expect(graph.edges.get(EDGE)?.properties).not.toHaveProperty('source');
+  });
+});
+
+describe('memory.remember — relationship.update retyping onto a type the two entities already have', () => {
+  // A retype moves the edge to another (from, to, type) coordinate. When an
+  // active edge already held it, the queued write died on
+  // relationships_unique_directed_idx and the job dead-lettered — after the tool
+  // had answered "Updated relationship". This table enforces no index; the
+  // Postgres half is in WriteKnowledgeTool.importKey.integration.test.ts.
+  const FRIENDS = '0199a1b2-0000-7000-8000-0000000000e2';
+  const endpoints = () => [
+    importedPerson(),
+    entityRow({ entity_id: OTHER, entity_type: 'Person', name: 'Sam' }),
+  ];
+  const friendsEdge = (overrides: Partial<RelationshipEntity> = {}) =>
+    knowsEdge({
+      relationship_id: FRIENDS,
+      relationship_type: 'FRIENDS_WITH',
+      properties: { met: 'school' },
+      strength: 0.8,
+      ...overrides,
+    });
+
+  it('refuses the retype, names the edge already there and what to do instead, and queues nothing', async () => {
+    const graph = makePipeline({ nodes: endpoints(), edges: [knowsEdge(), friendsEdge()] });
+
+    const result = await graph.tool.execute(CONTEXT, {
+      operations: [
+        {
+          kind: 'relationship.update',
+          relationshipId: EDGE,
+          relationshipType: 'friends with',
+          properties: { context: 'dentist' },
+        },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ updatedRelationships: 0, failures: 1 });
+    expect(result.data?.results[0]).toEqual({
+      kind: 'relationship.update',
+      status: 'failed',
+      message:
+        `Relationship ${EDGE} cannot become FRIENDS_WITH: relationship ${FRIENDS} already is one between the ` +
+        `same entities. Update ${FRIENDS} instead, and forget ${EDGE} (memory.forget) if the KNOWS ` +
+        'relationship no longer holds.',
+      relationshipId: EDGE,
+    });
+    expect(graph.queue).toHaveLength(0);
+    expect(graph.edges.get(EDGE)).toEqual(knowsEdge());
+    expect(graph.edges.get(FRIENDS)).toEqual(friendsEdge());
+  });
+
+  it('dry run reports the refusal, not an update', async () => {
+    const graph = makePipeline({ nodes: endpoints(), edges: [knowsEdge(), friendsEdge()] });
+
+    const result = await graph.tool.execute(CONTEXT, {
+      dryRun: true,
+      operations: [{ kind: 'relationship.update', relationshipId: EDGE, relationshipType: 'FRIENDS_WITH' }],
+    });
+
+    expect(result.data).toMatchObject({ dryRun: true, updatedRelationships: 0, failures: 1 });
+    expect(result.data?.results[0].message).toContain(`relationship ${FRIENDS} already is one`);
+  });
+
+  it('counts a bidirectional edge stored the other way round only when the retyped edge is bidirectional too', async () => {
+    // The same match relationship.create makes when it looks for the edge a
+    // restatement lands on.
+    const reversed = friendsEdge({ from_entity_id: OTHER, to_entity_id: PERSON, is_bidirectional: true });
+
+    const both = makePipeline({
+      nodes: endpoints(),
+      edges: [knowsEdge({ is_bidirectional: true }), reversed],
+    });
+    const refused = await both.run({
+      operations: [{ kind: 'relationship.update', relationshipId: EDGE, relationshipType: 'FRIENDS_WITH' }],
+    });
+    expect(refused.data).toMatchObject({ updatedRelationships: 0, failures: 1 });
+    expect(both.edges.get(EDGE)?.relationship_type).toBe('KNOWS');
+
+    // One-way PERSON -> OTHER is not the OTHER <-> PERSON stored, and it is on a
+    // coordinate of its own, so the index has nothing to refuse either.
+    const oneWay = makePipeline({ nodes: endpoints(), edges: [knowsEdge(), reversed] });
+    const retyped = await oneWay.run({
+      operations: [{ kind: 'relationship.update', relationshipId: EDGE, relationshipType: 'FRIENDS_WITH' }],
+    });
+    expect(retyped.data).toMatchObject({ updatedRelationships: 1, failures: 0 });
+    expect(oneWay.edges.get(EDGE)).toMatchObject({
+      relationship_type: 'FRIENDS_WITH',
+      is_bidirectional: false,
+    });
+    expect(oneWay.edges.get(FRIENDS)).toEqual(reversed);
+  });
+
+  it('retypes onto a type only a forgotten edge has, and leaves that edge forgotten', async () => {
+    const graph = makePipeline({
+      nodes: endpoints(),
+      edges: [knowsEdge(), friendsEdge({ is_active: false })],
+    });
+
+    const result = await graph.run({
+      operations: [
+        {
+          kind: 'relationship.update',
+          relationshipId: EDGE,
+          relationshipType: 'FRIENDS_WITH',
+          properties: { context: 'dentist' },
+        },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ updatedRelationships: 1, failures: 0 });
+    expect(graph.edges.get(EDGE)).toMatchObject({
+      relationship_type: 'FRIENDS_WITH',
+      strength: 0.4,
+      properties: { since: '2019', source: 'google-contacts', context: 'dentist' },
+    });
+    expect(graph.edges.get(FRIENDS)).toEqual(friendsEdge({ is_active: false }));
+  });
+
+  it('only looks for an edge in the way when the type really changes', async () => {
+    const graph = makePipeline({ nodes: endpoints(), edges: [knowsEdge(), friendsEdge()] });
+
+    const result = await graph.run({
+      operations: [
+        { kind: 'relationship.update', relationshipId: EDGE, relationshipType: 'knows', strength: 0.5 },
+        { kind: 'relationship.update', relationshipId: EDGE, properties: { context: 'dentist' } },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ updatedRelationships: 2, failures: 0 });
+    expect(graph.graphQuery.findActiveRelationship).not.toHaveBeenCalled();
+    expect(graph.edges.get(EDGE)).toMatchObject({ relationship_type: 'KNOWS', strength: 0.5 });
+  });
+
+  it('an edge that takes the type after the tool looked stops the write with a legible error, not the index', async () => {
+    // The tool's check and the write are on either side of the queue. An edge
+    // landing in between is caught by the write's own check, which names it
+    // and saves nothing.
+    const graph = makePipeline({ nodes: endpoints(), edges: [knowsEdge()] });
+
+    const result = await graph.tool.execute(CONTEXT, {
+      operations: [
+        {
+          kind: 'relationship.update',
+          relationshipId: EDGE,
+          relationshipType: 'FRIENDS_WITH',
+          properties: { context: 'dentist' },
+        },
+      ],
+    });
+    expect(result.data).toMatchObject({ updatedRelationships: 1, failures: 0 });
+
+    graph.edges.seed(friendsEdge());
+    await expect(graph.flush()).rejects.toThrow(
+      `Relationship ${EDGE} cannot become ${PERSON} -[FRIENDS_WITH]-> ${OTHER}: ` +
+        `relationship ${FRIENDS} is already the active edge there`,
+    );
+    expect(graph.edges.get(EDGE)).toEqual(knowsEdge());
+    expect(graph.edges.get(FRIENDS)).toEqual(friendsEdge());
+  });
+});
+
+describe('memory.remember — entity.update onto a linked key another entity holds', () => {
+  // A retype or a re-key moves the entity to another (entity_type, linked_table,
+  // linked_id), and entities_linked_uniq allows one of the owner's rows on each,
+  // active or not. A contact card filed once as a Concept and once as a Person
+  // leaves twins on one linked key, so "this Concept is really a Person" queued a
+  // write that died on the index, and the job dead-lettered — after the tool had
+  // answered "Updated entity". This table enforces no index; the Postgres half is
+  // in WriteKnowledgeTool.importKey.integration.test.ts.
+  const CONCEPT = '0199a1b2-0000-7000-8000-000000000005';
+  const HELD = `the Person linked to import:google-contacts record ${LINKED_ID}`;
+
+  /** The Concept an older parser filed Alex's card as, on the imported Person's linked key. */
+  const conceptTwin = (overrides: Partial<GraphNodeEntity> = {}) =>
+    entityRow({
+      entity_id: CONCEPT,
+      entity_type: 'Concept',
+      name: 'Alex Rivera',
+      linked_table: 'import:google-contacts',
+      linked_id: LINKED_ID,
+      properties: { source: 'vcard' },
+      ...overrides,
+    });
+
+  it('refuses the retype, names the entity already there and what to do instead, and queues nothing', async () => {
+    const graph = makePipeline({ nodes: [importedPerson(), conceptTwin()] });
+
+    const result = await graph.tool.execute(CONTEXT, {
+      operations: [
+        {
+          kind: 'entity.update',
+          entityId: CONCEPT,
+          entityType: 'Person',
+          properties: { occupation: 'dentist' },
+        },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ updatedNodes: 0, failures: 1 });
+    expect(result.data?.results[0]).toEqual({
+      kind: 'entity.update',
+      status: 'failed',
+      message:
+        `Entity ${CONCEPT} cannot become ${HELD}: entity ${PERSON} already is. Update ${PERSON} instead, and ` +
+        `forget ${CONCEPT} (memory.forget) if it is a duplicate of ${PERSON}.`,
+      entityId: CONCEPT,
+    });
+    expect(graph.queue).toHaveLength(0);
+    expect(graph.nodes.get(CONCEPT)).toEqual(conceptTwin());
+    expect(graph.nodes.get(PERSON)).toEqual(importedPerson());
+  });
+
+  it('dry run reports the refusal, not an update', async () => {
+    const graph = makePipeline({ nodes: [importedPerson(), conceptTwin()] });
+
+    const result = await graph.tool.execute(CONTEXT, {
+      dryRun: true,
+      operations: [{ kind: 'entity.update', entityId: CONCEPT, entityType: 'Person' }],
+    });
+
+    expect(result.data).toMatchObject({ dryRun: true, updatedNodes: 0, failures: 1 });
+    expect(result.data?.results[0].message).toContain(`entity ${PERSON} already is`);
+  });
+
+  it("refuses a re-key onto another entity's linked key the same way", async () => {
+    const unlinked = entityRow({ entity_id: OTHER, entity_type: 'Person', name: 'Alex R.' });
+    const graph = makePipeline({ nodes: [importedPerson(), unlinked] });
+
+    const result = await graph.run({
+      operations: [
+        {
+          kind: 'entity.update',
+          entityId: OTHER,
+          linkedTable: 'import:google-contacts',
+          linkedId: LINKED_ID,
+        },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ updatedNodes: 0, failures: 1 });
+    expect(result.data?.results[0].message).toBe(
+      `Entity ${OTHER} cannot become ${HELD}: entity ${PERSON} already is. Update ${PERSON} instead, and ` +
+        `forget ${OTHER} (memory.forget) if it is a duplicate of ${PERSON}.`,
+    );
+    expect(graph.nodes.get(OTHER)).toEqual(unlinked);
+  });
+
+  it('refuses the key while a forgotten or merged-away entity holds it, and says so', async () => {
+    const forgotten = { ...importedPerson(), is_active: false };
+    const graph = makePipeline({ nodes: [forgotten, conceptTwin()] });
+
+    const result = await graph.run({
+      operations: [{ kind: 'entity.update', entityId: CONCEPT, entityType: 'Person' }],
+    });
+
+    expect(result.data).toMatchObject({ updatedNodes: 0, failures: 1 });
+    expect(result.data?.results[0].message).toBe(
+      `Entity ${CONCEPT} cannot become ${HELD}: entity ${PERSON} still is, although it has been forgotten or ` +
+        'merged into another entity.',
+    );
+    expect(graph.nodes.get(CONCEPT)).toEqual(conceptTwin());
+  });
+
+  it('retypes the entity when no other entity holds that key, and keeps the key', async () => {
+    const graph = makePipeline({ nodes: [conceptTwin()] });
+
+    const result = await graph.run({
+      operations: [{ kind: 'entity.update', entityId: CONCEPT, entityType: 'Person', properties: { a: 1 } }],
+    });
+
+    expect(result.data).toMatchObject({ updatedNodes: 1, failures: 0 });
+    expect(graph.nodes.get(CONCEPT)).toMatchObject({
+      entity_type: 'Person',
+      linked_table: 'import:google-contacts',
+      linked_id: LINKED_ID,
+      properties: { source: 'vcard', a: 1 },
+    });
+  });
+
+  it('only looks for an entity in the way when the type or the linked key really changes', async () => {
+    const graph = makePipeline({ nodes: [importedPerson(), conceptTwin()] });
+
+    const result = await graph.run({
+      operations: [
+        { kind: 'entity.update', entityId: CONCEPT, entityType: 'concept', properties: { a: 1 } },
+        {
+          kind: 'entity.update',
+          entityId: CONCEPT,
+          linkedTable: 'import:google-contacts',
+          linkedId: LINKED_ID,
+        },
+        { kind: 'entity.update', entityId: CONCEPT, name: 'Alex' },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ updatedNodes: 3, failures: 0 });
+    expect(graph.graphQuery.findLinkedKeyHolder).not.toHaveBeenCalled();
+    expect(graph.nodes.get(CONCEPT)).toMatchObject({
+      entity_type: 'Concept',
+      name: 'Alex',
+      linked_id: LINKED_ID,
+      properties: { source: 'vcard', a: 1 },
+    });
+  });
+
+  it('an entity that takes the key after the tool looked stops the write with a legible error, not the index', async () => {
+    // The tool's check and the write are on either side of the queue. An
+    // entity landing on the key in between is caught by the write's own check,
+    // which names it and saves nothing.
+    const graph = makePipeline({ nodes: [conceptTwin()] });
+
+    const result = await graph.tool.execute(CONTEXT, {
+      operations: [
+        {
+          kind: 'entity.update',
+          entityId: CONCEPT,
+          entityType: 'Person',
+          properties: { occupation: 'dentist' },
+        },
+      ],
+    });
+    expect(result.data).toMatchObject({ updatedNodes: 1, failures: 0 });
+
+    graph.nodes.seed(importedPerson());
+    await expect(graph.flush()).rejects.toThrow(
+      `Entity ${CONCEPT} cannot become ${HELD}: entity ${PERSON} already is`,
+    );
+    expect(graph.nodes.get(CONCEPT)).toEqual(conceptTwin());
+    expect(graph.nodes.get(PERSON)).toEqual(importedPerson());
+  });
+});
+
+describe('memory.remember — entity.create onto a linked key another entity holds', () => {
+  // The same index, reached by the other node write: an insert on a key already
+  // held, or an id-reuse create that re-keys its row.
+  const HELD = `the Person linked to import:google-contacts record ${LINKED_ID}`;
+
+  it('refuses a new entity on the key, names the entity holding it, and queues nothing', async () => {
+    const graph = makePipeline({ nodes: [importedPerson()] });
+
+    const result = await graph.run({
+      operations: [
+        {
+          kind: 'entity.create',
+          entityType: 'Person',
+          name: 'Alex R.',
+          linkedTable: 'import:google-contacts',
+          linkedId: LINKED_ID,
+        },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ createdNodes: 0, updatedNodes: 0, failures: 1 });
+    expect(result.data?.results[0]).toEqual({
+      kind: 'entity.create',
+      status: 'failed',
+      message:
+        `Cannot create ${HELD}: entity ${PERSON} already is. Update ${PERSON} instead, or leave out linkedTable ` +
+        'and linkedId to create a separate entity.',
+    });
+    expect(graph.queue).toHaveLength(0);
+    expect(graph.nodes.all()).toEqual([importedPerson()]);
+  });
+
+  it('says so when the entity holding the key is forgotten or merged away', async () => {
+    const graph = makePipeline({ nodes: [{ ...importedPerson(), is_active: false }] });
+
+    const result = await graph.run({
+      operations: [
+        {
+          kind: 'entity.create',
+          entityType: 'Person',
+          linkedTable: 'import:google-contacts',
+          linkedId: LINKED_ID,
+        },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ createdNodes: 0, failures: 1 });
+    expect(result.data?.results[0].message).toBe(
+      `Cannot create ${HELD}: entity ${PERSON} still is, although it has been forgotten or merged into another ` +
+        'entity. Leave out linkedTable and linkedId to create a separate entity.',
+    );
+    expect(graph.nodes.all()).toHaveLength(1);
+  });
+
+  it('refuses an id-reuse create that would move its entity onto the key', async () => {
+    const unlinked = entityRow({ entity_id: OTHER, entity_type: 'Person', name: 'Alex R.' });
+    const graph = makePipeline({ nodes: [importedPerson(), unlinked] });
+
+    const result = await graph.run({
+      operations: [
+        {
+          kind: 'entity.create',
+          entityId: OTHER,
+          entityType: 'Person',
+          linkedTable: 'import:google-contacts',
+          linkedId: LINKED_ID,
+          relationships: [{ toEntityId: PERSON, relationshipType: 'KNOWS' }],
+        },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ updatedNodes: 0, createdRelationships: 0, failures: 1 });
+    expect(result.data?.results[0]).toMatchObject({
+      status: 'failed',
+      message: expect.stringContaining(`Entity ${OTHER} cannot become ${HELD}: entity ${PERSON} already is.`),
+      entityId: OTHER,
+    });
+    expect(graph.queue).toHaveLength(0);
+    expect(graph.nodes.get(OTHER)).toEqual(unlinked);
+  });
+
+  it('creates an entity on a key nobody holds, and restating a key the entity already holds is not a move', async () => {
+    const graph = makePipeline();
+
+    const created = await graph.run({
+      operations: [
+        {
+          kind: 'entity.create',
+          entityId: FRESH,
+          entityType: 'Person',
+          name: 'Alex Rivera',
+          linkedTable: 'import:google-contacts',
+          linkedId: LINKED_ID,
+        },
+      ],
+    });
+    const restated = await graph.run({
+      operations: [
+        {
+          kind: 'entity.create',
+          entityId: FRESH,
+          entityType: 'Person',
+          linkedTable: 'import:google-contacts',
+          linkedId: LINKED_ID,
+          properties: { occupation: 'dentist' },
+        },
+      ],
+    });
+
+    expect(created.data).toMatchObject({ createdNodes: 1, failures: 0 });
+    expect(restated.data).toMatchObject({ updatedNodes: 1, failures: 0 });
+    expect(graph.nodes.all()).toEqual([
+      expect.objectContaining({
+        entity_id: FRESH,
+        linked_id: LINKED_ID,
+        properties: { occupation: 'dentist' },
+      }),
+    ]);
   });
 });

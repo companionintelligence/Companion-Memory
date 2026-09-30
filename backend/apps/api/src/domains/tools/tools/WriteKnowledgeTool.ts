@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
 import { LoggerService } from '@ci/common/logging';
-import { GraphEventService, GraphQueryService, type RelationshipEntity } from '@ci/domains/memory';
+import {
+  GraphEventService,
+  type GraphNodeEntity,
+  GraphQueryService,
+  type RelationshipEntity,
+} from '@ci/domains/memory';
 
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
@@ -142,10 +147,7 @@ function unstorableTypeMessage(requested: string): string {
  * which the stored one reversed is not (see GraphUtilityService.findActiveRelationship).
  */
 function isSameEdge(
-  edge: Pick<
-    RelationshipEntity,
-    'from_entity_id' | 'to_entity_id' | 'relationship_type' | 'is_bidirectional'
-  >,
+  edge: Pick<RelationshipEntity, 'from_entity_id' | 'to_entity_id' | 'relationship_type' | 'is_bidirectional'>,
   fromEntityId: string,
   toEntityId: string,
   relationshipType: string,
@@ -165,6 +167,41 @@ function isSameEdge(
     edge.from_entity_id === toEntityId &&
     edge.to_entity_id === fromEntityId
   );
+}
+
+/** Where `entities_linked_uniq` puts an entity: its type, linked table and linked id. */
+type LinkedKey = Parameters<GraphQueryService['findLinkedKeyHolder']>[1];
+
+/**
+ * Why a node write is refused: `occupant` already has the linked key it would
+ * give an entity. `entityId` names the entity the write would move there, and is
+ * absent when the write would create one.
+ */
+function linkedKeyHeldMessage(
+  entityId: string | undefined,
+  key: LinkedKey,
+  occupant: Pick<GraphNodeEntity, 'entity_id' | 'is_active'>,
+): string {
+  const place = `the ${key.entityType} linked to ${key.linkedTable} record ${key.linkedId}`;
+  const refused = entityId ? `Entity ${entityId} cannot become ${place}` : `Cannot create ${place}`;
+
+  // A forgotten or merged-away entity cannot be updated through this tool, and
+  // it still holds its key.
+  if (!occupant.is_active) {
+    const stillHeld =
+      `${refused}: entity ${occupant.entity_id} still is, although it has been forgotten or merged into ` +
+      'another entity.';
+
+    return entityId
+      ? stillHeld
+      : `${stillHeld} Leave out linkedTable and linkedId to create a separate entity.`;
+  }
+
+  return entityId
+    ? `${refused}: entity ${occupant.entity_id} already is. Update ${occupant.entity_id} instead, and forget ` +
+        `${entityId} (memory.forget) if it is a duplicate of ${occupant.entity_id}.`
+    : `${refused}: entity ${occupant.entity_id} already is. Update ${occupant.entity_id} instead, or leave out ` +
+        'linkedTable and linkedId to create a separate entity.';
 }
 
 interface OperationResultSummary {
@@ -364,6 +401,26 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
             const entityType = existing?.entity_type ?? operation.entityType;
             const knownName = operation.name ?? existing?.name ?? undefined;
 
+            // The other door onto entities_linked_uniq (see entity.update): a new
+            // entity on a linked key another entity holds, or an id-reuse create
+            // that re-keys its row onto one, failed after this tool had answered.
+            const linkedKey = {
+              entityType,
+              linkedTable: operation.linkedTable ?? existing?.linked_table ?? null,
+              linkedId: operation.linkedId ?? existing?.linked_id ?? null,
+            };
+            const occupant = await this.findLinkedKeyOccupant(ownerId, existing, linkedKey);
+            if (occupant) {
+              results.push({
+                kind: operation.kind,
+                status: 'failed',
+                message: linkedKeyHeldMessage(existing?.entity_id, linkedKey, occupant),
+                entityId: existing?.entity_id,
+              });
+              failures += 1;
+              break;
+            }
+
             if (dryRun) {
               rememberName(entityType, knownName, operation.entityId ?? 'dry-run');
               if (existing) {
@@ -459,6 +516,34 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
               break;
             }
 
+            // A retype or a re-key moves the entity to another (entity_type,
+            // linked_table, linked_id), and entities_linked_uniq allows one of
+            // the owner's rows on each, a forgotten or merged-away one included:
+            // when another is already there the write fails after this tool has
+            // answered, and the job dead-letters. A card imported once as a
+            // Concept and once as a Person leaves twins on one linked key, so
+            // "this Concept is really a Person" is exactly that write. The two
+            // are not merged here — that would retire one of them, which is
+            // memory.forget's to do, behind its own confirmation — so say which
+            // entity is in the way and leave the choice to the caller.
+            const entityType = keepStoredSpelling(existing.entity_type, operation.entityType);
+            const linkedKey = {
+              entityType,
+              linkedTable: operation.linkedTable ?? existing.linked_table,
+              linkedId: operation.linkedId ?? existing.linked_id,
+            };
+            const occupant = await this.findLinkedKeyOccupant(ownerId, existing, linkedKey);
+            if (occupant) {
+              results.push({
+                kind: operation.kind,
+                status: 'failed',
+                message: linkedKeyHeldMessage(existing.entity_id, linkedKey, occupant),
+                entityId: operation.entityId,
+              });
+              failures += 1;
+              break;
+            }
+
             if (dryRun) {
               results.push({
                 kind: operation.kind,
@@ -477,7 +562,7 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
             // refresh, a person merge, the planner — changed in the meantime.
             const { entityId } = await this.graphEvents.upsertNode(ownerId, {
               entityId: operation.entityId,
-              entityType: keepStoredSpelling(existing.entity_type, operation.entityType),
+              entityType,
               name: operation.name,
               description: operation.description,
               properties: operation.properties,
@@ -727,6 +812,41 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
               relationshipType = stored;
             }
 
+            // A retype moves the edge to another (from, to, type) coordinate,
+            // and relationships_unique_directed_idx allows one active edge on
+            // each: when another is already there the write fails after this
+            // tool has answered, and the job dead-letters. The two are not
+            // merged here — that would retire this edge, which is
+            // memory.forget's to do, behind its own confirmation — so say
+            // which edge is in the way and leave the choice to the caller.
+            // The coordinate is matched as relationship.create matches it, so
+            // a bidirectional edge the other way round counts when the
+            // retyped edge is bidirectional too.
+            const nextType = keepStoredSpelling(existingRel.relationship_type, relationshipType);
+            if (nextType !== existingRel.relationship_type) {
+              const occupant = await this.graphQuery.findActiveRelationship(ownerId, {
+                fromEntityId: existingRel.from_entity_id,
+                toEntityId: existingRel.to_entity_id,
+                relationshipType: nextType,
+                isBidirectional: operation.isBidirectional ?? existingRel.is_bidirectional,
+              });
+
+              if (occupant) {
+                results.push({
+                  kind: operation.kind,
+                  status: 'failed',
+                  message:
+                    `Relationship ${existingRel.relationship_id} cannot become ${nextType}: relationship ` +
+                    `${occupant.relationship_id} already is one between the same entities. Update ` +
+                    `${occupant.relationship_id} instead, and forget ${existingRel.relationship_id} ` +
+                    `(memory.forget) if the ${existingRel.relationship_type} relationship no longer holds.`,
+                  relationshipId: operation.relationshipId,
+                });
+                failures += 1;
+                break;
+              }
+            }
+
             if (dryRun) {
               results.push({
                 kind: operation.kind,
@@ -744,7 +864,7 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
               relationshipId: operation.relationshipId,
               fromEntityId: existingRel.from_entity_id,
               toEntityId: existingRel.to_entity_id,
-              relationshipType: keepStoredSpelling(existingRel.relationship_type, relationshipType),
+              relationshipType: nextType,
               properties: operation.properties,
               mergeProperties: operation.mergeProperties !== false,
               removeProperties: operation.removeProperties,
@@ -781,6 +901,31 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
       updatedRelationships,
       failures,
     };
+  }
+
+  /**
+   * The other entity already holding the linked key a node write would give an
+   * entity. `existing` is the entity the write lands on, or `null` for a new
+   * one: an entity that keeps its key collides with nothing. Only a key
+   * `entities_linked_uniq` holds — one with a linked table and a linked id — can
+   * collide, so the common write, carrying neither, is never looked up.
+   */
+  private async findLinkedKeyOccupant(
+    ownerId: string,
+    existing: GraphNodeEntity | null,
+    key: LinkedKey,
+  ): Promise<GraphNodeEntity | null> {
+    if (key.linkedTable == null || key.linkedId == null) {
+      return null;
+    }
+
+    const keepsItsKey =
+      existing !== null &&
+      existing.entity_type === key.entityType &&
+      existing.linked_table === key.linkedTable &&
+      existing.linked_id === key.linkedId;
+
+    return keepsItsKey ? null : this.graphQuery.findLinkedKeyHolder(ownerId, key);
   }
 
   private async resolveEndpoint(

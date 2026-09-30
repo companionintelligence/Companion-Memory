@@ -472,20 +472,22 @@ Per-method `JwtOrApiKeyAuthGuard`. **No longer a thin proxy.** Generation is a d
 
 ## Account, identity & device surfaces
 
-### `AccountController` — `account` · `domains/auth/controllers/AccountController.ts:79`
+### `AccountController` — `account` · `domains/auth/controllers/AccountController.ts:85`
 
 | Verb   | Path                | Auth                                                                     | Purpose                                                                                                                                        |
 | ------ | ------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| DELETE | `/account`          | `JwtOrApiKeyAuthGuard` + `@RequireCapability(FULL_CAPABILITY)` (`:143`) | Delete the authenticated account: revoke access now, purge the data later. **204**. Body `{ confirmEmail }` — the account's own email retyped. |
-| GET    | `/account`          | `JwtAuthGuard` — session only (`:90`)                                    | `{ email, hasFederatedIdentity, hasOwnPassword }` for the settings page.                                                                       |
-| PATCH  | `/account/email`    | `JwtAuthGuard` — session only (`:176`)                                   | Body `{ newEmail, currentPassword? }` → `{ email }`, after re-authentication (`requireReauth`).                                                 |
-| PATCH  | `/account/password` | `JwtAuthGuard` — session only (`:210`)                                   | Body `{ newPassword, currentPassword? }` → **204**, after re-authentication; every other session of the account is signed out.                 |
+| DELETE | `/account`          | `JwtOrApiKeyAuthGuard` + `@RequireCapability(FULL_CAPABILITY)` (`:158`) | Delete the authenticated account: revoke access now, purge the data later. **204**. Body `{ confirmEmail }` — the account's own email retyped. |
+| GET | `/account` | `JwtAuthGuard` — session only (`:98`) | What the settings page renders from: `{ email, hasFederatedIdentity, hasOwnPassword, emailManagedByHub }`. |
+| PATCH | `/account/email` | `JwtAuthGuard` — session only (`:201`) | Body `{ newEmail, currentPassword? }` → `{ email }`, after re-authentication (below). **409** first, whatever the proof, while the Hub signs the request in as this account (`emailManagedByHub`): the forward-auth bridge finds a Hub person's account by this address alone, so a change would sign them into a new, empty account on their next page load. |
+| PATCH | `/account/password` | `JwtAuthGuard` — session only (`:240`) | Body `{ newPassword, currentPassword? }` → **204**, after re-authentication (below); every other session of the account is signed out. |
 
 Deletion is the only route here an API key can reach, and deliberately so. The native app never holds a JWT (it trades one for a durable API key at login), so a JWT-only route is unreachable from exactly the App Store build the store requirement is about. #2743 made that mistake, and until the fix every phone got **401** on deletion. The credential routes stay session-only: a key must never change the credentials it hangs off. Deletion is not a credential change, because it hands the key holder nothing that outlives the key.
 
 Which keys may delete: only an unscoped key at **`full`**, which is what the native app mints (`useAuth.ts`, #2661). A `write` or `read` key gets **403**. `write` is defined as "nothing that deletes" and is the default for every new key, so this also catches a phone that signed in before #2661; signing in again mints it a `full` key. A scope-limited key gets **403** from deny-by-default scope enforcement. A CI-Hub connect key (`managed_by = 'connect'`) gets **403** from the handler even at `full`: for a harness, `full` means it may *ask* to delete through an approval card, and this route has no card to raise. `AccountController.guards.test.ts` pins all of this against the real guards and passport strategies.
 
 The confirmation is the **email**, not the password: OIDC-provisioned accounts are given a random password the user has never seen, so requiring it would make deletion impossible for them.
+
+**Re-authentication** (`requireReauth`) keys on `users.password_set_at` alone, which records a password the user chose: signup, every password change, and the `make userpw` / `make testuser` scripts stamp it. With it set, `currentPassword` is required (**400** if absent, **401** if wrong). Without it, the account holds the random password Portal/OIDC or Hub-bridge provisioning gave it, which nobody has seen. It must instead present a session cookie established within the last ten minutes, else **401** `REAUTH_REQUIRED`. Whether a federated identity is bound does not enter into it — until 2026-09-30 an account with none was asked for its password regardless, which locked out every account the Hub bridge created. The ones it created before `password_set_at` existed still are: that migration's backfill stamped every account without a federated identity, theirs included, and nothing now tells them from a signup account, so an operator password reset (`scripts/change-password.ts`, `make userpw`) is the only way out.
 
 ### `AccountDataController` — `account` · `domains/auth/controllers/AccountDataController.ts:55`
 
