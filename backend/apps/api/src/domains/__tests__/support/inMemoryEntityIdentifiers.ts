@@ -11,15 +11,16 @@
  * `writes` being empty, not an inference from mocks.
  *
  * It answers only the statements the service issues: the insert builder,
- * `find` / `findOne` / `update` / `delete` on plain column equality, and the
- * `(kind, value_normalized) IN (...)` lookup behind
- * `findEntityIdsByIdentifiers`. Anything else throws rather than being answered
- * wrongly.
+ * `find` / `findOne` / `update` / `delete` on column equality or `In(...)` (as
+ * `listForEntities` passes it), and the `(kind, value_normalized) IN (...)`
+ * lookup behind `findEntityIdsByIdentifiers`. Anything else throws rather than
+ * being answered wrongly.
  *
  * Here rather than in the graph domain because the person resolver's specs need
  * it as much as the service's, and shared test machinery lives above the
  * domains (see `.dependency-cruiser.mjs`, `no-cross-domain-internals`).
  */
+import { FindOperator } from 'typeorm';
 
 export interface EntityIdentifierRow {
   ownerUserId: string;
@@ -45,13 +46,19 @@ const tupleOf = (row: { ownerUserId: string; kind: string; valueNormalized: stri
 
 function matches(row: EntityIdentifierRow, criteria: Criteria): boolean {
   return Object.entries(criteria).every(([column, expected]) => {
+    const actual = (row as unknown as Record<string, unknown>)[column];
+
+    if (expected instanceof FindOperator && expected.type === 'in' && Array.isArray(expected.value)) {
+      return (expected.value as unknown[]).includes(actual);
+    }
+
     if (expected !== null && typeof expected === 'object') {
-      // A TypeORM FindOperator (In, Not, ...): not modelled, so refuse it
-      // instead of comparing an object by identity and matching nothing.
+      // Any other operator (Not, Like, ...) is not modelled: refuse it instead
+      // of comparing an object by identity and matching nothing.
       throw new Error(`in-memory ci.entity_identifiers: unsupported criteria on "${column}"`);
     }
 
-    return (row as unknown as Record<string, unknown>)[column] === expected;
+    return actual === expected;
   });
 }
 

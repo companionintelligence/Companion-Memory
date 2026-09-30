@@ -375,6 +375,8 @@ export class PersonResolver {
       // refusing then would keep the contact changes, skip the name /
       // description / address patch below, and leave Cancel on the error
       // unable to bring back a number the user edited into the claimed value.
+      // Check exactly the list replaceForEntity is given: a value filtered out
+      // of it is never written, so it cannot conflict.
       const claimed = await this.entityIdentifierService.findConflicts(
         serviceContext.userId,
         id,
