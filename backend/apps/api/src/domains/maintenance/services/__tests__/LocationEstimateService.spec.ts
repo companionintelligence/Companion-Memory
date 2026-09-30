@@ -75,7 +75,10 @@ describe('LocationEstimateService.estimateBatch', () => {
         return [{ count: '5' }];
       } // countCandidates
 
-      return [{ event_id: 'a' }, { event_id: 'b' }]; // UPDATE ... RETURNING
+      // The UPDATE's counting CTE, answered the way the driver answers a
+      // SELECT. Not 2: that is the constant `.length` of TypeORM's
+      // `[rows, rowCount]` pair, which is what a bare UPDATE used to report.
+      return [{ count: 3 }];
     });
 
     const res = await service.estimateBatch(USER, {
@@ -84,9 +87,13 @@ describe('LocationEstimateService.estimateBatch', () => {
       sourceSystems: ['calendar', 'uber'],
     });
 
-    expect(res).toEqual({ candidates: 5, estimated: 2 });
+    expect(res).toEqual({ candidates: 5, estimated: 3 });
 
     const [sql, params] = dataSource.query.mock.calls[1] as [string, unknown[]];
+    // The UPDATE sits inside a CTE and the OUTER command is the SELECT that
+    // counts it; with the UPDATE outermost the count reads TypeORM's pair.
+    expect(sql).toMatch(/estimated AS \(\s*UPDATE ci\.events tgt/);
+    expect(sql).toMatch(/RETURNING 1\s*\)\s*SELECT count\(\*\)::int AS count FROM estimated$/);
     // params: [userId, sourceSystems, limit, maxGapSeconds, ESTIMATED_CONFIDENCE, maxGapHours, forced]
     expect(params[0]).toBe(USER);
     expect(params[1]).toEqual(['calendar', 'uber']);
@@ -118,7 +125,7 @@ describe('LocationEstimateService.estimateBatch', () => {
         return [{ count: '3' }];
       }
 
-      return [{ event_id: 'x' }];
+      return [{ count: 1 }];
     });
 
     const res = await service.estimateBatch(USER, {
@@ -141,7 +148,9 @@ describe('LocationEstimateService.estimateBatch', () => {
 
   it('converts a fractional maxGapHours to whole seconds', async () => {
     let call = 0;
-    const { service, dataSource } = makeService(async () => (++call === 1 ? [{ count: '1' }] : []));
+    const { service, dataSource } = makeService(async () =>
+      ++call === 1 ? [{ count: '1' }] : [{ count: 0 }],
+    );
 
     await service.estimateBatch(USER, { limit: 10, maxGapHours: 1.5, sourceSystems: ['calendar'] });
 

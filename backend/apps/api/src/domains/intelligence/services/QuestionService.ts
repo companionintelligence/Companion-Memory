@@ -1260,32 +1260,32 @@ export class QuestionService {
     return true;
   }
 
-  /** Stamp first presentation time on the feed row and bump times_asked on the question. */
+  /**
+   * Stamp first presentation time on the feed row and bump times_asked on the question.
+   *
+   * One statement, so the bump happens exactly when the stamp does and no
+   * result has to be read back to decide it. The two-statement version gated
+   * the bump on `rows[0]?.updated` from a bare `UPDATE … RETURNING`, which
+   * TypeORM returns as the pair `[rows, rowCount]` — `rows[0]` was the rows
+   * array, `.updated` was always undefined, and times_asked never moved.
+   */
   async recordFeedQuestionPresentation(userId: string, questionId: string): Promise<void> {
-    type Row = { updated: boolean };
-    const rows = (await this.dataSource.query(
-      `
-      UPDATE ci.feed_queue
-      SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('lastPresentedAt', to_jsonb(NOW()::text))
-      WHERE user_id = $1
-        AND question_id = $2
-        AND (metadata->>'lastPresentedAt' IS NULL)
-      RETURNING TRUE AS updated;
-      `,
-      [userId, questionId],
-    )) satisfies Array<Row>;
-
-    if (!rows[0]?.updated) {
-      return;
-    }
-
     await this.dataSource.query(
       `
+      WITH presented AS (
+        UPDATE ci.feed_queue
+        SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('lastPresentedAt', to_jsonb(NOW()::text))
+        WHERE user_id = $1
+          AND question_id = $2
+          AND (metadata->>'lastPresentedAt' IS NULL)
+        RETURNING 1
+      )
       UPDATE ci.questions
       SET times_asked = times_asked + 1
-      WHERE question_id = $1;
+      WHERE question_id = $2
+        AND EXISTS (SELECT 1 FROM presented);
       `,
-      [questionId],
+      [userId, questionId],
     );
   }
 
