@@ -65,6 +65,10 @@ export class UpdatePersonInput {
    * Reconciles this person's email/phone identifiers against the list: adds,
    * relabels, and DROPS what is missing. Omit to leave contact methods
    * untouched; send an empty list to clear them.
+   *
+   * A dropped value also leaves the person's own `email`/`emails`/`phone`/
+   * `phones` properties, which the contact list is shown from too. An import's
+   * typed record of a contact card (`Emails`, `Phones`, ...) is never edited.
    */
   @Field(() => [PersonContactInput], { nullable: true })
   contacts?: PersonContactInput[];

@@ -2,6 +2,29 @@ import { normalizeIdentifier } from '@ci/domains/graph';
 
 import type { PersonIdentifierType } from '../types/PersonIdentifierType';
 
+type ContactKind = 'email' | 'phone';
+
+/**
+ * The `properties` keys the person form OWNS — exactly the keys
+ * {@link contactMethodsFromPersonProperties} reads a contact from, so every row
+ * the form shows can be removed through it. `createPerson` writes
+ * `emails`/`phones`; the import push copies a contact's handle into
+ * `email` + `emails` or `phone` + `phones`; a merge unions them; migration
+ * 20260930020117 parks a typed extension number in `phones`.
+ *
+ * An import's typed record of a contact card — `Emails`, `Phones`, `Faxes`,
+ * `Names` — is deliberately NOT owned. It is the source's own words, a
+ * re-import rewrites it, and natural-key repairs read it back as evidence
+ * (20260930020117 proves a truncated phone key from `Phones`), so the form
+ * never edits it.
+ */
+const FORM_CONTACT_KEYS = [
+  { key: 'email', isList: false },
+  { key: 'emails', isList: true },
+  { key: 'phone', isList: false },
+  { key: 'phones', isList: true },
+] as const;
+
 /**
  * Emails and phones already stored on the person row (`properties.email` /
  * `.emails` / `.phone` / `.phones`) but never copied into
@@ -75,6 +98,89 @@ export function mergePersonIdentifiers(
   const extras = fromProperties.filter((row) => !seen.has(`${row.kind}:${row.value}`));
 
   return [...fromIndex, ...extras];
+}
+
+/**
+ * The `properties` patch a person-form save needs besides the identifier
+ * index, or {} when it needs none.
+ *
+ * The form sends its whole contact list, so a contact it showed and no longer
+ * sends was removed — and the row's own copy of it has to go with the index
+ * row. Left behind, `identifiers` shows it again, the next edit re-submits it,
+ * and the identifier backfill re-indexes it. Only the keys the form owns are
+ * edited (see `FORM_CONTACT_KEYS`), and only entries the form showed: a stored
+ * value it never displayed is not the user's to have dropped.
+ *
+ * A value an import still carries is written back by that import's next run.
+ * That is the source restating it, as it re-asserts the index row.
+ */
+export function droppedContactsPatch(
+  person: { email?: string | null; properties?: Record<string, unknown> | null },
+  submitted: ReadonlyArray<{ kind: ContactKind; value: string }>,
+): Record<string, unknown> {
+  const listed = new Set(submitted.map((contact) => contactMatchKey(contact.kind, contact.value)));
+
+  return withoutContacts(person, (matchKey) => !listed.has(matchKey));
+}
+
+/** {@link droppedContactsPatch} for removing ONE contact method (`removePersonIdentifier`). */
+export function removedContactPatch(
+  person: { email?: string | null; properties?: Record<string, unknown> | null },
+  kind: ContactKind,
+  value: string,
+): Record<string, unknown> {
+  const removed = contactMatchKey(kind, value);
+
+  return withoutContacts(person, (matchKey) => matchKey === removed);
+}
+
+/**
+ * How a stored contact and a submitted one are compared: by join key when the
+ * value has one, so "(555) 010-0142" and "555.010.0142" are the same number.
+ * A value with no join key can only be recognised by what was typed, so that is
+ * compared with spacing and letter case forgiven.
+ */
+function contactMatchKey(kind: ContactKind, value: string): string {
+  const joinKey = normalizeIdentifier(kind, value);
+
+  return joinKey != null
+    ? `${kind}:${joinKey}`
+    : `${kind}:typed:${value.trim().replace(/\s+/g, ' ').toLowerCase()}`;
+}
+
+/**
+ * Remove from the form-owned keys every stored entry the Details card shows as
+ * a contact whose match key `isRemoved` accepts. Returns the changed keys only.
+ */
+function withoutContacts(
+  person: { email?: string | null; properties?: Record<string, unknown> | null },
+  isRemoved: (matchKey: string) => boolean,
+): Record<string, unknown> {
+  const props = person.properties ?? {};
+  const patch: Record<string, unknown> = {};
+
+  for (const { key, isList } of FORM_CONTACT_KEYS) {
+    // Egress strips `email` out of the bag and surfaces it as a named field.
+    const stored: unknown = key === 'email' && props.email === undefined ? person.email : props[key];
+    const entries: unknown[] = Array.isArray(stored) ? stored : stored == null ? [] : [stored];
+
+    const kept = entries.filter((entry) => {
+      // Asked of the display itself, so an edit can never disagree with what
+      // the form was seeded from.
+      const [row] = contactMethodsFromPersonProperties({ properties: { [key]: [entry] } });
+
+      return row == null || !isRemoved(contactMatchKey(row.kind as ContactKind, row.rawValue ?? row.value));
+    });
+
+    if (kept.length < entries.length) {
+      // A list stays a list: SQL readers hand `emails`/`phones` straight to
+      // jsonb_array_elements, which rejects a JSON null. A cleared scalar is
+      // null, as a blanked form field is.
+      patch[key] = Array.isArray(stored) || isList ? kept : null;
+    }
+  }
+
+  return patch;
 }
 
 function readContactEntries(value: unknown): Array<{ value: string; label: string | null }> {

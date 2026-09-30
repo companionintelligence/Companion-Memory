@@ -54,7 +54,12 @@ import { UpdatePersonInput } from '../types/UpdatePersonInput';
 import { UpdatePersonPayload } from '../types/UpdatePersonPayload';
 import { memoryRelToGql } from '../utils/lifeGraphRelationships';
 import { Paginator } from '../utils/Paginator';
-import { contactMethodsFromPersonProperties, mergePersonIdentifiers } from '../utils/personContactMethods';
+import {
+  contactMethodsFromPersonProperties,
+  droppedContactsPatch,
+  mergePersonIdentifiers,
+  removedContactPatch,
+} from '../utils/personContactMethods';
 
 /** How long the review-queue query may spend folding deterministic pairs before it answers. */
 const ON_READ_FOLD_BUDGET_MS = 5_000;
@@ -327,7 +332,8 @@ export class PersonResolver {
   // contacts list than what's stored permanently drops the omitted email/phone identifiers, with no
   // restore path. This is the same hard-delete removePersonIdentifier is declared destructive for,
   // reachable through a mutation named like an ordinary update — flagged as the audit's own example
-  // of the bug class this file exists to close.
+  // of the bug class this file exists to close. The omitted values also leave the person's own
+  // email/emails/phone/phones properties (droppedContactsPatch), equally without a restore path.
   @GraphqlPrivacy({ access: 'delete', destructive: true })
   async updatePerson(
     @Context() context: RequestContext,
@@ -347,17 +353,33 @@ export class PersonResolver {
         return { success: false };
       }
 
+      const contacts = input.contacts.map((contact) => ({
+        kind: parseContactKind(contact.kind),
+        value: contact.value,
+        label: contact.label,
+        isPrimary: contact.isPrimary,
+      }));
+
+      // What the user removed: a row the form showed and no longer sends. Read
+      // from the WHOLE submission, never from a list narrowed for the index —
+      // one that leaves out rows the user kept without asserting them (an
+      // untouched property-only contact) would call every such row removed.
+      const dropped = droppedContactsPatch(owned, contacts);
+
       const { conflicts } = await this.entityIdentifierService.replaceForEntity(
         serviceContext.userId,
         id,
         ['email', 'phone'],
-        input.contacts.map((contact) => ({
-          kind: parseContactKind(contact.kind),
-          value: contact.value,
-          label: contact.label,
-          isPrimary: contact.isPrimary,
-        })),
+        contacts,
       );
+
+      // The row keeps its own copies of contact methods, and `identifiers`
+      // shows them: a contact the form dropped has to leave them too, or it is
+      // back on the next read. Written before a conflict is reported, because
+      // the index half of this edit already was.
+      if (Object.keys(dropped).length > 0) {
+        await this.personService.patch(serviceContext, id, { propertiesPatch: dropped });
+      }
 
       this.personIdentifiersLoader.clear(serviceContext, id);
 
@@ -531,7 +553,8 @@ export class PersonResolver {
   // ci.entity_identifiers, a table with no soft-delete column. addPersonIdentifier restores the
   // row only while the (kind, value) tuple is unclaimed, and CommunicationParticipantLinkListener
   // mints a stub Person that claims it on the next inbound communication — after which the only
-  // repair is mergePeople, which is itself destructive and has no unmerge.
+  // repair is mergePeople, which is itself destructive and has no unmerge. An email or phone also
+  // leaves the person's own email/emails/phone/phones properties (removedContactPatch).
   @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removePersonIdentifier(
     @Context() context: RequestContext,
@@ -548,6 +571,16 @@ export class PersonResolver {
     }
 
     await this.entityIdentifierService.removeForEntity(serviceContext.userId, personId, kind, input.value);
+
+    // The person's own copy too, or `identifiers` keeps showing it and the
+    // identifier backfill re-indexes it. See droppedContactsPatch.
+    if (kind !== 'name') {
+      const person = await this.personService.findById(serviceContext, personId);
+      const removed = person ? removedContactPatch(person, kind, input.value) : {};
+      if (Object.keys(removed).length > 0) {
+        await this.personService.patch(serviceContext, personId, { propertiesPatch: removed });
+      }
+    }
 
     this.personIdentifiersLoader.clear(serviceContext, personId);
 
