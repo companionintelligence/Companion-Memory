@@ -7,9 +7,12 @@ import {
   PersonForm,
   composedName,
   emptyPersonDraft,
+  pendingRefusals,
   personDraftFrom,
   personDraftToInput,
+  refusedContactsFrom,
   type PersonDraft,
+  type RefusedContact,
 } from '@/components/PersonForm';
 import { ResponsiveDialog } from '@/components/ResponsiveDialog';
 import { gql, useFragment } from '@/graphql';
@@ -89,6 +92,7 @@ export function EditPersonModal({ personId, open, onClose, onSaved }: Props) {
   const [draft, setDraft] = useState<PersonDraft>(emptyPersonDraft);
   const [nameError, setNameError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [refused, setRefused] = useState<RefusedContact[]>([]);
 
   const { data, loading: loadingPerson } = useQuery(GET_PERSON_FOR_EDIT, {
     variables: { id: personId },
@@ -113,6 +117,7 @@ export function EditPersonModal({ personId, open, onClose, onSaved }: Props) {
     setDraft(personDraftFrom(person));
     setNameError(null);
     setSubmitError(null);
+    setRefused([]);
   }
 
   if (!open && seededFor !== null) {
@@ -133,6 +138,7 @@ export function EditPersonModal({ personId, open, onClose, onSaved }: Props) {
 
     setNameError(null);
     setSubmitError(null);
+    setRefused([]);
 
     try {
       const result = await updatePerson({
@@ -149,8 +155,16 @@ export function EditPersonModal({ personId, open, onClose, onSaved }: Props) {
       onClose?.(false);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : 'Failed to save changes.');
+      // A number the server would not store (one with an extension, say) is
+      // pointed at on its own row, with the way out next to it.
+      setRefused(refusedContactsFrom(error));
     }
   };
+
+  // Once every refused row has been dealt with — moved into the notes, fixed or
+  // removed — the error that named them no longer describes the form.
+  const showSubmitError =
+    submitError != null && (refused.length === 0 || pendingRefusals(draft, refused).length > 0);
 
   return (
     <ResponsiveDialog open={open} onOpenChange={onClose}>
@@ -174,11 +188,17 @@ export function EditPersonModal({ personId, open, onClose, onSaved }: Props) {
                 <Skeleton className="h-10 w-2/3" />
               </div>
             ) : (
-              <PersonForm value={draft} onChange={setDraft} nameError={nameError} disabled={saving} />
+              <PersonForm
+                value={draft}
+                onChange={setDraft}
+                nameError={nameError}
+                disabled={saving}
+                refusedContacts={refused}
+              />
             )}
           </div>
 
-          {submitError && (
+          {showSubmitError && (
             <p role="alert" className="text-sm text-destructive">
               {submitError}
             </p>

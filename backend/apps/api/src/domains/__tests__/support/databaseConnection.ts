@@ -50,6 +50,10 @@
  * loaded 69-suite run with both of its variables pointing at a healthy
  * Postgres, and passed when run on its own. A probe that could not answer says
  * nothing about the database, so it can no longer produce a skip.
+ *
+ * `CI_REQUIRE_DB=1` (what `make test-db` sets) turns the two remaining skips
+ * into failures as well. A run that asked for a database and did not get one
+ * must not exit 0.
  */
 import {
   spawnSync,
@@ -115,10 +119,39 @@ export interface TestDatabaseConnection {
  * without moving the whole app — or the other suites — off the dev one.
  */
 export interface TestDatabaseOptions {
-  /** Checked before `DATABASE_URL`, e.g. `PIPELINE_TEST_DATABASE_URL`. */
-  urlEnvVar?: string;
+  /**
+   * Checked before `DATABASE_URL`, e.g. `PIPELINE_TEST_DATABASE_URL`. A list is
+   * checked in order and the first one that is set wins — for a suite that
+   * answers to its own variable and, failing that, a sibling domain's.
+   */
+  urlEnvVar?: string | readonly string[];
   /** Probe timeout override, e.g. `PIPELINE_TEST_PROBE_TIMEOUT_MS`. Defaults to 2000 ms. */
   probeTimeoutEnvVar?: string;
+}
+
+/** `TestDatabaseOptions.urlEnvVar` as a list, whatever shape it was given in. */
+function urlEnvVarNames(options: TestDatabaseOptions): readonly string[] {
+  if (options.urlEnvVar == null) {
+    return [];
+  }
+
+  return typeof options.urlEnvVar === 'string' ? [options.urlEnvVar] : options.urlEnvVar;
+}
+
+/** Suite overrides, then `DATABASE_URL`, without naming that fallback twice. */
+function configurationUrlVariables(options: TestDatabaseOptions): readonly string[] {
+  const names = [...urlEnvVarNames(options)];
+
+  if (!names.includes('DATABASE_URL')) {
+    names.push('DATABASE_URL');
+  }
+
+  return names;
+}
+
+/** How a message names the variables a suite reads: `A or B or DATABASE_URL`. */
+function overrideLabel(options: TestDatabaseOptions): string {
+  return configurationUrlVariables(options).join(' or ');
 }
 
 /**
@@ -162,7 +195,7 @@ export function resolveConfiguration(
   env: NodeJS.ProcessEnv = process.env,
   suppliedByDotenv: ReadonlySet<string> = SUPPLIED_BY_DOTENV,
 ): TestDatabaseConfiguration {
-  const urlVariables = options.urlEnvVar == null ? ['DATABASE_URL'] : [options.urlEnvVar, 'DATABASE_URL'];
+  const urlVariables = configurationUrlVariables(options);
 
   for (const variable of urlVariables) {
     const url = env[variable];
@@ -223,10 +256,89 @@ export function resolveConfiguration(
  * between those two, which decides skip versus fail, use
  * {@link resolveConfiguration}.
  */
-export function resolveConnection(options: TestDatabaseOptions = {}): TestDatabaseConnection | null {
-  const configuration = resolveConfiguration(options);
+export function resolveConnection(
+  options: TestDatabaseOptions = {},
+  env: NodeJS.ProcessEnv = process.env,
+  suppliedByDotenv: ReadonlySet<string> = SUPPLIED_BY_DOTENV,
+): TestDatabaseConnection | null {
+  const configuration = resolveConfiguration(options, env, suppliedByDotenv);
 
   return configuration.kind === 'configured' ? configuration.connection : null;
+}
+
+/**
+ * The connection fields a TypeORM `DataSource` wants, from a resolved
+ * connection: the URL when one was supplied (so `?sslmode=` and friends survive),
+ * otherwise the discrete fields. Every DB-backed suite used to spell this
+ * ternary out inline; the ones that had no discrete-field fallback at all now
+ * share it.
+ */
+export type DataSourceConnectionFields =
+  | { url: string }
+  | { host: string; port: number; username: string; password: string; database: string };
+
+export function dataSourceConnection(options: TestDatabaseOptions = {}): DataSourceConnectionFields {
+  const connection = resolveConnection(options);
+
+  if (connection == null) {
+    // Reachable only if the suite skipped its own availability check: the
+    // suite's `describe` is chosen from databaseAvailability(), which says
+    // "unavailable" whenever this would be null.
+    throw new Error(
+      `databaseAvailability() said a database was available but resolveConnection() found none (${overrideLabel(options)})`,
+    );
+  }
+
+  return connection.url != null
+    ? { url: connection.url }
+    : {
+        host: connection.host,
+        port: connection.port,
+        username: connection.username,
+        password: connection.password,
+        database: connection.database,
+      };
+}
+
+/**
+ * `CI_REQUIRE_DB=1` — the switch that makes a missing database a FAILURE.
+ *
+ * The table above already fails an explicitly requested database that is not
+ * there. What it still skips is "nothing configured" and "only `.env`'s
+ * discrete variables, and that port refused". `make test-db` sets this so
+ * those skips fail too: a run that provisioned a database and meant to use it
+ * must not exit 0 having skipped the integration coverage.
+ */
+export const REQUIRE_DB_ENV_VAR = 'CI_REQUIRE_DB';
+
+/** Whether this run must execute its database-backed suites. Only `1` and `true` count. */
+export function databaseRequired(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env[REQUIRE_DB_ENV_VAR]?.trim().toLowerCase();
+
+  return value === '1' || value === 'true';
+}
+
+/**
+ * Turn an "unavailable" answer into a thrown error when the run requires a
+ * database; pass every other answer through untouched. `subject` says whose
+ * skip this would have been, because the thrown message is the only place the
+ * failure is explained: the spec never reached its own `describe`.
+ */
+export function failIfRequired(
+  answer: DatabaseAvailability,
+  subject: string,
+  env: NodeJS.ProcessEnv = process.env,
+): DatabaseAvailability {
+  if (!answer.available && databaseRequired(env)) {
+    throw new Error(
+      `${REQUIRE_DB_ENV_VAR}=1 forbids skipping ${subject}, and no database is available: ${answer.reason} ` +
+        `(target ${answer.target}). A run that sets ${REQUIRE_DB_ENV_VAR} must execute its database-backed ` +
+        `suites, so this is a failure, not a skip. Start a throwaway database with \`make test-db\`, or ` +
+        `unset ${REQUIRE_DB_ENV_VAR} to allow the skip.`,
+    );
+  }
+
+  return answer;
 }
 
 // ---------------------------------------------------------------------------
@@ -615,7 +727,8 @@ const cachedDecisions = new Map<string, AvailabilityDecision>();
  * reason, or THROW — see the table at the top of this file. Cached, see above.
  */
 export function databaseAvailability(options: TestDatabaseOptions = {}): DatabaseAvailability {
-  const cacheKey = `${options.urlEnvVar ?? ''}|${options.probeTimeoutEnvVar ?? ''}`;
+  const label = overrideLabel(options);
+  const cacheKey = `${label}|${options.probeTimeoutEnvVar ?? ''}`;
   let decision = cachedDecisions.get(cacheKey);
 
   if (decision == null) {
@@ -629,15 +742,18 @@ export function databaseAvailability(options: TestDatabaseOptions = {}): Databas
     decision = decideAvailability(configuration, probe, {
       noneReason:
         'no database configured — set ' +
-        (options.urlEnvVar == null ? 'DATABASE_URL' : `${options.urlEnvVar} or DATABASE_URL`) +
+        label +
         ', or DATABASE_PASSWORD (plus optional DATABASE_HOST / DATABASE_PORT / DATABASE_USERNAME / ' +
         'DATABASE_NAME). `yarn test` already points DOTENV_CONFIG_PATH at the repo-root .env.',
-      urlEnvVar: options.urlEnvVar ?? 'DATABASE_URL',
+      urlEnvVar: label,
       probeTimeoutEnvVar: options.probeTimeoutEnvVar,
     });
 
     cachedDecisions.set(cacheKey, decision);
   }
 
-  return availabilityOrThrow(decision);
+  // failIfRequired is outside the cache on purpose: CI_REQUIRE_DB is a property
+  // of the run, and a decision cached as a skip must still throw when a later
+  // call is made under that switch.
+  return failIfRequired(availabilityOrThrow(decision), `the database-backed suite that reads ${label}`);
 }

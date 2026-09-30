@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
@@ -42,15 +42,26 @@ export class FederatedIdentityService {
     return entity.userId;
   }
 
-  /** Bind an external identity to a local user (idempotent on (issuer, subject)). */
-  async bind(data: {
-    userId: string;
-    issuer: string;
-    subject: string;
-    email?: string | null;
-    bindMethod?: 'sub' | 'email_link';
-  }): Promise<FederatedIdentity> {
-    const existing = await this.repository.findOne({
+  /**
+   * Bind an external identity to a local user (idempotent on (issuer, subject)).
+   *
+   * @param manager the transaction to write in, when the binding has to commit or roll back with
+   *   something else — the account it binds, when a sign-in claims an empty appliance
+   *   (`UserService.createFirstAccount`).
+   */
+  async bind(
+    data: {
+      userId: string;
+      issuer: string;
+      subject: string;
+      email?: string | null;
+      bindMethod?: 'sub' | 'email_link';
+    },
+    manager?: EntityManager,
+  ): Promise<FederatedIdentity> {
+    const repository = manager?.getRepository(FederatedIdentityEntity) ?? this.repository;
+
+    const existing = await repository.findOne({
       where: { issuer: data.issuer, subject: data.subject },
     });
 
@@ -58,7 +69,7 @@ export class FederatedIdentityService {
       return FederatedIdentityEntity.toEgressType(existing);
     }
 
-    const record = this.repository.create({
+    const record = repository.create({
       id: uuidv7(),
       userId: data.userId,
       issuer: data.issuer,
@@ -68,7 +79,7 @@ export class FederatedIdentityService {
       lastSeenAt: new Date(),
     });
 
-    const saved = await this.repository.save(record);
+    const saved = await repository.save(record);
     this.logger.log(`bound ${data.issuer}#${data.subject} → user ${data.userId} (${saved.bindMethod})`);
 
     return FederatedIdentityEntity.toEgressType(saved);

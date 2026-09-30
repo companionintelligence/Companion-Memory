@@ -306,11 +306,22 @@ describe('SecondaryNavigation', () => {
   });
 
   // `end={false}`: both halves are Sources, and the rail should say so on
-  // either one.
+  // either one — as a filled cell, not a `border-l` bent into a "(" by the
+  // cell's rounded corners.
   it.each(['/sources', '/sources/connect', '/sources/import'])('marks itself active on %s', (route) => {
     renderRail(route);
 
-    expect(screen.getByRole('link', { name: 'Sources' })).toHaveClass('border-l-primary');
+    const sources = screen.getByRole('link', { name: 'Sources' });
+
+    expect(sources).toHaveClass('bg-primary/10', 'text-primary');
+    expect(sources.className).not.toMatch(/border-l/);
+  });
+
+  it('leaves the collapsed icons of groups you are not in unfilled', () => {
+    renderRail('/sources');
+
+    expect(screen.getByRole('link', { name: 'Memory' })).not.toHaveClass('bg-primary/10');
+    expect(screen.getByRole('link', { name: 'Planning' })).not.toHaveClass('bg-primary/10');
   });
 
   // Distinct from the mobile drawer's "Main navigation drawer" label (see
@@ -506,12 +517,156 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Chat' })).not.toHaveAttribute('aria-current');
   });
 
+  // Chat's threads are a third level: capped, so they cannot push the rest of
+  // the rail off a phone screen, with the rest one tap away in place — on a
+  // phone the Chat page itself has no thread list to send you to.
+  describe('recent threads under Chat', () => {
+    const threads = ['Dinner plans', 'Trip', 'Gift ideas', 'Groceries', 'Movie night'].map((name, index) => ({
+      id: `t${index + 1}`,
+      name,
+    }));
+
+    it('shows the three newest, then All chats', () => {
+      recentThreads.current = threads;
+
+      renderRail('/memory/chat', { expanded: true });
+
+      expect(screen.getByRole('link', { name: 'Dinner plans' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Trip' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Gift ideas' })).toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: 'Groceries' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: 'Movie night' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'All chats' })).toBeInTheDocument();
+      // Nested by indentation now, not by a label at Memory's own indent.
+      expect(screen.queryByText(/^recent$/i)).not.toBeInTheDocument();
+    });
+
+    it('opens the rest in place with All chats, and folds them again', () => {
+      recentThreads.current = threads;
+
+      renderRail('/memory/chat', { expanded: true });
+
+      fireEvent.click(screen.getByRole('button', { name: 'All chats' }));
+
+      expect(screen.getByRole('link', { name: 'Groceries' })).toHaveAttribute('href', '/memory/chat/t4');
+      expect(screen.getByRole('link', { name: 'Movie night' })).toHaveAttribute('href', '/memory/chat/t5');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Fewer chats' }));
+
+      expect(screen.queryByRole('link', { name: 'Groceries' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'All chats' })).toBeInTheDocument();
+    });
+
+    it('offers no All chats when every thread already shows', () => {
+      recentThreads.current = threads.slice(0, 3);
+
+      renderRail('/memory/chat', { expanded: true });
+
+      expect(screen.getAllByRole('link', { name: /Dinner plans|Trip|Gift ideas/ })).toHaveLength(3);
+      expect(screen.queryByRole('button', { name: 'All chats' })).not.toBeInTheDocument();
+    });
+
+    it('keeps the thread you are in showing when it is older than the three', () => {
+      recentThreads.current = threads;
+
+      renderRail('/memory/chat/t5', { expanded: true });
+
+      expect(screen.getByRole('link', { name: 'Movie night' })).toHaveAttribute('aria-current', 'page');
+      expect(screen.queryByRole('link', { name: 'Groceries' })).not.toBeInTheDocument();
+    });
+
+    it('sets threads one level under Chat, smaller and muted', () => {
+      recentThreads.current = threads;
+
+      renderRail('/memory/chat', { expanded: true });
+
+      const thread = screen.getByRole('link', { name: 'Trip' });
+      const chat = screen.getByRole('link', { name: 'Chat' });
+
+      expect(thread).toHaveClass(
+        'ml-18',
+        'text-xs',
+        'text-muted-foreground',
+        'min-h-[36px]',
+        'device:min-h-[28px]',
+      );
+      expect(chat).toHaveClass('ml-9', 'text-sm', 'min-h-[40px]', 'device:min-h-[32px]');
+    });
+  });
+
   it('does not fetch threads while the Memory group is closed', () => {
     recentThreads.current = [{ id: 't1', name: 'Dinner plans' }];
 
     renderRail('/plan', { expanded: true });
 
     expect(screen.queryByRole('link', { name: 'Dinner plans' })).not.toBeInTheDocument();
+  });
+
+  // A border on a rounded row follows its corners and draws a "(" beside the
+  // label. The current page is a filled row with its own straight bar, set on
+  // the group's guide line.
+  it('marks the current page with a bar on the guide line, not a left border', () => {
+    renderRail('/memory/people', { expanded: true });
+
+    const people = screen.getByRole('link', { name: 'People' });
+    const memory = screen.getByTestId('memory-submenu');
+
+    expect(people).toHaveAttribute('aria-current', 'page');
+    expect(people).toHaveClass('bg-primary/10', 'text-primary');
+    expect(people.className).not.toMatch(/border-l/);
+    expect(people.parentElement?.querySelector('[data-testid="rail-active-bar"]')).not.toBeNull();
+    expect(within(memory).getAllByTestId('rail-active-bar')).toHaveLength(1);
+    expect(within(memory).getByTestId('rail-guide')).toBeInTheDocument();
+    expect(
+      screen
+        .getByRole('link', { name: 'Events' })
+        .parentElement?.querySelector('[data-testid="rail-active-bar"]'),
+    ).toBeNull();
+  });
+
+  // Sections, their rows and the rows under those are three heights, so the
+  // hierarchy reads at a glance: 44 / 40 / 36px to a thumb, 36 / 32 / 28px on
+  // the desktop rail (`device:`).
+  it('sizes sections and their rows by level', () => {
+    renderRail('/memory/people', { expanded: true });
+
+    const memoryHead = screen.getByRole('link', { name: 'Memory' }).parentElement;
+
+    expect(memoryHead).toHaveClass('min-h-[44px]', 'device:min-h-[36px]');
+    expect(screen.getByRole('link', { name: 'People' })).toHaveClass('min-h-[40px]', 'device:min-h-[32px]');
+  });
+
+  it('draws the places you work and the machinery behind them as two clusters', () => {
+    renderRail('/feed', { expanded: true });
+
+    const [work, system] = screen.getAllByTestId('rail-cluster');
+
+    expect(within(work).getByRole('link', { name: 'Planning' })).toBeInTheDocument();
+    expect(within(work).getByRole('link', { name: 'Memory' })).toBeInTheDocument();
+    expect(within(work).getByRole('link', { name: 'Saved Searches' })).toBeInTheDocument();
+    expect(within(system).getByRole('link', { name: 'Sources' })).toBeInTheDocument();
+    expect(within(system).getByRole('link', { name: 'Jobs' })).toBeInTheDocument();
+    expect(within(system).getByRole('link', { name: 'Approvals' })).toBeInTheDocument();
+    // A hairline and space between them, never a heading.
+    expect(system).toHaveClass('border-t');
+    expect(work).not.toHaveClass('border-t');
+  });
+
+  // Help and the account are what you reach for from anywhere, so they stay
+  // put under a divider while the destinations above them scroll.
+  it('pins Help and the account under a divider, outside the scrolling list', () => {
+    renderRail('/feed', { expanded: true });
+
+    const list = screen.getByTestId('rail-scroll');
+    const footer = screen.getByTestId('rail-footer');
+
+    expect(list).toHaveClass('overflow-y-auto');
+    expect(within(list).getByRole('link', { name: 'Planning' })).toBeInTheDocument();
+    expect(within(list).queryByRole('button', { name: 'Help' })).not.toBeInTheDocument();
+    expect(within(footer).getByRole('button', { name: 'Help' })).toBeInTheDocument();
+    expect(within(footer).getByRole('link', { name: 'Test User' })).toBeInTheDocument();
+    expect(footer).toHaveClass('border-t', 'shrink-0');
+    expect(list.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   // Capture is mobile-only (the overlay drawer) — desktop already has it in

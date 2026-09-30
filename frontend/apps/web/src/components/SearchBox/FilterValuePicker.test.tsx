@@ -151,4 +151,23 @@ describe('FilterValuePicker', () => {
 
     expect(screen.getByTestId('values')).toHaveTextContent('');
   });
+
+  it('opens the same panel from a caller’s own trigger, handed the current values', () => {
+    render(
+      <Host
+        initial={['Ada']}
+        options={['Ada', 'Alan']}
+        renderTrigger={(values) => <button type="button">{`Who row: ${values.join(', ')}`}</button>}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: /^Who: / })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Who row: Ada' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Alan' }));
+
+    expect(screen.getByTestId('values')).toHaveTextContent('Ada|Alan');
+    // `hidden`: the open (modal) popover hides the rest of the page from the a11y tree.
+    expect(screen.getByRole('button', { name: 'Who row: Ada, Alan', hidden: true })).toBeInTheDocument();
+  });
 });

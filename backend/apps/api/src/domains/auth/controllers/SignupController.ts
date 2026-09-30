@@ -43,6 +43,10 @@ export class SignupController {
    * one is always allowed. The gate closes again the moment it exists, which is
    * the only window that matters — everyone after the owner still needs a code
    * wherever the flag is on.
+   *
+   * This is the answer for the form, which is all it can be: by the time the
+   * signup is submitted someone else may have claimed the appliance. `signup`
+   * does not act on it — it decides the exemption as it creates the account.
    */
   private async isSignupCodeRequired(): Promise<boolean> {
     if (!(await this.featureService.isFeatureEnabled('require.signup.codes'))) {
@@ -72,39 +76,49 @@ export class SignupController {
   ) {
     const { name, email, password, signup_code } = input;
 
-    const isSignupCodeRequired = await this.isSignupCodeRequired();
+    const codesRequired = await this.featureService.isFeatureEnabled('require.signup.codes');
 
-    if (isSignupCodeRequired) {
-      if (signup_code == null) {
-        throw new BadRequestException('Must provide a valid signup code');
+    // Where codes are required the first account needs none (see
+    // isSignupCodeRequired), so try this as that account first. Whether it IS
+    // the first is decided in the step that creates it: asked beforehand, two
+    // people signing up to a fresh appliance at once were both exempt.
+    let user = codesRequired
+      ? await this.userService.createFirstAccount({ userId: SYSTEM_USER }, { name, email, password })
+      : null;
+
+    if (user == null) {
+      if (codesRequired) {
+        if (signup_code == null) {
+          throw new BadRequestException('Must provide a valid signup code');
+        }
+
+        const signupCodeLookup = await this.signupCodeService.findOne(signup_code);
+
+        if (!signupCodeLookup) {
+          throw new BadRequestException('Must provide a valid signup code');
+        }
       }
 
-      const signupCodeLookup = await this.signupCodeService.findOne(signup_code);
+      const userExists = await this.userService.checkEmailAvailability(email);
 
-      if (!signupCodeLookup) {
-        throw new BadRequestException('Must provide a valid signup code');
+      if (userExists) {
+        throw new BadRequestException('Email already in use');
       }
-    }
 
-    const userExists = await this.userService.checkEmailAvailability(email);
+      user = await this.userService.create(
+        { userId: SYSTEM_USER },
+        {
+          name,
+          email,
+          password,
+        },
+      );
 
-    if (userExists) {
-      throw new BadRequestException('Email already in use');
-    }
-
-    const user = await this.userService.create(
-      { userId: SYSTEM_USER },
-      {
-        name,
-        email,
-        password,
-      },
-    );
-
-    if (isSignupCodeRequired) {
-      await this.signupCodeService.update(signup_code!, {
-        used: true,
-      });
+      if (codesRequired) {
+        await this.signupCodeService.update(signup_code!, {
+          used: true,
+        });
+      }
     }
 
     const { sessionToken, sessionId } = await this.authService.issueSessionToken(

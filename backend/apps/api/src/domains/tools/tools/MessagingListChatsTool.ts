@@ -48,7 +48,12 @@ export class MessagingListChatsTool extends BaseTool<MessagingListChatsInput, Me
     parameters: {
       type: 'object',
       properties: {
-        maxResults: { type: 'integer', description: 'Max chats to return (default 25).', minimum: 1, maximum: 100 },
+        maxResults: {
+          type: 'integer',
+          description: 'Max chats to return (default 25).',
+          minimum: 1,
+          maximum: 100,
+        },
       },
       required: [],
     },

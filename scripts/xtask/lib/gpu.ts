@@ -248,7 +248,16 @@ export function computeHbpeBuildConfig(root: string, gpu: Gpu, uvVersion: string
       process.env.LLAMA_CPP_ROCM_WHEEL_IMAGE ??
       llamaCppRocmWheelImageDefault(meta, llamaCppVersion, llamaCppRef, amdgpuWheelTargets);
 
-    buildArgs.push('--build-arg', `AMDGPU_TARGETS=${amdgpuTargets}`);
+    // Pushed only when there is a value. Dockerfile.rocm reads it as
+    // `${AMDGPU_TARGETS:+...}`, so an unset arg is exactly as legitimate as a
+    // set one (llama.cpp then builds its default target list) — but an EMPTY
+    // `--build-arg AMDGPU_TARGETS=` is noise on the docker command line, and the
+    // "every build arg has a value" invariant in build.test.ts rightly refuses
+    // it. A host with no `rocminfo` (every Mac, any box without ROCm) is the
+    // case that reaches here empty; the warning below still says so.
+    if (amdgpuTargets) {
+      buildArgs.push('--build-arg', `AMDGPU_TARGETS=${amdgpuTargets}`);
+    }
 
     if (llamaCppRocmWheelImage) {
       buildArgs.push('--build-arg', `LLAMA_CPP_ROCM_WHEEL_IMAGE=${llamaCppRocmWheelImage}`);

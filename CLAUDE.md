@@ -48,6 +48,13 @@ make test
 # Run one app's tests directly (only a slice of `make test`)
 cd backend/apps/api && yarn test
 
+# The ~85 database-backed be-api suites SKIP SILENTLY without a database, so
+# `make test` can pass having run none of them. This starts a throwaway Postgres
+# in Docker, runs them against it with CI_REQUIRE_DB=1 (a missing database
+# FAILS instead of skipping), and fails on any unexplained skip or DB crash.
+# Never uses .env. See docs/CI.md.
+make test-db                                  # or ARGS='src/domains/import', KEEP=1
+
 # The native suites, which `make test` does NOT cover (each checks its own
 # toolchain first — JDK 21 + an Android SDK via ANDROID_HOME; cargo + GTK/WebKit)
 make test-android   # gradlew testDebugUnitTest — :app + the 3 :ci-capacitor-* modules
@@ -63,8 +70,8 @@ make build DRY_RUN=1    # print the exact docker build commands — every --buil
                         # and, on a cuda/rocm host, the wheel-image tags — without running Docker
 ```
 
-**Three of those targets are one-line delegations to `scripts/xtask/`, a TypeScript program
-run under `tsx`: `build`, `dev` and `test`.** Their logic is no
+**Four of those targets are one-line delegations to `scripts/xtask/`, a TypeScript program
+run under `tsx`: `build`, `dev`, `test` and `test-db`.** Their logic is no
 longer in the Makefile — read the recipe before editing it. Dispatch, `--help` and signal
 handling are in `scripts/xtask/index.ts`; one file per subcommand under `commands/`; shared
 pieces under `lib/` — `exec.ts` (`run()` fail-fast / `tryRun()` tolerant), `gpu.ts` (GPU

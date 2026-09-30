@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   HttpException,
   HttpStatus,
@@ -70,6 +71,31 @@ describe('formatError', () => {
 
       expect(result.message).toBe(exception.message);
       expect(result.extensions?.code).toBe(code);
+    });
+
+    it("forwards the details an exception's author attached, and nothing else from its body", () => {
+      // What the person editor needs to point at the row it refused.
+      const details = {
+        refusedContacts: [{ kind: 'phone', value: '212-555-0148 x31', reason: 'extension' }],
+      };
+      const exception = new BadRequestException({
+        message: '"212-555-0148 x31" includes an extension',
+        details,
+        internal: 'not for the client',
+      });
+
+      const result = formatError(formattedFor(exception), wrapped(exception));
+
+      expect(result.message).toBe('"212-555-0148 x31" includes an extension');
+      expect(result.extensions).toEqual({ code: 'BAD_USER_INPUT', details });
+    });
+
+    it('adds no details to an exception raised with a plain message', () => {
+      const exception = new BadRequestException('Unknown contact kind "fax" — expected email or phone');
+
+      const result = formatError(formattedFor(exception), wrapped(exception));
+
+      expect(result.extensions).not.toHaveProperty('details');
     });
 
     it('leaves a code set deliberately by application code alone', () => {

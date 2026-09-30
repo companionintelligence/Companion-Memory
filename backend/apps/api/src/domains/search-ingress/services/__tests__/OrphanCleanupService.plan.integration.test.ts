@@ -38,6 +38,15 @@ import { OrphanCleanupService } from '../OrphanCleanupService';
  * unusable, which no row count can fix. Seeding more only widens that gap, so
  * this reads the same on an appliance with a real archive.
  *
+ * `enable_mergejoin = off` for the same reason. The seeded ids come from the
+ * `ci.gen_uuid_v7()` default, which mints real UUIDv7 since migration
+ * 20260930141141, so they arrive in key order: `events_pkey` matches the heap
+ * exactly, and on a freshly migrated database a merge anti join over the whole
+ * key index prices below a few hundred probes. That plan still uses the key
+ * uncast — a costing choice, not the whole-table read this guards against —
+ * but it has no `Index Cond` to assert on. Priced out, a usable key is probed;
+ * a cast still falls back to a `Hash Cond` over a full read.
+ *
  * ── Why a rolled-back transaction is enough here ───────────────────────────
  *
  * `domains/__tests__/support/scratchDatabase.ts` is right that rollback is a
@@ -133,6 +142,9 @@ describeWithDb('OrphanCleanupService query plans (integration)', () => {
       // for this correlation at all? A cast on the indexed side answers no at
       // every table size.
       await runner.query('SET LOCAL enable_seqscan = off');
+      // Time-ordered ids make a merge over the whole key index cheap at this
+      // seed size (see the header), so it is priced out for the same reason.
+      await runner.query('SET LOCAL enable_mergejoin = off');
 
       return await work(runner);
     } finally {

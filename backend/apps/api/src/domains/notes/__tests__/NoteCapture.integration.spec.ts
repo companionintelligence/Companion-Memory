@@ -5,6 +5,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
 
+import { databaseAvailability, dataSourceConnection } from '../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../__tests__/support/schemaLock';
 import { NoteEntity } from '../entities/NoteEntity';
 import { NoteService } from '../services/NoteService';
@@ -27,9 +28,11 @@ import { NoteService } from '../services/NoteService';
  *  3. an id belonging to another user is never written through — the failure a
  *     client-minted primary key makes reachable in the first place.
  *
- * Opt-in: set `NOTES_TEST_DATABASE_URL` to a database with the migrations applied.
- * The rest of the notes suite mocks its repository, so this must not be a hard
- * dependency of `yarn test`.
+ * Needs a database with the migrations applied: `NOTES_TEST_DATABASE_URL`, else
+ * `DATABASE_URL`, else `.env`'s `DATABASE_*` values. `databaseAvailability()`
+ * decides whether that means run, skip or fail. The rest of the notes suite mocks
+ * its repository, so with no database configured this skips (and says why) rather
+ * than failing `yarn test`.
  *
  *   NOTES_TEST_DATABASE_URL=postgres://companion:pw@localhost:5432/companion \
  *     yarn workspace @ci/be-api jest NoteCapture.integration
@@ -41,8 +44,16 @@ import { NoteService } from '../services/NoteService';
  * and cleans up after itself like every other DB-backed domain spec.
  */
 
-const DATABASE_URL = process.env.NOTES_TEST_DATABASE_URL;
-const describeWithDb = DATABASE_URL ? describe : describe.skip;
+const DATABASE_ENV = {
+  urlEnvVar: 'NOTES_TEST_DATABASE_URL',
+  probeTimeoutEnvVar: 'NOTES_TEST_PROBE_TIMEOUT_MS',
+};
+const availability = databaseAvailability(DATABASE_ENV);
+const describeWithDb = availability.available ? describe : describe.skip;
+
+if (!availability.available) {
+  console.warn(`[notes/NoteCapture.integration] SKIPPED — ${availability.reason}`);
+}
 
 describeWithDb('NoteService.captureMany — the guards, in Postgres', () => {
   let dataSource: DataSource;
@@ -67,7 +78,7 @@ describeWithDb('NoteService.captureMany — the guards, in Postgres', () => {
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...dataSourceConnection(DATABASE_ENV),
       entities: [NoteEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },

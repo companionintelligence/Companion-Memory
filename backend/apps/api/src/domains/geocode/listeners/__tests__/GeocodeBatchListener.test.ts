@@ -272,6 +272,22 @@ describe('GeocodeBatchListener reverse direction', () => {
     const joined = builder.clauses.join(' | ');
     expect(joined).toContain('location_coordinates IS NOT NULL');
     expect(joined).toContain('location_name IS NULL');
+    expect(joined).toContain("COALESCE(event.metadata->>'location_source', '') <> 'estimated'");
+  });
+
+  it('an explicit eventIds set skips the name filter but still refuses estimated coordinates', async () => {
+    const { listener, builder } = makeListener(
+      [],
+      () => okOutcome(),
+      () => okReverse('x'),
+    );
+
+    await listener.handleBatch({ userId: USER, direction: 'reverse', eventIds: ['e1', 'e2'] });
+
+    const joined = builder.clauses.join(' | ');
+    expect(joined).toContain('event_id IN (:...eventIds)');
+    expect(joined).not.toContain('location_name IS NULL');
+    expect(joined).toContain("COALESCE(event.metadata->>'location_source', '') <> 'estimated'");
   });
 
   it('coerces numeric-string coordinates from the driver before calling the provider', async () => {

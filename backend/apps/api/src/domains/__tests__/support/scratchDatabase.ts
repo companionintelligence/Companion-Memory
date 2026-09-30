@@ -7,6 +7,7 @@ import { DataSource } from 'typeorm';
 import {
   availabilityOrThrow,
   decideAvailability,
+  failIfRequired,
   isExplicitlySet,
   probePort,
   probeTimeoutMs,
@@ -265,7 +266,10 @@ export function scratchDatabaseAvailability(): DatabaseAvailability {
     });
   }
 
-  return availabilityOrThrow(cachedDecision);
+  return failIfRequired(
+    availabilityOrThrow(cachedDecision),
+    'the scratch-database suite (it creates and drops a database of its own)',
+  );
 }
 
 // ---------------------------------------------------------------------------

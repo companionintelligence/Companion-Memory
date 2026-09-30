@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
@@ -838,8 +838,75 @@ describe('PeoplePage', () => {
 
     expect(await screen.findByText('Suggested merges')).toBeInTheDocument();
     expect(screen.getByText('85% match')).toBeInTheDocument();
-    expect(screen.getByText(/Same phone digits: 9145826767/)).toBeInTheDocument();
+    expect(screen.getByText(/Same phone digits: 914-582-6767/)).toBeInTheDocument();
     expect(screen.queryByText(/Detected by/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The report: "Same phone number, but names differ" above two people whose
+   * listed numbers were each marked "only here". The shared number sat in one
+   * record's contact-card list, which `identifiers` cannot show — it reads an
+   * index that holds a number for only one person. The card now names the
+   * number and lists it under both people.
+   */
+  it('names the shared number and shows it under both people, not as two unrelated numbers', async () => {
+    const phone = (value: string, rawValue: string) => ({
+      __typename: 'PersonIdentifierType' as const,
+      kind: 'phone',
+      value,
+      rawValue,
+      label: null,
+      source: 'import',
+    });
+
+    renderWithProviders(<PeoplePage />, {
+      mocks: mocks({
+        candidates: [
+          candidateEdge(
+            [
+              mergePerson({ name: 'Ada Quill', identifiers: [phone('2125550118', '(212) 555-0118')] }),
+              mergePerson({
+                id: DUPLICATE_GLOBAL_ID,
+                name: 'Bo Brightwater',
+                identifiers: [phone('2125550110', '212-555-0110')],
+              }),
+            ],
+            {
+              evidence: [
+                {
+                  __typename: 'MergeCandidateEvidenceType' as const,
+                  kind: 'phone',
+                  value: '+12125550118',
+                  score: 0.85,
+                },
+                {
+                  __typename: 'MergeCandidateEvidenceType' as const,
+                  kind: 'phone_check',
+                  value: 'given_name_conflict',
+                  score: 0,
+                },
+              ],
+            },
+          ),
+        ],
+      }),
+    });
+
+    const heading = await screen.findByText('Same phone number +1 (212) 555-0118, but names differ');
+    // The card, not the People list below it (which shares Ada's cache entry).
+    const card = within(heading.closest('.rounded-md.border') as HTMLElement);
+
+    // Ada's own row, and the evidence number under Bo — both "shared".
+    const adaRow = card.getByText('(212) 555-0118').closest('div');
+    expect(adaRow).toHaveTextContent('shared');
+    expect(adaRow).not.toHaveTextContent('only here');
+    expect(card.getByText('+1 (212) 555-0118').closest('div')).toHaveTextContent('shared');
+
+    // Bo's main line is genuinely his alone.
+    expect(card.getByText('212-555-0110').closest('div')).toHaveTextContent('only here');
+    // And the differences line no longer lists the shared number as Ada's alone.
+    expect(card.queryByText(/Ada Quill has \(212\) 555-0118/)).not.toBeInTheDocument();
+    expect(card.getByText(/Bo Brightwater has 212-555-0110/)).toBeInTheDocument();
   });
 
   it('shows a merging spinner on the merge button until the request finishes', async () => {

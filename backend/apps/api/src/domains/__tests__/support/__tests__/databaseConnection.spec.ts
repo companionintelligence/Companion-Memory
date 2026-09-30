@@ -2,13 +2,18 @@ import type { SpawnSyncReturns } from 'node:child_process';
 import { createServer, type Server } from 'node:net';
 
 import {
+  dataSourceConnection,
   databaseAvailability,
+  databaseRequired,
   decideAvailability,
+  failIfRequired,
   isExplicitlySet,
   probePort,
   probeTimeoutMs,
   resolveConfiguration,
+  resolveConnection,
   type AvailabilityWording,
+  type DatabaseAvailability,
   type PortProbe,
   type PortProbeOutcome,
   type ProbeSpawn,
@@ -154,6 +159,7 @@ function withEnv<T>(vars: Record<string, string | undefined>, body: () => T): T 
 // The variables every configuration test has to control, whatever the
 // developer running this happens to have exported or in .env.
 const NO_DATABASE_ENV = {
+  CI_REQUIRE_DB: undefined,
   DATABASE_URL: undefined,
   DATABASE_PASSWORD: undefined,
   DATABASE_HOST: undefined,
@@ -649,5 +655,92 @@ describe('databaseAvailability', () => {
       ),
       target: `127.0.0.1:${closed}/companion`,
     });
+  });
+
+  it('fails that same skip when the run set CI_REQUIRE_DB', async () => {
+    const closed = await closedPort();
+
+    expect(() =>
+      withEnv(
+        {
+          ...NO_DATABASE_ENV,
+          CI_REQUIRE_DB: '1',
+          DATABASE_PASSWORD: 'dev',
+          DATABASE_HOST: '127.0.0.1',
+          DATABASE_PORT: String(closed),
+        },
+        () => databaseAvailability({ urlEnvVar: 'PROBE_SPEC_REQUIRED_TEST_DATABASE_URL' }),
+      ),
+    ).toThrow(
+      /CI_REQUIRE_DB=1 forbids skipping the database-backed suite that reads PROBE_SPEC_REQUIRED_TEST_DATABASE_URL or DATABASE_URL/,
+    );
+  });
+});
+
+describe('a suite that names more than one database variable', () => {
+  const none = new Set<string>();
+  const options = { urlEnvVar: ['SCHEDULE_TEST_DATABASE_URL', 'PLANNING_TEST_DATABASE_URL'] as const };
+
+  it('uses the first one that is set, then DATABASE_URL', () => {
+    expect(
+      resolveConfiguration(
+        options,
+        {
+          SCHEDULE_TEST_DATABASE_URL: 'postgres://u:p@schedule:1/db',
+          PLANNING_TEST_DATABASE_URL: 'postgres://u:p@planning:1/db',
+        },
+        none,
+      ),
+    ).toMatchObject({ variable: 'SCHEDULE_TEST_DATABASE_URL', connection: { host: 'schedule' } });
+    expect(
+      resolveConnection(options, { PLANNING_TEST_DATABASE_URL: 'postgres://u:p@planning:1/db' })?.host,
+    ).toBe('planning');
+    expect(resolveConnection(options, { DATABASE_URL: 'postgres://u:p@app:1/db' })?.host).toBe('app');
+    expect(resolveConfiguration(options, {}, none)).toEqual({ kind: 'none' });
+  });
+});
+
+describe('dataSourceConnection', () => {
+  it('keeps the URL, query string included, when one was supplied', () => {
+    expect(
+      withEnv(
+        { ...NO_DATABASE_ENV, NOTES_TEST_DATABASE_URL: 'postgres://u:p@db:5432/companion?sslmode=disable' },
+        () => dataSourceConnection({ urlEnvVar: 'NOTES_TEST_DATABASE_URL' }),
+      ),
+    ).toEqual({ url: 'postgres://u:p@db:5432/companion?sslmode=disable' });
+  });
+
+  it('throws when the suite skipped the availability check and there is no connection', () => {
+    expect(() =>
+      withEnv(NO_DATABASE_ENV, () => dataSourceConnection({ urlEnvVar: 'NOTES_ABSENT_TEST_DATABASE_URL' })),
+    ).toThrow(/resolveConnection\(\) found none \(NOTES_ABSENT_TEST_DATABASE_URL or DATABASE_URL\)/);
+  });
+});
+
+describe('CI_REQUIRE_DB', () => {
+  const missing: DatabaseAvailability = {
+    available: false,
+    reason: 'nothing accepting connections',
+    target: '127.0.0.1:5999/companion',
+  };
+  const present: DatabaseAvailability = {
+    available: true,
+    reason: 'Postgres reachable',
+    target: '127.0.0.1:5432/companion',
+  };
+
+  it('counts only 1 and true', () => {
+    expect(databaseRequired({ CI_REQUIRE_DB: '1' })).toBe(true);
+    expect(databaseRequired({ CI_REQUIRE_DB: 'true' })).toBe(true);
+    expect(databaseRequired({ CI_REQUIRE_DB: '0' })).toBe(false);
+    expect(databaseRequired({})).toBe(false);
+  });
+
+  it('throws for a skip under the switch and passes every other answer through', () => {
+    expect(failIfRequired(present, 'a suite', { CI_REQUIRE_DB: '1' })).toBe(present);
+    expect(failIfRequired(missing, 'a suite', {})).toBe(missing);
+    expect(() =>
+      failIfRequired(missing, 'the suite that reads SUITE_OVERRIDE_URL', { CI_REQUIRE_DB: '1' }),
+    ).toThrow(/CI_REQUIRE_DB=1 forbids skipping the suite that reads SUITE_OVERRIDE_URL.*make test-db/s);
   });
 });

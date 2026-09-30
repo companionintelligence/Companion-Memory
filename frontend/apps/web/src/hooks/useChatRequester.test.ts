@@ -6,6 +6,7 @@ import { useChatRequester } from './useChatRequester';
 // Mutable holder so each test can vary auth/model state; mocks read it lazily.
 const h = vi.hoisted(() => ({
   toastError: vi.fn(),
+  toastInfo: vi.fn(),
   model: {
     selectedModel: 'llama3',
     thinkingEnabled: false,
@@ -14,7 +15,7 @@ const h = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@ci/shadcn', () => ({ useToast: () => ({ toast: { error: h.toastError } }) }));
+vi.mock('@ci/shadcn', () => ({ useToast: () => ({ toast: { error: h.toastError, info: h.toastInfo } }) }));
 const auth = vi.hoisted(() => ({
   authToken: 'tok' as string | null,
   authenticated: true,
@@ -51,6 +52,7 @@ beforeEach(() => {
     activeModels: [{ model: 'llama3', tools: true, thinking: true }],
   };
   h.toastError.mockClear();
+  h.toastInfo.mockClear();
 });
 
 afterEach(() => vi.unstubAllGlobals());

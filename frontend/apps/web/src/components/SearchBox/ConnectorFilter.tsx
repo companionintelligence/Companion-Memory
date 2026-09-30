@@ -13,7 +13,7 @@ import {
   writeCsvFilterParam,
 } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 
-import { FilterValuePicker } from './FilterValuePicker';
+import { FilterValuePicker, type FilterValuePickerProps } from './FilterValuePicker';
 
 // "How" — the data-source dimension (gmail, imessage, reddit, ...), written
 // to `?connectors=`. Populated from the distinct `source_system` values across
@@ -70,9 +70,11 @@ interface Props {
    * selection, as the explorer's does.
    */
   includeTypes?: string[];
+  /** Opens the picker from the caller's own element (the phone filter sheet's row). */
+  renderTrigger?: FilterValuePickerProps['renderTrigger'];
 }
 
-export function ConnectorFilter({ modal = true, label = 'How', includeTypes }: Props) {
+export function ConnectorFilter({ modal = true, label = 'How', includeTypes, renderTrigger }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
@@ -119,6 +121,7 @@ export function ConnectorFilter({ modal = true, label = 'How', includeTypes }: P
       searchPlaceholder="Search sources…"
       emptyText="No sources match"
       unknownValueHint="No connected source has this name, so this filter matches nothing."
+      renderTrigger={renderTrigger}
     />
   );
 }

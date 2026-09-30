@@ -12,6 +12,18 @@ import { EntityMergeBlockService } from './EntityMergeBlockService';
 
 export type DuplicateReason = 'email' | 'phone' | 'name';
 
+/**
+ * `PHONE_EXTENSION_PATTERN` from `domains/graph/utils/normalizeIdentifier.ts`,
+ * restated because this domain cannot import that one: `graph` already imports
+ * `memory`, so the barrel import would be a cycle. `PersonDuplicateService.spec`
+ * pins the two strings equal.
+ *
+ * The phone key below is a SQL copy of `normalizePhone`, and a copy that kept
+ * the last ten digits of a value like `(212) 555-0147 x229` would group two
+ * people on `5550147229` — a number neither of them has.
+ */
+export const PHONE_EXTENSION_SQL_PATTERN = String.raw`[;,#]|(?:^|[^a-z])(?:ext(?:ension|n)?|x)\.?\s*:?\s*\d|\d\s*[pw]\s*\d`;
+
 export interface PersonDuplicateGroup {
   reason: DuplicateReason;
   /** The shared normalized value the group collapsed on. */
@@ -85,8 +97,9 @@ function dropBlocked(people: Person[], blocked: Set<string>): Person[] {
  * silently dropped at ingest. The asserted identifiers DO survive in each
  * entity's properties (emails[] / phones[]), so candidates are found by
  * unnesting those arrays across all live Persons and grouping on the shared
- * normalization rule (email = trim+lowercase; phone = last 10 digits — the
- * same contract as normalizeIdentifier.ts). Exact normalized display-name
+ * normalization rule (email = trim+lowercase; phone = last 10 digits, a value
+ * carrying an extension refused — the same contract as normalizeIdentifier.ts,
+ * see {@link PHONE_EXTENSION_SQL_PATTERN}). Exact normalized display-name
  * matches are included as a weaker third signal (communications stubs created
  * from a bare display name have no email/phone to match on).
  *
@@ -153,6 +166,7 @@ export class PersonDuplicateService {
                     CASE WHEN jsonb_typeof(p.properties->'phones') = 'array'
                          THEN p.properties->'phones' ELSE '[]'::jsonb END) AS v
             WHERE length(regexp_replace(v, '\\D', '', 'g')) >= 7
+              AND v !~* $6
            UNION ALL
            SELECT p.entity_id, 'name', lower(btrim(regexp_replace(p.name, '\\s+', ' ', 'g')))
              FROM people p
@@ -173,7 +187,7 @@ export class PersonDuplicateService {
                    n DESC,
                    val ASC
           LIMIT $2 OFFSET $5`,
-      [context.userId, limit + 1, MAX_GROUP_SIZE, reasons, offset],
+      [context.userId, limit + 1, MAX_GROUP_SIZE, reasons, offset, PHONE_EXTENSION_SQL_PATTERN],
     );
 
     if (rows.length === 0) {
