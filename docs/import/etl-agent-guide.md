@@ -1013,6 +1013,18 @@ gets missed under time pressure. Two real shapes:
 - **Amazon Appstore entitlements** — the code fix landed first; the 92 existing
   rows would have stayed typed `'media'` forever. Migration `20260818224249`,
   commit `5dafcf14b`, PR #2079.
+- **A contact's natural key** — the phone join key kept the last ten digits of
+  line + extension, so `(212) 555-0147;229` keyed a card as `contact:5550147229`.
+  Fixing the rule MOVES the key, so every affected card re-imports as a
+  duplicate beside its old row. Migration `20260930020117` could only re-key
+  the rows whose own `properties.Phones` still held the typed line (vCard); the
+  Apple Contacts and CSV parsers kept their numbers only in identity
+  ATTRIBUTES, which staging never persists. Those parsers now keep `Phones` /
+  `Emails` too, `contactKeyRecomputable.test.ts` fails any contact parser whose
+  key cannot be rebuilt from its own metadata, and `push/truncatedPhoneKeys.ts`
+  re-keys the unprovable rows at push time, when the card itself proves them.
+  **The rule for a new parser:** every value its key is derived from must reach
+  `metadata`, or no fix to the key can ever be applied to rows already stored.
 
 **Why it recurs:** the test suite goes green on the code fix, and green feels
 like done. It is not; the corpus is the deliverable.

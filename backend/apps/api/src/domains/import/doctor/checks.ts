@@ -406,11 +406,13 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     //
     // KNOWN BLIND SPOT, stated because a silent one is the failure mode this file
     // exists to prevent: the 2 mis-typed `contact_list` rows are invisible here.
-    // Their parser stamps only {Source, File}, so nothing in the row's own data
-    // says "contact" — only a source-scoped sweep could catch them, and this
-    // check cannot. A datasource whose contact entities carry no contact metadata at all
-    // is only reachable by a source list, which is exactly what this check is
-    // built to avoid needing.
+    // Their parser stamped only {Source, File} when it wrote them, so nothing in
+    // those rows' own data says "contact" — only a source-scoped sweep could catch
+    // them, and this check cannot. (It now also keeps `Names` / `Emails` / `Phones`,
+    // as does `applecontacts.ts`, so rows written since would be visible.) A
+    // datasource whose contact entities carry no contact metadata at all is only
+    // reachable by a source list, which is exactly what this check is built to
+    // avoid needing.
     sql: String.raw`
       WITH bad AS (
         SELECT entity_id, name, linked_table, owner_user_id

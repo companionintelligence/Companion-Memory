@@ -188,6 +188,86 @@ describe('Contact List datasource', () => {
     expect(collected[0].entity?.metadata?.avatar_url).toBe('https://contacts.google.com/photo/jill.jpg');
   });
 
+  /**
+   * The identity attributes are read once, for `identity_key`, and never
+   * persisted. `Phones` / `Emails` are what lets a key rule change be repaired
+   * in SQL: a `(212) 555-0147 ext. 229` cell used to key as the truncation
+   * `5550147229`, and no contact-list row kept the cell to prove it.
+   */
+  it('keeps every phone and email cell as typed, the extension included', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-contactlist-typed-'));
+    const file = path.join(dir, 'contacts.csv');
+    fs.writeFileSync(
+      file,
+      'Name,E-mail 1 - Value,Phone 1 - Value,Phone 2 - Value\n' +
+        'Dana Quill,dana.quill@example.com,(212) 555-0147 ext. 229,+1 (212) 555-0199',
+    );
+    const { params, collected } = makeParams();
+    await new ContactListFileImporter().fileImport(
+      undefined,
+      { fullPath: file } as DirEntry,
+      params as unknown as ImportParams,
+    );
+
+    const entity = collected[0].entity!;
+    expect(entity.metadata).toMatchObject({
+      Names: ['Dana Quill'],
+      Emails: ['dana.quill@example.com'],
+      Phones: ['(212) 555-0147 ext. 229', '+1 (212) 555-0199'],
+    });
+    expect(entity.accumulate).toEqual(expect.arrayContaining(['Names', 'Emails', 'Phones']));
+  });
+
+  it("splits Google's joined cells in the typed lists, and nowhere else", async () => {
+    // `a ::: b` is how Google's export writes two values filed under one label.
+    // The attributes keep the cell whole — they decide the key, and every row
+    // already stored with such a cell is keyed on it.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-contactlist-joined-'));
+    const file = path.join(dir, 'contacts.csv');
+    fs.writeFileSync(
+      file,
+      'Name,E-mail 1 - Value,Phone 1 - Value\n' +
+        'Dana Quill,dana.quill@example.com ::: dq@example.org,+1 212-555-0147 ::: +1 212-555-0199',
+    );
+    const { params, collected } = makeParams();
+    await new ContactListFileImporter().fileImport(
+      undefined,
+      { fullPath: file } as DirEntry,
+      params as unknown as ImportParams,
+    );
+
+    const entity = collected[0].entity!;
+    expect(entity.metadata).toMatchObject({
+      Emails: ['dana.quill@example.com', 'dq@example.org'],
+      Phones: ['+1 212-555-0147', '+1 212-555-0199'],
+    });
+    expect(entity.attributes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'email', value: 'dana.quill@example.com ::: dq@example.org' }),
+        expect.objectContaining({ name: 'phone', value: '+1 212-555-0147 ::: +1 212-555-0199' }),
+      ]),
+    );
+  });
+
+  it('keeps the typed lists as sets while the usefulness filter still counts cells', async () => {
+    // One number in two columns and no name: two attributes, so the row passes
+    // the filter exactly as it did before — but it is one number.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-contactlist-typed-set-'));
+    const file = path.join(dir, 'contacts.csv');
+    fs.writeFileSync(file, 'Name,Phone 1 - Value,Phone 2 - Value,E-mail 1 - Value\n,555-0133,555-0133,');
+    const { params, collected } = makeParams();
+    await new ContactListFileImporter().fileImport(
+      undefined,
+      { fullPath: file } as DirEntry,
+      params as unknown as ImportParams,
+    );
+
+    expect(collected).toHaveLength(1);
+    expect(collected[0].entity!.attributes).toHaveLength(2);
+    expect(collected[0].entity!.metadata?.Phones).toEqual(['555-0133']);
+    expect(collected[0].entity!.metadata).not.toHaveProperty('Names');
+  });
+
   it('does not treat a non-URL Photo cell as an avatar_url', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-contactlist-photo-bad-'));
     const file = path.join(dir, 'contacts.csv');

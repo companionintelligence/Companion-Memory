@@ -86,6 +86,11 @@ import {
   type SelfIdentity,
 } from '../push/self';
 import {
+  rekeyTruncatedPhoneCoordinates,
+  truncatedPhoneKeyFor,
+  type TruncatedPhoneRekeyCandidate,
+} from '../push/truncatedPhoneKeys';
+import {
   DATABASE_FREE_FLOOR_BYTES,
   DatabaseVolumeFullError,
   isOutOfDiskError,
@@ -1268,6 +1273,9 @@ export class PushStage implements ImportStageRunner {
     // each key once, and every staged row holding it gets the resulting id.
     const byKey = new Map<string, StagedEntity[]>();
     const inputs: GraphEntityInputDto[] = [];
+    // Cards whose OLD coordinate was a truncated phone key — see
+    // `rekeyTruncatedPhoneKeys`, which moves those rows before ingest looks.
+    const rekeys: TruncatedPhoneRekeyCandidate[] = [];
     let skipped = 0;
     let unresolved = 0;
     let resolved = 0;
@@ -1320,6 +1328,18 @@ export class PushStage implements ImportStageRunner {
 
       byKey.set(input.key, [row]);
       inputs.push(input);
+
+      // Only the row whose input is sent: its source names the linked_table
+      // ingest will resolve in, so its old coordinate is the one that matters.
+      const truncated = input.entityType === 'Person' ? truncatedPhoneKeyFor(row) : null;
+
+      if (truncated != null) {
+        rekeys.push({ input, stagedType: row.type, dataSource: row.dataSource, proof: truncated });
+      }
+    }
+
+    if (rekeys.length > 0) {
+      await this.rekeyTruncatedPhoneKeys(context, rekeys);
     }
 
     if (inputs.length === 0) {
@@ -1451,6 +1471,55 @@ export class PushStage implements ImportStageRunner {
     });
 
     return { resolved, skipped, unresolved, failed };
+  }
+
+  /**
+   * Move contacts the OLD phone rule keyed on a truncation — `(212) 555-0147;229`
+   * as `5550147229` — onto the coordinate the fixed parser resolves them under,
+   * so the ingest that follows refreshes the existing row instead of minting a
+   * duplicate beside it. Migration 20260930020117 did this for the vCard rows it
+   * could prove; the card being pushed proves the rest. See
+   * `push/truncatedPhoneKeys.ts` for the proof and for what it refuses.
+   *
+   * Best effort. A refusal, or a failure that is about the rows rather than the
+   * database, leaves them where they are and the push goes on exactly as it did
+   * before this existed — the card mints a new row. A database that is away
+   * fails here the way it would fail the ingest a line later.
+   */
+  private async rekeyTruncatedPhoneKeys(
+    context: StageRunContext,
+    candidates: TruncatedPhoneRekeyCandidate[],
+  ): Promise<void> {
+    try {
+      const result = await this.retrying(context, 'moving contacts off truncated phone keys', () =>
+        rekeyTruncatedPhoneCoordinates(this.dataSource, context, candidates),
+      );
+
+      this.logger.log('Checked contacts keyed on a truncated phone number', {
+        runId: context.runId,
+        candidates: candidates.length,
+        moved: result.moved.length,
+        movedEntityIds: result.moved.map((row) => row.entityId),
+        skipped: result.skipped,
+        identifiersDeleted: result.identifiersDeleted,
+        selfClaimsDeleted: result.selfClaimsDeleted,
+        linksWithdrawn: result.linksWithdrawn,
+        edgesDeleted: result.edgesDeleted,
+        freedIdentifiersIndexed: result.freedIdentifiersIndexed,
+      });
+    } catch (err) {
+      // Every verdict class (not ready, unavailable, crashed) and every coded
+      // absence: the database being away is the stage's to handle, not ours.
+      if (isTransientDatabaseError(err)) {
+        throw err;
+      }
+
+      this.logger.warn('Could not move contacts off truncated phone keys; they resolve as new rows', {
+        runId: context.runId,
+        candidates: candidates.length,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private async recordEntityMapping(
