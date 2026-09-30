@@ -80,6 +80,18 @@ export class HubForwardAuthBridgeService {
   }
 
   /**
+   * Whether this request arrives through the Hub as the owner of `email`.
+   *
+   * {@link alignSession} finds a Hub person's Memory account by this address and
+   * nothing else, so while it holds the address is the Hub's link to the account:
+   * change it here and the next alignment finds no account for the Hub person,
+   * JIT-creates an empty one and signs them into that instead.
+   */
+  namesAccount(req: Request, email: string): boolean {
+    return emailsEqual(this.verifyUsername(req), email);
+  }
+
+  /**
    * If Hub headers name a different person than the Memory cookie, invalidate
    * the stale session and mint one for the Hub person (JIT-creating their
    * Memory user when they have never opened Memory on this box).

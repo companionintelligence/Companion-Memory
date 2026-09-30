@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -22,6 +23,7 @@ import { type User, UserService } from '@ci/domains/user';
 
 import { AuthService } from '../services/AuthService';
 import { FederatedIdentityService } from '../services/FederatedIdentityService';
+import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 
 const deleteAccountSchema = z.object({
   /**
@@ -65,6 +67,10 @@ export const REAUTH_SESSION_WINDOW_MS = 10 * 60 * 1000;
 /** The `message` a 401 from `requireReauth` carries when signing in again is the answer. */
 export const REAUTH_REQUIRED = 'REAUTH_REQUIRED';
 
+/** Why `PATCH /account/email` refuses a request the Hub signs in as this account — see `changeEmail`. */
+export const EMAIL_MANAGED_BY_HUB =
+  'Your Hub signs you in to Memory with this email address, so it cannot be changed here';
+
 /**
  * Session-only, on every route. An API key is for reading and writing data on
  * a person's behalf; it must never be able to change the credentials it hangs
@@ -79,26 +85,35 @@ export class AccountController {
     private readonly userService: UserService,
     private readonly authService: AuthService,
     private readonly federatedIdentityService: FederatedIdentityService,
+    private readonly hubBridge: HubForwardAuthBridgeService,
   ) {}
 
-  /** What the account settings UI needs to render itself: address, and whether
-   * a current-password prompt even makes sense for this account (see
-   * `requireReauth`). */
+  /** What the account settings UI needs to render itself: address, whether a
+   * current-password prompt even makes sense for this account (see
+   * `requireReauth`), and whether the address is the Hub's to change (see
+   * `changeEmail`). */
   @Get()
   @UseGuards(JwtAuthGuard)
   async get(
     @Context() context: RequestContext,
-  ): Promise<{ email: string; hasFederatedIdentity: boolean; hasOwnPassword: boolean }> {
+    @Req() req: Request,
+  ): Promise<{
+    email: string;
+    hasFederatedIdentity: boolean;
+    hasOwnPassword: boolean;
+    emailManagedByHub: boolean;
+  }> {
     const serviceContext = toServiceContext(context);
     const user = await this.requireUser(serviceContext);
     const federatedIdentities = await this.federatedIdentityService.listForUser(user.id);
 
-    // `hasOwnPassword` is what the settings page keys the current-password field on: a
-    // federated account that has set a password of its own is asked for it like any other.
+    // `hasOwnPassword` is what the settings page keys the current-password field on, for
+    // exactly the reason `requireReauth` keys on it — whatever the account's sign-in method.
     return {
       email: user.email,
       hasFederatedIdentity: federatedIdentities.length > 0,
       hasOwnPassword: Boolean(user.passwordSetAt),
+      emailManagedByHub: this.hubBridge.namesAccount(req, user.email),
     };
   }
 
@@ -146,6 +161,14 @@ export class AccountController {
    * isn't, since it redirects future logins to an address the attacker
    * controls. `requireReauth` asks for the current password wherever the user
    * has one, and for a recent sign-in otherwise.
+   *
+   * Refused outright (409), before any proof is asked for, while the Hub signs
+   * this request in as this account. The Hub forward-auth bridge finds a Hub
+   * person's account by this address alone, so the next page load after a
+   * change would sign them into a newly created, empty account and leave their
+   * memories behind an address the Hub never names. Nothing on either side
+   * follows a rename — the Hub's own username change strands the account the
+   * same way — so the settings page explains this instead of offering the form.
    */
   @Patch('email')
   @UseGuards(JwtAuthGuard)
@@ -156,6 +179,10 @@ export class AccountController {
   ): Promise<{ email: string }> {
     const serviceContext = toServiceContext(context);
     const user = await this.requireUser(serviceContext);
+
+    if (this.hubBridge.namesAccount(req, user.email)) {
+      throw new ConflictException(EMAIL_MANAGED_BY_HUB);
+    }
 
     await this.requireReauth(user, input.currentPassword, req);
 
@@ -176,10 +203,11 @@ export class AccountController {
   }
 
   /**
-   * Change (or, for an OIDC-linked account that has never had a password of
-   * its own, set) the authenticated user's password. On success every OTHER
-   * session for this account is invalidated — the request making the change
-   * stays signed in, everywhere else is forced to re-authenticate.
+   * Change (or, for a Portal-, OIDC- or Hub-provisioned account that has never
+   * had a password of its own, set) the authenticated user's password. On
+   * success every OTHER session for this account is invalidated — the request
+   * making the change stays signed in, everywhere else is forced to
+   * re-authenticate.
    */
   @Patch('password')
   @UseGuards(JwtAuthGuard)
@@ -215,13 +243,13 @@ export class AccountController {
   /**
    * Prove the caller is the account's owner before an email or password change.
    *
-   * The proof is the current password wherever the user has one they chose:
-   * every account that signed up with one, and a federated account that has
-   * since set one (`passwordSetAt`). The old rule exempted any account with a
-   * federated identity for good — reasonable for a Portal-provisioned account
-   * holding a random password it has never seen (`OidcController`,
-   * `PortalTokenService`), but it kept applying after that account had chosen a
-   * password, and it asked a stolen session for nothing.
+   * The proof is the current password wherever the user has one they chose —
+   * `passwordSetAt`, stamped by signup, by every password change and by the
+   * operator scripts that set one (`make userpw`, `make testuser`). The old rule
+   * exempted any account with a federated identity for good — reasonable for a
+   * Portal-provisioned account holding a random password it has never seen
+   * (`OidcController`, `PortalTokenService`), but it kept applying after that
+   * account had chosen a password, and it asked a stolen session for nothing.
    *
    * An account with no password of its own is asked for the next best thing:
    * a session established within {@link REAUTH_SESSION_WINDOW_MS}. Sign-in time
@@ -229,10 +257,22 @@ export class AccountController {
    * caller with only an access token and no session cookie cannot prove it, so
    * they get the same answer as a stale one: 401 `REAUTH_REQUIRED`, which the
    * settings page turns into "sign in again".
+   *
+   * Keyed on the stamp alone, not on whether a federated identity is bound. Until
+   * 2026-09-30 an account with none was asked for its password whatever the
+   * stamp said, and the accounts that caught were the Hub forward-auth bridge's:
+   * provisioned with a random password (`passwordChosenByUser: false`) and no
+   * federated identity, so a Hub-invited person could change neither their email
+   * nor their password. That makes a null stamp the whole of the exemption, so it
+   * must only ever mean "nobody knows this password": anything that writes a
+   * password a person knows has to stamp it. The opposite error is safe — a stamp
+   * on a random password (#2743's backfill put one on every account that had no
+   * federated identity, pre-federation Portal accounts and the bridge's earlier
+   * ones among them) asks for a password nobody can give, never waves a caller
+   * through.
    */
   private async requireReauth(user: User, currentPassword: string | undefined, req: Request): Promise<void> {
-    const federatedIdentities = await this.federatedIdentityService.listForUser(user.id);
-    const mustPresentPassword = federatedIdentities.length === 0 || Boolean(user.passwordSetAt);
+    const mustPresentPassword = Boolean(user.passwordSetAt);
 
     if (!mustPresentPassword) {
       const sessionToken: string | undefined = req.cookies?.[config.auth.cookies.sessionTokenName];
