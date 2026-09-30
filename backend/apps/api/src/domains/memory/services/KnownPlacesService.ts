@@ -6,8 +6,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { isValidTimezone } from '@ci/common/time/zoned';
-import { hourDowInTz } from '@ci/domains/daily-metrics/places/transitionMath';
+import { isValidTimezone, wallClockInTZ } from '@ci/common/time/zoned';
 
 import { PlaceService } from './PlaceService';
 import { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from './selfEntityProvisioner';
@@ -60,7 +59,12 @@ export interface KnownPlaceCandidate {
   locationId: string | null;
   /** Representative display name (location_name of the cluster's events). */
   label: string;
-  /** Suggested kind from the clustering heuristic (home/work/other). */
+  /**
+   * Suggested kind from the clustering heuristic. At most one candidate is
+   * `home` and one `work`, and only on evidence that recurs over several weeks
+   * (see {@link KnownPlacesService.assignPrimaryKinds}). A user with too little
+   * evidence gets none: every candidate is `other`.
+   */
   kind: KnownPlaceKind;
   /** Cluster centroid latitude. */
   lat: number;
@@ -77,6 +81,28 @@ export interface KnownPlaceCandidate {
   confidence: number;
 }
 
+/**
+ * One routine signal seen at a cluster: how many of its events fall in the
+ * signal's window, the distinct local days they fall on, and the distinct
+ * weeks those days fall in. Days are day numbers on the user's wall clock (see
+ * {@link localTime}); weeks are those days' {@link weekOf}.
+ */
+interface RoutineEvidence {
+  events: number;
+  days: Set<number>;
+  weeks: Set<number>;
+}
+
+function emptyEvidence(): RoutineEvidence {
+  return { events: 0, days: new Set(), weeks: new Set() };
+}
+
+function addEvidence(evidence: RoutineEvidence, day: number): void {
+  evidence.events += 1;
+  evidence.days.add(day);
+  evidence.weeks.add(weekOf(day));
+}
+
 /** Cluster the frequency pass accumulates before ranking. */
 interface Cluster {
   locationId: string | null;
@@ -85,10 +111,13 @@ interface Cluster {
   lngSum: number;
   eventCount: number;
   samples: KnownPlaceSampleEvent[];
-  /** Count of supporting events whose start hour is in 21:00–06:00 (home signal). */
-  nightCount: number;
-  /** Count of supporting events on weekdays in 09:00–17:00 (work signal). */
-  workHoursCount: number;
+  /**
+   * Home signal: events starting in 21:00–06:00. Their day is the night's
+   * EVENING, so 01:00 on a Saturday is Friday night.
+   */
+  night: RoutineEvidence;
+  /** Work signal: events starting Monday–Friday in 09:00–17:00. */
+  workHours: RoutineEvidence;
 }
 
 /**
@@ -121,6 +150,36 @@ function rememberSampleEvent(
 
 /** Coordinate grid size (degrees) for snapping nearby events into one cluster (~1.1km). */
 const CLUSTER_PRECISION = 2;
+
+/**
+ * How many different weeks a candidate must show the night-time signal in
+ * before it can be Home, or the weekday office-hours signal in before it can
+ * be Work. Weeks rather than events or days, because a home or a workplace is
+ * somewhere the user keeps coming back to, and a trip is a single burst
+ * however many days it lasts. The rule and the measurements behind the number
+ * are on {@link KnownPlacesService.assignPrimaryKinds}.
+ */
+const MIN_ROUTINE_WEEKS = 3;
+
+const MS_PER_DAY = 86_400_000;
+
+/**
+ * Where an instant falls on the user's wall clock. `day` is the local
+ * calendar date as a day number, counted from 1970-01-01, so a night can step
+ * back to its evening and a week can be taken by division. `weekday` counts
+ * from 0 for Sunday, as `Date#getUTCDay` does.
+ */
+function localTime(instant: Date, timezone: string): { day: number; hour: number; weekday: number } {
+  const wall = wallClockInTZ(instant, timezone);
+  const day = Date.UTC(wall.year, wall.month - 1, wall.day) / MS_PER_DAY;
+
+  return { day, hour: wall.hour, weekday: new Date(day * MS_PER_DAY).getUTCDay() };
+}
+
+/** The Monday-based week a day number falls in. Day 0, 1970-01-01, was a Thursday. */
+function weekOf(day: number): number {
+  return Math.floor((day + 3) / 7);
+}
 
 /** The graph relationship types that express a known place. */
 const KNOWN_PLACE_RELATIONSHIP_TYPES = ['LIVES_IN', 'WORKS_AT', 'VISITED'] as const;
@@ -275,8 +334,8 @@ export class KnownPlacesService {
           lngSum: 0,
           eventCount: 0,
           samples: [],
-          nightCount: 0,
-          workHoursCount: 0,
+          night: emptyEvidence(),
+          workHours: emptyEvidence(),
         };
         clusters.set(key, cluster);
       }
@@ -291,13 +350,18 @@ export class KnownPlacesService {
         cluster.labelCounts.set(name, (cluster.labelCounts.get(name) ?? 0) + 1);
       }
 
-      const { hour, dow: day } = hourDowInTz(new Date(row.start_time), timezone); // day: 0 = Sunday
-      if (hour >= 21 || hour < 6) {
-        cluster.nightCount += 1;
+      const start = new Date(row.start_time);
+      if (Number.isNaN(start.getTime())) {
+        continue;
       }
 
-      if (day >= 1 && day <= 5 && hour >= 9 && hour < 17) {
-        cluster.workHoursCount += 1;
+      const { day, hour, weekday } = localTime(start, timezone);
+      if (hour >= 21 || hour < 6) {
+        addEvidence(cluster.night, hour < 6 ? day - 1 : day);
+      }
+
+      if (weekday >= 1 && weekday <= 5 && hour >= 9 && hour < 17) {
+        addEvidence(cluster.workHours, day);
       }
     }
 
@@ -308,9 +372,8 @@ export class KnownPlacesService {
       .sort((a, b) => b.eventCount - a.eventCount)
       .slice(0, MAX_CANDIDATES);
 
-    // Mark the single strongest night-weighted cluster as the Home candidate and
-    // the strongest work-hours cluster as Work, so the top two surface as the
-    // confirmable Home/Work insights.
+    // Tag at most one Home and one Work, and only where the evidence recurs
+    // week after week; with too little evidence, nothing is tagged.
     this.assignPrimaryKinds(candidates, clusters);
 
     return candidates;
@@ -612,9 +675,51 @@ export class KnownPlacesService {
   }
 
   /**
-   * Tag the most home-like and most work-like candidate among the top clusters.
-   * Home = highest share of night-time events; Work = highest share of weekday
-   * 9–5 events. The two are distinct clusters where possible.
+   * Tag at most one candidate Home and one Work, and only on evidence that
+   * recurs week after week.
+   *
+   * Home is where the user's nights are: events that start 21:00–06:00 on
+   * their wall clock, each counted toward the evening it began. Work is where
+   * their weekday office hours are: events that start Monday–Friday,
+   * 09:00–17:00. A candidate qualifies for a role only if its signal falls in
+   * at least {@link MIN_ROUTINE_WEEKS} different weeks. Of the candidates that
+   * qualify, the one with the most distinct nights (for Work, weekdays) wins.
+   * A tie goes to the larger share of the candidate's events in the window,
+   * then to the busier candidate. Work is never the Home candidate: when one
+   * place is best for both, as a home office is, no Work is tagged. When
+   * nothing qualifies, nothing is tagged, and a caller must not stand a guess
+   * in for the missing tag (see `HomeConfirmService.topHomeCandidate`).
+   *
+   * The old rule took the highest SHARE of a cluster's events in the window,
+   * however few events that was. One event at 23:00 scored 1.0 and beat a real
+   * home at 0.75. The alternatives were measured on the reference corpus: 134
+   * located events, mostly ride pickups, or 91 once temporal estimates are
+   * left out. Each rule picked the same places on both sets:
+   *
+   *  - share (the old rule): Home was one late pickup in another city, and
+   *    Work was two pickups at an airport.
+   *  - at least 3 events, or 3 distinct days, then share: Home was an airport
+   *    cell with 2 nights, and Work a cell with 2 weekdays.
+   *  - night COUNT: Home was one trip, 2 nights in a single week.
+   *  - a Laplace- or Wilson-smoothed share: Home was the one-event cell or the
+   *    airport cell, and Work the two airport pickups.
+   *  - at least 3 distinct nights or weekdays: no Home, but Work was 3
+   *    weekdays spread over two business trips.
+   *  - at least 3 distinct weeks (this rule): no Home and no Work.
+   *
+   * No Home and no Work is the right answer on that corpus. The user's own
+   * GPS (`ci.position`) puts the most nights (12, in 11 weeks) and the most
+   * office-hours weekdays in the cell of their Google Maps "Home", which is a
+   * home office. None of that cell's located events is at night, so no rule
+   * over events can find it. Reading `ci.position` would; this pass does not.
+   *
+   * Nights are counted rather than night events, so a busy evening, such as a
+   * party with twenty photos, is one night. Ranking by that count rather than
+   * by share stops a weekly night out, whose events are all at night, from
+   * outranking a home that also has daytime events. What the floor cannot
+   * stop is a place the user really does keep returning to at night, such as
+   * a frequent flyer's airport. That qualifies like any other place, and it
+   * wins whenever the home has fewer nights in the event stream.
    */
   private assignPrimaryKinds(candidates: KnownPlaceCandidate[], clusters: Map<string, Cluster>): void {
     // An id-anchored candidate resolves ONLY by locationId (the cluster map is
@@ -636,37 +741,54 @@ export class KnownPlacesService {
       );
     };
 
-    let homeIdx = -1;
-    let workIdx = -1;
-    let bestNight = 0;
-    let bestWork = 0;
+    const homeIdx = strongestRoutine(candidates, clusterFor, (cluster) => cluster.night);
+    const workIdx = strongestRoutine(candidates, clusterFor, (cluster) => cluster.workHours);
 
-    candidates.forEach((candidate, idx) => {
-      const cluster = clusterFor(candidate);
-      if (!cluster) {
-        return;
-      }
-
-      const nightShare = cluster.nightCount / cluster.eventCount;
-      const workShare = cluster.workHoursCount / cluster.eventCount;
-
-      if (nightShare > bestNight) {
-        bestNight = nightShare;
-        homeIdx = idx;
-      }
-
-      if (workShare > bestWork) {
-        bestWork = workShare;
-        workIdx = idx;
-      }
-    });
-
-    if (homeIdx >= 0 && bestNight > 0) {
+    if (homeIdx >= 0) {
       candidates[homeIdx].kind = 'home';
     }
 
-    if (workIdx >= 0 && workIdx !== homeIdx && bestWork > 0) {
+    if (workIdx >= 0 && workIdx !== homeIdx) {
       candidates[workIdx].kind = 'work';
     }
   }
+}
+
+/**
+ * The index of the candidate with the strongest qualifying evidence for one
+ * routine, or -1 when none qualifies. The rule is documented on
+ * {@link KnownPlacesService.assignPrimaryKinds}.
+ */
+function strongestRoutine(
+  candidates: KnownPlaceCandidate[],
+  clusterFor: (candidate: KnownPlaceCandidate) => Cluster | undefined,
+  evidenceOf: (cluster: Cluster) => RoutineEvidence,
+): number {
+  let best = -1;
+  let bestDays = 0;
+  let bestShare = 0;
+
+  candidates.forEach((candidate, idx) => {
+    const cluster = clusterFor(candidate);
+    if (!cluster) {
+      return;
+    }
+
+    const evidence = evidenceOf(cluster);
+    if (evidence.weeks.size < MIN_ROUTINE_WEEKS) {
+      return;
+    }
+
+    const days = evidence.days.size;
+    const share = evidence.events / cluster.eventCount;
+
+    // Candidates arrive busiest first, so a full tie keeps the busier one.
+    if (days > bestDays || (days === bestDays && share > bestShare)) {
+      best = idx;
+      bestDays = days;
+      bestShare = share;
+    }
+  });
+
+  return best;
 }

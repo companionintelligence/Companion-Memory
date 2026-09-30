@@ -39,6 +39,16 @@ const WED_2300_PDT = '2026-08-20T06:00:00Z';
 const THU_0100_PDT = '2026-08-20T08:00:00Z';
 const WED_1000_PDT = '2026-08-19T17:00:00Z';
 const WED_1400_PDT = '2026-08-19T21:00:00Z';
+const SAT_1030_PDT = '2026-08-22T17:30:00Z';
+
+/**
+ * The same wall-clock time `weeks` weeks later. Home and Work are tagged only
+ * on a signal seen in three different weeks, so a fixture that should be
+ * tagged spreads its events out this way. Every fixture stays in PDT.
+ */
+function weeksLater(iso: string, weeks: number): string {
+  return new Date(Date.parse(iso) + weeks * 7 * 86_400_000).toISOString();
+}
 
 const HOME = { lat: 34.0522, lng: -118.2437 };
 const OFFICE = { lat: 34.0195, lng: -118.4912 };
@@ -153,10 +163,13 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
       [homeLocationId, ownerId],
     );
 
+    // One night in each of three weeks ("Movie night" runs past midnight),
+    // and a weekend morning.
     for (const [title, at] of [
       ['Dinner at home', WED_2230_PDT],
-      ['Late call', WED_2300_PDT],
-      ['Movie night', THU_0100_PDT],
+      ['Late call', weeksLater(WED_2300_PDT, 1)],
+      ['Movie night', weeksLater(THU_0100_PDT, 2)],
+      ['Saturday brunch', SAT_1030_PDT],
     ]) {
       await seedEvent({
         userId: ownerId,
@@ -168,9 +181,11 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
       });
     }
 
+    // A weekday in each of three weeks.
     for (const [title, at] of [
       ['Standup', WED_1000_PDT],
-      ['Design review', WED_1400_PDT],
+      ['Design review', weeksLater(WED_1400_PDT, 1)],
+      ['Planning', weeksLater(WED_1000_PDT, 2)],
     ]) {
       await seedEvent({ userId: ownerId, title, at, point: OFFICE, placeName: 'Office' });
     }
@@ -225,8 +240,8 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
     const candidates = await service.buildKnownPlaces(owner);
 
     expect(candidates.map((c) => [c.kind, c.label, c.eventCount, c.locationId])).toEqual([
-      ['home', 'Home base', 3, homeLocationId],
-      ['work', 'Office', 2, null],
+      ['home', 'Home base', 4, homeLocationId],
+      ['work', 'Office', 3, null],
     ]);
     // The title join #2777 broke: every sample reads its event's own name,
     // never the "Untitled event" fallback a NULL title would produce.
@@ -234,8 +249,135 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
       'Dinner at home',
       'Late call',
       'Movie night',
+      'Saturday brunch',
     ]);
-    expect(candidates[1].sampleEvents.map((e) => e.title).sort()).toEqual(['Design review', 'Standup']);
+    expect(candidates[1].sampleEvents.map((e) => e.title).sort()).toEqual([
+      'Design review',
+      'Planning',
+      'Standup',
+    ]);
+  });
+
+  describe('Home and Work on evidence that recurs over weeks', () => {
+    // A user with a routine, and one with the reference corpus's shape: a
+    // handful of rides, none of them recurring.
+    const settledId = uuidv7();
+    const drifterId = uuidv7();
+    const settledHomeId = uuidv7();
+    const settled = { userId: settledId } as UserServiceContext;
+    const drifter = { userId: drifterId } as UserServiceContext;
+
+    // Sunday 23:30 in Los Angeles is 06:30 Monday in UTC: not night at all on
+    // a UTC clock, and a different day and week.
+    const SUN_2330_PDT = '2026-08-24T06:30:00Z';
+    const SAT_1300_PDT = '2026-08-22T20:00:00Z';
+    const THU_2230_PDT = '2026-08-21T05:30:00Z';
+    const PICKUP = { lat: 37.7749, lng: -122.4194 };
+    const TERMINAL = { lat: 33.6762, lng: -117.8675 };
+    const CONFERENCE_HOTEL = { lat: 42.3601, lng: -71.0942 };
+
+    beforeAll(async () => {
+      await dataSource.query(
+        `INSERT INTO ci.users (id, name, email, timezone) VALUES
+           ($1, 'Settled known-places fixture', $2, 'America/Los_Angeles'),
+           ($3, 'Drifter known-places fixture', $4, 'America/Los_Angeles')`,
+        [
+          settledId,
+          `settled.${settledId}@example.invalid`,
+          drifterId,
+          `drifter.${drifterId}@example.invalid`,
+        ],
+      );
+      await dataSource.query(
+        `INSERT INTO ci.entities (entity_id, entity_type, name, properties, owner_user_id)
+         VALUES ($1, 'Location', 'Home', '{}'::jsonb, $2)`,
+        [settledHomeId, settledId],
+      );
+
+      // Home: a Sunday night in each of three weeks, and a Saturday lunch.
+      // Three of its four events are at night, a share of 0.75.
+      for (const [title, at] of [
+        ['Sunday night in', SUN_2330_PDT],
+        ['Sunday night in', weeksLater(SUN_2330_PDT, 1)],
+        ['Sunday night in', weeksLater(SUN_2330_PDT, 2)],
+        ['Saturday lunch', SAT_1300_PDT],
+      ]) {
+        await seedEvent({
+          userId: settledId,
+          title,
+          at,
+          point: HOME,
+          placeName: 'Home',
+          locationEntityId: settledHomeId,
+        });
+      }
+
+      // One late pickup across town: a night share of 1.0, on one event.
+      // The old rule made this Home.
+      await seedEvent({
+        userId: settledId,
+        title: 'Late pickup',
+        at: WED_2300_PDT,
+        point: PICKUP,
+        placeName: 'Pickup',
+      });
+
+      // The drifter's version of the same pickup, three weekday rides from an
+      // airport on two trips, and two nights of a conference in a single week.
+      await seedEvent({
+        userId: drifterId,
+        title: 'Late pickup',
+        at: WED_2300_PDT,
+        point: PICKUP,
+        placeName: 'Pickup',
+      });
+
+      for (const at of [WED_1000_PDT, WED_1400_PDT, weeksLater(WED_1400_PDT, 1)]) {
+        await seedEvent({
+          userId: drifterId,
+          title: 'Airport pickup',
+          at,
+          point: TERMINAL,
+          placeName: 'Terminal',
+        });
+      }
+
+      for (const at of [WED_2230_PDT, THU_2230_PDT]) {
+        await seedEvent({
+          userId: drifterId,
+          title: 'Hotel',
+          at,
+          point: CONFERENCE_HOTEL,
+          placeName: 'Conference hotel',
+        });
+      }
+    });
+
+    afterAll(async () => {
+      const users = [settledId, drifterId];
+      await dataSource.query('DELETE FROM ci.events WHERE user_id = ANY($1)', [users]);
+      await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = ANY($1)', [users]);
+      await dataSource.query('DELETE FROM ci.users WHERE id = ANY($1)', [users]);
+    });
+
+    it("tags the home whose nights recur on the owner's clock, not a single later night elsewhere", async () => {
+      const candidates = await service.buildKnownPlaces(settled);
+
+      expect(candidates.map((c) => [c.kind, c.label, c.eventCount, c.locationId])).toEqual([
+        ['home', 'Home', 4, settledHomeId],
+        ['other', 'Pickup', 1, null],
+      ]);
+    });
+
+    it('tags no Home and no Work when nothing recurs across three weeks', async () => {
+      const candidates = await service.buildKnownPlaces(drifter);
+
+      expect(candidates.map((c) => [c.kind, c.label, c.eventCount])).toEqual([
+        ['other', 'Terminal', 3],
+        ['other', 'Conference hotel', 2],
+        ['other', 'Pickup', 1],
+      ]);
+    });
   });
 
   it("never reads another user's events", async () => {
