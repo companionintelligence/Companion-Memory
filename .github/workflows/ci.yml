@@ -158,19 +158,18 @@ jobs:
       SEARCH_NEXT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       USER_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       # DATABASE_ADMIN_PASSWORD is deliberately NOT set, so this is not an
-      # oversight to "fix" by adding it. SEVEN further suites gate on
+      # oversight to "fix" by adding it. Further suites gate on
       # `scratchDatabaseAvailability()` (`domains/__tests__/support/scratchDatabase.ts`)
-      # — `user/…/AccountPurgeService.integration.spec.ts`, the four `etl/…`
-      # `ConnectionSyncJobService`/`SyncOrchestrator` specs,
-      # `pipeline/__tests__/enrichmentLoop.integration.spec.ts` and
-      # `domains/__tests__/support/__tests__/scratchDatabase.spec.ts` — and each
-      # one CREATEs a database of its own and replays every migration into it —
-      # roughly another two minutes apiece on top of the run below, against a
-      # 20-minute step ceiling. THEY STILL SKIP IN THIS JOB. That is visible,
-      # not disguised: each prints `SKIPPED — no administrative database
-      # connection configured …` naming this variable. Turning them on is a
-      # separate cost decision (and needs the step timeout revisited), not a
-      # side effect of this one.
+      # — list them with
+      #   grep -rl 'scratchDatabaseAvailability()' backend/apps/api/src
+      # rather than trusting a count here: this comment said seven while there
+      # were nine — and each one CREATEs a database of its own and replays
+      # every migration into it — roughly another two minutes apiece on top of
+      # the run below, against a 20-minute step ceiling. THEY STILL SKIP IN
+      # THIS JOB. That is visible, not disguised: each prints `SKIPPED — no
+      # administrative database connection configured …` naming this variable.
+      # Turning them on is a separate cost decision (and needs the step timeout
+      # revisited), not a side effect of this one.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
