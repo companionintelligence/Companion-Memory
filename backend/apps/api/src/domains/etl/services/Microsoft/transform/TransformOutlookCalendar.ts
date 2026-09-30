@@ -163,11 +163,28 @@ export class OutlookCalendarTransformService {
 
     const dataObj = data as Record<string, unknown>;
 
-    // Handle the structure from Microsoft Graph API
+    // Handle the structure from Microsoft Graph API. SyncOutlookCalendar
+    // returns every calendar in /me/calendars, each carrying its own `events`,
+    // so the job's events are all of them concatenated. This used to `return`
+    // from inside the loop, which imported the first calendar's events and
+    // silently dropped every other calendar the user has.
     if ('calendars' in dataObj && Array.isArray(dataObj.calendars)) {
-      for (const calendar of dataObj.calendars) {
-        return calendar.events as OutlookCalendarEvent[];
-      }
+      return dataObj.calendars.flatMap((calendar: unknown) => {
+        const events = (calendar as { events?: unknown } | null)?.events;
+
+        if (!Array.isArray(events)) {
+          // Both sync paths set `events` on every calendar they return, so this
+          // is a malformed payload. Skip the one calendar, not the whole job.
+          this.logger.warn('Outlook calendar has no events array; skipping it', {
+            calendarId: (calendar as { id?: unknown } | null)?.id,
+            eventsType: events === null ? 'null' : typeof events,
+          });
+
+          return [];
+        }
+
+        return events as OutlookCalendarEvent[];
+      });
     }
 
     this.logger.warn('No Outlook Calendar events found in data', {

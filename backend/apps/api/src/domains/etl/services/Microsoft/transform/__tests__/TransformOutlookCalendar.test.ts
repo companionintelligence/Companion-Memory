@@ -95,3 +95,88 @@ describe('OutlookCalendarTransformService.transformToEventDto — location_name'
     expect(dto.location_name).toBeUndefined();
   });
 });
+
+/**
+ * The public entry point, fed a sync job shaped the way SyncOutlookCalendar
+ * writes it: `{ calendars: [{ id, events: [...] }, ...] }`. Only the two
+ * services `processCalendarEvent` writes through are stubbed.
+ */
+function makeIngestService() {
+  const logger = {
+    setContext: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  };
+  const eventService = { create: jest.fn().mockResolvedValue([]) };
+  const promoteService = { processParticipants: jest.fn().mockResolvedValue([]) };
+
+  const service = new OutlookCalendarTransformService(
+    eventService as never,
+    {} as never, // ConnectionService — unused by the transform
+    promoteService as never,
+    logger as never,
+  );
+
+  return { service, eventService, logger };
+}
+
+function graphEvent(subject: string) {
+  return {
+    id: `graph-${subject}`,
+    iCalUId: `uid-${subject}`,
+    subject,
+    start: { dateTime: '2026-08-18T10:00:00Z' },
+    end: { dateTime: '2026-08-18T10:30:00Z' },
+  };
+}
+
+function runTransform(service: OutlookCalendarTransformService, data: unknown): Promise<void> {
+  return service.transformOutlookCalendar({
+    connection: { id: 'conn-1' } as never,
+    syncJob: { id: 'job-1', userId: 'user-1', data } as never,
+  });
+}
+
+/** Titles of every event handed to CalendarEventService.create, sorted. */
+function createdTitles(eventService: { create: jest.Mock }): string[] {
+  return eventService.create.mock.calls.map(([, dto]) => (dto as { title: string }).title).sort();
+}
+
+describe('OutlookCalendarTransformService.transformOutlookCalendar — every calendar', () => {
+  it('imports the events of every calendar, not just the first', async () => {
+    const { service, eventService } = makeIngestService();
+
+    await runTransform(service, {
+      calendars: [
+        { id: 'cal-work', name: 'Calendar', events: [graphEvent('Standup'), graphEvent('Retro')] },
+        { id: 'cal-family', name: 'Family', events: [graphEvent('Dentist')] },
+      ],
+    });
+
+    expect(createdTitles(eventService)).toEqual(['Dentist', 'Retro', 'Standup']);
+  });
+
+  it('skips a calendar whose events are missing or not an array, and still imports the rest', async () => {
+    const { service, eventService, logger } = makeIngestService();
+
+    await runTransform(service, {
+      calendars: [
+        { id: 'cal-no-events' },
+        { id: 'cal-null-events', events: null },
+        { id: 'cal-object-events', events: { value: [graphEvent('Nested')] } },
+        null,
+        { id: 'cal-ok', events: [graphEvent('Dentist')] },
+      ],
+    });
+
+    expect(createdTitles(eventService)).toEqual(['Dentist']);
+
+    const skipped = logger.warn.mock.calls
+      .filter(([message]) => message === 'Outlook calendar has no events array; skipping it')
+      .map(([, meta]) => (meta as { calendarId?: unknown }).calendarId);
+
+    expect(skipped).toEqual(['cal-no-events', 'cal-null-events', 'cal-object-events', undefined]);
+  });
+});
