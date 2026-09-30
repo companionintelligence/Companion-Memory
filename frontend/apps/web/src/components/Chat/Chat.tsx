@@ -35,6 +35,8 @@ interface Message {
   content: string;
   createdAt?: string;
   source?: 'openclaw' | 'memory' | 'user';
+  /** Persisted tool calls. The live stream draws these as they arrive; a reload has only this column. */
+  toolCalls?: object[] | null;
 }
 
 interface Props extends ChatInputProps {
