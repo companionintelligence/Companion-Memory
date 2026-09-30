@@ -40,6 +40,12 @@ const SNAPSHOT_TTL_MS = 3_000;
 const CATALOG_TTL_MS = 5 * 60_000;
 
 /**
+ * How long an OpenAI-compatible endpoint's `/v1/models` answer is reused when checking that the
+ * utility model is served. Every utility call asks; the list changes only when a model is pulled.
+ */
+const SERVED_MODELS_TTL_MS = 60_000;
+
+/**
  * How long after a runner first shows up in `/api/ps` its card-level sighting
  * is still taken as its baseline. Long enough to see the vision encoder's
  * buffers, which are allocated on the first image rather than at load; short
@@ -207,6 +213,10 @@ export class ResidencyPlannerService implements OnModuleInit {
 
   private lastReport: ResidencyReport | null = null;
 
+  private servedModels: { at: number; ids: string[] } | null = null;
+
+  private utilityFallbackLogged: string | null = null;
+
   private lastLoggedSummary: string | null = null;
 
   constructor(
@@ -249,7 +259,7 @@ export class ResidencyPlannerService implements OnModuleInit {
    */
   async resolveUtilityModel(): Promise<UtilityModelChoice> {
     if (!this.enabled) {
-      return { model: config.llm.utilityModel };
+      return { model: await this.utilityModelTheEndpointServes() };
     }
 
     try {
@@ -475,6 +485,52 @@ export class ResidencyPlannerService implements OnModuleInit {
 
       return null;
     }
+  }
+
+  /**
+   * The utility model, or the chat model when an OpenAI-compatible endpoint does not serve the
+   * utility model — the same "not served → route to the chat model" rule the planner applies on
+   * Ollama, which cannot run here (no `/api/ps`). Without it, a node whose only engine is Lemonade
+   * failed every utility job: `LLM_UTILITY_MODEL` unset resolves to `gemma4:e4b`, which Lemonade
+   * does not serve, and `validateModel` rejected it per call. A list that cannot be read, or one
+   * that holds neither model, leaves the configured id alone so the call reports the real problem.
+   */
+  private async utilityModelTheEndpointServes(): Promise<string> {
+    const utility = config.llm.utilityModel;
+    const driver = this.llmEndpointService.usesOpenAiDriver()
+      ? this.llmEndpointService.getOpenAiDriver()
+      : null;
+
+    if (!driver || typeof driver.listModels !== 'function') {
+      return utility;
+    }
+
+    const now = Date.now();
+
+    if (!this.servedModels || now - this.servedModels.at > SERVED_MODELS_TTL_MS) {
+      try {
+        this.servedModels = { at: now, ids: await driver.listModels() };
+      } catch {
+        return utility;
+      }
+    }
+
+    const served = this.servedModels.ids;
+    const chat = config.llm.chatModel;
+
+    if (served.includes(utility) || !chat || !served.includes(chat)) {
+      return utility;
+    }
+
+    if (this.utilityFallbackLogged !== utility) {
+      this.utilityFallbackLogged = utility;
+      this.logger.warn(
+        `Utility model "${utility}" is not served by ${config.llm.apiBase ?? 'the OpenAI-compatible endpoint'}; ` +
+          `utility calls run on the chat model "${chat}". Set LLM_UTILITY_MODEL to a served model to change that.`,
+      );
+    }
+
+    return chat;
   }
 
   /**

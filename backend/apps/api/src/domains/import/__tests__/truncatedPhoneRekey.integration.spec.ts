@@ -9,8 +9,10 @@ import {
 } from '@ci/domains/graph';
 import { GraphDeltaWriter } from '@ci/domains/memory';
 
+import type { Entity } from '../datasources/timeline';
 import { TRUNCATED_PHONE_REKEY_SOURCE } from '../push/truncatedPhoneKeys';
 import { PushStage } from '../stages/PushStage';
+import { entityIdentityKey, legacyEntityIdentityKey } from '../staging/identity';
 import type { StageRunContext } from '../types';
 
 import { createStagingHarness, importDatabase, type StagingHarness } from './support/stagingHarness';
@@ -161,7 +163,13 @@ describeWithDatabase(`moving contacts off truncated phone keys (${importDatabase
     return result.entities[0].entityId;
   }
 
-  /** The card the FIXED parser stages: its typed handles, and the key the fixed rule gives it. */
+  /**
+   * The card the FIXED parser stages: its typed handles, the key the current
+   * rule gives it, and the legacy key the row was minted under — both computed
+   * from the card's attributes exactly as `StagedWriter` computes them. The
+   * fixture states the current key it expects, so a fixture that means one
+   * thing and stages another fails here rather than downstream.
+   */
   async function stageCard(
     runId: string,
     card: {
@@ -172,6 +180,19 @@ describeWithDatabase(`moving contacts off truncated phone keys (${importDatabase
       source?: string;
     },
   ): Promise<string> {
+    const entity: Entity = {
+      ...(card.name ? { name: card.name } : {}),
+      type: 'contact',
+      attributes: [
+        ...(card.phones ?? []).map((value) => ({ name: 'phone', value, identity: true })),
+        ...(card.emails ?? []).map((value) => ({ name: 'email', value, identity: true })),
+      ],
+    };
+    const identityKey = entityIdentityKey(entity);
+    const legacy = legacyEntityIdentityKey(entity);
+
+    expect(identityKey).toBe(card.identityKey);
+
     const metadata = {
       Source: 'AppleContacts',
       ...(card.name ? { Names: [card.name] } : {}),
@@ -179,16 +200,18 @@ describeWithDatabase(`moving contacts off truncated phone keys (${importDatabase
       ...(card.emails?.length ? { Emails: card.emails } : {}),
     };
     const [row] = await harness.dataSource.query<Array<{ id: string }>>(
-      `INSERT INTO ci_import.staged_entities (run_id, user_id, type, name, metadata, identity_key, data_source)
-            VALUES ($1::uuid, $2::uuid, 'contact', $3, $4::jsonb, $5, $6)
+      `INSERT INTO ci_import.staged_entities
+              (run_id, user_id, type, name, metadata, identity_key, data_source, legacy_identity_key)
+            VALUES ($1::uuid, $2::uuid, 'contact', $3, $4::jsonb, $5, $6, $7)
          RETURNING id`,
       [
         runId,
         harness.userId,
         card.name,
         JSON.stringify(metadata),
-        card.identityKey,
+        identityKey,
         card.source ?? 'apple_contacts',
+        legacy !== identityKey ? legacy : null,
       ],
     );
 
@@ -537,31 +560,91 @@ describeWithDatabase(`moving contacts off truncated phone keys (${importDatabase
       expect(await identifiersOf(other)).toContain(`phone:${truncation}`);
       expect(await mappedEntity(card)).not.toBe(other);
     });
+  });
 
-    it('when two cards in this run both prove the same row', async () => {
-      const truncation = '5550153816'; // (212) 555-0153;816
-      const old = await seedOldRow(truncation, 'Kai Rowe');
+  it('gives a row two cards claim to one of them, and undoes the truncation on it', async () => {
+    // Under the old rule both copies keyed on the same truncation, so they were
+    // ONE row; `planLegacyKeyMoves` hands it to one claimant, and the other copy
+    // is minted fresh.
+    const truncation = '5550153816'; // (212) 555-0153;816
+    const old = await seedOldRow(truncation, 'Kai Rowe');
 
-      const runId = await harness.startRun();
-      const first = await stageCard(runId, {
-        name: 'Kai Rowe',
-        identityKey: 'kai.rowe@example.com',
-        phones: ['(212) 555-0153;816'],
-        emails: ['kai.rowe@example.com'],
-      });
-      const second = await stageCard(runId, {
-        name: 'Kai Rowe',
-        identityKey: 'k.rowe@example.org',
-        phones: ['(212) 555-0153;816'],
-        emails: ['k.rowe@example.org'],
-      });
-
-      await stage.pushEntities(contextFor(runId), 'balanced', null);
-
-      expect((await entity(old)).linked_id).toBe(GraphIngestService.linkedIdFor(`contact:${truncation}`));
-      expect(await mappedEntity(first)).not.toBe(old);
-      expect(await mappedEntity(second)).not.toBe(old);
+    const runId = await harness.startRun();
+    const first = await stageCard(runId, {
+      name: 'Kai Rowe',
+      identityKey: 'kai.rowe@example.com',
+      phones: ['(212) 555-0153;816'],
+      emails: ['kai.rowe@example.com'],
     });
+    const second = await stageCard(runId, {
+      name: 'Kai Rowe',
+      identityKey: 'k.rowe@example.org',
+      phones: ['(212) 555-0153;816'],
+      emails: ['k.rowe@example.org'],
+    });
+
+    await stage.pushEntities(contextFor(runId), 'balanced', null);
+
+    // Which one inherits is staging order — row ids, which two inserts in one
+    // millisecond may take in either order — so the test asks only that ONE did.
+    const mapped = [await mappedEntity(first), await mappedEntity(second)];
+    const heirKey = mapped[0] === old ? 'contact:kai.rowe@example.com' : 'contact:k.rowe@example.org';
+
+    expect(mapped.filter((id) => id === old)).toHaveLength(1);
+    expect((await entity(old)).linked_id).toBe(GraphIngestService.linkedIdFor(heirKey));
+    expect(await identifiersOf(old)).not.toContain(`phone:${truncation}`);
+  });
+
+  it('finishes the job on a later push when the row was moved but not yet repaired', async () => {
+    // A push that died between the legacy-key move and the repair: the row is
+    // already under the card's key, still carrying the truncation. The next
+    // push finds nothing to move, and repairs the row where it sits.
+    const truncation = '5550155018'; // (212) 555-0155;018
+    const old = await seedOldRow(truncation, 'Zoe Lind');
+
+    await harness.dataSource.query(`UPDATE ci.entities SET linked_id = $2::uuid WHERE entity_id = $1::uuid`, [
+      old,
+      GraphIngestService.linkedIdFor('contact:zoe.lind@example.com'),
+    ]);
+
+    const runId = await harness.startRun();
+    const staged = await stageCard(runId, {
+      name: 'Zoe Lind',
+      identityKey: 'zoe.lind@example.com',
+      phones: ['(212) 555-0155;018'],
+      emails: ['zoe.lind@example.com'],
+    });
+
+    await stage.pushEntities(contextFor(runId), 'balanced', null);
+
+    expect(await mappedEntity(staged)).toBe(old);
+    expect(await identifiersOf(old)).not.toContain(`phone:${truncation}`);
+    expect((await entity(old)).properties).not.toHaveProperty('phones');
+  });
+
+  it('repairs nothing when a card in this run keys those ten digits for real', async () => {
+    // The row under the card's key carries the digits, but this run also holds
+    // a card whose actual number they are: what they reached may be real.
+    const truncation = '5550156119'; // (212) 555-0156;119
+    const old = await seedOldRow(truncation, 'Ari Moss');
+
+    await harness.dataSource.query(`UPDATE ci.entities SET linked_id = $2::uuid WHERE entity_id = $1::uuid`, [
+      old,
+      GraphIngestService.linkedIdFor('contact:ari.moss@example.com'),
+    ]);
+
+    const runId = await harness.startRun();
+    await stageCard(runId, { name: 'Ari Moss', identityKey: truncation, phones: ['555-015-6119'] });
+    await stageCard(runId, {
+      name: 'Ari Moss',
+      identityKey: 'ari.moss@example.com',
+      phones: ['(212) 555-0156;119'],
+      emails: ['ari.moss@example.com'],
+    });
+
+    await stage.pushEntities(contextFor(runId), 'balanced', null);
+
+    expect(await identifiersOf(old)).toContain(`phone:${truncation}`);
   });
 
   it('moves a card with no other handle onto its name key', async () => {

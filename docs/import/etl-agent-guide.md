@@ -1019,12 +1019,17 @@ gets missed under time pressure. Two real shapes:
   duplicate beside its old row. Migration `20260930020117` could only re-key
   the rows whose own `properties.Phones` still held the typed line (vCard); the
   Apple Contacts and CSV parsers kept their numbers only in identity
-  ATTRIBUTES, which staging never persists. Those parsers now keep `Phones` /
-  `Emails` too, `contactKeyRecomputable.test.ts` fails any contact parser whose
-  key cannot be rebuilt from its own metadata, and `push/truncatedPhoneKeys.ts`
-  re-keys the unprovable rows at push time, when the card itself proves them.
-  **The rule for a new parser:** every value its key is derived from must reach
-  `metadata`, or no fix to the key can ever be applied to rows already stored.
+  ATTRIBUTES, which staging never persists. Two things close the gap: staging
+  records the key the card was minted under (`legacy_identity_key`, read with
+  the pre-fix rule) and the push moves the old row onto the new key
+  (`push/legacyKeys.ts`, PR #2795's mechanism for shared office lines); and
+  those parsers now keep `Phones` / `Emails`, so `push/truncatedPhoneKeys.ts`
+  can prove from the card that the old key was a truncation and undo what it
+  reached. `contactKeyRecomputable.test.ts` fails any contact parser whose key
+  cannot be rebuilt from its own metadata. **The rule for a new parser:** every
+  value its key is derived from must reach `metadata`, and a change to the key
+  rule must keep the OLD rule callable (`legacyEntityIdentityKey`) until every
+  stored row has been re-imported — or no fix can reach rows already stored.
 
 **Why it recurs:** the test suite goes green on the code fix, and green feels
 like done. It is not; the corpus is the deliverable.

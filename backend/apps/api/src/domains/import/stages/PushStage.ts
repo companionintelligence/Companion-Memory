@@ -76,6 +76,7 @@ import {
   productModelIdentifiers,
   type ReceiptEntityLinks,
 } from '../push/inputs';
+import { claimedCoordinates, legacyKeyClaims, planLegacyKeyMoves } from '../push/legacyKeys';
 import {
   type IsSelf,
   makeIsSelf,
@@ -86,9 +87,9 @@ import {
   type SelfIdentity,
 } from '../push/self';
 import {
-  rekeyTruncatedPhoneCoordinates,
+  repairTruncatedPhoneKeys,
   truncatedPhoneKeyFor,
-  type TruncatedPhoneRekeyCandidate,
+  type TruncatedPhoneRepair,
 } from '../push/truncatedPhoneKeys';
 import {
   DATABASE_FREE_FLOOR_BYTES,
@@ -1247,7 +1248,8 @@ export class PushStage implements ImportStageRunner {
     const staged = await this.retrying(context, 'reading the staged entities', () =>
       this.dataSource.query<StagedEntity[]>(
         `SELECT id, run_id AS "runId", user_id AS "userId", type, name, metadata,
-                identity_key AS "identityKey", data_source AS "dataSource"
+                identity_key AS "identityKey", data_source AS "dataSource",
+                legacy_identity_key AS "legacyIdentityKey"
            FROM ci_import.staged_entities
           WHERE run_id = $1::uuid AND push_status = 'pending'
           ORDER BY id`,
@@ -1273,9 +1275,6 @@ export class PushStage implements ImportStageRunner {
     // each key once, and every staged row holding it gets the resulting id.
     const byKey = new Map<string, StagedEntity[]>();
     const inputs: GraphEntityInputDto[] = [];
-    // Cards whose OLD coordinate was a truncated phone key — see
-    // `rekeyTruncatedPhoneKeys`, which moves those rows before ingest looks.
-    const rekeys: TruncatedPhoneRekeyCandidate[] = [];
     let skipped = 0;
     let unresolved = 0;
     let resolved = 0;
@@ -1328,18 +1327,6 @@ export class PushStage implements ImportStageRunner {
 
       byKey.set(input.key, [row]);
       inputs.push(input);
-
-      // Only the row whose input is sent: its source names the linked_table
-      // ingest will resolve in, so its old coordinate is the one that matters.
-      const truncated = input.entityType === 'Person' ? truncatedPhoneKeyFor(row) : null;
-
-      if (truncated != null) {
-        rekeys.push({ input, stagedType: row.type, dataSource: row.dataSource, proof: truncated });
-      }
-    }
-
-    if (rekeys.length > 0) {
-      await this.rekeyTruncatedPhoneKeys(context, rekeys);
     }
 
     if (inputs.length === 0) {
@@ -1353,6 +1340,9 @@ export class PushStage implements ImportStageRunner {
 
       return { resolved, skipped, unresolved, failed: 0 };
     }
+
+    await this.moveLegacyKeys(context, inputs, byKey);
+    await this.repairTruncatedPhoneKeys(context, inputs, byKey);
 
     // Keys ingest refused for a reason that was about the ENTITY. The rest of
     // what ingest does not echo back — the database being away — is never
@@ -1474,33 +1464,111 @@ export class PushStage implements ImportStageRunner {
   }
 
   /**
-   * Move contacts the OLD phone rule keyed on a truncation — `(212) 555-0147;229`
-   * as `5550147229` — onto the coordinate the fixed parser resolves them under,
-   * so the ingest that follows refreshes the existing row instead of minting a
-   * duplicate beside it. Migration 20260930020117 did this for the vCard rows it
-   * could prove; the card being pushed proves the rest. See
-   * `push/truncatedPhoneKeys.ts` for the proof and for what it refuses.
+   * Move the `ci.entities` rows minted under contacts' OLD keys onto their new
+   * ones, before ingest looks them up.
    *
-   * Best effort. A refusal, or a failure that is about the rows rather than the
-   * database, leaves them where they are and the push goes on exactly as it did
-   * before this existed — the card mints a new row. A database that is away
-   * fails here the way it would fail the ingest a line later.
+   * The re-key half of `entityIdentityKey` passing over shared handles: a
+   * contact whose smallest handle was an office line or a fax now resolves
+   * under another key, and ingest finds rows by key alone, so without this
+   * every such contact would be minted a second time beside its old row on the
+   * next import of the same export. Moving the row keeps its id, and the
+   * ingest right after rewrites it with what the card now says — which is also
+   * what takes the other colleagues' names off a Person that had collapsed
+   * several of them. See `push/legacyKeys.ts` for who inherits a row.
+   *
+   * Idempotent: a row moves only while it still sits on the old key and the
+   * new one is free, so a retried push, or the next import, finds nothing left
+   * to do.
    */
-  private async rekeyTruncatedPhoneKeys(
+  private async moveLegacyKeys(
     context: StageRunContext,
-    candidates: TruncatedPhoneRekeyCandidate[],
+    inputs: GraphEntityInputDto[],
+    byKey: Map<string, StagedEntity[]>,
   ): Promise<void> {
+    const claims = legacyKeyClaims(inputs.map((input) => ({ input, rows: byKey.get(input.key) ?? [] })));
+
+    if (claims.length === 0) {
+      return;
+    }
+
+    const scope = { userId: context.userId };
+    const found = await this.retrying(context, 'reading entities under their old keys', () =>
+      this.graph.findImportedEntities(scope, claimedCoordinates(claims)),
+    );
+    const plan = planLegacyKeyMoves(claims, found);
+    const moved =
+      plan.moves.length > 0
+        ? await this.retrying(context, 'moving entities onto their new keys', () =>
+            this.graph.rekeyImportedEntities(scope, plan.moves),
+          )
+        : [];
+
+    this.logger.log('Moved entities onto their new keys', {
+      runId: context.runId,
+      claimed: claims.length,
+      moved: moved.length,
+      kept: plan.kept,
+    });
+  }
+
+  /**
+   * Undo what a contact's TRUNCATED phone key had reached, now that its row
+   * sits under the card's own key — see `push/truncatedPhoneKeys.ts`.
+   *
+   * `moveLegacyKeys` just above put the row there. This is the half a key moved
+   * by the phone-extension fix needs and one moved by shared handles does not:
+   * a shared line is somebody's real number, while `(212) 555-0147;229` keyed as
+   * `5550147229` belongs to nobody on the card — and its identifier, self claim
+   * and every call matched to it came along with the row.
+   *
+   * Best effort. A failure that is about the rows rather than the database is
+   * logged and the push goes on, the row keeping what it had, as before this
+   * existed. A database that is away fails here the way it would fail the
+   * ingest a line later.
+   */
+  private async repairTruncatedPhoneKeys(
+    context: StageRunContext,
+    inputs: GraphEntityInputDto[],
+    byKey: Map<string, StagedEntity[]>,
+  ): Promise<void> {
+    const repairs: TruncatedPhoneRepair[] = [];
+
+    for (const input of inputs) {
+      if (input.entityType !== 'Person') {
+        continue;
+      }
+
+      for (const row of byKey.get(input.key) ?? []) {
+        // A row of another source riding on this input names a coordinate the
+        // ingest never looks at — the rule `legacyKeyClaims` applies too.
+        if ((row.dataSource ?? 'unknown') !== input.sourceSystem) {
+          continue;
+        }
+
+        const proof = truncatedPhoneKeyFor(row);
+
+        if (proof != null) {
+          repairs.push({ input, stagedType: row.type, dataSource: row.dataSource, proof });
+        }
+      }
+    }
+
+    if (repairs.length === 0) {
+      return;
+    }
+
     try {
-      const result = await this.retrying(context, 'moving contacts off truncated phone keys', () =>
-        rekeyTruncatedPhoneCoordinates(this.dataSource, context, candidates),
+      const result = await this.retrying(context, 'undoing what truncated phone keys reached', () =>
+        repairTruncatedPhoneKeys(this.dataSource, context, repairs),
       );
 
-      this.logger.log('Checked contacts keyed on a truncated phone number', {
+      this.logger.log('Undid what truncated phone keys had reached', {
         runId: context.runId,
-        candidates: candidates.length,
-        moved: result.moved.length,
-        movedEntityIds: result.moved.map((row) => row.entityId),
+        candidates: repairs.length,
+        repaired: result.repaired.length,
+        repairedEntityIds: result.repaired.map((row) => row.entityId),
         skipped: result.skipped,
+        rewritten: result.rewritten,
         identifiersDeleted: result.identifiersDeleted,
         selfClaimsDeleted: result.selfClaimsDeleted,
         linksWithdrawn: result.linksWithdrawn,
@@ -1514,9 +1582,9 @@ export class PushStage implements ImportStageRunner {
         throw err;
       }
 
-      this.logger.warn('Could not move contacts off truncated phone keys; they resolve as new rows', {
+      this.logger.warn('Could not undo what truncated phone keys had reached; the rows keep it', {
         runId: context.runId,
-        candidates: candidates.length,
+        candidates: repairs.length,
         error: err instanceof Error ? err.message : String(err),
       });
     }

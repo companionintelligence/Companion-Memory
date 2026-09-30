@@ -5,8 +5,13 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 
 import { naturalKeyFor } from '../../push/entities';
-import { identityKeyFromTypedHandles, typedHandlesOf } from '../../push/truncatedPhoneKeys';
-import { entityIdentityKey, resolveEntityType, stagedNaturalKey } from '../../staging/identity';
+import { typedHandlesOf } from '../../push/truncatedPhoneKeys';
+import {
+  entityIdentityKey,
+  normalizeHandle,
+  resolveEntityType,
+  stagedNaturalKey,
+} from '../../staging/identity';
 import { AppleContactsFileImporter } from '../applecontacts';
 import { ContactListFileImporter } from '../contactlist';
 import type { Entity, Graph, ImportParams } from '../timeline';
@@ -31,7 +36,14 @@ import { VCardFileImporter } from '../vcard';
  * own `Phones` / `Emails` / `Names` equals the key the importer actually
  * resolves under. A parser that keys on a handle it does not keep fails here.
  *
- * One stated exception, left out of the fixtures on purpose: a Google CSV cell
+ * It holds for a card none of whose handles the export marked shared, which is
+ * every card in these fixtures. A shared mark (`markSharedContactHandles`: a
+ * fax, or a line another person's card lists) is a fact about the export's
+ * OTHER cards, so a key that moves because of one is not recomputable from the
+ * card alone — which is why staging records the old key beside the new one
+ * (`legacy_identity_key`) and the push moves the row (`push/legacyKeys.ts`).
+ *
+ * One more stated exception, left out of the fixtures on purpose: a Google CSV cell
  * joining two values (`a@example.com ::: b@example.org`) still keys on the
  * joined string, because the attributes keep it whole so that no stored key
  * moves, while the lists hold its values split. That key is stated on the row
@@ -71,7 +83,9 @@ function keyFromProperties(entity: Entity): string | null {
 
   return stagedNaturalKey(
     'contact',
-    identityKeyFromTypedHandles(typedHandlesOf(properties)),
+    // `entityIdentityKey` over the typed values: the smallest handle the current
+    // rule keys (an extension line keys nothing).
+    typedHandlesOf(properties).map(normalizeHandle).filter(Boolean).sort()[0] ?? null,
     Array.isArray(names) && typeof names[0] === 'string' ? names[0] : null,
   );
 }
