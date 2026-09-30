@@ -279,9 +279,10 @@ function isHandleAttribute(attribute: EntityAttribute | null | undefined): attri
  *
  * Only ever used to FIND a row — {@link legacyEntityIdentityKey} reproduces the
  * key rows already in `ci.entities` were minted under, and those were minted
- * with this. Never a key anything is written under.
+ * with this — or to recognise one: `push/truncatedPhoneKeys.ts` reads it to
+ * prove a card's old key was a truncation. Never a key anything is written under.
  */
-function legacyNormalizeHandle(value: unknown): string {
+export function legacyNormalizeHandle(value: unknown): string {
   if (typeof value !== 'string') {
     return '';
   }

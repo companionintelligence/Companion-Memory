@@ -282,6 +282,35 @@ describe('PersonMergeService', () => {
     expect(folded.phones).toEqual(['2025550142', '2079460958']);
   });
 
+  it('keeps a typed office extension apart from its main line when an imported card merges in', async () => {
+    // applecontacts.ts and contactlist.ts keep `Phones` as typed now, as
+    // vcard.ts did. The union de-duplicates on the WHOLE digit string, so the
+    // extension line stays its own entry — the adjudicator refuses it — while a
+    // second spelling of the main line folds into the first.
+    const harness = makeHarness([
+      personRow(TARGET, {
+        name: 'Dana Quill',
+        properties: { Phones: ['(212) 555-0147'], phones: ['2125550147'] },
+      }),
+      personRow(SOURCE_A, {
+        name: 'Dana Quill',
+        properties: {
+          Phones: ['(212) 555-0147;229', '212.555.0147'],
+          Emails: ['dana.quill@example.com'],
+          emails: ['dana.quill@example.com'],
+        },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const propertiesUpdate = statementsMatching(harness, 'SET properties =');
+    const folded = JSON.parse(propertiesUpdate[0].params?.[2] as string) as Record<string, unknown>;
+    expect(folded.Phones).toEqual(['(212) 555-0147', '(212) 555-0147;229']);
+    expect(folded.phones).toEqual(['2125550147']);
+    expect(folded.emails).toEqual(['dana.quill@example.com']);
+  });
+
   it("never lets a source's is_self flag leak onto a non-self target", async () => {
     // SOURCE_A is a floating self-flagged stub (NOT the row users.entity_id
     // points at, so the self-source guard does not reject it).

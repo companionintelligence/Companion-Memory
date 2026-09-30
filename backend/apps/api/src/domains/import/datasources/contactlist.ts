@@ -12,6 +12,31 @@ import type { Entity, EntityAttribute, ImportParams } from './timeline';
 
 type ContactListOptions = Record<string, never>;
 
+/**
+ * The accumulating entity-metadata keys, as vcard.ts declares its own (see
+ * Entity.accumulate). `Phones` / `Emails` keep every value as typed: the identity
+ * attributes are read once for `identity_key` and never persisted, so without
+ * them a row's durable record of its own numbers is the one key derived from
+ * them — and a key the key rule later changes cannot be recomputed. The phone
+ * extension fix hit exactly that: a `(212) 555-0147;229` cell had keyed as
+ * `5550147229`, and migration 20260930020117 could prove it for vCard rows only.
+ */
+const ACCUMULATED_KEYS = ['Names', 'Emails', 'Phones'];
+
+/**
+ * Google Contacts' CSV joins a label's several values into ONE cell:
+ * `E-mail 1 - Value` reads `a@example.com ::: b@example.org`. Only ` ::: ` is
+ * split — a `,` or `;` in a phone cell is a pause or an extension.
+ */
+const JOINED_VALUE_SEPARATOR = /\s*:::\s*/;
+
+/** Every value in a column's cells: joined cells split, trimmed, unique in order, empties removed. */
+function cellValues(cells: string[] | undefined): string[] {
+  const values = (cells ?? []).flatMap((cell) => cell.split(JOINED_VALUE_SEPARATOR)).map((v) => v.trim());
+
+  return [...new Set(values.filter(Boolean))];
+}
+
 // Canonical field keys
 const CANON = {
   FULL: 'full_name',
@@ -208,6 +233,16 @@ export class ContactListFileImporter implements FileImporter {
         continue;
       }
 
+      // One entry per VALUE, as vcard.ts lists them; `attributes` above keep one
+      // per cell. Those decide the key and the usefulness filter, so a joined
+      // cell stays whole there — splitting it would move every such row's key and
+      // mint a second Person beside it. That key is still stated on the row
+      // (`properties.email` / `.phone`). Here it is split: the phone adjudicator
+      // reads a whole joined cell as one invalid number on the very digits the
+      // row is keyed by, which would cost the row its phone evidence.
+      const emails = cellValues(vals[CANON.EMAIL]);
+      const phones = cellValues(vals[CANON.PHONE]);
+
       contacts.push({
         name,
         // `type` is declared for the same reason as in vcard.ts: a contact-list row
@@ -218,12 +253,17 @@ export class ContactListFileImporter implements FileImporter {
         metadata: {
           Source: 'ContactList',
           File: path.basename(full),
+          // Every handle as typed — see ACCUMULATED_KEYS.
+          ...(name ? { Names: [name] } : {}),
+          ...(emails.length ? { Emails: emails } : {}),
+          ...(phones.length ? { Phones: phones } : {}),
           // Lowercase, unlike the other keys here: this exact key is the contract
           // `push/entities.ts` spreads straight into `ci.entities.properties`, and
           // `PersonType.avatarUrl` (backend/.../types/PersonType.ts) reads it back
           // as `properties.avatar_url`.
           ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
         },
+        accumulate: ACCUMULATED_KEYS,
       });
     }
 
