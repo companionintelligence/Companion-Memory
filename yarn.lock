@@ -3133,6 +3133,7 @@ __metadata:
     typescript: "npm:^5.8.3"
     typescript-eslint: "npm:^8.32.1"
     vite: "npm:^6.4.3"
+    yaml: "npm:^2.8.1"
   languageName: unknown
   linkType: soft
 

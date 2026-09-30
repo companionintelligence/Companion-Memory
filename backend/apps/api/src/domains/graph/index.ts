@@ -122,6 +122,7 @@ export type {
   ImportedEntityMatch,
   ImportedEntityRef,
   ImportedEntityRekey,
+  MergedAwayEntity,
 } from './services/GraphIngestService';
 export type {
   ItemRelationshipInputDto,
@@ -138,7 +139,9 @@ export {
 export {
   type IdentifierKind,
   type PersonNameParts,
+  PHONE_EXTENSION_PATTERN,
   classifyParticipant,
+  hasPhoneExtension,
   normalizeEmail,
   normalizeIdentifier,
   normalizeName,

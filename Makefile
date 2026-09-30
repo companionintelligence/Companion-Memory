@@ -698,7 +698,17 @@ typecheck: ## Typecheck every JS/TS workspace that declares a typecheck script
 
 .PHONY: test
 test: ## Run the unit tests, both stacks
-	@yarn tsx scripts/xtask/index.ts test
+	@# `node --import tsx`, NOT `yarn tsx`: the tsx CLI wrapper relays Ctrl-C and `kill` to its child and
+	@# SIGKILLs it if it has not answered within ~60 ms. This command spends its time blocked in a child
+	@# process, so it cannot answer, and the run would die with no summary (and, for test-db, with a
+	@# database container left running). scripts/xtask/makefile.test.ts fails if this goes back.
+	@yarn node --import tsx scripts/xtask/index.ts test
+
+.PHONY: test-db
+test-db: ## Run the database-backed jest suites against a throwaway Postgres (needs Docker)
+	@# `node --import tsx`, not `yarn tsx` -- see `test` above for why. Here the cost of the wrapper is a
+	@# running ci-testdb-* container and a leftover temp dir.
+	@yarn node --import tsx scripts/xtask/index.ts test-db $(if $(KEEP),--keep) $(if $(WORKERS),--workers $(WORKERS)) $(if $(DB_IMAGE),--image $(DB_IMAGE)) $(if $(NO_RETRY),--no-retry) -- $(ARGS)
 
 .PHONY: test-android
 test-android: ## Run the Android native unit tests (JVM; no emulator needed)

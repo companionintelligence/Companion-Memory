@@ -42,6 +42,21 @@ describe('LocationEstimateService.countCandidates', () => {
     expect(sql).toContain("metadata->>'location_source' = 'estimated'");
   });
 
+  it('never counts an event that names its own location — forced or not', async () => {
+    // Its coordinate is the geocoder's to resolve. A neighbour's fix pinned a
+    // calendar flight "Bangkok BKK" to the user's home (enrich.estimate_location
+    // v2 records the same rows as `skipped: has_location_name`). The clause sits
+    // OUTSIDE the forced-aware OR, so `forced` cannot re-admit them either.
+    const { service, dataSource } = makeService(async () => [{ count: '0' }]);
+
+    await service.countCandidates(USER, ['calendar'], 86400, true);
+
+    const [sql] = dataSource.query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(
+      /\)\s*AND \(e\.location_name IS NULL OR btrim\(e\.location_name\) = ''\)\s*AND e\.is_deleted/,
+    );
+  });
+
   it('with forced=true, widens the candidate predicate to include prior estimates', async () => {
     const { service, dataSource } = makeService(async () => [{ count: '7' }]);
 
@@ -98,6 +113,7 @@ describe('LocationEstimateService.estimateBatch', () => {
 
     // Safety invariants encoded in the SQL.
     expect(sql).toContain('location_coordinates IS NULL'); // candidate predicate (NULL coords admitted)
+    expect(sql).toContain("(e.location_name IS NULL OR btrim(e.location_name) = '')"); // named rows are the geocoder's
     expect(sql).toContain("|| jsonb_build_object('location_source', 'estimated')");
     expect(sql).toContain('is_inferred = true');
     expect(sql).toContain('COALESCE(e.is_predicted, false) = false'); // never abort batch on a predicted row

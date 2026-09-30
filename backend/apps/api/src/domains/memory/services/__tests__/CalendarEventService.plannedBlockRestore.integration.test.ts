@@ -5,6 +5,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import { UserEntity } from '@ci/domains/user';
 
+import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { BaseEntity } from '../../entities/BaseEntity';
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
@@ -30,8 +31,13 @@ import { GraphDeltaWriter } from '../GraphDeltaWriter';
  * Opt-in: set `PLANNING_TEST_DATABASE_URL` to a database with migrations
  * applied (see CandidateService.lifecycle.integration.test.ts).
  */
-const DATABASE_URL = process.env.MEMORY_TEST_DATABASE_URL ?? process.env.PLANNING_TEST_DATABASE_URL;
-const describeWithDb = DATABASE_URL ? describe : describe.skip;
+const DATABASE_ENV = { urlEnvVar: ['MEMORY_TEST_DATABASE_URL', 'PLANNING_TEST_DATABASE_URL'] };
+const availability = databaseAvailability(DATABASE_ENV);
+const describeWithDb = availability.available ? describe : describe.skip;
+
+if (!availability.available) {
+  console.warn(`[memory/CalendarEventService.plannedBlockRestore] SKIPPED — ${availability.reason}`);
+}
 
 describeWithDb('CalendarEventService — re-placing a tombstoned planned block (integration)', () => {
   let dataSource: DataSource;
@@ -75,7 +81,7 @@ describeWithDb('CalendarEventService — re-placing a tombstoned planned block (
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...dataSourceConnection(DATABASE_ENV),
       entities: [EventEntity, BaseEntity, EventBaseEntity, UserEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },

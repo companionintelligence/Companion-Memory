@@ -359,18 +359,46 @@ pairs in three deterministic tiers:
 
 | Tier | Evidence | Where it is graded |
 |------|----------|--------------------|
-| Email | a shared normalized mailbox (evidence, claims or `properties`) | `SHARES_EXACT_EMAIL` |
+| Email | a shared normalized mailbox (evidence, claims or `properties`) — held for review, never folded, when one side is the owner and the other's name contradicts theirs (`email_check: self_endpoint`), or when two contacts' full names share nothing (`email_check: name_conflict`) | `SHARES_EXACT_EMAIL`; `utils/emailIdentity.ts` `emailHoldReason` |
 | Phone | one equal, valid, ordinary number in both people's own `properties`, names compatible, line not shared (`phone` 0.95) — see the rule table below | `utils/phoneIdentity.ts` `PhoneHolders.adjudicate` |
 | Profile URL | equal LinkedIn `/in/` URL sets, corroborated by a shared name token or an agreeing "Connected On" date, contradicted by neither (`profile_url` 0.95) | `utils/profileUrls.ts` `adjudicateProfileUrls` |
 
-The phone tier (`clean.duplicate_detect` v6, `DUPLICATE_SCORING_GENERATION` 5) reads `Phones`
-(the vCard's numbers as typed), the `phones`/`phone` ten-digit keys and a display name that is a
-number (the Google Voice participant stub). Its adjudicator is the only producer of a 0.95 phone
-item; the claim pass's unguarded E.164 tier is capped at 0.85 (`phone_check: unadjudicated`), and
-the drain no longer joins `identifier_claims.value_e164` at all.
+The phone tier (`clean.duplicate_detect` v8: `DUPLICATE_SCORING_GENERATION` 6,
+`DUPLICATE_CANDIDATE_GENERATION` 3) reads `Phones` (the vCard's numbers as typed), `Faxes` (only to
+refuse them), the `phones`/`phone` ten-digit keys and a display name that is a number (the Google
+Voice participant stub). Its adjudicator is the only producer of a 0.95 phone item; the claim pass's
+unguarded E.164 tier is capped at 0.85 (`phone_check: unadjudicated`), and the drain no longer joins
+`identifier_claims.value_e164` at all.
+
+What a contact states reaches both tiers whole. Staging used to keep ONE handle per contact — the
+smallest, which is also its natural key — so a card with any phone never indexed its email (600 of
+1,018 cards with an email in one real export) and mail from it minted a stub. Staging now records
+every email and phone a contact states as `emails` / `phones` (`import/staging/identity.ts`
+`contactIdentifiers`), less a shared handle (a fax anywhere in the export, or a line another card
+lists under a name that describes someone else — `markSharedContactHandles`, the same rule that
+keeps them from keying the card), a fax, a number with an extension and a role inbox (`info@`),
+reading a Google CSV cell joined with ` ::: ` value by value, and the push indexes them all —
+except on a row that is several people: staging collapses sightings on their identity key, and a
+household on one home line stays together (#2795 cannot tell a shared surname from a nickname), so
+its lists hold every member's addresses. The sightings' names (`contactNames`) show it, and such a
+row is indexed on its handle alone (`describesSeveralPeople`).
+
+Migration `20260930022046` repaired the vCard rows already imported, from their own `Emails` /
+`Phones`. It skips a row whose `Names` are several people, and indexes a value only when no other
+card lists it under a different name: first writer wins would hand an office line, or the owner's
+address, to whichever card is older. It also dropped the fake numbers extensions had left in
+`phones` and in the index ("(310) 447-8675;229" keyed as 4478675229): any key the card's own typed
+`Phones` proves, by one extension rule (`PHONE_EXTENSION_PATTERN`) shared by the TypeScript and the
+SQL. That includes a fake a form save marked verified, because `replaceForEntity` promotes every
+row it round-trips. It never removes a row a user typed (those keep their `raw_value`), and never
+touches a merge survivor, whose ten digits can be a merged-in record's real line.
+
+`enrich.person_self_claim` (v2) turns a record's `emails` / `phones` into claims, and retracts the
+ones it no longer states (its own rows only).
 
 | Rule | Detail |
 |------|--------|
+| Fax | A number either record files under `Faxes` is never evidence, whatever else states it: one office's fax is on every card from that office. The vCard parser files a number under `Faxes` on every card of an export once any card in it types that number FAX (`TEL;TYPE=FAX`, or a fax label): one person's duplicate cards type it on one copy and leave it bare on the next. |
 | Parsing | Stated when the value says its country: `+`, `00`, `011` (NANP only), or eleven digits led by `1`. A national value is read as `+1` only under a NANP owner region and only when it is a valid geographic number. Toll-free (800/833/844/855/866/877/888, reserved 822/880–887/889), premium (900, NXX 976), personal/non-geographic (456, 500, 521–529, 533, 544, 566, 577, 588, 600, 622, 700, 710), N11 and 950/958/959 exchanges, reserved area codes (N11, N9X, 37X, 96X, 555), extensions, short codes and anything invalid are never evidence. |
 | Region | The owner's own stated numbers if unanimous, else an explicit list of North American IANA zones (`UTC` and `America/Mexico_City` give none). Once the corpus states ≥ 20 numbers, ≥ 50% must be `+1` or no region is used. No region: national numbers match at most as "country not confirmed" (0.75). |
 | Stated vs inferred | Per last ten digits a stated form beats an inferred one, two stated forms that disagree are unresolved, a refused raw value (a UK "020 …" number, an extension) beats the inferred reading of its own truncated `phones` key, and digits any person or claim states under another country are never read as `+1`. |
@@ -399,7 +427,28 @@ Guards, all on every merge:
 - **Phone live re-check.** A phone-only pair is re-graded by `PhoneHolders.adjudicate` on the live
   endpoints against the owner's whole phone corpus (read once per drain, kept in step after every
   merge); a rename, a number that became over-common or gained a second real identity, or a self
-  endpoint demotes it to a labelled review row.
+  endpoint demotes it to a labelled review row. A pair whose two records no longer share ANY number
+  keeps its phone item only while both people are still observed with it (a claim other than their
+  own self claim), held below the tier; with nothing left the row is retired, not floored.
+- **Review-queue re-check.** The detector never withdraws a pair and is not re-run when a record
+  changes, so before the People page shows the queue, `MergeCandidateService.revalidatePhoneEvidence`
+  checks every pending pair's phone evidence as a FACT — is the number still on both records (their
+  own lines, less a fax), or still observed for both? — and takes out what is not: a row that lost
+  some is rewritten, a row left with nothing is deleted (pending rows only; the detector re-proposes
+  if evidence returns). It never reads `ci.entity_identifiers` (unique per value, so two people can
+  never both hold a number there) and never re-grades, so it needs no corpus read.
+- **Two people on one mailbox.** A card that lists one person's address under another person's
+  name would fold the two, and carry the card's other addresses along. The detector writes such a
+  pair held (0.85, with an `email_check` marker), the drain re-checks live names before every email
+  fold, and the marker keeps the pair off every tier and on the queue. Two holds:
+  `self_endpoint` when one side is the self Person and the other's real name contradicts the
+  owner's (the owner's own mail stubs, named by the address, still fold), and `name_conflict` when
+  two contacts' full names share nothing (a different given name AND surname, no nickname prefix,
+  not one token in common). The second is the one that matters in practice: the owner's own contact
+  cards are ordinary Persons (the self Person is minted from `ci.users`), so a friend's card listing
+  the owner's work address meets them as two contacts. In one real 4,927-card export, it holds that
+  friend card against the owner's two cards and one double-typo pair, and folds the other 20
+  differently spelled pairs among the 63 addresses shared across cards.
 - **Self.** `users.entity_id` and any `is_self` row are always the target; a pair with two self
   endpoints is skipped. Otherwise the target is a real name over a placeholder, then the fuller name
   (`chooseMergeTarget`), because `PersonMergeService` keeps the target's display name.

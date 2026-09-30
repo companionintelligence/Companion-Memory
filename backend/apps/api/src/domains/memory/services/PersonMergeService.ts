@@ -493,29 +493,36 @@ function foldProperties(
   // keys were unioned above, and the phone adjudicator (utils/phoneIdentity.ts)
   // would then read a UK key as an inferred +1. So union it too, de-duplicated
   // on the digit string with the first-seen formatting kept.
-  const typedPhones: string[] = [];
-  const seenDigits = new Set<string>();
+  //
+  // `Faxes` for the same reason one step on: it is the only record that a
+  // number is office equipment, and the adjudicator refuses it as evidence.
+  // Target-wins would let the source's fax — often the very number its
+  // `phones` key holds — reach the target as an ordinary line.
+  for (const key of ['Phones', 'Faxes']) {
+    const typed: string[] = [];
+    const seenDigits = new Set<string>();
 
-  for (const props of [target, ...sources]) {
-    const raw = props.Phones;
-    const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
+    for (const props of [target, ...sources]) {
+      const raw = props[key];
+      const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
 
-    for (const item of list) {
-      if (typeof item !== 'string' || item.trim() === '') {
-        continue;
-      }
+      for (const item of list) {
+        if (typeof item !== 'string' || item.trim() === '') {
+          continue;
+        }
 
-      const key = item.replace(/\D/g, '') || item.trim();
+        const digits = item.replace(/\D/g, '') || item.trim();
 
-      if (!seenDigits.has(key)) {
-        seenDigits.add(key);
-        typedPhones.push(item);
+        if (!seenDigits.has(digits)) {
+          seenDigits.add(digits);
+          typed.push(item);
+        }
       }
     }
-  }
 
-  if (typedPhones.length > 0) {
-    out.Phones = typedPhones;
+    if (typed.length > 0) {
+      out[key] = typed;
+    }
   }
 
   // A tombstone's self flag must never leak onto the target: gate on the

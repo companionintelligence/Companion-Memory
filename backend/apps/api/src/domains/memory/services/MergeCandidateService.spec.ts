@@ -353,10 +353,12 @@ describe('MergeCandidateService', () => {
       timezone?: string | null;
       pages?: Array<Array<Record<string, unknown>>>;
       endpoints?: Endpoint[];
+      /** Live phone claims, as `loadPhoneClaimLines` reads them (holder counts precomputed). */
+      claims?: Array<{ entity_id: string; value_normalized: string; holders: number }>;
     }) {
       const { service, query, personMerge } = makeService([], []);
       const pages = [...(opts.pages ?? [])];
-      const state = { endpoints: opts.endpoints ?? [] };
+      const state = { endpoints: opts.endpoints ?? [], claims: opts.claims ?? [] };
       const pageCalls: unknown[][] = [];
       const endpointCalls: string[][] = [];
       const demotions: Array<{
@@ -365,6 +367,8 @@ describe('MergeCandidateService', () => {
         evidence: Array<{ kind: string; score: number | null }>;
       }> = [];
       const accepted: string[][] = [];
+      const retirements: string[] = [];
+      const claimCalls: string[][] = [];
       const corpusCalls: unknown[][] = [];
       const phoneCorpusCalls: unknown[][] = [];
 
@@ -421,6 +425,18 @@ describe('MergeCandidateService', () => {
           return [{ merge_candidate_id: 'x' }];
         }
 
+        if (/DELETE FROM ci\.merge_candidates/.test(sql)) {
+          retirements.push(params[1] as string);
+
+          return [];
+        }
+
+        if (/FROM ci\.identifier_claims c/.test(sql)) {
+          claimCalls.push(params[1] as string[]);
+
+          return state.claims.filter((row) => (params[1] as string[]).includes(row.entity_id));
+        }
+
         return [];
       });
 
@@ -432,6 +448,8 @@ describe('MergeCandidateService', () => {
         endpointCalls,
         demotions,
         accepted,
+        retirements,
+        claimCalls,
         corpusCalls,
         phoneCorpusCalls,
         state,
@@ -452,6 +470,50 @@ describe('MergeCandidateService', () => {
       expect(result).toMatchObject({ merged: 1, skipped: 0, demoted: 0 });
       expect(drain.personMerge.mergePeople).toHaveBeenCalledWith(CONTEXT, [PERSON_A], PERSON_B);
       expect(drain.accepted).toEqual([[PERSON_A, PERSON_B]]);
+    });
+
+    describe('the owner, on a shared email', () => {
+      it('holds a differently named person for review instead of folding them into the owner', async () => {
+        // A card named for a friend that lists the owner's address: folded,
+        // the friend would become "you", and their own address would follow.
+        const drain = makeDrain({
+          selfId: PERSON_B,
+          pages: [[pageRow()]],
+          endpoints: [endpoint(PERSON_A, 'Bo Brightwater'), endpoint(PERSON_B, 'Ada Quillfeather')],
+        });
+
+        const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+        expect(result).toMatchObject({ merged: 0, demoted: 1 });
+        expect(drain.personMerge.mergePeople).not.toHaveBeenCalled();
+        expect(drain.demotions[0]).toEqual({
+          id: '00000000-0000-0000-0000-0000000000c1',
+          score: 0.85,
+          evidence: [
+            { kind: 'email', value: 'ada@example.com', score: 0.85 },
+            { kind: 'email_check', value: 'self_endpoint', score: 0 },
+          ],
+        });
+      });
+
+      it("still folds the owner's own mail stub into the owner", async () => {
+        const drain = makeDrain({
+          selfId: PERSON_B,
+          pages: [[pageRow()]],
+          endpoints: [endpoint(PERSON_A, 'ada@example.com'), endpoint(PERSON_B, 'Ada Quillfeather')],
+        });
+
+        const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+        expect(result).toMatchObject({ merged: 1, demoted: 0 });
+        expect(drain.personMerge.mergePeople).toHaveBeenCalledWith(CONTEXT, [PERSON_A], PERSON_B);
+      });
+
+      it('keeps a held pair out of every later fold, and on the review queue', () => {
+        expect(SHARES_DETERMINISTIC_IDENTITY).toContain(
+          `AND NOT (mc.evidence @> '[{"kind":"email_check"}]'::jsonb)`,
+        );
+      });
     });
 
     it('selects on the email tier and the adjudicated phone tier, not on a claims E.164 join', async () => {
@@ -718,7 +780,7 @@ describe('MergeCandidateService', () => {
 
       const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
 
-      expect(result).toEqual({ merged: 0, skipped: 0, demoted: 0, considered: 0 });
+      expect(result).toEqual({ merged: 0, skipped: 0, demoted: 0, retired: 0, considered: 0 });
       expect(drain.pageCalls).toHaveLength(1);
     });
 
@@ -922,7 +984,7 @@ describe('MergeCandidateService', () => {
         });
       });
 
-      it('demotes a pair whose number became over-common after detection', async () => {
+      it('retires a pair whose number became over-common after detection, and does not merge it', async () => {
         const others = Array.from({ length: PHONE_MAX_HOLDERS - 1 }, (_, index) =>
           card(`00000000-0000-0000-0000-0000000000e${index + 1}`, `Holder${index} Quill`),
         );
@@ -933,10 +995,65 @@ describe('MergeCandidateService', () => {
 
         const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
 
-        expect(result).toMatchObject({ merged: 0, demoted: 1 });
+        expect(result).toMatchObject({ merged: 0, demoted: 0, retired: 1 });
         expect(drain.personMerge.mergePeople).not.toHaveBeenCalled();
-        // Nothing weighs any more: floored, not scored 0.
-        expect(drain.demotions[0]).toMatchObject({ score: 0.5, evidence: [] });
+        // Nothing weighs and nothing vetoes: a floored row with empty evidence
+        // would render "Proposed as the same person" with no reason at all.
+        expect(drain.demotions).toEqual([]);
+        expect(drain.retirements).toEqual(['00000000-0000-0000-0000-0000000000c1']);
+      });
+
+      it('retires an exact pair whose two records no longer share any number', async () => {
+        // Graded exact at detection; a re-import since rewrote B's card to a
+        // different number. applyPhoneVerdict('absent') would have kept the
+        // stale item, capped to 0.85 — "Same phone number" for a number B no
+        // longer carries.
+        const drain = makeDrain({
+          pages: [[phoneRow()]],
+          endpoints: [
+            card(PERSON_A, 'Ada Quill'),
+            endpoint(PERSON_B, 'Ada Quill', {}, false, {
+              Phones: ['(212) 555-0199'],
+              phones: ['2125550199'],
+            }),
+          ],
+        });
+
+        const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+        expect(result).toMatchObject({ merged: 0, demoted: 0, retired: 1 });
+        expect(drain.personMerge.mergePeople).not.toHaveBeenCalled();
+        expect(drain.retirements).toEqual(['00000000-0000-0000-0000-0000000000c1']);
+        expect(drain.claimCalls).toEqual([[PERSON_A, PERSON_B]]);
+      });
+
+      it('keeps such a pair for review, below the auto-merge tier, while both still hold the number as claims', async () => {
+        const drain = makeDrain({
+          pages: [[phoneRow()]],
+          endpoints: [
+            card(PERSON_A, 'Ada Quill'),
+            endpoint(PERSON_B, 'Ada Quill', {}, false, {
+              Phones: ['(212) 555-0199'],
+              phones: ['2125550199'],
+            }),
+          ],
+          claims: [
+            { entity_id: PERSON_A, value_normalized: DIGITS, holders: 2 },
+            { entity_id: PERSON_B, value_normalized: DIGITS, holders: 2 },
+          ],
+        });
+
+        const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
+
+        expect(result).toMatchObject({ merged: 0, demoted: 1, retired: 0 });
+        expect(drain.demotions[0]).toEqual({
+          id: '00000000-0000-0000-0000-0000000000c1',
+          score: 0.85,
+          evidence: [
+            { kind: 'phone', value: E164, score: 0.85 },
+            { kind: 'phone_check', value: 'unadjudicated', score: 0 },
+          ],
+        });
       });
 
       it('never folds a phone-only pair into the self Person', async () => {
@@ -1049,12 +1166,13 @@ describe('MergeCandidateService', () => {
 
         const result = await drain.service.autoMergeDeterministicPairs(CONTEXT, BUDGET);
 
-        expect(drain.demotions.map((demotion) => demotion.id)).toEqual([
-          '00000000-0000-0000-0000-0000000000c1',
-        ]);
+        // c1's number was over-common when the index loaded: nothing weighs,
+        // nothing vetoes, so it is retired rather than floored.
+        expect(drain.demotions).toEqual([]);
+        expect(drain.retirements).toEqual(['00000000-0000-0000-0000-0000000000c1']);
         expect(drain.personMerge.mergePeople).toHaveBeenNthCalledWith(1, CONTEXT, [PERSON_B], PERSON_A);
         expect(drain.personMerge.mergePeople).toHaveBeenNthCalledWith(2, CONTEXT, [PERSON_C], PERSON_A);
-        expect(result).toMatchObject({ merged: 2, demoted: 1 });
+        expect(result).toMatchObject({ merged: 2, demoted: 0, retired: 1 });
         expect(drain.phoneCorpusCalls).toHaveLength(1);
       });
     });
@@ -1077,6 +1195,275 @@ describe('MergeCandidateService', () => {
       expect(drain.endpointCalls).toHaveLength(2);
       expect(drain.endpointCalls[1]).toEqual([PERSON_A]);
       expect(drain.personMerge.mergePeople).toHaveBeenNthCalledWith(2, CONTEXT, [PERSON_C], PERSON_A);
+    });
+  });
+
+  /**
+   * The review queue's re-check. A fake manager, like the rest of this file:
+   * it proves which rows are written and how. That the SQL runs, and that the
+   * whole chain holds on rows Postgres produced, is
+   * `pipeline/stages/__tests__/PhoneEvidenceRecheck.integration.spec.ts`.
+   */
+  describe('revalidatePhoneEvidence', () => {
+    // Invented: the 555-01XX fiction range under real area codes.
+    const E164 = '+12025550142';
+    const DIGITS = '2025550142';
+    const ROW_ID = '00000000-0000-0000-0000-0000000000c1';
+
+    interface Endpoint {
+      entity_id: string;
+      person_name: string | null;
+      profile_props: Record<string, unknown> | null;
+      phone_props: Record<string, unknown> | null;
+      is_self: boolean;
+    }
+
+    const person = (id: string, name: string, phoneProps: Record<string, unknown> = {}): Endpoint => ({
+      entity_id: id,
+      person_name: name,
+      profile_props: {},
+      phone_props: phoneProps,
+      is_self: false,
+    });
+    /** A vCard that states the shared number. */
+    const withNumber = (id: string, name: string) =>
+      person(id, name, { Phones: ['(202) 555-0142'], phones: [DIGITS] });
+    /** The same person after a re-import rewrote their card to another number. */
+    const rewritten = (id: string, name: string) =>
+      person(id, name, { Phones: ['(212) 555-0199'], phones: ['2125550199'] });
+
+    /** What the detector wrote for a shared number held back on names. */
+    const reviewRow = (overrides: Record<string, unknown> = {}) => ({
+      merge_candidate_id: ROW_ID,
+      entity_id_a: PERSON_A,
+      entity_id_b: PERSON_B,
+      score: 0.85,
+      evidence: [
+        { kind: 'phone', value: E164, score: 0.85 },
+        { kind: 'phone_check', value: 'given_name_conflict', score: 0 },
+      ],
+      ...overrides,
+    });
+
+    function makeRecheck(opts: {
+      pages: Array<Array<Record<string, unknown>>>;
+      endpoints: Endpoint[];
+      claims?: Array<{ entity_id: string; value_normalized: string; holders: number }>;
+    }) {
+      const { service, query } = makeService([], []);
+      const pages = [...opts.pages];
+      const pageCalls: unknown[][] = [];
+      const phoneCorpusCalls: unknown[][] = [];
+      const updates: Array<{ id: string; score: number; evidence: unknown }> = [];
+      const deletes: string[] = [];
+      const writeSql: string[] = [];
+
+      query.mockReset();
+      query.mockImplementation(async (sql: string, params: unknown[] = []) => {
+        if (/FROM ci\.users/.test(sql)) {
+          return [{ entity_id: null, timezone: 'America/Los_Angeles' }];
+        }
+
+        if (/ORDER BY mc\.merge_candidate_id ASC/.test(sql)) {
+          pageCalls.push(params);
+
+          return pages.shift() ?? [];
+        }
+
+        if (sql === PHONE_FACTS_CORPUS_SQL) {
+          phoneCorpusCalls.push(params);
+
+          return opts.endpoints.filter((row) => Object.keys(row.phone_props ?? {}).length > 0);
+        }
+
+        if (sql === PHONE_CLAIM_E164_SQL) {
+          return [];
+        }
+
+        if (/profile_props/.test(sql)) {
+          return opts.endpoints.filter((row) => (params[1] as string[]).includes(row.entity_id));
+        }
+
+        if (/FROM ci\.identifier_claims c/.test(sql)) {
+          return (opts.claims ?? []).filter((row) => (params[1] as string[]).includes(row.entity_id));
+        }
+
+        if (/UPDATE ci\.merge_candidates/.test(sql)) {
+          writeSql.push(sql);
+          updates.push({
+            id: params[1] as string,
+            score: params[2] as number,
+            evidence: JSON.parse(params[3] as string),
+          });
+
+          return [];
+        }
+
+        if (/DELETE FROM ci\.merge_candidates/.test(sql)) {
+          writeSql.push(sql);
+          deletes.push(params[1] as string);
+
+          return [];
+        }
+
+        return [];
+      });
+
+      return { service, query, pageCalls, phoneCorpusCalls, updates, deletes, writeSql };
+    }
+
+    const BUDGET = { budgetMs: 60_000 };
+
+    it('leaves a row whose number both records still carry exactly as it was', async () => {
+      const recheck = makeRecheck({
+        pages: [[reviewRow()]],
+        endpoints: [withNumber(PERSON_A, 'Ada Quill'), withNumber(PERSON_B, 'Bo Brightwater')],
+      });
+
+      const result = await recheck.service.revalidatePhoneEvidence(CONTEXT, BUDGET);
+
+      expect(result).toEqual({ considered: 1, rewritten: 0, retired: 0 });
+      expect(recheck.updates).toEqual([]);
+      expect(recheck.deletes).toEqual([]);
+    });
+
+    it('retires a phone-only row whose number one record no longer carries', async () => {
+      // "Same phone number, but names differ" — over a number B's record no
+      // longer has. Nothing else weighs, so the row goes.
+      const recheck = makeRecheck({
+        pages: [[reviewRow()]],
+        endpoints: [withNumber(PERSON_A, 'Ada Quill'), rewritten(PERSON_B, 'Bo Brightwater')],
+      });
+
+      const result = await recheck.service.revalidatePhoneEvidence(CONTEXT, BUDGET);
+
+      expect(result).toEqual({ considered: 1, rewritten: 0, retired: 1 });
+      expect(recheck.deletes).toEqual([ROW_ID]);
+      expect(recheck.writeSql.every((sql) => /status = 'pending'/.test(sql))).toBe(true);
+    });
+
+    it('retires the row when B carries no number at all any more', async () => {
+      const recheck = makeRecheck({
+        pages: [[reviewRow()]],
+        endpoints: [withNumber(PERSON_A, 'Ada Quill'), person(PERSON_B, 'Bo Brightwater')],
+      });
+
+      expect(await recheck.service.revalidatePhoneEvidence(CONTEXT, BUDGET)).toMatchObject({ retired: 1 });
+    });
+
+    it('rewrites a row down to the evidence that still holds', async () => {
+      const recheck = makeRecheck({
+        pages: [
+          [
+            reviewRow({
+              evidence: [
+                { kind: 'phone', value: E164, score: 0.85 },
+                { kind: 'name_overlap', value: 'quill', score: 0.5 },
+                { kind: 'phone_check', value: 'given_name_conflict', score: 0 },
+              ],
+            }),
+          ],
+        ],
+        endpoints: [withNumber(PERSON_A, 'Ada Quill'), rewritten(PERSON_B, 'Bo Quill')],
+      });
+
+      const result = await recheck.service.revalidatePhoneEvidence(CONTEXT, BUDGET);
+
+      expect(result).toEqual({ considered: 1, rewritten: 1, retired: 0 });
+      expect(recheck.updates).toEqual([
+        { id: ROW_ID, score: 0.5, evidence: [{ kind: 'name_overlap', value: 'quill', score: 0.5 }] },
+      ]);
+    });
+
+    it('keeps a row both people still hold the number for as claims', async () => {
+      const recheck = makeRecheck({
+        pages: [[reviewRow()]],
+        endpoints: [withNumber(PERSON_A, 'Ada Quill'), person(PERSON_B, 'Bo Brightwater')],
+        claims: [
+          { entity_id: PERSON_A, value_normalized: DIGITS, holders: 2 },
+          { entity_id: PERSON_B, value_normalized: DIGITS, holders: 2 },
+        ],
+      });
+
+      expect(await recheck.service.revalidatePhoneEvidence(CONTEXT, BUDGET)).toEqual({
+        considered: 1,
+        rewritten: 0,
+        retired: 0,
+      });
+    });
+
+    it('does not count a claim value more people hold than the cap', async () => {
+      const recheck = makeRecheck({
+        pages: [[reviewRow()]],
+        endpoints: [withNumber(PERSON_A, 'Ada Quill'), person(PERSON_B, 'Bo Brightwater')],
+        claims: [
+          { entity_id: PERSON_A, value_normalized: DIGITS, holders: PHONE_MAX_HOLDERS + 1 },
+          { entity_id: PERSON_B, value_normalized: DIGITS, holders: PHONE_MAX_HOLDERS + 1 },
+        ],
+      });
+
+      expect(await recheck.service.revalidatePhoneEvidence(CONTEXT, BUDGET)).toMatchObject({ retired: 1 });
+    });
+
+    it('retires a pair whose shared number both cards now file as the office fax', async () => {
+      const fax = (id: string, name: string) =>
+        person(id, name, { Phones: ['(212) 555-0110'], phones: ['2125550110'], Faxes: ['(212) 555-0118'] });
+      const recheck = makeRecheck({
+        pages: [[reviewRow({ evidence: [{ kind: 'phone', value: '+12125550118', score: 0.85 }] })]],
+        endpoints: [
+          fax(PERSON_A, 'Ada Quill'),
+          {
+            ...fax(PERSON_B, 'Bo Brightwater'),
+            phone_props: { Phones: ['(212) 555-0111'], Faxes: ['(212) 555-0118'] },
+          },
+        ],
+      });
+
+      expect(await recheck.service.revalidatePhoneEvidence(CONTEXT, BUDGET)).toMatchObject({ retired: 1 });
+    });
+
+    it('reads nothing else when no pending row carries phone evidence', async () => {
+      const recheck = makeRecheck({ pages: [], endpoints: [] });
+
+      expect(await recheck.service.revalidatePhoneEvidence(CONTEXT, BUDGET)).toEqual({
+        considered: 0,
+        rewritten: 0,
+        retired: 0,
+      });
+      expect(recheck.phoneCorpusCalls).toEqual([]);
+      expect(recheck.pageCalls).toEqual([[USER, null, 100]]);
+    });
+
+    it('pages on merge_candidate_id and never reads the phone corpus', async () => {
+      // It runs on every People page load: the whole-corpus read costs a few
+      // hundred milliseconds at a real corpus's size, and a presence check
+      // needs only the two records and their claims.
+      const recheck = makeRecheck({
+        pages: [[reviewRow()], [reviewRow({ merge_candidate_id: '00000000-0000-0000-0000-0000000000c2' })]],
+        endpoints: [withNumber(PERSON_A, 'Ada Quill'), withNumber(PERSON_B, 'Bo Brightwater')],
+      });
+
+      await recheck.service.revalidatePhoneEvidence(CONTEXT, { budgetMs: 60_000, pageSize: 1 });
+
+      expect(recheck.pageCalls.map((params) => params[1])).toEqual([
+        null,
+        ROW_ID,
+        '00000000-0000-0000-0000-0000000000c2',
+      ]);
+      expect(recheck.phoneCorpusCalls).toEqual([]);
+    });
+
+    it('never throws: a failed read leaves the queue as stored', async () => {
+      const recheck = makeRecheck({ pages: [[reviewRow()]], endpoints: [] });
+      recheck.query.mockImplementation(async () => {
+        throw new Error('connection reset');
+      });
+
+      await expect(recheck.service.revalidatePhoneEvidence(CONTEXT, BUDGET)).resolves.toEqual({
+        considered: 0,
+        rewritten: 0,
+        retired: 0,
+      });
     });
   });
 });

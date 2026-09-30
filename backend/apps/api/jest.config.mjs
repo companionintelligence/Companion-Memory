@@ -46,8 +46,8 @@ export default {
   // new domains land with a real floor from day one instead of inheriting it.
   //
   // The planning floor is set just under what the suite achieves WITHOUT a
-  // database, since TaskService.tenancy.integration.test.ts skips unless
-  // PLANNING_TEST_DATABASE_URL is set.
+  // database, since TaskService.tenancy.integration.test.ts skips unless a
+  // database is configured (PLANNING_TEST_DATABASE_URL or the DATABASE_URL fallback).
   coverageThreshold: {
     './src/domains/planning/': {
       statements: 88,

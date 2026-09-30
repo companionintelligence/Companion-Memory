@@ -1502,6 +1502,9 @@ export class PushStage implements ImportStageRunner {
       claimed: claims.length,
       moved: moved.length,
       kept: plan.kept,
+      // Rows merged into a collapsed Person that were a colleague, not its
+      // heir: the reset dropped their values, and the merges still stand.
+      mergesOfSomeoneElse: moved.reduce((count, move) => count + (move.dropMergedFrom?.length ?? 0), 0),
     });
   }
 
