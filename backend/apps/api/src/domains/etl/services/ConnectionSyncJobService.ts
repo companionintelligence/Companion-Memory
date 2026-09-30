@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -68,9 +68,15 @@ export class ConnectionSyncJobService {
    * returned instead. Handled in the service rather than in one caller because
    * the constraint binds all three of them, and an unhandled 23505 in
    * `SyncNowService` would surface to the user as a 500.
+   *
+   * A caller may name the id (`createConnectionSyncJob` takes one). An id held
+   * by the caller's own row updates that row, as it always has; an id held by
+   * anyone else's is refused — see {@link findJobToWrite}.
    */
   async create(context: UserServiceContext, data: CreateConnectionSyncJobDto): Promise<ConnectionSyncJob> {
     const id = data.id ?? uuidv7();
+    // Only a caller-named id can already be a row.
+    const existing = data.id == null ? null : await this.findJobToWrite(context.userId, data.id);
 
     const SyncJob = this.connectionSyncJobRepository.create({
       id,
@@ -85,7 +91,11 @@ export class ConnectionSyncJobService {
     });
 
     try {
-      const result = await this.connectionSyncJobRepository.save(SyncJob);
+      // Only a row this call found and checked may go through save(); see insertJob.
+      const result =
+        existing == null
+          ? await this.insertJob(SyncJob)
+          : await this.connectionSyncJobRepository.save(SyncJob);
 
       return ConnectionSyncJobEntity.toEgressType(result);
     } catch (err) {
@@ -118,6 +128,48 @@ export class ConnectionSyncJobService {
 
       return ConnectionSyncJobEntity.toEgressType(live);
     }
+  }
+
+  /**
+   * The row a create naming `id` for `userId` lands on, or `null` when no row
+   * holds `id`.
+   *
+   * Looked up by primary key alone, because `id` is the whole key: a row
+   * holding it is the row TypeORM's save() would UPDATE, whoever owns it. An
+   * owner filter here would only hide another user's row, and save() then took
+   * it over — `user_id` flipped to the caller, the job's endpoint, status and
+   * cursor overwritten, and the provider payload in `data` left in place for
+   * the caller to read back. Another user's row is refused.
+   */
+  private async findJobToWrite(userId: string, id: string): Promise<ConnectionSyncJobEntity | null> {
+    const job = await this.connectionSyncJobRepository.findOne({ where: { id } });
+
+    if (job && job.userId !== userId) {
+      throw new ForbiddenException(`Sync job ${id} is not owned by ${userId}; refusing to write it`);
+    }
+
+    return job;
+  }
+
+  /**
+   * INSERT a job {@link findJobToWrite} found no row for, and return it with
+   * the defaults Postgres filled in. Not save(): that loads the primary key
+   * alone and UPDATEs whatever row it finds, so a row that took the id after
+   * the lookup — another user's included — would be overwritten. A plain
+   * INSERT fails on `connection_sync_jobs_pkey` instead, and still fails on
+   * `connection_sync_jobs_live_job_idx` for a second live job.
+   */
+  private async insertJob(job: ConnectionSyncJobEntity): Promise<ConnectionSyncJobEntity> {
+    await this.connectionSyncJobRepository
+      .createQueryBuilder()
+      .insert()
+      // `metadata.target`, as in PlaceService: the entity class would narrow
+      // `.values()` to `_QueryDeepPartialEntity`, which rejects the jsonb columns.
+      .into(this.connectionSyncJobRepository.metadata.target)
+      .values(job)
+      .execute();
+
+    return job;
   }
 
   async findAll(context: UserServiceContext): Promise<ConnectionSyncJob[]> {

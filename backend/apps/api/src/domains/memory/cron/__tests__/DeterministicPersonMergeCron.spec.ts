@@ -59,7 +59,8 @@ describe('DeterministicPersonMergeCron.sweep', () => {
     merged,
     skipped: 1,
     demoted: 2,
-    considered: merged + 3,
+    retired: 1,
+    considered: merged + 4,
   });
 
   it('drains every onboarded user with the per-user budget, and totals the counts', async () => {
@@ -84,7 +85,7 @@ describe('DeterministicPersonMergeCron.sweep', () => {
         (call) => call.options.includeProfileUrl === undefined && call.options.includePhone === undefined,
       ),
     ).toBe(true);
-    expect(totals).toEqual({ merged: 8, skipped: 2, demoted: 4, considered: 14 });
+    expect(totals).toEqual({ merged: 8, skipped: 2, demoted: 4, retired: 2, considered: 16 });
   });
 
   it('does not let one account stall the rest', async () => {

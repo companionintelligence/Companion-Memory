@@ -39,6 +39,7 @@ import {
   buildProfileUrlCandidates,
   claimScore,
   duplicateDetectStageVersion,
+  holdEmailPairs,
   mergeCandidateLists,
   profileFactsByEntity,
   scorePair,
@@ -117,10 +118,10 @@ describe('the version', () => {
   it('is monotone in each generation, so a bump can only go up', () => {
     // A hash would be uniformly distributed and would move the version DOWN half
     // the time, which pins the corpus to the abandoned high-water mark forever.
-    // A sum cannot. 6 = DUPLICATE_SCORING_GENERATION (5, the properties phone
-    // tier) + DUPLICATE_CANDIDATE_GENERATION (2, since
-    // enrich.person_self_claim widened the evidence set) - 1.
-    expect(DUPLICATE_DETECT_VERSION).toBe(6);
+    // A sum cannot. 8 = DUPLICATE_SCORING_GENERATION (6, fax lines refused by
+    // the properties phone tier) + DUPLICATE_CANDIDATE_GENERATION (3, since
+    // self claims carry every contact method a card states) - 1.
+    expect(DUPLICATE_DETECT_VERSION).toBe(8);
     expect(STAGE_VERSIONS[CLEAN_DUPLICATE_DETECT_STAGE_ID]).toBe(DUPLICATE_DETECT_VERSION);
   });
 });
@@ -960,6 +961,67 @@ describe('adjudicateCandidatePhones', () => {
 
     expect(graded.score).toBe(0.8);
     expect(kinds(graded)).toEqual(['phone', 'profile_url_conflict']);
+  });
+});
+
+describe('holdEmailPairs — names that say two people, on a shared email', () => {
+  const OWNER = '00000000-0000-4000-8000-00000000000a';
+  const FRIEND = '00000000-0000-4000-8000-00000000000b';
+  const STUB = '00000000-0000-4000-8000-00000000000c';
+  const emailPair = (a: string, b: string): MergeCandidate => ({
+    entityIdA: a,
+    entityIdB: b,
+    score: 0.95,
+    evidence: [{ kind: 'email', value: 'ada@quill.example', score: 0.95 }],
+  });
+  const names = new Map<string, string | null>([
+    [OWNER, 'Ada Quill'],
+    [FRIEND, 'Bo Brightwater'],
+    [STUB, 'ada@quill.example'],
+  ]);
+
+  it("holds a card that lists the owner's address under someone else's name", () => {
+    // Folded, the friend would become the owner — and their address with them.
+    expect(holdEmailPairs([emailPair(OWNER, FRIEND)], names, new Set([OWNER]))).toEqual([
+      {
+        entityIdA: OWNER,
+        entityIdB: FRIEND,
+        score: 0.85,
+        evidence: [
+          { kind: 'email', value: 'ada@quill.example', score: 0.85 },
+          { kind: 'email_check', value: 'self_endpoint', score: 0 },
+        ],
+      },
+    ]);
+  });
+
+  it("holds two contacts whose names share nothing: a friend's card against the owner's own card", () => {
+    // The owner's contact cards are ordinary Persons, not the self Person.
+    const CARD = '00000000-0000-4000-8000-00000000000d';
+    const withCard = new Map(names).set(CARD, 'Ada D Quill');
+
+    expect(holdEmailPairs([emailPair(CARD, FRIEND)], withCard, new Set([OWNER]))).toEqual([
+      {
+        entityIdA: CARD,
+        entityIdB: FRIEND,
+        score: 0.85,
+        evidence: [
+          { kind: 'email', value: 'ada@quill.example', score: 0.85 },
+          { kind: 'email_check', value: 'name_conflict', score: 0 },
+        ],
+      },
+    ]);
+  });
+
+  it("leaves the owner's own mail stub, a contact against a stub, and non-email pairs alone", () => {
+    const stub = emailPair(OWNER, STUB);
+    const contacts = emailPair(FRIEND, STUB);
+    const phone: MergeCandidate = {
+      ...emailPair(OWNER, FRIEND),
+      evidence: [{ kind: 'phone', value: '+12025550142', score: 0.85 }],
+    };
+
+    expect(holdEmailPairs([stub, contacts, phone], names, new Set([OWNER]))).toEqual([stub, contacts, phone]);
   });
 });
 

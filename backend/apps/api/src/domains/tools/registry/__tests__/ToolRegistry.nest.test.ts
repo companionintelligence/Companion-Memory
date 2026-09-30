@@ -68,7 +68,10 @@ function setup(result: unknown = { success: true, data: { hits: [] }, executionT
   const events = { send } as unknown as EventService;
   const gate = openGate();
   const registry = new ToolRegistry(makeLogger(), events, gate.double as PendingActionService);
-  const tool = { schema: schema('memory.recall'), execute: jest.fn(async () => result) } as unknown as BaseTool;
+  const tool = {
+    schema: schema('memory.recall'),
+    execute: jest.fn(async () => result),
+  } as unknown as BaseTool;
 
   return { registry, send, tool, provider: fakeProvider(tool) };
 }
@@ -112,7 +115,7 @@ describe('ToolRegistry (the Nest adapter over ToolRegistryCore)', () => {
     expect(registry).toBeDefined();
   });
 
-  it('drives the core lifecycle from Nest\'s module hooks', async () => {
+  it("drives the core lifecycle from Nest's module hooks", async () => {
     const { registry, provider } = setup();
     await registry.onModuleInit();
     await registry.registerProvider(provider);
@@ -126,7 +129,7 @@ describe('ToolRegistry (the Nest adapter over ToolRegistryCore)', () => {
     expect(registry.getRegisteredToolNames()).toEqual([]);
   });
 
-  it('still hands back a BaseTool, not the core\'s narrower ToolHandle', async () => {
+  it("still hands back a BaseTool, not the core's narrower ToolHandle", async () => {
     const { registry, provider, tool } = setup();
     await registry.registerProvider(provider);
 

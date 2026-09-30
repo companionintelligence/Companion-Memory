@@ -119,7 +119,14 @@ describe('DatabaseSearchTool — item links', () => {
   });
 
   it('stripStorageAddress keeps every other field intact', () => {
-    const file = { id: 'f1', filename: 'a.jpg', url: '/companion/k', bucket: 'companion', key: 'k', hash: 'h' };
+    const file = {
+      id: 'f1',
+      filename: 'a.jpg',
+      url: '/companion/k',
+      bucket: 'companion',
+      key: 'k',
+      hash: 'h',
+    };
 
     expect(stripStorageAddress(file as any)).toEqual({ id: 'f1', filename: 'a.jpg' });
   });

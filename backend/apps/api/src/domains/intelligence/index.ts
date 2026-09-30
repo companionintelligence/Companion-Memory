@@ -63,5 +63,8 @@ export type { Action, Answer, Question };
 // Shared visibility rules for ci.questions
 export { excludeForkedOriginsSql } from './questionScope';
 
+// The one rotation order both inference selectors take ci.questions in
+export { QUESTION_ROTATION_ORDER_SQL, QUESTION_ROTATION_RANK_SQL } from './questionOrder';
+
 // Persisted retrieval provenance for an inferred answer (ci.answers.answer_evidence)
 export type { AnswerEvidence, AnswerEvidenceCitation } from './types';

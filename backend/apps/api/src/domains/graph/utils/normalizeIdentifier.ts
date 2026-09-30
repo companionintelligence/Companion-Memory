@@ -22,40 +22,28 @@ import { isNonNameParticipant } from './participantSanity';
 export type IdentifierKind = 'email' | 'phone' | 'name';
 
 /**
- * An extension, or a dial-string suffix that reaches one: `x229`, `x 229`,
- * `ext. 229`, `extn 229`, `extension 229`, `Ext: 229`, and the `;` (wait),
- * `,` (pause) and `#` a dial string uses — which covers the RFC 3966
- * `;ext=229` and the form an Apple Contacts export writes an office line in,
- * `TEL:(212) 555-0147\;229`. Plus Android's `p` (pause) / `w` (wait), which
- * only mean that between digits.
+ * A phone value that carries an extension or a dial-string suffix: `;` `,` `#`,
+ * `x` / `ext` / `extn` / `extension` (a `.` and `:` allowed) before a digit —
+ * not at the end only ("x229 (office)"), and not only after a space
+ * ("2125550147x229") — or Android's pause/wait `p` / `w` between digits.
  *
- * Deliberately a superset of the `EXTENSION` pattern the duplicate detector's
- * `parsePhone` refuses (`memory/utils/phoneIdentity.ts`): that parser ALSO
- * refuses any value with a letter in it, so a mid-string `…0147x229` never
- * reaches it, while the join key has no letter rule (a vCard 4 `tel:+1…` URI
- * keys fine) and has to name every form itself.
+ * Such a value is not one number, and its digits cannot be keyed: the join key
+ * is the last ten digits of the digit string, so "(310) 447-8675;229" keyed as
+ * 4478675229 — the office's area code gone, the extension appended, and what
+ * is left a well-formed number that belongs to somebody else. The main line
+ * alone is no better: everybody at that office shares it.
  *
- * Written in the subset of syntax JavaScript and PostgreSQL's ARE engine read
- * identically (no lookbehind, `(?:…)`, `\s`, `\d`; case-insensitive in both via
- * `i` / `~*`), because it is also a SQL predicate: `PersonDuplicateService`
- * binds {@link PHONE_EXTENSION_PATTERN} and the migration that repaired the
- * truncated keys embeds it verbatim — `normalizeIdentifier.spec.ts` pins that.
+ * One pattern for every reader. No lookbehind, so the same string works as a
+ * JS `RegExp(…, 'i')` and under Postgres `~*`: migrations
+ * `20260930022046_index_contact_card_emails_and_phones` and
+ * `20260930020117_refuse_phone_extension_join_keys` embed it verbatim, and
+ * `normalizeIdentifier.spec.ts` pins both.
  */
 export const PHONE_EXTENSION_PATTERN = String.raw`[;,#]|(?:^|[^a-z])(?:ext(?:ension|n)?|x)\.?\s*:?\s*\d|\d\s*[pw]\s*\d`;
 
 const PHONE_EXTENSION = new RegExp(PHONE_EXTENSION_PATTERN, 'i');
 
-/**
- * True when a phone value carries an extension ({@link PHONE_EXTENSION_PATTERN}).
- *
- * Such a value is NOT one number, and its digits cannot be keyed: the join key
- * is the last ten digits of the digit string, so `(212) 555-0147;229` became
- * `5550147229` — the office's area code and exchange dropped, the extension
- * appended. On the card that found this, what was left began with a real area
- * code: a well-formed number that belongs to somebody else. The main line alone
- * is no better: everybody at that office shares it, and a key that collapses
- * colleagues is how contacts get merged.
- */
+/** True when a phone value carries an extension ({@link PHONE_EXTENSION_PATTERN}). */
 export function hasPhoneExtension(raw: string | null | undefined): boolean {
   return raw != null && PHONE_EXTENSION.test(raw);
 }

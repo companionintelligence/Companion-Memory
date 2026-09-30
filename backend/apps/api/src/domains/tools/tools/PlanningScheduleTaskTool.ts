@@ -32,10 +32,9 @@ const PlanningScheduleTaskInputSchema = z
   .refine((data) => !(data.endAt && !data.startAt), {
     message: 'endAt requires startAt',
   })
-  .refine(
-    (data) => !(data.startAt && data.endAt && Date.parse(data.endAt) <= Date.parse(data.startAt)),
-    { message: 'endAt must be after startAt' },
-  );
+  .refine((data) => !(data.startAt && data.endAt && Date.parse(data.endAt) <= Date.parse(data.startAt)), {
+    message: 'endAt must be after startAt',
+  });
 
 export type PlanningScheduleTaskInput = z.infer<typeof PlanningScheduleTaskInputSchema>;
 

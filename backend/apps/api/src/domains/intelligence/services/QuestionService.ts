@@ -13,6 +13,7 @@ import {
 } from '@ci/domains/intelligence/events';
 
 import { Question, QuestionEntity } from '../entities/QuestionEntity';
+import { QUESTION_ROTATION_ORDER_SQL, QUESTION_ROTATION_RANK_SQL, TIER_RANK_SQL } from '../questionOrder';
 import { excludeForkedOriginsSql } from '../questionScope';
 import type {
   AnswerEvidence,
@@ -24,30 +25,6 @@ import type {
 const FEED_QUESTION_QUEUE_LIMIT = 3;
 /** Unanswered front-of-queue questions rotate after this long on the feed. */
 export const FEED_QUESTION_STALE_MS = 30 * 60 * 1000;
-
-/**
- * Ask the functional questions first.
- *
- * `ci.questions.answer_tier` splits the catalogue into questions that settle a
- * fact ("What foods are you allergic to?"), questions that record a taste
- * ("Window or aisle?"), and questions that ask for a story ("How did you end up
- * in the city you live in now?"). A memory system earns the third kind by
- * getting the first two right, so every selector orders by this rank before it
- * applies its own tie-break.
- *
- * NULL sorts last, not first: an untiered row is a legacy question from the
- * pre-catalogue era, and those are exactly the abstract ones we do not want to
- * lead with. (Postgres defaults NULLs FIRST on DESC and LAST on ASC; spelling
- * the rank out as an integer avoids depending on that.)
- */
-const TIER_RANK_SQL = `
-  CASE q.answer_tier
-    WHEN 'factual'    THEN 0
-    WHEN 'preference' THEN 1
-    WHEN 'narrative'  THEN 2
-    ELSE 3
-  END
-`;
 
 const GAP_AWARE_CANDIDATE_SQL = `
   WITH category_coverage AS (
@@ -996,6 +973,11 @@ export class QuestionService {
    * unanswerable question ages back in at one attempt per retention window
    * rather than being silenced for good, and if the queue binding ever moves,
    * this degrades to the old order, which is the safe direction to fail).
+   *
+   * Among questions with the same attempt standing, the order is the
+   * catalogue's rotation order from questionOrder.ts — tier, batch age, then a
+   * round-robin across categories in the order the seed files list them. The
+   * listener takes the same definition, so the two selectors cannot drift.
    */
   async findUnansweredByUserId(attemptHistory: {
     queue: string;
@@ -1045,6 +1027,7 @@ export class QuestionService {
         ) dispatched
         GROUP BY 1, 2
       ),
+      rotation AS (${QUESTION_ROTATION_RANK_SQL}),
       unanswered AS (
         SELECT
           q.question_id AS id,
@@ -1053,16 +1036,18 @@ export class QuestionService {
           ROW_NUMBER() OVER (
             PARTITION BY COALESCE(q.is_private_to, u.user_id)
             -- Never-attempted before ever-attempted, least recently attempted
-            -- first among retries; tier and age order WITHIN those groups, so
-            -- the catalogue's factual-first preference still decides what a
-            -- fresh appliance asks about first.
-            ORDER BY att.last_attempt_at ASC NULLS FIRST, ${TIER_RANK_SQL} ASC, q.created_at ASC, q.question_id ASC
+            -- first among retries; the catalogue's rotation order WITHIN those
+            -- groups, so the factual-first preference still decides what a
+            -- fresh appliance asks about first, and every appliance asks it in
+            -- the same order. Not by question_id: see questionOrder.ts.
+            ORDER BY att.last_attempt_at ASC NULLS FIRST, ${QUESTION_ROTATION_ORDER_SQL}
           ) AS rn
         FROM ci.questions q
         CROSS JOIN (SELECT DISTINCT id AS user_id FROM ci.users WHERE id IS NOT NULL) u
         LEFT JOIN attempts att
           ON att.question_id = q.question_id::text
          AND att.user_id = COALESCE(q.is_private_to, u.user_id)::text
+        LEFT JOIN rotation qr ON qr.question_id = q.question_id
         WHERE q.is_active = TRUE
           -- Never spend an inference slot on a question the corpus cannot
           -- ground (body measurements, medical facts, the make of the boiler).
@@ -1260,32 +1245,32 @@ export class QuestionService {
     return true;
   }
 
-  /** Stamp first presentation time on the feed row and bump times_asked on the question. */
+  /**
+   * Stamp first presentation time on the feed row and bump times_asked on the question.
+   *
+   * One statement, so the bump happens exactly when the stamp does and no
+   * result has to be read back to decide it. The two-statement version gated
+   * the bump on `rows[0]?.updated` from a bare `UPDATE … RETURNING`, which
+   * TypeORM returns as the pair `[rows, rowCount]` — `rows[0]` was the rows
+   * array, `.updated` was always undefined, and times_asked never moved.
+   */
   async recordFeedQuestionPresentation(userId: string, questionId: string): Promise<void> {
-    type Row = { updated: boolean };
-    const rows = (await this.dataSource.query(
-      `
-      UPDATE ci.feed_queue
-      SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('lastPresentedAt', to_jsonb(NOW()::text))
-      WHERE user_id = $1
-        AND question_id = $2
-        AND (metadata->>'lastPresentedAt' IS NULL)
-      RETURNING TRUE AS updated;
-      `,
-      [userId, questionId],
-    )) satisfies Array<Row>;
-
-    if (!rows[0]?.updated) {
-      return;
-    }
-
     await this.dataSource.query(
       `
+      WITH presented AS (
+        UPDATE ci.feed_queue
+        SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('lastPresentedAt', to_jsonb(NOW()::text))
+        WHERE user_id = $1
+          AND question_id = $2
+          AND (metadata->>'lastPresentedAt' IS NULL)
+        RETURNING 1
+      )
       UPDATE ci.questions
       SET times_asked = times_asked + 1
-      WHERE question_id = $1;
+      WHERE question_id = $2
+        AND EXISTS (SELECT 1 FROM presented);
       `,
-      [questionId],
+      [userId, questionId],
     );
   }
 

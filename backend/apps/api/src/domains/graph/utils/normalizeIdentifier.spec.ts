@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 // The memory domain's public barrel — `no-cross-domain-internals` allows only
@@ -15,6 +15,50 @@ import {
   normalizePhone,
   splitPersonName,
 } from './normalizeIdentifier';
+
+describe('hasPhoneExtension', () => {
+  it.each([
+    '(310) 555-0175;229',
+    '(212) 555-0147,229',
+    '555-0147#229',
+    '(212) 555-0147 x229',
+    '2125550147x229',
+    '(212) 555-0147 x229 (office)',
+    '+1 212 555 0147 ext. 229',
+    '212-555-0147 Ext: 229',
+    '212-555-0147 extn 229',
+    '212-555-0147 extension 229',
+    '2125550147p229',
+    '2125550147 w 229',
+  ])('refuses %p', (raw) => {
+    expect(hasPhoneExtension(raw)).toBe(true);
+  });
+
+  it.each(['(212) 555-0147', '+44 20 7946 0958', 'tel:+12125550147', 'Fax: 212-555-0147', 'Mobile', ''])(
+    'lets %p through',
+    (raw) => {
+      expect(hasPhoneExtension(raw)).toBe(false);
+    },
+  );
+
+  it('reads null as no extension', () => {
+    expect(hasPhoneExtension(null)).toBe(false);
+  });
+
+  it('is the exact pattern the contact-card migration embeds, in both places it reads one', () => {
+    // A SQL copy that drifted would judge a number an extension in one place
+    // and a line in the other.
+    const migration = readFileSync(
+      path.join(
+        __dirname,
+        '../../../../db/postgres/migrations/20260930022046_index_contact_card_emails_and_phones.sql',
+      ),
+      'utf8',
+    );
+
+    expect(migration.split(`~* '${PHONE_EXTENSION_PATTERN}'`)).toHaveLength(3);
+  });
+});
 
 describe('normalizeEmail', () => {
   it('trims and lowercases', () => {
@@ -158,7 +202,7 @@ describe('hasPhoneExtension', () => {
     // about which stored keys were truncations; a migration is immutable once
     // applied, so the fix for a drift is a NEW migration, and this test is what
     // says one is needed.
-    const migration = fs.readFileSync(
+    const migration = readFileSync(
       path.join(
         __dirname,
         '../../../../db/postgres/migrations/20260930020117_refuse_phone_extension_join_keys.sql',

@@ -122,6 +122,7 @@ export type {
   ImportedEntityMatch,
   ImportedEntityRef,
   ImportedEntityRekey,
+  MergedAwayEntity,
 } from './services/GraphIngestService';
 export type {
   ItemRelationshipInputDto,

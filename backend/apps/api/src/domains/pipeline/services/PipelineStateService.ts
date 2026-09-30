@@ -424,9 +424,12 @@ export class PipelineStateService {
    * This is the per-row form of a version bump, for the case where new
    * evidence arrived for SOME rows rather than the rule changing for all of
    * them — a name identifier registered after the person-link stage had
-   * already claimed the messages naming it (see IdentifierArrivalService).
-   * Nothing else re-visits a decided row, by design: "tried and produced
-   * nothing" is a recorded answer, not an invitation to try again every tick.
+   * already claimed the messages naming it (see IdentifierArrivalService), or
+   * a place link `promote.place` wrote after `promote.edge_event` had already
+   * projected the event (see `STAGE_REOPENS`, applied by
+   * PipelineSliceListener). Nothing else re-visits a decided row, by design:
+   * "tried and produced nothing" is a recorded answer, not an invitation to
+   * try again every tick.
    */
   async reopen(entityType: string, stageId: string, ids: string[]): Promise<number> {
     const uniqueIds = [...new Set(ids)];
@@ -435,16 +438,25 @@ export class PipelineStateService {
       return 0;
     }
 
+    // The UPDATE is wrapped in a CTE and the OUTER statement is a SELECT, on
+    // purpose. TypeORM's Postgres driver resolves a bare `UPDATE … RETURNING`
+    // to `[rows, rowCount]` rather than to the rows, so reading `.length` off
+    // it counted the tuple: this returned 2 whether it moved no rows or ten
+    // thousand. The CTE form comes back as plain rows. `releaseQuarantined()`
+    // below hit the same shape and destructures the pair instead.
     const rows = await this.dataSource.query<Array<{ entity_id: string }>>(
-      `UPDATE ci.pipeline_state ps
-          SET stage_version = 0,
-              updated_at    = now()
-        WHERE ps.entity_type = $1
-          AND ps.stage = $2
-          AND ps.entity_id = ANY($3::uuid[])
-          AND ps.status IN ('done', 'skipped')
-          AND ps.stage_version > 0
-        RETURNING ps.entity_id`,
+      `WITH reopened AS (
+         UPDATE ci.pipeline_state ps
+            SET stage_version = 0,
+                updated_at    = now()
+          WHERE ps.entity_type = $1
+            AND ps.stage = $2
+            AND ps.entity_id = ANY($3::uuid[])
+            AND ps.status IN ('done', 'skipped')
+            AND ps.stage_version > 0
+          RETURNING ps.entity_id
+       )
+       SELECT entity_id FROM reopened`,
       [entityType, stageId, uniqueIds],
     );
 

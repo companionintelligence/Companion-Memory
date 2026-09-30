@@ -14,6 +14,7 @@ import {
   mergeAccumulatedMetadata,
   needsContentDigest,
   resolveEntityType,
+  withContactIdentifiers,
 } from './identity';
 import { stripNulCharacters } from './stripNulCharacters';
 
@@ -451,7 +452,11 @@ export class StagedWriter implements ImportPipeline {
     this.drop(COLLAPSED_DISTINCT_PATH);
   }
 
-  private async writeEntity(tx: EntityManager, entity: Entity): Promise<string> {
+  private async writeEntity(tx: EntityManager, parsed: Entity): Promise<string> {
+    // Every email and phone a contact states, recorded while the parser's
+    // attributes still exist — after this write only `identity_key`, the ONE
+    // smallest handle, survives. See contactIdentifiers in ./identity.
+    const entity = withContactIdentifiers(parsed);
     const identityKey = entityIdentityKey(entity);
     const type = resolveEntityType(entity);
     const metadata = (entity.metadata ?? {}) as Metadata;

@@ -69,12 +69,12 @@ describe('PendingActionsController', () => {
     const { controller } = harness();
     const managedApp = { ...REQ, apiKeyManagedBy: 'connect' as const };
 
-    await expect(
-      controller.approve('pa-1', { userId: 'user-1' }, managedApp),
-    ).rejects.toBeInstanceOf(ForbiddenException);
-    await expect(
-      controller.decline('pa-1', { userId: 'user-1' }, managedApp),
-    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(controller.approve('pa-1', { userId: 'user-1' }, managedApp)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    await expect(controller.decline('pa-1', { userId: 'user-1' }, managedApp)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
   });
 
   it('declines through the same owner scope', async () => {
