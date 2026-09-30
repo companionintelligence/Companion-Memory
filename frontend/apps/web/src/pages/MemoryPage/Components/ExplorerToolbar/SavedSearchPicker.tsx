@@ -49,14 +49,20 @@ interface SavedSearchListProps {
   autoFocus?: boolean;
   /** Touch-sized rows, for the phone sheet. */
   touch?: boolean;
+  /**
+   * Hand the picked search's params to the caller instead of applying them to
+   * this page's URL. The phone search panel only shows its footer off the
+   * explorer, where nothing reads `?search=`, so it opens the search there.
+   */
+  onOpen?: (params: URLSearchParams) => void;
 }
 
 /**
  * The "load one of my saved searches" list: a filter box, the user's own
  * saved searches (isSeed: false), and a way to the full Saved Searches page.
- * Picking one applies it to the URL in place. Rendered by the desktop picker's
- * popover and by the phone search panel's sheet, so both load a search the
- * same way.
+ * Picking one applies it to the URL in place, or hands it to `onOpen` (the
+ * phone search panel, which opens it in the explorer). Rendered by the desktop picker's popover and
+ * by the phone search panel's sheet, so both load a search the same way.
  */
 export function SavedSearchList({
   filterText,
@@ -64,6 +70,7 @@ export function SavedSearchList({
   onClose,
   autoFocus = true,
   touch = false,
+  onOpen,
 }: SavedSearchListProps) {
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -80,7 +87,13 @@ export function SavedSearchList({
     const savedSearch = result.data?.savedSearch;
 
     if (savedSearch) {
-      setSearchParams(applySavedSearchToParams(searchParams, savedSearch));
+      if (onOpen) {
+        // From empty params, so nothing of the page the panel was opened on
+        // rides along with the search.
+        onOpen(applySavedSearchToParams(new URLSearchParams(), savedSearch));
+      } else {
+        setSearchParams(applySavedSearchToParams(searchParams, savedSearch));
+      }
     }
 
     onFilterTextChange('');

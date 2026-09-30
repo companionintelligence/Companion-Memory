@@ -7,7 +7,7 @@
  */
 import type { MockedResponse } from '@apollo/client/testing';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DropdownProvider, excludedEntityTypesFor } from '@/components/SearchBox/useDropdown';
@@ -54,8 +54,14 @@ const OWN_SAVED_SEARCHES = mockQuery(
 
 function ParamsProbe() {
   const [params] = useSearchParams();
+  const { pathname } = useLocation();
 
-  return <div data-testid="params">{params.toString()}</div>;
+  return (
+    <>
+      <div data-testid="path">{pathname}</div>
+      <div data-testid="params">{params.toString()}</div>
+    </>
+  );
 }
 
 function params(): URLSearchParams {
@@ -68,11 +74,13 @@ function renderFooter(
     filterCount = 0,
     showSavedSearches = true,
     onClearFilters = vi.fn(),
+    onOpenSavedSearch = vi.fn(),
     mocks = [OWN_SAVED_SEARCHES],
   }: {
     filterCount?: number;
     showSavedSearches?: boolean;
     onClearFilters?: () => void;
+    onOpenSavedSearch?: (params: URLSearchParams) => void;
     mocks?: readonly MockedResponse[];
   } = {},
 ) {
@@ -83,6 +91,7 @@ function renderFooter(
         filterCount={filterCount}
         showSavedSearches={showSavedSearches}
         onClearFilters={onClearFilters}
+        onOpenSavedSearch={onOpenSavedSearch}
       />
     </DropdownProvider>,
     { route, mocks },
@@ -251,8 +260,11 @@ describe('MobileSearchPanelFilters', () => {
     expect(screen.getByRole('dialog', { name: 'Filters' })).toBeInTheDocument();
   });
 
-  it('loads a saved search from its sheet the way the desktop picker does', async () => {
-    renderFooter('/plan/tasks', {
+  it('hands a picked saved search to the header to open, instead of applying it to a page with nothing to filter', async () => {
+    const onOpenSavedSearch = vi.fn();
+
+    renderFooter('/plan/tasks?view=board', {
+      onOpenSavedSearch,
       mocks: [
         OWN_SAVED_SEARCHES,
         mockQuery(
@@ -283,8 +295,13 @@ describe('MobileSearchPanelFilters', () => {
 
     fireEvent.click(await within(sheet).findByText('My trip'));
 
-    await waitFor(() => expect(params().get('search')).toBe('paris'));
-    expect(params().get('tags')).toBe('vacation');
+    await waitFor(() => expect(onOpenSavedSearch).toHaveBeenCalledTimes(1));
+    const opened: URLSearchParams = onOpenSavedSearch.mock.calls[0][0];
+    expect(opened.get('search')).toBe('paris');
+    expect(opened.get('tags')).toBe('vacation');
+    // The page's own params stay behind, and this page's URL is left alone.
+    expect(opened.has('view')).toBe(false);
+    expect(params().has('search')).toBe(false);
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Saved searches' })).not.toBeInTheDocument(),
     );

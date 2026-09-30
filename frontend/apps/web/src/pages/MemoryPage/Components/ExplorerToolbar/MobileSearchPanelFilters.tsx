@@ -434,7 +434,7 @@ function FiltersSheet({ filterCount, onClearFilters }: { filterCount: number; on
   );
 }
 
-function SavedSearchesSheet() {
+function SavedSearchesSheet({ onOpenSavedSearch }: { onOpenSavedSearch: (params: URLSearchParams) => void }) {
   const [open, setOpen] = useState(false);
   const [filterText, setFilterText] = useState('');
   const count = useOwnSavedSearchCount();
@@ -471,6 +471,7 @@ function SavedSearchesSheet() {
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-[max(0.5rem,var(--safe-area-bottom),var(--keyboard-inset,0px))]">
           <SavedSearchList
             touch
+            onOpen={onOpenSavedSearch}
             autoFocus={false}
             filterText={filterText}
             onFilterTextChange={setFilterText}
@@ -491,6 +492,7 @@ export function MobileSearchPanelFilters({
   filterCount,
   showSavedSearches,
   onClearFilters,
+  onOpenSavedSearch,
 }: {
   /** Active filters, as the header counts them (countActiveFilters). */
   filterCount: number;
@@ -498,11 +500,13 @@ export function MobileSearchPanelFilters({
   showSavedSearches: boolean;
   /** Clears the explorer filter set; the typed query stays. */
   onClearFilters: () => void;
+  /** Opens a picked saved search (its params); the header does the navigating. */
+  onOpenSavedSearch: (params: URLSearchParams) => void;
 }) {
   return (
     <div className="divide-y divide-border">
       <FiltersSheet filterCount={filterCount} onClearFilters={onClearFilters} />
-      {showSavedSearches && <SavedSearchesSheet />}
+      {showSavedSearches && <SavedSearchesSheet onOpenSavedSearch={onOpenSavedSearch} />}
     </div>
   );
 }

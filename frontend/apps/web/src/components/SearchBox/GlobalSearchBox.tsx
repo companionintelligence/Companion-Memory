@@ -188,6 +188,20 @@ export function GlobalSearchBox() {
     [addRecentSearch, clearInput, navigate, onLiveSearchPage, searchParams, setSearchParams],
   );
 
+  // A saved search picked from the phone panel's sheet. That footer only shows
+  // off the explorer, so the search opens there, and the box remounts the way it
+  // does after committing a query from a launcher page: a fresh, unfocused box
+  // picks the query up from `?search=`, where the old one (still counted as
+  // focused while the sheet was open) would have auto-submitted its empty input
+  // and cleared the search straight back out of the URL.
+  const openSavedSearch = useCallback(
+    (params: URLSearchParams) => {
+      navigate(`/memory?${params.toString()}`);
+      clearInput();
+    },
+    [clearInput, navigate],
+  );
+
   // The query only — the counterpart to `clearFilters`. Remounting SearchBox
   // empties the input; on /memory the live `?search` param goes with it. The
   // filters, the drawer state, and the expanded bar all stay.
@@ -627,6 +641,7 @@ export function GlobalSearchBox() {
                     filterCount={activeFilterCount}
                     showSavedSearches={!(query ?? '').trim()}
                     onClearFilters={clearFilters}
+                    onOpenSavedSearch={openSavedSearch}
                   />
                 ) : (
                   <SearchPanelFilters modal={false} />
