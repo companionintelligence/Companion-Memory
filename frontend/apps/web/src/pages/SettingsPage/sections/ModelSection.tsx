@@ -8,20 +8,63 @@ import { ModelSelector } from '@/components/ModelSelector';
 import { useCurrentUser, useModel, useSessionAuth } from '@/hooks';
 import { useLlmEndpoint, type LlmBackendKind } from '@/hooks/useLlmEndpoint';
 
-const BACKEND_OPTIONS: { value: LlmBackendKind; label: string; defaultPort: number; hint: string }[] = [
+type BackendPreset = 'ollama' | 'lemonade' | 'openai_compatible';
+
+/**
+ * What the Backend picker offers. Two of the three are the same wire protocol (`openai_compatible`)
+ * with different defaults: Lemonade mounts its OpenAI routes at `/api/v1` on 13305, everything else
+ * at `/v1`. The path is editable below the port, so a server that mounts elsewhere still fits.
+ */
+const BACKEND_OPTIONS: {
+  value: BackendPreset;
+  backend: LlmBackendKind;
+  label: string;
+  defaultPort: number;
+  defaultBasePath: string;
+  hint: string;
+}[] = [
   {
     value: 'ollama',
+    backend: 'ollama',
     label: 'Ollama',
     defaultPort: 11434,
+    defaultBasePath: '/v1',
     hint: 'Native Ollama API on the host.',
   },
   {
+    value: 'lemonade',
+    backend: 'openai_compatible',
+    label: 'Lemonade',
+    defaultPort: 13305,
+    defaultBasePath: '/api/v1',
+    hint: 'Lemonade Server on the host (llama.cpp underneath), through its OpenAI-compatible API.',
+  },
+  {
     value: 'openai_compatible',
-    label: 'OpenAI-compatible (vLLM)',
+    backend: 'openai_compatible',
+    label: 'OpenAI-compatible (vLLM, llama.cpp, SGLang)',
     defaultPort: 8000,
-    hint: 'Any OpenAI-compatible server, including vLLM.',
+    defaultBasePath: '/v1',
+    hint: 'Any server that speaks the OpenAI chat API.',
   },
 ];
+
+/** The preset a saved endpoint came from, by its defaults; the generic one when none match. */
+function presetFor(config: { backend: LlmBackendKind; port: number; basePath?: string }): BackendPreset {
+  if (config.backend === 'ollama') {
+    return 'ollama';
+  }
+
+  const match = BACKEND_OPTIONS.find(
+    (option) =>
+      option.backend === 'openai_compatible' &&
+      option.value !== 'openai_compatible' &&
+      option.defaultPort === config.port &&
+      option.defaultBasePath === (config.basePath ?? '/v1'),
+  );
+
+  return match?.value ?? 'openai_compatible';
+}
 
 /**
  * Account-level LLM settings: inference endpoint, active model, and tool/thinking toggles.
@@ -49,8 +92,9 @@ export function ModelSection() {
   const { user: currentUser } = useCurrentUser();
   const canEditEndpoint = currentUser?.isAdmin ?? false;
 
-  const [backend, setBackend] = useState<LlmBackendKind>('ollama');
+  const [preset, setPreset] = useState<BackendPreset>('ollama');
   const [port, setPort] = useState('11434');
+  const [basePath, setBasePath] = useState('/v1');
   const [apiKey, setApiKey] = useState('');
   const [clearApiKey, setClearApiKey] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -64,8 +108,9 @@ export function ModelSection() {
       return;
     }
 
-    setBackend(config.backend);
+    setPreset(presetFor(config));
     setPort(String(config.port));
+    setBasePath(config.basePath ?? '/v1');
     // Keys are write-only. An empty field means "keep the saved key", never
     // "the browser received no key" — the server never sends one back.
     setApiKey('');
@@ -106,21 +151,27 @@ export function ModelSection() {
   }, [headers, ready]);
 
   const selectedBackend = useMemo(
-    () => BACKEND_OPTIONS.find((option) => option.value === backend) ?? BACKEND_OPTIONS[0],
-    [backend],
+    () => BACKEND_OPTIONS.find((option) => option.value === preset) ?? BACKEND_OPTIONS[0],
+    [preset],
   );
+  const backend = selectedBackend.backend;
 
   const endpointDirty =
     config != null &&
     !config.locked &&
-    (backend !== config.backend || port !== String(config.port) || apiKey.trim().length > 0 || clearApiKey);
+    (backend !== config.backend ||
+      port !== String(config.port) ||
+      (backend === 'openai_compatible' && basePath.trim() !== (config.basePath ?? '/v1')) ||
+      apiKey.trim().length > 0 ||
+      clearApiKey);
 
-  const handleBackendChange = (value: LlmBackendKind) => {
-    setBackend(value);
+  const handleBackendChange = (value: BackendPreset) => {
+    setPreset(value);
     const option = BACKEND_OPTIONS.find((item) => item.value === value);
 
     if (option) {
       setPort(String(option.defaultPort));
+      setBasePath(option.defaultBasePath);
     }
   };
 
@@ -134,6 +185,7 @@ export function ModelSection() {
     const savedConfig = await saveEndpoint({
       backend,
       port: parsedPort,
+      ...(backend === 'openai_compatible' && basePath.trim() ? { basePath: basePath.trim() } : {}),
       ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
       ...(clearApiKey ? { clearApiKey: true } : {}),
     });
@@ -218,10 +270,7 @@ export function ModelSection() {
             <div className="space-y-4 border-t border-border pt-4">
               <div className="grid gap-2">
                 <Label htmlFor="llm-backend">Backend</Label>
-                <Select
-                  value={backend}
-                  onValueChange={(value) => handleBackendChange(value as LlmBackendKind)}
-                >
+                <Select value={preset} onValueChange={(value) => handleBackendChange(value as BackendPreset)}>
                   <Select.Trigger id="llm-backend" className="w-full">
                     <Select.Value />
                   </Select.Trigger>
@@ -246,6 +295,22 @@ export function ModelSection() {
                   placeholder={String(selectedBackend.defaultPort)}
                 />
               </div>
+
+              {backend === 'openai_compatible' && (
+                <div className="grid gap-2">
+                  <Label htmlFor="llm-base-path">API path</Label>
+                  <Input
+                    id="llm-base-path"
+                    value={basePath}
+                    onChange={(event) => setBasePath(event.target.value)}
+                    placeholder={selectedBackend.defaultBasePath}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Where the server mounts its OpenAI API: <code>/v1</code> for vLLM, llama.cpp and SGLang,{' '}
+                    <code>/api/v1</code> for Lemonade.
+                  </p>
+                </div>
+              )}
 
               {backend === 'openai_compatible' && (
                 <div className="grid gap-2">

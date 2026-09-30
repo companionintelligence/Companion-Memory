@@ -74,7 +74,7 @@ jobs:
       # the host, not in one. Without this they rely on the startup
       # host-rewrite (`CI_LLM_HOST_REWRITE`) guessing right, which logs a
       # warning on every boot; naming it here is the same answer, stated.
-      # `embedding.host` falls back to this, so the embedder follows it too.
+      # `embedding.apiBase` falls back to this, so the embedder follows it too.
       #
       # NOTE: OLLAMA_HOST is also the variable Ollama's OWN server reads to
       # choose its bind address. That is not a conflict here — the server runs

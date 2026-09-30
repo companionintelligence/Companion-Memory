@@ -46,9 +46,21 @@ services:
       LLM_API_BASE: ${LLM_API_BASE:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
-      # Embeddings stay on native Ollama even when chat runs on vLLM/Lemonade;
-      # falls back to OLLAMA_HOST when unset.
+      # The small background model (extraction, classification) and the chat
+      # context window, as the Hub manifest hands them out; unset means the
+      # compiled-in default and the planner's measured window.
+      LLM_UTILITY_MODEL: ${LLM_UTILITY_MODEL:-}
+      CI_LLM_NUM_CTX: ${CI_LLM_NUM_CTX:-}
+      # Where embeddings run. Set, LLM_EMBEDDING_API_BASE pins the endpoint (any
+      # engine, an OpenAI-style base or a bare host; OLLAMA_EMBED_HOST is its
+      # deprecated name and still read); unset, the embedder follows the chat
+      # backend when that backend serves it (Lemonade, llama.cpp with the model
+      # loaded) and OLLAMA_HOST otherwise. The model is the one the Hub handed
+      # out, else nomic-embed-text; a name outside the index's declared
+      # generations is refused at boot.
+      LLM_EMBEDDING_API_BASE: ${LLM_EMBEDDING_API_BASE:-}
       OLLAMA_EMBED_HOST: ${OLLAMA_EMBED_HOST:-}
+      LLM_DEFAULT_EMBEDDING_MODEL: ${LLM_DEFAULT_EMBEDDING_MODEL:-}
       # Error reporting is opt-out: on wherever a DSN is set. An unset DSN is not
       # a privacy setting, it is no configuration — the API then never contacts
       # Sentry. CI_TELEMETRY=off or CI_LOCAL_ONLY=true disable it even when a
@@ -124,6 +136,17 @@ services:
     environment:
       CI_ROLE: worker
       CI_IMPORT_SCRATCH_DIR: ${CI_IMPORT_SCRATCH_DIR:-/var/lib/ci-import/scratch}
+      # The same inference env as the api above: the worker runs the embed
+      # and utility-model jobs, so it must see the same backend, embedder and
+      # window, or it embeds on a host the api was steered away from.
+      LLM_API_BASE: ${LLM_API_BASE:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
+      LLM_UTILITY_MODEL: ${LLM_UTILITY_MODEL:-}
+      CI_LLM_NUM_CTX: ${CI_LLM_NUM_CTX:-}
+      LLM_EMBEDDING_API_BASE: ${LLM_EMBEDDING_API_BASE:-}
+      OLLAMA_EMBED_HOST: ${OLLAMA_EMBED_HOST:-}
+      LLM_DEFAULT_EMBEDDING_MODEL: ${LLM_DEFAULT_EMBEDDING_MODEL:-}
       SENTRY_DSN: ${SENTRY_DSN_API:-}
       SENTRY_ENV: ${SENTRY_ENV:-}
       CI_TELEMETRY: ${CI_TELEMETRY:-}
@@ -212,6 +235,16 @@ services:
   summary-service:
     volumes:
       - secrets-summary:/run/secrets:ro
+    environment:
+      # The same inference env as the api: the sidecar chats and embeds on its
+      # own, and resolves the embedder's host the same way (config.py
+      # `resolve_embedding_target`). Unset, it assumes Ollama on the host.
+      LLM_API_BASE: ${LLM_API_BASE:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
+      LLM_EMBEDDING_API_BASE: ${LLM_EMBEDDING_API_BASE:-}
+      OLLAMA_EMBED_HOST: ${OLLAMA_EMBED_HOST:-}
+      LLM_DEFAULT_EMBEDDING_MODEL: ${LLM_DEFAULT_EMBEDDING_MODEL:-}
     depends_on:
       generate-secrets:
         condition: service_completed_successfully

@@ -167,6 +167,9 @@ describe('OllamaService.chatStream forced prose round', () => {
 
     expect(forced.tools).toBeUndefined();
     expect(forced.salvageTools).toBe(false);
+    // …but the driver still buffers the text and strips any tool markup the
+    // model emits anyway, so the viewer never sees a raw <tool_call> block.
+    expect(forced.discardToolMarkup).toBe(true);
 
     const forcedLast = forced.messages[forced.messages.length - 1];
 

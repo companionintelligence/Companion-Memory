@@ -73,6 +73,37 @@ describe('ci-import memory', () => {
     expect(ctx.term.text()).not.toContain('local-token');
   });
 
+  it('passes a Lemonade API root through, and refuses one for Ollama', async () => {
+    const seen: unknown[] = [];
+    const ctx = harness({
+      async updateLlmEndpoint(settings) {
+        seen.push(settings);
+
+        return {
+          backend: 'openai_compatible',
+          port: 13305,
+          basePath: '/api/v1',
+          hostGateway: 'h',
+          locked: false,
+          endpoint: 'http://h:13305/api/v1',
+          apiKeyConfigured: false,
+        };
+      },
+    });
+
+    await memoryConfigureCommand(ctx, { backend: 'openai-compatible', port: '13305', basePath: '/api/v1' });
+
+    expect(seen).toEqual([{ backend: 'openai_compatible', port: 13305, basePath: '/api/v1' }]);
+    expect(ctx.term.text()).toContain('api root    /api/v1');
+
+    await expect(
+      memoryConfigureCommand(ctx, { backend: 'ollama', port: '11434', basePath: '/api/v1' }),
+    ).rejects.toMatchObject({
+      exitCode: 2,
+      message: expect.stringContaining('--base-path'),
+    });
+  });
+
   it('rejects a malformed port before changing an endpoint', async () => {
     const ctx = harness({});
 

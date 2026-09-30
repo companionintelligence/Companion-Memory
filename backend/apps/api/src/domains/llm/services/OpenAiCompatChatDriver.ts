@@ -9,7 +9,15 @@ import type {
 
 import config from '@ci/configuration';
 
-import { type ServedModel, servedModelFromRow } from './servedModels';
+import {
+  type ServedModel,
+  type ServerProps,
+  servedModelFromRow,
+  serverPropsFromPayload,
+} from './servedModels';
+
+/** How long one `/props` answer stands in for the server: the values change only when the server is restarted. */
+const SERVER_PROPS_TTL_MS = 5 * 60_000;
 
 /**
  * OpenAI-protocol transport for the chat path, used when `LLM_API_BASE` points
@@ -99,7 +107,16 @@ export class OpenAiCompatChatDriver {
   /** Set once this endpoint has refused a `json_schema` response format; see {@link toResponseFormat}. */
   private jsonSchemaRejected = false;
 
-  constructor(baseURL: string, apiKey: string) {
+  /** The last `/props` answer (a `null` answer is remembered too) and when it was taken. */
+  private serverPropsCache: { at: number; value: ServerProps | null } | null = null;
+
+  constructor(
+    /** The `/v1` root this driver talks to, for a caller that speaks a route the SDK does not. */
+    readonly baseUrl: string,
+    readonly apiKey: string,
+  ) {
+    const baseURL = baseUrl;
+
     this.client = new OpenAI({
       baseURL,
       apiKey,
@@ -111,6 +128,42 @@ export class OpenAiCompatChatDriver {
       timeout: config.llm.firstResponseTimeoutMs,
       maxRetries: 0,
     });
+  }
+
+  /**
+   * llama-server's `GET /props`, read from the server root beside `/v1`: the loaded context window
+   * and the modalities the model took. `null` for any server that does not answer it in that
+   * shape (Lemonade's `/props` is its web page; vLLM has no such route) — remembered for a few
+   * minutes either way, so a listing does not cost an extra round trip each time.
+   */
+  async serverProps(): Promise<ServerProps | null> {
+    const now = Date.now();
+
+    if (this.serverPropsCache && now - this.serverPropsCache.at < SERVER_PROPS_TTL_MS) {
+      return this.serverPropsCache.value;
+    }
+
+    let value: ServerProps | null = null;
+
+    try {
+      const response = await fetch(`${this.baseUrl.replace(/\/$/, '').replace(/\/v1$/, '')}/props`, {
+        headers: {
+          Accept: 'application/json',
+          ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+        },
+        signal: AbortSignal.timeout(3_000),
+      });
+
+      if (response.ok && (response.headers.get('content-type') ?? '').includes('json')) {
+        value = serverPropsFromPayload(await response.json());
+      }
+    } catch {
+      value = null;
+    }
+
+    this.serverPropsCache = { at: now, value };
+
+    return value;
   }
 
   /** Model ids served by the backend (`GET /v1/models`). */
@@ -215,6 +268,16 @@ export class OpenAiCompatChatDriver {
     enableThinking?: boolean;
     salvageTools?: boolean;
     /**
+     * Buffer the text and strip any tool markup from it, but emit no tool
+     * calls at all — not the engine's structured ones, not salvaged ones. The
+     * forced prose round: its answer is final, so a call the model still
+     * emits is dropped, and this keeps the markup from reaching the viewer as
+     * text. Measured 2026-09-30 on Lemonade: the model was told tool use was
+     * over, apologised for a bad argument, and streamed a fresh
+     * `<tool_call>…</tool_call>` block which the chat showed verbatim.
+     */
+    discardToolMarkup?: boolean;
+    /**
      * Cap on the completion, in tokens. Unlike Ollama's `num_ctx` this bounds
      * only the answer — the prompt is bounded upstream by the context budget's
      * admission pass. Absent leaves the server's default alone.
@@ -241,7 +304,10 @@ export class OpenAiCompatChatDriver {
     // Buffer text whenever this chat may emit tool markup — including follow-up
     // turns that no longer advertise tools. Streaming `<toolcall>` as TEXT is
     // what made Confirm-home look like a successful call.
-    const bufferContent = Boolean(request.tools && request.tools.length > 0) || request.salvageTools === true;
+    const bufferContent =
+      Boolean(request.tools && request.tools.length > 0) ||
+      request.salvageTools === true ||
+      request.discardToolMarkup === true;
 
     try {
       for await (const part of stream) {
@@ -301,9 +367,10 @@ export class OpenAiCompatChatDriver {
 
     const rawContent = contentChunks.join('');
     const salvaged = extractEmbeddedToolCalls(rawContent);
-    const toolCalls = structured.length > 0 ? structured : salvaged.toolCalls;
+    const emitted = structured.length > 0 ? structured : salvaged.toolCalls;
+    const toolCalls = request.discardToolMarkup ? [] : emitted;
     const prose =
-      toolCalls.length > 0 || salvaged.toolCalls.length > 0 || /<tool_?call\b|<function=/i.test(rawContent)
+      emitted.length > 0 || salvaged.toolCalls.length > 0 || /<tool_?call\b|<function=/i.test(rawContent)
         ? stripToolMarkup(rawContent)
         : rawContent;
 
@@ -411,7 +478,45 @@ export function toOpenAiMessages(messages: OllamaMessage[]): ChatCompletionMessa
     });
   }
 
-  return hoistSystemMessages(converted);
+  return mergeAdjacentTurns(hoistSystemMessages(converted));
+}
+
+/**
+ * Join neighbouring plain-text turns of the same role into one. Qwen's chat
+ * template as llama.cpp (so Lemonade) renders it refuses a transcript whose
+ * last two messages are both assistant turns — `400 Cannot have 2 or more
+ * assistant messages at the end of the list` — and the thread-title job sends
+ * exactly that, because it keeps every assistant row of a tool turn and drops
+ * the tool rows between them. Ollama's template never minded. Only text turns
+ * are joined: an assistant turn carrying tool calls, a tool result, and a
+ * user turn with images keep their own positions.
+ */
+function mergeAdjacentTurns(messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
+  const merged: ChatCompletionMessageParam[] = [];
+
+  for (const message of messages) {
+    const previous = merged[merged.length - 1];
+    const joinable =
+      previous != null &&
+      previous.role === message.role &&
+      (message.role === 'user' || message.role === 'assistant') &&
+      typeof previous.content === 'string' &&
+      typeof message.content === 'string' &&
+      !('tool_calls' in previous && previous.tool_calls) &&
+      !('tool_calls' in message && message.tool_calls);
+
+    if (joinable) {
+      merged[merged.length - 1] = {
+        ...previous,
+        content: [previous.content, message.content].filter((part) => part !== '').join('\n\n'),
+      };
+      continue;
+    }
+
+    merged.push(message);
+  }
+
+  return merged;
 }
 
 /**

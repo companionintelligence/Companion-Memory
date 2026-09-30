@@ -28,8 +28,10 @@
       "llm_base_url": "LLM_API_BASE",
       "llm_api_key": "LLM_API_KEY",
       "chat_model": "LLM_DEFAULT_CHAT_MODEL",
+      "utility_model": "LLM_UTILITY_MODEL",
       "embedding_model": "LLM_DEFAULT_EMBEDDING_MODEL",
-      "ollama_embed_host": "OLLAMA_EMBED_HOST"
+      "embedding_base_url": "LLM_EMBEDDING_API_BASE",
+      "num_ctx": "CI_LLM_NUM_CTX"
     }
   },
   "demo_video": "./metadata/media/companion-memory-demo.mp4",

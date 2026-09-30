@@ -129,6 +129,20 @@ summary and hbpe sidecars. Only the import-stage queues and their crons in
 `backend/apps/api/src/domains/import/` currently declare `role: 'worker'`, which
 is what moves them off the request-serving event loop.
 
+Three of those arrows cross from Docker to the host, and a host firewall sees
+each of them as an inbound connection from the bridge network: the sidecars'
+calls to Ollama or Lemonade (`:11434` / `:13305`), and their completion
+webhooks back to the `api` process (`:3030`). CI-Hub prompts for the engine
+ports on its own installs, but the webhook port is a `make dev`-only crossing
+(a compose install reaches the api as `http://api:3030` inside one network),
+so nothing prompts for it. The symptom is silent: sidecar runs complete, the
+`py-fn-*` jobs sit `active` until they time out, and the sidecar log says
+`function_run_callback_undeliverable` with a firewall hint. On a ufw host:
+
+```bash
+sudo ufw allow from 172.16.0.0/12 to any port 3030 proto tcp comment 'ci-server sidecar callbacks'
+```
+
 PowerSync is **not** part of the local stack: the `powersync` Compose service
 declares `profiles: ["staging","production"]`, so `make dev` never starts it, and
 `GET /api/powersync/token` returns 503 until both `POWERSYNC_URL` and
