@@ -115,9 +115,38 @@ describe('entityIdentityKey', () => {
 
     expect(entityIdentityKey(entity)).toBe('5550100100');
   });
+
+  it('falls back to a newly-read shared handle too, for a nameless contact', () => {
+    // The fallback is every handle the contact has. That the legacy key leaves
+    // a newly-read one out is no reason for the CURRENT key to.
+    const entity: Entity = {
+      attributes: [
+        { name: 'phone', value: '555-010-0100', identity: true, shared: true, newSinceLegacyKey: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('5550100100');
+    expect(legacyEntityIdentityKey(entity)).toBeNull();
+  });
 });
 
 describe('legacyEntityIdentityKey', () => {
+  it('passes over a handle its parser did not read when the old row was keyed', () => {
+    // contact_list reads Outlook's "Business Phone 2" since 2026-09. The row
+    // already minted for Lena was keyed on her email, so that is the key the
+    // push has to find it by.
+    const entity: Entity = {
+      name: 'Lena Ortiz',
+      attributes: [
+        { name: 'email', value: 'lena@example.com', identity: true },
+        { name: 'phone', value: '555-010-0142', identity: true, newSinceLegacyKey: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('5550100142');
+    expect(legacyEntityIdentityKey(entity)).toBe('lena@example.com');
+  });
+
   it('is the smallest of every handle, shared or not — the rule existing rows were minted under', () => {
     const entity: Entity = {
       name: 'Lena Ortiz',

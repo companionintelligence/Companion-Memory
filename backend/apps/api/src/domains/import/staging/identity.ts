@@ -250,13 +250,22 @@ function isHandleAttribute(attribute: EntityAttribute | null | undefined): attri
 /**
  * The normalized identity handles an entity carries, in attribute order — every
  * one of them, or only the entity's OWN when `withShared` is false (see
- * {@link EntityAttribute.shared}).
+ * {@link EntityAttribute.shared}). When `withNew` is false it also leaves out
+ * the ones its parser has read only since the legacy key (see
+ * {@link EntityAttribute.newSinceLegacyKey}).
  */
-function identityHandles(entity: Entity, { withShared }: { withShared: boolean }): string[] {
+function identityHandles(
+  entity: Entity,
+  { withShared, withNew = true }: { withShared: boolean; withNew?: boolean },
+): string[] {
   const out: string[] = [];
 
   for (const attribute of entity.attributes ?? []) {
-    if (!isHandleAttribute(attribute) || (attribute.shared === true && !withShared)) {
+    if (
+      !isHandleAttribute(attribute) ||
+      (attribute.shared === true && !withShared) ||
+      (attribute.newSinceLegacyKey === true && !withNew)
+    ) {
       continue;
     }
 
@@ -315,12 +324,14 @@ export function entityIdentityKey(entity: Entity): string | null {
     return null;
   }
 
-  return legacyEntityIdentityKey(entity);
+  return smallestHandle(identityHandles(entity, { withShared: true }));
 }
 
 /**
  * The key {@link entityIdentityKey} gave this entity before shared handles were
- * passed over: the smallest of ALL its handles.
+ * passed over: the smallest of ALL its handles — all of them that its parser
+ * read then, which leaves out the ones marked
+ * {@link EntityAttribute.newSinceLegacyKey}.
  *
  * Kept for exactly one job. Changing which handle keys a contact MOVES its
  * natural key, and `GraphIngestService` resolves an existing row by nothing
@@ -331,9 +342,15 @@ export function entityIdentityKey(entity: Entity): string | null {
  * still has both keys in hand, so `StagedWriter` records this one beside the
  * new one and `PushStage` moves the old row onto the new key in place. See
  * `push/legacyKeys.ts`.
+ *
+ * A parser that starts reading a field it used to skip moves keys the same way
+ * — a contact keyed on its email moves onto a newly-read phone, since digits
+ * sort first — and rides the same re-key by marking what it newly reads. What
+ * that cannot reach is a contact that had no handle at all: it was keyed on its
+ * name, and a legacy key is a handle.
  */
 export function legacyEntityIdentityKey(entity: Entity): string | null {
-  return smallestHandle(identityHandles(entity, { withShared: true }));
+  return smallestHandle(identityHandles(entity, { withShared: true, withNew: false }));
 }
 
 /**
