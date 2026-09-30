@@ -24,7 +24,11 @@ Section **2.1(b)** is cited from `GraphIngestService.ts`. Do not renumber it.
 - `ci.entities.merged_into_entity_id` — tombstone pointer, indexed.
 - `ci.entity_merges` — audit log, one row per `(source_entity_id → target_entity_id)`, with
   per-table re-point counts and the source's pre-merge properties in
-  `details` (`{ counts, sourceProperties }`).
+  `details` (`{ counts, sourceProperties }`). **The Person and Location `counts` were constants
+  until the `countAffected` fix** (2026-09-29): each was `….length` of a bare
+  `UPDATE/DELETE … RETURNING`, which TypeORM resolves to the pair `[rows, rowCount]`, so every
+  Person count read 2 and `relationshipsDropped` 6, and every Location count 2, 4 or 6, whatever
+  moved. Rows written before the fix still carry those numbers — see §5.4.
 - `ci.entity_identifiers` grew from a bare lookup into a real contact-method table:
   `raw_value`, `label`, `is_primary`, `source`, `verified_at`.
 - `PersonDuplicateService` — candidate groups by shared normalized email / phone / name.
@@ -39,9 +43,11 @@ The hard parts are handled well and should not be re-litigated: the self person 
 *target* but never a *source*; relationship re-points are guarded against both the
 `no_self_references` CHECK and the `relationships_unique_directed_idx` partial unique index, with a
 `DISTINCT ON` so two duplicates carrying the same edge cannot collapse onto the index mid-UPDATE;
-the hypertable re-point lifts `timescaledb.max_tuples_decompressed_per_dml_transaction` for the
-transaction; tombstones are removed from *both* search stores (`ci_search.embeddings` and
-`ci_search.vectors`).
+tombstones are removed from *both* search stores (`ci_search.embeddings` and
+`ci_search.vectors`). The merge used to lift `timescaledb.max_tuples_decompressed_per_dml_transaction`
+for its `ci.communications` re-points; that table stopped being a hypertable in
+`20260807072321_dehypertable_communications`, and the dead lift was removed. `PlaceMergeService`
+keeps it, because `ci.position` is still a compressed hypertable.
 
 ### 1.2 Object identity — schema (`20260803223013`–`20260803223025`), services since #2176
 
@@ -336,8 +342,9 @@ Carried from the design draft, annotated with where they now stand.
 **P1 — The ledger is the merge; re-pointing is a projection.**
 A merge takes effect the instant its ledger row commits; rewriting the ~20 referrer columns can be
 an asynchronous, resumable sweep. *Today `PersonMergeService` does both synchronously in one
-transaction, which is fine at current corpus sizes and is the reason the hypertable re-point has to
-lift `max_tuples_decompressed_per_dml_transaction`. §5.3 is what P1 would buy.*
+transaction, which is fine at current corpus sizes; `PlaceMergeService` does the same, and its
+`ci.position` re-point is why it has to lift `max_tuples_decompressed_per_dml_transaction`. §5.3 is
+what P1 would buy.*
 
 **P2 — Canonicalisation should be a SQL-level primitive, not only a service method.**
 The HBPE sidecar reads `ci.*` directly as its training corpus. Resolution that lives only in
@@ -518,9 +525,14 @@ An earlier draft of it carried `ci.objects.object_entity_id`, which
 - **Unique-constrained** (`ci_search.embeddings` is `UNIQUE (entity_type, entity_id)`;
   `entity_tag` is `UNIQUE (entity_type, entity_id, tag_id)`): a plain UPDATE throws on collision.
   Delete the loser's row, keep the survivor's, then enqueue re-embed.
-- **Hypertable** (`ci.communications`): window by `time` in `DEFAULT_WINDOW_DAYS` slices exactly as
-  `CommunicationLinkBackfillService` does, so Postgres can exclude chunks. Never an unbounded scan —
-  that is the all-chunk Append that segfaulted TSDB 2.28.
+- **Hypertable** (`ci.position`, the one referrer still a compressed hypertable;
+  `ci.communications` stopped being one in `20260807072321_dehypertable_communications`): window by
+  `time` in `DEFAULT_WINDOW_DAYS` slices, the way `CommunicationLinkBackfillService` windowed
+  communications, so Postgres can exclude chunks. Never an unbounded scan — that is the all-chunk
+  Append that segfaulted TSDB 2.28. A counting CTE (`WITH x AS (UPDATE … RETURNING 1) SELECT
+  count(*) …`) is safe here: it decompresses and counts rows in compressed and partially compressed
+  chunks exactly as a bare UPDATE does, and honours the decompression cap
+  (`PlaceMergeService.integration.spec.ts`; checked on TimescaleDB 2.30.1).
 
 Splitting the sweep out of the merge transaction is only safe once reads resolve through a
 canonical primitive (P2): a half-swept merge is then *correct*, just not yet compact.
@@ -536,6 +548,13 @@ things are missing before a replay is exact:
   the target approximately — and say which in the API.
 - There is no `reverted_at` / `reverted_reason` column, so a reverted merge is indistinguishable
   from a live one. Add them, or unmerge cannot be idempotent.
+
+**Do not trust `details.counts` on rows written before the `countAffected` fix** (2026-09-29,
+§1.1). Those rows hold the constants TypeORM's `[rows, rowCount]` pair produced — for a Person
+merge every count 2 and `relationshipsDropped` 6 — and no field marks a row as pre- or post-fix. A
+replay must not size or verify anything from them. If it needs to tell the two apart, stamp a
+marker on new rows first; the constant signature is only a heuristic. Even an exact count says how
+many rows moved, not which ones, so the reverse sweep has to find its referrers either way.
 
 The replay itself:
 

@@ -4,6 +4,7 @@ import { EntityManager, Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { countAffected } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { PersonUpdatedEvent } from '@ci/domains/memory/events';
 
@@ -283,6 +284,11 @@ export class PersonMergeService {
    * statements are owner-scoped; array columns are rewritten set-based with a
    * DISTINCT unnest so a row referencing both a source and the target ends up
    * with a single target element.
+   *
+   * Every count goes through {@link countAffected}, never `….length` of a bare
+   * `UPDATE/DELETE … RETURNING`: TypeORM resolves that to `[rows, rowCount]`,
+   * which made each of these a constant 2 in the audit row (and
+   * `relationshipsDropped` a constant 6).
    */
   private async repointReferences(
     em: EntityManager,
@@ -290,75 +296,90 @@ export class PersonMergeService {
     sources: string[],
     targetId: string,
   ): Promise<MergeCounts> {
-    // Historical communications live in COMPRESSED TimescaleDB chunks; the
-    // re-point UPDATEs decompress them and can exceed the default per-txn cap
-    // (100k tuples), aborting the merge. Lift the cap for this txn only — the
-    // compression policy recompacts the touched chunks later. (Same pattern as
-    // CommunicationLinkBackfillService.)
-    await em.query('SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0');
-
-    const identifiers: unknown[] = await em.query(
-      `UPDATE ci.entity_identifiers SET entity_id = $3
-        WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
-        RETURNING 1`,
+    const identifiers = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.entity_identifiers SET entity_id = $3
+          WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
-    const communicationsFrom: unknown[] = await em.query(
-      `UPDATE ci.communications SET from_entity_id = $3
-        WHERE user_id = $1 AND from_entity_id = ANY($2::uuid[])
-        RETURNING 1`,
+    const communicationsFrom = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.communications SET from_entity_id = $3
+          WHERE user_id = $1 AND from_entity_id = ANY($2::uuid[])
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
-    // Hypertable-safe array rewrite: the subquery carries the full surrogate
-    // PK (time, user_id, id) so the outer UPDATE stays chunk-excluded.
-    const communicationsTo: unknown[] = await em.query(
-      `UPDATE ci.communications c
-          SET to_entity_ids = sub.new_ids
-         FROM (
-           SELECT time, user_id, id,
-                  ARRAY(SELECT DISTINCT CASE WHEN x = ANY($2::uuid[]) THEN $3::uuid ELSE x END
-                          FROM unnest(to_entity_ids) AS x) AS new_ids
-             FROM ci.communications
-            WHERE user_id = $1 AND to_entity_ids && $2::uuid[]
-         ) sub
-        WHERE c.time = sub.time AND c.user_id = sub.user_id AND c.id = sub.id
-        RETURNING 1`,
+    const communicationsTo = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.communications c
+            SET to_entity_ids = sub.new_ids
+           FROM (
+             SELECT time, user_id, id,
+                    ARRAY(SELECT DISTINCT CASE WHEN x = ANY($2::uuid[]) THEN $3::uuid ELSE x END
+                            FROM unnest(to_entity_ids) AS x) AS new_ids
+               FROM ci.communications
+              WHERE user_id = $1 AND to_entity_ids && $2::uuid[]
+           ) sub
+          WHERE c.time = sub.time AND c.user_id = sub.user_id AND c.id = sub.id
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
-    const eventsOrganizer: unknown[] = await em.query(
-      `UPDATE ci.events SET organizer_entity_id = $3
-        WHERE user_id = $1 AND organizer_entity_id = ANY($2::uuid[])
-        RETURNING 1`,
+    const eventsOrganizer = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.events SET organizer_entity_id = $3
+          WHERE user_id = $1 AND organizer_entity_id = ANY($2::uuid[])
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
-    const eventsParticipants: unknown[] = await em.query(
-      `UPDATE ci.events e
-          SET participant_entity_ids = sub.new_ids
-         FROM (
-           SELECT event_id,
-                  ARRAY(SELECT DISTINCT CASE WHEN x = ANY($2::uuid[]) THEN $3::uuid ELSE x END
-                          FROM unnest(participant_entity_ids) AS x) AS new_ids
-             FROM ci.events
-            WHERE user_id = $1 AND participant_entity_ids && $2::uuid[]
-         ) sub
-        WHERE e.event_id = sub.event_id
-        RETURNING 1`,
+    const eventsParticipants = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.events e
+            SET participant_entity_ids = sub.new_ids
+           FROM (
+             SELECT event_id,
+                    ARRAY(SELECT DISTINCT CASE WHEN x = ANY($2::uuid[]) THEN $3::uuid ELSE x END
+                            FROM unnest(participant_entity_ids) AS x) AS new_ids
+               FROM ci.events
+              WHERE user_id = $1 AND participant_entity_ids && $2::uuid[]
+           ) sub
+          WHERE e.event_id = sub.event_id
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
     // Relationships: drop edges that a re-point would turn into
     // self-references (from and to both land on the target) or that only
     // connected the duplicates to each other.
-    const droppedSelfRef: unknown[] = await em.query(
-      `DELETE FROM ci.relationships
-        WHERE owner_user_id = $1
-          AND ( (from_entity_id = ANY($2::uuid[]) AND (to_entity_id = $3 OR to_entity_id = ANY($2::uuid[])))
-             OR (to_entity_id = ANY($2::uuid[]) AND from_entity_id = $3) )
-        RETURNING 1`,
+    const droppedSelfRef = await countAffected(
+      em,
+      `WITH dropped AS (
+         DELETE FROM ci.relationships
+          WHERE owner_user_id = $1
+            AND ( (from_entity_id = ANY($2::uuid[]) AND (to_entity_id = $3 OR to_entity_id = ANY($2::uuid[])))
+               OR (to_entity_id = ANY($2::uuid[]) AND from_entity_id = $3) )
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM dropped`,
       [ownerUserId, sources, targetId],
     );
 
@@ -371,71 +392,87 @@ export class PersonMergeService {
     //    (to, type) shape (DISTINCT ON, oldest wins) — two duplicate people
     //    with the same edge would otherwise collapse onto the index mid-UPDATE.
     // Inactive rows are outside the index and re-point unconditionally.
-    const relationshipsFrom: unknown[] = await em.query(
-      `UPDATE ci.relationships r SET from_entity_id = $3
-        WHERE r.owner_user_id = $1 AND r.from_entity_id = ANY($2::uuid[])
-          AND (
-            r.is_active IS DISTINCT FROM TRUE
-            OR (
-              NOT EXISTS (
-                SELECT 1 FROM ci.relationships d
-                 WHERE d.from_entity_id = $3 AND d.to_entity_id = r.to_entity_id
-                   AND d.relationship_type = r.relationship_type AND d.is_active = TRUE)
-              AND r.relationship_id IN (
-                SELECT DISTINCT ON (to_entity_id, relationship_type) relationship_id
-                  FROM ci.relationships
-                 WHERE owner_user_id = $1 AND from_entity_id = ANY($2::uuid[]) AND is_active = TRUE
-                 ORDER BY to_entity_id, relationship_type, created_at ASC)
+    const relationshipsFrom = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.relationships r SET from_entity_id = $3
+          WHERE r.owner_user_id = $1 AND r.from_entity_id = ANY($2::uuid[])
+            AND (
+              r.is_active IS DISTINCT FROM TRUE
+              OR (
+                NOT EXISTS (
+                  SELECT 1 FROM ci.relationships d
+                   WHERE d.from_entity_id = $3 AND d.to_entity_id = r.to_entity_id
+                     AND d.relationship_type = r.relationship_type AND d.is_active = TRUE)
+                AND r.relationship_id IN (
+                  SELECT DISTINCT ON (to_entity_id, relationship_type) relationship_id
+                    FROM ci.relationships
+                   WHERE owner_user_id = $1 AND from_entity_id = ANY($2::uuid[]) AND is_active = TRUE
+                   ORDER BY to_entity_id, relationship_type, created_at ASC)
+              )
             )
-          )
-        RETURNING 1`,
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
-    const droppedFromDupes: unknown[] = await em.query(
-      `DELETE FROM ci.relationships
-        WHERE owner_user_id = $1 AND from_entity_id = ANY($2::uuid[])
-        RETURNING 1`,
+    const droppedFromDupes = await countAffected(
+      em,
+      `WITH dropped AS (
+         DELETE FROM ci.relationships
+          WHERE owner_user_id = $1 AND from_entity_id = ANY($2::uuid[])
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM dropped`,
       [ownerUserId, sources],
     );
 
-    const relationshipsTo: unknown[] = await em.query(
-      `UPDATE ci.relationships r SET to_entity_id = $3
-        WHERE r.owner_user_id = $1 AND r.to_entity_id = ANY($2::uuid[])
-          AND (
-            r.is_active IS DISTINCT FROM TRUE
-            OR (
-              NOT EXISTS (
-                SELECT 1 FROM ci.relationships d
-                 WHERE d.from_entity_id = r.from_entity_id AND d.to_entity_id = $3
-                   AND d.relationship_type = r.relationship_type AND d.is_active = TRUE)
-              AND r.relationship_id IN (
-                SELECT DISTINCT ON (from_entity_id, relationship_type) relationship_id
-                  FROM ci.relationships
-                 WHERE owner_user_id = $1 AND to_entity_id = ANY($2::uuid[]) AND is_active = TRUE
-                 ORDER BY from_entity_id, relationship_type, created_at ASC)
+    const relationshipsTo = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.relationships r SET to_entity_id = $3
+          WHERE r.owner_user_id = $1 AND r.to_entity_id = ANY($2::uuid[])
+            AND (
+              r.is_active IS DISTINCT FROM TRUE
+              OR (
+                NOT EXISTS (
+                  SELECT 1 FROM ci.relationships d
+                   WHERE d.from_entity_id = r.from_entity_id AND d.to_entity_id = $3
+                     AND d.relationship_type = r.relationship_type AND d.is_active = TRUE)
+                AND r.relationship_id IN (
+                  SELECT DISTINCT ON (from_entity_id, relationship_type) relationship_id
+                    FROM ci.relationships
+                   WHERE owner_user_id = $1 AND to_entity_id = ANY($2::uuid[]) AND is_active = TRUE
+                   ORDER BY from_entity_id, relationship_type, created_at ASC)
+              )
             )
-          )
-        RETURNING 1`,
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
-    const droppedToDupes: unknown[] = await em.query(
-      `DELETE FROM ci.relationships
-        WHERE owner_user_id = $1 AND to_entity_id = ANY($2::uuid[])
-        RETURNING 1`,
+    const droppedToDupes = await countAffected(
+      em,
+      `WITH dropped AS (
+         DELETE FROM ci.relationships
+          WHERE owner_user_id = $1 AND to_entity_id = ANY($2::uuid[])
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM dropped`,
       [ownerUserId, sources],
     );
 
     return {
-      identifiers: identifiers.length,
-      communicationsFrom: communicationsFrom.length,
-      communicationsTo: communicationsTo.length,
-      eventsOrganizer: eventsOrganizer.length,
-      eventsParticipants: eventsParticipants.length,
-      relationshipsFrom: relationshipsFrom.length,
-      relationshipsTo: relationshipsTo.length,
-      relationshipsDropped: droppedSelfRef.length + droppedFromDupes.length + droppedToDupes.length,
+      identifiers,
+      communicationsFrom,
+      communicationsTo,
+      eventsOrganizer,
+      eventsParticipants,
+      relationshipsFrom,
+      relationshipsTo,
+      relationshipsDropped: droppedSelfRef + droppedFromDupes + droppedToDupes,
     };
   }
 }

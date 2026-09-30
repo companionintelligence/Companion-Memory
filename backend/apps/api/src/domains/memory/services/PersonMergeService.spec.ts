@@ -41,9 +41,45 @@ interface Harness {
   send: jest.Mock;
 }
 
+/**
+ * Rows each counting write "touched", keyed by a fragment of its statement —
+ * distinct values, so a count wired to the wrong field shows up as a wrong
+ * number rather than an equal one.
+ */
+const REPOINTED: Array<[fragment: string, count: number]> = [
+  ['UPDATE ci.entity_identifiers SET entity_id', 3],
+  ['UPDATE ci.communications SET from_entity_id', 5],
+  ['SET to_entity_ids = sub.new_ids', 7],
+  ['UPDATE ci.events SET organizer_entity_id', 11],
+  ['SET participant_entity_ids = sub.new_ids', 13],
+  ['UPDATE ci.relationships r SET from_entity_id', 17],
+  ['UPDATE ci.relationships r SET to_entity_id', 19],
+];
+
+/** The three relationship DELETEs, in the order the merge issues them; they sum to relationshipsDropped. */
+const DROPPED = [1, 2, 4];
+
+const EXPECTED_COUNTS = {
+  identifiers: 3,
+  communicationsFrom: 5,
+  communicationsTo: 7,
+  eventsOrganizer: 11,
+  eventsParticipants: 13,
+  relationshipsFrom: 17,
+  relationshipsTo: 19,
+  relationshipsDropped: 7,
+};
+
 function makeHarness(entityRows: EntityRow[], selfEntityId: string | null = SELF): Harness {
   const statements: Array<{ sql: string; params: unknown[] | undefined }> = [];
+  const dropped = [...DROPPED];
 
+  // Answers each statement the way TypeORM's Postgres runner does, so this
+  // mock cannot flatter the service: a SELECT — which is what a counting CTE
+  // is — gets rows, while a bare UPDATE/DELETE gets the PAIR [rows, rowCount].
+  // Every count used to be `….length` of that pair, a constant 2 in
+  // production; a statement that loses its CTE wrapper now makes
+  // countAffected throw here too.
   const query = jest.fn(async (sql: string, params?: unknown[]) => {
     statements.push({ sql, params });
 
@@ -55,6 +91,18 @@ function makeHarness(entityRows: EntityRow[], selfEntityId: string | null = SELF
 
     if (sql.includes('FROM ci.users')) {
       return [{ entity_id: selfEntityId }];
+    }
+
+    if (/SELECT count\(\*\)::int AS count FROM/.test(sql)) {
+      const count = sql.includes('DELETE FROM ci.relationships')
+        ? dropped.shift()
+        : REPOINTED.find(([fragment]) => sql.includes(fragment))?.[1];
+
+      return [{ count: count ?? 0 }];
+    }
+
+    if (/^\s*(UPDATE|DELETE)\b/.test(sql)) {
+      return [[], 0];
     }
 
     return [];
@@ -154,9 +202,6 @@ describe('PersonMergeService', () => {
 
     expect(result.id).toBe(TARGET);
 
-    // Decompression cap lifted inside the txn before hypertable updates.
-    expect(statementsMatching(harness, 'max_tuples_decompressed_per_dml_transaction')).toHaveLength(1);
-
     // One re-point per dependent surface, each owner-scoped with the sources.
     for (const fragment of [
       'UPDATE ci.entity_identifiers SET entity_id',
@@ -199,8 +244,14 @@ describe('PersonMergeService', () => {
     expect(statementsMatching(harness, 'UPDATE ci_search.entity_tag')).toHaveLength(1);
     expect(statementsMatching(harness, 'DELETE FROM ci_search.entity_tag')).toHaveLength(1);
 
-    // One audit row per source.
-    expect(statementsMatching(harness, 'INSERT INTO ci.entity_merges')).toHaveLength(2);
+    // One audit row per source, each carrying the counts the statements
+    // reported — not the length of TypeORM's [rows, rowCount] pair.
+    const audits = statementsMatching(harness, 'INSERT INTO ci.entity_merges');
+    expect(audits).toHaveLength(2);
+    for (const audit of audits) {
+      const details = JSON.parse(audit.params?.[3] as string) as { counts: unknown };
+      expect(details.counts).toEqual(EXPECTED_COUNTS);
+    }
 
     // Target re-indexes after commit.
     expect(harness.send).toHaveBeenCalledWith(expect.anything(), { personId: TARGET });
