@@ -34,6 +34,13 @@
  *  2. the truncation is not also one of the card's real numbers: no typed
  *     value keys those digits under the current rule.
  *
+ * What it removes, and from which rows, is the rule migration 20260930020117
+ * and 20260930022046 agree on, so the three cannot disagree about one row:
+ * only a live, unmerged Person that is no merge's survivor (a survivor's
+ * digits may be a merged-in record's real number); an identifier row only
+ * where its `raw_value` is NULL (a typed one was chosen by a person); the fake
+ * taken out of `phones` / `phone` and nothing added in its place.
+ *
  * It acts on the row at the card's CURRENT coordinate, not on "the row that
  * moved", so a push that died between the move and this repair finishes it on
  * the next attempt; and it touches only what the truncation itself reached —
@@ -178,13 +185,15 @@ export type TruncatedPhoneRepairSkip =
   /** No row sits under the card's current key yet: the card was never imported, or its old row stayed put. */
   | 'absent'
   /** A staged card in this run keys onto those ten digits for real, so what they reached may be real. */
-  | 'still_claimed';
+  | 'still_claimed'
+  /** A merge tombstone, a survivor, or an inactive row — outside the agreed rule. */
+  | 'not_live';
 
 export interface TruncatedPhoneRepairResult {
-  /** Rows the repair looked at, by standing. */
-  repaired: Array<{ entityId: string; standing: 'live' | 'tombstone' | 'survivor' | 'inactive' }>;
+  /** Live rows the repair acted on. */
+  repaired: string[];
   skipped: Record<TruncatedPhoneRepairSkip, number>;
-  /** Rows whose name or properties still carried the truncation. */
+  /** Rows whose name or `phones` / `phone` still carried the truncation. */
   rewritten: number;
   identifiersDeleted: number;
   selfClaimsDeleted: number;
@@ -199,7 +208,7 @@ export const TRUNCATED_PHONE_REKEY_SOURCE = 'import:truncated_phone_rekey';
 function emptyResult(): TruncatedPhoneRepairResult {
   return {
     repaired: [],
-    skipped: { absent: 0, still_claimed: 0 },
+    skipped: { absent: 0, still_claimed: 0, not_live: 0 },
     rewritten: 0,
     identifiersDeleted: 0,
     selfClaimsDeleted: 0,
@@ -212,9 +221,7 @@ function emptyResult(): TruncatedPhoneRepairResult {
 interface ProbeRow {
   candidate: number;
   entity_id: string;
-  is_tombstone: boolean;
-  is_survivor: boolean;
-  is_active: boolean;
+  is_live: boolean;
   still_claimed: boolean;
 }
 
@@ -232,9 +239,10 @@ const PROBE = `
   )
   SELECT c.candidate,
          e.entity_id,
-         e.merged_into_entity_id IS NOT NULL AS is_tombstone,
-         EXISTS (SELECT 1 FROM ci.entities s WHERE s.merged_into_entity_id = e.entity_id) AS is_survivor,
-         COALESCE(e.is_active, true) AS is_active,
+         -- The agreed rule's rows: live, unmerged, and no merge's survivor.
+         (COALESCE(e.is_active, true)
+          AND e.merged_into_entity_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM ci.entities s WHERE s.merged_into_entity_id = e.entity_id)) AS is_live,
          -- The current rule still keys some card in this run on those ten
          -- digits: one whose real number they are, or that is named them. Every
          -- push status, so a resumed push that already sent it still sees it.
@@ -254,102 +262,130 @@ const PROBE = `
    ORDER BY e.entity_id
      FOR UPDATE OF e`;
 
-/** Rows the repair acts on. Mirrors migration 20260930020117's `_ext_vcard`. */
+/** Rows the repair acts on. Mirrors migration 20260930020117's `_ext_card`. */
 const CREATE_WORKING_SET = `
   CREATE TEMP TABLE _tpr ON COMMIT DROP AS
-  SELECT *
-    FROM jsonb_to_recordset($1::jsonb) AS t(
-           entity_id uuid, owner_user_id uuid, old_key text, new_key text, new_key_kind text,
-           is_tombstone boolean, is_survivor boolean, is_live boolean)`;
+  SELECT t.entity_id, t.owner_user_id, t.old_key, e.name = t.old_key AS named_for_it
+    FROM jsonb_to_recordset($1::jsonb) AS t(entity_id uuid, owner_user_id uuid, old_key text)
+    JOIN ci.entities e ON e.entity_id = t.entity_id`;
 
 /**
- * The repair, in the migration's order and with its statements — every one of
- * them written against `_tpr` where the migration read `_ext_vcard`, and each
+ * The repair: migration 20260930020117's statements for its population A,
+ * each written against `_tpr` where the migration reads `_ext_card`, and
  * wrapped so it reports a count rather than TypeORM's `[rows, affected]` pair.
- * Two the migration made are left to the push itself: the move (legacyKeys.ts)
- * and indexing the card's new handle (the ingest that follows).
+ * Its population B (identifier rows whose own typed value carries an
+ * extension) is the migration's alone: nothing indexes such a value any more.
  */
 const REPAIR = {
   changedTable: `CREATE TEMP TABLE _tpr_changed (entity_id uuid PRIMARY KEY) ON COMMIT DROP`,
 
-  // (A2) What the fixed parser writes, on a row still showing the truncation —
-  // never a merge survivor's, because `PersonMergeService` unions `phones`, so a
-  // survivor's truncated digits may also be a merged-in record's real number.
-  // Remembered: these are the rows whose search index and ledger are reset at
-  // the end.
+  // (A1) The record: the fake leaves `phones`; `phone` falls back to the first
+  // number left, or goes; a row named for its fake loses the name. Nothing is
+  // added. Only a row this changes is written — and remembered, for the search
+  // index and ledger reset at the end.
   properties: `
     WITH target AS (
-      SELECT t.entity_id,
-             CASE WHEN e.name = t.old_key THEN t.new_key ELSE e.name END AS new_name,
-             CASE t.new_key_kind
-               WHEN 'email' THEN (COALESCE(e.properties, '{}'::jsonb) - 'phone' - 'phones')
-                                 || jsonb_build_object('email', t.new_key, 'emails', jsonb_build_array(t.new_key))
-               WHEN 'phone' THEN (COALESCE(e.properties, '{}'::jsonb) - 'phone' - 'phones')
-                                 || jsonb_build_object('phone', t.new_key, 'phones', jsonb_build_array(t.new_key))
-               ELSE COALESCE(e.properties, '{}'::jsonb) - 'phone' - 'phones'
-             END AS new_properties
+      SELECT e.entity_id,
+             p.phones,
+             CASE WHEN t.named_for_it THEN NULL ELSE e.name END AS new_name,
+             CASE
+               WHEN NOT e.properties ? 'phone' OR e.properties ->> 'phone' <> t.old_key THEN e.properties -> 'phone'
+               ELSE p.phones -> 0
+             END AS phone
         FROM _tpr t
         JOIN ci.entities e ON e.entity_id = t.entity_id
-       WHERE NOT t.is_survivor
-         AND (e.name = t.old_key
-              OR e.properties ->> 'phone' = t.old_key
-              OR COALESCE(e.properties -> 'phones', '[]'::jsonb) @> to_jsonb(t.old_key))
+        CROSS JOIN LATERAL (
+          SELECT COALESCE(jsonb_agg(a.el ORDER BY a.ord), '[]'::jsonb) AS phones
+            FROM jsonb_array_elements(CASE jsonb_typeof(e.properties -> 'phones')
+                                        WHEN 'array'  THEN e.properties -> 'phones'
+                                        WHEN 'string' THEN jsonb_build_array(e.properties -> 'phones')
+                                        ELSE '[]'::jsonb
+                                      END) WITH ORDINALITY AS a(el, ord)
+           WHERE NOT (jsonb_typeof(a.el) = 'string' AND a.el #>> '{}' = t.old_key)
+        ) p
+    ),
+    rebuilt AS (
+      SELECT g.entity_id,
+             g.new_name,
+             (COALESCE(e.properties, '{}'::jsonb) - 'phones' - 'phone')
+             || CASE WHEN e.properties ? 'phones' AND jsonb_array_length(g.phones) > 0
+                     THEN jsonb_build_object('phones', g.phones) ELSE '{}'::jsonb END
+             || CASE WHEN g.phone IS NOT NULL AND jsonb_typeof(g.phone) <> 'null'
+                     THEN jsonb_build_object('phone', g.phone) ELSE '{}'::jsonb END AS new_properties
+        FROM target g
+        JOIN ci.entities e ON e.entity_id = g.entity_id
     ),
     changed AS (
       UPDATE ci.entities e
-         SET properties = g.new_properties,
-             name = g.new_name,
+         SET properties = r.new_properties,
+             name = r.new_name,
              updated_at = now()
-        FROM target g
-       WHERE e.entity_id = g.entity_id
-         AND (e.properties IS DISTINCT FROM g.new_properties OR e.name IS DISTINCT FROM g.new_name)
+        FROM rebuilt r
+       WHERE e.entity_id = r.entity_id
+         AND (e.properties IS DISTINCT FROM r.new_properties OR e.name IS DISTINCT FROM r.new_name)
       RETURNING e.entity_id
     )
     INSERT INTO _tpr_changed SELECT entity_id FROM changed`,
 
   countChanged: `SELECT count(*)::int AS n FROM _tpr_changed`,
 
-  // (A3) The identifier with teeth, on a live row only: a tombstone's was
-  // re-pointed to its survivor at merge time (see the survivor note above).
+  // (A2) The identifier with teeth — whatever its `source` or `verified_at`,
+  // but only where its `raw_value` is NULL: the stored string WAS the key. A row
+  // with a raw value was typed by a person, and a plain one stays theirs.
   identifiers: `
     WITH gone AS (
       DELETE FROM ci.entity_identifiers ei
        USING _tpr t
-       WHERE t.is_live
-         AND ei.entity_id = t.entity_id
+       WHERE ei.entity_id = t.entity_id
          AND ei.owner_user_id IS NOT DISTINCT FROM t.owner_user_id
          AND ei.kind = 'phone'
          AND ei.value_normalized = t.old_key
+         AND ei.raw_value IS NULL
       RETURNING 1
     )
     SELECT count(*)::int AS n FROM gone`,
 
-  // `enrich.person_self_claim` upserts and never retracts.
+  // `enrich.person_self_claim` upserts; only a retracting producer would remove
+  // a claim the record stopped stating.
   selfClaims: `
     WITH gone AS (
       DELETE FROM ci.identifier_claims c
        USING _tpr t
-       WHERE t.is_live
-         AND c.owner_user_id = t.owner_user_id
+       WHERE c.owner_user_id = t.owner_user_id
          AND c.subject_type = 'person'
          AND c.role = 'self'
          AND c.subject_id = t.entity_id
          AND c.kind = 'phone'
          AND c.value_normalized = t.old_key
+         AND c.raw_value IS NULL
       RETURNING 1
     )
     SELECT count(*)::int AS n FROM gone`,
 
-  // Links the withdrawn key resolved: one row per (subject, role, person),
-  // kept only when no OTHER claim still links that person in that role — a
-  // different identifier, or a human's confirmation of this one.
+  // Every (Person, key) proved fake that the Person no longer holds as an
+  // identifier — computed from the proof, not from what was deleted, so the
+  // links still come out when the migration took the identifier first; and a
+  // key the Person still holds because a person typed it stays linked.
+  withdrawn: `
+    CREATE TEMP TABLE _tpr_withdrawn ON COMMIT DROP AS
+    SELECT DISTINCT t.owner_user_id, t.entity_id, t.old_key
+      FROM _tpr t
+     WHERE NOT EXISTS (SELECT 1
+                         FROM ci.entity_identifiers ei
+                        WHERE ei.owner_user_id = t.owner_user_id
+                          AND ei.entity_id = t.entity_id
+                          AND ei.kind = 'phone'
+                          AND ei.value_normalized = t.old_key)`,
+
+  // One row per (subject, role, person) a withdrawn key linked, kept only when
+  // no OTHER claim still links that person in that role — a different
+  // identifier, or a human's confirmation of this one.
   links: `
     CREATE TEMP TABLE _tpr_links ON COMMIT DROP AS
     SELECT DISTINCT c.owner_user_id, c.subject_type, c.subject_id, c.role, c.entity_id
       FROM ci.identifier_claims c
-      JOIN _tpr w
-        ON w.is_live
-       AND w.owner_user_id = c.owner_user_id
+      JOIN _tpr_withdrawn w
+        ON w.owner_user_id = c.owner_user_id
        AND w.entity_id = c.entity_id
        AND w.old_key = c.value_normalized
      WHERE c.kind = 'phone'
@@ -367,9 +403,8 @@ const REPAIR = {
                 AND (o.disposition = 'confirmed'
                      OR NOT (o.kind = 'phone'
                              AND EXISTS (SELECT 1
-                                           FROM _tpr w2
-                                          WHERE w2.is_live
-                                            AND w2.owner_user_id = o.owner_user_id
+                                           FROM _tpr_withdrawn w2
+                                          WHERE w2.owner_user_id = o.owner_user_id
                                             AND w2.entity_id = o.entity_id
                                             AND w2.old_key = o.value_normalized))))`,
 
@@ -456,9 +491,8 @@ const REPAIR = {
        SET entity_id = NULL,
            confidence = NULL,
            method = NULL
-      FROM _tpr w
-     WHERE w.is_live
-       AND c.owner_user_id = w.owner_user_id
+      FROM _tpr_withdrawn w
+     WHERE c.owner_user_id = w.owner_user_id
        AND c.entity_id = w.entity_id
        AND c.value_normalized = w.old_key
        AND c.kind = 'phone'
@@ -467,7 +501,7 @@ const REPAIR = {
 
   // The number a withdrawn key freed, indexed for a Person whose own
   // `properties.phones` states it — `EntityIdentifierBackfillService`'s order,
-  // oldest first. First writer wins, so the truncation had kept it from them.
+  // oldest first. First writer wins, so the fake had kept it from them.
   freed: `
     WITH indexed AS (
       INSERT INTO ci.entity_identifiers (entity_id, owner_user_id, kind, value_normalized, raw_value, source)
@@ -489,7 +523,7 @@ const REPAIR = {
              AND e.owner_user_id = $2::uuid
              AND NOT EXISTS (SELECT 1 FROM _tpr p WHERE p.entity_id = e.entity_id)
         ) h
-        JOIN (SELECT DISTINCT owner_user_id, old_key FROM _tpr WHERE is_live) w
+        JOIN (SELECT DISTINCT owner_user_id, old_key FROM _tpr_withdrawn) w
           ON w.owner_user_id = h.owner_user_id
          AND w.old_key = h.phone_key
        -- The fixed rule's key only: a typed value with an extension keys nothing.
@@ -500,10 +534,18 @@ const REPAIR = {
     )
     SELECT count(*)::int AS n FROM indexed`,
 
-  // `personSearchDocument` indexes the name and `properties.phone`, so the
-  // stored vector answers to the truncation until rewritten — and nothing
-  // rewrites a row that has an embedding. The ledger rows go too, re-opening
-  // every entity-keyed stage: this row changed underneath them.
+  // `personSearchDocument` indexes the name and `properties.phone`, so a stored
+  // vector answers to the fake until rewritten — and nothing rewrites a row that
+  // has an embedding. The rows changed here, plus any whose vector still answers
+  // to its fake (one the migration or the ingest already cleaned). The ledger
+  // rows go too, re-opening every entity-keyed stage for them.
+  vectorsStillFake: `
+    INSERT INTO _tpr_changed
+    SELECT DISTINCT t.entity_id
+      FROM _tpr t
+      JOIN ci_search.vectors vv ON vv.entity_id = t.entity_id
+     WHERE vv.vector @@ to_tsquery('simple', t.old_key)
+    ON CONFLICT (entity_id) DO NOTHING`,
   searchEmbeddings: `DELETE FROM ci_search.embeddings em USING _tpr_changed c WHERE em.entity_id = c.entity_id`,
   searchVectors: `DELETE FROM ci_search.vectors vv USING _tpr_changed c WHERE vv.entity_id = c.entity_id`,
   searchSkips: `DELETE FROM ci_search.index_skips sk USING _tpr_changed c WHERE sk.entity_id = c.entity_id`,
@@ -518,9 +560,9 @@ async function count(manager: EntityManager, sql: string, params: unknown[] = []
 
 /**
  * Undo, on the row under each card's current key, what the card's truncated
- * key reached — the statements migration 20260930020117 ran for the vCard rows
- * it could prove. One transaction. Run after the legacy-key moves and before
- * the ingest that refreshes those rows.
+ * key reached — migration 20260930020117's statements, for the rows it could
+ * not prove. One transaction. Run after the legacy-key moves and before the
+ * ingest that refreshes those rows.
  *
  * Idempotent: every statement is scoped to the truncation, so once it is gone
  * from a row a second run changes nothing.
@@ -553,7 +595,7 @@ export async function repairTruncatedPhoneKeys(
       JSON.stringify(probe),
     ])) as ProbeRow[];
     const byCandidate = new Map(found.map((row) => [Number(row.candidate), row]));
-    const working: Array<Record<string, unknown>> = [];
+    const working: Array<{ entity_id: string; owner_user_id: string; old_key: string }> = [];
     const seen = new Set<string>();
 
     repairs.forEach((repair, index) => {
@@ -571,36 +613,23 @@ export async function repairTruncatedPhoneKeys(
         return;
       }
 
+      if (!row.is_live) {
+        result.skipped.not_live += 1;
+
+        return;
+      }
+
       if (seen.has(row.entity_id)) {
         return;
       }
 
       seen.add(row.entity_id);
-
-      const handle = repair.proof.handle;
-      // Every artifact a live, unmerged, un-merged-into row holds is its own.
-      const isLive = !row.is_tombstone && row.is_active && !row.is_survivor;
-
       working.push({
         entity_id: row.entity_id,
         owner_user_id: scope.userId,
         old_key: repair.proof.truncatedHandle,
-        new_key: handle,
-        new_key_kind: handle == null ? null : handle.includes('@') ? 'email' : 'phone',
-        is_tombstone: row.is_tombstone,
-        is_survivor: row.is_survivor,
-        is_live: isLive,
       });
-      result.repaired.push({
-        entityId: row.entity_id,
-        standing: row.is_tombstone
-          ? 'tombstone'
-          : row.is_survivor
-            ? 'survivor'
-            : isLive
-              ? 'live'
-              : 'inactive',
-      });
+      result.repaired.push(row.entity_id);
     });
 
     if (working.length === 0) {
@@ -614,6 +643,7 @@ export async function repairTruncatedPhoneKeys(
     result.identifiersDeleted = await count(manager, REPAIR.identifiers);
     result.selfClaimsDeleted = await count(manager, REPAIR.selfClaims);
 
+    await manager.query(REPAIR.withdrawn);
     await manager.query(REPAIR.links);
     result.linksWithdrawn = await count(manager, REPAIR.countLinks);
 
@@ -632,6 +662,7 @@ export async function repairTruncatedPhoneKeys(
       PHONE_EXTENSION_PATTERN,
     ]);
 
+    await manager.query(REPAIR.vectorsStillFake);
     await manager.query(REPAIR.searchEmbeddings);
     await manager.query(REPAIR.searchVectors);
     await manager.query(REPAIR.searchSkips);

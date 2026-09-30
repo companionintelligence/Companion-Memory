@@ -404,7 +404,7 @@ describeWithDatabase(`moving contacts off truncated phone keys (${importDatabase
     expect(await mappedEntity(staged)).toBe(dana);
   });
 
-  it('re-keys a merge tombstone and corrects it, leaving the identifiers its survivor holds', async () => {
+  it('lets a merge tombstone be moved, and leaves its record and its survivor alone', async () => {
     const truncation = '5550148311'; // (212) 555-0148;311
     const { dataSource, userId } = harness;
     const tombstone = await seedOldRow(truncation, 'Rae Holt');
@@ -439,13 +439,11 @@ describeWithDatabase(`moving contacts off truncated phone keys (${importDatabase
     const moved = await entity(tombstone);
     expect(moved.linked_id).toBe(GraphIngestService.linkedIdFor('contact:rae.holt@example.com'));
     expect(moved.merged_into_entity_id).toBe(survivor);
-    expect(moved.properties).toMatchObject({
-      email: 'rae.holt@example.com',
-      emails: ['rae.holt@example.com'],
-    });
-    expect(moved.properties).not.toHaveProperty('phone');
 
-    // Not the tombstone's to drop: the survivor may hold these digits for real.
+    // Outside the rule migration 20260930020117 and 20260930022046 agree on:
+    // only live Persons, and never a survivor, whose digits may be a merged-in
+    // record's real number. The tombstone's record stays as the merge left it.
+    expect(moved.properties).toMatchObject({ phone: truncation, phones: [truncation] });
     expect(await identifiersOf(survivor)).toContain(`phone:${truncation}`);
   });
 
@@ -645,6 +643,60 @@ describeWithDatabase(`moving contacts off truncated phone keys (${importDatabase
     await stage.pushEntities(contextFor(runId), 'balanced', null);
 
     expect(await identifiersOf(old)).toContain(`phone:${truncation}`);
+  });
+
+  it('keeps an identifier a person typed, and the links it made', async () => {
+    // A row with a raw value was typed by somebody — here a plain number that
+    // happens to be the same ten digits. The agreed rule deletes only the rows
+    // whose stored string WAS the key (raw_value NULL), and withdraws a link
+    // only for a key the person no longer holds.
+    const truncation = '5550157120'; // (212) 555-0157;120
+    const { dataSource, userId } = harness;
+    const old = await seedOldRow(truncation, 'Ivo Brandt');
+
+    await dataSource.query(
+      `UPDATE ci.entity_identifiers SET raw_value = '(555) 015-7120', source = 'user'
+        WHERE owner_user_id = $1::uuid AND entity_id = $2::uuid AND kind = 'phone' AND value_normalized = $3`,
+      [userId, old, truncation],
+    );
+
+    const call = randomUUID();
+    await dataSource.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name) VALUES ($1::uuid, 'Communication', $2::uuid, 'call')`,
+      [call, userId],
+    );
+    await dataSource.query(
+      `INSERT INTO ci.communications (id, time, user_id, communication_type, direction, content, from_entity_id, entity_type)
+            VALUES ($1::uuid, now(), $2::uuid, 'call', 'inbound', '', $3::uuid, 'Communication')`,
+      [call, userId, old],
+    );
+    await dataSource.query(
+      `INSERT INTO ci.identifier_claims
+         (owner_user_id, subject_type, subject_id, role, kind, value_normalized, raw_value, entity_id, confidence, method)
+       VALUES ($1::uuid, 'communication', $2::uuid, 'from', 'phone', $3, '(555) 015-7120', $4::uuid, 0.85, 'phone_last10')`,
+      [userId, call, truncation, old],
+    );
+
+    const runId = await harness.startRun();
+    await stageCard(runId, {
+      name: 'Ivo Brandt',
+      identityKey: 'ivo.brandt@example.com',
+      phones: ['(212) 555-0157;120'],
+      emails: ['ivo.brandt@example.com'],
+    });
+
+    await stage.pushEntities(contextFor(runId), 'balanced', null);
+
+    expect((await entity(old)).linked_id).toBe(
+      GraphIngestService.linkedIdFor('contact:ivo.brandt@example.com'),
+    );
+    expect(await identifiersOf(old)).toContain(`phone:${truncation}`);
+
+    const [communication] = await dataSource.query<Array<{ from_entity_id: string | null }>>(
+      `SELECT from_entity_id FROM ci.communications WHERE id = $1::uuid`,
+      [call],
+    );
+    expect(communication.from_entity_id).toBe(old);
   });
 
   it('moves a card with no other handle onto its name key', async () => {

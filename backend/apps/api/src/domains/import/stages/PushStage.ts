@@ -1566,7 +1566,7 @@ export class PushStage implements ImportStageRunner {
         runId: context.runId,
         candidates: repairs.length,
         repaired: result.repaired.length,
-        repairedEntityIds: result.repaired.map((row) => row.entityId),
+        repairedEntityIds: result.repaired,
         skipped: result.skipped,
         rewritten: result.rewritten,
         identifiersDeleted: result.identifiersDeleted,
