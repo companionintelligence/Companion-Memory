@@ -459,6 +459,28 @@ describe('PipelineControlService', () => {
       }
     });
 
+    it('refuses a STAGE_REOPENS edge that STAGE_DEPENDENCIES does not also order', () => {
+      // A consumer re-opened by a producer's output re-reads that output, so it
+      // must also wait for it. Without the ordering it would decide the row on
+      // the producer's own tick, and the re-open would be the only repair — a
+      // day late, on every row, by design.
+      const graph = STAGE_DEPENDENCIES as Record<string, readonly StageId[]>;
+      const original = graph[STAGE_IDS.PROMOTE_EDGE_EVENT];
+      graph[STAGE_IDS.PROMOTE_EDGE_EVENT] = (original ?? []).filter(
+        (producer) => producer !== STAGE_IDS.PROMOTE_PLACE,
+      );
+
+      try {
+        expect(() => assertStagePolicy()).toThrow(
+          /STAGE_REOPENS has "promote\.place" re-opening "promote\.edge_event", but STAGE_DEPENDENCIES does not order/,
+        );
+      } finally {
+        graph[STAGE_IDS.PROMOTE_EDGE_EVENT] = original;
+      }
+
+      expect(() => assertStagePolicy()).not.toThrow();
+    });
+
     it('orders every producer ahead of every consumer', () => {
       const ordered = orderStages([...STAGE_ID_LIST]);
 

@@ -13,6 +13,7 @@ the data model, the migration and backfill plan — is
 | `constants.ts` | Queues, stage ids, slice sizes, leases, retry policy. Everything DECLARED, nothing discovered. |
 | `versions.ts` | `STAGE_VERSIONS` — the re-run watermark. The point of the whole rebuild. |
 | `schedule.ts` | `STAGE_SCHEDULES` — per-stage `trigger` / `cost` / `window` / `minInterval` / `maxStaleness` / `perRunCap`, plus `stageDueness()` and the boot guard `assertStageSchedules()`. |
+| `reopens.ts` | `STAGE_REOPENS` — which consumers' decisions a producer's `done` re-opens, row for row (`promote.place` → `promote.edge_event`), applied by `PipelineSliceListener`. |
 | `types.ts` | The `Stage` contract, `StageResult`, `StageSource`, `StageSchedule`, and the event payload schemas. |
 | `events.ts` | The pipeline's event surface: `pipeline.slice`, `pipeline.sweep`, `pipeline.dead_letter.reap`. |
 | `services/PipelineStateService.ts` | The ledger. The only writer of `ci.pipeline_state` and the home of THE ONE RULE. |
@@ -270,12 +271,15 @@ stage whose `trigger` is not `manual` (`automaticStageIds()`); metered stages ar
 `window: 'enrichment'` + `perRunCap`, enforced by the guard rather than by
 unreachability.
 
-Two optional declarations sit alongside it, each with its own module-load guard:
+Three optional declarations sit alongside it, each with its own module-load guard:
 `STAGE_DEPENDENCIES` (`services/PipelineControlService.ts`), which orders
-producers before consumers inside a run, and `ARRIVAL_SIGNALS`
+producers before consumers inside a run; `ARRIVAL_SIGNALS`
 (`listeners/StageArrivalListener.ts`), which is what actually makes
 `trigger: 'onArrival'` true — declaring `onArrival` with no signal promises a
-fast path that does not exist.
+fast path that does not exist; and `STAGE_REOPENS` (`reopens.ts`), for a
+consumer whose predicate ORs columns from different producers, so a row can be
+decided before a slower producer writes it — the producer's `done` re-opens the
+consumer's decision on that same row.
 
 ### 4. Declare the token — `services/StageRegistry.ts`
 

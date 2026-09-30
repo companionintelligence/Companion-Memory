@@ -7,6 +7,7 @@ import { DataSource } from 'typeorm';
 import { LoggerService } from '@ci/common/logging';
 
 import { SHARD_LEASE_SECONDS, STAGE_ID_LIST, STAGE_IDS, type StageId } from '../constants';
+import { STAGE_REOPENS } from '../reopens';
 import {
   automaticStageIds,
   isMeteredStage as scheduleIsMeteredStage,
@@ -368,12 +369,16 @@ export const STAGE_DEPENDENCIES: Readonly<Partial<Record<StageId, readonly Stage
   // event leg additionally reads `location_entity_id`, which `promote.place`
   // writes. THIS graph is the whole of the ordering between them — the shared
   // nightly cadence that used to double as ordering is gone (the projections
-  // are hourly and unwindowed now, see `STAGE_SCHEDULES`), and it was never
-  // load-bearing: an unlinked source row fails every edge leg's
-  // `StageSource.predicate`, so a projection that outruns its producer skips it
-  // rather than marking it `done`. What this graph still buys is that on a tick
-  // where a producer is due WITH candidates, its consumer waits one tick rather
-  // than projecting a slice the producer is about to widen.
+  // are hourly and unwindowed now, see `STAGE_SCHEDULES`). What it buys is that
+  // on a tick where a producer is due WITH candidates, its consumer waits one
+  // tick rather than projecting a slice the producer is about to widen.
+  //
+  // It cannot stop a projection outrunning a producer ACROSS ticks, and for a
+  // leg whose predicate is ONE linkage column it does not need to: an unlinked
+  // row fails the predicate, so it is skipped rather than marked `done`. The
+  // event leg's predicate is an OR over four columns and two producers, so an
+  // event with participants is decided before `promote.place` links it — and
+  // that row is re-opened by `STAGE_REOPENS` (`reopens.ts`), not by this graph.
   [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: [STAGE_IDS.ENRICH_PERSON_LINK],
   [STAGE_IDS.PROMOTE_EDGE_EVENT]: [STAGE_IDS.ENRICH_EVENT_PERSON_LINK, STAGE_IDS.PROMOTE_PLACE],
   [STAGE_IDS.PROMOTE_EDGE_OBJECT]: [STAGE_IDS.PROMOTE_OBJECT],
@@ -505,13 +510,16 @@ export function orderStages(stageIds: readonly StageId[]): StageId[] {
 }
 
 /**
- * Module-load guard over the two declarations above.
+ * Module-load guard over the two declarations above, and over how
+ * `STAGE_REOPENS` (`reopens.ts`) relates to the first of them.
  *
  * Same reasoning as `assertStageRegistryComplete`, and run at module load for the
  * same reason: every one of these mistakes is silent at runtime. An edge naming a
  * stage id that does not exist is an edge that never blocks anything; a cycle
  * makes the ordering arbitrary; a metered stage that slipped into the default set
- * is a recurring charge nobody authorised. The earliest failure is the cheapest.
+ * is a recurring charge nobody authorised; a re-open with no ordering behind it
+ * repairs, a day late, a decision the ordering should have prevented. The
+ * earliest failure is the cheapest.
  */
 export function assertStagePolicy(): void {
   const declared = new Set<string>(STAGE_ID_LIST);
@@ -538,6 +546,22 @@ export function assertStagePolicy(): void {
   for (const stageId of METERED_STAGES) {
     if (!declared.has(stageId)) {
       problems.push(`"${stageId}" is in METERED_STAGES but is not a declared stage id`);
+    }
+  }
+
+  // A consumer re-opened by a producer's `done` re-reads that producer's
+  // output, so it must be ORDERED after it too. A re-open edge with no matching
+  // dependency would let the consumer run on the producer's tick and decide
+  // the row a moment before the write it is waiting for — and the re-open would
+  // then be the only thing that ever fixed it, a day late.
+  for (const [producer, consumers] of Object.entries(STAGE_REOPENS)) {
+    for (const consumer of consumers ?? []) {
+      if (!(STAGE_DEPENDENCIES[consumer] ?? []).includes(producer as StageId)) {
+        problems.push(
+          `STAGE_REOPENS has "${producer}" re-opening "${consumer}", but STAGE_DEPENDENCIES does not ` +
+            `order "${consumer}" after "${producer}"`,
+        );
+      }
     }
   }
 

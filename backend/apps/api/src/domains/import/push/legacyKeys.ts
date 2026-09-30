@@ -1,7 +1,7 @@
 import type { GraphEntityInputDto } from '@ci/domains/graph';
 
 import type { StagedEntity } from '../entities/StagedEntityEntity';
-import { namesDescribeDifferentPeople, stagedNaturalKey } from '../staging/identity';
+import { namesDescribeDifferentPeople, normalizeHandle, stagedNaturalKey } from '../staging/identity';
 
 import { naturalKeyFor } from './entities';
 
@@ -32,6 +32,27 @@ import { naturalKeyFor } from './entities';
  * it must not matter whether ingest replaces a row's properties (as it does
  * today) or unions its lists into them, because a union would keep every
  * colleague's name and address on the row.
+ *
+ * Emptied of what the CARDS put there, but not of what the row's merges did. A
+ * merge is a separate decision: that some other row (a chat participant, a
+ * contact from another address book) is this row's person. The row keeps its
+ * merges when it moves, so the identity values they folded in stay with it:
+ * `emails`, `phones`, `names`, `Phones` and `Faxes`, as far as each source's
+ * tombstone still carries them (`GraphIngestService.rekeyImportedEntities`
+ * has the rule). Dropping them would lose them for good. Nothing folds a
+ * standing merge again, and the survivor repair in #2796 runs once.
+ *
+ * The exception is a merge that is someone ELSE in the collapse, and the
+ * collapse is what makes those. While the row carried every colleague's
+ * handles, a stub for one of them could share a handle with it, and
+ * `MergeCandidateService` folds a shared email automatically, with no name
+ * check. Such a stub's values are the colleague's. Keeping them would hand the
+ * heir that colleague's address, which is the contamination the reset exists to
+ * remove, and would give the heir and the colleague's new row a shared claim
+ * that folds the new row straight back into the heir's. So a merged-away row
+ * whose name describes someone other than the heir, or that holds a handle only
+ * a colleague's card lists, loses its values along with the rest. Its merge
+ * still stands: unpicking a merge is not a re-key's job.
  */
 
 /** An import coordinate as `GraphIngestService` resolves one, less the owner. */
@@ -41,11 +62,20 @@ export interface ImportCoordinate {
   key: string;
 }
 
+/** A row merged into an {@link ImportedEntityRow}: a merge tombstone. */
+export interface MergedAwayRow {
+  entityId: string;
+  name: string | null;
+  properties?: Record<string, unknown>;
+}
+
 /** A row found at an {@link ImportCoordinate}. */
 export interface ImportedEntityRow extends ImportCoordinate {
   entityId: string;
   name: string | null;
   properties?: Record<string, unknown>;
+  /** The rows merged into it, which a reset must sort into its person's and someone else's. */
+  mergedFrom?: readonly MergedAwayRow[];
 }
 
 /**
@@ -56,6 +86,8 @@ export interface LegacyKeyClaim extends ImportCoordinate {
   legacyKey: string;
   /** What the card calls the person — how a contested row picks its heir. */
   name: string | null;
+  /** Every handle the card lists, normalized: how a merge into the row is shown to be a colleague's. */
+  handles: readonly string[];
 }
 
 /** A row to move, and where. */
@@ -66,6 +98,8 @@ export interface LegacyKeyMove {
   toKey: string;
   /** The row held several people: rebuild it from the heir's card alone. */
   resetProperties: boolean;
+  /** Rows merged into it that are someone else in the collapse: the reset drops their values too. */
+  dropMergedFrom: string[];
 }
 
 export interface LegacyKeyPlan {
@@ -111,7 +145,7 @@ export function legacyKeyClaims(
 ): LegacyKeyClaim[] {
   const current = new Set(batch.map(({ input }) => coordinateKey(input)));
   const claims: LegacyKeyClaim[] = [];
-  const seen = new Set<string>();
+  const seen = new Map<string, LegacyKeyClaim>();
 
   for (const { input, rows } of batch) {
     for (const row of rows) {
@@ -128,14 +162,31 @@ export function legacyKeyClaims(
       const legacy = { entityType: input.entityType, sourceSystem: input.sourceSystem, key: legacyKey };
       const claim = `${coordinateKey(legacy)}\u001f${input.key}`;
 
-      if (current.has(coordinateKey(legacy)) || seen.has(claim)) {
+      if (current.has(coordinateKey(legacy))) {
         continue;
       }
 
-      seen.add(claim);
+      const earlier = seen.get(claim);
+
+      // One claim per old key and new key. Another staged row making the same
+      // claim shares the card's key, so its handles are the card's too.
+      if (earlier) {
+        earlier.handles = [...new Set([...earlier.handles, ...cardHandles(row)])];
+        continue;
+      }
+
       // The CARD's name, not the input's display name: for a card with no
       // usable name that falls back to the handle, which says nothing here.
-      claims.push({ ...legacy, key: input.key, legacyKey, name: row.name ?? null });
+      const made: LegacyKeyClaim = {
+        ...legacy,
+        key: input.key,
+        legacyKey,
+        name: row.name ?? null,
+        handles: cardHandles(row),
+      };
+
+      seen.set(claim, made);
+      claims.push(made);
     }
   }
 
@@ -179,6 +230,10 @@ export function claimedCoordinates(claims: readonly LegacyKeyClaim[]): ImportCoo
  * than one person: another claimant's name says so, or the `Names` the row
  * already accumulated do. One person's own copies claiming it (a fragment each)
  * do not reset it — their details are all theirs.
+ *
+ * A reset keeps what the row's merges brought in, except from the merged-away
+ * rows listed in `dropMergedFrom`: those {@link mergedAsSomeoneElse | shown to
+ * be someone else} in the collapse. See this module's header for why.
  */
 export function planLegacyKeyMoves(
   claims: readonly LegacyKeyClaim[],
@@ -223,18 +278,94 @@ export function planLegacyKeyMoves(
     }
 
     taken.add(coordinateKey(heir));
+
+    const resetProperties =
+      list.some((claim) => namesDescribeDifferentPeople(row.name, claim.name)) ||
+      namesListSeveralPeople(row.properties?.Names);
+
     moves.push({
       entityType: heir.entityType,
       sourceSystem: heir.sourceSystem,
       fromKey: heir.legacyKey,
       toKey: heir.key,
-      resetProperties:
-        list.some((claim) => namesDescribeDifferentPeople(row.name, claim.name)) ||
-        namesListSeveralPeople(row.properties?.Names),
+      resetProperties,
+      dropMergedFrom: resetProperties ? mergedAsSomeoneElse(row, heir, list) : [],
     });
   }
 
   return { moves, kept };
+}
+
+/**
+ * The rows merged into `row` that are someone other than the `heir` it is
+ * being rebuilt for. A row counts when its name describes a different person
+ * from the one the heir's card names (the row's own name, for a card with no
+ * name), or when it holds a handle another claimant's card lists and the heir's
+ * card does not.
+ *
+ * The handle test is for a stub whose name says nothing about who it is: a mail
+ * participant minted with its address as its name, a line named by its number.
+ * Only claimants whose names describe someone else count as colleagues. One
+ * person's other copies of a card are not, whatever they list, and neither is
+ * a card with no name. A line every card lists, the heir's included, is
+ * nobody's evidence.
+ */
+function mergedAsSomeoneElse(
+  row: ImportedEntityRow,
+  heir: LegacyKeyClaim,
+  claimants: readonly LegacyKeyClaim[],
+): string[] {
+  const person = heir.name?.trim() || row.name;
+  const own = new Set(heir.handles);
+  const theirs = new Set(
+    claimants
+      .filter((claim) => claim !== heir && namesDescribeDifferentPeople(person, claim.name))
+      .flatMap((claim) => claim.handles)
+      .filter((handle) => !own.has(handle)),
+  );
+
+  return (row.mergedFrom ?? [])
+    .filter(
+      (merged) =>
+        namesDescribeDifferentPeople(person, merged.name) ||
+        handlesIn(merged.properties).some((handle) => theirs.has(handle)),
+    )
+    .map((merged) => merged.entityId);
+}
+
+/** The keys a contact card's metadata, or a Person's properties, list handles under. */
+const HANDLE_KEYS = ['email', 'emails', 'Emails', 'phone', 'phones', 'Phones', 'Faxes'];
+
+/**
+ * Every handle a bag lists under {@link HANDLE_KEYS}, as a lone value or a
+ * list, normalized the way staging compares handles: a lower-cased address, a
+ * number's last ten digits.
+ */
+function handlesIn(properties: Record<string, unknown> | null | undefined): string[] {
+  const out = new Set<string>();
+
+  for (const key of HANDLE_KEYS) {
+    const value = properties?.[key];
+
+    for (const item of Array.isArray(value) ? value : [value]) {
+      const handle = normalizeHandle(item);
+
+      if (handle) {
+        out.add(handle);
+      }
+    }
+  }
+
+  return [...out];
+}
+
+/** Every handle a staged card lists: the ones it is keyed on, then its metadata's. */
+function cardHandles(row: StagedEntity): string[] {
+  const keys = [row.identityKey, row.legacyIdentityKey]
+    .map(normalizeHandle)
+    .filter((handle) => handle !== '');
+
+  return [...new Set([...keys, ...handlesIn(row.metadata)])];
 }
 
 /** True when a stored `Names` list holds two names of different people. */

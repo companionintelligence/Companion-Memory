@@ -13,6 +13,7 @@ import {
 } from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
+import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { PLANNING_PREFS_DEFAULTS } from '../../entities/PlanningPrefsEntity';
 import { TASK_STATUSES, TaskEntity } from '../../entities/TaskEntity';
@@ -40,8 +41,13 @@ import { TaskService } from '../TaskService';
  *   PLANNING_TEST_DATABASE_URL=postgres://companion:pw@localhost:55433/companion \
  *     yarn test TaskService.tenancy
  */
-const DATABASE_URL = process.env.PLANNING_TEST_DATABASE_URL;
-const describeWithDb = DATABASE_URL ? describe : describe.skip;
+const DATABASE_ENV = { urlEnvVar: 'PLANNING_TEST_DATABASE_URL' };
+const availability = databaseAvailability(DATABASE_ENV);
+const describeWithDb = availability.available ? describe : describe.skip;
+
+if (!availability.available) {
+  console.warn(`[planning/TaskService.tenancy] SKIPPED — ${availability.reason}`);
+}
 
 describeWithDb('TaskService — tenant isolation (integration)', () => {
   let dataSource: DataSource;
@@ -61,7 +67,7 @@ describeWithDb('TaskService — tenant isolation (integration)', () => {
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...dataSourceConnection(DATABASE_ENV),
       entities: [TaskEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
@@ -292,7 +298,7 @@ describeWithDb('PlannedBlockService — accepted event_revise (integration)', ()
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...dataSourceConnection(DATABASE_ENV),
       // EventBaseEntity is a @ChildEntity of the ci.entities STI tree, so its
       // root has to be mapped alongside it; UserEntity because EventEntity.user
       // and PlanningTimeService both resolve against it.

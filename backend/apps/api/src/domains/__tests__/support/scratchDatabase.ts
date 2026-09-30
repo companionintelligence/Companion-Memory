@@ -4,7 +4,13 @@ import path from 'node:path';
 
 import { DataSource } from 'typeorm';
 
-import { isPortOpen, resolveConnection, type DatabaseAvailability } from './databaseConnection';
+import {
+  failIfRequired,
+  isPortOpenWithRetry,
+  resolveConnection,
+  type AvailabilityDeps,
+  type DatabaseAvailability,
+} from './databaseConnection';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -151,8 +157,8 @@ const DEFAULT_MAINTENANCE_DATABASE = 'postgres';
  * itself a database must not run at all; the alternative is the one this
  * module exists to prevent.
  */
-export function resolveAdminConnection(): AdminConnection | null {
-  const url = process.env.PIPELINE_TEST_ADMIN_DATABASE_URL;
+export function resolveAdminConnection(env: NodeJS.ProcessEnv = process.env): AdminConnection | null {
+  const url = env.PIPELINE_TEST_ADMIN_DATABASE_URL;
 
   if (url != null && url.trim().length > 0) {
     try {
@@ -172,7 +178,7 @@ export function resolveAdminConnection(): AdminConnection | null {
     }
   }
 
-  const password = process.env.DATABASE_ADMIN_PASSWORD;
+  const password = env.DATABASE_ADMIN_PASSWORD;
 
   // The one field with no default, for the same reason `resolveConnection()`
   // gives about the application password: everything else about this server is
@@ -184,12 +190,12 @@ export function resolveAdminConnection(): AdminConnection | null {
   // The SERVER, from whatever the ordinary harness resolves — which is how
   // PIPELINE_TEST_DATABASE_URL still gets a say in WHERE the scratch database
   // is created, while having no say at all in what it is called.
-  const server = resolveConnection();
+  const server = resolveConnection({}, env);
 
   return {
-    host: server?.host ?? process.env.DATABASE_HOST ?? 'localhost',
-    port: server?.port ?? Number(process.env.DATABASE_PORT ?? 5432),
-    username: process.env.DATABASE_ADMIN_USERNAME ?? DEFAULT_ADMIN_USERNAME,
+    host: server?.host ?? env.DATABASE_HOST ?? 'localhost',
+    port: server?.port ?? Number(env.DATABASE_PORT ?? 5432),
+    username: env.DATABASE_ADMIN_USERNAME ?? DEFAULT_ADMIN_USERNAME,
     password,
     database: DEFAULT_MAINTENANCE_DATABASE,
   };
@@ -202,15 +208,29 @@ let cachedAvailability: DatabaseAvailability | null = null;
  * SYNCHRONOUSLY, so a spec can pick `describe` vs `describe.skip` at collection
  * time. See the README beside this file for why that matters.
  */
-export function scratchDatabaseAvailability(): DatabaseAvailability {
-  if (cachedAvailability != null) {
+export function scratchDatabaseAvailability(deps?: AvailabilityDeps): DatabaseAvailability {
+  if (deps == null && cachedAvailability != null) {
     return cachedAvailability;
   }
 
-  const admin = resolveAdminConnection();
+  const env = deps?.env ?? process.env;
+  const subject = 'the scratch-database suite (it creates and drops a database of its own)';
+  const admin = resolveAdminConnection(env);
+
+  // Cached only when nothing was injected, and only AFTER failIfRequired has had
+  // its say — an answer that throws must not be remembered as a plain skip.
+  const remember = (answer: DatabaseAvailability): DatabaseAvailability => {
+    failIfRequired(answer, subject, env);
+
+    if (deps == null) {
+      cachedAvailability = answer;
+    }
+
+    return answer;
+  };
 
   if (admin == null) {
-    cachedAvailability = {
+    return remember({
       available: false,
       reason:
         'no administrative database connection configured — this suite creates and drops a database of ' +
@@ -218,27 +238,21 @@ export function scratchDatabaseAvailability(): DatabaseAvailability {
         'in .env.default, and `make dev` copies that to .env on first run) or PIPELINE_TEST_ADMIN_DATABASE_URL. ' +
         'There is no fallback to the application connection on purpose: that is the operator’s archive.',
       target: '(unset)',
-    };
-
-    return cachedAvailability;
+    });
   }
 
   const target = `${admin.host}:${admin.port}`;
-  const timeoutMs = Number(process.env.PIPELINE_TEST_PROBE_TIMEOUT_MS ?? 2_000);
+  const timeoutMs = Number(env.PIPELINE_TEST_PROBE_TIMEOUT_MS ?? 2_000);
 
-  if (!isPortOpen(admin.host, admin.port, timeoutMs)) {
-    cachedAvailability = {
+  if (!isPortOpenWithRetry(admin.host, admin.port, timeoutMs, deps)) {
+    return remember({
       available: false,
       reason: `nothing accepting connections at ${target} (probe timeout ${timeoutMs} ms)`,
       target,
-    };
-
-    return cachedAvailability;
+    });
   }
 
-  cachedAvailability = { available: true, reason: `Postgres reachable at ${target}`, target };
-
-  return cachedAvailability;
+  return remember({ available: true, reason: `Postgres reachable at ${target}`, target });
 }
 
 // ---------------------------------------------------------------------------

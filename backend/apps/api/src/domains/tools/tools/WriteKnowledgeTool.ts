@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
 import { LoggerService } from '@ci/common/logging';
-import { GraphEventService, GraphQueryService } from '@ci/domains/memory';
+import { GraphEventService, GraphQueryService, type RelationshipEntity } from '@ci/domains/memory';
 
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
@@ -89,6 +89,80 @@ const WriteKnowledgeInputSchema = z.object({
 });
 
 export type WriteKnowledgeInput = z.infer<typeof WriteKnowledgeInputSchema>;
+
+/** One of the `relationships` an `entity.create` carries, from that entity. */
+type NestedRelationship = NonNullable<z.infer<typeof EntityCreateSchema>['relationships']>[number];
+
+/**
+ * Entity and relationship types compare case-insensitively: a model writing
+ * `person` means the stored `Person`. They are NOT interchangeable in storage —
+ * importers key rows on the exact type, and the per-type services match it
+ * exactly — so a case-only difference must never reach the write as a retype.
+ */
+function sameGraphType(stored: string, requested: string): boolean {
+  return stored.trim().toLowerCase() === requested.trim().toLowerCase();
+}
+
+/** The requested type, unless it only differs from the stored one in case or whitespace. */
+function keepStoredSpelling(stored: string, requested: string | undefined): string {
+  return requested === undefined || sameGraphType(stored, requested) ? stored : requested;
+}
+
+/** `valid_relationship_type`, the CHECK on `ci.relationships.relationship_type`. */
+const STORABLE_RELATIONSHIP_TYPE = /^[A-Z_][A-Z0-9_]*$/;
+
+/**
+ * A relationship type spelled the way `ci.relationships` stores it — upper snake
+ * case, the CHECK above — or `null` when no spelling of it can be stored. The
+ * write happens after the tool has answered, so a `knows` or a `works at` sent
+ * through as is failed there, and the model had already been told the
+ * relationship was saved. The stored spelling is also what finds the edge an
+ * importer wrote: `KNOWS` is on the coordinate, `knows` is not. Same folding as
+ * `normalizeRelationship`'s key, without its renames.
+ */
+function storedRelationshipType(requested: string): string | null {
+  const spelled = requested
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_');
+
+  return STORABLE_RELATIONSHIP_TYPE.test(spelled) ? spelled : null;
+}
+
+function unstorableTypeMessage(requested: string): string {
+  return (
+    `Relationship type "${requested}" cannot be stored: use letters, digits and underscores, ` +
+    'not starting with a digit (e.g. WORKS_AT)'
+  );
+}
+
+/**
+ * Whether an id-reuse write describes the edge its id names. A bidirectional
+ * edge matches in either orientation — unless the write asks for a one-way edge,
+ * which the stored one reversed is not (see GraphUtilityService.findActiveRelationship).
+ */
+function isSameEdge(
+  edge: Pick<RelationshipEntity, 'from_entity_id' | 'to_entity_id' | 'relationship_type' | 'is_bidirectional'>,
+  fromEntityId: string,
+  toEntityId: string,
+  relationshipType: string,
+  isBidirectional: boolean | undefined,
+): boolean {
+  if (!sameGraphType(edge.relationship_type, relationshipType)) {
+    return false;
+  }
+
+  if (edge.from_entity_id === fromEntityId && edge.to_entity_id === toEntityId) {
+    return true;
+  }
+
+  return (
+    edge.is_bidirectional &&
+    isBidirectional !== false &&
+    edge.from_entity_id === toEntityId &&
+    edge.to_entity_id === fromEntityId
+  );
+}
 
 interface OperationResultSummary {
   kind: string;
@@ -247,62 +321,125 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
       try {
         switch (operation.kind) {
           case 'entity.create': {
-            if (operation.entityId) {
-              // A soft-deleted (forgotten) row still owns its id, so an id-reuse
-              // create must not fall through to createOrUpdateNode's update
-              // branch, which unconditionally flips is_active back to true.
-              const existing = await this.graphQuery.getNode(ownerId, operation.entityId, {
-                includeInactive: true,
-              });
+            const existing = operation.entityId
+              ? await this.graphQuery.getNode(ownerId, operation.entityId, { includeInactive: true })
+              : null;
 
-              if (existing && !existing.is_active) {
-                results.push({
-                  kind: operation.kind,
-                  status: 'failed',
-                  message: `Entity ${operation.entityId} was forgotten and cannot be recreated by id reuse`,
-                  entityId: operation.entityId,
-                });
-                failures += 1;
-                break;
-              }
-            }
-
-            if (dryRun) {
-              rememberName(operation.entityType, operation.name, operation.entityId ?? 'dry-run');
+            // A soft-deleted (forgotten) row still owns its id, so an id-reuse
+            // create must not fall through to createOrUpdateNode's update
+            // branch, which unconditionally flips is_active back to true.
+            if (existing && !existing.is_active) {
               results.push({
                 kind: operation.kind,
-                status: 'created',
-                message: 'Dry run: would create entity',
+                status: 'failed',
+                message: `Entity ${existing.entity_id} was forgotten and cannot be recreated by id reuse`,
+                entityId: existing.entity_id,
               });
-              createdNodes += 1;
+              failures += 1;
               break;
             }
 
-            const { entityId } = await this.graphEvents.upsertNode(ownerId, {
-              entityId: operation.entityId,
-              entityType: operation.entityType,
-              name: operation.name ?? null,
-              description: operation.description ?? null,
-              properties: operation.properties ?? {},
-              searchContent: operation.searchContent ?? null,
-              linkedTable: operation.linkedTable ?? null,
-              linkedId: operation.linkedId ?? null,
-              mergeProperties: false,
-            });
-
-            if (operation.relationships?.length) {
-              await this.handleRelationshipCreations(ownerId, entityId, operation.relationships, dryRun);
-              createdRelationships += operation.relationships.length;
+            // entity_type is half of the coordinate an importer upserts on, and
+            // the per-type services match it exactly, so an id-reuse create
+            // keeps the stored spelling and refuses a real change of type: a
+            // model that calls a Person an Organization has most likely picked
+            // up the wrong id, and its name and properties would land on that
+            // row. entity.update stays the one explicit way to retype.
+            if (existing && !sameGraphType(existing.entity_type, operation.entityType)) {
+              results.push({
+                kind: operation.kind,
+                status: 'failed',
+                message:
+                  `Entity ${existing.entity_id} is a ${existing.entity_type}; entity.create with an existing ` +
+                  `entityId cannot make it a ${operation.entityType}. Omit entityId to create a new entity.`,
+                entityId: existing.entity_id,
+              });
+              failures += 1;
+              break;
             }
 
-            rememberName(operation.entityType, operation.name, entityId);
-            createdNodes += 1;
-            results.push({
-              kind: operation.kind,
-              status: 'created',
-              message: `Created entity ${entityId}`,
-              entityId,
+            const entityType = existing?.entity_type ?? operation.entityType;
+            const knownName = operation.name ?? existing?.name ?? undefined;
+
+            if (dryRun) {
+              rememberName(entityType, knownName, operation.entityId ?? 'dry-run');
+              if (existing) {
+                updatedNodes += 1;
+                results.push({
+                  kind: operation.kind,
+                  status: 'updated',
+                  message: `Dry run: would update existing entity ${existing.entity_id}`,
+                  entityId: existing.entity_id,
+                });
+              } else {
+                createdNodes += 1;
+                results.push({
+                  kind: operation.kind,
+                  status: 'created',
+                  message: 'Dry run: would create entity',
+                });
+              }
+
+              break;
+            }
+
+            const nestedRelationships = operation.relationships?.length
+              ? await this.prepareNestedRelationships(ownerId, operation.entityId, operation.relationships)
+              : [];
+
+            // Only what the caller supplied goes out: every other field, the
+            // linked key included, stays `undefined` through GraphEventService
+            // and the listener, which createOrUpdateNode reads as "leave it".
+            // An id-reuse create lands on a row that may be imported, and the
+            // model sees neither its linked key nor the property keys other
+            // writers own — PersonMergeService's folded identifiers, is_self,
+            // structured names, planner settings. Sending `null`s and
+            // `mergeProperties: false` here used to clear the key (so the next
+            // import minted a duplicate) and swap the whole bag for whatever the
+            // model sent.
+            //
+            // Merging is also what makes a retried create harmless, and it is
+            // not conditional on `existing`: `entityId` can name a row whose own
+            // create is still queued, so this write may meet a row the read
+            // above did not. On a brand-new row the insert defaults an omitted
+            // field exactly as it would a null one, so nothing changes there.
+            const { entityId } = await this.graphEvents.upsertNode(ownerId, {
+              entityId: operation.entityId,
+              entityType,
+              name: operation.name,
+              description: operation.description,
+              properties: operation.properties,
+              searchContent: operation.searchContent,
+              linkedTable: operation.linkedTable,
+              linkedId: operation.linkedId,
+              mergeProperties: true,
             });
+
+            if (nestedRelationships.length) {
+              const nested = await this.writeNestedRelationships(ownerId, entityId, nestedRelationships);
+              createdRelationships += nested.created;
+              updatedRelationships += nested.updated;
+            }
+
+            rememberName(entityType, knownName, entityId);
+            if (existing) {
+              updatedNodes += 1;
+              results.push({
+                kind: operation.kind,
+                status: 'updated',
+                message: `Updated existing entity ${entityId}`,
+                entityId,
+              });
+            } else {
+              createdNodes += 1;
+              results.push({
+                kind: operation.kind,
+                status: 'created',
+                message: `Created entity ${entityId}`,
+                entityId,
+              });
+            }
+
             break;
           }
 
@@ -330,23 +467,22 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
               break;
             }
 
-            const mergedProperties = this.mergeProperties(
-              existing.properties ?? {},
-              operation.properties ?? {},
-              operation.mergeProperties !== false,
-              operation.removeProperties ?? [],
-            );
-
+            // Same shape as an id-reuse create: send only what the caller set
+            // and let the merge (or replace, or removal) run against the row as
+            // it is when the queued write lands. Sending back the fields read
+            // above instead would revert whatever another writer — an import
+            // refresh, a person merge, the planner — changed in the meantime.
             const { entityId } = await this.graphEvents.upsertNode(ownerId, {
               entityId: operation.entityId,
-              entityType: operation.entityType ?? existing.entity_type,
-              name: operation.name ?? existing.name,
-              description: operation.description ?? existing.description,
-              properties: mergedProperties,
-              searchContent: operation.searchContent ?? existing.search_content,
-              linkedTable: operation.linkedTable ?? existing.linked_table,
-              linkedId: operation.linkedId ?? existing.linked_id,
-              mergeProperties: false,
+              entityType: keepStoredSpelling(existing.entity_type, operation.entityType),
+              name: operation.name,
+              description: operation.description,
+              properties: operation.properties,
+              mergeProperties: operation.mergeProperties !== false,
+              removeProperties: operation.removeProperties,
+              searchContent: operation.searchContent,
+              linkedTable: operation.linkedTable,
+              linkedId: operation.linkedId,
             });
 
             updatedNodes += 1;
@@ -360,23 +496,36 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
           }
 
           case 'relationship.create': {
-            if (operation.relationshipId) {
-              // Same id-reuse guard as entity.create, mirrored for relationships.
-              const existingRels = await this.graphQuery.getRelationships(ownerId, {
-                relationshipIds: [operation.relationshipId],
-                includeInactive: true,
-              });
+            const byId = operation.relationshipId
+              ? (
+                  await this.graphQuery.getRelationships(ownerId, {
+                    relationshipIds: [operation.relationshipId],
+                    includeInactive: true,
+                  })
+                )[0]
+              : undefined;
 
-              if (existingRels[0] && !existingRels[0].is_active) {
-                results.push({
-                  kind: operation.kind,
-                  status: 'failed',
-                  message: `Relationship ${operation.relationshipId} was forgotten and cannot be recreated by id reuse`,
-                  relationshipId: operation.relationshipId,
-                });
-                failures += 1;
-                break;
-              }
+            // Same id-reuse guard as entity.create, mirrored for relationships.
+            if (byId && !byId.is_active) {
+              results.push({
+                kind: operation.kind,
+                status: 'failed',
+                message: `Relationship ${byId.relationship_id} was forgotten and cannot be recreated by id reuse`,
+                relationshipId: byId.relationship_id,
+              });
+              failures += 1;
+              break;
+            }
+
+            const relationshipType = storedRelationshipType(operation.relationshipType);
+            if (!relationshipType) {
+              results.push({
+                kind: operation.kind,
+                status: 'failed',
+                message: unstorableTypeMessage(operation.relationshipType),
+              });
+              failures += 1;
+              break;
             }
 
             const fromEntityId = await this.resolveEndpoint(
@@ -402,13 +551,75 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
               break;
             }
 
-            if (dryRun) {
+            // `no_self_references` would refuse the write after the tool had
+            // answered; two names can fuzzy-match to the same entity.
+            if (fromEntityId === toEntityId) {
               results.push({
                 kind: operation.kind,
-                status: 'created',
-                message: 'Dry run: would create relationship',
+                status: 'failed',
+                message: `Both ends of the relationship resolved to entity ${fromEntityId}; a relationship needs two different entities`,
               });
-              createdRelationships += 1;
+              failures += 1;
+              break;
+            }
+
+            // The edge counterpart of entity.create's type check. An importer
+            // keys its edges on (from, to, type), so an id-reuse create may not
+            // move the edge or retype it — relationship.update never moves an
+            // edge either.
+            if (
+              byId &&
+              !isSameEdge(byId, fromEntityId, toEntityId, relationshipType, operation.isBidirectional)
+            ) {
+              results.push({
+                kind: operation.kind,
+                status: 'failed',
+                message:
+                  `Relationship ${byId.relationship_id} is ${byId.from_entity_id} ` +
+                  `-[${byId.relationship_type}]-> ${byId.to_entity_id}; relationship.create ` +
+                  'with an existing relationshipId cannot move or retype it. Omit relationshipId to create ' +
+                  'a new relationship.',
+                relationshipId: byId.relationship_id,
+              });
+              failures += 1;
+              break;
+            }
+
+            // Without an id — how a model restates a fact — or with one that
+            // names no row, the edge may still exist on its coordinate: an
+            // importer's, or one an earlier write made. The write merges into
+            // it either way, since createOrUpdateRelationship resolves the same
+            // coordinate when it lands; finding it here lets the result name
+            // that edge and say it was updated, rather than report an id no row
+            // will ever carry. One that only appears after this read is still
+            // merged into — just reported as created.
+            const existingRel =
+              byId ??
+              (await this.graphQuery.findActiveRelationship(ownerId, {
+                fromEntityId,
+                toEntityId,
+                relationshipType,
+                isBidirectional: operation.isBidirectional,
+              }));
+
+            if (dryRun) {
+              if (existingRel) {
+                updatedRelationships += 1;
+                results.push({
+                  kind: operation.kind,
+                  status: 'updated',
+                  message: `Dry run: would update existing relationship ${existingRel.relationship_id}`,
+                  relationshipId: existingRel.relationship_id,
+                });
+              } else {
+                createdRelationships += 1;
+                results.push({
+                  kind: operation.kind,
+                  status: 'created',
+                  message: 'Dry run: would create relationship',
+                });
+              }
+
               break;
             }
 
@@ -423,24 +634,34 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
               break;
             }
 
-            const { relationshipId } = await this.graphEvents.upsertRelationship(ownerId, {
+            const relationshipId = await this.queueRelationshipWrite(ownerId, existingRel, {
               relationshipId: operation.relationshipId,
               fromEntityId,
               toEntityId,
-              relationshipType: operation.relationshipType,
-              properties: operation.properties ?? {},
-              strength: operation.strength ?? 1,
-              isBidirectional: operation.isBidirectional ?? false,
-              mergeProperties: false,
+              relationshipType,
+              properties: operation.properties,
+              strength: operation.strength,
+              isBidirectional: operation.isBidirectional,
             });
 
-            createdRelationships += 1;
-            results.push({
-              kind: operation.kind,
-              status: 'created',
-              message: `Created relationship ${relationshipId}`,
-              relationshipId,
-            });
+            if (existingRel) {
+              updatedRelationships += 1;
+              results.push({
+                kind: operation.kind,
+                status: 'updated',
+                message: `Updated existing relationship ${relationshipId}`,
+                relationshipId,
+              });
+            } else {
+              createdRelationships += 1;
+              results.push({
+                kind: operation.kind,
+                status: 'created',
+                message: `Created relationship ${relationshipId}`,
+                relationshipId,
+              });
+            }
+
             break;
           }
 
@@ -486,6 +707,23 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
               break;
             }
 
+            let relationshipType: string | undefined;
+            if (operation.relationshipType !== undefined) {
+              const stored = storedRelationshipType(operation.relationshipType);
+              if (!stored) {
+                results.push({
+                  kind: operation.kind,
+                  status: 'failed',
+                  message: unstorableTypeMessage(operation.relationshipType),
+                  relationshipId: operation.relationshipId,
+                });
+                failures += 1;
+                break;
+              }
+
+              relationshipType = stored;
+            }
+
             if (dryRun) {
               results.push({
                 kind: operation.kind,
@@ -497,22 +735,18 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
               break;
             }
 
-            const mergedRelProperties = this.mergeProperties(
-              existingRel.properties ?? {},
-              operation.properties ?? {},
-              operation.mergeProperties !== false,
-              operation.removeProperties ?? [],
-            );
-
+            // As in entity.update: only what the caller set, merged at write
+            // time. The endpoints are the stored ones — update never moves an edge.
             const { relationshipId } = await this.graphEvents.upsertRelationship(ownerId, {
               relationshipId: operation.relationshipId,
               fromEntityId: existingRel.from_entity_id,
               toEntityId: existingRel.to_entity_id,
-              relationshipType: operation.relationshipType ?? existingRel.relationship_type,
-              properties: mergedRelProperties,
-              strength: operation.strength ?? existingRel.strength,
-              isBidirectional: operation.isBidirectional ?? existingRel.is_bidirectional,
-              mergeProperties: false,
+              relationshipType: keepStoredSpelling(existingRel.relationship_type, relationshipType),
+              properties: operation.properties,
+              mergeProperties: operation.mergeProperties !== false,
+              removeProperties: operation.removeProperties,
+              strength: operation.strength,
+              isBidirectional: operation.isBidirectional,
             });
 
             updatedRelationships += 1;
@@ -602,58 +836,103 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
     return exact?.entity_id ?? typedHits[0]?.entity_id ?? containsHits[0]?.entity_id;
   }
 
-  private mergeProperties(
-    existing: Record<string, unknown>,
-    incoming: Record<string, unknown>,
-    merge: boolean,
-    removeKeys: string[],
-  ): Record<string, unknown> {
-    const base = merge ? { ...existing, ...incoming } : { ...incoming };
-    if (removeKeys.length) {
-      for (const key of removeKeys) {
-        delete base[key];
-      }
-    }
-
-    return base;
-  }
-
-  private async handleRelationshipCreations(
+  /**
+   * Check the `relationships` an `entity.create` carries, and spell their types
+   * the stored way, BEFORE the entity is queued: a bad edge then fails the
+   * operation with nothing written. Checked after, the entity was already on its
+   * way while the result said the operation failed — and a model retrying a
+   * failed create without an `entityId` mints a second entity. `entityId` is the
+   * id the create reuses, if any; a minted one cannot be a target yet.
+   */
+  private async prepareNestedRelationships(
     ownerId: string,
-    fromEntityId: string,
-    relationships: Array<{
-      toEntityId: string;
-      relationshipType: string;
-      properties?: Record<string, unknown>;
-      strength?: number;
-      isBidirectional?: boolean;
-    }>,
-    dryRun: boolean,
-  ): Promise<void> {
-    if (relationships.length === 0 || dryRun) {
-      return;
-    }
-
-    const targetIds = relationships.map((rel) => rel.toEntityId);
-    const targets = await this.graphQuery.getNodesByIds(ownerId, targetIds);
+    entityId: string | undefined,
+    relationships: NestedRelationship[],
+  ): Promise<NestedRelationship[]> {
+    const targets = await this.graphQuery.getNodesByIds(
+      ownerId,
+      relationships.map((rel) => rel.toEntityId),
+    );
     const targetSet = new Set(targets.map((node) => node.entity_id));
 
-    for (const relationship of relationships) {
+    return relationships.map((relationship) => {
       if (!targetSet.has(relationship.toEntityId)) {
         throw new Error(
           `Cannot create relationship to ${relationship.toEntityId}; target entity is missing or not owned by user`,
         );
       }
 
-      await this.graphEvents.upsertRelationship(ownerId, {
-        fromEntityId,
-        toEntityId: relationship.toEntityId,
-        relationshipType: relationship.relationshipType,
-        properties: relationship.properties ?? {},
-        strength: relationship.strength ?? 1,
-        isBidirectional: relationship.isBidirectional ?? false,
-        mergeProperties: false,
-      });
+      if (relationship.toEntityId === entityId) {
+        throw new Error(`Cannot create a relationship from entity ${entityId} to itself`);
+      }
+
+      const relationshipType = storedRelationshipType(relationship.relationshipType);
+      if (!relationshipType) {
+        throw new Error(unstorableTypeMessage(relationship.relationshipType));
+      }
+
+      return { ...relationship, relationshipType };
+    });
+  }
+
+  /**
+   * Queue an `entity.create`'s relationships the way `relationship.create`
+   * queues one: onto the edge already on the coordinate when there is one, with
+   * only what the caller set. They used to go out as fresh inserts with the
+   * defaults filled in, so restating an edge an importer had written
+   * dead-lettered on `relationships_unique_directed_idx` — and had one landed on
+   * it, `mergeProperties: false` over `{}` would have emptied its properties and
+   * the defaults reset its strength and direction.
+   */
+  private async writeNestedRelationships(
+    ownerId: string,
+    fromEntityId: string,
+    relationships: NestedRelationship[],
+  ): Promise<{ created: number; updated: number }> {
+    const counts = { created: 0, updated: 0 };
+
+    for (const relationship of relationships) {
+      const edge = { ...relationship, fromEntityId };
+      const existing = await this.graphQuery.findActiveRelationship(ownerId, edge);
+      await this.queueRelationshipWrite(ownerId, existing, edge);
+      counts[existing ? 'updated' : 'created'] += 1;
     }
+
+    return counts;
+  }
+
+  /**
+   * Queue a relationship write, onto `existing` when the edge is already there —
+   * addressed by that edge's own id, and keeping its stored orientation and type
+   * spelling. Unset fields stay `undefined` so an existing edge keeps its stored
+   * strength, direction and properties (a new edge still gets strength 1,
+   * one-way, `{}` from the insert defaults), and properties merge rather than
+   * replace. Returns the id the write is queued under.
+   */
+  private async queueRelationshipWrite(
+    ownerId: string,
+    existing: RelationshipEntity | null | undefined,
+    write: {
+      relationshipId?: string;
+      fromEntityId: string;
+      toEntityId: string;
+      relationshipType: string;
+      properties?: Record<string, unknown>;
+      strength?: number;
+      isBidirectional?: boolean;
+    },
+  ): Promise<string> {
+    const { relationshipId } = await this.graphEvents.upsertRelationship(ownerId, {
+      relationshipId: existing?.relationship_id ?? write.relationshipId,
+      fromEntityId: existing?.from_entity_id ?? write.fromEntityId,
+      toEntityId: existing?.to_entity_id ?? write.toEntityId,
+      relationshipType: existing?.relationship_type ?? write.relationshipType,
+      properties: write.properties,
+      strength: write.strength,
+      isBidirectional: write.isBidirectional,
+      mergeProperties: true,
+    });
+
+    return relationshipId;
   }
 }
