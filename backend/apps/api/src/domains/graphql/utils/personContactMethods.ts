@@ -1,4 +1,4 @@
-import { normalizeIdentifier } from '@ci/domains/graph';
+import { hasPhoneExtension, normalizeIdentifier, type IdentifierKind } from '@ci/domains/graph';
 
 import type { PersonIdentifierType } from '../types/PersonIdentifierType';
 
@@ -31,6 +31,11 @@ const FORM_CONTACT_KEYS = [
  * `ci.entity_identifiers`. The Details card only reads identifiers, so those
  * contacts used to render as "No details yet" even when we had the address
  * from the message that created them.
+ *
+ * A phone carrying an extension is shown AS TYPED, with the typed string as its
+ * `value`. It has no join key — the shared rule refuses it, because keeping its
+ * last ten digits fabricated somebody else's number — but it is still the way to
+ * reach this person, and the display must not lose it along with the key.
  */
 export function contactMethodsFromPersonProperties(person: {
   email?: string | null;
@@ -41,7 +46,8 @@ export function contactMethodsFromPersonProperties(person: {
   const seen = new Set<string>();
 
   const push = (kind: 'email' | 'phone', raw: string, label: string | null) => {
-    const normalized = normalizeIdentifier(kind, raw);
+    const normalized =
+      normalizeIdentifier(kind, raw) ?? (kind === 'phone' && hasPhoneExtension(raw) ? raw.trim() : null);
     if (normalized == null) {
       return;
     }
@@ -285,4 +291,43 @@ function readContactEntries(value: unknown): Array<{ value: string; label: strin
   }
 
   return entries;
+}
+
+/**
+ * The unusable contact values (`unusableIdentifiers`) worth failing a person
+ * edit over: every one except a row the user left untouched — one the
+ * person's own record states, with the same label.
+ *
+ * The edit form seeds its contact list from `identifiers`, which shows a phone
+ * carrying an extension as typed, and every save re-submits the whole list.
+ * Refusing those would fail every later save of the person — a fix to their
+ * name included — over a number nobody touched, and one this form cannot
+ * remove anyway: it lives in properties, not in the index. It stays where it
+ * is, shown and inert for matching.
+ *
+ * Anything else the user asserted is refused, a relabelled row included: the
+ * label has nowhere to go either, and dropping it without a word is the
+ * failure this refusal exists to end. {@link contactsToReconcile} does not
+ * make this redundant: it cannot key an unusable value, because it has no
+ * normalized form, so it passes those rows through.
+ */
+export function unusableToSurface<T extends { kind: IdentifierKind; value: string; label?: string | null }>(
+  unusable: readonly T[],
+  person: { email?: string | null; properties?: Record<string, unknown> | null },
+): T[] {
+  if (unusable.length === 0) {
+    return [];
+  }
+
+  // An unusable value is displayed with the typed string as its `value`, and
+  // the form sends that back trimmed, as it sends a missing label back as ''.
+  const statedLabels = new Map(
+    contactMethodsFromPersonProperties(person).map((row) => [`${row.kind}:${row.value}`, row.label ?? null]),
+  );
+
+  return unusable.filter((entry) => {
+    const key = `${entry.kind}:${entry.value.trim()}`;
+
+    return !statedLabels.has(key) || (entry.label?.trim() || null) !== statedLabels.get(key);
+  });
 }

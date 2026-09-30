@@ -142,7 +142,10 @@ function unstorableTypeMessage(requested: string): string {
  * which the stored one reversed is not (see GraphUtilityService.findActiveRelationship).
  */
 function isSameEdge(
-  edge: Pick<RelationshipEntity, 'from_entity_id' | 'to_entity_id' | 'relationship_type' | 'is_bidirectional'>,
+  edge: Pick<
+    RelationshipEntity,
+    'from_entity_id' | 'to_entity_id' | 'relationship_type' | 'is_bidirectional'
+  >,
   fromEntityId: string,
   toEntityId: string,
   relationshipType: string,

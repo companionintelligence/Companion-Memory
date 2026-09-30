@@ -411,7 +411,9 @@ describe('WriteKnowledgeTool relationship.update', () => {
     expect(result.data).toMatchObject({ updatedRelationships: 1, failures: 1 });
     expect(result.data?.results[1].message).toContain('cannot be stored');
     expect(graph.graphEvents.upsertRelationship).toHaveBeenCalledTimes(1);
-    expect(graph.graphEvents.upsertRelationship.mock.calls[0][1]).toMatchObject({ relationshipType: 'WORKS_WITH' });
+    expect(graph.graphEvents.upsertRelationship.mock.calls[0][1]).toMatchObject({
+      relationshipType: 'WORKS_WITH',
+    });
   });
 });
 
@@ -483,7 +485,13 @@ describe('WriteKnowledgeTool relationship.create onto an edge that already exist
     // No strength 1, one-way or `mergeProperties: false` over `{}`: those used
     // to go out with every nested relationship and reset the edge they hit.
     expect(graph.graphEvents.upsertRelationship.mock.calls.map(([, sent]) => sent)).toEqual([
-      { relationshipId: R1, fromEntityId: FROM, toEntityId: TO, relationshipType: 'KNOWS', mergeProperties: true },
+      {
+        relationshipId: R1,
+        fromEntityId: FROM,
+        toEntityId: TO,
+        relationshipType: 'KNOWS',
+        mergeProperties: true,
+      },
       {
         fromEntityId: FROM,
         toEntityId: E1,

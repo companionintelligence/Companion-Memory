@@ -1,3 +1,14 @@
+/**
+ * `PHONE_EXTENSION_PATTERN` from the backend's
+ * `domains/graph/utils/normalizeIdentifier.ts`, restated verbatim —
+ * `phoneHref.node.test.ts` fails if the two differ. The server refuses a number
+ * as carrying an extension by this pattern and then shows it as typed, so the
+ * card has to find the same extension in it.
+ */
+export const PHONE_EXTENSION_PATTERN = String.raw`[;,#]|(?:^|[^a-z])(?:ext(?:ension|n)?|x)\.?\s*:?\s*\d|\d\s*[pw]\s*\d`;
+
+const PHONE_EXTENSION = new RegExp(PHONE_EXTENSION_PATTERN, 'i');
+
 /** E.164's cap on the digits of one number, its country code included. */
 const E164_MAX_DIGITS = 15;
 
@@ -28,28 +39,55 @@ function isOneNumber(dialled: string): boolean {
 }
 
 /**
+ * `tel:<line>;ext=<extension>` when `text` carries an extension the server
+ * would refuse as a join key, or null when it does not.
+ */
+function extensionHref(text: string): string | null {
+  const marker = PHONE_EXTENSION.exec(text);
+
+  if (marker == null) {
+    return null;
+  }
+
+  // The match starts AT the marker (`;` `,` `#`, or an `x`/`ext` opening the
+  // string) or one character before it: the non-letter in front of an
+  // `x`/`ext`, or the digit in front of a `p`/`w`.
+  const start = marker.index + (/^[a-z;,#]/i.test(marker[0]) ? 0 : 1);
+  const line = dialDigits(text.slice(0, start));
+  const extension = text.slice(start).replace(/\D/g, '');
+
+  if (line.replace('+', '') === '' || extension === '') {
+    return null;
+  }
+
+  return `tel:${line};ext=${extension}`;
+}
+
+/**
  * The `tel:` link for a phone the Details card shows. It dials what the link
  * shows — the number as typed (`rawValue`) when there is one, else `value`.
  *
  * Not `value` first: an indexed number's `value` is its join key, and
- * `normalizePhone` (the backend's `domains/graph/utils/normalizeIdentifier.ts`)
- * keeps only the LAST TEN digits, so the country code a number was written with
- * is gone. `+44 20 7946 0958` keys as `2079460958`, which a North American phone
- * dials as a Maine number — the example `memory/utils/phoneIdentity.ts` gives.
+ * `normalizePhone` keeps only the LAST TEN digits, so the country code a
+ * number was written with is gone. A number carrying an extension has no key,
+ * so the server shows the typed string as `value`, and that string is split
+ * into `tel:<line>;ext=<ext>` rather than run together.
  *
  * - A `+` is kept, and so is a written `00` or `011`, as typed rather than
- *   rewritten as `+`: which of them is an international access code depends on
- *   where the call is made from, and `011` also begins Johannesburg and Delhi
- *   numbers dialled at home. Rewritten, it would become a country code nobody
- *   wrote.
- * - No country code is added. A number written without one is dialled as the
- *   local number it was typed as: `(415) 555-0100` is not assumed to be North
- *   American, and `020 7946 0958` keeps its trunk zero.
+ *   rewritten as `+`.
+ * - No country code is added.
  * - `value` is the fallback when there is no typed form, or the typed form is
  *   not one number.
  */
 export function phoneHref(phone: { value: string; rawValue?: string | null }): string {
-  const dialled = dialDigits(phone.rawValue?.trim() || phone.value);
+  const typed = phone.rawValue?.trim() || phone.value;
+  const split = extensionHref(typed);
+
+  if (split != null) {
+    return split;
+  }
+
+  const dialled = dialDigits(typed);
 
   return `tel:${isOneNumber(dialled) ? dialled : phone.value}`;
 }

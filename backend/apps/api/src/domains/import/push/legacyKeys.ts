@@ -15,6 +15,13 @@ import { naturalKeyFor } from './entities';
  * resolves by that key and nothing else, so left alone the next import of the
  * same export would mint a second Person beside each of them.
  *
+ * The phone-extension fix moved keys the same way: `(212) 555-0147;229` used to
+ * key its card as the truncation `5550147229`, and `normalizeHandle` now
+ * refuses it. `legacyEntityIdentityKey` reads handles the old way, so those
+ * cards claim their old rows here too — and `push/truncatedPhoneKeys.ts` then
+ * undoes what the fabricated number had reached, which a shared line (somebody's
+ * real number) does not need.
+ *
  * A migration cannot move those rows: which handle was a fax is a TEL type, and
  * which was shared is a fact about the export's OTHER cards, and neither
  * survives staging — `ci.entities` keeps only each entity's merged union of

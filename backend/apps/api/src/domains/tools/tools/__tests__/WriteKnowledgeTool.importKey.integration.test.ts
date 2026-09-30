@@ -133,7 +133,13 @@ describeWithDb(`WriteKnowledgeTool on an imported entity (${availability.target}
             password: connection.password,
             database: connection.database,
           }),
-      entities: [GraphNodeEntity, RelationshipEntity, NodeEntity, IngestRelationshipEntity, EntityIdentifierEntity],
+      entities: [
+        GraphNodeEntity,
+        RelationshipEntity,
+        NodeEntity,
+        IngestRelationshipEntity,
+        EntityIdentifierEntity,
+      ],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
     });
@@ -196,7 +202,11 @@ describeWithDb(`WriteKnowledgeTool on an imported entity (${availability.target}
       }
     };
 
-    tool = new WriteKnowledgeTool(graphEvents, new GraphQueryService({} as never, graphUtility), logger as never);
+    tool = new WriteKnowledgeTool(
+      graphEvents,
+      new GraphQueryService({} as never, graphUtility),
+      logger as never,
+    );
   });
 
   afterEach(async () => {
@@ -213,7 +223,12 @@ describeWithDb(`WriteKnowledgeTool on an imported entity (${availability.target}
 
     const result = await tool.execute(context, {
       operations: [
-        { kind: 'entity.create', entityId: alexId, entityType: 'Person', properties: { occupation: 'dentist' } },
+        {
+          kind: 'entity.create',
+          entityId: alexId,
+          entityType: 'Person',
+          properties: { occupation: 'dentist' },
+        },
       ],
     });
     await flush();
@@ -326,10 +341,14 @@ describeWithDb(`WriteKnowledgeTool on an imported entity (${availability.target}
     const SAM = { ...ALEX, key: 'google-contacts:contact:sam@example.com', name: 'Sam Lee', properties: {} };
     const result = await ingest.ingest(context, {
       entities: [ALEX, SAM],
-      relationships: [{ fromKey: ALEX.key, toKey: SAM.key, type: 'KNOWS', properties: { source: 'google-contacts' } }],
+      relationships: [
+        { fromKey: ALEX.key, toKey: SAM.key, type: 'KNOWS', properties: { source: 'google-contacts' } },
+      ],
     });
     expect(result.errors).toEqual([]);
-    const [alexId, samId] = [ALEX.key, SAM.key].map((key) => result.entities.find((e) => e.key === key)!.entityId);
+    const [alexId, samId] = [ALEX.key, SAM.key].map(
+      (key) => result.entities.find((e) => e.key === key)!.entityId,
+    );
     // Not `UPDATE … RETURNING`: TypeORM's postgres `query()` hands an UPDATE back as [rows, rowCount].
     const [{ relationship_id: edgeId }] = await runner.query(
       `SELECT relationship_id FROM ci.relationships
@@ -375,7 +394,12 @@ describeWithDb(`WriteKnowledgeTool on an imported entity (${availability.target}
     // "relationships_unique_directed_idx"`, which in production fails the
     // job into the dead letter queue after the tool has answered "Created".
     const SAM = { ...ALEX, key: 'google-contacts:contact:sam@example.com', name: 'Sam Lee', properties: {} };
-    const KNOWS_EDGE = { fromKey: ALEX.key, toKey: SAM.key, type: 'KNOWS', properties: { source: 'google-contacts' } };
+    const KNOWS_EDGE = {
+      fromKey: ALEX.key,
+      toKey: SAM.key,
+      type: 'KNOWS',
+      properties: { source: 'google-contacts' },
+    };
 
     /** Import Alex and Sam — with the KNOWS edge between them unless `withEdge` is false. */
     const importPair = async (withEdge = true) => {
@@ -384,7 +408,9 @@ describeWithDb(`WriteKnowledgeTool on an imported entity (${availability.target}
         relationships: withEdge ? [KNOWS_EDGE] : [],
       });
       expect(result.errors).toEqual([]);
-      const [alexId, samId] = [ALEX.key, SAM.key].map((key) => result.entities.find((e) => e.key === key)!.entityId);
+      const [alexId, samId] = [ALEX.key, SAM.key].map(
+        (key) => result.entities.find((e) => e.key === key)!.entityId,
+      );
 
       return { alexId, samId };
     };
@@ -441,13 +467,19 @@ describeWithDb(`WriteKnowledgeTool on an imported entity (${availability.target}
             kind: 'entity.create',
             entityId: alexId,
             entityType: 'Person',
-            relationships: [{ toEntityId: samId, relationshipType: 'KNOWS', properties: { context: 'dentist' } }],
+            relationships: [
+              { toEntityId: samId, relationshipType: 'KNOWS', properties: { context: 'dentist' } },
+            ],
           },
         ],
       });
       await flush();
 
-      expect(written.data).toMatchObject({ updatedNodes: 1, updatedRelationships: 1, createdRelationships: 0 });
+      expect(written.data).toMatchObject({
+        updatedNodes: 1,
+        updatedRelationships: 1,
+        createdRelationships: 0,
+      });
       expect(await knowsEdges(alexId, samId)).toEqual([
         {
           relationship_id: edgeId,
@@ -491,7 +523,9 @@ describeWithDb(`WriteKnowledgeTool on an imported entity (${availability.target}
       const { alexId, samId } = await importPair(false);
 
       const written = await tool.execute(context, {
-        operations: [{ kind: 'relationship.create', fromEntityId: alexId, toEntityId: samId, relationshipType: 'KNOWS' }],
+        operations: [
+          { kind: 'relationship.create', fromEntityId: alexId, toEntityId: samId, relationshipType: 'KNOWS' },
+        ],
       });
       await flush();
 

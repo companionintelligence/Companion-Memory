@@ -1,5 +1,10 @@
 import { Events } from '@ci/domains/events';
-import { GraphEventService, GraphNodeEntity, GraphUtilityService, RelationshipEntity } from '@ci/domains/memory';
+import {
+  GraphEventService,
+  GraphNodeEntity,
+  GraphUtilityService,
+  RelationshipEntity,
+} from '@ci/domains/memory';
 
 import { InMemoryRepository } from '../../../__tests__/support/inMemoryRepository';
 import { WriteKnowledgeTool } from '../WriteKnowledgeTool';
@@ -122,7 +127,13 @@ function makePipeline(seed: { nodes?: GraphNodeEntity[]; edges?: RelationshipEnt
   nodes.seed(...(seed.nodes ?? []));
   edges.seed(...(seed.edges ?? []));
 
-  const logger = { setContext: jest.fn(), debug: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+  const logger = {
+    setContext: jest.fn(),
+    debug: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  };
   const graphUtility = new GraphUtilityService(nodes as never, edges as never, logger as never);
 
   const queue: Array<{ event: string; body: QueuedWrite }> = [];
@@ -196,7 +207,12 @@ describe('memory.remember — entity.create with an entityId that already exists
 
     const result = await graph.run({
       operations: [
-        { kind: 'entity.create', entityId: PERSON, entityType: 'Person', properties: { occupation: 'dentist' } },
+        {
+          kind: 'entity.create',
+          entityId: PERSON,
+          entityType: 'Person',
+          properties: { occupation: 'dentist' },
+        },
       ],
     });
 
@@ -220,7 +236,12 @@ describe('memory.remember — entity.create with an entityId that already exists
 
     await graph.tool.execute(CONTEXT, {
       operations: [
-        { kind: 'entity.create', entityId: PERSON, entityType: 'Person', properties: { occupation: 'dentist' } },
+        {
+          kind: 'entity.create',
+          entityId: PERSON,
+          entityType: 'Person',
+          properties: { occupation: 'dentist' },
+        },
       ],
     });
 
@@ -258,7 +279,9 @@ describe('memory.remember — entity.create with an entityId that already exists
     const graph = makePipeline({ nodes: [selfPerson()] });
 
     await graph.run({
-      operations: [{ kind: 'entity.create', entityId: SELF, entityType: 'Person', properties: { nickname: 'Sammy' } }],
+      operations: [
+        { kind: 'entity.create', entityId: SELF, entityType: 'Person', properties: { nickname: 'Sammy' } },
+      ],
     });
 
     expect(graph.nodes.get(SELF)).toMatchObject({
@@ -277,7 +300,12 @@ describe('memory.remember — entity.create with an entityId that already exists
 
     const result = await graph.run({
       operations: [
-        { kind: 'entity.create', entityId: PERSON, entityType: 'person', properties: { occupation: 'dentist' } },
+        {
+          kind: 'entity.create',
+          entityId: PERSON,
+          entityType: 'person',
+          properties: { occupation: 'dentist' },
+        },
       ],
     });
 
@@ -289,7 +317,9 @@ describe('memory.remember — entity.create with an entityId that already exists
     const graph = makePipeline({ nodes: [importedPerson()] });
 
     const result = await graph.run({
-      operations: [{ kind: 'entity.create', entityId: PERSON, entityType: 'Organization', name: 'Acme Dental' }],
+      operations: [
+        { kind: 'entity.create', entityId: PERSON, entityType: 'Organization', name: 'Acme Dental' },
+      ],
     });
 
     expect(result.data).toMatchObject({ createdNodes: 0, updatedNodes: 0, failures: 1 });
@@ -306,7 +336,12 @@ describe('memory.remember — entity.create with an entityId that already exists
     const result = await graph.run({
       dryRun: true,
       operations: [
-        { kind: 'entity.create', entityId: PERSON, entityType: 'Person', properties: { occupation: 'dentist' } },
+        {
+          kind: 'entity.create',
+          entityId: PERSON,
+          entityType: 'Person',
+          properties: { occupation: 'dentist' },
+        },
       ],
     });
 
@@ -325,7 +360,12 @@ describe('memory.remember — entity.create with an entityId that already exists
 
     const result = await graph.run({
       operations: [
-        { kind: 'entity.create', entityId: PERSON, entityType: 'Person', properties: { occupation: 'dentist' } },
+        {
+          kind: 'entity.create',
+          entityId: PERSON,
+          entityType: 'Person',
+          properties: { occupation: 'dentist' },
+        },
       ],
     });
 
@@ -342,7 +382,13 @@ describe('memory.remember — entity.create with an entityId that already exists
 
     await graph.run({
       operations: [
-        { kind: 'entity.create', entityId: FRESH, entityType: 'Concept', name: 'Pilates', properties: { a: 1 } },
+        {
+          kind: 'entity.create',
+          entityId: FRESH,
+          entityType: 'Concept',
+          name: 'Pilates',
+          properties: { a: 1 },
+        },
       ],
     });
     const retry = await graph.run({
@@ -357,7 +403,14 @@ describe('memory.remember — entity.create with an entityId that already exists
     const graph = makePipeline();
 
     const result = await graph.run({
-      operations: [{ kind: 'entity.create', entityType: 'Concept', name: 'Pilates', properties: { category: 'fitness' } }],
+      operations: [
+        {
+          kind: 'entity.create',
+          entityType: 'Concept',
+          name: 'Pilates',
+          properties: { category: 'fitness' },
+        },
+      ],
     });
 
     expect(result.data).toMatchObject({ createdNodes: 1, updatedNodes: 0, failures: 0 });
@@ -409,7 +462,12 @@ describe('memory.remember — entity.update', () => {
 
     await graph.tool.execute(CONTEXT, {
       operations: [
-        { kind: 'entity.update', entityId: PERSON, properties: { occupation: 'dentist' }, removeProperties: ['names'] },
+        {
+          kind: 'entity.update',
+          entityId: PERSON,
+          properties: { occupation: 'dentist' },
+          removeProperties: ['names'],
+        },
       ],
     });
     const current = graph.nodes.get(PERSON)!;
@@ -428,7 +486,9 @@ describe('memory.remember — entity.update', () => {
   it('replaces the bag on mergeProperties: false with properties, and leaves it alone without them', async () => {
     const replaced = makePipeline({ nodes: [importedPerson()] });
     await replaced.run({
-      operations: [{ kind: 'entity.update', entityId: PERSON, mergeProperties: false, properties: { only: 'this' } }],
+      operations: [
+        { kind: 'entity.update', entityId: PERSON, mergeProperties: false, properties: { only: 'this' } },
+      ],
     });
     expect(replaced.nodes.get(PERSON)?.properties).toEqual({ only: 'this' });
 
@@ -438,7 +498,10 @@ describe('memory.remember — entity.update', () => {
     await renamed.run({
       operations: [{ kind: 'entity.update', entityId: PERSON, mergeProperties: false, name: 'Alex R.' }],
     });
-    expect(renamed.nodes.get(PERSON)).toMatchObject({ name: 'Alex R.', properties: importedPerson().properties });
+    expect(renamed.nodes.get(PERSON)).toMatchObject({
+      name: 'Alex R.',
+      properties: importedPerson().properties,
+    });
   });
 
   it('keeps the stored spelling for a case-only entityType; an explicit different type is still a retype', async () => {
@@ -448,13 +511,18 @@ describe('memory.remember — entity.update', () => {
 
     // entity.update stays the explicit door for a type change.
     const retyped = makePipeline({ nodes: [importedPerson()] });
-    await retyped.run({ operations: [{ kind: 'entity.update', entityId: PERSON, entityType: 'Organization' }] });
+    await retyped.run({
+      operations: [{ kind: 'entity.update', entityId: PERSON, entityType: 'Organization' }],
+    });
     expect(retyped.nodes.get(PERSON)).toMatchObject({ entity_type: 'Organization', linked_id: LINKED_ID });
   });
 });
 
 describe('memory.remember — relationship.create with a relationshipId that already exists', () => {
-  const endpoints = () => [importedPerson(), entityRow({ entity_id: OTHER, entity_type: 'Person', name: 'Sam' })];
+  const endpoints = () => [
+    importedPerson(),
+    entityRow({ entity_id: OTHER, entity_type: 'Person', name: 'Sam' }),
+  ];
 
   it('keeps the stored strength, direction and unsent properties, and merges the properties it sent', async () => {
     const graph = makePipeline({ nodes: endpoints(), edges: [knowsEdge()] });
@@ -511,7 +579,13 @@ describe('memory.remember — relationship.create with a relationshipId that alr
     const retype = makePipeline({ nodes: endpoints(), edges: [knowsEdge()] });
     const refused = await retype.run({
       operations: [
-        { kind: 'relationship.create', relationshipId: EDGE, fromEntityId: PERSON, toEntityId: OTHER, relationshipType: 'WORKS_WITH' },
+        {
+          kind: 'relationship.create',
+          relationshipId: EDGE,
+          fromEntityId: PERSON,
+          toEntityId: OTHER,
+          relationshipType: 'WORKS_WITH',
+        },
       ],
     });
     expect(refused.data).toMatchObject({ failures: 1 });
@@ -520,7 +594,13 @@ describe('memory.remember — relationship.create with a relationshipId that alr
     const caseOnly = makePipeline({ nodes: endpoints(), edges: [knowsEdge()] });
     const accepted = await caseOnly.run({
       operations: [
-        { kind: 'relationship.create', relationshipId: EDGE, fromEntityId: PERSON, toEntityId: OTHER, relationshipType: 'knows' },
+        {
+          kind: 'relationship.create',
+          relationshipId: EDGE,
+          fromEntityId: PERSON,
+          toEntityId: OTHER,
+          relationshipType: 'knows',
+        },
       ],
     });
     expect(accepted.data).toMatchObject({ failures: 0, updatedRelationships: 1 });
@@ -532,7 +612,13 @@ describe('memory.remember — relationship.create with a relationshipId that alr
 
     const result = await graph.run({
       operations: [
-        { kind: 'relationship.create', relationshipId: EDGE, fromEntityId: OTHER, toEntityId: PERSON, relationshipType: 'KNOWS' },
+        {
+          kind: 'relationship.create',
+          relationshipId: EDGE,
+          fromEntityId: OTHER,
+          toEntityId: PERSON,
+          relationshipType: 'KNOWS',
+        },
       ],
     });
 
@@ -547,7 +633,9 @@ describe('memory.remember — relationship.create with a relationshipId that alr
     const graph = makePipeline({ nodes: endpoints() });
 
     const result = await graph.tool.execute(CONTEXT, {
-      operations: [{ kind: 'relationship.create', fromEntityId: PERSON, toEntityId: OTHER, relationshipType: 'KNOWS' }],
+      operations: [
+        { kind: 'relationship.create', fromEntityId: PERSON, toEntityId: OTHER, relationshipType: 'KNOWS' },
+      ],
     });
 
     expect(result.data).toMatchObject({ createdRelationships: 1, updatedRelationships: 0, failures: 0 });
@@ -567,7 +655,10 @@ describe('memory.remember — restating a relationship that already exists, with
   // the type. The edge on that coordinate is often an importer's, so each of
   // these used to mint a fresh id, INSERT, and dead-letter on
   // relationships_unique_directed_idx — after the tool had said "Created".
-  const endpoints = () => [importedPerson(), entityRow({ entity_id: OTHER, entity_type: 'Person', name: 'Sam' })];
+  const endpoints = () => [
+    importedPerson(),
+    entityRow({ entity_id: OTHER, entity_type: 'Person', name: 'Sam' }),
+  ];
 
   it('lands on the stored edge, reports it updated under its own id, and merges what it sent', async () => {
     const graph = makePipeline({ nodes: endpoints(), edges: [knowsEdge()] });
@@ -595,7 +686,10 @@ describe('memory.remember — restating a relationship that already exists, with
   });
 
   it('reads a relationship type in any case or spacing as the stored spelling', async () => {
-    const graph = makePipeline({ nodes: endpoints(), edges: [knowsEdge({ relationship_type: 'WORKS_WITH' })] });
+    const graph = makePipeline({
+      nodes: endpoints(),
+      edges: [knowsEdge({ relationship_type: 'WORKS_WITH' })],
+    });
 
     const result = await graph.run({
       operations: [
@@ -611,7 +705,10 @@ describe('memory.remember — restating a relationship that already exists, with
 
     expect(result.data).toMatchObject({ updatedRelationships: 1, failures: 0 });
     expect(graph.edges.all()).toHaveLength(1);
-    expect(graph.edges.get(EDGE)).toMatchObject({ relationship_type: 'WORKS_WITH', properties: { team: 'billing' } });
+    expect(graph.edges.get(EDGE)).toMatchObject({
+      relationship_type: 'WORKS_WITH',
+      properties: { team: 'billing' },
+    });
   });
 
   it('matches a bidirectional edge restated the other way round, and keeps the stored orientation', async () => {
@@ -641,7 +738,9 @@ describe('memory.remember — restating a relationship that already exists, with
   it('treats the reverse of a one-way edge, or a one-way restatement of a bidirectional one, as a new edge', async () => {
     const oneWay = makePipeline({ nodes: endpoints(), edges: [knowsEdge()] });
     const reversed = await oneWay.tool.execute(CONTEXT, {
-      operations: [{ kind: 'relationship.create', fromEntityId: OTHER, toEntityId: PERSON, relationshipType: 'KNOWS' }],
+      operations: [
+        { kind: 'relationship.create', fromEntityId: OTHER, toEntityId: PERSON, relationshipType: 'KNOWS' },
+      ],
     });
     expect(reversed.data).toMatchObject({ createdRelationships: 1, updatedRelationships: 0 });
     expect(oneWay.queue[0].body.relationship).toMatchObject({ fromEntityId: OTHER, toEntityId: PERSON });
@@ -717,7 +816,9 @@ describe('memory.remember — restating a relationship that already exists, with
 
     const result = await graph.run({
       dryRun: true,
-      operations: [{ kind: 'relationship.create', fromEntityId: PERSON, toEntityId: OTHER, relationshipType: 'KNOWS' }],
+      operations: [
+        { kind: 'relationship.create', fromEntityId: PERSON, toEntityId: OTHER, relationshipType: 'KNOWS' },
+      ],
     });
 
     expect(result.data).toMatchObject({ dryRun: true, updatedRelationships: 1, createdRelationships: 0 });
@@ -734,7 +835,9 @@ describe('memory.remember — restating a relationship that already exists, with
           kind: 'entity.create',
           entityId: PERSON,
           entityType: 'Person',
-          relationships: [{ toEntityId: OTHER, relationshipType: 'knows', properties: { context: 'dentist' } }],
+          relationships: [
+            { toEntityId: OTHER, relationshipType: 'knows', properties: { context: 'dentist' } },
+          ],
         },
       ],
     });
@@ -753,7 +856,10 @@ describe('memory.remember — restating a relationship that already exists, with
 });
 
 describe('memory.remember — relationship writes the table would refuse', () => {
-  const endpoints = () => [importedPerson(), entityRow({ entity_id: OTHER, entity_type: 'Person', name: 'Sam' })];
+  const endpoints = () => [
+    importedPerson(),
+    entityRow({ entity_id: OTHER, entity_type: 'Person', name: 'Sam' }),
+  ];
 
   it('fails a type no spelling can store instead of reporting it saved', async () => {
     const graph = makePipeline({ nodes: endpoints() });
@@ -761,7 +867,12 @@ describe('memory.remember — relationship writes the table would refuse', () =>
     const result = await graph.run({
       operations: [
         { kind: 'relationship.create', fromEntityId: PERSON, toEntityId: OTHER, relationshipType: 'likes!' },
-        { kind: 'relationship.create', fromEntityId: PERSON, toEntityId: OTHER, relationshipType: '2nd_cousin' },
+        {
+          kind: 'relationship.create',
+          fromEntityId: PERSON,
+          toEntityId: OTHER,
+          relationshipType: '2nd_cousin',
+        },
       ],
     });
 
@@ -774,7 +885,9 @@ describe('memory.remember — relationship writes the table would refuse', () =>
     const graph = makePipeline({ nodes: endpoints() });
 
     const result = await graph.run({
-      operations: [{ kind: 'relationship.create', fromEntityId: PERSON, toEntityId: PERSON, relationshipType: 'KNOWS' }],
+      operations: [
+        { kind: 'relationship.create', fromEntityId: PERSON, toEntityId: PERSON, relationshipType: 'KNOWS' },
+      ],
     });
 
     expect(result.data).toMatchObject({ createdRelationships: 0, failures: 1 });
@@ -807,7 +920,12 @@ describe('memory.remember — relationship writes the table would refuse', () =>
       ],
     });
 
-    expect(result.data).toMatchObject({ createdNodes: 0, updatedNodes: 0, createdRelationships: 0, failures: 2 });
+    expect(result.data).toMatchObject({
+      createdNodes: 0,
+      updatedNodes: 0,
+      createdRelationships: 0,
+      failures: 2,
+    });
     expect(result.data?.results[0].message).toContain('target entity is missing');
     expect(result.data?.results[1].message).toContain('to itself');
     expect(graph.queue).toHaveLength(0);
@@ -823,11 +941,20 @@ describe('memory.remember — relationship.update', () => {
 
     await graph.tool.execute(CONTEXT, {
       operations: [
-        { kind: 'relationship.update', relationshipId: EDGE, properties: { context: 'dentist' }, removeProperties: ['source'] },
+        {
+          kind: 'relationship.update',
+          relationshipId: EDGE,
+          properties: { context: 'dentist' },
+          removeProperties: ['source'],
+        },
       ],
     });
     const current = graph.edges.get(EDGE)!;
-    graph.edges.seed({ ...current, strength: 0.9, properties: { ...current.properties, last_contact: '2026-09-01' } });
+    graph.edges.seed({
+      ...current,
+      strength: 0.9,
+      properties: { ...current.properties, last_contact: '2026-09-01' },
+    });
     await graph.flush();
 
     expect(graph.edges.get(EDGE)).toMatchObject({

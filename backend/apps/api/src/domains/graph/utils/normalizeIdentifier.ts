@@ -9,10 +9,12 @@
  *   - email: trim + lowercase.
  *   - phone: last 10 digits of the digit string (drops country code, spaces,
  *     punctuation, '+', leading '1', etc.). Fewer than 10 digits → keep all
- *     digits as-is.
+ *     digits as-is. A value carrying an EXTENSION is refused outright — see
+ *     {@link hasPhoneExtension}.
  *
  * Returns `null` when the input is empty/whitespace or (for phone) has no
- * digits, so callers can skip non-matchable values rather than store empties.
+ * digits or carries an extension, so callers can skip non-matchable values
+ * rather than store empties.
  */
 
 import { isNonNameParticipant } from './participantSanity';
@@ -28,12 +30,14 @@ export type IdentifierKind = 'email' | 'phone' | 'name';
  * Such a value is not one number, and its digits cannot be keyed: the join key
  * is the last ten digits of the digit string, so "(310) 447-8675;229" keyed as
  * 4478675229 — the office's area code gone, the extension appended, and what
- * is left a well-formed number that belongs to somebody else.
+ * is left a well-formed number that belongs to somebody else. The main line
+ * alone is no better: everybody at that office shares it.
  *
  * One pattern for every reader. No lookbehind, so the same string works as a
- * JS `RegExp(…, 'i')` and under Postgres `~*`: migration
- * `20260930022046_index_contact_card_emails_and_phones` embeds it verbatim,
- * and `normalizeIdentifier.spec.ts` pins that.
+ * JS `RegExp(…, 'i')` and under Postgres `~*`: migrations
+ * `20260930022046_index_contact_card_emails_and_phones` and
+ * `20260930020117_refuse_phone_extension_join_keys` embed it verbatim, and
+ * `normalizeIdentifier.spec.ts` pins both.
  */
 export const PHONE_EXTENSION_PATTERN = String.raw`[;,#]|(?:^|[^a-z])(?:ext(?:ension|n)?|x)\.?\s*:?\s*\d|\d\s*[pw]\s*\d`;
 
@@ -63,6 +67,13 @@ export function normalizeEmail(raw: string | null | undefined): string | null {
 
 export function normalizePhone(raw: string | null | undefined): string | null {
   if (raw == null) {
+    return null;
+  }
+
+  // Refused rather than truncated or stripped — see hasPhoneExtension. The
+  // duplicate detector's `parsePhone` and `toE164` refuse the same values, so
+  // this is the join key catching up with the two parsers that already knew.
+  if (hasPhoneExtension(raw)) {
     return null;
   }
 

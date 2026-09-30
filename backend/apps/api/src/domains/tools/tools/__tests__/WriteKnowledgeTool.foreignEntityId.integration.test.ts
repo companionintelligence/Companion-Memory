@@ -156,7 +156,11 @@ describeWithDb(`WriteKnowledgeTool on another owner's entity id (${availability.
       }
     };
 
-    tool = new WriteKnowledgeTool(graphEvents, new GraphQueryService({} as never, graphUtility), logger as never);
+    tool = new WriteKnowledgeTool(
+      graphEvents,
+      new GraphQueryService({} as never, graphUtility),
+      logger as never,
+    );
   });
 
   afterEach(async () => {
@@ -168,7 +172,9 @@ describeWithDb(`WriteKnowledgeTool on another owner's entity id (${availability.
     const before = await stored(bobsContact);
 
     await tool.execute({ userId: alice } as RequestContext, {
-      operations: [{ kind: 'entity.create', entityId: bobsContact, entityType: 'Person', name: 'Written by Alice' }],
+      operations: [
+        { kind: 'entity.create', entityId: bobsContact, entityType: 'Person', name: 'Written by Alice' },
+      ],
     });
 
     // The tool's own check cannot see Bob's row, so the write goes on the

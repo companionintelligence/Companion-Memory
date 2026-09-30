@@ -460,9 +460,10 @@ export class StagedWriter implements ImportPipeline {
     const identityKey = entityIdentityKey(entity);
     const type = resolveEntityType(entity);
     const metadata = (entity.metadata ?? {}) as Metadata;
-    // The key the rule before shared handles gave this entity, kept only where
-    // it differs: an existing `ci.entities` row was minted under it, and the
-    // push moves that row onto the new key rather than minting a second one.
+    // The key the rule before shared handles and phone extensions were passed
+    // over gave this entity (legacyEntityIdentityKey), kept only where it
+    // differs: an existing `ci.entities` row was minted under it, and the push
+    // moves that row onto the new key rather than minting a second one.
     // On a conflict the FIRST card's legacy key stands, like its name does.
     const legacy = legacyEntityIdentityKey(entity);
     const legacyIdentityKey = legacy !== identityKey ? legacy : null;

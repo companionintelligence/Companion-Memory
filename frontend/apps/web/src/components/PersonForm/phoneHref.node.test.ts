@@ -1,6 +1,9 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { phoneHref } from './phoneHref';
+import { PHONE_EXTENSION_PATTERN, phoneHref } from './phoneHref';
 
 describe('phoneHref', () => {
   it('dials a number written with a + by that country code, not as its last ten digits', () => {
@@ -44,6 +47,59 @@ describe('phoneHref', () => {
     // Their digits run together dial neither; the key is the last of them.
     expect(phoneHref({ value: '4155550101', rawValue: '+1 415-555-0100 / +1 415-555-0101' })).toBe(
       'tel:4155550101',
+    );
+  });
+
+  it('dials an indexed number by its key when that is all the card has', () => {
+    expect(phoneHref({ value: '4155550100' })).toBe('tel:4155550100');
+  });
+
+  it.each([
+    ['212-555-0148 x31', 'tel:2125550148;ext=31'],
+    ['212-555-0148x31', 'tel:2125550148;ext=31'],
+    ['(212) 555-0148 ext. 31', 'tel:2125550148;ext=31'],
+    ['212.555.0148 Extension: 31', 'tel:2125550148;ext=31'],
+    ['(212) 555-0147;229', 'tel:2125550147;ext=229'],
+    ['212-555-0147,,229', 'tel:2125550147;ext=229'],
+    ['212-555-0147 #229', 'tel:2125550147;ext=229'],
+    ['2125550147p229', 'tel:2125550147;ext=229'],
+    ['2125550147 w 229', 'tel:2125550147;ext=229'],
+  ])('keeps the line and the extension apart for %s', (value, href) => {
+    expect(phoneHref({ value })).toBe(href);
+  });
+
+  it('splits an extension on the typed form, not on the join key', () => {
+    expect(phoneHref({ value: '5550147229', rawValue: '(212) 555-0147;229' })).toBe('tel:2125550147;ext=229');
+  });
+
+  it('keeps a stated country on an extension line, and adds none', () => {
+    expect(phoneHref({ value: '+1 (212) 555-0147;229' })).toBe('tel:+12125550147;ext=229');
+    expect(phoneHref({ value: 'tel:+44 20 7946 0123;ext=12' })).toBe('tel:+442079460123;ext=12');
+    expect(phoneHref({ value: '+44 (0)20 7946 0958 x12' })).toBe('tel:+442079460958;ext=12');
+    expect(phoneHref({ value: '212-555-0148 x31' })).not.toContain('+');
+  });
+
+  it('never runs the extension into the number', () => {
+    expect(phoneHref({ value: '(212) 555-0147;229' })).not.toContain('2125550147229');
+  });
+
+  it('does not take the x in a word for an extension', () => {
+    expect(phoneHref({ value: 'fax 2125550147' })).toBe('tel:2125550147');
+  });
+});
+
+describe('PHONE_EXTENSION_PATTERN', () => {
+  it('is the pattern the server refuses extension numbers by, verbatim', () => {
+    const source = fs.readFileSync(
+      path.resolve(
+        __dirname,
+        '../../../../../../backend/apps/api/src/domains/graph/utils/normalizeIdentifier.ts',
+      ),
+      'utf8',
+    );
+
+    expect(source).toContain(
+      `export const PHONE_EXTENSION_PATTERN = String.raw\`${PHONE_EXTENSION_PATTERN}\`;`,
     );
   });
 });

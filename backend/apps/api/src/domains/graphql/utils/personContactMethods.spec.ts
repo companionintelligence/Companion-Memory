@@ -6,6 +6,7 @@ import {
   droppedContactsPatch,
   mergePersonIdentifiers,
   removedContactPatch,
+  unusableToSurface,
 } from './personContactMethods';
 
 describe('contactMethodsFromPersonProperties', () => {
@@ -38,6 +39,29 @@ describe('contactMethodsFromPersonProperties', () => {
       expect.objectContaining({ kind: 'email', value: 'john@home.example' }),
       expect.objectContaining({ kind: 'phone', value: '4155550100', label: 'mobile' }),
     ]);
+  });
+
+  it('shows a phone carrying an extension as typed, with no fabricated join key', () => {
+    // The shared rule refuses these (their last ten digits run the office line
+    // and the extension together into somebody else's number), and the card
+    // must not lose the number along with the key: it is still how to reach
+    // this person. The value is the typed string, never the truncation.
+    const contacts = contactMethodsFromPersonProperties({
+      properties: {
+        phones: ['(212) 555-0147;229', { value: '212-555-0148 x31', type: 'work' }, '212 555 0149'],
+      },
+    });
+
+    expect(contacts).toEqual([
+      expect.objectContaining({ kind: 'phone', value: '(212) 555-0147;229', rawValue: '(212) 555-0147;229' }),
+      expect.objectContaining({ kind: 'phone', value: '212-555-0148 x31', label: 'work' }),
+      expect.objectContaining({ kind: 'phone', value: '2125550149' }),
+    ]);
+    expect(contacts.map((contact) => contact.value)).not.toContain('5550147229');
+  });
+
+  it('still drops a "phone" with no digits and no extension', () => {
+    expect(contactMethodsFromPersonProperties({ properties: { phones: ['n/a'] } })).toEqual([]);
   });
 
   it('dedupes the same mailbox written as both email and emails[]', () => {
@@ -294,5 +318,57 @@ describe('contactsToReconcile', () => {
     const blank = { kind: 'phone' as const, value: 'n/a', label: '' };
 
     expect(contactsToReconcile([blank], person)).toEqual([blank]);
+  });
+});
+
+describe('unusableToSurface', () => {
+  // The edit form seeds from `identifiers` — which shows an extension number
+  // from properties as typed — and re-submits the whole list on every save.
+  const person = {
+    properties: {
+      phones: ['(212) 555-0147;229', { value: '212-555-0148 x31', type: 'work' }, '212 555 0149'],
+    },
+  };
+
+  it('lets through an extension number the user left untouched, so the person stays editable', () => {
+    // Exactly what the form sends back: the typed string, and the stated label
+    // — a missing one as ''.
+    const unusable = [
+      { kind: 'phone' as const, value: '(212) 555-0147;229', label: '' },
+      { kind: 'phone' as const, value: '212-555-0148 x31', label: 'work' },
+    ];
+
+    expect(unusableToSurface(unusable, person)).toEqual([]);
+  });
+
+  it('refuses one the user typed, including an edit of a stated one', () => {
+    const typed = { kind: 'phone' as const, value: '212-555-0150 ext. 12', label: '' };
+    const edited = { kind: 'phone' as const, value: '(212) 555-0147;230', label: '' };
+    // Even a reformat is the user asserting a new value.
+    const reformatted = { kind: 'phone' as const, value: '212-555-0148  X31', label: 'work' };
+
+    expect(
+      unusableToSurface(
+        [typed, edited, reformatted, { kind: 'phone', value: '(212) 555-0147;229', label: '' }],
+        person,
+      ),
+    ).toEqual([typed, edited, reformatted]);
+  });
+
+  it('refuses a stated number the user relabelled, rather than drop the label without a word', () => {
+    const relabelled = { kind: 'phone' as const, value: '(212) 555-0147;229', label: 'work' };
+    const moved = { kind: 'phone' as const, value: '212-555-0148 x31', label: 'mobile' };
+
+    expect(unusableToSurface([relabelled, moved], person)).toEqual([relabelled, moved]);
+  });
+
+  it('refuses everything for a row that states no phones', () => {
+    const typed = { kind: 'phone' as const, value: '212-555-0148 x31' };
+
+    expect(unusableToSurface([typed], { properties: null })).toEqual([typed]);
+  });
+
+  it('has nothing to surface without unusable values', () => {
+    expect(unusableToSurface([], person)).toEqual([]);
   });
 });

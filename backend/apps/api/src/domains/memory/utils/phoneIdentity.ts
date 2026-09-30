@@ -483,6 +483,11 @@ export interface ParsedPhone {
    * The last ten digits (all of them when fewer) — `normalizePhone`'s join
    * key, for every status, so a refused value can still be matched to the
    * lines it collides with. Empty when the value has no digits.
+   *
+   * For a value carrying an extension this is the key the join key USED to
+   * give it: `normalizePhone` now refuses such a value outright, but records
+   * written before it did hold the truncation in `phones`, and this is what
+   * lets {@link PhoneHolders.resolve} see the refusal on that same line.
    */
   l10: string;
 }

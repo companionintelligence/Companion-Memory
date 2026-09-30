@@ -255,6 +255,36 @@ describeWithDatabase(`contacts on a shared office line (${importDatabase.target}
     expect((await vcardPeople()).filter((name) => name === 'Omar Haddad')).toHaveLength(1);
   });
 
+  it('moves a contact keyed on the truncation of an extension line onto its real key', async () => {
+    // The old join key kept the last ten digits of line + extension, so this
+    // card keyed on `5550147229` — digits that are nobody's number. The legacy
+    // key still computes that truncation (the current key never does), which
+    // is the only way the push can find the row the old rule minted.
+    await pushTheOldWay({
+      name: 'Dana Quill',
+      identityKey: '5550147229',
+      metadata: {
+        Source: 'vCard',
+        Names: ['Dana Quill'],
+        Phones: ['(212) 555-0147;229'],
+        Emails: ['dana.quill@example.com'],
+      },
+    });
+    const old = await personAt('contact:5550147229');
+    expect(old?.properties.phones).toEqual(['5550147229']);
+
+    await importVcf(
+      'BEGIN:VCARD\nFN:Dana Quill\nTEL;type=pref:(212) 555-0147\\;229\nEMAIL:dana.quill@example.com\nEND:VCARD\n',
+    );
+
+    expect(await personAt('contact:5550147229')).toBeNull();
+    const moved = await personAt('contact:dana.quill@example.com');
+    expect(moved?.entity_id).toBe(old?.entity_id);
+    expect(moved?.properties.phones).toBeUndefined();
+    expect(moved?.properties.Phones).toEqual(['(212) 555-0147;229']);
+    expect((await vcardPeople()).filter((name) => name === 'Dana Quill')).toHaveLength(1);
+  });
+
   it('keeps a collapsed row that no card in the export is named after', async () => {
     // The row carries the name of whoever staged first — here someone this
     // export no longer lists. Handing it to a colleague would give them her

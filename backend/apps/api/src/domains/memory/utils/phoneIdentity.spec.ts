@@ -538,6 +538,40 @@ describe('PhoneHolders.adjudicate — numbers that are not evidence', () => {
     expect(adjudicate(vcard('Ada Quill', '52886'), vcard('Ada Quill', '52886'))).toEqual({ kind: 'absent' });
   });
 
+  /**
+   * The shape every contact importer writes since applecontacts.ts and
+   * contactlist.ts started keeping `Phones` as typed (vcard.ts always did):
+   * the typed office line with its extension, beside a `phones` key the FIXED
+   * rule wrote — which never holds the truncation (`5550147229` from
+   * `(212) 555-0147;229`), only the card's plain line, if it has one.
+   */
+  describe('a card whose typed Phones carry an office extension', () => {
+    const typedCard = (name: string, typed: string[], key?: string) =>
+      facts(name, { Phones: typed, ...(key ? { phones: [key] } : {}) });
+
+    it('reads the extension line as a refusal and the plain line as the number', () => {
+      const dana = typedCard('Dana Quill', ['(212) 555-0147;229', '+1 (212) 555-0199'], '2125550199');
+      const holders = holdersOf(['dana', dana]);
+
+      expect(holders.resolve(dana, '5550147229')).toEqual({ kind: 'refused', reasons: ['extension'] });
+      expect(holders.resolve(dana, '2125550199')).toEqual({
+        kind: 'number',
+        e164: '+12125550199',
+        stated: true,
+      });
+    });
+
+    it('writes nothing between two cards that share only that extension line', () => {
+      const verdict = adjudicate(
+        typedCard('Dana Quill', ['(212) 555-0147;229']),
+        typedCard('Dana Quill', ['212-555-0147 x229']),
+      );
+
+      expect(verdict).toEqual({ kind: 'unusable', reasons: ['extension'] });
+      expect(phoneEvidenceFor(verdict)).toEqual([]);
+    });
+  });
+
   it("never uses the owner's own number as evidence between two contacts", () => {
     const self = facts('Owner Person', { Phones: ['+1 (202) 555-0142'] }, { self: true });
     const holders = holdersOf(['self', self], ['a', vcard('Ada Quill', '(202) 555-0142')], ['b', stub()]);

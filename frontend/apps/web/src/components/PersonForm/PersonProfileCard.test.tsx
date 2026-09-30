@@ -95,6 +95,26 @@ describe('PersonProfileCard', () => {
     );
   });
 
+  it('dials a number with an extension as the line plus the extension, not one run-on number', () => {
+    // The server shows such a number as typed — it has no join key — and a
+    // `tel:` of that, or of its digits, ran the extension into the number.
+    render(
+      <PersonProfileCard
+        person={{
+          name: 'Dana',
+          identifiers: [
+            { kind: 'phone', value: '212-555-0148 x31', rawValue: '212-555-0148 x31', label: 'work' },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: '212-555-0148 x31' })).toHaveAttribute(
+      'href',
+      'tel:2125550148;ext=31',
+    );
+  });
+
   it('omits sections the person has nothing in', () => {
     render(<PersonProfileCard person={{ name: 'Nobody', nickname: 'Nick' }} />);
 

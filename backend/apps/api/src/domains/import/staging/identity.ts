@@ -7,7 +7,7 @@
  */
 import { createHash } from 'node:crypto';
 
-import { hasPhoneExtension, normalizeEmail } from '@ci/domains/graph';
+import { hasPhoneExtension, normalizeEmail, normalizePhone } from '@ci/domains/graph';
 import { tokenizePersonName } from '@ci/domains/memory';
 
 import type { Entity, EntityAttribute, Item, Metadata } from '../datasources/timeline';
@@ -36,10 +36,23 @@ function looksLikeHandle(value: unknown): boolean {
 /**
  * Normalize a handle to a comparable key: lower-cased email, or the last ten
  * digits of a phone number. Returns '' for anything that is neither an email nor
- * a long-enough phone (a bare name).
+ * a long-enough phone (a bare name), and for a phone carrying an extension.
  *
  * The last-ten-digits rule is what makes `+1 (555) 010-9999`, `555-010-9999` and
  * `15550109999` one person rather than three.
+ *
+ * ## The phone key IS the shared join key, not a copy of it
+ *
+ * This handle becomes the entity's `properties.phones`, its
+ * `ci.entity_identifiers` row and its natural key (`contact:<handle>`, hashed
+ * into `linked_id`), so it must be byte-identical to what `normalizePhone`
+ * computes for a communication participant. It used to be a second
+ * implementation of the last-ten rule, and both copies shared one defect: an
+ * office line's extension was folded into the digits, so the vCard line
+ * `TEL:(212) 555-0147\;229` keyed as `5550147229` — a well-formed number
+ * belonging to somebody else. The digits are now the shared rule's, extension
+ * refusal included; the seven-digit floor stays here, because below it an
+ * all-digit value is a short code ({@link isShortCode}), not a handle.
  */
 export function normalizeHandle(value: unknown): string {
   if (typeof value !== 'string') {
@@ -56,9 +69,11 @@ export function normalizeHandle(value: unknown): string {
     return trimmed.toLowerCase();
   }
 
-  const digits = trimmed.replace(/\D/g, '');
+  if (trimmed.replace(/\D/g, '').length < 7) {
+    return '';
+  }
 
-  return digits.length >= 7 ? digits.slice(-10) : '';
+  return normalizePhone(trimmed) ?? '';
 }
 
 /**
@@ -82,6 +97,11 @@ const PHONE_SHAPED = /^[+()\-./\s\d]+$/;
  * A value carrying no digits is a NAME, not a short number, and is not a short
  * code: the distinction drawn here is between two kinds of phone. An email is
  * excluded for the same reason — `normalizeHandle` keys it, so it is a handle.
+ *
+ * `normalizeHandle` also refuses a phone carrying an extension, and that
+ * refusal cannot leak in here: every extension marker (`x`, `ext`, `;`, `,`,
+ * `#`, `p`/`w`) falls outside {@link PHONE_SHAPED}, so a value that reached the
+ * length test is one `normalizeHandle` refused for being short and nothing else.
  */
 export function isShortCode(value: unknown): boolean {
   if (typeof value !== 'string') {
@@ -234,7 +254,11 @@ export function stagedNaturalKey(
  *
  * The single definition behind both {@link identityHandles} and
  * {@link hasContactIdentity}, so an entity typed 'contact' because of a handle
- * is always an entity with that handle to key on.
+ * is always an entity with that handle to key on — with one deliberate
+ * exception: a phone carrying an extension is still evidence the entity is a
+ * contact (it is somebody's desk line), but {@link normalizeHandle} refuses to
+ * key on it, so an entity whose ONLY handle is one keys on its name instead, as
+ * a handle-less card does.
  */
 function isHandleAttribute(attribute: EntityAttribute | null | undefined): attribute is EntityAttribute {
   const name = (attribute?.name ?? '').toLowerCase();
@@ -249,17 +273,53 @@ function isHandleAttribute(attribute: EntityAttribute | null | undefined): attri
 }
 
 /**
+ * {@link normalizeHandle} as it was before a phone carrying an extension was
+ * refused: the last ten digits of EVERY digit in the value, extension and all,
+ * so `(212) 555-0147;229` gives `5550147229`.
+ *
+ * Only ever used to FIND a row — {@link legacyEntityIdentityKey} reproduces the
+ * key rows already in `ci.entities` were minted under, and those were minted
+ * with this — or to recognise one: `push/truncatedPhoneKeys.ts` reads it to
+ * prove a card's old key was a truncation. Never a key anything is written under.
+ */
+export function legacyNormalizeHandle(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return '';
+  }
+
+  if (trimmed.includes('@')) {
+    return trimmed.toLowerCase();
+  }
+
+  const digits = trimmed.replace(/\D/g, '');
+
+  return digits.length >= 7 ? digits.slice(-10) : '';
+}
+
+/**
  * The normalized identity handles an entity carries, in attribute order — every
  * one of them, or only the entity's OWN when `withShared` is false (see
  * {@link EntityAttribute.shared}). When `withNew` is false it also leaves out
  * the ones its parser has read only since the legacy key (see
- * {@link EntityAttribute.newSinceLegacyKey}).
+ * {@link EntityAttribute.newSinceLegacyKey}). Normalized by {@link normalizeHandle}
+ * unless `legacy` asks for the truncating rule existing rows were keyed under.
  */
 function identityHandles(
   entity: Entity,
-  { withShared, withNew = true }: { withShared: boolean; withNew?: boolean },
+  {
+    withShared,
+    withNew = true,
+    legacy = false,
+  }: { withShared: boolean; withNew?: boolean; legacy?: boolean },
 ): string[] {
   const out: string[] = [];
+  const normalize = legacy ? legacyNormalizeHandle : normalizeHandle;
 
   for (const attribute of entity.attributes ?? []) {
     if (
@@ -270,7 +330,7 @@ function identityHandles(
       continue;
     }
 
-    const handle = normalizeHandle(attribute.value);
+    const handle = normalize(attribute.value);
 
     if (handle) {
       out.push(handle);
@@ -499,14 +559,21 @@ export function entityIdentityKey(entity: Entity): string | null {
     return null;
   }
 
+  // Under the current rule, not via legacyEntityIdentityKey: that one keeps
+  // the old truncation of an extension line, which is exactly the key this
+  // must never mint again.
   return smallestHandle(identityHandles(entity, { withShared: true }));
 }
 
 /**
  * The key {@link entityIdentityKey} gave this entity before shared handles were
- * passed over: the smallest of ALL its handles — all of them that its parser
- * read then, which leaves out the ones marked
- * {@link EntityAttribute.newSinceLegacyKey}.
+ * passed over: the smallest of ALL its handles — normalized the way they were
+ * then, so a phone carrying an extension counts as the truncation it keyed as
+ * (see {@link legacyNormalizeHandle}), and leaving out the ones marked
+ * {@link EntityAttribute.newSinceLegacyKey}. A row whose key was
+ * `contact:5550147229` from `(212) 555-0147;229` is found here and moved onto
+ * the card's real key, for every contact source; without the old rule the push
+ * would look for it under a key it never had, and mint the card a second Person.
  *
  * Kept for exactly one job. Changing which handle keys a contact MOVES its
  * natural key, and `GraphIngestService` resolves an existing row by nothing
@@ -525,7 +592,7 @@ export function entityIdentityKey(entity: Entity): string | null {
  * name, and a legacy key is a handle.
  */
 export function legacyEntityIdentityKey(entity: Entity): string | null {
-  return smallestHandle(identityHandles(entity, { withShared: true, withNew: false }));
+  return smallestHandle(identityHandles(entity, { withShared: true, withNew: false, legacy: true }));
 }
 
 /**
