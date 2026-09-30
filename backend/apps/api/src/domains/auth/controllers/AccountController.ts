@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -15,13 +16,15 @@ import type { Request } from 'express';
 import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
-import { JwtAuthGuard } from '@ci/common/guards';
+import { FULL_CAPABILITY, RequireCapability } from '@ci/common/decorators';
+import { type ApiKeyScopedRequest, JwtAuthGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { type User, UserService } from '@ci/domains/user';
 
 import { AuthService } from '../services/AuthService';
 import { FederatedIdentityService } from '../services/FederatedIdentityService';
+import { isManagedAppPrincipal } from '../types';
 
 const deleteAccountSchema = z.object({
   /**
@@ -47,15 +50,6 @@ const changePasswordSchema = z.object({
 });
 
 /**
- * Account lifecycle: the counterpart to `SignupController`.
- *
- * Exists because both stores require it. Apple Guideline 5.1.1(v) and Google Play's
- * Data Deletion policy say an app offering in-app account creation must offer in-app
- * account deletion, and Companion's signup page is exactly that. Self-hosting is not
- * an exemption: Apple wants the *initiation* path inside the app even though the data
- * lives on the user's own appliance.
- */
-/**
  * How recently a session must have been established for an account that has no
  * password of its own to change its email or set a password without further
  * proof. The same "sudo mode" idea as a forge's re-authentication window.
@@ -66,12 +60,21 @@ export const REAUTH_SESSION_WINDOW_MS = 10 * 60 * 1000;
 export const REAUTH_REQUIRED = 'REAUTH_REQUIRED';
 
 /**
- * Session-only, on every route. An API key is for reading and writing data on
- * a person's behalf; it must never be able to change the credentials it hangs
- * off. Under the `JwtOrApiKeyAuthGuard` these routes had, a `write` key — the
- * level every new key is minted at — could set a password it knew and move the
- * email, and on a Portal-signed-in account nothing asked it for anything
- * (2026-09-24 audit).
+ * Account lifecycle: the counterpart to `SignupController`.
+ *
+ * Exists because both stores require it. Apple Guideline 5.1.1(v) and Google Play's
+ * Data Deletion policy say an app offering in-app account creation must offer in-app
+ * account deletion, and Companion's signup page is exactly that. Self-hosting is not
+ * an exemption: Apple wants the *initiation* path inside the app even though the data
+ * lives on the user's own appliance.
+ *
+ * Session-only on every route except deletion. An API key is for reading and
+ * writing data on a person's behalf; it must never be able to change the
+ * credentials it hangs off. Under the `JwtOrApiKeyAuthGuard` these routes had, a
+ * `write` key — the level every new key is minted at — could set a password it
+ * knew and move the email, and on a Portal-signed-in account nothing asked it for
+ * anything (2026-09-24 audit). Deletion takes a key because the app the stores
+ * require it of holds nothing else; see `remove`.
  */
 @Controller('account')
 export class AccountController {
@@ -106,13 +109,30 @@ export class AccountController {
    * Delete the authenticated user's account: revoke access now, purge the data later
    * (see `UserService.requestDeletion`).
    *
-   * Guarded by `JwtOrApiKeyAuthGuard`, not the `JwtAuthGuard` used by the other
-   * sensitive `/keys`-style routes, and that is load-bearing rather than lax. The
-   * native app never holds a JWT — it trades one for a durable API key at login and
-   * authenticates with `x-api-key` from then on — so a JWT-only route would be
-   * unreachable from the App Store build, i.e. unreachable from the only client the
-   * requirement is actually about. It does not widen the blast radius either: an
-   * attacker holding that key can already read every memory the account has.
+   * Guarded by `JwtOrApiKeyAuthGuard`, not the session-only `JwtAuthGuard` the rest of
+   * this controller uses, and that is load-bearing rather than lax. The native app
+   * never holds a JWT — it trades one for a durable API key at login and authenticates
+   * with `x-api-key` from then on — so a JWT-only route is unreachable from the App
+   * Store build, i.e. from the only client the requirement is actually about. #2743
+   * proved it by moving this route there with the credential routes: every phone got
+   * a 401, which the guard-level `AccountController.guards.test.ts` now pins.
+   *
+   * That does not reopen what #2743 closed. A key must not change the credentials it
+   * hangs off because that hands its holder a password or an address that outlives
+   * the key. Deletion hands them nothing: access ends for everyone, the key included.
+   * What deletion does is destroy, and destroying is what `full` names — `write`, the
+   * level every new key gets by default, is "nothing that deletes". The native app
+   * mints its key at `full` (web `useAuth.ts`, #2661) because it already issues the
+   * destructive mutations, so a key that can end the account could already empty it.
+   * For the grace period an operator can still undo it
+   * (`docs/architecture/account-deletion.md`).
+   *
+   * An installed app's key is refused even at `full`. For a CI-Hub-connected harness,
+   * `full` means it may ASK to delete and the owner answers a card
+   * (`capabilityForApp`); this route has no card to raise, so ending the account stays
+   * the owner's act. Every such key is scope-limited today, which the guard already
+   * refuses here; the check keeps that true if an app is ever given the whole surface
+   * (`FULL_SURFACE_CONNECT_APPS`).
    *
    * Password re-authentication is deliberately NOT the confirmation. Accounts created
    * through OIDC are given a random 32-byte password they have never seen
@@ -122,11 +142,19 @@ export class AccountController {
    */
   @Delete()
   @HttpCode(HttpStatus.NO_CONTENT)
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(FULL_CAPABILITY)
   async remove(
     @Context() context: RequestContext,
+    @Req() req: ApiKeyScopedRequest,
     @Body(new ValidationPipe(deleteAccountSchema)) input: { confirmEmail: string },
   ): Promise<void> {
+    if (isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy })) {
+      throw new ForbiddenException(
+        "An installed app cannot delete this account — that is the owner's decision",
+      );
+    }
+
     const serviceContext = toServiceContext(context);
     const user = await this.requireUser(serviceContext);
 

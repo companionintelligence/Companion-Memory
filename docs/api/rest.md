@@ -472,13 +472,20 @@ Per-method `JwtOrApiKeyAuthGuard`. **No longer a thin proxy.** Generation is a d
 
 ## Account, identity & device surfaces
 
-### `AccountController` — `account` · `domains/auth/controllers/AccountController.ts:36`
+### `AccountController` — `account` · `domains/auth/controllers/AccountController.ts:79`
 
-| Verb   | Path       | Auth                           | Purpose                                                                                                                                        |
-| ------ | ---------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| DELETE | `/account` | `JwtOrApiKeyAuthGuard` (`:60`) | Delete the authenticated account: revoke access now, purge the data later. **204**. Body `{ confirmEmail }` — the account's own email retyped. |
+| Verb   | Path                | Auth                                                                     | Purpose                                                                                                                                        |
+| ------ | ------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| DELETE | `/account`          | `JwtOrApiKeyAuthGuard` + `@RequireCapability(FULL_CAPABILITY)` (`:143`) | Delete the authenticated account: revoke access now, purge the data later. **204**. Body `{ confirmEmail }` — the account's own email retyped. |
+| GET    | `/account`          | `JwtAuthGuard` — session only (`:90`)                                    | `{ email, hasFederatedIdentity, hasOwnPassword }` for the settings page.                                                                       |
+| PATCH  | `/account/email`    | `JwtAuthGuard` — session only (`:176`)                                   | Body `{ newEmail, currentPassword? }` → `{ email }`, after re-authentication (`requireReauth`).                                                 |
+| PATCH  | `/account/password` | `JwtAuthGuard` — session only (`:210`)                                   | Body `{ newPassword, currentPassword? }` → **204**, after re-authentication; every other session of the account is signed out.                 |
 
-Two deliberate choices worth knowing: the guard is `JwtOrApiKeyAuthGuard`, **not** `JwtAuthGuard`, because the native app never holds a JWT (it trades one for a durable API key at login), and a JWT-only route would be unreachable from exactly the App Store build the store requirement is about. And the confirmation is the **email**, not the password: OIDC-provisioned accounts are given a random password the user has never seen, so requiring it would make deletion impossible for them.
+Deletion is the only route here an API key can reach, and deliberately so. The native app never holds a JWT (it trades one for a durable API key at login), so a JWT-only route is unreachable from exactly the App Store build the store requirement is about. #2743 made that mistake, and until the fix every phone got **401** on deletion. The credential routes stay session-only: a key must never change the credentials it hangs off. Deletion is not a credential change, because it hands the key holder nothing that outlives the key.
+
+Which keys may delete: only an unscoped key at **`full`**, which is what the native app mints (`useAuth.ts`, #2661). A `write` or `read` key gets **403**. `write` is defined as "nothing that deletes" and is the default for every new key, so this also catches a phone that signed in before #2661; signing in again mints it a `full` key. A scope-limited key gets **403** from deny-by-default scope enforcement. A CI-Hub connect key (`managed_by = 'connect'`) gets **403** from the handler even at `full`: for a harness, `full` means it may *ask* to delete through an approval card, and this route has no card to raise. `AccountController.guards.test.ts` pins all of this against the real guards and passport strategies.
+
+The confirmation is the **email**, not the password: OIDC-provisioned accounts are given a random password the user has never seen, so requiring it would make deletion impossible for them.
 
 ### `AccountDataController` — `account` · `domains/auth/controllers/AccountDataController.ts:55`
 

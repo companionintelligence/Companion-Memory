@@ -1,8 +1,10 @@
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import type { Request } from 'express';
 
+import type { ApiKeyScopedRequest } from '@ci/common/guards';
 import config from '@ci/configuration';
 
+import { CONNECT_PROVENANCE } from '../../types';
 import { AccountController } from '../AccountController';
 
 /**
@@ -86,7 +88,7 @@ describe('AccountController — delete account', () => {
   it('requests deletion when the confirmation email matches the account', async () => {
     const { controller, userService } = makeController();
 
-    await controller.remove(requestContext(), { confirmEmail: 'jsmith@example.com' });
+    await controller.remove(requestContext(), mockRequest(), { confirmEmail: 'jsmith@example.com' });
 
     expect(userService.requestDeletion).toHaveBeenCalledWith({ userId: 'u1' }, 'u1');
   });
@@ -95,7 +97,7 @@ describe('AccountController — delete account', () => {
     const { controller, userService } = makeController();
 
     // The user is retyping to prove intent, not reproducing a stored string byte-for-byte.
-    await controller.remove(requestContext(), { confirmEmail: '  JSmith@Example.COM  ' });
+    await controller.remove(requestContext(), mockRequest(), { confirmEmail: '  JSmith@Example.COM  ' });
 
     expect(userService.requestDeletion).toHaveBeenCalledTimes(1);
   });
@@ -103,9 +105,9 @@ describe('AccountController — delete account', () => {
   it('rejects a mismatched confirmation and deletes NOTHING', async () => {
     const { controller, userService } = makeController();
 
-    await expect(controller.remove(requestContext(), { confirmEmail: 'someone@else.com' })).rejects.toThrow(
-      BadRequestException,
-    );
+    await expect(
+      controller.remove(requestContext(), mockRequest(), { confirmEmail: 'someone@else.com' }),
+    ).rejects.toThrow(BadRequestException);
 
     expect(userService.requestDeletion).not.toHaveBeenCalled();
   });
@@ -114,9 +116,22 @@ describe('AccountController — delete account', () => {
     // Soft-deleted users stop resolving through findById, so a replay lands here.
     const { controller, userService } = makeController(null);
 
-    await expect(controller.remove(requestContext(), { confirmEmail: 'jsmith@example.com' })).rejects.toThrow(
-      UnauthorizedException,
-    );
+    await expect(
+      controller.remove(requestContext(), mockRequest(), { confirmEmail: 'jsmith@example.com' }),
+    ).rejects.toThrow(UnauthorizedException);
+
+    expect(userService.requestDeletion).not.toHaveBeenCalled();
+  });
+
+  it('refuses an installed app (a CI-Hub connect key) even with the right confirmation, and deletes NOTHING', async () => {
+    // Which keys reach the handler at all is the guard's business, pinned in
+    // AccountController.guards.test.ts; this is the part the handler decides.
+    const { controller, userService } = makeController();
+    const appRequest = { apiKeyManagedBy: CONNECT_PROVENANCE } as unknown as ApiKeyScopedRequest;
+
+    await expect(
+      controller.remove(requestContext(), appRequest, { confirmEmail: 'jsmith@example.com' }),
+    ).rejects.toThrow(ForbiddenException);
 
     expect(userService.requestDeletion).not.toHaveBeenCalled();
   });
