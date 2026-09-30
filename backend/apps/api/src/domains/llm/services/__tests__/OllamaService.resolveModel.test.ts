@@ -87,7 +87,7 @@ describe('OllamaService.resolveModel uses the loaded backend model', () => {
   it('errors when the backend is serving no chat models', async () => {
     const { service } = buildService([]);
 
-    await expect(service.resolveModel(ctx)).rejects.toThrow(/No chat model is currently loaded/);
+    await expect(service.resolveModel(ctx)).rejects.toThrow(/No chat model is currently served/);
   });
 
   it('falls back past an unloaded vision default like llava:7b on vLLM', async () => {

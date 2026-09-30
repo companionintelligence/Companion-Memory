@@ -713,14 +713,17 @@ def generate_embedding(llm_config: LLMConfig, text: str) -> list[float]:
         return []
 
     try:
+        embedding_base = resolve_embedding_api_base(settings.llm_api_base)
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
-                f"{resolve_embedding_api_base(settings.llm_api_base)}/embeddings",
+                f"{embedding_base}/embeddings",
                 json={
                     "model": settings.embedding_model,
                     "input": text[:8000],  # Limit input size
                 },
-                headers={"Authorization": f"Bearer {resolve_embedding_api_key()}"},
+                headers={
+                    "Authorization": f"Bearer {resolve_embedding_api_key(embedding_base)}"
+                },
             )
             response.raise_for_status()
             data = response.json()

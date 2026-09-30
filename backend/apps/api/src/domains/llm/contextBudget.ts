@@ -369,6 +369,12 @@ export function attachmentStub(count: number): string {
  * `LLM_QUEUE_OPTIONS` sets `retryLimit: 3`, so without this an overflow is
  * replayed verbatim three times — three guaranteed failures at full prefill
  * cost. Classified, it becomes a retry with a smaller window instead.
+ *
+ * Matched on wording because every backend words it differently: Ollama and
+ * vLLM say "context length", OpenAI `context_length_exceeded`, llama.cpp's
+ * server (so Lemonade) "the request exceeds the available context size" with
+ * type `exceed_context_size_error`, and TGI "`inputs` tokens + `max_new_tokens`
+ * must be <= N".
  */
 export function isContextOverflowError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -377,10 +383,13 @@ export function isContextOverflowError(error: unknown): boolean {
   return (
     lower.includes('context length') ||
     lower.includes('context window') ||
+    lower.includes('context size') ||
     lower.includes('maximum context') ||
     lower.includes('context_length_exceeded') ||
+    lower.includes('exceed_context_size') ||
     lower.includes('too many tokens') ||
     (lower.includes('prompt') && lower.includes('too long')) ||
-    (lower.includes('exceeds') && lower.includes('token'))
+    (lower.includes('exceeds') && lower.includes('token')) ||
+    (lower.includes('max_new_tokens') && lower.includes('must be <='))
   );
 }
