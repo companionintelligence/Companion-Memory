@@ -157,6 +157,13 @@ for it is now **Reflections**; the tables, GraphQL types and REST routes still s
 > and not `CASCADE`. **Any new user-scoped `ci.questions` selector must carry
 > `excludeForkedOriginsSql`** (`domains/intelligence/questionScope.ts`), or retired
 > reflections come back.
+>
+> **Never order the catalogue by `question_id`.** The seeded rows carry random v4 ids on
+> every fresh install and share one `created_at` per seed batch, so id order is a
+> different shuffle on every appliance. `seed_position` (`20260930153606`) records the
+> order the seed files list them; the inference rotation takes the catalogue round-robin
+> across categories in that order, from `domains/intelligence/questionOrder.ts`, and a
+> migration that seeds more questions should write `seed_position` too.
 
 ### Commerce & object identity
 
