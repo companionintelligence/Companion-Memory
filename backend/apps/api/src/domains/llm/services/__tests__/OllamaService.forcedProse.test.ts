@@ -210,6 +210,36 @@ describe('OllamaService.chatStream forced prose round', () => {
     expect(last.tool_calls).toBeUndefined();
   });
 
+  it('asks once more, with tools off, when the follow-up after tools is empty', async () => {
+    const { service, tool, driver } = await setup([
+      [proseChunk('Let me look.'), toolCallChunk()],
+      [],
+      [proseChunk('Here is who to see.')],
+    ]);
+
+    const stream = await service.chatStream(context, [{ role: 'user', content: 'find it' }], {
+      model: MODEL,
+      enableTools: true,
+    });
+    const messages = await drain(stream);
+
+    expect(driver.chatStream).toHaveBeenCalledTimes(3);
+    expect(tool.execute).toHaveBeenCalledTimes(1);
+
+    const forced = driver.calls[2];
+
+    expect(forced.tools).toBeUndefined();
+    expect(forced.salvageTools).toBe(false);
+    expect(forced.messages[forced.messages.length - 1].content).toContain('do not call any more tools');
+
+    const assistants = messages.filter((message: { role: string }) => message.role === 'assistant');
+
+    expect(assistants).toHaveLength(2);
+    expect(assistants[0].content).toContain('Let me look.');
+    expect(assistants[1].content).toContain('Here is who to see.');
+    expect(assistants.some((message: { content: string }) => message.content.trim() === '')).toBe(false);
+  });
+
   it('does not add a round when the follow-up already answered in prose', async () => {
     const { service, driver } = await setup([[toolCallChunk()], [proseChunk('Here is your answer.')]]);
 

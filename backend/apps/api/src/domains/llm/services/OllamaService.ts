@@ -869,6 +869,10 @@ export class OllamaService implements OnModuleInit {
     // more generation, with tools neither advertised nor salvaged, so the
     // model has to speak to the results it already has.
     let forcedProseRound = false;
+    // The follow-up after a tool round came back with nothing a person can
+    // read. One more generation, tools off, instead of storing a blank
+    // assistant row and leaving the chat looking cut off before the lookup.
+    let scheduleForcedProse = false;
     // A backend failure inside the generator is logged and the stream ends
     // quietly (an empty assistant row) rather than throwing at the consumer —
     // long-standing behavior the SSE controller depends on. Recording it here
@@ -886,6 +890,8 @@ export class OllamaService implements OnModuleInit {
         let lastChunk: ChatResponse | undefined;
         let handleAbort = () => {};
 
+        let stopLoop = false;
+
         let deadline: FirstResponseFetch | undefined;
 
         textChunks.splice(0, textChunks.length);
@@ -900,7 +906,13 @@ export class OllamaService implements OnModuleInit {
 
         accumulatedMessages.push(...toolEvaluations);
 
-        if (generateRounds >= maxToolRounds) {
+        if (scheduleForcedProse) {
+          // Consume the one blank-follow-up retry before the cap check. The
+          // cap would otherwise break: this round has no new tool calls, and
+          // generateRounds is already at max after the silent follow-up.
+          forcedProseRound = true;
+          scheduleForcedProse = false;
+        } else if (generateRounds >= maxToolRounds) {
           if (iterationToolCalls.length === 0 || forcedProseRound) {
             break;
           }
@@ -1035,7 +1047,7 @@ export class OllamaService implements OnModuleInit {
               errorStack: error instanceof Error ? error.stack : undefined,
             });
 
-            break;
+            stopLoop = true;
           }
         } finally {
           // The forced round's answer is final whatever the model wanted:
@@ -1053,14 +1065,30 @@ export class OllamaService implements OnModuleInit {
 
           const think = thinkChunks.join('');
           const content = textChunks.join('');
+          const visible = content.trim().length > 0 || think.trim().length > 0;
+          // Tools ran and the model neither answered nor asked for another
+          // lookup. Drop the blank row and ask once more, in prose. A second
+          // blank (the forced round itself) is stored, so this cannot loop.
+          const retryBlankFollowUp =
+            !signal?.aborted &&
+            !forcedProseRound &&
+            iterationToolCalls.length > 0 &&
+            toolCalls.length === 0 &&
+            !visible;
 
-          const message = {
-            role: 'assistant',
-            content: (think ? `<think>${think}</think>` : '') + content,
-            ...(toolCalls.length > 0 && { tool_calls: toolCalls.slice() }),
-          } satisfies OllamaMessage;
+          if (retryBlankFollowUp) {
+            scheduleForcedProse = true;
+            stopLoop = false;
+            streamError = undefined;
+          } else {
+            const message = {
+              role: 'assistant',
+              content: (think ? `<think>${think}</think>` : '') + content,
+              ...(toolCalls.length > 0 && { tool_calls: toolCalls.slice() }),
+            } satisfies OllamaMessage;
 
-          accumulatedMessages.push(message);
+            accumulatedMessages.push(message);
+          }
 
           signal?.removeEventListener('abort', handleAbort);
 
@@ -1071,7 +1099,11 @@ export class OllamaService implements OnModuleInit {
             });
           }
         }
-      } while (toolCalls.length > 0);
+
+        if (stopLoop) {
+          break;
+        }
+      } while (toolCalls.length > 0 || scheduleForcedProse);
 
       const wrapUp = savedKnowledgeWrapUp(accumulatedMessages);
       if (wrapUp && !signal?.aborted) {
