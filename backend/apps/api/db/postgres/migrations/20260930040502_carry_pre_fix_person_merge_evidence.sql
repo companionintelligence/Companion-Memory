@@ -31,9 +31,9 @@
 --      `MergeCandidateService.autoMergeDeterministicPairs` then merges it
 --      without asking anyone.
 --
--- The fix makes every merge do both inside its own transaction and counts them
--- in the audit row (`details.counts.claims` / `.blocksCarried`). It repairs no
--- merge that had already happened. This migration does.
+-- The fix (#2818) makes every merge do both inside its own transaction and
+-- counts them in the audit row (`details.counts.claims` / `.blocksCarried`).
+-- It repairs no merge that had already happened. This migration does.
 --
 -- ## Ship WITH or AFTER that fix, and WITH or BEFORE the first bump
 --
@@ -41,8 +41,8 @@
 -- again, and dbmate never re-runs a migration. Every statement here is
 -- idempotent, so running the migrate:up half again by hand is safe; do it in
 -- ONE transaction, because the working table is ON COMMIT DROP. The first
--- self-claim or detector version bump re-examines every survivor, so it must
--- find the blocks already carried.
+-- self-claim or detector version bump (#2797 at the time of writing)
+-- re-examines every survivor, so it must find the blocks already carried.
 --
 -- ## Where a tombstone's evidence goes: its canonical live Person
 --
