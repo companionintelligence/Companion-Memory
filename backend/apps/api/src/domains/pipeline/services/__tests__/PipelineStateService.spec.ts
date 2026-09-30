@@ -647,12 +647,22 @@ describe('PipelineStateService.coverage', () => {
 });
 
 describe('PipelineStateService.reopen', () => {
+  /**
+   * Answers the way TypeORM's Postgres driver does, not the way it is easy to
+   * assume: a bare `UPDATE … RETURNING` resolves to `[rows, rowCount]`, and only
+   * a statement whose OUTER command is a SELECT (a CTE-wrapped UPDATE) resolves
+   * to the rows. The old mock returned rows for everything, which is how
+   * `reopen()` returning a constant 2 went unnoticed — its one test happened to
+   * re-open exactly two rows.
+   */
   function make(returning: Array<{ entity_id: string }>) {
     const statements: Array<{ sql: string; params: unknown[] }> = [];
     const query = jest.fn(async (raw: string, params: unknown[] = []) => {
-      statements.push({ sql: raw.replace(/\s+/g, ' ').trim(), params });
+      const sql = raw.replace(/\s+/g, ' ').trim();
 
-      return returning;
+      statements.push({ sql, params });
+
+      return /^(UPDATE|DELETE)\b/i.test(sql) ? [returning, returning.length] : returning;
     });
     const logger = {
       setContext: jest.fn(),
@@ -680,6 +690,24 @@ describe('PipelineStateService.reopen', () => {
     // Deduplicated, in the contract order.
     expect(params).toEqual([ENTITY_TYPE, STAGE_ID, [srcId(1), srcId(2)]]);
   });
+
+  it.each([0, 1, 3])(
+    'reports %i when that many rows moved — the count, not the driver tuple',
+    async (moved) => {
+      const { service, statements } = make(
+        Array.from({ length: moved }, (_, i) => ({ entity_id: srcId(i + 1) })),
+      );
+
+      await expect(service.reopen(ENTITY_TYPE, STAGE_ID, [srcId(1), srcId(2), srcId(3)])).resolves.toBe(
+        moved,
+      );
+
+      // The outer command is a SELECT over the UPDATE's RETURNING, which is what
+      // makes the driver hand back rows. A bare UPDATE here counts the tuple.
+      expect(statements[0].sql).toMatch(/^WITH reopened AS \( UPDATE ci\.pipeline_state/);
+      expect(statements[0].sql).toMatch(/\) SELECT entity_id FROM reopened$/);
+    },
+  );
 
   it('issues no statement for an empty id list', async () => {
     const { service, statements } = make([]);
