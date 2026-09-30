@@ -121,14 +121,15 @@ This is the priority queue. Each item should land its own ratcheted coverage flo
 2. then `DATABASE_URL`,
 3. then the discrete `DATABASE_HOST/PORT/USERNAME/DATABASE/PASSWORD`.
 
-There are **sixteen** per-suite variables, not the two this document used to
-name: `ASKS_`, `BROWSER_ACTIVITY_`, `CONNECTIONS_`, `EVENTS_`, `IMPORT_`,
-`MEMORY_`, `NOTES_`, `PEERS_`, `PERSISTENCE_`, `PERSONALIZATION_`, `PIPELINE_`,
-`PLANNING_`, `PORTABILITY_`, `SCHEDULE_`, `SEARCH_INGRESS_`, `SEARCH_NEXT_`
-(each `…_TEST_DATABASE_URL`). Naming one per suite is what lets you point a
-single domain at a scratch database without moving the whole app.
+There are **eighteen** per-suite variables, not the two this document used to
+name: `ASKS_`, `AUTH_`, `BROWSER_ACTIVITY_`, `CONNECTIONS_`, `EVENTS_`,
+`IMPORT_`, `MEMORY_`, `NOTES_`, `PEERS_`, `PERSISTENCE_`, `PERSONALIZATION_`,
+`PIPELINE_`, `PLANNING_`, `PORTABILITY_`, `SCHEDULE_`, `SEARCH_INGRESS_`,
+`SEARCH_NEXT_`, `USER_` (each `…_TEST_DATABASE_URL`). Naming one per suite is
+what lets you point a single domain at a scratch database without moving the
+whole app.
 
-**The fallback to `DATABASE_URL` is NOT universal — three suites do not have
+**The fallback to `DATABASE_URL` is NOT universal — five suites do not have
 it.** They read their variable straight off `process.env` and gate `describe` on
 that alone, so setting only `DATABASE_URL` leaves them skipping:
 
@@ -137,10 +138,12 @@ that alone, so setting only `DATABASE_URL` leaves them skipping:
 | `planning/services/__tests__/TaskService.tenancy.integration.test.ts` (two `describe` blocks) | `PLANNING_TEST_DATABASE_URL` |
 | `notes/__tests__/NoteCapture.integration.spec.ts` | `NOTES_TEST_DATABASE_URL` |
 | `schedule/services/__tests__/CandidateService.lifecycle.integration.test.ts` | `SCHEDULE_TEST_DATABASE_URL ?? PLANNING_TEST_DATABASE_URL` |
+| `auth/__tests__/CreateTestUserScript.integration.test.ts` | `AUTH_TEST_DATABASE_URL` — the one per-suite variable `ci.yml` does not set |
+| `user/services/__tests__/UserService.applianceClaim.integration.spec.ts` | `USER_TEST_DATABASE_URL` — on purpose: the claim it tests is appliance-wide, so it needs a database with no live admin, and refuses to run on one that has |
 
-They also miss the port probe as a result: point one at a URL with nothing
-listening and it fails every test instead of skipping. Anything pointing an
-environment at a database — `ci.yml`, a runbook, your shell — must set the
+All but `USER_` also miss the port probe as a result: point one at a URL with
+nothing listening and it fails every test instead of skipping. Anything pointing
+an environment at a database — `ci.yml`, a runbook, your shell — must set the
 per-suite variables, not just `DATABASE_URL`.
 
 **Trap 1 — a skip is not a pass.** The probe answers *"is a port open"*. With no
@@ -148,8 +151,8 @@ database the suites `describe.skip` and **jest exits 0**. That is deliberate (a
 laptop with no stack must not fail), but it means a green local run, or a green
 `ci.yml` run, can have executed none of the DB-backed coverage. `ci.yml`'s
 backend job now runs a `services: postgres`, bootstraps the role and extensions,
-migrates, and sets all sixteen per-suite variables, so the DB-backed suites do
-run there. What still skips in that job is the seven suites gating on
+migrates, and sets every per-suite variable except `AUTH_`, so the DB-backed
+suites do run there. What still skips in that job is the seven suites gating on
 `scratchDatabaseAvailability()`, because `DATABASE_ADMIN_PASSWORD` is
 deliberately unset — a cost decision the workflow states in a comment rather
 than hides. `consent-path-gate.yml` remains the stronger guarantee for the

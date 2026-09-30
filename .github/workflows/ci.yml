@@ -117,25 +117,29 @@ jobs:
       # suites cannot disagree about which database this is.
       DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       PGPASSWORD: ci_test_admin_pw
-      # EVERY ONE of the sixteen per-suite variables is enumerated below, and
-      # that is NOT redundant with `DATABASE_URL` above. Thirteen of the sixteen
-      # resolve through `domains/__tests__/support/databaseConnection.ts`, which
-      # checks the suite's own `<DOMAIN>_TEST_DATABASE_URL` FIRST and falls
-      # through to `DATABASE_URL` — for those, these lines are a restatement of
-      # the fallback. The other three read their variable DIRECTLY off
-      # `process.env` with no fallback at all, and gate `describe` on it:
+      # Seventeen per-suite variables are enumerated below, and that is NOT
+      # redundant with `DATABASE_URL` above. Thirteen of them resolve through
+      # `domains/__tests__/support/databaseConnection.ts`, which checks the
+      # suite's own `<DOMAIN>_TEST_DATABASE_URL` FIRST and falls through to
+      # `DATABASE_URL` — for those, these lines are a restatement of the
+      # fallback. The other four read their variable DIRECTLY off `process.env`
+      # with no fallback at all, and gate `describe` on it:
       #   PLANNING_ — planning/services/__tests__/TaskService.tenancy.integration.test.ts
       #   NOTES_    — notes/__tests__/NoteCapture.integration.spec.ts
       #   SCHEDULE_ — schedule/services/__tests__/CandidateService.lifecycle.integration.test.ts
       #               (it chains `SCHEDULE_ ?? PLANNING_`, so PLANNING_ alone
       #               would in fact cover it — set anyway, so nobody has to know)
-      # With only `DATABASE_URL` set those four `describe` blocks resolve to
+      #   USER_     — user/services/__tests__/UserService.applianceClaim.integration.spec.ts
+      #               (on purpose: it needs an appliance with no live admin, which a
+      #               dev stack's DATABASE_URL almost never is and this one is)
+      # With only `DATABASE_URL` set those five `describe` blocks resolve to
       # `describe.skip` and jest still exits 0 — the green-but-tested-nothing
       # outcome this job exists to end. The list is enumerated in full rather
-      # than trimmed to the three so that a new suite written in either style is
+      # than trimmed to the four so that a new suite written in either style is
       # covered, and so nobody has to know which style each file uses. Keep it
-      # in step with the sixteen named in
-      # `docs/architecture/test-strategy.md` §3.
+      # in step with `docs/architecture/test-strategy.md` §3. The one per-suite
+      # variable NOT set here is `AUTH_TEST_DATABASE_URL`
+      # (auth/__tests__/CreateTestUserScript.integration.test.ts).
       ASKS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       BROWSER_ACTIVITY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       CONNECTIONS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
@@ -152,6 +156,7 @@ jobs:
       SCHEDULE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       SEARCH_INGRESS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       SEARCH_NEXT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      USER_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       # DATABASE_ADMIN_PASSWORD is deliberately NOT set, so this is not an
       # oversight to "fix" by adding it. SEVEN further suites gate on
       # `scratchDatabaseAvailability()` (`domains/__tests__/support/scratchDatabase.ts`)
