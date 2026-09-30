@@ -522,4 +522,48 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       expect(res.redirect).not.toHaveBeenCalledWith('/login?error=signup_code_required');
     });
   });
+
+  // `users.password_set_at` decides what `AccountController.requireReauth` asks
+  // for: where it is set, an email or password change must present the current
+  // password. Every account this callback creates holds a random password nobody
+  // has seen, so it must be created as not chosen — stamped as chosen, the
+  // account is asked for a password it cannot know and can never change either.
+  // One row per door into `createOidcUser`, the provisioning path #2743 missed.
+  describe('an account the callback creates has no password of its own', () => {
+    type Mocks = ReturnType<typeof makeController>;
+
+    it.each<[door: string, req: unknown, admit: (mocks: Mocks) => void]>([
+      [
+        'native, claiming an empty appliance',
+        nativeReq(),
+        ({ userService }) => userService.hasNoUsers.mockResolvedValue(true),
+      ],
+      [
+        'native, invited with a signup code',
+        nativeReq({ oidc_signup_code: 'invite-1' }),
+        ({ signupCodeService }) => signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' }),
+      ],
+      [
+        'web, invited by the Hub',
+        webReq(),
+        ({ hubBridge }) => hubBridge.verifyUsername.mockReturnValue('new@example.com'),
+      ],
+    ])('%s', async (_door, req, admit) => {
+      const mocks = makeController();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'new@example.com' }));
+      mocks.userService.findByEmail.mockResolvedValue(null);
+      mocks.userService.create.mockResolvedValue({ id: 'user-new', email: 'new@example.com' });
+      admit(mocks);
+
+      await mocks.controller.callback('code-x', 'match', undefined, req as never, makeRes() as never);
+
+      expect(mocks.userService.create).toHaveBeenCalledTimes(1);
+      expect(mocks.userService.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ email: 'new@example.com', passwordChosenByUser: false }),
+      );
+    });
+  });
 });

@@ -867,7 +867,11 @@ export class OidcController {
       {
         name: name || email.split('@')[0],
         email,
+        // Random password — the account authenticates via OIDC. Nobody has seen
+        // it, so it is not one the user chose: stamped as chosen, the account
+        // would be asked for it before every email or password change.
         password: randomBytes(32).toString('hex'),
+        passwordChosenByUser: false,
       },
     );
   }
