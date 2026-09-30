@@ -275,8 +275,14 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * coordinate, so improving the geocoder makes every estimate stale. Bumping
    * the provider generation therefore bumps BOTH stages — which is the point,
    * and means this line moves whenever `enrich.geocode`'s does.
+   *
+   * v2 — ESTIMATE_RULE_GENERATION 2: an event with its own `location_name` is
+   * skipped (`has_location_name`) instead of borrowing a neighbour's coordinate.
+   * The bump re-decides every row under the new rule; the estimates v1 wrote
+   * onto named events, and the place links built on them, are withdrawn by
+   * migration 20260930035044_clear_estimates_on_events_with_own_location.
    */
-  [STAGE_IDS.ENRICH_ESTIMATE_LOCATION]: 1,
+  [STAGE_IDS.ENRICH_ESTIMATE_LOCATION]: 2,
 
   /**
    * v1 — initial conversion of the three participant backfills.
@@ -307,15 +313,31 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   [STAGE_IDS.ENRICH_EVENT_PERSON_LINK]: 2,
 
   /**
+   * v2 — self claims track the record (a claim the record no longer states is
+   * retracted), and records now state every email and phone a contact card
+   * gives (staging's contactIdentifiers; migration 20260930022046 for rows
+   * already imported), so every Person is re-read.
+   *
    * v1 — initial self-claim producer (PERSON_SELF_CLAIM_GENERATION in
    * PersonSelfClaimStage.ts). Bump alongside that generation.
    */
-  [STAGE_IDS.ENRICH_PERSON_SELF_CLAIM]: 1,
+  [STAGE_IDS.ENRICH_PERSON_SELF_CLAIM]: 2,
 
   /** v2 — reddit added to SOURCE_TIME_SPECS. Bump when it gains a source; only a bump re-opens a skip. */
   [STAGE_IDS.CLEAN_TEMPORAL_REPAIR]: 2,
 
   /**
+   * v8 — DUPLICATE_CANDIDATE_GENERATION bumped to 3: the claim population
+   * changed under the detector — self claims now carry every email and phone
+   * a contact card states, and stale ones are retracted — so every person is
+   * re-examined (behind enrich.person_self_claim, which STAGE_DEPENDENCIES
+   * orders first). Released together with v7; both bumps are in the sum.
+   *
+   * v7 — DUPLICATE_SCORING_GENERATION bumped to 6: a number a Person's record
+   * files as a fax (`properties.Faxes`, from the vCard parser's `TEL;TYPE=FAX`)
+   * is never phone evidence. One office's fax is on every card from that
+   * office, and it had proposed two colleagues as one person at 0.85.
+   *
    * v6 — DUPLICATE_SCORING_GENERATION bumped to 5: a properties-based phone
    * tier (memory/utils/phoneIdentity.ts). Person `Phones`/`phones`/`phone` and
    * numeric display names are parsed to E.164 — stated forms, or a valid
@@ -334,7 +356,7 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * widening the evidence set. A bump rescores pending candidates; it never
    * resurrects a rejected pair.
    */
-  [STAGE_IDS.CLEAN_DUPLICATE_DETECT]: 6,
+  [STAGE_IDS.CLEAN_DUPLICATE_DETECT]: 8,
 
   /**
    * v1 — initial owned-unit detector. A literal mirroring the derivation in

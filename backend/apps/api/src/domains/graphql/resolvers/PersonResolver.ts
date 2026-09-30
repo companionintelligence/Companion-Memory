@@ -56,6 +56,7 @@ import { memoryRelToGql } from '../utils/lifeGraphRelationships';
 import { Paginator } from '../utils/Paginator';
 import {
   contactMethodsFromPersonProperties,
+  contactsToReconcile,
   droppedContactsPatch,
   mergePersonIdentifiers,
   removedContactPatch,
@@ -63,6 +64,15 @@ import {
 
 /** How long the review-queue query may spend folding deterministic pairs before it answers. */
 const ON_READ_FOLD_BUDGET_MS = 5_000;
+
+/**
+ * How long the review-queue query may spend re-checking stored phone evidence
+ * against the live records (`MergeCandidateService.revalidatePhoneEvidence`).
+ * Three small indexed statements per 100 pending phone pairs and no corpus
+ * read — about 25 ms for 200 pairs over 17k people, measured 2026-09-29. The
+ * budget bounds a pathological queue, not the ordinary one.
+ */
+const ON_READ_PHONE_RECHECK_BUDGET_MS = 3_000;
 
 /** Map the structured input fields onto the established properties JSONB keys. */
 function structuredPropertiesPatch(
@@ -147,12 +157,27 @@ function addressPropertiesPatch(addresses: PersonAddressInput[]): Record<string,
 /** Contact-method kinds a person form can edit ('name' is machine-asserted). */
 type ContactKind = Extract<IdentifierKind, 'email' | 'phone'>;
 
+const CONTACT_KINDS: ContactKind[] = ['email', 'phone'];
+
 function parseContactKind(raw: string): ContactKind {
   if (raw !== 'email' && raw !== 'phone') {
     throw new BadRequestException(`Unknown contact kind "${raw}" — expected email or phone`);
   }
 
   return raw;
+}
+
+/**
+ * The 409 for contact values another person already holds. The value stays
+ * with its holder (first-writer-wins, same as ingest): the right fix is a
+ * merge, not a re-point.
+ */
+function contactConflictException(conflicts: ReadonlyArray<{ value: string }>): ConflictException {
+  return new ConflictException(
+    `${conflicts.map((conflict) => conflict.value).join(', ')} already ${
+      conflicts.length === 1 ? 'belongs' : 'belong'
+    } to another person. Merge the two people instead of re-assigning it.`,
+  );
 }
 
 /**
@@ -353,7 +378,7 @@ export class PersonResolver {
         return { success: false };
       }
 
-      const contacts = input.contacts.map((contact) => ({
+      const submitted = input.contacts.map((contact) => ({
         kind: parseContactKind(contact.kind),
         value: contact.value,
         label: contact.label,
@@ -364,12 +389,38 @@ export class PersonResolver {
       // from the WHOLE submission, never from a list narrowed for the index —
       // one that leaves out rows the user kept without asserting them (an
       // untouched property-only contact) would call every such row removed.
-      const dropped = droppedContactsPatch(owned, contacts);
+      const dropped = droppedContactsPatch(owned, submitted);
+
+      // The form re-submits every contact it was seeded with, property-only
+      // ones included. Only what the user asserted reaches the index: see
+      // contactsToReconcile. The conflict check has to see that same list: a
+      // value filtered out of it is never written, so it cannot conflict.
+      const indexed = await this.entityIdentifierService.listForEntities(serviceContext.userId, [id]);
+      const contacts = contactsToReconcile(submitted, {
+        indexed: indexed.get(id) ?? [],
+        stated: contactMethodsFromPersonProperties(owned),
+      });
+
+      // A value another person already holds fails the whole update HERE,
+      // before anything is written. replaceForEntity only meets a conflict at
+      // the insert, after it has deleted every row missing from the list:
+      // refusing then would keep the contact changes, skip the name /
+      // description / address patch below, and leave Cancel on the error
+      // unable to bring back a number the user edited into the claimed value.
+      const claimed = await this.entityIdentifierService.findConflicts(
+        serviceContext.userId,
+        id,
+        CONTACT_KINDS,
+        contacts,
+      );
+      if (claimed.length > 0) {
+        throw contactConflictException(claimed);
+      }
 
       const { conflicts } = await this.entityIdentifierService.replaceForEntity(
         serviceContext.userId,
         id,
-        ['email', 'phone'],
+        CONTACT_KINDS,
         contacts,
       );
 
@@ -384,15 +435,11 @@ export class PersonResolver {
       this.personIdentifiersLoader.clear(serviceContext, id);
 
       if (conflicts.length > 0) {
-        // The non-conflicting contact methods were still applied — only the
-        // claimed values were left with their existing owner (first-writer-wins,
-        // same as ingest). Surfacing that beats silently dropping them: the
-        // right fix is a merge, not a re-point.
-        throw new ConflictException(
-          `${conflicts.map((conflict) => conflict.value).join(', ')} already ${
-            conflicts.length === 1 ? 'belongs' : 'belong'
-          } to another person. Merge the two people instead of re-assigning it.`,
-        );
+        // Only when another writer (an import, a message minting a participant
+        // stub) claimed a value between the read above and the write: the rest
+        // of the list is applied by now, but say so rather than drop the value
+        // without a word.
+        throw contactConflictException(conflicts);
       }
     }
 
@@ -713,6 +760,19 @@ export class PersonResolver {
         includeProfileUrl,
         includePhone,
       });
+
+      // A card that says "Same phone number" must be about a number both
+      // people's records still carry. The detector never withdraws a pair and
+      // is not re-run when a record changes, so stored phone evidence is
+      // re-checked against the live records before the queue is shown —
+      // rewritten to what still holds, retired when nothing does. Not gated
+      // by the kill switch: it merges nothing. Once per visit, on the first
+      // page: it covers the whole queue, and later pages would only repeat it.
+      if (after == null) {
+        await this.mergeCandidateService.revalidatePhoneEvidence(serviceContext, {
+          budgetMs: ON_READ_PHONE_RECHECK_BUDGET_MS,
+        });
+      }
     }
 
     const page = await this.mergeCandidateService.findCandidates(serviceContext, {

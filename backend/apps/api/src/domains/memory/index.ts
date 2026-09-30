@@ -528,11 +528,22 @@ export {
   profileFactsSqlObject,
   profileUrlSqlPrefilter,
 } from './utils/profileUrls';
+// A shared email's one guard: never folded into the self Person over a name
+// that contradicts the owner's. Read by the detector and the drain.
+export {
+  type EmailCheckReason,
+  type EmailEndpoint,
+  EMAIL_EVIDENCE,
+  EMAIL_HELD_SCORE,
+  emailHoldReason,
+  holdEmailEvidence,
+} from './utils/emailIdentity';
 // Phone numbers as duplicate evidence. The same arrangement as profile URLs:
 // one adjudicator, read by the duplicate detector and by the auto-merger's
 // live re-check, and the only producer of a 0.95 phone item.
 export {
   type GivenNameRelation,
+  type LivePhoneSupport,
   type NanpNumberClass,
   type ParsedPhone,
   type PhoneBasis,
@@ -548,6 +559,8 @@ export {
   type PhoneRegion,
   type PhoneUnusableReason,
   type PhoneVerdict,
+  type RevalidatedPhoneEvidence,
+  FAX_FACT_PROPERTY_KEYS,
   NANP_TIMEZONES,
   PHONE_CLAIM_E164_SQL,
   PHONE_EVIDENCE,
@@ -560,6 +573,7 @@ export {
   PhoneHolders,
   applyPhoneVerdict,
   capUnadjudicatedPhones,
+  carriedPhoneLines,
   classifyPhoneName,
   derivePhoneRegion,
   extractPhoneFacts,
@@ -572,7 +586,9 @@ export {
   parsePhone,
   phoneCorpusFacts,
   phoneEvidenceFor,
+  phoneEvidenceNumbers,
   phoneFactsSqlObject,
+  revalidatePhoneEvidence,
   sharedPhoneLines,
   statedPhoneNumbers,
 } from './utils/phoneIdentity';

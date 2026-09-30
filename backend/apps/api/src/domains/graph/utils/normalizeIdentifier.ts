@@ -19,6 +19,31 @@ import { isNonNameParticipant } from './participantSanity';
 
 export type IdentifierKind = 'email' | 'phone' | 'name';
 
+/**
+ * A phone value that carries an extension or a dial-string suffix: `;` `,` `#`,
+ * `x` / `ext` / `extn` / `extension` (a `.` and `:` allowed) before a digit —
+ * not at the end only ("x229 (office)"), and not only after a space
+ * ("2125550147x229") — or Android's pause/wait `p` / `w` between digits.
+ *
+ * Such a value is not one number, and its digits cannot be keyed: the join key
+ * is the last ten digits of the digit string, so "(310) 447-8675;229" keyed as
+ * 4478675229 — the office's area code gone, the extension appended, and what
+ * is left a well-formed number that belongs to somebody else.
+ *
+ * One pattern for every reader. No lookbehind, so the same string works as a
+ * JS `RegExp(…, 'i')` and under Postgres `~*`: migration
+ * `20260930022046_index_contact_card_emails_and_phones` embeds it verbatim,
+ * and `normalizeIdentifier.spec.ts` pins that.
+ */
+export const PHONE_EXTENSION_PATTERN = String.raw`[;,#]|(?:^|[^a-z])(?:ext(?:ension|n)?|x)\.?\s*:?\s*\d|\d\s*[pw]\s*\d`;
+
+const PHONE_EXTENSION = new RegExp(PHONE_EXTENSION_PATTERN, 'i');
+
+/** True when a phone value carries an extension ({@link PHONE_EXTENSION_PATTERN}). */
+export function hasPhoneExtension(raw: string | null | undefined): boolean {
+  return raw != null && PHONE_EXTENSION.test(raw);
+}
+
 export function normalizeEmail(raw: string | null | undefined): string | null {
   if (raw == null) {
     return null;

@@ -121,6 +121,17 @@ export interface EntityAttribute {
    * `staging/identity.ts markSharedContactHandles`.
    */
   shared?: boolean;
+  /**
+   * The handle comes from a field an earlier revision of its parser did not
+   * read, so a row already minted for this entity was keyed without it. It is
+   * an identity and keys the entity like any other handle. Only
+   * `legacyEntityIdentityKey`, which names the key that older row carries,
+   * passes over it. Without the mark, a contact whose newly-read number sorts
+   * smallest would record as its old key one that no row was minted under, and
+   * the push, finding nothing there to move, would mint a second Person beside
+   * the first. See `staging/identity.ts legacyEntityIdentityKey`.
+   */
+  newSinceLegacyKey?: boolean;
 }
 export interface Entity {
   id?: string | number;
