@@ -35,17 +35,40 @@ function personRow(id: string, overrides: Partial<EntityRow> = {}): EntityRow {
   };
 }
 
+/** One `ci.identifier_claims` row, as far as a merge can see it. */
+interface ClaimRow {
+  owner_user_id: string;
+  subject_type: string;
+  subject_id: string;
+  role: string;
+  kind: string;
+  value_normalized: string;
+  entity_id: string | null;
+  disposition: 'confirmed' | 'rejected' | null;
+}
+
 interface Harness {
   service: PersonMergeService;
-  statements: Array<{ sql: string; params: unknown[] | undefined }>;
+  statements: Array<{ sql: string; params: unknown[] | undefined; inTransaction: boolean }>;
   send: jest.Mock;
 }
 
-function makeHarness(entityRows: EntityRow[], selfEntityId: string | null = SELF): Harness {
-  const statements: Array<{ sql: string; params: unknown[] | undefined }> = [];
+/**
+ * `claims` is an in-memory `ci.identifier_claims`: the claim re-point is
+ * applied to it by its bound parameters (owner, sources, target), and answers
+ * with the count its CTE selects. The statement's SQL shape is asserted
+ * separately, so this only has to model what the parameters mean.
+ */
+function makeHarness(
+  entityRows: EntityRow[],
+  selfEntityId: string | null = SELF,
+  claims: ClaimRow[] = [],
+): Harness {
+  const statements: Harness['statements'] = [];
+  let inTransaction = false;
 
   const query = jest.fn(async (sql: string, params?: unknown[]) => {
-    statements.push({ sql, params });
+    statements.push({ sql, params, inTransaction });
 
     if (sql.includes('FROM ci.entities') && sql.includes('FOR UPDATE')) {
       const requested = (params?.[1] as string[]) ?? [];
@@ -57,12 +80,34 @@ function makeHarness(entityRows: EntityRow[], selfEntityId: string | null = SELF
       return [{ entity_id: selfEntityId }];
     }
 
+    if (sql.includes('UPDATE ci.identifier_claims')) {
+      const [owner, sources, target] = params as [string, string[], string];
+      const moved = claims.filter(
+        (claim) =>
+          claim.owner_user_id === owner && claim.entity_id != null && sources.includes(claim.entity_id),
+      );
+
+      for (const claim of moved) {
+        claim.entity_id = target;
+      }
+
+      return [{ count: moved.length }];
+    }
+
     return [];
   });
 
   const manager = {
     query,
-    transaction: jest.fn(async (cb: (em: { query: typeof query }) => Promise<unknown>) => cb({ query })),
+    transaction: jest.fn(async (cb: (em: { query: typeof query }) => Promise<unknown>) => {
+      inTransaction = true;
+
+      try {
+        return await cb({ query });
+      } finally {
+        inTransaction = false;
+      }
+    }),
   };
 
   const findOne = jest.fn(async () =>
@@ -227,6 +272,142 @@ describe('PersonMergeService', () => {
     const compression = statementsMatching(harness, 'WHERE owner_user_id = $1 AND merged_into_entity_id');
     expect(compression).toHaveLength(1);
     expect(compression[0].params).toEqual([USER, [SOURCE_A], TARGET]);
+  });
+
+  it("carries the sources' merge blocks to the target inside the transaction, keeping the sources' own rows", async () => {
+    // The target now holds the sources' claims, so the detector's next look at
+    // it would re-find every pair a human rejected with a source — and fold one
+    // evidenced by a shared address with no human asked.
+    const harness = makeHarness([personRow(TARGET), personRow(SOURCE_A), personRow(SOURCE_B)]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
+
+    const carry = statementsMatching(harness, 'INSERT INTO ci.entity_merge_blocks');
+    expect(carry).toHaveLength(1);
+    expect(carry[0].inTransaction).toBe(true);
+    expect(carry[0].params).toEqual([USER, [SOURCE_A, SOURCE_B], TARGET]);
+
+    const sql = carry[0].sql.replace(/\s+/g, ' ');
+    // Every block the owner holds naming a source...
+    expect(sql).toContain(
+      'WHERE b.owner_user_id = $1 AND (b.entity_id_a = ANY($2::uuid[]) OR b.entity_id_b = ANY($2::uuid[]))',
+    );
+    // ...except one between people this merge folds together, which would
+    // pair the target with itself: the merge is the later decision.
+    expect(sql).toContain('WHERE blocked.other_id <> $3::uuid AND NOT (blocked.other_id = ANY($2::uuid[]))');
+    // Stored as the ordered pair entity_merge_blocks_ordered demands, and a
+    // block the target already holds keeps its own reason.
+    expect(sql).toContain('LEAST($3::uuid, blocked.other_id), GREATEST($3::uuid, blocked.other_id)');
+    expect(sql).toContain('ON CONFLICT (owner_user_id, entity_id_a, entity_id_b) DO NOTHING');
+
+    // The source's rows stay — an unmerge replays from them.
+    expect(statementsMatching(harness, 'DELETE FROM ci.entity_merge_blocks')).toHaveLength(0);
+    expect(statementsMatching(harness, 'UPDATE ci.entity_merge_blocks')).toHaveLength(0);
+  });
+
+  it("moves the sources' identifier claims to the target inside the merge transaction, writing only their resolution", async () => {
+    const harness = makeHarness([personRow(TARGET), personRow(SOURCE_A), personRow(SOURCE_B)]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
+
+    const repoint = statementsMatching(harness, 'UPDATE ci.identifier_claims');
+    expect(repoint).toHaveLength(1);
+    expect(repoint[0].inTransaction).toBe(true);
+    expect(repoint[0].params).toEqual([USER, [SOURCE_A, SOURCE_B], TARGET]);
+
+    const sql = repoint[0].sql.replace(/\s+/g, ' ');
+    expect(sql).toContain('WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])');
+    // `entity_id` is the only column written. The unique key is the
+    // observation — (owner, subject_type, subject_id, role, kind,
+    // value_normalized) — and entity_id is not in it, so this cannot collide;
+    // method, confidence and a human's disposition describe the observation
+    // too, and stay exactly as they were.
+    expect(sql).toMatch(/SET entity_id = \$3 WHERE/);
+    // Every disposition moves: no filter on it, and nothing writes it.
+    expect(sql).not.toMatch(/disposition/);
+
+    // Before the sources become tombstones and the audit rows are written.
+    const order = harness.statements.map(({ sql: text }) => text);
+    const repointAt = order.findIndex((text) => text.includes('UPDATE ci.identifier_claims'));
+    expect(repointAt).toBeLessThan(order.findIndex((text) => text.includes('is_active = FALSE')));
+    expect(repointAt).toBeLessThan(order.findIndex((text) => text.includes('INSERT INTO ci.entity_merges')));
+  });
+
+  it("makes the merged-away card's number evidence against the target, so a third copy holding only that number pairs with it", async () => {
+    // Three copies of one contact. The target and SOURCE_A share an address,
+    // which is how they came to be merged; SOURCE_A's card also carries a
+    // number, and THIRD holds only that number.
+    const third = '00000000-0000-0000-0000-0000000000e1';
+    const message = '00000000-0000-0000-0000-0000000000f1';
+    const claim = (overrides: Partial<ClaimRow>): ClaimRow => ({
+      owner_user_id: USER,
+      subject_type: 'person',
+      subject_id: SOURCE_A,
+      role: 'self',
+      kind: 'email',
+      value_normalized: 'wren@example.net',
+      entity_id: SOURCE_A,
+      disposition: null,
+      ...overrides,
+    });
+    const claims: ClaimRow[] = [
+      claim({ subject_id: TARGET, entity_id: TARGET }),
+      claim({}),
+      claim({ kind: 'phone', value_normalized: '4155550136' }),
+      // A message from that number, which enrich.person_link resolved to SOURCE_A.
+      claim({
+        subject_type: 'communication',
+        subject_id: message,
+        role: 'from',
+        kind: 'phone',
+        value_normalized: '4155550136',
+      }),
+      // A link a human rejected: it moves, and stays rejected.
+      claim({
+        subject_type: 'communication',
+        subject_id: message,
+        role: 'to',
+        value_normalized: 'desk@example.net',
+        disposition: 'rejected',
+      }),
+      claim({ subject_id: third, kind: 'phone', value_normalized: '4155550136', entity_id: third }),
+    ];
+    const before = claims.map((row) => ({ ...row }));
+
+    const harness = makeHarness(
+      [personRow(TARGET, { name: 'Wren Adair' }), personRow(SOURCE_A, { name: 'Wren A.' })],
+      SELF,
+      claims,
+    );
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    // Every claim that resolved to SOURCE_A now resolves to the target; where
+    // it was observed, and the rejection, are untouched.
+    claims.forEach((row, index) => {
+      const was = before[index];
+      expect(row).toEqual({ ...was, entity_id: was.entity_id === SOURCE_A ? TARGET : was.entity_id });
+    });
+
+    // DuplicateDetectStage.loadEvidence counts a claim's holder only while it
+    // is a live person and the claim is not rejected. SOURCE_A is now a
+    // tombstone — the number's holders are the target and THIRD, the pair the
+    // detector could not see while the number sat on the tombstone.
+    const live = new Set([TARGET, third]);
+    const holdersOf = (value: string) =>
+      new Set(
+        claims
+          .filter((row) => row.value_normalized === value && row.disposition !== 'rejected')
+          .map((row) => row.entity_id)
+          .filter((id): id is string => id != null && live.has(id)),
+      );
+    expect(holdersOf('4155550136')).toEqual(new Set([TARGET, third]));
+    expect(holdersOf('desk@example.net')).toEqual(new Set());
+
+    // And the audit row records how many claims moved.
+    const [audit] = statementsMatching(harness, 'INSERT INTO ci.entity_merges');
+    const details = JSON.parse(audit.params?.[3] as string) as { counts: { claims: number } };
+    expect(details.counts.claims).toBe(4);
   });
 
   it("keeps the target's name even when a merge source's name is fuller, including when the target is the self person", async () => {

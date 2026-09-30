@@ -613,8 +613,9 @@ export interface ControlTickReport {
   sweepsStarted: number;
 
   /**
-   * Ledger rows re-opened because an identifier registered since could answer
-   * one of their unresolved claims (see IdentifierArrivalService).
+   * Ledger rows re-opened by new identifier evidence: an identifier registered
+   * since could answer one of their unresolved claims, or a merge moved claims
+   * onto the person they decided about (see IdentifierArrivalService).
    */
   claimsReopened: number;
 
@@ -882,8 +883,9 @@ export class PipelineControlService {
     // ── 2. New evidence re-opens old decisions, before the candidates are counted ──
     //
     // An identifier registered since a person-link decision was recorded makes
-    // that decision provisional again. Done here so the re-opened rows count as
-    // candidates in the very same tick, rather than one tick later.
+    // that decision provisional again, and so does a merge into the person a
+    // self-claim or duplicate decision was about. Done here so the re-opened
+    // rows count as candidates in the very same tick, rather than one tick later.
     if (this.identifierArrival != null) {
       report.claimsReopened += await this.identifierArrival.reopenForUser(userId);
     }

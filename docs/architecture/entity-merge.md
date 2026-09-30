@@ -85,6 +85,37 @@ as open:
 
   `DuplicateDetectStage` currently covers `entity_type = 'Person'` only.
 
+  **A merge carries the claims with it** (2026-09-29). Until then `PersonMergeService` re-pointed
+  `ci.entity_identifiers` but not `ci.identifier_claims.entity_id`, so a source's claims — its
+  `enrich.person_self_claim` self claims included — stayed on the tombstone. The detector's holder
+  join admits live people only, so they stopped being evidence, and the source~third pair it had
+  already proposed went moot with the source. Nothing re-examined the survivor either: the ledger
+  re-runs a stage only on a version bump. A third copy sharing only the merged-away card's address
+  or number was therefore never proposed against the survivor. Two halves now close it:
+  - **In the merge transaction**, every claim that resolved to a source is re-pointed to the target.
+    Only `entity_id` moves — the observation (`subject_type`/`subject_id`, role, value), its
+    `method`/`confidence` and a human's `disposition` stay. It cannot collide, because
+    `identifier_claims_observation_uniq` does not include `entity_id`. A `rejected` claim moves
+    too and stays rejected: every reader excludes rejected claims on both sides, and
+    `enrich.person_link`'s own upsert would move it the same way. The count is
+    `details.counts.claims`. In the same transaction each source's `ci.entity_merge_blocks` row is
+    carried to the target as a new (target, X) row (`details.counts.blocksCarried`). Without it,
+    the re-examination below would re-find a pair a human had ruled out; one evidenced by a shared
+    address would then be folded by the deterministic drain.
+  - **On the ledger**, `IdentifierArrivalService` (called by the control tick) re-opens a live
+    survivor's `enrich.person_self_claim` and `clean.duplicate_detect` decisions recorded before a
+    `ci.entity_merges` row into it, with a `CLAIM_LEASE_SECONDS` margin. The merge does not write
+    the ledger itself: `PipelineStateService` is its only writer, and memory does not depend on the
+    pipeline domain. The merge's audit row, committed with the claims, is the signal. It counts only
+    if it records `counts.blocksCarried`. A merge from before this change moved no claims and
+    carried no blocks, so its survivor waits for the next version bump, as before. That bump is
+    where the old merges' uncarried blocks bite: a survivor whose self claims are re-derived from
+    its folded card can be proposed against someone a human ruled out for the source.
+
+  Proven against Postgres in `pipeline/__tests__/mergeSurvivorEvidence.integration.spec.ts`. Take
+  away either half and the third copy is never proposed; take away the block carry and the
+  ruled-out stranger is.
+
 ### 1.4 The promotion paths
 
 Every path that mints an entity, and how it dedupes today. The first five are the original set;
@@ -490,6 +521,9 @@ export const ENTITY_REFERRERS = [
   { table: 'ci.activities',     column: 'participant_entity_ids', kind: 'array' },
   { table: 'ci_search.embeddings', column: 'entity_id', kind: 'scalar', onCollision: 'delete_loser' },
   { table: 'ci_search.entity_tag', column: 'entity_id', kind: 'scalar', onCollision: 'delete_loser' },
+  // Re-pointed by PersonMergeService since 2026-09-29 (§1.3). Never collides: its unique key
+  // is the observation, and entity_id is not part of it.
+  { table: 'ci.identifier_claims', column: 'entity_id', kind: 'scalar' },
   // … position, documents, files, devices, sensors, agents, goals, document_chunks
 ] as const;
 ```
@@ -503,6 +537,14 @@ The list above is a starting point, not a survey — it must be derived, which i
 An earlier draft of it carried `ci.objects.object_entity_id`, which
 `20260811061402_convert_inventory_to_cti.sql` had already dropped as "a dead precursor of this link
 (no writer anywhere, all NULL)". A hand-maintained registry rots in both directions.
+
+`ci.identifier_claims.entity_id` is the latest case: an unregistered referrer for seven weeks, and a
+stranded claim fails silently, because the detector simply stops seeing it (§1.3). The guard's
+pattern needs widening too. `%entity_id` / `%entity_ids` misses the ordered pairs
+`ci.merge_candidates.entity_id_a/_b` and `ci.entity_merge_blocks.entity_id_a/_b`. Since 2026-09-29
+`PersonMergeService` carries a source's blocks to the target; otherwise the survivor's
+re-examination would re-propose, as (target, X), a (source, X) pair a human rejected. It leaves the
+source's pending candidates moot, for that re-examination to re-derive against the survivor.
 
 **The sweep**, driven off the ledger, resumable, idempotent (re-running finds zero rows):
 
