@@ -74,6 +74,48 @@ export interface GraphEntityMappingDto {
   entityId: string;
 }
 
+/**
+ * An import coordinate: what {@link GraphIngestService.ingest} resolves an
+ * entity by, less the owner — the row with this entity type, under
+ * `import:<sourceSystem>`, whose linked_id is `uuidv5(key)`.
+ */
+export interface ImportedEntityRef {
+  entityType: string;
+  sourceSystem: string;
+  key: string;
+}
+
+/** A row holding an {@link ImportedEntityRef}. */
+export interface ImportedEntityMatch extends ImportedEntityRef {
+  entityId: string;
+  name: string | null;
+  properties: Record<string, unknown>;
+  mergedIntoEntityId: string | null;
+}
+
+/** Move the row holding `fromKey` onto `toKey`, same type and source. */
+export interface ImportedEntityRekey {
+  entityType: string;
+  sourceSystem: string;
+  fromKey: string;
+  toKey: string;
+  /**
+   * Empty the row's properties as it moves, so the ingest that follows builds
+   * them from scratch out of what the source now says. For a row the importer
+   * has learned was several things at once: whatever {@link ingest} does with a
+   * row's existing properties — replace them, or union the lists — must not
+   * carry the others' details into the one it now belongs to.
+   */
+  resetProperties?: boolean;
+}
+
+/** Coordinates per `findImportedEntities` SELECT — three bind parameters each. */
+const IMPORTED_LOOKUP_CHUNK = 1000;
+
+function importCoordKey(entityType: string, linkedTable: string, linkedId: string): string {
+  return `${entityType}||${linkedTable}||${linkedId}`;
+}
+
 export interface GraphIngestResult {
   entitiesProcessed: number;
   relationshipsProcessed: number;
@@ -262,6 +304,138 @@ export class GraphIngestService {
     }
 
     return { entitiesProcessed, relationshipsProcessed, errors, entities };
+  }
+
+  /**
+   * The rows that hold the given import coordinates — the same
+   * `(entity type, import:<sourceSystem>, uuidv5(key))` {@link ingest} resolves
+   * by — for a caller that must know what a key resolves to BEFORE ingesting
+   * under it. A merge tombstone comes back as itself, not as its canonical row:
+   * it is the row holding the coordinate.
+   */
+  async findImportedEntities(
+    context: UserServiceContext,
+    refs: ImportedEntityRef[],
+  ): Promise<ImportedEntityMatch[]> {
+    const refsByCoord = new Map<string, ImportedEntityRef[]>();
+
+    for (const ref of refs) {
+      const coord = importCoordKey(
+        ref.entityType,
+        `import:${ref.sourceSystem}`,
+        GraphIngestService.linkedIdFor(ref.key),
+      );
+      const list = refsByCoord.get(coord);
+
+      if (list) {
+        list.push(ref);
+      } else {
+        refsByCoord.set(coord, [ref]);
+      }
+    }
+
+    const coords = [...refsByCoord.values()].map(([ref]) => ({
+      entityType: ref.entityType,
+      linkedTable: `import:${ref.sourceSystem}`,
+      linkedId: GraphIngestService.linkedIdFor(ref.key),
+    }));
+    const matches: ImportedEntityMatch[] = [];
+
+    // Three bind parameters per coordinate in one OR-chain, so bounded well
+    // under Postgres' 65,535.
+    for (let offset = 0; offset < coords.length; offset += IMPORTED_LOOKUP_CHUNK) {
+      const rows = await this.findExistingNodes(
+        context.userId,
+        coords.slice(offset, offset + IMPORTED_LOOKUP_CHUNK),
+      );
+
+      for (const row of rows) {
+        for (const ref of refsByCoord.get(importCoordKey(row.entityType, row.linkedTable!, row.linkedId!)) ??
+          []) {
+          matches.push({
+            ...ref,
+            entityId: row.entityId,
+            name: row.name,
+            properties: row.properties ?? {},
+            mergedIntoEntityId: row.mergedIntoEntityId,
+          });
+        }
+      }
+    }
+
+    return matches;
+  }
+
+  /**
+   * Move rows from one import key to another IN PLACE, for an importer whose
+   * natural key for a thing changed. The row keeps its `entity_id`, so every
+   * edge, identifier, merge and search-index row that points at it still does;
+   * the next {@link ingest} under the new key then resolves to it rather than
+   * minting a second row beside it.
+   *
+   * Only ever onto a FREE coordinate. The statement re-checks that itself, so a
+   * row that landed on the destination in the meantime is left where it is
+   * rather than raising a unique violation; such a move is simply absent from
+   * the result. Tombstones move like any row — ingest resolves through them.
+   *
+   * No graph delta: the coordinate is provenance, not something a reader of the
+   * entity sees, and whatever the following ingest changes about the row is
+   * recorded there as usual. A move with `resetProperties` empties the row's
+   * properties in the same statement, under the same guard.
+   *
+   * Returns the moves that happened, each with the row it moved.
+   */
+  async rekeyImportedEntities(
+    context: UserServiceContext,
+    moves: ImportedEntityRekey[],
+  ): Promise<Array<ImportedEntityRekey & { entityId: string }>> {
+    if (moves.length === 0) {
+      return [];
+    }
+
+    const linkedTables = moves.map((move) => `import:${move.sourceSystem}`);
+    const fromIds = moves.map((move) => GraphIngestService.linkedIdFor(move.fromKey));
+    const toIds = moves.map((move) => GraphIngestService.linkedIdFor(move.toKey));
+    const resets = moves.map((move) => move.resetProperties === true);
+
+    // A CTE rather than a bare UPDATE … RETURNING: through TypeORM's postgres
+    // driver `query()` hands an UPDATE back as the pair `[rows, rowCount]`, not
+    // as its RETURNING rows (see EstimateLocationStage).
+    const rows: Array<{ entity_id: string; entity_type: string; linked_table: string; from_id: string }> =
+      await this.nodeRepository.query(
+        `WITH moved AS (
+           UPDATE ci.entities e
+              SET linked_id = m.to_id,
+                  properties = CASE WHEN m.reset THEN '{}'::jsonb ELSE e.properties END,
+                  updated_at = now()
+             FROM unnest($2::text[], $3::text[], $4::uuid[], $5::uuid[], $6::boolean[])
+                  AS m(entity_type, linked_table, from_id, to_id, reset)
+            WHERE e.owner_user_id = $1::uuid
+              AND e.entity_type = m.entity_type
+              AND e.linked_table = m.linked_table
+              AND e.linked_id = m.from_id
+              AND NOT EXISTS (
+                    SELECT 1
+                      FROM ci.entities t
+                     WHERE t.owner_user_id = $1::uuid
+                       AND t.entity_type = m.entity_type
+                       AND t.linked_table = m.linked_table
+                       AND t.linked_id = m.to_id)
+        RETURNING e.entity_id, m.entity_type, m.linked_table, m.from_id
+         )
+         SELECT entity_id, entity_type, linked_table, from_id::text AS from_id FROM moved`,
+        [context.userId, moves.map((move) => move.entityType), linkedTables, fromIds, toIds, resets],
+      );
+
+    const movedByCoord = new Map(
+      rows.map((row) => [importCoordKey(row.entity_type, row.linked_table, row.from_id), row.entity_id]),
+    );
+
+    return moves.flatMap((move, index) => {
+      const entityId = movedByCoord.get(importCoordKey(move.entityType, linkedTables[index], fromIds[index]));
+
+      return entityId ? [{ ...move, entityId }] : [];
+    });
   }
 
   /**

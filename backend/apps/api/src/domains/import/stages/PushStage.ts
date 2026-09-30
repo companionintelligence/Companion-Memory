@@ -76,6 +76,7 @@ import {
   productModelIdentifiers,
   type ReceiptEntityLinks,
 } from '../push/inputs';
+import { claimedCoordinates, legacyKeyClaims, planLegacyKeyMoves } from '../push/legacyKeys';
 import {
   type IsSelf,
   makeIsSelf,
@@ -1242,7 +1243,8 @@ export class PushStage implements ImportStageRunner {
     const staged = await this.retrying(context, 'reading the staged entities', () =>
       this.dataSource.query<StagedEntity[]>(
         `SELECT id, run_id AS "runId", user_id AS "userId", type, name, metadata,
-                identity_key AS "identityKey", data_source AS "dataSource"
+                identity_key AS "identityKey", data_source AS "dataSource",
+                legacy_identity_key AS "legacyIdentityKey"
            FROM ci_import.staged_entities
           WHERE run_id = $1::uuid AND push_status = 'pending'
           ORDER BY id`,
@@ -1333,6 +1335,8 @@ export class PushStage implements ImportStageRunner {
 
       return { resolved, skipped, unresolved, failed: 0 };
     }
+
+    await this.moveLegacyKeys(context, inputs, byKey);
 
     // Keys ingest refused for a reason that was about the ENTITY. The rest of
     // what ingest does not echo back — the database being away — is never
@@ -1451,6 +1455,54 @@ export class PushStage implements ImportStageRunner {
     });
 
     return { resolved, skipped, unresolved, failed };
+  }
+
+  /**
+   * Move the `ci.entities` rows minted under contacts' OLD keys onto their new
+   * ones, before ingest looks them up.
+   *
+   * The re-key half of `entityIdentityKey` passing over shared handles: a
+   * contact whose smallest handle was an office line or a fax now resolves
+   * under another key, and ingest finds rows by key alone, so without this
+   * every such contact would be minted a second time beside its old row on the
+   * next import of the same export. Moving the row keeps its id, and the
+   * ingest right after rewrites it with what the card now says — which is also
+   * what takes the other colleagues' names off a Person that had collapsed
+   * several of them. See `push/legacyKeys.ts` for who inherits a row.
+   *
+   * Idempotent: a row moves only while it still sits on the old key and the
+   * new one is free, so a retried push, or the next import, finds nothing left
+   * to do.
+   */
+  private async moveLegacyKeys(
+    context: StageRunContext,
+    inputs: GraphEntityInputDto[],
+    byKey: Map<string, StagedEntity[]>,
+  ): Promise<void> {
+    const claims = legacyKeyClaims(inputs.map((input) => ({ input, rows: byKey.get(input.key) ?? [] })));
+
+    if (claims.length === 0) {
+      return;
+    }
+
+    const scope = { userId: context.userId };
+    const found = await this.retrying(context, 'reading entities under their old keys', () =>
+      this.graph.findImportedEntities(scope, claimedCoordinates(claims)),
+    );
+    const plan = planLegacyKeyMoves(claims, found);
+    const moved =
+      plan.moves.length > 0
+        ? await this.retrying(context, 'moving entities onto their new keys', () =>
+            this.graph.rekeyImportedEntities(scope, plan.moves),
+          )
+        : [];
+
+    this.logger.log('Moved entities onto their new keys', {
+      runId: context.runId,
+      claimed: claims.length,
+      moved: moved.length,
+      kept: plan.kept,
+    });
   }
 
   private async recordEntityMapping(

@@ -4,6 +4,7 @@ import path from 'path';
 
 import Database from 'better-sqlite3';
 
+import { entityIdentityKey } from '../../staging/identity';
 import { AppleContactsFileImporter } from '../applecontacts';
 import type { EntityAttribute, ImportParams } from '../timeline';
 
@@ -219,5 +220,71 @@ describe('Apple Contacts datasource', () => {
       expect(names).toEqual(['Alice Icloud', 'Bob Exchange', 'Unassigned Contact']);
       fs.rmSync(tmp, { recursive: true, force: true });
     });
+  });
+
+  /**
+   * Colleagues whose cards all list the office switchboard used to key on it —
+   * the smallest handle, since digits sort before letters — and stage as ONE
+   * entity. With no `accumulate` here, the others simply vanished. They are
+   * told apart across every database one import reads, since colleagues are
+   * as likely to sit in a work account's database as in iCloud's.
+   */
+  it('keys colleagues sharing an office line apart, across account databases', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-office-'));
+
+    const makeDb = (
+      dbPath: string,
+      contacts: Array<{ pk: number; first: string; last: string; phones: string[]; email?: string }>,
+    ) => {
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      const db = new Database(dbPath);
+      db.exec(`
+        CREATE TABLE ZABCDRECORD (Z_PK INTEGER PRIMARY KEY, ZFIRSTNAME TEXT, ZLASTNAME TEXT);
+        CREATE TABLE ZABCDPHONENUMBER (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZFULLNUMBER TEXT);
+        CREATE TABLE ZABCDEMAILADDRESS (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZADDRESS TEXT);
+        CREATE TABLE ZABCDURLADDRESS (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZURL TEXT);
+      `);
+      for (const c of contacts) {
+        db.prepare('INSERT INTO ZABCDRECORD (Z_PK, ZFIRSTNAME, ZLASTNAME) VALUES (?, ?, ?)').run(
+          c.pk,
+          c.first,
+          c.last,
+        );
+        for (const number of c.phones) {
+          db.prepare('INSERT INTO ZABCDPHONENUMBER (ZOWNER, ZFULLNUMBER) VALUES (?, ?)').run(c.pk, number);
+        }
+
+        if (c.email) {
+          db.prepare('INSERT INTO ZABCDEMAILADDRESS (ZOWNER, ZADDRESS) VALUES (?, ?)').run(c.pk, c.email);
+        }
+      }
+
+      db.close();
+    };
+
+    makeDb(path.join(tmp, 'AddressBook-v22.abcddb'), [
+      { pk: 1, first: 'Priya', last: 'Natarajan', phones: ['555-010-0100'], email: 'priya@example.com' },
+    ]);
+    makeDb(path.join(tmp, 'Sources', 'ACCOUNT-WORK', 'AddressBook-v22.abcddb'), [
+      { pk: 1, first: 'Tom', last: 'Becker', phones: ['555-010-0100'], email: 'tom@example.com' },
+      { pk: 2, first: 'Lena', last: 'Ortiz', phones: ['555-010-0100', '555-010-0142'] },
+    ]);
+
+    const pipeline: EmittedGraph[] = [];
+    await new AppleContactsFileImporter().fileImport({}, { filename: path.basename(tmp), fullPath: tmp }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const keyByName = new Map(pipeline.map((g) => [g.entity!.name, entityIdentityKey(g.entity!)]));
+    expect(keyByName).toEqual(
+      new Map([
+        ['Priya Natarajan', 'priya@example.com'],
+        ['Tom Becker', 'tom@example.com'],
+        ['Lena Ortiz', '5550100142'],
+      ]),
+    );
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

@@ -53,6 +53,8 @@ import fs from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { markSharedContactHandles } from '../staging/identity';
+
 import { unescapeIcsText as unescapeVCardText } from './calendar';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -196,6 +198,7 @@ export class VCardFileImporter implements FileImporter {
     // through a truncated card or a stray END with no matching BEGIN.
     const photos = extractCardPhotos(raw);
     let cardIndex = 0;
+    const cards: { lines: ContentLine[]; photo?: CardPhoto }[] = [];
 
     for (const line of unfoldContentLines(raw)) {
       const trimmed = line.trim();
@@ -214,7 +217,7 @@ export class VCardFileImporter implements FileImporter {
         cardIndex += 1;
 
         if (card) {
-          this.emitCard(card, file, params, photo);
+          cards.push({ lines: card, photo });
         }
 
         card = null;
@@ -234,21 +237,52 @@ export class VCardFileImporter implements FileImporter {
     if (card) {
       params.pipeline.drop?.('no_end_marker', file);
     }
+
+    this.emitCards(cards, file, params);
   }
 
-  private emitCard(lines: ContentLine[], file: string, params: ImportParams, photo?: CardPhoto): void {
-    const contact = buildContact(lines, file, photo);
-    if (!contact) {
-      // A card with neither a name nor one usable attribute. Rare, but it is a
-      // record we chose not to keep — never a silent `continue`.
-      params.pipeline.drop?.('empty_card', file);
+  /**
+   * Build every card of one file, then emit them in file order.
+   *
+   * Two passes, because a card cannot tell on its own which of its numbers are
+   * its own. Colleagues' cards all list the office switchboard and the office
+   * fax; each card alone just lists some numbers. Only the file shows that the
+   * same line sits on three people's cards, and so must not be the one handle
+   * that keys any of them — see `markSharedContactHandles`. The file is already
+   * read whole (and every photo already extracted), so waiting for the last
+   * card costs no extra read and little extra memory.
+   */
+  private emitCards(
+    cards: { lines: ContentLine[]; photo?: CardPhoto }[],
+    file: string,
+    params: ImportParams,
+  ): void {
+    const built: BuiltContact[] = [];
+    const faxes: string[] = [];
 
-      return;
+    for (const { lines, photo } of cards) {
+      const contact = buildContact(lines, file, photo);
+      if (!contact) {
+        // A card with neither a name nor one usable attribute. Rare, but it is a
+        // record we chose not to keep — never a silent `continue`.
+        params.pipeline.drop?.('empty_card', file);
+        continue;
+      }
+
+      built.push(contact);
+      faxes.push(...faxNumbersOf(lines));
     }
 
-    params.pipeline.push({
-      item: contact.item,
-      edges: [{ relation: 'contact', to: { entity: contact.entity } }],
+    const entities = markSharedContactHandles(
+      built.map((contact) => contact.entity),
+      faxes,
+    );
+
+    built.forEach((contact, index) => {
+      params.pipeline.push({
+        item: contact.item,
+        edges: [{ relation: 'contact', to: { entity: entities[index] } }],
+      });
     });
   }
 }
@@ -364,7 +398,7 @@ const PHOTO_MIME_BY_TYPE: Record<string, string> = {
  * BEGIN/END bookkeeping `parseVCards`'s main loop does — a second BEGIN before
  * an END drops the card in progress without emitting, a file that ends mid-card
  * emits nothing for it — so the result lines up 1:1 with the cards
- * {@link unfoldContentLines}'s consumer actually calls `emitCard` for.
+ * {@link unfoldContentLines}'s consumer actually hands to `emitCards`.
  *
  * Line folding only, deliberately not the full tokenizer above: a PHOTO's
  * value is opaque base64, so unlike TEXT properties it needs no CHARSET/
@@ -397,7 +431,7 @@ export function extractCardPhotos(raw: string): (CardPhoto | undefined)[] {
     const trimmed = line.trim();
     if (/^BEGIN:VCARD$/i.test(trimmed)) {
       // A second BEGIN before an END means the previous card was truncated —
-      // parseVCards drops it without calling emitCard, so this pass must not
+      // parseVCards drops it without keeping it for emitCards, so this pass must not
       // push an entry for it either.
       chunks = null;
       mimeType = '';
@@ -444,7 +478,7 @@ export function extractCardPhotos(raw: string): (CardPhoto | undefined)[] {
 
   // An unterminated final card (no closing END:VCARD) — parseVCards drops it
   // too, via the `if (card) drop('no_end_marker')` after its own loop, and
-  // never calls emitCard for it, so this pass must not push a trailing entry.
+  // never keeps it for emitCards, so this pass must not push a trailing entry.
 
   return photos;
 }
@@ -664,6 +698,62 @@ function cleanLabel(value: string): string {
   return unescapeVCardText(value)
     .replace(/^_\$!<(.*)>!\$_$/, '$1')
     .trim();
+}
+
+/**
+ * Each property group's `X-ABLabel`: `item1.X-ABLabel:_$!<School>!$_` names
+ * what `item1.EMAIL` is FOR. Both orders occur in real files, so the map is
+ * built from the whole card before anything reads it.
+ */
+function groupLabelsOf(lines: ContentLine[]): Map<string, string> {
+  const groupLabels = new Map<string, string>();
+  for (const line of lines) {
+    if (!line.group || line.binary || line.name !== 'X-ABLABEL') {
+      continue;
+    }
+
+    const label = cleanLabel(line.value);
+    if (label) {
+      groupLabels.set(line.group, label);
+    }
+  }
+
+  return groupLabels;
+}
+
+/**
+ * The numbers a card files as a FAX, as written: a TEL typed `FAX` in any case,
+ * alone or beside WORK/HOME (vCard 2.1's bare `;FAX` lands in TYPE too), or one
+ * whose group label says fax — Apple's own `_$!<WorkFAX>!$_` and a custom
+ * `X-ABLabel:Office fax` alike.
+ *
+ * Read by the file-level pass, not by `buildContact`: a fax is office
+ * equipment, so every card from one office lists it, and whether a number is a
+ * fax is a fact about the NUMBER — true on every card that lists it once any
+ * card says so. Real exports type the same number FAX on one copy of a card
+ * and leave it untyped on the next.
+ */
+export function faxNumbersOf(lines: ContentLine[]): string[] {
+  const groupLabels = groupLabelsOf(lines);
+  const faxes: string[] = [];
+
+  for (const line of lines) {
+    if (line.name !== 'TEL' || line.binary) {
+      continue;
+    }
+
+    const label = line.group ? groupLabels.get(line.group) : undefined;
+    const typed = (line.params.TYPE ?? []).some((t) => t.toUpperCase() === 'FAX');
+
+    if (typed || (label != null && /fax/i.test(label))) {
+      const value = unescapeVCardText(line.value).trim();
+      if (value) {
+        faxes.push(value);
+      }
+    }
+  }
+
+  return faxes;
 }
 
 /** Parameter values that describe the transport, not the human's label. */
@@ -975,17 +1065,7 @@ export interface BuiltContact {
 export function buildContact(lines: ContentLine[], file: string, photo?: CardPhoto): BuiltContact | null {
   // Labels first: `item1.X-ABLabel` names what `item1.EMAIL` is FOR, and both
   // orders occur in real files, so the map must be complete before it is read.
-  const groupLabels = new Map<string, string>();
-  for (const line of lines) {
-    if (!line.group || line.binary || line.name !== 'X-ABLABEL') {
-      continue;
-    }
-
-    const label = cleanLabel(line.value);
-    if (label) {
-      groupLabels.set(line.group, label);
-    }
-  }
+  const groupLabels = groupLabelsOf(lines);
 
   const attributes: ContactAttribute[] = [];
   const emails: string[] = [];

@@ -10,6 +10,7 @@ import {
   entityIdentityKey,
   entityKey,
   hashItem,
+  legacyEntityIdentityKey,
   mergeAccumulatedMetadata,
   needsContentDigest,
   resolveEntityType,
@@ -454,14 +455,21 @@ export class StagedWriter implements ImportPipeline {
     const identityKey = entityIdentityKey(entity);
     const type = resolveEntityType(entity);
     const metadata = (entity.metadata ?? {}) as Metadata;
+    // The key the rule before shared handles gave this entity, kept only where
+    // it differs: an existing `ci.entities` row was minted under it, and the
+    // push moves that row onto the new key rather than minting a second one.
+    // On a conflict the FIRST card's legacy key stands, like its name does.
+    const legacy = legacyEntityIdentityKey(entity);
+    const legacyIdentityKey = legacy !== identityKey ? legacy : null;
 
     if (identityKey == null) {
-      return this.writeHandlelessEntity(tx, entity, type, metadata);
+      return this.writeHandlelessEntity(tx, entity, type, metadata, legacyIdentityKey);
     }
 
     const rows = await tx.query<Array<{ id: string; metadata: Record<string, unknown> }>>(
-      `INSERT INTO ci_import.staged_entities (run_id, user_id, type, name, metadata, identity_key, data_source)
-            VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6, $7)
+      `INSERT INTO ci_import.staged_entities
+              (run_id, user_id, type, name, metadata, identity_key, data_source, legacy_identity_key)
+            VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6, $7, $8)
        ON CONFLICT (run_id, identity_key) WHERE identity_key IS NOT NULL DO NOTHING
          RETURNING id, metadata`,
       [
@@ -472,6 +480,7 @@ export class StagedWriter implements ImportPipeline {
         JSON.stringify(metadata),
         identityKey,
         this.scope.dataSource,
+        legacyIdentityKey,
       ],
     );
 
@@ -497,6 +506,7 @@ export class StagedWriter implements ImportPipeline {
     entity: Entity,
     type: string | null,
     metadata: Metadata,
+    legacyIdentityKey: string | null,
   ): Promise<string> {
     const key = entityKey(entity);
     // Hashed because `entityKey` embeds the attribute JSON and has no length
@@ -527,8 +537,8 @@ export class StagedWriter implements ImportPipeline {
     // re-inserted everything the dead attempt had already written.
     const rows = await tx.query<Array<{ id: string }>>(
       `INSERT INTO ci_import.staged_entities
-              (run_id, user_id, type, name, metadata, identity_key, data_source, dedupe_key)
-            VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, NULL, $6, $7)
+              (run_id, user_id, type, name, metadata, identity_key, data_source, dedupe_key, legacy_identity_key)
+            VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, NULL, $6, $7, $8)
          ON CONFLICT (run_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
          RETURNING id`,
       [
@@ -539,6 +549,7 @@ export class StagedWriter implements ImportPipeline {
         JSON.stringify(metadata),
         this.scope.dataSource,
         dedupeKey,
+        legacyIdentityKey,
       ],
     );
 

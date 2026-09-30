@@ -3,12 +3,13 @@ import os from 'node:os';
 import path from 'path';
 
 import { entityTypeFor, naturalKeyFor } from '../../push/entities';
-import { entityIdentityKey, resolveEntityType } from '../../staging/identity';
-import type { EntityAttribute, ImportParams } from '../timeline';
+import { entityIdentityKey, legacyEntityIdentityKey, resolveEntityType } from '../../staging/identity';
+import type { Entity, EntityAttribute, ImportParams } from '../timeline';
 import {
   VCardFileImporter,
   buildContact,
   decodeQuotedPrintable,
+  faxNumbersOf,
   parseContentLine,
   unfoldContentLines,
   type ContentLine,
@@ -782,5 +783,135 @@ describe('avatar_url from PHOTO', () => {
     expect(entities).toHaveLength(1);
     expect(entities[0]!.name).toBe('Real Card');
     expect(entities[0]!.metadata?.avatar_url).toBe(`data:image/jpeg;base64,${PNG_B64}`);
+  });
+});
+
+describe('colleagues on one office line are keyed apart', () => {
+  /*
+   * The shape that made three people one Person: every card from one firm lists
+   * the switchboard (555-0100) and the fax (555-0101) beside the person's own
+   * address, the smallest handle keyed the card, and digits sort before letters
+   * — so all three keyed on the switchboard, staged as one entity, and pushed as
+   * one Person whose accumulated `Names` listed them all. Invented data; the
+   * real export's quirks are kept: the switchboard typed CELL on one card, and
+   * the fax typed FAX on one card and left bare on the next.
+   */
+  const OFFICE = [
+    'BEGIN:VCARD',
+    'VERSION:3.0',
+    'FN:Priya Natarajan',
+    'EMAIL;TYPE=INTERNET;TYPE=pref:priya@example.com',
+    'TEL;TYPE=WORK;TYPE=VOICE:(555) 010-0100',
+    'TEL;TYPE=WORK;TYPE=FAX:(555) 010-0101',
+    'END:VCARD',
+    'BEGIN:VCARD',
+    'VERSION:3.0',
+    'FN:Tom Becker',
+    'EMAIL;TYPE=INTERNET:tom@example.com',
+    'TEL;TYPE=CELL;TYPE=pref:(555) 010-0100',
+    'TEL:(555) 010-0101',
+    'END:VCARD',
+    'BEGIN:VCARD',
+    'VERSION:3.0',
+    'FN:Lena Ortiz',
+    'item1.EMAIL;TYPE=INTERNET:lena@example.com',
+    'item1.X-ABLabel:_$!<Work>!$_',
+    'TEL;TYPE=WORK:(555) 010-0100',
+    'TEL;TYPE=CELL:(555) 010-0142',
+    'END:VCARD',
+    '',
+  ].join('\r\n');
+
+  const natural = (entity: Entity) =>
+    naturalKeyFor({
+      type: resolveEntityType(entity),
+      identityKey: entityIdentityKey(entity),
+      name: entity.name,
+    } as never);
+
+  it('keys each colleague on a handle of their own', async () => {
+    const { pipeline } = await importRaw(OFFICE);
+    const entities = contactEntities(pipeline) as Entity[];
+
+    expect(entities.map((e) => e.name)).toEqual(['Priya Natarajan', 'Tom Becker', 'Lena Ortiz']);
+    expect(entities.map(natural)).toEqual([
+      'contact:priya@example.com',
+      'contact:tom@example.com',
+      'contact:5550100142',
+    ]);
+  });
+
+  it('still reports the key they USED to share, which is how the old Person is found', async () => {
+    const { pipeline } = await importRaw(OFFICE);
+    const entities = contactEntities(pipeline) as Entity[];
+
+    expect(entities.map(legacyEntityIdentityKey)).toEqual(['5550100100', '5550100100', '5550100100']);
+  });
+
+  it('keeps the shared numbers on each card — they are still how to reach these people', async () => {
+    const { pipeline } = await importRaw(OFFICE);
+    const [priya] = contactEntities(pipeline) as Entity[];
+
+    expect(priya.metadata?.Phones).toEqual(['(555) 010-0100', '(555) 010-0101']);
+    expect(priya.attributes?.filter((a) => a.shared).map((a) => a.value)).toEqual([
+      '(555) 010-0100',
+      '(555) 010-0101',
+    ]);
+  });
+
+  it('treats a number typed FAX on one copy of a card as a fax on the other copy too', async () => {
+    // One person, two copies: a per-card rule keyed the typed copy on the direct
+    // line and the untyped copy on the fax, and split one person in two.
+    const raw =
+      'BEGIN:VCARD\nFN:Omar Haddad\nTEL;TYPE=WORK;TYPE=FAX:555-010-0150\nTEL:555-010-0177\nEND:VCARD\n' +
+      'BEGIN:VCARD\nFN:Omar Haddad\nTEL:555-010-0150\nTEL:555-010-0177\nEND:VCARD\n';
+
+    const { pipeline } = await importRaw(raw);
+    const entities = contactEntities(pipeline) as Entity[];
+
+    expect(entities.map(entityIdentityKey)).toEqual(['5550100177', '5550100177']);
+  });
+
+  it('leaves one person filed twice under two spellings collapsing on their shared line', async () => {
+    const raw =
+      'BEGIN:VCARD\nFN:Matt Okafor\nTEL:555-010-0160\nEMAIL:matt@example.com\nEND:VCARD\n' +
+      'BEGIN:VCARD\nFN:Matthew Okafor\nTEL:555-010-0160\nEND:VCARD\n';
+
+    const { pipeline } = await importRaw(raw);
+    const entities = contactEntities(pipeline) as Entity[];
+
+    expect(entities.map(entityIdentityKey)).toEqual(['5550100160', '5550100160']);
+    expect(entities.flatMap((e) => e.attributes ?? []).some((a) => a.shared)).toBe(false);
+  });
+
+  it('still counts an empty card as a drop in the two-pass flow', async () => {
+    const raw = 'BEGIN:VCARD\nVERSION:3.0\nEND:VCARD\nBEGIN:VCARD\nFN:Grace Whitaker\nEND:VCARD\n';
+
+    const { pipeline, drops } = await importRaw(raw);
+
+    expect(drops.empty_card).toBe(1);
+    expect(contactEntities(pipeline).map((e) => e!.name)).toEqual(['Grace Whitaker']);
+  });
+});
+
+describe('faxNumbersOf', () => {
+  const faxes = (card: string) => faxNumbersOf(contentLines(`BEGIN:VCARD\n${card}\nEND:VCARD\n`));
+
+  it('reads TYPE=FAX in any case, alone or in a list', () => {
+    expect(faxes('TEL;TYPE=WORK;TYPE=FAX:555-010-0101')).toEqual(['555-010-0101']);
+    expect(faxes('TEL;type=work,fax:555-010-0101')).toEqual(['555-010-0101']);
+  });
+
+  it("reads vCard 2.1's bare ;FAX", () => {
+    expect(faxes('TEL;WORK;FAX:555-010-0101')).toEqual(['555-010-0101']);
+  });
+
+  it("reads Apple's fax label and a custom one", () => {
+    expect(faxes('item2.TEL:555-010-0101\nitem2.X-ABLabel:_$!<WorkFAX>!$_')).toEqual(['555-010-0101']);
+    expect(faxes('item3.X-ABLabel:Office fax\nitem3.TEL:555-010-0102')).toEqual(['555-010-0102']);
+  });
+
+  it('ignores every other line', () => {
+    expect(faxes('TEL;TYPE=CELL:555-010-0142\nTEL;TYPE=WORK:555-010-0100\nNOTE:fax me')).toEqual([]);
   });
 });

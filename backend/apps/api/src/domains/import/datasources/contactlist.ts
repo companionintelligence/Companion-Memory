@@ -3,10 +3,12 @@ import fs from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { markSharedContactHandles } from '../staging/identity';
+
 import { parseCSVRows } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { EntityAttribute, ImportParams } from './timeline';
+import type { Entity, EntityAttribute, ImportParams } from './timeline';
 
 type ContactListOptions = Record<string, never>;
 
@@ -152,6 +154,11 @@ export class ContactListFileImporter implements FileImporter {
       return;
     } // insufficient mapping
 
+    // Emitted together after the last row: an Outlook export's "Company Main
+    // Phone" column puts one switchboard on every colleague's row, and only the
+    // whole file shows that — see markSharedContactHandles.
+    const contacts: Entity[] = [];
+
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
       if (row.length !== header.length) {
@@ -201,25 +208,27 @@ export class ContactListFileImporter implements FileImporter {
         continue;
       }
 
-      params.pipeline.push({
+      contacts.push({
+        name,
         // `type` is declared for the same reason as in vcard.ts: a contact-list row
         // is a contact even when it carries no phone or email for
         // `hasContactIdentity` to find.
-        entity: {
-          name,
-          type: 'contact',
-          attributes,
-          metadata: {
-            Source: 'ContactList',
-            File: path.basename(full),
-            // Lowercase, unlike the other keys here: this exact key is the contract
-            // `push/entities.ts` spreads straight into `ci.entities.properties`, and
-            // `PersonType.avatarUrl` (backend/.../types/PersonType.ts) reads it back
-            // as `properties.avatar_url`.
-            ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
-          },
+        type: 'contact',
+        attributes,
+        metadata: {
+          Source: 'ContactList',
+          File: path.basename(full),
+          // Lowercase, unlike the other keys here: this exact key is the contract
+          // `push/entities.ts` spreads straight into `ci.entities.properties`, and
+          // `PersonType.avatarUrl` (backend/.../types/PersonType.ts) reads it back
+          // as `properties.avatar_url`.
+          ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
         },
       });
+    }
+
+    for (const entity of markSharedContactHandles(contacts)) {
+      params.pipeline.push({ entity });
     }
   }
 }
