@@ -1,6 +1,10 @@
 .yarn
 .local/
-tools/
+# The local-only architecture-viz scripts dir at the repo root (gitignored as
+# /tools/ too). Anchored on purpose: a bare `tools/` matches a directory of that
+# name at ANY depth, and silently exempted backend/apps/api/src/domains/tools/,
+# persona/tools/ and mcp-client/tools/ from `yarn format:check` and lint-staged.
+/tools/
 node_modules
 .pnp.*
 .claude/worktrees/
