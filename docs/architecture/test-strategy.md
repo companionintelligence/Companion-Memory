@@ -152,10 +152,14 @@ laptop with no stack must not fail), but it means a green local run, or a green
 `ci.yml` run, can have executed none of the DB-backed coverage. `ci.yml`'s
 backend job now runs a `services: postgres`, bootstraps the role and extensions,
 migrates, and sets every per-suite variable except `AUTH_`, so the DB-backed
-suites do run there. What still skips in that job is the seven suites gating on
-`scratchDatabaseAvailability()`, because `DATABASE_ADMIN_PASSWORD` is
+suites do run there. What still skips in that job is every suite gating on
+`scratchDatabaseAvailability()` (`grep -rl 'scratchDatabaseAvailability()'
+backend/apps/api/src` lists them), because `DATABASE_ADMIN_PASSWORD` is
 deliberately unset — a cost decision the workflow states in a comment rather
-than hides. `consent-path-gate.yml` remains the stronger guarantee for the
+than hides. Those are the suites that need a database no other suite writes to:
+their subject is appliance-wide state (who claims an empty appliance, what a
+purge leaves behind) or real declared stages, so a shared one cannot stand in.
+`consent-path-gate.yml` remains the stronger guarantee for the
 consent path: it fails if any suite in scope skips.
 
 **Trap 2 — a database without the migrations FAILS, and looks like your bug.**

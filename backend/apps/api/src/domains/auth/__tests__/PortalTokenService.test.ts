@@ -49,8 +49,16 @@ const b64 = (value: object) => Buffer.from(JSON.stringify(value)).toString('base
 const fakeJwt = (alg: string) => `${b64({ alg, kid: 'k1' })}.${b64({ sub: 's' })}.sig`;
 const TOKEN = fakeJwt('EdDSA');
 
+/** Stands in for the transaction `UserService.createFirstAccount` runs its `alongside` work in. */
+const CLAIM_TRANSACTION = { transaction: 'first-account' };
+
 describe('PortalTokenService', () => {
-  let userService: { findByEmail: jest.Mock; create: jest.Mock; findById: jest.Mock; hasNoUsers: jest.Mock };
+  let userService: {
+    findByEmail: jest.Mock;
+    create: jest.Mock;
+    createFirstAccount: jest.Mock;
+    findById: jest.Mock;
+  };
   let federatedIdentityService: { findUserId: jest.Mock; bind: jest.Mock; listForUser: jest.Mock };
   let logger: { setContext: jest.Mock; debug: jest.Mock; warn: jest.Mock };
   let service: PortalTokenService;
@@ -59,13 +67,13 @@ describe('PortalTokenService', () => {
     mockJwtVerify.mockReset();
     mockCreateRemoteJWKSet.mockReset();
     mockCreateRemoteJWKSet.mockReturnValue('JWKS');
-    // A claimed appliance is the steady state; tests that exercise the
-    // first-sign-in claim flip this to true explicitly.
+    // A claimed appliance is the steady state (createFirstAccount declines);
+    // tests that exercise the first-sign-in claim use `claimsTheAppliance`.
     userService = {
       findByEmail: jest.fn(),
       create: jest.fn(),
+      createFirstAccount: jest.fn().mockResolvedValue(null),
       findById: jest.fn(),
-      hasNoUsers: jest.fn().mockResolvedValue(false),
     };
     federatedIdentityService = {
       findUserId: jest.fn().mockResolvedValue(null),
@@ -80,10 +88,26 @@ describe('PortalTokenService', () => {
     );
   });
 
+  /**
+   * The appliance is empty and this sign-in claims it: `createFirstAccount` creates the account,
+   * runs the caller's `alongside` work in its transaction, and returns the account.
+   */
+  const claimsTheAppliance = (user: { id: string }) =>
+    userService.createFirstAccount.mockImplementation(
+      async (
+        _context: unknown,
+        _data: unknown,
+        alongside?: (manager: unknown, created: unknown) => Promise<unknown>,
+      ) => {
+        await alongside?.(CLAIM_TRANSACTION, { ...user, role: 'admin' });
+
+        return user;
+      },
+    );
+
   it('verifies against the portal JWKS with the configured issuer + audience', async () => {
     mockJwtVerify.mockResolvedValue({ payload: { sub: 's1', email: 'liam@ci.computer' } });
-    userService.hasNoUsers.mockResolvedValue(true);
-    userService.create.mockResolvedValue({ id: 'u1' });
+    claimsTheAppliance({ id: 'u1' });
 
     await service.verifyAndProvision(TOKEN);
 
@@ -112,12 +136,12 @@ describe('PortalTokenService', () => {
       payload: { iss: 'https://hub.test', sub: 's1', email: 'liam@ci.computer', name: 'Liam' },
     });
     userService.findByEmail.mockResolvedValue(null);
-    userService.hasNoUsers.mockResolvedValue(true);
-    userService.create.mockResolvedValue({ id: 'u-new' });
+    claimsTheAppliance({ id: 'u-new' });
 
     const user = await service.verifyAndProvision(TOKEN);
 
     expect(user).toEqual({ id: 'u-new' });
+    // In the claiming transaction, so the binding exists exactly when the account does.
     expect(federatedIdentityService.bind).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'u-new',
@@ -125,7 +149,40 @@ describe('PortalTokenService', () => {
         subject: 's1',
         bindMethod: 'sub',
       }),
+      CLAIM_TRANSACTION,
     );
+  });
+
+  it('SECURITY: decides "unclaimed" in the step that creates the account, never before it', async () => {
+    // Asked first and acted on after, two first sign-ins racing on an empty appliance both saw it
+    // empty and both got in. The ordinary create() — which admits unconditionally — must never be
+    // this path's way in, and there is no separate "is it empty?" question to race.
+    mockJwtVerify.mockResolvedValue({
+      payload: { iss: 'https://hub.test', sub: 's1', email: 'liam@ci.computer' },
+    });
+    claimsTheAppliance({ id: 'u-new' });
+
+    await service.verifyAndProvision(TOKEN);
+
+    expect(userService.createFirstAccount).toHaveBeenCalledTimes(1);
+    expect(userService.create).not.toHaveBeenCalled();
+  });
+
+  it('a sign-in that lost the claim to its OWN identity resolves to the account it claimed', async () => {
+    // A client's first requests arrive together; one claims the appliance, and its account and
+    // binding commit before the others get their answer. Refusing them would sign the owner out
+    // of the box they had just claimed.
+    mockJwtVerify.mockResolvedValue({
+      payload: { iss: 'https://hub.test', sub: 's1', email: 'liam@ci.computer' },
+    });
+    federatedIdentityService.findUserId
+      .mockResolvedValueOnce(null) // path 1, before the race
+      .mockResolvedValueOnce('u-owner'); // after losing it
+    userService.findById.mockResolvedValue({ id: 'u-owner' });
+
+    expect(await service.verifyAndProvision(TOKEN)).toEqual({ id: 'u-owner' });
+    expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('SECURITY: a CLAIMED appliance refuses a Portal identity nobody here has bound', async () => {
@@ -136,7 +193,7 @@ describe('PortalTokenService', () => {
       payload: { iss: 'https://hub.test', sub: 'stranger-sub', email: 'stranger@example.com', name: 'S' },
     });
     userService.findByEmail.mockResolvedValue(null);
-    userService.hasNoUsers.mockResolvedValue(false);
+    userService.createFirstAccount.mockResolvedValue(null);
 
     expect(await service.verifyAndProvision(TOKEN)).toBeNull();
     expect(userService.create).not.toHaveBeenCalled();
@@ -195,14 +252,14 @@ describe('PortalTokenService', () => {
 
   it('falls back to a deterministic shadow email when the token has no email', async () => {
     mockJwtVerify.mockResolvedValue({ payload: { iss: 'https://hub.test', sub: 'sub-xyz' } });
-    userService.hasNoUsers.mockResolvedValue(true);
-    userService.create.mockResolvedValue({ id: 'u2' });
+    claimsTheAppliance({ id: 'u2' });
 
     await service.verifyAndProvision(TOKEN);
 
-    expect(userService.create).toHaveBeenCalledWith(
+    expect(userService.createFirstAccount).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ email: 'oidc-sub-xyz@portal.local' }),
+      expect.any(Function),
     );
   });
 
@@ -211,6 +268,7 @@ describe('PortalTokenService', () => {
 
     expect(await service.verifyAndProvision(TOKEN)).toBeNull();
     expect(userService.create).not.toHaveBeenCalled();
+    expect(userService.createFirstAccount).not.toHaveBeenCalled();
   });
 
   it('builds the JWKS with explicit fetch timeout + cooldown, once, lazily', async () => {
@@ -285,6 +343,7 @@ describe('PortalTokenService', () => {
       });
       // The whole point: a peer must never mint a shadow account here.
       expect(userService.create).not.toHaveBeenCalled();
+      expect(userService.createFirstAccount).not.toHaveBeenCalled();
       expect(federatedIdentityService.bind).not.toHaveBeenCalled();
     });
 
