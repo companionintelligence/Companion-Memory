@@ -9,7 +9,6 @@ import {
   isOrganizationalAddress,
   isShortCode,
   legacyEntityIdentityKey,
-  legacyNormalizeHandle,
   markSharedContactHandles,
   mergeAccumulatedMetadata,
   namesDescribeDifferentPeople,
@@ -111,45 +110,6 @@ describe('entityIdentityKey', () => {
     expect(entityIdentityKey({ name: 'European Vacation', type: 'album' })).toBeNull();
   });
 
-  it('keys an office-line contact on its email, not on the truncated extension', () => {
-    // The verified defect: a card whose only phone is `line;extension` keyed as
-    // `contact:5550147229` — the digits of a stranger's number.
-    const entity: Entity = {
-      name: 'Dana Quill',
-      type: 'contact',
-      attributes: [
-        { name: 'phone', value: '(212) 555-0147;229', identity: true },
-        { name: 'email', value: 'Dana.Quill@example.com', identity: true },
-      ],
-    };
-
-    expect(entityIdentityKey(entity)).toBe('dana.quill@example.com');
-  });
-
-  it('is null when the only handle is an extension line, so the card keys on its name', () => {
-    const entity: Entity = {
-      name: 'Rae Holt',
-      type: 'contact',
-      attributes: [{ name: 'phone', value: '212-555-0148 x31', identity: true }],
-    };
-
-    expect(entityIdentityKey(entity)).toBeNull();
-    // Still a contact: an extension is a desk line, and a type-less source that
-    // surfaced one has still surfaced a person.
-    expect(hasContactIdentity(entity)).toBe(true);
-  });
-
-  it('keeps a plain number that sorts first, so a card with an extension line and a mobile is unaffected', () => {
-    const entity: Entity = {
-      attributes: [
-        { name: 'phone', value: '(212) 555-0150;12', identity: true },
-        { name: 'phone', value: '212-555-0101', identity: true },
-      ],
-    };
-
-    expect(entityIdentityKey(entity)).toBe('2125550101');
-  });
-
   it('passes over a shared handle even when it sorts first', () => {
     // The office switchboard sorts below the person's own address — digits
     // before letters — and used to be the key.
@@ -214,53 +174,6 @@ describe('legacyEntityIdentityKey', () => {
     };
 
     expect(legacyEntityIdentityKey(entity)).toBe(entityIdentityKey(entity));
-  });
-
-  it('gives back the truncation an office extension used to key on', () => {
-    // Both changes to the key moved this card: the extension is refused now,
-    // and the legacy rule is the one its existing row was minted under.
-    const entity: Entity = {
-      name: 'Dana Quill',
-      attributes: [
-        { name: 'phone', value: '(212) 555-0147;229', identity: true },
-        { name: 'email', value: 'dana.quill@example.com', identity: true },
-      ],
-    };
-
-    expect(entityIdentityKey(entity)).toBe('dana.quill@example.com');
-    expect(legacyEntityIdentityKey(entity)).toBe('5550147229');
-  });
-
-  it('never lends the truncation to a nameless contact falling back on a shared handle', () => {
-    // 5550147229 < 5550160100: under the legacy rule the truncation would win.
-    const entity: Entity = {
-      attributes: [
-        { name: 'phone', value: '(212) 555-0147;229', identity: true },
-        { name: 'phone', value: '555-016-0100', identity: true, shared: true },
-      ],
-    };
-
-    expect(entityIdentityKey(entity)).toBe('5550160100');
-    expect(legacyEntityIdentityKey(entity)).toBe('5550147229');
-  });
-});
-
-describe('legacyNormalizeHandle', () => {
-  it.each([
-    ['(212) 555-0147;229', '5550147229'],
-    ['212.555.0147 ext. 229', '5550147229'],
-    ['(212) 555-0147', '2125550147'],
-    ['Dana.Quill@Example.com', 'dana.quill@example.com'],
-    ['555-01', ''],
-    [42, ''],
-  ])('keys %p as %p', (value, expected) => {
-    expect(legacyNormalizeHandle(value)).toBe(expected);
-  });
-
-  it('agrees with normalizeHandle on every value that carries no extension', () => {
-    for (const value of ['(212) 555-0147', '+1 (212) 555-0199', '2025550142', 'dana@example.com', '555-01']) {
-      expect(legacyNormalizeHandle(value)).toBe(normalizeHandle(value));
-    }
   });
 });
 
@@ -397,6 +310,67 @@ describe('markSharedContactHandles', () => {
     markSharedContactHandles(office, ['555-010-0101']);
 
     expect(JSON.stringify(office)).toBe(before);
+  });
+});
+
+describe('a phone carrying an extension', () => {
+  it('keys an office-line contact on its email, not on the truncated extension', () => {
+    // The verified defect: a card whose only phone is `line;extension` keyed as
+    // `contact:5550147229` — the digits of a stranger's number.
+    const entity: Entity = {
+      name: 'Dana Quill',
+      type: 'contact',
+      attributes: [
+        { name: 'phone', value: '(212) 555-0147;229', identity: true },
+        { name: 'email', value: 'Dana.Quill@example.com', identity: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('dana.quill@example.com');
+  });
+
+  it('is null when the only handle is an extension line, so the card keys on its name', () => {
+    const entity: Entity = {
+      name: 'Rae Holt',
+      type: 'contact',
+      attributes: [{ name: 'phone', value: '212-555-0148 x31', identity: true }],
+    };
+
+    expect(entityIdentityKey(entity)).toBeNull();
+    // Still a contact: an extension is a desk line, and a type-less source that
+    // surfaced one has still surfaced a person.
+    expect(hasContactIdentity(entity)).toBe(true);
+  });
+
+  it('keeps a plain number that sorts first, so a card with an extension line and a mobile is unaffected', () => {
+    const entity: Entity = {
+      attributes: [
+        { name: 'phone', value: '(212) 555-0150;12', identity: true },
+        { name: 'phone', value: '212-555-0101', identity: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('2125550101');
+  });
+
+  it('keeps the truncation as the LEGACY key, so the push can find the row it minted', () => {
+    // Rows already in ci.entities were keyed by the old rule, which ran the
+    // line and the extension together. The push looks for the old row under
+    // this key and moves it onto the card's real one; the current key never
+    // takes the truncation, even for a card with nothing else to key on.
+    const withEmail: Entity = {
+      name: 'Dana Quill',
+      attributes: [
+        { name: 'phone', value: '(212) 555-0147;229', identity: true },
+        { name: 'email', value: 'dana.quill@example.com', identity: true },
+      ],
+    };
+    const nameless: Entity = { attributes: [{ name: 'phone', value: '212-555-0148 x31', identity: true }] };
+
+    expect(legacyEntityIdentityKey(withEmail)).toBe('5550147229');
+    expect(entityIdentityKey(withEmail)).toBe('dana.quill@example.com');
+    expect(legacyEntityIdentityKey(nameless)).toBe('2555014831');
+    expect(entityIdentityKey(nameless)).toBeNull();
   });
 });
 

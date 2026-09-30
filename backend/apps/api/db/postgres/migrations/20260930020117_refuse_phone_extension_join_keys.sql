@@ -1,8 +1,7 @@
 -- migrate:up
 
 -- Take the FABRICATED PHONE NUMBERS that office-line extensions were truncated
--- into out of the shared join key, and bring every row that key reached into
--- line with what the fixed rule now writes.
+-- into out of everything that matches on them.
 --
 -- ## The bug this cleans up after
 --
@@ -22,10 +21,10 @@
 --   * `ci.entity_identifiers` (kind 'phone', raw_value NULL, because the stored
 --     string WAS the key) -- `PersonLinkStage` matches `phone_last10` at 0.85
 --     confidence, so a stranger's calls and texts could attach to this contact;
---   * `ci.entities.linked_id` = uuidv5('contact:5550147229'), the importer's
---     idempotency coordinate, and `properties.phone`/`.phones`;
---   * `enrich.person_self_claim`'s self claims, which the duplicate detector
---     groups on;
+--   * `properties.phone` / `.phones`, which `enrich.person_self_claim` turns
+--     into the claims the duplicate detector groups on;
+--   * the display name, when the card had no usable one -- and a numeric name
+--     the detector reads as another phone number;
 --   * the Details card, whose `tel:` link dialled the fabricated number.
 --
 -- The duplicate detector's own parser (`memory/utils/phoneIdentity.ts`
@@ -38,100 +37,65 @@
 --
 -- Measured on the full drive-master corpus (2026-09-27, 6.9 GB), run through
 -- the real vCard parser: 5,270 contact entities, 19 carrying a phone with an
--- extension, 2 whose natural key was a truncation (the other 17 had a smaller
+-- extension, 2 whose handle was a truncation (the other 17 had a smaller
 -- handle, so the truncation never became their key). Neither fabricated
 -- number appears anywhere else in the corpus, so on that corpus the exposure is
 -- latent -- no communication or event can have matched either one. The
 -- statements that withdraw links are written for the appliance where one did.
 --
--- ## What is recomputable, and what is not
+-- ## What this does NOT do: move natural keys
 --
--- `raw_value` is NULL on exactly the rows that matter most, so the evidence has
--- to come from elsewhere. Two populations carry it; the rest do not:
+-- A truncation was also a contact's natural key (`contact:5550147229`, hashed
+-- into `linked_id`). This file leaves every `linked_id` where it is. Since
+-- 20260930021527 a contact's key also depends on which of its handles the
+-- export SHARES with other cards (a fax, a switchboard), and that is decided
+-- per export and survives nowhere a migration can read -- so the key the fixed
+-- parser will choose cannot be computed here. The push computes it instead:
+-- `legacyEntityIdentityKey` reproduces the truncating rule, so the next import
+-- of the same card finds its row under the old key and moves it onto the new
+-- one before ingest (`push/legacyKeys.ts`), for every contact source. A
+-- `linked_id` is only ever read by that ingest, so leaving it until then
+-- matches nobody's calls.
 --
---   A. vCard Persons (`linked_table = 'import:vcard'`). The parser keeps every
---      TEL line as typed in `properties.Phones`, so a truncated key is PROVABLE:
---      its `linked_id` equals uuidv5('contact:' || <last ten digits of a typed
---      value carrying an extension>), and the key the fixed parser computes
---      from the same card's `Phones` + `Emails` differs from it. That second
---      condition is what keeps a card that also lists the same ten digits as a
---      plain number: the fixed rule keys it too, the old key stays the minimum,
---      and the row is not a candidate.
+-- ## Agreed with 20260930022046
+--
+-- That migration (index every contact method a card states) removes the same
+-- fakes from the same rows, and the two may run in either order. They use one
+-- definition, so whichever runs second finds nothing left to do:
+--
+--   * a FAKE is the old key of a value in the card's own typed `Phones` that
+--     carries an extension (`PHONE_EXTENSION_PATTERN`, restated verbatim
+--     below; `normalizeIdentifier.spec.ts` pins it), with at least seven
+--     digits, that no plain line of the same card also produces;
+--   * only live, unmerged Persons, and never a merge SURVIVOR: `PersonMergeService`
+--     unions `phones` and `Phones` across a merge, so on a survivor the same
+--     ten digits may also be a merged-in record's real number;
+--   * a fake identifier row goes whatever its `source` or `verified_at` --
+--     `EntityIdentifierService.replaceForEntity` has stamped every indexed row
+--     the person form round-tripped as user-verified, fakes included, so
+--     neither says a person chose it -- but only where its `raw_value` is
+--     NULL. A row with a raw value was typed by a person; one that carries an
+--     extension is population B below, and a plain one stays.
+--
+-- ## Populations, and what is recomputable
+--
+--   A. Persons that keep their typed numbers in `properties.Phones` (the vCard
+--      parser always has). The fake is provable from the row itself.
 --   B. `ci.entity_identifiers` rows whose OWN `raw_value` carries an extension
---      and whose key is that value's last ten digits -- a phone somebody typed
---      into the person form, or a raw `properties.phones` entry an ingest
---      indexed.
+--      and whose key is that value's last ten digits -- a number typed into
+--      the person form. The typed string is copied into `properties.phones`,
+--      where the Details card shows it and every matcher now refuses it, and
+--      the row goes.
 --
---   NOT recomputable: Apple Contacts (`applecontacts`) and CSV contact lists
---   (`contact_list`) stage the typed number only on the run, and `ci_import`
---   staging is retention-swept; the durable row keeps nothing but the
---   truncation, indistinguishable from a real ten-digit number. Those rows are
---   left alone, truncated identifier included -- for them the fix is
---   forward-only. The fixed parser keys the same card elsewhere on its next
---   import, so the old row is orphaned beside a correct new one rather than
---   refreshed. (Neither source is in the measured corpus.)
---
--- ## Scope guards
---
---   * A vCard row that is a merge SURVIVOR is re-keyed (its coordinate is
---     provably its own) but its identifiers and properties are left alone:
---     `PersonMergeService` unions `phones` across the merge, so the same ten
---     digits may also have come from a merged-in record that really holds that
---     number, and nothing on the survivor can tell the two apart.
---   * A merge TOMBSTONE is re-keyed and its own properties corrected, for the
---     reason 20260819145023 gives: `upsertEntities` resolves a coordinate
---     THROUGH `merged_into_entity_id`, so re-keying preserves a human's merge
---     decision against future imports. Its identifiers were re-pointed to the
---     survivor at merge time; see the survivor note.
---   * Re-keying never collides: a destination coordinate already occupied (an
---     appliance that re-imported on the fixed parser) is skipped, and two
---     candidates heading for the same coordinate keep the older row only.
---   * A link claim a human `confirmed` is never withdrawn or re-resolved.
---
--- The namespace literal is `IMPORT_NAMESPACE` from `GraphIngestService.ts`
--- ("Do not change -- it is the idempotency anchor"), and the key shape is
--- `stagedNaturalKey` ('contact:<handle>', else 'contact:<lower(trimmed name)>').
--- The extension pattern is `PHONE_EXTENSION_PATTERN`, restated verbatim below;
--- `normalizeIdentifier.spec.ts` fails if the two ever differ.
-
--- `uuid-ossp` supplies the only RFC-4122 v5 generator available to SQL (PG18
--- ships uuidv4/uuidv7 builtins and no v5). It may be absent, or installed into
--- `ci` rather than `public`, hence resolving its schema -- the same block as
--- 20260820000332. It is a TRUSTED extension, so the owner may create it.
-DO $$
-DECLARE
-  v5_schema text;
-BEGIN
-  SELECT n.nspname INTO v5_schema
-    FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-   WHERE p.proname = 'uuid_generate_v5'
-   ORDER BY (n.nspname = 'ci') DESC, n.nspname
-   LIMIT 1;
-
-  IF v5_schema IS NULL THEN
-    EXECUTE 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"';
-
-    SELECT n.nspname INTO v5_schema
-      FROM pg_proc p
-      JOIN pg_namespace n ON n.oid = p.pronamespace
-     WHERE p.proname = 'uuid_generate_v5'
-     ORDER BY (n.nspname = 'ci') DESC, n.nspname
-     LIMIT 1;
-  END IF;
-
-  IF v5_schema IS NULL THEN
-    RAISE EXCEPTION 'uuid_generate_v5 is unavailable: install the uuid-ossp extension and re-run';
-  END IF;
-
-  -- Lasts to the end of the migration's transaction; RESET at the bottom.
-  EXECUTE format('SET LOCAL search_path = %I, ci, public', v5_schema);
-END
-$$;
+--   NOT recomputable: rows from Apple Contacts and CSV contact lists imported
+--   before those parsers kept `Phones`. Nothing on the row separates their
+--   truncation from a real ten-digit number, so they are left alone here.
+--   The push-time move above re-keys them at their next import; their fake
+--   identifier row outlives that and needs the import-side repair.
 
 -- ---------------------------------------------------------------------------
 -- The rule, once. Session-local functions, dropped at the bottom, so every
--- statement below reads the same definition instead of five copies of it.
+-- statement below reads the same definition.
 -- ---------------------------------------------------------------------------
 
 -- `hasPhoneExtension`. `~*` is case-insensitive exactly as the JS `i` flag is,
@@ -157,24 +121,10 @@ CREATE FUNCTION pg_temp.phone_key(v text) RETURNS text
            END
   $f$;
 
--- `normalizeHandle`, fixed: an email lower-cased; a phone of seven or more
--- digits keyed by `phone_key`; anything else nothing. The parser trims every
--- value before it stages it, so `btrim` here is a no-op kept for safety.
-CREATE FUNCTION pg_temp.handle_key(v text) RETURNS text
-  LANGUAGE sql IMMUTABLE
-  AS $f$
-    SELECT CASE
-             WHEN v IS NULL OR btrim(v) = '' THEN NULL
-             WHEN strpos(v, '@') > 0 THEN lower(btrim(v))
-             WHEN length(regexp_replace(v, '\D', '', 'g')) < 7 THEN NULL
-             ELSE pg_temp.phone_key(v)
-           END
-  $f$;
-
 -- A jsonb value's strings, as text rows: an array's string elements, a lone
--- string, or nothing. Object elements (the Google Contacts
--- `{value, type}` shape) are not handles and are skipped, as every reader of
--- these keys skips them.
+-- string, or nothing. Object elements (the Google Contacts `{value, type}`
+-- shape) are not handles and are skipped, as every reader of these keys skips
+-- them.
 CREATE FUNCTION pg_temp.jsonb_strings(j jsonb) RETURNS SETOF text
   LANGUAGE sql IMMUTABLE
   AS $f$
@@ -188,157 +138,120 @@ CREATE FUNCTION pg_temp.jsonb_strings(j jsonb) RETURNS SETOF text
   $f$;
 
 -- ---------------------------------------------------------------------------
--- Population A: vCard Persons keyed on a truncation.
+-- Population A: the fakes a card's own typed numbers prove.
 -- ---------------------------------------------------------------------------
 
--- `new_key` is `entityIdentityKey` under the fixed rule: the smallest handle
--- the card's own TEL + EMAIL values yield, in code-unit order (`COLLATE "C"`,
--- which is what JS `Array.prototype.sort` compares) -- over the entity's
--- `Phones` + `Emails`, which are exactly those values (NOTE-recovered ones
--- included). `new_natural` is `stagedNaturalKey('contact', new_key, name)`,
--- the name being the staged one the parser keeps in `Names[0]`.
-CREATE TEMP TABLE _ext_vcard ON COMMIT DROP AS
-WITH proven AS (
-  SELECT DISTINCT
-         e.entity_id,
-         e.owner_user_id,
-         e.linked_table,
-         e.name,
-         e.properties,
-         e.created_at,
-         e.merged_into_entity_id,
-         COALESCE(e.is_active, true) AS is_active,
-         pg_temp.phone_old_key(t.typed) AS old_key
+-- One row per (Person, fake key). `written` is the typed value with a `tel:`
+-- scheme dropped, as 20260930022046 reads it; a PLAIN line is one written like
+-- a number (`^\+?[0-9 ().\-/]+$`), with seven or more digits, carrying no
+-- extension, and not a line the card files as a fax.
+CREATE TEMP TABLE _ext_card ON COMMIT DROP AS
+WITH card AS (
+  SELECT e.entity_id, e.owner_user_id, e.name, e.properties
     FROM ci.entities e
-    CROSS JOIN LATERAL pg_temp.jsonb_strings(e.properties -> 'Phones') AS t(typed)
    WHERE e.entity_type = 'Person'
-     AND e.linked_table = 'import:vcard'
-     AND pg_temp.phone_has_extension(t.typed)
-     AND length(regexp_replace(t.typed, '\D', '', 'g')) >= 7
-     AND e.linked_id = uuid_generate_v5('6f4b3f9e-1c2a-5d8e-9a7b-0c1d2e3f4a5b'::uuid,
-                                        'contact:' || pg_temp.phone_old_key(t.typed))
+     AND COALESCE(e.is_active, true) = true
+     AND e.merged_into_entity_id IS NULL
+     AND e.properties ? 'Phones'
+     AND NOT EXISTS (SELECT 1 FROM ci.entities s WHERE s.merged_into_entity_id = e.entity_id)
 ),
-keyed AS (
-  SELECT p.*,
-         (SELECT min(pg_temp.handle_key(h.v) COLLATE "C")
-            FROM (SELECT pg_temp.jsonb_strings(p.properties -> 'Phones')
-                  UNION ALL
-                  SELECT pg_temp.jsonb_strings(p.properties -> 'Emails')) AS h(v)) AS new_key,
-         NULLIF(lower(btrim(p.properties -> 'Names' ->> 0)), '') AS staged_name,
-         EXISTS (SELECT 1 FROM ci.entities s WHERE s.merged_into_entity_id = p.entity_id) AS is_survivor
-    FROM proven p
+typed AS (
+  SELECT c.entity_id, btrim(regexp_replace(btrim(t.v), '^tel:', '', 'i')) AS written
+    FROM card c
+    CROSS JOIN LATERAL pg_temp.jsonb_strings(c.properties -> 'Phones') AS t(v)
+),
+fax AS (
+  SELECT c.entity_id, pg_temp.phone_old_key(f.v) AS old_key
+    FROM card c
+    CROSS JOIN LATERAL pg_temp.jsonb_strings(c.properties -> 'Faxes') AS f(v)
+),
+fake AS (
+  SELECT DISTINCT t.entity_id, pg_temp.phone_old_key(t.written) AS old_key
+    FROM typed t
+   WHERE pg_temp.phone_has_extension(t.written)
+     AND length(regexp_replace(t.written, '\D', '', 'g')) >= 7
 )
-SELECT k.entity_id,
-       k.owner_user_id,
-       k.linked_table,
-       k.created_at,
-       k.old_key,
-       k.new_key,
-       CASE WHEN k.new_key IS NULL THEN NULL WHEN strpos(k.new_key, '@') > 0 THEN 'email' ELSE 'phone' END
-         AS new_key_kind,
-       CASE
-         WHEN k.new_key IS NOT NULL THEN
-           uuid_generate_v5('6f4b3f9e-1c2a-5d8e-9a7b-0c1d2e3f4a5b'::uuid, 'contact:' || k.new_key)
-         WHEN k.staged_name IS NOT NULL THEN
-           uuid_generate_v5('6f4b3f9e-1c2a-5d8e-9a7b-0c1d2e3f4a5b'::uuid, 'contact:' || k.staged_name)
-       END AS new_linked_id,
-       -- `toGraphEntity` names a row after its handle only when the card's own
-       -- name was unusable, so a row named for the truncation takes the new
-       -- handle's name instead -- or none, which is what the fixed parser
-       -- writes for a card with neither.
-       CASE WHEN k.name = k.old_key THEN k.new_key ELSE k.name END AS new_name,
-       k.merged_into_entity_id IS NOT NULL AS is_tombstone,
-       k.is_survivor,
-       -- Every artifact a live, unmerged, un-merged-into row holds is its own.
-       (k.merged_into_entity_id IS NULL AND k.is_active AND NOT k.is_survivor) AS is_live
-  FROM keyed k
- -- The proof's second half: under the fixed rule the card keys elsewhere. A
- -- card that also lists the same digits as a plain number keys the same way
- -- and is not a candidate.
- WHERE k.new_key IS DISTINCT FROM k.old_key;
-
-CREATE INDEX ON _ext_vcard (entity_id);
-
--- (A1) The coordinate. One row per destination: the oldest candidate wins a
--- shared one, and an occupied destination is skipped outright. Both leave the
--- row on its old key -- orphaned from future imports, which is what the fixed
--- parser makes of it anyway -- rather than failing the migration on
--- `entities_linked_uniq`.
-UPDATE ci.entities e
-   SET linked_id = r.new_linked_id,
-       updated_at = now()
-  FROM (
-    SELECT v.*,
-           row_number() OVER (PARTITION BY v.owner_user_id, v.linked_table, v.new_linked_id
-                              ORDER BY v.created_at, v.entity_id) AS rank
-      FROM _ext_vcard v
-     WHERE v.new_linked_id IS NOT NULL
-  ) r
- WHERE e.entity_id = r.entity_id
-   AND r.rank = 1
-   AND NOT EXISTS (
+SELECT c.entity_id, c.owner_user_id, f.old_key, c.name = f.old_key AS named_for_it
+  FROM fake f
+  JOIN card c ON c.entity_id = f.entity_id
+ WHERE NOT EXISTS (
          SELECT 1
-           FROM ci.entities t
-          WHERE t.owner_user_id IS NOT DISTINCT FROM r.owner_user_id
-            AND t.entity_type = 'Person'
-            AND t.linked_table = r.linked_table
-            AND t.linked_id = r.new_linked_id
-            AND t.entity_id <> r.entity_id);
+           FROM typed t
+          WHERE t.entity_id = f.entity_id
+            AND t.written ~ '^\+?[0-9[:space:]().\-/]+$'
+            AND NOT pg_temp.phone_has_extension(t.written)
+            AND length(regexp_replace(t.written, '\D', '', 'g')) >= 7
+            AND pg_temp.phone_old_key(t.written) = f.old_key
+            AND NOT EXISTS (SELECT 1 FROM fax x WHERE x.entity_id = t.entity_id AND x.old_key = f.old_key));
 
--- (A2) The properties and name the fixed parser writes: `phone`/`phones` held
--- the truncation and go; the new handle's keys come in, exactly as
--- `toGraphEntity` sets them. Everything else -- the typed `Phones`, user edits,
--- enrichment -- is left as it is. Only a row this actually changes is written,
--- and those are remembered: they are the rows whose search index and ledger
--- are reset at the bottom.
+CREATE INDEX ON _ext_card (entity_id);
+
+-- (A1) The record. Each fake leaves `phones`; `phone` falls back to the first
+-- number left, or goes. A row named for its fake loses the name: `toGraphEntity`
+-- only names a Person after its handle when the card's own name was unusable,
+-- and the fixed import names it after its real handle, or nothing. Nothing is
+-- added -- the lists stay exactly as the import and any merge left them, minus
+-- the fakes. Only a row this actually changes is written, and those are
+-- remembered: they are the rows whose search index and ledger are reset below.
 CREATE TEMP TABLE _ext_changed (entity_id uuid PRIMARY KEY) ON COMMIT DROP;
 
-WITH target AS (
-  SELECT v.entity_id,
-         v.new_name,
-         CASE v.new_key_kind
-           WHEN 'email' THEN (e.properties - 'phone' - 'phones')
-                             || jsonb_build_object('email', v.new_key, 'emails', jsonb_build_array(v.new_key))
-           WHEN 'phone' THEN (e.properties - 'phone' - 'phones')
-                             || jsonb_build_object('phone', v.new_key, 'phones', jsonb_build_array(v.new_key))
-           ELSE e.properties - 'phone' - 'phones'
-         END AS new_properties
-    FROM _ext_vcard v
-    JOIN ci.entities e ON e.entity_id = v.entity_id
-   WHERE NOT v.is_survivor
+WITH fakes AS (
+  SELECT entity_id, array_agg(old_key) AS keys, bool_or(named_for_it) AS named_for_it
+    FROM _ext_card
+   GROUP BY entity_id
+),
+target AS (
+  SELECT e.entity_id,
+         p.phones,
+         CASE WHEN f.named_for_it THEN NULL ELSE e.name END AS new_name,
+         CASE
+           WHEN NOT e.properties ? 'phone' OR NOT (e.properties ->> 'phone' = ANY (f.keys)) THEN e.properties -> 'phone'
+           ELSE p.phones -> 0
+         END AS phone
+    FROM fakes f
+    JOIN ci.entities e ON e.entity_id = f.entity_id
+    CROSS JOIN LATERAL (
+      SELECT COALESCE(jsonb_agg(a.el ORDER BY a.ord), '[]'::jsonb) AS phones
+        FROM jsonb_array_elements(CASE jsonb_typeof(e.properties -> 'phones')
+                                    WHEN 'array'  THEN e.properties -> 'phones'
+                                    WHEN 'string' THEN jsonb_build_array(e.properties -> 'phones')
+                                    ELSE '[]'::jsonb
+                                  END) WITH ORDINALITY AS a(el, ord)
+       WHERE NOT (jsonb_typeof(a.el) = 'string' AND a.el #>> '{}' = ANY (f.keys))
+    ) p
+),
+rebuilt AS (
+  SELECT t.entity_id,
+         t.new_name,
+         (e.properties - 'phones' - 'phone')
+         || CASE WHEN e.properties ? 'phones' AND jsonb_array_length(t.phones) > 0
+                 THEN jsonb_build_object('phones', t.phones) ELSE '{}'::jsonb END
+         || CASE WHEN t.phone IS NOT NULL AND jsonb_typeof(t.phone) <> 'null'
+                 THEN jsonb_build_object('phone', t.phone) ELSE '{}'::jsonb END AS new_properties
+    FROM target t
+    JOIN ci.entities e ON e.entity_id = t.entity_id
 ),
 changed AS (
   UPDATE ci.entities e
-     SET properties = t.new_properties,
-         name = t.new_name,
+     SET properties = r.new_properties,
+         name = r.new_name,
          updated_at = now()
-    FROM target t
-   WHERE e.entity_id = t.entity_id
-     AND (e.properties IS DISTINCT FROM t.new_properties OR e.name IS DISTINCT FROM t.new_name)
+    FROM rebuilt r
+   WHERE e.entity_id = r.entity_id
+     AND (e.properties IS DISTINCT FROM r.new_properties OR e.name IS DISTINCT FROM r.new_name)
   RETURNING e.entity_id
 )
 INSERT INTO _ext_changed SELECT entity_id FROM changed;
 
--- (A3) The identifier with teeth goes, whatever wrote or verified it: the proof
--- is on the entity's own card, and a user who "verified" it verified the
--- truncation the card displayed. The new handle is indexed the way ingest would
--- index it -- first writer wins, so an address another entity already holds
--- stays with that entity.
+-- (A2) The identifier with teeth -- see the agreement above for why `source`
+-- and `verified_at` are not a reason to keep it, and why `raw_value` is.
 DELETE FROM ci.entity_identifiers ei
- USING _ext_vcard v
- WHERE v.is_live
-   AND ei.entity_id = v.entity_id
-   AND ei.owner_user_id IS NOT DISTINCT FROM v.owner_user_id
+ USING _ext_card c
+ WHERE ei.entity_id = c.entity_id
+   AND ei.owner_user_id IS NOT DISTINCT FROM c.owner_user_id
    AND ei.kind = 'phone'
-   AND ei.value_normalized = v.old_key;
-
-INSERT INTO ci.entity_identifiers (entity_id, owner_user_id, kind, value_normalized, source)
-SELECT v.entity_id, v.owner_user_id, v.new_key_kind, v.new_key, 'migration:20260930020117'
-  FROM _ext_vcard v
- WHERE v.is_live
-   AND v.new_key IS NOT NULL
-   AND v.owner_user_id IS NOT NULL
-ON CONFLICT (owner_user_id, kind, value_normalized) DO NOTHING;
+   AND ei.value_normalized = c.old_key
+   AND ei.raw_value IS NULL;
 
 -- ---------------------------------------------------------------------------
 -- Population B: identifier rows whose own raw value carries an extension.
@@ -389,22 +302,24 @@ DELETE FROM ci.entity_identifiers ei
  WHERE ei.entity_id = t.entity_id
    AND ei.owner_user_id IS NOT DISTINCT FROM t.owner_user_id
    AND ei.kind = 'phone'
-   AND ei.value_normalized = t.old_key;
+   AND ei.value_normalized = t.old_key
+   AND ei.raw_value = t.typed;
 
 -- ---------------------------------------------------------------------------
--- Self claims. `enrich.person_self_claim` upserts and never retracts, so its
--- v2 re-run alone would leave these in place for the duplicate detector.
+-- Self claims. `enrich.person_self_claim` upserts; the v2 re-run re-derives
+-- what the records now state, but only a retracting producer would remove a
+-- claim the record stopped stating, so these go here.
 -- ---------------------------------------------------------------------------
 
 DELETE FROM ci.identifier_claims c
- USING _ext_vcard v
- WHERE v.is_live
-   AND c.owner_user_id = v.owner_user_id
+ USING _ext_card f
+ WHERE c.owner_user_id = f.owner_user_id
    AND c.subject_type = 'person'
    AND c.role = 'self'
-   AND c.subject_id = v.entity_id
+   AND c.subject_id = f.entity_id
    AND c.kind = 'phone'
-   AND c.value_normalized = v.old_key;
+   AND c.value_normalized = f.old_key
+   AND c.raw_value IS NULL;
 
 -- A self claim on a typed value that carries an extension (a raw
 -- `properties.phones` entry, e.g. from the person form) is the same truncation,
@@ -420,13 +335,25 @@ DELETE FROM ci.identifier_claims c
 -- ---------------------------------------------------------------------------
 -- Links a withdrawn key had resolved. `enrich.person_link` v3 re-adjudicates
 -- every claim, but its projection only ever ADDS (`COALESCE(new, old)`, a
--- merging append), so a column a truncated key filled keeps its wrong person
--- once the key resolves to nobody. Withdrawn here, from the claims that
--- recorded why each link exists.
+-- merging append), so a column a fake filled keeps its wrong person once the
+-- key resolves to nobody. Withdrawn here, from the claims that recorded why
+-- each link exists.
 -- ---------------------------------------------------------------------------
 
+-- Every (Person, key) this file proved fake that the Person no longer holds as
+-- an identifier. Computed from the proof, not from what was deleted, so the
+-- links still come out when 20260930022046 ran first and took the identifier;
+-- and a key the Person still holds because a person typed it stays linked.
 CREATE TEMP TABLE _ext_withdrawn ON COMMIT DROP AS
-SELECT owner_user_id, entity_id, old_key FROM _ext_vcard WHERE is_live AND owner_user_id IS NOT NULL
+SELECT DISTINCT c.owner_user_id, c.entity_id, c.old_key
+  FROM _ext_card c
+ WHERE c.owner_user_id IS NOT NULL
+   AND NOT EXISTS (SELECT 1
+                     FROM ci.entity_identifiers ei
+                    WHERE ei.owner_user_id = c.owner_user_id
+                      AND ei.entity_id = c.entity_id
+                      AND ei.kind = 'phone'
+                      AND ei.value_normalized = c.old_key)
 UNION
 SELECT owner_user_id, entity_id, old_key FROM _ext_typed WHERE owner_user_id IS NOT NULL;
 
@@ -471,7 +398,7 @@ UPDATE ci.communications c
 
 -- Per subject, not per link: an UPDATE ... FROM applies one joined row per
 -- target, so two withdrawn recipients on one message must arrive together.
--- Order is kept -- RecipientIds-style positional readers rely on it.
+-- Order is kept -- positional readers of the recipient list rely on it.
 UPDATE ci.communications c
    SET to_entity_ids = ARRAY(SELECT u.id
                                FROM unnest(c.to_entity_ids) WITH ORDINALITY AS u(id, ord)
@@ -547,10 +474,10 @@ UPDATE ci.identifier_claims c
 -- ---------------------------------------------------------------------------
 -- The number a withdrawn key freed. `ci.entity_identifiers` is first-writer-
 -- wins, so a Person that really holds those ten digits (a caller whose
--- `properties.phones` states them) could never index them while the truncation
--- sat there. Indexed now, in `EntityIdentifierBackfillService`'s order (oldest
+-- `properties.phones` states them) could never index them while the fake sat
+-- there. Indexed now, in `EntityIdentifierBackfillService`'s order (oldest
 -- first), so the re-run resolves their calls to them -- the index the appliance
--- would hold had the truncation never been written.
+-- would hold had the fake never been written.
 --
 -- That counterfactual includes the population this file cannot prove: an Apple
 -- Contacts or CSV twin of the same office-line card keyed the same truncation,
@@ -572,9 +499,7 @@ SELECT DISTINCT ON (h.owner_user_id, h.phone_key)
        AND COALESCE(e.is_active, true) = true
        AND e.merged_into_entity_id IS NULL
        AND e.owner_user_id IS NOT NULL
-       -- Not a row this migration just proved holds a truncation -- a merge
-       -- survivor keeps its `phones` untouched, see Scope guards.
-       AND NOT EXISTS (SELECT 1 FROM _ext_vcard v WHERE v.entity_id = e.entity_id)
+       AND NOT EXISTS (SELECT 1 FROM _ext_card c WHERE c.entity_id = e.entity_id)
   ) h
   JOIN (SELECT DISTINCT owner_user_id, old_key FROM _ext_withdrawn) w
     ON w.owner_user_id = h.owner_user_id
@@ -583,50 +508,25 @@ SELECT DISTINCT ON (h.owner_user_id, h.phone_key)
 ON CONFLICT (owner_user_id, kind, value_normalized) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
--- Staged vCard rows. A run pushed after this migration -- one interrupted
--- mid-import across the upgrade -- would push its staged `identity_key` and
--- mint the truncated coordinate straight back. Same proof, same new key,
--- computed from the staged metadata (which is where `properties` came from).
+-- The search index and the ledger, for every row whose name or
+-- `properties.phone` changed here -- and every row whose stored vector still
+-- answers to its fake, which is how a row 20260930022046 already cleaned (it
+-- touches no index) gets its index rewritten too. `personSearchDocument`
+-- indexes both fields, so the stored vector answers to the fabricated number
+-- until it is rewritten, and `SearchIndexBackfillService` never revisits a row
+-- that has an embedding. Deleting the ledger rows as well re-opens every
+-- entity-keyed stage for these rows -- the index legs, the self claim, the
+-- duplicate detector -- which is the whole of "this row changed underneath
+-- you". Neither half selects a row twice: the fake is gone from both the
+-- record and the vector once they are rebuilt.
 -- ---------------------------------------------------------------------------
 
-UPDATE ci_import.staged_entities s
-   SET identity_key = r.new_key
-  FROM (
-    SELECT k.*,
-           row_number() OVER (PARTITION BY k.run_id, k.new_key ORDER BY k.created_at, k.id) AS rank
-      FROM (
-        SELECT s2.id, s2.run_id, s2.created_at, s2.identity_key AS old_key,
-               (SELECT min(pg_temp.handle_key(h.v) COLLATE "C")
-                  FROM (SELECT pg_temp.jsonb_strings(s2.metadata -> 'Phones')
-                        UNION ALL
-                        SELECT pg_temp.jsonb_strings(s2.metadata -> 'Emails')) AS h(v)) AS new_key
-          FROM ci_import.staged_entities s2
-         WHERE s2.data_source = 'vcard'
-           AND s2.identity_key IS NOT NULL
-           AND EXISTS (SELECT 1
-                         FROM pg_temp.jsonb_strings(s2.metadata -> 'Phones') AS t(typed)
-                        WHERE pg_temp.phone_has_extension(t.typed)
-                          AND pg_temp.phone_old_key(t.typed) = s2.identity_key)
-      ) k
-     WHERE k.new_key IS DISTINCT FROM k.old_key
-  ) r
- WHERE s.id = r.id
-   AND (r.new_key IS NULL
-        OR (r.rank = 1
-            AND NOT EXISTS (SELECT 1
-                              FROM ci_import.staged_entities t
-                             WHERE t.run_id = r.run_id
-                               AND t.identity_key = r.new_key)));
-
--- ---------------------------------------------------------------------------
--- The search index and the ledger, for every repaired row whose name or
--- `properties.phone` changed. `personSearchDocument` indexes both, so the
--- stored vector answers to the fabricated number until it is rewritten, and
--- `SearchIndexBackfillService` never revisits a row that has an embedding.
--- Deleting the ledger rows as well re-opens every entity-keyed stage for these
--- rows -- the index legs, the self claim, the duplicate detector -- which is
--- the whole of "this row changed underneath you".
--- ---------------------------------------------------------------------------
+INSERT INTO _ext_changed
+SELECT DISTINCT c.entity_id
+  FROM _ext_card c
+  JOIN ci_search.vectors vv ON vv.entity_id = c.entity_id
+ WHERE vv.vector @@ to_tsquery('simple', c.old_key)
+ON CONFLICT (entity_id) DO NOTHING;
 
 DELETE FROM ci_search.embeddings em USING _ext_changed c WHERE em.entity_id = c.entity_id;
 
@@ -637,7 +537,6 @@ DELETE FROM ci_search.index_skips sk USING _ext_changed c WHERE sk.entity_id = c
 DELETE FROM ci.pipeline_state ps USING _ext_changed c WHERE ps.entity_id = c.entity_id;
 
 DROP FUNCTION pg_temp.jsonb_strings(jsonb);
-DROP FUNCTION pg_temp.handle_key(text);
 DROP FUNCTION pg_temp.phone_key(text);
 DROP FUNCTION pg_temp.phone_old_key(text);
 DROP FUNCTION pg_temp.phone_has_extension(text);
@@ -645,14 +544,12 @@ DROP FUNCTION pg_temp.phone_has_extension(text);
 -- ## Idempotency
 --
 -- Every working set is computed once into temp tables dropped on commit. A
--- re-keyed row no longer has a truncation's `linked_id`. One that could not be
--- re-keyed (no natural key, or an occupied destination) is still selected, but
--- every statement on it is a no-op the second time: its properties and name
--- already match (so it is not written, and its index and ledger are not reset
--- again), and its identifier and self claim are gone. A withdrawn link has no
--- claim resolving it any more, and a staged row's key moved. A second run
--- changes nothing -- verified against a seeded copy of the schema, by
--- checksumming every table this file writes before and after it.
+-- second run still proves the same fakes (the typed `Phones` are untouched),
+-- but every statement on them is a no-op: the lists and name already match
+-- (so nothing is written, and the index and ledger are not reset again), the
+-- identifier rows and claims are gone, and a withdrawn link has no claim
+-- resolving it any more. Verified against a seeded copy of the schema by
+-- checksumming every table this file writes before and after a second run.
 --
 -- ## Post-migration verification
 --
@@ -664,30 +561,20 @@ DROP FUNCTION pg_temp.phone_has_extension(text);
 --    WHERE subject_type = 'person' AND role = 'self' AND kind = 'phone'
 --      AND raw_value ~* '<the pattern above>';
 --
--- Should be 0 outside merge survivors -- no live vCard Person still keyed on,
--- or holding, a truncation of its own typed extension:
---   SELECT count(*) FROM ci.entities e
---    WHERE e.entity_type = 'Person' AND e.linked_table = 'import:vcard'
---      AND e.merged_into_entity_id IS NULL
---      AND NOT EXISTS (SELECT 1 FROM ci.entities s WHERE s.merged_into_entity_id = e.entity_id)
+-- Merge survivors are left alone by design; the ones still holding a fake,
+-- to review by hand:
+--   SELECT e.entity_id, e.name FROM ci.entities e
+--    WHERE e.entity_type = 'Person' AND e.merged_into_entity_id IS NULL
+--      AND EXISTS (SELECT 1 FROM ci.entities s WHERE s.merged_into_entity_id = e.entity_id)
 --      AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(
 --                    CASE WHEN jsonb_typeof(e.properties->'Phones')='array'
 --                         THEN e.properties->'Phones' ELSE '[]'::jsonb END) p(v)
 --                   WHERE p.v ~* '<the pattern above>'
---                     AND right(regexp_replace(p.v, '\D', '', 'g'), 10) = e.properties->>'phone');
---
--- The survivors this deliberately left alone, to review by hand:
---   the same query with the survivor condition inverted.
+--                     AND e.properties->'phones' ? right(regexp_replace(p.v, '\D', '', 'g'), 10));
 --
 -- Should be UNCHANGED -- this migration deletes no entity, communication or
--- event, and retypes nothing:
+-- event, retypes nothing, and moves no `linked_id`:
 --   SELECT entity_type, count(*) FROM ci.entities GROUP BY 1;
-
--- The SET LOCAL above outlives this file's statements, and dbmate records the
--- applied version in the SAME transaction against an unqualified
--- `schema_migrations`; with uuid-ossp's schema first in the path that insert
--- can resolve to the wrong schema. Restore the session default first.
-RESET search_path;
 
 -- migrate:down
 -- No-op: irreversible data repair, same reasoning as 20260820000332. The keys

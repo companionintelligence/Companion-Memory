@@ -77,38 +77,6 @@ export function normalizeHandle(value: unknown): string {
 }
 
 /**
- * {@link normalizeHandle} as it was before extensions were refused: an email
- * lower-cased, a phone of seven or more digits keyed by the last ten of ALL its
- * digits — extension included, so `(212) 555-0147;229` gives `5550147229`.
- *
- * Kept to RECOGNISE a key the old rule minted, never to write one: it is half
- * of {@link legacyEntityIdentityKey}, and `push/truncatedPhoneKeys.ts` reads it
- * to tell a truncated key from a real number. The duplicate detector keeps the
- * same truncation for the same reason (`ParsedPhone.l10` in
- * `memory/utils/phoneIdentity.ts`), as migration 20260930020117 does
- * (`pg_temp.phone_old_key`).
- */
-export function legacyNormalizeHandle(value: unknown): string {
-  if (typeof value !== 'string') {
-    return '';
-  }
-
-  const trimmed = value.trim();
-
-  if (!trimmed) {
-    return '';
-  }
-
-  if (trimmed.includes('@')) {
-    return trimmed.toLowerCase();
-  }
-
-  const digits = trimmed.replace(/\D/g, '');
-
-  return digits.length >= 7 ? digits.slice(-10) : '';
-}
-
-/**
  * A value made of nothing but digits and the punctuation phone numbers are
  * written with. Used to tell a phone FIELD from a name that happens to contain
  * a digit, before asking how long the number is.
@@ -305,19 +273,47 @@ function isHandleAttribute(attribute: EntityAttribute | null | undefined): attri
 }
 
 /**
+ * {@link normalizeHandle} as it was before a phone carrying an extension was
+ * refused: the last ten digits of EVERY digit in the value, extension and all,
+ * so `(212) 555-0147;229` gives `5550147229`.
+ *
+ * Only ever used to FIND a row — {@link legacyEntityIdentityKey} reproduces the
+ * key rows already in `ci.entities` were minted under, and those were minted
+ * with this — or to recognise one: `push/truncatedPhoneKeys.ts` reads it to
+ * prove a card's old key was a truncation. Never a key anything is written under.
+ */
+export function legacyNormalizeHandle(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return '';
+  }
+
+  if (trimmed.includes('@')) {
+    return trimmed.toLowerCase();
+  }
+
+  const digits = trimmed.replace(/\D/g, '');
+
+  return digits.length >= 7 ? digits.slice(-10) : '';
+}
+
+/**
  * The normalized identity handles an entity carries, in attribute order — every
  * one of them, or only the entity's OWN when `withShared` is false (see
- * {@link EntityAttribute.shared}). Normalized by the current rule unless the
- * caller asks for the one keys were minted under ({@link legacyNormalizeHandle}).
+ * {@link EntityAttribute.shared}). Normalized by {@link normalizeHandle} unless
+ * `legacy` asks for the rule existing rows were keyed under.
  */
 function identityHandles(
   entity: Entity,
-  {
-    withShared,
-    normalize = normalizeHandle,
-  }: { withShared: boolean; normalize?: (value: unknown) => string },
+  { withShared, legacy = false }: { withShared: boolean; legacy?: boolean },
 ): string[] {
   const out: string[] = [];
+  const normalize = legacy ? legacyNormalizeHandle : normalizeHandle;
 
   for (const attribute of entity.attributes ?? []) {
     if (!isHandleAttribute(attribute) || (attribute.shared === true && !withShared)) {
@@ -379,21 +375,20 @@ export function entityIdentityKey(entity: Entity): string | null {
     return null;
   }
 
-  // The smallest shared handle, by today's rule: never an extension's
-  // truncation, which is what the legacy rule below would hand back.
+  // Under the CURRENT rule, not via legacyEntityIdentityKey: that one keeps
+  // the old truncation of an extension line, which is exactly the key this
+  // must never mint again.
   return smallestHandle(identityHandles(entity, { withShared: true }));
 }
 
 /**
- * The key {@link entityIdentityKey} gave this entity before two changes to it:
- * the smallest of ALL its handles, shared ones included, each normalized by
- * {@link legacyNormalizeHandle} — so a phone carrying an extension gives the
- * truncation it used to key on.
- *
- * Every row minted before either change was minted under this key. (A build
- * carrying only the shared-handle change — none was released — keyed a card on
- * its smallest OWN handle, truncation and all; this finds that row only where
- * the truncation was also the smallest handle overall.)
+ * The key {@link entityIdentityKey} gave this entity before shared handles were
+ * passed over: the smallest of ALL its handles — normalized the way they were
+ * then, so a phone carrying an extension counts as the truncation it keyed as
+ * (see {@link legacyNormalizeHandle}). A row whose key was `contact:5550147229`
+ * from `(212) 555-0147;229` is found here and moved onto the card's real key,
+ * for every contact source; without the old rule the push would look for it
+ * under a key it never had, and mint the card a second Person.
  *
  * Kept for exactly one job. Changing which handle keys a contact MOVES its
  * natural key, and `GraphIngestService` resolves an existing row by nothing
@@ -403,11 +398,10 @@ export function entityIdentityKey(entity: Entity): string | null {
  * the export, and neither is stored anywhere after staging. The parser, though,
  * still has both keys in hand, so `StagedWriter` records this one beside the
  * new one and `PushStage` moves the old row onto the new key in place. See
- * `push/legacyKeys.ts`, and `push/truncatedPhoneKeys.ts` for what else a moved
- * truncation had reached.
+ * `push/legacyKeys.ts`.
  */
 export function legacyEntityIdentityKey(entity: Entity): string | null {
-  return smallestHandle(identityHandles(entity, { withShared: true, normalize: legacyNormalizeHandle }));
+  return smallestHandle(identityHandles(entity, { withShared: true, legacy: true }));
 }
 
 /**

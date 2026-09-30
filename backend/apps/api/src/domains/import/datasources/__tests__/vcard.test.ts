@@ -631,9 +631,11 @@ describe('a card with no phone or email is still a contact', () => {
    * ESCAPED semicolon. The parser unescapes it into the typed value, and the
    * old join key then kept the last ten digits of line + extension —
    * `contact:5550147229`, a stranger's number, as the card's natural key, its
-   * `properties.phones` and its identifier. Migration
-   * `20260930020117_refuse_phone_extension_join_keys.sql` re-keys the rows that
-   * shipped, onto exactly the keys these two tests pin.
+   * `properties.phones` and its identifier. Rows that shipped keep that key
+   * until their next import, where `legacyEntityIdentityKey` still computes the
+   * truncation and the push moves them onto exactly the keys these two tests
+   * pin; migration `20260930020117_refuse_phone_extension_join_keys.sql` removes
+   * everything else the fake reached in the meantime.
    */
   it('keys an office-line card with an email on the email, keeping the typed line', () => {
     const built = buildContact(
