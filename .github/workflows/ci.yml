@@ -117,8 +117,8 @@ jobs:
       # suites cannot disagree about which database this is.
       DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       PGPASSWORD: ci_test_admin_pw
-      # EVERY ONE of the sixteen per-suite variables is enumerated below, and
-      # that is NOT redundant with `DATABASE_URL` above. Thirteen of the sixteen
+      # EVERY ONE of the seventeen per-suite variables is enumerated below, and
+      # that is NOT redundant with `DATABASE_URL` above. Fourteen of the seventeen
       # resolve through `domains/__tests__/support/databaseConnection.ts`, which
       # checks the suite's own `<DOMAIN>_TEST_DATABASE_URL` FIRST and falls
       # through to `DATABASE_URL` — for those, these lines are a restatement of
@@ -134,12 +134,13 @@ jobs:
       # outcome this job exists to end. The list is enumerated in full rather
       # than trimmed to the three so that a new suite written in either style is
       # covered, and so nobody has to know which style each file uses. Keep it
-      # in step with the sixteen named in
+      # in step with the seventeen named in
       # `docs/architecture/test-strategy.md` §3.
       ASKS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       BROWSER_ACTIVITY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       CONNECTIONS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       EVENTS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      GEOCODE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       IMPORT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       MEMORY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       NOTES_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable

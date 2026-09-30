@@ -121,8 +121,8 @@ This is the priority queue. Each item should land its own ratcheted coverage flo
 2. then `DATABASE_URL`,
 3. then the discrete `DATABASE_HOST/PORT/USERNAME/DATABASE/PASSWORD`.
 
-There are **sixteen** per-suite variables, not the two this document used to
-name: `ASKS_`, `BROWSER_ACTIVITY_`, `CONNECTIONS_`, `EVENTS_`, `IMPORT_`,
+There are **seventeen** per-suite variables, not the two this document used to
+name: `ASKS_`, `BROWSER_ACTIVITY_`, `CONNECTIONS_`, `EVENTS_`, `GEOCODE_`, `IMPORT_`,
 `MEMORY_`, `NOTES_`, `PEERS_`, `PERSISTENCE_`, `PERSONALIZATION_`, `PIPELINE_`,
 `PLANNING_`, `PORTABILITY_`, `SCHEDULE_`, `SEARCH_INGRESS_`, `SEARCH_NEXT_`
 (each `…_TEST_DATABASE_URL`). Naming one per suite is what lets you point a
@@ -148,7 +148,7 @@ database the suites `describe.skip` and **jest exits 0**. That is deliberate (a
 laptop with no stack must not fail), but it means a green local run, or a green
 `ci.yml` run, can have executed none of the DB-backed coverage. `ci.yml`'s
 backend job now runs a `services: postgres`, bootstraps the role and extensions,
-migrates, and sets all sixteen per-suite variables, so the DB-backed suites do
+migrates, and sets all seventeen per-suite variables, so the DB-backed suites do
 run there. What still skips in that job is the seven suites gating on
 `scratchDatabaseAvailability()`, because `DATABASE_ADMIN_PASSWORD` is
 deliberately unset — a cost decision the workflow states in a comment rather
