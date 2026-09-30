@@ -606,9 +606,7 @@ export class GraphUtilityService {
     },
   ): Promise<{ node: GraphNodeEntity; created: boolean }> {
     const entityId = payload.entityId ?? uuidv7();
-    let node = await this.entityRepo.findOne({
-      where: { entity_id: entityId, owner_user_id: ownerUserId },
-    });
+    let node = await this.findNodeToWrite(ownerUserId, entityId);
 
     const created = !node;
     if (!node) {
@@ -665,9 +663,51 @@ export class GraphUtilityService {
       node.is_archived = false;
     }
 
-    const saved = await this.entityRepo.save(node);
+    // Only a row this call found and checked may go through save(); see insertNode.
+    const saved = created ? await this.insertNode(node) : await this.entityRepo.save(node);
 
     return { node: saved, created };
+  }
+
+  /**
+   * The row a node write for `ownerUserId` lands on, or `null` when no row
+   * holds `entityId`.
+   *
+   * Looked up by primary key alone, because `entity_id` is the whole key: a
+   * row holding the id is the row the write would reach, whoever owns it, so
+   * an owner filter here only hid it — the write went on as an insert and
+   * TypeORM's save() turned that into an UPDATE of the other owner's row. A row
+   * that belongs to anyone else — another user, or no one once its owner was
+   * deleted — is refused, forgotten or not.
+   */
+  private async findNodeToWrite(ownerUserId: string, entityId: string): Promise<GraphNodeEntity | null> {
+    const node = await this.entityRepo.findOne({ where: { entity_id: entityId } });
+
+    if (node && node.owner_user_id !== ownerUserId) {
+      throw new Error(`Graph node ${entityId} is not owned by ${ownerUserId}; refusing to write it`);
+    }
+
+    return node;
+  }
+
+  /**
+   * INSERT a node {@link findNodeToWrite} found no row for, and return it with
+   * the defaults Postgres filled in. Not save(): that loads the primary key
+   * alone and UPDATEs whatever row it finds, so a row that took the id after
+   * the lookup — another owner's included — would be overwritten. A plain
+   * INSERT fails on `entities_pkey` instead.
+   */
+  private async insertNode(node: GraphNodeEntity): Promise<GraphNodeEntity> {
+    await this.entityRepo
+      .createQueryBuilder()
+      .insert()
+      // `metadata.target`, as in PlaceService: the entity class would narrow
+      // `.values()` to `_QueryDeepPartialEntity`, which rejects jsonb `properties`.
+      .into(this.entityRepo.metadata.target)
+      .values(node)
+      .execute();
+
+    return node;
   }
 
   async softDeleteNode(entityId: string, ownerUserId: string): Promise<void> {
