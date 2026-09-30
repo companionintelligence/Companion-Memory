@@ -88,6 +88,62 @@ export {
 } from './src/utils/fetchJson';
 export { localHubPlugin, localHubSession, type LocalHubSession } from './src/utils/localHub';
 export {
+  cancelLocalLlmDownload,
+  deleteLocalLlmModel,
+  downloadLocalLlmModel,
+  ensureLocalLlmLoaded,
+  isContextExhausted,
+  isLocalLlmReady,
+  localLlmPlatform,
+  localLlmPlugin,
+  onLocalLlmDownloadProgress,
+  probeLocalLlm,
+  resetLocalLlmConversation,
+  streamLocalLlm,
+  unloadLocalLlm,
+} from './src/utils/localLlm';
+export type {
+  LoadLocalLlmOptions,
+  LocalLlmAvailability,
+  LocalLlmDownloadProgress,
+  LocalLlmGenerationStats,
+  LocalLlmLoadResult,
+  LocalLlmModelState,
+  LocalLlmModelStatus,
+  LocalLlmModelStatusResult,
+  LocalLlmPluginApi,
+  LocalLlmProbe,
+  LocalLlmTokenEvent,
+  StreamLocalLlmOptions,
+  StreamLocalLlmResult,
+} from './src/utils/localLlm';
+export {
+  LOCAL_LLM_CATALOG,
+  LOCAL_LLM_DISK_HEADROOM_BYTES,
+  LOCAL_LLM_MODEL_LIST,
+  evaluateModelFit,
+  findLocalLlmModel,
+  formatBytes,
+  localLlmModelsFor,
+} from './src/utils/localLlmCatalog';
+export type {
+  LocalLlmAccelerator,
+  LocalLlmCapability,
+  LocalLlmDeviceFacts,
+  LocalLlmFit,
+  LocalLlmModelId,
+  LocalLlmModelSpec,
+  LocalLlmPlatform,
+} from './src/utils/localLlmCatalog';
+export {
+  DEFAULT_LOCAL_LLM_PREFS,
+  getLocalLlmPrefs,
+  parseLocalLlmPrefs,
+  setLocalLlmPrefs,
+  subscribeLocalLlmPrefs,
+} from './src/utils/localLlmPrefs';
+export type { LocalLlmMode, LocalLlmPrefs } from './src/utils/localLlmPrefs';
+export {
   OUTBOX_MAX_ATTEMPTS,
   OUTBOX_MAX_ITEMS,
   OUTBOX_WARN_AT,
