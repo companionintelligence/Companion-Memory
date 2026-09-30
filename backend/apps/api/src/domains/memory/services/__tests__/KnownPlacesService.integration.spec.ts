@@ -7,6 +7,7 @@ import type { LoggerService } from '@ci/common/logging';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
+import { DEAD_EVENT_STATUSES } from '../CalendarEventService';
 import { KnownPlacesService } from '../KnownPlacesService';
 import type { PlaceService } from '../PlaceService';
 import { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from '../selfEntityProvisioner';
@@ -23,7 +24,9 @@ import { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from '../selfEnti
  * something self-anchored is ingested — could not confirm any known place.
  * The third is in the WHERE clause as well. A temporal location estimate is a
  * neighbour's coordinate, and it must not count as evidence of a place. The
- * `temporal location estimates` block below pins that.
+ * `temporal location estimates` block below pins that. The fourth is its
+ * sibling: an event that was deleted, predicted or cancelled, which the
+ * `events that did not happen` block pins.
  *
  * Opt-in like the sibling integration specs: set MEMORY_TEST_DATABASE_URL.
  */
@@ -68,6 +71,31 @@ const LIBRARY = { lat: 34.0503, lng: -118.2551 };
 const OVERLOOK = { lat: 34.0934, lng: -118.6015 };
 const TRAILHEAD = { lat: 34.1184, lng: -118.3004 };
 
+// The diarist's weeks: Wednesday evening classes, a weekend of photos, and
+// the week after.
+const THU_1000_PDT = '2026-08-20T17:00:00Z';
+const THU_2200_PDT = '2026-08-21T05:00:00Z';
+const FRI_1930_PDT = '2026-08-22T02:30:00Z';
+const FRI_2200_PDT = '2026-08-22T05:00:00Z';
+const SAT_0700_PDT = '2026-08-22T14:00:00Z';
+const SAT_2200_PDT = '2026-08-23T05:00:00Z';
+const SUN_2200_PDT = '2026-08-24T05:00:00Z';
+const NEXT_WED_1000_PDT = '2026-08-26T17:00:00Z';
+const NEXT_WED_1400_PDT = '2026-08-26T21:00:00Z';
+const NEXT_THU_1000_PDT = '2026-08-27T17:00:00Z';
+// The three Wednesdays after WED_2100_PDT, at the same 21:00.
+const LATER_WEDS_2100_PDT = ['2026-08-27T04:00:00Z', '2026-09-03T04:00:00Z', '2026-09-10T04:00:00Z'];
+
+const STUDIO = { lat: 34.0907, lng: -118.3266 };
+const HOTEL = { lat: 34.0118, lng: -118.4172 };
+const COWORKING = { lat: 33.9911, lng: -118.4658 };
+const DENTIST = { lat: 34.0736, lng: -118.4004 };
+const RESERVOIR = { lat: 34.1255, lng: -118.3159 };
+const MARKET = { lat: 34.1561, lng: -118.1318 };
+const PARK = { lat: 34.1366, lng: -118.2942 };
+const TRATTORIA = { lat: 34.0839, lng: -118.3614 };
+const NOODLE_BAR = { lat: 34.0617, lng: -118.3008 };
+
 /**
  * The provenance columns (`metadata`, `inference_sources`, `is_inferred`,
  * `confidence_score`) as each writer leaves them. {@link MEASURED} is what the
@@ -81,6 +109,18 @@ interface Provenance {
 }
 
 const MEASURED: Provenance = { metadata: {}, inferenceSources: {}, isInferred: false, confidence: 1 };
+
+/**
+ * Whether the event still stands: the tombstone, the forecast flag and the
+ * status. {@link HAPPENED} is what the column defaults give.
+ */
+interface Lifecycle {
+  isDeleted: boolean;
+  isPredicted: boolean | null;
+  status: string;
+}
+
+const HAPPENED: Lifecycle = { isDeleted: false, isPredicted: false, status: 'confirmed' };
 
 /** What `EstimateLocationStage.writeEstimates` writes: a donor GPS fix copied onto the event. */
 function estimatedFromFix(deltaSeconds: number): Provenance {
@@ -117,9 +157,12 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
 
   const ownerId = uuidv7();
   const strangerId = uuidv7();
-  // Seeded by the `temporal location estimates` block; cleaned up here.
+  // Seeded by the `temporal location estimates` and `events that did not
+  // happen` blocks; cleaned up here.
   const travellerId = uuidv7();
   const guessesOnlyId = uuidv7();
+  const diaristId = uuidv7();
+  const neverWentId = uuidv7();
   const owner = { userId: ownerId } as UserServiceContext;
   const stranger = { userId: strangerId } as UserServiceContext;
   const homeLocationId = uuidv7();
@@ -152,9 +195,11 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
     placeName: string | null;
     locationEntityId?: string;
     provenance?: Provenance;
+    lifecycle?: Partial<Lifecycle>;
   }): Promise<void> {
     const eventId = uuidv7();
     const provenance = args.provenance ?? MEASURED;
+    const lifecycle = { ...HAPPENED, ...args.lifecycle };
     await dataSource.query(
       `INSERT INTO ci.entities (entity_id, entity_type, name, properties, owner_user_id, linked_table, linked_id)
        VALUES ($1, 'Event', $2, '{}'::jsonb, $3, 'events', $1)`,
@@ -164,10 +209,12 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
       `INSERT INTO ci.events
          (event_id, user_id, start_time, category, source_type, source_system, source_id,
           location_coordinates, location_name, location_entity_id,
-          metadata, inference_sources, is_inferred, confidence_score)
+          metadata, inference_sources, is_inferred, confidence_score,
+          is_deleted, is_predicted, status)
        VALUES ($1::uuid, $2, $3, 'capture', 'ci.import', 'known_places_spec', $1::text,
                ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, $6, $7,
-               $8::jsonb, $9::jsonb, $10, $11)`,
+               $8::jsonb, $9::jsonb, $10, $11,
+               $12, $13, $14)`,
       [
         eventId,
         args.userId,
@@ -180,6 +227,9 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
         provenance.inferenceSources === null ? null : JSON.stringify(provenance.inferenceSources),
         provenance.isInferred,
         provenance.confidence,
+        lifecycle.isDeleted,
+        lifecycle.isPredicted,
+        lifecycle.status,
       ],
     );
   }
@@ -287,7 +337,7 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
 
   afterAll(async () => {
     if (dataSource?.isInitialized) {
-      const users = [ownerId, strangerId, travellerId, guessesOnlyId];
+      const users = [ownerId, strangerId, travellerId, guessesOnlyId, diaristId, neverWentId];
       await dataSource.query('DELETE FROM ci.relationships WHERE owner_user_id = ANY($1)', [users]);
       await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = ANY($1)', [users]);
       await dataSource.query('DELETE FROM ci.events WHERE user_id = ANY($1)', [users]);
@@ -597,6 +647,292 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
     it('offers no candidates to a user whose only located events are estimates', async () => {
       // So `HomeConfirmService` never asks "is this home?" about a guess.
       expect(await service.buildKnownPlaces(guessesOnly)).toEqual([]);
+    });
+  });
+
+  /**
+   * A deleted event, a predicted one, and one that was cancelled all keep a
+   * coordinate that is their own, so the estimate rule lets them through.
+   * None of them says the user was there. The reference corpus has none of
+   * the three among its located events. It does have five cancelled Takeout
+   * reservations, which say so only in `metadata` and have no coordinate yet
+   * only because geocoding failed there. So the diarist below is the only
+   * place any of this is measured. The deleted, predicted and cancelled
+   * groups are each big enough to take Home or Work if they were counted.
+   */
+  describe('events that did not happen', () => {
+    const diarist = { userId: diaristId } as UserServiceContext;
+    const neverWent = { userId: neverWentId } as UserServiceContext;
+    const diaristHomeId = uuidv7();
+
+    beforeAll(async () => {
+      await dataSource.query(
+        `INSERT INTO ci.users (id, name, email, timezone) VALUES
+           ($1, 'Diarist known-places fixture', $2, 'America/Los_Angeles'),
+           ($3, 'Never-went known-places fixture', $4, 'America/Los_Angeles')`,
+        [
+          diaristId,
+          `diarist.${diaristId}@example.invalid`,
+          neverWentId,
+          `never-went.${neverWentId}@example.invalid`,
+        ],
+      );
+      await dataSource.query(
+        `INSERT INTO ci.entities (entity_id, entity_type, name, properties, owner_user_id)
+         VALUES ($1, 'Location', 'Home', '{}'::jsonb, $2)`,
+        [diaristHomeId, diaristId],
+      );
+
+      // What happened: three nights at home, and two office hours.
+      for (const [title, at] of [
+        ['Dinner at home', WED_2230_PDT],
+        ['Late call', WED_2300_PDT],
+        ['Movie night', THU_0100_PDT],
+      ]) {
+        await seedEvent({
+          userId: diaristId,
+          title,
+          at,
+          point: HOME,
+          placeName: 'Home',
+          locationEntityId: diaristHomeId,
+        });
+      }
+
+      for (const [title, at] of [
+        ['Standup', WED_1000_PDT],
+        ['Design review', WED_1400_PDT],
+      ]) {
+        await seedEvent({ userId: diaristId, title, at, point: OFFICE, placeName: 'Office' });
+      }
+
+      // Deleted: four nights of photos at a hotel, which the user removed
+      // from their timeline. One more night than home.
+      for (const [title, at] of [
+        ['IMG_2041.HEIC', THU_2200_PDT],
+        ['IMG_2042.HEIC', FRI_2200_PDT],
+        ['IMG_2043.HEIC', SAT_2200_PDT],
+        ['IMG_2044.HEIC', SUN_2200_PDT],
+      ]) {
+        await seedEvent({
+          userId: diaristId,
+          title,
+          at,
+          point: HOTEL,
+          placeName: 'Hotel',
+          lifecycle: { isDeleted: true },
+        });
+      }
+
+      // Predicted: next week's office hours, forecast at a coworking space.
+      // One more work-hours event than the office. No writer produces these
+      // today except an account import, which restores rows verbatim, but
+      // the flag says what the row is.
+      for (const at of [NEXT_WED_1000_PDT, NEXT_WED_1400_PDT, NEXT_THU_1000_PDT]) {
+        await seedEvent({
+          userId: diaristId,
+          title: 'Focus time',
+          at,
+          point: COWORKING,
+          placeName: 'Coworking space',
+          lifecycle: { isPredicted: true },
+        });
+      }
+
+      // `is_predicted` is nullable. NULL is not a prediction: the column
+      // default is false, and every other reader COALESCEs NULL to false.
+      await seedEvent({
+        userId: diaristId,
+        title: 'Farmers market',
+        at: SAT_1100_PDT,
+        point: MARKET,
+        placeName: 'Farmers market',
+        lifecycle: { isPredicted: null },
+      });
+
+      // Cancelled: an evening class that took place, and the three that
+      // followed it, which the studio called off. Google Calendar sync keeps a
+      // cancelled event as a row with status 'cancelled' and geocodes its
+      // venue like any other. Counted, they would make the studio the user's
+      // most-visited night spot.
+      const geocoded: Provenance = { ...MEASURED, metadata: { location_source: 'geocoded' } };
+      await seedEvent({
+        userId: diaristId,
+        title: 'Pottery class',
+        at: WED_2100_PDT,
+        point: STUDIO,
+        placeName: 'Pottery studio',
+        provenance: geocoded,
+      });
+      for (const at of LATER_WEDS_2100_PDT) {
+        await seedEvent({
+          userId: diaristId,
+          title: 'Pottery class',
+          at,
+          point: STUDIO,
+          placeName: 'Pottery studio',
+          provenance: geocoded,
+          lifecycle: { status: 'cancelled' },
+        });
+      }
+
+      // Cancelled, where `status` cannot say so: Friday dinner, booked at a
+      // trattoria, cancelled, and rebooked at a noodle bar. The Google Takeout
+      // importer leaves both reservations 'confirmed' and records the
+      // cancellation only as `metadata.Canceled`. Each address is geocoded
+      // like any other.
+      for (const [placeName, point, canceled] of [
+        ['Trattoria', TRATTORIA, true],
+        ['Noodle bar', NOODLE_BAR, false],
+      ] as const) {
+        await seedEvent({
+          userId: diaristId,
+          title: `Reservation — ${placeName}`,
+          at: FRI_1930_PDT,
+          point,
+          placeName,
+          provenance: {
+            ...MEASURED,
+            metadata: { Kind: 'reservation', Canceled: canceled, location_source: 'geocoded' },
+          },
+        });
+      }
+
+      // The rest of the calendar's "did not happen": an appointment the user
+      // did not show up to, and a planned run they skipped.
+      await seedEvent({
+        userId: diaristId,
+        title: 'Dentist',
+        at: THU_1000_PDT,
+        point: DENTIST,
+        placeName: 'Dentist',
+        lifecycle: { status: 'no_show' },
+      });
+      await seedEvent({
+        userId: diaristId,
+        title: 'Run',
+        at: SAT_0700_PDT,
+        point: RESERVOIR,
+        placeName: 'Reservoir loop',
+        lifecycle: { status: 'skipped' },
+      });
+
+      // An invitation the user has not answered. The calendar still draws a
+      // tentative event, so it counts.
+      await seedEvent({
+        userId: diaristId,
+        title: 'Picnic',
+        at: SUN_1200_PDT,
+        point: PARK,
+        placeName: 'Griffith Park',
+        lifecycle: { status: 'tentative' },
+      });
+
+      // One night of each kind at the same hotel, and nothing that happened.
+      for (const lifecycle of [{ isDeleted: true }, { isPredicted: true }, { status: 'cancelled' }]) {
+        await seedEvent({
+          userId: neverWentId,
+          title: 'Night out',
+          at: WED_2300_PDT,
+          point: HOTEL,
+          placeName: 'Hotel',
+          lifecycle,
+        });
+      }
+
+      await seedEvent({
+        userId: neverWentId,
+        title: 'Reservation — Hotel',
+        at: WED_2300_PDT,
+        point: HOTEL,
+        placeName: 'Hotel',
+        provenance: { ...MEASURED, metadata: { Kind: 'reservation', Canceled: true } },
+      });
+    });
+
+    it('counts only the events that happened', async () => {
+      // They are all really there as located rows. Leaving them out is the
+      // rule's doing, not the fixture's.
+      expect(
+        await dataSource.query(
+          `SELECT count(*)::int AS located,
+                  count(*) FILTER (WHERE is_deleted)::int AS deleted,
+                  count(*) FILTER (WHERE is_predicted)::int AS predicted,
+                  count(*) FILTER (WHERE status = ANY($2))::int AS did_not_happen,
+                  count(*) FILTER (WHERE metadata @> '{"Canceled": true}')::int AS canceled_reservations
+             FROM ci.events
+            WHERE user_id = $1 AND location_coordinates IS NOT NULL`,
+          [diaristId, [...DEAD_EVENT_STATUSES]],
+        ),
+      ).toEqual([{ located: 22, deleted: 4, predicted: 3, did_not_happen: 5, canceled_reservations: 1 }]);
+
+      const [first, ...rest] = await service.buildKnownPlaces(diarist);
+      const tuples = [first, ...rest.sort((a, b) => a.label.localeCompare(b.label))].map((c) => [
+        c.kind,
+        c.label,
+        c.eventCount,
+        c.locationId,
+      ]);
+
+      expect(tuples).toEqual([
+        ['home', 'Home', 3, diaristHomeId],
+        ['other', 'Farmers market', 1, null],
+        ['other', 'Griffith Park', 1, null],
+        ['other', 'Noodle bar', 1, null],
+        ['work', 'Office', 2, null],
+        ['other', 'Pottery studio', 1, null],
+      ]);
+    });
+
+    // The test above checks who wins Home and Work. Each test below looks only
+    // at its own group's place, so a failure names the clause that broke.
+
+    it('does not count photos the user deleted, or return their titles', async () => {
+      const candidates = await service.buildKnownPlaces(diarist);
+
+      expect(candidates.filter((c) => c.label === 'Hotel')).toEqual([]);
+      // A tombstoned row is never returned to a client, and `sampleEvents`
+      // goes to the Places page.
+      expect(
+        candidates.flatMap((c) => c.sampleEvents.map((e) => e.title)).filter((t) => t.startsWith('IMG_')),
+      ).toEqual([]);
+    });
+
+    it('does not count predicted events, but counts one whose is_predicted is NULL', async () => {
+      const candidates = await service.buildKnownPlaces(diarist);
+
+      expect(candidates.filter((c) => c.label === 'Coworking space')).toEqual([]);
+      expect(candidates.filter((c) => c.label === 'Farmers market').map((c) => c.eventCount)).toEqual([1]);
+    });
+
+    it('counts the class that took place, not the three that were called off', async () => {
+      const candidates = await service.buildKnownPlaces(diarist);
+
+      expect(candidates.filter((c) => c.label === 'Pottery studio')).toMatchObject([
+        { kind: 'other', eventCount: 1 },
+      ]);
+    });
+
+    it('does not count a reservation whose cancellation only its metadata records', async () => {
+      const labels = (await service.buildKnownPlaces(diarist)).map((c) => c.label);
+
+      expect(labels).not.toContain('Trattoria');
+      // The key's value decides, not its presence: `Canceled: false` counts.
+      expect(labels).toContain('Noodle bar');
+    });
+
+    it('treats a no-show and a skipped block as the calendar does, and still counts a tentative event', async () => {
+      const labels = (await service.buildKnownPlaces(diarist)).map((c) => c.label);
+
+      expect(labels).not.toContain('Dentist');
+      expect(labels).not.toContain('Reservoir loop');
+      expect(labels).toContain('Griffith Park');
+    });
+
+    it('offers no candidates to a user whose only located events did not happen', async () => {
+      // So `HomeConfirmService` never asks "is this home?" about somewhere the
+      // user never went.
+      expect(await service.buildKnownPlaces(neverWent)).toEqual([]);
     });
   });
 });

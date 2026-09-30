@@ -9,6 +9,7 @@ import { LoggerService } from '@ci/common/logging';
 import { isValidTimezone } from '@ci/common/time/zoned';
 import { hourDowInTz } from '@ci/domains/daily-metrics/places/transitionMath';
 
+import { LIVE_EVENT_SQL } from './CalendarEventService';
 import { PlaceService } from './PlaceService';
 import { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from './selfEntityProvisioner';
 
@@ -67,8 +68,9 @@ export interface KnownPlaceCandidate {
   /** Cluster centroid longitude. */
   lng: number;
   /**
-   * Number of events supporting this cluster. Only events whose coordinate is
-   * their own count; a temporal estimate never does (see
+   * Number of events supporting this cluster. Only events that happened and
+   * whose coordinate is their own count. A temporal estimate never does, and
+   * nor does a deleted, predicted or cancelled event (see
    * {@link KnownPlacesService.buildKnownPlaces}).
    */
   eventCount: number;
@@ -165,6 +167,15 @@ const ESTIMATE_METHOD = 'temporal_nn';
  */
 const LOCATION_SOURCE_REVERSE_GEOCODED = 'reverse_geocoded';
 
+/**
+ * The `metadata` key a Google Takeout reservation (`google_purchases`) carries
+ * as `true` when it was cancelled. The importer leaves `status` at
+ * 'confirmed', so this key is the only record of the cancellation, and
+ * {@link LIVE_EVENT_SQL} cannot see it. This is a copy of the importer's key,
+ * like the tokens above. If they drift, cancelled reservations count again.
+ */
+const RESERVATION_CANCELED_KEY = 'Canceled';
+
 /** The graph relationship types that express a known place. */
 const KNOWN_PLACE_RELATIONSHIP_TYPES = ['LIVES_IN', 'WORKS_AT', 'VISITED'] as const;
 type KnownPlaceRelationship = (typeof KNOWN_PLACE_RELATIONSHIP_TYPES)[number];
@@ -227,8 +238,9 @@ interface KnownPlaceRow {
  * user's self node to a `ci.entities` Location node, with `strength` as the
  * confidence, `start_date`/`end_date` as the era, and `properties` for the rest.
  *
- * Building is read-only and idempotent: a pure aggregation over events whose
- * coordinates are their own (never a temporal estimate; see
+ * Building is read-only and idempotent: a pure aggregation over events that
+ * happened and whose coordinates are their own (never a temporal estimate, nor
+ * a deleted, predicted or cancelled event; see
  * {@link KnownPlacesService.buildKnownPlaces}). Confirmation (updateKnownPlace)
  * upserts the relationship in place on the existing partial-unique index, so
  * re-confirming never duplicates.
@@ -301,6 +313,50 @@ export class KnownPlacesService {
    * COALESCEd. Without that, a row with no `location_source` key compares as
    * NULL, and the WHERE drops it. That is most measured rows, because
    * `metadata` defaults to `'{}'`.
+   *
+   * ── Nor is an event that did not happen ────────────────────────────────────
+   *
+   * Three more kinds of located event are left out. Their coordinates are
+   * their own, so the rule above lets them through, but none of them says the
+   * user was there.
+   *
+   *  - Deleted (`is_deleted`). The user removed it. The column's contract is
+   *    that a tombstoned row is left out of every read and never returned to a
+   *    client, and a candidate's `sampleEvents` go to the Places page, titles
+   *    included. Undo (`CalendarEventService.restore`) clears the flag, and
+   *    the event counts again.
+   *  - Predicted (`is_predicted`). A guess about where the user will be, not a
+   *    record of where they were. Suggestions stay in `ci.event_candidates`
+   *    until the user accepts one, which writes `is_predicted = false`, and
+   *    that event counts. Nothing writes `true` today except an account
+   *    import, which restores rows verbatim.
+   *  - Cancelled. The status test is the calendar's own {@link LIVE_EVENT_SQL},
+   *    so `no_show` and `skipped` go with `cancelled`. Google Calendar sync
+   *    keeps a cancelled meeting as a row and geocodes its venue, but the
+   *    user never went. A Google Takeout reservation records its cancellation
+   *    only in {@link RESERVATION_CANCELED_KEY}, so that key is read as well.
+   *    `tentative`, `planned`, `in_progress`, `rescheduled` and `completed`
+   *    still count, as they do on the calendar.
+   *
+   * Some rows that did not happen carry no marker, so they still count. An
+   * `.ics` import (Google Takeout, Apple) ignores STATUS, so its cancelled
+   * meetings arrive 'confirmed'. A cancellation that reaches the source after
+   * the first import never reaches the row, because events are not refreshed
+   * on re-import. A declined invitation is only a `responseStatus` inside
+   * `metadata.participants`. Each belongs in the importer, where fixing it
+   * corrects the calendar too.
+   *
+   * Every clause is NULL-safe without leaning on a constraint. `is_predicted`
+   * is nullable, and NULL counts as not predicted, as its default and every
+   * other reader of it have it. `is_deleted` and `status` are NOT NULL today,
+   * but their down migrations drop that, and `LIVE_EVENT_SQL` COALESCEs
+   * `status`. The reservation key is COALESCEd like `location_source`.
+   *
+   * None of this occurs among the reference corpus's located events, so its
+   * candidates do not change. It does hold five cancelled reservations. They
+   * have no coordinate only because `enrich.geocode` failed on all 42
+   * reservations there (`provider_unavailable`). Once geocoding succeeds,
+   * they would count without the reservation clause.
    */
   async buildKnownPlaces(context: UserServiceContext): Promise<KnownPlaceCandidate[]> {
     const rows: Array<{
@@ -329,10 +385,20 @@ export class KnownPlacesService {
         AND entity.entity_type = 'Event'
        WHERE event.user_id = $1
          AND event.location_coordinates IS NOT NULL
+         AND event.is_deleted IS NOT TRUE
+         AND event.is_predicted IS NOT TRUE
+         AND ${LIVE_EVENT_SQL}
+         AND COALESCE(event.metadata->>$5, '') <> 'true'
          AND COALESCE(event.metadata->>'location_source', '') <> $2
          AND NOT (COALESCE(event.metadata->>'location_source', '') = $3
                   AND COALESCE(event.inference_sources->>'method', '') = $4)`,
-      [context.userId, LOCATION_SOURCE_ESTIMATED, LOCATION_SOURCE_REVERSE_GEOCODED, ESTIMATE_METHOD],
+      [
+        context.userId,
+        LOCATION_SOURCE_ESTIMATED,
+        LOCATION_SOURCE_REVERSE_GEOCODED,
+        ESTIMATE_METHOD,
+        RESERVATION_CANCELED_KEY,
+      ],
     );
 
     if (rows.length === 0) {

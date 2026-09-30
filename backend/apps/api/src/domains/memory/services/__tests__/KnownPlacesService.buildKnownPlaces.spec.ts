@@ -3,6 +3,7 @@ import type { DataSource } from 'typeorm';
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 
+import { LIVE_EVENT_SQL } from '../CalendarEventService';
 import { KnownPlacesService } from '../KnownPlacesService';
 import type { PlaceService } from '../PlaceService';
 
@@ -363,7 +364,26 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
 
     expect(sql).toContain("COALESCE(event.metadata->>'location_source', '') <> $2");
     expect(sql).toContain("COALESCE(event.inference_sources->>'method', '') = $4");
-    expect(params).toEqual([USER, 'estimated', 'reverse_geocoded', 'temporal_nn']);
+    expect(params?.slice(0, 4)).toEqual([USER, 'estimated', 'reverse_geocoded', 'temporal_nn']);
+  });
+
+  it('leaves deleted, predicted and did-not-happen events out of the read', async () => {
+    // Also proven against Postgres in KnownPlacesService.integration.spec.ts.
+    // The status test is the calendar's own LIVE_EVENT_SQL rather than a copy,
+    // because DEAD_EVENT_STATUSES is shared precisely so its copies cannot
+    // drift apart. The reservation key IS a copy (see
+    // RESERVATION_CANCELED_KEY), so it is pinned here.
+    const { service, query } = makeService([]);
+
+    await service.buildKnownPlaces(CONTEXT);
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+
+    expect(sql).toContain('event.is_deleted IS NOT TRUE');
+    expect(sql).toContain('event.is_predicted IS NOT TRUE');
+    expect(sql).toContain(LIVE_EVENT_SQL);
+    expect(sql).toContain("COALESCE(event.metadata->>$5, '') <> 'true'");
+    expect(params[4]).toBe('Canceled');
   });
 
   it('keeps the newest event titles so an unnamed cluster can be recognized', async () => {
