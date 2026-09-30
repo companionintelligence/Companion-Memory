@@ -24,7 +24,7 @@ const FOCUSABLE_SELECTOR = [
  * Phone chrome around the Power Rail drawer.
  *
  * Closed: a chevron in the top bar and a swipe right from the left edge.
- * Open: the same rail as desktop, as an opaque drawer over a scrim. Search
+ * Open: the same rail as desktop, as a glass drawer over a scrim. Search
  * lives in the top bar.
  */
 export function MobileNavigation() {

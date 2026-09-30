@@ -148,17 +148,22 @@ describe('MobileNavigation', () => {
     expect(wordmark.parentElement).toHaveClass('border-l-2', 'px-2', 'py-2');
   });
 
-  // A translucent drawer let bright page content show through between its
-  // rows. 300px, less a strip of page on the narrowest phones.
-  it('draws an opaque drawer, 300px wide', async () => {
+  // The drawer is glass: the page stays in view behind it, frosted by the
+  // blur. 300px, less a strip of page on the narrowest phones.
+  it('draws a glass drawer, 300px wide', async () => {
     renderMobileNav();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
 
     const nav = await screen.findByRole('navigation');
 
-    expect(nav).toHaveClass('bg-background', 'w-[min(300px,calc(100vw-56px))]');
-    expect(nav.className).not.toMatch(/backdrop-blur|bg-white\//);
+    expect(nav).toHaveClass(
+      'backdrop-blur-xl',
+      'bg-white/35',
+      'dark:bg-white/10',
+      'w-[min(300px,calc(100vw-56px))]',
+    );
+    expect(nav).not.toHaveClass('bg-background');
   });
 
   it('pins Help and the account under a divider while the rest of the drawer scrolls', async () => {
