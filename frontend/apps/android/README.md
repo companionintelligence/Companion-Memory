@@ -347,24 +347,107 @@ bundle); the standalone mobile project declares the actual plugin packages.
 [`frontend/apps/ios/README.md`](../ios/README.md#native-capabilities--permissions).
 Android has no equivalent wired today.
 
-**On-device chat completion (LocalLLM, early preview).** The `@ci/capacitor-local-llm`
-Kotlin plugin (`frontend/packages/capacitor-local-llm/android/`) starts a loopback-only
-HTTP server (`127.0.0.1`, random port, per-launch bearer token) exposing an OpenAI-compatible
-`POST /v1/chat/completions` (SSE) backed by [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM)
-running fully on-device — no appliance connection needed. JS reaches it via
-`@ci/common`'s `startLocalLlm`/`loadLocalLlmModel`/etc. (`nativeBridge.ts`) plus a direct
-SSE client (`localLlm.ts`); try it from Settings → On-device model. This is a skeleton,
-not the full offline-mode design: no model download UI wired to a real source yet (push
-a `.litertlm` file onto the device and paste its path), no capability gating, no
-integration with the appliance-routed chat page.
+**On-device chat (LocalLLM).** A `LocalLLM` Capacitor plugin runs a language model fully on the
+phone through [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) — the runtime Google's
+[AI Edge Gallery](https://github.com/google-ai-edge/gallery) ships, whose model allowlist and
+`LlmChatModelHelper` this is modelled on. Android implements it in
+`frontend/packages/capacitor-local-llm/android/`; iOS implements the **identical JS contract** in the app
+target (`ios/App/App/LocalLLM/`). Nothing you type leaves the device and it works with no connection.
+
+The web layer is `@ci/common`'s `localLlm.ts` (probe / download / load / stream over the runtime
+`window.Capacitor.Plugins.LocalLLM` bridge), `localLlmCatalog.ts` (the model list) and
+`localLlmPrefs.ts` (per-device routing preferences). The UI is **Settings → On-device model** and the
+chat page; `nativeBridge.generateOffline()` remains the one-shot helper.
+
+**Models.** The catalog is Gallery's allowlist cut down to what an anonymous in-app download can fetch.
+Every entry is Apache-2.0, ungated, and **pinned to a Hugging Face commit** with its exact byte size — the
+download is verified against that size, and a pinned URL cannot drift under it.
+
+| Model | Size | Min RAM | Backends | Reasoning | Photos | Memory tools | Platforms |
+|---|---|---|---|---|---|---|---|
+| Qwen3 0.6B | 328 MB | 4 GB | CPU | ✓ | | ✓ | iOS, Android |
+| Qwen2.5 1.5B Instruct | 1.5 GB | 6 GB | GPU, CPU | | | | iOS, Android |
+| Gemma 4 E2B | 2.4 GB | 8 GB | GPU, CPU | ✓ | ✓ | ✓ | Android |
+| Gemma 4 E4B | 3.4 GB | 12 GB | GPU, CPU | ✓ | ✓ | ✓ | Android |
+
+Left out on purpose: Gemma 3n, Gemma3-1B-IT and the FunctionGemma fine-tunes. Hugging Face serves them
+`gated` (an account plus a licence click-through), so an anonymous download answers `401 GatedRepo` — the
+bug that once left Android with no downloadable model at all. They return with an HF sign-in flow.
+Gemma 4 is Android-only because the iOS app has no `com.apple.developer.kernel.increased-memory-limit`
+entitlement (an App ID capability only the account owner can enable), and a 2.6–3.7 GB model would be
+jetsam-killed without it.
+
+**What the user sees.** Settings → On-device model lists the models this device can hold (with the reason
+when it cannot), downloads with live progress and **Cancel**, deletes, loads and unloads, and offers CPU/GPU,
+"Think before answering" and "Look things up in Memory". *When to use it* is a separate choice and defaults
+to the appliance:
+
+- **Always use my Companion** — the on-device model is never used.
+- **Use my Companion, fall back to this phone** — chat goes to the appliance; a dropped connection or a
+  502/503/504 answers on the phone instead, with a toast. A 401/403/500 is *not* treated as offline.
+- **Always answer on this phone** — never calls the appliance. If the model is missing it refuses rather than
+  quietly falling through, and attachments (which live on the appliance) are refused rather than dropped.
+  With a Gemma 4 model, "attach" picks photos that are read on the phone as base64 and never uploaded.
+
+A reply from the phone shows *Answered on this phone · model · tok/s · time to first token*. "New chat" and
+switching threads call `resetConversation()` so turns do not leak between chats. On-device turns are not
+saved as appliance threads.
+
+**Contract additions (v2).** `cancelDownload`, `getLoadedModel`, `resetConversation`; `loadModel` takes
+`accelerator` (a GPU that will not initialise falls back to the CPU and says so) and
+`enableSpeculativeDecoding`; `generate*` take `enableThinking` and `images`; results and the terminal
+`llmToken` event carry `thought` and `stats` (`timeToFirstTokenMs`, `decodeTokensPerSecond`, …);
+`isAvailable` reports `totalMemoryBytes` and `freeDiskBytes`. The disk check is now per model (remaining
+bytes + 512 MiB) instead of a global 1 GiB, and `downloadModel` refuses any URL not on `huggingface.co`.
+`capacitorPluginContract.test.ts` parses `definitions.ts`, the Kotlin and the Swift catalogs and both
+method lists, so the halves cannot drift.
+
+**Known limits (measured on LiteRT-LM 0.14.0 with the Android emulator).**
+
+- A cancelled conversation cannot be reused, so after **Stop** — or a failed turn — the next message starts a
+  fresh conversation and the model forgets earlier turns, even though the chat still shows them. Replaying
+  history through `initialMessages` is the follow-up.
+- Gemma 4 fixes thinking on or off at the first turn of a conversation, so toggling "Think before answering"
+  mid-chat also starts a fresh conversation.
+- A GPU backend can pass `initialize()` and fail only on its first token ("Can not find OpenCL library"), so a
+  GPU load probes one token and falls back to the CPU itself (`fellBackToCpu`). The plugin manifest declares
+  `libOpenCL.so` / `libvndksupport.so` (`required=false`), which Android 12+ needs before an app targeting API 31+
+  may open the vendor OpenCL library; that effect needs a real GPU device to confirm.
+- The catalog is pinned to revisions that load on 0.14.0. Qwen3's `main` needs 0.17.1+, so bump LiteRT-LM on both
+  platforms *before* repinning it.
+- **Play Console:** the Android plugin manifest again declares `FOREGROUND_SERVICE_DATA_SYNC` and
+  `foregroundServiceType="dataSync"` on both `LocalLlmGenerationService` and WorkManager's
+  `SystemForegroundService` (removed in #2776 while nothing could start a download; restored now that Settings →
+  On-device model and on-device chat can). Without them Android 14+ throws `SecurityException` and Android 10+
+  `IllegalArgumentException` from `startForeground()` the moment a user taps Download or sends a message. Play
+  needs the dataSync declaration (a 0.3–3.6 GB resumable model download) and a demo of that screen.
+- A conversation whose context window fills (Qwen3: 1,024 tokens, Gemma 4: 4,000) answers every later message with
+  nothing. The web layer detects that empty completed turn, says so, resets the conversation and asks once more —
+  the model loses the earlier turns, the screen does not. A native token-count check that resets *before* sending
+  is the cleaner follow-up.
+- On-device turns are ephemeral, and per-call `maxTokens`/`topK`/`topP`/`temperature` on `generate` are ignored:
+  LiteRT-LM fixes the sampler when the conversation is created.
+
+**Not verified on a device.** Nothing here has run inference on a real phone. On an Android emulator (CPU) the
+engine was exercised for Qwen3 (the pinned revision), Qwen2.5, and Gemma 4 E2B — load, streaming, reset, cancel,
+thinking, a vision prompt, and the speculative-decoding flag; Gemma 4 E4B (3.65 GB) did not fit that emulator, and
+nothing on iOS has run inference at all (it compiles and its pure logic and downloader were exercised off-device).
+Compiled and unit-tested: the catalog, download resume/verification, policy decisions (RAM/disk/URL), stats maths,
+image sizing and the web layer. **Unverified until someone runs a phone:** actual generation,
+GPU/Metal init, multi-token prediction, whether a model emits the `thought` channel or leaks `<think>` tags,
+photo input on Gemma 4, and memory headroom (iOS `physicalMemory` reports below the marketing figure — a
+"6 GB" iPhone reports ~5.6 GB and will not be offered Qwen2.5). **Not built** from Gallery: Prompt Lab,
+Agent Skills, Mobile Actions (FunctionGemma), audio input, the benchmark screen, importing a model file,
+and NPU backends.
 
 - minSdk stays 23; the plugin itself gates on `Build.VERSION.SDK_INT >= 31`
   (LiteRT-LM's AAR requires Android 12), so older devices keep the rest of the app.
 - The package declares itself **Android-only** — it has no `ios/` folder and does not
-  appear in the iOS Podfile. iOS ships its own in-app Swift implementation instead
-  (a different model, too); see the iOS README.
-- The emulator does not reliably run LiteRT-LM inference (untested; the iOS Simulator
-  has a confirmed upstream issue) — test on a real device.
+  appear in the iOS Podfile. iOS ships its own in-app Swift implementation of the same
+  JS contract; see the iOS README.
+- An arm64 API 34 emulator (8 GB RAM) **does** run LiteRT-LM on the CPU — that is how the catalog revisions
+  were checked — but it has no GPU/OpenCL and its speeds mean nothing. The iOS Simulator has a confirmed
+  upstream issue. Test GPU, speed and memory on a real device.
 
 ## On-device agent tooling (intent hooks, both platforms)
 
@@ -407,6 +490,14 @@ endpoint — authenticated with the same `x-api-key` the App Intents already use
 `<name>.part` and the next attempt continues with an HTTP `Range` request, so a force-quit or a lost
 connection costs nothing. It still lives in the app target rather than that package (which declares
 itself Android-only); moving it there needs a podspec + vendored xcframework + Podfile regeneration.
+
+> ✅ **Fixed 2026-09-29 — Qwen3's `resolve/main` URL had drifted twice over.** The 2026-08-26 fix recorded
+> `Qwen3-0.6B` at 344,437,808 bytes against a `resolve/main` URL. On 2026-09-20 Hugging Face's `main` became a
+> re-export (344,671,744 bytes) that needs LiteRT-LM 0.17.1+: the downloader fetched all of it and failed its
+> `length != expected` check on every attempt, and had it passed, the file fails `Engine.initialize()` on the
+> 0.14.0 both platforms link. Every catalog URL is now pinned to a commit (`resolve/<sha>/…`), Qwen3 to the
+> last revision that loads on 0.14.0 (`154c5de0…`, exercised on an emulator), and a test refuses `resolve/main`.
+> Bumping LiteRT-LM is what would unlock the newer file.
 
 > ✅ **Fixed 2026-08-26 — Android's model catalog used to be broken.** It pointed at
 > `litert-community/Gemma3-1B-IT`, a repo Hugging Face now serves `gated: "auto"`, so the `.task`
