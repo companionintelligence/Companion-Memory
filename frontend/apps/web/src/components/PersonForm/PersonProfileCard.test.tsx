@@ -63,6 +63,24 @@ describe('PersonProfileCard', () => {
     expect(screen.getByText('Job')).toBeInTheDocument();
   });
 
+  it('dials a number by the country code it was written with, not by its last ten digits', () => {
+    // `value` is the join key, and this number's key is a North American
+    // number: 207 is Maine.
+    render(
+      <PersonProfileCard
+        person={{
+          name: 'Dana',
+          identifiers: [{ kind: 'phone', value: '2079460958', rawValue: '+44 20 7946 0958', label: 'work' }],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: '+44 20 7946 0958' })).toHaveAttribute(
+      'href',
+      'tel:+442079460958',
+    );
+  });
+
   it('renders contact methods as actionable links, showing the raw value', () => {
     render(<PersonProfileCard person={PERSON} />);
 
@@ -70,8 +88,11 @@ describe('PersonProfileCard', () => {
       'href',
       'mailto:dana@example.com',
     );
-    // The phone shows as typed but dials the normalized number.
-    expect(screen.getByRole('link', { name: '+1 (415) 555-0100' })).toHaveAttribute('href', 'tel:4155550100');
+    // The phone shows as typed and dials as typed, its country code included.
+    expect(screen.getByRole('link', { name: '+1 (415) 555-0100' })).toHaveAttribute(
+      'href',
+      'tel:+14155550100',
+    );
   });
 
   it('omits sections the person has nothing in', () => {
