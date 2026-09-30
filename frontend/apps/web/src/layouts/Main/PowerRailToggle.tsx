@@ -15,7 +15,7 @@ const CAPSULE =
 
 /**
  * Mark and name. Desktop keeps the full product name. The phone drawer
- * shares 224px with the close chevron, so it uses the short form — the
+ * shares its width with the close chevron, so it uses the short form — the
  * full string used to ellipsize.
  */
 function RailMark({
@@ -62,7 +62,7 @@ function RailMark({
           opticalNudge && '-translate-y-px',
           // The dock capsule animates its own max-width and wipes the name as
           // it closes; a shrinkable span would put an ellipsis in the middle of
-          // that. The drawer instead has a fixed 224px to share with the close
+          // that. The drawer instead has a fixed width to share with the close
           // chevron, so there the name is the part that gives way.
           truncateName ? 'min-w-0 truncate' : 'overflow-hidden whitespace-nowrap',
         )}
@@ -81,7 +81,7 @@ function RailMark({
  * name is one control too many. Desktop keeps the toggle below, because there
  * the mark IS the button.
  *
- * No capsule either: the drawer is already a pane of glass, and a bordered pill
+ * No capsule either: the drawer is already its own surface, and a bordered pill
  * inside it is a border drawn on a border — one that would also cost the width
  * the chevron needs.
  */

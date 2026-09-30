@@ -3,8 +3,10 @@ import { normalizeIdentifier } from '@ci/domains/graph';
 import { PipelineStateService } from '../../services/PipelineStateService';
 import {
   CLEAN_IDENTIFIER_NORMALIZE_STAGE_ID,
+  E164_RULE_GENERATION,
   IDENTIFIER_NORMALIZE_SOURCE,
   IDENTIFIER_NORMALIZE_VERSION,
+  IDENTIFIER_RULE_GENERATION,
   IdentifierNormalizeStage,
   type IdentifierPatch,
   type IdentifierRow,
@@ -83,6 +85,16 @@ describe('the version', () => {
       }),
     ).toThrow(/versions\.ts in the same commit/);
   });
+
+  it('moved both generations for the extension refusal, and the sum with them', () => {
+    // v2 of the shared rule: `normalizePhone` refuses a value carrying an
+    // extension. v2 of the E.164 derivation: `toE164` refuses every form the
+    // join key does, not only a trailing `x`/`ext`. A bump here is the lever
+    // that re-opens the corpus; pinned so it cannot be quietly reverted.
+    expect(IDENTIFIER_RULE_GENERATION).toBe(2);
+    expect(E164_RULE_GENERATION).toBe(2);
+    expect(IDENTIFIER_NORMALIZE_VERSION).toBe(3);
+  });
 });
 
 /* ===================================================================== *
@@ -126,6 +138,18 @@ describe('toE164', () => {
     // number that dials the switchboard and claims to be the person.
     expect(toE164('+1 415 555 0100 ext. 22')).toBeNull();
     expect(toE164('+1 415 555 0100 x22')).toBeNull();
+  });
+
+  it.each([
+    ['+1 (212) 555-0147;229'],
+    ['+1 212 555 0147,229'],
+    ['+1 212 555 0147#229'],
+    ['+12125550147x229'],
+  ])('refuses the dial-string extension %s the join key refuses', (raw) => {
+    // The pattern this replaced caught only a trailing `x`/`ext`, so a stated
+    // `+1` with a `;`-separated extension derived `+12125550147229`: fourteen
+    // digits under +1, a "number" that exists nowhere.
+    expect(toE164(raw)).toBeNull();
   });
 
   it('is idempotent on its own output', () => {
@@ -218,6 +242,31 @@ describe('normalizeOne', () => {
     expect(
       normalizeOne(identifier({ kind: 'phone', raw_value: 'no digits', value_normalized: 'x' })),
     ).toBeNull();
+  });
+
+  it('reports a raw value carrying an extension as unnormalizable, and never rewrites it', () => {
+    // The row a person-form number with an extension was stored as: its key is
+    // the truncation. The v2 rule refuses the raw value, and this stage never
+    // deletes, so it is counted and left for the repair migration
+    // (20260930020117) — which is the reason that migration exists.
+    expect(
+      normalizeOne(
+        identifier({ kind: 'phone', raw_value: '(212) 555-0147;229', value_normalized: '5550147229' }),
+      ),
+    ).toBeNull();
+  });
+
+  it('cannot see a truncation whose raw value was never kept', () => {
+    // The importer's rows: `properties.phones` held the key itself, so the index
+    // row has no raw value and its key is a fixed point of every generation of
+    // the rule. Pinned because it is the limit of what a rule bump can repair —
+    // those rows are found by the migration from the card's typed `Phones`.
+    const patch = normalizeOne(
+      identifier({ kind: 'phone', raw_value: null, value_normalized: '5550147229' }),
+    );
+
+    expect(patch?.target).toBe('5550147229');
+    expect(patch?.target).toBe(patch?.currentValue);
   });
 
   it('is idempotent — the second pass computes the same target', () => {

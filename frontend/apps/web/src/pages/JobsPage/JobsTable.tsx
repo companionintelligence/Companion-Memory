@@ -1,5 +1,6 @@
 import { Fragment, useState, type ReactNode } from 'react';
 
+import { useOverflowsRight } from '@ci/common';
 import { Badge, Button, Card, Collapsible, Input, Skeleton, cn } from '@ci/shadcn';
 import { AlertTriangle, ChevronDown, ChevronRight, type LucideIcon } from '@ci/shadcn/icons';
 
@@ -110,15 +111,7 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange, o
    * fail in a way that points at the wrong component.
    */
   const categoryChips = (
-    <div
-      className={
-        phone
-          ? 'scrollbar-none flex gap-1 overflow-x-auto overscroll-x-contain pb-0.5'
-          : 'flex flex-wrap items-center gap-1'
-      }
-      role="tablist"
-      aria-label="Job category"
-    >
+    <ChipRow phone={phone} label="Job category" wideClassName="flex flex-wrap items-center gap-1">
       <CategoryChip
         label="All"
         count={allCategoriesTotal}
@@ -162,19 +155,11 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange, o
           />
         </>
       ) : null}
-    </div>
+    </ChipRow>
   );
 
   const stateTabs = (
-    <div
-      className={
-        phone
-          ? 'scrollbar-none flex gap-1 overflow-x-auto overscroll-x-contain pb-0.5'
-          : 'flex flex-wrap gap-1'
-      }
-      role="tablist"
-      aria-label="Job state"
-    >
+    <ChipRow phone={phone} label="Job state" wideClassName="flex flex-wrap gap-1">
       {STATE_TABS.map((tab) => {
         // `stateCounts` deliberately ignores the state filter, so every tab
         // shows what picking it would yield. `total` does NOT — it reflects
@@ -214,7 +199,7 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange, o
           </Button>
         );
       })}
-    </div>
+    </ChipRow>
   );
 
   const filterSelects = (
@@ -265,7 +250,11 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange, o
             them under one surface makes the card read as "narrow the table by
             state, then by category, then by these three" instead of as three
             unrelated control strips. */}
-        <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/30 p-2">
+        {/* `min-w-0`: this panel is an item of the card header's grid, and a grid
+            item's minimum width defaults to its content's. On a phone that content
+            is a chip row laid out on one line (~1,750px), so without it the whole
+            header — Find box included — was laid out that wide. */}
+        <div className="flex min-w-0 flex-col gap-2 rounded-lg border border-border/60 bg-muted/30 p-2">
           <FilterRow label="State" phone={phone}>
             {stateTabs}
           </FilterRow>
@@ -515,35 +504,43 @@ function JobCard({ job, expanded, onToggle }: { job: JobListItem; expanded: bool
           </span>
           <StateBadge job={job} />
         </div>
-        <p className="min-w-0 truncate text-xs text-muted-foreground">
-          {job.event ?? 'no event name'}
-          {job.interactive ? ' · interactive' : ''}
-          {' · '}
-          {job.queue}
-        </p>
+        {/* The name above already says what the job is; its event and queue names
+            say it again in internal form ("Retrieval telemetry", then
+            "retrieval.query · telemetry"), so on a phone they wait in the details.
+            Retries are counted only once there have been some. */}
         <p className="text-xs text-muted-foreground">
           {formatDuration(job.durationMs)}
           {' · '}
-          {job.retryCount}/{job.retryLimit}
-          {' · '}
           {formatTimestamp(job.createdOn)}
+          {job.retryCount > 0 ? ` · Retried ${job.retryCount} of ${job.retryLimit}` : ''}
+          {job.interactive ? ' · interactive' : ''}
         </p>
         {job.failure ? <JobFailureLine message={job.failure.message} /> : null}
       </button>
       {expanded ? (
         <div className="pb-3">
-          <JobDetails job={job} />
+          <JobDetails job={job} names />
         </div>
       ) : null}
     </div>
   );
 }
 
-function JobDetails({ job }: { job: JobListItem }) {
+/**
+ * `names` adds the event and queue names, which the table shows in its own columns
+ * but a phone card leaves out of its summary.
+ */
+function JobDetails({ job, names = false }: { job: JobListItem; names?: boolean }) {
   return (
     <>
       <p className="mb-2 max-w-3xl text-xs text-muted-foreground">{job.description}</p>
       <dl className="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2 lg:grid-cols-3">
+        {names ? (
+          <>
+            <Detail label="Event" value={job.event ?? 'no event name'} mono />
+            <Detail label="Queue" value={job.queue} mono />
+          </>
+        ) : null}
         <Detail label="Job id" value={job.id} mono />
         <Detail
           label="Category"
@@ -624,6 +621,45 @@ function Detail({ label, value, mono }: { label: string; value: ReactNode; mono?
  * is a visible echo of what assistive tech was already being told, not the only
  * copy of it.
  */
+/**
+ * A row of filter chips. On a wide screen the chips wrap. On a phone they stay on
+ * one line that scrolls sideways, and the right edge fades while chips are still
+ * hidden past it — otherwise the row just looks cut off.
+ */
+function ChipRow({
+  phone,
+  label,
+  wideClassName,
+  children,
+}: {
+  phone: boolean;
+  label: string;
+  wideClassName: string;
+  children: ReactNode;
+}) {
+  const [ref, more] = useOverflowsRight<HTMLDivElement>();
+
+  if (!phone) {
+    return (
+      <div className={wideClassName} role="tablist" aria-label={label}>
+        {children}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={ref}
+      data-more={more || undefined}
+      className="scrollbar-none flex gap-1 overflow-x-auto overscroll-x-contain pb-0.5 data-[more]:[mask-image:linear-gradient(to_right,black_calc(100%-2rem),transparent)]"
+      role="tablist"
+      aria-label={label}
+    >
+      {children}
+    </div>
+  );
+}
+
 function FilterRow({ label, phone, children }: { label: string; phone: boolean; children: ReactNode }) {
   return (
     <div

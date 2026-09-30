@@ -684,4 +684,258 @@ describe('ForceGraph', () => {
       expect(named).toHaveLength(nodes.length);
     });
   });
+
+  describe('zoom buttons and touch gestures', () => {
+    /** The camera as last written to the DOM. */
+    const camera = () => {
+      const transform = screen.getByTestId('force-camera').getAttribute('transform') ?? '';
+      const match = /translate\(([-\d.e]+), ([-\d.e]+)\) scale\(([-\d.e]+)\)/.exec(transform);
+      if (!match) {
+        throw new Error(`unreadable camera transform: ${transform}`);
+      }
+
+      return { x: Number(match[1]), y: Number(match[2]), scale: Number(match[3]) };
+    };
+
+    /** Waits for the layout to stop moving the camera, so what a test measures is its own gesture. */
+    async function settledCamera() {
+      await waitFor(() => {
+        expect(screen.getAllByTestId('force-node').length).toBeGreaterThan(0);
+      });
+
+      let previous = '';
+      let stableFor = 0;
+      await waitFor(
+        () => {
+          const current = screen.getByTestId('force-camera').getAttribute('transform') ?? '';
+          stableFor = current === previous ? stableFor + 1 : 0;
+          previous = current;
+          expect(stableFor).toBeGreaterThanOrEqual(3);
+        },
+        { timeout: 8000, interval: 40 },
+      );
+
+      return camera();
+    }
+
+    /** A pointer event from one finger. jsdom has no layout, so client and canvas space coincide. */
+    const finger = (pointerId: number, x: number, y: number, isPrimary = pointerId === 1) => ({
+      pointerId,
+      pointerType: 'touch',
+      isPrimary,
+      button: 0,
+      clientX: x,
+      clientY: y,
+    });
+
+    const canvas = () => screen.getByRole('img', { name: 'Knowledge graph overview' });
+
+    it('offers zoom in, zoom out and show-the-whole-graph as labelled buttons', async () => {
+      const { nodes, links } = buildGraph(NAMES);
+
+      render(<ForceGraph nodes={nodes} links={links} centerNodeId={CENTER_ID} />);
+
+      await settledCamera();
+
+      for (const name of ['Zoom in', 'Zoom out', 'Show the whole graph']) {
+        const button = screen.getByRole('button', { name });
+
+        // A real, enabled button, so Tab reaches it and Enter or Space presses it.
+        expect(button.tagName).toBe('BUTTON');
+        expect(button).toHaveAttribute('type', 'button');
+        expect(button).toBeEnabled();
+        button.focus();
+        expect(button).toHaveFocus();
+      }
+    });
+
+    it('zooms in and out about the middle of the canvas, and flies back to the fitted frame', async () => {
+      const { nodes, links } = buildGraph(NAMES);
+
+      render(<ForceGraph nodes={nodes} links={links} centerNodeId={CENTER_ID} height={480} />);
+
+      const fitted = await settledCamera();
+      // What sits in the middle of the canvas (720 wide by default under jsdom, 480 tall here).
+      const middle = { x: (360 - fitted.x) / fitted.scale, y: (240 - fitted.y) / fitted.scale };
+
+      fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+
+      await waitFor(() => {
+        expect(camera().scale).toBeCloseTo(fitted.scale * 1.5, 5);
+      });
+
+      const zoomed = camera();
+
+      expect(middle.x * zoomed.scale + zoomed.x).toBeCloseTo(360, 3);
+      expect(middle.y * zoomed.scale + zoomed.y).toBeCloseTo(240, 3);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }));
+
+      await waitFor(() => {
+        expect(camera().scale).toBeCloseTo(fitted.scale, 5);
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+
+      // A quick double press compounds, rather than the second press starting from wherever the
+      // first one's hop had got to.
+      await waitFor(() => {
+        expect(camera().scale).toBeCloseTo(Math.min(3, fitted.scale * 2.25), 5);
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show the whole graph' }));
+
+      await waitFor(() => {
+        const back = camera();
+
+        expect(back.scale).toBeCloseTo(fitted.scale, 5);
+        expect(back.x).toBeCloseTo(fitted.x, 3);
+        expect(back.y).toBeCloseTo(fitted.y, 3);
+      });
+    });
+
+    it('pinches with two fingers, about their midpoint', async () => {
+      const { nodes, links } = buildGraph(NAMES);
+
+      render(<ForceGraph nodes={nodes} links={links} centerNodeId={CENTER_ID} />);
+
+      const before = await settledCamera();
+      const grabbed = { x: (300 - before.x) / before.scale, y: (20 - before.y) / before.scale };
+
+      fireEvent.pointerDown(canvas(), finger(1, 280, 20));
+      fireEvent.pointerDown(canvas(), finger(2, 320, 20));
+      fireEvent.pointerMove(canvas(), finger(1, 270, 20));
+      fireEvent.pointerMove(canvas(), finger(2, 330, 20));
+
+      // 40px apart to 60px apart, and what was between the fingers is still between them.
+      await waitFor(() => {
+        expect(camera().scale).toBeCloseTo(before.scale * 1.5, 5);
+      });
+
+      const after = camera();
+
+      expect(grabbed.x * after.scale + after.x).toBeCloseTo(300, 3);
+      expect(grabbed.y * after.scale + after.y).toBeCloseTo(20, 3);
+    });
+
+    it('carries on as a one-finger pan, without a jump, when a finger lifts mid-pinch', async () => {
+      const { nodes, links } = buildGraph(NAMES);
+
+      render(<ForceGraph nodes={nodes} links={links} centerNodeId={CENTER_ID} />);
+
+      await settledCamera();
+
+      const before = camera();
+      fireEvent.pointerDown(canvas(), finger(1, 280, 20));
+      fireEvent.pointerDown(canvas(), finger(2, 320, 20));
+      fireEvent.pointerMove(canvas(), finger(2, 360, 20));
+
+      await waitFor(() => {
+        expect(camera().scale).toBeCloseTo(before.scale * 2, 5);
+      });
+
+      fireEvent.pointerUp(canvas(), finger(2, 360, 20));
+      const afterPinch = camera();
+
+      fireEvent.pointerMove(canvas(), finger(1, 290, 26));
+
+      await waitFor(() => {
+        const now = camera();
+
+        expect(now.scale).toBe(afterPinch.scale);
+        expect(now.x).toBeCloseTo(afterPinch.x + 10, 5);
+        expect(now.y).toBeCloseTo(afterPinch.y + 6, 5);
+      });
+    });
+
+    it('lets a second finger that lands on a node join the pinch instead of dragging it', async () => {
+      const { nodes, links } = buildGraph(NAMES);
+      const onNodeSelect = vi.fn();
+
+      render(<ForceGraph nodes={nodes} links={links} centerNodeId={CENTER_ID} onNodeSelect={onNodeSelect} />);
+
+      const before = await settledCamera();
+      const leaf = screen
+        .getAllByTestId('force-node')
+        .find((group) => group.querySelector('text')?.textContent === 'Aqsa Anwar');
+      const leafTransform = leaf?.getAttribute('transform');
+
+      fireEvent.pointerDown(canvas(), finger(1, 100, 20));
+      fireEvent.pointerDown(leaf!, finger(2, 140, 20));
+      fireEvent.pointerMove(canvas(), finger(2, 180, 20));
+
+      await waitFor(() => {
+        expect(camera().scale).toBeCloseTo(before.scale * 2, 5);
+      });
+
+      // The node was never picked up: the layout is at rest, so it has not moved at all.
+      expect(leaf).toHaveAttribute('transform', leafTransform!);
+    });
+
+    it('turns a node drag into a pinch when a second finger lands, and puts the node back', async () => {
+      const { nodes, links } = buildGraph(NAMES);
+
+      render(<ForceGraph nodes={nodes} links={links} centerNodeId={CENTER_ID} />);
+
+      await settledCamera();
+      const centre = screen
+        .getAllByTestId('force-node')
+        .find((group) => group.querySelector('text')?.textContent === 'Abdul Ameer');
+      const pinnedAt = centre?.getAttribute('transform');
+
+      // The first finger picks the (pinned) centre node up and moves it...
+      fireEvent.pointerDown(centre!, finger(1, 100, 100));
+      fireEvent.pointerMove(centre!, finger(1, 150, 100));
+
+      await waitFor(() => {
+        expect(centre?.getAttribute('transform')).not.toBe(pinnedAt);
+      });
+
+      // ...then a second finger makes it a pinch: the centre goes back to its pin, the camera zooms.
+      // (The drag re-tensioned the layout, which moves the settle-time camera, hence reading it here.)
+      const atPinch = camera();
+      fireEvent.pointerDown(canvas(), finger(2, 250, 100));
+      fireEvent.pointerMove(canvas(), finger(2, 350, 100));
+
+      await waitFor(() => {
+        expect(camera().scale).toBeCloseTo(Math.min(3, atPinch.scale * 2), 5);
+        expect(centre).toHaveAttribute('transform', pinnedAt!);
+      });
+    });
+
+    it('hands the camera back when the browser takes a one-finger swipe to scroll the page', async () => {
+      const { nodes, links } = buildGraph(NAMES);
+
+      render(<ForceGraph nodes={nodes} links={links} centerNodeId={CENTER_ID} />);
+
+      const before = await settledCamera();
+
+      // The swipe's first move is delivered before the browser decides it is a scroll...
+      fireEvent.pointerDown(canvas(), finger(1, 200, 300));
+      fireEvent.pointerMove(canvas(), finger(1, 200, 275));
+
+      await waitFor(() => {
+        expect(camera().y).toBeCloseTo(before.y - 25, 5);
+      });
+
+      // ...then it cancels the pointer and scrolls the page instead. The graph stays where it was.
+      fireEvent.pointerCancel(canvas(), finger(1, 0, 0));
+
+      expect(camera()).toEqual(before);
+    });
+
+    it('keeps vertical swipes for the page, unless the canvas is the whole view', () => {
+      const { nodes, links } = buildGraph(['Aqsa Anwar']);
+
+      const { rerender } = render(<ForceGraph nodes={nodes} links={links} />);
+
+      // pan-y without pinch-zoom: the browser scrolls with vertical swipes and nothing else.
+      expect(canvas().style.touchAction).toBe('pan-y');
+
+      rerender(<ForceGraph nodes={nodes} links={links} verticalSwipe="graph" />);
+
+      expect(canvas().style.touchAction).toBe('none');
+    });
+  });
 });

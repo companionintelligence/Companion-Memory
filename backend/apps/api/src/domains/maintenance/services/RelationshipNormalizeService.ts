@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
+import { countAffected } from '@ci/common/persistence';
 
 /**
  * #1947 stage A — normalise historical `ci.relationships` rows to the
@@ -146,9 +147,15 @@ export class RelationshipNormalizeService {
         { from: 'RECEIVED_EMAIL_FROM', to: 'EMAILED' },
       ];
 
+      // Every count below is a CTE ending in `SELECT count(*)`, never
+      // `.length` of a statement whose OUTER command is UPDATE: TypeORM hands
+      // that back as the pair `[rows, rowCount]`, so `swapped`, `deletedIs` and
+      // `bidirectionalStamped` used to report 6, 2 and 2 on every run — the
+      // replay of an already-normalized graph included.
       let swapped = 0;
       for (const spec of swapSpecs) {
-        const inserted: Array<{ relationship_id: string }> = await manager.query(
+        swapped += await countAffected(
+          manager,
           `WITH victims AS (
              SELECT *
                FROM ci.relationships
@@ -168,36 +175,46 @@ export class RelationshipNormalizeService {
                FROM victims v
              ON CONFLICT DO NOTHING
              RETURNING relationship_id
+           ),
+           retired AS (
+             UPDATE ci.relationships r
+                SET is_active = FALSE, updated_at = NOW()
+               FROM victims v
+              WHERE r.relationship_id = v.relationship_id
+             RETURNING 1
            )
-           UPDATE ci.relationships r
-              SET is_active = FALSE, updated_at = NOW()
-             FROM victims v
-            WHERE r.relationship_id = v.relationship_id
-           RETURNING r.relationship_id`,
+           SELECT count(*)::int AS count FROM retired`,
           [userId, spec.from, spec.to],
         );
-        swapped += inserted.length;
       }
 
       // Reject IS — deactivate (identity belongs in entity_identifiers + merge).
-      const deletedIs = await manager.query(
-        `UPDATE ci.relationships
-            SET is_active = FALSE, updated_at = NOW(),
-                properties = COALESCE(properties, '{}'::jsonb) || jsonb_build_object('rejected', 'IS')
-          WHERE owner_user_id = $1
-            AND relationship_type = 'IS'
-            AND is_active = TRUE
-          RETURNING relationship_id`,
+      const deletedIs = await countAffected(
+        manager,
+        `WITH rejected AS (
+           UPDATE ci.relationships
+              SET is_active = FALSE, updated_at = NOW(),
+                  properties = COALESCE(properties, '{}'::jsonb) || jsonb_build_object('rejected', 'IS')
+            WHERE owner_user_id = $1
+              AND relationship_type = 'IS'
+              AND is_active = TRUE
+           RETURNING 1
+         )
+         SELECT count(*)::int AS count FROM rejected`,
         [userId],
       );
 
-      const bidirectionalStamped = await manager.query(
-        `UPDATE ci.relationships
-            SET is_bidirectional = TRUE, updated_at = NOW()
-          WHERE owner_user_id = $1
-            AND is_bidirectional = FALSE
-            AND relationship_type = ANY($2::text[])
-          RETURNING relationship_id`,
+      const bidirectionalStamped = await countAffected(
+        manager,
+        `WITH stamped AS (
+           UPDATE ci.relationships
+              SET is_bidirectional = TRUE, updated_at = NOW()
+            WHERE owner_user_id = $1
+              AND is_bidirectional = FALSE
+              AND relationship_type = ANY($2::text[])
+           RETURNING 1
+         )
+         SELECT count(*)::int AS count FROM stamped`,
         [
           userId,
           [
@@ -224,8 +241,8 @@ export class RelationshipNormalizeService {
       const result = {
         renamed: renamed.length + documents.length,
         swapped,
-        deletedIs: deletedIs.length,
-        bidirectionalStamped: bidirectionalStamped.length,
+        deletedIs,
+        bidirectionalStamped,
       };
 
       this.logger.log('Relationship normalize complete', { userId, ...result });

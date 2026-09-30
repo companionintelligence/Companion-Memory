@@ -54,6 +54,8 @@ describe('CalendarEventService.createMany — no per-row event emission', () => 
       find: jest.fn(async () => []),
       metadata: { target: EventBaseEntity, columns: { length: 10 } },
       createQueryBuilder: jest.fn(() => baseInsertQb),
+      // insertBaseRows' ownership check: no base row held by another owner.
+      query: jest.fn(async () => []),
     };
     const repo: Record<string, unknown> = {
       create: jest.fn((x: Partial<EventEntity>) => x as EventEntity),

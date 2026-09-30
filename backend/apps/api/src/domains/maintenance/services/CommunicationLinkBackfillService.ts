@@ -352,44 +352,36 @@ export class CommunicationLinkBackfillService {
       if (updIds.length > 0) {
         // One set-based UPDATE for the whole page. `to_ids` rides as jsonb (a
         // uuid[][] can't be unnested element-wise); each row's array is rebuilt
-        // in SQL. Still bounded to this page's (user_id, time, id) rows so it
-        // stays chunk-local; the NULL guards keep it idempotent.
-        //
-        // Historical rows live in COMPRESSED TimescaleDB chunks; a wide UPDATE
-        // decompresses them and exceeds the default per-txn cap (100k tuples),
-        // aborting the backfill. Lift the cap for this txn only — a one-time
-        // backfill; the compression policy recompacts the touched chunks later.
-        await this.dataSource.transaction(async (em) => {
-          await em.query('SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0');
-          await em.query(
-            `UPDATE ci.communications c
-              SET from_entity_id = COALESCE(u.from_id, c.from_entity_id),
-                  to_entity_ids   = CASE
-                                      WHEN u.to_ids IS NULL THEN c.to_entity_ids
-                                      ELSE ARRAY(
-                                        SELECT m.id
-                                          FROM unnest(COALESCE(c.to_entity_ids, '{}'::uuid[]) || u.to_ids)
-                                               WITH ORDINALITY AS m(id, ord)
-                                         GROUP BY m.id
-                                         ORDER BY min(m.ord))
-                                    END
-             FROM (
-               SELECT t.id,
-                      t.time,
-                      t.from_id,
-                      CASE
-                        WHEN t.to_json IS NULL THEN NULL
-                        ELSE ARRAY(SELECT jsonb_array_elements_text(t.to_json))::uuid[]
-                      END AS to_ids
-                 FROM unnest($2::uuid[], $3::timestamptz[], $4::uuid[], $5::jsonb[])
-                        AS t(id, time, from_id, to_json)
-             ) u
-            WHERE c.user_id = $1
-              AND c.time = u.time
-              AND c.id = u.id`,
-            [userId, updIds, updTimes, updFromIds, updToIds],
-          );
-        });
+        // in SQL. Bounded to this page's (user_id, time, id) rows; the NULL
+        // guards keep it idempotent.
+        await this.dataSource.query(
+          `UPDATE ci.communications c
+            SET from_entity_id = COALESCE(u.from_id, c.from_entity_id),
+                to_entity_ids   = CASE
+                                    WHEN u.to_ids IS NULL THEN c.to_entity_ids
+                                    ELSE ARRAY(
+                                      SELECT m.id
+                                        FROM unnest(COALESCE(c.to_entity_ids, '{}'::uuid[]) || u.to_ids)
+                                             WITH ORDINALITY AS m(id, ord)
+                                       GROUP BY m.id
+                                       ORDER BY min(m.ord))
+                                  END
+           FROM (
+             SELECT t.id,
+                    t.time,
+                    t.from_id,
+                    CASE
+                      WHEN t.to_json IS NULL THEN NULL
+                      ELSE ARRAY(SELECT jsonb_array_elements_text(t.to_json))::uuid[]
+                    END AS to_ids
+               FROM unnest($2::uuid[], $3::timestamptz[], $4::uuid[], $5::jsonb[])
+                      AS t(id, time, from_id, to_json)
+           ) u
+          WHERE c.user_id = $1
+            AND c.time = u.time
+            AND c.id = u.id`,
+          [userId, updIds, updTimes, updFromIds, updToIds],
+        );
       }
 
       // Advance the keyset cursor to the oldest row in this page. Strictly

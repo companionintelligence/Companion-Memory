@@ -3,7 +3,13 @@ import os from 'node:os';
 import path from 'path';
 
 import { entityTypeFor, naturalKeyFor } from '../../push/entities';
-import { entityIdentityKey, legacyEntityIdentityKey, resolveEntityType } from '../../staging/identity';
+import {
+  contactIdentifiers,
+  entityIdentityKey,
+  FAX_ATTRIBUTE_NAME,
+  legacyEntityIdentityKey,
+  resolveEntityType,
+} from '../../staging/identity';
 import type { Entity, EntityAttribute, ImportParams } from '../timeline';
 import {
   VCardFileImporter,
@@ -491,6 +497,87 @@ describe('handles recovered from a NOTE-embedded export record', () => {
   });
 });
 
+describe('fax numbers are filed apart from the person’s lines', () => {
+  // Invented: an office in the 212 fiction range — main line 555-0110 (this
+  // colleague at extension 229), fax 555-0118. The shape is a real export's:
+  // every card from one office lists the office fax, and filed among `Phones`
+  // it made two colleagues "the same phone number" to the duplicate detector.
+  const office = [
+    'BEGIN:VCARD',
+    'VERSION:3.0',
+    'N:Quill;Ada;;;',
+    'FN:Ada Quill',
+    'TEL;type=pref:(212) 555-0110\\;229',
+    'TEL;type=OTHER;type=FAX:(212) 555-0118',
+    'END:VCARD',
+  ].join('\r\n');
+
+  it('files a TYPE=FAX number under Faxes, not Phones', () => {
+    const contact = buildContact(contentLines(office), 'office.vcf');
+
+    expect(contact!.entity.metadata?.Phones).toEqual(['(212) 555-0110;229']);
+    expect(contact!.entity.metadata?.Faxes).toEqual(['(212) 555-0118']);
+    expect(contact!.item.metadata?.Faxes).toEqual(['(212) 555-0118']);
+    expect(contact!.entity.accumulate).toContain('Faxes');
+  });
+
+  it('keeps the fax an identity attribute, so no natural key moves', () => {
+    // The key is the card's smallest handle, and here that is the FAX: the
+    // extension line truncates to 5550110229. Filing the fax apart must not
+    // change it — a key that moves on re-import mints a duplicate contact.
+    const contact = buildContact(contentLines(office), 'office.vcf');
+
+    expect(contact!.entity.attributes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: FAX_ATTRIBUTE_NAME, value: '(212) 555-0118', identity: true }),
+      ]),
+    );
+    expect(entityIdentityKey(contact!.entity)).toBe('2125550118');
+  });
+
+  it('gives staging no line of the colleague’s own to index: the fax is office equipment, the extension no number', () => {
+    const contact = buildContact(contentLines(office), 'office.vcf');
+
+    expect(contactIdentifiers(contact!.entity)).toEqual({ emails: [], phones: [] });
+  });
+
+  it.each([
+    ['an Apple built-in label', ['item1.TEL:(212) 555-0118', 'item1.X-ABLabel:_$!<WorkFAX>!$_']],
+    ['a vCard 2.1 bare type', ['TEL;WORK;FAX:(212) 555-0118']],
+    ['a comma-joined TYPE', ['TEL;TYPE="work,fax":(212) 555-0118']],
+  ])('recognises a fax written with %s', (_label, lines) => {
+    const contact = buildContact(
+      contentLines(['BEGIN:VCARD', 'FN:Ada Quill', ...lines, 'END:VCARD'].join('\r\n')),
+      'fax.vcf',
+    );
+
+    expect(contact!.entity.metadata?.Faxes).toEqual(['(212) 555-0118']);
+    expect(contact!.entity.metadata?.Phones).toBeUndefined();
+  });
+
+  it('does not recover note phones onto a card whose only TEL is a fax', () => {
+    // Before faxes were filed apart, the fax sat in `phones` and the note
+    // fallback did not run. It still must not: recovered phones are identity
+    // attributes, and adding one would move the card's natural key.
+    const contact = buildContact(
+      contentLines(
+        [
+          'BEGIN:VCARD',
+          'FN:Ada Quill',
+          'TEL;type=FAX:(212) 555-0118',
+          'NOTE:Source: MOBILE_CONTACTS\\nPhoneNumbers: 202-555-0142\\n',
+          'END:VCARD',
+        ].join('\r\n'),
+      ),
+      'fax-only.vcf',
+    );
+
+    expect(contact!.entity.metadata?.Phones).toBeUndefined();
+    expect(contact!.entity.metadata?.Faxes).toEqual(['(212) 555-0118']);
+    expect(entityIdentityKey(contact!.entity)).toBe('2125550118');
+  });
+});
+
 describe('full pipeline: grouped labels + folded NOTE + QUOTED-PRINTABLE ORG together', () => {
   it('imports a realistic Apple-style card intact end to end', async () => {
     const raw = [
@@ -624,6 +711,38 @@ describe('a card with no phone or email is still a contact', () => {
     // its handle, so re-keying the handle-less rows onto `contact:<name>` lands in
     // a disjoint key space. Verified as 0 collisions on the live corpus too.
     expect(stagedNaturalKey(built.entity)).toBe('contact:5551110000');
+  });
+
+  /**
+   * The Apple Contacts export writes an office line's extension after an
+   * ESCAPED semicolon. The parser unescapes it into the typed value, and the
+   * old join key then kept the last ten digits of line + extension —
+   * `contact:5550147229`, a stranger's number, as the card's natural key, its
+   * `properties.phones` and its identifier. Rows that shipped keep that key
+   * until their next import, where `legacyEntityIdentityKey` still computes the
+   * truncation and the push moves them onto exactly the keys these two tests
+   * pin; migration `20260930020117_refuse_phone_extension_join_keys.sql` removes
+   * everything else the fake reached in the meantime.
+   */
+  it('keys an office-line card with an email on the email, keeping the typed line', () => {
+    const built = buildContact(
+      contentLines(
+        'BEGIN:VCARD\nFN:Dana Quill\nTEL;type=pref:(212) 555-0147\\;229\nEMAIL:dana.quill@example.com\nEND:VCARD\n',
+      ),
+      'contacts.vcf',
+    )!;
+
+    expect(built.entity.metadata?.Phones).toEqual(['(212) 555-0147;229']);
+    expect(stagedNaturalKey(built.entity)).toBe('contact:dana.quill@example.com');
+  });
+
+  it('keys an office-line card with nothing else on its name', () => {
+    const built = buildContact(
+      contentLines('BEGIN:VCARD\nFN:Rae Holt\nTEL;TYPE=WORK:212-555-0148 x31\nEND:VCARD\n'),
+      'contacts.vcf',
+    )!;
+
+    expect(stagedNaturalKey(built.entity)).toBe('contact:rae holt');
   });
 });
 
@@ -850,12 +969,30 @@ describe('colleagues on one office line are keyed apart', () => {
 
   it('keeps the shared numbers on each card — they are still how to reach these people', async () => {
     const { pipeline } = await importRaw(OFFICE);
-    const [priya] = contactEntities(pipeline) as Entity[];
+    const [priya, tom] = contactEntities(pipeline) as Entity[];
 
-    expect(priya.metadata?.Phones).toEqual(['(555) 010-0100', '(555) 010-0101']);
+    // The fax stays on the card, filed as a fax — Tom's copy too, which is
+    // untyped: the export types it FAX on Priya's card.
+    expect(priya.metadata?.Phones).toEqual(['(555) 010-0100']);
+    expect(priya.metadata?.Faxes).toEqual(['(555) 010-0101']);
+    expect(tom.metadata?.Phones).toEqual(['(555) 010-0100']);
+    expect(tom.metadata?.Faxes).toEqual(['(555) 010-0101']);
     expect(priya.attributes?.filter((a) => a.shared).map((a) => a.value)).toEqual([
       '(555) 010-0100',
       '(555) 010-0101',
+    ]);
+  });
+
+  it("indexes each colleague under their own handles only — never the office's lines", async () => {
+    const { pipeline } = await importRaw(OFFICE);
+    const entities = contactEntities(pipeline) as Entity[];
+
+    // The switchboard and the fax are shared: indexed under whichever colleague
+    // arrived first, they would claim every call the office makes.
+    expect(entities.map(contactIdentifiers)).toEqual([
+      { emails: ['priya@example.com'], phones: [] },
+      { emails: ['tom@example.com'], phones: [] },
+      { emails: ['lena@example.com'], phones: ['5550100142'] },
     ]);
   });
 

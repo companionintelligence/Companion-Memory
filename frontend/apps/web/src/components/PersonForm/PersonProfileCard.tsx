@@ -4,6 +4,7 @@ import { Badge, Button, Card } from '@ci/shadcn';
 import { Pencil } from '@ci/shadcn/icons';
 
 import type { PersonDraftSource } from './personDraft';
+import { phoneHref } from './phoneHref';
 
 function labelFor(value: string | null | undefined, fallback: string): string {
   const trimmed = value?.trim();
@@ -116,7 +117,7 @@ export function PersonProfileCard({ person, onEdit }: Props) {
         <div className="flex flex-col gap-1">
           {phones.map((phone) => (
             <span key={`${phone.kind}:${phone.value}`} className="flex items-center gap-2">
-              <a href={`tel:${phone.value}`} className="truncate hover:underline">
+              <a href={phoneHref(phone)} className="truncate hover:underline">
                 {phone.rawValue?.trim() || phone.value}
               </a>
               {phone.label && (

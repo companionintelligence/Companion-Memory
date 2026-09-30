@@ -40,8 +40,10 @@ function makeService(
       return [];
     }
 
+    // The property write's counting CTE — an outer SELECT, so the driver
+    // hands back rows, not the `[rows, rowCount]` pair of a bare UPDATE.
     if (sql.includes('UPDATE ci.entities')) {
-      return [{ entity_id: 'entity-1' }];
+      return [{ count: 1 }];
     }
 
     return [];
@@ -461,11 +463,20 @@ describe('ContextPromptPersistService.execute — writer branches not reachable 
 
   it('throws when the property write matches no entity (wrong owner, or gone)', async () => {
     const { service, dataSourceQuery } = makeService();
-    dataSourceQuery.mockImplementation(async (sql: string) => (sql.includes('UPDATE ci.entities') ? [] : []));
+    // This stub used to answer `[]` — rows — for a bare `UPDATE … RETURNING`,
+    // which the driver answers with `[[], 0]`, so the guard only ever fired
+    // here. The statement now counts through a CTE and the stub says 0.
+    dataSourceQuery.mockImplementation(async (sql: string) =>
+      sql.includes('UPDATE ci.entities') ? [{ count: 0 }] : [],
+    );
 
     await expect(
       callExecute(service, { writer: 'write_place_properties', entityId: ENTITY_UUID, properties: {} }),
     ).rejects.toThrow('property write matched no entity');
+
+    const [sql] =
+      dataSourceQuery.mock.calls.find(([text]) => String(text).includes('UPDATE ci.entities')) ?? [];
+    expect(sql).toMatch(/RETURNING 1\s*\)\s*SELECT count\(\*\)::int AS count FROM updated/);
   });
 
   it('throws when a property write plan has no resolvable entityId', async () => {

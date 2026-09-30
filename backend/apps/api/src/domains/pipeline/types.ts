@@ -93,6 +93,35 @@ export interface StageSource {
    * literal. Never build it from request input.
    */
   predicate?: string;
+
+  /**
+   * A `timestamptz` column on the source row that every writer of the stage's
+   * INPUTS bumps — `updated_at`, in practice. Declaring it re-opens a decided
+   * row whose source row changed after the decision was recorded
+   * (`PipelineStateService.reopenChangedSources`, called by the control tick
+   * when the leg is due).
+   *
+   * The version answers "did the RULE change since this was decided?"; this
+   * answers "did the INPUT?". Without it a stage whose output mirrors a mutable
+   * row keeps its first answer until the next version bump, however the row
+   * changes — `enrich.person_self_claim` kept a self claim for every number a
+   * re-import, merge or edit had dropped from a Person.
+   *
+   * It is an INPUT column, never the one the stage writes, so it re-creates no
+   * ratchet: nothing the stage does moves it, and a re-opened row goes through
+   * THE ONE RULE like any other. Declare it only when all three hold:
+   *
+   *  - every writer of the fields the stage reads stamps it (a writer that
+   *    does not is invisible to this, and the stale answer survives until the
+   *    next bump);
+   *  - nothing bumps it at a high rate for reasons the stage does not care
+   *    about, or every such write buys a pointless re-run;
+   *  - a re-run is cheap. A change re-runs ONE row, but a bulk re-import
+   *    changes thousands at once.
+   *
+   * Interpolated as an identifier, so it must be a plain in-repo column name.
+   */
+  changedAtColumn?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@
  * import half stays hidden when the appliance has importing turned off.
  */
 import { screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -187,5 +187,64 @@ describe('SourcesPage', () => {
       await waitFor(() => expect(screen.getByText('connect panel')).toBeInTheDocument());
       expect(screen.queryByText(/import surface/)).not.toBeInTheDocument();
     });
+  });
+});
+
+/** Phone or not, as `useDeviceLayout` reads it (the `max-width` query). */
+function setViewport(mobile: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width') ? mobile : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
+
+/**
+ * On a phone the three tiles stacked one per row and, pinned above the scrolling
+ * content, took nearly half the screen. There the switch is one row of segments.
+ */
+describe('SourcesPage on a phone', () => {
+  afterEach(() => setViewport(false));
+
+  it('keeps every path in one row of segments, the current one marked', async () => {
+    setViewport(true);
+    renderAt('/sources/connect');
+
+    const services = await screen.findByRole('link', { name: /Services/ });
+    const row = services.parentElement;
+
+    expect(row).toHaveClass('grid-cols-3');
+    expect(row).toContainElement(screen.getByRole('link', { name: /Import/ }));
+    expect(row).toContainElement(screen.getByRole('link', { name: /Devices/ }));
+    expect(services).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: /Import/ })).not.toHaveAttribute('aria-current');
+  });
+
+  it('shows counts as numbers, keeping the noun for screen readers', async () => {
+    setViewport(true);
+    h.imports = 2;
+    renderAt('/sources/connect');
+
+    const importLink = await screen.findByRole('link', { name: /Import/ });
+
+    expect(importLink).toHaveTextContent(/2/);
+    expect(importLink).toHaveAccessibleName(/Import\s*2 imports/);
+    expect(screen.queryByText('2 imports')).not.toBeInTheDocument();
+  });
+
+  it('drops the import segment when importing is off, and the row to two', async () => {
+    setViewport(true);
+    h.importEnabled = false;
+    renderAt('/sources/connect');
+
+    const services = await screen.findByRole('link', { name: /Services/ });
+
+    expect(services.parentElement).toHaveClass('grid-cols-2');
+    expect(screen.queryByRole('link', { name: /Import/ })).not.toBeInTheDocument();
   });
 });

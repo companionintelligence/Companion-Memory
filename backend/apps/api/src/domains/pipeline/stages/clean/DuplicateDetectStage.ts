@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import {
+  EMAIL_EVIDENCE,
   PHONE_CLAIM_E164_SQL,
   PHONE_FACTS_CORPUS_SQL,
   PROFILE_FACTS_CORPUS_SQL,
@@ -14,7 +15,9 @@ import {
   applyProfileVerdict,
   capUnadjudicatedPhones,
   compareTokenizedNames,
+  emailHoldReason,
   extractProfileFacts,
+  holdEmailEvidence,
   indexableTokens,
   phoneCorpusFacts,
   sharedPhoneLines,
@@ -90,8 +93,16 @@ const CANDIDATE_ENTITY_TYPE = 'Person';
  * item — the claim pass's unguarded E.164 tier is capped at 0.85 — and the
  * profile veto still runs last. See {@link buildPhoneCandidates} and
  * {@link adjudicateCandidatePhones}.
+ * 6 — fax lines are not evidence: a number a Person's record files under
+ * `Faxes` (the vCard parser's `TEL;TYPE=FAX`) is refused by the phone
+ * adjudicator whatever else states it, so colleagues who share an office fax
+ * are no longer "the same phone number". See `FAX_FACT_PROPERTY_KEYS` in
+ * `memory/utils/phoneIdentity.ts`. And a shared EMAIL is held for review
+ * (`email_check`) instead of folded when it would take a differently named
+ * person into the owner (`self_endpoint`) or join two contacts whose names
+ * share nothing (`name_conflict`). See {@link holdEmailPairs}.
  */
-export const DUPLICATE_SCORING_GENERATION = 5;
+export const DUPLICATE_SCORING_GENERATION = 6;
 
 /**
  * Generation of the CANDIDATE SET — which subjects are compared, i.e. the
@@ -108,8 +119,13 @@ export const DUPLICATE_SCORING_GENERATION = 5;
  * Contacts Person that never resolved from a communication or event now has
  * evidence too (loadEvidence groups on `entity_id` regardless of
  * `subject_type`, so no query here changed — only the claim producers did).
+ * 3 — those self claims now carry EVERY email and phone a contact card states
+ * (staging's `contactIdentifiers`; migration 20260930022046 for rows already
+ * imported) where they used to carry one handle — a card with any phone never
+ * had an email claim — and stale ones are retracted. Again no query here
+ * changed; the population did.
  */
-export const DUPLICATE_CANDIDATE_GENERATION = 2;
+export const DUPLICATE_CANDIDATE_GENERATION = 3;
 
 /**
  * The stage version, derived so that improving EITHER re-runs history.
@@ -974,6 +990,43 @@ export function adjudicateCandidatePhones(
   });
 }
 
+/**
+ * Hold for review every shared-email pair whose names say it is two people:
+ * a differently named person against the owner, or two contacts whose names
+ * share nothing.
+ *
+ * A shared email is the deterministic tier: `MergeCandidateService` folds it
+ * without asking, into the self Person when one side is the owner. A contact
+ * card that lists one person's address beside another person's name would
+ * fold the two — and carry the card's other addresses along, for the next
+ * sweep to fold whoever owns those. `emailHoldReason`
+ * (`memory/utils/emailIdentity.ts`) decides; `holdEmailEvidence` caps the
+ * email item below the auto-merge tier and marks it `email_check`, which the
+ * fold refuses.
+ *
+ * Runs over the MERGED list, after the phone verdict and before the profile
+ * veto, which keeps the last word. `names` and `selfIds` are corpus-wide: an
+ * endpoint of a slice pair can be anyone.
+ */
+export function holdEmailPairs(
+  candidates: readonly MergeCandidate[],
+  names: ReadonlyMap<string, string | null>,
+  selfIds: ReadonlySet<string>,
+): MergeCandidate[] {
+  return candidates.map((candidate) => {
+    if (!candidate.evidence.some((item) => item.kind === EMAIL_EVIDENCE.match)) {
+      return candidate;
+    }
+
+    const reason = emailHoldReason(
+      { name: names.get(candidate.entityIdA) ?? null, isSelf: selfIds.has(candidate.entityIdA) },
+      { name: names.get(candidate.entityIdB) ?? null, isSelf: selfIds.has(candidate.entityIdB) },
+    );
+
+    return reason == null ? candidate : { ...candidate, ...holdEmailEvidence(candidate, reason) };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // The stage
 // ---------------------------------------------------------------------------
@@ -1124,17 +1177,25 @@ export class DuplicateDetectStage implements Stage {
       suppressed.add(id);
     }
 
-    // Phone before profile: the profile veto has the last word on the score.
-    // The floor is re-applied because the phone verdict can REMOVE evidence —
-    // a claim pair whose only shared number turns out to be toll-free, say.
+    const selfIds = await this.loadSelfIds(ctx.userId);
+    const nameById = new Map(names.map((row) => [row.entity_id, row.name] as const));
+
+    // Phone, then the email hold, then profile: the profile veto has the
+    // last word on the score. The floor is re-applied because the phone
+    // verdict can REMOVE evidence — a claim pair whose only shared number
+    // turns out to be toll-free, say.
     const candidates = adjudicateCandidateProfiles(
-      adjudicateCandidatePhones(
-        mergeCandidateLists(
-          mergeCandidateLists(mergeCandidateLists(exactCandidates, nameCandidates), profileCandidates),
-          phoneCandidates,
+      holdEmailPairs(
+        adjudicateCandidatePhones(
+          mergeCandidateLists(
+            mergeCandidateLists(mergeCandidateLists(exactCandidates, nameCandidates), profileCandidates),
+            phoneCandidates,
+          ),
+          phoneCorpus.facts,
+          phoneCorpus.holders,
         ),
-        phoneCorpus.facts,
-        phoneCorpus.holders,
+        nameById,
+        selfIds,
       ),
       profileFacts,
     ).filter((candidate) => candidate.score >= MIN_CANDIDATE_SCORE);
@@ -1284,6 +1345,28 @@ export class DuplicateDetectStage implements Stage {
           AND btrim(e.name) <> ''`,
       [userId],
     );
+  }
+
+  /**
+   * Every Person that IS the owner: `users.entity_id`, and any live Person
+   * flagged `is_self` (column or property) — the same two tests the phone
+   * corpus and the drain apply.
+   */
+  private async loadSelfIds(userId: string): Promise<Set<string>> {
+    const rows = await this.dataSource.query<Array<{ entity_id: string }>>(
+      `SELECT u.entity_id FROM ci.users u WHERE u.id = $1::uuid AND u.entity_id IS NOT NULL
+       UNION
+       SELECT e.entity_id
+         FROM ci.entities e
+        WHERE e.owner_user_id = $1::uuid
+          AND e.entity_type = '${CANDIDATE_ENTITY_TYPE}'
+          AND COALESCE(e.is_active, true) = true
+          AND e.merged_into_entity_id IS NULL
+          AND (e.is_self IS TRUE OR e.properties->>'is_self' = 'true')`,
+      [userId],
+    );
+
+    return new Set(rows.map((row) => row.entity_id));
   }
 
   /**
@@ -1549,7 +1632,15 @@ export class DuplicateDetectStage implements Stage {
    * own prior proposal, and a review queue whose contents change under the
    * reviewer is worse than a stale row: `detector_version` says which generation
    * produced each row, so a stale proposal is identifiable and reapable by a
-   * deliberate `clean.fact_reap`, which is where that decision belongs.
+   * deliberate pass, which is where that decision belongs.
+   *
+   * For PHONE evidence that pass exists: `MergeCandidateService.revalidatePhoneEvidence`
+   * re-checks every pending pair's phone items against the live records before
+   * the People page shows the queue, rewrites a row to what still holds, and
+   * retires one left with nothing. Stale phone evidence was not hypothetical —
+   * a re-import rewrites `properties` from the source's own card, so a number
+   * a merge had folded in can vanish from one side while the card still said
+   * "Same phone number".
    *
    * `evidence` is written as one jsonb array per pair rather than as rows,
    * matching `ci.promotion_candidates.evidence`, the shape the review UI in this

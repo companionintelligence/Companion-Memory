@@ -59,16 +59,21 @@ export class GraphEventListener {
 
   @OnEvent(Events.GRAPH_NODE_UPSERTED)
   async handleNodeUpserted(payload: EventPayloads[Events.GRAPH_NODE_UPSERTED]) {
+    // Fields go through as they arrived — an absent one stays `undefined`, which
+    // `createOrUpdateNode` reads as "leave the stored value alone". A `?? null`
+    // here would turn every omitted field into "clear it", which is how an
+    // id-reuse `memory.remember` write used to null an imported row's linked key.
     const { node, created } = await this.graphUtility.createOrUpdateNode(payload.ownerId, {
       entityId: payload.node.entityId,
       entityType: payload.node.entityType,
-      name: payload.node.name ?? null,
-      description: payload.node.description ?? null,
-      properties: payload.node.properties ?? {},
-      searchContent: payload.node.searchContent ?? null,
-      linkedTable: payload.node.linkedTable ?? null,
-      linkedId: payload.node.linkedId ?? null,
+      name: payload.node.name,
+      description: payload.node.description,
+      properties: payload.node.properties,
+      searchContent: payload.node.searchContent,
+      linkedTable: payload.node.linkedTable,
+      linkedId: payload.node.linkedId,
       mergeProperties: payload.node.mergeProperties,
+      removeProperties: payload.node.removeProperties,
     });
 
     // The write above is the ONLY thing that used to happen here: the
@@ -102,6 +107,7 @@ export class GraphEventListener {
       startDate: this.parseDate(payload.relationship.startDate),
       endDate: this.parseDate(payload.relationship.endDate),
       mergeProperties: payload.relationship.mergeProperties,
+      removeProperties: payload.relationship.removeProperties,
     });
   }
 

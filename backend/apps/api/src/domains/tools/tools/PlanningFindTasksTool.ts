@@ -3,7 +3,12 @@ import { z } from 'zod';
 
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { ACTIVE_TASK_STATUSES, TASK_STATUSES, TaskService, type Task } from '@ci/domains/planning/task.module';
+import {
+  ACTIVE_TASK_STATUSES,
+  TASK_STATUSES,
+  TaskService,
+  type Task,
+} from '@ci/domains/planning/task.module';
 
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';

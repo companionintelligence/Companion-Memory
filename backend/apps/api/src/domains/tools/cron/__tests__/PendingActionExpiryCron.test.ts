@@ -4,7 +4,13 @@ import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants'
 import { PendingActionExpiryCron, PENDING_ACTION_EXPIRY_CRON } from '../PendingActionExpiryCron';
 
 function makeLogger() {
-  return { setContext: jest.fn(), debug: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as any;
+  return {
+    setContext: jest.fn(),
+    debug: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  } as any;
 }
 
 describe('PendingActionExpiryCron', () => {
