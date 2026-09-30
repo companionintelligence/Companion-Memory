@@ -341,12 +341,40 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
   /**
    * `auto` mode's second half: the appliance could not be reached, so answer here. Called from inside
    * `submit`'s own try, so it reuses that turn's controller and loading state instead of restarting them.
+   *
+   * A turn that carried files, or photos this model cannot see, is refused. Answering the text alone would
+   * read as if those attachments had been looked at.
    */
   const fallBackToDevice = useCallback(
-    async (prompt: string, controller: AbortController): Promise<boolean> => {
+    async (
+      prompt: string,
+      controller: AbortController,
+      extras?: { fileIds?: string[]; images?: string[] },
+    ): Promise<boolean> => {
+      if (extras?.fileIds && extras.fileIds.length > 0) {
+        toast.error('Your Companion is unreachable, and attachments cannot be read on this phone.');
+
+        return false;
+      }
+
+      const images = extras?.images;
+
+      if (images && images.length > 0) {
+        const modelId = getLocalLlmPrefs().modelId;
+        const spec = modelId ? findLocalLlmModel(modelId) : undefined;
+
+        if (!spec?.capabilities.includes('vision')) {
+          toast.error(
+            `Your Companion is unreachable, and ${spec?.label ?? 'this model'} cannot read photos.`,
+          );
+
+          return false;
+        }
+      }
+
       toast.info('Your Companion is unreachable — answering on this phone.');
 
-      return answerOnDevice(prompt, controller);
+      return answerOnDevice(prompt, controller, images);
     },
     [answerOnDevice, toast],
   );
@@ -442,7 +470,7 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
 
         if (!res.ok) {
           if (localReady && isApplianceUnreachable(res)) {
-            return await fallBackToDevice(prompt, controller);
+            return await fallBackToDevice(prompt, controller, { fileIds: data.fileIds, images: data.images });
           }
 
           throw new ApplianceRefusedError();
@@ -465,7 +493,7 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
       } catch (err) {
         if ((err as Error).name !== 'AbortError') {
           if (localReady && isApplianceUnreachable(err)) {
-            return await fallBackToDevice(prompt, controller);
+            return await fallBackToDevice(prompt, controller, { fileIds: data.fileIds, images: data.images });
           }
 
           setError(err);

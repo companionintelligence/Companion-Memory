@@ -537,6 +537,61 @@ describe('useChatRequester — auto mode', () => {
     expect(llm.stream).toHaveBeenCalledTimes(1);
   });
 
+  it('does not answer from the text alone when the unreachable turn had attachments', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
+    );
+
+    const { result } = renderHook(() => useChatRequester({ threadId: null }));
+
+    let returned: boolean | undefined;
+
+    await act(async () => {
+      returned = await result.current[1].submit({ message: 'read this', fileIds: ['file-1'] });
+    });
+
+    expect(returned).toBe(false);
+    expect(llm.stream).not.toHaveBeenCalled();
+    expect(h.toastError).toHaveBeenCalledWith(expect.stringContaining('attachments'));
+    expect(h.toastInfo).not.toHaveBeenCalled();
+  });
+
+  it('does not answer a photo on a model that cannot see it when the appliance is down', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
+    );
+
+    const { result } = renderHook(() => useChatRequester({ threadId: null }));
+
+    let returned: boolean | undefined;
+
+    await act(async () => {
+      returned = await result.current[1].submit({ message: 'what is this?', fileIds: [], images: ['QUJD'] });
+    });
+
+    expect(returned).toBe(false);
+    expect(llm.stream).not.toHaveBeenCalled();
+    expect(h.toastError).toHaveBeenCalledWith(expect.stringContaining('cannot read photos'));
+  });
+
+  it('hands the photo to a vision model when the appliance cannot be reached', async () => {
+    llm.prefs.modelId = 'gemma-4-e2b-it';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
+    );
+
+    const { result } = renderHook(() => useChatRequester({ threadId: null }));
+
+    await act(async () => {
+      await result.current[1].submit({ message: 'what is this?', fileIds: [], images: ['QUJD'] });
+    });
+
+    expect(llm.stream).toHaveBeenCalledWith('what is this?', expect.objectContaining({ images: ['QUJD'] }));
+  });
+
   it('does NOT fall back when the appliance refuses us — an auth failure must not look like an answer', async () => {
     vi.stubGlobal(
       'fetch',
