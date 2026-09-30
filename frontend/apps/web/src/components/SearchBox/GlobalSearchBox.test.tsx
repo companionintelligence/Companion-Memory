@@ -262,6 +262,49 @@ describe('GlobalSearchBox suggestions', () => {
     expect(params().get('search')).toBe('latte');
   });
 
+  it("on a person's page, a recent search opens the search across Memory — the page has no list to filter", () => {
+    localStorage.setItem('memoryRecentSearches', JSON.stringify(['latte']));
+    renderAt('/people/42');
+
+    engage(screen.getByRole('textbox'));
+    fireEvent.click(screen.getByText('latte'));
+
+    expect(path()).toBe('/memory');
+    expect(params().get('search')).toBe('latte');
+  });
+
+  it('on a person\'s page, "Search all of Memory for …" opens the search across Memory', async () => {
+    renderAt('/people/42');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'latte' } });
+
+    fireEvent.click(await screen.findByText('Search all of Memory for'));
+
+    expect(path()).toBe('/memory');
+    expect(params().get('search')).toBe('latte');
+  });
+
+  it('on a list page, a recent search filters the page in place and lets go of the box, closing the panel', async () => {
+    localStorage.setItem('memoryRecentSearches', JSON.stringify(['latte']));
+    renderAt('/memory/people');
+
+    // jsdom reports the document as never focused, which the box reads as the
+    // window losing focus (and so keeps its panel); a real focused tab says yes.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+
+    const input = screen.getByRole('textbox');
+    input.focus();
+    engage(input);
+    fireEvent.click(screen.getByText('latte'));
+
+    expect(path()).toBe('/memory/people');
+    expect(params().get('search')).toBe('latte');
+    expect(document.activeElement).not.toBe(input);
+    await waitFor(() => expect(input).toHaveValue('latte'));
+  });
+
   it('removing a recent search does not commit it', () => {
     localStorage.setItem('memoryRecentSearches', JSON.stringify(['latte']));
     renderAt('/memory/events');

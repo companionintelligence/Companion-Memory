@@ -502,6 +502,15 @@ export function GlobalSearchBox() {
       if (id.startsWith(RECENT_PREFIX)) {
         commitSearch(id.slice(RECENT_PREFIX.length));
 
+        // On a list page the commit filters the page in place and leaves the
+        // input alone — right for a typed query, which the input already shows.
+        // A recent search starts from an empty input, so let go of focus: the
+        // panel closes (and a phone's keyboard with it) and the input picks the
+        // query up from `?search=`, so the tap visibly does something.
+        if (onLiveSearchPage) {
+          inputRef.current?.blur();
+        }
+
         return;
       }
 
@@ -563,7 +572,7 @@ export function GlobalSearchBox() {
           break;
       }
     },
-    [addRecentSearch, clearFilters, clearInput, clearQuery, commitSearch, navigate, query],
+    [addRecentSearch, clearFilters, clearInput, clearQuery, commitSearch, navigate, onLiveSearchPage, query],
   );
 
   // Expand + focus. The focus call only lands when already expanded (a hidden
