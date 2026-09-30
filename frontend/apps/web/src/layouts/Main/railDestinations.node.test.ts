@@ -1,9 +1,12 @@
+import { ListTodo } from '@ci/shadcn/icons';
 import { describe, expect, it } from 'vitest';
 
 import {
   RAIL_DESTINATIONS,
+  type RailDestination,
   allRailDestinations,
   isRailDestinationActive,
+  railClusters,
   visibleRailDestinations,
 } from './railDestinations';
 
@@ -237,5 +240,69 @@ describe('Approvals and Activity', () => {
 
     expect(byId.approvals).toBe('/approvals');
     expect(byId.activity).toBe('/activity');
+  });
+});
+
+/**
+ * The rail separates the places you work from the machinery behind them with
+ * space and a hairline, not a label — so the split has to live in the data.
+ */
+describe('railClusters', () => {
+  const ids = (clusters: RailDestination[][]) => clusters.map((cluster) => cluster.map((d) => d.id));
+
+  it('puts Planning, Memory and Saved Searches above Sources, Jobs, Approvals and Forecast', () => {
+    const rows = visibleRailDestinations(() => true).filter((d) => d.id !== 'self');
+
+    expect(ids(railClusters(rows))).toEqual([
+      ['plan', 'memory', 'saved-searches'],
+      ['sources', 'jobs', 'approvals', 'forecast'],
+    ]);
+  });
+
+  it('keeps two clusters when gated rows drop out of either', () => {
+    const rows = visibleRailDestinations((flag) => flag !== 'jobs.page' && flag !== 'forecast.page').filter(
+      (d) => d.id !== 'self',
+    );
+
+    expect(ids(railClusters(rows))).toEqual([
+      ['plan', 'memory', 'saved-searches'],
+      ['sources', 'approvals'],
+    ]);
+  });
+
+  // Runs, not buckets: the rail never reorders rows to gather a cluster.
+  it('starts a new cluster each time the cluster changes, in rail order', () => {
+    const row = (id: string, cluster?: RailDestination['cluster']): RailDestination => ({
+      id,
+      to: `/${id}`,
+      label: id,
+      icon: ListTodo,
+      cluster,
+    });
+
+    expect(ids(railClusters([row('a'), row('b', 'system'), row('c'), row('d', 'work')]))).toEqual([
+      ['a'],
+      ['b'],
+      ['c', 'd'],
+    ]);
+    expect(railClusters([])).toEqual([]);
+  });
+
+  // A group head going dark promotes its children to the top level; they have
+  // to land in the head's cluster, not open a hairline of their own.
+  it('gives a promoted child its gated head’s cluster', () => {
+    const head: RailDestination = {
+      id: 'head',
+      to: '/head',
+      label: 'Head',
+      icon: ListTodo,
+      flag: 'head.page',
+      cluster: 'system',
+      children: [{ id: 'child', to: '/child', label: 'Child', icon: ListTodo }],
+    };
+
+    const visible = visibleRailDestinations((flag) => flag !== 'head.page', [head]);
+
+    expect(visible.map((d) => [d.id, d.cluster])).toEqual([['child', 'system']]);
   });
 });

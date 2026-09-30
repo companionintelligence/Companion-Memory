@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SETTINGS_SECTIONS, settingsPathToProfile, visibleSettingsSections } from './settingsNav';
 
 const isIosPlatform = vi.hoisted(() => vi.fn(() => false));
+const isNativePlatform = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
   isIosPlatform: () => isIosPlatform(),
+  isNativePlatform: () => isNativePlatform(),
 }));
 
 describe('settingsPathToProfile', () => {
@@ -24,6 +26,7 @@ describe('settingsPathToProfile', () => {
 describe('SETTINGS_SECTIONS', () => {
   beforeEach(() => {
     isIosPlatform.mockReturnValue(false);
+    isNativePlatform.mockReturnValue(false);
   });
 
   it('starts with appearance', () => {
@@ -34,6 +37,12 @@ describe('SETTINGS_SECTIONS', () => {
     expect(visibleSettingsSections().some((section) => section.id === 'safari')).toBe(false);
     isIosPlatform.mockReturnValue(true);
     expect(visibleSettingsSections().some((section) => section.id === 'safari')).toBe(true);
+  });
+
+  it('offers the on-device model only inside a native shell', () => {
+    expect(visibleSettingsSections().some((section) => section.id === 'on-device')).toBe(false);
+    isNativePlatform.mockReturnValue(true);
+    expect(visibleSettingsSections().some((section) => section.id === 'on-device')).toBe(true);
   });
 
   it('no longer lists about-you or account — they moved to the Self page', () => {

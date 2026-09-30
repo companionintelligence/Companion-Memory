@@ -8,9 +8,11 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
+private const val TAG = "LocalLlmGenService"
 private const val NOTIFICATION_CHANNEL_ID = "local_llm_generation"
 private const val NOTIFICATION_ID = 91_002
 
@@ -43,10 +45,20 @@ class LocalLlmGenerationService : Service() {
                 .setOnlyAlertOnce(true)
                 .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        // Best effort, like the request that started this service: Android can refuse the promotion
+        // (ForegroundServiceStartNotAllowedException on API 31+ when the app is backgrounded, a
+        // SecurityException if the permission or service type is missing). Thrown from here it would take
+        // the whole process down, for a notification that only ever *protected* a generation that runs
+        // fine without it. Stop the service instead; the generation carries on unprotected.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not enter the foreground; stopping the generation service", e)
+            stopSelf()
         }
 
         // Not START_STICKY: if the OS kills the process, there is no in-flight generation left

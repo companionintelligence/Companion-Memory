@@ -60,7 +60,7 @@ export function SelfSubmenu() {
       onOpenChange={onOpenChange}
       onHeadClick={onHeadClick}
       testId="self-submenu"
-      compactHead
+      accountHead
       collapsedIcon={avatar}
       head={
         <>

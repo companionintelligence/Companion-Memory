@@ -328,6 +328,59 @@ export class EntityIdentifierService {
   }
 
   /**
+   * The `conflicts` {@link replaceForEntity} would report for the same
+   * arguments — values of the reconciled kinds that ANOTHER entity already
+   * holds — found with a read, so a caller that has to refuse the whole edit
+   * can ask before anything is written. `replaceForEntity` only meets a
+   * conflict at the insert, after it has deleted every row missing from
+   * `desired`.
+   *
+   * Same normalize-and-de-dupe rule, so the same values come back: the first
+   * spelling of each, in `desired` order. A value this entity already holds is
+   * not a conflict, and neither is one that does not normalize —
+   * `replaceForEntity` stores nothing for it.
+   *
+   * A read, not a lock: a value another writer claims between this call and
+   * the write is still reported by `replaceForEntity` itself.
+   */
+  async findConflicts(
+    ownerUserId: string,
+    entityId: string,
+    kinds: readonly IdentifierKind[],
+    desired: ReadonlyArray<{ kind: IdentifierKind; value: string }>,
+  ): Promise<Array<{ kind: IdentifierKind; value: string }>> {
+    const firstSpelling = new Map<string, IdentifierKey & { value: string }>();
+
+    for (const entry of desired) {
+      if (!kinds.includes(entry.kind)) {
+        continue;
+      }
+
+      const valueNormalized = normalizeIdentifier(entry.kind, entry.value);
+      if (valueNormalized == null) {
+        continue;
+      }
+
+      const key = `${entry.kind}:${valueNormalized}`;
+      if (!firstSpelling.has(key)) {
+        firstSpelling.set(key, { kind: entry.kind, valueNormalized, value: entry.value });
+      }
+    }
+
+    const holders = await this.findEntityIdsByIdentifiers(ownerUserId, [...firstSpelling.values()]);
+
+    const conflicts: Array<{ kind: IdentifierKind; value: string }> = [];
+    for (const [key, { kind, value }] of firstSpelling) {
+      const holder = holders.get(key);
+      if (holder != null && holder !== entityId) {
+        conflicts.push({ kind, value });
+      }
+    }
+
+    return conflicts;
+  }
+
+  /**
    * Reconcile ONE entity's contact methods of the given kinds against `desired`
    * — the set-shaped counterpart to {@link addForEntity}, for a form that edits
    * the whole contact list at once.

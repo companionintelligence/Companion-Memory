@@ -12,10 +12,24 @@ export class QuestionEntity {
    * Which half of the catalogue this question belongs to: 'factual' settles a
    * fact, 'preference' records a taste, 'narrative' asks for a story. Selection
    * orders by this so the appliance asks the answerable questions first — see
-   * TIER_RANK_SQL in QuestionService. NULL means a pre-catalogue question.
+   * TIER_RANK_SQL in questionOrder.ts. NULL means a pre-catalogue question.
    */
   @Column({ type: 'text', nullable: true, name: 'answer_tier' })
   answerTier?: string | null;
+
+  /**
+   * Where a seeded catalogue question sits in the seed migrations, in the order
+   * they list it. The inference rotation takes the catalogue round-robin across
+   * categories in this order (questionOrder.ts), because `question_id` order is
+   * a different shuffle on every appliance. NULL for anything no seed migration
+   * wrote — including a fork, which `forkSharedQuestion` deliberately leaves
+   * without one.
+   *
+   * Written by migrations only; nothing in the app sets or reads it through
+   * the repository.
+   */
+  @Column({ type: 'integer', nullable: true, name: 'seed_position' })
+  seedPosition?: number | null;
 
   @Column({ name: 'question_text' })
   text!: string;

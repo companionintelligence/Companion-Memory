@@ -35,6 +35,8 @@ function makeHarness() {
     ),
     metadata: { target: CommunicationBaseEntity, columns: { length: 10 } },
     createQueryBuilder: jest.fn(() => makeInsertBuilder(baseInsert)),
+    // insertBaseRows' ownership check: no base row held by another owner.
+    query: jest.fn(async () => []),
   };
 
   const repository: Record<string, unknown> = {

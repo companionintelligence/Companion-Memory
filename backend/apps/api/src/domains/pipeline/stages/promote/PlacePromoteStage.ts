@@ -297,7 +297,12 @@ interface EventLink {
  *    field returns zero for every place on the appliance today, because nothing
  *    has ever written the column: 0 of 324,044 events carry a link. **This stage
  *    is the reason that number stops being zero**, which is the honest test of
- *    whether a promoter did anything.
+ *    whether a promoter did anything. Also READ by `promote.edge_event`, which
+ *    projects it as Event −LOCATED_AT→ Place (`event.happened_at`) — and which
+ *    has often decided the event already, off its participants. Every event
+ *    this stage records `done` has that decision re-opened by the worker
+ *    (`STAGE_REOPENS` in `reopens.ts`); this stage does not do it, because a
+ *    stage never writes the ledger.
  *
  * `location_boundary` is the weakest of the three and it is worth being exact
  * about: the column is SELECTed by `PlaceEntity` (as `boundary`), returned by

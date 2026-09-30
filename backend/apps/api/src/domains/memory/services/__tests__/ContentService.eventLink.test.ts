@@ -129,6 +129,7 @@ describe('ContentService.createMany — set-based batch + event auto-link', () =
     find: jest.Mock;
     metadata: { columns: unknown[] };
     createQueryBuilder: jest.Mock;
+    query: jest.Mock;
   };
   let eventQb: {
     select: jest.Mock;
@@ -160,6 +161,8 @@ describe('ContentService.createMany — set-based batch + event auto-link', () =
       find: jest.fn(async () => []),
       metadata: { columns: Array.from({ length: 10 }) },
       createQueryBuilder: jest.fn(() => makeInsertBuilder(baseInsert)),
+      // insertBaseRows' ownership check: no base row held by another owner.
+      query: jest.fn(async () => []),
     };
 
     // contentRepository.create returns the object it is given (with the service's

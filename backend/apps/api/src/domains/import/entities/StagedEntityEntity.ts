@@ -66,9 +66,11 @@ export class StagedEntityEntity {
   identityKey!: string | null;
 
   /**
-   * The identity key the rule BEFORE shared handles gave this entity — its
-   * smallest handle, shared or not — when that differs from `identityKey`; NULL
-   * when they agree, and for rows staged before the column existed.
+   * The identity key the rule BEFORE shared handles were passed over gave this
+   * entity — its smallest handle, shared or not, an extension line read as the
+   * truncation it used to key as, of those its parser read then — when that
+   * differs from `identityKey`; NULL when they agree, and for rows staged
+   * before the column existed.
    *
    * Rows already in `ci.entities` were minted under that key, and a moved key
    * would mint a second Person on the next import. The push uses this to move

@@ -160,7 +160,7 @@ export interface UpdateAnswerDto {
 /**
  * `ci.questions.answer_tier` — which half of the catalogue a reflection belongs
  * to. Mirrors the `questions_answer_tier_check` constraint; selection orders by
- * it (see TIER_RANK_SQL in QuestionService).
+ * it (see TIER_RANK_SQL in questionOrder.ts).
  */
 export const ANSWER_TIERS = ['factual', 'preference', 'narrative'] as const;
 export type AnswerTier = (typeof ANSWER_TIERS)[number];

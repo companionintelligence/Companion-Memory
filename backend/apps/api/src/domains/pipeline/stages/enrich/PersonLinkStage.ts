@@ -84,8 +84,18 @@ const EVENT_SUBJECT_TYPE = 'event';
  * `value_normalized` provisional. (Until CI-Import-Tools' retirement this also
  * meant bumping its copy of the rule; that repo's import functionality is now
  * native here.)
+ *
+ * v2 — the shared `normalizePhone` (and `toE164`) refuse a value carrying an
+ * extension. No participant string can carry one past {@link PHONE_SHAPE}, so
+ * no claim's VALUE moves; what moves is what a claim RESOLVES to, because the
+ * index side held keys truncated from vCard office lines (`(212) 555-0147;229`
+ * as `5550147229`) that migration
+ * `20260930020117_refuse_phone_extension_join_keys` deletes. The upsert
+ * overwrites `entity_id`, so the re-run re-adjudicates every claim that had
+ * matched one — the projection only ever adds, which is why that migration
+ * also withdraws the links those claims had projected.
  */
-export const IDENTIFIER_RULE_GENERATION = 1;
+export const IDENTIFIER_RULE_GENERATION = 2;
 
 /**
  * Generation of the MATCH rule — which index row a triple resolves to, and how
