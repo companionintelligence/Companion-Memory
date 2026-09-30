@@ -275,8 +275,14 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * coordinate, so improving the geocoder makes every estimate stale. Bumping
    * the provider generation therefore bumps BOTH stages — which is the point,
    * and means this line moves whenever `enrich.geocode`'s does.
+   *
+   * v2 — ESTIMATE_RULE_GENERATION 2: an event with its own `location_name` is
+   * skipped (`has_location_name`) instead of borrowing a neighbour's coordinate.
+   * The bump re-decides every row under the new rule; the estimates v1 wrote
+   * onto named events, and the place links built on them, are withdrawn by
+   * migration 20260930035044_clear_estimates_on_events_with_own_location.
    */
-  [STAGE_IDS.ENRICH_ESTIMATE_LOCATION]: 1,
+  [STAGE_IDS.ENRICH_ESTIMATE_LOCATION]: 2,
 
   /**
    * v1 — initial conversion of the three participant backfills.
