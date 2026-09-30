@@ -142,6 +142,81 @@ describe('Calendar datasource', () => {
     }
   });
 
+  it('imports a Google Calendar HTML description as text, keeping its lines and links', async () => {
+    // The shape Google writes into DESCRIPTION (RFC 5545 says plain TEXT): its
+    // appointment-booking body, with markup and real `\n` escapes mixed. 194 of
+    // the 1,260 descriptions in the reference exports carried tags, and they
+    // were displayed, indexed and embedded as raw markup.
+    const icsPath = icsFile('ci-ics-html-', 'google.ics', [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Google Inc//Google Calendar 70.9054//EN',
+      'BEGIN:VEVENT',
+      'UID:html-1@google.com',
+      'DTSTART:20260704T150000Z',
+      'DTEND:20260704T160000Z',
+      'SUMMARY:Intro call',
+      'DESCRIPTION:<b>Booked by</b>\\nAda Lovelace\\nada@example.com\\n\\nQuestions? Answers <a href="https://exam',
+      ' ple.com/faq">here</a>&nbsp\\;&amp\\; more.<br><br>Join with Google Meet: https://meet.example/abc',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ]);
+
+    try {
+      const [event] = await importIcs(icsPath);
+      const text =
+        'Booked by\nAda Lovelace\nada@example.com\n\nQuestions? Answers here (https://example.com/faq) & more.\n\n' +
+        'Join with Google Meet: https://meet.example/abc';
+
+      // Metadata `Description` is what the push stores as the event's
+      // description: shown in Memory, indexed for search, and embedded.
+      expect(event.item.metadata.Description).toBe(text);
+    } finally {
+      fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
+    }
+  });
+
+  it('leaves a plain-text description exactly as written, angle brackets and all', () => {
+    // No HTML tag, so no HTML parser: one would delete `<ada@example.com>` as
+    // an unknown element and decode a literal `&amp;`.
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:plain-1@x',
+      'DTSTART:20260101T090000Z',
+      'SUMMARY:Sync',
+      'DESCRIPTION:Organizer: Ada <ada@example.com>\\nQ&amp\\;A if 2 < 3',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+
+    const [event] = parseIcsEvents(ics, 'plain.ics');
+
+    expect(event.description).toBe('Organizer: Ada <ada@example.com>\nQ&amp;A if 2 < 3');
+  });
+
+  it('keeps the UID-less event id stable: the sig hashes the raw HTML, not the text', () => {
+    const rawDescription = '<b>Booked by</b>\\nAda';
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'DTSTART:20260101T090000Z',
+      'SUMMARY:Call',
+      `DESCRIPTION:${rawDescription}`,
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\n');
+
+    const [event] = parseIcsEvents(ics, 'noUidHtml.ics');
+    const expectedSig = crypto
+      .createHash('sha1')
+      .update(['20260101T090000Z', '', 'Call', '', rawDescription].join('\0'))
+      .digest('hex');
+
+    expect(event.description).toBe('Booked by\nAda');
+    expect(event.id).toBe(`ics:noUidHtml.ics:${expectedSig}`);
+  });
+
   it('keeps the UID-less event id (sig) stable across the unescape fix', () => {
     // The sig hash seeding the id for UID-less events is computed from the RAW
     // (still-escaped) text, not the unescaped display text. Otherwise every
@@ -258,9 +333,10 @@ describe('Calendar datasource', () => {
     expect(items.map((item) => item.id)).not.toContain('04AACD36-CF84-4420-AA2A-D25CB8B9C662');
 
     // The body is the event's, not the reminder boilerplate. `\n` is a real
-    // RFC 5545 TEXT escape, decoded like everywhere else.
+    // RFC 5545 TEXT escape, decoded like everywhere else, and Google's `<b>` is
+    // converted to text (see icsDescriptionText).
     expect(booked?.metadata.Description).toBe(
-      '<b>Booked by</b>\nAva Booker\nava@example.com\n\nJoin with Google Meet: https://meet.example.com/fby-pwgg-pff',
+      'Booked by\nAva Booker\nava@example.com\n\nJoin with Google Meet: https://meet.example.com/fby-pwgg-pff',
     );
     expect(metaText(booked?.metadata.Description)).not.toContain('This is an event reminder');
     expect(booked?.metadata.Summary).toBe('Meet w/ Liam (Ava Booker)');
