@@ -5,7 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { JobControlStore } from '@ci/common/job-controls';
 import { MaxArraySizePipe } from '@ci/common/pipes';
-import { EntityIdentifierService, type IdentifierKind } from '@ci/domains/graph';
+import { EntityIdentifierService, hasPhoneExtension, type IdentifierKind } from '@ci/domains/graph';
 import { CreatePersonPayload } from '@ci/domains/graphql/types/CreatePersonPayload';
 import { DeleteByIdInput } from '@ci/domains/graphql/types/DeleteByIdInput';
 import { DeleteByIdPayload } from '@ci/domains/graphql/types/DeleteByIdPayload';
@@ -505,7 +505,16 @@ export class PersonResolver {
     );
 
     if (owningEntityId == null) {
-      throw new BadRequestException(`"${input.value}" does not normalize to a usable ${kind}`);
+      // An extension gets its own message because the number itself is fine:
+      // it just cannot identify anybody. Its last ten digits would run the
+      // office line and the extension together into someone else's number, and
+      // the main line alone is shared by everyone at that office.
+      throw new BadRequestException(
+        kind === 'phone' && hasPhoneExtension(input.value)
+          ? `"${input.value}" includes an extension, so it can't be used to match this person to ` +
+            'calls and messages. Keep it in a note instead.'
+          : `"${input.value}" does not normalize to a usable ${kind}`,
+      );
     }
 
     if (owningEntityId !== personId) {
