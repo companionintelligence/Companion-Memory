@@ -75,6 +75,12 @@ interface OutlookCalendarEvent {
   createdDateTime?: string;
   lastModifiedDateTime?: string;
   webLink?: string;
+  /**
+   * Set only on a calendarView/delta tombstone, which carries nothing but `id`
+   * and this: an event deleted since the last round, or one that changed
+   * outside the view's date range.
+   */
+  '@removed'?: { reason?: string };
 }
 
 interface Participant {
@@ -219,6 +225,22 @@ export class OutlookCalendarTransformService {
     try {
       const eventId = event.id || 'unknown';
       const subject = event.subject || 'Untitled Event';
+
+      // A delta tombstone is not an event. With no start, subject or iCalUId,
+      // transforming it minted an "Untitled Event" stamped at ingest time under
+      // the Graph-id fallback identity, which is never the identity the deleted
+      // event was stored under, so it could not even dedup against that row.
+      // Removing the stored event is still not implemented.
+      if ('@removed' in event) {
+        this.logger.debug('Skipping removed event (Graph delta tombstone)', {
+          userId,
+          connectionId,
+          eventId,
+          reason: event['@removed']?.reason,
+        });
+
+        return;
+      }
 
       // Skip cancelled events
       if (event.isCancelled) {

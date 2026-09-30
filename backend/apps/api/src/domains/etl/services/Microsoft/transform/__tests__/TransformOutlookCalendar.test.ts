@@ -209,4 +209,28 @@ describe('OutlookCalendarTransformService.transformOutlookCalendar — every cal
     // Two full batches of ten, then five: never the whole payload at once.
     expect(maxInFlight).toBe(10);
   });
+
+  it('skips a Graph delta tombstone instead of minting an "Untitled Event" for it', async () => {
+    const { service, eventService } = makeIngestService();
+
+    await runTransform(service, {
+      calendars: [
+        {
+          id: 'cal-work',
+          events: [
+            // Verbatim shape from Graph's calendarView/delta docs: nothing but
+            // the type, the id and the annotation.
+            {
+              '@odata.type': '#microsoft.graph.event',
+              id: 'AAMkADk0MGFkODE3LWE4MmYtNDRhOS04OGQLkRkXbBznTvAADb6ytyAAA=',
+              '@removed': { reason: 'deleted' },
+            },
+            graphEvent('Standup'),
+          ],
+        },
+      ],
+    });
+
+    expect(createdTitles(eventService)).toEqual(['Standup']);
+  });
 });
