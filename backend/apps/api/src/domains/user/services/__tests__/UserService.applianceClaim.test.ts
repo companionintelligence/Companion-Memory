@@ -12,8 +12,38 @@ const bcrypt = bcryptModule as unknown as { hash: jest.Mock };
 const SYSTEM = { userId: SYSTEM_USER } as never;
 
 /**
+ * The command Postgres reports for `sql` — the OUTER statement's. Parenthesised spans (CTE bodies,
+ * subqueries) are removed innermost-first, so `WITH p AS (UPDATE …) SELECT …` reads as SELECT and
+ * `UPDATE … WHERE NOT EXISTS (SELECT …)` as UPDATE.
+ */
+function outerCommand(sql: string): string | undefined {
+  let flattened = sql;
+
+  while (/\([^()]*\)/.test(flattened)) {
+    flattened = flattened.replace(/\([^()]*\)/g, ' ');
+  }
+
+  return /\b(SELECT|INSERT|UPDATE|DELETE)\b/i.exec(flattened)?.[1].toUpperCase();
+}
+
+/**
+ * What TypeORM's `PostgresQueryRunner.query()` resolves to for a statement that produced `rows`.
+ *
+ * NOT always the rows: it switches on that outer command and hands back `[rows, rowCount]` for an
+ * UPDATE or DELETE. This fake used to answer the bare `UPDATE ... RETURNING id` with plain rows — a
+ * shape the driver never produces — so the claim reading the pair's length (always 2) as
+ * "promoted" passed here while `create()` returned `role: 'admin'` for every account.
+ */
+function driverResult(sql: string, rows: unknown[]): unknown {
+  const command = outerCommand(sql);
+
+  return command === 'UPDATE' || command === 'DELETE' ? [rows, rows.length] : rows;
+}
+
+/**
  * A UserService whose transaction manager records every statement and answers the promoting
- * UPDATE with `rows`, standing in for "this account was/was not promoted".
+ * statement with `rows`, standing in for "this account was/was not promoted", in the shape the
+ * real driver would give it.
  */
 function makeService(promotedRows: Array<{ id: string }>) {
   const queries: Array<{ sql: string; params: unknown[] }> = [];
@@ -22,8 +52,8 @@ function makeService(promotedRows: Array<{ id: string }>) {
     query: jest.fn((sql: string, params: unknown[]) => {
       queries.push({ sql, params });
 
-      // The advisory lock returns nothing anyone reads; only the UPDATE's rows matter.
-      return Promise.resolve(sql.includes('pg_advisory_xact_lock') ? [] : promotedRows);
+      // The advisory lock returns nothing anyone reads; only the promotion's rows matter.
+      return Promise.resolve(driverResult(sql, sql.includes('pg_advisory_xact_lock') ? [] : promotedRows));
     }),
   };
 
@@ -77,6 +107,20 @@ describe('UserService — claiming an unowned appliance', () => {
 
     const user = await service.create(SYSTEM, NEW_USER);
 
+    expect(user.role).toBe('user');
+  });
+
+  it('reads the promotion from its rows, not from the pair a bare UPDATE resolves to', async () => {
+    // `.length` of `[rows, rowCount]` is 2 whether or not a row matched, so the claim must be a
+    // statement whose OUTER command is a SELECT. Pinned so it cannot be "simplified" back into a
+    // bare UPDATE ... RETURNING, which is the exact shape that shipped every account as an admin.
+    const { service, queries } = makeService([]);
+
+    const user = await service.create(SYSTEM, NEW_USER);
+
+    const update = queries.find((q) => q.sql.includes("SET role = 'admin'"));
+
+    expect(outerCommand(update!.sql)).toBe('SELECT');
     expect(user.role).toBe('user');
   });
 
@@ -144,5 +188,28 @@ describe('UserService — claiming an unowned appliance', () => {
 
     await expect(service.create({ userId: 'user-9' } as never, NEW_USER)).rejects.toThrow('Unauthorized');
     expect(userRepository.manager.transaction).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The fake above is only worth anything while it answers the way TypeORM's Postgres driver does. If
+ * it drifts back to plain rows for an UPDATE, every case in this file loses the ability to see the
+ * bug it exists to catch. The driver itself is exercised in
+ * `UserService.applianceClaim.integration.spec.ts`.
+ */
+describe('the driver fake these cases run on', () => {
+  it('answers an UPDATE ... RETURNING with [rows, rowCount], CTE prefix or not', () => {
+    const bare = `UPDATE ci.users SET role = 'admin' WHERE NOT EXISTS (SELECT 1) RETURNING id`;
+    const prefixed = `WITH admins AS (SELECT 1) UPDATE ci.users SET role = 'admin' RETURNING id`;
+
+    expect(driverResult(bare, [])).toEqual([[], 0]);
+    expect(driverResult(prefixed, [{ id: 'user-1' }])).toEqual([[{ id: 'user-1' }], 1]);
+  });
+
+  it('answers an UPDATE wrapped in a CTE with the rows, because its outer command is a SELECT', () => {
+    const wrapped = `WITH promoted AS (UPDATE ci.users SET role = 'admin' RETURNING id) SELECT id FROM promoted`;
+
+    expect(driverResult(wrapped, [])).toEqual([]);
+    expect(driverResult(wrapped, [{ id: 'user-1' }])).toEqual([{ id: 'user-1' }]);
   });
 });

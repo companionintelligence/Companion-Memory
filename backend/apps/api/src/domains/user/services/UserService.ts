@@ -126,14 +126,23 @@ export class UserService {
     return this.userRepository.manager.transaction(async (manager) => {
       await manager.query('SELECT pg_advisory_xact_lock($1)', [APPLIANCE_CLAIM_LOCK_KEY]);
 
+      // Wrapped in a CTE so the OUTER command is a SELECT, which is the only shape TypeORM's
+      // Postgres driver resolves to the rows themselves. A bare `UPDATE ... RETURNING` resolves to
+      // the pair `[rows, rowCount]` instead, and this used to read that pair's length — 2, whatever
+      // the UPDATE matched — as "promoted": `create()` handed back `role: 'admin'` for EVERY new
+      // account while the row correctly stayed 'user'. `PortalTokenService.provisionUser` puts that
+      // object straight onto `request.user`, which is what both admin guards read. Same trap as
+      // `PipelineControlService.reapExpiredShardLeases`; see its comment for the driver detail.
       const promoted = await manager.query<Array<{ id: string }>>(
-        `UPDATE ci.users
-            SET role = 'admin'
-          WHERE id = $1
-            AND NOT EXISTS (
-              SELECT 1 FROM ci.users WHERE role = 'admin' AND deleted_at IS NULL
-            )
-        RETURNING id`,
+        `WITH promoted AS (
+           UPDATE ci.users
+              SET role = 'admin'
+            WHERE id = $1
+              AND NOT EXISTS (
+                SELECT 1 FROM ci.users WHERE role = 'admin' AND deleted_at IS NULL
+              )
+          RETURNING id)
+         SELECT id FROM promoted`,
         [userId],
       );
 
