@@ -199,6 +199,35 @@ describe('AccountSection — delete', () => {
     expect(await screen.findByText(/Could not delete the account/i)).toBeInTheDocument();
     expect(h.logout).not.toHaveBeenCalled();
   });
+
+  it('native: tells a device whose key the server refuses (403) to sign in again, and stays signed in', async () => {
+    // A phone that signed in before keys were minted at `full` holds a `write` one, which
+    // `DELETE /account` refuses. "Please try again" would never work; signing in again does.
+    h.authToken = null;
+    fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
+      if (isAccountReadCall(url, init)) {
+        return Promise.resolve({ email: h.email, hasFederatedIdentity: false, hasOwnPassword: true });
+      }
+
+      return Promise.reject(
+        new FetchJsonError(
+          403,
+          'Forbidden',
+          'This API key is "write" and cannot perform this action, which requires "full" access',
+        ),
+      );
+    });
+    render(<AccountSection />);
+    openDialog();
+
+    fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: 'jsmith@example.com' } });
+    fireEvent.click(confirmButton());
+
+    expect(await screen.findByText(/Sign out, sign back in, then try again/)).toBeInTheDocument();
+    expect(screen.queryByText(/Could not delete the account/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/requires "full" access/)).not.toBeInTheDocument();
+    expect(h.logout).not.toHaveBeenCalled();
+  });
 });
 
 describe('AccountSection — change email', () => {

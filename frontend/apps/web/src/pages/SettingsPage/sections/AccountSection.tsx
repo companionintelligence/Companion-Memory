@@ -13,6 +13,16 @@ import { useAuth, useCurrentUser } from '@/hooks';
  */
 const HUB_SIGN_IN_AGAIN = 'Sign out, then open Memory from your Hub again to make this change.';
 
+/**
+ * What a 403 from `DELETE /account` means. Only the device key a phone holds can meet
+ * one: the route requires a key at `full` (`AccountController.remove`), and a phone
+ * that signed in before keys were minted at `full` (#2661) still holds a `write` one.
+ * Signing in again mints a new key at `full`. A web session is never refused this way;
+ * the capability rule reads only API keys.
+ */
+const DEVICE_SIGN_IN_AGAIN_TO_DELETE =
+  'This device needs a fresh sign-in to delete the account. Sign out, sign back in, then try again.';
+
 function messageFrom(error: unknown, fallback: string, signInAgain: string): string {
   if (error instanceof FetchJsonError && error.status === 401 && error.message === 'REAUTH_REQUIRED') {
     // An account with no password of its own proves itself by a recent sign-in
@@ -177,8 +187,12 @@ export function AccountSection() {
       // The account stops authenticating immediately, so there is nothing left to
       // stay signed in to: drop the local credential and return to a logged-out app.
       await logout();
-    } catch {
-      setError('Could not delete the account. Please try again.');
+    } catch (err) {
+      setError(
+        err instanceof FetchJsonError && err.status === 403
+          ? DEVICE_SIGN_IN_AGAIN_TO_DELETE
+          : 'Could not delete the account. Please try again.',
+      );
       setLoading(false);
     }
   };
