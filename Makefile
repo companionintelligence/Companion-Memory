@@ -847,7 +847,7 @@ smoke-api: ## Verify the API image can run `migrate` with production-only depend
 # migrate-database runs `yarn migrate`, so both halves of it must resolve inside
 # the image, which installs dependencies only: a devDependency in either exits
 # non-zero at startup and rolls back every app install. Neither half needs a
-# database here — check:migrations only reads migration filenames, and dbmate's
+# database here — check:migrations only reads the migration files, and dbmate's
 # --help resolves bin/dbmate.js's imports without connecting. entrypoint.sh is
 # bypassed because it demands the eight runtime secrets. A missing image is an
 # error, not a pass: a gate that verified nothing must not report green.

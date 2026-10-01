@@ -15,7 +15,7 @@
     "dbmate": "DOTENV_CONFIG_PATH=../../../.env node bin/dbmate.js",
     "dbshell": "DOTENV_CONFIG_PATH=../../../.env node bin/dbshell.js",
     "dburl": "DOTENV_CONFIG_PATH=../../../.env node bin/dburl.js",
-    "check:migrations": "node bin/check-migration-versions.js",
+    "check:migrations": "node bin/check-migration-versions.js && node bin/check-migration-directives.js",
     "migrate": "yarn check:migrations && yarn dbmate up",
     "pgboss:ensure": "node bin/ensure-pgboss-schema.js",
     "migrate:up": "yarn migrate",

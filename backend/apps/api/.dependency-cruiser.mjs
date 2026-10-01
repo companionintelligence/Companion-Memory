@@ -29,9 +29,10 @@ export default {
       name: 'no-production-dev-deps',
       severity: 'error',
       // bin/ is covered too: it is the only other code the production image
-      // runs (`yarn migrate` -> check-migration-versions.js, dbmate.js), and
-      // the image installs dependencies only, so a devDependency there is not
-      // a lint nit — it exits non-zero at startup and fails every app install.
+      // runs (`yarn migrate` -> check-migration-versions.js,
+      // check-migration-directives.js, dbmate.js), and the image installs
+      // dependencies only, so a devDependency there is not a lint nit — it
+      // exits non-zero at startup and fails every app install.
       comment: 'Application code must not import non-production dependencies',
       from: {
         path: '^(src|bin)',
