@@ -49,6 +49,22 @@ describe('AdminOnlyGuard', () => {
 describe('the preconditions for gating a route behind AdminOnlyGuard', () => {
   const src = (path: string) => readFileSync(resolve(__dirname, '..', '..', '..', path), 'utf8');
 
+  /**
+   * One method of a class, from its signature to the closing brace at
+   * class-member indentation, so a claim about `create()` cannot be satisfied by
+   * text that happens to sit in another method.
+   */
+  const methodSource = (source: string, name: string): string => {
+    const start = source.search(new RegExp(`^  (?:private |public )?(?:async )?${name}\\(`, 'm'));
+    const end = start < 0 ? -1 : source.indexOf('\n  }\n', start);
+
+    if (end < 0) {
+      throw new Error(`could not find ${name}() in the source this suite reads`);
+    }
+
+    return source.slice(start, end);
+  };
+
   it.each([['domains/auth/services/JwtStrategy.ts'], ['domains/auth/services/ApiKeyStrategy.ts']])(
     '%s resolves the full user record, so role reaches the request',
     (path) => {
@@ -87,11 +103,22 @@ describe('the preconditions for gating a route behind AdminOnlyGuard', () => {
     expect(service).toMatch(/SET role = 'admin'/);
     expect(service).toMatch(/role = 'admin' AND deleted_at IS NULL/);
 
-    // Called from create(), which is the single chokepoint all five user-creation
-    // sites funnel through (local signup, portal JIT-provisioning, the Hub
-    // forward-auth bridge, and both OIDC paths). Promoting in any one caller
-    // would leave the others able to create the first account unpromoted.
-    expect(service).toMatch(/await this\.claimApplianceIfUnowned\(entity\.id\)/);
+    // Called from insertAccount(), the one method that writes an account, inside
+    // the transaction that does, under the lock every creation takes. Both public
+    // ways in go through it: create(), and createFirstAccount() for the doors that
+    // admit someone without an invitation. So every user-creation site (local
+    // signup, portal JIT-provisioning, the Hub forward-auth bridge, and both OIDC
+    // paths) is promoted. Promoting in any one caller would leave the others able
+    // to create the first account unpromoted.
+    expect(methodSource(service, 'insertAccount')).toMatch(
+      /await this\.claimApplianceIfUnowned\(manager, saved\.id\)/,
+    );
+    expect(methodSource(service, 'create')).toMatch(
+      /this\.insertAccount\(\s*data,\s*\{\s*onlyIfFirst:\s*false\s*\}\s*\)/,
+    );
+    expect(methodSource(service, 'createFirstAccount')).toMatch(
+      /this\.insertAccount\(\s*data,\s*\{\s*onlyIfFirst:\s*true,\s*alongside\s*\}\s*\)/,
+    );
   });
 
   it('heals the fresh installs the original backfill could not reach', () => {
