@@ -1,6 +1,7 @@
 import { SYSTEM_USER, type ServiceContext } from '@ci/common/context';
 
 import { QuestionEntity } from '../entities/QuestionEntity';
+import { QUESTION_ROTATION_ORDER_SQL, QUESTION_ROTATION_RANK_SQL } from '../questionOrder';
 
 import { QuestionService, FEED_QUESTION_STALE_MS } from './QuestionService';
 
@@ -815,17 +816,47 @@ describe('QuestionService asks the functional questions first', () => {
     expect(sql).toMatch(/q\.evidence_class\s*<>\s*'hand_entry'/);
   });
 
+  // The per-user ORDER BY, not the first ROW_NUMBER in the statement: the
+  // rotation-rank CTE ahead of it carries a window of its own.
+  const perUserOrder = (sql: string) => sql.slice(sql.indexOf('ORDER BY att.last_attempt_at'));
+  const flat = (sql: string) => sql.replace(/\s+/g, ' ');
+
   it('sorts by tier before it sorts by age', async () => {
     const service = makeService();
     const [sql] = await capturedSql(service, () => service.findUnansweredByUserId(ATTEMPT_HISTORY));
 
-    const order = sql.slice(sql.indexOf('ROW_NUMBER'));
+    const order = perUserOrder(sql);
     const tierAt = order.search(/CASE\s+q\.answer_tier/);
     const createdAt = order.indexOf('q.created_at');
 
     expect(tierAt).toBeGreaterThan(-1);
     expect(createdAt).toBeGreaterThan(-1);
     expect(tierAt).toBeLessThan(createdAt);
+  });
+
+  it('breaks ties by the shared rotation order — round-robin over the whole catalogue — not by uuid', async () => {
+    // A seed batch shares one created_at and, on a fresh install, carries
+    // random v4 ids, so the old `q.question_id ASC` tiebreak was a different
+    // shuffle on every appliance. The ranks are joined from the definition the
+    // listener uses too, and are computed over the catalogue rather than over
+    // the caller's unanswered rows: ranked over what is left, a category's next
+    // question would restart at round 1 and the round-robin would collapse back
+    // into plain written order. The behaviour is proved on a real Postgres in
+    // SmartRotationListener.answerInfer.integration.spec.ts.
+    const service = makeService();
+    const [sql] = await capturedSql(service, () => service.findUnansweredByUserId(ATTEMPT_HISTORY));
+
+    expect(flat(sql)).toContain(`rotation AS (${flat(QUESTION_ROTATION_RANK_SQL)})`);
+    expect(flat(sql)).toContain('LEFT JOIN rotation qr ON qr.question_id = q.question_id');
+    expect(flat(perUserOrder(sql))).toContain(
+      `ORDER BY att.last_attempt_at ASC NULLS FIRST, ${flat(QUESTION_ROTATION_ORDER_SQL).trim()} ) AS rn`,
+    );
+
+    const ranks = flat(QUESTION_ROTATION_RANK_SQL);
+
+    expect(ranks).not.toMatch(/ci\.answers|last_attempt_at/);
+    expect(ranks).toContain('PARTITION BY r.answer_tier, r.created_at, r.question_category');
+    expect(ranks).toContain('ORDER BY r.seed_position ASC NULLS LAST, r.question_text COLLATE "C" ASC');
   });
 
   it('rotates by attempt history: cooldown filter, and never-attempted ahead of every retry', async () => {
@@ -848,7 +879,7 @@ describe('QuestionService asks the functional questions first', () => {
     expect(sql).toMatch(/last_attempt_at IS NULL OR att\.last_attempt_at < NOW\(\)/);
     // Attempt recency must outrank tier: a question the model already failed
     // goes behind every never-attempted question, whatever its tier.
-    const order = sql.slice(sql.indexOf('ROW_NUMBER'));
+    const order = perUserOrder(sql);
     const attemptAt = order.indexOf('att.last_attempt_at ASC NULLS FIRST');
     const tierAt = order.search(/CASE\s+q\.answer_tier/);
 

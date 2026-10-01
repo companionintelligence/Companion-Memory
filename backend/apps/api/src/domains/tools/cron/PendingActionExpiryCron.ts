@@ -50,10 +50,7 @@ export class PendingActionExpiryCron {
     try {
       await this.pendingActions.sweep();
     } catch (err) {
-      this.logger.error(
-        'Pending-action sweep failed',
-        err instanceof Error ? err : new Error(String(err)),
-      );
+      this.logger.error('Pending-action sweep failed', err instanceof Error ? err : new Error(String(err)));
     } finally {
       this.running = false;
     }

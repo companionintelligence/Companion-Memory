@@ -1,7 +1,14 @@
+import { normalizePhone } from '@ci/domains/graph';
+
 import type { Entity, Item } from '../../datasources/timeline';
 import {
+  CONTACT_IDENTIFIER_KEYS,
+  CONTACT_NAMES_KEY,
+  contactIdentifiers,
+  declaredAccumulate,
   entityIdentityKey,
   entityKey,
+  FAX_ATTRIBUTE_NAME,
   hasContactIdentity,
   hashItem,
   isOrganizationalAddress,
@@ -14,6 +21,7 @@ import {
   normalizeHandle,
   ORGANIZATIONAL_STAGED_TYPE,
   resolveEntityType,
+  withContactIdentifiers,
 } from '../identity';
 
 /**
@@ -43,6 +51,37 @@ describe('normalizeHandle', () => {
     expect(normalizeHandle('12345')).toBe('');
     expect(normalizeHandle('')).toBe('');
     expect(normalizeHandle(undefined)).toBe('');
+  });
+
+  it('refuses a phone carrying an extension instead of keying its truncation', () => {
+    // An Apple Contacts export writes an office line's extension after an
+    // escaped `;`, which the vCard parser unescapes to exactly this. The last
+    // ten digits of line + extension are `5550147229`: another number entirely,
+    // and this key becomes the contact's natural key, `properties.phones` and
+    // its identifier row.
+    for (const raw of [
+      '(212) 555-0147;229',
+      '212-555-0147 x229',
+      '212-555-0147 ext. 229',
+      '212-555-0147,229',
+    ]) {
+      expect(normalizeHandle(raw)).toBe('');
+    }
+  });
+
+  it('keys a phone byte-identically to the shared join key', () => {
+    // The handle IS the join key a communication participant is looked up by;
+    // the two were separate implementations of one rule, and both carried the
+    // extension defect.
+    for (const raw of [
+      '+1 (555) 010-9999',
+      '555-010-9999',
+      '15550109999',
+      '555-0100',
+      '(212) 555-0147;229',
+    ]) {
+      expect(normalizeHandle(raw)).toBe(normalizePhone(raw) ?? '');
+    }
   });
 });
 
@@ -115,9 +154,38 @@ describe('entityIdentityKey', () => {
 
     expect(entityIdentityKey(entity)).toBe('5550100100');
   });
+
+  it('falls back to a newly-read shared handle too, for a nameless contact', () => {
+    // The fallback is every handle the contact has. That the legacy key leaves
+    // a newly-read one out is no reason for the CURRENT key to.
+    const entity: Entity = {
+      attributes: [
+        { name: 'phone', value: '555-010-0100', identity: true, shared: true, newSinceLegacyKey: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('5550100100');
+    expect(legacyEntityIdentityKey(entity)).toBeNull();
+  });
 });
 
 describe('legacyEntityIdentityKey', () => {
+  it('passes over a handle its parser did not read when the old row was keyed', () => {
+    // contact_list reads Outlook's "Business Phone 2" since 2026-09. The row
+    // already minted for Lena was keyed on her email, so that is the key the
+    // push has to find it by.
+    const entity: Entity = {
+      name: 'Lena Ortiz',
+      attributes: [
+        { name: 'email', value: 'lena@example.com', identity: true },
+        { name: 'phone', value: '555-010-0142', identity: true, newSinceLegacyKey: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('5550100142');
+    expect(legacyEntityIdentityKey(entity)).toBe('lena@example.com');
+  });
+
   it('is the smallest of every handle, shared or not — the rule existing rows were minted under', () => {
     const entity: Entity = {
       name: 'Lena Ortiz',
@@ -280,6 +348,67 @@ describe('markSharedContactHandles', () => {
   });
 });
 
+describe('a phone carrying an extension', () => {
+  it('keys an office-line contact on its email, not on the truncated extension', () => {
+    // The verified defect: a card whose only phone is `line;extension` keyed as
+    // `contact:5550147229` — the digits of a stranger's number.
+    const entity: Entity = {
+      name: 'Dana Quill',
+      type: 'contact',
+      attributes: [
+        { name: 'phone', value: '(212) 555-0147;229', identity: true },
+        { name: 'email', value: 'Dana.Quill@example.com', identity: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('dana.quill@example.com');
+  });
+
+  it('is null when the only handle is an extension line, so the card keys on its name', () => {
+    const entity: Entity = {
+      name: 'Rae Holt',
+      type: 'contact',
+      attributes: [{ name: 'phone', value: '212-555-0148 x31', identity: true }],
+    };
+
+    expect(entityIdentityKey(entity)).toBeNull();
+    // Still a contact: an extension is a desk line, and a type-less source that
+    // surfaced one has still surfaced a person.
+    expect(hasContactIdentity(entity)).toBe(true);
+  });
+
+  it('keeps a plain number that sorts first, so a card with an extension line and a mobile is unaffected', () => {
+    const entity: Entity = {
+      attributes: [
+        { name: 'phone', value: '(212) 555-0150;12', identity: true },
+        { name: 'phone', value: '212-555-0101', identity: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('2125550101');
+  });
+
+  it('keeps the truncation as the LEGACY key, so the push can find the row it minted', () => {
+    // Rows already in ci.entities were keyed by the old rule, which ran the
+    // line and the extension together. The push looks for the old row under
+    // this key and moves it onto the card's real one; the current key never
+    // takes the truncation, even for a card with nothing else to key on.
+    const withEmail: Entity = {
+      name: 'Dana Quill',
+      attributes: [
+        { name: 'phone', value: '(212) 555-0147;229', identity: true },
+        { name: 'email', value: 'dana.quill@example.com', identity: true },
+      ],
+    };
+    const nameless: Entity = { attributes: [{ name: 'phone', value: '212-555-0148 x31', identity: true }] };
+
+    expect(legacyEntityIdentityKey(withEmail)).toBe('5550147229');
+    expect(entityIdentityKey(withEmail)).toBe('dana.quill@example.com');
+    expect(legacyEntityIdentityKey(nameless)).toBe('2555014831');
+    expect(entityIdentityKey(nameless)).toBeNull();
+  });
+});
+
 describe('isShortCode', () => {
   /*
    * The rule that keeps an SMS service out of somebody's address book. It has
@@ -312,6 +441,15 @@ describe('isShortCode', () => {
     // A name, a name carrying a digit, an email, and the empty/absent cases.
     // Without the phone-shape guard "Studio 54" would read as a short code.
     for (const value of ['Dana Wu', 'Studio 54', '411@example.invalid', '', '   ', undefined, null, 42]) {
+      expect(isShortCode(value)).toBe(false);
+    }
+  });
+
+  it('never mistakes an extension line for a short code', () => {
+    // `normalizeHandle` refuses these too, for a different reason; every
+    // extension marker falls outside the phone shape, so the refusal cannot
+    // leak into this test and file a desk line as an SMS service.
+    for (const value of ['(212) 555-0147;229', '212-555-0147 x229', '555-0147 ext 2', '0147;2']) {
       expect(isShortCode(value)).toBe(false);
     }
   });
@@ -384,6 +522,128 @@ describe('isOrganizationalAddress', () => {
 
   it('is false for a value with no @ at all', () => {
     expect(isOrganizationalAddress('not-an-email')).toBe(false);
+  });
+});
+
+describe('contactIdentifiers — every method a contact states as its own', () => {
+  // Invented: the 555-01XX fiction range, and `.example` mail domains.
+  const card = (attributes: Entity['attributes'], type = 'contact'): Entity => ({
+    name: 'Ada Quill',
+    type,
+    attributes,
+  });
+
+  it('keeps every email and phone, not just the one handle the natural key takes', () => {
+    // Digits sort before letters: the key is the phone, and before this the
+    // email was never indexed at all.
+    const entity = card([
+      { name: 'phone', value: '(202) 555-0142', identity: true },
+      { name: 'phone', value: '+1 212 555 0199', identity: true },
+      { name: 'email', value: 'Ada.Quill@Example.com', identity: true },
+    ]);
+
+    expect(entityIdentityKey(entity)).toBe('2025550142');
+    expect(contactIdentifiers(entity)).toEqual({
+      emails: ['ada.quill@example.com'],
+      phones: ['2025550142', '2125550199'],
+    });
+  });
+
+  it('leaves out a fax, an extension number, a role inbox and a value that is not a number', () => {
+    const entity = card([
+      { name: 'phone', value: '(212) 555-0110;229', identity: true },
+      { name: 'phone', value: '(212) 555-0110 x12', identity: true },
+      { name: FAX_ATTRIBUTE_NAME, value: '(212) 555-0118', identity: true },
+      { name: 'phone', value: 'Office: 212 555 0111', identity: true },
+      { name: 'email', value: 'info@quill-legal.example', identity: true },
+      { name: 'email', value: 'ada@quill-legal.example', identity: true },
+    ]);
+
+    expect(contactIdentifiers(entity)).toEqual({ emails: ['ada@quill-legal.example'], phones: [] });
+    // Every one of them still counts toward the natural key, which must never
+    // move — here the "Office:" value's digits sort smallest.
+    expect(entityIdentityKey(entity)).toBe('2125550111');
+  });
+
+  it('reads URI and display forms the way the identity index does', () => {
+    const entity = card([
+      { name: 'phone', value: 'tel:+1-202-555-0142', identity: true },
+      { name: 'email', value: 'mailto:ada@example.com', identity: true },
+      { name: 'email', value: 'Ada Quill <ADA@example.com>', identity: true },
+    ]);
+
+    expect(contactIdentifiers(entity)).toEqual({ emails: ['ada@example.com'], phones: ['2025550142'] });
+  });
+
+  it('is empty for anything that does not become a Person', () => {
+    const place = card([{ name: 'phone', value: '(202) 555-0142' }], 'place');
+
+    expect(contactIdentifiers(place)).toEqual({ emails: [], phones: [] });
+    expect(withContactIdentifiers(place)).toBe(place);
+  });
+
+  it('records both lists on a Person, empty ones included, and makes them accumulate', () => {
+    // An empty `phones` is information: this contact states no line of its
+    // own, so its handle (a fax, here) must not be indexed as one.
+    const faxOnly = card([{ name: FAX_ATTRIBUTE_NAME, value: '(212) 555-0118', identity: true }]);
+    const staged = withContactIdentifiers({ ...faxOnly, accumulate: ['Names'] });
+
+    expect(staged.metadata).toEqual({ emails: [], phones: [], [CONTACT_NAMES_KEY]: ['Ada Quill'] });
+    expect(staged.accumulate).toEqual(['Names', ...CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY]);
+    expect(entityIdentityKey(staged)).toBe(entityIdentityKey(faxOnly));
+  });
+
+  it('grows a repeat sighting by what it adds', () => {
+    const first = withContactIdentifiers(card([{ name: 'phone', value: '(202) 555-0142', identity: true }]));
+    const second = withContactIdentifiers(
+      card([
+        { name: 'phone', value: '202.555.0142', identity: true },
+        { name: 'email', value: 'ada@example.com', identity: true },
+      ]),
+    );
+
+    expect(mergeAccumulatedMetadata(first.metadata as Record<string, unknown>, second)).toEqual({
+      emails: ['ada@example.com'],
+      phones: ['2025550142'],
+      [CONTACT_NAMES_KEY]: ['Ada Quill'],
+    });
+  });
+
+  it("records every sighting's name, so the push can see a row that is two people", () => {
+    // A household on one home line: #2795 keeps them together, and staging
+    // collapses them onto one row that only knows the first sighting's name.
+    const ana = withContactIdentifiers({
+      ...card([
+        { name: 'phone', value: '(415) 555-0100', identity: true },
+        { name: 'email', value: 'ana.ruiz@example.com', identity: true },
+      ]),
+      name: 'Ana Ruiz',
+    });
+    const luis = withContactIdentifiers({
+      ...card([
+        { name: 'phone', value: '(415) 555-0100', identity: true },
+        { name: 'email', value: 'luis.ruiz@example.org', identity: true },
+      ]),
+      name: 'Luis Ruiz',
+    });
+
+    expect(entityIdentityKey(ana)).toBe(entityIdentityKey(luis));
+    expect(mergeAccumulatedMetadata(ana.metadata as Record<string, unknown>, luis)).toMatchObject({
+      emails: ['ana.ruiz@example.com', 'luis.ruiz@example.org'],
+      [CONTACT_NAMES_KEY]: ['Ana Ruiz', 'Luis Ruiz'],
+    });
+  });
+
+  it('reads each value of a Google CSV cell that joins them with :::', () => {
+    const entity = card([
+      { name: 'email', value: 'ada@example.com ::: Ada.Q@Example.org', identity: true },
+      { name: 'phone', value: '+1 202-555-0142 ::: +1 202-555-0177', identity: true },
+    ]);
+
+    expect(contactIdentifiers(entity)).toEqual({
+      emails: ['ada@example.com', 'ada.q@example.org'],
+      phones: ['2025550142', '2025550177'],
+    });
   });
 });
 
@@ -555,5 +815,29 @@ describe('mergeAccumulatedMetadata', () => {
 
   it('does nothing for an entity that declared no accumulating keys', () => {
     expect(mergeAccumulatedMetadata({ prices: ['1'] }, { metadata: { prices: ['2'] } })).toBeNull();
+  });
+});
+
+describe('declaredAccumulate', () => {
+  // What `staged_entities.accumulate` stores — the push needs the declaration,
+  // not just the values it grew, to union these keys into the graph row.
+
+  it('stores the keys a parser declared, cleaned', () => {
+    expect(declaredAccumulate({ accumulate: [' Phones', 'URLs', 'Phones', ''] })).toEqual(['Phones', 'URLs']);
+  });
+
+  it('is null when nothing was declared, which is most entity types', () => {
+    expect(declaredAccumulate({ name: 'Paris' })).toBeNull();
+    expect(declaredAccumulate({ accumulate: [] })).toBeNull();
+  });
+
+  it('keeps an earlier sighting’s keys when a later one declares others', () => {
+    // One person staged by two parsers in one run: each declaration is a
+    // promise about its own keys, so the row carries both.
+    expect(declaredAccumulate({ accumulate: ['Orders'] }, ['Phones', 'URLs'])).toEqual([
+      'Phones',
+      'URLs',
+      'Orders',
+    ]);
   });
 });

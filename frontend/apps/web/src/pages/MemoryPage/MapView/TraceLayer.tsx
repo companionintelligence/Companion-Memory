@@ -7,6 +7,7 @@ import L from 'leaflet';
 import { CircleMarker, Polyline, Tooltip, useMap as useLeafletMap, useMapEvents } from 'react-leaflet';
 
 import { gql } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import { boundsToBbox, clampBboxSpan } from '../bbox';
 import { useEntityService } from '../useEntityService';
@@ -214,6 +215,7 @@ function usePositionTrack({ enabled }: { enabled: boolean }) {
  */
 export function TraceLayer({ points, colour }: { points: TracePoint[]; colour: string }) {
   const segments = useMemo(() => traceSegments(points), [points]);
+  const fmt = useDateTimeFormat();
 
   return (
     <>
@@ -242,13 +244,17 @@ export function TraceLayer({ points, colour }: { points: TracePoint[]; colour: s
         >
           <Tooltip direction="top" offset={[0, -4]}>
             <span className="text-xs">
-              {new Date(point.startTime).toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                year: 'numeric',
-                hour: 'numeric',
-                minute: '2-digit',
-              })}
+              {fmt.dateTime(
+                point.startTime,
+                {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                },
+                'en-US',
+              )}
               {point.fixCount > 1 && ` · ${point.fixCount.toLocaleString()} fixes`}
             </span>
           </Tooltip>

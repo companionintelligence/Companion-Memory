@@ -2,15 +2,16 @@ import { useRef, useEffect, useState, useCallback } from 'react';
 
 import { useQuery, useMutation } from '@apollo/client';
 import {
-  GlobalUID,
-  LoadingPage,
   buildNoteRecord,
   captureNote,
   forgetQueuedNote,
+  GlobalUID,
   isQueuedNote,
+  LoadingPage,
   newNoteId,
-  usePageTitle,
+  useDeviceLayout,
   useOutboxQueue,
+  usePageTitle,
 } from '@ci/common';
 import { Editor } from '@ci/editor';
 import { Spinner } from '@ci/shadcn';
@@ -33,6 +34,13 @@ import {
 import { useEntityReference } from './useEntityReference';
 
 const AUTOSAVE_THROTTLE_MS = 1000;
+
+/**
+ * The save status's words ("Saving", "Saved offline", "5m"). A phone's toolbar has
+ * no room left beside the formatting buttons, so there only the icon shows and the
+ * words stay in the accessible name; wider screens show both, as before.
+ */
+const STATUS_WORDS = 'sr-only device:not-sr-only';
 
 const GET_NOTE = gql(`
   query GetNote($id: ID!) {
@@ -77,6 +85,7 @@ export function NotePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { reference, onReferenceClick } = useEntityReference();
+  const { isMobile } = useDeviceLayout();
 
   const { data, loading, refetch } = useQuery(GET_NOTE, {
     variables: { id: GlobalUID.encode('note', id!) },
@@ -413,7 +422,7 @@ export function NotePage() {
                 ) : updating || creating ? (
                   <>
                     <Spinner size={12} variant="circle" color="rgb(6,108,128)" />
-                    <div>Saving</div>
+                    <div className={STATUS_WORDS}>Saving</div>
                   </>
                 ) : queuedAt ? (
                   // Queued is a SAVED state, not a pending one: the note is committed to
@@ -422,7 +431,10 @@ export function NotePage() {
                   // warning, because there is nothing for the user to do about it.
                   <>
                     <CloudOff className="text-amber-400 h-4 w-4" strokeWidth={1.5} />
-                    <div title="Saved on this device. It syncs to your Companion automatically.">
+                    <div
+                      className={STATUS_WORDS}
+                      title="Saved on this device. It syncs to your Companion automatically."
+                    >
                       Saved offline
                     </div>
                   </>
@@ -430,13 +442,17 @@ export function NotePage() {
                   <>
                     <TriangleAlert className="text-amber-300 h-4 w-4" strokeWidth={1.5} />
                     {note?.updatedAt ? (
-                      <TimeAgo date={note.updatedAt} minPeriod={5} formatter={shortFormatter} />
+                      <span className={STATUS_WORDS}>
+                        <TimeAgo date={note.updatedAt} minPeriod={5} formatter={shortFormatter} />
+                      </span>
                     ) : null}
                   </>
                 ) : id !== 'new' && note?.updatedAt ? (
                   <>
                     <Check className="text-[rgb(6,108,128)] h-4 w-4 -mr-0.5" />
-                    <TimeAgo date={note.updatedAt} minPeriod={5} formatter={shortFormatter} />
+                    <span className={STATUS_WORDS}>
+                      <TimeAgo date={note.updatedAt} minPeriod={5} formatter={shortFormatter} />
+                    </span>
                   </>
                 ) : null}
               </div>
@@ -453,7 +469,9 @@ export function NotePage() {
                     sourceKind: 'NoteType',
                     sourceId: note.id,
                   })}
-                  size="sm"
+                  // A phone gets the one-icon menu (same actions, "Open chat" first):
+                  // the two labelled buttons need ~290px the toolbar row does not have.
+                  size={isMobile ? 'icon' : 'sm'}
                 />
               ) : null}
             </div>

@@ -491,6 +491,16 @@ describe('MaintenanceOrchestratorService', () => {
     ]);
   });
 
+  it('reverse_geocode does not count estimated coordinates, which the listener refuses to name', async () => {
+    const { service, eventCountQb } = makeService();
+
+    await service.orchestrate(USER_ID, { stages: ['reverse_geocode'] });
+
+    expect(eventCountQb.andWhere).toHaveBeenCalledWith(
+      "COALESCE(event.metadata->>'location_source', '') <> 'estimated'",
+    );
+  });
+
   it('enqueue legs noop (no job sent) when the candidate count is zero', async () => {
     const { service, send } = makeService();
 

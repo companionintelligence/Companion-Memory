@@ -16,6 +16,8 @@ import {
 import type { CalendarSlot } from '@/components/HorizonGrid';
 import { formatClock } from '@/components/HorizonGrid/nowNext';
 import { gql } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { type Section } from '@/pages/PlanPage/taskSections';
 import type { PlanTask } from '@/pages/PlanPage/usePlanTasks';
 
@@ -312,10 +314,14 @@ function SlateBody({ sections, loading, error = false, onDismissProposed, onPlac
   );
 }
 
-function formatSlotHeading(slot: CalendarSlot): string {
-  const day = slot.instant.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+/**
+ * "Wednesday, Sep 30 · 3:00 PM". The slot was picked on the grid, which draws in the profile zone,
+ * so both halves read the formatter's zone — the day and the hour the person actually clicked.
+ */
+function formatSlotHeading(slot: CalendarSlot, fmt: DateTimeFormatter): string {
+  const day = fmt.date(slot.instant, { weekday: 'long', month: 'short', day: 'numeric' });
 
-  return slot.allDay ? `${day} · All day` : `${day} · ${formatClock(slot.instant)}`;
+  return slot.allDay ? `${day} · All day` : `${day} · ${formatClock(slot.instant, fmt)}`;
 }
 
 interface TaskSlateDrawerProps extends SlateBodyProps {
@@ -348,6 +354,7 @@ export function TaskSlateDrawer({
   onCreated,
 }: TaskSlateDrawerProps) {
   const { isMobile } = useDeviceLayout();
+  const fmt = useDateTimeFormat();
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState<EventDraft>(() =>
     eventDraftAt(slot?.instant ?? new Date(), slot?.allDay),
@@ -427,7 +434,7 @@ export function TaskSlateDrawer({
         <Sheet.Header className="gap-1 pb-1">
           <Sheet.Title className="text-sm">Add to calendar</Sheet.Title>
           <Sheet.Description className="text-[11px] tabular-nums">
-            {slot ? formatSlotHeading(slot) : 'Pick an empty time'}
+            {slot ? formatSlotHeading(slot, fmt) : 'Pick an empty time'}
           </Sheet.Description>
         </Sheet.Header>
 

@@ -79,6 +79,37 @@ describe('HubForwardAuthBridgeService', () => {
     expect(service.verifyUsername(req)).toBe('hello@lifescope.io');
   });
 
+  describe('namesAccount', () => {
+    it('is true when the verified Hub username is this address, whatever its case', () => {
+      const { service } = makeService();
+      const req = { headers: signedHeaders('hello@lifescope.io'), cookies: {} } as never;
+
+      expect(service.namesAccount(req, ' Hello@LifeScope.io ')).toBe(true);
+    });
+
+    it('is false for someone else', () => {
+      const { service } = makeService();
+      const req = { headers: signedHeaders('hello@lifescope.io'), cookies: {} } as never;
+
+      expect(service.namesAccount(req, 'other@lifescope.io')).toBe(false);
+    });
+
+    it('is false for a header the Hub did not sign', () => {
+      const { service } = makeService();
+      const req = { headers: signedHeaders('hello@lifescope.io', 'not-the-secret'), cookies: {} } as never;
+
+      expect(service.namesAccount(req, 'hello@lifescope.io')).toBe(false);
+    });
+
+    it('is false when forward-auth is disabled', () => {
+      config.auth.hubForwardAuth.enabled = false;
+      const { service } = makeService();
+      const req = { headers: signedHeaders('hello@lifescope.io'), cookies: {} } as never;
+
+      expect(service.namesAccount(req, 'hello@lifescope.io')).toBe(false);
+    });
+  });
+
   it('leaves a matching Memory session alone', async () => {
     const { service, userService, authService } = makeService();
     authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
@@ -117,9 +148,12 @@ describe('HubForwardAuthBridgeService', () => {
       accessToken: 'access-hello',
     });
     expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token', expect.any(Object));
+    // The password is a random one nobody sees, so it must stay unstamped: that is what
+    // lets AccountController.requireReauth ask this person for a recent sign-in instead
+    // of for it. The bridge binds no federated identity, so nothing else would.
     expect(userService.create).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ email: 'hello@lifescope.io' }),
+      expect.objectContaining({ email: 'hello@lifescope.io', passwordChosenByUser: false }),
     );
     expect(authService.issueSessionToken).toHaveBeenCalledWith('user-b', expect.any(Object));
     expect(csrfService.generateToken).toHaveBeenCalledWith('sid-2');

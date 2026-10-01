@@ -9,6 +9,8 @@ export type LlmBackendKind = 'ollama' | 'openai_compatible';
 export interface LlmEndpointConfig {
   backend: LlmBackendKind;
   port: number;
+  /** The API root on an OpenAI-compatible backend (`/v1`, or Lemonade's `/api/v1`); absent on Ollama. */
+  basePath?: string;
   hostGateway: string;
   locked: boolean;
   endpoint: string;
@@ -19,6 +21,8 @@ export interface LlmEndpointConfig {
 export interface LlmEndpointUpdate {
   backend: LlmBackendKind;
   port: number;
+  /** OpenAI-compatible only: where the server mounts its API; `/v1` when omitted. */
+  basePath?: string;
   /** Write-only replacement for a saved OpenAI-compatible credential. */
   apiKey?: string;
   /** Removes the appliance-saved credential and falls back to runtime config. */

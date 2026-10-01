@@ -20,6 +20,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { PageContent } from '@/components/layout';
 import { gql, makeFragmentData } from '@/graphql';
 import { useAuth } from '@/hooks';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { Endpoints, ENDPOINTS_FRAGMENT } from '@/pages/ProviderPage/Endpoints';
 
 export interface Provider {
@@ -168,6 +170,7 @@ function computeEndpointStatus(
   jobs: StatusJob[],
   endpoint: { name: string; TTL?: number | null },
   jobType: 'historical' | 'incremental' | null,
+  fmt: DateTimeFormatter,
 ) {
   const endpointJobs = jobs
     .filter(
@@ -210,7 +213,7 @@ function computeEndpointStatus(
       icon: <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-500 flex-shrink-0" />,
       text: (
         <span className="text-muted-foreground">
-          Successfully run at {new Date(latest.completedAt as string).toLocaleString()}
+          Successfully run at {fmt.dateTime(latest.completedAt as string)}
         </span>
       ),
     };
@@ -256,6 +259,7 @@ interface EndpointStatusRowProps {
  * the endpoint name as its label.
  */
 function EndpointStatusRow({ connectionId, endpoint, jobType, label }: EndpointStatusRowProps) {
+  const fmt = useDateTimeFormat();
   const { data } = useQuery(GET_CONNECTION_SYNC_JOBS, {
     variables: {
       connectionId,
@@ -268,7 +272,7 @@ function EndpointStatusRow({ connectionId, endpoint, jobType, label }: EndpointS
   const jobs: StatusJob[] =
     (data?.connectionSyncJobs.edges.map((edge) => edge.node) as StatusJob[] | undefined) ?? [];
 
-  const { icon, text } = computeEndpointStatus(jobs, endpoint, jobType);
+  const { icon, text } = computeEndpointStatus(jobs, endpoint, jobType, fmt);
 
   return (
     <li className="flex items-center gap-2 text-sm">

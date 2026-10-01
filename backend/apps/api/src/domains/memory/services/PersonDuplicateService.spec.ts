@@ -1,9 +1,13 @@
 import type { UserServiceContext } from '@ci/common/context';
+// The graph domain's public barrel, imported by the SPEC only: the service
+// cannot import it (graph already imports memory), which is exactly why it
+// restates the pattern and why this file pins the two together.
+import { PHONE_EXTENSION_PATTERN } from '@ci/domains/graph';
 
 import { pairKey } from '../entities/EntityMergeBlockEntity';
 import { PersonEntity } from '../entities/PersonEntity';
 
-import { PersonDuplicateService } from './PersonDuplicateService';
+import { PHONE_EXTENSION_SQL_PATTERN, PersonDuplicateService } from './PersonDuplicateService';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
 const PERSON_A = '00000000-0000-0000-0000-0000000000b1';
@@ -169,7 +173,7 @@ describe('PersonDuplicateService', () => {
 
     const { groups, hasMore } = await service.findDuplicateGroups(CONTEXT, { limit: 1, offset: 10 });
 
-    expect(query.mock.calls[0]?.[1]).toEqual([USER, 2, 6, null, 10]);
+    expect(query.mock.calls[0]?.[1]).toEqual([USER, 2, 6, null, 10, PHONE_EXTENSION_SQL_PATTERN]);
     expect(groups).toHaveLength(1);
     expect(hasMore).toBe(true);
   });
@@ -201,5 +205,22 @@ describe('PersonDuplicateService', () => {
 
     expect(groups[0].people.some((person) => person.isSelf)).toBe(true);
     expect(groups[0].reason).toBe('email');
+  });
+
+  it("refuses a phone carrying an extension with the join key's own pattern", async () => {
+    // The phone key is a SQL copy of `normalizePhone`. Kept in step with the
+    // shared rule by string equality, because the rule's home is a domain this
+    // one cannot import without a cycle: a copy that drifted back to "last ten
+    // digits of everything" would group two people on the number an office
+    // line and its extension run together into.
+    expect(PHONE_EXTENSION_SQL_PATTERN).toBe(PHONE_EXTENSION_PATTERN);
+
+    const { service, query } = makeService([], []);
+
+    await service.findDuplicateGroups(CONTEXT);
+
+    const [sql, params] = query.mock.calls[0] ?? [];
+    expect(sql).toContain('v !~* $6');
+    expect(params?.[5]).toBe(PHONE_EXTENSION_PATTERN);
   });
 });

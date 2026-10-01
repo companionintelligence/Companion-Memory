@@ -63,6 +63,24 @@ describe('PersonProfileCard', () => {
     expect(screen.getByText('Job')).toBeInTheDocument();
   });
 
+  it('dials a number by the country code it was written with, not by its last ten digits', () => {
+    // `value` is the join key, and this number's key is a North American
+    // number: 207 is Maine.
+    render(
+      <PersonProfileCard
+        person={{
+          name: 'Dana',
+          identifiers: [{ kind: 'phone', value: '2079460958', rawValue: '+44 20 7946 0958', label: 'work' }],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: '+44 20 7946 0958' })).toHaveAttribute(
+      'href',
+      'tel:+442079460958',
+    );
+  });
+
   it('renders contact methods as actionable links, showing the raw value', () => {
     render(<PersonProfileCard person={PERSON} />);
 
@@ -70,8 +88,31 @@ describe('PersonProfileCard', () => {
       'href',
       'mailto:dana@example.com',
     );
-    // The phone shows as typed but dials the normalized number.
-    expect(screen.getByRole('link', { name: '+1 (415) 555-0100' })).toHaveAttribute('href', 'tel:4155550100');
+    // The phone shows as typed and dials as typed, its country code included.
+    expect(screen.getByRole('link', { name: '+1 (415) 555-0100' })).toHaveAttribute(
+      'href',
+      'tel:+14155550100',
+    );
+  });
+
+  it('dials a number with an extension as the line plus the extension, not one run-on number', () => {
+    // The server shows such a number as typed — it has no join key — and a
+    // `tel:` of that, or of its digits, ran the extension into the number.
+    render(
+      <PersonProfileCard
+        person={{
+          name: 'Dana',
+          identifiers: [
+            { kind: 'phone', value: '212-555-0148 x31', rawValue: '212-555-0148 x31', label: 'work' },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: '212-555-0148 x31' })).toHaveAttribute(
+      'href',
+      'tel:2125550148;ext=31',
+    );
   });
 
   it('omits sections the person has nothing in', () => {

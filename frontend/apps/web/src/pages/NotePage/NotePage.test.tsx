@@ -29,7 +29,7 @@ const editorState = vi.hoisted(() => ({
 // supply, so it threw during render and took the page down before the offline
 // path under test could run.
 vi.mock('@/components/ChatWithAgent', () => ({
-  ChatWithAgentMenu: () => null,
+  ChatWithAgentMenu: ({ size }: { size?: string }) => <span data-testid="chat-menu" data-size={size} />,
 }));
 
 vi.mock('@ci/editor', () => {
@@ -60,6 +60,10 @@ vi.mock('react-router-dom', async (importOriginal) => {
   return { ...actual, useNavigate: () => navigate };
 });
 
+// The phone/desktop switch. Wide by default, so every other test sees the layout
+// it always has.
+const device = vi.hoisted(() => ({ layout: { isMobile: false } }));
+
 const common = vi.hoisted(() => ({
   captureNote: vi.fn(),
   forgetQueuedNote: vi.fn(),
@@ -77,6 +81,7 @@ vi.mock('@ci/common', async (orig) => ({
   isQueuedNote: common.isQueuedNote,
   newNoteId: common.newNoteId,
   useOutboxQueue: () => ({ pending: 0 }),
+  useDeviceLayout: () => device.layout,
 }));
 
 const GET_NOTE = gql(`
@@ -131,6 +136,7 @@ async function flushAutosave() {
 }
 
 beforeEach(() => {
+  device.layout = { isMobile: false };
   editorState.onUpdate = undefined;
   navigate.mockReset();
   common.captureNote.mockReset();
@@ -302,5 +308,49 @@ describe('NotePage — offline capture', () => {
     expect(
       await screen.findByText('Queued — this note is waiting to sync and cannot be edited until it does.'),
     ).toBeInTheDocument();
+  });
+});
+
+describe('NotePage — toolbar on a phone', () => {
+  const noteGlobalId = GlobalUID.encode('note', 'abc-uuid');
+  const savedNote = {
+    request: { query: GET_NOTE, variables: { id: noteGlobalId } },
+    result: {
+      data: {
+        note: {
+          __typename: 'NoteType',
+          id: noteGlobalId,
+          title: 'Old title',
+          content: '<p>Old content</p>',
+          updatedAt: '2026-08-01T00:00:00.000Z',
+        },
+      },
+    },
+  };
+
+  it('uses the one-icon chat menu on a phone, where the labelled buttons do not fit', async () => {
+    device.layout = { isMobile: true };
+    renderWithProviders(<NotePage />, { route: '/notes/abc-uuid', path: '/notes/:id', mocks: [savedNote] });
+
+    expect(await screen.findByTestId('chat-menu')).toHaveAttribute('data-size', 'icon');
+  });
+
+  it('keeps the labelled chat buttons on a wide screen', async () => {
+    renderWithProviders(<NotePage />, { route: '/notes/abc-uuid', path: '/notes/:id', mocks: [savedNote] });
+
+    expect(await screen.findByTestId('chat-menu')).toHaveAttribute('data-size', 'sm');
+  });
+
+  it('shows the saved time only to screen readers on a phone, and visibly from the desktop breakpoint up', async () => {
+    const { container } = renderWithProviders(<NotePage />, {
+      route: '/notes/abc-uuid',
+      path: '/notes/:id',
+      mocks: [savedNote],
+    });
+
+    await screen.findByTestId('chat-menu');
+    const words = container.querySelector('time')?.parentElement;
+
+    expect(words).toHaveClass('sr-only', 'device:not-sr-only');
   });
 });

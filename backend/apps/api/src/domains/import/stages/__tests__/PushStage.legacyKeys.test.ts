@@ -26,7 +26,13 @@ interface StagedRow {
   legacyIdentityKey: string | null;
 }
 
-function stageWith(rows: StagedRow[], legacyRowName: string | null) {
+interface MergedAway {
+  entityId: string;
+  name: string | null;
+  properties: Record<string, unknown>;
+}
+
+function stageWith(rows: StagedRow[], legacyRowName: string | null, mergedFrom: MergedAway[] = []) {
   const staged = rows.map((row, i) => ({
     id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
     runId: RUN_ID,
@@ -65,6 +71,7 @@ function stageWith(rows: StagedRow[], legacyRowName: string | null) {
             entityId: 'collapsed-row',
             name: legacyRowName,
             mergedIntoEntityId: null,
+            mergedFrom,
           })),
     ),
     rekeyImportedEntities: jest.fn(async (_ctx: unknown, moves: Array<Record<string, string>>) =>
@@ -122,11 +129,25 @@ describe('PushStage moving contacts onto their new keys', () => {
         fromKey: 'contact:5550100100',
         toKey: 'contact:priya@example.com',
         resetProperties: true,
+        dropMergedFrom: [],
       },
     ]);
     expect(graph.rekeyImportedEntities.mock.invocationCallOrder[0]).toBeLessThan(
       graph.ingest.mock.invocationCallOrder[0],
     );
+  });
+
+  it('tells the move which merges into the row were a colleague, from the cards it is pushing', async () => {
+    const { stage, graph } = stageWith(office, 'Priya Natarajan', [
+      { entityId: 'priya-mail', name: 'Priya Natarajan', properties: { emails: ['priya.n@mail.example'] } },
+      { entityId: 'tom-bare', name: 'tom@example.com', properties: { emails: ['tom@example.com'] } },
+    ]);
+
+    await stage.pushEntities(context, 'balanced', null);
+
+    expect(graph.rekeyImportedEntities).toHaveBeenCalledWith({ userId: USER_ID }, [
+      expect.objectContaining({ resetProperties: true, dropMergedFrom: ['tom-bare'] }),
+    ]);
   });
 
   it('asks about the old key and every new key in one lookup', async () => {

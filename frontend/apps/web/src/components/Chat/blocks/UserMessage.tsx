@@ -4,6 +4,7 @@ import { useDeviceLayout } from '@ci/common';
 import { cn } from '@ci/shadcn';
 
 import { Markdown } from '@/components/Markdown';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 interface Props {
   content: string;
@@ -12,6 +13,7 @@ interface Props {
 
 export function UserMessage({ content, createdAt }: Props) {
   const { isMobile } = useDeviceLayout();
+  const fmt = useDateTimeFormat();
 
   const maxWidth = useMemo(() => (isMobile ? 'max-w-[60%]' : 'max-w-[40%]'), [isMobile]);
 
@@ -24,9 +26,7 @@ export function UserMessage({ content, createdAt }: Props) {
     >
       <Markdown>{content}</Markdown>
       {createdAt && (
-        <div className={cn('pt-1 text-xs text-primary-foreground text-right')}>
-          {new Date(createdAt).toLocaleString()}
-        </div>
+        <div className={cn('pt-1 text-xs text-primary-foreground text-right')}>{fmt.dateTime(createdAt)}</div>
       )}
     </div>
   );

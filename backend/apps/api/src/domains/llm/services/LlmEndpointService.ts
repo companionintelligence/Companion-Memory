@@ -7,6 +7,8 @@ import config from '@ci/configuration';
 
 import {
   containerSharedConfigPath,
+  DEFAULT_OPENAI_BASE_PATH,
+  normalizeBasePath,
   readSharedConfig,
   sharedConfigPath,
   syncAppEnvLlmVars,
@@ -22,6 +24,8 @@ export type { LlmBackendKind };
 export interface LlmEndpointSettings {
   backend: LlmBackendKind;
   port: number;
+  /** OpenAI-compatible only: the server's API root, `/v1` unless the server mounts it elsewhere (Lemonade: `/api/v1`). */
+  basePath?: string;
   apiKey?: string;
 }
 
@@ -29,6 +33,7 @@ export interface LlmEndpointSettings {
 export interface LlmEndpointUpdate {
   backend: LlmBackendKind;
   port: number;
+  basePath?: string;
   /** Replaces the stored credential. It is deliberately write-only. */
   apiKey?: string;
   /** Removes a credential saved by this appliance and falls back to runtime config. */
@@ -39,6 +44,8 @@ export interface LlmEndpointUpdate {
 export interface LlmEndpointView {
   backend: LlmBackendKind;
   port: number;
+  /** The API root in use on an OpenAI-compatible backend; absent on Ollama. */
+  basePath?: string;
   /** Hostname the API container uses to reach an inference server on the host. */
   hostGateway: string;
   /** True when Hub/env injected LLM_* and settings cannot override. */
@@ -133,6 +140,7 @@ function settingsFromEnv(): {
       settings: {
         backend: 'openai_compatible',
         port: portFromUrl(config.llm.apiBase, DEFAULT_OPENAI_PORT),
+        basePath: basePathFromUrl(config.llm.apiBase),
         apiKey: config.llm.apiKey,
       },
       apiBase: config.llm.apiBase?.trim(),
@@ -148,6 +156,15 @@ function settingsFromEnv(): {
       apiKey: config.llm.apiKey,
     },
   };
+}
+
+/** The path of an injected `LLM_API_BASE`, so the view reports Lemonade's `/api/v1` rather than assuming `/v1`. */
+function basePathFromUrl(url: string | undefined): string {
+  try {
+    return normalizeBasePath(url ? new URL(url).pathname : undefined);
+  } catch {
+    return DEFAULT_OPENAI_BASE_PATH;
+  }
 }
 
 function isForeignApiBase(apiBase: string | undefined, ollamaHost: string): boolean {
@@ -226,7 +243,8 @@ function buildResolved(
   const ollamaHost = `http://${hostGateway}:${settings.backend === 'ollama' ? settings.port : DEFAULT_OLLAMA_PORT}`;
   const apiBase =
     settings.backend === 'openai_compatible'
-      ? managedApiBase?.trim() || `http://${hostGateway}:${settings.port}/v1`
+      ? managedApiBase?.trim() ||
+        `http://${hostGateway}:${settings.port}${normalizeBasePath(settings.basePath)}`
       : undefined;
 
   return {
@@ -264,6 +282,9 @@ export class LlmEndpointService implements OnModuleInit {
     return {
       backend: this.resolved.settings.backend,
       port: this.resolved.settings.port,
+      ...(this.resolved.settings.backend === 'openai_compatible' && {
+        basePath: normalizeBasePath(this.resolved.settings.basePath),
+      }),
       hostGateway: this.resolved.hostGateway,
       locked: this.resolved.locked,
       endpoint: safeEndpoint(this.resolved.apiBase ?? this.resolved.ollamaHost),
@@ -296,6 +317,7 @@ export class LlmEndpointService implements OnModuleInit {
     const persisted = {
       backend: settings.backend,
       port: settings.port,
+      ...(settings.backend === 'openai_compatible' && { basePath: normalizeBasePath(settings.basePath) }),
       ...(apiKey ? { apiKey } : {}),
       hostGateway,
     };
@@ -425,6 +447,7 @@ export class LlmEndpointService implements OnModuleInit {
           backend: resolved.settings.backend,
           hostGateway: resolved.hostGateway,
           port: resolved.settings.port,
+          basePath: resolved.settings.basePath,
           apiKey: resolved.apiKey,
         });
       } catch (error) {
@@ -458,6 +481,7 @@ export class LlmEndpointService implements OnModuleInit {
         settings: {
           backend: parsed.backend,
           port: parsed.port,
+          basePath: parsed.basePath,
           apiKey: parsed.apiKey,
         },
         hostGateway: parsed.hostGateway?.trim() || inferHostGateway(),

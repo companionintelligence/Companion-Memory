@@ -268,7 +268,16 @@ export class PendingActionService {
       return inFlight;
     }
 
-    const proposal = this.openOrCreate(schema, toolName, context, input, ruling, principalName, inputKey, now);
+    const proposal = this.openOrCreate(
+      schema,
+      toolName,
+      context,
+      input,
+      ruling,
+      principalName,
+      inputKey,
+      now,
+    );
 
     this.proposing.set(key, proposal);
 

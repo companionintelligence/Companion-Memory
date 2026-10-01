@@ -4,6 +4,9 @@ import { Button, Tooltip, cn } from '@ci/shadcn';
 import { AlertTriangle, FastForward, Pause, Play, RotateCcw, Square } from '@ci/shadcn/icons';
 import L from 'leaflet';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
+
 import { SPEEDS, formatSpeed, isEmptyRange, type PlaybackRange } from './playbackMachine';
 import { usePlayback, usePlaybackControls, usePlaybackCursor } from './usePlayback';
 
@@ -33,6 +36,7 @@ export function PlaybackBar({ className }: { className?: string } = {}) {
   const { store, loading, error, retry, hasTrack, ready } = usePlayback();
   const { status, speed, range, skipGaps, stopCount } = usePlaybackControls();
   const cursor = usePlaybackCursor();
+  const fmt = useDateTimeFormat();
 
   // Leaflet would otherwise treat a drag on the scrubber as a map pan and a
   // wheel over the bar as a zoom.
@@ -147,11 +151,11 @@ export function PlaybackBar({ className }: { className?: string } = {}) {
               step={1}
               onChange={(event) => onScrub(Number(event.target.value))}
               aria-label="Playback position"
-              aria-valuetext={formatMoment(cursor)}
+              aria-valuetext={formatMoment(cursor, fmt)}
             />
 
             <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-              <span className="tabular-nums">{formatMoment(range.start)}</span>
+              <span className="tabular-nums">{formatMoment(range.start, fmt)}</span>
               <span
                 // Live region, but polite and only announced at the resolution
                 // usePlaybackCursor samples at — a per-frame aria-live would be
@@ -159,9 +163,9 @@ export function PlaybackBar({ className }: { className?: string } = {}) {
                 aria-live="polite"
                 className="truncate font-medium text-foreground tabular-nums"
               >
-                {formatMoment(cursor)}
+                {formatMoment(cursor, fmt)}
               </span>
-              <span className="tabular-nums">{formatMoment(range.end)}</span>
+              <span className="tabular-nums">{formatMoment(range.end, fmt)}</span>
             </div>
           </div>
 
@@ -262,16 +266,20 @@ function timeAt(range: PlaybackRange, fraction: number): number {
  * The playhead as a date. Matches the map cluster popup's format so the two
  * read as the same clock.
  */
-function formatMoment(time: number): string {
+function formatMoment(time: number, fmt: DateTimeFormatter): string {
   if (!Number.isFinite(time)) {
     return '—';
   }
 
-  return new Date(time).toLocaleString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return fmt.dateTime(
+    time,
+    {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    },
+    'en-US',
+  );
 }

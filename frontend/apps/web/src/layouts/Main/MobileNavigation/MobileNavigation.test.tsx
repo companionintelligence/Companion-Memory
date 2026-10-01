@@ -113,7 +113,7 @@ describe('MobileNavigation', () => {
     expect(screen.getByRole('banner').querySelector('img[src*="logo"]')).toBeNull();
   });
 
-  it('opens the glass rail with the same destinations as the desktop list', async () => {
+  it('opens the drawer with the same destinations as the desktop list', async () => {
     renderMobileNav();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
@@ -134,7 +134,7 @@ describe('MobileNavigation', () => {
     const nav = await screen.findByRole('navigation');
     const wordmark = within(nav).getByTestId('power-rail-wordmark');
 
-    // Short form — the drawer shares 224px with the close chevron, so the
+    // Short form — the drawer shares its width with the close chevron, so the
     // full "Companion Memory" used to ellipsize. Desktop keeps the long name.
     expect(within(wordmark).getByText('Memory')).toHaveAttribute('aria-hidden', 'false');
     expect(within(wordmark).queryByText('Companion Memory')).toBeNull();
@@ -146,6 +146,60 @@ describe('MobileNavigation', () => {
     // Same inset as Capture / Planning — without it the 32px disc sat on the
     // pane edge while every row below had px-2 + a 2px active border.
     expect(wordmark.parentElement).toHaveClass('border-l-2', 'px-2', 'py-2');
+  });
+
+  // The drawer is glass: the page stays in view behind it, frosted by the
+  // blur. 300px, less a strip of page on the narrowest phones.
+  it('draws a glass drawer, 300px wide', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    const nav = await screen.findByRole('navigation');
+
+    expect(nav).toHaveClass(
+      'backdrop-blur-xl',
+      'bg-white/35',
+      'dark:bg-white/10',
+      'w-[min(300px,calc(100vw-56px))]',
+    );
+    expect(nav).not.toHaveClass('bg-background');
+  });
+
+  it('pins Help and the account under a divider while the rest of the drawer scrolls', async () => {
+    renderMobileNav('/memory/chat');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    const nav = await screen.findByRole('navigation');
+    const list = within(nav).getByTestId('rail-scroll');
+    const footer = within(nav).getByTestId('rail-footer');
+
+    expect(list).toHaveClass('overflow-y-auto', 'flex-1', 'min-h-0');
+    expect(within(list).getByRole('link', { name: 'Chat' })).toBeInTheDocument();
+    expect(within(footer).getByRole('button', { name: 'Help' })).toBeInTheDocument();
+    expect(within(footer).getByRole('link', { name: 'Test User' })).toBeInTheDocument();
+    expect(within(list).queryByRole('button', { name: 'Help' })).not.toBeInTheDocument();
+    expect(footer).toHaveClass('border-t', 'shrink-0');
+  });
+
+  // The swipe that closes the drawer may start anywhere on it — the drawer's
+  // own measured edge, not the 224px it used to be.
+  it('closes on a left swipe that starts anywhere on the drawer', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    const nav = await screen.findByRole('navigation');
+
+    vi.spyOn(nav, 'getBoundingClientRect').mockReturnValue({ right: 300 } as DOMRect);
+
+    fireEvent.touchStart(document, { touches: [{ clientX: 280, clientY: 240 }] });
+    fireEvent.touchEnd(document, { changedTouches: [{ clientX: 180, clientY: 240 }] });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('link', { name: 'Planning' })).not.toBeInTheDocument();
+    });
   });
 
   // The wordmark is a statement, not a second close button: the chevron beside

@@ -1,3 +1,5 @@
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
+
 /** Title-case a snake/kebab identifier for display ('google_calendar' → 'Google Calendar'). */
 export function formatEntityLabel(value?: string | null): string | null {
   if (!value) {
@@ -14,7 +16,10 @@ export function formatEntityLabel(value?: string | null): string | null {
  * Render a stored timestamp for a detail view. Mirrors the memory drawer's
  * metadata rows so an entity reads the same on its full page as in the drawer.
  */
-export function formatEntityTimestamp(value?: string | null): string | null {
+export function formatEntityTimestamp(
+  value: string | null | undefined,
+  fmt: DateTimeFormatter,
+): string | null {
   if (!value) {
     return null;
   }
@@ -23,5 +28,5 @@ export function formatEntityTimestamp(value?: string | null): string | null {
 
   return isNaN(date.getTime())
     ? value
-    : date.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+    : fmt.dateTime(date, { dateStyle: 'medium', timeStyle: 'short' }, 'en-US');
 }

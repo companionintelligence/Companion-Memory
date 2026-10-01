@@ -114,46 +114,76 @@ This is the priority queue. Each item should land its own ratcheted coverage flo
 
 ### DB-backed suites — the two ways this misleads you
 
-*Most* suites that need Postgres resolve the connection through
+Every suite that needs Postgres resolves the connection through
 `domains/__tests__/support/databaseConnection.ts`, in this precedence:
 
-1. **the suite's own** `<DOMAIN>_TEST_DATABASE_URL`,
+1. **the suite's own** `<DOMAIN>_TEST_DATABASE_URL` (a few suites accept a
+   sibling domain's as a second choice, e.g. `SCHEDULE_` then `PLANNING_`),
 2. then `DATABASE_URL`,
-3. then the discrete `DATABASE_HOST/PORT/USERNAME/DATABASE/PASSWORD`.
+3. then the discrete `DATABASE_HOST/PORT/USERNAME/NAME/PASSWORD`.
 
-There are **sixteen** per-suite variables, not the two this document used to
-name: `ASKS_`, `BROWSER_ACTIVITY_`, `CONNECTIONS_`, `EVENTS_`, `IMPORT_`,
-`MEMORY_`, `NOTES_`, `PEERS_`, `PERSISTENCE_`, `PERSONALIZATION_`, `PIPELINE_`,
-`PLANNING_`, `PORTABILITY_`, `SCHEDULE_`, `SEARCH_INGRESS_`, `SEARCH_NEXT_`
-(each `…_TEST_DATABASE_URL`). Naming one per suite is what lets you point a
-single domain at a scratch database without moving the whole app.
+Each domain has a variable of its own — `ASKS_`, `AUTH_`, `BROWSER_ACTIVITY_`,
+`CONNECTIONS_`, `EVENTS_`, `GEOCODE_`, `IMPORT_`, `MEMORY_`, `NOTES_`, `PEERS_`,
+`PERSISTENCE_`, `PERSONALIZATION_`, `PIPELINE_`, `PLANNING_`, `PORTABILITY_`,
+`SCHEDULE_`, `SEARCH_INGRESS_`, `SEARCH_NEXT_`, `USER_` (each `…_TEST_DATABASE_URL`), plus
+`MACOS_`, which only the Python summary suite reads and which must name an
+*empty* database. Naming one per suite is what lets you point a single domain at
+a scratch database without moving the whole app. `UserService.applianceClaim.integration.spec.ts` is the exception: it reads only `USER_TEST_DATABASE_URL` and skips when that is unset, because the claim it tests is appliance-wide and a dev stack's `DATABASE_URL` usually already has an admin. The list is checked against the
+source tree by the unit tests of `scripts/xtask/lib/testDb.ts`, which is why this
+paragraph states no count.
 
-**The fallback to `DATABASE_URL` is NOT universal — three suites do not have
-it.** They read their variable straight off `process.env` and gate `describe` on
-that alone, so setting only `DATABASE_URL` leaves them skipping:
+Two suites also answer to a sibling domain's variable, which they pass to the
+helper as a list — the first one that is set wins, before `DATABASE_URL`:
 
-| Suite | Reads |
+| Suite | Reads, in order |
 | --- | --- |
-| `planning/services/__tests__/TaskService.tenancy.integration.test.ts` (two `describe` blocks) | `PLANNING_TEST_DATABASE_URL` |
-| `notes/__tests__/NoteCapture.integration.spec.ts` | `NOTES_TEST_DATABASE_URL` |
-| `schedule/services/__tests__/CandidateService.lifecycle.integration.test.ts` | `SCHEDULE_TEST_DATABASE_URL ?? PLANNING_TEST_DATABASE_URL` |
+| `schedule/services/__tests__/CandidateService.lifecycle.integration.test.ts` | `SCHEDULE_TEST_DATABASE_URL`, `PLANNING_TEST_DATABASE_URL`, then the fallback above |
+| `memory/services/__tests__/CalendarEventService.plannedBlockRestore.integration.test.ts` | `MEMORY_TEST_DATABASE_URL`, `PLANNING_TEST_DATABASE_URL`, then the fallback above |
 
-They also miss the port probe as a result: point one at a URL with nothing
-listening and it fails every test instead of skipping. Anything pointing an
-environment at a database — `ci.yml`, a runbook, your shell — must set the
-per-suite variables, not just `DATABASE_URL`.
+That fallback used to have exceptions: the planning, notes, schedule, calendar
+and auth suites read their variable straight off `process.env` and gated
+`describe` on it alone, so setting only `DATABASE_URL` left them skipping — and
+pointing one at a URL with nothing listening failed every test instead of
+skipping. They now go through the same helper as the rest, so both problems are
+gone, and so is the difference: on a machine with a `.env` database configured,
+`make test` now runs them too, against that database, as it always did the
+others. To keep them off it, use `make test-db` (below).
 
 **Trap 1 — a skip is not a pass.** The probe answers *"is a port open"*. With no
 database the suites `describe.skip` and **jest exits 0**. That is deliberate (a
 laptop with no stack must not fail), but it means a green local run, or a green
 `ci.yml` run, can have executed none of the DB-backed coverage. `ci.yml`'s
-backend job now runs a `services: postgres`, bootstraps the role and extensions,
-migrates, and sets all sixteen per-suite variables, so the DB-backed suites do
-run there. What still skips in that job is the seven suites gating on
+backend job now runs a `services: postgres`, bootstraps the role and extensions
+(`scripts/test-db/bootstrap.sql`, shared with `make test-db`), migrates, and sets
+every per-suite variable, so the DB-backed suites do run there. What still skips in that job is the seven suites gating on
 `scratchDatabaseAvailability()`, because `DATABASE_ADMIN_PASSWORD` is
 deliberately unset — a cost decision the workflow states in a comment rather
 than hides. `consent-path-gate.yml` remains the stronger guarantee for the
 consent path: it fails if any suite in scope skips.
+
+Since 2026-09-30 a skip needs *proof*, and only an unasked-for database may
+skip: the suite skips when nothing is configured, or when only `.env`'s discrete
+`DATABASE_*` values are set and the connection is refused (the dev stack is
+down). A URL you set for the run — the suite's `<DOMAIN>_TEST_DATABASE_URL` or
+`DATABASE_URL` — that refuses the connection **fails** the suite, naming the
+variable; so does a host that never answers, a URL that does not parse, and a
+probe that could not finish, however the database was configured. That last one
+is the hole this closed: the probe is a child process, and on a loaded machine
+(load ~300) a probe killed by its time limit read as "nothing listening", so a
+suite pointed at a healthy Postgres skipped in silence. The full table is in the
+header of `databaseConnection.ts`.
+
+`CI_REQUIRE_DB=1` turns those two remaining skips into failures too. `make
+test-db` starts a throwaway Postgres, sets that variable, runs the `be-api`
+suite against it and fails on any skip the allow-list does not forgive and on
+any database crash in the container's log. See
+[`../CI.md`](../CI.md#running-the-database-backed-suites-locally-make-test-db).
+
+Every file whose tests were *all* skipped is now listed, with the reason it
+gave, just above jest's totals (`skippedSuitesReporter.js`, wired in
+`jest.config.mjs`). Jest's own reporter drops such a file's console output, so
+until then a multi-file run showed a count — `Test Suites: 1 skipped` — and
+nothing else.
 
 **Trap 2 — a database without the migrations FAILS, and looks like your bug.**
 "Port open" and "schema correct" are different questions, and only the first is
@@ -184,8 +214,9 @@ coverageThreshold: {
 ```
 
 Note the planning floor is set just under what that suite achieves **without** a database,
-because `TaskService.tenancy.integration.test.ts` skips unless `PLANNING_TEST_DATABASE_URL`
-is set. A floor that assumed the DB-backed run would fail every laptop.
+because `TaskService.tenancy.integration.test.ts` and the other DB-backed planning suites
+skip unless a database is configured (`PLANNING_TEST_DATABASE_URL`, or the `DATABASE_URL`
+fallback). A floor that assumed the DB-backed run would fail every laptop without one.
 
 The ratchet rule is unchanged; apply it per path. Every PR that adds tests should:
 

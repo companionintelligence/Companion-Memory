@@ -117,29 +117,27 @@ jobs:
       # suites cannot disagree about which database this is.
       DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       PGPASSWORD: ci_test_admin_pw
-      # EVERY ONE of the sixteen per-suite variables is enumerated below, and
-      # that is NOT redundant with `DATABASE_URL` above. Thirteen of the sixteen
-      # resolve through `domains/__tests__/support/databaseConnection.ts`, which
-      # checks the suite's own `<DOMAIN>_TEST_DATABASE_URL` FIRST and falls
-      # through to `DATABASE_URL` — for those, these lines are a restatement of
-      # the fallback. The other three read their variable DIRECTLY off
-      # `process.env` with no fallback at all, and gate `describe` on it:
-      #   PLANNING_ — planning/services/__tests__/TaskService.tenancy.integration.test.ts
-      #   NOTES_    — notes/__tests__/NoteCapture.integration.spec.ts
-      #   SCHEDULE_ — schedule/services/__tests__/CandidateService.lifecycle.integration.test.ts
-      #               (it chains `SCHEDULE_ ?? PLANNING_`, so PLANNING_ alone
-      #               would in fact cover it — set anyway, so nobody has to know)
-      # With only `DATABASE_URL` set those four `describe` blocks resolve to
-      # `describe.skip` and jest still exits 0 — the green-but-tested-nothing
-      # outcome this job exists to end. The list is enumerated in full rather
-      # than trimmed to the three so that a new suite written in either style is
-      # covered, and so nobody has to know which style each file uses. Keep it
-      # in step with the sixteen named in
-      # `docs/architecture/test-strategy.md` §3.
+      # Every per-suite `<DOMAIN>_TEST_DATABASE_URL` a suite reads is enumerated
+      # below. Every DB-backed suite resolves its connection through
+      # `domains/__tests__/support/databaseConnection.ts`, which checks the
+      # suite's own variable FIRST and falls through to `DATABASE_URL`, so each
+      # line restates that fallback. They are listed anyway so that pointing one
+      # domain at a different database later is a one-line change here, and so
+      # this list and the one `make test-db` exports
+      # (`scripts/xtask/commands/test-db.ts`, checked against the source tree by
+      # its unit tests) say the same thing.
+      #
+      # Until the suites gated on a variable read straight off `process.env` were
+      # moved onto that helper (PLANNING_, NOTES_, SCHEDULE_, AUTH_), setting only
+      # `DATABASE_URL` left them on `describe.skip` with jest still exiting 0 —
+      # the green-but-tested-nothing outcome this job exists to end. AUTH_ was
+      # missing from this list altogether until it was added with that change.
       ASKS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      AUTH_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       BROWSER_ACTIVITY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       CONNECTIONS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       EVENTS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      GEOCODE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       IMPORT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       MEMORY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       NOTES_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
@@ -152,6 +150,7 @@ jobs:
       SCHEDULE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       SEARCH_INGRESS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       SEARCH_NEXT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      USER_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
       # DATABASE_ADMIN_PASSWORD is deliberately NOT set, so this is not an
       # oversight to "fix" by adding it. SEVEN further suites gate on
       # `scratchDatabaseAvailability()` (`domains/__tests__/support/scratchDatabase.ts`)
@@ -225,13 +224,15 @@ jobs:
           # (VipsService). The suites that exercise real decoding skip without
           # it, which would silently hide a decode regression here.
           apt-get install -y --no-install-recommends postgresql-client libvips-tools
+          # The role, database and extensions live in ONE file, shared with
+          # `make test-db` (scripts/xtask/commands/test-db.ts), so a local run and
+          # this job cannot disagree about what a test database is. The password
+          # is a psql variable, never a literal in that file; it must match the
+          # one in the *_DATABASE_URL values above. `\connect` inside the file
+          # reuses PGPASSWORD from the job env.
           psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 \
-            -c "CREATE ROLE companion WITH LOGIN PASSWORD 'ci_test_app_pw';" \
-            -c "CREATE DATABASE companion OWNER companion;"
-          for ext in timescaledb postgis vector pg_stat_statements btree_gist; do
-            psql -h postgres -U postgres -d companion -v ON_ERROR_STOP=1 \
-              -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";"
-          done
+            -v app_password=ci_test_app_pw \
+            -f scripts/test-db/bootstrap.sql
 
       # "Port open" and "schema correct" are different questions, and the suites
       # only probe the first (test-strategy.md §3.1, trap 2). An unmigrated

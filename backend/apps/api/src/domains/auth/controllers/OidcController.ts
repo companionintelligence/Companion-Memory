@@ -15,6 +15,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import type { EntityManager } from 'typeorm';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { z } from 'zod';
 
@@ -23,7 +24,7 @@ import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
-import { UserService } from '@ci/domains/user';
+import { type CreateUserDto, UserService } from '@ci/domains/user';
 
 import { AuthService, type SignupIntent } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
@@ -494,6 +495,12 @@ export class OidcController {
       // so every gate below would otherwise leave the owner locked out of the
       // machine they just installed. The first account is therefore always
       // allowed; from the second onwards the gates below apply as before.
+      //
+      // `unclaimed` only sorts this request onto a path and refuses early. It is
+      // never what creates an account: where it is the ONLY thing letting this
+      // person in, the account is created through `claimApplianceFor`, which
+      // decides "still unclaimed?" atomically with the insert. Another sign-in
+      // can claim the appliance between this line and that one.
       const unclaimed = await this.userService.hasNoUsers();
 
       // The signup-code gate still applies: when codes are required, only users
@@ -516,10 +523,11 @@ export class OidcController {
 
       res.clearCookie(SIGNUP_CODE_COOKIE, { path: '/' });
 
-      const isSignupCodeRequired =
-        !unclaimed && !invited && (await this.featureService.isFeatureEnabled('require.signup.codes'));
+      // Whether this person needs an invitation they do not hold. Waived only
+      // for the first account; anyone else is refused here.
+      const codeRequired = !invited && (await this.featureService.isFeatureEnabled('require.signup.codes'));
 
-      if (isSignupCodeRequired) {
+      if (codeRequired && !unclaimed) {
         this.logger.warn(`OIDC sign-in rejected for unknown user (signup codes required): ${userInfo.email}`);
 
         return isNative
@@ -552,13 +560,34 @@ export class OidcController {
       }
 
       if (isNative) {
-        const created = await this.createOidcUser(userInfo.email, userInfo.name);
-        await this.bindIfPossible(created.id, issuer, userInfo.sub, userInfo.email);
+        // An invitation admits whoever holds it. Without one, the only way in is
+        // to be the appliance's first account.
+        let created: { id: string } | null;
+
+        if (invited) {
+          created = await this.createOidcUser(userInfo.email, userInfo.name);
+          await this.bindIfPossible(created.id, issuer, userInfo.sub, userInfo.email);
+        } else {
+          created = await this.claimApplianceFor(
+            { issuer, subject: userInfo.sub, email: userInfo.email },
+            this.oidcAccount(userInfo.email, userInfo.name),
+          );
+        }
+
+        if (!created) {
+          // Another sign-in claimed the appliance after `unclaimed` was read.
+          // Refused exactly as it would have been had it arrived a moment later.
+          this.logger.warn(`OIDC sign-in refused for ${userInfo.email}: the appliance was claimed first`);
+
+          return res.redirect(
+            this.nativeRedirectUrl({ error: codeRequired ? 'signup_code_required' : 'signup_required' }),
+          );
+        }
 
         this.logger.log(
-          unclaimed
-            ? `Unclaimed appliance claimed by first OIDC sign-in: ${userInfo.email}`
-            : `Invited OIDC sign-in created Memory account for ${userInfo.email}`,
+          invited
+            ? `Invited OIDC sign-in created Memory account for ${userInfo.email}`
+            : `Unclaimed appliance claimed by first OIDC sign-in: ${userInfo.email}`,
         );
 
         return res.redirect(this.nativeRedirectUrl({ code: this.oidcNativeCodeService.issue(created.id) }));
@@ -579,12 +608,18 @@ export class OidcController {
       // to the "create account?" confirmation (GET/POST confirm-account below).
       // REDIRECT_COOKIE is left intact so the confirm POST can honour the
       // original destination.
+      //
+      // Where the code was waived only because the appliance is empty, the
+      // intent says so: the confirm step may run minutes from now, and must
+      // create the account only if it is still the first.
       res.cookie(
         SIGNUP_INTENT_COOKIE,
-        this.authService.issueSignupIntentToken(userInfo.email, userInfo.name, {
-          issuer,
-          subject: userInfo.sub,
-        }),
+        this.authService.issueSignupIntentToken(
+          userInfo.email,
+          userInfo.name,
+          { issuer, subject: userInfo.sub },
+          { firstAccountOnly: codeRequired },
+        ),
         {
           httpOnly: true,
           secure: req.secure,
@@ -765,21 +800,39 @@ export class OidcController {
 
       user = existing;
     } else {
-      user = await this.userService.create(
-        { userId: SYSTEM_USER },
-        {
-          name: identity.name || identity.email.split('@')[0],
-          email: identity.email,
-          // Random password — the account authenticates via OIDC.
-          password: randomBytes(32).toString('hex'),
-          passwordChosenByUser: false,
-        },
-      );
+      const account = {
+        name: identity.name || identity.email.split('@')[0],
+        email: identity.email,
+        // Random password — the account authenticates via OIDC.
+        password: randomBytes(32).toString('hex'),
+        passwordChosenByUser: false,
+      };
 
-      // Bind the new account to the Portal identity that asked for it, so the
-      // bearer path resolves it by (iss, sub) from the first API call on.
-      if (identity.issuer && identity.subject) {
-        await this.bindIfPossible(user.id, identity.issuer, identity.subject, identity.email);
+      if (identity.firstAccountOnly) {
+        // The callback let this person past the signup-code gate only because
+        // the appliance had no accounts, up to the intent's lifetime ago. Still
+        // true, or no account: decided now, atomically with creating it.
+        const claimed = await this.claimApplianceFor(identity, account);
+
+        if (claimed == null) {
+          this.logger.warn(
+            `confirm-account refused for ${identity.email}: the appliance was claimed after this sign-in began, and signup codes are required`,
+          );
+          res.clearCookie(SIGNUP_INTENT_COOKIE, { path: '/' });
+          res.redirect(HttpStatus.SEE_OTHER, '/login?error=signup_code_required');
+
+          return;
+        }
+
+        user = claimed;
+      } else {
+        user = await this.userService.create({ userId: SYSTEM_USER }, account);
+
+        // Bind the new account to the Portal identity that asked for it, so the
+        // bearer path resolves it by (iss, sub) from the first API call on.
+        if (identity.issuer && identity.subject) {
+          await this.bindIfPossible(user.id, identity.issuer, identity.subject, identity.email);
+        }
       }
     }
 
@@ -862,34 +915,77 @@ export class OidcController {
   }
 
   private async createOidcUser(email: string, name?: string): Promise<{ id: string; email: string }> {
-    return this.userService.create(
+    return this.userService.create({ userId: SYSTEM_USER }, this.oidcAccount(email, name));
+  }
+
+  /** The account a native or Hub-invited OIDC sign-in creates. */
+  private oidcAccount(email: string, name?: string): CreateUserDto {
+    return {
+      name: name || email.split('@')[0],
+      email,
+      password: randomBytes(32).toString('hex'),
+      // Nobody has seen this password. Stamped as chosen, the account is asked
+      // for it before every email or password change.
+      passwordChosenByUser: false,
+    };
+  }
+
+  /**
+   * Create `account` as the appliance's FIRST account, bound to `identity` in the same transaction —
+   * or, when the appliance already has an account, create nothing.
+   *
+   * For a sign-in that holds no invitation, being first is the whole of what admits it, so it is
+   * decided as the account is created (`UserService.createFirstAccount`) rather than trusted from an
+   * earlier look: two first sign-ins racing on an empty appliance used to both get in.
+   *
+   * @returns the new account; otherwise the account this same identity already claimed the
+   *   appliance with — a second tab, or a second flow, that won the race and committed its binding
+   *   with it; otherwise `null`, because the owner is somebody else.
+   */
+  private async claimApplianceFor(
+    identity: { issuer?: string; subject?: string; email: string },
+    account: CreateUserDto,
+  ): Promise<{ id: string } | null> {
+    const { issuer, subject, email } = identity;
+
+    const created = await this.userService.createFirstAccount(
       { userId: SYSTEM_USER },
-      {
-        name: name || email.split('@')[0],
-        email,
-        password: randomBytes(32).toString('hex'),
-      },
+      account,
+      (manager, user) => this.bindIfPossible(user.id, issuer, subject, email, 'sub', manager),
     );
+
+    if (created) {
+      return created;
+    }
+
+    const boundUserId =
+      issuer && subject ? await this.federatedIdentityService.findUserId(issuer, subject) : null;
+
+    return boundUserId ? this.userService.findById({ userId: SYSTEM_USER }, boundUserId) : null;
   }
 
   private async bindIfPossible(
     userId: string,
-    issuer: string,
+    issuer: string | undefined,
     subject: string | undefined,
     email: string,
     bindMethod: 'sub' | 'email_link' = 'sub',
+    manager?: EntityManager,
   ): Promise<void> {
     if (!subject || !issuer) {
       return;
     }
 
-    await this.federatedIdentityService.bind({
-      userId,
-      issuer,
-      subject,
-      email,
-      bindMethod,
-    });
+    await this.federatedIdentityService.bind(
+      {
+        userId,
+        issuer,
+        subject,
+        email,
+        bindMethod,
+      },
+      manager,
+    );
   }
 
   /**

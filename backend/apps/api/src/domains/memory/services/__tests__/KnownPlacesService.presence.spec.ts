@@ -13,22 +13,30 @@ import type { PlaceService } from '../PlaceService';
 /**
  * Measured presence in `buildKnownPlaces`: how `ci.position` day and night
  * counts join the event clusters, rank them, and pick Home, and that they
- * leave the event rules' Work alone. `dataSource.query` is mocked (as in
+ * leave the event rules' own picks alone. `dataSource.query` is mocked (as in
  * KnownPlacesService.buildKnownPlaces.spec.ts) and routed by the table each
  * statement reads. The SQL itself runs against Postgres in
  * KnownPlacesService.presence.integration.spec.ts.
+ *
+ * The event rows carry no timezone, so the user's clock is UTC here.
  */
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
 const CONTEXT: UserServiceContext = { userId: USER } as UserServiceContext;
 
-const WEEKDAY_WORK_HOUR = '2026-08-19T10:00:00.000Z'; // Wed, 10:00 UTC
-const WEEKDAY_NIGHT_HOUR = '2026-08-19T22:00:00.000Z'; // Wed, 22:00 UTC
+/** Three Wednesdays, each in a different Monday-based week. */
+const WEDNESDAYS = ['2026-08-05', '2026-08-12', '2026-08-19'];
 const WEEKEND_HOUR = '2026-08-15T10:00:00.000Z'; // Sat, neither signal
+
+function at(date: string, time: string): string {
+  return `${date}T${time}:00.000Z`;
+}
 
 /** Grid cells as the SQL returns them: floor(coordinate * 100 + 0.5). */
 const HOME_CELL = { latCell: 3566, lngCell: 13975 };
 const HOME = { lat: 35.66, lng: 139.75 };
+/** Where the event rule finds a night routine of its own. */
+const NIGHTSPOT = { lat: 34.69, lng: 135.5 };
 
 interface EventRow {
   event_id?: string | null;
@@ -52,16 +60,26 @@ function eventRow(overrides: Partial<EventRow> = {}): EventRow {
   };
 }
 
-/** A row of KNOWN_PLACE_PRESENCE_SQL, typed as node-postgres hands it back (counts arrive as strings). */
+/** Night events on the three WEDNESDAYS: a routine the event rule would make Home. */
+function nightRoutine(overrides: Partial<EventRow> = {}): EventRow[] {
+  return WEDNESDAYS.map((date) => eventRow({ ...NIGHTSPOT, start_time: at(date, '22:00'), ...overrides }));
+}
+
+/**
+ * A row of KNOWN_PLACE_PRESENCE_SQL, typed as node-postgres hands it back
+ * (counts arrive as strings). Unless told otherwise, each night falls in a
+ * week of its own.
+ */
 function presenceRow(
   cell: { latCell: number; lngCell: number },
-  counts: { days: number; nights: number; lat?: number; lng?: number },
+  counts: { days: number; nights: number; nightWeeks?: number; lat?: number; lng?: number },
 ): Record<string, unknown> {
   return {
     lat_cell: cell.latCell,
     lng_cell: cell.lngCell,
     days: String(counts.days),
     nights: String(counts.nights),
+    night_weeks: String(counts.nightWeeks ?? counts.nights),
     lat: counts.lat ?? (cell.latCell + 0.1) / 100,
     lng: counts.lng ?? (cell.lngCell + 0.1) / 100,
   };
@@ -136,6 +154,8 @@ describe('KnownPlacesService.buildKnownPlaces — measured presence', () => {
     expect(recent).toMatch(/ORDER BY pos\.time DESC\s+LIMIT \$4::int/);
     expect(recent).not.toMatch(/GROUP BY|count\(|avg\(/);
     expect(recent).toContain('pos.user_id = $1::uuid');
+    // Weeks are Monday-based, as the event rule's weekOf counts them.
+    expect(sql).toContain("count(DISTINCT date_trunc('week', visits.night::timestamp)) AS night_weeks");
     // Events stay the first statement; the estimate-exclusion spec reads calls[0].
     expect(String(query.mock.calls[0][0])).toContain('FROM ci.events');
   });
@@ -203,7 +223,7 @@ describe('KnownPlacesService.buildKnownPlaces — measured presence', () => {
     ];
     const { service } = makeService({
       events,
-      presence: [presenceRow(HOME_CELL, { days: 172, nights: 12 })],
+      presence: [presenceRow(HOME_CELL, { days: 172, nights: 12, nightWeeks: 11 })],
       totalDays: 555,
     });
 
@@ -240,27 +260,32 @@ describe('KnownPlacesService.buildKnownPlaces — measured presence', () => {
     expect(candidates[0]).toMatchObject({ label: 'Corner', eventCount: 1, presenceDays: 3 });
   });
 
-  it("names Home from presence over the event rule's one-event night cluster", async () => {
+  it("names Home from presence over the event rule's own night routine", async () => {
+    const withoutPresence = makeService({ events: nightRoutine() });
+    expect(homes(await withoutPresence.service.buildKnownPlaces(CONTEXT))).toEqual([
+      expect.objectContaining({ eventCount: 3, presenceDays: 0 }),
+    ]);
+
     const { service } = makeService({
-      events: [eventRow({ lat: 34.69, lng: 135.5, start_time: WEEKDAY_NIGHT_HOUR })],
-      presence: [presenceRow(HOME_CELL, { days: 9, nights: 2 })],
+      events: nightRoutine(),
+      presence: [presenceRow(HOME_CELL, { days: 9, nights: 3, nightWeeks: 3 })],
     });
 
     const candidates = await service.buildKnownPlaces(CONTEXT);
 
     expect(homes(candidates)).toEqual([expect.objectContaining({ presenceDays: 9, eventCount: 0 })]);
-    expect(candidates.find((candidate) => candidate.eventCount === 1)?.kind).toBe('other');
+    expect(candidates.find((candidate) => candidate.eventCount === 3)?.kind).toBe('other');
   });
 
-  it('ranks Home by presence days, breaks a tie by nights, and lets nights only gate', async () => {
+  it('ranks Home by presence days, breaks a tie by nights, and needs nights in three different weeks', async () => {
     const { service } = makeService({
       presence: [
-        // The most days, but a single night: a place the user is at by day.
-        presenceRow({ latCell: 3567, lngCell: 13969 }, { days: 200, nights: 1 }),
+        // The most days and plenty of nights, but every night in two weeks: a stay.
+        presenceRow({ latCell: 3567, lngCell: 13969 }, { days: 200, nights: 9, nightWeeks: 2 }),
         // The most nights, on few days.
-        presenceRow({ latCell: 3568, lngCell: 13977 }, { days: 36, nights: 15 }),
-        presenceRow(HOME_CELL, { days: 172, nights: 12 }),
-        presenceRow({ latCell: 3567, lngCell: 13975 }, { days: 172, nights: 11 }),
+        presenceRow({ latCell: 3568, lngCell: 13977 }, { days: 36, nights: 15, nightWeeks: 8 }),
+        presenceRow(HOME_CELL, { days: 172, nights: 12, nightWeeks: 11 }),
+        presenceRow({ latCell: 3567, lngCell: 13975 }, { days: 172, nights: 11, nightWeeks: 10 }),
       ],
       totalDays: 555,
     });
@@ -271,15 +296,12 @@ describe('KnownPlacesService.buildKnownPlaces — measured presence', () => {
   });
 
   it.each([
-    ['6 days', false, { days: 6, nights: 6 }],
-    ['1 night', false, { days: 40, nights: 1 }],
-    ['7 days and 2 nights', true, { days: 7, nights: 2 }],
+    ['nights in two weeks', false, { days: 60, nights: 10, nightWeeks: 2 }],
+    ['no nights at all', false, { days: 90, nights: 0, nightWeeks: 0 }],
+    ['nights in three weeks', true, { days: 3, nights: 3, nightWeeks: 3 }],
   ])('with %s of presence, presence names Home: %s', async (_label, presenceWins, counts) => {
     const { service } = makeService({
-      events: [
-        eventRow({ location_entity_id: 'loc-night', start_time: WEEKDAY_NIGHT_HOUR }),
-        eventRow({ location_entity_id: 'loc-night', start_time: WEEKDAY_NIGHT_HOUR }),
-      ],
+      events: nightRoutine({ location_entity_id: 'loc-night' }),
       presence: [presenceRow(HOME_CELL, counts)],
     });
 
@@ -294,17 +316,15 @@ describe('KnownPlacesService.buildKnownPlaces — measured presence', () => {
 
   it("keeps Work the event rule's pick when presence pushes it out of the top 50", async () => {
     const events = [
-      // The event rule's Work: two weekday 9–5 events.
-      eventRow({ lat: 35.68, lng: 139.7, start_time: WEEKDAY_WORK_HOUR }),
-      eventRow({ lat: 35.68, lng: 139.7, start_time: WEEKDAY_WORK_HOUR }),
-      // One weekday 9–5 event in a cell with plenty of GPS: the same share,
-      // and ranked second on its presence days.
-      eventRow({ lat: 35.67, lng: 139.69, start_time: WEEKDAY_WORK_HOUR }),
+      // The event rule's Work: weekday mornings in three different weeks.
+      ...WEDNESDAYS.map((date) => eventRow({ lat: 35.68, lng: 139.7, start_time: at(date, '10:00') })),
+      // One weekday 9–5 event in a cell with plenty of GPS: a high rank, no routine.
+      eventRow({ lat: 35.67, lng: 139.69, start_time: at(WEDNESDAYS[2], '11:00') }),
     ];
     const presence = [
       presenceRow(HOME_CELL, { days: 172, nights: 12 }),
       presenceRow({ latCell: 3567, lngCell: 13969 }, { days: 150, nights: 8 }),
-      // Sixty more cells of GPS, each out-ranking two events.
+      // Sixty more cells of GPS, each out-ranking three events.
       ...Array.from({ length: 60 }, (_, index) =>
         presenceRow({ latCell: 4000 + index, lngCell: -10000 }, { days: 10 + index, nights: 0 }),
       ),
@@ -315,10 +335,10 @@ describe('KnownPlacesService.buildKnownPlaces — measured presence', () => {
 
     expect(candidates).toHaveLength(50);
     expect(candidates.filter((candidate) => candidate.kind === 'work')).toEqual([
-      expect.objectContaining({ eventCount: 2, presenceDays: 0 }),
+      expect.objectContaining({ eventCount: 3, presenceDays: 0 }),
     ]);
     // Kept, and in rank order: it takes the last place.
-    expect(candidates[49]).toMatchObject({ kind: 'work', eventCount: 2 });
+    expect(candidates[49]).toMatchObject({ kind: 'work', eventCount: 3 });
     expect(candidates.find((candidate) => candidate.presenceDays === 150)?.kind).toBe('other');
     expect(homes(candidates)).toEqual([expect.objectContaining({ presenceDays: 172 })]);
   });
@@ -360,6 +380,7 @@ describe('KnownPlacesService.buildKnownPlaces — measured presence', () => {
     const { service } = makeService({
       presence: [
         { ...presenceRow(HOME_CELL, { days: 9, nights: 3 }), lat_cell: null },
+        { ...presenceRow({ latCell: 3566, lngCell: 13976 }, { days: 9, nights: 3 }), night_weeks: null },
         presenceRow({ latCell: 3568, lngCell: 13977 }, { days: 0, nights: 0 }),
         presenceRow({ latCell: 3567, lngCell: 13969 }, { days: 8, nights: 2 }),
       ],

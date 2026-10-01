@@ -1,5 +1,6 @@
 import { EventIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import { SearchResultRow } from './SearchResultRow';
 
@@ -17,12 +18,13 @@ interface Props {
 
 export function EventResult({ event }: Props) {
   const data = useFragment(EVENT_FRAGMENT, event);
+  const fmt = useDateTimeFormat();
 
   return (
     <SearchResultRow
       icon={<EventIcon />}
       title={data.title}
-      meta={new Date(data.startTime).toLocaleString()}
+      meta={fmt.dateTime(data.startTime)}
       kind="Event"
     />
   );

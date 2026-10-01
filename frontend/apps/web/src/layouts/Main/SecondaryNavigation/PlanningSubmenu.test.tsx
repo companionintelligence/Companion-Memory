@@ -1,5 +1,5 @@
 import { Tooltip } from '@ci/shadcn';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -80,6 +80,36 @@ describe('PlanningSubmenu', () => {
 
     expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('href', '/plan/calendar');
+  });
+
+  // Tasks and Calendar start on Planning's label column, hung off a guide
+  // line under its icon; the current one is filled and carries a straight
+  // bar on that line instead of a `border-l` that bends round its corners.
+  it('marks the current sub-view with a bar on the guide line', () => {
+    renderSubmenu('/plan/tasks');
+
+    const tasks = screen.getByRole('link', { name: 'Tasks' });
+    const calendar = screen.getByRole('link', { name: 'Calendar' });
+
+    expect(within(screen.getByTestId('planning-submenu')).getByTestId('rail-guide')).toBeInTheDocument();
+    expect(tasks).toHaveClass('bg-primary/10', 'text-primary', 'ml-9');
+    expect(tasks.className).not.toMatch(/border-l/);
+    expect(tasks.parentElement?.querySelector('[data-testid="rail-active-bar"]')).not.toBeNull();
+    expect(calendar).not.toHaveClass('bg-primary/10');
+    expect(calendar.parentElement?.querySelector('[data-testid="rail-active-bar"]')).toBeNull();
+  });
+
+  // Planning itself is a section: on its own page its row fills, with no bar
+  // (there is no guide line above a section to put one on).
+  it('fills the Planning row itself on /plan', () => {
+    renderSubmenu('/plan');
+
+    const head = screen.getByRole('link', { name: 'Planning' });
+
+    expect(head).toHaveAttribute('aria-current', 'page');
+    expect(head.parentElement).toHaveClass('bg-primary/10', 'text-primary');
+    expect(head.parentElement?.className).not.toMatch(/border-l/);
+    expect(screen.queryByTestId('rail-active-bar')).not.toBeInTheDocument();
   });
 
   it('closes when the chevron is clicked, even off a /plan route the next render', () => {

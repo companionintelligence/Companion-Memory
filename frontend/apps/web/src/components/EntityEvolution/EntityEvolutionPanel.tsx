@@ -9,6 +9,8 @@ import {
   type EvolutionNodeType,
   useEntityEvolutionService,
 } from '@/api/useEntityEvolutionService';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 /** Matches the hook's default. Held here too so the panel can tell a full page from a complete one. */
 const EVOLUTION_PAGE_LIMIT = 200;
@@ -46,19 +48,19 @@ function toTitleCase(value: string): string {
     .join(' ');
 }
 
-function formatDate(value: string): string {
+function formatDate(value: string, fmt: DateTimeFormatter): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
   }
 
-  return new Intl.DateTimeFormat(undefined, {
+  return fmt.dateTime(date, {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
-  }).format(date);
+  });
 }
 
 function formatDiffValue(value: unknown): string {
@@ -214,6 +216,7 @@ export function EntityEvolutionPanel({ entityId, entityName }: Props) {
     limit: EVOLUTION_PAGE_LIMIT,
     skip: !entityId,
   });
+  const fmt = useDateTimeFormat();
 
   const [nodeTypeFilter, setNodeTypeFilter] = useState<EvolutionNodeType | 'all'>('all');
   const [changeTypeFilter, setChangeTypeFilter] = useState<EvolutionChangeType | 'all'>('all');
@@ -385,7 +388,9 @@ export function EntityEvolutionPanel({ entityId, entityName }: Props) {
                         <Badge variant="secondary">{toTitleCase(delta.relationshipType)}</Badge>
                       )}
                     </div>
-                    <p className="shrink-0 text-xs text-muted-foreground">{formatDate(delta.changedAt)}</p>
+                    <p className="shrink-0 text-xs text-muted-foreground">
+                      {formatDate(delta.changedAt, fmt)}
+                    </p>
                   </div>
 
                   {delta.nodeType === 'relationship' ? (

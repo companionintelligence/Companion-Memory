@@ -216,8 +216,14 @@ clearest evidence that CPU was never the ceiling.
 - **The dev-stack reallocates ports on every `up`.** `IMPORT_TEST_DATABASE_URL`
   pinned to yesterday's port fails as "nothing accepting connections", which
   reads like an absent database. Always take it from `make dburl`.
+  *(Since 2026-09-30 an explicit URL that refuses connections fails the suite,
+  naming the variable, instead of skipping it.)*
 - **`*_TEST_PROBE_TIMEOUT_MS` matters on a loaded box.** The synchronous probe
   spawns a node process; 2,000 ms is not always enough to spawn it.
+  *(Fixed 2026-09-30: a probe killed before it could answer read as "no
+  database" and skipped the suite. Start-up now has its own 10 s allowance and
+  up to three attempts, and a probe that still cannot answer fails the suite —
+  it can no longer skip it. The variable is only the socket timeout now.)*
 - **The inbox consumes what it imports** (unpack acquires by rename). Copy into
   it; never point it at the only copy of a corpus. The upload path (`ci-import
   import <file>`) leaves the original alone.

@@ -1,3 +1,5 @@
+import type { TimeFormat } from '@ci/domains/user';
+
 /** Portable archive written by legacy GET /api/account/export (small accounts). */
 export interface UserDataArchive {
   version: 1;
@@ -16,6 +18,7 @@ export interface UserProfileSnapshot {
   onboarded: boolean;
   onboardedAt: string | null;
   timezone: string;
+  timeFormat: TimeFormat;
   onboardingProgress: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;

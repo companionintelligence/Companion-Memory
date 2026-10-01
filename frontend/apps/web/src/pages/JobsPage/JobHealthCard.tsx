@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { Button, Card, Skeleton, cn } from '@ci/shadcn';
 import { AlertTriangle, CheckCircle2, Info, RefreshCcw } from '@ci/shadcn/icons';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+
 import { cardPad, usePhone } from './Fold';
 import { categoryChartColor, categoryLabel } from './jobCategories';
 import { jobVerdicts, type JobVerdict, type VerdictTone } from './jobVerdicts';
@@ -121,6 +123,7 @@ export function JobHealthCard({
   onSelectState,
 }: Props) {
   const phone = usePhone();
+  const fmt = useDateTimeFormat();
   const verdicts = jobVerdicts({ stateCounts, categoryCounts, crons });
 
   const total = Object.values(stateCounts).reduce((sum, n) => sum + n, 0);
@@ -156,10 +159,11 @@ export function JobHealthCard({
           <Card.Title className="text-base">Health</Card.Title>
           <Card.Description>
             {updatedAt
-              ? `What the job system is doing, and whether any of it needs you — as of ${new Intl.DateTimeFormat(
-                  undefined,
-                  { hour: '2-digit', minute: '2-digit', second: '2-digit' },
-                ).format(updatedAt)}`
+              ? `What the job system is doing, and whether any of it needs you — as of ${fmt.time(updatedAt, {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                })}`
               : 'What the job system is doing, and whether any of it needs you.'}
           </Card.Description>
         </div>
@@ -192,7 +196,7 @@ export function JobHealthCard({
           >
             <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
             <span className="min-w-0 break-words">
-              Showing data from {staleSince.toLocaleTimeString()} — refreshes have been failing since then
+              Showing data from {fmt.time(staleSince)} — refreshes have been failing since then
               {error ? ` (${error})` : ''}.
             </span>
           </div>

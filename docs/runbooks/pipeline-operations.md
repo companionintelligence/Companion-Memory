@@ -603,7 +603,7 @@ Every id in the failing batch gets its own ledger row with a retry gate, so the
 outage reads as a rate. Cross-check the host:
 
 ```bash
-# Host from config: services.ollama.host / embedding.host (OLLAMA_EMBED_HOST),
+# Host from config: services.ollama.host / embedding.apiBase (LLM_EMBEDDING_API_BASE),
 # default http://host.docker.internal:11434 — i.e. :11434 on the appliance host.
 curl -sS http://localhost:11434/api/tags | head -c 400   # up? is CI_EMBED_MODEL pulled?
 docker stats --no-stream                                 # saturated?

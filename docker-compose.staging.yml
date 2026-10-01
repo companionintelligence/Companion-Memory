@@ -23,6 +23,7 @@ services:
       LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
       # Embeddings stay on native Ollama even when chat runs on vLLM/Lemonade;
       # falls back to OLLAMA_HOST when unset.
+      LLM_EMBEDDING_API_BASE: ${LLM_EMBEDDING_API_BASE:-}
       OLLAMA_EMBED_HOST: ${OLLAMA_EMBED_HOST:-}
       HBPE_HOST: http://hbpe-service:8002
       # `api` exists only in the staging/production overrides — there is no base

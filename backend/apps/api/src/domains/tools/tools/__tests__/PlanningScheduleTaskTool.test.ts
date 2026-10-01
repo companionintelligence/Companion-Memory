@@ -35,11 +35,10 @@ describe('PlanningScheduleTaskTool', () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual(outcome);
-    expect(scheduleTask).toHaveBeenCalledWith(
-      { userId: CONTEXT.userId },
-      TASK_ID,
-      { estimatedMinutes: 30, date: '2026-09-18' },
-    );
+    expect(scheduleTask).toHaveBeenCalledWith({ userId: CONTEXT.userId }, TASK_ID, {
+      estimatedMinutes: 30,
+      date: '2026-09-18',
+    });
     expect(scheduleTaskAt).not.toHaveBeenCalled();
   });
 
@@ -50,11 +49,10 @@ describe('PlanningScheduleTaskTool', () => {
 
     await tool.execute(CONTEXT, { taskId: TASK_ID });
 
-    expect(scheduleTask).toHaveBeenCalledWith(
-      { userId: CONTEXT.userId },
-      TASK_ID,
-      { estimatedMinutes: undefined, date: undefined },
-    );
+    expect(scheduleTask).toHaveBeenCalledWith({ userId: CONTEXT.userId }, TASK_ID, {
+      estimatedMinutes: undefined,
+      date: undefined,
+    });
   });
 
   it('places at an explicit instant through scheduleTaskAt when startAt is given', async () => {

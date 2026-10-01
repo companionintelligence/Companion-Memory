@@ -1,0 +1,15 @@
+{
+  "id": "tools_no_personal_lookup",
+  "capability": "tools",
+  "title": "Arithmetic does not search personal memory",
+  "conversation": [
+    {
+      "role": "user",
+      "content": "What is 17 + 25? Reply with the number only."
+    }
+  ],
+  "expected": {
+    "must_not_use": ["memory", "graph", "places", "calendar", "messaging", "planning"],
+    "answer_contains": ["42"]
+  }
+}

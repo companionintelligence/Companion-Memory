@@ -13,6 +13,7 @@ import {
 } from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
+import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { PLANNING_PREFS_DEFAULTS } from '../../entities/PlanningPrefsEntity';
 import { TaskEntity } from '../../entities/TaskEntity';
@@ -40,12 +41,22 @@ import { TaskService } from '../TaskService';
  *     excluded, and the same still-`pending` row becomes claimable again the
  *     moment the task/block leaves that status, with no re-sync step.
  *
- * Opt-in, same convention as `TaskService.tenancy.integration.test.ts`: set
- * `PLANNING_TEST_DATABASE_URL` to a Postgres already migrated to `main`
- * (e.g. the `ci-parity-db` container: postgres://companion:parity_local@localhost:5433/companion).
+ * Same database convention as `TaskService.tenancy.integration.test.ts`:
+ * `PLANNING_TEST_DATABASE_URL`, else `DATABASE_URL`, else `.env`'s `DATABASE_*`,
+ * pointing at a Postgres already migrated to `main` (e.g. the `ci-parity-db`
+ * container: postgres://companion:parity_local@localhost:5433/companion).
+ * `databaseAvailability()` decides whether that means run, skip or fail.
  */
-const DATABASE_URL = process.env.PLANNING_TEST_DATABASE_URL;
-const describeWithDb = DATABASE_URL ? describe : describe.skip;
+const DATABASE_ENV = {
+  urlEnvVar: 'PLANNING_TEST_DATABASE_URL',
+  probeTimeoutEnvVar: 'PLANNING_TEST_PROBE_TIMEOUT_MS',
+};
+const availability = databaseAvailability(DATABASE_ENV);
+const describeWithDb = availability.available ? describe : describe.skip;
+
+if (!availability.available) {
+  console.warn(`[planning/ReminderDispatchService.claim] SKIPPED — ${availability.reason}`);
+}
 
 describeWithDb('claimDueReminders (integration)', () => {
   let dataSource: DataSource;
@@ -110,7 +121,7 @@ describeWithDb('claimDueReminders (integration)', () => {
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...dataSourceConnection(DATABASE_ENV),
       entities: [TaskEntity, TaskPendingChangeEntity, EventEntity, BaseEntity, EventBaseEntity, UserEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },

@@ -66,9 +66,11 @@ export class StagedEntityEntity {
   identityKey!: string | null;
 
   /**
-   * The identity key the rule BEFORE shared handles gave this entity — its
-   * smallest handle, shared or not — when that differs from `identityKey`; NULL
-   * when they agree, and for rows staged before the column existed.
+   * The identity key the rule BEFORE shared handles were passed over gave this
+   * entity — its smallest handle, shared or not, an extension line read as the
+   * truncation it used to key as, of those its parser read then — when that
+   * differs from `identityKey`; NULL when they agree, and for rows staged
+   * before the column existed.
    *
    * Rows already in `ci.entities` were minted under that key, and a moved key
    * would mint a second Person on the next import. The push uses this to move
@@ -100,6 +102,19 @@ export class StagedEntityEntity {
    */
   @Column({ type: 'boolean', name: 'graph_dirty', default: false })
   graphDirty!: boolean;
+
+  /**
+   * The metadata keys the parser declared as accumulating (`Entity.accumulate`),
+   * or null when it declared none.
+   *
+   * Stored because the push needs it and the parser is long gone by then:
+   * `GraphIngestService` set-unions these keys into an existing graph row rather
+   * than replacing them, so a later export ADDS its orders, phones and URLs to
+   * what an earlier one said. Without the list it cannot tell a set from a
+   * scalar, and replaced both.
+   */
+  @Column({ type: 'text', array: true, nullable: true })
+  accumulate!: string[] | null;
 
   @Column({ type: 'text', name: 'push_status', default: 'pending' })
   pushStatus!: StagedPushStatus;

@@ -229,6 +229,10 @@ export function buildProgram(deps: ProgramDeps): Command {
     .description('Configure an appliance-owned inference endpoint')
     .requiredOption('--backend <kind>', 'ollama or openai-compatible')
     .requiredOption('--port <port>', 'port exposed to the Memory API container')
+    .option(
+      '--base-path <path>',
+      "OpenAI-compatible only: the server's API root (/v1 unless it mounts it elsewhere; Lemonade uses /api/v1)",
+    )
     .option('--backend-api-key <key>', 'write-only credential for an OpenAI-compatible backend')
     .option('--clear-api-key', 'remove the appliance-saved backend credential')
     .option('--json', 'machine-readable output')

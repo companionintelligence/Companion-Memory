@@ -1,4 +1,5 @@
 import {
+  FAX_FACT_PROPERTY_KEYS,
   NANP_TIMEZONES,
   PHONE_EVIDENCE,
   PHONE_FACTS_CORPUS_SQL,
@@ -8,6 +9,7 @@ import {
   PhoneHolders,
   applyPhoneVerdict,
   capUnadjudicatedPhones,
+  carriedPhoneLines,
   classifyPhoneName,
   derivePhoneRegion,
   extractPhoneFacts,
@@ -18,7 +20,9 @@ import {
   parsePhone,
   phoneCorpusFacts,
   phoneEvidenceFor,
+  phoneEvidenceNumbers,
   phoneFactsSqlObject,
+  revalidatePhoneEvidence,
   sharedPhoneLines,
   type PhoneFacts,
   type PhoneRegion,
@@ -534,6 +538,40 @@ describe('PhoneHolders.adjudicate — numbers that are not evidence', () => {
     expect(adjudicate(vcard('Ada Quill', '52886'), vcard('Ada Quill', '52886'))).toEqual({ kind: 'absent' });
   });
 
+  /**
+   * The shape every contact importer writes since applecontacts.ts and
+   * contactlist.ts started keeping `Phones` as typed (vcard.ts always did):
+   * the typed office line with its extension, beside a `phones` key the FIXED
+   * rule wrote — which never holds the truncation (`5550147229` from
+   * `(212) 555-0147;229`), only the card's plain line, if it has one.
+   */
+  describe('a card whose typed Phones carry an office extension', () => {
+    const typedCard = (name: string, typed: string[], key?: string) =>
+      facts(name, { Phones: typed, ...(key ? { phones: [key] } : {}) });
+
+    it('reads the extension line as a refusal and the plain line as the number', () => {
+      const dana = typedCard('Dana Quill', ['(212) 555-0147;229', '+1 (212) 555-0199'], '2125550199');
+      const holders = holdersOf(['dana', dana]);
+
+      expect(holders.resolve(dana, '5550147229')).toEqual({ kind: 'refused', reasons: ['extension'] });
+      expect(holders.resolve(dana, '2125550199')).toEqual({
+        kind: 'number',
+        e164: '+12125550199',
+        stated: true,
+      });
+    });
+
+    it('writes nothing between two cards that share only that extension line', () => {
+      const verdict = adjudicate(
+        typedCard('Dana Quill', ['(212) 555-0147;229']),
+        typedCard('Dana Quill', ['212-555-0147 x229']),
+      );
+
+      expect(verdict).toEqual({ kind: 'unusable', reasons: ['extension'] });
+      expect(phoneEvidenceFor(verdict)).toEqual([]);
+    });
+  });
+
   it("never uses the owner's own number as evidence between two contacts", () => {
     const self = facts('Owner Person', { Phones: ['+1 (202) 555-0142'] }, { self: true });
     const holders = holdersOf(['self', self], ['a', vcard('Ada Quill', '(202) 555-0142')], ['b', stub()]);
@@ -569,6 +607,74 @@ describe('PhoneHolders.adjudicate — numbers that are not evidence', () => {
 
   it('pins the cap to the profile-URL cap', () => {
     expect(PHONE_MAX_HOLDERS).toBe(PROFILE_URL_MAX_HOLDERS);
+  });
+});
+
+describe('PhoneHolders.adjudicate — fax lines', () => {
+  // Invented: an office in the 212 fiction range. Main line 555-0110, fax
+  // 555-0118 — every card from the office lists both.
+  const FAX = '(212) 555-0118';
+  const FAX_DIGITS = '2125550118';
+
+  /** A colleague's card as the vCard parser now files it: the fax apart from the lines. */
+  function colleague(name: string, line: string): PhoneFacts {
+    return facts(name, { Phones: [line], phones: [line.replace(/\D/g, '').slice(-10)], Faxes: [FAX] });
+  }
+
+  it('reads the fax key, and only to refuse', () => {
+    expect(FAX_FACT_PROPERTY_KEYS).toEqual(['Faxes']);
+
+    const card = colleague('Ada Quill', '(212) 555-0110');
+
+    expect(card.lines.get(FAX_DIGITS)).toEqual({
+      stated: new Set(),
+      inferred: null,
+      refused: new Set(['fax']),
+    });
+  });
+
+  it('writes nothing for two colleagues who share only the office fax', () => {
+    const verdict = adjudicate(
+      colleague('Ada Quill', '(212) 555-0110'),
+      colleague('Bo Brightwater', '(212) 555-0111'),
+    );
+
+    expect(verdict).toEqual({ kind: 'unusable', reasons: ['fax'] });
+    expect(phoneEvidenceFor(verdict)).toEqual([]);
+  });
+
+  it('refuses the fax even when the same digits also sit in a phone key, stated', () => {
+    // The vCard identity key is the card's smallest handle, and that can be
+    // the fax: `phones` then carries it, and a typed "+1" form may too.
+    const keyedOnFax = facts('Ada Quill', {
+      Phones: ['+1 212 555 0118'],
+      phones: [FAX_DIGITS],
+      Faxes: [FAX],
+    });
+    const other = facts('Bo Brightwater', { Phones: ['+1 (212) 555-0118'], phones: [FAX_DIGITS] });
+
+    expect(adjudicate(keyedOnFax, other)).toEqual({ kind: 'unusable', reasons: ['fax'] });
+  });
+
+  it('refuses a line either side files as a fax', () => {
+    // Bo calls it a line; Ada's card calls it the fax. A shared machine is not
+    // evidence that its two listings are one person.
+    const verdict = adjudicate(colleague('Ada Quill', '(212) 555-0110'), vcard('Ada Quill', FAX));
+
+    expect(verdict).toEqual({ kind: 'unusable', reasons: ['fax'] });
+  });
+
+  it('still judges the colleagues on a number that is a line on both cards', () => {
+    const verdict = adjudicate(
+      colleague('Ada Quill', '(212) 555-0110'),
+      colleague('Bo Brightwater', '(212) 555-0110'),
+    );
+
+    expect(verdict).toMatchObject({
+      kind: 'review',
+      numbers: ['+12125550110'],
+      reasons: ['given_name_conflict'],
+    });
   });
 });
 
@@ -704,6 +810,158 @@ describe('verdict → evidence', () => {
   });
 });
 
+describe('carriedPhoneLines — is the number on the record?', () => {
+  it('carries a national number with no region, and a stated one', () => {
+    const card = facts('Ada Quill', { Phones: ['(202) 555-0142', '+44 20 7946 0958'] }, { region: null });
+
+    expect([...carriedPhoneLines(card)].sort()).toEqual([ADA_DIGITS, UK_DIGITS]);
+  });
+
+  it('never carries a line the record files as its fax, even when a phone key repeats it', () => {
+    const card = facts('Ada Quill', {
+      Phones: ['(212) 555-0110', '+1 212 555 0118'],
+      phones: ['2125550118'],
+      Faxes: ['(212) 555-0118'],
+    });
+
+    expect([...carriedPhoneLines(card)]).toEqual(['2125550110']);
+  });
+
+  it('carries no extension line, but a stated form of the same digits wins over it', () => {
+    expect([...carriedPhoneLines(facts('Ada Quill', { Phones: ['(202) 555-0142 x12'] }))]).toEqual([]);
+    expect([
+      ...carriedPhoneLines(facts('Ada Quill', { Phones: ['(202) 555-0142 x12', '+1 202 555 0142'] })),
+    ]).toEqual([ADA_DIGITS]);
+  });
+});
+
+describe('revalidatePhoneEvidence — re-checking a stored candidate', () => {
+  const name = { kind: 'name_overlap', value: 'quill', score: 0.5 };
+  const review = [
+    { kind: 'phone', value: ADA_E164, score: 0.85 },
+    { kind: 'phone_check', value: 'given_name_conflict', score: 0 },
+  ];
+  const nothing = new Set<string>();
+  const both = new Set([ADA_DIGITS]);
+
+  it('leaves a candidate whose numbers both people still carry exactly as it was', () => {
+    const stored = { score: 0.85, evidence: [...review, name] };
+
+    expect(revalidatePhoneEvidence(stored, { carried: both })).toEqual({
+      score: 0.85,
+      evidence: stored.evidence,
+      changed: false,
+    });
+  });
+
+  it('checks presence, not grade: an exact item both still carry stays for the drain to judge', () => {
+    const stored = { score: 0.95, evidence: [{ kind: 'phone', value: ADA_E164, score: 0.95 }] };
+
+    expect(revalidatePhoneEvidence(stored, { carried: both }).changed).toBe(false);
+  });
+
+  it('drops a number one person no longer carries, with the check that explained it', () => {
+    // A re-import rewrote one card.
+    expect(
+      revalidatePhoneEvidence({ score: 0.85, evidence: [...review, name] }, { carried: nothing }),
+    ).toEqual({
+      score: 0.5,
+      evidence: [name],
+      changed: true,
+    });
+  });
+
+  it('drops everything when the number was the only evidence', () => {
+    expect(revalidatePhoneEvidence({ score: 0.85, evidence: review }, { carried: nothing })).toEqual({
+      score: 0,
+      evidence: [],
+      changed: true,
+    });
+  });
+
+  it('drops the office fax once a record files it as one', () => {
+    const colleague = (name: string) =>
+      facts(name, { Phones: ['(212) 555-0110', '(212) 555-0118'], Faxes: ['(212) 555-0118'] });
+    const carried = new Set(
+      [...carriedPhoneLines(colleague('Ada Quill'))].filter((line) =>
+        carriedPhoneLines(colleague('Bo Brightwater')).has(line),
+      ),
+    );
+
+    expect(
+      revalidatePhoneEvidence(
+        { score: 0.85, evidence: [{ kind: 'phone', value: '+12125550118', score: 0.85 }, review[1]] },
+        { carried },
+      ),
+    ).toEqual({ score: 0, evidence: [], changed: true });
+  });
+
+  it('holds what survives on observed claims alone below the auto-merge tier, when asked to', () => {
+    const exact = { score: 0.95, evidence: [{ kind: 'phone', value: ADA_E164, score: 0.95 }] };
+
+    expect(revalidatePhoneEvidence(exact, { carried: both, capUnadjudicated: true })).toEqual({
+      score: 0.85,
+      evidence: [
+        { kind: 'phone', value: ADA_E164, score: 0.85 },
+        { kind: 'phone_check', value: 'unadjudicated', score: 0 },
+      ],
+      changed: true,
+    });
+  });
+
+  it('reads a claim-pass item (ten digits, no country) against the same key', () => {
+    const stored = { score: 0.75, evidence: [{ kind: 'phone', value: ADA_DIGITS, score: 0.75 }] };
+
+    expect(revalidatePhoneEvidence(stored, { carried: both }).changed).toBe(false);
+  });
+
+  it('keeps only the numbers that still hold when an item names several', () => {
+    const two = { kind: 'phone', value: `${ADA_E164}, +12125550199`, score: 0.95 };
+
+    expect(revalidatePhoneEvidence({ score: 0.95, evidence: [two] }, { carried: both })).toEqual({
+      score: 0.95,
+      evidence: [{ kind: 'phone', value: ADA_E164, score: 0.95 }],
+      changed: true,
+    });
+  });
+
+  it('keeps a country conflict only while both still carry its digits', () => {
+    const conflict = { kind: 'phone_country_conflict', value: `${UK_E164} ≠ +12079460958`, score: 0 };
+    const stored = { score: 0.5, evidence: [name, conflict] };
+
+    expect(revalidatePhoneEvidence(stored, { carried: new Set([UK_DIGITS]) }).changed).toBe(false);
+    expect(revalidatePhoneEvidence(stored, { carried: nothing })).toEqual({
+      score: 0.5,
+      evidence: [name],
+      changed: true,
+    });
+  });
+
+  it('never raises the stored score, so a profile veto’s cap survives', () => {
+    // An email pair capped at 0.8 by a partial LinkedIn match, whose phone
+    // item no longer holds: removing the phone must not lift it back to 0.95.
+    const stored = {
+      score: 0.8,
+      evidence: [
+        { kind: 'email', value: 'ada@example.com', score: 0.95 },
+        ...review,
+        { kind: 'profile_url_partial', value: 'linkedin.com/in/ada-quill', score: 0 },
+      ],
+    };
+
+    const checked = revalidatePhoneEvidence(stored, { carried: nothing });
+
+    expect(checked.score).toBe(0.8);
+    expect(checked.evidence.map((item) => item.kind)).toEqual(['email', 'profile_url_partial']);
+  });
+
+  it('splits an evidence value into the numbers every writer joins with a comma', () => {
+    expect(phoneEvidenceNumbers(`${ADA_E164}, +12125550199`)).toEqual([ADA_E164, '+12125550199']);
+    expect(phoneEvidenceNumbers(ADA_DIGITS)).toEqual([ADA_DIGITS]);
+    expect(phoneEvidenceNumbers('')).toEqual([]);
+  });
+});
+
 describe('the corpus', () => {
   it('derives the region from the corpus and extracts only people with lines', () => {
     const { region, facts: byId } = phoneCorpusFacts(
@@ -748,9 +1006,10 @@ describe('the corpus', () => {
 
   it('loads only the keys it reads, and numeric names', () => {
     expect(phoneFactsSqlObject('e')).toBe(
-      "jsonb_build_object('Phones', e.properties->'Phones', 'phones', e.properties->'phones', 'phone', e.properties->'phone')",
+      "jsonb_build_object('Phones', e.properties->'Phones', 'phones', e.properties->'phones', " +
+        "'phone', e.properties->'phone', 'Faxes', e.properties->'Faxes')",
     );
-    expect(PHONE_FACTS_CORPUS_SQL).toContain("e.properties ?| array['Phones', 'phones', 'phone']");
+    expect(PHONE_FACTS_CORPUS_SQL).toContain("e.properties ?| array['Phones', 'phones', 'phone', 'Faxes']");
     expect(PHONE_FACTS_CORPUS_SQL).toContain('e.merged_into_entity_id IS NULL');
   });
 });
