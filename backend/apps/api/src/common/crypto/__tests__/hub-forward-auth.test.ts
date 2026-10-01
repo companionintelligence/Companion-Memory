@@ -167,7 +167,7 @@ describe('hub-forward-auth stable id', () => {
     });
   });
 
-  it.each([
+  it.each<[string, { issuer?: string; userId?: string }]>([
     ['an https issuer (an OIDC issuer is never a Hub directory)', { issuer: 'https://hub.ci.computer' }],
     ['an issuer that is not a directory uuid', { issuer: 'urn:ci-hub:not-a-uuid' }],
     ['an id that is not a uuid', { userId: '42' }],

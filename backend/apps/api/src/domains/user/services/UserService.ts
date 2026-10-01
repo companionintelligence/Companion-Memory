@@ -49,12 +49,16 @@ export class UserService {
     private readonly eventService: EventService,
   ) {}
 
-  async create(context: ServiceContext, data: CreateUserDto): Promise<User> {
+  /**
+   * @param alongside work that must commit or roll back with the account — the Hub forward-auth
+   *   bridge's binding of the Hub person it is created for, so the account never exists unbound.
+   */
+  async create(context: ServiceContext, data: CreateUserDto, alongside?: WithNewAccount): Promise<User> {
     if (context.userId !== SYSTEM_USER) {
       throw new Error('Unauthorized');
     }
 
-    const user = await this.insertAccount(data, { onlyIfFirst: false });
+    const user = await this.insertAccount(data, { onlyIfFirst: false, alongside });
 
     // Unreachable: only an `onlyIfFirst` insert can decline. Thrown rather than asserted away, so a
     // change that breaks that is a loud failure instead of a `null` typed as a User.
@@ -493,6 +497,24 @@ export class UserService {
     });
 
     return result ? UserEntity.toEgressType(result) : null;
+  }
+
+  /**
+   * Every live account whose address equals `email` once both are case-folded.
+   *
+   * `email` is `TEXT UNIQUE` and {@link findByEmail} compares it exactly, while the Hub lower-cases
+   * every username it signs (CI-Hub migration 0062 folded the old ones in place). An account signed
+   * up as `Owner@Example.com` is the same person the Hub calls `owner@example.com`, and an exact
+   * lookup misses them. Soft-deleted rows are left out, as everywhere else on this repository.
+   */
+  async findByEmailIgnoringCase(email: string): Promise<User[]> {
+    const results = await this.userRepository
+      .createQueryBuilder('user')
+      .where('LOWER(user.email) = LOWER(:email)', { email: email.trim() })
+      .orderBy('user.createdAt', 'ASC')
+      .getMany();
+
+    return results.map((result) => UserEntity.toEgressType(result));
   }
 
   async onboard(id: string): Promise<void> {

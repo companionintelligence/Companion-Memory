@@ -77,14 +77,16 @@ export class SessionController {
   }
 
   /**
-   * Verified Hub identity for this request, or `{ username: null }` when
-   * forward-auth is off / headers are missing. The SPA uses this to refuse a
-   * stale Memory home when Traefik already named a different person.
+   * Verified Hub identity for this request, or `{ username: null, accountId: null }`
+   * when forward-auth is off / headers are missing. The SPA uses this to refuse a
+   * stale Memory home when Traefik already named a different person: by
+   * `accountId` — the account the Hub person signs in as — when the Hub sends a
+   * stable id, and by `username` against the account's email when it does not.
    */
   @Get('hub-identity')
   @HttpCode(200)
-  hubIdentity(@Req() req: Request) {
-    return { username: this.hubBridge.verifyUsername(req) };
+  async hubIdentity(@Req() req: Request) {
+    return this.hubBridge.describeIdentity(req);
   }
 
   /**

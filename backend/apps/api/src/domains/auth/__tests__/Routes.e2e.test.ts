@@ -118,6 +118,7 @@ const mockLoginThrottle = {
       useValue: {
         verifyUsername: jest.fn().mockReturnValue(null),
         alignSession: jest.fn().mockResolvedValue({ username: null, replaced: false }),
+        describeIdentity: jest.fn().mockResolvedValue({ username: null, accountId: null }),
       },
     },
   ],

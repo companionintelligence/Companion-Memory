@@ -125,7 +125,7 @@ db_host_port = $(shell \
 # Point every local-DB target at that port. node-config reads DATABASE_PORT, and
 # dotenv won't override an already-set env var, so this wins over .env's 5432.
 # Evaluated lazily per target, so non-DB targets never pay the Docker lookup.
-seed migrate dbclear dbdestroy dbshell dburl chatreset filereset gentoken signup testuser userpw: export DATABASE_PORT = $(or $(strip $(db_host_port)),$(error No running 'database' container for project '$(COMPOSE_PROJECT_NAME)'. Start its stack first with 'make dev'.))
+seed migrate dbclear dbdestroy dbshell dburl chatreset filereset gentoken signup testuser userpw hub-account-link: export DATABASE_PORT = $(or $(strip $(db_host_port)),$(error No running 'database' container for project '$(COMPOSE_PROJECT_NAME)'. Start its stack first with 'make dev'.))
 
 define switch_env
 	@CURRENT="$(running_env)"; \
@@ -1202,6 +1202,14 @@ userpw: ## Change a user's password
 	@printf "$(call task_icon,userpw,🔑) Changing user password...\n\n"
 
 	@cd backend/apps/api && yarn run exec -- scripts/change-password.ts
+
+	@printf "\n"
+
+.PHONY: hub-account-link
+hub-account-link: ## Show or repair which Memory account each Hub person signs in as (ARGS="list" | "move --from A --to B [--apply]" | "unlink --email A [--apply]")
+	@printf "$(call task_icon,hub-account-link,🔗) Hub account links...\n\n"
+
+	@cd backend/apps/api && yarn hub-account-link $(or $(ARGS),list)
 
 	@printf "\n"
 
