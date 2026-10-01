@@ -10,6 +10,13 @@ import { GraphDeltaWriter } from '@ci/domains/memory';
 
 import { NodeEntity } from '../entities/NodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
+import {
+  IDENTITY_LIST_KEYS,
+  mergedPropertiesSql,
+  mergeIngestedProperties,
+  stableJson,
+  unionKeysFor,
+} from '../utils/ingestedProperties';
 
 import { type EntityIdentifierBatchEntry, EntityIdentifierService } from './EntityIdentifierService';
 
@@ -36,6 +43,13 @@ export interface GraphEntityInputDto {
   description?: string | null;
   sourceSystem: string;
   properties?: Record<string, unknown> | null;
+  /**
+   * The property keys that are SETS for this entity: its parser's
+   * `Entity.accumulate` declaration, carried from the staged row. A re-ingest
+   * unions these into the stored row instead of replacing them. The plural
+   * identity keys (`IDENTITY_LIST_KEYS`) are unioned whether declared or not.
+   */
+  accumulate?: readonly string[] | null;
 }
 
 export interface GraphRelationshipInputDto {
@@ -129,15 +143,6 @@ export interface ImportedEntityRekey {
 }
 
 /**
- * The plural identity keys `PersonMergeService.foldProperties` carries from a
- * merged-away row to its survivor, and so what a reset keeps of the merges a
- * row absorbed. The same list as `IDENTITY_LIST_KEYS` in the ingest's
- * refresh-as-merge change (`utils/ingestedProperties.ts`): import that one once
- * it lands, rather than keep two lists that have to agree.
- */
-const MERGED_IDENTITY_LIST_KEYS: readonly string[] = ['emails', 'phones', 'names', 'Phones', 'Faxes'];
-
-/**
  * What JavaScript's `String.prototype.trim` strips (the WhiteSpace and
  * LineTerminator code points), which is how `foldProperties` tells a blank
  * member from a value. Bound as `btrim`'s character set, so the database's
@@ -207,38 +212,55 @@ export interface GraphIngestResult {
 }
 
 /**
- * JSON with object keys in sorted order, so two payloads that differ only in key
- * order compare equal. Needed because a stored `properties` value comes back
- * from jsonb in Postgres' own key order, which is not the order the source sent
- * — a naive comparison would call every row stale on every ingest.
- */
-function stableJson(value: unknown): string {
-  return JSON.stringify(value, (_key, v) => {
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      const sorted: Record<string, unknown> = {};
-      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-        sorted[k] = (v as Record<string, unknown>)[k];
-      }
-
-      return sorted;
-    }
-
-    return v;
-  });
-}
-
-/**
  * Whether an incoming row says anything the stored one doesn't. Rows that match
  * are left untouched: a resync is overwhelmingly rows that haven't changed, and
  * writing them all back would churn the table (and its indexes) for nothing.
+ *
+ * "Says anything" is judged on what the MERGE would leave, not on whether the
+ * two rows are equal. They rarely are once anyone else has written to the row —
+ * a merge target carries its duplicates' numbers, a self Person its `is_self` —
+ * and comparing bags called every such row stale on every import, only for the
+ * write to put back what was already there. The comparison is sorted-key JSON,
+ * because jsonb hands a bag back in its own key order, not the source's.
+ *
+ * A null name or description says nothing either, matching the conflict
+ * action's COALESCE below.
  */
-function isStale(current: NodeEntity, incoming: NodeEntity): boolean {
+function isStale(current: NodeEntity, incoming: NodeEntity, unionKeys: readonly string[]): boolean {
+  const merged = mergeIngestedProperties(current.properties, incoming.properties, unionKeys);
+
   return (
-    (current.name ?? null) !== (incoming.name ?? null) ||
-    (current.description ?? null) !== (incoming.description ?? null) ||
-    stableJson(current.properties ?? {}) !== stableJson(incoming.properties ?? {})
+    (incoming.name != null && incoming.name !== current.name) ||
+    (incoming.description != null && incoming.description !== current.description) ||
+    stableJson(merged) !== stableJson(current.properties ?? {})
   );
 }
+
+/**
+ * The entity upsert's conflict action. A conflicting row keeps its id; its
+ * properties are MERGED with the incoming ones rather than replaced — see
+ * `utils/ingestedProperties.ts` — and its name and description take the
+ * incoming value unless that is null, the rule bulkUpsert's ingest refreshes
+ * already follow. The importer never sends a description at all, so the plain
+ * `description = EXCLUDED.description` this replaced erased whatever a merge
+ * or a person edit had written there on every refresh.
+ *
+ * The merge runs in the statement, against the row as it stands once the
+ * conflict has locked it, so a person merge (or any other writer) that
+ * committed after this batch read the row is merged into, not overwritten.
+ * `:unionKeys` is the batch's set-key list, bound per statement.
+ *
+ * The WHERE leaves a row alone if it became a merge tombstone after the
+ * existence check read it: that row is not RETURNED, so step 3 re-resolves the
+ * key through the tombstone like any other.
+ */
+const ENTITY_CONFLICT_ACTION =
+  '(owner_user_id, entity_type, linked_table, linked_id) WHERE linked_table IS NOT NULL ' +
+  'DO UPDATE SET name = COALESCE(EXCLUDED."name", "entities"."name"), ' +
+  'description = COALESCE(EXCLUDED."description", "entities"."description"), ' +
+  `properties = ${mergedPropertiesSql('"entities"."properties"', 'EXCLUDED."properties"', ':unionKeys::text[]')}, ` +
+  'updated_at = now() ' +
+  'WHERE "entities"."merged_into_entity_id" IS NULL';
 
 /**
  * Idempotent bulk ingest of an archive importer's knowledge graph (the
@@ -249,6 +271,9 @@ function isStale(current: NodeEntity, incoming: NodeEntity): boolean {
  *
  * - Entities upsert on (owner_user_id, entity_type, linked_table, linked_id),
  *   where linked_table = `import:<sourceSystem>` and linked_id = uuidv5(key).
+ *   Re-ingesting one MERGES into the stored row rather than replacing it, so
+ *   what merges, edits and enrichment wrote there survives the next import —
+ *   see `utils/ingestedProperties.ts`.
  * - Relationships reference entities by their batch `key` (resolved to entity_id
  *   here, so the importer needs no server round-trips) and upsert on the
  *   directed (from, to, type) unique index. The `self` sentinel resolves to the
@@ -599,7 +624,7 @@ export class GraphIngestService {
           toIds,
           resets,
           dropped,
-          MERGED_IDENTITY_LIST_KEYS,
+          IDENTITY_LIST_KEYS,
           JS_TRIM_CHARACTERS,
         ],
       );
@@ -647,6 +672,8 @@ export class GraphIngestService {
       linkedTable: string;
       linkedId: string;
       row: NodeEntity;
+      /** The property keys a refresh unions rather than replaces. */
+      unionKeys: string[];
     }
     const coordKey = (entityType: string, linkedTable: string, linkedId: string): string =>
       `${entityType}||${linkedTable}||${linkedId}`;
@@ -675,13 +702,25 @@ export class GraphIngestService {
         linkedId,
         userId: ownerId,
       });
-      const prep: Prepared = { input, entityType: input.entityType, linkedTable, linkedId, row };
+      const prep: Prepared = {
+        input,
+        entityType: input.entityType,
+        linkedTable,
+        linkedId,
+        row,
+        unionKeys: unionKeysFor(input.accumulate),
+      };
       prepared.push(prep);
       firstByCoord.set(ck, prep);
     }
 
     // coordKey -> resolved entity_id (existing, freshly inserted, or race winner).
     const idByCoord = new Map<string, string>();
+    // coordKey -> what step 2's statement left on a row it wrote (RETURNING).
+    const written = new Map<
+      string,
+      { name: string | null; description: string | null; properties: Record<string, unknown> }
+    >();
 
     try {
       // 1. Existence pre-check over the distinct linked-key coordinates. The
@@ -708,9 +747,15 @@ export class GraphIngestService {
       // later learned more about the same thing — an importer entity that
       // accumulated a second price, an entity whose mention count grew — could
       // never say so. A row's linked key is namespaced by its sourceSystem
-      // (linked_table = `import:<sourceSystem>`), so a refresh only ever
-      // overwrites what that same source wrote last time; it cannot clobber
-      // another source's or the enrichment pass's nodes.
+      // (linked_table = `import:<sourceSystem>`), so a refresh only ever lands
+      // on a row this same source created; it cannot reach another source's or
+      // the enrichment pass's nodes.
+      //
+      // Other writers DO share this row, though — a person merge folds its
+      // duplicates' numbers into it, a person edit adds structured names,
+      // markSelfEntity adds `is_self`. So the refresh merges properties rather
+      // than replacing them (ENTITY_CONFLICT_ACTION), and a row counts as stale
+      // only when the merge would change it.
       //
       // A merge TOMBSTONE is excluded outright, ahead of the staleness check. A
       // tombstone keeps its linked key, so it still owns this coordinate and
@@ -727,7 +772,7 @@ export class GraphIngestService {
           return false;
         }
 
-        return current === undefined || isStale(current, p.row);
+        return current === undefined || isStale(current, p.row, p.unionKeys);
       });
       if (toWrite.length > 0) {
         // Split into param-budget-bounded chunks so a large batch never exceeds
@@ -736,31 +781,67 @@ export class GraphIngestService {
         // resolution are unchanged; the returned rows are accumulated across
         // chunks.
         //
+        // And one statement per set-key list, because the merge binds that list
+        // as a parameter. A parser declares the same keys for every entity of
+        // a kind, so a batch holds a handful of lists, not one per row.
+        //
         // `entity_id` is deliberately NOT in the SET list: a conflicting row
         // keeps the id it was created with (and that everything else already
         // references), so the uuidv7 minted for the insert attempt is simply
         // discarded. RETURNING hands back the row's real id either way.
-        const rows = toWrite.map((p) => p.row);
-        const chunkSize = computeChunkSize(this.nodeRepository.metadata.columns.length);
-        for (let offset = 0; offset < rows.length; offset += chunkSize) {
-          const insertResult = await this.nodeRepository
-            .createQueryBuilder()
-            .insert()
-            .into(this.nodeRepository.metadata.target)
-            .values(rows.slice(offset, offset + chunkSize))
-            .onConflict(
-              '(owner_user_id, entity_type, linked_table, linked_id) WHERE linked_table IS NOT NULL ' +
-                'DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, ' +
-                'properties = EXCLUDED.properties, updated_at = now()',
-            )
-            .returning(['entityId', 'entityType', 'linkedTable', 'linkedId'])
-            .execute();
+        const byUnionKeys = new Map<string, Prepared[]>();
+        for (const p of toWrite) {
+          const signature = JSON.stringify(p.unionKeys);
+          const group = byUnionKeys.get(signature);
+          if (group) {
+            group.push(p);
+          } else {
+            byUnionKeys.set(signature, [p]);
+          }
+        }
 
-          for (const raw of (insertResult.raw as Array<Record<string, unknown>>) ?? []) {
-            idByCoord.set(
-              coordKey(String(raw.entity_type), String(raw.linked_table), String(raw.linked_id)),
-              String(raw.entity_id),
-            );
+        const chunkSize = computeChunkSize(this.nodeRepository.metadata.columns.length);
+        for (const group of byUnionKeys.values()) {
+          const rows = group.map((p) => p.row);
+          for (let offset = 0; offset < rows.length; offset += chunkSize) {
+            const insertResult = await this.nodeRepository
+              .createQueryBuilder()
+              .insert()
+              .into(this.nodeRepository.metadata.target)
+              .values(rows.slice(offset, offset + chunkSize))
+              .onConflict(ENTITY_CONFLICT_ACTION)
+              .setParameter('unionKeys', group[0].unionKeys)
+              .returning([
+                'entityId',
+                'entityType',
+                'linkedTable',
+                'linkedId',
+                'name',
+                'description',
+                'properties',
+              ])
+              .execute();
+
+            for (const raw of (insertResult.raw as Array<Record<string, unknown>>) ?? []) {
+              const ck = coordKey(String(raw.entity_type), String(raw.linked_table), String(raw.linked_id));
+              idByCoord.set(ck, String(raw.entity_id));
+              written.set(ck, {
+                name: (raw.name as string | null) ?? null,
+                description: (raw.description as string | null) ?? null,
+                properties: (raw.properties as Record<string, unknown> | null) ?? {},
+              });
+            }
+          }
+        }
+
+        // A row the statement left alone — one that became a merge tombstone
+        // after step 1 read it — must not keep the id step 1 resolved it to.
+        // Forgetting it sends the key through step 3, which follows the
+        // tombstone to the row it was merged into.
+        for (const p of toWrite) {
+          const ck = coordKey(p.entityType, p.linkedTable, p.linkedId);
+          if (!written.has(ck)) {
+            idByCoord.delete(ck);
           }
         }
 
@@ -768,7 +849,10 @@ export class GraphIngestService {
           toWrite.flatMap((p) => {
             const ck = coordKey(p.entityType, p.linkedTable, p.linkedId);
             const entityId = idByCoord.get(ck);
-            if (!entityId) {
+            // What the row holds now, as RETURNED — the merge's result, which is
+            // not what this source sent whenever anyone else has written to it.
+            const now = written.get(ck);
+            if (!entityId || now === undefined) {
               return [];
             }
 
@@ -783,16 +867,14 @@ export class GraphIngestService {
                 ownerUserId: ownerId,
                 changeSource: 'GraphIngestService.upsertEntities',
                 changedFields: {
-                  name: current
-                    ? { old: current.name, new: p.row.name ?? null }
-                    : { new: p.row.name ?? null },
+                  name: current ? { old: current.name, new: now.name } : { new: now.name },
                   description: current
-                    ? { old: current.description, new: p.row.description ?? null }
-                    : { new: p.row.description ?? null },
+                    ? { old: current.description, new: now.description }
+                    : { new: now.description },
                   entity_type: { new: p.entityType },
                   properties: current
-                    ? { old: current.properties, new: p.row.properties ?? {} }
-                    : { new: p.row.properties ?? {} },
+                    ? { old: current.properties, new: now.properties }
+                    : { new: now.properties },
                 },
               },
             ];

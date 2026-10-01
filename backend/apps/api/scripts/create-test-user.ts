@@ -119,6 +119,9 @@ function mintKey() {
           name,
           email,
           password: await bcrypt.hash(password, config.auth.local.saltRounds),
+          // A password printed to the terminal is one a person knows, so
+          // AccountController.requireReauth must ask for it (as UserService.create would).
+          passwordSetAt: new Date(),
           timezone,
           // Skip the FTUE wizard: a client authenticating with an API key never walks
           // it, and an un-onboarded user trips guards on some surfaces.
@@ -127,6 +130,7 @@ function mintKey() {
       );
     } else if (suppliedPassword != null) {
       user.password = await bcrypt.hash(suppliedPassword, config.auth.local.saltRounds);
+      user.passwordSetAt = new Date();
       await users.save(user);
     }
 

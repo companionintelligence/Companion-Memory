@@ -642,4 +642,63 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       expect(res.redirect).not.toHaveBeenCalledWith('/login?error=signup_code_required');
     });
   });
+
+  // `users.password_set_at` decides what `AccountController.requireReauth` asks
+  // for: where it is set, an email or password change must present the current
+  // password. Every account this callback creates holds a random password nobody
+  // has seen, so it must be created as not chosen — stamped as chosen, the
+  // account is asked for a password it cannot know and can never change either.
+  // One row per door that creates an account, the provisioning path #2743 missed.
+  // Claiming an empty appliance goes through createFirstAccount; an invitation
+  // goes through create. Both build the account with oidcAccount.
+  describe('an account the callback creates has no password of its own', () => {
+    const userinfo = () =>
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'new@example.com' }));
+
+    it('native, claiming an empty appliance', async () => {
+      const mocks = makeController();
+      userinfo();
+      mocks.userService.findByEmail.mockResolvedValue(null);
+      mocks.userService.hasNoUsers.mockResolvedValue(true);
+      claimsTheAppliance(mocks.userService, { id: 'user-new' });
+
+      await mocks.controller.callback('code-x', 'match', undefined, nativeReq(), makeRes() as never);
+
+      expect(mocks.userService.create).not.toHaveBeenCalled();
+      expect(mocks.userService.createFirstAccount).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ email: 'new@example.com', passwordChosenByUser: false }),
+        expect.any(Function),
+      );
+    });
+
+    it.each<[door: string, req: unknown, admit: (mocks: ReturnType<typeof makeController>) => void]>([
+      [
+        'native, invited with a signup code',
+        nativeReq({ oidc_signup_code: 'invite-1' }),
+        ({ signupCodeService }) => signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' }),
+      ],
+      [
+        'web, invited by the Hub',
+        webReq(),
+        ({ hubBridge }) => hubBridge.verifyUsername.mockReturnValue('new@example.com'),
+      ],
+    ])('%s', async (_door, req, admit) => {
+      const mocks = makeController();
+      userinfo();
+      mocks.userService.findByEmail.mockResolvedValue(null);
+      mocks.userService.create.mockResolvedValue({ id: 'user-new', email: 'new@example.com' });
+      admit(mocks);
+
+      await mocks.controller.callback('code-x', 'match', undefined, req as never, makeRes() as never);
+
+      expect(mocks.userService.create).toHaveBeenCalledTimes(1);
+      expect(mocks.userService.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ email: 'new@example.com', passwordChosenByUser: false }),
+      );
+    });
+  });
 });

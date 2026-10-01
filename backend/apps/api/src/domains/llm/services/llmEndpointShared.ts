@@ -6,6 +6,8 @@ export type LlmBackendKind = 'ollama' | 'openai_compatible';
 export interface PersistedLlmEndpointSettings {
   backend: LlmBackendKind;
   port: number;
+  /** The OpenAI-compatible root on the server (`/v1`; Lemonade's is `/api/v1`). See {@link normalizeBasePath}. */
+  basePath?: string;
   apiKey?: string;
   hostGateway?: string;
 }
@@ -14,10 +16,32 @@ export interface ResolvedLlmEndpointEnv {
   backend: LlmBackendKind;
   hostGateway: string;
   port: number;
+  basePath?: string;
   apiKey: string;
 }
 
 const DEFAULT_OLLAMA_PORT = 11434;
+
+/** Where an OpenAI-compatible server's routes live when nothing says otherwise. */
+export const DEFAULT_OPENAI_BASE_PATH = '/v1';
+
+/**
+ * The path under which an OpenAI-compatible server mounts `/chat/completions`, `/models` and the
+ * rest. vLLM, llama.cpp, SGLang and Ollama's own compatibility layer all use `/v1`; Lemonade uses
+ * `/api/v1`. Until 2026-09-30 the path was fixed at `/v1`, so the Settings screen and the CLI could
+ * not point the appliance at a Lemonade at all — only the Hub's `LLM_API_BASE` could. Empty or
+ * missing means the default; a leading slash is added and a trailing one dropped, so `api/v1/` and
+ * `/api/v1` are the same setting.
+ */
+export function normalizeBasePath(basePath: string | undefined | null): string {
+  const trimmed = (basePath ?? '').trim().replace(/\/+$/, '');
+
+  if (trimmed === '' || trimmed === '/') {
+    return DEFAULT_OPENAI_BASE_PATH;
+  }
+
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
 
 /** Host path shared between API and summary-service when APP_DATA_DIR is mounted at /app-data. */
 export function sharedConfigPath(): string | null {
@@ -36,7 +60,7 @@ export function containerSharedConfigPath(): string {
 
 export function llmApiBaseFromSettings(settings: ResolvedLlmEndpointEnv): string {
   if (settings.backend === 'openai_compatible') {
-    return `http://${settings.hostGateway}:${settings.port}/v1`;
+    return `http://${settings.hostGateway}:${settings.port}${normalizeBasePath(settings.basePath)}`;
   }
 
   return `http://${settings.hostGateway}:${settings.port}/v1`;
@@ -125,6 +149,8 @@ export function inferHostGatewayFromEnv(): string {
   for (const candidate of [
     process.env.OLLAMA_HOST,
     process.env.LLM_API_BASE,
+    process.env.LLM_EMBEDDING_API_BASE,
+    process.env.CI_EMBEDDING_BASE_URL,
     process.env.CI_OLLAMA_EMBED_HOST,
   ]) {
     if (!candidate) {

@@ -1,4 +1,9 @@
-import { isChatCapableModel, servedModelFromRow } from '../servedModels';
+import {
+  isChatCapableModel,
+  servedModelFromRow,
+  servedModelSeesImages,
+  serverPropsFromPayload,
+} from '../servedModels';
 
 describe('servedModelFromRow', () => {
   it("reads Lemonade's labels and loaded window", () => {
@@ -68,5 +73,57 @@ describe('isChatCapableModel', () => {
     expect(isChatCapableModel({ id: 'my-vectors:latest' }, 'my-vectors')).toBe(false);
     expect(isChatCapableModel({ id: 'my-vectors' }, 'my-vectors:latest')).toBe(false);
     expect(isChatCapableModel({ id: 'gemma4:e4b' }, 'my-vectors')).toBe(true);
+  });
+});
+
+describe('serverPropsFromPayload', () => {
+  it("reads a llama-server's loaded window and modalities", () => {
+    expect(
+      serverPropsFromPayload({
+        default_generation_settings: { n_ctx: 32768, seed: -1 },
+        modalities: { vision: true, audio: false },
+        total_slots: 1,
+      }),
+    ).toEqual({ contextTokens: 32768, vision: true });
+    expect(serverPropsFromPayload({ modalities: { vision: false } })).toEqual({
+      contextTokens: null,
+      vision: false,
+    });
+  });
+
+  it('answers null for anything that is not that route: HTML, another JSON, nothing', () => {
+    expect(serverPropsFromPayload('<!doctype html>')).toBeNull();
+    expect(serverPropsFromPayload({ data: [] })).toBeNull();
+    expect(serverPropsFromPayload(null)).toBeNull();
+  });
+});
+
+describe('servedModelSeesImages', () => {
+  it('trusts labels when the backend publishes them, with or without vision', () => {
+    expect(servedModelSeesImages({ id: 'Qwen3.8-27B-GGUF', labels: ['chat', 'vision'] })).toBe(true);
+    expect(
+      servedModelSeesImages(
+        { id: 'Qwen3-VL-8B-GGUF', labels: ['chat'] },
+        { contextTokens: null, vision: true },
+      ),
+    ).toBe(false);
+  });
+
+  it("falls back to the server's /props, then to the name, when there are no labels", () => {
+    expect(
+      servedModelSeesImages({ id: 'qwen3.8-27b', labels: [] }, { contextTokens: 32768, vision: true }),
+    ).toBe(true);
+    expect(
+      servedModelSeesImages(
+        { id: 'Qwen/Qwen3-VL-8B-Instruct', labels: [] },
+        { contextTokens: 32768, vision: false },
+      ),
+    ).toBe(false);
+    expect(servedModelSeesImages({ id: 'Qwen/Qwen3-VL-8B-Instruct', labels: [] }, null)).toBe(true);
+    expect(servedModelSeesImages({ id: 'llava-v1.6-mistral-7b' })).toBe(true);
+    expect(servedModelSeesImages({ id: 'google/gemma-3-12b-it' })).toBe(true);
+    expect(servedModelSeesImages({ id: 'google/gemma-3-1b-it' })).toBe(false);
+    expect(servedModelSeesImages({ id: 'Qwen/Qwen3-8B' })).toBe(false);
+    expect(servedModelSeesImages({ id: 'meta-llama/Llama-3.1-8B-Instruct' })).toBe(false);
   });
 });

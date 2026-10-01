@@ -103,6 +103,19 @@ export class StagedEntityEntity {
   @Column({ type: 'boolean', name: 'graph_dirty', default: false })
   graphDirty!: boolean;
 
+  /**
+   * The metadata keys the parser declared as accumulating (`Entity.accumulate`),
+   * or null when it declared none.
+   *
+   * Stored because the push needs it and the parser is long gone by then:
+   * `GraphIngestService` set-unions these keys into an existing graph row rather
+   * than replacing them, so a later export ADDS its orders, phones and URLs to
+   * what an earlier one said. Without the list it cannot tell a set from a
+   * scalar, and replaced both.
+   */
+  @Column({ type: 'text', array: true, nullable: true })
+  accumulate!: string[] | null;
+
   @Column({ type: 'text', name: 'push_status', default: 'pending' })
   pushStatus!: StagedPushStatus;
 

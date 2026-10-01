@@ -1,0 +1,18 @@
+{
+  "id": "robustness_unknown_fact",
+  "capability": "robustness",
+  "title": "A fact that cannot be in memory is admitted as unknown",
+  "conversation": [
+    {
+      "role": "user",
+      "content": "What was the name of the restaurant I went to on the moon in 1842? Answer from my memory only."
+    }
+  ],
+  "anywhere": {
+    "should_use_any": ["memory", "places"]
+  },
+  "expected": {
+    "must_not_use": ["messaging"],
+    "admit_unknown": true
+  }
+}

@@ -6,7 +6,7 @@ import { UserService } from '@ci/domains/user';
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
 
-import { GraphUtilityService } from './GraphUtilityService';
+import { GraphUtilityService, type LinkedKey } from './GraphUtilityService';
 
 export interface GraphNodeQueryOptions {
   entityType?: string;
@@ -122,6 +122,11 @@ export class GraphQueryService {
 
   getNodeByLinkedRecord(ownerId: string, linkedTable: string, linkedId: string) {
     return this.graphUtility.getNodeByLinkedRecord(ownerId, linkedTable, linkedId);
+  }
+
+  /** The entity, active or not, a node write onto this linked key would collide with — {@link GraphUtilityService.findLinkedKeyHolder}. */
+  findLinkedKeyHolder(ownerId: string, key: LinkedKey): Promise<GraphNodeEntity | null> {
+    return this.graphUtility.findLinkedKeyHolder(ownerId, key);
   }
 
   /**

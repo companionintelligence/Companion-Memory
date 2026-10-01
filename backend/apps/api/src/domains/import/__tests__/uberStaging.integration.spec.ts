@@ -90,8 +90,10 @@ describeWithDatabase(`uber eats staging (${importDatabase.target})`, () => {
 
       await writer.settled();
 
-      const rows = await harness.dataSource.query<Array<{ name: string; metadata: Record<string, unknown> }>>(
-        `SELECT name, metadata FROM ci_import.staged_entities
+      const rows = await harness.dataSource.query<
+        Array<{ name: string; metadata: Record<string, unknown>; accumulate: string[] | null }>
+      >(
+        `SELECT name, metadata, accumulate FROM ci_import.staged_entities
           WHERE run_id = $1::uuid AND type = 'food' ORDER BY name`,
         [runId],
       );
@@ -107,6 +109,10 @@ describeWithDatabase(`uber eats staging (${importDatabase.target})`, () => {
           { date: '2022-12-17T14:00:00.000Z', restaurant: 'Chouquets', price: 4.75 },
         ],
       });
+
+      // A dish is not a contact, so staging keeps exactly what the parser
+      // declared and the push unions just those keys into the graph row.
+      expect(rows[0].accumulate).toEqual(['Orders', 'Customizations']);
 
       const [{ orders }] = await harness.dataSource.query<Array<{ orders: string }>>(
         `SELECT COUNT(DISTINCT r.item_id) AS orders

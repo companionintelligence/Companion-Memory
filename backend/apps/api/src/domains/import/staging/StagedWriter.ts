@@ -7,6 +7,7 @@ import type { Entity, Graph, ImportPipeline, Item, Metadata } from '../datasourc
 import { digestFile, type ContentDigest } from './contentDigest';
 import {
   dateToIso,
+  declaredAccumulate,
   entityIdentityKey,
   entityKey,
   hashItem,
@@ -32,6 +33,13 @@ export const COLLAPSED_DISTINCT_PATH = 'collapsed-distinct-path';
 
 /** Digests computed for one batch, keyed by the item object the parser emitted. */
 type BatchDigests = Map<Item, ContentDigest>;
+
+/** An already-staged entity, as a repeat sighting reads it back to grow it. */
+interface StoredEntityRow {
+  id: string;
+  metadata: Record<string, unknown>;
+  accumulate: string[] | null;
+}
 
 /** What one run's staging produced. Folded into the parse stage's `detail`. */
 export interface StagedCounts {
@@ -474,8 +482,8 @@ export class StagedWriter implements ImportPipeline {
 
     const rows = await tx.query<Array<{ id: string; metadata: Record<string, unknown> }>>(
       `INSERT INTO ci_import.staged_entities
-              (run_id, user_id, type, name, metadata, identity_key, data_source, legacy_identity_key)
-            VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6, $7, $8)
+              (run_id, user_id, type, name, metadata, identity_key, data_source, legacy_identity_key, accumulate)
+            VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6, $7, $8, $9::text[])
        ON CONFLICT (run_id, identity_key) WHERE identity_key IS NOT NULL DO NOTHING
          RETURNING id, metadata`,
       [
@@ -487,6 +495,7 @@ export class StagedWriter implements ImportPipeline {
         identityKey,
         this.scope.dataSource,
         legacyIdentityKey,
+        declaredAccumulate(entity),
       ],
     );
 
@@ -496,13 +505,13 @@ export class StagedWriter implements ImportPipeline {
       return rows[0].id;
     }
 
-    const existing = await tx.query<Array<{ id: string; metadata: Record<string, unknown> }>>(
-      `SELECT id, metadata FROM ci_import.staged_entities
+    const existing = await tx.query<StoredEntityRow[]>(
+      `SELECT id, metadata, accumulate FROM ci_import.staged_entities
         WHERE run_id = $1::uuid AND identity_key = $2`,
       [this.scope.runId, identityKey],
     );
 
-    await this.growEntity(tx, existing[0].id, existing[0].metadata ?? {}, entity);
+    await this.growEntity(tx, existing[0], entity);
 
     return existing[0].id;
   }
@@ -526,12 +535,12 @@ export class StagedWriter implements ImportPipeline {
       // path, and its price on a second morning is a fact the first sighting
       // cannot carry. Growing only the identity-keyed path silently dropped
       // every one of them.
-      const rows = await tx.query<Array<{ metadata: Record<string, unknown> }>>(
-        `SELECT metadata FROM ci_import.staged_entities WHERE id = $1::uuid`,
+      const rows = await tx.query<StoredEntityRow[]>(
+        `SELECT id, metadata, accumulate FROM ci_import.staged_entities WHERE id = $1::uuid`,
         [seen],
       );
 
-      await this.growEntity(tx, seen, rows[0]?.metadata ?? {}, entity);
+      await this.growEntity(tx, rows[0] ?? { id: seen, metadata: {}, accumulate: null }, entity);
 
       return seen;
     }
@@ -543,8 +552,8 @@ export class StagedWriter implements ImportPipeline {
     // re-inserted everything the dead attempt had already written.
     const rows = await tx.query<Array<{ id: string }>>(
       `INSERT INTO ci_import.staged_entities
-              (run_id, user_id, type, name, metadata, identity_key, data_source, dedupe_key, legacy_identity_key)
-            VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, NULL, $6, $7, $8)
+              (run_id, user_id, type, name, metadata, identity_key, data_source, dedupe_key, legacy_identity_key, accumulate)
+            VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, NULL, $6, $7, $8, $9::text[])
          ON CONFLICT (run_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
          RETURNING id`,
       [
@@ -556,6 +565,7 @@ export class StagedWriter implements ImportPipeline {
         this.scope.dataSource,
         dedupeKey,
         legacyIdentityKey,
+        declaredAccumulate(entity),
       ],
     );
 
@@ -570,8 +580,8 @@ export class StagedWriter implements ImportPipeline {
     // as a repeat sighting within one attempt would — the resumed parse is
     // replaying records the dead one had already seen, and treating them as new
     // is what produced the duplicate edges alongside the duplicate rows.
-    const existing = await tx.query<Array<{ id: string; metadata: Record<string, unknown> }>>(
-      `SELECT id, metadata FROM ci_import.staged_entities
+    const existing = await tx.query<StoredEntityRow[]>(
+      `SELECT id, metadata, accumulate FROM ci_import.staged_entities
         WHERE run_id = $1::uuid AND dedupe_key = $2`,
       [this.scope.runId, dedupeKey],
     );
@@ -580,7 +590,7 @@ export class StagedWriter implements ImportPipeline {
       throw new Error('staged entity conflicted on its dedupe key but could not be read back');
     }
 
-    await this.growEntity(tx, existing[0].id, existing[0].metadata ?? {}, entity);
+    await this.growEntity(tx, existing[0], entity);
     this.handleless.set(key, existing[0].id);
 
     return existing[0].id;
@@ -591,15 +601,11 @@ export class StagedWriter implements ImportPipeline {
    *
    * `graph_dirty` is set alongside, because the push resumes from a high-water
    * mark: a row that changed after it was already sent would otherwise never be
-   * revisited.
+   * revisited. So is the union of the two sightings' `accumulate` lists, since
+   * the keys this one grew must be unioned — not replaced — at push time too.
    */
-  private async growEntity(
-    tx: EntityManager,
-    entityId: string,
-    stored: Record<string, unknown>,
-    entity: Entity,
-  ): Promise<void> {
-    const merged = mergeAccumulatedMetadata(stored, entity);
+  private async growEntity(tx: EntityManager, stored: StoredEntityRow, entity: Entity): Promise<void> {
+    const merged = mergeAccumulatedMetadata(stored.metadata ?? {}, entity);
 
     if (merged == null) {
       return;
@@ -607,9 +613,9 @@ export class StagedWriter implements ImportPipeline {
 
     await tx.query(
       `UPDATE ci_import.staged_entities
-          SET metadata = $2::jsonb, graph_dirty = true
+          SET metadata = $2::jsonb, graph_dirty = true, accumulate = $3::text[]
         WHERE id = $1::uuid`,
-      [entityId, JSON.stringify(merged)],
+      [stored.id, JSON.stringify(merged), declaredAccumulate(entity, stored.accumulate)],
     );
 
     this.counts.entitiesGrown += 1;
