@@ -19,6 +19,8 @@ import {
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
 
+import { type GraphDateTimeTimeZone, graphDateTimeToInstant } from './graphDateTime';
+
 interface OutlookCalendarEvent {
   id?: string;
   /** RFC 5545 UID (Graph spells it iCalUId) — the event's cross-pipeline identity key. */
@@ -31,14 +33,8 @@ interface OutlookCalendarEvent {
     content?: string;
     contentType?: string;
   };
-  start?: {
-    dateTime?: string;
-    timeZone?: string;
-  };
-  end?: {
-    dateTime?: string;
-    timeZone?: string;
-  };
+  start?: GraphDateTimeTimeZone;
+  end?: GraphDateTimeTimeZone;
   location?: {
     displayName?: string;
     address?: {
@@ -138,6 +134,9 @@ export function isInsideDeltaWindow(
 
 @Injectable()
 export class OutlookCalendarTransformService {
+  /** Time zones already reported by {@link instantOf}: once per zone per process, not once per event. */
+  private readonly warnedTimeZones = new Set<string>();
+
   constructor(
     private readonly eventService: CalendarEventService,
     private readonly connectionService: ConnectionService,
@@ -338,8 +337,8 @@ export class OutlookCalendarTransformService {
           participants,
           userId,
           connectionId,
-          event.start?.dateTime,
-          event.end?.dateTime,
+          this.instantOf(event.start, event.id),
+          this.instantOf(event.end, event.id),
         );
       }
 
@@ -478,14 +477,37 @@ export class OutlookCalendarTransformService {
     return participants;
   }
 
+  /**
+   * The instant a Graph `start` / `end` names, read in the zone Graph reports it
+   * in — never in the zone of this process. See graphDateTimeToInstant. Throws on
+   * a `dateTime` that is not an ISO date-time, which processCalendarEvent logs
+   * and skips, as it did when the DB rejected the Invalid Date this used to make.
+   */
+  private instantOf(value: GraphDateTimeTimeZone | undefined, eventId?: string): Date | undefined {
+    return graphDateTimeToInstant(value, {
+      onUnrecognizedZone: (timeZone) => {
+        if (this.warnedTimeZones.has(timeZone)) {
+          return;
+        }
+
+        this.warnedTimeZones.add(timeZone);
+        this.logger.warn(
+          'Outlook event time zone is not one this runtime knows; reading its times as UTC. Not logged again for this zone.',
+          { timeZone, eventId },
+        );
+      },
+    });
+  }
+
   private async transformToEventDto(
     event: OutlookCalendarEvent,
     userId: string,
     connectionId: string,
   ): Promise<CreateEventDto> {
-    const hasStartTime = !!event.start?.dateTime;
-    const start_time = hasStartTime ? new Date(event.start!.dateTime!) : new Date();
-    const end_time = event.end?.dateTime ? new Date(event.end.dateTime) : null;
+    const startsAt = this.instantOf(event.start, event.id);
+    const hasStartTime = startsAt !== undefined;
+    const start_time = startsAt ?? new Date();
+    const end_time = this.instantOf(event.end, event.id) ?? null;
 
     // Extract location. A meeting-join link is not a place name — see
     // isUriLocation — so a pasted Teams/Zoom URL in displayName is dropped
@@ -569,8 +591,8 @@ export class OutlookCalendarTransformService {
     participants: Participant[],
     userId: string,
     connectionId: string,
-    startDate?: string,
-    endDate?: string,
+    startDate?: Date,
+    endDate?: Date,
   ): Promise<string[]> {
     const participantInfos = participants.map((p) => ({
       email: p.email,
@@ -589,8 +611,8 @@ export class OutlookCalendarTransformService {
       connectionId,
       'calendar',
       'ORGANIZED_EVENT_WITH',
-      startDate ? new Date(startDate) : undefined,
-      endDate ? new Date(endDate) : undefined,
+      startDate,
+      endDate,
     );
 
     const attendeeEntityIds = await this.promoteService.processParticipants(
@@ -599,8 +621,8 @@ export class OutlookCalendarTransformService {
       connectionId,
       'calendar',
       'MET_WITH',
-      startDate ? new Date(startDate) : undefined,
-      endDate ? new Date(endDate) : undefined,
+      startDate,
+      endDate,
     );
 
     return [...organizerEntityIds, ...attendeeEntityIds];
