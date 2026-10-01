@@ -2,12 +2,13 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { EDGE_PROJECTION_REOPENER } from '@ci/domains/maintenance';
-import { EVENT_STATUS_REOPENER, EVENT_TIME_REOPENER } from '@ci/domains/memory';
+import { EVENT_LOCATION_REOPENER, EVENT_STATUS_REOPENER, EVENT_TIME_REOPENER } from '@ci/domains/memory';
 
 import { PIPELINE_QUEUE_NAMES, STAGE_ID_LIST, type StageId } from '../constants';
 import { EDGE_STAGES_BY_SOURCE } from '../listeners/GraphEdgeSweepRequestListener';
 import { STAGE_REOPENS, assertStageReopens } from '../reopens';
 import { EdgeProjectionReopenService } from '../services/EdgeProjectionReopenService';
+import { EventLocationReopenService } from '../services/EventLocationReopenService';
 import { EventStatusReopenService } from '../services/EventStatusReopenService';
 import { EventTimeReopenService } from '../services/EventTimeReopenService';
 import { STAGE_REGISTRY } from '../services/StageRegistry';
@@ -419,16 +420,18 @@ describe('every STAGE_REOPENS edge re-opens the row its producer decided', () =>
  * metadata Nest boots from.
  */
 /**
- * The same for the memory domain's two contracts: `CalendarEventService` asks
+ * The same for the memory domain's three contracts: `CalendarEventService` asks
  * the pipeline to settle what it decided about an event's old time
- * (`EVENT_TIME_REOPENER`) and about whether it happened
- * (`EVENT_STATUS_REOPENER`), and THROWS without either binding. A person's edit
- * of an event's time, a drag on the calendar and a cancellation all ask, so an
+ * (`EVENT_TIME_REOPENER`), about whether it happened (`EVENT_STATUS_REOPENER`)
+ * and about where (`EVENT_LOCATION_REOPENER`, when a calendar source moves the
+ * place), and THROWS without a binding. A person's edit of an event's time, a
+ * drag on the calendar, a cancellation and a re-delivered place all ask, so an
  * unbound token is those writes failing, not a silent gap.
  */
 describe.each([
   ['EVENT_TIME_REOPENER', EVENT_TIME_REOPENER, EventTimeReopenService],
   ['EVENT_STATUS_REOPENER', EVENT_STATUS_REOPENER, EventStatusReopenService],
+  ['EVENT_LOCATION_REOPENER', EVENT_LOCATION_REOPENER, EventLocationReopenService],
 ] as const)('%s is bound for the writers of an event that are not stages', (_name, token, service) => {
   it('binds the token to its service, and provides that service', () => {
     const binding = MODULE_PROVIDERS.find(

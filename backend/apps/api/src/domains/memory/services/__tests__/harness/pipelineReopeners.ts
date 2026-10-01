@@ -1,11 +1,13 @@
+import { EVENT_LOCATION_REOPENER } from '../../eventLocationReopener';
 import { EVENT_STATUS_REOPENER } from '../../eventStatusReopener';
 import { EVENT_TIME_REOPENER } from '../../eventTimeReopener';
 
 /**
- * What PipelineModule binds to `EVENT_TIME_REOPENER` and `EVENT_STATUS_REOPENER`,
- * as stand-ins that only record being asked — for a `CalendarEventService`
- * built by hand, which a move or a status change that crosses the line between
- * "still counts" and "called off" throws without.
+ * What PipelineModule binds to `EVENT_TIME_REOPENER`, `EVENT_STATUS_REOPENER` and
+ * `EVENT_LOCATION_REOPENER`, as stand-ins that only record being asked — for a
+ * `CalendarEventService` built by hand, which a move, a status change that
+ * crosses the line between "still counts" and "called off", or a source's move
+ * of the place throws without.
  *
  * `moduleRef` answers by token, as Nest's does and as a stub that returns one
  * object for every token cannot: a service that resolves the wrong token gets
@@ -14,9 +16,11 @@ import { EVENT_TIME_REOPENER } from '../../eventTimeReopener';
 export function stubPipelineReopeners() {
   const time = { reopenTimeDecisions: jest.fn(async (..._args: unknown[]): Promise<number> => 0) };
   const status = { reopenStatusDecisions: jest.fn(async (..._args: unknown[]): Promise<number> => 0) };
+  const location = { reopenLocationDecisions: jest.fn(async (..._args: unknown[]): Promise<number> => 0) };
   const bindings: Record<string, unknown> = {
     [EVENT_TIME_REOPENER]: time,
     [EVENT_STATUS_REOPENER]: status,
+    [EVENT_LOCATION_REOPENER]: location,
   };
 
   const moduleRef = {
@@ -29,5 +33,5 @@ export function stubPipelineReopeners() {
     },
   };
 
-  return { time, status, moduleRef };
+  return { time, status, location, moduleRef };
 }

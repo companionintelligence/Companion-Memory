@@ -23,6 +23,17 @@ export interface RecurrenceDefinition {
   timeZone: string | null;
 }
 
+/**
+ * The location a source last delivered, as {@link EventEntity.sourceLocation}
+ * stores it: the name and the `[longitude, latitude]` point, either of which
+ * may be null. Read through `locationBaseOf` (sourceLocationMerge.ts), which
+ * treats anything else as no base.
+ */
+export interface SourceLocationRecord {
+  name: string | null;
+  coordinates: number[] | null;
+}
+
 @Entity({ schema: 'ci', name: 'events' })
 // Idempotency key for captured/imported events. Created by migration
 // 20260620213807_add_events_source_idempotency; declared here so TypeORM is
@@ -244,6 +255,16 @@ export class EventEntity {
   @Column({ type: 'text', nullable: true, name: 'source_title' })
   sourceTitle!: string | null;
 
+  /**
+   * The location the source last delivered — a name and a point, as one value —
+   * the merge base for the location refresh (sourceLocationMerge.ts,
+   * 20261001171454). NULL when there is no base; an object with both members
+   * null is "the source delivered no location". Internal merge state, like
+   * {@link sourceStatus}.
+   */
+  @Column({ type: 'jsonb', nullable: true, name: 'source_location' })
+  sourceLocation!: SourceLocationRecord | null;
+
   // Consent / sharing scope (mirrors ci.answers.sharing_level). Stored raw at
   // ingest; redaction happens at read based on the consumer's scope (G2).
   @Column({ type: 'text', default: 'private', name: 'sharing_level' })
@@ -434,6 +455,7 @@ export type Event = Readonly<
     | 'sourceEndTime'
     | 'sourceRecurrence'
     | 'sourceTitle'
+    | 'sourceLocation'
   >
 > & {
   // Owned by the CTI base row (ci.entities); composed on egress.

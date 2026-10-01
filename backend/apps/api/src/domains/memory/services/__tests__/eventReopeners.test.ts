@@ -1,10 +1,12 @@
+import { EVENT_LOCATION_REOPENER, resolveEventLocationReopener } from '../eventLocationReopener';
 import { EVENT_STATUS_REOPENER, resolveEventStatusReopener } from '../eventStatusReopener';
 import { EVENT_TIME_REOPENER, resolveEventTimeReopener } from '../eventTimeReopener';
 
 /**
- * The two contracts through which CalendarEventService tells the pipeline an
- * event's time moved (`EVENT_TIME_REOPENER`) or its status called it off or
- * reinstated it (`EVENT_STATUS_REOPENER`). Memory owns both, the pipeline binds
+ * The three contracts through which CalendarEventService tells the pipeline an
+ * event's time moved (`EVENT_TIME_REOPENER`), its status called it off or
+ * reinstated it (`EVENT_STATUS_REOPENER`), or its source moved its place
+ * (`EVENT_LOCATION_REOPENER`). Memory owns all of them, the pipeline binds
  * them, and the service resolves each lazily. They have to throw, naming the
  * token, rather than return nothing: a write whose settling cannot run leaves a
  * row no stage ever revisits, so the write must fail and roll back. Wiring is
@@ -13,6 +15,7 @@ import { EVENT_TIME_REOPENER, resolveEventTimeReopener } from '../eventTimeReope
 describe.each([
   ['EVENT_TIME_REOPENER', EVENT_TIME_REOPENER, resolveEventTimeReopener],
   ['EVENT_STATUS_REOPENER', EVENT_STATUS_REOPENER, resolveEventStatusReopener],
+  ['EVENT_LOCATION_REOPENER', EVENT_LOCATION_REOPENER, resolveEventLocationReopener],
 ] as const)('%s', (name, token, resolve) => {
   it('is spelled as its own name, since Nest resolves it by that string', () => {
     expect(token).toBe(name);

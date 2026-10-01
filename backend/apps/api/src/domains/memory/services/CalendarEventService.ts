@@ -12,6 +12,7 @@ import {
   type ObjectLiteral,
   type SelectQueryBuilder,
 } from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
@@ -46,6 +47,7 @@ import type { OccurrenceSpec } from '../recurrence/types';
 import { CreateEventDto, UpdateEventDto, SearchEventDto, type SourceAssertedField } from '../types';
 
 import { CtiAggregate } from './CtiAggregate';
+import { resolveEventLocationReopener } from './eventLocationReopener';
 import { purgeEventAggregates } from './eventPurge';
 import { resolveEventStatusReopener } from './eventStatusReopener';
 import { resolveEventTimeReopener } from './eventTimeReopener';
@@ -60,6 +62,21 @@ import {
   sameTimes,
   sameWhen,
 } from './sourceFieldMerge';
+import {
+  type DeliveredLocation,
+  type SourceLocation,
+  type StoredLocation,
+  SOURCE_LOCATION_VOCABULARY,
+  confidenceOf,
+  coordinatesOf,
+  heardLocation,
+  locationBaseOf,
+  locationBaseRecord,
+  mergeSourceLocation,
+  normalizeLocationName,
+  sameCoordinates,
+  sameLocation,
+} from './sourceLocationMerge';
 import { DEFAULT_EVENT_STATUS, mergeSourceStatus } from './sourceStatusMerge';
 
 interface Options {
@@ -316,6 +333,7 @@ interface SourceDelivery {
   status?: string;
   when?: DeliveredWhen;
   title?: string;
+  location?: DeliveredLocation;
 }
 
 /**
@@ -361,7 +379,89 @@ function sourceDeliveryOf(item: CreateEventDto): SourceDelivery {
     delivery.title = item.title;
   }
 
+  // The place is the one field a delivery can state by saying nothing: no name
+  // is a source that says the event has none (the organizer cleared it, or
+  // replaced it with a meeting link the transforms drop).
+  if (says('location')) {
+    delivery.location = locationOf(item);
+  }
+
   return delivery;
+}
+
+/**
+ * The `changed_fields` a moved place adds to the event's graph delta: each part
+ * that changed, as the row had it and as it now is, and the place link that
+ * went with them.
+ */
+function locationDelta(
+  from: StoredLocation,
+  to: SourceLocation,
+  linkedTo: string | null,
+): Record<string, { old?: unknown; new?: unknown }> {
+  return {
+    ...(from.name !== to.name ? { location_name: { old: from.name, new: to.name } } : {}),
+    ...(sameCoordinates(from.coordinates, to.coordinates)
+      ? {}
+      : { location_coordinates: { old: from.coordinates, new: to.coordinates } }),
+    ...(linkedTo !== null ? { location_entity_id: { old: linkedTo, new: null } } : {}),
+  };
+}
+
+/**
+ * The `metadata` a person's write to the place leaves behind: the same bag with
+ * the pipeline's marks that write supersedes taken out, or null when it
+ * supersedes none.
+ *
+ * The stages tag what they write (`metadata.location_source`, and
+ * `metadata.promote` for the place link) and read the tag as "mine, and
+ * replaceable". A person who has since rewritten the value did not leave that
+ * tag behind on purpose: left in place it lets the next `enrich.geocode` or
+ * `enrich.event_reverse` generation overwrite the correction, and it makes the
+ * source's next move read the person's value as the pipeline's, which is the
+ * one thing the location refresh (sourceLocationMerge.ts) must not do. Only the
+ * marks the write supersedes go: a point replaces the tags that describe a
+ * point, a name the tag that describes a name, a link the link's marker. A
+ * caller that sends `metadata` itself owns the bag and is left alone.
+ */
+function metadataWithoutSupersededMarks(data: UpdateEventDto): (() => string) | null {
+  if (data.metadata) {
+    return null;
+  }
+
+  const { geocoded, approximate, estimated, reverseGeocoded } = SOURCE_LOCATION_VOCABULARY;
+  const tags = [
+    ...(data.location_coordinates ? [geocoded, approximate, estimated] : []),
+    ...(data.location_name ? [reverseGeocoded] : []),
+  ];
+
+  if (tags.length === 0 && !data.location_entity_id) {
+    return null;
+  }
+
+  let bag = `COALESCE(metadata, '{}'::jsonb)`;
+
+  if (tags.length > 0) {
+    bag = `CASE WHEN metadata->>'location_source' IN (${tags.map((tag) => `'${tag}'`).join(', ')})
+                 THEN (${bag} - 'location_source') ELSE ${bag} END`;
+  }
+
+  if (data.location_entity_id) {
+    bag = `(${bag} - 'promote')`;
+  }
+
+  return () => bag;
+}
+
+/** What a create DTO says about the place: a name and a point, each possibly absent, and the confidence of the point. */
+function locationOf(
+  item: Pick<CreateEventDto, 'location_name' | 'location_coordinates' | 'confidence_score'>,
+): DeliveredLocation {
+  return {
+    name: normalizeLocationName(item.location_name),
+    coordinates: coordinatesOf(item.location_coordinates),
+    confidence: confidenceOf(item.confidence_score),
+  };
 }
 
 /** A row's time base, or null when it has none (`source_start_time` unset). */
@@ -398,6 +498,14 @@ function deliveredBefore(existing: EventEntity, delivery: SourceDelivery): boole
     }
   }
 
+  if (delivery.location) {
+    const base = locationBaseOf(existing.sourceLocation);
+
+    if (base === null || !sameLocation(base, heardLocation(base, delivery.location))) {
+      return false;
+    }
+  }
+
   return delivery.title === undefined || existing.sourceTitle === delivery.title;
 }
 
@@ -417,6 +525,13 @@ interface LockedEventRow {
   end_time_original: Date | null;
   last_moved_at: Date | null;
   source_title: string | null;
+  location_name: string | null;
+  location_lng: number | null;
+  location_lat: number | null;
+  location_entity_id: string | null;
+  location_source: string | null;
+  promoted_by: string | null;
+  source_location: unknown;
 }
 
 /**
@@ -679,6 +794,10 @@ export class CalendarEventService {
       if (item.title != null) {
         toCreate.sourceTitle = item.title;
       }
+
+      // The place as the delivery stated it, including none: a row first synced
+      // with no place must find its base when the organizer adds one.
+      toCreate.sourceLocation = locationBaseRecord(locationOf(item));
     }
 
     return toCreate;
@@ -887,9 +1006,10 @@ export class CalendarEventService {
 
   /**
    * Apply what the row's SOURCE just delivered for the fields it owns — the
-   * status, the time, the title — each by a three-way merge against what that
-   * source delivered last time (sourceStatusMerge.ts, sourceFieldMerge.ts). A
-   * value someone else set stands; the source's own earlier value gives way.
+   * status, the time, the title and the place — each by a three-way merge
+   * against what that source delivered last time (sourceStatusMerge.ts,
+   * sourceFieldMerge.ts, sourceLocationMerge.ts). A value someone else set
+   * stands; the source's own earlier value gives way.
    *
    * Lock first, decide second. The merge reads the row version this
    * transaction holds the lock on, so a user's edit that commits while a sync
@@ -907,6 +1027,16 @@ export class CalendarEventService {
    * person moved the row (sourceFieldMerge.ts reads it). A status that calls
    * the event off, or reinstates it, settles the pipeline's decisions on
    * whether it happened in the same transaction (eventStatusReopener.ts).
+   *
+   * A moved place replaces the name and the point in one statement, together
+   * with what is derived from them: the confidence that rode with the point,
+   * the pipeline's tags, an estimate's markers, and the link to a Location
+   * `promote.place` made. The Event −LOCATED_AT→ Place edge the edge leg
+   * projected from that link is deleted in the same transaction, because the
+   * projection only ever inserts, and the pipeline's decisions on the old place
+   * are re-opened (eventLocationReopener.ts). The Location row itself, and its
+   * footprint, are left to the stages: a place's footprint is already a
+   * high-water mark when links are withdrawn.
    *
    * A tombstone follows its source as well, so the trash's Undo brings back
    * what the source says NOW rather than what it said when the row was
@@ -936,7 +1066,14 @@ export class CalendarEventService {
                 metadata->'recurrenceRule' AS recurrence_rule,
                 metadata->>'recurrenceTimeZone' AS recurrence_time_zone,
                 start_time_original, end_time_original, last_moved_at,
-                source_title
+                source_title,
+                location_name,
+                ST_X(location_coordinates::geometry) AS location_lng,
+                ST_Y(location_coordinates::geometry) AS location_lat,
+                location_entity_id,
+                metadata->>'location_source' AS location_source,
+                metadata->'promote'->>'stage' AS promoted_by,
+                source_location
            FROM ci.events
           WHERE event_id = $1 AND user_id = $2
             FOR UPDATE`,
@@ -988,7 +1125,21 @@ export class CalendarEventService {
         title = mergeSourceTitle(shownTitle, row.source_title, delivery.title);
       }
 
-      if (!status && !when && !title) {
+      const shownLocation: StoredLocation = {
+        name: normalizeLocationName(row.location_name),
+        coordinates:
+          row.location_lng === null || row.location_lat === null
+            ? null
+            : coordinatesOf({ type: 'Point', coordinates: [row.location_lng, row.location_lat] }),
+        source: row.location_source,
+        linked: row.location_entity_id !== null,
+        linkedBy: row.promoted_by,
+      };
+      const location = delivery.location
+        ? mergeSourceLocation(shownLocation, locationBaseOf(row.source_location), delivery.location)
+        : null;
+
+      if (!status && !when && !title && !location) {
         return null;
       }
 
@@ -996,7 +1147,8 @@ export class CalendarEventService {
       const timesChanged = when?.timesChanged ?? false;
       const recurrenceChanged = when?.recurrenceChanged ?? false;
       const titleChanged = title?.changed ?? false;
-      const visible = statusChanged || timesChanged || recurrenceChanged || titleChanged;
+      const placeMoved = location?.apply != null;
+      const visible = statusChanged || timesChanged || recurrenceChanged || titleChanged || placeMoved;
 
       // One UPDATE, built from what moved. A new base alone changes nothing any
       // reader sees, so `updated_at` moves only with a visible change: that is
@@ -1008,6 +1160,11 @@ export class CalendarEventService {
         params.push(value);
         sets.push(`${column} = $${params.length}${cast}`);
       };
+
+      // `metadata` is edited by more than one part of the merge (the series'
+      // rule, the pipeline's location tags), and a column may be assigned once
+      // per UPDATE, so each part wraps the expression the last one built.
+      let metadata = `COALESCE(metadata, '{}'::jsonb)`;
 
       if (status) {
         assign('status', status.status);
@@ -1041,11 +1198,12 @@ export class CalendarEventService {
 
         if (recurrenceChanged) {
           params.push(JSON.stringify(delivery.when.recurrenceKeys));
-          sets.push(
-            `metadata = (COALESCE(metadata, '{}'::jsonb) - ${RECURRENCE_METADATA_KEYS.map(
-              (key) => `'${key}'`,
-            ).join(' - ')}) || $${params.length}::jsonb`,
-          );
+          // Parenthesized whole: `||` binds looser than `-`, so a later step that
+          // removes a key from this expression would otherwise remove it from the
+          // right-hand side only.
+          metadata = `((${metadata} - ${RECURRENCE_METADATA_KEYS.map((key) => `'${key}'`).join(' - ')}) || $${
+            params.length
+          }::jsonb)`;
 
           if (delivery.when.isRecurring !== undefined) {
             assign('is_recurring', delivery.when.isRecurring);
@@ -1055,6 +1213,43 @@ export class CalendarEventService {
 
       if (title) {
         assign('source_title', title.base);
+      }
+
+      if (location) {
+        assign('source_location', JSON.stringify(locationBaseRecord(location.base)), '::jsonb');
+      }
+
+      if (location?.apply) {
+        const { location: placed, confidence } = location.apply;
+
+        assign('location_name', placed.name);
+
+        if (placed.coordinates) {
+          params.push(placed.coordinates[0], placed.coordinates[1]);
+          sets.push(
+            `location_coordinates = ST_SetSRID(ST_MakePoint($${params.length - 1}, $${params.length}), 4326)::geography`,
+          );
+        } else {
+          sets.push('location_coordinates = NULL');
+        }
+
+        // What the point's precision was, and what the pipeline derived from the
+        // old name and point: none of it describes the new place. The link goes
+        // with the pair it was made from, and the edge projected from it is
+        // deleted below. An estimate's markers go only where they are the
+        // estimator's (`inference_sources` is replaced wholesale by it, so
+        // `temporal_nn` is its mark); anything else in them is someone else's.
+        assign('confidence_score', confidence);
+        sets.push(
+          'location_entity_id = NULL',
+          `is_inferred = CASE WHEN inference_sources->>'method' = 'temporal_nn' THEN false ELSE is_inferred END`,
+          `inference_sources = CASE WHEN inference_sources->>'method' = 'temporal_nn' THEN '{}'::jsonb ELSE inference_sources END`,
+        );
+        metadata = `(${metadata} - 'location_source' - 'promote')`;
+      }
+
+      if (metadata !== `COALESCE(metadata, '{}'::jsonb)`) {
+        sets.push(`metadata = ${metadata}`);
       }
 
       if (visible) {
@@ -1077,6 +1272,17 @@ export class CalendarEventService {
         await resolveEventTimeReopener(this.moduleRef).reopenTimeDecisions([id], manager);
       }
 
+      if (location?.apply) {
+        // The link was derived from the place that just changed (a link anyone
+        // else made would have kept the location out of the merge), and so was
+        // the edge projected from it.
+        if (row.location_entity_id !== null) {
+          await this.retractPlaceEdge(manager, context.userId, id, row.location_entity_id);
+        }
+
+        await resolveEventLocationReopener(this.moduleRef).reopenLocationDecisions([id], manager);
+      }
+
       // A cancellation takes back the location the estimator lent the event; a
       // reinstatement offers it to the estimator again. A status the merge left
       // alone (the user's stands) is the stored one, so it crosses nothing. A
@@ -1087,6 +1293,9 @@ export class CalendarEventService {
       }
 
       const published = visible && !row.is_deleted;
+      // HBPE reads the status, the time and the title of an event; the place is
+      // not a token feature, so a place alone is not worth a re-serialization.
+      const hbpeRelevant = statusChanged || timesChanged || recurrenceChanged || titleChanged;
 
       if (published) {
         const name = title
@@ -1113,6 +1322,9 @@ export class CalendarEventService {
               ? { recurrence: { old: shown.recurrence, new: when.when.recurrence } }
               : {}),
             ...(titleChanged && title ? { name: { old: shownTitle, new: title.title } } : {}),
+            ...(location?.apply
+              ? locationDelta(shownLocation, location.apply.location, row.location_entity_id)
+              : {}),
           },
           ownerUserId: context.userId,
           changeSource: 'CalendarEventService.refreshFromSource',
@@ -1123,7 +1335,7 @@ export class CalendarEventService {
         });
       }
 
-      return { published, movedFrom: timesChanged ? row.start_time : null };
+      return { published, hbpeRelevant, movedFrom: timesChanged ? row.start_time : null };
     });
 
     if (!outcome) {
@@ -1134,11 +1346,14 @@ export class CalendarEventService {
 
     if (outcome.published) {
       await this.signallingEventService.send(EventUpdatedEvent, { eventId: id });
-      // Both days a move touches: the one the event left and the one it lands on.
-      await this.hbpeNotify?.notifyEvents(
-        reloaded.userId,
-        outcome.movedFrom ? [outcome.movedFrom, reloaded.startTime] : reloaded.startTime,
-      );
+
+      if (outcome.hbpeRelevant) {
+        // Both days a move touches: the one the event left and the one it lands on.
+        await this.hbpeNotify?.notifyEvents(
+          reloaded.userId,
+          outcome.movedFrom ? [outcome.movedFrom, reloaded.startTime] : reloaded.startTime,
+        );
+      }
     }
 
     return reloaded;
@@ -1188,6 +1403,64 @@ export class CalendarEventService {
     );
 
     await resolveEventTimeReopener(this.moduleRef).reopenTimeDecisions([id], manager);
+  }
+
+  /**
+   * Delete the Event −LOCATED_AT→ Place edge `promote.edge_event` projected from
+   * an event's place link, and record that it is gone.
+   *
+   * The projection only ever inserts (`ON CONFLICT DO NOTHING`), so nothing but
+   * the writer that withdraws the link can take the edge back, and one left
+   * behind would tell every graph read that the meeting is at the old place.
+   * Only the matrix's own edge: another rule can draw the same pair (a
+   * receipt's `receipt.event_at_place`), and that one is justified by its
+   * receipt, not by the event's place. The place is read through its merge
+   * survivor, which is what the projection resolves an endpoint to.
+   *
+   * A `deleted` delta stays in the log for the edge's creation, which a summary
+   * may already have read (the log is append-only; see the repair migrations).
+   */
+  private async retractPlaceEdge(
+    manager: EntityManager,
+    userId: string,
+    eventId: string,
+    placeId: string,
+  ): Promise<void> {
+    const gone = (await manager.query(
+      `WITH gone AS (
+         DELETE FROM ci.relationships r
+          USING ci.entities l
+          WHERE l.entity_id = $3
+            AND r.owner_user_id = $1
+            AND r.from_entity_id = $2
+            AND r.to_entity_id = COALESCE(l.merged_into_entity_id, l.entity_id)
+            AND r.relationship_type = 'LOCATED_AT'
+            AND r.properties->>'rule' = 'event.happened_at'
+          RETURNING r.relationship_id, r.relationship_type, r.from_entity_id, r.to_entity_id
+       )
+       SELECT relationship_id, relationship_type, from_entity_id, to_entity_id FROM gone`,
+      [userId, eventId, placeId],
+    )) as Array<{
+      relationship_id: string;
+      relationship_type: string;
+      from_entity_id: string;
+      to_entity_id: string;
+    }>;
+
+    await this.graphDeltaWriter.recordMany(
+      gone.map((edge) => ({
+        nodeType: 'relationship' as const,
+        changeType: 'deleted' as const,
+        relationshipId: edge.relationship_id,
+        relationshipType: edge.relationship_type,
+        fromEntityId: edge.from_entity_id,
+        toEntityId: edge.to_entity_id,
+        ownerUserId: userId,
+        changeSource: 'CalendarEventService.refreshFromSource',
+        changeReason: "the event's place moved at its source",
+      })),
+      manager,
+    );
   }
 
   /**
@@ -2121,6 +2394,14 @@ export class CalendarEventService {
       updateData.isLocked = data.is_locked;
     }
 
+    // A person's place takes the pipeline's marks on the value it replaces with
+    // it (see metadataWithoutSupersededMarks).
+    const supersededMarks = metadataWithoutSupersededMarks(data);
+    const detail: QueryDeepPartialEntity<EventEntity> = {
+      ...(updateData as QueryDeepPartialEntity<EventEntity>),
+      ...(supersededMarks ? { metadata: supersededMarks } : {}),
+    };
+
     // One transaction across both halves of the aggregate (see CtiAggregate).
     // A title/description-only patch still bumps ci.events.updated_at so
     // detail-side incremental consumers see the change.
@@ -2129,8 +2410,7 @@ export class CalendarEventService {
       context,
       id,
       {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        detail: updateData as any, // TypeORM will handle JSON serialization
+        detail, // TypeORM will handle JSON serialization
         base: basePatch,
       },
       {

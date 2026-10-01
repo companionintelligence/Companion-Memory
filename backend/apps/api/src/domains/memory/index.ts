@@ -306,6 +306,14 @@ export {
   type EventStatusReopener,
   resolveEventStatusReopener,
 } from './services/eventStatusReopener';
+export {
+  EVENT_LOCATION_REOPENER,
+  type EventLocationReopener,
+  resolveEventLocationReopener,
+} from './services/eventLocationReopener';
+// The pipeline's `metadata.location_source` / `promote.stage` vocabulary as the location refresh reads it;
+// pipeline/__tests__/sourceLocationVocabulary.spec.ts holds the stages to it.
+export { SOURCE_LOCATION_VOCABULARY } from './services/sourceLocationMerge';
 export type { MapPin } from './services/CalendarEventService';
 // What `FileService.purge` answers with, and the error that says a purge deleted a file's stored
 // objects and then could not delete its records.
