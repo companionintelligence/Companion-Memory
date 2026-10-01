@@ -45,6 +45,7 @@ import { CreateEventDto, UpdateEventDto, SearchEventDto } from '../types';
 import { CtiAggregate } from './CtiAggregate';
 import { purgeEventAggregates } from './eventPurge';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { mergeSourceStatus } from './sourceStatusMerge';
 
 interface Options {
   limit?: number;
@@ -235,6 +236,21 @@ function isLivePlannedBlock(row: EventEntity): boolean {
   const status = row.status ?? 'confirmed';
 
   return !(DEAD_EVENT_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * Whether an identity belongs to a SOURCE — a calendar connection, the
+ * importer, a capture client — whose later re-deliveries may move the row's
+ * status (see sourceStatusMerge.ts).
+ *
+ * Planning is excluded: it is the one server-minted identity that reaches
+ * createOne (`platformIdentity('planning', 'task', id)` → `task:<uuid>`). The
+ * planner is not a source whose view can drift from the row's; its blocks have
+ * their own lifecycle (`restorePlannedBlock`), and a live one is still handed
+ * back verbatim.
+ */
+function isSourceOwned(sourceId: string | null | undefined, sourceType: string | null | undefined): boolean {
+  return Boolean(sourceId) && sourceType !== 'planning';
 }
 
 /**
@@ -463,6 +479,15 @@ export class CalendarEventService {
       delete (toCreate as Record<string, unknown>).status;
     }
 
+    // The merge base for the status refresh in createOne: what the SOURCE said,
+    // kept beside what the row shows, so a later re-delivery can tell the
+    // source's old value from a user's edit. Only a status the source actually
+    // sent — the column DEFAULT is nobody's assertion — and only on an identity
+    // a source owns.
+    if (item.status != null && isSourceOwned(item.source_id, item.source_type)) {
+      toCreate.sourceStatus = item.status;
+    }
+
     return toCreate;
   }
 
@@ -495,7 +520,11 @@ export class CalendarEventService {
     // Idempotency: (source_type, source_system, source_id) is the stable
     // provenance triple capture sources carry. Re-ingesting the same event
     // — flaky-client retries, a full importer re-sync — must NOT create a
-    // duplicate. When the triple is present, return the existing row.
+    // duplicate. When the triple is present, return the existing row. The
+    // one thing a re-delivery may still change on it is `status`, and only
+    // where the source's own status moved and the user has not overridden it
+    // (returnExisting / applySourceStatus): a meeting cancelled after its
+    // first sync must not stay confirmed forever.
     //
     // Deliberately NOT filtered by `isDeleted`: `events_source_identity_uniq`
     // covers tombstoned rows too, so skipping one here would send the insert
@@ -530,9 +559,7 @@ export class CalendarEventService {
           return this.restorePlannedBlock(context, existing.id, item);
         }
 
-        await this.ledgerArrival(context, existing.id, item);
-
-        return this.composeOne(existing);
+        return this.returnExisting(context, existing, item);
       }
     }
 
@@ -581,9 +608,7 @@ export class CalendarEventService {
       if (sourceWhere && (err as { code?: string })?.code === '23505') {
         const existing = await this.eventRepository.findOne({ where: sourceWhere });
         if (existing) {
-          await this.ledgerArrival(context, existing.id, item);
-
-          return this.composeOne(existing);
+          return this.returnExisting(context, existing, item);
         }
       }
 
@@ -646,6 +671,121 @@ export class CalendarEventService {
   }
 
   /**
+   * A re-delivery of a row that already exists: ledger the arrival and hand the
+   * row back, with its status brought up to date when the row belongs to a
+   * source and that source's status has moved (see {@link applySourceStatus}).
+   * Nothing else on the row is touched — the find-or-return contract above.
+   */
+  private async returnExisting(
+    context: UserServiceContext,
+    existing: EventEntity,
+    item: CreateEventDto,
+  ): Promise<Event> {
+    const current =
+      item.status != null && isSourceOwned(item.source_id, item.source_type)
+        ? await this.applySourceStatus(context, existing, item.status)
+        : existing;
+
+    await this.ledgerArrival(context, existing.id, item);
+
+    return this.composeOne(current);
+  }
+
+  /**
+   * Apply a status the row's SOURCE just delivered — the three-way merge in
+   * sourceStatusMerge.ts, against `source_status`, the value that source
+   * delivered last time. A status the user set stands; the source's own
+   * earlier value gives way.
+   *
+   * Lock first, decide second. The merge reads the row version this
+   * transaction holds the lock on, so a user's edit that commits while a sync
+   * is in flight is seen and kept; deciding from `existing` — read before the
+   * lock — would overwrite it.
+   *
+   * A tombstone's status follows the source as well, so the trash's Undo
+   * brings back what the source says NOW rather than what it said when the
+   * row was deleted. But `is_deleted` is never written, and nothing is
+   * published for a tombstone — no graph delta, no update event, no HBPE
+   * notification: to every reader it is gone, and the deletion outlives the
+   * sync.
+   *
+   * @returns the stored row, re-read when anything was written.
+   */
+  private async applySourceStatus(
+    context: UserServiceContext,
+    existing: EventEntity,
+    delivered: string,
+  ): Promise<EventEntity> {
+    // The usual re-delivery — the organizer edited the agenda, the status did
+    // not move — costs nothing: the source said this last time too.
+    if (existing.sourceStatus === delivered) {
+      return existing;
+    }
+
+    const outcome = await this.eventRepository.manager.transaction(async (manager) => {
+      const [row] = (await manager.query(
+        `SELECT status, source_status, is_deleted
+           FROM ci.events
+          WHERE event_id = $1 AND user_id = $2
+            FOR UPDATE`,
+        [existing.id, context.userId],
+      )) as Array<{ status: string; source_status: string | null; is_deleted: boolean }>;
+
+      const merged = row
+        ? mergeSourceStatus({ status: row.status, sourceStatus: row.source_status }, delivered)
+        : null;
+
+      if (!row || !merged) {
+        return null;
+      }
+
+      // `updated_at` moves only with `status`: a new base alone changes
+      // nothing any reader sees, and incremental consumers key on it.
+      await manager.query(
+        `UPDATE ci.events
+            SET status = $3,
+                source_status = $4,
+                updated_at = CASE WHEN $5 THEN now() ELSE updated_at END
+          WHERE event_id = $1 AND user_id = $2`,
+        [existing.id, context.userId, merged.status, merged.sourceStatus, merged.statusChanged],
+      );
+
+      const published = merged.statusChanged && !row.is_deleted;
+
+      if (published) {
+        const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id: existing.id } });
+        await this.graphDeltaWriter.entityUpdated({
+          entityId: existing.id,
+          entityType: 'Event',
+          name: base?.name ?? null,
+          changedFields: { status: { old: row.status, new: merged.status } },
+          ownerUserId: context.userId,
+          changeSource: 'CalendarEventService.applySourceStatus',
+          changeReason: "status re-delivered by the event's source",
+          // The source changed it, not the user.
+          changedByUserId: null,
+          manager,
+        });
+      }
+
+      return { published };
+    });
+
+    if (!outcome) {
+      return existing;
+    }
+
+    const reloaded = (await this.eventRepository.findOne({ where: { id: existing.id } })) ?? existing;
+
+    if (outcome.published) {
+      await this.signallingEventService.send(EventUpdatedEvent, { eventId: existing.id });
+      await this.hbpeNotify?.notifyEvents(reloaded.userId, reloaded.startTime);
+    }
+
+    return reloaded;
+  }
+
+  /**
    * Ledger one arrival of an event (insert, dedup hit, or lost race — all
    * three evidence the record; see ci.record_sources). No-op on an incomplete
    * triple. Mirrors CommunicationService.ledgerArrival.
@@ -695,6 +835,94 @@ export class CalendarEventService {
     data: CreateEventDto[],
   ): Promise<Array<BulkInsertResult<Event>>> {
     return this.createManyBatchedDetailed(context, data);
+  }
+
+  /**
+   * Apply a status an event's SOURCE now reports to a row the caller has
+   * already found — the door for a re-delivery too thin to go through
+   * {@link create}. Google's stub for a deleted event is its id and
+   * `status: 'cancelled'`: no start time to create with, and usually no
+   * iCalUID to find the row by.
+   *
+   * The same merge as a re-delivery through `create` ({@link applySourceStatus}):
+   * a status the user set stands, a tombstone stays one, and nothing is ever
+   * inserted.
+   *
+   * @returns the stored event, or `null` when the caller owns no such row, or
+   *   owns one no source does (a planned block, an event the user made).
+   */
+  async applyStatusFromSource(
+    context: UserServiceContext,
+    id: string,
+    status: string,
+  ): Promise<Event | null> {
+    const existing = await this.eventRepository.findOne({ where: { id, userId: context.userId } });
+
+    if (!existing || !isSourceOwned(existing.sourceId, existing.sourceType)) {
+      return null;
+    }
+
+    return this.composeOne(await this.applySourceStatus(context, existing, status));
+  }
+
+  /**
+   * Stored events by identity, keyed by `source_id` — TOMBSTONES INCLUDED.
+   *
+   * For an ingest path working out what a source's re-delivery refers to, not
+   * for anything a user reads. Such a caller has to see a row the user
+   * deleted: the identity is still taken, and a cancellation still lands on it
+   * (quietly — see {@link applySourceStatus}). One `source_id IN (…)`, so the
+   * read lands on events_source_identity_uniq.
+   */
+  async findSourceRows(
+    context: UserServiceContext,
+    sourceSystem: string,
+    sourceIds: readonly string[],
+  ): Promise<Map<string, Event>> {
+    const ids = [...new Set(sourceIds)];
+
+    if (ids.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.eventRepository.find({
+      where: { userId: context.userId, sourceSystem, sourceId: In(ids) },
+    });
+
+    return new Map((await this.composeMany(rows)).map((event) => [event.sourceId as string, event]));
+  }
+
+  /**
+   * Stored events one connection wrote, keyed by the provider's own event id
+   * (`metadata.rawEventId`) — TOMBSTONES INCLUDED, for the same reason as
+   * {@link findSourceRows}.
+   *
+   * Rows are keyed by iCalUID (cross-pipeline identity), but the payloads that
+   * cancel them often carry only the provider's id: a cancelled occurrence
+   * names its series by the master's Google id (`recurringEventId`), and a
+   * deleted event is its own id and a status. This is the way back from one to
+   * the other. Scoped to the connection (idx_events_connection_id), so one
+   * account's ids can never resolve to another's rows.
+   */
+  async findByProviderEventIds(
+    context: UserServiceContext,
+    connectionId: string,
+    providerEventIds: readonly string[],
+  ): Promise<Map<string, Event>> {
+    const ids = [...new Set(providerEventIds)];
+
+    if (ids.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.eventRepository
+      .createQueryBuilder('event')
+      .where('event.user_id = :userId', { userId: context.userId })
+      .andWhere('event.connection_id = :connectionId', { connectionId })
+      .andWhere(`event.metadata->>'rawEventId' IN (:...providerEventIds)`, { providerEventIds: ids })
+      .getMany();
+
+    return new Map((await this.composeMany(rows)).map((event) => [String(event.metadata.rawEventId), event]));
   }
 
   /**

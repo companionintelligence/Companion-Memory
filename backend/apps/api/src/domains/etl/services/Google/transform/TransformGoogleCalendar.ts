@@ -2,16 +2,21 @@ import { Injectable } from '@nestjs/common';
 import { Point } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
+import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
 import { GeocodeService, isUriLocation } from '@ci/domains/geocode';
 import {
   CalendarEventService,
   type CreateEventDto,
+  type Event,
+  FEDERATED_SYSTEMS,
+  type SourceIdentity,
   calendarEventIdentity,
   canonicalSystem,
   icsRecurrenceInstant,
   platformIdentity,
+  seriesUidOf,
 } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
@@ -86,6 +91,47 @@ interface Participant {
 /** Process calendar events in small batches to avoid unbounded Promise.all memory spikes. */
 const CALENDAR_TRANSFORM_BATCH_SIZE = 10;
 
+/**
+ * Google's shape for a cancellation that no longer carries its event. Two kinds
+ * arrive this way, and neither has a `start`:
+ *
+ *  - a cancelled exception of a recurring series ("only guaranteed to have
+ *    values for the id, recurringEventId and originalStartTime fields"), which
+ *    is how "delete this occurrence only" syncs;
+ *  - a deleted event ("only guaranteed to have the id field populated").
+ *
+ * A cancellation that still has its start — the organizer's own calendar keeps
+ * the details — is an ordinary payload and goes through transformToEventDto.
+ */
+function isCancellationStub(event: CalendarEvent): boolean {
+  return (event.status ?? '').toLowerCase() === 'cancelled' && !event.start?.dateTime && !event.start?.date;
+}
+
+/**
+ * An instance's RECURRENCE-ID as its identity suffix: the date (`YYYYMMDD`) for
+ * an all-day series, the UTC instant otherwise — the spelling the .ics importer
+ * converges on (docs/design/cross-pipeline-identity.md §3.5).
+ */
+function recurrenceIdOf(originalStartTime: CalendarEvent['originalStartTime']): string | undefined {
+  if (originalStartTime?.date) {
+    return originalStartTime.date.replace(/-/g, '');
+  }
+
+  return originalStartTime?.dateTime ? icsRecurrenceInstant(new Date(originalStartTime.dateTime)) : undefined;
+}
+
+/**
+ * The UID a stub's stored row can be found under when no Google id is on it —
+ * a row another pipeline (the Takeout .ics import) stored first. Google sends
+ * the UID when it has one; for an event Google minted itself, it is
+ * `<event id>@google.com`. An instance shares its series master's UID.
+ */
+function stubUid(stub: CalendarEvent): string | undefined {
+  const googleId = stub.recurringEventId ?? stub.id;
+
+  return stub.iCalUID ?? (googleId ? `${googleId}@google.com` : undefined);
+}
+
 @Injectable()
 export class GoogleCalendarTransformService {
   constructor(
@@ -127,8 +173,11 @@ export class GoogleCalendarTransformService {
         eventCount: events.length,
       });
 
-      for (let i = 0; i < events.length; i += CALENDAR_TRANSFORM_BATCH_SIZE) {
-        const batch = events.slice(i, i + CALENDAR_TRANSFORM_BATCH_SIZE);
+      const stubs = events.filter(isCancellationStub);
+      const payloads = events.filter((event) => !isCancellationStub(event));
+
+      for (let i = 0; i < payloads.length; i += CALENDAR_TRANSFORM_BATCH_SIZE) {
+        const batch = payloads.slice(i, i + CALENDAR_TRANSFORM_BATCH_SIZE);
 
         await Promise.all(
           batch.map(
@@ -140,6 +189,13 @@ export class GoogleCalendarTransformService {
               }),
           ),
         );
+      }
+
+      // After the full payloads, not among them: a first sync lists a series'
+      // master beside its cancelled exceptions, in no promised order, and a
+      // stub can only be matched to a master that is already stored.
+      if (stubs.length > 0) {
+        await this.processCancellationStubs({ stubs, userId, connectionId: connection.id });
       }
 
       this.logger.log('Google Calendar event transformation completed', {
@@ -235,6 +291,188 @@ export class GoogleCalendarTransformService {
       });
       // Don't throw - continue processing other events
     }
+  }
+
+  /**
+   * Cancellations that arrive without their event (see isCancellationStub).
+   *
+   * A stub cannot be stored as it stands — no start, no title, and usually no
+   * iCalUID, which is what rows are keyed on — so each is matched to what is
+   * already stored and the cancellation is applied there:
+   *
+   *  - A cancelled OCCURRENCE becomes the series' cancelled override row,
+   *    `<uid>#<RECURRENCE-ID>`, or cancels the one already there (an
+   *    occurrence moved before it was cancelled). That row is how "delete
+   *    this occurrence only" is stored: read-time expansion drops every
+   *    occurrence whose override key is taken (recurrence/queries.ts
+   *    `dropExistingOverrides`). Without it the expander kept synthesizing the
+   *    occurrence from the master's RRULE — on the grid, in the planner's
+   *    occupied set, in peer free/busy.
+   *  - A deleted EVENT has its stored row cancelled. A deletion at the source
+   *    is a status, not the user's tombstone: `is_deleted` is the user's
+   *    decision alone, and Google can restore what it deleted.
+   *
+   * Both go through CalendarEventService's status refresh, so a status the
+   * user set stands and a row the user deleted stays deleted. A stub that
+   * matches nothing stored is dropped: there is nothing to cancel, and a series
+   * this box never stored has no occurrences to suppress.
+   */
+  private async processCancellationStubs({
+    stubs,
+    userId,
+    connectionId,
+  }: {
+    stubs: CalendarEvent[];
+    userId: string;
+    connectionId: string;
+  }): Promise<void> {
+    const context = { userId } as UserServiceContext;
+
+    // Rows this connection wrote carry Google's own id: a master under the
+    // series id, an override row under the instance id.
+    const byGoogleId = await this.eventService.findByProviderEventIds(
+      context,
+      connectionId,
+      stubs.flatMap((stub) => [stub.id, stub.recurringEventId]).filter((id): id is string => Boolean(id)),
+    );
+
+    // The rest by UID: a row another pipeline stored first carries no Google id.
+    const byUid = await this.eventService.findSourceRows(
+      context,
+      FEDERATED_SYSTEMS.calendar,
+      stubs
+        .filter((stub) => !byGoogleId.has(stub.recurringEventId ?? stub.id ?? ''))
+        .map(stubUid)
+        .filter((uid): uid is string => Boolean(uid)),
+    );
+
+    const unmatched: string[] = [];
+
+    for (const stub of stubs) {
+      try {
+        if (!(await this.applyCancellationStub(stub, context, connectionId, byGoogleId, byUid))) {
+          unmatched.push(stub.id ?? 'unknown');
+        }
+      } catch (error) {
+        this.logger.error('Error processing cancelled calendar event', {
+          userId,
+          connectionId,
+          eventId: stub.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    if (unmatched.length > 0) {
+      this.logger.warn('Cancelled calendar events matched nothing stored; nothing to cancel', {
+        userId,
+        connectionId,
+        count: unmatched.length,
+        eventIds: unmatched.slice(0, 20),
+      });
+    }
+  }
+
+  /** @returns whether the stub matched anything stored. */
+  private async applyCancellationStub(
+    stub: CalendarEvent,
+    context: UserServiceContext,
+    connectionId: string,
+    byGoogleId: Map<string, Event>,
+    byUid: Map<string, Event>,
+  ): Promise<boolean> {
+    const uid = stubUid(stub);
+
+    if (!stub.recurringEventId) {
+      const stored = (stub.id ? byGoogleId.get(stub.id) : undefined) ?? (uid ? byUid.get(uid) : undefined);
+
+      if (!stored) {
+        return false;
+      }
+
+      await this.eventService.applyStatusFromSource(context, stored.id, 'cancelled');
+
+      return true;
+    }
+
+    // An occurrence that was moved or edited before it was cancelled already
+    // has its override row, written by this connection under the instance id.
+    const override = stub.id ? byGoogleId.get(stub.id) : undefined;
+
+    if (override) {
+      await this.eventService.applyStatusFromSource(context, override.id, 'cancelled');
+
+      return true;
+    }
+
+    // No RECURRENCE-ID, no override key — and `calendarEventIdentity` would
+    // then hand back the MASTER's identity, so the create below would cancel
+    // the whole series instead of one occurrence of it.
+    const recurrenceId = recurrenceIdOf(stub.originalStartTime);
+    const master = byGoogleId.get(stub.recurringEventId) ?? (uid ? byUid.get(uid) : undefined);
+    const seriesUid =
+      master?.sourceSystem === FEDERATED_SYSTEMS.calendar ? seriesUidOf(master.sourceId) : null;
+    const identity = seriesUid && recurrenceId ? calendarEventIdentity(seriesUid, recurrenceId) : null;
+
+    if (!master || !identity) {
+      return false;
+    }
+
+    // Through `create`, so an override another pipeline already stored under
+    // the same key (a Takeout .ics exception) is found and refreshed, not
+    // duplicated.
+    await this.eventService.create(
+      context,
+      this.cancelledOccurrenceDto(stub, master, identity, { userId: context.userId, connectionId }),
+    );
+
+    return true;
+  }
+
+  /**
+   * The override row for one cancelled occurrence. The stub names only the
+   * slot; the rest comes from the stored series — its title, so the row reads
+   * as what was cancelled wherever cancelled rows are shown, and its length, so
+   * that if Google restores the occurrence the row it turns back into spans the
+   * right time.
+   */
+  private cancelledOccurrenceDto(
+    stub: CalendarEvent,
+    master: Event,
+    identity: SourceIdentity,
+    { userId, connectionId }: { userId: string; connectionId: string },
+  ): CreateEventDto {
+    const originalStart = stub.originalStartTime ?? {};
+    // A bare `date` parses to UTC midnight, the instant every all-day row is
+    // stored at (parseDateTime above does the same with `start.date`).
+    const startTime = new Date((originalStart.dateTime ?? originalStart.date) as string);
+    const spanMs = master.endTime ? master.endTime.getTime() - master.startTime.getTime() : 0;
+
+    return {
+      id: uuidv7(),
+      title: master.title ?? 'Untitled Event',
+      event_type: 'calendar_event',
+      category: 'google_calendar',
+      start_time: startTime,
+      ...(spanMs > 0 ? { end_time: new Date(startTime.getTime() + spanMs) } : {}),
+      source_type: 'ETL',
+      source_platform: canonicalSystem('google_calendar'),
+      source_system: identity.system,
+      source_id: identity.id,
+      connection_id: connectionId,
+      // As on every override row this transform writes (`!!recurringEventId`).
+      is_recurring: true,
+      is_all_day: Boolean(originalStart.date),
+      status: 'cancelled',
+      metadata: {
+        connectionId,
+        rawEventId: stub.id,
+        rawEventStatus: stub.status,
+        recurringEventId: stub.recurringEventId,
+        originalStartTime: stub.originalStartTime,
+      },
+      user: { id: userId },
+    };
   }
 
   private extractEventDetails(event: CalendarEvent): EventDetails {
@@ -347,14 +585,7 @@ export class GoogleCalendarTransformService {
       // the Google event id under the platform system (stable across
       // re-syncs, not expected to converge cross-pipeline).
       ...(() => {
-        const identity = calendarEventIdentity(
-          rawEvent.iCalUID,
-          rawEvent.originalStartTime?.date
-            ? rawEvent.originalStartTime.date.replace(/-/g, '')
-            : rawEvent.originalStartTime?.dateTime
-              ? icsRecurrenceInstant(new Date(rawEvent.originalStartTime.dateTime))
-              : undefined,
-        );
+        const identity = calendarEventIdentity(rawEvent.iCalUID, recurrenceIdOf(rawEvent.originalStartTime));
 
         return identity
           ? { source_system: identity.system, source_id: identity.id }

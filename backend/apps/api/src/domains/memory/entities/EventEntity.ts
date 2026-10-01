@@ -197,6 +197,17 @@ export class EventEntity {
   @Column({ type: 'text', default: 'confirmed' })
   status!: string;
 
+  /**
+   * The status this row's source last delivered — the merge base
+   * `CalendarEventService` refreshes `status` against when a provider
+   * re-delivers the event (20260930174811). A re-delivered status lands only
+   * while `status` still equals `COALESCE(sourceStatus, 'confirmed')`; any
+   * other value is the user's and stands. NULL when no source has asserted a
+   * status. Internal merge state: not on the egress type, not user-writable.
+   */
+  @Column({ type: 'text', nullable: true, name: 'source_status' })
+  sourceStatus!: string | null;
+
   // Consent / sharing scope (mirrors ci.answers.sharing_level). Stored raw at
   // ingest; redaction happens at read based on the consumer's scope (G2).
   @Column({ type: 'text', default: 'private', name: 'sharing_level' })
@@ -372,7 +383,7 @@ export class EventEntity {
   }
 }
 
-export type Event = Readonly<Omit<EventEntity, 'user' | 'entityType'>> & {
+export type Event = Readonly<Omit<EventEntity, 'user' | 'entityType' | 'sourceStatus'>> & {
   // Owned by the CTI base row (ci.entities); composed on egress.
   readonly title: string | null;
   readonly description: string | null;

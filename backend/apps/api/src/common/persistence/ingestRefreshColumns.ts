@@ -90,6 +90,19 @@ export const INGEST_REFRESH_COLUMNS: Record<IngestEntityKind, readonly string[]>
   //    row). The importer sends nulls there; a refresh would un-link every
   //    communication enrichment had already attributed to a person.
   communication: ['direction', 'participants_metadata', 'metadata', 'content', 'preview', 'subject'],
+  // EMPTY, and `status` deliberately not in it. A re-delivered event status IS
+  // refreshed — by the per-row door, CalendarEventService.createOne, which the
+  // calendar connections use — but not as a refresh column: `status` is also
+  // the user's (updateEvent writes it), and a same-producer re-push takes a
+  // listed column's new value whenever it is not null, so it would turn a
+  // meeting the user marked no_show back into 'confirmed'. createOne instead
+  // merges three ways against `source_status`, the value the source delivered
+  // last time (sourceStatusMerge.ts). The bulk path records that base on
+  // INSERT, but still refreshes nothing on conflict: the importer states a
+  // status now (an .ics STATUS, a cancelled Takeout reservation — #2871), yet
+  // a re-push of a row already stored leaves its status as it was. Closing
+  // that needs the same merge as a conflict action (a merge kind that reads
+  // `source_status`), not a column in this list.
   event: [],
   // EMPTY ON PURPOSE, and load-bearing: ci.objects is the one ingest table a
   // user edits directly (renaming a thing, correcting its condition, recording
