@@ -4,7 +4,8 @@ import type { UserServiceContext } from '@ci/common/context';
 
 import { PersonEntity } from '../entities/PersonEntity';
 
-import { PersonMergeService, RELATIONSHIP_COLUMNS } from './PersonMergeService';
+import { RELATIONSHIP_COLUMNS } from './mergeEdgeSweep';
+import { PersonMergeService } from './PersonMergeService';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
 const TARGET = '00000000-0000-0000-0000-0000000000b1';

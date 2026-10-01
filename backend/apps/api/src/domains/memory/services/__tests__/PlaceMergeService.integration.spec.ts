@@ -342,6 +342,11 @@ describeWithDb(`PlaceMergeService — counts, in Postgres (${availability.target
       relationshipsFrom: 1,
       relationshipsTo: 3,
       relationshipsDropped: 2,
+      // Nothing commits to a source mid-merge here, so the sweeps find only the
+      // duplicates the guarded UPDATEs declined and drop them, as they always did.
+      // The race itself is pinned by
+      // pipeline/stages/__tests__/PlaceMergeRacesEdgeProjection.integration.spec.ts.
+      relationshipsRescued: 0,
       searchRowsDeleted: 3,
       tagLinksMoved: 3,
     };
@@ -400,6 +405,7 @@ describeWithDb(`PlaceMergeService — counts, in Postgres (${availability.target
       relationshipsFrom: 0,
       relationshipsTo: 0,
       relationshipsDropped: 0,
+      relationshipsRescued: 0,
       searchRowsDeleted: 0,
       tagLinksMoved: 0,
     });

@@ -9,7 +9,8 @@ import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/supp
 import { PersonEntity } from '../../entities/PersonEntity';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 import { MergeCandidateService } from '../MergeCandidateService';
-import { type MergeCounts, PersonMergeService, RELATIONSHIP_COLUMNS } from '../PersonMergeService';
+import { RELATIONSHIP_COLUMNS } from '../mergeEdgeSweep';
+import { type MergeCounts, PersonMergeService } from '../PersonMergeService';
 
 /**
  * The counts a person merge records, checked against the rows it moved — in

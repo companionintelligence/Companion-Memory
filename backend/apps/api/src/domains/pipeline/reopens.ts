@@ -92,14 +92,19 @@ import { STAGE_ID_LIST, STAGE_IDS, type StageId } from './constants';
  *    `CommunicationParticipantLinkListener`. They were the writer behind 17,416
  *    of those 17,417 messages. The legacy `GeocodeBatchListener`, which also
  *    writes `ci.events.location_entity_id`, still does not.
- *  - A person merge that RACES the projection, in the one window the merge
- *    cannot close. `PersonMergeService` re-points the losers' edges to the
- *    survivor and then sweeps what is left, moving a loser edge a projection
- *    committed in between onto the survivor. It used to delete it, with the
+ *  - A person or place merge that RACES the projection, in the one window the
+ *    merge cannot close. `PersonMergeService` and `PlaceMergeService` re-point
+ *    the losers' edges to the survivor and then sweep what is left
+ *    (`memory/services/mergeEdgeSweep.ts`), moving a loser edge a projection
+ *    committed in between onto the survivor. They used to delete it, with the
  *    leg's ledger row still `running`, so no re-open could have reached it:
- *    five SENT/RECEIVED edges were lost that way on the reference appliance at
- *    15:23 on 2026-09-30, during a `DeterministicPersonMergeCron` drain, and
- *    repair migration `20260930161359` re-opened those five. What is left is a
+ *    five SENT/RECEIVED edges were lost that way in one person merge on the
+ *    reference appliance at 15:23 on 2026-09-30, during a
+ *    `DeterministicPersonMergeCron` drain, and repair migration
+ *    `20260930161359` re-opened those five. The place merge ended in the same
+ *    statement and re-points the columns `promote.edge_event`,
+ *    `promote.edge_position` and `promote.edge_place` read; no loss is recorded
+ *    for it, but the real-Postgres specs show the same one. What is left is a
  *    projection whose own snapshot predates the merge's commit and that commits
  *    after the sweep: its edge stays on the tombstone while the row is `done`.
  *    That window is the length of the sweep plus the rest of the merge's

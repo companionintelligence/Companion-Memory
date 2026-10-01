@@ -11,6 +11,7 @@ import { PlaceUpdatedEvent } from '@ci/domains/memory/events';
 import { type Place, PlaceEntity } from '../entities/PlaceEntity';
 
 import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { sweepLeftoverEdges } from './mergeEdgeSweep';
 
 /** Per-table re-point counts recorded in the `ci.entity_merges` audit row. */
 export interface PlaceMergeCounts {
@@ -30,6 +31,15 @@ export interface PlaceMergeCounts {
   relationshipsFrom: number;
   relationshipsTo: number;
   relationshipsDropped: number;
+  /**
+   * Edges a concurrent writer committed to a source AFTER the guarded re-point's
+   * snapshot (the edge projection, most often), which the final sweep moved onto
+   * the target instead of dropping. Not part of `relationshipsFrom/To`, which
+   * count the rows that UPDATE moved. Zero on almost every merge; a non-zero
+   * value is the race this count exists to make visible. A row written before
+   * this count existed has no such key, which means "not counted", not "none".
+   */
+  relationshipsRescued: number;
   searchRowsDeleted: number;
   tagLinksMoved: number;
 }
@@ -70,7 +80,10 @@ interface LocationRow {
  *  3. re-points every column that can name a place: events, position fixes,
  *     child places, owned things (last-seen / acquired-from), sightings,
  *     receipts (place / merchant), identifier claims, and relationship
- *     endpoints (the known-places LIVES_IN / WORKS_AT / VISITED edges);
+ *     endpoints (the known-places LIVES_IN / WORKS_AT / VISITED edges), then
+ *     sweeps what that left behind — moving, not dropping, any edge a
+ *     concurrent writer committed to a source after the re-point's snapshot (see
+ *     {@link sweepLeftoverEdges});
  *  4. folds the row — target wins every non-null scalar it already has; the
  *     point, boundary, parent and provider place_id fill from the first
  *     source that has one; properties merge target-wins;
@@ -361,6 +374,16 @@ export class PlaceMergeService {
    * `UPDATE/DELETE … RETURNING`: TypeORM resolves that to `[rows, rowCount]`,
    * which made each of these a constant in the audit row and in the
    * `mergePlaces` payload.
+   *
+   * The relationship statements run in a fixed order: the self-reference drop,
+   * both guarded re-points, and only THEN the two sweeps. Each statement of a
+   * READ COMMITTED transaction takes its own snapshot, and until the merge
+   * commits the edge projection still reads the place columns re-pointed above
+   * (`events.location_entity_id`, `position.location_entity_id`, …) as the
+   * SOURCE, so it can commit a source's edge between any two of these
+   * statements. The re-points are the long ones; the sweeps are short and read
+   * last, so the span in which a commit can slip past every statement is as
+   * small as it can be made here.
    */
   private async repointReferences(
     em: EntityManager,
@@ -493,7 +516,9 @@ export class PlaceMergeService {
     // Relationships (LIVES_IN / WORKS_AT / VISITED and any other edge): drop
     // edges that would become self-references or only joined the duplicates,
     // then guarded re-points that respect relationships_unique_directed_idx —
-    // the same two-guard statement PersonMergeService uses.
+    // the same two-guard statement PersonMergeService uses — then a sweep per
+    // end for whatever those left, which is moved, not dropped (see
+    // sweepLeftoverEdges). Both sweeps come after both re-points on purpose.
     const droppedSelfRef = await countAffected(
       em,
       `WITH dropped AS (
@@ -532,17 +557,6 @@ export class PlaceMergeService {
       [ownerUserId, sources, targetId],
     );
 
-    const droppedFromDupes = await countAffected(
-      em,
-      `WITH dropped AS (
-         DELETE FROM ci.relationships
-          WHERE owner_user_id = $1 AND from_entity_id = ANY($2::uuid[])
-          RETURNING 1
-       )
-       SELECT count(*)::int AS count FROM dropped`,
-      [ownerUserId, sources],
-    );
-
     const relationshipsTo = await countAffected(
       em,
       `WITH repointed AS (
@@ -568,16 +582,15 @@ export class PlaceMergeService {
       [ownerUserId, sources, targetId],
     );
 
-    const droppedToDupes = await countAffected(
-      em,
-      `WITH dropped AS (
-         DELETE FROM ci.relationships
-          WHERE owner_user_id = $1 AND to_entity_id = ANY($2::uuid[])
-          RETURNING 1
-       )
-       SELECT count(*)::int AS count FROM dropped`,
-      [ownerUserId, sources],
-    );
+    const sweep = {
+      ownerUserId,
+      sources,
+      targetId,
+      changeSource: 'PlaceMergeService.mergePlaces',
+      changeReason: 'place_merge.rescued_edge',
+    };
+    const sweptFrom = await sweepLeftoverEdges(em, this.graphDeltaWriter, { ...sweep, end: 'from' });
+    const sweptTo = await sweepLeftoverEdges(em, this.graphDeltaWriter, { ...sweep, end: 'to' });
 
     return {
       events,
@@ -589,7 +602,8 @@ export class PlaceMergeService {
       identifiers,
       relationshipsFrom,
       relationshipsTo,
-      relationshipsDropped: droppedSelfRef + droppedFromDupes + droppedToDupes,
+      relationshipsDropped: droppedSelfRef + sweptFrom.dropped + sweptTo.dropped,
+      relationshipsRescued: sweptFrom.rescued + sweptTo.rescued,
       searchRowsDeleted: 0,
       tagLinksMoved: 0,
     };
