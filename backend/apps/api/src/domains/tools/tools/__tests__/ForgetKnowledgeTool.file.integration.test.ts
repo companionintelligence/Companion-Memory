@@ -21,6 +21,7 @@ import { UserEntity } from '@ci/domains/user';
 
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
 import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
+import { GRAPH_ENTITY_ENTITIES, graphEntityServices } from '../../../__tests__/support/graphEntityServices';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { ForgetKnowledgeTool } from '../ForgetKnowledgeTool';
 
@@ -115,7 +116,7 @@ describeWithDb(`memory.forget on a File node, against Postgres (${availability.t
     dataSource = new DataSource({
       type: 'postgres',
       ...dataSourceConnection(DATABASE_ENV),
-      entities: [BaseEntity, GraphNodeEntity, RelationshipEntity, UserEntity],
+      entities: [BaseEntity, GraphNodeEntity, RelationshipEntity, UserEntity, ...GRAPH_ENTITY_ENTITIES],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
     });
@@ -142,6 +143,10 @@ describeWithDb(`memory.forget on a File node, against Postgres (${availability.t
       logger(),
     );
 
+    // A concept is purged by the real `ConceptService`, as the tool does it, and announces through the same
+    // `signalling` this suite watches.
+    const graphEntities = graphEntityServices(dataSource, signalling, logger());
+
     // No case here names an event, content, a communication or an item, so the tool never reaches for those.
     tool = new ForgetKnowledgeTool(
       graph,
@@ -151,6 +156,9 @@ describeWithDb(`memory.forget on a File node, against Postgres (${availability.t
       {} as unknown as CommunicationService,
       {} as unknown as ItemService,
       files,
+      graphEntities.people,
+      graphEntities.places,
+      graphEntities.concepts,
       logger(),
     );
   });
@@ -591,7 +599,10 @@ describeWithDb(`memory.forget on a File node, against Postgres (${availability.t
 
   it('names the file it had already destroyed when it is the rest of the call that is refused', async () => {
     const file = await seedFile('Trip photo');
-    const me = await seedNode('Person', 'Me');
+    // A node of a type nothing purges, so it is the generic delete that the foreign key stops, after the
+    // file has gone. A `Person` goes through `PersonService.purge`, which refuses the user's own node
+    // before anything else in the call is destroyed.
+    const me = await seedNode('Organization', 'Me');
 
     await seedTrail(file, 'Trip photo');
     await dataSource.query('UPDATE ci.users SET entity_id = $1 WHERE id = $2', [me, ownerId]);

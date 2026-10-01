@@ -25,6 +25,7 @@ import { UserEntity } from '@ci/domains/user';
 
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
 import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
+import { GRAPH_ENTITY_ENTITIES, graphEntityServices } from '../../../__tests__/support/graphEntityServices';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { ForgetKnowledgeTool } from '../ForgetKnowledgeTool';
 
@@ -126,6 +127,7 @@ describeWithDb(`memory.forget on a Content node, against Postgres (${availabilit
         GraphNodeEntity,
         RelationshipEntity,
         UserEntity,
+        ...GRAPH_ENTITY_ENTITIES,
       ],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
@@ -159,6 +161,8 @@ describeWithDb(`memory.forget on a Content node, against Postgres (${availabilit
       logger(),
     );
     // No case here names a communication or an item, so the tool never reaches for either.
+    const services = graphEntityServices(dataSource, signalling, logger());
+
     tool = new ForgetKnowledgeTool(
       graph,
       signalling,
@@ -167,6 +171,9 @@ describeWithDb(`memory.forget on a Content node, against Postgres (${availabilit
       {} as unknown as CommunicationService,
       {} as unknown as ItemService,
       {} as unknown as FileService,
+      services.people,
+      services.places,
+      services.concepts,
       logger(),
     );
   });

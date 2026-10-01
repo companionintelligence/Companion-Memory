@@ -23,6 +23,7 @@ import { UserEntity } from '@ci/domains/user';
 
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
 import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
+import { GRAPH_ENTITY_ENTITIES, graphEntityServices } from '../../../__tests__/support/graphEntityServices';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { ForgetKnowledgeTool } from '../ForgetKnowledgeTool';
 
@@ -106,7 +107,15 @@ describeWithDb(`memory.forget on an Item node, against Postgres (${availability.
     dataSource = new DataSource({
       type: 'postgres',
       ...dataSourceConnection(DATABASE_ENV),
-      entities: [BaseEntity, ItemEntity, ItemBaseEntity, GraphNodeEntity, RelationshipEntity, UserEntity],
+      entities: [
+        BaseEntity,
+        ItemEntity,
+        ItemBaseEntity,
+        GraphNodeEntity,
+        RelationshipEntity,
+        UserEntity,
+        ...GRAPH_ENTITY_ENTITIES,
+      ],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
     });
@@ -124,6 +133,8 @@ describeWithDb(`memory.forget on an Item node, against Postgres (${availability.
     );
 
     // No case here names an event, content or a communication, so the tool never reaches for those.
+    const services = graphEntityServices(dataSource, signalling, logger());
+
     tool = new ForgetKnowledgeTool(
       graph,
       signalling,
@@ -139,6 +150,9 @@ describeWithDb(`memory.forget on an Item node, against Postgres (${availability.
       ),
       // No case here names a file, so the tool never reaches for it.
       {} as unknown as FileService,
+      services.people,
+      services.places,
+      services.concepts,
       logger(),
     );
   });
@@ -523,7 +537,9 @@ describeWithDb(`memory.forget on an Item node, against Postgres (${availability.
 
   it('names the item it had already destroyed when it is the rest of the call that is refused', async () => {
     const item = await seedItem('A kettle');
-    const me = await seedNode('Person', 'Me');
+    // A kind of node nothing purges, so it is the generic delete that refuses it, after the purge. A Person is
+    // purged before an item, and the user's own is refused before anything has been destroyed.
+    const me = await seedNode('Organization', 'Me');
 
     await seedTrail(item, 'A kettle');
     await dataSource.query('UPDATE ci.users SET entity_id = $1 WHERE id = $2', [me, ownerId]);
