@@ -37,7 +37,8 @@ export interface ForgetKnowledgeOutput {
   /**
    * The events among `archivedEntityIds` that archive mode moved to the trash
    * (the same tombstone `deleteEvent` writes) rather than just deactivating a
-   * graph node. `restoreEvent` brings each one back as it was.
+   * graph node. `restoreEvent` brings each one back as it was. Never set for
+   * `archive_and_delete`, which cannot be undone.
    */
   restorableEventIds?: string[];
   mode: 'archive' | 'archive_and_delete';
@@ -77,7 +78,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
           enum: ['archive', 'archive_and_delete'],
           default: 'archive',
           description:
-            'Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored); archive_and_delete also removes them from the active graph.',
+            'Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). archive_and_delete permanently deletes them: an event goes with its attached content and cannot be restored, and one that came from a source that syncs again can arrive again.',
         },
         reason: {
           type: 'string',
@@ -133,6 +134,9 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
 
     const warnings: string[] = [];
 
+    // Deactivate or delete entities and relationships according to mode
+    const hardDelete = mode === 'archive_and_delete';
+
     const entitySnapshots = [] as Array<{
       node: GraphNodeEntity;
       relationships: RelationshipEntity[];
@@ -143,6 +147,10 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     for (const entityId of entityIds) {
       const snapshot = await this.graphUtility.collectEntitySnapshot(entityId, ownerId, {
         includeRelationships: true,
+        // Delete takes whatever is there. A node that archive already deactivated,
+        // which is what an event in the trash is, is still a node to delete: without
+        // this the second step of "archive, then delete" answers "not found".
+        includeInactive: hardDelete,
       });
 
       if (!snapshot.node) {
@@ -165,17 +173,15 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
         })
       : [];
 
-    // Deactivate or delete entities and relationships according to mode
-    const hardDelete = mode === 'archive_and_delete';
-
-    const trashedEventIds = hardDelete
-      ? new Set<string>()
-      : await this.trashEvents(
-          uniqueEntitySnapshots.map((entry) => entry.node),
-          ownerId,
-        );
+    // An Event is two rows, so neither mode can treat its node like any other.
+    // Archive moves it to the trash and delete purges it; each announces its own
+    // removal, and what is left is generic.
+    const nodes = uniqueEntitySnapshots.map((entry) => entry.node);
+    const handledEventIds = hardDelete
+      ? await this.purgeEvents(nodes, ownerId)
+      : await this.trashEvents(nodes, ownerId);
     const graphSnapshots = uniqueEntitySnapshots.filter(
-      (entry) => !trashedEventIds.has(entry.node.entity_id),
+      (entry) => !handledEventIds.has(entry.node.entity_id),
     );
 
     graphSnapshots.forEach((entry) =>
@@ -206,7 +212,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     return {
       archivedEntityIds: uniqueEntitySnapshots.map((entry) => entry.node.entity_id),
       archivedRelationshipIds: Array.from(new Set(explicitRelationships.map((rel) => rel.relationship_id))),
-      restorableEventIds: trashedEventIds.size ? Array.from(trashedEventIds) : undefined,
+      restorableEventIds: !hardDelete && handledEventIds.size ? Array.from(handledEventIds) : undefined,
       mode,
       warnings: warnings.length ? warnings : undefined,
     };
@@ -258,6 +264,35 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
   }
 
   /**
+   * Delete events for good, through {@link CalendarEventService.purge}.
+   *
+   * The generic path, `deactivateEntities` with `hardDelete`, deletes the node's
+   * `ci.entities` row and trusts the foreign keys. For an event that cannot work.
+   * HBPE has clustered nearly every event, its cluster tables reference the event
+   * with no `ON DELETE` action, and the delete fails outright. When it does go
+   * through it strands the event's content's graph nodes and leaves edges,
+   * ledger rows, tags and search rows pointing at nothing. `purge` does the
+   * whole teardown in one transaction, and in both directions of
+   * `ci.relationships`, which this tool never did.
+   *
+   * It takes an event in any state, so an event already in the trash is purged
+   * by the same call that would have purged a live one. As with the trash, a
+   * node `purge` does not take (an `Event` node with no `ci.events` row behind
+   * it) goes on to the generic path, where there is nothing to cascade.
+   */
+  private async purgeEvents(nodes: GraphNodeEntity[], ownerId: string): Promise<Set<string>> {
+    const eventIds = nodes.filter((node) => node.entity_type === 'Event').map((node) => node.entity_id);
+
+    if (eventIds.length === 0) {
+      return new Set();
+    }
+
+    const purged = await this.calendarEvents.purge({ userId: ownerId }, eventIds);
+
+    return new Set(purged.eventIds);
+  }
+
+  /**
    * Drop a forgotten node from the search index.
    *
    * `deactivateEntities` only flips `ci.entities.is_active` (or deletes the
@@ -280,9 +315,9 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    * mirror half of a pair whose detail row `deactivateEntities` does not touch,
    * so `event.deleted` for an event that still exists in `ci.events` would be
    * false to every future consumer of that event, and unindexing it would
-   * desync search from a record the rest of the app still lists. (An archived
-   * Event aggregate never reaches here: {@link trashEvents} tombstones it, and
-   * `CalendarEventService.remove` un-indexes it itself.)
+   * desync search from a record the rest of the app still lists. (An Event
+   * aggregate never reaches here: {@link trashEvents} tombstones it and
+   * {@link purgeEvents} deletes it, and both un-index it themselves.)
    */
   private async unindexEntity(node: GraphNodeEntity): Promise<void> {
     // Reuses the canonical graph→search alias table rather than restating

@@ -1594,12 +1594,12 @@ export class GraphUtilityService {
   async collectEntitySnapshot(
     entityId: string,
     ownerUserId: string,
-    options: { includeRelationships?: boolean } = {},
+    options: { includeRelationships?: boolean; includeInactive?: boolean } = {},
   ): Promise<{
     node: GraphNodeEntity | null;
     relationships: RelationshipEntity[];
   }> {
-    const node = await this.getNodeById(entityId, ownerUserId);
+    const node = await this.getNodeById(entityId, ownerUserId, { includeInactive: options.includeInactive });
     if (!node) {
       return { node: null, relationships: [] };
     }

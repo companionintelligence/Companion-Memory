@@ -24,6 +24,7 @@ const CONTEXT = { userId: '00000000-0000-0000-0000-0000000000aa' } as RequestCon
 // fixtures need real UUIDs or validateInput rejects the whole call before executeInternal runs.
 const E1 = '11111111-1111-1111-1111-111111111111';
 const E2 = '77777777-7777-7777-7777-777777777777';
+const E3 = '66666666-6666-6666-6666-666666666666';
 const E_MISSING = '88888888-8888-8888-8888-888888888888';
 const E_MISSING_ONLY = '99999999-9999-9999-9999-999999999999';
 const R1 = '22222222-2222-2222-2222-222222222222';
@@ -94,7 +95,7 @@ function makeGraphUtility(
   const nodes = options.nodes ?? {};
   const relationshipsById = options.relationshipsById ?? {};
 
-  const collectEntitySnapshot = jest.fn(async (entityId: string) => {
+  const collectEntitySnapshot = jest.fn(async (entityId: string, _ownerId?: string, _options?: object) => {
     const entry = nodes[entityId];
     if (!entry) {
       return { node: null, relationships: [] };
@@ -119,15 +120,22 @@ function makeGraphUtility(
 }
 
 /**
- * Stand-in for `CalendarEventService.remove`: true exactly once for each id
- * that has a live `ci.events` row to tombstone, false for anything else — an
- * `Event` node with no detail row, or one already in the trash.
+ * Stand-in for `CalendarEventService`. `remove` is true exactly once for each id
+ * that has a live `ci.events` row to tombstone, false for anything else: an
+ * `Event` node with no detail row, or one already in the trash. `purge` takes
+ * every id that has a `ci.events` row at all, live or in the trash, and answers
+ * with the ones it took.
  */
-function makeCalendarEvents(liveEventIds: string[] = []) {
+function makeCalendarEvents(liveEventIds: string[] = [], trashedEventIds: string[] = []) {
   const live = new Set(liveEventIds);
+  const trashed = new Set(trashedEventIds);
   const remove = jest.fn(async (_context: { userId: string }, id: string) => live.delete(id));
+  const purge = jest.fn(async (_context: { userId: string }, ids: string[]) => ({
+    eventIds: ids.filter((id) => live.has(id) || trashed.has(id)),
+    contentIds: [] as string[],
+  }));
 
-  return { remove };
+  return { remove, purge };
 }
 
 function makeTool(
@@ -399,9 +407,87 @@ describe('ForgetKnowledgeTool events', () => {
     expect(calendarEvents.remove).not.toHaveBeenCalled();
     expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, false);
   });
+});
 
-  it('leaves archive_and_delete a hard delete for events too', async () => {
+describe('ForgetKnowledgeTool events, archive_and_delete', () => {
+  it('purges an event instead of deleting its node, and leaves the trash call alone', async () => {
     const calendarEvents = makeCalendarEvents([E1]);
+    const graphUtility = makeGraphUtility({
+      nodes: { [E1]: { entityType: 'Event', relationships: [fakeRel(R1)] } },
+    });
+    const search = makeSearchIndex();
+    const tool = makeTool(graphUtility, search, calendarEvents);
+
+    const result = await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive_and_delete' });
+
+    expect(result.success).toBe(true);
+    expect(calendarEvents.purge).toHaveBeenCalledWith({ userId: CONTEXT.userId }, [E1]);
+    expect(calendarEvents.remove).not.toHaveBeenCalled();
+    // The purge removed the node, its content and every edge, in both directions.
+    // The tool adds nothing of its own: deleting the node again would be a no-op
+    // at best, and the generic path is the one that cannot cope with an event.
+    expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateRelationships).not.toHaveBeenCalled();
+    expect(search.send).not.toHaveBeenCalled();
+    expect(result.data?.archivedEntityIds).toEqual([E1]);
+    // Nothing to restore: that is what delete means.
+    expect(result.data?.restorableEventIds).toBeUndefined();
+  });
+
+  it('looks nodes up including inactive ones, so an event already in the trash can be purged', async () => {
+    const calendarEvents = makeCalendarEvents([], [E1]);
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Event' } } });
+    const tool = makeTool(graphUtility, makeSearchIndex(), calendarEvents);
+
+    await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive_and_delete' });
+
+    expect(graphUtility.collectEntitySnapshot).toHaveBeenCalledWith(
+      E1,
+      CONTEXT.userId,
+      expect.objectContaining({ includeInactive: true }),
+    );
+    expect(calendarEvents.purge).toHaveBeenCalledWith({ userId: CONTEXT.userId }, [E1]);
+  });
+
+  it('does not look inactive nodes up in archive mode, where they are already forgotten', async () => {
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Concept' } } });
+    const tool = makeTool(graphUtility);
+
+    await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
+
+    expect(graphUtility.collectEntitySnapshot).toHaveBeenCalledWith(
+      E1,
+      CONTEXT.userId,
+      expect.objectContaining({ includeInactive: false }),
+    );
+  });
+
+  it('purges every event in a batch with one call and deletes the other nodes the generic way', async () => {
+    const calendarEvents = makeCalendarEvents([E1, E2]);
+    const graphUtility = makeGraphUtility({
+      nodes: {
+        [E1]: { entityType: 'Event', relationships: [fakeRel(R1)] },
+        [E2]: { entityType: 'Event' },
+        [E3]: { entityType: 'Concept', relationships: [fakeRel(R_CASCADE)] },
+      },
+    });
+    const search = makeSearchIndex();
+    const tool = makeTool(graphUtility, search, calendarEvents);
+
+    const result = await tool.execute(CONTEXT, { entityIds: [E1, E2, E3], mode: 'archive_and_delete' });
+
+    expect(calendarEvents.purge).toHaveBeenCalledTimes(1);
+    expect(calendarEvents.purge).toHaveBeenCalledWith({ userId: CONTEXT.userId }, [E1, E2]);
+    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E3], CONTEXT.userId, true);
+    // Only the node the generic path took has edges for it to delete.
+    expect(graphUtility.deactivateRelationships).toHaveBeenCalledWith([R_CASCADE], CONTEXT.userId, true);
+    expect(result.data?.archivedEntityIds).toEqual([E1, E2, E3]);
+  });
+
+  it('sends an Event node with no ci.events row down the generic path, where there is nothing to cascade', async () => {
+    // Graph ingest writes `Event` nodes with no detail row behind them. `purge`
+    // answers with only the events it found, and this one has to be deleted too.
+    const calendarEvents = makeCalendarEvents();
     const graphUtility = makeGraphUtility({
       nodes: { [E1]: { entityType: 'Event', relationships: [fakeRel(R1)] } },
     });
@@ -409,9 +495,38 @@ describe('ForgetKnowledgeTool events', () => {
 
     const result = await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive_and_delete' });
 
-    expect(calendarEvents.remove).not.toHaveBeenCalled();
+    expect(calendarEvents.purge).toHaveBeenCalledWith({ userId: CONTEXT.userId }, [E1]);
     expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, true);
     expect(graphUtility.deactivateRelationships).toHaveBeenCalledWith([R1], CONTEXT.userId, true);
-    expect(result.data?.restorableEventIds).toBeUndefined();
+    expect(result.data?.archivedEntityIds).toEqual([E1]);
+  });
+
+  it('never asks the calendar to purge anything when the batch holds no event', async () => {
+    const calendarEvents = makeCalendarEvents([E1]);
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Person' } } });
+    const tool = makeTool(graphUtility, makeSearchIndex(), calendarEvents);
+
+    await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive_and_delete' });
+
+    expect(calendarEvents.purge).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, true);
+  });
+
+  it('still removes the relationships it was asked to remove by id', async () => {
+    const calendarEvents = makeCalendarEvents([E1]);
+    const graphUtility = makeGraphUtility({
+      nodes: { [E1]: { entityType: 'Event' } },
+      relationshipsById: { [R_EXPLICIT]: fakeRel(R_EXPLICIT) },
+    });
+    const tool = makeTool(graphUtility, makeSearchIndex(), calendarEvents);
+
+    const result = await tool.execute(CONTEXT, {
+      entityIds: [E1],
+      relationshipIds: [R_EXPLICIT],
+      mode: 'archive_and_delete',
+    });
+
+    expect(graphUtility.deactivateRelationships).toHaveBeenCalledWith([R_EXPLICIT], CONTEXT.userId, true);
+    expect(result.data?.archivedRelationshipIds).toEqual([R_EXPLICIT]);
   });
 });
