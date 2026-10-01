@@ -51,8 +51,16 @@ if (!availability.available) {
 
 jest.setTimeout(60_000);
 
-/** The detail tables a purge, or the generic delete of the node they belong to, cascades into. */
-const DETAIL_TABLES = ['ci.events', 'ci.content', 'ci.objects', 'ci.communications'];
+/**
+ * The tables a purge, or the generic delete of the node they belong to, deletes a row from, and that a
+ * foreign key could stop it deleting.
+ *
+ * `ci.files` is the odd one out: it is not the detail table of a node, because a `File` node is joined to
+ * its row by a plain `linked_id` column and deleting the node never cascades into it. It is here because
+ * `FileService.purge` deletes the row, so a foreign key onto it with no `ON DELETE` action would refuse that
+ * delete after the stored objects had already gone: the worst place for a delete to fail.
+ */
+const DETAIL_TABLES = ['ci.events', 'ci.content', 'ci.objects', 'ci.communications', 'ci.files'];
 
 /**
  * Foreign keys onto a detail table that no purge clears, and why that is right. Each is named
@@ -71,6 +79,69 @@ const ACCEPTED_ON_ENTITIES: Record<string, string> = {
   'ci.entities <- ci.users.entity_id': 'the user’s own Person node',
   'ci.entities <- ci.product_models.product_entity_id': 'a catalog model’s Product node',
 };
+
+/**
+ * Every foreign key onto `ci.files`, and what it does when the file goes, which is what `FileService.purge`
+ * relies on or accepts. None of them refuses the delete, so `ACCEPTED_ON_DETAIL_TABLES` never sees them;
+ * they are pinned here instead, so that a new one, or one whose action changes, is a decision somebody takes
+ * and not a surprise in a delete on a real appliance. A new table that cascades from `ci.files` would have
+ * the purge delete its rows silently, and one that sets null would have it rewrite them.
+ */
+const FILE_FOREIGN_KEYS: Record<string, { action: string; reason: string }> = {
+  'ci.files <- ci.file_chunks.file_id': {
+    action: 'CASCADE',
+    reason:
+      'the text extracted from the file, and its chunks. Relied on: the purge deletes nothing of them itself, and they are the file’s content, so they must go with it.',
+  },
+  'ci.files <- ci.files.parent_id': {
+    action: 'CASCADE',
+    reason:
+      'the variants of a file (previews, thumbnails, playback copies). Relied on, but the purge also walks and locks them itself to reach their objects, which a cascade cannot do.',
+  },
+  'ci.files <- ci.message_files.file_id': {
+    action: 'CASCADE',
+    reason:
+      'a chat message’s attachment link. Relied on: the message keeps its text and loses the attachment, which is what forgetting the file means for it.',
+  },
+  'ci.files <- ci.unfurls.poster_file_id': {
+    action: 'SET NULL',
+    reason:
+      'a link preview’s poster image. Accepted: the preview is its own record and stays, without its poster.',
+  },
+};
+
+/** What `pg_constraint.confdeltype` calls each action. */
+const DELETE_ACTIONS: Record<string, string> = {
+  a: 'NO ACTION',
+  r: 'RESTRICT',
+  c: 'CASCADE',
+  n: 'SET NULL',
+  d: 'SET DEFAULT',
+};
+
+/**
+ * What is wrong, if anything, between the foreign keys the catalog has onto a table and the ones that were
+ * decided. Every list is empty when they agree.
+ */
+function compareActions(catalog: Record<string, string>, decided: Record<string, string>) {
+  return {
+    // A new foreign key. Decide what forgetting a file does to it, and pin it.
+    addedAndNotDecided: Object.keys(catalog)
+      .filter((key) => !(key in decided))
+      .sort(),
+    // The constraint has gone: remove the entry.
+    decidedAndGone: Object.keys(decided)
+      .filter((key) => !(key in catalog))
+      .sort(),
+    // The action changed under a decision that was taken about the old one.
+    actionChanged: Object.keys(decided)
+      .filter((key) => key in catalog && catalog[key] !== decided[key])
+      .sort()
+      .map((key) => `${key}: decided ${decided[key]}, now ${catalog[key]}`),
+  };
+}
+
+const NO_ACTION_DRIFT = { addedAndNotDecided: [], decidedAndGone: [], actionChanged: [] };
 
 /** A foreign key as the catalog names it: what it references, from where, and from which column. */
 const keyOf = (referenced: string, referencing: string, column: string): string =>
@@ -154,6 +225,57 @@ describe('comparing the purges with the catalog', () => {
   });
 });
 
+/** What was decided for each foreign key onto `ci.files`, without the reasons. */
+const DECIDED_FILE_ACTIONS: Record<string, string> = Object.fromEntries(
+  Object.entries(FILE_FOREIGN_KEYS).map(([key, { action }]) => [key, action]),
+);
+
+describe('comparing the file foreign keys with the catalog', () => {
+  it('guards ci.files like every other table a purge deletes from', () => {
+    // A foreign key onto it with no `ON DELETE` action refuses the file purge's last delete, after the objects
+    // are gone. Without the table in the list the live comparison below never looks at it.
+    expect(DETAIL_TABLES).toContain('ci.files');
+  });
+
+  it('is quiet when the catalog is what was decided', () => {
+    expect(compareActions(DECIDED_FILE_ACTIONS, DECIDED_FILE_ACTIONS)).toEqual(NO_ACTION_DRIFT);
+  });
+
+  it('names a new foreign key onto ci.files that nobody has decided on', () => {
+    const added = keyOf('ci.files', 'ci.some_new_table', 'file_id');
+
+    expect(compareActions({ ...DECIDED_FILE_ACTIONS, [added]: 'CASCADE' }, DECIDED_FILE_ACTIONS)).toEqual({
+      ...NO_ACTION_DRIFT,
+      addedAndNotDecided: [added],
+    });
+  });
+
+  it('names a decided foreign key that has gone', () => {
+    const [gone, ...stillThere] = Object.keys(DECIDED_FILE_ACTIONS);
+    const catalog = Object.fromEntries(stillThere.map((key) => [key, DECIDED_FILE_ACTIONS[key]]));
+
+    expect(compareActions(catalog, DECIDED_FILE_ACTIONS)).toEqual({
+      ...NO_ACTION_DRIFT,
+      decidedAndGone: [gone],
+    });
+  });
+
+  it('names a foreign key whose action changed under the decision that was taken about it', () => {
+    const key = 'ci.files <- ci.file_chunks.file_id';
+
+    expect(compareActions({ ...DECIDED_FILE_ACTIONS, [key]: 'NO ACTION' }, DECIDED_FILE_ACTIONS)).toEqual({
+      ...NO_ACTION_DRIFT,
+      actionChanged: [`${key}: decided CASCADE, now NO ACTION`],
+    });
+  });
+
+  it('gives a reason for every decision, so that a later reader knows what it was', () => {
+    for (const [key, { reason }] of Object.entries(FILE_FOREIGN_KEYS)) {
+      expect({ key, reason: reason.length > 20 }).toEqual({ key, reason: true });
+    }
+  });
+});
+
 describeWithDb(`the tables that can block a node delete (${availability.target})`, () => {
   let dataSource: DataSource;
 
@@ -191,7 +313,41 @@ describeWithDb(`the tables that can block a node delete (${availability.target})
     return rows.map((row) => keyOf(row.referenced, row.referencing, row.column));
   }
 
-  it('onto an event, content, an item or a communication are exactly the ones the purges clear or accept', async () => {
+  /** Every foreign key onto `table`, whatever it does on delete, as `referenced <- table.column` and the action. */
+  async function foreignKeysOnto(table: string): Promise<Record<string, string>> {
+    const rows: Array<{ referenced: string; referencing: string; column: string; action: string }> =
+      await dataSource.query(
+        `SELECT c.confrelid::regclass::text AS referenced,
+                c.conrelid::regclass::text AS referencing,
+                (SELECT string_agg(a.attname, ', ' ORDER BY k.ord)
+                   FROM unnest(c.conkey) WITH ORDINALITY AS k (attnum, ord)
+                   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum) AS "column",
+                c.confdeltype::text AS action
+           FROM pg_constraint c
+          WHERE c.contype = 'f'
+            AND c.confrelid = $1::text::regclass
+          ORDER BY 1, 2, 3`,
+        [table],
+      );
+
+    return Object.fromEntries(
+      rows.map((row) => [
+        keyOf(row.referenced, row.referencing, row.column),
+        DELETE_ACTIONS[row.action] ?? row.action,
+      ]),
+    );
+  }
+
+  it('onto ci.files are exactly the ones whose action the file purge relies on or accepts', async () => {
+    const catalog = await foreignKeysOnto('ci.files');
+
+    // Precondition: the catalog has the table this is about. A guard that read nothing would pass.
+    expect(Object.keys(catalog).length).toBeGreaterThan(0);
+
+    expect(compareActions(catalog, DECIDED_FILE_ACTIONS)).toEqual(NO_ACTION_DRIFT);
+  });
+
+  it('onto an event, content, an item, a communication or a stored file are exactly the ones the purges clear or accept', async () => {
     const cleared = HBPE_LINKS.map((link) => keyOf(link.references, link.table, link.column));
 
     // Precondition: the catalog has the tables this is about. A guard that read nothing would pass.

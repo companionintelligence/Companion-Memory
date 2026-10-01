@@ -294,6 +294,9 @@ export type { Content } from './entities/ContentEntity';
 export { canonicalEntityType, isStorableEntityType, sameEntityType } from './graph.types';
 export { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from './services/selfEntityProvisioner';
 export type { MapPin } from './services/CalendarEventService';
+// What `FileService.purge` answers with, and the error that says a purge deleted a file's stored
+// objects and then could not delete its records.
+export { StoredObjectsDeletedError, type PurgedFiles } from './services/filePurge';
 export { DEAD_EVENT_STATUSES, LIVE_EVENT_SQL } from './services/CalendarEventService';
 export { MAX_EXPANDED_OCCURRENCES, MAX_RECURRING_MASTERS } from './services/CalendarEventService';
 // Read-time RRULE expansion. Exported so `peers` can expand the same series for

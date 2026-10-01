@@ -5,9 +5,10 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { OnEvent } from '@ci/domains/events';
+import { EventService, OnEvent } from '@ci/domains/events';
 import {
   FileService as FileStorageService,
+  FileRemovedEvent,
   FileUploadedEvent,
   type FileUploadedPayload,
   // Aliased — this file's own `File` (below) is the graph-shadow node type,
@@ -21,6 +22,7 @@ import { EventEntity } from '../entities/EventEntity';
 import { type File, FileEntity } from '../entities/FileEntity';
 
 import { EntityService } from './EntityService';
+import { nothingPurged, purgeFileAggregates, StoredObjectsDeletedError, type PurgedFiles } from './filePurge';
 
 /** Where the graph-node write for an upload runs, off the shared default queue. */
 export const MEMORY_FILE_ENTITY_QUEUE = 'memory-file-entity';
@@ -40,6 +42,7 @@ export class FileService extends EntityService<FileEntity, File> {
     fileRepository: Repository<FileEntity>,
     @InjectRepository(EventEntity)
     private readonly eventRepository: Repository<EventEntity>,
+    private readonly eventService: EventService,
     private readonly logger: LoggerService,
   ) {
     super(fileRepository, FileEntity);
@@ -59,6 +62,54 @@ export class FileService extends EntityService<FileEntity, File> {
     const entity = await this.findOrCreateForFile(context, linkedId, name ?? null);
 
     return { entity };
+  }
+
+  /**
+   * Permanently deletes stored files, with everything that only exists because of them:
+   * the `File` node, the `ci.files` row it shadows, every variant, their chunks and
+   * search rows, and the objects in the object store. This is `memory.forget`'s
+   * `archive_and_delete` for a `File` node: see {@link purgeFileAggregates} for what goes,
+   * what stays, and why the objects are deleted before the rows.
+   *
+   * Everything in the database is one transaction. Search is told afterwards, so a
+   * listener that looks finds the files gone, and the ids that were not the caller's,
+   * or have no `ci.files` row behind them, are left out of the result.
+   *
+   * @throws {StoredObjectsDeletedError} if the objects were deleted and the rows then
+   *   could not be, which leaves files the app still lists whose contents are gone.
+   *   Anything that failed before that left everything as it was.
+   */
+  async purge(context: UserServiceContext, nodeIds: string[]): Promise<PurgedFiles> {
+    const requested = Array.from(new Set(nodeIds));
+
+    if (requested.length === 0) {
+      return nothingPurged();
+    }
+
+    // Named by the purge itself once the objects are gone, and read here rather than there
+    // because the commit that follows can fail too.
+    let objectsGoneFor: string[] = [];
+    let purged: PurgedFiles;
+
+    try {
+      purged = await this.repository.manager.transaction((manager) =>
+        purgeFileAggregates(manager, context.userId, requested, this.fileStorageService, {
+          onObjectsDeleted: (namedNodeIds) => {
+            objectsGoneFor = namedNodeIds;
+          },
+        }),
+      );
+    } catch (error) {
+      throw objectsGoneFor.length > 0 ? new StoredObjectsDeletedError(objectsGoneFor, error) : error;
+    }
+
+    // The index rows were deleted in the transaction. This tells anything else that
+    // listens, and is what announces a removal everywhere else in the app.
+    for (const fileId of purged.fileIds) {
+      await this.eventService.send(FileRemovedEvent, { fileId });
+    }
+
+    return purged;
   }
 
   @OnEvent(FileUploadedEvent, { queue: MEMORY_FILE_ENTITY_QUEUE })

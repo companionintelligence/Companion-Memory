@@ -125,9 +125,10 @@ export interface BareReferenceKind {
   /**
    * The `ci.record_sources.record_table` its provenance is ledgered under: the
    * name of its detail table, which is not always the name of the node
-   * (`objects` for an item).
+   * (`objects` for an item). Left out for a kind that nothing ledgers, which is
+   * a stored file: no `appendRecordSources` caller names one.
    */
-  ledgerTable: 'events' | 'content' | 'communications' | 'objects';
+  ledgerTable?: 'events' | 'content' | 'communications' | 'objects';
   /**
    * The `ci.identifier_claims.subject_type` the person-link stages write its
    * participants' claims under. Only an event and a communication have
@@ -147,8 +148,20 @@ export const COMMUNICATION_REFERENCES: BareReferenceKind = {
 export const ITEM_REFERENCES: BareReferenceKind = { ledgerTable: 'objects' };
 
 /**
- * Deletes every row that names one of these event, content, communication or
- * item ids and has no foreign key to say so, in the caller's transaction.
+ * A stored file. Neither half of the kind applies: nothing ledgers a file, and a
+ * file has no participants, so there is no ledger table and no claim subject to
+ * name. What a file does have is several ids, and the rows that name it use all of
+ * them: the pipeline, the search index and the tags are keyed by the id of its
+ * `ci.files` row, the graph (edges, deltas) by the id of its `File` node, and the
+ * search rows of its extracted text by the id of each chunk. The caller passes
+ * every kind of id in the one list, and a uuid names one row wherever it is
+ * looked for.
+ */
+export const FILE_REFERENCES: BareReferenceKind = {};
+
+/**
+ * Deletes every row that names one of these event, content, communication, item
+ * or file ids and has no foreign key to say so, in the caller's transaction.
  *
  * `ci.relationships` has no foreign key to `ci.entities`, and neither do the
  * provenance ledger, the pipeline bookkeeping, the tags and categories, the
@@ -197,11 +210,13 @@ export async function deleteBareReferences(
      DELETE FROM ci.graph_deltas
       WHERE relationship_id IN (SELECT relationship_id FROM gone)`,
   );
-  await manager.query(
-    `DELETE FROM ci.record_sources
-      WHERE record_table = $2 AND record_id = ANY($1::uuid[])`,
-    [ids, kind.ledgerTable],
-  );
+  if (kind.ledgerTable !== undefined) {
+    await manager.query(
+      `DELETE FROM ci.record_sources
+        WHERE record_table = $2 AND record_id = ANY($1::uuid[])`,
+      [ids, kind.ledgerTable],
+    );
+  }
 
   if (kind.claimSubjectType !== undefined) {
     await manager.query(
