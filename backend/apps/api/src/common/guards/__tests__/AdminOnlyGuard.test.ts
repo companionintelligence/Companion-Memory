@@ -114,7 +114,7 @@ describe('the preconditions for gating a route behind AdminOnlyGuard', () => {
       /await this\.claimApplianceIfUnowned\(manager, saved\.id\)/,
     );
     expect(methodSource(service, 'create')).toMatch(
-      /this\.insertAccount\(\s*data,\s*\{\s*onlyIfFirst:\s*false\s*\}\s*\)/,
+      /this\.insertAccount\(\s*data,\s*\{\s*onlyIfFirst:\s*false,\s*alongside\s*\}\s*\)/,
     );
     expect(methodSource(service, 'createFirstAccount')).toMatch(
       /this\.insertAccount\(\s*data,\s*\{\s*onlyIfFirst:\s*true,\s*alongside\s*\}\s*\)/,
