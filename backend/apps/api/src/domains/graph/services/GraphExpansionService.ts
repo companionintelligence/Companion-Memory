@@ -308,6 +308,13 @@ export class GraphExpansionService {
   // Data access + formatting
   // ---------------------------------------------------------------------------
 
+  /**
+   * An active edge does not make its far end live. Forgetting a node leaves
+   * its inbound edges active, and deleting an event leaves all of its edges
+   * active so `restore` can bring it back whole. The neighbour's own
+   * `is_active` is what says whether it still exists, and a recall block that
+   * skipped it named forgotten and deleted things back to the model.
+   */
   private async fetchEdges(userId: string, seedIds: string[]): Promise<EdgeRow[]> {
     return this.dataSource.query(
       `SELECT
@@ -326,6 +333,7 @@ export class GraphExpansionService {
          ON nb.entity_id = CASE WHEN r.from_entity_id = ANY($1::uuid[]) THEN r.to_entity_id ELSE r.from_entity_id END
        WHERE (r.from_entity_id = ANY($1::uuid[]) OR r.to_entity_id = ANY($1::uuid[]))
          AND r.is_active = true
+         AND nb.is_active = true
          AND r.owner_user_id = $2
        ORDER BY r.strength DESC NULLS LAST
        LIMIT $3`,
