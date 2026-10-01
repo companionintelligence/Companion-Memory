@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository } from 'typeorm';
+import { EntityManager, Like, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
+import { HUB_ISSUER_PREFIX } from '@ci/common/crypto';
 import { LoggerService } from '@ci/common/logging';
 
 import { type FederatedIdentity, FederatedIdentityEntity } from '../entities/FederatedIdentityEntity';
@@ -85,10 +86,29 @@ export class FederatedIdentityService {
     return FederatedIdentityEntity.toEgressType(saved);
   }
 
-  /** All external identities bound to a local user. */
-  async listForUser(userId: string): Promise<FederatedIdentity[]> {
-    const entities = await this.repository.find({ where: { userId } });
+  /**
+   * All external identities bound to a local user.
+   *
+   * @param options.oidcOnly leave out Hub forward-auth identities (`urn:ci-hub:` issuers). The
+   *   one-time Portal email link asks this: its "already bound" refusal stops a second OIDC
+   *   identity adopting an account a first one claimed, and a Hub person's own binding must not
+   *   turn their first Portal sign-in into `account_linked_elsewhere`.
+   */
+  async listForUser(userId: string, options: { oidcOnly?: boolean } = {}): Promise<FederatedIdentity[]> {
+    const entities = await this.repository.find({
+      where: options.oidcOnly ? { userId, issuer: Not(Like(`${HUB_ISSUER_PREFIX}%`)) } : { userId },
+    });
 
     return entities.map(FederatedIdentityEntity.toEgressType);
+  }
+
+  /**
+   * The binding `userId` holds from one issuer — for a Hub user directory, the one person of that
+   * Hub the account belongs to (a partial unique index allows at most one) — or null.
+   */
+  async findForUserFromIssuer(userId: string, issuer: string): Promise<FederatedIdentity | null> {
+    const entity = await this.repository.findOne({ where: { userId, issuer } });
+
+    return entity ? FederatedIdentityEntity.toEgressType(entity) : null;
   }
 }
