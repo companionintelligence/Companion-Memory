@@ -1,23 +1,7 @@
 import type { EntityManager } from 'typeorm';
 
-/**
- * Tables that reference `ci.events` or `ci.content` with NO `ON DELETE` action, so
- * a row in any of them makes the delete of the event, or of a content row that
- * cascades from it, fail outright. {@link purgeEventAggregates} empties each one
- * first.
- *
- * Exported so a test can compare it with the live catalog: a new table that
- * references either with no action has to be listed here and cleared below, and
- * that test fails, naming the table, until it is. Without it the first anyone
- * would hear of such a table is a delete that fails on a real appliance, which
- * is how `memory.forget`'s `archive_and_delete` came to fail on the 98% of the
- * reference corpus's events that HBPE had clustered.
- */
-export const EVENT_PURGE_BLOCKERS = [
-  'hbpe.content_context',
-  'hbpe.l1_event_cluster',
-  'hbpe.l2_content_cluster',
-] as const;
+import { teardownContent } from './contentPurge';
+import { clearHbpeLinks, deleteBareReferences } from './purgeTeardown';
 
 /** What one purge removed, for the caller to announce once the transaction has committed. */
 export interface PurgedEventAggregates {
@@ -36,8 +20,8 @@ export interface PurgedEventAggregates {
  * `ci.content` rows, and then three things go wrong:
  *
  *  1. **It fails.** HBPE's cluster-membership tables reference the event, and its
- *     content, with no `ON DELETE` action ({@link EVENT_PURGE_BLOCKERS}). HBPE
- *     clusters nearly every event, so the delete raised on nearly every event.
+ *     content, with no `ON DELETE` action ({@link clearHbpeLinks}). HBPE clusters
+ *     nearly every event, so the delete raised on nearly every event.
  *  2. **It strands the content's graph node.** The cascade removes the
  *     `ci.content` detail row, but the `Content` base row in `ci.entities` owns
  *     the content's title, and nothing cascades to it. A photo's title would live
@@ -47,10 +31,10 @@ export interface PurgedEventAggregates {
  *     state, the tags and categories, the search index or the graph deltas. The
  *     deltas matter most: a node's `created` delta carries its title.
  *
- * So the steps run in dependency order: blockers, then everything that only
- * points at the event, then the content's base rows, then the events' own.
- * `ci.relationships` is cleaned in BOTH directions, which `memory.forget` never
- * did.
+ * So the steps run in dependency order: the links that block the delete, then
+ * everything that only points at the event, then the content ({@link teardownContent}),
+ * then the events' own base rows. `ci.relationships` is cleaned in BOTH
+ * directions, which `memory.forget` never did.
  *
  * What it deliberately leaves alone is every record that merely MENTIONS the
  * event, whose foreign key is `ON DELETE SET NULL`: receipts, object
@@ -95,74 +79,18 @@ export async function purgeEventAggregates(
 
   // Whatever `ci.content.event_id` points at the events goes with them, whoever
   // owns the row: the foreign key cascades to it regardless, so leaving its base
-  // row behind would only strand it.
+  // row behind would only strand it. HBPE labels content too, so it is locked
+  // before its links are cleared, which `teardownContent` sees to.
   const content: Array<{ id: string }> = await manager.query(
     `SELECT id FROM ci.content WHERE event_id = ANY($1::uuid[]) ORDER BY id`,
     [eventIds],
   );
   const contentIds = content.map((row) => row.id);
-  const everyId = [...eventIds, ...contentIds];
 
-  const exec = (sql: string, ids: string[]) => manager.query(sql, [ids]);
-
-  // 1. What blocks the delete. HBPE only ever increments a cluster's
-  // `member_count`, and ranks each user's top-50 L1 vocabulary by it, so the
-  // memberships deleted here are taken off the count in the same statement. A
-  // cluster that loses its last member stays: it is HBPE's to retire.
-  await exec(
-    `WITH gone AS (
-       DELETE FROM hbpe.l1_event_cluster WHERE event_id = ANY($1::uuid[]) RETURNING cluster_id
-     ), per_cluster AS (
-       SELECT cluster_id, count(*)::int AS members FROM gone GROUP BY cluster_id
-     )
-     UPDATE hbpe.l1_clusters c
-        SET member_count = GREATEST(c.member_count - p.members, 0),
-            updated_at = now()
-       FROM per_cluster p
-      WHERE c.cluster_id = p.cluster_id`,
-    eventIds,
-  );
-  await exec(
-    `WITH gone AS (
-       DELETE FROM hbpe.l2_content_cluster WHERE content_id = ANY($1::uuid[]) RETURNING cluster_id
-     ), per_cluster AS (
-       SELECT cluster_id, count(*)::int AS members FROM gone GROUP BY cluster_id
-     )
-     UPDATE hbpe.l2_clusters c
-        SET member_count = GREATEST(c.member_count - p.members, 0),
-            updated_at = now()
-       FROM per_cluster p
-      WHERE c.cluster_id = p.cluster_id`,
-    contentIds,
-  );
-  await exec('DELETE FROM hbpe.content_context WHERE content_id = ANY($1::uuid[])', contentIds);
-
-  // 2. What only points at them, with no foreign key to say so.
-  await exec(
-    `DELETE FROM ci.relationships
-      WHERE from_entity_id = ANY($1::uuid[]) OR to_entity_id = ANY($1::uuid[])`,
-    everyId,
-  );
-  await exec(
-    `DELETE FROM ci.record_sources
-      WHERE (record_table = 'events' AND record_id = ANY($1::uuid[]))
-         OR (record_table = 'content' AND record_id = ANY($1::uuid[]))`,
-    everyId,
-  );
-  await exec('DELETE FROM ci.pipeline_state WHERE entity_id = ANY($1::uuid[])', everyId);
-  await exec('DELETE FROM ci.pipeline_dead_letters WHERE entity_id = ANY($1::uuid[])', everyId);
-  await exec('DELETE FROM ci.graph_deltas WHERE entity_id = ANY($1::uuid[])', everyId);
-
-  // Raw SQL because this domain cannot import the search domains (they import
-  // this one), as `GraphUtilityService.dropStalePersonIndex` and the merge
-  // services do for their own `ci_search` rows. Done here rather than left to the
-  // removal events below so that the index is clean when the transaction
-  // commits, not whenever a queue gets round to it.
-  await exec('DELETE FROM ci_search.entity_tag WHERE entity_id = ANY($1::uuid[])', everyId);
-  await exec('DELETE FROM ci_search.entity_categories WHERE entity_id = ANY($1::uuid[])', everyId);
-  await exec('DELETE FROM ci_search.vectors WHERE entity_id = ANY($1::uuid[])', everyId);
-  await exec('DELETE FROM ci_search.embeddings WHERE entity_id = ANY($1::uuid[])', everyId);
-  await exec('DELETE FROM ci_search.index_skips WHERE entity_id = ANY($1::uuid[])', everyId);
+  // 1. What blocks the delete, and what only points at the events, with no
+  // foreign key to say so.
+  await clearHbpeLinks(manager, 'ci.events', eventIds);
+  await deleteBareReferences(manager, eventIds);
 
   // A sub-event's `parent_event_id` has no foreign key, so it would dangle. Make
   // it what `recurrence_parent_id` already does when its parent goes.
@@ -175,12 +103,11 @@ export async function purgeEventAggregates(
     [eventIds],
   );
 
-  // 3. The aggregates themselves. The content's base rows first: they take the
-  // `ci.content` detail rows with them, and nothing else would take them.
-  await manager.query(
-    `DELETE FROM ci.entities WHERE entity_type = 'Content' AND entity_id = ANY($1::uuid[])`,
-    [contentIds],
-  );
+  // 2. The content, whole. Its base rows go before the events', which would
+  // cascade to the detail rows and strand them.
+  await teardownContent(manager, contentIds);
+
+  // 3. The events themselves.
   await manager.query(`DELETE FROM ci.entities WHERE entity_type = 'Event' AND entity_id = ANY($1::uuid[])`, [
     eventIds,
   ]);

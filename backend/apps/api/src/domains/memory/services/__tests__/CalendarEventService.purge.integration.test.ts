@@ -657,6 +657,62 @@ describeWithDb(`CalendarEventService.purge against Postgres (${availability.targ
     expect(await footprint(doomed)).toEqual(EMPTY);
   });
 
+  it('waits for HBPE when it labels the event’s photo from another connection at the same moment', async () => {
+    const doomed = await photoEvent('Beach day');
+
+    // The photo is already clustered. Take that back, so the membership that matters is the one HBPE
+    // writes below, from its own connection, while the purge is running.
+    await dataSource.query('DELETE FROM hbpe.l2_content_cluster WHERE content_id = $1', [doomed.contentId]);
+
+    const hbpeConnection = dataSource.createQueryRunner();
+
+    await hbpeConnection.connect();
+    await hbpeConnection.startTransaction();
+
+    let purging: Promise<unknown> | undefined;
+
+    try {
+      const [{ pid }] = await hbpeConnection.query('SELECT pg_backend_pid() AS pid');
+
+      // HBPE labels content as it does events, with a key-share lock on the content's row. Nothing holds
+      // the event, so the purge gets through its first lock and reaches the content's.
+      await hbpeConnection.query(
+        'INSERT INTO hbpe.l2_content_cluster (content_id, cluster_id, similarity) VALUES ($1, $2, 0.9)',
+        [doomed.contentId, doomed.l2ClusterId],
+      );
+
+      purging = calendar.purge(owner, [doomed.eventId]);
+
+      // Held at the statement that locks the content rows, before the content's links are cleared. Held
+      // anywhere later, it would have cleared the memberships it could see and tripped over this one.
+      const blocked = await until(async () => {
+        const rows: Array<{ query: string }> = await dataSource.query(
+          'SELECT query FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))',
+          [pid],
+        );
+
+        return rows.length > 0 ? rows : null;
+      }, 'the purge to block on the HBPE connection');
+
+      expect(blocked).toHaveLength(1);
+      expect(blocked[0].query).toMatch(/\bci\.content\b[\s\S]*\bFOR UPDATE\b/);
+
+      await hbpeConnection.commitTransaction();
+    } catch (error) {
+      await hbpeConnection.rollbackTransaction().catch(() => undefined);
+      // Let a purge that was released by the rollback finish, so it cannot run into the next test's clean-up.
+      await purging?.catch(() => undefined);
+
+      throw error;
+    } finally {
+      await hbpeConnection.release();
+    }
+
+    // Having waited, the purge sees the membership that just committed and clears it with the rest.
+    expect(await purging).toEqual({ eventIds: [doomed.eventId], contentIds: [doomed.contentId] });
+    expect(await footprint(doomed)).toEqual(EMPTY);
+  });
+
   it('is all or nothing when something it does not know about blocks the delete', async () => {
     const doomed = await photoEvent('Beach day');
     const doomedBefore = await footprint(doomed);

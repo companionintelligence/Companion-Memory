@@ -7,11 +7,19 @@ import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
 import {
   CalendarEventService,
+  ContentService,
   GraphUtilityService,
   GraphNodeEntity,
   RelationshipEntity,
 } from '@ci/domains/memory';
-import { ConceptRemovedEvent, PersonRemovedEvent, PlaceRemovedEvent } from '@ci/domains/memory/events';
+import {
+  CommunicationRemovedEvent,
+  ConceptRemovedEvent,
+  ContentRemovedEvent,
+  ItemRemovedEvent,
+  PersonRemovedEvent,
+  PlaceRemovedEvent,
+} from '@ci/domains/memory/events';
 
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolError, ToolExecutionContext } from '../core/types';
@@ -47,10 +55,10 @@ export interface ForgetKnowledgeOutput {
 }
 
 /**
- * A delete that failed after it had already destroyed something. Events are purged first, in
- * their own transaction, and a purge cannot be undone, so when the rest of the call is refused
- * the events are gone and stay gone. This says which, rather than leaving the caller to find
- * out by trying again.
+ * A delete that failed after it had already destroyed something. Events and content are purged
+ * first, each in its own transaction, and a purge cannot be undone, so when the rest of the call
+ * is refused what was purged is gone and stays gone. This says which, rather than leaving the
+ * caller to find out by trying again.
  */
 class PartialForgetError extends Error {
   constructor(
@@ -101,7 +109,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
           enum: ['archive', 'archive_and_delete'],
           default: 'archive',
           description:
-            'Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). archive_and_delete permanently deletes them: an event goes with its attached content and cannot be restored, and one that came from a source that syncs again can arrive again.',
+            'Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, and anything that came from a source that syncs again can arrive again.',
         },
         reason: {
           type: 'string',
@@ -131,6 +139,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     private readonly graphUtility: GraphUtilityService,
     private readonly eventService: EventService,
     private readonly calendarEvents: CalendarEventService,
+    private readonly contents: ContentService,
     protected readonly logger: LoggerService,
   ) {
     super();
@@ -199,16 +208,15 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
         })
       : [];
 
-    // An Event is two rows, so neither mode can treat its node like any other.
-    // Archive moves it to the trash and delete purges it; each announces its own
-    // removal, and what is left is generic.
+    // An Event is two rows, and a Content node has HBPE's links hanging off it, so
+    // neither mode can treat them like any other node. Archive moves an event to
+    // the trash; delete purges events and content. Each announces its own removal,
+    // and what is left is generic.
     const nodes = uniqueEntitySnapshots.map((entry) => entry.node);
-    const handledEventIds = hardDelete
-      ? await this.purgeEvents(nodes, ownerId)
+    const handledIds = hardDelete
+      ? await this.purgeAggregates(nodes, ownerId)
       : await this.trashEvents(nodes, ownerId);
-    const graphSnapshots = uniqueEntitySnapshots.filter(
-      (entry) => !handledEventIds.has(entry.node.entity_id),
-    );
+    const graphSnapshots = uniqueEntitySnapshots.filter((entry) => !handledIds.has(entry.node.entity_id));
 
     graphSnapshots.forEach((entry) =>
       entry.relationships.forEach((rel) => relationshipIdsToDisable.add(rel.relationship_id)),
@@ -224,7 +232,13 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
         );
 
         for (const entry of graphSnapshots) {
-          await this.unindexEntity(entry.node);
+          await this.unindexEntity(entry.node, hardDelete);
+
+          const leftBehind = hardDelete ? this.leftBehindWarning(entry.node) : null;
+
+          if (leftBehind) {
+            warnings.push(leftBehind);
+          }
         }
       }
 
@@ -236,16 +250,15 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
         );
       }
     } catch (error) {
-      // A trashed event comes back with `restore`. A purged one does not, so say which are gone.
-      throw hardDelete && handledEventIds.size
-        ? new PartialForgetError(Array.from(handledEventIds), error)
-        : error;
+      // A trashed event comes back with `restore`. A purged event or content row does not, so say
+      // which are gone.
+      throw hardDelete && handledIds.size ? new PartialForgetError(Array.from(handledIds), error) : error;
     }
 
     return {
       archivedEntityIds: uniqueEntitySnapshots.map((entry) => entry.node.entity_id),
       archivedRelationshipIds: Array.from(new Set(explicitRelationships.map((rel) => rel.relationship_id))),
-      restorableEventIds: !hardDelete && handledEventIds.size ? Array.from(handledEventIds) : undefined,
+      restorableEventIds: !hardDelete && handledIds.size ? Array.from(handledIds) : undefined,
       mode,
       warnings: warnings.length ? warnings : undefined,
     };
@@ -297,32 +310,93 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
   }
 
   /**
-   * Delete events for good, through {@link CalendarEventService.purge}.
+   * Delete the events and the content among `nodes` for good, and answer with the
+   * ids of the nodes that are gone, which are no longer the generic path's.
    *
    * The generic path, `deactivateEntities` with `hardDelete`, deletes the node's
-   * `ci.entities` row and trusts the foreign keys. For an event that cannot work.
-   * HBPE has clustered nearly every event, its cluster tables reference the event
-   * with no `ON DELETE` action, and the delete fails outright. When it does go
-   * through it strands the event's content's graph nodes and leaves edges,
-   * ledger rows, tags and search rows pointing at nothing. `purge` does the
-   * whole teardown in one transaction, and in both directions of
-   * `ci.relationships`, which this tool never did.
+   * `ci.entities` row and trusts the foreign keys. For these two that cannot
+   * work. HBPE has clustered nearly every event and nearly every content row, its
+   * link tables reference them with no `ON DELETE` action, and the delete fails
+   * outright. When it does go through it leaves rows that name the node with no
+   * foreign key to say so. Each owning service does the whole teardown in one
+   * transaction and announces its own removal.
+   *
+   * Events go first, and take their attached content with them, so a content node
+   * named in the same call may already be gone when its own turn comes.
+   *
+   * The two are separate transactions, and neither can be undone. When the second
+   * is refused after the first has committed, the error says what is already gone.
+   */
+  private async purgeAggregates(nodes: GraphNodeEntity[], ownerId: string): Promise<Set<string>> {
+    const destroyed = new Set<string>();
+
+    try {
+      await this.purgeEvents(nodes, ownerId, destroyed);
+      await this.purgeContent(nodes, ownerId, destroyed);
+    } catch (error) {
+      throw destroyed.size ? new PartialForgetError(Array.from(destroyed), error) : error;
+    }
+
+    return destroyed;
+  }
+
+  /**
+   * Delete events through {@link CalendarEventService.purge}.
    *
    * It takes an event in any state, so an event already in the trash is purged
    * by the same call that would have purged a live one. As with the trash, a
    * node `purge` does not take (an `Event` node with no `ci.events` row behind
    * it) goes on to the generic path, where there is nothing to cascade.
    */
-  private async purgeEvents(nodes: GraphNodeEntity[], ownerId: string): Promise<Set<string>> {
+  private async purgeEvents(
+    nodes: GraphNodeEntity[],
+    ownerId: string,
+    destroyed: Set<string>,
+  ): Promise<void> {
     const eventIds = nodes.filter((node) => node.entity_type === 'Event').map((node) => node.entity_id);
 
     if (eventIds.length === 0) {
-      return new Set();
+      return;
     }
 
     const purged = await this.calendarEvents.purge({ userId: ownerId }, eventIds);
 
-    return new Set(purged.eventIds);
+    purged.eventIds.forEach((id) => destroyed.add(id));
+
+    // A content node named in this call that hung off one of those events went with it. It is gone, so
+    // it is neither the next step's to purge nor the generic path's to delete.
+    const named = new Set(
+      nodes.filter((node) => node.entity_type === 'Content').map((node) => node.entity_id),
+    );
+
+    purged.contentIds.filter((id) => named.has(id)).forEach((id) => destroyed.add(id));
+  }
+
+  /**
+   * Delete content for good, through {@link ContentService.purge}: the node, its
+   * `ci.content` row, HBPE's links to it and every row that names it.
+   *
+   * A `Content` node `purge` does not take, because there is no `ci.content` row
+   * behind it (graph ingest writes those), goes on to the generic path. HBPE
+   * cannot have clustered a row that does not exist, so there is nothing for the
+   * delete to be refused over.
+   */
+  private async purgeContent(
+    nodes: GraphNodeEntity[],
+    ownerId: string,
+    destroyed: Set<string>,
+  ): Promise<void> {
+    const contentIds = nodes
+      .filter((node) => node.entity_type === 'Content' && !destroyed.has(node.entity_id))
+      .map((node) => node.entity_id);
+
+    if (contentIds.length === 0) {
+      return;
+    }
+
+    const purged = await this.contents.purge({ userId: ownerId }, contentIds);
+
+    purged.contentIds.forEach((id) => destroyed.add(id));
   }
 
   /**
@@ -376,7 +450,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    * and clears the index-skip marker, so a node that is later recreated or
    * reactivated is re-indexed normally rather than suppressed by a stale skip.
    *
-   * Only the types whose record IS the `ci.entities` row are handled. Every
+   * Archive handles only the types whose record IS the `ci.entities` row. Every
    * other graph type (Event/Item/Content/Communication/File) is the base or
    * mirror half of a pair whose detail row `deactivateEntities` does not touch,
    * so `event.deleted` for an event that still exists in `ci.events` would be
@@ -384,8 +458,15 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    * desync search from a record the rest of the app still lists. (An Event
    * aggregate never reaches here: {@link trashEvents} tombstones it and
    * {@link purgeEvents} deletes it, and both un-index it themselves.)
+   *
+   * Delete is the other case for the types that have a removal event of their
+   * own. The detail row (`ci.content`, `ci.objects`, `ci.communications`) goes
+   * with the node, by cascade, so the record IS gone and announcing it is true.
+   * Without it their search rows would wait for the nightly orphan sweep. When
+   * delete is the mode, a `Content` node that has a `ci.content` row never reaches
+   * here: {@link purgeContent} deletes it and announces it itself.
    */
-  private async unindexEntity(node: GraphNodeEntity): Promise<void> {
+  private async unindexEntity(node: GraphNodeEntity, hardDelete: boolean): Promise<void> {
     // Reuses the canonical graph→search alias table rather than restating
     // which spellings ('Contact', 'Location', …) mean which search type.
     const searchType = normalizeEmbeddableType(node.entity_type);
@@ -403,14 +484,62 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
         await this.eventService.send(ConceptRemovedEvent, { conceptId: node.entity_id });
 
         return;
-      default:
-        this.logger.debug('Forgotten entity has no graph-owned search index rows to remove', {
-          entityId: node.entity_id,
-          entityType: node.entity_type ?? null,
-          searchType,
-        });
+      case 'content':
+        if (hardDelete) {
+          await this.eventService.send(ContentRemovedEvent, { contentId: node.entity_id });
 
-        return;
+          return;
+        }
+
+        break;
+      case 'item':
+        if (hardDelete) {
+          await this.eventService.send(ItemRemovedEvent, { itemId: node.entity_id });
+
+          return;
+        }
+
+        break;
+      case 'communication':
+        if (hardDelete) {
+          await this.eventService.send(CommunicationRemovedEvent, { communicationId: node.entity_id });
+
+          return;
+        }
+
+        break;
+      default:
+        break;
     }
+
+    this.logger.debug('Forgotten entity has no graph-owned search index rows to remove', {
+      entityId: node.entity_id,
+      entityType: node.entity_type ?? null,
+      searchType,
+    });
+  }
+
+  /**
+   * What `archive_and_delete` leaves behind for an item or a communication, said
+   * to the caller, so that it does not tell the user the record is gone without
+   * a trace.
+   *
+   * Both go through the generic delete: the node, its detail row (by cascade)
+   * and its edges. No foreign key refuses it for a communication, and only an
+   * item that is another item's parent is refused, which is reported as
+   * `CONSTRAINT_VIOLATION`. But the rows that name one by id with no foreign key
+   * are not deleted the way a purge deletes them for an event or for content: its
+   * provenance ledger entries, pipeline state, tags and categories, and graph
+   * deltas, which carry its title. Its search rows are announced as removed.
+   * Closing the rest is a purge of its own, not done here.
+   */
+  private leftBehindWarning(node: GraphNodeEntity): string | null {
+    const searchType = normalizeEmbeddableType(node.entity_type);
+
+    if (searchType !== 'item' && searchType !== 'communication') {
+      return null;
+    }
+
+    return `${node.entity_type} ${node.entity_id} was deleted, but rows that name it only by id were left in place: its provenance entries, pipeline state, tags and change history.`;
   }
 }

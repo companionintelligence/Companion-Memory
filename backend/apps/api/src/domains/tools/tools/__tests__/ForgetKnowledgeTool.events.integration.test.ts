@@ -8,6 +8,9 @@ import { DeterministicEdgeBackfillService } from '@ci/domains/maintenance';
 import {
   BaseEntity,
   CalendarEventService,
+  ContentBaseEntity,
+  ContentEntity,
+  ContentService,
   EventBaseEntity,
   EventEntity,
   GraphDeltaWriter,
@@ -154,7 +157,16 @@ describeWithDb(`memory.forget on an Event, against Postgres (${availability.targ
     dataSource = new DataSource({
       type: 'postgres',
       ...dataSourceConnection(DATABASE_ENV),
-      entities: [EventEntity, BaseEntity, EventBaseEntity, GraphNodeEntity, RelationshipEntity, UserEntity],
+      entities: [
+        EventEntity,
+        BaseEntity,
+        EventBaseEntity,
+        ContentEntity,
+        ContentBaseEntity,
+        GraphNodeEntity,
+        RelationshipEntity,
+        UserEntity,
+      ],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
     });
@@ -181,7 +193,19 @@ describeWithDb(`memory.forget on an Event, against Postgres (${availability.targ
     );
     knownPlaces = new KnownPlacesService(dataSource, logger(), {} as never);
     edges = new DeterministicEdgeBackfillService(dataSource, deltaWriter, logger());
-    tool = new ForgetKnowledgeTool(graph, signalling, calendar, logger());
+    tool = new ForgetKnowledgeTool(
+      graph,
+      signalling,
+      calendar,
+      new ContentService(
+        dataSource.getRepository(ContentEntity),
+        dataSource.getRepository(ContentBaseEntity),
+        dataSource.getRepository(EventEntity),
+        signalling,
+        deltaWriter,
+      ),
+      logger(),
+    );
   });
 
   async function wipe(userId: string): Promise<void> {

@@ -42,8 +42,10 @@ import {
   contentTypeOptions,
   distinctColumnSql,
 } from './contentFacetsSql';
+import { purgeContentAggregates } from './contentPurge';
 import { CtiAggregate } from './CtiAggregate';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { clearHbpeLinks } from './purgeTeardown';
 
 /** The provenance triple shared by a content row and the event it auto-links to. */
 /** Scoped filter for {@link ContentService.findPage}: the content library's pickers. */
@@ -1365,9 +1367,23 @@ export class ContentService {
     return content;
   }
 
+  /**
+   * The app's delete: the content row and its `ci.entities` base row are
+   * destroyed, and nothing restores them. A `deleted` graph delta records it,
+   * which carries the title, and the edges and ledger rows that name the content
+   * are left where they are.
+   *
+   * HBPE's links to the row are cleared first, in the same transaction. They
+   * reference it with no `ON DELETE` action, so deleting clustered content, which
+   * is nearly all of it, used to fail on a foreign key. That is the only thing it
+   * shares with {@link purge}, which is `memory.forget`'s delete and takes the
+   * rest with it: deltas, edges, ledger, tags, search rows.
+   */
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     const removed = await this.aggregate.remove(context, id, {
       withinTx: async ({ manager, before }) => {
+        await clearHbpeLinks(manager, 'ci.content', [id]);
+
         const base = await manager.getRepository(ContentBaseEntity).findOne({ where: { id } });
         await this.graphDeltaWriter.entityDeleted({
           entityId: id,
@@ -1390,6 +1406,42 @@ export class ContentService {
     });
 
     return true;
+  }
+
+  /**
+   * Permanently deletes content, with everything that only exists because of it.
+   * This is `memory.forget`'s `archive_and_delete` for a `Content` node, and the
+   * other end from {@link remove}: see {@link purgeContentAggregates} for what
+   * goes, for what a plain delete of the base row would have failed on, and for
+   * how it differs from `remove`.
+   *
+   * Content attached to an event is purged like any other and the event is left
+   * alone; purging the event is what takes its content with it
+   * ({@link CalendarEventService.purge}).
+   *
+   * Everything is one transaction. Search is told afterwards, and the ids that
+   * were not the caller's, or no longer exist, are simply left out of the result.
+   *
+   * @returns the ids that were purged.
+   */
+  async purge(context: UserServiceContext, ids: string[]): Promise<{ contentIds: string[] }> {
+    const requested = Array.from(new Set(ids));
+
+    if (requested.length === 0) {
+      return { contentIds: [] };
+    }
+
+    const contentIds = await this.contentRepository.manager.transaction((manager) =>
+      purgeContentAggregates(manager, context.userId, requested),
+    );
+
+    // The index rows were deleted in the transaction. This tells anything else
+    // that listens, and is what announces a removal everywhere else in the app.
+    for (const contentId of contentIds) {
+      await this.eventService.send(ContentRemovedEvent, { contentId });
+    }
+
+    return { contentIds };
   }
 
   /**
