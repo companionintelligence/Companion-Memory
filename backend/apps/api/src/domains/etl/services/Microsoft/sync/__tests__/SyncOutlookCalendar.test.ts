@@ -44,7 +44,11 @@ function createClient(routes: Record<string, unknown>) {
 }
 
 type SyncResult = Awaited<ReturnType<typeof syncOutlookCalendar>>;
-type SyncedCalendar = { id: string; events: Array<{ id: string; attachments?: unknown }> };
+type SyncedCalendar = {
+  id: string;
+  events: Array<{ id: string; attachments?: unknown }>;
+  deltaWindow?: { startDateTime: string; endDateTime: string };
+};
 
 function incremental(client: BaseClient, nextCursor: Record<string, unknown> = {}): Promise<SyncResult> {
   return syncOutlookCalendar({
@@ -58,6 +62,19 @@ function incremental(client: BaseClient, nextCursor: Record<string, unknown> = {
 const calendarsOf = (result: SyncResult) => result.data.calendars as SyncedCalendar[];
 const idsOf = (calendar: SyncedCalendar) => calendar.events.map((e) => e.id);
 const requested = (request: jest.Mock) => request.mock.calls.map(([, endpoint]) => endpoint as string);
+
+/** The date range a fresh round was opened with, read back off its first request. */
+function windowOf(request: jest.Mock, calendarId: string) {
+  const first = requested(request).find((endpoint) =>
+    endpoint.startsWith(`/v1.0/me/calendars/${calendarId}/calendarView/delta?startDateTime=`),
+  );
+  const params = new URL(first as string, GRAPH).searchParams;
+
+  return { startDateTime: params.get('startDateTime'), endDateTime: params.get('endDateTime') };
+}
+
+/** A range recorded by an earlier run, stored beside that run's link. */
+const STORED_WINDOW = { startDateTime: '2026-09-01T00:00:00.000Z', endDateTime: '2029-09-01T00:00:00.000Z' };
 
 describe('syncOutlookCalendar — incremental delta rounds', () => {
   it("drains every page of a calendar's round and keeps the deltaLink from the last one", async () => {
@@ -76,7 +93,10 @@ describe('syncOutlookCalendar — incremental delta rounds', () => {
     const result = await incremental(client);
 
     expect(idsOf(calendarsOf(result)[0])).toEqual(['e1', 'e2', 'e3']);
-    expect(result.nextCursor).toStrictEqual({ deltaLinks: { 'cal-a': roundEndLink('cal-a', 'd1') } });
+    expect(result.nextCursor).toStrictEqual({
+      deltaLinks: { 'cal-a': roundEndLink('cal-a', 'd1') },
+      deltaWindows: { 'cal-a': windowOf(request, 'cal-a') },
+    });
     expect(requested(request)).toEqual([
       CALENDAR_LIST,
       expect.stringContaining('/v1.0/me/calendars/cal-a/calendarView/delta?startDateTime='),
@@ -92,16 +112,22 @@ describe('syncOutlookCalendar — incremental delta rounds', () => {
       [stored]: { value: [event('new')], '@odata.deltaLink': roundEndLink('cal-a', 'd2') },
     });
 
-    const result = await incremental(client, { deltaLinks: { 'cal-a': stored } });
+    const result = await incremental(client, {
+      deltaLinks: { 'cal-a': stored },
+      deltaWindows: { 'cal-a': STORED_WINDOW },
+    });
 
     expect(idsOf(calendarsOf(result)[0])).toEqual(['new']);
-    expect(result.nextCursor).toStrictEqual({ deltaLinks: { 'cal-a': roundEndLink('cal-a', 'd2') } });
+    expect(result.nextCursor).toStrictEqual({
+      deltaLinks: { 'cal-a': roundEndLink('cal-a', 'd2') },
+      deltaWindows: { 'cal-a': STORED_WINDOW },
+    });
     // No fresh round is started when a cursor exists.
     expect(requested(request)).toEqual([CALENDAR_LIST, stored]);
   });
 
   it("keeps a cursor per calendar when only one calendar's round spans pages", async () => {
-    const { client } = createClient({
+    const { client, request } = createClient({
       [CALENDAR_LIST]: { value: [{ id: 'cal-a' }, { id: 'cal-b' }] },
       [firstRequest('cal-a')]: { value: [event('a1')], '@odata.nextLink': pageLink('cal-a', 'p2') },
       [pageLink('cal-a', 'p2')]: { value: [event('a2')], '@odata.deltaLink': roundEndLink('cal-a', 'da') },
@@ -115,6 +141,7 @@ describe('syncOutlookCalendar — incremental delta rounds', () => {
     expect(idsOf(calB)).toEqual(['b1']);
     expect(result.nextCursor).toStrictEqual({
       deltaLinks: { 'cal-a': roundEndLink('cal-a', 'da'), 'cal-b': roundEndLink('cal-b', 'db') },
+      deltaWindows: { 'cal-a': windowOf(request, 'cal-a'), 'cal-b': windowOf(request, 'cal-b') },
     });
   });
 
@@ -139,6 +166,64 @@ describe('syncOutlookCalendar — incremental delta rounds', () => {
   });
 });
 
+describe("syncOutlookCalendar — the date range a calendar's round covers", () => {
+  // Graph reports `@removed` for an event deleted inside a round's range AND
+  // for one added, edited or deleted outside it, and the round's links are
+  // opaque. The transform can only tell the two apart by the range, so the
+  // range is recorded beside the link and handed over with the events.
+  it('records the range a fresh round is opened with, beside its link, and hands it over with the events', async () => {
+    const { client, request } = createClient({
+      [CALENDAR_LIST]: { value: [{ id: 'cal-a' }] },
+      [firstRequest('cal-a')]: { value: [event('e1')], '@odata.deltaLink': roundEndLink('cal-a', 'd1') },
+    });
+
+    const result = await incremental(client);
+    const window = windowOf(request, 'cal-a');
+
+    // Three years ahead of the moment the round opened, as initialDeltaRound asks.
+    expect(Date.parse(window.endDateTime as string) - Date.parse(window.startDateTime as string)).toBe(
+      3 * 365 * 24 * 60 * 60 * 1000,
+    );
+    expect(calendarsOf(result)[0].deltaWindow).toStrictEqual(window);
+    expect(result.nextCursor).toStrictEqual({
+      deltaLinks: { 'cal-a': roundEndLink('cal-a', 'd1') },
+      deltaWindows: { 'cal-a': window },
+    });
+  });
+
+  it('carries a stored range forward with its link: the round, and so its range, is the same', async () => {
+    const stored = roundEndLink('cal-a', 'd1');
+    const { client } = createClient({
+      [CALENDAR_LIST]: { value: [{ id: 'cal-a' }] },
+      [stored]: { value: [event('new')], '@odata.deltaLink': roundEndLink('cal-a', 'd2') },
+    });
+
+    const result = await incremental(client, {
+      deltaLinks: { 'cal-a': stored },
+      deltaWindows: { 'cal-a': STORED_WINDOW },
+    });
+
+    expect(calendarsOf(result)[0].deltaWindow).toStrictEqual(STORED_WINDOW);
+    expect(result.nextCursor).toMatchObject({ deltaWindows: { 'cal-a': STORED_WINDOW } });
+  });
+
+  it('opens a fresh round for a link stored without its range, rather than follow a round of unknown range', async () => {
+    const legacy = roundEndLink('cal-a', 'd1');
+    const { client, request } = createClient({
+      [CALENDAR_LIST]: { value: [{ id: 'cal-a' }] },
+      [firstRequest('cal-a')]: { value: [event('e1')], '@odata.deltaLink': roundEndLink('cal-a', 'fresh') },
+    });
+
+    const result = await incremental(client, { deltaLinks: { 'cal-a': legacy } });
+
+    expect(requested(request)).not.toContain(legacy);
+    expect(result.nextCursor).toStrictEqual({
+      deltaLinks: { 'cal-a': roundEndLink('cal-a', 'fresh') },
+      deltaWindows: { 'cal-a': windowOf(request, 'cal-a') },
+    });
+  });
+});
+
 describe('syncOutlookCalendar — the per-run event cap', () => {
   const filler = (count: number, prefix: string) =>
     Array.from({ length: count }, (_, i) => event(`${prefix}${i}`));
@@ -160,7 +245,10 @@ describe('syncOutlookCalendar — the per-run event cap', () => {
 
     expect(calendarsOf(firstRun)[0].events).toHaveLength(MAX_DELTA_EVENTS_PER_RUN + 1);
     expect(requested(first.request)).not.toContain(stopsOn);
-    expect(firstRun.nextCursor).toStrictEqual({ deltaLinks: { 'cal-a': stopsOn } });
+    expect(firstRun.nextCursor).toStrictEqual({
+      deltaLinks: { 'cal-a': stopsOn },
+      deltaWindows: { 'cal-a': windowOf(first.request, 'cal-a') },
+    });
 
     const second = createClient({
       [CALENDAR_LIST]: { value: [{ id: 'cal-a' }] },
@@ -171,11 +259,15 @@ describe('syncOutlookCalendar — the per-run event cap', () => {
 
     expect(requested(second.request)).toEqual([CALENDAR_LIST, stopsOn]);
     expect(idsOf(calendarsOf(secondRun)[0])).toEqual(['last']);
-    expect(secondRun.nextCursor).toStrictEqual({ deltaLinks: { 'cal-a': roundEndLink('cal-a', 'd1') } });
+    // Still the range the round was opened with, a run ago.
+    expect(secondRun.nextCursor).toStrictEqual({
+      deltaLinks: { 'cal-a': roundEndLink('cal-a', 'd1') },
+      deltaWindows: { 'cal-a': windowOf(first.request, 'cal-a') },
+    });
   });
 
   it('records the deltaLink, not a nextLink, when the page that reaches the cap is the last one', async () => {
-    const { client } = createClient({
+    const { client, request } = createClient({
       [CALENDAR_LIST]: { value: [{ id: 'cal-a' }] },
       [firstRequest('cal-a')]: {
         value: filler(MAX_DELTA_EVENTS_PER_RUN, 'a'),
@@ -185,7 +277,10 @@ describe('syncOutlookCalendar — the per-run event cap', () => {
 
     const result = await incremental(client);
 
-    expect(result.nextCursor).toStrictEqual({ deltaLinks: { 'cal-a': roundEndLink('cal-a', 'd1') } });
+    expect(result.nextCursor).toStrictEqual({
+      deltaLinks: { 'cal-a': roundEndLink('cal-a', 'd1') },
+      deltaWindows: { 'cal-a': windowOf(request, 'cal-a') },
+    });
   });
 });
 
@@ -197,9 +292,15 @@ describe('syncOutlookCalendar — malformed and failing delta responses', () => 
       [stored]: { value: [event('x')] },
     });
 
-    const result = await incremental(client, { deltaLinks: { 'cal-a': stored } });
+    const result = await incremental(client, {
+      deltaLinks: { 'cal-a': stored },
+      deltaWindows: { 'cal-a': STORED_WINDOW },
+    });
 
-    expect(result.nextCursor).toStrictEqual({ deltaLinks: { 'cal-a': stored } });
+    expect(result.nextCursor).toStrictEqual({
+      deltaLinks: { 'cal-a': stored },
+      deltaWindows: { 'cal-a': STORED_WINDOW },
+    });
     expect(logger.warn).toHaveBeenCalledWith(
       'Outlook Calendar delta response carried neither a nextLink nor a deltaLink',
       expect.objectContaining({ calendarId: 'cal-a' }),
@@ -214,8 +315,9 @@ describe('syncOutlookCalendar — malformed and failing delta responses', () => 
 
     const result = await incremental(client);
 
-    // toStrictEqual distinguishes a missing key from one set to undefined.
-    expect(result.nextCursor).toStrictEqual({ deltaLinks: {} });
+    // toStrictEqual distinguishes a missing key from one set to undefined. A
+    // range is kept only beside a link: with no link there is no round to resume.
+    expect(result.nextCursor).toStrictEqual({ deltaLinks: {}, deltaWindows: {} });
   });
 
   it('rethrows a failing page, and logs the Graph error code the client attached', async () => {
@@ -228,7 +330,9 @@ describe('syncOutlookCalendar — malformed and failing delta responses', () => 
       [stored]: failure,
     });
 
-    await expect(incremental(client, { deltaLinks: { 'cal-a': stored } })).rejects.toBe(failure);
+    await expect(
+      incremental(client, { deltaLinks: { 'cal-a': stored }, deltaWindows: { 'cal-a': STORED_WINDOW } }),
+    ).rejects.toBe(failure);
 
     expect(logger.error).toHaveBeenCalledWith(
       'Error fetching Outlook Calendar delta page',

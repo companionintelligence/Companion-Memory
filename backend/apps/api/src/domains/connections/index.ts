@@ -120,6 +120,7 @@ export type { ProviderKey } from './entities/ProviderKeyEntity';
 export type {
   Calendar,
   CalendarEvent,
+  CalendarViewWindow,
   OneDrivePageEntity,
   OneDriveFileEntity,
   OutlookMailMessageEntity,

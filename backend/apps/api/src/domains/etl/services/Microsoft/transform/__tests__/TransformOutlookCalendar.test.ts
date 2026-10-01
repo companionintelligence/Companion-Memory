@@ -1,4 +1,4 @@
-import { OutlookCalendarTransformService } from '../TransformOutlookCalendar';
+import { OutlookCalendarTransformService, isInsideDeltaWindow } from '../TransformOutlookCalendar';
 
 /**
  * Every constructor dependency mocked; `transformToEventDto` (private) is
@@ -46,7 +46,7 @@ function callTransformToEventDto(
   event: ReturnType<typeof outlookEvent>,
   userId: string,
   connectionId: string,
-): Promise<{ location_name?: string }> {
+): Promise<{ location_name?: string; status?: string; metadata?: Record<string, unknown> }> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (service as any).transformToEventDto(event, userId, connectionId);
 }
@@ -96,6 +96,25 @@ describe('OutlookCalendarTransformService.transformToEventDto — location_name'
   });
 });
 
+describe('OutlookCalendarTransformService.transformToEventDto — status and Graph id', () => {
+  it('records the Graph id, the only thing a later tombstone names the event by', async () => {
+    const dto = await callTransformToEventDto(makeService(), outlookEvent(null), 'user-1', 'conn-1');
+
+    expect(dto.metadata).toMatchObject({ rawEventId: 'evt-1' });
+  });
+
+  it('carries isCancelled as the status', async () => {
+    const dto = await callTransformToEventDto(
+      makeService(),
+      { ...outlookEvent(null), isCancelled: true },
+      'user-1',
+      'conn-1',
+    );
+
+    expect(dto.status).toBe('cancelled');
+  });
+});
+
 /**
  * The public entry point, fed a sync job shaped the way SyncOutlookCalendar
  * writes it: `{ calendars: [{ id, events: [...] }, ...] }`. Only the two
@@ -109,7 +128,13 @@ function makeIngestService() {
     error: jest.fn(),
     debug: jest.fn(),
   };
-  const eventService = { create: jest.fn().mockResolvedValue([]) };
+  const eventService = {
+    create: jest.fn().mockResolvedValue([]),
+    recordProviderEventId: jest.fn().mockResolvedValue(false),
+    findByProviderEventIds: jest.fn().mockResolvedValue(new Map()),
+    findSourceRows: jest.fn().mockResolvedValue(new Map()),
+    applyStatusFromSource: jest.fn().mockResolvedValue(null),
+  };
   const promoteService = { processParticipants: jest.fn().mockResolvedValue([]) };
 
   const service = new OutlookCalendarTransformService(
@@ -119,7 +144,7 @@ function makeIngestService() {
     logger as never,
   );
 
-  return { service, eventService, logger };
+  return { service, eventService, promoteService, logger };
 }
 
 function graphEvent(subject: string) {
@@ -210,8 +235,9 @@ describe('OutlookCalendarTransformService.transformOutlookCalendar — every cal
     expect(maxInFlight).toBe(10);
   });
 
-  it('skips a Graph delta tombstone instead of minting an "Untitled Event" for it', async () => {
+  it('never mints an "Untitled Event" for a Graph delta tombstone, and looks it up by its Graph id', async () => {
     const { service, eventService } = makeIngestService();
+    const tombstoneId = 'AAMkADk0MGFkODE3LWE4MmYtNDRhOS04OGQLkRkXbBznTvAADb6ytyAAA=';
 
     await runTransform(service, {
       calendars: [
@@ -222,7 +248,7 @@ describe('OutlookCalendarTransformService.transformOutlookCalendar — every cal
             // the type, the id and the annotation.
             {
               '@odata.type': '#microsoft.graph.event',
-              id: 'AAMkADk0MGFkODE3LWE4MmYtNDRhOS04OGQLkRkXbBznTvAADb6ytyAAA=',
+              id: tombstoneId,
               '@removed': { reason: 'deleted' },
             },
             graphEvent('Standup'),
@@ -232,5 +258,70 @@ describe('OutlookCalendarTransformService.transformOutlookCalendar — every cal
     });
 
     expect(createdTitles(eventService)).toEqual(['Standup']);
+    expect(eventService.findByProviderEventIds).toHaveBeenCalledWith(expect.anything(), 'conn-1', [
+      tombstoneId,
+    ]);
+    // Matching nothing stored, it cancels nothing.
+    expect(eventService.applyStatusFromSource).not.toHaveBeenCalled();
+  });
+
+  it('hands a cancelled event to create as cancelled, and promotes nobody from it', async () => {
+    const { service, eventService, promoteService } = makeIngestService();
+
+    await runTransform(service, {
+      calendars: [
+        {
+          id: 'cal-work',
+          events: [
+            {
+              ...graphEvent('Canceled: Standup'),
+              isCancelled: true,
+              organizer: { emailAddress: { name: 'Ada', address: 'ada@example.test' } },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(eventService.create).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      expect.objectContaining({ status: 'cancelled' }),
+    );
+    expect(promoteService.processParticipants).not.toHaveBeenCalled();
+  });
+});
+
+describe('isInsideDeltaWindow', () => {
+  const window = { startDateTime: '2026-09-01T00:00:00.000Z', endDateTime: '2029-09-01T00:00:00.000Z' };
+  const now = new Date('2026-10-01T12:00:00Z');
+  const event = (start: string, end: string | null) => ({
+    startTime: new Date(start),
+    endTime: end ? new Date(end) : null,
+  });
+
+  it.each([
+    ['inside the range', event('2026-09-23T19:00:00Z', '2026-09-23T20:00:00Z'), true],
+    ['before the range', event('2026-08-10T17:00:00Z', '2026-08-10T18:00:00Z'), false],
+    ['after the range', event('2029-10-01T09:00:00Z', '2029-10-01T10:00:00Z'), false],
+    ['across the range start', event('2026-08-31T23:00:00Z', '2026-09-01T01:00:00Z'), true],
+    ['a point event inside it', event('2026-09-23T19:00:00Z', null), true],
+  ])('with a recorded range: %s', (_label, stored, expected) => {
+    expect(isInsideDeltaWindow(stored, window, now)).toBe(expected);
+  });
+
+  it('matches nothing against a range that does not parse', () => {
+    const unreadable = { startDateTime: 'soon', endDateTime: 'later' };
+
+    expect(isInsideDeltaWindow(event('2026-09-23T19:00:00Z', '2026-09-23T20:00:00Z'), unreadable, now)).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    ['an event still to come', event('2026-10-08T19:00:00Z', '2026-10-08T20:00:00Z'), true],
+    ['an event under way', event('2026-10-01T11:00:00Z', '2026-10-01T13:00:00Z'), true],
+    ['an event already over', event('2026-09-24T19:00:00Z', '2026-09-24T20:00:00Z'), false],
+  ])('with no recorded range: %s', (_label, stored, expected) => {
+    expect(isInsideDeltaWindow(stored, undefined, now)).toBe(expected);
   });
 });

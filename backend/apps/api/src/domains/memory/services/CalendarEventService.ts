@@ -20,6 +20,7 @@ import {
   type KeysetPageArgs,
   appendRecordSources,
   bulkInsertIdempotent,
+  countAffected,
   keysetPaginate,
   INGEST_REFRESH_COLUMNS,
 } from '@ci/common/persistence';
@@ -899,10 +900,12 @@ export class CalendarEventService {
    *
    * Rows are keyed by iCalUID (cross-pipeline identity), but the payloads that
    * cancel them often carry only the provider's id: a cancelled occurrence
-   * names its series by the master's Google id (`recurringEventId`), and a
-   * deleted event is its own id and a status. This is the way back from one to
-   * the other. Scoped to the connection (idx_events_connection_id), so one
-   * account's ids can never resolve to another's rows.
+   * names its series by the master's Google id (`recurringEventId`), a deleted
+   * Google event is its own id and a status, and an Outlook tombstone
+   * (`@removed`) is the Graph id and nothing else. This is the way back from one
+   * to the other; {@link recordProviderEventId} keeps it current. Scoped to the
+   * connection (idx_events_connection_id), so one account's ids can never
+   * resolve to another's rows.
    */
   async findByProviderEventIds(
     context: UserServiceContext,
@@ -923,6 +926,46 @@ export class CalendarEventService {
       .getMany();
 
     return new Map((await this.composeMany(rows)).map((event) => [String(event.metadata.rawEventId), event]));
+  }
+
+  /**
+   * Point {@link findByProviderEventIds} at the provider's CURRENT id for a row
+   * this connection wrote — the id an id-only re-delivery will name it by.
+   *
+   * A re-delivery through {@link create} hands the stored row back without
+   * touching its metadata, so a row keeps the `rawEventId` it was inserted with:
+   * none, if its transform did not record one then (Outlook's, before it kept
+   * the Graph id), and a stale one once the provider re-ids the event (Graph
+   * does, unless asked for immutable ids, when an event moves to another
+   * calendar). Only that key is written, and only on a row of this connection —
+   * the finder is scoped to the connection, so an id on another's row would
+   * resolve nothing. Readers see no change, so `updated_at` stays and nothing is
+   * published.
+   *
+   * @returns whether the stored id changed.
+   */
+  async recordProviderEventId(
+    context: UserServiceContext,
+    id: string,
+    connectionId: string,
+    providerEventId: string,
+  ): Promise<boolean> {
+    const changed = await countAffected(
+      this.eventRepository.manager,
+      `WITH recorded AS (
+         UPDATE ci.events
+            SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{rawEventId}', to_jsonb($4::text))
+          WHERE event_id = $1
+            AND user_id = $2
+            AND connection_id = $3
+            AND metadata->>'rawEventId' IS DISTINCT FROM $4::text
+         RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM recorded`,
+      [id, context.userId, connectionId, providerEventId],
+    );
+
+    return changed > 0;
   }
 
   /**

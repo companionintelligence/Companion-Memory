@@ -2,12 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { Point } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
+import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { type Connection, ConnectionService } from '@ci/domains/connections';
+import { type CalendarViewWindow, type Connection, ConnectionService } from '@ci/domains/connections';
 import { isUriLocation } from '@ci/domains/geocode';
 import {
   CalendarEventService,
   type CreateEventDto,
+  type Event,
   calendarEventIdentity,
   canonicalSystem,
   icsRecurrenceInstant,
@@ -77,10 +79,19 @@ interface OutlookCalendarEvent {
   webLink?: string;
   /**
    * Set only on a calendarView/delta tombstone, which carries nothing but `id`
-   * and this: an event deleted since the last round, or one that changed
-   * outside the view's date range.
+   * and this, always with `reason: 'deleted'`: an event inside the round's date
+   * range that was deleted, or one OUTSIDE it that was added, edited or deleted
+   * (see processRemovals).
    */
   '@removed'?: { reason?: string };
+}
+
+/** A tombstone, as processRemovals reads it. */
+interface Removal {
+  /** The Graph id it names — all a tombstone carries. */
+  id: string;
+  /** The date range of the round that reported it; absent from a job synced before ranges were recorded. */
+  window?: CalendarViewWindow;
 }
 
 interface Participant {
@@ -98,6 +109,32 @@ interface Participant {
  * batched the same way.
  */
 const CALENDAR_TRANSFORM_BATCH_SIZE = 10;
+
+/**
+ * Whether a stored event lies inside the date range of the delta round that
+ * reported its tombstone — the only place a tombstone means "deleted".
+ *
+ * Overlap, as calendarView itself selects: an event that has not ended by the
+ * range's start and has begun by its end. A range that does not parse matches
+ * nothing. With no recorded range at all (a job synced before ranges were
+ * recorded), only an event that has not ended yet counts: whatever the range
+ * was, it began before now, so an event still to come is inside it — unless it
+ * lies beyond the range's far end, three years after the round began.
+ */
+export function isInsideDeltaWindow(
+  event: Pick<Event, 'startTime' | 'endTime'>,
+  window: CalendarViewWindow | undefined,
+  now: Date,
+): boolean {
+  const start = event.startTime.getTime();
+  const end = (event.endTime ?? event.startTime).getTime();
+
+  if (!window) {
+    return end >= now.getTime();
+  }
+
+  return end >= Date.parse(window.startDateTime) && start <= Date.parse(window.endDateTime);
+}
 
 @Injectable()
 export class OutlookCalendarTransformService {
@@ -125,22 +162,23 @@ export class OutlookCalendarTransformService {
         syncJobId,
       });
 
-      const events = this.extractCalendarEvents(data);
+      const { payloads, removals } = this.extractCalendarItems(data);
 
-      if (events.length === 0) {
+      if (payloads.length === 0 && removals.length === 0) {
         this.logger.log('No Outlook Calendar events found to transform', { userId, syncJobId });
 
         return;
       }
 
-      this.logger.log(`Processing ${events.length} Outlook Calendar events`, {
+      this.logger.log(`Processing ${payloads.length} Outlook Calendar events`, {
         userId,
         syncJobId,
-        eventCount: events.length,
+        eventCount: payloads.length,
+        removedCount: removals.length,
       });
 
-      for (let i = 0; i < events.length; i += CALENDAR_TRANSFORM_BATCH_SIZE) {
-        const batch = events.slice(i, i + CALENDAR_TRANSFORM_BATCH_SIZE);
+      for (let i = 0; i < payloads.length; i += CALENDAR_TRANSFORM_BATCH_SIZE) {
+        const batch = payloads.slice(i, i + CALENDAR_TRANSFORM_BATCH_SIZE);
 
         await Promise.all(
           batch.map(
@@ -154,10 +192,20 @@ export class OutlookCalendarTransformService {
         );
       }
 
+      // After every payload, not among them: an event moved to another
+      // calendar arrives as a tombstone for its old Graph id in one calendar
+      // and the event under a new id in the other. Delivering the event first
+      // moves the row's recorded id to the new one, and the tombstone then
+      // names nothing stored, instead of cancelling an event that still exists.
+      if (removals.length > 0) {
+        await this.processRemovals({ removals, userId, connectionId: connection.id });
+      }
+
       this.logger.log('Outlook Calendar transformation completed', {
         userId,
         syncJobId,
-        processedCount: events.length,
+        processedCount: payloads.length,
+        removedCount: removals.length,
       });
     } catch (error: unknown) {
       this.logger.error('Error transforming Outlook Calendar events', {
@@ -171,13 +219,21 @@ export class OutlookCalendarTransformService {
     }
   }
 
-  private extractCalendarEvents(data: unknown): OutlookCalendarEvent[] {
+  /**
+   * The job's events, every calendar's, split into payloads (events) and
+   * tombstones (`@removed` entries, each with the date range of its calendar's
+   * round).
+   */
+  private extractCalendarItems(data: unknown): { payloads: OutlookCalendarEvent[]; removals: Removal[] } {
+    const payloads: OutlookCalendarEvent[] = [];
+    const removals: Removal[] = [];
+
     if (!data || typeof data !== 'object') {
       this.logger.warn('Invalid data type for Outlook Calendar events', {
         dataType: typeof data,
       });
 
-      return [];
+      return { payloads, removals };
     }
 
     const dataObj = data as Record<string, unknown>;
@@ -188,7 +244,7 @@ export class OutlookCalendarTransformService {
     // from inside the loop, which imported the first calendar's events and
     // silently dropped every other calendar the user has.
     if ('calendars' in dataObj && Array.isArray(dataObj.calendars)) {
-      return dataObj.calendars.flatMap((calendar: unknown) => {
+      for (const calendar of dataObj.calendars as unknown[]) {
         const events = (calendar as { events?: unknown } | null)?.events;
 
         if (!Array.isArray(events)) {
@@ -199,18 +255,35 @@ export class OutlookCalendarTransformService {
             eventsType: events === null ? 'null' : typeof events,
           });
 
-          return [];
+          continue;
         }
 
-        return events as OutlookCalendarEvent[];
-      });
+        // Only the incremental sync's calendars carry one; only its rounds
+        // report tombstones.
+        const window = (calendar as { deltaWindow?: CalendarViewWindow }).deltaWindow;
+
+        for (const event of events as OutlookCalendarEvent[]) {
+          if (event !== null && typeof event === 'object' && '@removed' in event) {
+            // A tombstone is not an event. Transformed, it minted an "Untitled
+            // Event" stamped at ingest time under the Graph-id fallback
+            // identity, never the identity the deleted event was stored under.
+            if (event.id) {
+              removals.push({ id: event.id, window });
+            }
+          } else {
+            payloads.push(event);
+          }
+        }
+      }
+
+      return { payloads, removals };
     }
 
     this.logger.warn('No Outlook Calendar events found in data', {
       dataKeys: Object.keys(dataObj),
     });
 
-    return [];
+    return { payloads, removals };
   }
 
   private async processCalendarEvent({
@@ -226,34 +299,6 @@ export class OutlookCalendarTransformService {
       const eventId = event.id || 'unknown';
       const subject = event.subject || 'Untitled Event';
 
-      // A delta tombstone is not an event. With no start, subject or iCalUId,
-      // transforming it minted an "Untitled Event" stamped at ingest time under
-      // the Graph-id fallback identity, which is never the identity the deleted
-      // event was stored under, so it could not even dedup against that row.
-      // Removing the stored event is still not implemented.
-      if ('@removed' in event) {
-        this.logger.debug('Skipping removed event (Graph delta tombstone)', {
-          userId,
-          connectionId,
-          eventId,
-          reason: event['@removed']?.reason,
-        });
-
-        return;
-      }
-
-      // Skip cancelled events
-      if (event.isCancelled) {
-        this.logger.debug('Skipping cancelled event', {
-          userId,
-          connectionId,
-          eventId,
-          subject,
-        });
-
-        return;
-      }
-
       this.logger.log('Processing Outlook Calendar event', {
         eventId,
         subject,
@@ -263,13 +308,32 @@ export class OutlookCalendarTransformService {
       // Extract participants
       const participants = this.extractParticipants(event);
 
-      // Transform and save event
+      // Transform and save event. A cancelled one too, with status
+      // 'cancelled': it is how an attendee's copy of a cancelled meeting (or of
+      // one cancelled occurrence, now an exception with the same
+      // `originalStart`) arrives, and `create` carries the status onto the row
+      // already stored under the same identity — unless the user set a status
+      // of their own (see CalendarEventService.applySourceStatus).
       const eventDto = await this.transformToEventDto(event, userId, connectionId);
 
-      await this.eventService.create({ userId }, eventDto);
+      const [stored] = await this.eventService.create({ userId }, eventDto);
 
-      // Process participants
-      if (participants.length > 0) {
+      // `create` hands back an existing row untouched, so one stored before the
+      // Graph id was recorded, or under the id Graph used before the event moved
+      // calendars, does not have this one. Record it: a tombstone names its event
+      // by nothing else.
+      if (
+        stored &&
+        event.id &&
+        stored.connectionId === connectionId &&
+        stored.metadata?.rawEventId !== event.id
+      ) {
+        await this.eventService.recordProviderEventId({ userId }, stored.id, connectionId, event.id);
+      }
+
+      // Process participants — not for a meeting that is not happening: the
+      // MET_WITH edge carries the meeting's own times.
+      if (participants.length > 0 && !event.isCancelled) {
         await this.processParticipants(
           participants,
           userId,
@@ -293,6 +357,95 @@ export class OutlookCalendarTransformService {
       });
       // Don't throw - continue processing other events
     }
+  }
+
+  /**
+   * Tombstones: `@removed` entries, which name an event by its Graph id and say
+   * nothing else. The organizer's own copy of a cancelled meeting (or of one
+   * cancelled occurrence) leaves the calendar this way, as does anything deleted
+   * outright.
+   *
+   * Inside the date range of the round that reported it, a tombstone is an event
+   * deleted at the source — or one moved out of the range, which no longer
+   * stands at the slot stored for it either. Outside the range Graph also
+   * reports every event merely added or EDITED, so a tombstone there says
+   * nothing this box can act on, and the stored row is left alone ("Filter the
+   * events under @removed for the date range that your scenario requires" —
+   * event: delta, Graph v1.0). See isInsideDeltaWindow.
+   *
+   * The row is found by the Graph id recorded on it (`metadata.rawEventId`), or —
+   * for a UID-less row stored before that id was recorded — by the identity the
+   * transform derives from the Graph id. A row keyed by its iCalUId and stored
+   * before the id was recorded is found once Graph has delivered the event again
+   * (processCalendarEvent records the id then); until that, its tombstone
+   * matches nothing.
+   *
+   * A deletion at the source is a status, never the user's tombstone:
+   * `applyStatusFromSource` lands 'cancelled' unless the user set a status of
+   * their own, follows a row the user deleted without publishing anything, and
+   * never writes `is_deleted`. If Graph later delivers the event again (restored
+   * from Deleted Items, under a new id), `create` brings the status back.
+   */
+  private async processRemovals({
+    removals,
+    userId,
+    connectionId,
+  }: {
+    removals: Removal[];
+    userId: string;
+    connectionId: string;
+  }): Promise<void> {
+    const context = { userId } as UserServiceContext;
+    const derivedIdOf = (graphId: string) => platformIdentity('outlook_calendar', graphId).id;
+    const ids = removals.map((removal) => removal.id);
+
+    const byGraphId = await this.eventService.findByProviderEventIds(context, connectionId, ids);
+    const byDerivedId = await this.eventService.findSourceRows(
+      context,
+      canonicalSystem('outlook_calendar'),
+      ids.filter((id) => !byGraphId.has(id)).map(derivedIdOf),
+    );
+
+    const now = new Date();
+    const unmatched: string[] = [];
+    let outsideRange = 0;
+    let cancelled = 0;
+
+    for (const removal of removals) {
+      try {
+        // By identity, as `create` finds the row a payload re-delivers: for a
+        // UID-less event the identity IS the Graph id.
+        const stored = byGraphId.get(removal.id) ?? byDerivedId.get(derivedIdOf(removal.id));
+
+        if (!stored) {
+          unmatched.push(removal.id);
+        } else if (!isInsideDeltaWindow(stored, removal.window, now)) {
+          outsideRange += 1;
+        } else {
+          await this.eventService.applyStatusFromSource(context, stored.id, 'cancelled');
+          cancelled += 1;
+        }
+      } catch (error) {
+        this.logger.error('Error processing removed Outlook Calendar event', {
+          userId,
+          connectionId,
+          eventId: removal.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    // Unmatched is routine — an event outside the range this box never stored,
+    // or a row stored before Graph ids were recorded — so this is not a warning.
+    this.logger.log('Outlook Calendar removals processed', {
+      userId,
+      connectionId,
+      removedCount: removals.length,
+      cancelledCount: cancelled,
+      outsideRangeCount: outsideRange,
+      unmatchedCount: unmatched.length,
+      unmatchedEventIds: unmatched.slice(0, 20),
+    });
   }
 
   private extractParticipants(event: OutlookCalendarEvent): Participant[] {
@@ -351,6 +504,9 @@ export class OutlookCalendarTransformService {
     // Build metadata
     const metadata = {
       connectionId,
+      // The Graph id — the only thing a tombstone (`@removed`) names its event
+      // by; CalendarEventService.findByProviderEventIds resolves it.
+      rawEventId: event.id,
       organizerEmail: event.organizer?.emailAddress?.address,
       organizerName: event.organizer?.emailAddress?.name,
       participantCount: event.attendees?.length ?? 0,

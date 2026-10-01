@@ -3,6 +3,7 @@ import type {
   Connection,
   Calendar,
   CalendarEvent,
+  CalendarViewWindow,
   OutlookAttachment,
 } from '@ci/domains/connections';
 
@@ -20,14 +21,35 @@ const CALENDAR_PAGE_SIZE = 50;
  */
 export const MAX_DELTA_EVENTS_PER_RUN = 500;
 
-/** The request that starts a calendar's first delta round: the next three years of its events. */
-function initialDeltaEndpoint(calendarId: string): string {
-  const params = new URLSearchParams({
-    startDateTime: new Date().toISOString(),
-    endDateTime: new Date(Date.now() + 3 * 365 * 24 * 60 * 60 * 1000).toISOString(), // 3 years in the future
-  });
+/** How far ahead a fresh delta round reaches: three years. */
+const DELTA_WINDOW_MS = 3 * 365 * 24 * 60 * 60 * 1000;
 
-  return `/v1.0/me/calendars/${calendarId}/calendarView/delta?${params.toString()}`;
+/**
+ * The request that starts a calendar's delta round — the next three years of
+ * its events — and that range, which every later link of the round inherits.
+ */
+function initialDeltaRound(calendarId: string): { endpoint: string; window: CalendarViewWindow } {
+  const start = new Date();
+  const window = {
+    startDateTime: start.toISOString(),
+    endDateTime: new Date(start.getTime() + DELTA_WINDOW_MS).toISOString(),
+  };
+
+  return {
+    endpoint: `/v1.0/me/calendars/${calendarId}/calendarView/delta?${new URLSearchParams(window).toString()}`,
+    window,
+  };
+}
+
+function isCalendarViewWindow(value: unknown): value is CalendarViewWindow {
+  const window = value as Partial<CalendarViewWindow> | null;
+
+  return (
+    typeof window?.startDateTime === 'string' &&
+    typeof window.endDateTime === 'string' &&
+    !Number.isNaN(Date.parse(window.startDateTime)) &&
+    !Number.isNaN(Date.parse(window.endDateTime))
+  );
 }
 
 /**
@@ -49,30 +71,40 @@ function initialDeltaEndpoint(calendarId: string): string {
  *
  * The walk also stops once {@link MAX_DELTA_EVENTS_PER_RUN} events are in hand,
  * in which case `resumeLink` is the nextLink to carry on from.
+ *
+ * `window` is the round's date range. A stored link is followed only together
+ * with the range stored beside it: Graph's links are opaque, and the transform
+ * cannot read the round's `@removed` entries without the range (see
+ * TransformOutlookCalendar). A link stored before ranges were recorded starts a
+ * fresh round instead, once.
  */
 async function walkDeltaRound({
   connection,
   client,
   calendarId,
-  storedLink,
+  stored,
 }: {
   connection: Connection;
   client: BaseClient;
   calendarId: string;
-  storedLink: string | undefined;
+  stored: { link: string; window: CalendarViewWindow } | undefined;
 }): Promise<{
   events: CalendarEvent[];
   resumeLink: string | undefined;
+  window: CalendarViewWindow;
   roundComplete: boolean;
   pages: number;
 }> {
+  const { endpoint: firstEndpoint, window } = stored
+    ? { endpoint: stored.link, window: stored.window }
+    : initialDeltaRound(calendarId);
   const events: CalendarEvent[] = [];
   // What to persist if no response gives a better link: the one this run
   // started from, so a malformed answer re-asks rather than forgets the round.
-  let resumeLink = storedLink;
+  let resumeLink = stored?.link;
   let roundComplete = false;
   let pages = 0;
-  let endpoint: string | undefined = storedLink ?? initialDeltaEndpoint(calendarId);
+  let endpoint: string | undefined = firstEndpoint;
 
   while (endpoint) {
     let response: Record<string, unknown>;
@@ -111,7 +143,7 @@ async function walkDeltaRound({
     }
   }
 
-  return { events, resumeLink, roundComplete, pages };
+  return { events, resumeLink, window, roundComplete, pages };
 }
 
 export async function syncOutlookCalendar({
@@ -234,10 +266,13 @@ export async function syncOutlookCalendar({
         nextCalendarsLink = response['@odata.nextLink'] as string | undefined;
       } while (nextCalendarsLink);
 
-      // Per calendar, the link the next run resumes from: the `@odata.deltaLink`
-      // of a completed round, or the `@odata.nextLink` of one cut short.
+      // Per calendar, the link the next run resumes from — the `@odata.deltaLink`
+      // of a completed round, or the `@odata.nextLink` of one cut short — and
+      // beside it the date range of the round that link belongs to.
       const nextDeltaLinks: Record<string, string> = {};
+      const nextDeltaWindows: Record<string, CalendarViewWindow> = {};
       const storedDeltaLinks = (nextCursor?.deltaLinks ?? {}) as Record<string, unknown>;
+      const storedDeltaWindows = (nextCursor?.deltaWindows ?? {}) as Record<string, unknown>;
 
       for (const calendar of calendars) {
         client.logger.log('Performing Outlook Calendar sync for', {
@@ -246,12 +281,24 @@ export async function syncOutlookCalendar({
         });
 
         const storedLink = storedDeltaLinks[calendar.id];
+        const storedWindow = storedDeltaWindows[calendar.id];
+        const hasStoredLink = typeof storedLink === 'string' && storedLink.length > 0;
 
-        const { events, resumeLink, roundComplete, pages } = await walkDeltaRound({
+        if (hasStoredLink && !isCalendarViewWindow(storedWindow)) {
+          client.logger.log('Restarting Outlook Calendar delta round stored without its date range', {
+            connectionId: connection.id,
+            calendarId: calendar.id,
+          });
+        }
+
+        const { events, resumeLink, window, roundComplete, pages } = await walkDeltaRound({
           connection,
           client,
           calendarId: calendar.id,
-          storedLink: typeof storedLink === 'string' && storedLink ? storedLink : undefined,
+          stored:
+            hasStoredLink && isCalendarViewWindow(storedWindow)
+              ? { link: storedLink, window: storedWindow }
+              : undefined,
         });
 
         for (const event of events) {
@@ -270,9 +317,11 @@ export async function syncOutlookCalendar({
         }
 
         calendar.events = events;
+        calendar.deltaWindow = window;
 
         if (resumeLink) {
           nextDeltaLinks[calendar.id] = resumeLink;
+          nextDeltaWindows[calendar.id] = window;
         }
 
         client.logger.log('Calendar delta sync completed', {
@@ -295,6 +344,7 @@ export async function syncOutlookCalendar({
         },
         nextCursor: {
           deltaLinks: nextDeltaLinks,
+          deltaWindows: nextDeltaWindows,
         },
       };
     }
