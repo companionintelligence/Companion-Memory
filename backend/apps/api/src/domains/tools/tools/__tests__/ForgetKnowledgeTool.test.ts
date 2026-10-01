@@ -1,14 +1,17 @@
 import type { RequestContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
-import type {
-  CalendarEventService,
-  CommunicationService,
-  ContentService,
-  GraphNodeEntity,
-  GraphUtilityService,
-  ItemService,
-  RelationshipEntity,
+import {
+  StoredObjectsDeletedError,
+  type CalendarEventService,
+  type CommunicationService,
+  type ContentService,
+  type FileService,
+  type GraphNodeEntity,
+  type GraphUtilityService,
+  type ItemService,
+  type PurgedFiles,
+  type RelationshipEntity,
 } from '@ci/domains/memory';
 import {
   CommunicationRemovedEvent,
@@ -210,6 +213,39 @@ function makeItems(purgeableItemIds: string[] = [], duplicatesOf: Record<string,
   return { purge };
 }
 
+/**
+ * Stand-in for `FileService`. `purge` takes every id that has a `ci.files` row (`purgeableNodeIds`) and
+ * answers with the ones it took, the stored file each stood for, the copies of those files that went with
+ * them (`copiesOf`: file ids by the node that was named) and the content that wraps them (`wrappingOf`: ids
+ * by node). `keptObjects` is how many stored objects stayed. A `File` node with no detail row is not among
+ * them, as for the real one.
+ */
+function makeFiles(
+  purgeableNodeIds: string[] = [],
+  extra: {
+    copiesOf?: Record<string, string[]>;
+    wrappingOf?: Record<string, string[]>;
+    keptObjects?: number;
+  } = {},
+) {
+  const purgeable = new Set(purgeableNodeIds);
+  const purge = jest.fn(async (_context: { userId: string }, ids: string[]): Promise<PurgedFiles> => {
+    const nodeIds = ids.filter((id) => purgeable.has(id));
+    const copyFileIds = nodeIds.flatMap((id) => extra.copiesOf?.[id] ?? []);
+
+    return {
+      nodeIds,
+      fileIds: [...nodeIds.map((id) => `file-of-${id}`), ...copyFileIds],
+      copyFileIds,
+      deletedObjects: nodeIds.length + copyFileIds.length,
+      keptObjects: extra.keptObjects ?? 0,
+      wrappingContentIds: nodeIds.flatMap((id) => extra.wrappingOf?.[id] ?? []),
+    };
+  });
+
+  return { purge };
+}
+
 function makeTool(
   graphUtility: ReturnType<typeof makeGraphUtility>,
   search: ReturnType<typeof makeSearchIndex> = makeSearchIndex(),
@@ -217,6 +253,7 @@ function makeTool(
   contents: ReturnType<typeof makeContents> = makeContents(),
   communications: ReturnType<typeof makeCommunications> = makeCommunications(),
   items: ReturnType<typeof makeItems> = makeItems(),
+  files: ReturnType<typeof makeFiles> = makeFiles(),
 ) {
   return new ForgetKnowledgeTool(
     graphUtility as unknown as GraphUtilityService,
@@ -225,6 +262,7 @@ function makeTool(
     contents as unknown as ContentService,
     communications as unknown as CommunicationService,
     items as unknown as ItemService,
+    files as unknown as FileService,
     logger(),
   );
 }
@@ -1227,6 +1265,363 @@ describe('ForgetKnowledgeTool items, archive_and_delete', () => {
     expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
     expect(search.send).not.toHaveBeenCalled();
     expect(search.lookup('item', E1)).toBe(true);
+  });
+});
+
+describe('ForgetKnowledgeTool files, archive_and_delete', () => {
+  /** A tool whose only interesting collaborators are the graph and the file service. */
+  function fileTool(
+    graphUtility: ReturnType<typeof makeGraphUtility>,
+    files: ReturnType<typeof makeFiles>,
+    others: {
+      search?: ReturnType<typeof makeSearchIndex>;
+      items?: ReturnType<typeof makeItems>;
+    } = {},
+  ) {
+    return makeTool(
+      graphUtility,
+      others.search ?? makeSearchIndex(),
+      makeCalendarEvents(),
+      makeContents(),
+      makeCommunications(),
+      others.items ?? makeItems(),
+      files,
+    );
+  }
+
+  it('purges a File node instead of deleting its node, and announces nothing itself', async () => {
+    const files = makeFiles([E1]);
+    const graphUtility = makeGraphUtility({
+      nodes: { [E1]: { entityType: 'File', relationships: [fakeRel(R1)] } },
+    });
+    const search = makeSearchIndex();
+
+    const result = await fileTool(graphUtility, files, { search }).execute(CONTEXT, {
+      entityIds: [E1],
+      mode: 'archive_and_delete',
+    });
+
+    expect(result.success).toBe(true);
+    expect(files.purge).toHaveBeenCalledWith({ userId: CONTEXT.userId }, [E1]);
+    // The purge removed the node, the stored file, its variants and the objects, and `FileService.purge`
+    // announces `file.deleted` itself, keyed by the id of the `ci.files` row, which is not the node's. The
+    // tool adds nothing, and above all does not go on to delete the node the generic way.
+    expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateRelationships).not.toHaveBeenCalled();
+    expect(search.send).not.toHaveBeenCalled();
+    expect(result.data?.archivedEntityIds).toEqual([E1]);
+    expect(result.data?.restorableEventIds).toBeUndefined();
+    expect(result.data?.warnings).toBeUndefined();
+  });
+
+  it('purges every File node in a batch with one call and deletes the other nodes the generic way', async () => {
+    const files = makeFiles([E1, E2]);
+    const graphUtility = makeGraphUtility({
+      nodes: {
+        [E1]: { entityType: 'File' },
+        [E2]: { entityType: 'File' },
+        [E3]: { entityType: 'Concept', relationships: [fakeRel(R_CASCADE)] },
+      },
+    });
+
+    const result = await fileTool(graphUtility, files).execute(CONTEXT, {
+      entityIds: [E1, E2, E3],
+      mode: 'archive_and_delete',
+    });
+
+    expect(files.purge).toHaveBeenCalledTimes(1);
+    expect(files.purge).toHaveBeenCalledWith({ userId: CONTEXT.userId }, [E1, E2]);
+    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E3], CONTEXT.userId, true);
+    expect(result.data?.archivedEntityIds).toEqual([E1, E2, E3]);
+  });
+
+  it('says what went with a file that nobody named: its copies', async () => {
+    // E1's preview and playback rows went in the same transaction, with their objects.
+    const files = makeFiles([E1], { copiesOf: { [E1]: ['copy-a', 'copy-b'] } });
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'File' } } });
+
+    const result = await fileTool(graphUtility, files).execute(CONTEXT, {
+      entityIds: [E1],
+      mode: 'archive_and_delete',
+    });
+
+    // Only the node that was named is one the call deleted. The copies were not asked about, so they are a
+    // warning and not a result.
+    expect(result.data?.archivedEntityIds).toEqual([E1]);
+    expect(result.data?.warnings).toEqual([
+      'Also deleted, because each was a copy (a preview, thumbnail or playback version) of a file named here: copy-a, copy-b.',
+    ]);
+  });
+
+  it('says when a stored object stayed because another file record still names it', async () => {
+    const files = makeFiles([E1], { keptObjects: 2 });
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'File' } } });
+
+    const result = await fileTool(graphUtility, files).execute(CONTEXT, {
+      entityIds: [E1],
+      mode: 'archive_and_delete',
+    });
+
+    expect(result.data?.warnings).toEqual([
+      '2 stored object(s) were not deleted because another file record still names them.',
+    ]);
+  });
+
+  it('lists the content that wraps a deleted file, which stays, so that it can be forgotten on its own', async () => {
+    // The user's decision: a photo is a file and a content record wrapping it, and the record is a record in its
+    // own right. It is left, and the caller is told, rather than purged without being asked.
+    const files = makeFiles([E1], { wrappingOf: { [E1]: [E2, E3] } });
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'File' } } });
+
+    const result = await fileTool(graphUtility, files).execute(CONTEXT, {
+      entityIds: [E1],
+      mode: 'archive_and_delete',
+    });
+
+    expect(result.success).toBe(true);
+    expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    expect(result.data?.warnings).toEqual([
+      `Not deleted: content that wraps a deleted file, and still shows its filename and description: ${E2}, ${E3}. Forget it separately to remove it.`,
+    ]);
+  });
+
+  it('says nothing of copies, objects or content when none were involved', async () => {
+    const files = makeFiles([E1]);
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'File' } } });
+
+    const result = await fileTool(graphUtility, files).execute(CONTEXT, {
+      entityIds: [E1],
+      mode: 'archive_and_delete',
+    });
+
+    expect(result.data?.warnings).toBeUndefined();
+  });
+
+  it('sends a File node with no ci.files row down the generic path, where there is nothing to cascade', async () => {
+    // Graph ingest can write `File` nodes with no stored file behind them. `purge` answers with only the nodes it
+    // found, and this one has to be deleted too. Nothing references a row that is not there.
+    const files = makeFiles();
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'File' } } });
+
+    const result = await fileTool(graphUtility, files).execute(CONTEXT, {
+      entityIds: [E1],
+      mode: 'archive_and_delete',
+    });
+
+    expect(files.purge).toHaveBeenCalledWith({ userId: CONTEXT.userId }, [E1]);
+    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, true);
+    expect(result.data?.archivedEntityIds).toEqual([E1]);
+  });
+
+  it('never asks the file service to purge anything when the batch holds no File node', async () => {
+    const files = makeFiles([E1]);
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Person' } } });
+
+    await fileTool(graphUtility, files).execute(CONTEXT, { entityIds: [E1], mode: 'archive_and_delete' });
+
+    expect(files.purge).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, true);
+  });
+
+  it('never purges a file in archive mode, which only deactivates its node', async () => {
+    const files = makeFiles([E1]);
+    const graphUtility = makeGraphUtility({
+      nodes: { [E1]: { entityType: 'File', relationships: [fakeRel(R1)] } },
+    });
+
+    const result = await fileTool(graphUtility, files).execute(CONTEXT, {
+      entityIds: [E1],
+      mode: 'archive',
+    });
+
+    expect(files.purge).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, false);
+    expect(result.data?.restorableEventIds).toBeUndefined();
+  });
+
+  it('purges files after events, content, communications and items, each in its own call', async () => {
+    const calendarEvents = makeCalendarEvents([E1]);
+    const contents = makeContents([E2]);
+    const communications = makeCommunications([E3]);
+    const items = makeItems([E_MISSING]);
+    const files = makeFiles([E_MISSING_ONLY]);
+    const graphUtility = makeGraphUtility({
+      nodes: {
+        [E1]: { entityType: 'Event' },
+        [E2]: { entityType: 'Content' },
+        [E3]: { entityType: 'Communication' },
+        [E_MISSING]: { entityType: 'Item' },
+        [E_MISSING_ONLY]: { entityType: 'File' },
+      },
+    });
+    const tool = makeTool(
+      graphUtility,
+      makeSearchIndex(),
+      calendarEvents,
+      contents,
+      communications,
+      items,
+      files,
+    );
+
+    const result = await tool.execute(CONTEXT, {
+      entityIds: [E1, E2, E3, E_MISSING, E_MISSING_ONLY],
+      mode: 'archive_and_delete',
+    });
+
+    expect(files.purge).toHaveBeenCalledWith({ userId: CONTEXT.userId }, [E_MISSING_ONLY]);
+    expect(files.purge.mock.invocationCallOrder[0]).toBeGreaterThan(items.purge.mock.invocationCallOrder[0]);
+    expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    expect(result.data?.archivedEntityIds).toEqual([E1, E2, E3, E_MISSING, E_MISSING_ONLY]);
+  });
+
+  it('still removes the relationships it was asked to remove by id', async () => {
+    const files = makeFiles([E1]);
+    const graphUtility = makeGraphUtility({
+      nodes: { [E1]: { entityType: 'File' } },
+      relationshipsById: { [R_EXPLICIT]: fakeRel(R_EXPLICIT) },
+    });
+
+    const result = await fileTool(graphUtility, files).execute(CONTEXT, {
+      entityIds: [E1],
+      relationshipIds: [R_EXPLICIT],
+      mode: 'archive_and_delete',
+    });
+
+    expect(graphUtility.deactivateRelationships).toHaveBeenCalledWith([R_EXPLICIT], CONTEXT.userId, true);
+    expect(result.data?.archivedRelationshipIds).toEqual([R_EXPLICIT]);
+  });
+
+  describe('when the purge fails', () => {
+    it('reports an object store that failed as retryable, and says that nothing was deleted', async () => {
+      const files = makeFiles([E1]);
+
+      files.purge.mockRejectedValueOnce(
+        new Error(
+          'The stored objects could not be deleted, so nothing was deleted from the database (some may already be gone, and forgetting again is safe): connect ECONNREFUSED',
+        ),
+      );
+
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'File' } } });
+
+      const result = await fileTool(graphUtility, files).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatchObject({ code: 'EXECUTION_ERROR', retryable: true });
+      expect(result.error?.message).toContain('nothing was deleted from the database');
+      // Nothing was destroyed and nothing is half gone, so the error names neither.
+      expect(result.error?.details).not.toHaveProperty('deletedEntityIds');
+      expect(result.error?.details).not.toHaveProperty('storedObjectsDeletedFor');
+      expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    });
+
+    it('names the files whose stored contents are gone, and says that forgetting them again finishes the job', async () => {
+      const files = makeFiles([E1]);
+
+      files.purge.mockRejectedValueOnce(new StoredObjectsDeletedError([E1], new Error('deadlock detected')));
+
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'File' } } });
+
+      const result = await fileTool(graphUtility, files).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.success).toBe(false);
+      // A deadlock is the kind of failure a second try gets past, and the cause is what decides that.
+      expect(result.error).toMatchObject({
+        code: 'EXECUTION_ERROR',
+        retryable: true,
+        details: { storedObjectsDeletedFor: [E1] },
+      });
+      expect(result.error?.message).toContain('deadlock detected');
+      expect(result.error?.message).toContain(`Forgetting them again finishes the job: ${E1}.`);
+      // Nothing was destroyed: the entity is still there, only its contents are not.
+      expect(result.error?.details).not.toHaveProperty('deletedEntityIds');
+      expect(result.error?.message).not.toContain('Already deleted');
+      expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    });
+
+    it('does not call a foreign-key violation retryable, and still names the files whose contents are gone', async () => {
+      // A migration added a table that references `ci.files` with no `ON DELETE` action: the row delete is
+      // refused, the same way each time, after the objects had already gone.
+      const files = makeFiles([E1]);
+
+      files.purge.mockRejectedValueOnce(
+        new StoredObjectsDeletedError(
+          [E1],
+          pgFailure('23503', { constraint: 'new_table_file_id_fkey', table: 'files' }),
+        ),
+      );
+
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'File' } } });
+
+      const result = await fileTool(graphUtility, files).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.error).toMatchObject({
+        code: 'CONSTRAINT_VIOLATION',
+        retryable: false,
+        details: {
+          constraint: 'new_table_file_id_fkey',
+          table: 'files',
+          storedObjectsDeletedFor: [E1],
+        },
+      });
+      expect(result.error?.message).toContain('Retrying will not change that');
+      expect(result.error?.message).toContain(
+        `Retrying cannot finish the job until what references them is removed: ${E1}.`,
+      );
+      expect(result.error?.message).not.toContain('Forgetting them again finishes the job');
+    });
+
+    it('lists what an earlier purge destroyed together with the files whose contents are gone', async () => {
+      const items = makeItems([E1]);
+      const files = makeFiles([E2]);
+
+      files.purge.mockRejectedValueOnce(new StoredObjectsDeletedError([E2], new Error('connection reset')));
+
+      const graphUtility = makeGraphUtility({
+        nodes: { [E1]: { entityType: 'Item' }, [E2]: { entityType: 'File' } },
+      });
+
+      const result = await fileTool(graphUtility, files, { items }).execute(CONTEXT, {
+        entityIds: [E1, E2],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.error).toMatchObject({
+        code: 'EXECUTION_ERROR',
+        details: { deletedEntityIds: [E1], storedObjectsDeletedFor: [E2] },
+      });
+      expect(result.error?.message).toContain(`Already deleted: ${E1}.`);
+      expect(result.error?.message).toContain(`Forgetting them again finishes the job: ${E2}.`);
+    });
+
+    it('lists what an earlier purge destroyed when the file purge fails before touching anything', async () => {
+      const items = makeItems([E1]);
+      const files = makeFiles([E2]);
+
+      files.purge.mockRejectedValueOnce(new Error('The object store did not answer within 60 s'));
+
+      const graphUtility = makeGraphUtility({
+        nodes: { [E1]: { entityType: 'Item' }, [E2]: { entityType: 'File' } },
+      });
+
+      const result = await fileTool(graphUtility, files, { items }).execute(CONTEXT, {
+        entityIds: [E1, E2],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.error).toMatchObject({ code: 'EXECUTION_ERROR', details: { deletedEntityIds: [E1] } });
+      expect(result.error?.details).not.toHaveProperty('storedObjectsDeletedFor');
+      expect(result.error?.message).toContain(`Already deleted: ${E1}.`);
+    });
   });
 });
 

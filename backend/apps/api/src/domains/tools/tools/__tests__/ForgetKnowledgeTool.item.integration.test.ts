@@ -9,6 +9,7 @@ import {
   type CalendarEventService,
   type CommunicationService,
   type ContentService,
+  type FileService,
   GraphDeltaWriter,
   GraphNodeEntity,
   GraphUtilityService,
@@ -136,6 +137,8 @@ describeWithDb(`memory.forget on an Item node, against Postgres (${availability.
         signalling,
         new GraphDeltaWriter(dataSource, logger()),
       ),
+      // No case here names a file, so the tool never reaches for it.
+      {} as unknown as FileService,
       logger(),
     );
   });

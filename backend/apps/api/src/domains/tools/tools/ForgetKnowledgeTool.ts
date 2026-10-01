@@ -9,10 +9,13 @@ import {
   CalendarEventService,
   CommunicationService,
   ContentService,
+  FileService,
   GraphUtilityService,
   GraphNodeEntity,
   ItemService,
   RelationshipEntity,
+  StoredObjectsDeletedError,
+  type PurgedFiles,
 } from '@ci/domains/memory';
 import {
   CommunicationRemovedEvent,
@@ -57,25 +60,52 @@ export interface ForgetKnowledgeOutput {
 }
 
 /**
- * A delete that failed after it had already destroyed something. Events, content, communications and
- * items are purged first, each in its own transaction, and a purge cannot be undone, so when the rest
- * of the call is refused what was purged is gone and stays gone. This says which, rather than leaving
- * the caller to find out by trying again.
+ * A delete that failed after it had already destroyed something. Events, content, communications,
+ * items and files are purged first, each in its own transaction, and a purge cannot be undone, so
+ * when the rest of the call is refused what was purged is gone and stays gone. This says which,
+ * rather than leaving the caller to find out by trying again.
+ *
+ * A file can also be half gone: a purge deletes its stored objects before its records, so a failure
+ * in between leaves a file that is still listed and no longer opens. Those are named separately,
+ * because they are not deleted and the way to finish them is to forget them again.
  */
 class PartialForgetError extends Error {
   constructor(
     readonly deletedEntityIds: string[],
     cause: unknown,
+    readonly storedObjectsDeletedFor: string[] = [],
   ) {
     const reason = cause instanceof Error ? cause.message : String(cause);
 
-    super(`The delete failed: ${reason}.${alreadyDeleted(deletedEntityIds)}`, { cause });
+    super(
+      `The delete failed: ${reason}.${alreadyDeleted(deletedEntityIds)}${storedContentsGone(storedObjectsDeletedFor)}`,
+      { cause },
+    );
     this.name = 'PartialForgetError';
   }
 }
 
 function alreadyDeleted(ids: string[]): string {
   return ids.length ? ` Already deleted: ${ids.join(', ')}.` : '';
+}
+
+/**
+ * Says which files lost their stored contents without losing their records. Whether forgetting them
+ * again can finish the job depends on what stopped the records going: a failure that was
+ * transient can be tried again, and a foreign key that still references them cannot. The message of
+ * a {@link PartialForgetError} is only shown for the first kind, because `handleError` words the
+ * second itself.
+ */
+function storedContentsGone(ids: string[], retryHelps = true): string {
+  if (ids.length === 0) {
+    return '';
+  }
+
+  return ` The stored contents of these were deleted but the entities were not, so they are still listed and will not open. ${
+    retryHelps
+      ? 'Forgetting them again finishes the job'
+      : 'Retrying cannot finish the job until what references them is removed'
+  }: ${ids.join(', ')}.`;
 }
 
 @Injectable()
@@ -111,7 +141,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
           enum: ['archive', 'archive_and_delete'],
           default: 'archive',
           description:
-            "Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, an item goes with the duplicates that were merged into it, and anything that came from a source that syncs again can arrive again. An item that is another item's parent is refused until its children are named too.",
+            "Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, an item goes with the duplicates that were merged into it, a file goes with its previews and other copies and with its stored bytes, and anything that came from a source that syncs again can arrive again. An item that is another item's parent is refused until its children are named too. The content record of a photo is not deleted with its file: it is listed in warnings, to be forgotten on its own.",
         },
         reason: {
           type: 'string',
@@ -144,6 +174,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     private readonly contents: ContentService,
     private readonly communications: CommunicationService,
     private readonly items: ItemService,
+    private readonly files: FileService,
     protected readonly logger: LoggerService,
   ) {
     super();
@@ -213,11 +244,11 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
       : [];
 
     // An Event is two rows, a Content node has HBPE's links hanging off it, a
-    // Communication leaves its participants' claims behind, and an Item leaves its
-    // identifiers and merge history, so none of them can be treated like any other
-    // node. Archive moves an event to the trash; delete purges events, content,
-    // communications and items. Each announces its own removal, and what is left
-    // is generic.
+    // Communication leaves its participants' claims behind, an Item leaves its
+    // identifiers and merge history, and a File node is only the shadow of a
+    // stored file, so none of them can be treated like any other node. Archive
+    // moves an event to the trash; delete purges events, content, communications,
+    // items and files. Each announces its own removal, and what is left is generic.
     const nodes = uniqueEntitySnapshots.map((entry) => entry.node);
     const handledIds = hardDelete
       ? await this.purgeAggregates(nodes, ownerId, warnings)
@@ -310,18 +341,18 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
   }
 
   /**
-   * Delete the events, content, communications and items among `nodes` for good,
-   * and answer with the ids of the nodes that are gone, which are no longer the
-   * generic path's.
+   * Delete the events, content, communications, items and files among `nodes` for
+   * good, and answer with the ids of the nodes that are gone, which are no longer
+   * the generic path's.
    *
    * The generic path, `deactivateEntities` with `hardDelete`, deletes the node's
    * `ci.entities` row and trusts the foreign keys. For these that cannot work.
    * HBPE has clustered nearly every event and nearly every content row, its link
    * tables reference them with no `ON DELETE` action, and the delete fails
    * outright. When it does go through, and it always does for a communication, it
-   * leaves rows that name the node with no foreign key to say so. Each owning
-   * service does the whole teardown in one transaction and announces its own
-   * removal.
+   * leaves rows that name the node with no foreign key to say so. For a file it
+   * never reaches the file at all. Each owning service does the whole teardown in
+   * one transaction and announces its own removal.
    *
    * Events go first, and take their attached content with them, so a content node
    * named in the same call may already be gone when its own turn comes.
@@ -338,14 +369,20 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     warnings: string[],
   ): Promise<Set<string>> {
     const destroyed = new Set<string>();
+    // Files whose stored contents were deleted and whose records then could not be: neither
+    // destroyed nor intact, and the only state a purge can leave that is.
+    const contentsOnly = new Set<string>();
 
     try {
       await this.purgeEvents(nodes, ownerId, destroyed);
       await this.purgeContent(nodes, ownerId, destroyed);
       await this.purgeCommunications(nodes, ownerId, destroyed);
       await this.purgeItems(nodes, ownerId, destroyed, warnings);
+      await this.purgeFiles(nodes, ownerId, destroyed, warnings, contentsOnly);
     } catch (error) {
-      throw destroyed.size ? new PartialForgetError(Array.from(destroyed), error) : error;
+      throw destroyed.size || contentsOnly.size
+        ? new PartialForgetError(Array.from(destroyed), error, Array.from(contentsOnly))
+        : error;
     }
 
     return destroyed;
@@ -480,6 +517,81 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
   }
 
   /**
+   * Delete files for good, through {@link FileService.purge}: the node, the stored
+   * file it shadows, every variant under it, their chunks and search rows, and the
+   * objects in the object store.
+   *
+   * A `File` node is only the graph's shadow of a stored file, joined to it by a
+   * plain `linked_id` column, so the generic delete of the node never reached the
+   * file, the bytes, or the search rows keyed by the file's id.
+   *
+   * The objects are deleted before the rows. If the object store fails, nothing was
+   * deleted and the error is retryable. If the database fails after it, the files
+   * are still listed and no longer open, and the error names them
+   * ({@link StoredObjectsDeletedError}): forgetting them again finishes the job.
+   *
+   * What went that nobody named is said in `warnings`: the copies (previews,
+   * thumbnails, playback versions) that went with a file, and any object that
+   * stayed because another record still names it. So is the one thing that did not
+   * go and that the user may expect to have: a photo is a file and a content record
+   * that wraps it, the record keeps the filename and the description the image
+   * describer wrote, and forgetting the file does not forget it. They are listed,
+   * to be forgotten on their own.
+   *
+   * A `File` node `purge` does not take, because there is no `ci.files` row behind
+   * it, goes on to the generic path. Nothing references a row that does not exist,
+   * so there is nothing for the delete to be refused over.
+   */
+  private async purgeFiles(
+    nodes: GraphNodeEntity[],
+    ownerId: string,
+    destroyed: Set<string>,
+    warnings: string[],
+    contentsOnly: Set<string>,
+  ): Promise<void> {
+    const named = new Set(nodes.filter((node) => node.entity_type === 'File').map((node) => node.entity_id));
+
+    if (named.size === 0) {
+      return;
+    }
+
+    let purged: PurgedFiles;
+
+    try {
+      purged = await this.files.purge({ userId: ownerId }, Array.from(named));
+    } catch (error) {
+      if (error instanceof StoredObjectsDeletedError) {
+        error.nodeIds.forEach((id) => contentsOnly.add(id));
+
+        // The cause is what failed, and is what says whether trying again can help.
+        throw error.cause;
+      }
+
+      throw error;
+    }
+
+    purged.nodeIds.filter((id) => named.has(id)).forEach((id) => destroyed.add(id));
+
+    if (purged.copyFileIds.length > 0) {
+      warnings.push(
+        `Also deleted, because each was a copy (a preview, thumbnail or playback version) of a file named here: ${purged.copyFileIds.join(', ')}.`,
+      );
+    }
+
+    if (purged.keptObjects > 0) {
+      warnings.push(
+        `${purged.keptObjects} stored object(s) were not deleted because another file record still names them.`,
+      );
+    }
+
+    if (purged.wrappingContentIds.length > 0) {
+      warnings.push(
+        `Not deleted: content that wraps a deleted file, and still shows its filename and description: ${purged.wrappingContentIds.join(', ')}. Forget it separately to remove it.`,
+      );
+    }
+  }
+
+  /**
    * An integrity violation is not worth another try. `BaseTool` marks every failure retryable,
    * which is right for a timeout or a deadlock and wrong here: a foreign key that still references
    * the row refuses the same delete the same way every time, and an agent told otherwise will keep
@@ -489,7 +601,14 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
   protected handleError(error: unknown): ToolError {
     const partial = error instanceof PartialForgetError ? error : null;
     const cause = partial ? partial.cause : error;
-    const progress = partial ? { deletedEntityIds: partial.deletedEntityIds } : {};
+    const progress = partial
+      ? {
+          ...(partial.deletedEntityIds.length > 0 ? { deletedEntityIds: partial.deletedEntityIds } : {}),
+          ...(partial.storedObjectsDeletedFor.length > 0
+            ? { storedObjectsDeletedFor: partial.storedObjectsDeletedFor }
+            : {}),
+        }
+      : {};
 
     if (!isIntegrityConstraintViolation(cause)) {
       const base = super.handleError(error);
@@ -506,7 +625,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
 
     return {
       code: 'CONSTRAINT_VIOLATION',
-      message: `Cannot delete: ${blocker} still references one of the entities. Retrying will not change that. Use mode "archive" to forget without erasing.${alreadyDeleted(partial?.deletedEntityIds ?? [])}`,
+      message: `Cannot delete: ${blocker} still references one of the entities. Retrying will not change that. Use mode "archive" to forget without erasing.${alreadyDeleted(partial?.deletedEntityIds ?? [])}${storedContentsGone(partial?.storedObjectsDeletedFor ?? [], false)}`,
       retryable: false,
       details: { constraint, table, ...progress },
     };
@@ -548,6 +667,12 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    * that has a `ci.objects` row never reaches here: {@link purgeContent},
    * {@link purgeCommunications} and {@link purgeItems} delete it and announce it
    * themselves.
+   *
+   * A `File` node that has a `ci.files` row does not either: {@link purgeFiles}
+   * deletes the file and announces `file.deleted`, whose payload is the id of the
+   * `ci.files` row, because that and not the node's id is what the file's search
+   * rows are keyed by. That is why there is no `file` case below. In archive mode
+   * the node is deactivated and the stored file is left listed, as it always was.
    */
   private async unindexEntity(node: GraphNodeEntity, hardDelete: boolean): Promise<void> {
     // Reuses the canonical graph→search alias table rather than restating

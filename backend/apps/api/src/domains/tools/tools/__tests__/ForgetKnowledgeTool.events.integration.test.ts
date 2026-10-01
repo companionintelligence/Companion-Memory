@@ -20,6 +20,7 @@ import {
   RelationshipEntity,
   type CommunicationService,
   type CreateEventDto,
+  type FileService,
   type ItemService,
 } from '@ci/domains/memory';
 import { ConceptRemovedEvent, EventRemovedEvent, EventUpdatedEvent } from '@ci/domains/memory/events';
@@ -206,9 +207,10 @@ describeWithDb(`memory.forget on an Event, against Postgres (${availability.targ
         signalling,
         deltaWriter,
       ),
-      // No case here names a communication or an item, so the tool never reaches for either.
+      // No case here names a communication, an item or a file, so the tool never reaches for any of them.
       {} as unknown as CommunicationService,
       {} as unknown as ItemService,
+      {} as unknown as FileService,
       logger(),
     );
   });
