@@ -49,7 +49,7 @@ function ExternalNavLink({ href, label, children }: ExternalNavLinkProps) {
       rel="noopener noreferrer"
       aria-label={label}
       className={cn(
-        'relative flex min-w-0 items-center gap-2.5 rounded-md text-sm transition will-change-transform active:scale-95',
+        'relative flex min-w-0 items-center gap-2 rounded-md text-sm transition will-change-transform active:scale-95',
         RAIL_CHILD_HEIGHT,
         RAIL_CHILD_INSET,
         railRowTone(false),

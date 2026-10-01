@@ -584,13 +584,13 @@ describe('SecondaryNavigation', () => {
       const chat = screen.getByRole('link', { name: 'Chat' });
 
       expect(thread).toHaveClass(
-        'ml-18',
+        'ml-7.5',
         'text-xs',
         'text-muted-foreground',
         'min-h-[36px]',
         'device:min-h-[28px]',
       );
-      expect(chat).toHaveClass('ml-9', 'text-sm', 'min-h-[40px]', 'device:min-h-[32px]');
+      expect(chat).toHaveClass('ml-4.5', 'text-sm', 'min-h-[40px]', 'device:min-h-[32px]');
     });
   });
 

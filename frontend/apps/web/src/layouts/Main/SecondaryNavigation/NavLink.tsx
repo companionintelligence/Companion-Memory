@@ -5,7 +5,7 @@ import { NavLink as BaseNavLink, useMatch, useResolvedPath } from 'react-router-
 
 import { usePowerRail } from '../PowerRailContext';
 
-import { RAIL_SECTION_HEIGHT, RAIL_SECTION_INSET, railRowTone } from './railRow';
+import { RAIL_COLLAPSED_BADGE, RAIL_SECTION_HEIGHT, RAIL_SECTION_INSET, railRowTone } from './railRow';
 
 interface NavLinkProps extends ComponentProps<typeof BaseNavLink> {
   label: string;
@@ -47,9 +47,9 @@ export function NavLink({ to, label, children, badgeCount = 0, className, ...pro
         <span
           className={cn(
             'pointer-events-none inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold leading-none text-destructive-foreground',
-            // Inset when collapsed: the rail's overflow-y-auto scrollport
-            // clips anything that hangs outside the icon cell.
-            expanded ? 'ml-auto' : 'absolute right-0 top-0',
+            // Collapsed, over the icon's top like every rail count — see
+            // RAIL_COLLAPSED_BADGE for why it stays inside the cell.
+            expanded ? 'ml-auto' : RAIL_COLLAPSED_BADGE,
           )}
         >
           {badgeCount > 99 ? '99+' : badgeCount}
