@@ -25,6 +25,7 @@ import {
   SOURCE_TYPE,
   wantsAttachmentContentFrom,
 } from '../push/canonical';
+import { FACEBOOK_MESSENGER_SOURCE_SYSTEM, isFacebookMessengerRow } from '../push/inputs';
 import { dropReasonFor } from '../telemetry/dropReasons';
 import { buildStageSummary, SUMMARY_KEY, type StageSummary } from '../telemetry/stageSummary';
 import type { ImportStageRunner, StageOutcome, StageRunContext } from '../types';
@@ -57,6 +58,8 @@ interface MediaRow {
 interface AttachmentRow {
   id: string;
   dataSource: string;
+  classification?: string | null;
+  mediaType?: string | null;
   contentHash: string;
   metadata: Record<string, unknown> | null;
 }
@@ -606,7 +609,8 @@ export class MediaStage implements ImportStageRunner {
 
   private async nextAttachmentBatch(runId: string): Promise<AttachmentRow[]> {
     return this.dataSource.query<AttachmentRow[]>(
-      `SELECT id, data_source AS "dataSource", content_hash AS "contentHash", metadata
+      `SELECT id, data_source AS "dataSource", classification, media_type AS "mediaType",
+              content_hash AS "contentHash", metadata
          FROM ci_import.staged_items
         WHERE ${this.attachmentPredicate()}
         ORDER BY id
@@ -1166,15 +1170,26 @@ interface StoredAttachment {
  * push will key the communication on, so the attachment's id is a suffix of
  * its parent's. Mail keys on the federated `(email, <Message-ID>)` pair
  * (`toCommunicationInput` does the identical mapping from `metadata.MessageID`);
- * everything else on the staged row's platform triple.
+ * a Messenger message under `facebook_messenger`
+ * (`toFacebookMessengerCommunicationInput`); everything else on the staged
+ * row's platform triple.
+ *
+ * The Messenger case was missing, so every Messenger attachment was catalogued
+ * as `facebook` while its message was `facebook_messenger` — and the explorer's
+ * Facebook source filter returned thousands of chat attachments.
  */
 function attachmentParentIdentity(row: AttachmentRow): SourceIdentity {
   const messageId = row.metadata?.MessageID;
 
   return (
     emailIdentity(typeof messageId === 'string' ? messageId : undefined) ??
-    platformIdentity(row.dataSource, row.contentHash)
+    platformIdentity(parentSourceSystem(row), row.contentHash)
   );
+}
+
+/** The system the push keys this row's message on, when it is not the mail pair. */
+function parentSourceSystem(row: AttachmentRow): string {
+  return isFacebookMessengerRow(row) ? FACEBOOK_MESSENGER_SOURCE_SYSTEM : row.dataSource;
 }
 
 /**
@@ -1206,7 +1221,7 @@ function attachmentContentInput(row: AttachmentRow, plan: StoredAttachment): Cre
     ...(() => {
       const identity = plan.sha256
         ? attachmentIdentity(attachmentParentIdentity(row), plan.sha256)
-        : platformIdentity(row.dataSource, row.contentHash, 'attachment', String(plan.index));
+        : platformIdentity(parentSourceSystem(row), row.contentHash, 'attachment', String(plan.index));
 
       return { source_system: identity.system, source_id: identity.id };
     })(),

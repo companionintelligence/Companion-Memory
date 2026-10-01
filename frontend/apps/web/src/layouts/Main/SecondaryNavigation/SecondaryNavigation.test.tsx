@@ -278,6 +278,10 @@ describe('SecondaryNavigation', () => {
 
     expect(screen.getByRole('link', { name: 'Support' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Docs' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Privacy Policy' })).toHaveAttribute(
+      'href',
+      'https://ci.computer/privacy-policy',
+    );
   });
 
   // The rail floats over the content when pinned open, so the lane it sits in

@@ -58,6 +58,7 @@ import {
   isFacebookPost,
   isRedditComment,
   isRedditPost,
+  kindFor,
   mintsProductModel,
   num,
   redditMediaUrl,
@@ -1630,6 +1631,23 @@ export const FACEBOOK_MESSENGER_SOURCE_TYPE = SOURCE_TYPE;
 /** Is this canonical record a Facebook Messenger message? */
 export function isFacebookMessengerRecord(rec: CanonicalRecord): boolean {
   return rec.sourceSystem === 'facebook' && rec.kind === 'communication.message';
+}
+
+/**
+ * The same test on a staged row, before it has been canonicalized. MediaStage
+ * runs ahead of the push and keys each attachment on its parent message's
+ * identity, so it has to know the message will land under
+ * {@link FACEBOOK_MESSENGER_SOURCE_SYSTEM} rather than its data source.
+ */
+export function isFacebookMessengerRow(row: {
+  dataSource: string;
+  classification?: string | null;
+  mediaType?: string | null;
+}): boolean {
+  return (
+    row.dataSource === 'facebook' &&
+    kindFor(row.classification ?? null, row.mediaType ?? null) === 'communication.message'
+  );
 }
 
 /** The sender + recipient display names of a Messenger message. */

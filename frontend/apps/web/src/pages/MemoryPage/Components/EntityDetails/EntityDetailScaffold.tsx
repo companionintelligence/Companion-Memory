@@ -12,12 +12,13 @@ import {
 import { useApolloClient } from '@apollo/client';
 import { GlobalUID } from '@ci/common';
 import { Button, Card, IconButton, Label, Sheet, Tooltip, cn, useToast } from '@ci/shadcn';
-import { FileSymlink, ImageOff, Loader2, Pencil, Trash2 } from '@ci/shadcn/icons';
+import { Download, FileSymlink, ImageOff, Loader2, Pencil, Trash2 } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { Link, useInRouterContext } from 'react-router-dom';
 
 import { useTagEntityService } from '@/api';
 import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
+import { isSameOriginUrl } from '@/components/entities/resolveMediaUrl';
 import {
   EntityFields,
   EntityMetaList,
@@ -453,8 +454,26 @@ export function EntityMedia({
   // toward zero on a short window (dev tools open, a small laptop). Floored
   // at 16rem, so the media stays readable at any window height while tall
   // screens keep the exact old behaviour.
+  //
+  // The download saves the ORIGINAL where the caller named one: a video's
+  // `src` may be its playback rendition, with the original in `fallbackHref`.
+  // Only a file in our own store is offered (see isSameOriginUrl) — an
+  // external original already has "Open original" in the unavailable state.
+  const downloadHref = [fallbackHref, src].find((href) => !!href && isSameOriginUrl(href));
+
   return (
-    <div className="flex shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/40">
+    <div className="relative flex shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/40">
+      {downloadHref && (
+        <a
+          href={downloadHref}
+          download={alt || true}
+          aria-label="Download"
+          title="Download"
+          className="absolute right-2 top-2 z-10 rounded-md bg-black/50 p-1.5 text-white transition hover:bg-black/70"
+        >
+          <Download className="size-4" aria-hidden />
+        </a>
+      )}
       {isVideo ? (
         <video
           key={attempt}

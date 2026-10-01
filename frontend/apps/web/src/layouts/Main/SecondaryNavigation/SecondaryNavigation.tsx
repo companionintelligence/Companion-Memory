@@ -62,12 +62,12 @@ function ExternalNavLink({ href, label, children }: ExternalNavLinkProps) {
 }
 
 /**
- * Support and Docs, under one entry.
+ * Support, Docs and the Privacy Policy, under one entry.
  *
- * Two separate rows for "where do I get help" is one more than the question
- * has. Collapsed, it is a single icon whose tooltip says Help; the two
- * destinations are one click in either state, rather than two permanent rows
- * competing with the places you actually work.
+ * Separate rows for "where do I get help" are more than the question has.
+ * Collapsed, it is a single icon whose tooltip says Help; the destinations
+ * are one click in either state, rather than permanent rows competing with
+ * the places you actually work.
  */
 function HelpSubmenu() {
   const { expanded } = usePowerRail();

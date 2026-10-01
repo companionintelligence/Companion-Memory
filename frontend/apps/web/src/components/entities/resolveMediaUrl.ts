@@ -12,6 +12,21 @@ export function resolveMediaUrl(value?: string | null): string | undefined {
 }
 
 /**
+ * Is this URL served by the app itself (the `/static` object store)?
+ *
+ * The `download` attribute is silently ignored for cross-origin URLs — the
+ * browser navigates to the file instead of saving it. So a real "Download" is
+ * only offered for same-origin media; an external source gets "Open original".
+ */
+export function isSameOriginUrl(url: string): boolean {
+  try {
+    return new URL(url, window.location.origin).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Tile/row thumbnail for a FileType: prefer the derived preview, then the
  * original source for images — so a Capture screenshot renders before
  * preview generation finishes.

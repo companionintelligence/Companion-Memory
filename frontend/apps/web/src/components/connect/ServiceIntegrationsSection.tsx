@@ -131,7 +131,6 @@ export const SERVICE_PROVIDERS: ServiceProviderConfig[] = [
       { icon: MessageSquare, label: 'Posts' },
       { icon: Image, label: 'Photos' },
       { icon: Video, label: 'Videos' },
-      { icon: Users, label: 'Friends' },
     ],
   },
   {

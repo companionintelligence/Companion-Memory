@@ -9,6 +9,7 @@ import {
   History,
   LifeBuoy,
   ListTodo,
+  Lock,
   MessageCircleQuestion,
   ShieldCheck,
   Workflow,
@@ -211,6 +212,9 @@ export const HELP_LINKS = [
     label: 'Docs',
     icon: BookOpen,
   },
+  // Meta App Review requires the privacy policy to be reachable from inside
+  // the app, not only from the Facebook app's dashboard listing.
+  { href: 'https://ci.computer/privacy-policy', label: 'Privacy Policy', icon: Lock },
 ] as const;
 
 function isVisible(destination: RailDestination, isFeatureEnabled: (flag: string) => boolean): boolean {

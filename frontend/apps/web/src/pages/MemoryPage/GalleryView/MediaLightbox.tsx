@@ -4,6 +4,7 @@ import { IconButton } from '@ci/shadcn';
 import { ChevronLeft, ChevronRight, Download, ExternalLink, X } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { isSameOriginUrl } from '@/components/entities/resolveMediaUrl';
 import { FileIcon } from '@/components/icons';
 
 import { EmbedPlayer } from './EmbedPlayer';
@@ -14,18 +15,6 @@ interface Props {
   index: number;
   onClose: () => void;
   onIndexChange: (index: number) => void;
-}
-
-// The `download` attribute is silently ignored for cross-origin URLs — the
-// browser navigates/opens the file instead of saving it. So we only offer a real
-// "Download" for same-origin media (our /static object store) and fall back to an
-// "Open original" affordance for external sources.
-function isSameOrigin(url: string): boolean {
-  try {
-    return new URL(url, window.location.origin).origin === window.location.origin;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -132,7 +121,7 @@ export function MediaLightbox({ entries, index, onClose, onIndexChange }: Props)
   // A poster standing in for a page (TMDB art for a Netflix episode) opens the
   // PAGE, not the poster file, and is never offered as a download.
   const openUrl = current.pageUrl ?? current.fullUrl;
-  const canDownload = !current.pageUrl && isSameOrigin(current.fullUrl);
+  const canDownload = !current.pageUrl && isSameOriginUrl(current.fullUrl);
   const isBroken = brokenUrl === current.fullUrl;
 
   return (

@@ -23,6 +23,7 @@ const USER_ID = '33333333-3333-4333-8333-333333333333';
 interface AttachmentStub {
   id: string;
   dataSource: string;
+  classification?: string;
   contentHash: string;
   metadata: Record<string, unknown>;
 }
@@ -565,6 +566,51 @@ describe('MediaStage', () => {
         source_system: 'twitter',
         source_id: `attachment:twitter:dm:9:${sha256}`,
       });
+    });
+
+    it('catalogues a Messenger attachment under facebook_messenger, the system its message lands under', async () => {
+      // toFacebookMessengerCommunicationInput keys the message on
+      // facebook_messenger, not on the `facebook` data source. Keyed on the
+      // data source, 2,471 chat attachments answered the explorer's Facebook
+      // source filter while their own messages did not.
+      const sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const messenger: AttachmentStub = {
+        ...messageWith(scratchDir, [{ name: 'a.jpg' }], { AttachmentContent: true }),
+        dataSource: 'facebook',
+        classification: 'message',
+        contentHash: 'facebook:msg:v2:182be1e9',
+      };
+      const { stage, contents } = makeStage([], {
+        attachments: [messenger],
+        upload: jest.fn(async () => ({ file: { id: 'file-1', hash: sha256 }, deduped: false })),
+      });
+
+      await stage.run(contextFor(scratchDir));
+
+      const [, inputs] = contents.createManyDetailed.mock.calls[0];
+      expect(inputs[0]).toMatchObject({
+        source_system: 'facebook_messenger',
+        source_id: `attachment:facebook:msg:v2:182be1e9:${sha256}`,
+      });
+    });
+
+    it('leaves a Facebook row that is not a message on the facebook system', async () => {
+      const sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const post: AttachmentStub = {
+        ...messageWith(scratchDir, [{ name: 'a.jpg' }], { AttachmentContent: true }),
+        dataSource: 'facebook',
+        classification: 'post',
+        contentHash: 'facebook:post:1',
+      };
+      const { stage, contents } = makeStage([], {
+        attachments: [post],
+        upload: jest.fn(async () => ({ file: { id: 'file-1', hash: sha256 }, deduped: false })),
+      });
+
+      await stage.run(contextFor(scratchDir));
+
+      const [, inputs] = contents.createManyDetailed.mock.calls[0];
+      expect(inputs[0]).toMatchObject({ source_system: 'facebook' });
     });
 
     it('hangs a mail attachment off the federated (email, <Message-ID>) identity the message itself lands under', async () => {
