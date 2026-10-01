@@ -7,7 +7,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { OnEvent } from '@ci/domains/events';
-import { EventEntity, CalendarEventService, PlaceService } from '@ci/domains/memory';
+import { EventEntity, CalendarEventService, EVENT_HAPPENED_SQL, PlaceService } from '@ci/domains/memory';
 import { GeocodeBatchRequestEvent, type GeocodeBatchRequestPayload } from '@ci/domains/memory/events';
 
 import {
@@ -16,7 +16,6 @@ import {
   VIRTUAL_STATUS,
   type ReverseGeocodeOutcome,
 } from '../services/GeocodeService';
-import { eventHappenedSql } from '../util/eventHappened';
 
 /** Dedicated PGBoss queue so geocode backfills don't block the default queue. */
 const GEOCODE_QUEUE = 'geocode';
@@ -68,7 +67,7 @@ interface PlaceResolution {
  * It also writes `location_entity_id`, the link `promote.place` writes, and it
  * applies that stage's rule to it: an event that did not happen (deleted,
  * predicted, cancelled, no_show, skipped, or a cancelled Takeout reservation;
- * see {@link eventHappenedSql}) is geocoded like any other but is not linked.
+ * see {@link EVENT_HAPPENED_SQL}) is geocoded like any other but is not linked.
  * The coordinate is a fact about the venue. The link says the user went, and it
  * is read as a visit, a footprint and a LOCATED_AT edge. The rule is asked per
  * event, after the provider answers, because a batch is minutes of provider
@@ -489,7 +488,7 @@ export class GeocodeBatchListener {
   }
 
   /**
-   * Whether the event happened ({@link eventHappenedSql}), read now rather than
+   * Whether the event happened ({@link EVENT_HAPPENED_SQL}), read now rather than
    * carried over from {@link selectCandidates}. A batch is up to
    * `config.geocoding.batchSize` provider calls with a backoff of up to six
    * seconds each, and a calendar sync that cancels a meeting while one is in
@@ -498,13 +497,16 @@ export class GeocodeBatchListener {
    *
    * Fails closed. An event that cannot be read — hard-deleted mid-batch, or not
    * this user's — is not one this listener has any business linking.
+   *
+   * The table is aliased `event` because that is the alias
+   * {@link EVENT_HAPPENED_SQL} is written for.
    */
   private async eventHappened(context: UserServiceContext, eventId: string): Promise<boolean> {
     const rows: Array<{ happened: boolean | null }> = await this.dataSource.query(
-      `SELECT ${eventHappenedSql('e')} AS happened
-         FROM ci.events e
-        WHERE e.event_id = $1
-          AND e.user_id = $2`,
+      `SELECT ${EVENT_HAPPENED_SQL} AS happened
+         FROM ci.events event
+        WHERE event.event_id = $1
+          AND event.user_id = $2`,
       [eventId, context.userId],
     );
 

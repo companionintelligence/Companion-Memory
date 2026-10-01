@@ -54,7 +54,8 @@ import { GeocodeBatchListener } from '../GeocodeBatchListener';
  * off at its source stays in `ci.events` with its venue, so the link counted it
  * as a visit, widened the Location's footprint, and let `promote.edge_event`
  * project Event -LOCATED_AT-> Place for an event that never took place. The
- * rule is the one `promote.place` applies (`eventHappenedSql`), and the cases
+ * rule is the one `promote.place` applies (`eventHappenedSql`), in the memory
+ * domain's text (`EVENT_HAPPENED_SQL`, which the listener reads), and the cases
  * are the list every reader that asks the question is held to
  * (`EVENT_LIFECYCLE_CASES`): each class it refuses, and the controls that stop
  * it being widened to "anything but confirmed". A status added to

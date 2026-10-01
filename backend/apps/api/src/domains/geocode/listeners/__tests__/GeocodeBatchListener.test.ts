@@ -1,6 +1,7 @@
+import { EVENT_HAPPENED_SQL } from '@ci/domains/memory';
+
 import { VIRTUAL_STATUS } from '../../services/GeocodeService';
 import type { GeocodeOutcome, ReverseGeocodeOutcome } from '../../services/GeocodeService';
-import { eventHappenedSql } from '../../util/eventHappened';
 import { GeocodeBatchListener } from '../GeocodeBatchListener';
 
 function makeLogger() {
@@ -540,7 +541,7 @@ describe('GeocodeBatchListener Place linking — an event that did not happen', 
     expect(updates[0].data).not.toHaveProperty('location_entity_id');
   });
 
-  it("reads the event once, scoped to the user, in the rule's own text", async () => {
+  it("reads the event once, scoped to the user, in the memory domain's text of the rule", async () => {
     const rows = [{ event_id: 'e1', location_name: 'Conference Room B' }];
     const { listener, dataSource } = makeListener(rows, () => okOutcome());
 
@@ -549,10 +550,11 @@ describe('GeocodeBatchListener Place linking — an event that did not happen', 
     expect(dataSource.queries).toHaveLength(1);
     const [{ sql, params }] = dataSource.queries;
     expect(params).toEqual(['e1', USER]);
-    expect(sql).toContain(`SELECT ${eventHappenedSql('e')} AS happened`);
-    expect(sql).toContain('FROM ci.events e');
-    expect(sql).toContain('e.event_id = $1');
-    expect(sql).toContain('e.user_id = $2');
+    expect(sql).toContain(`SELECT ${EVENT_HAPPENED_SQL} AS happened`);
+    // EVENT_HAPPENED_SQL is written for the alias `event`.
+    expect(sql).toContain('FROM ci.events event');
+    expect(sql).toContain('event.event_id = $1');
+    expect(sql).toContain('event.user_id = $2');
   });
 
   it('asks only about an event it resolved: not a virtual venue, not a negative result', async () => {
