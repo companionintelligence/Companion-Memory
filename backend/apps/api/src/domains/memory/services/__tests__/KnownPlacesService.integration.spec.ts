@@ -91,8 +91,6 @@ const SAT_0700_PDT = '2026-08-22T14:00:00Z';
 const SAT_2200_PDT = '2026-08-23T05:00:00Z';
 const SUN_2200_PDT = '2026-08-24T05:00:00Z';
 const NEXT_WED_1000_PDT = '2026-08-26T17:00:00Z';
-const NEXT_WED_1400_PDT = '2026-08-26T21:00:00Z';
-const NEXT_THU_1000_PDT = '2026-08-27T17:00:00Z';
 // The three Wednesdays after WED_2100_PDT, at the same 21:00.
 const LATER_WEDS_2100_PDT = ['2026-08-27T04:00:00Z', '2026-09-03T04:00:00Z', '2026-09-10T04:00:00Z'];
 
@@ -599,12 +597,12 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
         [travellerHomeId, airportLocationId, travellerId],
       );
 
-      // Home, measured: three nights and a Sunday evening. Only one of the
-      // four carries a name, as happens with photos.
+      // Home, measured: a night in each of three weeks and a Sunday evening.
+      // Only one of the four carries a name, as happens with photos.
       for (const [title, at, placeName] of [
         ['Dinner at home', WED_2230_PDT, 'Home'],
-        ['Late call', WED_2300_PDT, null],
-        ['Movie night', THU_0100_PDT, null],
+        ['Late call', weeksLater(WED_2300_PDT, 1), null],
+        ['Movie night', weeksLater(THU_0100_PDT, 2), null],
         ['Sunday roast', SUN_1800_PDT, null],
       ] as const) {
         await seedEvent({
@@ -663,6 +661,22 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
         locationEntityId: airportLocationId,
         provenance: relabelledByLegacyReverseLeg(25),
       });
+
+      // The traveller takes that red-eye week after week, so the airport's
+      // nights recur: four of them, in four weeks, a night more than home's
+      // three. A single red-eye could not take Home under the weeks rule even if
+      // it were counted. A habit could, and that is what the estimate rule has
+      // to stop.
+      for (const week of [1, 2, 3]) {
+        await seedEvent({
+          userId: travellerId,
+          title: 'Walking',
+          at: weeksLater(SAT_0430_PDT, week),
+          point: AIRPORT,
+          placeName: null,
+          provenance: estimatedFromFix(40),
+        });
+      }
 
       // Coordinates that ARE the event's own, one per writer, each on a
       // weekend daytime so that none of them carries a home or work signal.
@@ -740,7 +754,7 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
             WHERE user_id = $1 AND location_coordinates IS NOT NULL`,
           [travellerId],
         ),
-      ).toEqual([{ located: 15, estimated: 6 }]);
+      ).toEqual([{ located: 18, estimated: 9 }]);
 
       const [first, ...rest] = await service.buildKnownPlaces(traveller);
       const tuples = [first, ...rest.sort((a, b) => a.label.localeCompare(b.label))].map((c) => [
@@ -800,7 +814,11 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
    * reservations, which say so only in `metadata` and have no coordinate yet
    * only because geocoding failed there. So the diarist below is the only
    * place any of this is measured. The deleted, predicted and cancelled
-   * groups are each big enough to take Home or Work if they were counted.
+   * groups are each big enough to take Home or Work if they were counted. That
+   * means the signal in three weeks, as the weeks rule requires, and a night or
+   * an office day more than the real place has. A group any smaller would be
+   * kept out by the weeks rule on its own, and the tests would stop saying
+   * anything about the clauses that are meant to keep it out.
    */
   describe('events that did not happen', () => {
     const diarist = { userId: diaristId } as UserServiceContext;
@@ -825,11 +843,13 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
         [diaristHomeId, diaristId],
       );
 
-      // What happened: three nights at home, and two office hours.
+      // What happened: a night at home in each of three weeks and a weekend
+      // morning, and an office day in each of three weeks.
       for (const [title, at] of [
         ['Dinner at home', WED_2230_PDT],
-        ['Late call', WED_2300_PDT],
-        ['Movie night', THU_0100_PDT],
+        ['Late call', weeksLater(WED_2300_PDT, 1)],
+        ['Movie night', weeksLater(THU_0100_PDT, 2)],
+        ['Saturday brunch', SAT_1030_PDT],
       ]) {
         await seedEvent({
           userId: diaristId,
@@ -843,18 +863,19 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
 
       for (const [title, at] of [
         ['Standup', WED_1000_PDT],
-        ['Design review', WED_1400_PDT],
+        ['Design review', weeksLater(WED_1400_PDT, 1)],
+        ['Planning', weeksLater(WED_1000_PDT, 2)],
       ]) {
         await seedEvent({ userId: diaristId, title, at, point: OFFICE, placeName: 'Office' });
       }
 
-      // Deleted: four nights of photos at a hotel, which the user removed
-      // from their timeline. One more night than home.
+      // Deleted: four nights of photos at a hotel, in three weeks, which the
+      // user removed from their timeline. One more night than home.
       for (const [title, at] of [
         ['IMG_2041.HEIC', THU_2200_PDT],
         ['IMG_2042.HEIC', FRI_2200_PDT],
-        ['IMG_2043.HEIC', SAT_2200_PDT],
-        ['IMG_2044.HEIC', SUN_2200_PDT],
+        ['IMG_2043.HEIC', weeksLater(SAT_2200_PDT, 1)],
+        ['IMG_2044.HEIC', weeksLater(SUN_2200_PDT, 2)],
       ]) {
         await seedEvent({
           userId: diaristId,
@@ -866,15 +887,15 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
         });
       }
 
-      // Predicted: next week's office hours, forecast at a coworking space.
-      // One more work-hours event than the office. No writer produces these
+      // Predicted: the next four weeks of office hours, forecast at a coworking
+      // space. One more office day than the office. No writer produces these
       // today except an account import, which restores rows verbatim, but
       // the flag says what the row is.
-      for (const at of [NEXT_WED_1000_PDT, NEXT_WED_1400_PDT, NEXT_THU_1000_PDT]) {
+      for (const week of [0, 1, 2, 3]) {
         await seedEvent({
           userId: diaristId,
           title: 'Focus time',
-          at,
+          at: weeksLater(NEXT_WED_1000_PDT, week),
           point: COWORKING,
           placeName: 'Coworking space',
           lifecycle: { isPredicted: true },
@@ -1006,7 +1027,7 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
             WHERE user_id = $1 AND location_coordinates IS NOT NULL`,
           [diaristId, [...DEAD_EVENT_STATUSES]],
         ),
-      ).toEqual([{ located: 22, deleted: 4, predicted: 3, did_not_happen: 5, canceled_reservations: 1 }]);
+      ).toEqual([{ located: 25, deleted: 4, predicted: 4, did_not_happen: 5, canceled_reservations: 1 }]);
 
       const [first, ...rest] = await service.buildKnownPlaces(diarist);
       const tuples = [first, ...rest.sort((a, b) => a.label.localeCompare(b.label))].map((c) => [
@@ -1017,11 +1038,11 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
       ]);
 
       expect(tuples).toEqual([
-        ['home', 'Home', 3, diaristHomeId],
+        ['home', 'Home', 4, diaristHomeId],
         ['other', 'Farmers market', 1, null],
         ['other', 'Griffith Park', 1, null],
         ['other', 'Noodle bar', 1, null],
-        ['work', 'Office', 2, null],
+        ['work', 'Office', 3, null],
         ['other', 'Pottery studio', 1, null],
       ]);
     });
