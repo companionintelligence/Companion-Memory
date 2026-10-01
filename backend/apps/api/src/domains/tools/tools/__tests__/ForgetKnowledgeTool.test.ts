@@ -222,13 +222,19 @@ function makeContents(purgeableContentIds: string[] = [], files: WrappedFilesPur
 
 /**
  * Stand-in for `CommunicationService`. `purge` takes every id that has a `ci.communications` row
- * (`purgeableCommunicationIds`) and answers with the ones it took; a `Communication` node with no
- * detail row is not among them, as for the real one.
+ * (`purgeableCommunicationIds`) and answers with the ones it took, with the content rows its attachments
+ * named that went too (`contentIds`) and with what was done about the stored files (`files`); a
+ * `Communication` node with no detail row is not among them, as for the real one.
  */
-function makeCommunications(purgeableCommunicationIds: string[] = []) {
+function makeCommunications(
+  purgeableCommunicationIds: string[] = [],
+  extra: { contentIds?: string[]; files?: WrappedFilesPurged } = {},
+) {
   const purgeable = new Set(purgeableCommunicationIds);
   const purge = jest.fn(async (_context: { userId: string }, ids: string[]) => ({
     communicationIds: ids.filter((id) => purgeable.has(id)),
+    contentIds: extra.contentIds ?? [],
+    files: extra.files ?? wrapped(),
   }));
 
   return { purge };
@@ -2402,6 +2408,380 @@ describe('ForgetKnowledgeTool wrapped files, archive_and_delete', () => {
       });
       expect(result.error?.message).toContain(`Already deleted: ${E3}.`);
       expect(result.error?.message).toContain(`Forgetting them again finishes the job: ${E1}.`);
+    });
+  });
+});
+
+describe('ForgetKnowledgeTool message attachments, archive_and_delete', () => {
+  const FILE = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const FILE_2 = 'aaaaaaaa-0000-0000-0000-000000000002';
+  const COPY = 'aaaaaaaa-0000-0000-0000-0000000000c1';
+  const NODE = 'bbbbbbbb-0000-0000-0000-000000000001';
+  const OTHER_MESSAGE = 'cccccccc-0000-0000-0000-000000000002';
+  const PHOTO = 'dddddddd-0000-0000-0000-000000000001';
+  const PHOTO_2 = 'dddddddd-0000-0000-0000-000000000002';
+
+  /** A tool whose only interesting collaborators are the graph and the services that purge what holds files. */
+  function messageTool(
+    graphUtility: ReturnType<typeof makeGraphUtility>,
+    parts: {
+      calendarEvents?: ReturnType<typeof makeCalendarEvents>;
+      contents?: ReturnType<typeof makeContents>;
+      communications?: ReturnType<typeof makeCommunications>;
+      files?: ReturnType<typeof makeFiles>;
+    },
+  ) {
+    return makeTool(
+      graphUtility,
+      makeSearchIndex(),
+      parts.calendarEvents ?? makeCalendarEvents(),
+      parts.contents ?? makeContents(),
+      parts.communications ?? makeCommunications(),
+      makeItems(),
+      parts.files ?? makeFiles(),
+    );
+  }
+
+  const forgetMessages = (
+    graphUtility: ReturnType<typeof makeGraphUtility>,
+    parts: Parameters<typeof messageTool>[1],
+    entityIds: string[] = [E1],
+  ) => messageTool(graphUtility, parts).execute(CONTEXT, { entityIds, mode: 'archive_and_delete' });
+
+  describe('what it says went', () => {
+    it('says which stored files went with a message, and the copies that went with them, in the message’s own words', async () => {
+      const communications = makeCommunications([E1], {
+        files: wrapped({ wrappedFileIds: [FILE], fileIds: [FILE, COPY], nodeIds: [NODE] }),
+      });
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Communication' } } });
+
+      const result = await forgetMessages(graphUtility, { communications });
+
+      expect(result.success).toBe(true);
+      expect(result.data?.archivedEntityIds).toEqual([E1]);
+      expect(result.data?.warnings).toEqual([
+        `Also deleted, along with the message that held them, because nothing else used them: stored file(s) ${FILE}, and 1 copy(ies) of them (previews, thumbnails, playback versions).`,
+      ]);
+    });
+
+    it('says which content rows went with a message that nobody named', async () => {
+      const communications = makeCommunications([E1], { contentIds: [PHOTO, PHOTO_2] });
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Communication' } } });
+
+      const result = await forgetMessages(graphUtility, { communications });
+
+      expect(result.data?.warnings).toEqual([
+        `Also deleted, because a message named here carried them as attachments: content ${PHOTO}, ${PHOTO_2}.`,
+      ]);
+    });
+
+    it('lists the first few of a long run of content rows and counts the rest, so that a chat of photos is one line', async () => {
+      const ids = Array.from({ length: 8 }, (_, index) => `dddddddd-0000-0000-0000-00000000030${index}`);
+      const communications = makeCommunications([E1], { contentIds: ids });
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Communication' } } });
+
+      const result = await forgetMessages(graphUtility, { communications });
+
+      expect(result.data?.warnings).toEqual([
+        `Also deleted, because a message named here carried them as attachments: content ${ids.slice(0, 5).join(', ')} and 3 more.`,
+      ]);
+    });
+
+    it('says the content rows first, then the files, when a message took both', async () => {
+      const communications = makeCommunications([E1], {
+        contentIds: [PHOTO],
+        files: wrapped({ wrappedFileIds: [FILE], fileIds: [FILE] }),
+      });
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Communication' } } });
+
+      const result = await forgetMessages(graphUtility, { communications });
+
+      expect(result.data?.warnings).toEqual([
+        `Also deleted, because a message named here carried them as attachments: content ${PHOTO}.`,
+        `Also deleted, along with the message that held them, because nothing else used them: stored file(s) ${FILE}.`,
+      ]);
+    });
+
+    it('says when a stored object stayed because another file record still names it', async () => {
+      const communications = makeCommunications([E1], {
+        files: wrapped({ wrappedFileIds: [FILE], fileIds: [FILE], keptObjects: 2 }),
+      });
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Communication' } } });
+
+      const result = await forgetMessages(graphUtility, { communications });
+
+      expect(result.data?.warnings).toContain(
+        '2 stored object(s) were not deleted because another file record still names them.',
+      );
+    });
+
+    it('says nothing of files or content when the messages named none', async () => {
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Communication' } } });
+
+      const result = await forgetMessages(graphUtility, { communications: makeCommunications([E1]) });
+
+      expect(result.data?.warnings).toBeUndefined();
+    });
+  });
+
+  describe('what it says stayed, and why', () => {
+    it('names a file that another message and other content still use, and the File node that deletes it anyway', async () => {
+      const communications = makeCommunications([E1], {
+        files: wrapped({
+          kept: [keptFile(FILE, { nodeId: NODE, usedBy: { messageIds: [OTHER_MESSAGE], contentIds: [E2] } })],
+        }),
+      });
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Communication' } } });
+
+      const result = await forgetMessages(graphUtility, { communications });
+
+      // A kept file is not a failure: the message went, and the call says what is left and why.
+      expect(result.success).toBe(true);
+      expect(result.data?.warnings).toEqual([
+        `Not deleted: stored file ${FILE} is still used by message(s) ${OTHER_MESSAGE}; other content ${E2}. Forget its File node ${NODE} to delete it anyway.`,
+      ]);
+    });
+  });
+
+  describe('a call that names what keeps a file', () => {
+    it('does not say a file stayed when a later purge in the same call deleted it', async () => {
+      // The content went first and kept the file, because the message used it. Then the message went, and
+      // nothing used it any more. Both are true in turn, and only the end of it is what the user is told.
+      const contents = makeContents(
+        [E2],
+        wrapped({ kept: [keptFile(FILE, { nodeId: NODE, usedBy: { messageIds: [E1] } })] }),
+      );
+      const communications = makeCommunications([E1], {
+        files: wrapped({ wrappedFileIds: [FILE], fileIds: [FILE, COPY] }),
+      });
+      const graphUtility = makeGraphUtility({
+        nodes: { [E1]: { entityType: 'Communication' }, [E2]: { entityType: 'Content' } },
+      });
+
+      const result = await forgetMessages(graphUtility, { contents, communications }, [E1, E2]);
+
+      expect(result.success).toBe(true);
+      expect(result.data?.warnings).toEqual([
+        `Also deleted, along with the message that held them, because nothing else used them: stored file(s) ${FILE}, and 1 copy(ies) of them (previews, thumbnails, playback versions).`,
+      ]);
+    });
+
+    it('says what the last purge found when a file stayed through all of them', async () => {
+      const contents = makeContents(
+        [E2],
+        wrapped({ kept: [keptFile(FILE, { usedBy: { messageIds: [E1], contentIds: [E3] } })] }),
+      );
+      const communications = makeCommunications([E1], {
+        files: wrapped({ kept: [keptFile(FILE, { usedBy: { contentIds: [E3] } })] }),
+      });
+      const graphUtility = makeGraphUtility({
+        nodes: { [E1]: { entityType: 'Communication' }, [E2]: { entityType: 'Content' } },
+      });
+
+      const result = await forgetMessages(graphUtility, { contents, communications }, [E1, E2]);
+
+      // One line, and the message that was forgotten since is not named as what keeps it.
+      expect(result.data?.warnings).toEqual([
+        `Not deleted: stored file ${FILE} is still used by other content ${E3}.`,
+      ]);
+    });
+
+    it('lists the files that stayed across the purges together, ten at a time', async () => {
+      const kept = (from: number) =>
+        Array.from({ length: 6 }, (_, index) =>
+          keptFile(`aaaaaaaa-0000-0000-0000-0000000004${String(from + index).padStart(2, '0')}`, {
+            usedBy: { messageIds: [OTHER_MESSAGE] },
+          }),
+        );
+      const contents = makeContents([E2], wrapped({ kept: kept(0) }));
+      const communications = makeCommunications([E1], { files: wrapped({ kept: kept(6) }) });
+      const graphUtility = makeGraphUtility({
+        nodes: { [E1]: { entityType: 'Communication' }, [E2]: { entityType: 'Content' } },
+      });
+
+      const result = await forgetMessages(graphUtility, { contents, communications }, [E1, E2]);
+
+      const warnings = result.data?.warnings ?? [];
+
+      expect(warnings).toHaveLength(11);
+      expect(warnings.slice(0, 10).every((line) => line.startsWith('Not deleted: stored file '))).toBe(true);
+      expect(warnings[10]).toBe(
+        '2 more stored file(s) were not deleted either, because something else still uses them.',
+      );
+    });
+
+    it('says what went and what stayed in the same call, each file once', async () => {
+      const contents = makeContents(
+        [E2],
+        wrapped({ kept: [keptFile(FILE_2, { nodeId: NODE, usedBy: { messageIds: [OTHER_MESSAGE] } })] }),
+      );
+      const communications = makeCommunications([E1], {
+        files: wrapped({
+          wrappedFileIds: [FILE],
+          fileIds: [FILE],
+          kept: [keptFile(FILE_2, { nodeId: NODE, usedBy: { messageIds: [OTHER_MESSAGE] } })],
+        }),
+      });
+      const graphUtility = makeGraphUtility({
+        nodes: { [E1]: { entityType: 'Communication' }, [E2]: { entityType: 'Content' } },
+      });
+
+      const result = await forgetMessages(graphUtility, { contents, communications }, [E1, E2]);
+
+      expect(result.data?.warnings).toEqual([
+        `Also deleted, along with the message that held them, because nothing else used them: stored file(s) ${FILE}.`,
+        `Not deleted: stored file ${FILE_2} is still used by message(s) ${OTHER_MESSAGE}. Forget its File node ${NODE} to delete it anyway.`,
+      ]);
+    });
+  });
+
+  describe('a File node named in the same call', () => {
+    it('is not purged a second time when it went with the message that named it', async () => {
+      const communications = makeCommunications([E1], {
+        files: wrapped({ wrappedFileIds: [FILE], fileIds: [FILE], nodeIds: [E2] }),
+      });
+      const files = makeFiles([E2]);
+      const graphUtility = makeGraphUtility({
+        nodes: { [E1]: { entityType: 'Communication' }, [E2]: { entityType: 'File' } },
+      });
+
+      const result = await forgetMessages(graphUtility, { communications, files }, [E1, E2]);
+
+      expect(result.success).toBe(true);
+      // Its node went with the message's purge, so neither the file purge nor the generic delete has it.
+      expect(files.purge).not.toHaveBeenCalled();
+      expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+      expect(result.data?.archivedEntityIds).toEqual([E1, E2]);
+    });
+
+    it('is still purged when the message kept its file, which is the way to delete it anyway', async () => {
+      const communications = makeCommunications([E1], {
+        files: wrapped({ kept: [keptFile(FILE, { nodeId: E2, usedBy: { messageIds: [OTHER_MESSAGE] } })] }),
+      });
+      const files = makeFiles([E2]);
+      const graphUtility = makeGraphUtility({
+        nodes: { [E1]: { entityType: 'Communication' }, [E2]: { entityType: 'File' } },
+      });
+
+      const result = await forgetMessages(graphUtility, { communications, files }, [E1, E2]);
+
+      expect(result.success).toBe(true);
+      expect(files.purge).toHaveBeenCalledWith({ userId: CONTEXT.userId }, [E2]);
+    });
+
+    it('is listed as already deleted when a later purge fails, though it was only said at the end', async () => {
+      // The warnings are written once every purge has run, and a failure writes none, so the node that went
+      // with the message has to be marked when the message's purge returns, not when the call is reported.
+      const communications = makeCommunications([E1], {
+        files: wrapped({ wrappedFileIds: [FILE], fileIds: [FILE], nodeIds: [E2] }),
+      });
+      const people = makePeople([E3]);
+
+      people.purge.mockRejectedValueOnce(new Error('connection reset'));
+
+      const graphUtility = makeGraphUtility({
+        nodes: {
+          [E1]: { entityType: 'Communication' },
+          [E2]: { entityType: 'File' },
+          [E3]: { entityType: 'Person' },
+        },
+      });
+
+      const result = await toolWith(graphUtility, { communications, people }).execute(CONTEXT, {
+        entityIds: [E1, E2, E3],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error?.details).toMatchObject({ deletedEntityIds: [E1, E2] });
+    });
+  });
+
+  describe('when the purge fails', () => {
+    it('names the messages whose photos are gone, and says that forgetting them again finishes the job', async () => {
+      const communications = makeCommunications([E1]);
+
+      communications.purge.mockRejectedValueOnce(
+        new StoredObjectsDeletedError([E1], new Error('deadlock detected')),
+      );
+
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Communication' } } });
+
+      const result = await forgetMessages(graphUtility, { communications });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatchObject({
+        code: 'EXECUTION_ERROR',
+        retryable: true,
+        details: { storedObjectsDeletedFor: [E1] },
+      });
+      expect(result.error?.message).toContain('deadlock detected');
+      expect(result.error?.message).toContain(`Forgetting them again finishes the job: ${E1}.`);
+      expect(result.error?.details).not.toHaveProperty('deletedEntityIds');
+    });
+
+    it('does not call a foreign-key violation retryable, and does not promise that forgetting again helps', async () => {
+      const communications = makeCommunications([E1]);
+
+      communications.purge.mockRejectedValueOnce(
+        new StoredObjectsDeletedError(
+          [E1],
+          pgFailure('23503', { constraint: 'new_fkey', table: 'communications' }),
+        ),
+      );
+
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Communication' } } });
+
+      const result = await forgetMessages(graphUtility, { communications });
+
+      expect(result.error).toMatchObject({
+        code: 'CONSTRAINT_VIOLATION',
+        retryable: false,
+        details: { storedObjectsDeletedFor: [E1] },
+      });
+      expect(result.error?.message).toContain(
+        `Retrying cannot finish the job until what references them is removed: ${E1}.`,
+      );
+      expect(result.error?.message).not.toContain('Forgetting them again finishes the job');
+    });
+
+    it('lists what an earlier purge destroyed together with the message whose photo is gone', async () => {
+      const calendarEvents = makeCalendarEvents([E3]);
+      const communications = makeCommunications([E1]);
+
+      communications.purge.mockRejectedValueOnce(
+        new StoredObjectsDeletedError([E1], new Error('connection reset')),
+      );
+
+      const graphUtility = makeGraphUtility({
+        nodes: { [E3]: { entityType: 'Event' }, [E1]: { entityType: 'Communication' } },
+      });
+
+      const result = await forgetMessages(graphUtility, { calendarEvents, communications }, [E3, E1]);
+
+      expect(result.error).toMatchObject({
+        details: { deletedEntityIds: [E3], storedObjectsDeletedFor: [E1] },
+      });
+      expect(result.error?.message).toContain(`Already deleted: ${E3}.`);
+      expect(result.error?.message).toContain(`Forgetting them again finishes the job: ${E1}.`);
+    });
+
+    it('says nothing of half-gone files when the object store failed first, and nothing was deleted', async () => {
+      const communications = makeCommunications([E1]);
+
+      communications.purge.mockRejectedValueOnce(
+        new Error(
+          'The stored objects could not be deleted, so nothing was deleted from the database: ECONNREFUSED',
+        ),
+      );
+
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Communication' } } });
+
+      const result = await forgetMessages(graphUtility, { communications });
+
+      expect(result.error).toMatchObject({ code: 'EXECUTION_ERROR', retryable: true });
+      expect(result.error?.details).not.toHaveProperty('storedObjectsDeletedFor');
+      expect(result.error?.details).not.toHaveProperty('deletedEntityIds');
     });
   });
 });

@@ -74,8 +74,8 @@ export interface ForgetKnowledgeOutput {
  * A file can also be half gone: a purge deletes its stored objects before its records, so a failure
  * in between leaves a file that is still listed and no longer opens. Those are named separately,
  * because they are not deleted and the way to finish them is to forget them again. The same goes for
- * content and events, whose purge deletes the stored photo they wrap: the ones named are the content
- * or events that are still there, wrapping a photo that no longer opens.
+ * content, events and messages, whose purge deletes the stored photo they wrap or name: the ones named are
+ * the content, events or messages that are still there, holding a photo that no longer opens.
  */
 class PartialForgetError extends Error {
   constructor(
@@ -129,6 +129,12 @@ function unwrapStoredObjectsDeleted(error: unknown, contentsOnly: Set<string>): 
   }
 
   return error;
+}
+
+/** What one purge of events, content or messages did about stored files, and what held them: the words its line is said in. */
+interface WrappedStep {
+  files: WrappedFilesPurged;
+  heldBy: string;
 }
 
 const keptObjectsWarning = (count: number): string =>
@@ -204,7 +210,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
           enum: ['archive', 'archive_and_delete'],
           default: 'archive',
           description:
-            "Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, an item, person, place or concept goes with the duplicates that were merged into it, a file goes with its previews and other copies and with its stored bytes, and anything that came from a source that syncs again can arrive again. The stored photo of content or of an event goes with it, bytes included, only when nothing else uses it: if another content record, a message's attachment, a chat attachment or another event still does, the file stays and is listed in warnings with what uses it and the File node to forget to delete it anyway. A forgotten person's email addresses, phone numbers and handles are remembered as digests, so messages that still name them do not create them again; their messages and events are not deleted. An item that is another item's parent is refused until its children are named too, and the user's own person is always refused. The content record of a photo is not deleted with its file: it is listed in warnings, to be forgotten on its own.",
+            "Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, an item, person, place or concept goes with the duplicates that were merged into it, a file goes with its previews and other copies and with its stored bytes, and anything that came from a source that syncs again can arrive again. The stored photo of content, of an event or of a message's attachments goes with it, bytes included, only when nothing else uses it: if another content record, another message's attachment, a chat attachment or another event still does, the file stays and is listed in warnings with what uses it and the File node to forget to delete it anyway. A message also takes the content records its attachments name (a Messenger photo's record, a Discord attachment link) unless another message or an event still holds them. A forgotten person's email addresses, phone numbers and handles are remembered as digests, so messages that still name them do not create them again; their messages and events are not deleted. An item that is another item's parent is refused until its children are named too, and the user's own person is always refused. The content record of a photo is not deleted with its file: it is listed in warnings, to be forgotten on its own.",
         },
         reason: {
           type: 'string',
@@ -423,7 +429,10 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    * does the whole teardown in one transaction and announces its own removal.
    *
    * Events go first, and take their attached content with them, so a content node
-   * named in the same call may already be gone when its own turn comes.
+   * named in the same call may already be gone when its own turn comes. Messages go
+   * after content, and take the content their attachments name that nothing else
+   * holds. What those three did about stored files is said once, after the last of
+   * them ({@link reportWrappedFiles}).
    *
    * Each is a separate transaction, and none can be undone. When a later one is
    * refused after an earlier one has committed, the error says what is already gone.
@@ -438,14 +447,19 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
   ): Promise<Set<string>> {
     const destroyed = new Set<string>();
     // Entities whose stored files were deleted and which then could not be: neither destroyed nor
-    // intact, and the only state a purge can leave that is. A file, or the content or event that
-    // wrapped the file, depending on what was named.
+    // intact, and the only state a purge can leave that is. A file, or the content, event or message that
+    // wrapped or named the file, depending on what was named.
     const contentsOnly = new Set<string>();
+    // What each purge of events, content or messages did about stored files, said once, after all three: a
+    // file that one of them kept because another record used it can be deleted by a later one in the same
+    // call, when that record is among what was named, and the two lines would contradict each other.
+    const wrapped: WrappedStep[] = [];
 
     try {
-      await this.purgeEvents(nodes, ownerId, destroyed, warnings, contentsOnly);
-      await this.purgeContent(nodes, ownerId, destroyed, warnings, contentsOnly);
-      await this.purgeCommunications(nodes, ownerId, destroyed);
+      await this.purgeEvents(nodes, ownerId, destroyed, wrapped, contentsOnly);
+      await this.purgeContent(nodes, ownerId, destroyed, wrapped, contentsOnly);
+      await this.purgeCommunications(nodes, ownerId, destroyed, warnings, wrapped, contentsOnly);
+      this.reportWrappedFiles(wrapped, warnings);
       await this.purgePeople(nodes, ownerId, destroyed, warnings);
       await this.purgePlaces(nodes, ownerId, destroyed, warnings);
       await this.purgeConcepts(nodes, ownerId, destroyed, warnings);
@@ -472,7 +486,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     nodes: GraphNodeEntity[],
     ownerId: string,
     destroyed: Set<string>,
-    warnings: string[],
+    wrapped: WrappedStep[],
     contentsOnly: Set<string>,
   ): Promise<void> {
     const eventIds = nodes.filter((node) => node.entity_type === 'Event').map((node) => node.entity_id);
@@ -490,7 +504,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     }
 
     purged.eventIds.forEach((id) => destroyed.add(id));
-    this.reportWrappedFiles(purged.files, nodes, destroyed, warnings);
+    this.collectWrappedFiles(purged.files, 'content or event', nodes, destroyed, wrapped);
 
     // A content node named in this call that hung off one of those events went with it. It is gone, so
     // it is neither the next step's to purge nor the generic path's to delete.
@@ -514,7 +528,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     nodes: GraphNodeEntity[],
     ownerId: string,
     destroyed: Set<string>,
-    warnings: string[],
+    wrapped: WrappedStep[],
     contentsOnly: Set<string>,
   ): Promise<void> {
     const contentIds = nodes
@@ -534,47 +548,73 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     }
 
     purged.contentIds.forEach((id) => destroyed.add(id));
-    this.reportWrappedFiles(purged.files, nodes, destroyed, warnings);
+    this.collectWrappedFiles(purged.files, 'content or event', nodes, destroyed, wrapped);
   }
 
   /**
-   * Says what a purge of content or of an event did about the stored photos it wrapped, which nobody
-   * named and which are the part that is the photo: the ones that went, with their copies; the objects
-   * that stayed because another file record names them; and the files that were kept because something
-   * else still uses them, each with what uses it and the `File` node to forget to delete it anyway.
+   * Notes what a purge of content, of an event or of a message did about the stored photos it wrapped,
+   * linked or named, for {@link reportWrappedFiles} to say once every such purge in the call has run.
    *
-   * A `File` node that was named in this call and went with its content is gone, so it is neither the
-   * next step's to purge nor the generic path's to delete.
+   * A `File` node that was named in this call and went with what held it is gone, so it is neither the
+   * next step's to purge nor the generic path's to delete. That is marked now, and not when the call is
+   * reported, so that a later failure still lists it among what was already deleted.
    */
-  private reportWrappedFiles(
+  private collectWrappedFiles(
     files: WrappedFilesPurged,
+    heldBy: string,
     nodes: GraphNodeEntity[],
     destroyed: Set<string>,
-    warnings: string[],
+    steps: WrappedStep[],
   ): void {
     const named = new Set(nodes.filter((node) => node.entity_type === 'File').map((node) => node.entity_id));
 
     files.nodeIds.filter((id) => named.has(id)).forEach((id) => destroyed.add(id));
+    steps.push({ files, heldBy });
+  }
 
-    if (files.wrappedFileIds.length > 0) {
-      const copies = files.fileIds.length - files.wrappedFileIds.length;
+  /**
+   * Says what the purges of content, events and messages did about the stored photos they held, which
+   * nobody named and which are the part that is the photo: the ones that went, with their copies; the
+   * objects that stayed because another file record names them; and the files that were kept because
+   * something else still uses them, each with what uses it and the `File` node to forget to delete it
+   * anyway.
+   *
+   * The files that stayed are judged on the whole call. A file one purge kept, because a message or a
+   * content row still used it, was looked at again by the purge of that message or content row if it was
+   * named too, so the last look is the one that counts, and a file that a later purge deleted is not
+   * kept at all.
+   */
+  private reportWrappedFiles(steps: WrappedStep[], warnings: string[]): void {
+    for (const { files, heldBy } of steps) {
+      if (files.wrappedFileIds.length > 0) {
+        const copies = files.fileIds.length - files.wrappedFileIds.length;
 
-      warnings.push(
-        `Also deleted, along with the content or event that held them, because nothing else used them: stored file(s) ${listIds(files.wrappedFileIds)}${
-          copies > 0 ? `, and ${copies} copy(ies) of them (previews, thumbnails, playback versions)` : ''
-        }.`,
-      );
+        warnings.push(
+          `Also deleted, along with the ${heldBy} that held them, because nothing else used them: stored file(s) ${listIds(files.wrappedFileIds)}${
+            copies > 0 ? `, and ${copies} copy(ies) of them (previews, thumbnails, playback versions)` : ''
+          }.`,
+        );
+      }
+
+      if (files.keptObjects > 0) {
+        warnings.push(keptObjectsWarning(files.keptObjects));
+      }
     }
 
-    if (files.keptObjects > 0) {
-      warnings.push(keptObjectsWarning(files.keptObjects));
+    const gone = new Set(steps.flatMap(({ files }) => files.fileIds));
+    const latest = new Map<string, KeptFile>();
+
+    for (const { files } of steps) {
+      files.kept.forEach((kept) => latest.set(kept.fileId, kept));
     }
 
-    files.kept.slice(0, MAX_KEPT_FILES_LISTED).forEach((kept) => warnings.push(keptFileWarning(kept)));
+    const kept = Array.from(latest.values()).filter((file) => !gone.has(file.fileId));
 
-    if (files.kept.length > MAX_KEPT_FILES_LISTED) {
+    kept.slice(0, MAX_KEPT_FILES_LISTED).forEach((file) => warnings.push(keptFileWarning(file)));
+
+    if (kept.length > MAX_KEPT_FILES_LISTED) {
       warnings.push(
-        `${files.kept.length - MAX_KEPT_FILES_LISTED} more stored file(s) were not deleted either, because something else still uses them.`,
+        `${kept.length - MAX_KEPT_FILES_LISTED} more stored file(s) were not deleted either, because something else still uses them.`,
       );
     }
   }
@@ -583,6 +623,12 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    * Delete communications for good, through {@link CommunicationService.purge}:
    * the node, its `ci.communications` row, and every row that names it, the
    * participants' identifier claims among them. HBPE is told which days to redo.
+   *
+   * What the messages' attachments name goes with them. The content rows over a message's photos
+   * (Messenger's, Discord's attachment links) go unless another message or an event holds them, and the
+   * stored files go when nothing else uses them. Those content rows nobody named are said in `warnings`,
+   * so the caller does not tell the user less than happened, and the files are said with the ones the
+   * purges of content and events deleted ({@link reportWrappedFiles}).
    *
    * A `Communication` node `purge` does not take, because there is no
    * `ci.communications` row behind it (graph ingest writes those), goes on to the
@@ -593,6 +639,9 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     nodes: GraphNodeEntity[],
     ownerId: string,
     destroyed: Set<string>,
+    warnings: string[],
+    wrapped: WrappedStep[],
+    contentsOnly: Set<string>,
   ): Promise<void> {
     const communicationIds = nodes
       .filter((node) => node.entity_type === 'Communication')
@@ -602,9 +651,23 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
       return;
     }
 
-    const purged = await this.communications.purge({ userId: ownerId }, communicationIds);
+    let purged: Awaited<ReturnType<CommunicationService['purge']>>;
+
+    try {
+      purged = await this.communications.purge({ userId: ownerId }, communicationIds);
+    } catch (error) {
+      throw unwrapStoredObjectsDeleted(error, contentsOnly);
+    }
 
     purged.communicationIds.forEach((id) => destroyed.add(id));
+
+    if (purged.contentIds.length > 0) {
+      warnings.push(
+        `Also deleted, because a message named here carried them as attachments: content ${listIds(purged.contentIds)}.`,
+      );
+    }
+
+    this.collectWrappedFiles(purged.files, 'message', nodes, destroyed, wrapped);
   }
 
   /**
