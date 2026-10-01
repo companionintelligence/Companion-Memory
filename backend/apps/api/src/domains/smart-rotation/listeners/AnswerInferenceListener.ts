@@ -195,6 +195,15 @@ export type InferenceOutcome =
       confidence?: number;
     };
 
+/**
+ * Why a queued job was dropped before any retrieval or model call.
+ *
+ * `gone` is the row vanishing between the listener's two reads of it; the other
+ * three are the filters both inference selectors apply when they queue a job
+ * (see {@link QuestionService.findInferenceStanding}).
+ */
+type InferenceSkipReason = 'gone' | 'inactive' | 'hand-entry' | 'forked';
+
 @Injectable()
 export class AnswerInferenceListener {
   constructor(
@@ -236,6 +245,33 @@ export class AnswerInferenceListener {
       return;
     }
 
+    // ═══ THE EXECUTION-TIME GATE ═══
+    //
+    // `findById` settles who may READ the row and nothing else. The selectors
+    // that queue this job also require the question to be active, not
+    // `hand_entry`, and not replaced by one of the owner's own forks — but they
+    // check that when they QUEUE it, and a job waits in pg-boss, behind the
+    // single-slot LLM queue, before anything runs it. In that gap a migration can
+    // retire the row, a reclassification can mark it `hand_entry`, and the owner
+    // can fork it, and nothing in the payload knows. Unchecked, the job ran the
+    // model anyway and wrote an inferred answer onto a question the owner is no
+    // longer asked.
+    //
+    // Here, and not in `inferAnswerForQuestion`: that is what a probe or a test
+    // calls to inspect the model's decision without writing anything, and gating
+    // it would stop a probe from asking about a hand-entry question at all.
+    const skipReason = await this.findSkipReason(serviceContext, question.id);
+
+    if (skipReason) {
+      this.logger.debug('Answer inference skipped — the question no longer qualifies', {
+        userId: ownerId,
+        questionId: payload.questionId,
+        reason: skipReason,
+      });
+
+      return;
+    }
+
     const outcome = await this.inferAnswerForQuestion(serviceContext, question);
 
     if (outcome.status !== 'ok') {
@@ -245,6 +281,43 @@ export class AnswerInferenceListener {
     const { inferred, confidence, evidence } = outcome;
 
     await this.persistInferredAnswer(serviceContext, payload.questionId, inferred, confidence, evidence);
+  }
+
+  /**
+   * Why a queued job must not run any more, or null when the question still
+   * qualifies.
+   *
+   * Reads the three facts fresh from `ci.questions` and decides here, so the
+   * decision is this listener's and the SQL stays the service's. The order is
+   * only the order the reason is reported in: a retired question the owner has
+   * also forked is `inactive`, and either way the job does not run.
+   */
+  private async findSkipReason(
+    serviceContext: UserServiceContext,
+    questionId: string,
+  ): Promise<InferenceSkipReason | null> {
+    const standing = await this.questionService.findInferenceStanding(serviceContext, questionId);
+
+    // Readable a moment ago and not now: deleted between the two reads.
+    if (!standing) {
+      return 'gone';
+    }
+
+    if (!standing.isActive) {
+      return 'inactive';
+    }
+
+    // A deny-list, as in both selectors (`evidence_class <> 'hand_entry'`): a
+    // class added later stays inferable until somebody says it is not.
+    if (standing.evidenceClass === 'hand_entry') {
+      return 'hand-entry';
+    }
+
+    if (standing.forkedByCaller) {
+      return 'forked';
+    }
+
+    return null;
   }
 
   /**

@@ -19,6 +19,7 @@ import type {
   AnswerEvidence,
   CreateQuestionDto,
   QuestionCatalogueQueryDto,
+  QuestionInferenceStanding,
   UpdateQuestionDto,
 } from '../types';
 
@@ -1092,6 +1093,78 @@ export class QuestionService {
     }
 
     return groupedByUserId;
+  }
+
+  /**
+   * What `ci.questions` says about one question RIGHT NOW, read the way the
+   * inference selectors read it for this caller.
+   *
+   * {@link findUnansweredByUserId} and `SmartRotationListener`'s
+   * `findNextUnansweredQuestionId` only pick a question that is active, not
+   * `hand_entry`, and not hidden from the owner by one of their own forks. They
+   * check that when a job is QUEUED, and the job then waits in pg-boss — behind
+   * the single-slot LLM queue — before anything runs it. In that gap a migration
+   * can retire the row, a reclassification can mark it `hand_entry`, and the
+   * owner can fork it. {@link findById} sees none of that: it settles who may
+   * READ the row and nothing else. So `AnswerInferenceListener` asks this at the
+   * moment it RUNS.
+   *
+   * The facts come back separately, not as one verdict, so the caller can say
+   * which of them stopped a job. The `is_active` and `evidence_class` tests are
+   * spelled out in both selectors and are the contract this has to keep (see
+   * SmartRotationListener.md); the fork rule is the shared
+   * {@link excludeForkedOriginsSql}, so that one cannot drift.
+   *
+   * `null` when the caller cannot see the row at all — it does not exist, or it
+   * is private to somebody else — which is the rule {@link findById} applies.
+   */
+  async findInferenceStanding(
+    context: ServiceContext,
+    id: string,
+  ): Promise<QuestionInferenceStanding | null> {
+    type Row = {
+      is_active: boolean;
+      evidence_class: string;
+      forked_by_caller: boolean;
+    };
+
+    // SYSTEM_USER is a Symbol, so it can never be bound as a parameter. It owns
+    // no private rows and no forks either, and NULL says exactly that in SQL:
+    // only shared rows are visible, and nothing is forked.
+    const userId = context.userId && context.userId !== SYSTEM_USER ? context.userId : null;
+
+    const rows = (await this.dataSource.query(
+      `
+      SELECT
+        q.is_active,
+        q.evidence_class,
+        -- "Forked by the caller" is "does not survive the shared fork filter".
+        -- Said through excludeForkedOriginsSql rather than a second copy of its
+        -- subquery, so the two cannot disagree about what a fork is.
+        NOT EXISTS (
+          SELECT 1
+          FROM ci.questions visible
+          WHERE visible.question_id = q.question_id
+            ${excludeForkedOriginsSql('visible', '$2::uuid')}
+        ) AS forked_by_caller
+      FROM ci.questions q
+      WHERE q.question_id = $1::uuid
+        AND (q.is_private_to IS NULL OR q.is_private_to = $2::uuid)
+      `,
+      [id, userId],
+    )) satisfies Array<Row>;
+
+    const row = rows[0];
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      isActive: row.is_active,
+      evidenceClass: row.evidence_class,
+      forkedByCaller: row.forked_by_caller,
+    };
   }
 
   async findOneUnanswered(context: ServiceContext): Promise<Question | null> {

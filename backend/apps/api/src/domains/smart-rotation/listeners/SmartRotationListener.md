@@ -47,6 +47,7 @@ each work type to its owning domain while keeping expensive work on pg-boss.
 | Summary sidecar | Once a dossier has been built, `dossier_refresh` arrives only when a summary has been stored since — but every unknown state (including a user who has never produced one) still dispatches every tick | Making the dossier unconditional (an hourly LLM rebuild), or gating it on a clock, a run history, or `entities.updated_at` |
 | Insight sidecar | It is the authoritative novelty gate | Adding a scheduler-side novelty gate |
 | `QuestionService.findUnansweredByUserId` | Both inference selectors ask in one order, from `questionOrder.ts` | Giving either selector its own ORDER BY, or breaking a tie on `question_id` before the rotation keys |
+| `AnswerInferenceListener.inferQuestionAnswer` | A queued job runs only for a question that is still active, not `hand_entry`, and not replaced by one of the owner's forks — read fresh from `QuestionService.findInferenceStanding` when the job RUNS, because both selectors apply those filters only when they QUEUE it and the job then waits behind the single-slot LLM queue | Changing `is_active`, `evidence_class` or the fork filter in either selector without changing it in `findInferenceStanding`: jobs already queued keep running on the old rule |
 
 ## Notes
 
