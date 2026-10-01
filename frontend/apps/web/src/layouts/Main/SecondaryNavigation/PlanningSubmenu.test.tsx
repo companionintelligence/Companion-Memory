@@ -9,7 +9,7 @@ import { PlanningSubmenu } from './PlanningSubmenu';
 
 const STORAGE_KEY = 'ci-power-rail-expanded';
 
-const h = vi.hoisted(() => ({ planningPageEnabled: true }));
+const h = vi.hoisted(() => ({ planningPageEnabled: true, planBadgeCount: 0 }));
 
 vi.mock('@/common/feature', async () => {
   const actual = await vi.importActual<typeof import('@/common/feature')>('@/common/feature');
@@ -23,7 +23,7 @@ vi.mock('@/common/feature', async () => {
 });
 
 vi.mock('./useFeedBadgeCount', () => ({ useFeedBadgeCount: () => 0 }));
-vi.mock('./usePlanBadgeCount', () => ({ usePlanBadgeCount: () => 0 }));
+vi.mock('./usePlanBadgeCount', () => ({ usePlanBadgeCount: () => h.planBadgeCount }));
 
 function renderSubmenu(route = '/plan', { expanded = true }: { expanded?: boolean } = {}) {
   if (expanded) {
@@ -45,6 +45,7 @@ describe('PlanningSubmenu', () => {
   beforeEach(() => {
     localStorage.removeItem(STORAGE_KEY);
     h.planningPageEnabled = true;
+    h.planBadgeCount = 0;
   });
 
   it('collapses to a single icon link to /plan when the rail is collapsed', () => {
@@ -52,6 +53,17 @@ describe('PlanningSubmenu', () => {
 
     expect(screen.getByRole('link', { name: 'Planning' })).toHaveAttribute('href', '/plan');
     expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+  });
+
+  it('hangs the collapsed count over the top of the icon, inside the row', () => {
+    h.planBadgeCount = 3;
+    renderSubmenu('/feed', { expanded: false });
+
+    const count = within(screen.getByRole('link', { name: 'Planning' })).getByText('3');
+
+    // Beside the icon as a flex sibling, the pill's `ml-auto` pushed it to the
+    // lane's edge, where the rail's scrollport cut it off.
+    expect(count.parentElement).toHaveClass('absolute', 'left-1/2', 'top-0', '-translate-x-1/2');
   });
 
   it('opens Planning section icons below the head when the collapsed icon is clicked', () => {
@@ -92,7 +104,7 @@ describe('PlanningSubmenu', () => {
     const calendar = screen.getByRole('link', { name: 'Calendar' });
 
     expect(within(screen.getByTestId('planning-submenu')).getByTestId('rail-guide')).toBeInTheDocument();
-    expect(tasks).toHaveClass('bg-primary/10', 'text-primary', 'ml-9');
+    expect(tasks).toHaveClass('bg-primary/10', 'text-primary', 'ml-4.5');
     expect(tasks.className).not.toMatch(/border-l/);
     expect(tasks.parentElement?.querySelector('[data-testid="rail-active-bar"]')).not.toBeNull();
     expect(calendar).not.toHaveClass('bg-primary/10');

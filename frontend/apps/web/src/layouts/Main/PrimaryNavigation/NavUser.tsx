@@ -68,7 +68,7 @@ function SubRow({ icon, label, onClick }: SubRowProps) {
       className={cn(
         'flex cursor-pointer items-center rounded-md text-left text-sm transition',
         RAIL_CHILD_HEIGHT,
-        expanded ? ['gap-2.5', RAIL_CHILD_INSET] : 'justify-center',
+        expanded ? ['gap-2', RAIL_CHILD_INSET] : 'justify-center',
         railRowTone(false),
       )}
     >
@@ -100,7 +100,7 @@ function ThemeSubmenu() {
         className={cn(
           'flex items-center rounded-md text-left text-sm transition [&[data-state=open]>svg:last-child]:rotate-90',
           RAIL_CHILD_HEIGHT,
-          expanded ? ['gap-2.5', RAIL_CHILD_INSET] : 'justify-center',
+          expanded ? ['gap-2', RAIL_CHILD_INSET] : 'justify-center',
           railRowTone(false),
         )}
       >
@@ -113,12 +113,12 @@ function ThemeSubmenu() {
 
       <Collapsible.Content className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
         <div className="flex flex-col gap-0.5 py-1">
-          {/* One level under Theme, on its label column — the rail's third
+          {/* One level under Theme, starting under its icon — the rail's third
               level (`RAIL_LEAF_INSET`), where Chat's threads sit under Chat.
               It runs to the rows' right edge, with tight segments, because
-              that column leaves the desktop rail about 8.5rem for three
+              that column leaves the desktop rail about 11.125rem for three
               labels; everything there is rem, so it fits at any zoom. */}
-          <div className={expanded ? 'ml-18' : undefined}>
+          <div className={expanded ? 'ml-7.5' : undefined}>
             <div
               role="radiogroup"
               aria-label="Theme"

@@ -19,6 +19,7 @@ import {
   GraphDeltaWriter,
   GraphNodeEntity,
   GraphUtilityService,
+  type FileService,
   type ItemService,
   RelationshipEntity,
 } from '@ci/domains/memory';
@@ -190,8 +191,9 @@ describeWithDb(`memory.forget on a Communication node, against Postgres (${avail
         deltaWriter,
         hbpe,
       ),
-      // No case here names an item, so the tool never reaches for it.
+      // No case here names an item or a file, so the tool never reaches for either.
       {} as unknown as ItemService,
+      {} as unknown as FileService,
       logger(),
     );
   });

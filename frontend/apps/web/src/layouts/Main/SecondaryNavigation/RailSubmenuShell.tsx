@@ -10,6 +10,7 @@ import {
   RAIL_ACCOUNT_HEIGHT,
   RAIL_CHILD_HEIGHT,
   RAIL_CHILD_INSET,
+  RAIL_COLLAPSED_BADGE,
   RAIL_ICON_ACTIVE,
   RAIL_LEAF_HEIGHT,
   RAIL_LEAF_INSET,
@@ -110,7 +111,7 @@ export function RailSubmenuShell({
         )}
       >
         {collapsedIcon}
-        {collapsedBadge}
+        {collapsedBadge ? <span className={RAIL_COLLAPSED_BADGE}>{collapsedBadge}</span> : null}
       </Link>
     );
 
@@ -210,7 +211,7 @@ export function RailSubmenuHead({
 /**
  * One child row inside an opened group — the same shape for every submenu.
  *
- * Expanded, it starts on the section's label column with its icon, and the
+ * Expanded, it starts just past the group's guide line with its icon, and the
  * current page carries the bar on the group's guide line. Collapsed, it is an
  * icon in the rail lane with its label in a tooltip.
  */
@@ -240,7 +241,7 @@ export function RailSubmenuRow({
           aria-label={label}
           aria-current={active ? 'page' : undefined}
           className={cn(
-            'flex min-w-0 items-center gap-2.5 rounded-md text-sm transition',
+            'flex min-w-0 items-center gap-2 rounded-md text-sm transition',
             RAIL_CHILD_HEIGHT,
             RAIL_CHILD_INSET,
             railRowTone(active),
@@ -279,7 +280,7 @@ export function RailSubmenuRow({
           >
             {icon}
           </span>
-          {badge ? <span className="pointer-events-none absolute right-0 top-0">{badge}</span> : null}
+          {badge ? <span className={RAIL_COLLAPSED_BADGE}>{badge}</span> : null}
         </Link>
       </Tooltip.Trigger>
       <Tooltip.Content side="right">{label}</Tooltip.Content>

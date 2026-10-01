@@ -207,15 +207,29 @@ describe('the What strip shares its line with the filter controls without being 
   // their own wrapping never engaged: at 1,400 px the strip was a 57 px sliver
   // scrolling behind them, and below ~1,350 px they dropped to a second line
   // and ran off the right edge. The controls are the flexible item now.
-  it('floors the strip at 16rem from xl up and never lets it grow past its content', () => {
+  // The floor is every button at rest. A fixed 16rem hid the Tags button with
+  // the rail pinned below ~1,600 px; `min-w-max` counted a label sliding out
+  // under the pointer, so hovering a button pushed the controls down a line.
+  it('floors the strip at its buttons at rest from xl up and never lets it grow past its content', () => {
     const { container } = renderNav();
 
-    const strip = container.querySelector('.overflow-x-auto');
+    const strip = container.querySelector<HTMLElement>('.overflow-x-auto');
 
     expect(strip).not.toBeNull();
     expect(strip).toHaveClass('flex-1', 'basis-0', 'min-w-0');
-    expect(strip).toHaveClass('xl:min-w-[16rem]', 'xl:max-w-max');
-    expect(strip).not.toHaveClass('md:basis-auto', 'md:min-w-[16rem]');
+    expect(strip).toHaveClass('xl:min-w-(--what-strip-floor)', 'xl:max-w-max');
+    expect(strip).not.toHaveClass('md:basis-auto', 'md:min-w-[16rem]', 'xl:min-w-max');
+    // Eight buttons, four with a caret, seven gaps: 392 px at the 17px root.
+    expect(strip?.style.getPropertyValue('--what-strip-floor')).toBe('calc(22.125rem + 16px)');
+  });
+
+  it("floors the events explorer's strip at its own four buttons", () => {
+    const { container } = renderNav('/memory/events');
+
+    const strip = container.querySelector<HTMLElement>('.overflow-x-auto');
+
+    // Messages, Events (caret), Browser, Tags (caret): 193 px, not /memory's 392.
+    expect(strip?.style.getPropertyValue('--what-strip-floor')).toBe('calc(10.875rem + 8px)');
   });
 
   it('gives the filter controls their own line below xl, and a floored share of the line from xl up', () => {

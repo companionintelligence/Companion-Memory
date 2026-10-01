@@ -26,18 +26,47 @@ export const RAIL_ACCOUNT_HEIGHT = 'min-h-[52px]';
 /*
  * Columns, from the rail's content edge:
  *
- *   section  │pl-2.5│ icon 1.5rem │gap-3│ label …      icon centre 1.375rem, label 2.875rem
- *   guide    │      ┆ 1px, under the section icon's centre
- *   child    │ ml-9     │pl-2.5│ icon 1rem │gap-2.5│ label …   icon on the section's label column
- *   leaf     │ ml-18                        │pl-2.5│ text …   box on the child's label column
+ *   section  │pl-2.5│ icon 1.5rem │gap-3│ label …      icon 0.625–2.125rem, label 2.875rem
+ *   guide    │   ┆ 1px at 1rem, under the section icon's left half
+ *   child    │ml-4.5│pl-1.5│ icon 1rem │gap-2│ label …   icon 1.5rem, label 3rem
+ *   leaf     │ ml-7.5          │pl-1.5│ text …   text 2.25rem, under the child's icon
  *
- * `pl-2.5` is where the old 2px `border-l` plus `px-2` put the icon, so the
- * drawer's header mark, which centres itself on this icon column, still does.
- * `py-1` only matters once text is scaled up past the row's minimum height.
+ * The guide sits left of the section icon's centre (1.375rem) so the children
+ * can start close in: a child's icon is 0.875rem in from the section's, where
+ * on the centre it could get no nearer than 1.25rem. `ml-4.5` is as close as
+ * the row can start and still clear the current page's 2px bar on the guide,
+ * so the row's fill never touches it. On the section's label column (`ml-9`,
+ * where they began) the children read as a separate list set far in. Child
+ * and leaf rows pad by `pl-1.5` and space icon from label by `gap-2`, tighter
+ * than a section's `pl-2.5` and `gap-3`: their 1rem icon and small text need
+ * less room than a 1.5rem icon.
+ *
+ * A leaf's text starts under the middle of its child's icon, not on the
+ * child's label: small muted text already reads as a level down, and on the
+ * label column (3rem) Chat's threads sat as far in as the children
+ * themselves once did.
+ *
+ * A section's `pl-2.5` is where the old 2px `border-l` plus `px-2` put the
+ * icon, so the drawer's header mark, which centres itself on this icon
+ * column, still does. `py-1` only matters once text is scaled up past the
+ * row's minimum height.
  */
 export const RAIL_SECTION_INSET = 'py-1 pl-2.5 pr-2';
-export const RAIL_CHILD_INSET = 'ml-9 py-1 pl-2.5 pr-2';
-export const RAIL_LEAF_INSET = 'ml-18 py-1 pl-2.5 pr-2';
+export const RAIL_CHILD_INSET = 'ml-4.5 py-1 pl-1.5 pr-2';
+export const RAIL_LEAF_INSET = 'ml-7.5 py-1 pl-1.5 pr-2';
+
+/**
+ * Where a count sits on a collapsed rail icon: centred over the icon's top,
+ * inside the row's own box.
+ *
+ * A collapsed row is the icon's whole lane with the icon centred in it, so the
+ * row's centre is the icon's. Inside the row because the rail's
+ * `overflow-y-auto` scrollport clips anything that hangs outside one — and
+ * never beside the icon as a flex sibling: the pill's `ml-auto` then pushed it
+ * to the lane's edge, where it was cut off, and pulled the icon off-centre.
+ * `flex` so an inline pill inside it adds no line-box height.
+ */
+export const RAIL_COLLAPSED_BADGE = 'pointer-events-none absolute left-1/2 top-0 flex -translate-x-1/2';
 
 /**
  * Idle and current-page fills for a row.
@@ -73,7 +102,7 @@ export function RailChildren({ children }: { children: ReactNode }) {
       <span
         aria-hidden
         data-testid="rail-guide"
-        className="pointer-events-none absolute inset-y-0.5 left-[calc(1.375rem-0.5px)] w-px bg-border"
+        className="pointer-events-none absolute inset-y-0.5 left-[calc(1rem-0.5px)] w-px bg-border"
       />
       {children}
     </div>
@@ -81,8 +110,9 @@ export function RailChildren({ children }: { children: ReactNode }) {
 }
 
 /**
- * The current page's marker: a straight 3px bar on the guide line, half the
- * row's height. Its own element rather than a border, so nothing about the
+ * The current page's marker: a straight 2px bar on the guide line, half the
+ * row's height. 2px rather than 3px so a child row can start `ml-4.5` and its
+ * fill still clears the bar. Its own element rather than a border, so nothing about the
  * row's rounded shape can bend it.
  *
  * Rendered inside a `relative` box that starts at the rail's content edge (see
@@ -93,7 +123,7 @@ function RailActiveBar() {
     <span
       aria-hidden
       data-testid="rail-active-bar"
-      className="pointer-events-none absolute inset-y-1/4 left-[calc(1.375rem-1.5px)] w-[3px] rounded-full bg-primary"
+      className="pointer-events-none absolute inset-y-1/4 left-[calc(1rem-1px)] w-[2px] rounded-full bg-primary"
     />
   );
 }

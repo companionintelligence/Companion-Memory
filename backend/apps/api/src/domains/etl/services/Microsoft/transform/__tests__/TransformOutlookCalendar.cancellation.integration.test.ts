@@ -52,11 +52,13 @@ import { OutlookCalendarTransformService } from '../TransformOutlookCalendar';
  * the schedule grid and PlannedBlockService share. Participant promotion is
  * stubbed: it is not on the path under test, but WHETHER it runs is.
  *
- * Fixture times carry a `Z`. Graph sends `start.dateTime` without an offset, in
- * the zone `start.timeZone` names (UTC here: nothing asks for another), and the
- * transform hands it to `new Date`, which reads an offset-less string in the
- * zone of the process. That is UTC in the API container and not on a laptop,
- * so the fixtures say which instant they mean.
+ * Fixture times are spelled as Graph spells them: `start.dateTime` has no offset
+ * and `start.timeZone` names its zone (UTC here: nothing asks for another). The
+ * transform reads the wall clock in that zone, so they mean the same instant on
+ * every machine. They carried a `Z` while it handed the string to `new Date`,
+ * which reads an offset-less one in the zone of the process, and a `Z` was the
+ * only way to keep this spec from depending on where it ran. See
+ * graphDateTime.ts and TransformOutlookCalendar.graphTime.test.ts.
  *
  * Opt-in like the sibling integration specs: set MEMORY_TEST_DATABASE_URL to a
  * migrated database of your own.
@@ -90,9 +92,9 @@ function exchangeUid(): string {
   return `040000008200E00074C5B7101A82E00800000000${uuidv7().replace(/-/g, '').toUpperCase()}`;
 }
 
-/** Graph's `dateTimeTimeZone` for an instant, to the second (see the note above about the `Z`). */
+/** Graph's `dateTimeTimeZone` for an instant, to the second: no offset, seven fractional digits, `UTC`. */
 function utc(instant: string | number): { dateTime: string; timeZone: string } {
-  return { dateTime: new Date(instant).toISOString().replace(/\.\d{3}Z$/, '.0000000Z'), timeZone: 'UTC' };
+  return { dateTime: new Date(instant).toISOString().replace(/\.\d{3}Z$/, '.0000000'), timeZone: 'UTC' };
 }
 
 /** A tombstone exactly as calendarView/delta sends it: the type, the id and the annotation. */

@@ -26,6 +26,9 @@ vi.mock('@/pages/SettingsPage/sections/AboutYouSection', () => ({
 vi.mock('@/pages/SettingsPage/sections/AccountSection', () => ({
   AccountSection: () => <div>AccountSection</div>,
 }));
+vi.mock('@/pages/SettingsPage/sections/InvitesSection', () => ({
+  InvitesSection: () => <div>InvitesSection</div>,
+}));
 
 const ENTITY_ID = 'cGVyc29uOjQy';
 
@@ -115,7 +118,13 @@ describe('SelfProfileTab — the inline person editor', () => {
   it('renders the other Self sections around the inline form', async () => {
     await renderTab();
 
-    for (const label of ['LifeDetailsSection', 'ConnectionsSection', 'AboutYouSection', 'AccountSection']) {
+    for (const label of [
+      'LifeDetailsSection',
+      'ConnectionsSection',
+      'AboutYouSection',
+      'InvitesSection',
+      'AccountSection',
+    ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });

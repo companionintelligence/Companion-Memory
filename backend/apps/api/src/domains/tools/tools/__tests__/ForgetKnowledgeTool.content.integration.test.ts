@@ -16,6 +16,7 @@ import {
   GraphDeltaWriter,
   GraphNodeEntity,
   GraphUtilityService,
+  type FileService,
   type ItemService,
   RelationshipEntity,
 } from '@ci/domains/memory';
@@ -165,6 +166,7 @@ describeWithDb(`memory.forget on a Content node, against Postgres (${availabilit
       contents,
       {} as unknown as CommunicationService,
       {} as unknown as ItemService,
+      {} as unknown as FileService,
       logger(),
     );
   });
