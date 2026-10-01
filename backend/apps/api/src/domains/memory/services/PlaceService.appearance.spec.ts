@@ -1,5 +1,6 @@
 import type { UserServiceContext } from '@ci/common/context';
 
+import { EVENT_HAPPENED_SQL } from './eventHappened';
 import { PlaceService } from './PlaceService';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
@@ -64,6 +65,7 @@ describe('PlaceService places browse appearance dating', () => {
     const sql = query.mock.calls[0][0] as string;
     expect(sql).toContain('location_entity_id');
     expect(sql).toContain("time_source IS DISTINCT FROM 'ingest'");
+    expect(sql).toContain(EVENT_HAPPENED_SQL);
     expect(sql).not.toContain('communications');
     expect(rows).toEqual([{ id: PLACE, type: 'place', sortTime: appearedAt }]);
   });

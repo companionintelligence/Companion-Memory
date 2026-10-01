@@ -15,17 +15,28 @@ import {
 import { UserEntity } from '@ci/domains/user';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
+import {
+  EVENT_LIFECYCLE_CASES,
+  EVENT_STATUSES,
+  eventStatusVocabulary,
+  HAPPENED,
+  insertEvent,
+  type LifecycleCase,
+} from '../../../__tests__/support/eventLifecycleFixtures';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
-import type { GeocodeService, ReverseGeocodeOutcome } from '../../services/GeocodeService';
+import type { GeocodeOutcome, GeocodeService, ReverseGeocodeOutcome } from '../../services/GeocodeService';
 import { GeocodeBatchListener } from '../GeocodeBatchListener';
 
 /**
- * The reverse leg of GeocodeBatchListener against Postgres.
+ * GeocodeBatchListener against Postgres: what it writes onto `ci.events`, which
+ * the unit suite only ever sees as strings handed to a mocked query builder and
+ * calls to a mocked event service.
  *
- * Whether an event is named is decided by the SQL in selectReverseCandidates,
- * which the unit suite only ever sees as strings handed to a mocked query
- * builder. Until this spec nothing ran that SQL, and nothing in it asked where
- * a coordinate came from: an ESTIMATE — a neighbouring GPS fix the location
+ * ── Reverse leg: where a coordinate came from ──────────────────────────────
+ *
+ * Whether an event is named is decided by the SQL in selectReverseCandidates.
+ * Until this spec nothing ran that SQL, and nothing in it asked where a
+ * coordinate came from: an ESTIMATE — a neighbouring GPS fix the location
  * estimator copied onto an event that had none — was named, linked to a Place
  * as a visit, and re-tagged `reverse_geocoded`, which erased the only marker
  * that said it was an estimate.
@@ -35,6 +46,30 @@ import { GeocodeBatchListener } from '../GeocodeBatchListener';
  * what the estimator writes. So the selection is the only thing standing
  * between an estimate and a fabricated visit, and the controls prove the leg
  * still names what it should.
+ *
+ * ── Both legs: whether the event happened ──────────────────────────────────
+ *
+ * The listener also writes `location_entity_id`, the link `promote.place`
+ * writes, and it used to write it onto anything it resolved. A meeting called
+ * off at its source stays in `ci.events` with its venue, so the link counted it
+ * as a visit, widened the Location's footprint, and let `promote.edge_event`
+ * project Event -LOCATED_AT-> Place for an event that never took place. The
+ * rule is the one `promote.place` applies (`eventHappenedSql`), in the memory
+ * domain's text (`EVENT_HAPPENED_SQL`, which the listener reads), and the cases
+ * are the list every reader that asks the question is held to
+ * (`EVENT_LIFECYCLE_CASES`): each class it refuses, and the controls that stop
+ * it being widened to "anything but confirmed". A status added to
+ * `ci.events` fails the vocabulary check below until that list says whether an
+ * event carrying it happened.
+ *
+ * What these cases assert for an event that did not happen is deliberately
+ * asymmetric: the coordinate or name IS written (`enrich.geocode` writes it
+ * too, and it is right about the venue), and the Place link is not, nor is the
+ * Location entity the link would have minted. A tombstone is the exception to
+ * the first half, because `CalendarEventService.update` refuses to write one.
+ * Two further cases change the row WHILE the provider call is in flight,
+ * because a batch is minutes long and the answer must follow the row as it is
+ * when the link is written, not as it was when the candidate was selected.
  *
  * Opt-in like the sibling integration specs: set GEOCODE_TEST_DATABASE_URL.
  */
@@ -50,6 +85,12 @@ jest.setTimeout(60_000);
 interface Point {
   lat: number;
   lng: number;
+}
+
+/** An event this spec seeded, and where its coordinate is, or will be once the provider answers. */
+interface Seeded {
+  id: string;
+  point: Point;
 }
 
 /** The GPS fix the estimator copied onto every estimated event below. */
@@ -95,7 +136,16 @@ const MEASURED = {
   confidenceScore: 1.0,
 };
 
-describeWithDb(`GeocodeBatchListener reverse leg against Postgres (${availability.target})`, () => {
+/**
+ * The confidence the stub provider reports for every forward hit, so a test can
+ * tell the listener's write from the seed's (1.0).
+ */
+const GEOCODED_CONFIDENCE = 0.95;
+
+/** Any fixed hour: the listener never reads an event's time. */
+const AT = Date.parse('2026-09-01T18:00:00Z');
+
+describeWithDb(`GeocodeBatchListener against Postgres (${availability.target})`, () => {
   let dataSource: DataSource;
   let schemaLock: SchemaLock | null = null;
   let listener: GeocodeBatchListener;
@@ -103,8 +153,38 @@ describeWithDb(`GeocodeBatchListener reverse leg against Postgres (${availabilit
   /** Every coordinate the provider was asked to name, as a 4dp cell. */
   const askedAbout: string[] = [];
 
+  /** Every venue string the provider was asked to place. */
+  const askedToPlace: string[] = [];
+
+  /** The point the stub provider answers for a venue string. */
+  const venuePoints = new Map<string, Point>();
+
+  /**
+   * Run while the provider "call" for a venue (forward) or a 4dp cell (reverse)
+   * is in flight, before it answers. This is how a test changes a row between
+   * the moment the listener selected it and the moment it writes.
+   */
+  const whileInFlight = new Map<string, () => Promise<void>>();
+
+  /** The listener's own log lines, in order. */
+  const logLines: Array<{ message: string; data: Record<string, unknown> }> = [];
+
   const autoUserId = uuidv7();
   const explicitUserId = uuidv7();
+  const forwardUserId = uuidv7();
+  const reverseDeadUserId = uuidv7();
+
+  /**
+   * A point of its own for every call, 0.5 degrees (about 55 km) from every
+   * other. A Location this spec's assertions look for lives within 200 m of its
+   * event's point, so no two cases can see each other's.
+   */
+  let pointsIssued = 0;
+  function freshPoint(): Point {
+    return { lat: 10 + 0.5 * pointsIssued++, lng: 30 };
+  }
+
+  const query = (sql: string, params?: unknown[]): Promise<unknown> => dataSource.query(sql, params);
 
   async function seedEvent(args: {
     userId: string;
@@ -142,6 +222,43 @@ describeWithDb(`GeocodeBatchListener reverse leg against Postgres (${availabilit
     );
 
     return eventId;
+  }
+
+  /**
+   * One event of a lifecycle case (or any lifecycle), by the insert every spec
+   * that asks "did this event happen" shares. `point` null is an event with a
+   * name and no coordinate yet; `locationName` null is the reverse.
+   */
+  async function seedLifecycle(
+    userId: string,
+    title: string,
+    lifecycle: LifecycleCase['lifecycle'],
+    point: Point | null,
+    locationName: string | null,
+  ): Promise<string> {
+    const id = uuidv7();
+
+    await insertEvent(query, userId, { id, title, at: AT, lifecycle, point, locationName });
+
+    return id;
+  }
+
+  /** What the forward leg writes: the coordinate, its confidence, and the link. */
+  async function readLocated(eventId: string): Promise<Record<string, unknown> | undefined> {
+    const [row] = await dataSource.query(
+      `SELECT e.location_coordinates IS NOT NULL      AS located,
+              ST_Y(e.location_coordinates::geometry)  AS lat,
+              ST_X(e.location_coordinates::geometry)  AS lng,
+              e.confidence_score,
+              e.location_entity_id IS NOT NULL        AS linked,
+              l.entity_type                           AS place_type
+         FROM ci.events e
+         LEFT JOIN ci.entities l ON l.entity_id = e.location_entity_id
+        WHERE e.event_id = $1`,
+      [eventId],
+    );
+
+    return row;
   }
 
   /** The columns the reverse leg writes, and the columns an estimate lives in. */
@@ -203,18 +320,26 @@ describeWithDb(`GeocodeBatchListener reverse leg against Postgres (${availabilit
     await dataSource.query(
       `INSERT INTO ci.users (id, name, email, timezone) VALUES
          ($1, 'Reverse-geocode auto fixture', $2, 'UTC'),
-         ($3, 'Reverse-geocode explicit fixture', $4, 'UTC')`,
+         ($3, 'Reverse-geocode explicit fixture', $4, 'UTC'),
+         ($5, 'Geocode forward did-not-happen fixture', $6, 'UTC'),
+         ($7, 'Reverse-geocode did-not-happen fixture', $8, 'UTC')`,
       [
         autoUserId,
         `auto.${autoUserId}@example.invalid`,
         explicitUserId,
         `explicit.${explicitUserId}@example.invalid`,
+        forwardUserId,
+        `forward.${forwardUserId}@example.invalid`,
+        reverseDeadUserId,
+        `reverse-dead.${reverseDeadUserId}@example.invalid`,
       ],
     );
 
     const logger = {
       setContext: jest.fn(),
-      log: jest.fn(),
+      log: jest.fn((message: string, data: Record<string, unknown> = {}) => {
+        logLines.push({ message, data });
+      }),
       warn: jest.fn(),
       error: jest.fn(),
       debug: jest.fn(),
@@ -223,9 +348,25 @@ describeWithDb(`GeocodeBatchListener reverse leg against Postgres (${availabilit
     const graphDeltaWriter = new GraphDeltaWriter(dataSource, logger);
 
     const geocodeService = {
+      geocode: jest.fn(async (location: string): Promise<GeocodeOutcome> => {
+        askedToPlace.push(location);
+        await whileInFlight.get(location)?.();
+        const point = venuePoints.get(location);
+
+        return point == null
+          ? { status: 'ZERO_RESULTS', point: null, confidence: null, cached: false, retryable: false }
+          : {
+              status: 'OK',
+              point: { type: 'Point', coordinates: [point.lng, point.lat] },
+              confidence: GEOCODED_CONFIDENCE,
+              cached: false,
+              retryable: false,
+            };
+      }),
       reverseGeocode: jest.fn(async (lat: number, lng: number): Promise<ReverseGeocodeOutcome> => {
         const cell = cellOf({ lat, lng });
         askedAbout.push(cell);
+        await whileInFlight.get(cell)?.();
         const placeName = PROVIDER_NAMES.get(cell) ?? null;
 
         return placeName == null
@@ -251,7 +392,7 @@ describeWithDb(`GeocodeBatchListener reverse leg against Postgres (${availabilit
 
   afterAll(async () => {
     if (dataSource?.isInitialized) {
-      const users = [autoUserId, explicitUserId];
+      const users = [autoUserId, explicitUserId, forwardUserId, reverseDeadUserId];
       await dataSource.query('DELETE FROM ci.graph_deltas WHERE owner_user_id = ANY($1)', [users]);
       await dataSource.query('DELETE FROM ci.events WHERE user_id = ANY($1)', [users]);
       await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = ANY($1)', [users]);
@@ -361,6 +502,231 @@ describeWithDb(`GeocodeBatchListener reverse leg against Postgres (${availabilit
         place_name: null,
       });
       expect(await placesNear(explicitUserId, HOME)).toBe(0);
+    });
+  });
+
+  describe('forward leg (a name, no coordinate): an event that did not happen is geocoded, not linked', () => {
+    const byCase = new Map<string, Seeded & { venue: string }>();
+    let cancelledInFlight: Seeded & { venue: string };
+    let vanishedInFlight: Seeded & { venue: string };
+
+    /** An event with a venue name the stub provider can place, at a point of its own. */
+    async function seedUnlocated(title: string, lifecycle: LifecycleCase['lifecycle']) {
+      const point = freshPoint();
+      const venue = `Venue (${title})`;
+      venuePoints.set(venue, point);
+
+      return { id: await seedLifecycle(forwardUserId, title, lifecycle, null, venue), point, venue };
+    }
+
+    beforeAll(async () => {
+      for (const { name, lifecycle } of EVENT_LIFECYCLE_CASES) {
+        byCase.set(name, await seedUnlocated(name, lifecycle));
+      }
+
+      // Live when the candidate is selected, called off while the provider call
+      // is in flight: a calendar sync landing mid-batch.
+      cancelledInFlight = await seedUnlocated('cancelled in flight', HAPPENED);
+      whileInFlight.set(cancelledInFlight.venue, async () => {
+        await dataSource.query(`UPDATE ci.events SET status = 'cancelled' WHERE event_id = $1`, [
+          cancelledInFlight.id,
+        ]);
+      });
+
+      // Gone altogether while the provider call is in flight.
+      vanishedInFlight = await seedUnlocated('vanished in flight', HAPPENED);
+      whileInFlight.set(vanishedInFlight.venue, async () => {
+        await dataSource.query('DELETE FROM ci.events WHERE event_id = $1', [vanishedInFlight.id]);
+        await dataSource.query('DELETE FROM ci.entities WHERE entity_id = $1', [vanishedInFlight.id]);
+      });
+
+      askedToPlace.length = 0;
+      logLines.length = 0;
+      await listener.handleBatch({ userId: forwardUserId });
+    });
+
+    it('classifies every status ci.events allows', async () => {
+      // A status added to the CHECK constraint fails here until the shared case
+      // table says whether an event carrying it happened.
+      expect([...(await eventStatusVocabulary(query))].sort()).toEqual([...EVENT_STATUSES].sort());
+    });
+
+    it.each(EVENT_LIFECYCLE_CASES.map((c) => [c.name, c.happened, c.lifecycle.isDeleted] as const))(
+      '%s (happened: %s): linked to a Place only if it happened',
+      async (name, happened, isDeleted) => {
+        const { id, point } = byCase.get(name)!;
+        const row = await readLocated(id);
+
+        // CalendarEventService.update refuses a tombstone, so nothing lands on one.
+        expect(row).toMatchObject({
+          located: !isDeleted,
+          linked: happened,
+          place_type: happened ? 'Location' : null,
+        });
+        if (!isDeleted) {
+          expect(row).toMatchObject({ confidence_score: GEOCODED_CONFIDENCE });
+          expect(row?.lat).toBeCloseTo(point.lat, 6);
+          expect(row?.lng).toBeCloseTo(point.lng, 6);
+        }
+
+        // The Location the link would have minted does not exist either.
+        expect(await placesNear(forwardUserId, point)).toBe(happened ? 1 : 0);
+      },
+    );
+
+    it('still asks the provider about every event that was called off: the coordinate is not what is refused', () => {
+      for (const { name, lifecycle } of EVENT_LIFECYCLE_CASES) {
+        if (!lifecycle.isDeleted) {
+          expect(askedToPlace).toContain(`Venue (${name})`);
+        }
+      }
+    });
+
+    it('an event cancelled while its provider call was in flight gets the coordinate and no link', async () => {
+      expect(await readLocated(cancelledInFlight.id)).toMatchObject({
+        located: true,
+        confidence_score: GEOCODED_CONFIDENCE,
+        linked: false,
+        place_type: null,
+      });
+      expect(await placesNear(forwardUserId, cancelledInFlight.point)).toBe(0);
+    });
+
+    it('an event that disappeared while its provider call was in flight mints no Location', async () => {
+      expect(await readLocated(vanishedInFlight.id)).toBeUndefined();
+      expect(await placesNear(forwardUserId, vanishedInFlight.point)).toBe(0);
+    });
+
+    it('counts, in the batch log, what it resolved without linking', () => {
+      const done = logLines.find((line) => line.message === 'Completed geocode backfill batch');
+      const linkedCount = EVENT_LIFECYCLE_CASES.filter((c) => c.happened).length;
+
+      expect(done).toBeDefined();
+      expect((done!.data.resolved as number) - (done!.data.unlinked as number)).toBe(linkedCount);
+      expect(done!.data.unlinked).toBeGreaterThanOrEqual(EVENT_LIFECYCLE_CASES.length - linkedCount);
+    });
+  });
+
+  describe('reverse leg (a coordinate, no name): an event that did not happen is named, not linked', () => {
+    const byCase = new Map<string, Seeded>();
+    const addressOf = (title: string): string => `${title}, 1 Spec Street`;
+    let cancelledInFlight: Seeded;
+    let vanishedInFlight: Seeded;
+
+    /** An event with a measured coordinate and no name, at a point the stub provider can name. */
+    async function seedLocated(title: string, lifecycle: LifecycleCase['lifecycle']): Promise<Seeded> {
+      const point = freshPoint();
+      PROVIDER_NAMES.set(cellOf(point), addressOf(title));
+
+      return { id: await seedLifecycle(reverseDeadUserId, title, lifecycle, point, null), point };
+    }
+
+    beforeAll(async () => {
+      for (const { name, lifecycle } of EVENT_LIFECYCLE_CASES) {
+        byCase.set(name, await seedLocated(name, lifecycle));
+      }
+
+      cancelledInFlight = await seedLocated('cancelled in flight', HAPPENED);
+      whileInFlight.set(cellOf(cancelledInFlight.point), async () => {
+        await dataSource.query(`UPDATE ci.events SET status = 'cancelled' WHERE event_id = $1`, [
+          cancelledInFlight.id,
+        ]);
+      });
+
+      vanishedInFlight = await seedLocated('vanished in flight', HAPPENED);
+      whileInFlight.set(cellOf(vanishedInFlight.point), async () => {
+        await dataSource.query('DELETE FROM ci.events WHERE event_id = $1', [vanishedInFlight.id]);
+        await dataSource.query('DELETE FROM ci.entities WHERE entity_id = $1', [vanishedInFlight.id]);
+      });
+
+      askedAbout.length = 0;
+      logLines.length = 0;
+      await listener.handleBatch({ userId: reverseDeadUserId, direction: 'reverse' });
+    });
+
+    it.each(EVENT_LIFECYCLE_CASES.map((c) => [c.name, c.happened, c.lifecycle.isDeleted] as const))(
+      '%s (happened: %s): linked to a Place only if it happened',
+      async (name, happened, isDeleted) => {
+        const { id, point } = byCase.get(name)!;
+
+        // CalendarEventService.update refuses a tombstone, so nothing lands on one.
+        expect(await readEvent(id)).toMatchObject({
+          location_name: isDeleted ? null : addressOf(name),
+          location_source: isDeleted ? null : 'reverse_geocoded',
+          place_type: happened ? 'Location' : null,
+          place_name: happened ? addressOf(name) : null,
+        });
+        expect(await placesNear(reverseDeadUserId, point)).toBe(happened ? 1 : 0);
+      },
+    );
+
+    it('an event cancelled while its provider call was in flight is named and not linked', async () => {
+      expect(await readEvent(cancelledInFlight.id)).toMatchObject({
+        location_name: addressOf('cancelled in flight'),
+        place_type: null,
+      });
+      expect(await placesNear(reverseDeadUserId, cancelledInFlight.point)).toBe(0);
+    });
+
+    it('an event that disappeared while its provider call was in flight mints no Location', async () => {
+      expect(await readEvent(vanishedInFlight.id)).toBeUndefined();
+      expect(await placesNear(reverseDeadUserId, vanishedInFlight.point)).toBe(0);
+    });
+
+    it('counts, in the batch log, what it resolved without linking', () => {
+      const done = logLines.find((line) => line.message === 'Completed reverse-geocode backfill batch');
+      const linkedCount = EVENT_LIFECYCLE_CASES.filter((c) => c.happened).length;
+
+      expect(done).toBeDefined();
+      expect((done!.data.resolved as number) - (done!.data.unlinked as number)).toBe(linkedCount);
+      expect(done!.data.unlinked).toBeGreaterThanOrEqual(EVENT_LIFECYCLE_CASES.length - linkedCount);
+    });
+  });
+
+  describe('an explicit eventIds set does not carry an event that did not happen past the rule', () => {
+    let heldId: string;
+    let calledOffId: string;
+    let calledOffPoint: Point;
+
+    beforeAll(async () => {
+      // Both already have a coordinate AND a stale name, which the explicit set
+      // skips the name filter for. The cancelled one is still wanted by the
+      // operator who asked for it, so it is renamed; it must not be linked.
+      const heldPoint = freshPoint();
+      calledOffPoint = freshPoint();
+      PROVIDER_NAMES.set(cellOf(heldPoint), 'Held, 2 Spec Street');
+      PROVIDER_NAMES.set(cellOf(calledOffPoint), 'Called off, 2 Spec Street');
+
+      heldId = await seedLifecycle(reverseDeadUserId, 'Explicit, held', HAPPENED, heldPoint, 'Stale name');
+      calledOffId = await seedLifecycle(
+        reverseDeadUserId,
+        'Explicit, called off',
+        { ...HAPPENED, status: 'cancelled' },
+        calledOffPoint,
+        'Stale name',
+      );
+
+      await listener.handleBatch({
+        userId: reverseDeadUserId,
+        direction: 'reverse',
+        eventIds: [heldId, calledOffId],
+      });
+    });
+
+    it('links the event that happened', async () => {
+      expect(await readEvent(heldId)).toMatchObject({
+        location_name: 'Held, 2 Spec Street',
+        place_type: 'Location',
+      });
+    });
+
+    it('renames the one that was called off, because it was asked for, and does not link it', async () => {
+      expect(await readEvent(calledOffId)).toMatchObject({
+        location_name: 'Called off, 2 Spec Street',
+        location_source: 'reverse_geocoded',
+        place_type: null,
+      });
+      expect(await placesNear(reverseDeadUserId, calledOffPoint)).toBe(0);
     });
   });
 });

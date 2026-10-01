@@ -178,8 +178,9 @@ async def nightly(
         # It used to sit inside `if needs_bootstrap`, which broke the only path
         # a new label has to a forecast: label_unlabeled writes
         # hbpe.l1_event_cluster, and serialize is the sole writer of
-        # hbpe.token_stream (ingester._reserialise covers today alone), which is
-        # in turn the only thing build_recurrence_profiles reads. On an
+        # hbpe.token_stream (the ingester rewrites today alone, and queues the
+        # older days a notification names for this step), which is in turn the
+        # only thing build_recurrence_profiles reads. On an
         # established appliance — valid checkpoint, no vocab drift, so
         # needs_bootstrap returns False — a whole night of labeling therefore
         # landed nowhere and /forecast kept returning clusters:[]. That is
@@ -191,17 +192,20 @@ async def nightly(
         # (user, date) at a time, so re-running it over an unchanged corpus is a
         # no-op with the same row count.
         #
-        # The bound is TWO budgets, not one, however far back the corpus
-        # reaches: at most SERIALIZE_WINDOW_DAYS + 1 content days (tiers A + B)
-        # plus at most PURGE_DAY_CAP source-less days riding on top of them
-        # (tier C) — 182 serialize_day calls at the default window, not 91. The
-        # purge half is delete-only work and it converges, so in steady state
-        # the second budget goes mostly unspent. Two cases do spend it in full:
-        # a bulk delete, and — once, on deploy — the historical backlog this
-        # change newly makes reachable. Days that emptied out below the 91st
-        # newest were never revisited under the old flat window, so an appliance
-        # carrying that backlog spends the whole purge cap for
-        # ceil(backlog / cap) consecutive nights before settling.
+        # The bound is THREE budgets, not one, however far back the corpus
+        # reaches: at most SERIALIZE_WINDOW_DAYS + 1 content days (tiers A + B),
+        # at most PURGE_DAY_CAP source-less days riding on top of them (tier C),
+        # and at most RESERIALIZE_DAY_CAP queued days the API announced a change
+        # on (reserialize_queue) — 273 serialize_day calls at the default
+        # window, not 91. The last two converge, so in steady state they go
+        # mostly unspent. The purge budget is spent in full by a bulk delete,
+        # and — once, on deploy — by the historical backlog the purge tier newly
+        # made reachable: days that emptied out below the 91st newest were never
+        # revisited under the old flat window, so an appliance carrying that
+        # backlog spends the whole purge cap for ceil(backlog / cap) consecutive
+        # nights before settling. The queue budget is spent in full by a burst
+        # of edits to days older than the budget, and once by the backlog its
+        # migration seeds.
         step("serialize")
         results["steps"]["serialize"] = await _safe(
             serialize_token_stream(user_id), "serialize"

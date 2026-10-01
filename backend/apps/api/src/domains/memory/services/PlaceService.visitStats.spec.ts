@@ -1,5 +1,6 @@
 import type { UserServiceContext } from '@ci/common/context';
 
+import { EVENT_HAPPENED_SQL } from './eventHappened';
 import { PlaceService } from './PlaceService';
 
 const isGeocodingConfigured = jest.fn<boolean, []>();
@@ -25,7 +26,7 @@ function makeHarness(options: {
   pipelinePending: boolean;
   visitRows?: Array<{ place_id: string; n: string; first_at: Date | null; last_at: Date | null }>;
 }) {
-  const query = jest.fn(async (sql: string) => {
+  const query = jest.fn(async (sql: string, _params?: unknown[]) => {
     if (sql.includes('ci.pipeline_state')) {
       return [{ exists: options.pipelinePending }];
     }
@@ -102,6 +103,31 @@ describe('PlaceService.getVisitStats status', () => {
     const stats = await service.getVisitStats(CONTEXT, [PLACE]);
 
     expect(stats.get(PLACE)).toMatchObject({ visitCount: 3, status: 'confirmed' });
+  });
+
+  it('counts only events that happened: the visit query applies the shared predicate on the event alias', async () => {
+    // The filtering is SQL, so what it does is proven against Postgres in
+    // __tests__/PlaceService.visitStats.integration.spec.ts. This pins the
+    // text: that the read applies EVENT_HAPPENED_SQL (whose own text
+    // eventHappened.spec.ts pins), over the alias it is written for, scoped to
+    // the user, with no bind parameter added to the two it always had.
+    isGeocodingConfigured.mockReturnValue(true);
+    const { service, query } = makeHarness({ pipelinePending: false });
+
+    await service.getVisitStats(CONTEXT, [PLACE]);
+
+    const visitCall = query.mock.calls.find(([sql]) => sql.includes('FROM ci.events'));
+
+    expect(visitCall).toBeDefined();
+
+    const [sql, params] = visitCall!;
+
+    expect(sql).toContain('FROM ci.events event');
+    expect(sql).toContain('event.user_id = $1');
+    expect(sql).toContain(EVENT_HAPPENED_SQL);
+    expect(sql).toContain('MIN(event.start_time)');
+    expect(sql).toContain('MAX(event.start_time)');
+    expect(params).toEqual([USER, [PLACE]]);
   });
 
   it('does not query pipeline_state at all when the batch is empty', async () => {

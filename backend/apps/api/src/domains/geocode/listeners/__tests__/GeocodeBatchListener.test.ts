@@ -1,3 +1,5 @@
+import { EVENT_HAPPENED_SQL } from '@ci/domains/memory';
+
 import { VIRTUAL_STATUS } from '../../services/GeocodeService';
 import type { GeocodeOutcome, ReverseGeocodeOutcome } from '../../services/GeocodeService';
 import { GeocodeBatchListener } from '../GeocodeBatchListener';
@@ -33,23 +35,42 @@ function makeQueryBuilder(rows: Array<Record<string, unknown>>) {
   return { qb, clauses };
 }
 
-function makeDataSource(builder: ReturnType<typeof makeQueryBuilder>) {
+/** What the "did this event happen" read returns; the default is that it did. */
+type HappenedRows = (eventId: string) => Array<{ happened: boolean | null }>;
+
+const EVENT_HAPPENED: HappenedRows = () => [{ happened: true }];
+
+/**
+ * `query` is the "did this event happen" read, the only raw SQL the listener
+ * issues; every call is recorded so a test can assert on its text and scope.
+ */
+function makeDataSource(builder: ReturnType<typeof makeQueryBuilder>, happenedRows: HappenedRows) {
+  const queries: Array<{ sql: string; params: unknown[] }> = [];
+
   return {
+    queries,
     getRepository: jest.fn(() => ({ createQueryBuilder: jest.fn(() => builder.qb) })),
+    query: jest.fn(async (sql: string, params: unknown[]) => {
+      queries.push({ sql, params });
+
+      return happenedRows(String(params[0]));
+    }),
   };
 }
 
 /**
  * Build a listener with a geocodeService whose `geocode` returns a scripted
  * outcome (provider never touched), and capture CalendarEventService.update calls.
+ * `happenedRows` scripts what the listener reads about whether each event happened.
  */
 function makeListener(
   rows: Array<Record<string, unknown>>,
   outcomeFor: (location: string) => GeocodeOutcome,
   reverseOutcomeFor?: (lat: number, lng: number) => ReverseGeocodeOutcome,
+  happenedRows: HappenedRows = EVENT_HAPPENED,
 ) {
   const builder = makeQueryBuilder(rows);
-  const dataSource = makeDataSource(builder);
+  const dataSource = makeDataSource(builder, happenedRows);
 
   const geocodeCalls: Array<{ location: string; bustCache: boolean }> = [];
   const reverseCalls: Array<{ lat: number; lng: number; bustCache: boolean }> = [];
@@ -117,6 +138,7 @@ function makeListener(
   return {
     listener,
     builder,
+    dataSource,
     geocodeService,
     eventService,
     placeService,
@@ -416,6 +438,151 @@ describe('GeocodeBatchListener Place linking', () => {
 
     expect(updates[0].data.location_name).toBe('Mountain View, CA');
     expect(updates[0].data.location_entity_id).toBeUndefined();
+  });
+});
+
+describe('GeocodeBatchListener Place linking — an event that did not happen', () => {
+  // Proven against Postgres, class by class, in
+  // GeocodeBatchListener.integration.spec.ts. These pin the control flow and
+  // the SQL the control flow runs.
+  const didNotHappen: HappenedRows = () => [{ happened: false }];
+
+  const okReverse = (placeName: string): ReverseGeocodeOutcome => ({
+    status: 'OK',
+    placeName,
+    cached: false,
+    retryable: false,
+  });
+
+  it('forward: still writes the coordinate, creates no Place, writes no link, and says so in the log', async () => {
+    const rows = [{ event_id: 'e1', location_name: 'Conference Room B' }];
+    const { listener, placeService, updates, logger } = makeListener(
+      rows,
+      () => okOutcome(),
+      undefined,
+      didNotHappen,
+    );
+
+    await listener.handleBatch({ userId: USER });
+
+    expect(placeService.findOrCreateForGeocode).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(1);
+    expect(updates[0].data.location_coordinates).toEqual({ type: 'Point', coordinates: [-122.1, 37.4] });
+    expect(updates[0].data.confidence_score).toBe(0.95);
+    expect(updates[0].data).not.toHaveProperty('location_entity_id');
+    expect(logger.log).toHaveBeenCalledWith(
+      'Completed geocode backfill batch',
+      expect.objectContaining({ resolved: 1, unlinked: 1 }),
+    );
+  });
+
+  it('reverse: still names the event and tags it, creates no Place, writes no link, and says so in the log', async () => {
+    const rows = [{ event_id: 'e1', lat: 37.4143, lng: -122.0774 }];
+    const { listener, placeService, updates, logger } = makeListener(
+      rows,
+      () => okOutcome(),
+      () => okReverse('1401 N Shoreline Blvd, Mountain View, CA'),
+      didNotHappen,
+    );
+
+    await listener.handleBatch({ userId: USER, direction: 'reverse' });
+
+    expect(placeService.findOrCreateForGeocode).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(2);
+    expect(updates[0].data.location_name).toBe('1401 N Shoreline Blvd, Mountain View, CA');
+    expect(updates[0].data).not.toHaveProperty('location_entity_id');
+    expect(updates[1].data.metadata).toMatchObject({ location_source: 'reverse_geocoded' });
+    expect(logger.log).toHaveBeenCalledWith(
+      'Completed reverse-geocode backfill batch',
+      expect.objectContaining({ resolved: 1, unlinked: 1 }),
+    );
+  });
+
+  it('decides per event: one that happened is still linked beside one that did not', async () => {
+    const rows = [
+      { event_id: 'held', location_name: 'Office' },
+      { event_id: 'called-off', location_name: 'Office' },
+    ];
+    const { listener, placeCalls, updates, logger } = makeListener(
+      rows,
+      () => okOutcome(),
+      undefined,
+      (eventId) => [{ happened: eventId === 'held' }],
+    );
+
+    await listener.handleBatch({ userId: USER });
+
+    expect(placeCalls).toHaveLength(1);
+    const byId = new Map(updates.map((u) => [u.id, u.data]));
+    expect(byId.get('held')?.location_entity_id).toEqual(expect.stringContaining('place:'));
+    expect(byId.get('called-off')).not.toHaveProperty('location_entity_id');
+    expect(logger.log).toHaveBeenCalledWith(
+      'Completed geocode backfill batch',
+      expect.objectContaining({ resolved: 2, unlinked: 1 }),
+    );
+  });
+
+  it.each([
+    ['the event cannot be read (hard-deleted mid-batch, or owned by another user)', () => []],
+    ['the rule evaluates to NULL', () => [{ happened: null }]],
+  ] as Array<[string, HappenedRows]>)('fails closed when %s', async (_label, happenedRows) => {
+    const rows = [{ event_id: 'e1', location_name: 'Conference Room B' }];
+    const { listener, placeService, updates } = makeListener(
+      rows,
+      () => okOutcome(),
+      undefined,
+      happenedRows,
+    );
+
+    await listener.handleBatch({ userId: USER });
+
+    expect(placeService.findOrCreateForGeocode).not.toHaveBeenCalled();
+    expect(updates[0].data.location_coordinates).toBeDefined();
+    expect(updates[0].data).not.toHaveProperty('location_entity_id');
+  });
+
+  it("reads the event once, scoped to the user, in the memory domain's text of the rule", async () => {
+    const rows = [{ event_id: 'e1', location_name: 'Conference Room B' }];
+    const { listener, dataSource } = makeListener(rows, () => okOutcome());
+
+    await listener.handleBatch({ userId: USER });
+
+    expect(dataSource.queries).toHaveLength(1);
+    const [{ sql, params }] = dataSource.queries;
+    expect(params).toEqual(['e1', USER]);
+    expect(sql).toContain(`SELECT ${EVENT_HAPPENED_SQL} AS happened`);
+    // EVENT_HAPPENED_SQL is written for the alias `event`.
+    expect(sql).toContain('FROM ci.events event');
+    expect(sql).toContain('event.event_id = $1');
+    expect(sql).toContain('event.user_id = $2');
+  });
+
+  it('asks only about an event it resolved: not a virtual venue, not a negative result', async () => {
+    const rows = [
+      { event_id: 'virtual', location_name: 'zoom' },
+      { event_id: 'nowhere', location_name: 'nowhere in particular' },
+    ];
+    const virtual: GeocodeOutcome = {
+      status: VIRTUAL_STATUS,
+      point: null,
+      confidence: null,
+      cached: false,
+      retryable: false,
+    };
+    const zeroResults: GeocodeOutcome = {
+      status: 'ZERO_RESULTS',
+      point: null,
+      confidence: null,
+      cached: false,
+      retryable: false,
+    };
+    const { listener, dataSource } = makeListener(rows, (location) =>
+      location === 'zoom' ? virtual : zeroResults,
+    );
+
+    await listener.handleBatch({ userId: USER });
+
+    expect(dataSource.queries).toHaveLength(0);
   });
 });
 

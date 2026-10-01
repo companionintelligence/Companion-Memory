@@ -289,6 +289,14 @@ class _DayQueryCursor:
         params = tuple(params or ())
         self._calls.append((flat, params))
 
+        if "hbpe.reserialize_days" in flat:
+            # serialize_token_stream also reads its re-serialize queue. These
+            # tests are about the day list, so the queue is always empty here;
+            # test_reserialize_queue.py interprets that SQL.
+            self._result = []
+            self.rowcount = 0
+            return
+
         if "MIN(source_date)" in flat:
             days = sorted(
                 {
@@ -1313,6 +1321,17 @@ def test_window_and_keyset_params_bind_in_query_order(monkeypatch):
 
 _SERIALIZED_DAYS: list[str] = []
 _ROWS_PER_DAY = 59
+# What serialize_token_stream reports for its re-serialize queue when the queue
+# is empty, as every fake in this file serves it.
+_EMPTY_QUEUE = {
+    "status": "ok",
+    "queued": 0,
+    "serialized": 0,
+    "rows": 0,
+    "settled": 0,
+    "deferred": 0,
+    "failed": 0,
+}
 
 
 class _DaySerializer:
@@ -1333,10 +1352,16 @@ def _run_serialize(monkeypatch, days, bounds=None, today=TODAY):
     _SERIALIZED_DAYS.clear()
 
     class _Cur:
-        def execute(self, *_a, **_k):
-            return None
+        rowcount = 0
+
+        def execute(self, sql, *_a, **_k):
+            # The re-serialize queue serialize_token_stream also reads is empty
+            # here; test_reserialize_queue.py covers it.
+            self._queue = "hbpe.reserialize_days" in str(sql)
 
         def fetchall(self):
+            if self._queue:
+                return []
             # (source_date, is_content); this fake models content days only.
             return [(d.isoformat(), True) for d in sorted(days, reverse=True)]
 
@@ -1492,13 +1517,21 @@ def test_serialize_reports_a_corpus_that_is_entirely_in_the_future(monkeypatch):
     result = _run_serialize(
         monkeypatch, [], bounds=(dt.date(2026, 9, 1), dt.date(2026, 10, 15))
     )
-    assert result == {"rows": 0, "reason": "only_future_events"}
+    assert result == {
+        "rows": 0,
+        "reason": "only_future_events",
+        "reserialize_queue": _EMPTY_QUEUE,
+    }
     assert _SERIALIZED_DAYS == []
 
 
 def test_serialize_reports_an_empty_corpus(monkeypatch):
     result = _run_serialize(monkeypatch, [], bounds=None)
-    assert result == {"rows": 0, "reason": "no_events"}
+    assert result == {
+        "rows": 0,
+        "reason": "no_events",
+        "reserialize_queue": _EMPTY_QUEUE,
+    }
     assert _SERIALIZED_DAYS == []
 
 

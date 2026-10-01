@@ -264,6 +264,51 @@ export class EntityIdentifierService {
   }
 
   /**
+   * Which of these identifiers belong to a person the owner asked `memory.forget`
+   * to erase, in the same `${kind}:${valueNormalized}` spelling
+   * {@link findEntityIdsByIdentifiers} keys by. The paths that mint a stub Person
+   * from a message participant skip every one of them, or the person would be
+   * created again from the mail that still names them.
+   *
+   * `ci.forgotten_identifiers` holds digests, not addresses, so the key is hashed
+   * here by the same database function the purge hashed it with. A display name is
+   * never listed (a name is shared by many people), so a `name` key is not even
+   * asked about. One round-trip for all of them; an empty input short-circuits.
+   */
+  async findForgottenIdentifiers(ownerUserId: string, keys: IdentifierKey[]): Promise<Set<string>> {
+    const out = new Set<string>();
+    const unique = new Map<string, IdentifierKey>();
+
+    for (const key of keys) {
+      if (key.kind !== 'name') {
+        unique.set(`${key.kind}:${key.valueNormalized}`, key);
+      }
+    }
+
+    if (unique.size === 0) {
+      return out;
+    }
+
+    const tuples = [...unique.values()];
+
+    const rows: Array<{ kind: string; value_normalized: string }> = await this.repository.manager.query(
+      `SELECT t.kind, t.value_normalized
+         FROM unnest($2::text[], $3::text[]) AS t (kind, value_normalized)
+         JOIN ci.forgotten_identifiers f
+           ON f.owner_user_id = $1::uuid
+          AND f.kind = t.kind
+          AND f.identifier_digest = ci.forgotten_identifier_digest($1::uuid, t.kind, t.value_normalized)`,
+      [ownerUserId, tuples.map((key) => key.kind), tuples.map((key) => key.valueNormalized)],
+    );
+
+    for (const row of rows) {
+      out.add(`${row.kind}:${row.value_normalized}`);
+    }
+
+    return out;
+  }
+
+  /**
    * All identifiers claimed by the given entities, for the contact-methods
    * read surface (PersonType.identifiers). Returns a Map entity_id -> rows,
    * ordered kind then value for stable display.

@@ -7,7 +7,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { OnEvent } from '@ci/domains/events';
-import { EventEntity, CalendarEventService, PlaceService } from '@ci/domains/memory';
+import { EventEntity, CalendarEventService, EVENT_HAPPENED_SQL, PlaceService } from '@ci/domains/memory';
 import { GeocodeBatchRequestEvent, type GeocodeBatchRequestPayload } from '@ci/domains/memory/events';
 
 import {
@@ -47,6 +47,13 @@ interface ReverseCandidateRow {
   lng: number;
 }
 
+/** What the provider resolved about a place beyond its name and coordinate. */
+interface PlaceResolution {
+  placeId?: string | null;
+  components?: Record<string, unknown> | null;
+  bounds?: { north: number; south: number; east: number; west: number } | null;
+}
+
 /**
  * Consumes {@link GeocodeBatchRequestEvent}: selects events carrying a
  * location_name but no location_coordinates (the backfill set), forward-geocodes
@@ -56,6 +63,25 @@ interface ReverseCandidateRow {
  * Idempotent: the candidate query excludes already-geocoded events, and a
  * re-run updates in place (CalendarEventService.update is keyed on event_id), so it can
  * be enqueued repeatedly without duplicating work.
+ *
+ * It also writes `location_entity_id`, the link `promote.place` writes, and it
+ * applies that stage's rule to it: an event that did not happen (deleted,
+ * predicted, cancelled, no_show, skipped, or a cancelled Takeout reservation;
+ * see {@link EVENT_HAPPENED_SQL}) is geocoded like any other but is not linked.
+ * The coordinate is a fact about the venue. The link says the user went, and it
+ * is read as a visit, a footprint and a LOCATED_AT edge. The rule is asked per
+ * event, after the provider answers, because a batch is minutes of provider
+ * calls and a sync can cancel a meeting meanwhile. An event refused its link
+ * gets it from `promote.place` if it is reinstated: that stage offers an event
+ * only while it passes the same rule, so a reinstated one is picked up on its
+ * next sweep with no version bump.
+ *
+ * This is not an operator-only leftover. The orchestrator's `geocode` and
+ * `reverse_geocode` legs enqueue it, and they run after every bulk `/v1` ingest
+ * (`IngestCoalesceService`, `ingest.selfHeal`, on by default) as well as from the
+ * maintenance endpoints. Its links do not re-open `promote.edge_event` the way
+ * `promote.place`'s do (`pipeline/reopens.ts`); that gap is separate, and this
+ * class does not close it.
  */
 @Injectable()
 export class GeocodeBatchListener {
@@ -104,6 +130,7 @@ export class GeocodeBatchListener {
     });
 
     let resolved = 0;
+    let unlinked = 0;
     let virtual = 0;
     let failed = 0;
     let skipped = 0;
@@ -116,11 +143,20 @@ export class GeocodeBatchListener {
           if (outcome.status === 'OK' && outcome.point && outcome.confidence !== null) {
             // PostGIS Point.coordinates is [lng, lat] (GeoJSON order).
             const [lng, lat] = outcome.point.coordinates;
-            const place = await this.linkPlace(context, candidate.location_name, lat, lng, {
-              placeId: outcome.placeId,
-              components: outcome.components,
-              bounds: outcome.bounds,
-            });
+            // The coordinate below is written either way; the Place link only
+            // for an event that happened.
+            const { place, happened } = await this.placeForEvent(
+              context,
+              candidate.event_id,
+              candidate.location_name,
+              lat,
+              lng,
+              {
+                placeId: outcome.placeId,
+                components: outcome.components,
+                bounds: outcome.bounds,
+              },
+            );
 
             await this.eventService.update(context, candidate.event_id, {
               location_coordinates: outcome.point,
@@ -137,6 +173,9 @@ export class GeocodeBatchListener {
             }
 
             resolved++;
+            if (!happened) {
+              unlinked++;
+            }
 
             return;
           }
@@ -168,6 +207,8 @@ export class GeocodeBatchListener {
     this.logger.log('Completed geocode backfill batch', {
       userId,
       resolved,
+      // Resolved, but the event did not happen, so no Place link was written.
+      unlinked,
       virtual,
       skipped,
       failed,
@@ -223,6 +264,7 @@ export class GeocodeBatchListener {
     });
 
     let resolved = 0;
+    let unlinked = 0;
     let failed = 0;
     let skipped = 0;
 
@@ -240,11 +282,20 @@ export class GeocodeBatchListener {
           if (outcome.status === 'OK' && outcome.placeName) {
             const lat = Number(candidate.lat);
             const lng = Number(candidate.lng);
-            const place = await this.linkPlace(context, outcome.placeName, lat, lng, {
-              placeId: outcome.placeId,
-              components: outcome.components,
-              bounds: outcome.bounds,
-            });
+            // The name below is written either way; the Place link only for an
+            // event that happened.
+            const { place, happened } = await this.placeForEvent(
+              context,
+              candidate.event_id,
+              outcome.placeName,
+              lat,
+              lng,
+              {
+                placeId: outcome.placeId,
+                components: outcome.components,
+                bounds: outcome.bounds,
+              },
+            );
 
             await this.eventService.update(context, candidate.event_id, {
               location_name: outcome.placeName,
@@ -252,6 +303,9 @@ export class GeocodeBatchListener {
             });
             await this.tagLocationSource(context, candidate.event_id, 'reverse_geocoded');
             resolved++;
+            if (!happened) {
+              unlinked++;
+            }
 
             return;
           }
@@ -274,6 +328,8 @@ export class GeocodeBatchListener {
     this.logger.log('Completed reverse-geocode backfill batch', {
       userId,
       resolved,
+      // Resolved, but the event did not happen, so no Place link was written.
+      unlinked,
       failed,
       skipped,
       candidateCount: candidates.length,
@@ -318,6 +374,10 @@ export class GeocodeBatchListener {
    * reason — treats its name as one it owns. COALESCE because a measured row
    * usually has no location_source at all, and `NULL <> 'estimated'` is NULL,
    * not true.
+   *
+   * Whether the event happened is not asked here either; see
+   * {@link selectCandidates}. A cancelled event's measured coordinate is still
+   * named, and still not linked ({@link placeForEvent}).
    */
   private async selectReverseCandidates(
     userId: string,
@@ -360,6 +420,14 @@ export class GeocodeBatchListener {
    *
    * An explicit eventIds list overrides the auto-selection but is still scoped
    * to the user.
+   *
+   * Nothing here asks whether the event happened, on purpose. Geocoding a
+   * cancelled meeting's venue is right (`enrich.geocode` does it too), and
+   * dropping such rows here would also make an explicit eventIds request for
+   * one a silent no-op. What it must not get is a Place link, which is decided
+   * per event in {@link placeForEvent}. The operator-facing candidate counts
+   * (MaintenanceController, MaintenanceOrchestratorService) therefore still
+   * mirror this filter exactly.
    */
   private async selectCandidates(
     userId: string,
@@ -396,6 +464,56 @@ export class GeocodeBatchListener {
   }
 
   /**
+   * The Place to link an event to, and whether the event happened — which is
+   * why `place` is null when it is.
+   *
+   * An event that did not happen gets no Place at all: not a link, and not the
+   * Location entity {@link linkPlace} would mint for its venue, which would sit
+   * in the graph with no visit behind it. The caller still writes the
+   * coordinate or name it resolved.
+   */
+  private async placeForEvent(
+    context: UserServiceContext,
+    eventId: string,
+    name: string,
+    lat: number,
+    lng: number,
+    resolution: PlaceResolution,
+  ): Promise<{ place: { id: string } | null; happened: boolean }> {
+    if (!(await this.eventHappened(context, eventId))) {
+      return { place: null, happened: false };
+    }
+
+    return { place: await this.linkPlace(context, name, lat, lng, resolution), happened: true };
+  }
+
+  /**
+   * Whether the event happened ({@link EVENT_HAPPENED_SQL}), read now rather than
+   * carried over from {@link selectCandidates}. A batch is up to
+   * `config.geocoding.batchSize` provider calls with a backoff of up to six
+   * seconds each, and a calendar sync that cancels a meeting while one is in
+   * flight must not be answered with a link saying the user was there. One
+   * primary-key read per resolved candidate, beside a paid provider call.
+   *
+   * Fails closed. An event that cannot be read — hard-deleted mid-batch, or not
+   * this user's — is not one this listener has any business linking.
+   *
+   * The table is aliased `event` because that is the alias
+   * {@link EVENT_HAPPENED_SQL} is written for.
+   */
+  private async eventHappened(context: UserServiceContext, eventId: string): Promise<boolean> {
+    const rows: Array<{ happened: boolean | null }> = await this.dataSource.query(
+      `SELECT ${EVENT_HAPPENED_SQL} AS happened
+         FROM ci.events event
+        WHERE event.event_id = $1
+          AND event.user_id = $2`,
+      [eventId, context.userId],
+    );
+
+    return rows[0]?.happened === true;
+  }
+
+  /**
    * Idempotent upsert of the {@link PlaceEntity} for a (name, lat, lng) tuple
    * so the event can carry `location_entity_id` and "events at <place>" queries
    * can traverse the graph. Returns null on any failure — the caller proceeds
@@ -407,11 +525,7 @@ export class GeocodeBatchListener {
     name: string,
     lat: number,
     lng: number,
-    resolution: {
-      placeId?: string | null;
-      components?: Record<string, unknown> | null;
-      bounds?: { north: number; south: number; east: number; west: number } | null;
-    } = {},
+    resolution: PlaceResolution = {},
   ): Promise<{ id: string } | null> {
     try {
       return await this.placeService.findOrCreateForGeocode(context, {

@@ -177,10 +177,19 @@ module = [
 ignore_errors = true
 
 [[tool.mypy.overrides]]
+# Carved back out of the quarantine above: annotated from the start, and strict.
+# A named module outranks the ``ci.hbpe.*`` pattern.
+module = [
+    "ci.hbpe.pipeline.reserialize_queue",
+]
+ignore_errors = false
+
+[[tool.mypy.overrides]]
 # Third-party packages that ship no type information.
 module = [
     "markitdown.*",
     "nest_asyncio.*",
+    "psycopg2.*",
     "structlog.*",
 ]
 ignore_missing_imports = true

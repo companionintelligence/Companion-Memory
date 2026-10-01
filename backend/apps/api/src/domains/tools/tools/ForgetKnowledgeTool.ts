@@ -8,11 +8,15 @@ import { EventService } from '@ci/domains/events';
 import {
   CalendarEventService,
   CommunicationService,
+  ConceptService,
   ContentService,
   FileService,
   GraphUtilityService,
   GraphNodeEntity,
+  graphEntityKindOf,
   ItemService,
+  PersonService,
+  PlaceService,
   RelationshipEntity,
   StoredObjectsDeletedError,
   type PurgedFiles,
@@ -61,9 +65,9 @@ export interface ForgetKnowledgeOutput {
 
 /**
  * A delete that failed after it had already destroyed something. Events, content, communications,
- * items and files are purged first, each in its own transaction, and a purge cannot be undone, so
- * when the rest of the call is refused what was purged is gone and stays gone. This says which,
- * rather than leaving the caller to find out by trying again.
+ * items, files, people, places and concepts are purged first, each in its own transaction, and a purge
+ * cannot be undone, so when the rest of the call is refused what was purged is gone and stays gone.
+ * This says which, rather than leaving the caller to find out by trying again.
  *
  * A file can also be half gone: a purge deletes its stored objects before its records, so a failure
  * in between leaves a file that is still listed and no longer opens. Those are named separately,
@@ -141,7 +145,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
           enum: ['archive', 'archive_and_delete'],
           default: 'archive',
           description:
-            "Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, an item goes with the duplicates that were merged into it, a file goes with its previews and other copies and with its stored bytes, and anything that came from a source that syncs again can arrive again. An item that is another item's parent is refused until its children are named too. The content record of a photo is not deleted with its file: it is listed in warnings, to be forgotten on its own.",
+            "Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, an item, person, place or concept goes with the duplicates that were merged into it, a file goes with its previews and other copies and with its stored bytes, and anything that came from a source that syncs again can arrive again. A forgotten person's email addresses, phone numbers and handles are remembered as digests, so messages that still name them do not create them again; their messages and events are not deleted. An item that is another item's parent is refused until its children are named too, and the user's own person is always refused. The content record of a photo is not deleted with its file: it is listed in warnings, to be forgotten on its own.",
         },
         reason: {
           type: 'string',
@@ -175,6 +179,9 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     private readonly communications: CommunicationService,
     private readonly items: ItemService,
     private readonly files: FileService,
+    private readonly people: PersonService,
+    private readonly places: PlaceService,
+    private readonly concepts: ConceptService,
     protected readonly logger: LoggerService,
   ) {
     super();
@@ -245,10 +252,12 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
 
     // An Event is two rows, a Content node has HBPE's links hanging off it, a
     // Communication leaves its participants' claims behind, an Item leaves its
-    // identifiers and merge history, and a File node is only the shadow of a
-    // stored file, so none of them can be treated like any other node. Archive
-    // moves an event to the trash; delete purges events, content, communications,
-    // items and files. Each announces its own removal, and what is left is generic.
+    // identifiers and merge history, a File node is only the shadow of a stored
+    // file, and a Person, Place or Concept leaves the identifiers it was known by
+    // and everything that was merged into it, so none of them can be treated like
+    // any other node. Archive moves an event to the trash; delete purges events,
+    // content, communications, items, files, people, places and concepts. Each
+    // announces its own removal, and what is left is generic.
     const nodes = uniqueEntitySnapshots.map((entry) => entry.node);
     const handledIds = hardDelete
       ? await this.purgeAggregates(nodes, ownerId, warnings)
@@ -341,18 +350,18 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
   }
 
   /**
-   * Delete the events, content, communications, items and files among `nodes` for
-   * good, and answer with the ids of the nodes that are gone, which are no longer
-   * the generic path's.
+   * Delete the events, content, communications, items, files, people, places and
+   * concepts among `nodes` for good, and answer with the ids of the nodes that are
+   * gone, which are no longer the generic path's.
    *
    * The generic path, `deactivateEntities` with `hardDelete`, deletes the node's
    * `ci.entities` row and trusts the foreign keys. For these that cannot work.
    * HBPE has clustered nearly every event and nearly every content row, its link
    * tables reference them with no `ON DELETE` action, and the delete fails
-   * outright. When it does go through, and it always does for a communication, it
-   * leaves rows that name the node with no foreign key to say so. For a file it
-   * never reaches the file at all. Each owning service does the whole teardown in
-   * one transaction and announces its own removal.
+   * outright. When it does go through, and it always does for a communication, a
+   * person, a place or a concept, it leaves rows that name the node with no foreign
+   * key to say so. For a file it never reaches the file at all. Each owning service
+   * does the whole teardown in one transaction and announces its own removal.
    *
    * Events go first, and take their attached content with them, so a content node
    * named in the same call may already be gone when its own turn comes.
@@ -377,6 +386,9 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
       await this.purgeEvents(nodes, ownerId, destroyed);
       await this.purgeContent(nodes, ownerId, destroyed);
       await this.purgeCommunications(nodes, ownerId, destroyed);
+      await this.purgePeople(nodes, ownerId, destroyed, warnings);
+      await this.purgePlaces(nodes, ownerId, destroyed, warnings);
+      await this.purgeConcepts(nodes, ownerId, destroyed, warnings);
       await this.purgeItems(nodes, ownerId, destroyed, warnings);
       await this.purgeFiles(nodes, ownerId, destroyed, warnings, contentsOnly);
     } catch (error) {
@@ -473,6 +485,121 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     const purged = await this.communications.purge({ userId: ownerId }, communicationIds);
 
     purged.communicationIds.forEach((id) => destroyed.add(id));
+  }
+
+  /**
+   * Delete people for good, through {@link PersonService.purge}: the node, its
+   * identifiers, the pointers to it from messages and events, its merge history
+   * and every row that names it.
+   *
+   * The addresses, phone numbers and handles they held are remembered as digests
+   * so mail that still names them does not create them again. That is a thing the
+   * caller should know was kept, so it is said here, and so are the duplicates that
+   * were merged into a person, which went unnamed.
+   *
+   * The user's own node is refused, by the foreign key from `ci.users`, and the
+   * refusal is reported like any other as a `CONSTRAINT_VIOLATION` that retrying
+   * will not change.
+   *
+   * A `Person` node `purge` does not take goes on to the generic path. Every
+   * spelling the graph holds a person under is taken, so that is a node the caller
+   * does not own, which the snapshot has already turned away.
+   */
+  private async purgePeople(
+    nodes: GraphNodeEntity[],
+    ownerId: string,
+    destroyed: Set<string>,
+    warnings: string[],
+  ): Promise<void> {
+    const personIds = nodes
+      .filter((node) => graphEntityKindOf(node.entity_type) === 'person')
+      .map((node) => node.entity_id);
+
+    if (personIds.length === 0) {
+      return;
+    }
+
+    const purged = await this.people.purge({ userId: ownerId }, personIds);
+
+    purged.personIds.forEach((id) => destroyed.add(id));
+
+    if (purged.duplicateIds.length > 0) {
+      warnings.push(
+        `Also deleted, because each had been merged into a person named here: ${purged.duplicateIds.join(', ')}.`,
+      );
+    }
+
+    if (purged.blockedIdentifiers > 0) {
+      warnings.push(
+        `${purged.blockedIdentifiers} email address(es), phone number(s) and handle(s) they used are remembered as digests, so messages that still name them do not create them again. Their messages and events were not deleted.`,
+      );
+    }
+  }
+
+  /**
+   * Delete places for good, through {@link PlaceService.purge}: the node, its
+   * identifiers, its merge history and every row that names it. Its children move
+   * up to its parent first, as {@link PlaceService.remove} does.
+   *
+   * The events, fixes and receipts that were at the place keep their own record of
+   * where, and the place is minted again from it when a new event is promoted.
+   *
+   * A `Location` or `Place` node `purge` does not take goes on to the generic path.
+   */
+  private async purgePlaces(
+    nodes: GraphNodeEntity[],
+    ownerId: string,
+    destroyed: Set<string>,
+    warnings: string[],
+  ): Promise<void> {
+    const placeIds = nodes
+      .filter((node) => graphEntityKindOf(node.entity_type) === 'place')
+      .map((node) => node.entity_id);
+
+    if (placeIds.length === 0) {
+      return;
+    }
+
+    const purged = await this.places.purge({ userId: ownerId }, placeIds);
+
+    purged.placeIds.forEach((id) => destroyed.add(id));
+
+    if (purged.duplicateIds.length > 0) {
+      warnings.push(
+        `Also deleted, because each had been merged into a place named here: ${purged.duplicateIds.join(', ')}.`,
+      );
+    }
+  }
+
+  /**
+   * Delete concepts for good, through {@link ConceptService.purge}: the node, its
+   * identifiers and every row that names it.
+   *
+   * A `Concept` node `purge` does not take goes on to the generic path.
+   */
+  private async purgeConcepts(
+    nodes: GraphNodeEntity[],
+    ownerId: string,
+    destroyed: Set<string>,
+    warnings: string[],
+  ): Promise<void> {
+    const conceptIds = nodes
+      .filter((node) => graphEntityKindOf(node.entity_type) === 'concept')
+      .map((node) => node.entity_id);
+
+    if (conceptIds.length === 0) {
+      return;
+    }
+
+    const purged = await this.concepts.purge({ userId: ownerId }, conceptIds);
+
+    purged.conceptIds.forEach((id) => destroyed.add(id));
+
+    if (purged.duplicateIds.length > 0) {
+      warnings.push(
+        `Also deleted, because each had been merged into a concept named here: ${purged.duplicateIds.join(', ')}.`,
+      );
+    }
   }
 
   /**
@@ -666,7 +793,8 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    * `Communication` node that has a `ci.communications` row, or an `Item` node
    * that has a `ci.objects` row never reaches here: {@link purgeContent},
    * {@link purgeCommunications} and {@link purgeItems} delete it and announce it
-   * themselves.
+   * themselves. So does a person, a place or a concept, whatever spelling it is
+   * stored under ({@link purgePeople}, {@link purgePlaces}, {@link purgeConcepts}).
    *
    * A `File` node that has a `ci.files` row does not either: {@link purgeFiles}
    * deletes the file and announces `file.deleted`, whose payload is the id of the

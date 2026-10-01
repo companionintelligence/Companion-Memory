@@ -80,6 +80,9 @@ export const USER_OWNED_TABLES: readonly UserOwnedTable[] = [
   { schema: 'ci', table: 'graph_deltas', userColumn: 'owner_user_id' },
   { schema: 'ci', table: 'relationships', userColumn: 'owner_user_id' },
   { schema: 'ci', table: 'entity_identifiers', userColumn: 'owner_user_id' },
+  // Digests of the identifiers of people memory.forget erased: derived from a user's data, so it goes
+  // with it, and counted rather than left to the cascade.
+  { schema: 'ci', table: 'forgotten_identifiers', userColumn: 'owner_user_id' },
   { schema: 'ci', table: 'entities', userColumn: 'owner_user_id' },
 
   // --- Core memory: content references events, so content before events. ---

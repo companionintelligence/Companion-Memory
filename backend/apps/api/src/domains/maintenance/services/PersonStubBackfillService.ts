@@ -54,6 +54,12 @@ export interface PersonStubBackfillResult {
   /** Identifiers the prefilter found already covered by the index. */
   identifiersExisting: number;
   /**
+   * Identifiers skipped because they belong to a person the owner asked `memory.forget` to erase
+   * (`ci.forgotten_identifiers`). The mail that names them is still here, and minting them again would
+   * undo the forget.
+   */
+  identifiersForgotten: number;
+  /**
    * Upper bound on stub Person entities created. Sourced from
    * `GraphIngestService.ingest`'s `entitiesProcessed`, which also counts
    * idempotent resolves of pre-existing linked-key rows — so a concurrent
@@ -102,6 +108,11 @@ interface SeenIdentifier {
  * `properties.emails`/`.phones`, etc.) leaves the index empty and every
  * communication unlinked. Run this FIRST, then /api/maintenance/link-communications.
  *
+ * An identifier on `ci.forgotten_identifiers` is skipped, not minted: it belongs to
+ * a person the owner asked `memory.forget` to erase, and the mail that names them
+ * is still here. Without the skip this pass is what undoes the forget, and the
+ * person-link stage then re-attaches the whole history to the new row.
+ *
  * Delegates entity + identifier writes to {@link GraphIngestService.ingest},
  * which is itself idempotent (entities dedupe on the linked-key partial unique
  * index; identifiers dedupe on the (owner_user_id, kind, value_normalized)
@@ -140,6 +151,7 @@ export class PersonStubBackfillService {
         examined: 0,
         identifiersSeen: 0,
         identifiersExisting: 0,
+        identifiersForgotten: 0,
         peopleCreated: 0,
         identifiersIndexed: 0,
         errors: [],
@@ -160,6 +172,7 @@ export class PersonStubBackfillService {
     let examined = 0;
     let identifiersSeen = 0;
     let identifiersExisting = 0;
+    let identifiersForgotten = 0;
     let peopleCreated = 0;
     let identifiersIndexed = 0;
     const errors: string[] = [];
@@ -185,6 +198,7 @@ export class PersonStubBackfillService {
       examined += windowResult.examined;
       identifiersSeen += windowResult.identifiersSeen;
       identifiersExisting += windowResult.identifiersExisting;
+      identifiersForgotten += windowResult.identifiersForgotten;
       peopleCreated += windowResult.peopleCreated;
       identifiersIndexed += windowResult.identifiersIndexed;
       errors.push(...windowResult.errors);
@@ -198,6 +212,7 @@ export class PersonStubBackfillService {
       examined,
       identifiersSeen,
       identifiersExisting,
+      identifiersForgotten,
       peopleCreated,
       identifiersIndexed,
       windows,
@@ -209,6 +224,7 @@ export class PersonStubBackfillService {
       examined,
       identifiersSeen,
       identifiersExisting,
+      identifiersForgotten,
       peopleCreated,
       identifiersIndexed,
       errors,
@@ -281,6 +297,7 @@ export class PersonStubBackfillService {
     examined: number;
     identifiersSeen: number;
     identifiersExisting: number;
+    identifiersForgotten: number;
     peopleCreated: number;
     identifiersIndexed: number;
     errors: string[];
@@ -288,6 +305,7 @@ export class PersonStubBackfillService {
     let examined = 0;
     let identifiersSeen = 0;
     let identifiersExisting = 0;
+    let identifiersForgotten = 0;
     let peopleCreated = 0;
     let identifiersIndexed = 0;
     const errors: string[] = [];
@@ -362,11 +380,19 @@ export class PersonStubBackfillService {
         // for that bulk savings on re-runs.
         const allKeys = [...seenByComposite.values()].map((s) => s.key);
         const existing = await this.entityIdentifierService.findEntityIdsByIdentifiers(userId, allKeys);
+        // The owner asked `memory.forget` to erase the person these belong to. The mail that names them is
+        // still here, and without this the first pass after the forget would mint each of them again.
+        const forgotten = await this.entityIdentifierService.findForgottenIdentifiers(userId, allKeys);
 
         const newEntities: GraphEntityInputDto[] = [];
         for (const [composite, seen] of seenByComposite) {
           if (existing.has(composite)) {
             identifiersExisting += 1;
+            continue;
+          }
+
+          if (forgotten.has(composite)) {
+            identifiersForgotten += 1;
             continue;
           }
 
@@ -450,6 +476,7 @@ export class PersonStubBackfillService {
       examined,
       identifiersSeen,
       identifiersExisting,
+      identifiersForgotten,
       peopleCreated,
       identifiersIndexed,
       errors,

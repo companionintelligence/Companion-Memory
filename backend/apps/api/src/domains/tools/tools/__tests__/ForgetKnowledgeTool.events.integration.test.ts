@@ -28,6 +28,7 @@ import { UserEntity } from '@ci/domains/user';
 
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
 import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
+import { GRAPH_ENTITY_ENTITIES, graphEntityServices } from '../../../__tests__/support/graphEntityServices';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { ForgetKnowledgeTool } from '../ForgetKnowledgeTool';
 
@@ -169,6 +170,7 @@ describeWithDb(`memory.forget on an Event, against Postgres (${availability.targ
         GraphNodeEntity,
         RelationshipEntity,
         UserEntity,
+        ...GRAPH_ENTITY_ENTITIES,
       ],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
@@ -196,6 +198,8 @@ describeWithDb(`memory.forget on an Event, against Postgres (${availability.targ
     );
     knownPlaces = new KnownPlacesService(dataSource, logger(), {} as never);
     edges = new DeterministicEdgeBackfillService(dataSource, deltaWriter, logger());
+    const services = graphEntityServices(dataSource, signalling, logger());
+
     tool = new ForgetKnowledgeTool(
       graph,
       signalling,
@@ -211,6 +215,9 @@ describeWithDb(`memory.forget on an Event, against Postgres (${availability.targ
       {} as unknown as CommunicationService,
       {} as unknown as ItemService,
       {} as unknown as FileService,
+      services.people,
+      services.places,
+      services.concepts,
       logger(),
     );
   });
@@ -762,8 +769,9 @@ describeWithDb(`memory.forget on an Event, against Postgres (${availability.targ
     });
 
     it('does not touch the edges of a node it does not own', async () => {
-      const mine = await seedNode('Concept', 'Jazz');
-      const theirs = await seedNode('Concept', 'Jazz', strangerId);
+      // A kind of node nothing purges, so this is the generic delete, which only ever takes the caller's own edges.
+      const mine = await seedNode('Organization', 'Jazz Club');
+      const theirs = await seedNode('Organization', 'Jazz Club', strangerId);
 
       // An edge of the stranger's that happens to name my node's id is the stranger's to keep.
       const [{ relationship_id }] = await dataSource.query(

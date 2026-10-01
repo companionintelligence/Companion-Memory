@@ -292,6 +292,9 @@ export {
 export type { Content } from './entities/ContentEntity';
 // How a graph write spells `entity_type`; `memory.remember` sends the model's type through these.
 export { canonicalEntityType, isStorableEntityType, sameEntityType } from './graph.types';
+// Which nodes are a Person, a Place or a Concept, under every spelling `ci.entities` holds them in;
+// `memory.forget` sends each to its own purge.
+export { GRAPH_ENTITY_TYPES, graphEntityKindOf, type GraphEntityKind } from './graph.types';
 export { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from './services/selfEntityProvisioner';
 export {
   EVENT_TIME_REOPENER,
@@ -308,6 +311,9 @@ export type { MapPin } from './services/CalendarEventService';
 // objects and then could not delete its records.
 export { StoredObjectsDeletedError, type PurgedFiles } from './services/filePurge';
 export { DEAD_EVENT_STATUSES, LIVE_EVENT_SQL } from './services/CalendarEventService';
+// "This `ci.events` row happened" (alias `event`): the calendar's LIVE_EVENT_SQL plus deleted, predicted
+// and cancelled-reservation. What a place's visit count, the Places date browse and Known places apply.
+export { EVENT_HAPPENED_SQL } from './services/eventHappened';
 export { MAX_EXPANDED_OCCURRENCES, MAX_RECURRING_MASTERS } from './services/CalendarEventService';
 // Read-time RRULE expansion. Exported so `peers` can expand the same series for
 // free/busy without routing that read through findInRange, which would silently

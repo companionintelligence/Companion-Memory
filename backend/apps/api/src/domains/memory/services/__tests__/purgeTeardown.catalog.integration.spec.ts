@@ -34,6 +34,18 @@ import { HBPE_LINKS } from '../purgeTeardown';
  * `ON DELETE` action refuses the delete of every node it holds, whatever its type,
  * and the tables that have one hold other kinds of node.
  *
+ * A person, a place and a concept ARE `ci.entities` rows, with no detail table behind
+ * them, so the keys onto `ci.entities` are the whole of what the schema decides about
+ * what points at one. `PersonService.purge`, `PlaceService.purge` and
+ * `ConceptService.purge` lean on all three kinds of key, so all three are named here:
+ * the ones that refuse (the user's own Person, which the purge keeps refusing), the
+ * ones that set themselves to NULL (an event's place, a receipt's merchant, a place's
+ * children: each decided, below, as either "the record stays" or "the purge handles
+ * it"), and the ones that cascade (the detail rows of an event, a message, content and
+ * an item, and the retype proposals about a node). A new key of any of the three kinds
+ * is a decision somebody has to make about people, places and concepts, and it fails
+ * here by name until they have.
+ *
  * What it does not see: a column that holds a node's id and has no foreign key. A
  * purge does not fail on those, it leaves them pointing at nothing. They are the
  * `deleteBareReferences` list, which has no catalog to be held against.
@@ -76,8 +88,45 @@ const ACCEPTED_ON_DETAIL_TABLES: Record<string, string> = {
  * None can hold an event, a content item, an item or a communication.
  */
 const ACCEPTED_ON_ENTITIES: Record<string, string> = {
-  'ci.entities <- ci.users.entity_id': 'the user’s own Person node',
-  'ci.entities <- ci.product_models.product_entity_id': 'a catalog model’s Product node',
+  'ci.entities <- ci.users.entity_id':
+    'the user’s own Person node. `PersonService.purge` keeps refusing it: the database raises this key, the transaction rolls back, and the tool reports a CONSTRAINT_VIOLATION that retrying will not change (PersonService.purge.integration.test.ts pins it)',
+  'ci.entities <- ci.product_models.product_entity_id':
+    'a catalog model’s Product node, which none of the purges takes',
+};
+
+/**
+ * Foreign keys onto `ci.entities` that set themselves to NULL when the node goes, and what each means for a
+ * person, a place or a concept that is purged. The schema has already decided every one: a purge that leaves
+ * the key alone is deciding the same thing, so each says which.
+ */
+const DECIDED_SET_NULL_ON_ENTITIES: Record<string, string> = {
+  'ci.entities <- ci.entities.merged_into_entity_id':
+    'HANDLED. A merge tombstone points at its survivor, and deleting the survivor would turn each tombstone into an archived node with the name, emails and numbers it had. The purge takes the survivor’s tombstones with it, in the same transaction.',
+  'ci.entities <- ci.entities.parent_place_id':
+    'HANDLED. Nulling a child’s parent can collide with entities_admin_place_uniq and make the place undeletable, so the purge grafts the children onto the nearest ancestor that stays, as PlaceService.remove does.',
+  'ci.entities <- ci.events.location_entity_id':
+    'THE RECORD STAYS. The event is its own record, and the place is derived from its coordinates and name, which a purge does not touch.',
+  'ci.entities <- ci.object_observations.place_entity_id': 'THE RECORD STAYS. A sighting is its own record.',
+  'ci.entities <- ci.objects.acquired_from_entity_id': 'THE RECORD STAYS. An item is its own record.',
+  'ci.entities <- ci.objects.last_seen_place_entity_id': 'THE RECORD STAYS. An item is its own record.',
+  // `position` is a reserved word, so the catalog spells it quoted.
+  'ci.entities <- ci."position".location_entity_id': 'THE RECORD STAYS. A position fix is its own record.',
+  'ci.entities <- ci."position".reference_entity_id': 'THE RECORD STAYS. A position fix is its own record.',
+  'ci.entities <- ci.receipts.merchant_entity_id': 'THE RECORD STAYS. A receipt is its own record.',
+  'ci.entities <- ci.receipts.place_entity_id': 'THE RECORD STAYS. A receipt is its own record.',
+};
+
+/**
+ * Foreign keys onto `ci.entities` that CASCADE, and why deleting a node should take the row with it. A new one
+ * would delete user data whenever any node is deleted, so it is named before it can.
+ */
+const CASCADES_FROM_ENTITIES: Record<string, string> = {
+  'ci.entities <- ci.communications.id, entity_type': 'the detail row of a Communication node',
+  'ci.entities <- ci.content.id, entity_type': 'the detail row of a Content node',
+  'ci.entities <- ci.events.event_id, entity_type': 'the detail row of an Event node',
+  'ci.entities <- ci.objects.object_id, entity_type': 'the detail row of an Item node',
+  'ci.entities <- ci.entity_type_proposals.entity_id':
+    'a proposal to retype a node means nothing once the node is gone',
 };
 
 /**
@@ -217,6 +266,22 @@ describe('comparing the purges with the catalog', () => {
     });
   });
 
+  it('names a new foreign key onto ci.entities that sets itself to NULL and nobody has decided', () => {
+    const added = keyOf('ci.entities', 'ci.some_new_table', 'place_entity_id');
+    const decided = Object.keys(DECIDED_SET_NULL_ON_ENTITIES);
+
+    expect(compareWithCatalog([...decided, added], [], decided)).toEqual({
+      ...NOTHING_WRONG,
+      blockingAndNotHandled: [added],
+    });
+  });
+
+  it('gives every decision a reason that says whether the purge handles it or the record stays', () => {
+    for (const [key, reason] of Object.entries(DECIDED_SET_NULL_ON_ENTITIES)) {
+      expect({ key, decided: /^(HANDLED|THE RECORD STAYS)\./.test(reason) }).toEqual({ key, decided: true });
+    }
+  });
+
   it('names an accepted foreign key that has gone', () => {
     expect(compareWithCatalog(cleared, cleared, Object.keys(ACCEPTED_ON_DETAIL_TABLES))).toEqual({
       ...NOTHING_WRONG,
@@ -294,8 +359,12 @@ describeWithDb(`the tables that can block a node delete (${availability.target})
     }
   });
 
-  /** Every foreign key onto these tables that has no `ON DELETE` action, as `referenced <- table.column`. */
-  async function blockersOnto(tables: string[]): Promise<string[]> {
+  /**
+   * Every foreign key onto these tables whose `ON DELETE` action is one of `actions` (pg_constraint's letters:
+   * `a` no action, `r` restrict, `n` set null, `c` cascade), as `referenced <- table.column`. The no-action and
+   * restrict keys are the ones that refuse a delete, which is what a purge has to clear or accept.
+   */
+  async function keysOnto(tables: string[], actions: string[] = ['a', 'r']): Promise<string[]> {
     const rows: Array<{ referenced: string; referencing: string; column: string }> = await dataSource.query(
       `SELECT c.confrelid::regclass::text AS referenced,
               c.conrelid::regclass::text AS referencing,
@@ -305,9 +374,14 @@ describeWithDb(`the tables that can block a node delete (${availability.target})
          FROM pg_constraint c
         WHERE c.contype = 'f'
           AND c.confrelid = ANY ($1::text[]::regclass[])
-          AND c.confdeltype IN ('a', 'r')
+          AND c.confdeltype = ANY ($2::"char"[])
+          -- A hypertable's chunks carry a copy of its keys, and only once it has data in them: the table is
+          -- the key, not the chunk, or the guard would change with the rows the database happens to hold.
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_class r JOIN pg_namespace n ON n.oid = r.relnamespace
+             WHERE r.oid = c.conrelid AND n.nspname = '_timescaledb_internal')
         ORDER BY 1, 2, 3`,
-      [tables],
+      [tables, actions],
     );
 
     return rows.map((row) => keyOf(row.referenced, row.referencing, row.column));
@@ -354,13 +428,28 @@ describeWithDb(`the tables that can block a node delete (${availability.target})
     expect(cleared.length).toBeGreaterThan(0);
 
     expect(
-      compareWithCatalog(await blockersOnto(DETAIL_TABLES), cleared, Object.keys(ACCEPTED_ON_DETAIL_TABLES)),
+      compareWithCatalog(await keysOnto(DETAIL_TABLES), cleared, Object.keys(ACCEPTED_ON_DETAIL_TABLES)),
     ).toEqual(NOTHING_WRONG);
   });
 
   it('onto ci.entities are exactly the ones that hold other kinds of node', async () => {
     const accepted = Object.keys(ACCEPTED_ON_ENTITIES);
 
-    expect(compareWithCatalog(await blockersOnto(['ci.entities']), [], accepted)).toEqual(NOTHING_WRONG);
+    expect(compareWithCatalog(await keysOnto(['ci.entities']), [], accepted)).toEqual(NOTHING_WRONG);
+  });
+
+  it('onto ci.entities that set themselves to NULL are exactly the ones somebody has decided', async () => {
+    const decided = Object.keys(DECIDED_SET_NULL_ON_ENTITIES);
+
+    // Precondition: the catalog has some. A guard that read nothing would pass.
+    expect((await keysOnto(['ci.entities'], ['n'])).length).toBeGreaterThan(0);
+    expect(compareWithCatalog(await keysOnto(['ci.entities'], ['n']), [], decided)).toEqual(NOTHING_WRONG);
+  });
+
+  it('onto ci.entities that cascade are exactly the ones somebody has decided', async () => {
+    const decided = Object.keys(CASCADES_FROM_ENTITIES);
+
+    expect((await keysOnto(['ci.entities'], ['c'])).length).toBeGreaterThan(0);
+    expect(compareWithCatalog(await keysOnto(['ci.entities'], ['c']), [], decided)).toEqual(NOTHING_WRONG);
   });
 });

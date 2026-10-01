@@ -1,6 +1,6 @@
 import type { EntityManager } from 'typeorm';
 
-import { deleteBareReferences, ITEM_REFERENCES } from './purgeTeardown';
+import { deleteBareReferences, deleteMergeBookkeeping, ITEM_REFERENCES } from './purgeTeardown';
 
 /** What one purge removed, for the caller to announce once the transaction has committed. */
 export interface PurgedItems {
@@ -133,18 +133,7 @@ export async function purgeItemAggregates(
     `DELETE FROM ci.object_identifiers WHERE subject_type = 'object_instance' AND subject_id = ANY($1::uuid[])`,
     [everyId],
   );
-  await manager.query(
-    `DELETE FROM ci.entity_merges WHERE source_entity_id = ANY($1::uuid[]) OR target_entity_id = ANY($1::uuid[])`,
-    [everyId],
-  );
-  await manager.query(
-    `DELETE FROM ci.merge_candidates WHERE entity_id_a = ANY($1::uuid[]) OR entity_id_b = ANY($1::uuid[])`,
-    [everyId],
-  );
-  await manager.query(
-    `DELETE FROM ci.entity_merge_blocks WHERE entity_id_a = ANY($1::uuid[]) OR entity_id_b = ANY($1::uuid[])`,
-    [everyId],
-  );
+  await deleteMergeBookkeeping(manager, everyId);
 
   // 2. Other items that list them as related. An array with no foreign key would keep the dead ids.
   await manager.query(
