@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * EVERY WAY A `ci.events` ROW SAYS IT DID NOT HAPPEN, FOR BOTH ESTIMATORS.
+ * EVERY WAY A `ci.events` ROW SAYS IT DID NOT HAPPEN, FOR EVERY READER THAT ASKS.
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * Two code paths copy a neighbour's coordinate onto an event that has none:
@@ -12,6 +12,11 @@ import { randomUUID } from 'node:crypto';
  * one list of cases both real-Postgres specs are held to, so the two cannot
  * drift apart. It sits here because neither domain may import the other's
  * internals.
+ *
+ * `promote.place` asks the same question of the events it links to a place,
+ * and is held to the same list: its real-Postgres spec and the spec of the
+ * repair migration that withdrew its earlier links seed each case with
+ * {@link insertEvent} (with a venue name) rather than the blocks below.
  *
  * Each case is seeded twice over, so a failure names the clause that broke:
  *
@@ -157,6 +162,8 @@ export async function insertEvent(
     at: number;
     lifecycle: EventLifecycle;
     point: { lat: number; lng: number } | null;
+    /** The venue, as an importer or calendar sync writes it. None by default. */
+    locationName?: string | null;
   },
 ): Promise<void> {
   await query(
@@ -167,11 +174,11 @@ export async function insertEvent(
   await query(
     `INSERT INTO ci.events
        (event_id, user_id, start_time, source_system, location_coordinates,
-        is_deleted, is_predicted, status, metadata)
+        is_deleted, is_predicted, status, metadata, location_name)
      VALUES ($1::uuid, $2, $3, $4,
              CASE WHEN $5::float8 IS NULL THEN NULL
                   ELSE ST_SetSRID(ST_MakePoint($6::float8, $5::float8), 4326)::geography END,
-             $7, $8, $9, $10::jsonb)`,
+             $7, $8, $9, $10::jsonb, $11)`,
     [
       event.id,
       userId,
@@ -183,6 +190,7 @@ export async function insertEvent(
       event.lifecycle.isPredicted,
       event.lifecycle.status,
       JSON.stringify(event.lifecycle.metadata),
+      event.locationName ?? null,
     ],
   );
 }

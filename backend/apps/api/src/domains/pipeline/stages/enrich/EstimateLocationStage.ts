@@ -178,10 +178,13 @@ export function liveEventStatusSql(alias: string): string {
 
 /**
  * "This event happened", for a `ci.events` row aliased `alias`. It is ONE rule
- * with three uses: which events may LEND a coordinate (the donor branch of
+ * with three uses here: which events may LEND a coordinate (the donor branch of
  * {@link EstimateLocationStage.writeEstimates}), which may RECEIVE one
  * ({@link ESTIMATE_LOCATION_SOURCE}), and the stage's mid-flight re-check
- * ({@link EstimateLocationStage.loadRows}). An event that did not happen is:
+ * ({@link EstimateLocationStage.loadRows}). `promote.place` imports it for the
+ * same question about which events count as visits to their venue
+ * (`PROMOTE_PLACE_SOURCE`, and its own mid-flight re-check). An event that did
+ * not happen is:
  *
  *  - deleted (`is_deleted`);
  *  - a prediction (`is_predicted`). NULL is not a prediction: the column

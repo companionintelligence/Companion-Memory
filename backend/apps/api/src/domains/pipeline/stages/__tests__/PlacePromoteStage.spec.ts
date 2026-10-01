@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { databaseAvailability, resolveConnection } from '../../__tests__/harness/pipelineHarness';
+import { eventHappenedSql } from '../enrich/EstimateLocationStage';
 import { FORWARD_GEOCODE_PROVIDER_GENERATION } from '../enrich/GeocodeStage';
 import {
   LOCATION_TYPE_RADIUS_METRES,
@@ -74,6 +75,7 @@ interface EventRow {
   location_entity_id: string | null;
   promoted_by: string | null;
   is_deleted: boolean | null;
+  did_not_happen: boolean;
 }
 
 function eventRow(n: number, overrides: Partial<EventRow> = {}): EventRow {
@@ -85,6 +87,7 @@ function eventRow(n: number, overrides: Partial<EventRow> = {}): EventRow {
     location_entity_id: null,
     promoted_by: null,
     is_deleted: false,
+    did_not_happen: false,
     ...overrides,
   };
 }
@@ -236,6 +239,16 @@ describe('PlacePromoteStage — the applicability predicate says what a row IS',
     expect(predicate).toMatch(/is_deleted/i);
   });
 
+  it("requires an event that happened, by enrich.estimate_location's own rule", () => {
+    // A cancelled meeting keeps its venue, and enrich.geocode resolves it, so a
+    // coordinate and a name do not make a visit. The fragment is imported, not
+    // copied, and pinned as text: `status` and `is_deleted` are NOT NULL today,
+    // so a COALESCE dropped from either passes every Postgres test and only
+    // this catches it. The real-Postgres cases are in
+    // PlacePromoteDidNotHappen.integration.spec.ts.
+    expect(predicate).toContain(eventHappenedSql('s'));
+  });
+
   it('sweeps ci.events keyed by event_id and scoped by user_id', () => {
     expect(PROMOTE_PLACE_SOURCE).toMatchObject({
       schema: 'ci',
@@ -316,6 +329,9 @@ describe('PlacePromoteStage.run — every id gets exactly one answer', () => {
 
   it.each([
     ['event_deleted', { is_deleted: true }],
+    // A deleted row did not happen either. It keeps its own, older reason.
+    ['event_deleted', { is_deleted: true, did_not_happen: true }],
+    ['event_did_not_happen', { did_not_happen: true }],
     ['no_coordinates', { lat: null, lng: null }],
     ['no_location_name', { location_name: '   ' }],
   ])('skips with reason %s', async (reason, overrides) => {
@@ -327,6 +343,18 @@ describe('PlacePromoteStage.run — every id gets exactly one answer', () => {
     // Decided locally, before any place resolution: a row this stage may not
     // promote never costs a round trip.
     expect(placeService.findOrCreateForGeocode).not.toHaveBeenCalled();
+  });
+
+  it('asks Postgres whether each event happened, by the same rule as the predicate', async () => {
+    // The mid-flight re-check is the predicate's rule evaluated on the slice's
+    // rows, so a row called off between the sweep and the slice is caught by
+    // the same text that keeps it out of the sweep.
+    const { stage, dataSource } = makeStage({ rows: [eventRow(1)] });
+
+    await stage.run({ userId: USER }, [eventId(1)]);
+
+    expect(dataSource.calls[0].sql).toContain(`NOT (${eventHappenedSql('e')})`);
+    expect(dataSource.calls[0].sql).toMatch(/AS did_not_happen/);
   });
 
   it('refuses to re-point a link another writer owns', async () => {

@@ -409,7 +409,16 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    */
   [STAGE_IDS.CLEAN_SINGLE_VALUED_EDGE_AUDIT]: 1,
 
-  /** v1 — place promotion. Derives from the forward-geocode generation: a better provider makes every hierarchy provisional. Cheap to bump — no provider call. */
+  /**
+   * v1 — place promotion. Derives from the forward-geocode generation: a better
+   * provider makes every hierarchy provisional. Cheap to bump — no provider call.
+   *
+   * Still v1 after events that did not happen left `PROMOTE_PLACE_SOURCE`. That
+   * narrowed which rows the sweep offers, and a bump re-offers only rows the
+   * predicate admits, so it could not have withdrawn one of the links written
+   * earlier. Migration
+   * 20261001153044_withdraw_place_links_from_events_that_did_not_happen does.
+   */
   [STAGE_IDS.PROMOTE_PLACE]: 1,
 
   /**

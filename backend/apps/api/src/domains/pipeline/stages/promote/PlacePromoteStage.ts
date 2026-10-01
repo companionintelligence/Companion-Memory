@@ -19,10 +19,13 @@ import { PlaceService } from '@ci/domains/memory';
 import { PIPELINE_QUEUES } from '../../constants';
 import type { Stage, StageResult, StageSource } from '../../types';
 import { STAGE_VERSIONS, type StageVersion } from '../../versions';
-// Intra-domain relative import, exactly as `EstimateLocationStage` does. The
-// dependency is real: this stage's hierarchy comes from the address components
-// the forward geocoder left in `ci.geocode_cache`, so a better provider produces
-// a different hierarchy. See {@link PROMOTE_PLACE_VERSION}.
+// Intra-domain relative imports, exactly as `EstimateLocationStage` does. Both
+// dependencies are real. This stage's hierarchy comes from the address
+// components the forward geocoder left in `ci.geocode_cache`, so a better
+// provider produces a different hierarchy (see {@link PROMOTE_PLACE_VERSION}).
+// And whether an event happened is the estimator's rule, imported rather than
+// copied so the two cannot drift (see {@link PROMOTE_PLACE_SOURCE}).
+import { eventHappenedSql } from '../enrich/EstimateLocationStage';
 import { FORWARD_GEOCODE_PROVIDER_GENERATION } from '../enrich/GeocodeStage';
 
 /**
@@ -59,6 +62,12 @@ const ENTITY_TYPE = 'event';
  * {@link PLACE_UNCERTAINTY_FLOOR_METERS} / {@link LOCATION_TYPE_RADIUS_METERS},
  * and the `promote` provenance envelope. Bump it in the same commit that edits
  * any of them.
+ *
+ * Not for an edit to {@link PROMOTE_PLACE_SOURCE}'s predicate. That changes
+ * which rows the sweep offers, not what this stage decides about a row it is
+ * offered, and a bump cannot reach a row the predicate leaves out. A narrowing
+ * that has to undo links already written needs a repair migration instead, as
+ * the one for events that did not happen did.
  */
 export const PLACE_PROMOTION_RULE_GENERATION = 1;
 
@@ -144,9 +153,10 @@ promotePlaceStageVersion();
  * forever, and warming the geocode cache could not repair a single one of them.
  * With the ledger, the repair is `PLACE_PROMOTION_RULE_GENERATION += 1`.
  *
- * What the predicate DOES say is what a row IS: a live event that carries BOTH a
- * resolved coordinate and a name for it. Both are INPUTS, written by importers,
- * `enrich.geocode` and `enrich.estimate_location` — never by this stage.
+ * What the predicate DOES say is what a row IS: an event that happened, carrying
+ * BOTH a resolved coordinate and a name for it. Both are INPUTS, written by
+ * importers, `enrich.geocode` and `enrich.estimate_location` — never by this
+ * stage.
  *
  * Requiring a name as well as a coordinate is a real narrowing, and it is
  * deliberate. On the appliance this was written against, 358 events carry
@@ -156,6 +166,40 @@ promotePlaceStageVersion();
  * with noise that no later stage could tell from a real venue. Those rows become
  * candidates the moment `enrich.position_reverse` gives them a name, with no
  * change here.
+ *
+ * ── An event that did not happen is not a visit ────────────────────────────
+ *
+ * "Happened" is {@link eventHappenedSql}, the rule `enrich.estimate_location`
+ * applies to the events it estimates and the ones it copies from: not deleted,
+ * not a prediction, not `cancelled`, `no_show` or `skipped`, and not a Takeout
+ * reservation marked `Canceled`. Until it was added here, only `is_deleted` was
+ * tested. Google Calendar sync keeps a meeting cancelled at the source as a
+ * row, venue and all, and `enrich.geocode` resolves that venue like any other,
+ * so this stage linked the meeting to a Location. The link counted it in the
+ * place's `visitStats`, put its coordinate in the place's footprint, and let
+ * `promote.edge_event` project Event −LOCATED_AT→ Place (`event.happened_at`)
+ * for a meeting that never took place. The coordinate is still right about the
+ * venue. It is not evidence that the user went.
+ *
+ * It is applicability, as `is_deleted` already was, and not a recorded skip,
+ * for the reason `ESTIMATE_LOCATION_SOURCE` gives: a status can change back. A
+ * cancelled meeting has no ledger row here, so if it is reinstated the next
+ * sweep offers it, with no bump. A recorded skip would hold it until one. The
+ * cost is the mirror image. A link written while the event was live stays when
+ * it is cancelled afterwards, because the sweep no longer offers the row, and
+ * nothing withdraws a link from a row that is not offered. An event called off
+ * between the sweep and its slice is recorded as `skipped:
+ * event_did_not_happen` (see {@link PlacePromoteStage.decideLocally}).
+ *
+ * Narrowing the predicate did not bump {@link PLACE_PROMOTION_RULE_GENERATION}.
+ * The sweep tests the predicate on every arm, the version arm included, so a
+ * bump re-offers only rows that still pass it. It could not reach a single link
+ * to an event that did not happen. It would re-promote every other row to the
+ * link it already has, and, through the derived versions, re-run
+ * `promote.place_position` and both edge legs over their whole corpora. The
+ * links written before this rule are withdrawn by migration
+ * `20261001153044_withdraw_place_links_from_events_that_did_not_happen`,
+ * together with their edges and the footprints derived from them.
  */
 export const PROMOTE_PLACE_SOURCE: StageSource = {
   schema: 'ci',
@@ -166,7 +210,7 @@ export const PROMOTE_PLACE_SOURCE: StageSource = {
     `s.location_coordinates IS NOT NULL ` +
     `AND s.location_name IS NOT NULL ` +
     `AND btrim(s.location_name) <> '' ` +
-    `AND COALESCE(s.is_deleted, false) = false`,
+    `AND ${eventHappenedSql('s')}`,
 };
 
 // ---------------------------------------------------------------------------
@@ -239,6 +283,8 @@ interface CandidateRow {
   /** `metadata->'promote'->>'stage'`, i.e. which stage claims the existing link. */
   promoted_by: string | null;
   is_deleted: boolean | null;
+  /** `NOT` {@link eventHappenedSql}, evaluated by Postgres. */
+  did_not_happen: boolean;
 }
 
 /** One `ci.geocode_cache` hit: the hierarchy inputs, for free. */
@@ -551,6 +597,15 @@ export class PlacePromoteStage implements Stage {
       return { outcome: 'skipped', reason: 'event_deleted' };
     }
 
+    if (row.did_not_happen) {
+      // Cancelled, a no-show, skipped, a prediction, or a cancelled
+      // reservation. The applicability predicate excludes these, so this one
+      // was called off between the sweep and the slice, or arrived on a
+      // replayed dead letter. Deleted rows answered above. See
+      // PROMOTE_PLACE_SOURCE on why such an event is not linked to a place.
+      return { outcome: 'skipped', reason: 'event_did_not_happen' };
+    }
+
     if (row.lat == null || row.lng == null) {
       // The applicability predicate requires a coordinate, so this is one cleared
       // mid-flight, or a dead letter replayed weeks later carrying stale ids.
@@ -601,7 +656,8 @@ export class PlacePromoteStage implements Stage {
               ST_X(e.location_coordinates::geometry)        AS lng,
               e.location_entity_id,
               e.metadata->'${PROMOTE_PROVENANCE_KEY}'->>'stage' AS promoted_by,
-              e.is_deleted
+              e.is_deleted,
+              NOT (${eventHappenedSql('e')})                AS did_not_happen
          FROM ci.events e
         WHERE e.event_id = ANY($1::uuid[])
           AND e.user_id = $2::uuid`,
