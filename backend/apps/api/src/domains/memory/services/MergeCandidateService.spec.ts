@@ -177,14 +177,17 @@ describe('MergeCandidateService', () => {
   it('stamps only pending pairs whose BOTH endpoints were decided', async () => {
     const { service, query } = makeService([], []);
     query.mockReset();
-    query.mockResolvedValue([{ merge_candidate_id: 'x' }]);
+    // The counting CTE's one row. A bare UPDATE … RETURNING would come back
+    // from TypeORM as [rows, rowCount] — length 2 whatever it touched.
+    query.mockResolvedValue([{ count: 3 }]);
 
     const resolved = await service.resolvePairs(CONTEXT, [PERSON_A, PERSON_B, PERSON_A], 'accepted');
 
-    expect(resolved).toBe(1);
+    expect(resolved).toBe(3);
     const [sql, params] = query.mock.calls[0] ?? [];
     expect(sql).toMatch(/UPDATE ci\.merge_candidates/);
     expect(sql).toMatch(/status = 'pending'/);
+    expect(sql).toMatch(/SELECT count\(\*\)::int AS count FROM resolved/);
     expect(params).toEqual([USER, [PERSON_A, PERSON_B], 'accepted']);
   });
 
@@ -422,7 +425,7 @@ describe('MergeCandidateService', () => {
         if (/SET status = \$3/.test(sql)) {
           accepted.push(params[1] as string[]);
 
-          return [{ merge_candidate_id: 'x' }];
+          return [{ count: 1 }];
         }
 
         if (/DELETE FROM ci\.merge_candidates/.test(sql)) {

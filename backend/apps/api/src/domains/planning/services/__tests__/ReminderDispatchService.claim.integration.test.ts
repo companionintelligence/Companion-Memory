@@ -41,11 +41,16 @@ import { TaskService } from '../TaskService';
  *     excluded, and the same still-`pending` row becomes claimable again the
  *     moment the task/block leaves that status, with no re-sync step.
  *
- * Opt-in, same convention as `TaskService.tenancy.integration.test.ts`: set
- * `PLANNING_TEST_DATABASE_URL` to a Postgres already migrated to `main`
- * (e.g. the `ci-parity-db` container: postgres://companion:parity_local@localhost:5433/companion).
+ * Same database convention as `TaskService.tenancy.integration.test.ts`:
+ * `PLANNING_TEST_DATABASE_URL`, else `DATABASE_URL`, else `.env`'s `DATABASE_*`,
+ * pointing at a Postgres already migrated to `main` (e.g. the `ci-parity-db`
+ * container: postgres://companion:parity_local@localhost:5433/companion).
+ * `databaseAvailability()` decides whether that means run, skip or fail.
  */
-const DATABASE_ENV = { urlEnvVar: 'PLANNING_TEST_DATABASE_URL' };
+const DATABASE_ENV = {
+  urlEnvVar: 'PLANNING_TEST_DATABASE_URL',
+  probeTimeoutEnvVar: 'PLANNING_TEST_PROBE_TIMEOUT_MS',
+};
 const availability = databaseAvailability(DATABASE_ENV);
 const describeWithDb = availability.available ? describe : describe.skip;
 

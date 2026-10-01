@@ -1,6 +1,9 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DateTimeFormatOverride } from '@/hooks/useDateTimeFormat';
+import { createDateTimeFormatter, type TimeFormat } from '@/lib/dateTimeFormat';
+
 import { TimelineJsHost } from './TimelineJsHost';
 import type { TimelineJsData } from './types';
 
@@ -34,6 +37,7 @@ class FakeTimeline {
   constructor(
     _elem: HTMLElement,
     private readonly deck: { events: Array<{ unique_id?: string }> },
+    readonly options: Record<string, unknown> = {},
   ) {
     FakeTimeline.instances.push(this);
   }
@@ -101,5 +105,29 @@ describe('TimelineJsHost', () => {
     await waitFor(() => expect(instance.add).toHaveBeenCalledTimes(1));
     expect(instance.add).toHaveBeenCalledWith(expect.objectContaining({ unique_id: 'c' }));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it("writes TimelineJS's own dates in 24-hour only when 24-hour is chosen", async () => {
+    const languageFor = async (timeFormat: TimeFormat) => {
+      FakeTimeline.instances = [];
+      const { unmount } = render(
+        <DateTimeFormatOverride formatter={createDateTimeFormatter({ timeFormat })}>
+          <TimelineJsHost data={deck('a')} startAtSlide={0} sessionKey={timeFormat} />
+        </DateTimeFormatOverride>,
+      );
+
+      releaseStylesheet();
+      await waitFor(() => expect(FakeTimeline.instances).toHaveLength(1));
+      const language = FakeTimeline.instances[0].options.language;
+      unmount();
+
+      return language;
+    };
+
+    // The library's own English file, as before the preference existed…
+    expect(await languageFor('auto')).toMatch(/locale\/en\.json$/);
+    expect(await languageFor('h12')).toMatch(/locale\/en\.json$/);
+    // …and the 24-hour patterns only when asked for.
+    expect(await languageFor('h23')).toMatch(/locale\/en-h23\.json$/);
   });
 });

@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Accordion, Badge, Card, Input, Skeleton, Switch, cn } from '@ci/shadcn';
 import { AlertTriangle, Lock } from '@ci/shadcn/icons';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+
 import { FoldBody, FoldCard, FoldTrigger, cardPad, usePhone } from './Fold';
 import { categoryDot, categoryLabel, CATEGORY_LABELS } from './jobCategories';
 import type { JobControlsPatch, JobControlsResponse, JobMode, JobQueueControl } from './useJobControls';
@@ -342,12 +344,13 @@ function QueueRow({
  * one greyed-out row.
  */
 function QueueStatusLine({ queue, globallyPaused }: { queue: JobQueueControl; globallyPaused: boolean }) {
+  const fmt = useDateTimeFormat();
   const dropped =
     queue.skippedCount > 0 ? (
       <>
         {' '}
         {queue.skippedCount.toLocaleString()} job{queue.skippedCount === 1 ? '' : 's'} dropped
-        {queue.lastSkippedAt ? `, last ${new Date(queue.lastSkippedAt).toLocaleString()}` : ''}.
+        {queue.lastSkippedAt ? `, last ${fmt.dateTime(queue.lastSkippedAt)}` : ''}.
       </>
     ) : null;
 

@@ -47,10 +47,13 @@ function managerWithUniqueIndex(existing: Map<string, string>) {
       return [{ id: `entity-${existing.size + 1}` }];
     }
 
-    if (sql.includes('SELECT id, metadata FROM ci_import.staged_entities') && sql.includes('dedupe_key')) {
+    if (
+      sql.includes('SELECT id, metadata, accumulate FROM ci_import.staged_entities') &&
+      sql.includes('dedupe_key')
+    ) {
       const id = existing.get(params[1] as string);
 
-      return id ? [{ id, metadata: {} }] : [];
+      return id ? [{ id, metadata: {}, accumulate: null }] : [];
     }
 
     if (sql.includes('UPDATE')) {

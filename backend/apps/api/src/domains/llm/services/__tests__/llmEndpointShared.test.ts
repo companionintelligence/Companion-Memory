@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import {
   llmApiBaseFromSettings,
+  normalizeBasePath,
   readSharedConfig,
   syncAppEnvLlmVars,
   writeSharedConfig,
@@ -38,6 +39,33 @@ describe('llmEndpointShared', () => {
         apiKey: 'vllm-local',
       }),
     ).toBe('http://host.docker.internal:8000/v1');
+    expect(
+      llmApiBaseFromSettings({
+        backend: 'openai_compatible',
+        hostGateway: 'host.docker.internal',
+        port: 13305,
+        basePath: '/api/v1',
+        apiKey: 'x',
+      }),
+    ).toBe('http://host.docker.internal:13305/api/v1');
+    // Ollama's compatibility layer is always at /v1, whatever a stale setting says.
+    expect(
+      llmApiBaseFromSettings({
+        backend: 'ollama',
+        hostGateway: 'h',
+        port: 11434,
+        basePath: '/api/v1',
+        apiKey: 'x',
+      }),
+    ).toBe('http://h:11434/v1');
+  });
+
+  it('normalizes an API root: default, slashes, and a bare name', () => {
+    expect(normalizeBasePath(undefined)).toBe('/v1');
+    expect(normalizeBasePath('')).toBe('/v1');
+    expect(normalizeBasePath('/')).toBe('/v1');
+    expect(normalizeBasePath('api/v1/')).toBe('/api/v1');
+    expect(normalizeBasePath(' /openai/v1 ')).toBe('/openai/v1');
   });
 
   it('patches app.env with LLM vars', () => {

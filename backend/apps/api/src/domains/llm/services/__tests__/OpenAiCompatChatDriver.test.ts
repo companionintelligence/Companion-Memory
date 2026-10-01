@@ -75,6 +75,38 @@ describe('toOpenAiMessages', () => {
     expect(assistant.tool_calls[0].id).not.toBe(assistant.tool_calls[1].id);
   });
 
+  it('joins neighbouring text turns of one role, which the Qwen template refuses at the end of a transcript', () => {
+    // The thread-title job's excerpt of a tool turn: every assistant row kept, the tool rows dropped.
+    const result = toOpenAiMessages([
+      { role: 'user', content: 'find rabbits' },
+      { role: 'assistant', content: 'Looking.' },
+      { role: 'assistant', content: 'The tool threw an error.' },
+      { role: 'assistant', content: 'Here are three photos.' },
+    ]);
+
+    expect(result).toEqual([
+      { role: 'user', content: 'find rabbits' },
+      { role: 'assistant', content: 'Looking.\n\nThe tool threw an error.\n\nHere are three photos.' },
+    ]);
+  });
+
+  it('keeps assistant tool-call turns and their tool results apart from the text around them', () => {
+    const result = toOpenAiMessages([
+      { role: 'user', content: 'find rabbits' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ function: { name: 'media_findPhotos', arguments: { query: 'rabbits' } } }],
+      },
+      { role: 'tool', content: '[]' },
+      { role: 'assistant', content: 'Nothing found.' },
+      { role: 'assistant', content: 'Sorry.' },
+    ]);
+
+    expect(result.map((message) => message.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+    expect(result[3]).toEqual({ role: 'assistant', content: 'Nothing found.\n\nSorry.' });
+  });
+
   it('converts Ollama image attachments to data-URL content parts', () => {
     const messages: OllamaMessage[] = [
       { role: 'user', content: 'Describe this', images: ['aGVsbG8='] as unknown as Uint8Array[] },
@@ -281,5 +313,94 @@ describe('OpenAiCompatChatDriver.chat with a JSON Schema format', () => {
 
     await expect(driverWith(create).chat(request)).rejects.toThrow('model not found');
     expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OpenAiCompatChatDriver.chatStream and tool markup', () => {
+  function streamingDriver(deltas: Array<Record<string, unknown>>) {
+    const driver = new OpenAiCompatChatDriver('http://backend.invalid/v1', 'key');
+    const create = jest.fn(async () => ({
+      async *[Symbol.asyncIterator]() {
+        for (const delta of deltas) {
+          yield { choices: [{ delta }] };
+        }
+      },
+    }));
+    (
+      driver as unknown as { client: { chat: { completions: { create: jest.Mock } } } }
+    ).client.chat.completions.create = create;
+
+    return { driver, create };
+  }
+
+  async function collect(
+    iterator: AsyncGenerator<{ message: { content?: string; tool_calls?: unknown[] } }>,
+  ) {
+    const content: string[] = [];
+    const toolCalls: unknown[] = [];
+
+    for await (const chunk of iterator) {
+      if (chunk.message.content) {
+        content.push(chunk.message.content);
+      }
+
+      toolCalls.push(...(chunk.message.tool_calls ?? []));
+    }
+
+    return { content: content.join(''), toolCalls };
+  }
+
+  // What Lemonade streamed in the forced prose round on 2026-09-30, as text.
+  const apologyThenMarkup = [
+    { content: 'The tool threw an error — maxResults was sent as a string. Retrying with a number.\n\n' },
+    { content: '<tool_call>\n<function=media_findPhotos>\n<parameter=maxResults>\n15\n</parameter>\n' },
+    { content: '<parameter=query>\nrabbits\n</parameter>\n</function>\n</tool_call>' },
+  ];
+  const request = { model: 'm', messages: [{ role: 'user' as const, content: 'rabbits' }] };
+
+  it('salvages markup into a tool call on a salvage round', async () => {
+    const { driver } = streamingDriver(apologyThenMarkup);
+
+    const { content, toolCalls } = await collect(driver.chatStream({ ...request, salvageTools: true }));
+
+    expect(content).toBe(
+      'The tool threw an error — maxResults was sent as a string. Retrying with a number.',
+    );
+    expect(toolCalls).toEqual([
+      { function: { name: 'media_findPhotos', arguments: { maxResults: '15', query: 'rabbits' } } },
+    ]);
+  });
+
+  it('strips the markup and emits no tool call when told to discard it (the forced prose round)', async () => {
+    const { driver } = streamingDriver(apologyThenMarkup);
+
+    const { content, toolCalls } = await collect(driver.chatStream({ ...request, discardToolMarkup: true }));
+
+    expect(content).toBe(
+      'The tool threw an error — maxResults was sent as a string. Retrying with a number.',
+    );
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("drops the engine's own structured tool calls too when discarding", async () => {
+    const { driver } = streamingDriver([
+      { content: 'One moment.' },
+      {
+        tool_calls: [{ index: 0, function: { name: 'media_findPhotos', arguments: '{"query":"rabbits"}' } }],
+      },
+    ]);
+
+    const { content, toolCalls } = await collect(driver.chatStream({ ...request, discardToolMarkup: true }));
+
+    expect(content).toBe('One moment.');
+    expect(toolCalls).toEqual([]);
+  });
+
+  it('still streams plain text as it arrives when nothing about the round involves tools', async () => {
+    const { driver } = streamingDriver([{ content: 'Hello' }, { content: ' there' }]);
+
+    const { content } = await collect(driver.chatStream(request));
+
+    expect(content).toBe('Hello there');
   });
 });

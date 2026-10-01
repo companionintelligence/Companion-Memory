@@ -168,6 +168,17 @@ describe('toGraphEntity', () => {
     expect(input?.properties).toMatchObject({ ASIN: 'B000QJJSW6', Source: 'Amazon Music' });
   });
 
+  it('carries the parser’s accumulate declaration, so a re-import unions those keys', () => {
+    // Without it GraphIngestService cannot tell the card's URLs (a set) from
+    // its Source (a scalar), and a second export replaced the first's URLs.
+    const input = toGraphEntity(
+      staged({ metadata: { URLs: ['https://a.example'] }, accumulate: ['URLs', 'Phones'] }),
+    );
+
+    expect(input?.accumulate).toEqual(['URLs', 'Phones']);
+    expect(toGraphEntity(staged())).not.toHaveProperty('accumulate');
+  });
+
   it('resolves a handle-less artist instead of dropping it', () => {
     const input = toGraphEntity(staged({ type: 'person', name: 'Foghat', identityKey: null }));
 

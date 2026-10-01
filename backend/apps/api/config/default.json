@@ -150,6 +150,7 @@
   "embedding": {
     "model": "nomic-embed-text",
     "batchSize": 32,
+    "maxInputChars": 8000,
     "concurrency": 4,
     "coalesceWindowMs": 15,
     "minTextLength": 3,

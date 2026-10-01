@@ -30,6 +30,33 @@ def test_apply_persisted_llm_endpoint_sets_env(tmp_path, monkeypatch):
     assert os.environ["LLM_API_KEY"] == "vllm-local"
 
 
+def test_apply_persisted_llm_endpoint_uses_the_saved_api_root(tmp_path, monkeypatch):
+    """Lemonade mounts its OpenAI routes at /api/v1; the API saves that as basePath."""
+    from ci.summary.llm_endpoint_env import _api_base, apply_persisted_llm_endpoint
+
+    config_path = tmp_path / "llm-endpoint.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend": "openai_compatible",
+                "port": 13305,
+                "basePath": "api/v1/",
+                "hostGateway": "host.docker.internal",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("LLM_API_BASE", raising=False)
+    monkeypatch.setenv("LLM_ENDPOINT_CONFIG_PATH", str(config_path))
+
+    apply_persisted_llm_endpoint()
+
+    assert os.environ["LLM_API_BASE"] == "http://host.docker.internal:13305/api/v1"
+    # Ollama's compatibility layer is always /v1, whatever the file says.
+    assert _api_base("h", "ollama", 11434, "/api/v1") == "http://h:11434/v1"
+    assert _api_base("h", "openai_compatible", 8000, None) == "http://h:8000/v1"
+
+
 def test_apply_persisted_llm_endpoint_skips_when_env_set(tmp_path, monkeypatch):
     config_path = tmp_path / "llm-endpoint.json"
     config_path.write_text(
@@ -63,6 +90,146 @@ def test_embedding_base_prefers_ollama_embed_host(monkeypatch):
         == "http://host.docker.internal:11434/v1"
     )
     assert resolve_embedding_api_key() == "ollama"
+
+
+@pytest.fixture
+def embed_target(monkeypatch):
+    """resolve_embedding_target with no pinned host, against a stubbed /models listing."""
+    import ci.summary.config as config
+
+    for name in (
+        "EMBEDDING_API_BASE",
+        "LLM_EMBEDDING_API_BASE",
+        "OLLAMA_EMBED_HOST",
+        "CI_OLLAMA_EMBED_HOST",
+        "OLLAMA_HOST",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(config, "_embedder_on_chat_backend", None)
+    monkeypatch.setattr(config.settings, "embedding_model", "nomic-embed-text")
+
+    def serve(rows):
+        calls = []
+
+        def served():
+            calls.append(1)
+            if isinstance(rows, Exception):
+                raise rows
+            return rows
+
+        monkeypatch.setattr(config, "_served_models", served)
+        return calls
+
+    return config, serve
+
+
+LEMONADE_BASE = "http://host.docker.internal:13305/api/v1"
+
+
+def test_embedding_target_is_the_chat_backend_when_it_serves_the_same_weights(
+    embed_target, monkeypatch
+):
+    """Lemonade lists Ollama's nomic-embed-text as user.nomic-embed-text-v1.5-GGUF; ask for it by that name."""
+    config, serve = embed_target
+    monkeypatch.setenv("OLLAMA_HOST", "http://host.docker.internal:11434")
+    calls = serve(
+        [{"id": "Qwen3.8-27B-GGUF"}, {"id": "user.nomic-embed-text-v1.5-GGUF"}]
+    )
+
+    assert config.resolve_embedding_target(LEMONADE_BASE) == (
+        LEMONADE_BASE,
+        "user.nomic-embed-text-v1.5-GGUF",
+    )
+    # Memoised: the second resolve does not list again.
+    assert config.resolve_embedding_target(LEMONADE_BASE) == (
+        LEMONADE_BASE,
+        "user.nomic-embed-text-v1.5-GGUF",
+    )
+    assert calls == [1]
+
+
+def test_embedding_target_falls_back_to_ollama_when_the_chat_backend_serves_no_embedder(
+    embed_target, monkeypatch
+):
+    config, serve = embed_target
+    monkeypatch.setenv("OLLAMA_HOST", "http://host.docker.internal:11434")
+    serve([{"id": "Qwen/Qwen3-8B", "owned_by": "vllm"}])
+
+    assert config.resolve_embedding_target("http://host.docker.internal:8000/v1") == (
+        "http://host.docker.internal:11434/v1",
+        "nomic-embed-text",
+    )
+
+
+def test_embedding_target_retries_a_listing_that_failed(embed_target, monkeypatch):
+    config, serve = embed_target
+    monkeypatch.setenv("OLLAMA_HOST", "http://host.docker.internal:11434")
+    calls = serve(RuntimeError("connection refused"))
+
+    assert (
+        config.resolve_embedding_target(LEMONADE_BASE)[0]
+        == "http://host.docker.internal:11434/v1"
+    )
+    assert (
+        config.resolve_embedding_target(LEMONADE_BASE)[0]
+        == "http://host.docker.internal:11434/v1"
+    )
+    assert calls == [1, 1]
+
+
+def test_embedding_target_is_the_chat_backend_on_a_host_with_no_ollama(embed_target):
+    """A vLLM-only host has nowhere else to go; the request is made and its answer is the answer."""
+    config, serve = embed_target
+    serve([{"id": "Qwen/Qwen3-8B", "owned_by": "vllm"}])
+
+    assert config.resolve_embedding_target("http://host.docker.internal:8000/v1") == (
+        "http://host.docker.internal:8000/v1",
+        "nomic-embed-text",
+    )
+
+
+def test_embedding_target_does_not_ask_ollama_about_itself(embed_target, monkeypatch):
+    config, serve = embed_target
+    monkeypatch.setenv("OLLAMA_HOST", "http://host.docker.internal:11434")
+    calls = serve([{"id": "nomic-embed-text:latest"}])
+
+    assert config.resolve_embedding_target("http://host.docker.internal:11434/v1") == (
+        "http://host.docker.internal:11434/v1",
+        "nomic-embed-text",
+    )
+    assert calls == []
+
+
+def test_llm_embedding_api_base_pins_the_endpoint_ahead_of_the_deprecated_name(
+    embed_target, monkeypatch
+):
+    """The API's name for the pinned endpoint, the sibling of LLM_API_BASE; the old name still works."""
+    config, serve = embed_target
+    monkeypatch.setenv(
+        "LLM_EMBEDDING_API_BASE", "http://host.docker.internal:13305/api/v1"
+    )
+    monkeypatch.setenv("OLLAMA_EMBED_HOST", "http://host.docker.internal:11434")
+    calls = serve([{"id": "user.nomic-embed-text-v1.5-GGUF"}])
+
+    assert config.resolve_embedding_target(LEMONADE_BASE) == (
+        "http://host.docker.internal:13305/api/v1",
+        "nomic-embed-text",
+    )
+    assert calls == []
+
+
+def test_pinned_embed_host_wins_without_asking_the_chat_backend(
+    embed_target, monkeypatch
+):
+    config, serve = embed_target
+    monkeypatch.setenv("OLLAMA_EMBED_HOST", "http://ci-hub:5002/api/inference/pool")
+    calls = serve([{"id": "user.nomic-embed-text-v1.5-GGUF"}])
+
+    assert config.resolve_embedding_target(LEMONADE_BASE) == (
+        "http://ci-hub:5002/api/inference/pool/v1",
+        "nomic-embed-text",
+    )
+    assert calls == []
 
 
 def test_embedding_base_honors_explicit_override(monkeypatch):

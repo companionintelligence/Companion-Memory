@@ -24,10 +24,14 @@ import { CandidateService } from '../CandidateService';
  * bug and the promotion-consistency ordering both shipped green. This locks the
  * full lifecycle against the actual constraints.
  *
- * Opt-in: set `SCHEDULE_TEST_DATABASE_URL` (or `PLANNING_TEST_DATABASE_URL`) to
- * a database with migrations applied.
+ * Needs a database with migrations applied: `SCHEDULE_TEST_DATABASE_URL`, else
+ * `PLANNING_TEST_DATABASE_URL`, else `DATABASE_URL`, else `.env`'s `DATABASE_*`
+ * values. `databaseAvailability()` decides whether that means run, skip or fail.
  */
-const DATABASE_ENV = { urlEnvVar: ['SCHEDULE_TEST_DATABASE_URL', 'PLANNING_TEST_DATABASE_URL'] };
+const DATABASE_ENV = {
+  urlEnvVar: ['SCHEDULE_TEST_DATABASE_URL', 'PLANNING_TEST_DATABASE_URL'],
+  probeTimeoutEnvVar: 'SCHEDULE_TEST_PROBE_TIMEOUT_MS',
+};
 const availability = databaseAvailability(DATABASE_ENV);
 const describeWithDb = availability.available ? describe : describe.skip;
 

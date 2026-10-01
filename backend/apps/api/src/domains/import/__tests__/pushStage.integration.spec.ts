@@ -17,7 +17,7 @@ import { GraphDeltaWriter } from '@ci/domains/memory';
 
 import { buildContact, parseContentLine, unfoldContentLines, type ContentLine } from '../datasources/vcard';
 import { PushStage } from '../stages/PushStage';
-import { markSharedContactHandles } from '../staging/identity';
+import { CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY, markSharedContactHandles } from '../staging/identity';
 import { StagedWriter } from '../staging/StagedWriter';
 import type { StageRunContext } from '../types';
 
@@ -508,6 +508,75 @@ describeWithDatabase(`the push stage (${importDatabase.target})`, () => {
     );
 
     expect(Number(count)).toBe(3);
+  });
+
+  it('grows a person on a later export instead of replacing it, and keeps what a merge added', async () => {
+    // Two exports of one address book. The parser declares URLs and Phones as
+    // accumulating; the staged row carries that declaration to the push, and
+    // the push unions those keys into the person rather than replacing them.
+    // Between the exports a merge folded a duplicate's number into him — which
+    // the second export's refresh used to erase.
+    const card = (url: string) => ({
+      entity: {
+        type: 'contact',
+        name: 'Gus Oduya',
+        attributes: [{ name: 'phone', value: '(202) 555-0173', identity: true }],
+        metadata: { Source: 'vCard', Phones: ['(202) 555-0173'], URLs: [url] },
+        accumulate: ['Phones', 'URLs'],
+      },
+    });
+    const personFor = async (runId: string) => {
+      const [mapped] = await harness.dataSource.query<Array<{ server_entity_id: string }>>(
+        `SELECT m.server_entity_id
+           FROM ci_import.entity_mappings m
+           JOIN ci_import.staged_entities s ON s.id = m.staged_entity_id
+          WHERE s.run_id = $1::uuid`,
+        [runId],
+      );
+
+      return mapped.server_entity_id;
+    };
+
+    const { stage } = makeStage();
+
+    const first = await harness.writerFor('vcard');
+    first.writer.push(card('https://gus.example/a'));
+    await first.writer.settled();
+
+    const [staged] = await harness.dataSource.query<Array<{ accumulate: string[] }>>(
+      `SELECT accumulate FROM ci_import.staged_entities WHERE run_id = $1::uuid`,
+      [first.runId],
+    );
+    // The parser's own keys, then the ones staging accumulates for every contact.
+    expect(staged.accumulate).toEqual(['Phones', 'URLs', ...CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY]);
+
+    await stage.run(contextFor(first.runId));
+    const gus = await personFor(first.runId);
+
+    // PersonMergeService's fold, in effect: a duplicate's number unioned in.
+    await harness.dataSource.query(
+      `UPDATE ci.entities SET properties = properties || '{"phones": ["2025550173", "2025550188"]}'::jsonb
+        WHERE entity_id = $1`,
+      [gus],
+    );
+
+    const second = await harness.writerFor('vcard');
+    second.writer.push(card('https://gus.example/b'));
+    await second.writer.settled();
+    await stage.run(contextFor(second.runId));
+
+    expect(await personFor(second.runId)).toBe(gus);
+
+    const [after] = await harness.dataSource.query<Array<{ properties: Record<string, unknown> }>>(
+      `SELECT properties FROM ci.entities WHERE entity_id = $1`,
+      [gus],
+    );
+
+    expect(after.properties).toMatchObject({
+      URLs: ['https://gus.example/a', 'https://gus.example/b'],
+      Phones: ['(202) 555-0173'],
+      phones: ['2025550173', '2025550188'],
+    });
   });
 
   it('attaches the sender and recipients to the communication it pushes', async () => {

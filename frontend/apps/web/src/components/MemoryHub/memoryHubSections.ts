@@ -114,10 +114,13 @@ export function isMemoryExplorerPath(pathname: string): boolean {
  * header search box writes the query into the page in place — filters and
  * sort untouched — instead of jumping to the explorer. The explorer itself,
  * plus every hub list that used to carry its own search input (people,
- * places, things, tags) and the content library. A detail route under one of
- * them (`/memory/places/42`, `/memory/content/42`) still renders that list,
- * so it counts too. Notes and chat have no searchable list; the box stays a
- * launcher there.
+ * places, things, tags) and the content library. A detail route nested under
+ * one of them (`/memory/places/42`, `/memory/content/42`) still renders that
+ * list, so it counts too. A standalone detail page (`/people/42`,
+ * `/places/42`, `/items/42`) does not: the section's tab stays lit there
+ * (`MEMORY_HUB_SECTIONS.match`), but there is no list for `?search=` to
+ * filter, so a query committed on one used to vanish into the URL. Those, like
+ * notes and chat, keep the box as a launcher.
  */
 const LIVE_SEARCH_SECTIONS = new Set([
   '/memory/people',
@@ -132,7 +135,13 @@ export function isLiveSearchPath(pathname: string): boolean {
     return true;
   }
 
-  return MEMORY_HUB_SECTIONS.some(
-    (section) => LIVE_SEARCH_SECTIONS.has(section.to) && section.match(pathname),
-  );
+  // The list route itself, or a route nested under it. Not the section's
+  // `match`, which also lights the tab on standalone detail pages.
+  for (const list of LIVE_SEARCH_SECTIONS) {
+    if (pathname === list || pathname.startsWith(`${list}/`)) {
+      return true;
+    }
+  }
+
+  return false;
 }

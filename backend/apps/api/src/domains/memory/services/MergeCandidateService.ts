@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { countAffected } from '@ci/common/persistence';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
 import {
@@ -1457,22 +1458,28 @@ export class MergeCandidateService {
       return 0;
     }
 
-    const rows: Array<{ merge_candidate_id: string }> = await this.personRepository.manager.query(
-      `UPDATE ci.merge_candidates
-          SET status = $3, updated_at = now()
-        WHERE owner_user_id = $1
-          AND status = 'pending'
-          AND entity_id_a = ANY($2::uuid[])
-          AND entity_id_b = ANY($2::uuid[])
-        RETURNING merge_candidate_id`,
+    // Counted through a CTE: a bare UPDATE … RETURNING resolves to
+    // [rows, rowCount], whose length is 2 whatever it touched (countAffected).
+    const resolved = await countAffected(
+      this.personRepository.manager,
+      `WITH resolved AS (
+         UPDATE ci.merge_candidates
+            SET status = $3, updated_at = now()
+          WHERE owner_user_id = $1
+            AND status = 'pending'
+            AND entity_id_a = ANY($2::uuid[])
+            AND entity_id_b = ANY($2::uuid[])
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM resolved`,
       [context.userId, unique, status],
     );
 
-    if (rows.length > 0) {
-      this.logger.log('Resolved merge candidates', { status, entities: unique.length, rows: rows.length });
+    if (resolved > 0) {
+      this.logger.log('Resolved merge candidates', { status, entities: unique.length, rows: resolved });
     }
 
-    return rows.length;
+    return resolved;
   }
 
   private async loadPeople(context: UserServiceContext, rows: CandidateRow[]): Promise<Map<string, Person>> {

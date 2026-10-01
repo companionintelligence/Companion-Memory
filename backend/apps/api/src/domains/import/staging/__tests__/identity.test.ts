@@ -1,8 +1,11 @@
+import { normalizePhone } from '@ci/domains/graph';
+
 import type { Entity, Item } from '../../datasources/timeline';
 import {
   CONTACT_IDENTIFIER_KEYS,
   CONTACT_NAMES_KEY,
   contactIdentifiers,
+  declaredAccumulate,
   entityIdentityKey,
   entityKey,
   FAX_ATTRIBUTE_NAME,
@@ -48,6 +51,37 @@ describe('normalizeHandle', () => {
     expect(normalizeHandle('12345')).toBe('');
     expect(normalizeHandle('')).toBe('');
     expect(normalizeHandle(undefined)).toBe('');
+  });
+
+  it('refuses a phone carrying an extension instead of keying its truncation', () => {
+    // An Apple Contacts export writes an office line's extension after an
+    // escaped `;`, which the vCard parser unescapes to exactly this. The last
+    // ten digits of line + extension are `5550147229`: another number entirely,
+    // and this key becomes the contact's natural key, `properties.phones` and
+    // its identifier row.
+    for (const raw of [
+      '(212) 555-0147;229',
+      '212-555-0147 x229',
+      '212-555-0147 ext. 229',
+      '212-555-0147,229',
+    ]) {
+      expect(normalizeHandle(raw)).toBe('');
+    }
+  });
+
+  it('keys a phone byte-identically to the shared join key', () => {
+    // The handle IS the join key a communication participant is looked up by;
+    // the two were separate implementations of one rule, and both carried the
+    // extension defect.
+    for (const raw of [
+      '+1 (555) 010-9999',
+      '555-010-9999',
+      '15550109999',
+      '555-0100',
+      '(212) 555-0147;229',
+    ]) {
+      expect(normalizeHandle(raw)).toBe(normalizePhone(raw) ?? '');
+    }
   });
 });
 
@@ -120,9 +154,38 @@ describe('entityIdentityKey', () => {
 
     expect(entityIdentityKey(entity)).toBe('5550100100');
   });
+
+  it('falls back to a newly-read shared handle too, for a nameless contact', () => {
+    // The fallback is every handle the contact has. That the legacy key leaves
+    // a newly-read one out is no reason for the CURRENT key to.
+    const entity: Entity = {
+      attributes: [
+        { name: 'phone', value: '555-010-0100', identity: true, shared: true, newSinceLegacyKey: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('5550100100');
+    expect(legacyEntityIdentityKey(entity)).toBeNull();
+  });
 });
 
 describe('legacyEntityIdentityKey', () => {
+  it('passes over a handle its parser did not read when the old row was keyed', () => {
+    // contact_list reads Outlook's "Business Phone 2" since 2026-09. The row
+    // already minted for Lena was keyed on her email, so that is the key the
+    // push has to find it by.
+    const entity: Entity = {
+      name: 'Lena Ortiz',
+      attributes: [
+        { name: 'email', value: 'lena@example.com', identity: true },
+        { name: 'phone', value: '555-010-0142', identity: true, newSinceLegacyKey: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('5550100142');
+    expect(legacyEntityIdentityKey(entity)).toBe('lena@example.com');
+  });
+
   it('is the smallest of every handle, shared or not — the rule existing rows were minted under', () => {
     const entity: Entity = {
       name: 'Lena Ortiz',
@@ -285,6 +348,67 @@ describe('markSharedContactHandles', () => {
   });
 });
 
+describe('a phone carrying an extension', () => {
+  it('keys an office-line contact on its email, not on the truncated extension', () => {
+    // The verified defect: a card whose only phone is `line;extension` keyed as
+    // `contact:5550147229` — the digits of a stranger's number.
+    const entity: Entity = {
+      name: 'Dana Quill',
+      type: 'contact',
+      attributes: [
+        { name: 'phone', value: '(212) 555-0147;229', identity: true },
+        { name: 'email', value: 'Dana.Quill@example.com', identity: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('dana.quill@example.com');
+  });
+
+  it('is null when the only handle is an extension line, so the card keys on its name', () => {
+    const entity: Entity = {
+      name: 'Rae Holt',
+      type: 'contact',
+      attributes: [{ name: 'phone', value: '212-555-0148 x31', identity: true }],
+    };
+
+    expect(entityIdentityKey(entity)).toBeNull();
+    // Still a contact: an extension is a desk line, and a type-less source that
+    // surfaced one has still surfaced a person.
+    expect(hasContactIdentity(entity)).toBe(true);
+  });
+
+  it('keeps a plain number that sorts first, so a card with an extension line and a mobile is unaffected', () => {
+    const entity: Entity = {
+      attributes: [
+        { name: 'phone', value: '(212) 555-0150;12', identity: true },
+        { name: 'phone', value: '212-555-0101', identity: true },
+      ],
+    };
+
+    expect(entityIdentityKey(entity)).toBe('2125550101');
+  });
+
+  it('keeps the truncation as the LEGACY key, so the push can find the row it minted', () => {
+    // Rows already in ci.entities were keyed by the old rule, which ran the
+    // line and the extension together. The push looks for the old row under
+    // this key and moves it onto the card's real one; the current key never
+    // takes the truncation, even for a card with nothing else to key on.
+    const withEmail: Entity = {
+      name: 'Dana Quill',
+      attributes: [
+        { name: 'phone', value: '(212) 555-0147;229', identity: true },
+        { name: 'email', value: 'dana.quill@example.com', identity: true },
+      ],
+    };
+    const nameless: Entity = { attributes: [{ name: 'phone', value: '212-555-0148 x31', identity: true }] };
+
+    expect(legacyEntityIdentityKey(withEmail)).toBe('5550147229');
+    expect(entityIdentityKey(withEmail)).toBe('dana.quill@example.com');
+    expect(legacyEntityIdentityKey(nameless)).toBe('2555014831');
+    expect(entityIdentityKey(nameless)).toBeNull();
+  });
+});
+
 describe('isShortCode', () => {
   /*
    * The rule that keeps an SMS service out of somebody's address book. It has
@@ -317,6 +441,15 @@ describe('isShortCode', () => {
     // A name, a name carrying a digit, an email, and the empty/absent cases.
     // Without the phone-shape guard "Studio 54" would read as a short code.
     for (const value of ['Dana Wu', 'Studio 54', '411@example.invalid', '', '   ', undefined, null, 42]) {
+      expect(isShortCode(value)).toBe(false);
+    }
+  });
+
+  it('never mistakes an extension line for a short code', () => {
+    // `normalizeHandle` refuses these too, for a different reason; every
+    // extension marker falls outside the phone shape, so the refusal cannot
+    // leak into this test and file a desk line as an SMS service.
+    for (const value of ['(212) 555-0147;229', '212-555-0147 x229', '555-0147 ext 2', '0147;2']) {
       expect(isShortCode(value)).toBe(false);
     }
   });
@@ -682,5 +815,29 @@ describe('mergeAccumulatedMetadata', () => {
 
   it('does nothing for an entity that declared no accumulating keys', () => {
     expect(mergeAccumulatedMetadata({ prices: ['1'] }, { metadata: { prices: ['2'] } })).toBeNull();
+  });
+});
+
+describe('declaredAccumulate', () => {
+  // What `staged_entities.accumulate` stores — the push needs the declaration,
+  // not just the values it grew, to union these keys into the graph row.
+
+  it('stores the keys a parser declared, cleaned', () => {
+    expect(declaredAccumulate({ accumulate: [' Phones', 'URLs', 'Phones', ''] })).toEqual(['Phones', 'URLs']);
+  });
+
+  it('is null when nothing was declared, which is most entity types', () => {
+    expect(declaredAccumulate({ name: 'Paris' })).toBeNull();
+    expect(declaredAccumulate({ accumulate: [] })).toBeNull();
+  });
+
+  it('keeps an earlier sighting’s keys when a later one declares others', () => {
+    // One person staged by two parsers in one run: each declaration is a
+    // promise about its own keys, so the row carries both.
+    expect(declaredAccumulate({ accumulate: ['Orders'] }, ['Phones', 'URLs'])).toEqual([
+      'Phones',
+      'URLs',
+      'Orders',
+    ]);
   });
 });

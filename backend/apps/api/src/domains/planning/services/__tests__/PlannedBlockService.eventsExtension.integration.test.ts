@@ -35,10 +35,14 @@ import { TaskService } from '../TaskService';
  * whether Postgres accepts the values at all. This suite writes real rows and
  * reads them back with SQL.
  *
- * Same opt-in as the sibling suite (`PLANNING_TEST_DATABASE_URL`); see that
- * file's header for how to stand up a database for this.
+ * Same database as the sibling suites (`PLANNING_TEST_DATABASE_URL`, else
+ * `DATABASE_URL`, else `.env`'s `DATABASE_*`); see
+ * TaskService.tenancy.integration.test.ts's header for how to stand one up.
  */
-const DATABASE_ENV = { urlEnvVar: 'PLANNING_TEST_DATABASE_URL' };
+const DATABASE_ENV = {
+  urlEnvVar: 'PLANNING_TEST_DATABASE_URL',
+  probeTimeoutEnvVar: 'PLANNING_TEST_PROBE_TIMEOUT_MS',
+};
 const availability = databaseAvailability(DATABASE_ENV);
 const describeWithDb = availability.available ? describe : describe.skip;
 

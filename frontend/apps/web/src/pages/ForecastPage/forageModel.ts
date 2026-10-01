@@ -20,6 +20,7 @@
  */
 
 import type { ForecastBucket, ProbabilityEntry } from '@/api/useForecastService';
+import { HOUR_MINUTE, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 /** Same threshold as ci_forage.trial.COMMIT_MASS. */
 export const COMMIT_MASS = 0.6;
@@ -190,11 +191,11 @@ export function rankSaccades(
   return rows.sort((a, b) => b.kl - a.kl);
 }
 
-export function formatSlotClock(iso: string): string {
+export function formatSlotClock(iso: string, fmt: DateTimeFormatter): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) {
     return `bucket ${iso}`;
   }
 
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return fmt.time(d, HOUR_MINUTE);
 }

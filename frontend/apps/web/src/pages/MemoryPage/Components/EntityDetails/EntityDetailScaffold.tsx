@@ -31,6 +31,7 @@ import {
   type RelatedEntityOpenTarget,
 } from '@/components/EntityRelationshipCards/EntityRelationshipCards';
 import { TagInput } from '@/components/TagInput';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { entityToAgentChatContext } from '@/lib/entityToAgentChatContext';
 
 import type { GenericEntity, MemoryEntity } from '../../../MemoryPage/useEntityService';
@@ -668,7 +669,8 @@ export function EntityDetailScaffold({
     setEditing(false);
   };
 
-  const chatContext = useMemo(() => entityToAgentChatContext(entity), [entity]);
+  const fmt = useDateTimeFormat();
+  const chatContext = useMemo(() => entityToAgentChatContext(entity, fmt), [entity, fmt]);
 
   const visibleMeta = (metaItems ?? []).filter(
     (item) => item.value !== null && item.value !== undefined && item.value !== '',

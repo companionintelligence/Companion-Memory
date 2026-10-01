@@ -270,20 +270,22 @@ export class ContextPromptGenerateService {
     ) {
       const { candidates } = await this.homeConfirmService.snapshot({ userId });
       const placeOptions = this.homeConfirmService.candidateOptions(candidates);
-      if (placeOptions.length >= 2) {
+      const top = this.homeConfirmService.topHomeCandidate(candidates);
+      // A yes/no may only name `top`: the answer arrives as a bare "yes", which
+      // HomeConfirmService resolves to topHomeCandidate. Without a `home`
+      // candidate, even a single named place is offered as a choice, so the
+      // answer is its id.
+      if (placeOptions.length >= 2 || (placeOptions.length === 1 && !top)) {
         type = 'home_work_other';
         options = placeOptions;
-      } else if (placeOptions.length === 1) {
+      } else if (top) {
         type = 'yes_no';
         options = DEFAULT_SELECTOR_OPTIONS.yes_no;
-        prompt = `Is ${placeOptions[0].label} home?`;
+        prompt = `Is ${top.label} home?`;
       } else {
-        const top = this.homeConfirmService.topHomeCandidate(candidates);
-        if (top) {
-          type = 'yes_no';
-          options = DEFAULT_SELECTOR_OPTIONS.yes_no;
-          prompt = `Is ${top.label} home?`;
-        }
+        // No answer could be written: the generic Home/Work/Other chips name
+        // no place, and a "home" resolves to no candidate.
+        return null;
       }
     } else if (type === 'home_work_other' || type === 'what_did_you_do_here') {
       const places = await this.loadEntities(userId, 'Location');
@@ -793,6 +795,11 @@ export class ContextPromptGenerateService {
 
       const top = this.homeConfirmService.topHomeCandidate(candidates);
       const options = this.homeConfirmService.candidateOptions(candidates);
+      // No `home` candidate to name and no named place to choose from.
+      if (!top && options.length === 0) {
+        return [];
+      }
+
       const label =
         options.length >= 2
           ? 'Which of these places is home? Prefer home_work_other. Options are the listed places, not role chips.'

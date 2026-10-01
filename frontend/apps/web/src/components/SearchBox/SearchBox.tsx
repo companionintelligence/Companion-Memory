@@ -2,13 +2,16 @@ import {
   type ForwardedRef,
   type ReactNode,
   type RefObject,
+  Fragment,
   forwardRef,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useState,
   useRef,
 } from 'react';
 
+import { useDeviceLayout } from '@ci/common';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import {
   IconButton,
@@ -31,6 +34,19 @@ import { DropdownProvider, useDropdown } from './useDropdown';
 
 /** Radix filter menus portal outside the search wrapper — clicks there must not dismiss the panel. */
 const PORTALED_FILTER_IDS = ['entity-type-filters'];
+
+/**
+ * Spread onto a portaled layer that belongs to the panel: on a phone, the
+ * filter and saved-search sheets its footer opens. A tap or focus inside one
+ * counts as inside the panel, and while one is open the panel stays as it is
+ * underneath, so closing the sheet (Done, or a tap on its scrim) returns to
+ * the same results. The layer handles its own dismissal.
+ */
+export const SEARCH_PANEL_LAYER_PROPS = { 'data-search-panel-layer': '' } as const;
+
+function isSearchPanelLayer(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('[data-search-panel-layer]') != null;
+}
 
 function isPortaledFilterTarget(target: Node | null): boolean {
   if (target == null) {
@@ -55,7 +71,8 @@ function isPortaledFilterTarget(target: Node | null): boolean {
     target.closest('[data-radix-popper-content-wrapper]') != null ||
     target.closest('[data-slot="dropdown-menu-content"]') != null ||
     target.closest('[data-slot="popover-content"]') != null ||
-    target.closest('[data-slot="select-content"]') != null
+    target.closest('[data-slot="select-content"]') != null ||
+    isSearchPanelLayer(target)
   );
 }
 
@@ -67,10 +84,17 @@ function hasOpenNestedFilterOverlay(): boolean {
         '[data-slot="dropdown-menu-content"][data-state="open"]',
         '[data-slot="popover-content"][data-state="open"]',
         '[data-slot="select-content"][data-state="open"]',
+        // A phone sheet's scrim is its sibling, not its child, so a tap there
+        // would otherwise read as outside the panel and close it under the
+        // sheet. Radix closes the sheet on that tap; the panel stays.
+        '[data-search-panel-layer][data-state="open"]',
       ].join(', '),
     ) != null
   );
 }
+
+/** Space between the phone panel and the input above it, and the screen edges beside it. */
+const PHONE_PANEL_GAP = 8;
 
 const FormSchema = s.object({
   query: s.string(),
@@ -102,6 +126,11 @@ interface SearchResultItem {
    * keys are the keyboard analogue of dragging it onto the filter drop area.
    */
   filter?: FilterDragPayload;
+  /**
+   * A caption over this row, outside its hit area and the arrow-key order —
+   * e.g. "Recent" over the first recent search.
+   */
+  heading?: ReactNode;
 }
 
 interface Props {
@@ -192,6 +221,12 @@ interface Props {
   onSave?: (query: string, entityTypes: string[]) => void;
   /** Ref populated with a function to mark user-engaged before programmatic focus. */
   engageRef?: React.MutableRefObject<(() => void) | null>;
+  /**
+   * On a phone, drop the panel below the input across the whole screen (8px
+   * gutters) with touch-sized rows, instead of hanging it off the input —
+   * which in a phone header is only part of the width. Desktop is unaffected.
+   */
+  fullWidthOnPhone?: boolean;
 }
 
 function SearchBox(
@@ -225,10 +260,13 @@ function SearchBox(
     onFilterAdd,
     onSave,
     engageRef,
+    fullWidthOnPhone = false,
   }: Props,
   forwardedRef: ForwardedRef<HTMLInputElement>,
 ) {
   const { t } = useTranslation();
+  const { isMobile } = useDeviceLayout();
+  const phonePanel = fullWidthOnPhone && isMobile === true;
 
   const form = useForm<FormData>({
     resolver: formDataResolver(FormSchema),
@@ -672,7 +710,10 @@ function SearchBox(
       );
     } else if (results.length > 0) {
       body = (
-        <div className="flex max-h-[60vh] min-w-0 overflow-x-hidden">
+        // min-h-0 on a phone: the panel there is a column capped at the visible
+        // height, and this is the part that gives way (and scrolls) so the
+        // footer below it stays on screen.
+        <div className={cn('flex max-h-[60vh] min-w-0 overflow-x-hidden', phonePanel && 'min-h-0')}>
           {selectedResult && selectedResult.preview && (
             <div className="min-w-0 flex-1 overflow-hidden p-4">{selectedResult.preview}</div>
           )}
@@ -681,34 +722,43 @@ function SearchBox(
           <ScrollArea className="min-w-0 flex-1" collapseX ref={scrollAreaRef}>
             <div className="py-1">
               {results.map((result, index) => (
-                <div
-                  key={result.id}
-                  ref={(el) => {
-                    resultItemsRef.current[index] = el;
-                  }}
-                  className={`
-                        min-w-0 overflow-hidden px-2 py-1.5 cursor-pointer border-l-4
-                        ${index === selectedIndex ? 'bg-accent text-accent-foreground border-blue-500' : 'hover:bg-muted/50 border-transparent'}
-                      `}
-                  // Keep the input focused so the focus-driven panel doesn't close
-                  // before the click lands — except on draggable rows while the
-                  // panel is pinned: preventing mousedown default cancels native
-                  // HTML5 drag, and a pinned panel stays visible unfocused anyway.
-                  onMouseDown={(e) => {
-                    if (
-                      panelPinned &&
-                      e.target instanceof Element &&
-                      e.target.closest('[draggable="true"]')
-                    ) {
-                      return;
-                    }
+                <Fragment key={result.id}>
+                  {result.heading != null && (
+                    <div className="px-4 pt-2 pb-1 text-xs text-muted-foreground">{result.heading}</div>
+                  )}
+                  <div
+                    ref={(el) => {
+                      resultItemsRef.current[index] = el;
+                    }}
+                    className={cn(
+                      'min-w-0 overflow-hidden px-2 py-1.5 cursor-pointer border-l-4',
+                      index === selectedIndex
+                        ? 'bg-accent text-accent-foreground border-blue-500'
+                        : 'hover:bg-muted/50 border-transparent',
+                      // Touch-sized on a phone: at least 48px tall, and inset to
+                      // line up with the footer rows under the list.
+                      phonePanel && 'flex min-h-12 flex-col justify-center px-3',
+                    )}
+                    // Keep the input focused so the focus-driven panel doesn't close
+                    // before the click lands — except on draggable rows while the
+                    // panel is pinned: preventing mousedown default cancels native
+                    // HTML5 drag, and a pinned panel stays visible unfocused anyway.
+                    onMouseDown={(e) => {
+                      if (
+                        panelPinned &&
+                        e.target instanceof Element &&
+                        e.target.closest('[draggable="true"]')
+                      ) {
+                        return;
+                      }
 
-                    e.preventDefault();
-                  }}
-                  onClick={() => onResultSelect?.(result)}
-                >
-                  {result.content}
-                </div>
+                      e.preventDefault();
+                    }}
+                    onClick={() => onResultSelect?.(result)}
+                  >
+                    {result.content}
+                  </div>
+                </Fragment>
               ))}
             </div>
             <ScrollBar />
@@ -769,6 +819,25 @@ function SearchBox(
     return () => document.removeEventListener('pointerdown', handlePointerDown);
   }, [panelVisible, panelFooter]);
 
+  // The phone panel is `fixed`, which is what lets it span the screen rather
+  // than the input, so `top-full` no longer places it: it goes just under the
+  // input's measured bottom edge. Layout effect, so the first paint is already
+  // in place.
+  const [phonePanelTop, setPhonePanelTop] = useState(0);
+
+  useLayoutEffect(() => {
+    if (!phonePanel || !panelVisible) {
+      return;
+    }
+
+    const place = () => setPhonePanelTop(wrapperRef.current?.getBoundingClientRect().bottom ?? 0);
+
+    place();
+    window.addEventListener('resize', place);
+
+    return () => window.removeEventListener('resize', place);
+  }, [phonePanel, panelVisible]);
+
   return (
     <Form {...form}>
       <form autoComplete="off" onSubmit={form.handleSubmit(handleFormSubmit)}>
@@ -781,7 +850,10 @@ function SearchBox(
               'aria-[invalid=true]:ring-destructive/20 dark:aria-[invalid=true]:ring-destructive/40 aria-[invalid=true]:border-destructive',
               'transition-[color,box-shadow]',
               disabled ? 'cursor-not-allowed opacity-50 pointer-events-none' : '',
-              panelVisible ? 'rounded-b-none' : '',
+              // The phone panel floats clear of the input, so the input keeps
+              // its corners and shows a focus ring instead of joining the panel.
+              panelVisible && !phonePanel ? 'rounded-b-none' : '',
+              panelVisible && phonePanel ? 'border-ring/40 ring-[3px] ring-ring/10' : '',
               // Right inset matches the 3px of vertical slack around the h-7 controls.
               variant === 'compact' ? 'pr-[3px]' : '',
             )}
@@ -824,7 +896,7 @@ function SearchBox(
                         setPanelDismissed(false);
                       }
                     }}
-                    onBlur={() => {
+                    onBlur={(e) => {
                       // Window deactivation isn't a real focus change — keep the
                       // panel so it's still open when the window comes back (the
                       // browser restores focus to the input).
@@ -839,6 +911,14 @@ function SearchBox(
                       }
 
                       if (isPortaledFilterTarget(active)) {
+                        return;
+                      }
+
+                      // Focus going into one of the panel's own sheets leaves the
+                      // panel as it is, results included, for when the sheet
+                      // closes. Read off relatedTarget: during blur,
+                      // activeElement is still <body>.
+                      if (isSearchPanelLayer(e.relatedTarget)) {
                         return;
                       }
 
@@ -946,12 +1026,31 @@ function SearchBox(
           </div>
 
           {panelVisible && (
-            <div className="absolute top-full left-0 right-0 z-50 max-w-full overflow-x-hidden bg-background border border-t-0 rounded-b-md shadow-xs">
+            <div
+              className={
+                phonePanel
+                  ? 'fixed z-50 flex flex-col overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-lg'
+                  : 'absolute top-full left-0 right-0 z-50 max-w-full overflow-x-hidden bg-background border border-t-0 rounded-b-md shadow-xs'
+              }
+              // Height capped at what is left of the visible viewport below it
+              // (the keyboard takes the rest), so the footer rows never end up
+              // under the keyboard or past the bottom of the screen.
+              style={
+                phonePanel
+                  ? {
+                      top: phonePanelTop + PHONE_PANEL_GAP,
+                      left: PHONE_PANEL_GAP,
+                      right: PHONE_PANEL_GAP,
+                      maxHeight: `calc(var(--vv-height, 100dvh) - ${phonePanelTop + 2 * PHONE_PANEL_GAP}px)`,
+                    }
+                  : undefined
+              }
+            >
               {panelHeader}
               {resultsNode}
               {panelFooter && (
                 <div
-                  className={cn(resultsNode != null && 'border-t')}
+                  className={cn(resultsNode != null && 'border-t', phonePanel && 'shrink-0')}
                   // Keep focus in the input so the filter panel stays open while
                   // opening What / When / How menus in the footer.
                   onMouseDown={(e) => e.preventDefault()}

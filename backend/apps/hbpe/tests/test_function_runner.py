@@ -138,3 +138,24 @@ def test_no_token_means_no_graphql():
 
     with pytest.raises(graphql_client.GraphQLUnavailable):
         graphql_client._get_token("nobody")
+
+
+def test_transport_errors_are_named_even_when_their_message_is_empty():
+    """A connect timeout's str() is "" in both httpx and requests; the log read `error=` for hours."""
+    from ci.hbpe.runner import callback_unreachable_hint, describe_transport_error
+
+    class ConnectTimeout(Exception):
+        pass
+
+    assert describe_transport_error(ConnectTimeout()) == "ConnectTimeout"
+    assert describe_transport_error(ValueError("bad body")) == "ValueError: bad body"
+
+    # The dev stack: API on the host, this sidecar in a container, a firewall between them.
+    hint = callback_unreachable_hint(
+        "http://host.docker.internal:3030/function-runs/callback"
+    )
+    assert "ufw allow" in hint and "port 3030" in hint
+    # A compose/Hub install reaches the API inside one network; no firewall advice there.
+    assert "ufw" not in callback_unreachable_hint(
+        "http://api:3030/function-runs/callback"
+    )

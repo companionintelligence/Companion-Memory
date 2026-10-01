@@ -466,6 +466,7 @@ export class UserDataPortabilityService {
       onboarded: user.onboarded,
       onboardedAt: user.onboardedAt?.toISOString() ?? null,
       timezone: user.timezone,
+      timeFormat: user.timeFormat,
       onboardingProgress: (user.onboardingProgress as Record<string, unknown> | null) ?? null,
       createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),

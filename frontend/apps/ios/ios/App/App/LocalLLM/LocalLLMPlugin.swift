@@ -3,18 +3,24 @@ import Foundation
 import UIKit
 
 /// On-device chat completion for iOS, implementing the **same JS contract** as the Android
-/// `@ci/capacitor-local-llm` plugin (`isAvailable` / `loadModel` / `unloadModel` / `generate` /
-/// `generateStream` / `cancel`, plus the `llmToken` event). That is deliberate: `@ci/common`'s
-/// `generateOffline()` already drives that contract and falls back to the appliance's
-/// `/api/llm/generate` when the plugin is absent, so implementing it here makes on-device inference
-/// work on iOS with **no web-layer changes at all**.
+/// `@ci/capacitor-local-llm` plugin — the v2 surface in that package's `definitions.ts`:
+/// `isAvailable` / `getModelStatus` / `downloadModel` / `cancelDownload` / `deleteModel` /
+/// `loadModel` / `getLoadedModel` / `resetConversation` / `unloadModel` / `generate` /
+/// `generateStream` / `cancel` / `configureIntentTools`, plus the `llmToken` and
+/// `modelDownloadProgress` events. That is deliberate: `@ci/common`'s `generateOffline()` already
+/// drives that contract and falls back to the appliance's `/api/llm/generate` when the plugin is
+/// absent, so implementing it here makes on-device inference work on iOS with **no web-layer
+/// changes at all**.
 ///
-/// One difference from Android: **hand-written tools.** See `CompanionIntentTools.swift` —
-/// LiteRT-LM's Swift `Tool` reflects over compile-time properties and has no runtime-schema
-/// equivalent of Android's `OpenApiTool`. This one is forced by the runtime, not chosen. The
-/// model itself no longer differs — both platforms ship Qwen3-0.6B (`litert-community/Qwen3-0.6B`)
-/// since Android's original Gemma catalog entry sat on a repo Hugging Face now serves
-/// `gated: "auto"`, 401-ing every anonymous download. See `LocalLLMModels.swift`.
+/// Differences from Android, each forced by the platform rather than chosen:
+///
+/// - **Hand-written tools.** See `CompanionIntentTools.swift` — LiteRT-LM's Swift `Tool` reflects
+///   over compile-time properties and has no runtime-schema equivalent of Android's `OpenApiTool`.
+/// - **Two models, not four.** The Gemma 4 entries are Android-only: this app has no entitlements
+///   file, so it lacks `com.apple.developer.kernel.increased-memory-limit`, and a 2.6–3.7 GB model
+///   would be jetsam-killed. See `LocalLLMModels.swift`.
+/// - **No image input.** No iOS model is multimodal; a call carrying `images` is rejected, never
+///   silently stripped to its text.
 ///
 /// This lives in the app target rather than in `@ci/capacitor-local-llm` (which declares itself
 /// Android-only and has no `ios/`) because moving it into that package needs a podspec, a vendored
@@ -23,52 +29,68 @@ import UIKit
 public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
   public let identifier = "LocalLLMPlugin"
   public let jsName = "LocalLLM"
+  // Capacitor 7 dropped the Objective-C runtime scan: this array is the ONLY thing the bridge
+  // consults, so an `@objc func` missing from it compiles and is unreachable from JS.
+  // `capacitorPluginContract.test.ts` checks it against `LocalLlmPlugin` in `definitions.ts`.
   public let pluginMethods: [CAPPluginMethod] = [
     CAPPluginMethod(name: "isAvailable", returnType: CAPPluginReturnPromise),
     CAPPluginMethod(name: "getModelStatus", returnType: CAPPluginReturnPromise),
     CAPPluginMethod(name: "downloadModel", returnType: CAPPluginReturnPromise),
+    CAPPluginMethod(name: "cancelDownload", returnType: CAPPluginReturnPromise),
     CAPPluginMethod(name: "deleteModel", returnType: CAPPluginReturnPromise),
     CAPPluginMethod(name: "loadModel", returnType: CAPPluginReturnPromise),
+    CAPPluginMethod(name: "configureIntentTools", returnType: CAPPluginReturnPromise),
+    CAPPluginMethod(name: "getLoadedModel", returnType: CAPPluginReturnPromise),
+    CAPPluginMethod(name: "resetConversation", returnType: CAPPluginReturnPromise),
     CAPPluginMethod(name: "unloadModel", returnType: CAPPluginReturnPromise),
     CAPPluginMethod(name: "generate", returnType: CAPPluginReturnPromise),
     CAPPluginMethod(name: "generateStream", returnType: CAPPluginReturnPromise),
     CAPPluginMethod(name: "cancel", returnType: CAPPluginReturnPromise),
-    CAPPluginMethod(name: "configureIntentTools", returnType: CAPPluginReturnPromise),
   ]
 
   private let engine = LocalLLMEngine()
   private var generationTask: Task<Void, Never>?
 
-  /// Forwards every progress tick to JS as `modelDownloadProgress`, matching Android's event shape.
-  private lazy var downloader = ModelDownloader { [weak self] modelId, status, downloaded, total in
-    self?.notifyListeners(
-      modelDownloadProgressEvent,
-      data: [
-        "modelId": modelId,
-        "status": status.rawValue,
-        "bytesDownloaded": downloaded,
-        "totalBytes": total,
-      ])
+  /// Forwards every progress tick to JS as `modelDownloadProgress`, matching Android's event shape —
+  /// including `error` on a failure, which is the only way the UI learns why.
+  private lazy var downloader = ModelDownloader { [weak self] modelId, status, downloaded, total, error in
+    var data: [String: Any] = [
+      "modelId": modelId,
+      "status": status.rawValue,
+      "bytesDownloaded": downloaded,
+      "totalBytes": total,
+    ]
+    if status == .error, let error { data["error"] = error }
+
+    self?.notifyListeners(modelDownloadProgressEvent, data: data)
   }
 
   /// Capability probe, matching Android's: no side effects, no downloads.
   ///
-  /// The RAM floor mirrors the Android plugin's rationale — a ~530 MiB int4 model needs roughly 2 GB
-  /// resident, and jetsam kills the app rather than failing the allocation, so refusing up front is
-  /// the difference between "unavailable" and "the app disappeared mid-sentence".
+  /// `available` means the device's RAM can run at least the *smallest* catalog model (iOS 15.5 is
+  /// the deployment floor, so there is no separate OS gate). Free disk is deliberately not part of
+  /// it — a nearly-full phone can still run a model it already has — so it is reported, and
+  /// enforced per model in `downloadModel`, where the model's real size is known. Jetsam kills the
+  /// app rather than failing an allocation, so refusing on RAM up front is the difference between
+  /// "unavailable" and "the app disappeared mid-sentence".
   @objc func isAvailable(_ call: CAPPluginCall) {
     let totalMemory = ProcessInfo.processInfo.physicalMemory
+    let available = LocalLLMPolicy.deviceCanRunAnyModel(
+      physicalMemory: totalMemory, catalog: LocalLLMModels.all)
 
-    guard totalMemory >= Self.minimumPhysicalMemoryBytes else {
-      call.resolve([
-        "available": false,
-        "reason": "This device does not have enough memory to run an on-device model.",
-      ])
+    var result: [String: Any] = [
+      "available": available,
+      "totalMemoryBytes": Int(clamping: totalMemory),
+    ]
 
-      return
+    if let freeDisk = LocalLLMModels.freeDiskBytes() {
+      result["freeDiskBytes"] = freeDisk
+    }
+    if !available {
+      result["reason"] = "This device does not have enough memory to run an on-device model."
     }
 
-    call.resolve(["available": true])
+    call.resolve(result)
   }
 
   /// Current on-disk state of a model, with byte progress while downloading. Matches Android's
@@ -83,8 +105,31 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
   ///
   /// Resolves once the download is *enqueued*, not once it completes — same contract as Android, so
   /// callers listen for the terminal `ready`/`error` event or poll `getModelStatus`.
+  ///
+  /// The download is always the catalog's own commit-pinned URL. The `url` the caller sends is kept
+  /// in the contract only so it can be *refused* when it is anything else — a native side that
+  /// fetched whatever URL JS supplied would let a compromised WebView swap in any file on
+  /// `huggingface.co` sized to the pin. Also refused up front, before a byte moves: a device below
+  /// the model's RAM floor, and a volume without room for what is still to fetch plus headroom. A
+  /// missing `url` is fine.
   @objc func downloadModel(_ call: CAPPluginCall) {
     guard let info = resolveModel(call) else { return }
+
+    if let raw = call.getString("url") {
+      do {
+        try LocalLLMPolicy.verifyDownloadURL(raw, isPinnedURL: info.url, modelId: info.modelId)
+      } catch {
+        call.reject(error.localizedDescription)
+
+        return
+      }
+    }
+
+    if let shortfall = memoryShortfall(for: info) {
+      call.reject(shortfall.localizedDescription)
+
+      return
+    }
 
     do {
       try downloader.start(info)
@@ -94,66 +139,129 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
     }
   }
 
+  /// Stops an in-flight download, drops its partial file and emits a final `modelDownloadProgress`
+  /// with `not_downloaded`. A no-op for a model that is not downloading (or is already complete).
+  @objc func cancelDownload(_ call: CAPPluginCall) {
+    guard let info = resolveModel(call) else { return }
+
+    downloader.cancelDownload(info)
+    call.resolve()
+  }
+
   /// Deletes the downloaded model and any partial, cancelling an in-flight download first.
   @objc func deleteModel(_ call: CAPPluginCall) {
     guard let info = resolveModel(call) else { return }
 
     // Unload first: deleting the file out from under a live engine leaves it holding a handle to a
-    // path that no longer exists, and the failure only surfaces at the next generate().
+    // path that no longer exists, and the failure only surfaces at the next generate(). The engine
+    // decides whether it is using the file — including a load that has not finished yet, which a
+    // check on the resident model's path would miss.
     Task {
-      if await engine.modelPath == (try? LocalLLMModels.modelFile(info))?.path {
-        await engine.unload()
+      if let path = (try? LocalLLMModels.modelFile(info))?.path {
+        await engine.unload(ifUsing: path)
       }
       downloader.delete(info)
       call.resolve()
     }
   }
 
-  /// Loads a downloaded model. Takes `modelId` (matching Android); `path` is still accepted as an
-  /// escape hatch for a hand-pushed file, which is how this was tested before the downloader existed.
+  /// Loads a downloaded model, by `modelId` only — there is deliberately no `path`. A path from the
+  /// WebView would let a compromised page probe the sandbox (the error text differs for a file that
+  /// exists) and hand any app-readable file to the model parser; Android ignores it too.
+  ///
+  /// Idempotent: a load identical to the resident one is a no-op that returns the same result (see
+  /// `LocalLLMEngine.load`), so the JS layer can ask every turn without paying for a reload.
+  ///
+  /// Resolves `{toolCount, accelerator, fellBackToCpu, speculativeDecoding}`: the backend the model
+  /// actually loaded on (a `gpu` request that will not initialise retries on the CPU), and whether
+  /// multi-token prediction is in force (only when asked for *and* the file carries it).
   @objc func loadModel(_ call: CAPPluginCall) {
-    let path: String
-    var info: LocalLLMModelInfo?
+    guard let info = resolveModel(call) else { return }
 
-    if let explicit = call.getString("path") {
-      path = explicit
-    } else if let modelId = call.getString("modelId") {
-      guard let resolved = LocalLLMModels.find(modelId) else {
-        call.reject("Unknown modelId: \(modelId)")
-
-        return
-      }
-      guard let file = try? LocalLLMModels.modelFile(resolved) else {
-        call.reject("Could not resolve the models directory")
-
-        return
-      }
-      info = resolved
-      path = file.path
-    } else {
-      call.reject("modelId (or path) is required")
+    if let shortfall = memoryShortfall(for: info) {
+      call.reject(shortfall.localizedDescription)
 
       return
     }
 
-    guard FileManager.default.fileExists(atPath: path) else {
+    guard let file = try? LocalLLMModels.modelFile(info) else {
+      call.reject("Could not resolve the models directory")
+
+      return
+    }
+    guard FileManager.default.fileExists(atPath: file.path) else {
       call.reject("Model is not downloaded. Call downloadModel() first.")
 
       return
     }
 
+    var requestedAccelerator: LocalLLMAccelerator?
+    if let raw = call.getString("accelerator") {
+      guard let parsed = LocalLLMAccelerator(rawValue: raw) else {
+        call.reject("Unknown accelerator: \(raw). Expected \"cpu\" or \"gpu\".")
+
+        return
+      }
+      requestedAccelerator = parsed
+    }
+
     Task {
       do {
         // Fetched here, not lazily: LiteRT-LM fixes the tool set when the conversation is
-        // created (now done inside load(), not per-call — see LocalLLMEngine), so tools must
-        // exist before load(). Matches Android's loadModel(), which fetches at the same point
-        // for the same reason. No-ops (and logs) when the appliance is unreachable or intent
-        // tools were never configured, leaving a toolless — but working — local model.
-        let tools = CompanionToolContext.executableTools()
-        try await engine.load(modelPath: path, maxTokens: info?.defaultMaxTokens, tools: tools)
-        call.resolve(["toolCount": tools.count])
+        // created (done inside load(), not per-call — see LocalLLMEngine), so tools must exist
+        // before load(). Matches Android's loadModel(), which fetches at the same point for the
+        // same reason. Skipped outright for a model without the `tools` capability. No-ops (and
+        // logs) when the appliance is unreachable or intent tools were never configured, leaving a
+        // toolless — but working — local model.
+        let tools = LocalLLMPolicy.toolsToBind(
+          CompanionToolContext.executableTools(), capabilities: info.capabilities)
+
+        let outcome = try await engine.load(
+          LocalLLMLoadRequest(
+            path: file.path, info: info, tools: tools,
+            requestedAccelerator: requestedAccelerator,
+            wantsSpeculativeDecoding: call.getBool("enableSpeculativeDecoding") ?? false,
+            maxTokens: call.getInt("maxTokens"), topK: call.getInt("topK"),
+            topP: call.getDouble("topP"), temperature: call.getDouble("temperature")))
+
+        call.resolve([
+          "toolCount": outcome.toolCount,
+          "accelerator": outcome.accelerator.rawValue,
+          "fellBackToCpu": outcome.fellBackToCpu,
+          "speculativeDecoding": outcome.speculativeDecoding,
+        ])
       } catch {
         call.reject("Failed to load model: \(error.localizedDescription)")
+      }
+    }
+  }
+
+  /// Which model is resident right now. Survives a WebView reload, which the JS side does not.
+  @objc func getLoadedModel(_ call: CAPPluginCall) {
+    Task {
+      guard await engine.isLoaded else {
+        call.resolve(["loaded": false])
+
+        return
+      }
+
+      var result: [String: Any] = ["loaded": true]
+      if let modelId = await engine.loadedModelId { result["modelId"] = modelId }
+      if let accelerator = await engine.loadedAccelerator { result["accelerator"] = accelerator.rawValue }
+
+      call.resolve(result)
+    }
+  }
+
+  /// Starts a fresh conversation on the loaded engine — same sampler, same tools, no reload. Any
+  /// generation in flight is cancelled first. Rejects when no model is loaded.
+  @objc func resetConversation(_ call: CAPPluginCall) {
+    Task {
+      do {
+        try await engine.resetConversation()
+        call.resolve()
+      } catch {
+        call.reject("Could not reset the conversation: \(error.localizedDescription)")
       }
     }
   }
@@ -174,6 +282,19 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
     return info
   }
 
+  /// The RAM check both `downloadModel` and `loadModel` apply, as an error to reject with.
+  private func memoryShortfall(for info: LocalLLMModelInfo) -> LocalLLMError? {
+    let physical = ProcessInfo.processInfo.physicalMemory
+
+    guard
+      !LocalLLMPolicy.meetsMemoryFloor(
+        physicalMemory: physical, minDeviceMemoryBytes: info.minDeviceMemoryBytes)
+    else { return nil }
+
+    return .insufficientMemory(
+      modelId: info.modelId, requiredBytes: info.minDeviceMemoryBytes, deviceBytes: physical)
+  }
+
   @objc func unloadModel(_ call: CAPPluginCall) {
     Task {
       await engine.unload()
@@ -184,6 +305,9 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
   /// Non-streaming: buffers the whole reply. Tools were attached when the conversation was
   /// created, at `loadModel()` — the model's turn history now lives inside that persistent
   /// conversation too, so this only ever sends the one new prompt.
+  ///
+  /// Resolves `{text, thought?, stats?}`. `thought` is the reasoning, present only when
+  /// `enableThinking` produced some; `stats` only when the generation ran to completion.
   @objc func generate(_ call: CAPPluginCall) {
     guard let prompt = call.getString("prompt") else {
       call.reject("prompt is required")
@@ -191,26 +315,45 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
       return
     }
 
+    let enableThinking = call.getBool("enableThinking") ?? false
+    let imageCount = call.getArray("images")?.count ?? 0
+
     let backgroundTask = beginBackgroundTask()
     Task {
       defer { endBackgroundTask(backgroundTask) }
       do {
-        let stream = try await engine.streamCompletion(prompt: prompt)
-        var text = ""
+        try await rejectImages(count: imageCount)
 
-        for try await delta in stream {
-          text += delta
+        let stream = try await engine.generate(prompt: prompt, enableThinking: enableThinking)
+        var text = ""
+        var thought = ""
+        var stats: GenerationStats?
+
+        for try await event in stream {
+          switch event {
+          case .delta(let answer, let reasoning):
+            text += answer
+            thought += reasoning
+          case .finished(let outcome):
+            stats = outcome.stats
+          }
         }
 
-        call.resolve(["text": text])
+        var result: [String: Any] = ["text": text]
+        let reasoning = thought.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !reasoning.isEmpty { result["thought"] = reasoning }
+        if let stats { result["stats"] = stats.asDictionary }
+
+        call.resolve(result)
       } catch {
         call.reject("Generation failed: \(error.localizedDescription)")
       }
     }
   }
 
-  /// Streaming: emits `llmToken` events (`{partial, done}`), resolving once generation completes —
-  /// the exact shape `generateOffline`'s `generateLocalStreaming` subscribes to.
+  /// Streaming: emits `llmToken` events (`{partial, thought?, done}`), resolving once generation
+  /// completes — the exact shape `generateOffline`'s `generateLocalStreaming` subscribes to. The
+  /// terminal `done: true` event also carries `stats`, unless the generation was cancelled.
   @objc func generateStream(_ call: CAPPluginCall) {
     guard let prompt = call.getString("prompt") else {
       call.reject("prompt is required")
@@ -218,29 +361,68 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
       return
     }
 
+    let enableThinking = call.getBool("enableThinking") ?? false
+    let imageCount = call.getArray("images")?.count ?? 0
+
+    // A new stream replaces the one before it: the old consumer is cancelled so its call resolves,
+    // and the engine stops the old native generation and waits for it before starting this one.
     generationTask?.cancel()
+
     let backgroundTask = beginBackgroundTask()
     generationTask = Task {
       defer { endBackgroundTask(backgroundTask) }
-      do {
-        let stream = try await engine.streamCompletion(prompt: prompt)
 
-        for try await delta in stream {
-          notifyListeners("llmToken", data: ["partial": delta, "done": false])
+      do {
+        try await rejectImages(count: imageCount)
+
+        let stream = try await engine.generate(prompt: prompt, enableThinking: enableThinking)
+        var outcome: GenerationOutcome?
+
+        for try await event in stream {
+          switch event {
+          case .delta(let answer, let thought):
+            var data: [String: Any] = ["partial": answer, "done": false]
+            if !thought.isEmpty { data["thought"] = thought }
+            notifyListeners("llmToken", data: data)
+          case .finished(let finished):
+            outcome = finished
+          }
         }
 
-        notifyListeners("llmToken", data: ["partial": "", "done": true])
+        // Never stats on a cancelled run, even one whose consumer was cancelled just as the final
+        // event was already buffered: the JS side reads "no stats" as "this one was cut short".
+        notifyListeners("llmToken", data: terminalEvent(stats: Task.isCancelled ? nil : outcome?.stats))
         call.resolve()
       } catch {
         // A cancel() is a normal end, not a failure: report the terminal event and resolve, so the
         // JS side's `finally` unsubscribes cleanly instead of surfacing an error to the user.
         if Task.isCancelled {
-          notifyListeners("llmToken", data: ["partial": "", "done": true])
+          notifyListeners("llmToken", data: terminalEvent(stats: nil))
           call.resolve()
         } else {
           call.reject("Generation failed: \(error.localizedDescription)")
         }
       }
+    }
+  }
+
+  /// The final `llmToken` event. `stats` is omitted (not zeroed) for a generation that did not run
+  /// to completion — a cancelled run's speed says nothing about the model.
+  private func terminalEvent(stats: GenerationStats?) -> [String: Any] {
+    var data: [String: Any] = ["partial": "", "done": true]
+    if let stats { data["stats"] = stats.asDictionary }
+
+    return data
+  }
+
+  /// Rejects a call that carries `images`. No iOS model has the `vision` capability and this port
+  /// does no image decoding, so the honest answer is no — dropping them and answering the text alone
+  /// would describe a photo the model never saw.
+  private func rejectImages(count: Int) async throws {
+    let modelId = await engine.loadedModelId
+
+    if let rejection = LocalLLMPolicy.imageRejection(modelId: modelId, imageCount: count) {
+      throw rejection
     }
   }
 
@@ -320,13 +502,6 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
       call.resolve(["toolCount": tools.count])
     }
   }
-
-  /// 4 GB: reconciled with Android's floor (`MIN_TOTAL_MEMORY_BYTES`), which used to be 3 GB
-  /// against this file's 6 GB for models with the same ~2 GB estimated peak RSS — an unexplained
-  /// 2x gap between platforms gating the identical workload. 4 GB is that ~2 GB footprint plus
-  /// ~2 GB of headroom for the OS, the WebView, and the rest of the app before jetsam takes the
-  /// process rather than `isAvailable()` politely declining up front.
-  private static let minimumPhysicalMemoryBytes: UInt64 = 4 * 1024 * 1024 * 1024
 }
 
 /// Ensures a `UIBackgroundTaskIdentifier` is ended exactly once, no matter which of two racing

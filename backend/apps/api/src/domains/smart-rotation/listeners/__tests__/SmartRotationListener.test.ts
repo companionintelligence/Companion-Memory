@@ -1,7 +1,11 @@
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
 import { Events } from '@ci/domains/events';
-import type { QuestionService } from '@ci/domains/intelligence';
+import {
+  QUESTION_ROTATION_ORDER_SQL,
+  QUESTION_ROTATION_RANK_SQL,
+  type QuestionService,
+} from '@ci/domains/intelligence';
 import type { GraphEnrichmentService, MaintenanceOrchestratorService } from '@ci/domains/maintenance';
 import type { ContextPromptGenerateService, CrossTableHydrationService } from '@ci/domains/personalization';
 import type { PythonFunctionService } from '@ci/domains/python-functions';
@@ -208,8 +212,37 @@ describe('SmartRotationListener', () => {
       const flattened = sql.replace(/\s+/g, ' ');
 
       expect(flattened).toContain(
-        'ORDER BY a.last_attempt_at ASC NULLS FIRST, q.created_at ASC, q.question_id ASC',
+        `ORDER BY a.last_attempt_at ASC NULLS FIRST, ${QUESTION_ROTATION_ORDER_SQL.replace(/\s+/g, ' ').trim()} LIMIT 1`,
       );
+    });
+
+    // The same rotation order as QuestionService.findUnansweredByUserId, taken
+    // from the one shared definition. This copy used to carry its own: no tier
+    // rank, and a question_id tiebreak that is a different shuffle on every
+    // appliance, because the seeded catalogue has random v4 ids and one
+    // created_at. The round-robin itself is proved against a real Postgres in
+    // SmartRotationListener.answerInfer.integration.spec.ts.
+    it('takes untried questions in the shared catalogue rotation order, joined from the shared ranks', async () => {
+      const eventService = { send: jest.fn() } as unknown as EventService;
+      const dataSource = { query: jest.fn().mockResolvedValue([{ id: 'q-1' }]) };
+
+      const listener = buildListener({ eventService, dataSource });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'answer_infer' });
+
+      const [sql] = dataSource.query.mock.calls[0] as [string];
+      const flattened = sql.replace(/\s+/g, ' ');
+
+      expect(flattened).toContain(`rotation AS (${QUESTION_ROTATION_RANK_SQL.replace(/\s+/g, ' ')})`);
+      expect(flattened).toContain('LEFT JOIN rotation qr ON qr.question_id = q.question_id');
+
+      const order = flattened.slice(flattened.indexOf('ORDER BY a.last_attempt_at'));
+
+      expect(order).toMatch(/CASE q\.answer_tier/);
+      expect(order.search(/CASE q\.answer_tier/)).toBeLessThan(order.indexOf('q.created_at ASC'));
+      // The uuid may only settle rows that agree on every other term.
+      expect(order.indexOf('q.question_id ASC')).toBeGreaterThan(order.indexOf('qr.category_round ASC'));
+      expect(order).toMatch(/q\.question_id ASC LIMIT 1/);
     });
 
     it('reads the attempt history from both the live and the archived pg-boss job rows', async () => {

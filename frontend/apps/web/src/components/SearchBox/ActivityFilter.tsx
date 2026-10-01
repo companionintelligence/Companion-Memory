@@ -11,7 +11,7 @@ import {
   writeCsvFilterParam,
 } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 
-import { FilterValuePicker } from './FilterValuePicker';
+import { FilterValuePicker, type FilterValuePickerProps } from './FilterValuePicker';
 
 // "Activity" — the event-type dimension (visited, messaged, called, ate,
 // traveled, purchased, ...), written to `?eventTypes=`. Populated from the
@@ -38,9 +38,11 @@ interface Props {
   modal?: boolean;
   /** Dimension name on the trigger ("Activity: all"). */
   label?: string;
+  /** Opens the picker from the caller's own element (the phone filter sheet's row). */
+  renderTrigger?: FilterValuePickerProps['renderTrigger'];
 }
 
-export function ActivityFilter({ modal = true, label = 'Activity' }: Props) {
+export function ActivityFilter({ modal = true, label = 'Activity', renderTrigger }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [open, setOpen] = useState(false);
 
@@ -81,6 +83,7 @@ export function ActivityFilter({ modal = true, label = 'Activity' }: Props) {
       searchPlaceholder="Search activities…"
       emptyText="No activities match"
       unknownValueHint="No event has this activity type, so this filter matches nothing."
+      renderTrigger={renderTrigger}
     />
   );
 }

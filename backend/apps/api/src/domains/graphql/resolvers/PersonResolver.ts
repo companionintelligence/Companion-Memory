@@ -5,7 +5,12 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { JobControlStore } from '@ci/common/job-controls';
 import { MaxArraySizePipe } from '@ci/common/pipes';
-import { EntityIdentifierService, type IdentifierKind } from '@ci/domains/graph';
+import {
+  EntityIdentifierService,
+  hasPhoneExtension,
+  type IdentifierKind,
+  unusableIdentifiers,
+} from '@ci/domains/graph';
 import { CreatePersonPayload } from '@ci/domains/graphql/types/CreatePersonPayload';
 import { DeleteByIdInput } from '@ci/domains/graphql/types/DeleteByIdInput';
 import { DeleteByIdPayload } from '@ci/domains/graphql/types/DeleteByIdPayload';
@@ -57,7 +62,10 @@ import { Paginator } from '../utils/Paginator';
 import {
   contactMethodsFromPersonProperties,
   contactsToReconcile,
+  droppedContactsPatch,
   mergePersonIdentifiers,
+  removedContactPatch,
+  unusableToSurface,
 } from '../utils/personContactMethods';
 
 /** How long the review-queue query may spend folding deterministic pairs before it answers. */
@@ -156,6 +164,74 @@ function addressPropertiesPatch(addresses: PersonAddressInput[]): Record<string,
 type ContactKind = Extract<IdentifierKind, 'email' | 'phone'>;
 
 const CONTACT_KINDS: ContactKind[] = ['email', 'phone'];
+
+/**
+ * Why a contact value was refused. `extension` is a real number that cannot
+ * identify anybody, so it is worth keeping somewhere else; `unusable` is not a
+ * number (or address) at all.
+ */
+type RefusedContactReason = 'extension' | 'unusable';
+
+/** `"a"`, `"a" and "b"`, `"a", "b" and "c"`. */
+function quotedList(values: readonly string[]): string {
+  const quoted = values.map((value) => `"${value}"`);
+
+  return quoted.length <= 1
+    ? quoted.join('')
+    : `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`;
+}
+
+/**
+ * The 400 for contact values the shared rule stores nothing for.
+ *
+ * An extension gets its own message because the number itself is fine: it just
+ * cannot identify anybody. Its last ten digits would run the office line and
+ * the extension together into someone else's number, and the main line alone is
+ * shared by everyone at that office.
+ *
+ * `details.refusedContacts` names each value exactly as it was sent, label
+ * included, so the person form can point at the row — and offer to move an
+ * extension number into the notes — instead of only printing the sentence. The
+ * label matters because relabelling a number the record holds is refused too
+ * (see unusableToSurface): once the user puts the label back, the row is no
+ * longer the one refused. `formatError` passes `details` through as
+ * `extensions.details`.
+ */
+function refusedContactsException(
+  refused: ReadonlyArray<{ kind: IdentifierKind; value: string; label?: string | null }>,
+): BadRequestException {
+  const refusedContacts = refused.map(({ kind, value, label }) => ({
+    kind,
+    value,
+    label: label?.trim() || null,
+    reason: (kind === 'phone' && hasPhoneExtension(value) ? 'extension' : 'unusable') as RefusedContactReason,
+  }));
+
+  const withExtension = refusedContacts
+    .filter((entry) => entry.reason === 'extension')
+    .map((entry) => entry.value);
+  const sentences: string[] = [];
+
+  if (withExtension.length === 1) {
+    sentences.push(
+      `${quotedList(withExtension)} includes an extension, so it can't be used to match this person to ` +
+        'calls and messages. Keep it in a note instead.',
+    );
+  } else if (withExtension.length > 1) {
+    sentences.push(
+      `${quotedList(withExtension)} include an extension, so they can't be used to match this person to ` +
+        'calls and messages. Keep them in a note instead.',
+    );
+  }
+
+  for (const entry of refusedContacts) {
+    if (entry.reason === 'unusable') {
+      sentences.push(`"${entry.value}" does not normalize to a usable ${entry.kind}.`);
+    }
+  }
+
+  return new BadRequestException({ message: sentences.join(' '), details: { refusedContacts } });
+}
 
 function parseContactKind(raw: string): ContactKind {
   if (raw !== 'email' && raw !== 'phone') {
@@ -300,7 +376,10 @@ export class PersonResolver {
     }
 
     // Register the initial contact methods so the new person resolves in
-    // people-linking immediately (non-fatal, same as ingest).
+    // people-linking immediately (non-fatal, same as ingest). What it reports
+    // `unusable` — a phone carrying an extension — is not lost, unlike in
+    // updatePerson: `properties.phones` above keeps every number as typed, and
+    // that is where the Details card shows it from, inert for matching.
     if (contacts.length > 0) {
       await this.entityIdentifierService
         .replaceForEntity(serviceContext.userId, entity.id, ['email', 'phone'], contacts)
@@ -355,7 +434,8 @@ export class PersonResolver {
   // contacts list than what's stored permanently drops the omitted email/phone identifiers, with no
   // restore path. This is the same hard-delete removePersonIdentifier is declared destructive for,
   // reachable through a mutation named like an ordinary update — flagged as the audit's own example
-  // of the bug class this file exists to close.
+  // of the bug class this file exists to close. The omitted values also leave the person's own
+  // email/emails/phone/phones properties (droppedContactsPatch), equally without a restore path.
   @GraphqlPrivacy({ access: 'delete', destructive: true })
   async updatePerson(
     @Context() context: RequestContext,
@@ -375,20 +455,41 @@ export class PersonResolver {
         return { success: false };
       }
 
+      const submitted = input.contacts.map((contact) => ({
+        kind: parseContactKind(contact.kind),
+        value: contact.value,
+        label: contact.label,
+        isPrimary: contact.isPrimary,
+      }));
+
+      // What the user removed: a row the form showed and no longer sends. Read
+      // from the WHOLE submission, never from a list narrowed for the index —
+      // one that leaves out rows the user kept without asserting them (an
+      // untouched property-only contact) would call every such row removed.
+      const dropped = droppedContactsPatch(owned, submitted);
+
+      // A value the shared rule stores nothing for is refused here, BEFORE
+      // anything is written. Contacts are written only to the index, so saving
+      // around it would lose it — and replaceForEntity has already dropped
+      // whatever it replaced by the time it reports: edit a number to add its
+      // extension, cancel on the error, and the number would be gone. Values
+      // the row itself states are let through (see unusableToSurface) — they
+      // arrive with every save. Checked on the whole submission: the index
+      // filter below cannot key an unusable value, so it would not drop one.
+      const refused = unusableToSurface(unusableIdentifiers(CONTACT_KINDS, submitted), owned);
+      if (refused.length > 0) {
+        throw refusedContactsException(refused);
+      }
+
       // The form re-submits every contact it was seeded with, property-only
       // ones included. Only what the user asserted reaches the index: see
       // contactsToReconcile. The conflict check has to see that same list: a
       // value filtered out of it is never written, so it cannot conflict.
       const indexed = await this.entityIdentifierService.listForEntities(serviceContext.userId, [id]);
-      const contacts = contactsToReconcile(
-        input.contacts.map((contact) => ({
-          kind: parseContactKind(contact.kind),
-          value: contact.value,
-          label: contact.label,
-          isPrimary: contact.isPrimary,
-        })),
-        { indexed: indexed.get(id) ?? [], stated: contactMethodsFromPersonProperties(owned) },
-      );
+      const contacts = contactsToReconcile(submitted, {
+        indexed: indexed.get(id) ?? [],
+        stated: contactMethodsFromPersonProperties(owned),
+      });
 
       // A value another person already holds fails the whole update HERE,
       // before anything is written. replaceForEntity only meets a conflict at
@@ -412,6 +513,14 @@ export class PersonResolver {
         CONTACT_KINDS,
         contacts,
       );
+
+      // The row keeps its own copies of contact methods, and `identifiers`
+      // shows them: a contact the form dropped has to leave them too, or it is
+      // back on the next read. Written before a conflict is reported, because
+      // the index half of this edit already was.
+      if (Object.keys(dropped).length > 0) {
+        await this.personService.patch(serviceContext, id, { propertiesPatch: dropped });
+      }
 
       this.personIdentifiersLoader.clear(serviceContext, id);
 
@@ -555,7 +664,7 @@ export class PersonResolver {
     );
 
     if (owningEntityId == null) {
-      throw new BadRequestException(`"${input.value}" does not normalize to a usable ${kind}`);
+      throw refusedContactsException([{ kind, value: input.value, label: input.label }]);
     }
 
     if (owningEntityId !== personId) {
@@ -581,7 +690,8 @@ export class PersonResolver {
   // ci.entity_identifiers, a table with no soft-delete column. addPersonIdentifier restores the
   // row only while the (kind, value) tuple is unclaimed, and CommunicationParticipantLinkListener
   // mints a stub Person that claims it on the next inbound communication — after which the only
-  // repair is mergePeople, which is itself destructive and has no unmerge.
+  // repair is mergePeople, which is itself destructive and has no unmerge. An email or phone also
+  // leaves the person's own email/emails/phone/phones properties (removedContactPatch).
   @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removePersonIdentifier(
     @Context() context: RequestContext,
@@ -598,6 +708,16 @@ export class PersonResolver {
     }
 
     await this.entityIdentifierService.removeForEntity(serviceContext.userId, personId, kind, input.value);
+
+    // The person's own copy too, or `identifiers` keeps showing it and the
+    // identifier backfill re-indexes it. See droppedContactsPatch.
+    if (kind !== 'name') {
+      const person = await this.personService.findById(serviceContext, personId);
+      const removed = person ? removedContactPatch(person, kind, input.value) : {};
+      if (Object.keys(removed).length > 0) {
+        await this.personService.patch(serviceContext, personId, { propertiesPatch: removed });
+      }
+    }
 
     this.personIdentifiersLoader.clear(serviceContext, personId);
 

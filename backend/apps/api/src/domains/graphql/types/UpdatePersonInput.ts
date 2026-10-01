@@ -66,9 +66,17 @@ export class UpdatePersonInput {
    * relabels, and DROPS what is missing. Omit to leave contact methods
    * untouched; send an empty list to clear them.
    *
+   * A dropped value also leaves the person's own `email`/`emails`/`phone`/
+   * `phones` properties, which the contact list is shown from too. An import's
+   * typed record of a contact card (`Emails`, `Phones`, ...) is never edited.
+   *
    * A value another person already holds fails the whole update (CONFLICT)
    * before anything is written, the other fields included: the fix is a merge,
-   * not a re-point.
+   * not a re-point. A value that cannot be stored as an identifier — a phone
+   * number with an extension, or a "phone" with no digits — fails the same
+   * way (BAD_USER_INPUT; each value and its label are listed in
+   * `extensions.details.refusedContacts`), unless it is one this person's
+   * record already holds, sent back unchanged: the same text and label.
    */
   @Field(() => [PersonContactInput], { nullable: true })
   contacts?: PersonContactInput[];

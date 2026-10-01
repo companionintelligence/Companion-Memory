@@ -82,6 +82,15 @@ describe('savedKnowledgeWrapUp', () => {
     expect(savedKnowledgeWrapUp(messages)).toBe('Saved.');
   });
 
+  it('counts an update as a save, same as a create', () => {
+    // memory.remember reports an entity.create that reused an existing id as an
+    // update, and a plain entity.update is one — neither may leave the user
+    // looking at silence.
+    for (const summary of [{ updatedNodes: 1 }, { createdNodes: 0, updatedRelationships: 1 }]) {
+      expect(savedKnowledgeWrapUp([assistantToolCall(), toolMsg(summary)])).toBe('Saved.');
+    }
+  });
+
   it('sums across MULTIPLE tool results in the same turn', () => {
     const messages: OllamaMessage[] = [
       assistantToolCall(),

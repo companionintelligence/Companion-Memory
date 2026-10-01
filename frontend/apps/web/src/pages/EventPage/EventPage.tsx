@@ -16,6 +16,7 @@ import { PageContent } from '@/components/layout';
 import { Map } from '@/components/Map';
 import { Tag } from '@/components/Tag';
 import { gql } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { namedChatContext } from '@/lib/agentChat';
 import {
   EntityMedia,
@@ -100,6 +101,7 @@ export function EventPage() {
   const { id } = useParams<{ id: string }>();
 
   const navigate = useNavigate();
+  const fmt = useDateTimeFormat();
 
   const { data, loading, error, refetch } = useQuery(GET_EVENT, {
     variables: {
@@ -176,8 +178,8 @@ export function EventPage() {
               onEditModeChange={setEditMode}
               fields={[{ key: 'title', label: 'Title', value: event.title ?? '' }]}
               metaItems={[
-                { label: 'Starts', value: formatEntityTimestamp(event.startTime) },
-                { label: 'Ends', value: formatEntityTimestamp(event.endTime) },
+                { label: 'Starts', value: formatEntityTimestamp(event.startTime, fmt) },
+                { label: 'Ends', value: formatEntityTimestamp(event.endTime, fmt) },
                 { label: 'Type', value: formatEntityLabel(event.eventType) ?? 'Event' },
                 { label: 'Source', value: formatEntityLabel(event.sourceSystem) },
               ]}

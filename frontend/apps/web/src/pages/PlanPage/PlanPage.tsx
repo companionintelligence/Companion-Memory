@@ -11,6 +11,7 @@ import { resolveTimeZone } from '@/components/HorizonGrid/zonedClock';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
 import { useCurrentUser } from '@/hooks';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import { EditTaskModal, UPDATE_TASK, type EditableTask } from './EditTaskModal';
 import { NewTaskForm } from './NewTaskForm';
@@ -85,6 +86,7 @@ export function PlanPage() {
    * draws in. The browser zone is only the fallback. See `pendingRationale`.
    */
   const timeZone = resolveTimeZone(user?.timezone);
+  const fmt = useDateTimeFormat();
 
   const { nodes, sections, pendingByTask, loading, error, refetch } = usePlanTasks();
 
@@ -336,7 +338,7 @@ export function PlanPage() {
         onSchedule={handleSchedule}
         onReschedule={handleReschedule}
         pendingChangeId={pending?.id}
-        pendingRationale={pending ? describePendingChange(pending, timeZone) : null}
+        pendingRationale={pending ? describePendingChange(pending, timeZone, fmt) : null}
         pendingKind={pending?.kind}
         onAcceptPending={(changeId) => void acceptPending({ variables: { id: changeId } }).then(refresh)}
         onDeclinePending={(changeId) => void declinePending({ variables: { id: changeId } }).then(refresh)}

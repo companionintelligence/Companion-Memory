@@ -335,7 +335,8 @@ export const ConfigSchema = z.object({
   }),
   // OpenAI-compatible chat backend (Hub-injected LLM_* env, or Settings → Model).
   // When the chat port differs from Ollama's, the NestJS chat path speaks OpenAI
-  // protocol (vLLM, etc.); embeddings continue to use OLLAMA_HOST / OLLAMA_EMBED_HOST.
+  // protocol (vLLM, etc.). Embeddings follow it when it serves the embedder, else
+  // OLLAMA_HOST; LLM_EMBEDDING_API_BASE pins them (EmbeddingGenerationService.resolveTarget).
   llm: z
     .object({
       apiBase: z.string().optional(),
@@ -512,16 +513,41 @@ export const ConfigSchema = z.object({
     restUrl: z.string(),
   }),
   // Embedding/indexing pipeline knobs. These let a deployment point the embedder
-  // at a GPU/alternate-host Ollama and tune throughput for bulk imports without
-  // code changes. `host` defaults to services.ollama.host (resolved below) so the
-  // embedder follows the main Ollama host unless OLLAMA_EMBED_HOST overrides it.
+  // at another engine or host and tune throughput for bulk imports without code
+  // changes. `apiBase` defaults to services.ollama.host (resolved below) so the
+  // embedder follows the main Ollama host unless LLM_EMBEDDING_API_BASE pins it.
   embedding: z.object({
-    /** Ollama host used for embedding calls. Falls back to services.ollama.host. */
-    host: z.string().optional(),
+    /**
+     * The embedding endpoint pinned for this process (LLM_EMBEDDING_API_BASE),
+     * the sibling of LLM_API_BASE: an OpenAI-style base such as
+     * `http://host:13305/api/v1`, or a bare host. Stored as the root — a trailing
+     * `/v1` is dropped — because the embedder speaks the native `/api/embed`
+     * there first and `/v1/embeddings` when that route is missing. Unset, the
+     * embedder follows the chat backend when that serves it, else the Ollama
+     * host — see EMBED_HOST_EXPLICITLY_CONFIGURED and
+     * EmbeddingGenerationService.resolveTarget.
+     */
+    apiBase: z.string().optional(),
+    /**
+     * OLLAMA_EMBED_HOST, the name this setting had while embeddings were
+     * Ollama-only. Read as a fallback for `apiBase`, with a warning, so an
+     * older CI-Hub manifest or `.env` keeps working; remove once nothing sets it.
+     */
+    legacyHost: z.string().optional(),
     /** Embedding model name (must match the pgvector column dimensionality). */
     model: z.string().default('nomic-embed-text'),
     /** Max texts sent to Ollama's /api/embed in a single HTTP request. */
     batchSize: z.coerce.number().int().positive().default(32),
+    /**
+     * Longest text sent to the embedder, in characters; anything past it is
+     * cut. Ollama's `/api/embed` truncated to the model's window itself (2048
+     * tokens for nomic-embed-text as Ollama runs it), and the OpenAI dialect
+     * has no such option — llama-server refuses an over-long input outright
+     * (see `isInputTooLong`). 8,000 characters is about 2,000 tokens of prose,
+     * the same bound the Summary sidecar applies (`text[:8000]`), and past
+     * nomic's 2048-token training window the vectors get worse, not better.
+     */
+    maxInputChars: z.coerce.number().int().positive().default(8000),
     /** Max concurrent in-flight Ollama embedding HTTP requests. */
     concurrency: z.coerce.number().int().positive().default(12),
     /**
@@ -1462,14 +1488,44 @@ function llmUrlForThisRuntime(label: string, value: string | undefined): string 
 
 parsed.services.ollama.host = llmUrlForThisRuntime('OLLAMA_HOST', parsed.services.ollama.host);
 parsed.llm.apiBase = llmUrlForThisRuntime('LLM_API_BASE', parsed.llm.apiBase);
-parsed.embedding.host = llmUrlForThisRuntime('OLLAMA_EMBED_HOST', parsed.embedding.host);
 
-// The embedder follows the main Ollama host unless an explicit embedding host is
-// configured (OLLAMA_EMBED_HOST), so a GPU/alternate-host Ollama can be pointed
-// at for embeddings only without touching the prompt/inference host. Corrected
-// above first, so an inherited host arrives already right for this runtime.
-if (!parsed.embedding.host) {
-  parsed.embedding.host = parsed.services.ollama.host;
+// Captured BEFORE the default below fills it in: whether an operator (or the
+// Hub installer) pinned the embedding endpoint — LLM_EMBEDDING_API_BASE, or its
+// old name OLLAMA_EMBED_HOST — as distinct from the embedder following the chat
+// backend or the Ollama host. `EmbeddingGenerationService` embeds where it is
+// told when this is true, and otherwise on the chat backend when that backend
+// serves the embedder (see `resolveTarget` there). Same `config.has` reasoning
+// as UTILITY_MODEL_EXPLICITLY_CONFIGURED below: default.json carries neither
+// key, so only the env mapping can put one there.
+export const EMBED_HOST_EXPLICITLY_CONFIGURED =
+  (config.has('embedding.apiBase') && Boolean(config.get('embedding.apiBase'))) ||
+  (config.has('embedding.legacyHost') && Boolean(config.get('embedding.legacyHost')));
+
+if (!parsed.embedding.apiBase?.trim() && parsed.embedding.legacyHost?.trim()) {
+  console.warn(
+    '[config] OLLAMA_EMBED_HOST is deprecated; set LLM_EMBEDDING_API_BASE instead (same value, ' +
+      'any engine). Using it for this process.',
+  );
+  parsed.embedding.apiBase = parsed.embedding.legacyHost;
+}
+
+// Stored as the root the native `/api/embed` lives under: `.../v1` and
+// `.../api/v1` (Lemonade) both mean "this server", and the embedder adds the
+// route it needs. Corrected for this runtime first, like the chat base, so an
+// inherited value arrives already right.
+parsed.embedding.apiBase = llmUrlForThisRuntime(
+  'LLM_EMBEDDING_API_BASE',
+  parsed.embedding.apiBase?.trim() || undefined,
+)?.replace(/\/+$/, '');
+if (parsed.embedding.apiBase?.endsWith('/v1')) {
+  parsed.embedding.apiBase = parsed.embedding.apiBase.slice(0, -'/v1'.length);
+}
+
+// The embedder follows the main Ollama host unless an embedding endpoint is
+// pinned, so a GPU/alternate-host engine can be pointed at for embeddings only
+// without touching the chat endpoint.
+if (!parsed.embedding.apiBase) {
+  parsed.embedding.apiBase = parsed.services.ollama.host;
 }
 
 // CI-Hub names the embedder it installed in LLM_DEFAULT_EMBEDDING_MODEL (its `embedding_model` handout,

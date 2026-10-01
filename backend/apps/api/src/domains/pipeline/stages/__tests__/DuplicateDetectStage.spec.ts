@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { DataSource, type QueryRunner } from 'typeorm';
 
-import { normalizePhone } from '@ci/domains/graph';
+import { hasPhoneExtension, normalizePhone } from '@ci/domains/graph';
 import {
   PHONE_MAX_HOLDERS,
   PROFILE_URL_MAX_HOLDERS,
@@ -1045,6 +1045,22 @@ describe('phone parity with the shared normalisers', () => {
   it.each(inputs)('keeps normalizePhone’s last ten digits for %p', (raw) => {
     // The join key `properties.phones` and `identifier_claims.value_normalized`
     // carry; a drift here would make holders of one number disagree on its key.
+    if (hasPhoneExtension(raw)) {
+      // The one deliberate exception. The join key REFUSES an extension now
+      // (it used to keep the last ten digits of line + extension), but `l10`
+      // still carries that truncation: it is the key the old rule wrote into
+      // `phones`, and a record that still holds one — a merge survivor, an
+      // import whose typed number was never kept — must meet its own refusal on
+      // the same line, or the truncation reads as an inferred +1 number.
+      expect(normalizePhone(raw)).toBeNull();
+      expect(parsePhone(raw, 'NANP')).toMatchObject({
+        status: 'extension',
+        l10: raw.replace(/\D/g, '').slice(-10),
+      });
+
+      return;
+    }
+
     expect(parsePhone(raw, 'NANP').l10).toBe(normalizePhone(raw) ?? '');
   });
 

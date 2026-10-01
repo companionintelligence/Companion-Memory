@@ -11,7 +11,9 @@ import { ChatAbout, ChatAboutSheet } from '@/components/ChatWithAgent';
 import { Map } from '@/components/Map';
 import { type MarkerVariant } from '@/components/Map/Marker';
 import { gql, useFragment } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { namedChatContext, type AgentChatContext } from '@/lib/agentChat';
+import { type DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { entityToAgentChatContext } from '@/lib/entityToAgentChatContext';
 
 import { useEntityService, type EntityItem } from '../../MemoryPage/useEntityService';
@@ -131,9 +133,9 @@ type Pin = {
   entity: EntityItem | null;
 };
 
-function pinChatContext(pin: Pin): AgentChatContext {
+function pinChatContext(pin: Pin, fmt: DateTimeFormatter): AgentChatContext {
   if (pin.entity) {
-    return entityToAgentChatContext(pin.entity);
+    return entityToAgentChatContext(pin.entity, fmt);
   }
 
   return namedChatContext({
@@ -198,6 +200,7 @@ function entityTime(entity: EntityItem): number {
 /** Pins from the map's own `mapPins` read — the signed-in user's whole located set. */
 function useMapPins({ skip }: { skip: boolean }) {
   const [{ searchVariables }] = useEntityService();
+  const fmt = useDateTimeFormat();
   // Paging and the explorer-only knobs (sort order, includeFiles, hasLocation —
   // which mapPins forces on) are dropped: the map asks for a set, not a page.
   const {
@@ -251,14 +254,14 @@ function useMapPins({ skip }: { skip: boolean }) {
           id: pin.id,
           coords: { lat: pin.latitude, lng: pin.longitude },
           title: pin.title || 'Untitled event',
-          timeLabel: dated ? formatEventTimeRange(pin.startTime, pin.endTime) : null,
+          timeLabel: dated ? formatEventTimeRange(pin.startTime, pin.endTime, fmt) : null,
           sortTime: dated ? new Date(pin.startTime as string).getTime() : 0,
           variant: 'event' as MarkerVariant,
           entity: null,
         };
       })
       .sort((a, b) => a.sortTime - b.sortTime);
-  }, [data]);
+  }, [data, fmt]);
 
   const refetchPins = useCallback(() => {
     void refetch();
@@ -282,6 +285,7 @@ function useMapPins({ skip }: { skip: boolean }) {
  */
 function useFeedPins() {
   const [{ data, loading, error }] = useEntityService();
+  const fmt = useDateTimeFormat();
 
   const pins = useMemo<Pin[]>(() => {
     return data
@@ -293,13 +297,13 @@ function useFeedPins() {
         id: entity.id,
         coords,
         title: clusterItemTitle(entity),
-        timeLabel: clusterItemTime(entity),
+        timeLabel: clusterItemTime(entity, fmt),
         sortTime: entityTime(entity),
         variant: markerVariant(entity),
         entity,
       }))
       .sort((a, b) => a.sortTime - b.sortTime);
-  }, [data]);
+  }, [data, fmt]);
 
   return { pins, loading, error: error != null };
 }
@@ -408,13 +412,13 @@ function clusterItemTitle(entity: EntityItem): string {
   );
 }
 
-function clusterItemTime(entity: EntityItem): string | null {
+function clusterItemTime(entity: EntityItem, fmt: DateTimeFormatter): string | null {
   const item = entity as ClusterListEntity;
 
   if (entity.__typename === 'EventType') {
     const start = item.startTime ?? item.bucketStartTime;
 
-    return start ? formatEventTimeRange(start, item.endTime) : null;
+    return start ? formatEventTimeRange(start, item.endTime, fmt) : null;
   }
 
   const raw = item.time ?? item.bucketTime;
@@ -427,12 +431,16 @@ function clusterItemTime(entity: EntityItem): string | null {
 
   return isNaN(time.getTime())
     ? null
-    : time.toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-      });
+    : fmt.dateTime(
+        time,
+        {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        },
+        'en-US',
+      );
 }
 
 function ClusterPopupContent({
@@ -444,11 +452,13 @@ function ClusterPopupContent({
   onSelect: (pin: Pin) => void;
   onZoom: () => void;
 }) {
+  const fmt = useDateTimeFormat();
+
   return (
     <div className="w-72 overflow-hidden text-card-foreground" onClick={(event) => event.stopPropagation()}>
       <div className="max-h-72 overflow-y-auto py-2">
         {cluster.items.map((pin) => (
-          <ChatAbout key={pin.id} context={pinChatContext(pin)}>
+          <ChatAbout key={pin.id} context={pinChatContext(pin, fmt)}>
             <button
               type="button"
               className="flex w-full items-start gap-2 px-3 py-2 text-left text-card-foreground transition-colors duration-150 hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
@@ -562,6 +572,7 @@ function ClusteredMarkers({
   onHoverPin?: (pin: Pin | null) => void;
 }) {
   const map = useLeafletMap();
+  const fmt = useDateTimeFormat();
   const [chatPin, setChatPin] = useState<Pin | null>(null);
   // One state for both, because clustering depends on both: zoom decides the
   // projection, the viewport decides which pins are candidates at all.
@@ -654,7 +665,7 @@ function ClusteredMarkers({
             setChatPin(null);
           }
         }}
-        context={chatPin ? pinChatContext(chatPin) : { title: 'This memory' }}
+        context={chatPin ? pinChatContext(chatPin, fmt) : { title: 'This memory' }}
       />
     </>
   );

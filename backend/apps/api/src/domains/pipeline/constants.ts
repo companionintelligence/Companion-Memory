@@ -243,6 +243,11 @@ export const STAGE_IDS = {
    * pair this stage exists to find. Reading `ci.entities.properties`
    * directly (the same JSONB `PersonDuplicateService`'s ad-hoc computation
    * already reaches into) keeps every entity's own claim, lossy or not.
+   *
+   * The claims are a COPY of the record, so they are kept in step with it:
+   * a value the record no longer yields is retracted in the same statement as
+   * the upsert, and a Person whose row changes after its decision is re-opened
+   * (`source.changedAtColumn`) rather than waiting for a version bump.
    */
   ENRICH_PERSON_SELF_CLAIM: 'enrich.person_self_claim',
 
@@ -555,6 +560,33 @@ export const MAX_SWEEP_HOPS = 10_000;
  * noticing (so a crash costs one lease period, not a support ticket).
  */
 export const CLAIM_LEASE_SECONDS = 15 * 60;
+
+/**
+ * How far BEFORE a decision a source row's `changedAtColumn` may fall and
+ * still re-open it (`PipelineStateService.reopenChangedSources`).
+ *
+ * Not zero, because the two timestamps are not the moments they look like.
+ * A writer stamps `updated_at = now()`, and `now()` is when its TRANSACTION
+ * began, not when it committed; the ledger row's `updated_at` is when the
+ * slice RECORDED its answer, not when it read the source. A slice can read the
+ * old row, the writer commit, and the slice then complete — leaving a change
+ * stamped before the decision that the decision never saw. The gap is at most
+ * the writer's transaction plus the slice's own run, and a slice may run for
+ * up to {@link CLAIM_LEASE_SECONDS} before the ledger considers it dead.
+ *
+ * The cost of the margin is one extra run for a row decided within it of a
+ * change: the next check finds it again, and the re-run's decision lands long
+ * after the change, so it is not found a third time.
+ */
+export const SOURCE_CHANGE_GRACE_SECONDS = CLAIM_LEASE_SECONDS;
+
+/**
+ * Ceiling on rows `reopenChangedSources` re-opens per leg per call. Same size
+ * and reasoning as `IDENTIFIER_ARRIVAL_BATCH`: the UPDATE is milliseconds, the
+ * sweep that follows is paced by the dispatcher, and a change larger than this
+ * (a bulk re-import) is simply finished on the next due tick.
+ */
+export const SOURCE_CHANGE_REOPEN_BATCH = 20_000;
 
 /**
  * Lease held on a `ci.pipeline_shards` row by the worker draining it.

@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
+// The memory domain's public barrel — `no-cross-domain-internals` allows only
+// that (and graph already depends on memory, so this adds no new edge).
+import { parsePhone } from '@ci/domains/memory';
+
 import {
   PHONE_EXTENSION_PATTERN,
   classifyParticipant,
@@ -96,6 +100,117 @@ describe('normalizePhone', () => {
     expect(normalizePhone('not-a-number')).toBeNull();
     expect(normalizePhone('')).toBeNull();
     expect(normalizePhone(null)).toBeNull();
+  });
+
+  // The shape the defect was found in: an Apple Contacts export writes an office
+  // line's extension as `TEL;type=pref:(212) 555-0147\;229`, and the last ten
+  // digits of main line + extension are a DIFFERENT, well-formed number. These
+  // fixtures are the same shape with invented 555-01XX numbers.
+  it.each([
+    ['(212) 555-0147;229', '5550147229'],
+    ['+1 (212) 555-0147;229', '5550147229'],
+    ['212-555-0147 x229', '5550147229'],
+    ['212.555.0147 X 229', '5550147229'],
+    ['2125550147x229', '5550147229'],
+    ['212-555-0147 ext 229', '5550147229'],
+    ['212-555-0147 ext. 229', '5550147229'],
+    ['212-555-0147 Ext:229', '5550147229'],
+    ['212-555-0147 extn 229', '5550147229'],
+    ['212-555-0147 extension 229', '5550147229'],
+    ['(212) 555-0147, x2290', '5501472290'],
+    ['212-555-0147,229', '5550147229'],
+    ['212-555-0147#229', '5550147229'],
+    ['tel:+1-212-555-0147;ext=229', '5550147229'],
+    ['+12125550147p229', '5550147229'],
+    ['+1 212 555 0147 w 229', '5550147229'],
+  ])('refuses %p rather than keying it as the fabricated %p', (raw, fabricated) => {
+    expect(normalizePhone(raw)).toBeNull();
+    expect(normalizeIdentifier('phone', raw)).toBeNull();
+    // The number the old rule would have minted, spelled out so the failure a
+    // regression causes reads as what it is.
+    expect(raw.replace(/\D/g, '').slice(-10)).toBe(fabricated);
+  });
+
+  it('is still a fixed point, so a stored key re-normalizes to itself', () => {
+    for (const raw of ['+1 (415) 555-0100', '5550100', '415.555.0100']) {
+      const once = normalizePhone(raw);
+
+      expect(normalizePhone(once)).toBe(once);
+    }
+  });
+});
+
+describe('hasPhoneExtension', () => {
+  it.each([
+    '(212) 555-0147;229',
+    '212-555-0147 x229',
+    '2125550147x229',
+    '212-555-0147 EXT. 229',
+    '212-555-0147 extension 229',
+    '212-555-0147,229',
+    '212-555-0147#229',
+    '212-555-0147p229',
+    '212-555-0147 w 229',
+    'tel:+1-212-555-0147;ext=229',
+  ])('flags %p', (raw) => {
+    expect(hasPhoneExtension(raw)).toBe(true);
+  });
+
+  it.each([
+    '+1 (212) 555-0147',
+    '212.555.0147',
+    '0044 20 7946 0958',
+    'tel:+12125550147',
+    // Letters that are not an extension marker: a label, and a vanity word.
+    'Fax 212-555-0147',
+    'Box 12',
+    'Telex 5550147',
+    '1-800-FLOWERS',
+    '',
+  ])('does not flag %p', (raw) => {
+    expect(hasPhoneExtension(raw)).toBe(false);
+  });
+
+  it('treats null and undefined as no extension', () => {
+    expect(hasPhoneExtension(null)).toBe(false);
+    expect(hasPhoneExtension(undefined)).toBe(false);
+  });
+
+  it('refuses at least everything the duplicate detector refuses as an extension', () => {
+    // `parsePhone` (memory/utils/phoneIdentity.ts) is the older parser and the
+    // one this rule was brought into line with. The reverse inclusion does not
+    // hold, by design: the detector ALSO refuses any letter, so it never needed
+    // to name `…0147x229` as an extension, and the join key does.
+    const forms = [
+      '(212) 555-0147;229',
+      '212-555-0147,229',
+      '212-555-0147#229',
+      '212-555-0147 x229',
+      '212-555-0147 ext. 229',
+      '212-555-0147 extension 229',
+    ];
+
+    for (const raw of forms) {
+      expect(parsePhone(raw, 'NANP').status).toBe('extension');
+      expect(hasPhoneExtension(raw)).toBe(true);
+    }
+  });
+
+  it('is restated verbatim in the migration that repaired the truncated keys', () => {
+    // The migration's `pg_temp.phone_has_extension` is this pattern under `~*`.
+    // A pattern edited here without the migration would leave the two disagreeing
+    // about which stored keys were truncations; a migration is immutable once
+    // applied, so the fix for a drift is a NEW migration, and this test is what
+    // says one is needed.
+    const migration = readFileSync(
+      path.join(
+        __dirname,
+        '../../../../db/postgres/migrations/20260930020117_refuse_phone_extension_join_keys.sql',
+      ),
+      'utf8',
+    );
+
+    expect(migration).toContain(`v ~* '${PHONE_EXTENSION_PATTERN}'`);
   });
 });
 

@@ -712,6 +712,38 @@ describe('a card with no phone or email is still a contact', () => {
     // a disjoint key space. Verified as 0 collisions on the live corpus too.
     expect(stagedNaturalKey(built.entity)).toBe('contact:5551110000');
   });
+
+  /**
+   * The Apple Contacts export writes an office line's extension after an
+   * ESCAPED semicolon. The parser unescapes it into the typed value, and the
+   * old join key then kept the last ten digits of line + extension —
+   * `contact:5550147229`, a stranger's number, as the card's natural key, its
+   * `properties.phones` and its identifier. Rows that shipped keep that key
+   * until their next import, where `legacyEntityIdentityKey` still computes the
+   * truncation and the push moves them onto exactly the keys these two tests
+   * pin; migration `20260930020117_refuse_phone_extension_join_keys.sql` removes
+   * everything else the fake reached in the meantime.
+   */
+  it('keys an office-line card with an email on the email, keeping the typed line', () => {
+    const built = buildContact(
+      contentLines(
+        'BEGIN:VCARD\nFN:Dana Quill\nTEL;type=pref:(212) 555-0147\\;229\nEMAIL:dana.quill@example.com\nEND:VCARD\n',
+      ),
+      'contacts.vcf',
+    )!;
+
+    expect(built.entity.metadata?.Phones).toEqual(['(212) 555-0147;229']);
+    expect(stagedNaturalKey(built.entity)).toBe('contact:dana.quill@example.com');
+  });
+
+  it('keys an office-line card with nothing else on its name', () => {
+    const built = buildContact(
+      contentLines('BEGIN:VCARD\nFN:Rae Holt\nTEL;TYPE=WORK:212-555-0148 x31\nEND:VCARD\n'),
+      'contacts.vcf',
+    )!;
+
+    expect(stagedNaturalKey(built.entity)).toBe('contact:rae holt');
+  });
 });
 
 describe('avatar_url from PHOTO', () => {

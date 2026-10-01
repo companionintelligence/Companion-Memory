@@ -3,15 +3,27 @@ import { Ollama } from 'ollama';
 import plimit, { type LimitFunction } from 'p-limit';
 
 import { LoggerService } from '@ci/common/logging';
-import config from '@ci/configuration';
+import config, { EMBED_HOST_EXPLICITLY_CONFIGURED } from '@ci/configuration';
+import { LlmEndpointService } from '@ci/domains/llm/services/LlmEndpointService';
 
 import { embedSkipReason } from '../embeddable';
+import { canonicalEmbedModel } from '../embedModelIdentity';
 
 interface PendingEmbedding {
   input: string;
   resolve: (vector: number[]) => void;
   reject: (error: unknown) => void;
 }
+
+/**
+ * Where a batch goes and in which dialect. `model` is the spelling THAT engine
+ * lists the embedder under (Lemonade lists the weights Ollama calls
+ * `nomic-embed-text` as `user.nomic-embed-text-v1.5-GGUF`), which is why it is
+ * part of the target rather than read from config at call time.
+ */
+export type EmbedTarget =
+  | { dialect: 'ollama'; host: string; model: string }
+  | { dialect: 'openai'; baseUrl: string; apiKey: string; model: string };
 
 /**
  * Per-call ceiling on one batched `/api/embed` request.
@@ -93,7 +105,16 @@ export const EMBED_TIMEOUT_MS = 270_000;
 export const EMBED_TIMEOUT_MESSAGE = `Ollama embed timed out after ${EMBED_TIMEOUT_MS}ms (ETIMEDOUT) and the request was aborted`;
 
 /**
- * Generates embedding vectors via Ollama's batched `/api/embed` endpoint.
+ * Generates embedding vectors, batched, on whichever engine serves the embedder.
+ *
+ * Two dialects (see {@link EmbedTarget} and {@link resolveTarget}):
+ *
+ *  - Ollama's native `/api/embed`, which Ollama, Lemonade and CI-Hub's pool all
+ *    serve. This is the path every measurement below was taken on.
+ *  - OpenAI's `/v1/embeddings`, which every OpenAI-compatible engine serves
+ *    (vLLM, llama.cpp, SGLang, Lemonade, Ollama's own `/v1`). Until 2026-09-30
+ *    this class spoke only the native dialect, so a CI-Server whose chat backend
+ *    was vLLM or llama.cpp — and had no Ollama beside it — embedded nothing.
  *
  * Two batching mechanisms work together:
  *
@@ -109,10 +130,11 @@ export const EMBED_TIMEOUT_MESSAGE = `Ollama embed timed out after ${EMBED_TIMEO
  *     without restructuring every listener, and is idempotent w.r.t. upserts (the
  *     callers still upsert per entity).
  *
- * Model and host are configurable (CI_EMBED_MODEL / OLLAMA_EMBED_HOST) so a
- * GPU/alternate-host Ollama can be targeted without code changes; concurrency
- * (CI_EMBED_CONCURRENCY) bounds in-flight HTTP requests, and
- * {@link EMBED_TIMEOUT_MS} bounds how long any one of them may take.
+ * The model is configurable (CI_EMBED_MODEL, or CI-Hub's handout), and an
+ * explicit LLM_EMBEDDING_API_BASE pins the endpoint; without one the embedder follows the
+ * chat backend when that backend serves it, else the Ollama host (see
+ * {@link resolveTarget}). Concurrency (CI_EMBED_CONCURRENCY) bounds in-flight
+ * HTTP requests, and {@link EMBED_TIMEOUT_MS} bounds how long any one may take.
  *
  * Note what a timeout costs the coalescing buffer: `flush()` rejects EVERY
  * buffered caller when the batch fails, so one slow call fails up to
@@ -123,11 +145,29 @@ export const EMBED_TIMEOUT_MESSAGE = `Ollama embed timed out after ${EMBED_TIMEO
  */
 @Injectable()
 export class EmbeddingGenerationService {
-  private readonly host = config.embedding.host ?? config.services.ollama.host;
-
   private readonly model = config.embedding.model;
 
+  /**
+   * The resolved target, memoised until the chat endpoint changes (keyed on the
+   * endpoint's identity in {@link resolveTarget}). Cleared, never replaced, on a
+   * `/api/embed` 404 so the next batch re-resolves in the OpenAI dialect.
+   */
+  private target: { key: string; value: EmbedTarget } | null = null;
+
+  /** Hosts whose `/api/embed` answered 404: they speak only the OpenAI dialect. */
+  private readonly nativeRouteMissing = new Set<string>();
+
   private readonly batchSize = config.embedding.batchSize;
+
+  private readonly maxInputChars = config.embedding.maxInputChars;
+
+  /**
+   * A tighter cap than `maxInputChars`, measured from the engine: the input
+   * length a batch was accepted at after one it refused as too long. Per
+   * target — cleared when the target changes — because the limit is the
+   * engine's (nomic on llama-server takes 2,048 tokens; Ollama truncates).
+   */
+  private learnedInputChars: number | null = null;
 
   private readonly coalesceWindowMs = config.embedding.coalesceWindowMs;
 
@@ -138,8 +178,108 @@ export class EmbeddingGenerationService {
 
   private flushTimer: NodeJS.Timeout | null = null;
 
-  constructor(private readonly logger: LoggerService) {
+  constructor(
+    private readonly logger: LoggerService,
+    private readonly endpoint: LlmEndpointService,
+  ) {
     this.logger.setContext(EmbeddingGenerationService.name);
+  }
+
+  /**
+   * Where the next batch goes. Public so the doctor / Settings can say where
+   * embeddings run; the answer is memoised per chat endpoint.
+   *
+   * 1. `LLM_EMBEDDING_API_BASE` set (an operator, or CI-Hub handing out its
+   *    pool; `OLLAMA_EMBED_HOST` is its deprecated name): that server, native
+   *    dialect — falling to `/v1/embeddings` there once `/api/embed` has
+   *    answered 404.
+   * 2. Otherwise, chat on an OpenAI-compatible backend: ask it what it serves.
+   *    If it lists the configured embedder — under any spelling
+   *    `canonicalEmbedModel` folds to the same weights — embed THERE, in the
+   *    OpenAI dialect, under the spelling it lists. One engine then holds one
+   *    card's budget, which is the whole point: Ollama embedding beside a
+   *    Lemonade that holds the card runs the embedder on the CPU.
+   * 3. Otherwise (chat on Ollama; or the backend serves no embedder; or its
+   *    listing failed): the Ollama host, native dialect. A failed listing is not
+   *    memoised, so a backend that was merely slow to start is asked again on
+   *    the next batch.
+   */
+  async resolveTarget(): Promise<EmbedTarget> {
+    const driver = this.endpoint.getOpenAiDriver();
+    const ollamaHost = this.endpoint.getOllamaHost();
+    const key = `${driver?.baseUrl ?? ''}|${ollamaHost}`;
+
+    if (this.target?.key === key) {
+      return this.target.value;
+    }
+
+    // A new target is a new engine with its own limit.
+    this.learnedInputChars = null;
+
+    const pinnedHost = EMBED_HOST_EXPLICITLY_CONFIGURED ? config.embedding.apiBase : undefined;
+
+    if (pinnedHost) {
+      const value: EmbedTarget = this.nativeRouteMissing.has(pinnedHost)
+        ? {
+            dialect: 'openai',
+            baseUrl: `${pinnedHost.replace(/\/$/, '')}/v1`,
+            apiKey: config.llm.apiKey,
+            model: this.model,
+          }
+        : { dialect: 'ollama', host: pinnedHost, model: this.model };
+
+      this.target = { key, value };
+
+      return value;
+    }
+
+    if (driver) {
+      let served: string[];
+
+      try {
+        served = await driver.listModels();
+      } catch (err: unknown) {
+        this.logger.warn('Chat backend did not list its models; embedding on the Ollama host this batch', {
+          baseUrl: driver.baseUrl,
+          error: err instanceof Error ? err.message : String(err),
+        });
+
+        return { dialect: 'ollama', host: ollamaHost, model: this.model };
+      }
+
+      const wanted = canonicalEmbedModel(this.model);
+      const listed =
+        served.find((id) => id === this.model) ?? served.find((id) => canonicalEmbedModel(id) === wanted);
+
+      if (listed) {
+        const value: EmbedTarget = {
+          dialect: 'openai',
+          baseUrl: driver.baseUrl,
+          apiKey: driver.apiKey,
+          model: listed,
+        };
+
+        this.logger.log('Embedding on the chat backend, which serves the embedder', {
+          baseUrl: driver.baseUrl,
+          model: listed,
+        });
+        this.target = { key, value };
+
+        return value;
+      }
+
+      this.logger.log('Chat backend does not serve the embedder; embedding on the Ollama host', {
+        baseUrl: driver.baseUrl,
+        model: this.model,
+        ollamaHost,
+      });
+    }
+
+    const value: EmbedTarget = { dialect: 'ollama', host: ollamaHost, model: this.model };
+
+    this.target = { key, value };
+
+    return value;
   }
 
   /**
@@ -290,21 +430,62 @@ export class EmbeddingGenerationService {
    * burn its budget while queued.
    */
   private async embedBatch(batch: string[]): Promise<number[][]> {
+    const target = await this.resolveTarget();
+    const cap = Math.min(this.maxInputChars, this.learnedInputChars ?? Number.POSITIVE_INFINITY);
+    let inputs = batch.map((text) => text.slice(0, cap));
+
+    // A batch the engine refuses as too long is sent again with every input
+    // halved, a few times, rather than failed — see `isInputTooLong` for why
+    // the engine's own limit is not known here.
+    for (let shrink = 0; ; shrink += 1) {
+      try {
+        const vectors = await this.embedOnce(target, inputs);
+
+        if (shrink > 0) {
+          // The length that got through becomes the cap for every later batch
+          // on this engine, so the refusal is paid once per process, not once
+          // per long text. Floored: one dense text must not shorten prose for
+          // everything that follows.
+          const accepted = Math.max(...inputs.map((text) => text.length));
+
+          this.learnedInputChars = Math.max(MIN_LEARNED_INPUT_CHARS, accepted);
+          this.logger.log('Embedding input cap measured from the engine', {
+            dialect: target.dialect,
+            maxInputChars: this.learnedInputChars,
+          });
+        }
+
+        return vectors;
+      } catch (err: unknown) {
+        const longest = Math.max(...inputs.map((text) => text.length));
+
+        if (shrink >= MAX_INPUT_SHRINKS || longest <= MIN_INPUT_CHARS || !isInputTooLong(err)) {
+          throw err;
+        }
+
+        inputs = inputs.map((text) => text.slice(0, Math.max(MIN_INPUT_CHARS, Math.floor(text.length / 2))));
+        this.logger.warn('Embedding engine refused the batch as too long; retrying with shorter inputs', {
+          dialect: target.dialect,
+          longestChars: longest,
+          retryLongestChars: Math.max(...inputs.map((text) => text.length)),
+          error: err instanceof Error ? err.message.slice(0, 200) : String(err),
+        });
+      }
+    }
+  }
+
+  /** One request for one batch, bounded by {@link EMBED_TIMEOUT_MS}. */
+  private async embedOnce(target: EmbedTarget, batch: string[]): Promise<number[][]> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), EMBED_TIMEOUT_MS);
 
-    const client = new Ollama({
-      host: this.host,
-      fetch: (input, init) => fetch(input, { ...init, signal: controller.signal }),
-    });
-
-    let response: Awaited<ReturnType<Ollama['embed']>>;
+    let embeddings: number[][] | undefined;
 
     try {
-      response = await client.embed({
-        model: this.model,
-        input: batch,
-      });
+      embeddings =
+        target.dialect === 'ollama'
+          ? await this.embedNative(target, batch, controller.signal)
+          : await this.embedOpenAi(target, batch, controller.signal);
     } catch (err: unknown) {
       // Rethrow OUR message, not the AbortError's — see EMBED_TIMEOUT_MESSAGE
       // for why the wording decides whether the pipeline refunds or spends a
@@ -321,14 +502,124 @@ export class EmbeddingGenerationService {
       clearTimeout(timer);
     }
 
-    const embeddings = response.embeddings;
-
     if (embeddings == null || embeddings.length !== batch.length) {
-      throw new Error(`Ollama embed returned ${embeddings?.length ?? 0} vectors for ${batch.length} inputs`);
+      throw new Error(
+        `${target.dialect === 'ollama' ? 'Ollama' : 'OpenAI-compatible'} embed returned ${embeddings?.length ?? 0} vectors for ${batch.length} inputs`,
+      );
     }
 
     return embeddings;
   }
+
+  /** `POST {host}/api/embed` through the pinned client, with the signal injected at its one seam. */
+  private async embedNative(
+    target: Extract<EmbedTarget, { dialect: 'ollama' }>,
+    batch: string[],
+    signal: AbortSignal,
+  ): Promise<number[][]> {
+    const client = new Ollama({
+      host: target.host,
+      fetch: (input, init) => fetch(input, { ...init, signal }),
+    });
+
+    try {
+      const response = await client.embed({ model: target.model, input: batch });
+
+      return response.embeddings;
+    } catch (err: unknown) {
+      // A pinned endpoint with no `/api/embed` at all (vLLM, llama.cpp, SGLang
+      // behind LLM_EMBEDDING_API_BASE) answers 404 before it reads the body. Remember the host
+      // and re-resolve in the OpenAI dialect; this batch fails as it would have.
+      if (!signal.aborted && isRouteMissing(err)) {
+        this.nativeRouteMissing.add(target.host);
+        this.target = null;
+        this.logger.warn('Embed host has no /api/embed; switching to /v1/embeddings there', {
+          host: target.host,
+        });
+      }
+
+      throw err;
+    }
+  }
+
+  /**
+   * `POST {baseUrl}/embeddings` with an array `input`, which every
+   * OpenAI-compatible engine accepts. Plain `fetch` rather than the OpenAI SDK:
+   * the SDK retries by default and would double a timed-out batch's cost.
+   * Vectors come back in `data[].index` order, which is not guaranteed to be
+   * request order, so they are placed by index.
+   */
+  private async embedOpenAi(
+    target: Extract<EmbedTarget, { dialect: 'openai' }>,
+    batch: string[],
+    signal: AbortSignal,
+  ): Promise<number[][]> {
+    const response = await fetch(`${target.baseUrl.replace(/\/$/, '')}/embeddings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(target.apiKey ? { Authorization: `Bearer ${target.apiKey}` } : {}),
+      },
+      body: JSON.stringify({ model: target.model, input: batch }),
+      signal,
+    });
+
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => '')).slice(0, 300);
+
+      throw new Error(
+        `OpenAI-compatible embed at ${target.baseUrl} answered ${response.status}${detail ? `: ${detail}` : ''}`,
+      );
+    }
+
+    const payload = (await response.json()) as { data?: Array<{ index?: number; embedding?: number[] }> };
+    const rows = Array.isArray(payload.data) ? payload.data : [];
+    const vectors: number[][] = Array.from({ length: rows.length }, () => []);
+
+    rows.forEach((row, position) => {
+      const at = Number.isInteger(row.index) ? (row.index as number) : position;
+
+      vectors[at] = Array.isArray(row.embedding) ? row.embedding : [];
+    });
+
+    return vectors;
+  }
+}
+
+/**
+ * How many times a batch the engine refused as too long is halved and sent
+ * again before the failure stands, and the length below which an input is
+ * never cut further (one llama-server default `--ubatch-size`, 512 tokens,
+ * is around 2,000 characters; an input this short that still fails is not a
+ * length problem).
+ */
+const MAX_INPUT_SHRINKS = 3;
+const MIN_INPUT_CHARS = 1_000;
+/** The measured cap never drops below this: half the default is one refusal's worth, not a text's. */
+const MIN_LEARNED_INPUT_CHARS = 4_000;
+
+/**
+ * Whether an embed failure is the engine refusing the input for its length.
+ * Ollama's `/api/embed` truncates to the model's window by default, so this
+ * is the OpenAI dialect's problem: llama-server (so Lemonade) answers 500
+ * `input (N tokens) is too large to process. increase the physical batch size`
+ * for anything past its `--ubatch-size`, and vLLM/TGI answer 400 with their
+ * context-length wording. The limit itself is not reported anywhere a client
+ * can read it before sending, so the batch is shrunk on the answer instead.
+ */
+export function isInputTooLong(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+
+  return /too large to process|physical batch size|maximum context length|exceeds? (the )?(available )?context|context (size|length|window)/i.test(
+    message,
+  );
+}
+
+/** Whether an `ollama` client error is the server saying the route does not exist. */
+function isRouteMissing(err: unknown): boolean {
+  const status = (err as { status_code?: unknown } | null)?.status_code;
+
+  return status === 404 && !/model/i.test(err instanceof Error ? err.message : '');
 }
 
 /** Format a numeric vector as a pgvector-compatible string literal. */

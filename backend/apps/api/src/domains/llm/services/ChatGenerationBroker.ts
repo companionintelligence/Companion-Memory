@@ -16,6 +16,8 @@ interface Session {
   abort: AbortController;
   text: string;
   thinking: string;
+  /** Every published frame, in order, so a viewer who attaches late sees tool calls too. */
+  frames: ChatGenerationChunk[];
   done: boolean;
   listeners: Set<Listener>;
 }
@@ -42,6 +44,7 @@ export class ChatGenerationBroker {
       abort: new AbortController(),
       text: '',
       thinking: '',
+      frames: [],
       done: false,
       listeners: new Set(),
     };
@@ -79,6 +82,8 @@ export class ChatGenerationBroker {
     if (session == null || session.done) {
       return;
     }
+
+    session.frames.push(chunk);
 
     if (chunk.channel === Channel.TEXT) {
       session.text += chunk.text;
@@ -147,12 +152,11 @@ export class ChatGenerationBroker {
     });
     res.flushHeaders?.();
 
-    if (session.thinking) {
-      res.write(Buffer.from(this.encoder.encodeFrame(Channel.THINK, session.thinking)));
-    }
-
-    if (session.text) {
-      res.write(Buffer.from(this.encoder.encodeFrame(Channel.TEXT, session.text)));
+    // Replay the turn so far in the order it happened. Text and thinking alone
+    // drop tool calls that already ran, so someone who leaves and comes back
+    // mid-turn sees a reply that stops just before the lookup.
+    for (const frame of session.frames) {
+      res.write(Buffer.from(this.encoder.encodeFrame(frame.channel, frame.text)));
     }
 
     if (session.done) {

@@ -34,8 +34,14 @@ Extensions are created by the `setup-database` one-shot
 `timescaledb`, `postgis`, `vector`, `pg_stat_statements`, `btree_gist`. `uuid-ossp`
 comes from a migration instead.
 
-- **UUIDv7 primary keys** use PG18's native `uuidv7()` builtin — no extension
-  (migration `20260611030000_use_native_uuidv7.sql`; `ci.gen_uuid_v7()` wraps it).
+- **UUIDv7 primary keys** use PG18's native `uuidv7()` builtin — no extension.
+  `ci.gen_uuid_v7()` (the default for 50 tables) wraps it as of
+  `20260930141141_fix_ci_gen_uuid_v7_native_uuidv7.sql`. The earlier
+  `20260611030000_use_native_uuidv7.sql` replaced the name unqualified, so it only created a
+  twin, `public.gen_uuid_v7()`, which 12 tables default to. Until the fix, `ci.gen_uuid_v7()`
+  silently minted **UUIDv4**: rows it minted on the PG18 image, and every row an older migration
+  seeds on a fresh install (most of `ci.questions`), carry random ids. Never read id order as
+  creation order — order by a timestamp.
 - There is **no Apache AGE** graph extension, and no code anywhere references one.
   The knowledge graph is plain relational tables (`ci.entities` + `ci.relationships`)
   — older diagrams that show AGE are historical.
@@ -157,6 +163,13 @@ for it is now **Reflections**; the tables, GraphQL types and REST routes still s
 > and not `CASCADE`. **Any new user-scoped `ci.questions` selector must carry
 > `excludeForkedOriginsSql`** (`domains/intelligence/questionScope.ts`), or retired
 > reflections come back.
+>
+> **Never order the catalogue by `question_id`.** The seeded rows carry random v4 ids on
+> every fresh install and share one `created_at` per seed batch, so id order is a
+> different shuffle on every appliance. `seed_position` (`20260930153606`) records the
+> order the seed files list them; the inference rotation takes the catalogue round-robin
+> across categories in that order, from `domains/intelligence/questionOrder.ts`, and a
+> migration that seeds more questions should write `seed_position` too.
 
 ### Commerce & object identity
 

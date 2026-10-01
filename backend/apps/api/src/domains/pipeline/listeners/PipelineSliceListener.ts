@@ -6,6 +6,7 @@ import { OnEvent } from '@ci/domains/events';
 
 import { PIPELINE_QUEUES } from '../constants';
 import { PipelineSliceEvent } from '../events';
+import { stagesReopenedBy } from '../reopens';
 import { PipelineStateService } from '../services/PipelineStateService';
 import { StageRegistry } from '../services/StageRegistry';
 import { pipelineSlicePayloadSchema, type Stage, type StageResult } from '../types';
@@ -30,9 +31,11 @@ import { pipelineSlicePayloadSchema, type Stage, type StageResult } from '../typ
  *  2. **Claim** the ids. Returns the subset this worker actually owns, which
  *     de-duplicates a slice that overlaps one already in flight.
  *  3. **Run** the stage over the claimed ids.
- *  4. **Record** every claimed id's outcome in one bulk upsert. Ids the stage
+ *  4. **Re-open** the downstream decisions this slice's `done` results made
+ *     stale — `STAGE_REOPENS` in `reopens.ts`; nothing for most stages.
+ *  5. **Record** every claimed id's outcome in one bulk upsert. Ids the stage
  *     said nothing about are recorded as failures — silence is never success.
- *  5. **On throw**, fail the claimed ids in the ledger (so they carry a reason,
+ *  6. **On throw**, fail the claimed ids in the ledger (so they carry a reason,
  *     a retry gate and an attempt count instead of being stranded `running`),
  *     write `ci.pipeline_dead_letters`, and rethrow so pg-boss's own retry and
  *     dead-letter machinery still applies.
@@ -173,6 +176,13 @@ export class PipelineSliceListener {
         });
       }
 
+      // BEFORE complete(), deliberately. Until this slice's own results are
+      // recorded its rows are still claimed, so a re-open that throws lands in
+      // the catch below and the whole slice is retried — re-open included. The
+      // other order would leave a window in which this stage is `done` and the
+      // consumer was never told, and nothing would ever tell it.
+      const reopened = await this.reopenConsumers(stage, payload.entityType, reconciled);
+
       const summary = await this.stateService.complete(stage, payload.entityType, reconciled);
 
       this.logger.log('Processed pipeline slice', {
@@ -183,6 +193,7 @@ export class PipelineSliceListener {
         requested: payload.ids.length,
         claimed: claimed.length,
         ...summary,
+        ...(reopened != null ? { reopened } : {}),
       });
     } catch (err: unknown) {
       // The payload is persisted VERBATIM (the parsed object, which is the
@@ -255,5 +266,42 @@ export class PipelineSliceListener {
 
       throw error;
     }
+  }
+
+  /**
+   * Re-open, in every consumer `STAGE_REOPENS` declares for this stage, the
+   * ledger rows of the ids this slice recorded `done` — same entity type, same
+   * ids. Returns how many rows moved, or `null` when the stage declares no
+   * consumer, so the slice's log line only grows a field where one means
+   * something.
+   *
+   * Only `done`: see `reopens.ts`. The count can be below the number of `done`
+   * ids and that is normal — a consumer that never saw the row has no ledger
+   * row to move (the row is already a candidate for it), and a live claim is
+   * left alone by `reopen()`.
+   */
+  private async reopenConsumers(
+    stage: Stage,
+    entityType: string,
+    results: Map<string, StageResult>,
+  ): Promise<number | null> {
+    const consumers = stagesReopenedBy(stage.id);
+
+    if (consumers.length === 0) {
+      return null;
+    }
+
+    const doneIds = [...results].filter(([, result]) => result.outcome === 'done').map(([id]) => id);
+    let reopened = 0;
+
+    if (doneIds.length === 0) {
+      return reopened;
+    }
+
+    for (const consumer of consumers) {
+      reopened += await this.stateService.reopen(entityType, consumer, doneIds);
+    }
+
+    return reopened;
   }
 }

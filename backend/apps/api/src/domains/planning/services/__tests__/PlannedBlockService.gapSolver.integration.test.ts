@@ -42,10 +42,15 @@ import { TaskService } from '../TaskService';
  * `occupiedSpans` reads only startTime/endTime/isAllDay/plannedMinutes, so the
  * fixture stays small and every row in it is there to move the answer.
  *
- * Opt-in: set `PLANNING_TEST_DATABASE_URL` to a database with the migrations
- * applied (see TaskService.tenancy.integration.test.ts for the setup).
+ * Needs a database with the migrations applied: `PLANNING_TEST_DATABASE_URL`,
+ * else `DATABASE_URL`, else `.env`'s `DATABASE_*` values (see
+ * TaskService.tenancy.integration.test.ts for the setup). `databaseAvailability()`
+ * decides whether that means run, skip or fail.
  */
-const DATABASE_ENV = { urlEnvVar: 'PLANNING_TEST_DATABASE_URL' };
+const DATABASE_ENV = {
+  urlEnvVar: 'PLANNING_TEST_DATABASE_URL',
+  probeTimeoutEnvVar: 'PLANNING_TEST_PROBE_TIMEOUT_MS',
+};
 const availability = databaseAvailability(DATABASE_ENV);
 const describeWithDb = availability.available ? describe : describe.skip;
 

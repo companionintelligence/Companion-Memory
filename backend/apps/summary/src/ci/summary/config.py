@@ -42,28 +42,98 @@ def openai_v1_base(host: str) -> str:
     return base if base.endswith("/v1") else f"{base}/v1"
 
 
-def resolve_embedding_api_base(llm_api_base: str) -> str:
-    """
-    Embeddings stay on Ollama even when chat is pointed at vLLM.
+# The chat backend confirmed to serve the embedder, as (base, the id it lists it under). Cleared
+# when the base changes; never holds a failed listing, so a backend that was slow to start is asked
+# again on the next embed. Mirrors `target` in the API's EmbeddingGenerationService.
+_embedder_on_chat_backend: tuple[str, str] | None = None
 
-    The API already splits this (`OLLAMA_EMBED_HOST` vs `LLM_API_BASE`). Summary
-    used to POST `/v1/embeddings` at the chat backend, which 404s on a chat-only
-    vLLM and silently stores zero vectors.
-    """
-    explicit = os.getenv("EMBEDDING_API_BASE", "").strip()
-    if explicit:
-        return openai_v1_base(explicit)
 
-    ollama_host = (
-        os.getenv("OLLAMA_EMBED_HOST")
-        or os.getenv("CI_OLLAMA_EMBED_HOST")
-        or os.getenv("OLLAMA_HOST")
-        or ""
+def _embedder_served_by_chat_backend(llm_api_base: str, model: str) -> str | None:
+    """
+    The id the chat backend lists the embedder under, or None when it does not serve it (or
+    could not be asked). Any spelling of the indexed model counts: Lemonade lists the weights
+    Ollama calls `nomic-embed-text` as `user.nomic-embed-text-v1.5-GGUF`.
+    """
+    global _embedder_on_chat_backend
+
+    cached = _embedder_on_chat_backend
+    if cached is not None and cached[0] == llm_api_base:
+        return cached[1]
+
+    try:
+        rows = _served_models()
+    except Exception as exc:
+        logger.warning(
+            "Could not list models at %s (%s); embedding on the Ollama host this time.",
+            llm_api_base,
+            exc,
+        )
+        return None
+
+    served = [str(row.get("id")) for row in rows]
+    same_weights = NOMIC_V15_EMBED_NAMES if model in NOMIC_V15_EMBED_NAMES else {model}
+    listed = next((tag for tag in served if tag == model), None) or next(
+        (tag for tag in served if tag in same_weights), None
+    )
+    if listed is not None:
+        _embedder_on_chat_backend = (llm_api_base, listed)
+        logger.info(
+            "Embedding on the chat backend %s, which serves %s.", llm_api_base, listed
+        )
+    return listed
+
+
+def resolve_embedding_target(llm_api_base: str) -> tuple[str, str]:
+    """
+    Where embeddings go and what to call the model there, as (`/v1` base, model id).
+
+    Mirrors `EmbeddingGenerationService.resolveTarget` in the API; keep the two in step:
+
+    1. A pinned endpoint — `EMBEDDING_API_BASE`, else `LLM_EMBEDDING_API_BASE` (the API's name for
+       the same thing, the sibling of `LLM_API_BASE`), else the deprecated `OLLAMA_EMBED_HOST` /
+       `CI_OLLAMA_EMBED_HOST` — with the configured model. An operator sets one; CI-Hub hands out
+       its pool.
+    2. Else the chat backend, under the id it lists the embedder as, when it serves the same
+       weights. One engine then holds one card's budget: until 2026-09-30 this preferred
+       `OLLAMA_HOST`, so a Lemonade or llama.cpp host that served the embedder still sent every
+       summary embedding to an Ollama that had been pushed off the GPU by the chat model.
+    3. Else `OLLAMA_HOST`, else the chat backend regardless (the only host there is).
+
+    Summary used to POST `/v1/embeddings` at the chat backend unconditionally, which 404s on a
+    chat-only vLLM and silently stores zero vectors; rule 2 asks first.
+    """
+    model = settings.embedding_model
+
+    explicit = (
+        os.getenv("EMBEDDING_API_BASE") or os.getenv("LLM_EMBEDDING_API_BASE") or ""
     ).strip()
-    if ollama_host:
-        return openai_v1_base(ollama_host)
+    if explicit:
+        return openai_v1_base(explicit), model
 
-    return openai_v1_base(llm_api_base)
+    pinned = (
+        os.getenv("OLLAMA_EMBED_HOST") or os.getenv("CI_OLLAMA_EMBED_HOST") or ""
+    ).strip()
+    if pinned:
+        return openai_v1_base(pinned), model
+
+    chat_base = openai_v1_base(llm_api_base)
+    ollama_host = (os.getenv("OLLAMA_HOST") or "").strip()
+    if chat_base and (
+        not ollama_host or _origin(chat_base) != _origin(openai_v1_base(ollama_host))
+    ):
+        listed = _embedder_served_by_chat_backend(llm_api_base, model)
+        if listed is not None:
+            return chat_base, listed
+
+    if ollama_host:
+        return openai_v1_base(ollama_host), model
+
+    return chat_base, model
+
+
+def resolve_embedding_api_base(llm_api_base: str) -> str:
+    """The `/v1` base embeddings go to; see `resolve_embedding_target`."""
+    return resolve_embedding_target(llm_api_base)[0]
 
 
 def _origin(url: str) -> tuple[str, str, int | None]:

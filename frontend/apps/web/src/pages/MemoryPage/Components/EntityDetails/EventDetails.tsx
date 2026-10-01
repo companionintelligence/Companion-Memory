@@ -2,6 +2,8 @@ import { useMutation } from '@apollo/client';
 import { MapPin } from '@ci/shadcn/icons';
 
 import { gql, useFragment } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import type { MemoryEntityOf } from '../../useEntityService';
 import { EVENT_FRAGMENT } from '../EntityCard/EventCard';
@@ -55,7 +57,7 @@ function formatTitleCase(value?: string | null): string | null {
     .replace(/\w\S*/g, (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase());
 }
 
-function formatDateTime(value?: string | null): string | null {
+function formatDateTime(value: string | null | undefined, fmt: DateTimeFormatter): string | null {
   if (!value) {
     return null;
   }
@@ -64,10 +66,14 @@ function formatDateTime(value?: string | null): string | null {
 
   return isNaN(date.getTime())
     ? value
-    : date.toLocaleString('en-US', {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      });
+    : fmt.dateTime(
+        date,
+        {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        },
+        'en-US',
+      );
 }
 
 function formatDuration(start?: string | null, end?: string | null): string | null {
@@ -198,6 +204,7 @@ function DetailSection({ title, items }: { title: string; items: DetailItem[] })
 export function EventDetails({ entity }: Props) {
   const data = useFragment(EVENT_FRAGMENT, entity);
   const [updateEvent] = useMutation(UPDATE_EVENT);
+  const fmt = useDateTimeFormat();
 
   const props = (data.location?.properties ?? {}) as LocationProperties;
   const eventFields = entity as EventLocationFields;
@@ -284,8 +291,8 @@ export function EventDetails({ entity }: Props) {
       }}
       metaItems={[
         { label: 'Source', value: formatTitleCase(data.sourceSystem) },
-        { label: 'Starts', value: formatDateTime(data.startTime) },
-        { label: 'Ends', value: formatDateTime(data.endTime) },
+        { label: 'Starts', value: formatDateTime(data.startTime, fmt) },
+        { label: 'Ends', value: formatDateTime(data.endTime, fmt) },
         { label: 'Duration', value: formatDuration(data.startTime, data.endTime) },
         { label: 'Type', value: formatTitleCase(eventFields.eventType) ?? 'Event' },
         {

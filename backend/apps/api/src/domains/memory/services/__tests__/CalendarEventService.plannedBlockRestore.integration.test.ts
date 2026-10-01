@@ -28,10 +28,14 @@ import { GraphDeltaWriter } from '../GraphDeltaWriter';
  * the unique index (which spans tombstones), the soft delete, and find-or-
  * return; the unit suites mock the repository and so cannot see any of it.
  *
- * Opt-in: set `PLANNING_TEST_DATABASE_URL` to a database with migrations
- * applied (see CandidateService.lifecycle.integration.test.ts).
+ * Needs a database with migrations applied: `MEMORY_TEST_DATABASE_URL`, else
+ * `PLANNING_TEST_DATABASE_URL`, else `DATABASE_URL`, else `.env`'s `DATABASE_*`
+ * values. `databaseAvailability()` decides whether that means run, skip or fail.
  */
-const DATABASE_ENV = { urlEnvVar: ['MEMORY_TEST_DATABASE_URL', 'PLANNING_TEST_DATABASE_URL'] };
+const DATABASE_ENV = {
+  urlEnvVar: ['MEMORY_TEST_DATABASE_URL', 'PLANNING_TEST_DATABASE_URL'],
+  probeTimeoutEnvVar: 'MEMORY_TEST_PROBE_TIMEOUT_MS',
+};
 const availability = databaseAvailability(DATABASE_ENV);
 const describeWithDb = availability.available ? describe : describe.skip;
 

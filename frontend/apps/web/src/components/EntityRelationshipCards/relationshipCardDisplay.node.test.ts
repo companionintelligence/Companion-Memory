@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { createDateTimeFormatter, DEVICE_DATE_TIME_FORMATTER } from '@/lib/dateTimeFormat';
+
 import {
   filterDisplayTags,
   formatCardWhen,
@@ -95,10 +97,18 @@ describe('formatCardWhen', () => {
   const now = new Date('2026-08-27T18:00:00');
 
   it('returns a short date for another day this year', () => {
-    expect(formatCardWhen(Date.parse('2026-03-04T12:00:00'), now)).toBe('Mar 4');
+    expect(formatCardWhen(Date.parse('2026-03-04T12:00:00'), DEVICE_DATE_TIME_FORMATTER, now)).toBe('Mar 4');
   });
 
   it('returns null when there is no recency', () => {
-    expect(formatCardWhen(0, now)).toBeNull();
+    expect(formatCardWhen(0, DEVICE_DATE_TIME_FORMATTER, now)).toBeNull();
+  });
+
+  it("returns today's time of day in the chosen hour cycle", () => {
+    // Local instants on the runner's clock, read back on the same clock (no zone given).
+    const at = Date.parse('2026-08-27T15:43:00');
+
+    expect(formatCardWhen(at, DEVICE_DATE_TIME_FORMATTER, now)).toMatch(/^3:43\sPM$/);
+    expect(formatCardWhen(at, createDateTimeFormatter({ timeFormat: 'h23' }), now)).toBe('15:43');
   });
 });

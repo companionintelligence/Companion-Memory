@@ -140,6 +140,17 @@ export interface EntityAttribute {
    * `staging/identity.ts markSharedContactHandles`.
    */
   shared?: boolean;
+  /**
+   * The handle comes from a field an earlier revision of its parser did not
+   * read, so a row already minted for this entity was keyed without it. It is
+   * an identity and keys the entity like any other handle. Only
+   * `legacyEntityIdentityKey`, which names the key that older row carries,
+   * passes over it. Without the mark, a contact whose newly-read number sorts
+   * smallest would record as its old key one that no row was minted under, and
+   * the push, finding nothing there to move, would mint a second Person beside
+   * the first. See `staging/identity.ts legacyEntityIdentityKey`.
+   */
+  newSinceLegacyKey?: boolean;
 }
 export interface Entity {
   id?: string | number;
@@ -159,9 +170,14 @@ export interface Entity {
    * record is the set of them, not whichever arrived first.
    *
    * Values for a listed key are stored as a list of DISTINCT values in
-   * first-seen order (see persistence.ts mergeAccumulatedMetadata). Sources
+   * first-seen order (see staging/identity.ts mergeAccumulatedMetadata). Sources
    * should emit these keys as arrays so the shape is the same on the first
    * write as on the tenth, and should name them plurally to match.
+   *
+   * The declaration holds ACROSS imports too: it is kept on the staged row
+   * (`staged_entities.accumulate`), and the push unions these keys into the
+   * graph row an earlier import made instead of replacing them
+   * (graph/utils/ingestedProperties.ts).
    *
    * Unlisted keys keep the existing first-write-wins behavior.
    */
