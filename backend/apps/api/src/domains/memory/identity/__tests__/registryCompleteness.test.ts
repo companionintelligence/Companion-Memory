@@ -73,22 +73,27 @@ function extractSystemLiterals(): Found[] {
   return found;
 }
 
+const DATASOURCE_DIR = path.join(SRC_ROOT, 'domains/import/datasources');
+
+/** The importers' own source files. Registry.ts declares interfaces, not descriptors, and index.ts only imports them. */
+function datasourceSources(): Array<{ entry: string; text: string }> {
+  return fs
+    .readdirSync(DATASOURCE_DIR)
+    .filter((entry) => entry.endsWith('.ts') && !entry.includes('.test.') && !entry.includes('.spec.'))
+    .filter((entry) => entry !== 'registry.ts' && entry !== 'index.ts')
+    .map((entry) => ({ entry, text: fs.readFileSync(path.join(DATASOURCE_DIR, entry), 'utf8') }));
+}
+
 function extractDatasourceNames(): Found[] {
   const found: Found[] = [];
-  const dir = path.join(SRC_ROOT, 'domains/import/datasources');
-  for (const entry of fs.readdirSync(dir)) {
-    if (!entry.endsWith('.ts') || entry.includes('.test.') || entry.includes('.spec.')) {
-      continue;
-    }
 
-    const text = fs.readFileSync(path.join(dir, entry), 'utf8');
-    // The descriptor object: `name: 'snake_case_name',` near the DataSource
-    // export. Registry.ts itself declares interfaces, not descriptors.
-    if (entry === 'registry.ts' || entry === 'index.ts') {
-      continue;
-    }
-
-    const match = text.match(/^\s*name:\s*'([a-z0-9_]+)',/m);
+  for (const { entry, text } of datasourceSources()) {
+    // The descriptor is the object handed to `registerDataSource(...)`, and its
+    // first key is `name: 'snake_case_name'`. Anchored there because the first
+    // `name: '…',` on a line of its own need not be it: contactlist.ts builds
+    // `{ name: 'phone', value, … }` attributes over several lines, and matching
+    // the first one in the file took `phone` for the importer's name.
+    const match = text.match(/\bregisterDataSource\(\{\s*name:\s*'([a-z0-9_]+)'/);
     if (match) {
       found.push({ file: `domains/import/datasources/${entry}`, literal: match[1] });
     }
@@ -119,5 +124,17 @@ describe('identity registry completeness', () => {
     );
 
     expect(offenders.map(({ file, literal }) => `${literal} (${file})`)).toEqual([]);
+  });
+
+  it('reads a datasource name from every importer that registers one', () => {
+    // The check above works on source text. An importer whose descriptor it
+    // cannot read would drop out of it without anything failing.
+    const read = new Set(extractDatasourceNames().map(({ file }) => path.basename(file)));
+    const unread = datasourceSources()
+      .filter(({ text }) => text.includes('registerDataSource('))
+      .filter(({ entry }) => !read.has(entry))
+      .map(({ entry }) => entry);
+
+    expect(unread).toEqual([]);
   });
 });
