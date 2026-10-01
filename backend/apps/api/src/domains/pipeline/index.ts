@@ -44,7 +44,7 @@ import { FileEntity, FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { EDGE_PROJECTION_REOPENER, MaintenanceModule } from '@ci/domains/maintenance';
-import { MemoryModule } from '@ci/domains/memory';
+import { EVENT_TIME_REOPENER, MemoryModule } from '@ci/domains/memory';
 
 import { STAGE_IDS } from './constants';
 import { PipelineController } from './controllers/PipelineController';
@@ -66,6 +66,7 @@ import { VideoPlaybackSweepRequestListener } from './listeners/VideoPlaybackSwee
 import { BackpressureService } from './services/BackpressureService';
 import { EdgeProjectionReopenService } from './services/EdgeProjectionReopenService';
 import { EnrichmentWindowService } from './services/EnrichmentWindowService';
+import { EventTimeReopenService } from './services/EventTimeReopenService';
 import { IdentifierArrivalService } from './services/IdentifierArrivalService';
 import { PipelineControlService } from './services/PipelineControlService';
 import { PipelineDispatchService } from './services/PipelineDispatchService';
@@ -324,6 +325,11 @@ const stageProviders: Provider[] = [
     // the reverse) and resolves it lazily.
     EdgeProjectionReopenService,
     { provide: EDGE_PROJECTION_REOPENER, useExisting: EdgeProjectionReopenService },
+    // The same arrangement for an event's TIME: when its source moves it,
+    // CalendarEventService (memory, which this module imports) re-opens the
+    // decisions stages made on the old time, in the transaction that moved it.
+    EventTimeReopenService,
+    { provide: EVENT_TIME_REOPENER, useExisting: EventTimeReopenService },
     ...stageProviders,
   ],
   controllers: [PipelineController],

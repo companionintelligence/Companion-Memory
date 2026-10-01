@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
@@ -35,17 +36,27 @@ import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next'
 
 import { BaseEntity } from '../entities/BaseEntity';
 import { EventBaseEntity } from '../entities/EventBaseEntity';
-import { EventEntity, Event } from '../entities/EventEntity';
+import { EventEntity, Event, type RecurrenceDefinition } from '../entities/EventEntity';
 import { PlaceEntity } from '../entities/PlaceEntity';
 import { ledgerPlatform } from '../identity';
 import { expandAll } from '../recurrence/expandAll';
 import { dropExistingOverrides, resolveExpansionZone } from '../recurrence/queries';
 import type { OccurrenceSpec } from '../recurrence/types';
-import { CreateEventDto, UpdateEventDto, SearchEventDto } from '../types';
+import { CreateEventDto, UpdateEventDto, SearchEventDto, type SourceAssertedField } from '../types';
 
 import { CtiAggregate } from './CtiAggregate';
 import { purgeEventAggregates } from './eventPurge';
+import { resolveEventTimeReopener } from './eventTimeReopener';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
+import {
+  type EventWhen,
+  type StoredWhen,
+  type TitleMerge,
+  mergeSourceTitle,
+  mergeSourceWhen,
+  recurrenceOf,
+  sameWhen,
+} from './sourceFieldMerge';
 import { mergeSourceStatus } from './sourceStatusMerge';
 
 interface Options {
@@ -255,6 +266,141 @@ function isSourceOwned(sourceId: string | null | undefined, sourceType: string |
 }
 
 /**
+ * `time_source` for an instant the writer stamped because it had none — the
+ * `TIME_SOURCES.INGEST` value of pipeline/stages/clean/TemporalRepairStage
+ * (memory cannot import the pipeline). Such a time is nobody's word on when
+ * the event happens, so a re-delivery carrying one moves nothing.
+ */
+const INGEST_TIME_SOURCE = 'ingest';
+
+/** The metadata keys a series' recurrence is read from (parseRecurrence.ts), and the only ones the refresh rewrites. */
+const RECURRENCE_METADATA_KEYS = ['recurrenceRule', 'recurrenceTimeZone'] as const;
+
+/** A delivered time, with what travels onto the row when that time is applied. */
+interface DeliveredWhen extends EventWhen {
+  /** `is_all_day`, applied with the times (a meeting turned into an all-day event changes both). */
+  isAllDay?: boolean;
+  /** `is_recurring`, applied with the recurrence. */
+  isRecurring?: boolean;
+  /** The delivery's own reading of its instant; NULL (unexamined) when it states none. */
+  timeSource: string | null;
+  timePrecision: string | null;
+  /** The delivered {@link RECURRENCE_METADATA_KEYS} that are present; an absent one is removed. */
+  recurrenceKeys: Record<string, unknown>;
+}
+
+/**
+ * What one re-delivery says about the fields its source owns: only the fields
+ * it actually says. A field left out is not refreshed.
+ */
+interface SourceDelivery {
+  status?: string;
+  when?: DeliveredWhen;
+  title?: string;
+}
+
+/**
+ * The fields a create DTO asserts, for the refresh of a row it finds already
+ * stored.
+ *
+ * A status counts only when one was sent (the column DEFAULT is nobody's
+ * assertion), a time only when it is not an ingest stamp, and a delivery that
+ * names `source_asserts` speaks for those fields alone — a cancelled occurrence
+ * rebuilt from its series fills in a time and a title its source never sent.
+ */
+function sourceDeliveryOf(item: CreateEventDto): SourceDelivery {
+  const claimed = item.source_asserts ? new Set<SourceAssertedField>(item.source_asserts) : null;
+  const says = (field: SourceAssertedField): boolean => claimed === null || claimed.has(field);
+  const delivery: SourceDelivery = {};
+
+  if (item.status != null && says('status')) {
+    delivery.status = item.status;
+  }
+
+  if (item.start_time && item.time_source !== INGEST_TIME_SOURCE && says('time')) {
+    const recurrenceKeys: Record<string, unknown> = {};
+
+    for (const key of RECURRENCE_METADATA_KEYS) {
+      if (item.metadata?.[key] !== undefined) {
+        recurrenceKeys[key] = item.metadata[key];
+      }
+    }
+
+    delivery.when = {
+      startTime: new Date(item.start_time),
+      endTime: item.end_time ? new Date(item.end_time) : null,
+      recurrence: recurrenceOf(item.metadata),
+      ...(item.is_all_day !== undefined ? { isAllDay: item.is_all_day } : {}),
+      ...(item.is_recurring !== undefined ? { isRecurring: item.is_recurring } : {}),
+      timeSource: item.time_source ?? null,
+      timePrecision: item.time_precision ?? null,
+      recurrenceKeys,
+    };
+  }
+
+  if (item.title != null && says('title')) {
+    delivery.title = item.title;
+  }
+
+  return delivery;
+}
+
+/** A row's time base, or null when it has none (`source_start_time` unset). */
+function baseWhenOf(row: {
+  sourceStartTime: Date | null;
+  sourceEndTime: Date | null;
+  sourceRecurrence: RecurrenceDefinition | null;
+}): EventWhen | null {
+  return row.sourceStartTime
+    ? {
+        startTime: row.sourceStartTime,
+        endTime: row.sourceEndTime ?? null,
+        recurrence: row.sourceRecurrence ?? null,
+      }
+    : null;
+}
+
+/**
+ * Whether every field a delivery asserts equals the base already stored for
+ * it — the usual re-delivery (the organizer edited the agenda), which then
+ * costs no lock and no write. Read off a row loaded without a lock: a stale
+ * read only sends a delivery to the locked path, which decides again.
+ */
+function deliveredBefore(existing: EventEntity, delivery: SourceDelivery): boolean {
+  if (delivery.status !== undefined && existing.sourceStatus !== delivery.status) {
+    return false;
+  }
+
+  if (delivery.when) {
+    const base = baseWhenOf(existing);
+
+    if (base === null || !sameWhen(base, delivery.when)) {
+      return false;
+    }
+  }
+
+  return delivery.title === undefined || existing.sourceTitle === delivery.title;
+}
+
+/** The columns {@link CalendarEventService.refreshFromSource} reads under the row lock. */
+interface LockedEventRow {
+  status: string;
+  source_status: string | null;
+  is_deleted: boolean;
+  start_time: Date;
+  end_time: Date | null;
+  source_start_time: Date | null;
+  source_end_time: Date | null;
+  source_recurrence: RecurrenceDefinition | null;
+  recurrence_rule: unknown;
+  recurrence_time_zone: string | null;
+  start_time_original: Date | null;
+  end_time_original: Date | null;
+  last_moved_at: Date | null;
+  source_title: string | null;
+}
+
+/**
  * Spanning-aggregate service for the events CTI split: an event is ONE logical
  * entity persisted as a `ci.entities` base row (discriminated 'Event', the
  * SOLE owner of title/description — see {@link EventBaseEntity}) plus a
@@ -275,6 +421,12 @@ export class CalendarEventService {
     private readonly dataSource: DataSource,
     private readonly graphDeltaWriter: GraphDeltaWriter,
     @Optional() private readonly hbpeNotify?: HbpeNotifyService,
+    /**
+     * Resolves EVENT_TIME_REOPENER (bound by PipelineModule) when a source moves
+     * an event's time — see eventTimeReopener.ts. Optional only so suites can
+     * construct the service by hand; a time move without it throws.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {
     this.aggregate = new CtiAggregate({
       detailRepository: this.eventRepository,
@@ -480,13 +632,31 @@ export class CalendarEventService {
       delete (toCreate as Record<string, unknown>).status;
     }
 
-    // The merge base for the status refresh in createOne: what the SOURCE said,
-    // kept beside what the row shows, so a later re-delivery can tell the
-    // source's old value from a user's edit. Only a status the source actually
-    // sent — the column DEFAULT is nobody's assertion — and only on an identity
-    // a source owns.
-    if (item.status != null && isSourceOwned(item.source_id, item.source_type)) {
-      toCreate.sourceStatus = item.status;
+    // Not a column. It qualifies a re-delivery (see sourceDeliveryOf).
+    delete (toCreate as Record<string, unknown>).source_asserts;
+
+    // The merge bases for the refresh in createOne: what the SOURCE said, kept
+    // beside what the row shows, so a later re-delivery can tell the source's
+    // old value from a user's edit (sourceStatusMerge.ts, sourceFieldMerge.ts).
+    // Only on an identity a source owns.
+    if (isSourceOwned(item.source_id, item.source_type)) {
+      // Only a status the source actually sent: the column DEFAULT is nobody's
+      // assertion.
+      if (item.status != null) {
+        toCreate.sourceStatus = item.status;
+      }
+
+      // Every time and title the row is written with, including an ingest
+      // stamp and a cancelled occurrence's filled-in ones: nobody else wrote
+      // them, so a later delivery that does state them must find the row
+      // still showing its base, and land.
+      toCreate.sourceStartTime = item.start_time;
+      toCreate.sourceEndTime = item.end_time ?? null;
+      toCreate.sourceRecurrence = recurrenceOf(item.metadata);
+
+      if (item.title != null) {
+        toCreate.sourceTitle = item.title;
+      }
     }
 
     return toCreate;
@@ -521,11 +691,12 @@ export class CalendarEventService {
     // Idempotency: (source_type, source_system, source_id) is the stable
     // provenance triple capture sources carry. Re-ingesting the same event
     // — flaky-client retries, a full importer re-sync — must NOT create a
-    // duplicate. When the triple is present, return the existing row. The
-    // one thing a re-delivery may still change on it is `status`, and only
-    // where the source's own status moved and the user has not overridden it
-    // (returnExisting / applySourceStatus): a meeting cancelled after its
-    // first sync must not stay confirmed forever.
+    // duplicate. When the triple is present, return the existing row. What a
+    // re-delivery may still change on it is what its source owns — the
+    // status, the time and the title — and only where the source's own value
+    // moved and nobody else has changed it since (returnExisting /
+    // refreshFromSource): a meeting cancelled, moved or renamed after its first
+    // sync must not stay as it first arrived forever.
     //
     // Deliberately NOT filtered by `isDeleted`: `events_source_identity_uniq`
     // covers tombstoned rows too, so skipping one here would send the insert
@@ -673,19 +844,19 @@ export class CalendarEventService {
 
   /**
    * A re-delivery of a row that already exists: ledger the arrival and hand the
-   * row back, with its status brought up to date when the row belongs to a
-   * source and that source's status has moved (see {@link applySourceStatus}).
-   * Nothing else on the row is touched — the find-or-return contract above.
+   * row back, with whatever its source owns brought up to date when the row
+   * belongs to a source and that source's value moved (see
+   * {@link refreshFromSource}). Nothing else on the row is touched — the
+   * find-or-return contract above.
    */
   private async returnExisting(
     context: UserServiceContext,
     existing: EventEntity,
     item: CreateEventDto,
   ): Promise<Event> {
-    const current =
-      item.status != null && isSourceOwned(item.source_id, item.source_type)
-        ? await this.applySourceStatus(context, existing, item.status)
-        : existing;
+    const current = isSourceOwned(item.source_id, item.source_type)
+      ? await this.refreshFromSource(context, existing, sourceDeliveryOf(item))
+      : existing;
 
     await this.ledgerArrival(context, existing.id, item);
 
@@ -693,94 +864,248 @@ export class CalendarEventService {
   }
 
   /**
-   * Apply a status the row's SOURCE just delivered — the three-way merge in
-   * sourceStatusMerge.ts, against `source_status`, the value that source
-   * delivered last time. A status the user set stands; the source's own
-   * earlier value gives way.
+   * Apply what the row's SOURCE just delivered for the fields it owns — the
+   * status, the time, the title — each by a three-way merge against what that
+   * source delivered last time (sourceStatusMerge.ts, sourceFieldMerge.ts). A
+   * value someone else set stands; the source's own earlier value gives way.
    *
    * Lock first, decide second. The merge reads the row version this
    * transaction holds the lock on, so a user's edit that commits while a sync
    * is in flight is seen and kept; deciding from `existing` — read before the
-   * lock — would overwrite it.
+   * lock — would overwrite it. The title lives on the base row
+   * (`ci.entities`), so that row is locked too, AFTER the events row: the
+   * order every write to the aggregate takes (CtiAggregate), so a sync and a
+   * user's rename cannot deadlock.
    *
-   * A tombstone's status follows the source as well, so the trash's Undo
-   * brings back what the source says NOW rather than what it said when the
-   * row was deleted. But `is_deleted` is never written, and nothing is
-   * published for a tombstone — no graph delta, no update event, no HBPE
-   * notification: to every reader it is gone, and the deletion outlives the
-   * sync.
+   * A moved time is applied the way `update` applies one: the graph delta, the
+   * update event, and HBPE told about the day it left and the day it lands on.
+   * It also clears what `clean.temporal_repair` recorded about the OLD time
+   * and re-opens the decisions stages made on it, in this transaction (see
+   * eventTimeReopener.ts). It does not stamp `last_moved_at`, which says a
+   * person moved the row (sourceFieldMerge.ts reads it).
+   *
+   * A tombstone follows its source as well, so the trash's Undo brings back
+   * what the source says NOW rather than what it said when the row was
+   * deleted. But `is_deleted` is never written, and nothing is published for a
+   * tombstone — no graph delta, no update event, no HBPE notification: to
+   * every reader it is gone, and the deletion outlives the sync.
    *
    * @returns the stored row, re-read when anything was written.
    */
-  private async applySourceStatus(
+  private async refreshFromSource(
     context: UserServiceContext,
     existing: EventEntity,
-    delivered: string,
+    delivery: SourceDelivery,
   ): Promise<EventEntity> {
-    // The usual re-delivery — the organizer edited the agenda, the status did
-    // not move — costs nothing: the source said this last time too.
-    if (existing.sourceStatus === delivered) {
+    // The usual re-delivery — the organizer edited the agenda, nothing this
+    // refreshes moved — costs nothing: the source said all of it last time.
+    if (deliveredBefore(existing, delivery)) {
       return existing;
     }
 
+    const id = existing.id;
+
     const outcome = await this.eventRepository.manager.transaction(async (manager) => {
       const [row] = (await manager.query(
-        `SELECT status, source_status, is_deleted
+        `SELECT status, source_status, is_deleted,
+                start_time, end_time, source_start_time, source_end_time, source_recurrence,
+                metadata->'recurrenceRule' AS recurrence_rule,
+                metadata->>'recurrenceTimeZone' AS recurrence_time_zone,
+                start_time_original, end_time_original, last_moved_at,
+                source_title
            FROM ci.events
           WHERE event_id = $1 AND user_id = $2
             FOR UPDATE`,
-        [existing.id, context.userId],
-      )) as Array<{ status: string; source_status: string | null; is_deleted: boolean }>;
+        [id, context.userId],
+      )) as LockedEventRow[];
 
-      const merged = row
-        ? mergeSourceStatus({ status: row.status, sourceStatus: row.source_status }, delivered)
-        : null;
-
-      if (!row || !merged) {
+      if (!row) {
         return null;
       }
 
-      // `updated_at` moves only with `status`: a new base alone changes
-      // nothing any reader sees, and incremental consumers key on it.
+      const status =
+        delivery.status === undefined
+          ? null
+          : mergeSourceStatus({ status: row.status, sourceStatus: row.source_status }, delivery.status);
+
+      const shown: StoredWhen = {
+        startTime: row.start_time,
+        endTime: row.end_time,
+        recurrence: recurrenceOf({
+          recurrenceRule: row.recurrence_rule,
+          recurrenceTimeZone: row.recurrence_time_zone,
+        }),
+        startTimeOriginal: row.start_time_original,
+        endTimeOriginal: row.end_time_original,
+        lastMovedAt: row.last_moved_at,
+      };
+      const when = delivery.when
+        ? mergeSourceWhen(
+            shown,
+            baseWhenOf({
+              sourceStartTime: row.source_start_time,
+              sourceEndTime: row.source_end_time,
+              sourceRecurrence: row.source_recurrence,
+            }),
+            delivery.when,
+          )
+        : null;
+
+      // The base row only when the title can move: a repeated title needs no
+      // second lock.
+      let title: TitleMerge | null = null;
+      let shownTitle: string | null = null;
+
+      if (delivery.title !== undefined && row.source_title !== delivery.title) {
+        const [base] = (await manager.query(`SELECT name FROM ci.entities WHERE entity_id = $1 FOR UPDATE`, [
+          id,
+        ])) as Array<{ name: string | null }>;
+        shownTitle = base?.name ?? null;
+        title = mergeSourceTitle(shownTitle, row.source_title, delivery.title);
+      }
+
+      if (!status && !when && !title) {
+        return null;
+      }
+
+      const statusChanged = status?.statusChanged ?? false;
+      const timesChanged = when?.timesChanged ?? false;
+      const recurrenceChanged = when?.recurrenceChanged ?? false;
+      const titleChanged = title?.changed ?? false;
+      const visible = statusChanged || timesChanged || recurrenceChanged || titleChanged;
+
+      // One UPDATE, built from what moved. A new base alone changes nothing any
+      // reader sees, so `updated_at` moves only with a visible change: that is
+      // what incremental consumers key on. A rename bumps it too, as `update`
+      // does for a title-only patch.
+      const params: unknown[] = [id, context.userId];
+      const sets: string[] = [];
+      const assign = (column: string, value: unknown, cast = ''): void => {
+        params.push(value);
+        sets.push(`${column} = $${params.length}${cast}`);
+      };
+
+      if (status) {
+        assign('status', status.status);
+        assign('source_status', status.sourceStatus);
+      }
+
+      if (when && delivery.when) {
+        assign('source_start_time', when.base.startTime);
+        assign('source_end_time', when.base.endTime);
+        assign(
+          'source_recurrence',
+          when.base.recurrence ? JSON.stringify(when.base.recurrence) : null,
+          '::jsonb',
+        );
+
+        if (timesChanged) {
+          assign('start_time', when.when.startTime);
+          assign('end_time', when.when.endTime);
+          // What the clean stage recorded described the old time: the source
+          // has replaced it, so the new one is unexamined until the stage —
+          // re-opened below — looks at it. An undo through the old
+          // start_time_original would put back a time the source has left.
+          assign('time_source', delivery.when.timeSource);
+          assign('time_precision', delivery.when.timePrecision);
+          sets.push('start_time_original = NULL', 'end_time_original = NULL');
+
+          if (delivery.when.isAllDay !== undefined) {
+            assign('is_all_day', delivery.when.isAllDay);
+          }
+        }
+
+        if (recurrenceChanged) {
+          params.push(JSON.stringify(delivery.when.recurrenceKeys));
+          sets.push(
+            `metadata = (COALESCE(metadata, '{}'::jsonb) - ${RECURRENCE_METADATA_KEYS.map(
+              (key) => `'${key}'`,
+            ).join(' - ')}) || $${params.length}::jsonb`,
+          );
+
+          if (delivery.when.isRecurring !== undefined) {
+            assign('is_recurring', delivery.when.isRecurring);
+          }
+        }
+      }
+
+      if (title) {
+        assign('source_title', title.base);
+      }
+
+      if (visible) {
+        sets.push('updated_at = now()');
+      }
+
       await manager.query(
-        `UPDATE ci.events
-            SET status = $3,
-                source_status = $4,
-                updated_at = CASE WHEN $5 THEN now() ELSE updated_at END
-          WHERE event_id = $1 AND user_id = $2`,
-        [existing.id, context.userId, merged.status, merged.sourceStatus, merged.statusChanged],
+        `UPDATE ci.events SET ${sets.join(', ')} WHERE event_id = $1 AND user_id = $2`,
+        params,
       );
 
-      const published = merged.statusChanged && !row.is_deleted;
+      if (title && titleChanged) {
+        await manager.query(`UPDATE ci.entities SET name = $2, updated_at = now() WHERE entity_id = $1`, [
+          id,
+          title.title,
+        ]);
+      }
+
+      if (timesChanged) {
+        await resolveEventTimeReopener(this.moduleRef).reopenTimeDecisions([id], manager);
+      }
+
+      const published = visible && !row.is_deleted;
 
       if (published) {
-        const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id: existing.id } });
+        const name = title
+          ? title.title
+          : ((
+              (await manager.query(`SELECT name FROM ci.entities WHERE entity_id = $1`, [id])) as Array<{
+                name: string | null;
+              }>
+            )[0]?.name ?? null);
+
         await this.graphDeltaWriter.entityUpdated({
-          entityId: existing.id,
+          entityId: id,
           entityType: 'Event',
-          name: base?.name ?? null,
-          changedFields: { status: { old: row.status, new: merged.status } },
+          name,
+          changedFields: {
+            ...(statusChanged && status ? { status: { old: row.status, new: status.status } } : {}),
+            ...(timesChanged && when
+              ? {
+                  start_time: { old: row.start_time, new: when.when.startTime },
+                  end_time: { old: row.end_time, new: when.when.endTime },
+                }
+              : {}),
+            ...(recurrenceChanged && when
+              ? { recurrence: { old: shown.recurrence, new: when.when.recurrence } }
+              : {}),
+            ...(titleChanged && title ? { name: { old: shownTitle, new: title.title } } : {}),
+          },
           ownerUserId: context.userId,
-          changeSource: 'CalendarEventService.applySourceStatus',
-          changeReason: "status re-delivered by the event's source",
+          changeSource: 'CalendarEventService.refreshFromSource',
+          changeReason: "re-delivered by the event's source",
           // The source changed it, not the user.
           changedByUserId: null,
           manager,
         });
       }
 
-      return { published };
+      return { published, movedFrom: timesChanged ? row.start_time : null };
     });
 
     if (!outcome) {
       return existing;
     }
 
-    const reloaded = (await this.eventRepository.findOne({ where: { id: existing.id } })) ?? existing;
+    const reloaded = (await this.eventRepository.findOne({ where: { id } })) ?? existing;
 
     if (outcome.published) {
-      await this.signallingEventService.send(EventUpdatedEvent, { eventId: existing.id });
-      await this.hbpeNotify?.notifyEvents(reloaded.userId, reloaded.startTime);
+      await this.signallingEventService.send(EventUpdatedEvent, { eventId: id });
+      // Both days a move touches: the one the event left and the one it lands on.
+      await this.hbpeNotify?.notifyEvents(
+        reloaded.userId,
+        outcome.movedFrom ? [outcome.movedFrom, reloaded.startTime] : reloaded.startTime,
+      );
     }
 
     return reloaded;
@@ -845,9 +1170,9 @@ export class CalendarEventService {
    * `status: 'cancelled'`: no start time to create with, and usually no
    * iCalUID to find the row by.
    *
-   * The same merge as a re-delivery through `create` ({@link applySourceStatus}):
-   * a status the user set stands, a tombstone stays one, and nothing is ever
-   * inserted.
+   * The same merge as a re-delivery through `create` ({@link refreshFromSource}),
+   * for the status alone: a status the user set stands, a tombstone stays one,
+   * and nothing is ever inserted.
    *
    * @returns the stored event, or `null` when the caller owns no such row, or
    *   owns one no source does (a planned block, an event the user made).
@@ -863,7 +1188,7 @@ export class CalendarEventService {
       return null;
     }
 
-    return this.composeOne(await this.applySourceStatus(context, existing, status));
+    return this.composeOne(await this.refreshFromSource(context, existing, { status }));
   }
 
   /**
@@ -872,7 +1197,7 @@ export class CalendarEventService {
    * For an ingest path working out what a source's re-delivery refers to, not
    * for anything a user reads. Such a caller has to see a row the user
    * deleted: the identity is still taken, and a cancellation still lands on it
-   * (quietly — see {@link applySourceStatus}). One `source_id IN (…)`, so the
+   * (quietly — see {@link refreshFromSource}). One `source_id IN (…)`, so the
    * read lands on events_source_identity_uniq.
    */
   async findSourceRows(

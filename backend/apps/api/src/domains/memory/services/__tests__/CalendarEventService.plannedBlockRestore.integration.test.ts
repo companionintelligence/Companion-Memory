@@ -50,7 +50,10 @@ describeWithDb('CalendarEventService — re-placing a tombstoned planned block (
 
   const ctx: UserServiceContext = { userId: uuidv7() } as UserServiceContext;
 
-  const noopSignalling = { send: async () => undefined };
+  const signalling = { send: jest.fn(async () => undefined) };
+  // A source's time move re-opens the pipeline's decisions on that time
+  // (eventTimeReopener.ts); here, only whether it was asked to.
+  const timeReopener = { reopenTimeDecisions: jest.fn(async () => 0) };
   const noopLogger = {
     setContext: () => undefined,
     log: () => undefined,
@@ -105,9 +108,11 @@ describeWithDb('CalendarEventService — re-placing a tombstoned planned block (
     service = new CalendarEventService(
       dataSource.getRepository(EventEntity),
       dataSource.getRepository(EventBaseEntity),
-      noopSignalling as never,
+      signalling as never,
       dataSource,
       new GraphDeltaWriter(dataSource, noopLogger),
+      undefined,
+      { get: () => timeReopener } as never,
     );
   });
 
@@ -190,7 +195,7 @@ describeWithDb('CalendarEventService — re-placing a tombstoned planned block (
     expect(second.startTime).toEqual(FIRST_START);
   });
 
-  it('still returns a tombstoned CAPTURE row untouched, so a deleted import stays deleted', async () => {
+  it('never restores a tombstoned CAPTURE row, so a deleted import stays deleted', async () => {
     // The identity a real calendar sync mints, built through the same
     // constructor the ETL uses — `source_system`/`source_id` are branded types,
     // and the raw `as` casts behind them are deliberately not exported.
@@ -211,6 +216,7 @@ describeWithDb('CalendarEventService — re-placing a tombstoned planned block (
     // The next sync re-sends the same event. It must NOT come back to life:
     // the deletion outlives the sync, which is the whole reason `createOne`
     // matches tombstones in the first place.
+    signalling.send.mockClear();
     const [resynced] = await service.create(ctx, {
       title: 'Imported standup',
       event_type: 'meeting',
@@ -222,10 +228,17 @@ describeWithDb('CalendarEventService — re-placing a tombstoned planned block (
 
     expect(resynced.id).toBe(imported.id);
 
+    // Not the planning branch: no restore, nothing re-published. The time does
+    // follow the source, quietly (CalendarEventService.refreshFromSource), so
+    // an Undo would bring back where the meeting is now.
     const [row] = await dataSource.query('SELECT is_deleted, start_time FROM ci.events WHERE event_id = $1', [
       imported.id,
     ]);
     expect(row.is_deleted).toBe(true);
-    expect(new Date(row.start_time)).toEqual(FIRST_START);
+    expect(new Date(row.start_time)).toEqual(SECOND_START);
+    expect(signalling.send).not.toHaveBeenCalled();
+    await expect(service.findById(ctx, imported.id)).resolves.toBeNull();
+    // Re-opened even so: if the Undo comes, the stages must look at the new time.
+    expect(timeReopener.reopenTimeDecisions).toHaveBeenCalledWith([imported.id], expect.anything());
   });
 });

@@ -254,16 +254,13 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
 
       const detailPatch = patches.detail ?? {};
       const detailTouched = Object.keys(detailPatch).length > 0;
-      if (detailTouched) {
-        await repository.update(byId, detailPatch);
-      }
 
       // Before-state merged with the patch — what the detail row now holds —
       // without waiting on the reload, so base derivation sees real values.
       // withoutUndefined() guards this the same way RelationshipService.update
       // and TaskService.update do (#2703, #2713): an untouched field arriving
       // as `key: undefined` must not clobber `before`'s real value here, since
-      // `after` (unlike the `repository.update()` call above, which TypeORM
+      // `after` (unlike the `repository.update()` call below, which TypeORM
       // already normalizes) is built with a plain Object.assign.
       const after = Object.assign(
         Object.create(Object.getPrototypeOf(before) as object),
@@ -272,19 +269,27 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
       ) as TDetail;
 
       const basePatch = typeof patches.base === 'function' ? patches.base(after) : (patches.base ?? null);
-      if (basePatch && Object.keys(basePatch).length > 0) {
+      const baseTouched = basePatch != null && Object.keys(basePatch).length > 0;
+
+      // The DETAIL row is written first, always: every write to an aggregate
+      // takes the detail row's lock before the base row's, so two writers can
+      // never hold one each and wait on the other. A base-only change (e.g. a
+      // rename) still writes it — the watermark below — which is also what
+      // keeps updated_at truthful for consumers sweeping the detail table.
+      // CalendarEventService's source refresh locks in the same order.
+      const updateDateColumn = this.options.detailRepository.metadata?.updateDateColumn;
+      if (detailTouched) {
+        await repository.update(byId, detailPatch);
+      } else if (baseTouched && updateDateColumn) {
+        await repository.update(byId, {
+          [updateDateColumn.propertyName]: new Date(),
+        } as unknown as QueryDeepPartialEntity<TDetail>);
+      }
+
+      if (baseTouched) {
         await manager
           .getRepository(this.options.baseEntity)
           .update({ id } as FindOptionsWhere<TBase>, basePatch);
-
-        // A base-only change (e.g. a rename) must keep the detail watermark
-        // truthful for consumers sweeping the detail table by updated_at.
-        const updateDateColumn = this.options.detailRepository.metadata?.updateDateColumn;
-        if (!detailTouched && updateDateColumn) {
-          await repository.update(byId, {
-            [updateDateColumn.propertyName]: new Date(),
-          } as unknown as QueryDeepPartialEntity<TDetail>);
-        }
       }
 
       const reloaded = await repository.findOne({ where });
@@ -319,19 +324,29 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
         return false;
       }
 
+      const softDeleteFlag = this.options.softDeleteFlag;
+
+      if (softDeleteFlag) {
+        // The tombstone first, then the hook: the detail row's lock before
+        // anything the hook writes to the base row — the one lock order every
+        // write to the aggregate keeps (see applyUpdate).
+        await manager
+          .getRepository(this.options.detailEntity)
+          .update({ id } as FindOptionsWhere<TDetail>, this.flagPatch(softDeleteFlag, true));
+
+        if (hooks?.withinTx) {
+          await hooks.withinTx({ manager, before, after: null });
+        }
+
+        return true;
+      }
+
+      // A physical delete has to run the hook while the rows still exist.
       if (hooks?.withinTx) {
         await hooks.withinTx({ manager, before, after: null });
       }
 
-      const softDeleteFlag = this.options.softDeleteFlag;
-
-      if (softDeleteFlag) {
-        await manager
-          .getRepository(this.options.detailEntity)
-          .update({ id } as FindOptionsWhere<TDetail>, this.flagPatch(softDeleteFlag, true));
-      } else {
-        await manager.getRepository(this.options.baseEntity).delete({ id } as FindOptionsWhere<TBase>);
-      }
+      await manager.getRepository(this.options.baseEntity).delete({ id } as FindOptionsWhere<TBase>);
 
       return true;
     });

@@ -100,7 +100,7 @@ describeWithDb(`CalendarEventService — a source re-delivering a status (${avai
   ): Promise<Array<{ changed_fields: unknown; changed_by_user_id: unknown }>> {
     return dataSource.query(
       `SELECT changed_fields, changed_by_user_id FROM ci.graph_deltas
-        WHERE entity_id = $1 AND change_source = 'CalendarEventService.applySourceStatus'`,
+        WHERE entity_id = $1 AND change_source = 'CalendarEventService.refreshFromSource'`,
       [id],
     );
   }

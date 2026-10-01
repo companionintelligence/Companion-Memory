@@ -12,6 +12,17 @@ import {
 
 import { UserEntity, User } from '@ci/domains/user';
 
+/**
+ * A series' rule as its source delivered it — `metadata.recurrenceRule` and
+ * `metadata.recurrenceTimeZone`, which only the Google transform writes —
+ * stored as {@link EventEntity.sourceRecurrence}. `rule` is kept as stored
+ * (Google's `recurrence` array) and compared as JSON.
+ */
+export interface RecurrenceDefinition {
+  rule: unknown;
+  timeZone: string | null;
+}
+
 @Entity({ schema: 'ci', name: 'events' })
 // Idempotency key for captured/imported events. Created by migration
 // 20260620213807_add_events_source_idempotency; declared here so TypeORM is
@@ -200,13 +211,38 @@ export class EventEntity {
   /**
    * The status this row's source last delivered — the merge base
    * `CalendarEventService` refreshes `status` against when a provider
-   * re-delivers the event (20260930174811). A re-delivered status lands only
+   * re-delivers the event (20261001145556). A re-delivered status lands only
    * while `status` still equals `COALESCE(sourceStatus, 'confirmed')`; any
    * other value is the user's and stands. NULL when no source has asserted a
    * status. Internal merge state: not on the egress type, not user-writable.
    */
   @Column({ type: 'text', nullable: true, name: 'source_status' })
   sourceStatus!: string | null;
+
+  /**
+   * The start_time this row's source last delivered: with {@link sourceEndTime}
+   * and {@link sourceRecurrence}, the merge base for the time refresh
+   * (sourceFieldMerge.ts, 20261001154235). NULL when there is no base.
+   * Internal merge state, like {@link sourceStatus}.
+   */
+  @Column({ type: 'timestamptz', nullable: true, name: 'source_start_time' })
+  sourceStartTime!: Date | null;
+
+  /** The end_time the source last delivered; NULL beside a set {@link sourceStartTime} means it sent none. */
+  @Column({ type: 'timestamptz', nullable: true, name: 'source_end_time' })
+  sourceEndTime!: Date | null;
+
+  /** The series rule the source last delivered with that time; NULL beside a set {@link sourceStartTime} means none. */
+  @Column({ type: 'jsonb', nullable: true, name: 'source_recurrence' })
+  sourceRecurrence!: RecurrenceDefinition | null;
+
+  /**
+   * The title the source last delivered — the base for the title refresh. The
+   * title itself lives on the CTI base row (`ci.entities.name`); its base lives
+   * here, on the row whose lock the merge takes.
+   */
+  @Column({ type: 'text', nullable: true, name: 'source_title' })
+  sourceTitle!: string | null;
 
   // Consent / sharing scope (mirrors ci.answers.sharing_level). Stored raw at
   // ingest; redaction happens at read based on the consumer's scope (G2).
@@ -269,11 +305,16 @@ export class EventEntity {
   recurrenceRule!: string | null;
 
   /**
-   * Stamped whenever this row's `startTime`/`endTime` changes — by
-   * `CalendarEventService.update` and `.reschedule`, and by
-   * `PlannedBlockService.placeAt` on first placement. Needed later for
-   * reflow's anti-thrash stability window (roadmap "Later"); this milestone
-   * only stamps it correctly, it does not read it back for anything yet.
+   * Stamped whenever a person (or the planner) changes this row's
+   * `startTime`/`endTime` — by `CalendarEventService.update` and `.reschedule`,
+   * and by `PlannedBlockService.placeAt` on first placement. Needed later for
+   * reflow's anti-thrash stability window (roadmap "Later").
+   *
+   * NOT stamped when the row's SOURCE moves it (the refresh in
+   * `CalendarEventService.createOne`), nor by `clean.temporal_repair`. That
+   * difference is read: the refresh tells a row only the clean stage moved
+   * from one a person moved by it (sourceFieldMerge.ts). Reflow moves planned
+   * blocks, which no source owns, so it loses nothing.
    */
   @Column({ type: 'timestamptz', nullable: true, name: 'last_moved_at' })
   lastMovedAt!: Date | null;
@@ -383,7 +424,18 @@ export class EventEntity {
   }
 }
 
-export type Event = Readonly<Omit<EventEntity, 'user' | 'entityType' | 'sourceStatus'>> & {
+export type Event = Readonly<
+  Omit<
+    EventEntity,
+    | 'user'
+    | 'entityType'
+    | 'sourceStatus'
+    | 'sourceStartTime'
+    | 'sourceEndTime'
+    | 'sourceRecurrence'
+    | 'sourceTitle'
+  >
+> & {
   // Owned by the CTI base row (ci.entities); composed on egress.
   readonly title: string | null;
   readonly description: string | null;

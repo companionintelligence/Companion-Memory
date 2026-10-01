@@ -40,6 +40,12 @@ export const updateContentSchema = z.object({
   event_id: z.string().optional(),
 });
 
+/**
+ * A field a source owns on a stored event, and refreshes when it re-delivers
+ * the event — see {@link CreateEventDto.source_asserts}.
+ */
+export type SourceAssertedField = 'status' | 'time' | 'title';
+
 export interface CreateEventDto {
   id?: string;
   title: string;
@@ -119,6 +125,16 @@ export interface CreateEventDto {
     id: string;
   };
   content?: CreateContentDto[];
+  /**
+   * Which of this delivery's values are its SOURCE's word, for the refresh of
+   * an event already stored under its identity (CalendarEventService
+   * `refreshFromSource`). Omitted: all of them. A delivery that has to fill in
+   * fields its source did not send — a cancelled occurrence rebuilt from its
+   * series, whose time and title are the series' — names only the ones it
+   * does know, so a stored row's own time and title are not replaced by the
+   * filler. A new row is written with everything either way.
+   */
+  source_asserts?: readonly SourceAssertedField[];
 }
 
 export interface UpdateEventDto {

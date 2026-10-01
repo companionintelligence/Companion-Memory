@@ -464,6 +464,11 @@ export class GoogleCalendarTransformService {
       is_recurring: true,
       is_all_day: Boolean(originalStart.date),
       status: 'cancelled',
+      // The stub says the occurrence is cancelled and nothing else. The time
+      // and title above are filled in from the series, so an override row
+      // another pipeline already stored (an occurrence moved or renamed before
+      // it was cancelled) keeps its own when `create` finds it.
+      source_asserts: ['status'],
       metadata: {
         connectionId,
         rawEventId: stub.id,
