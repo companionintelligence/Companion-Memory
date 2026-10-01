@@ -148,6 +148,8 @@ describe('CalendarEventService CTI aggregate', () => {
     // The base row must survive — deleting it would cascade the detail away and
     // make the deletion irreversible.
     expect(baseRepo.delete).not.toHaveBeenCalled();
+    // … but it is deactivated, because graph readers see only the base row.
+    expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { isActive: false });
   });
 
   it('remove refuses an already-deleted event (its authorizing load skips tombstones)', async () => {
@@ -160,6 +162,7 @@ describe('CalendarEventService CTI aggregate', () => {
       where: expect.objectContaining({ id: 'e1', isDeleted: false }),
     });
     expect(repo.update).not.toHaveBeenCalled();
+    expect(baseRepo.update).not.toHaveBeenCalled();
   });
 
   it('restore clears the tombstone and returns the event', async () => {
@@ -179,6 +182,7 @@ describe('CalendarEventService CTI aggregate', () => {
       where: expect.objectContaining({ id: 'e1', isDeleted: true }),
     });
     expect(repo.update).toHaveBeenCalledWith({ id: 'e1' }, { isDeleted: false });
+    expect(baseRepo.update).toHaveBeenCalledWith({ id: 'e1' }, { isActive: true });
     expect(restored?.id).toBe('e1');
   });
 
@@ -189,6 +193,7 @@ describe('CalendarEventService CTI aggregate', () => {
 
     expect(restored).toBeNull();
     expect(repo.update).not.toHaveBeenCalled();
+    expect(baseRepo.update).not.toHaveBeenCalled();
   });
 
   it('findById hides a tombstoned event from readers', async () => {

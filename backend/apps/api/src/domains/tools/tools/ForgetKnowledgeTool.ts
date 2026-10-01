@@ -4,7 +4,12 @@ import { z } from 'zod';
 import { normalizeEmbeddableType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
-import { GraphUtilityService, GraphNodeEntity, RelationshipEntity } from '@ci/domains/memory';
+import {
+  CalendarEventService,
+  GraphUtilityService,
+  GraphNodeEntity,
+  RelationshipEntity,
+} from '@ci/domains/memory';
 import { ConceptRemovedEvent, PersonRemovedEvent, PlaceRemovedEvent } from '@ci/domains/memory/events';
 
 import { BaseTool } from '../core/BaseTool';
@@ -29,6 +34,12 @@ export type ForgetKnowledgeInput = z.infer<typeof ForgetKnowledgeInputSchema>;
 export interface ForgetKnowledgeOutput {
   archivedEntityIds: string[];
   archivedRelationshipIds: string[];
+  /**
+   * The events among `archivedEntityIds` that archive mode moved to the trash
+   * (the same tombstone `deleteEvent` writes) rather than just deactivating a
+   * graph node. `restoreEvent` brings each one back as it was.
+   */
+  restorableEventIds?: string[];
   mode: 'archive' | 'archive_and_delete';
   warnings?: string[];
 }
@@ -66,7 +77,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
           enum: ['archive', 'archive_and_delete'],
           default: 'archive',
           description:
-            'Archive marks nodes/relationships inactive; archive_and_delete also removes them from the active graph.',
+            'Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored); archive_and_delete also removes them from the active graph.',
         },
         reason: {
           type: 'string',
@@ -95,6 +106,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
   constructor(
     private readonly graphUtility: GraphUtilityService,
     private readonly eventService: EventService,
+    private readonly calendarEvents: CalendarEventService,
     protected readonly logger: LoggerService,
   ) {
     super();
@@ -138,7 +150,6 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
         continue;
       }
 
-      snapshot.relationships.forEach((rel) => relationshipIdsToDisable.add(rel.relationship_id));
       entitySnapshots.push({
         node: snapshot.node,
         relationships: snapshot.relationships,
@@ -154,19 +165,32 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
         })
       : [];
 
-    explicitRelationships.forEach((rel) => relationshipIdsToDisable.add(rel.relationship_id));
-
     // Deactivate or delete entities and relationships according to mode
     const hardDelete = mode === 'archive_and_delete';
 
-    if (uniqueEntitySnapshots.length) {
+    const trashedEventIds = hardDelete
+      ? new Set<string>()
+      : await this.trashEvents(
+          uniqueEntitySnapshots.map((entry) => entry.node),
+          ownerId,
+        );
+    const graphSnapshots = uniqueEntitySnapshots.filter(
+      (entry) => !trashedEventIds.has(entry.node.entity_id),
+    );
+
+    graphSnapshots.forEach((entry) =>
+      entry.relationships.forEach((rel) => relationshipIdsToDisable.add(rel.relationship_id)),
+    );
+    explicitRelationships.forEach((rel) => relationshipIdsToDisable.add(rel.relationship_id));
+
+    if (graphSnapshots.length) {
       await this.graphUtility.deactivateEntities(
-        uniqueEntitySnapshots.map((entry) => entry.node.entity_id),
+        graphSnapshots.map((entry) => entry.node.entity_id),
         ownerId,
         hardDelete,
       );
 
-      for (const entry of uniqueEntitySnapshots) {
+      for (const entry of graphSnapshots) {
         await this.unindexEntity(entry.node);
       }
     }
@@ -182,9 +206,55 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     return {
       archivedEntityIds: uniqueEntitySnapshots.map((entry) => entry.node.entity_id),
       archivedRelationshipIds: Array.from(new Set(explicitRelationships.map((rel) => rel.relationship_id))),
+      restorableEventIds: trashedEventIds.size ? Array.from(trashedEventIds) : undefined,
       mode,
       warnings: warnings.length ? warnings : undefined,
     };
+  }
+
+  /**
+   * Archive events the way the app deletes them: through the event's own
+   * tombstone, {@link CalendarEventService.remove}.
+   *
+   * An Event node is only the `ci.entities` half of an aggregate. The readers
+   * of the other half — the calendar, the location-enrichment stages, HBPE,
+   * search hydration — decide liveness from `ci.events.is_deleted`, and none
+   * of them reads `ci.entities.is_active`, the one flag `deactivateEntities`
+   * writes. So deactivating the node forgot the event from the graph and
+   * nowhere else.
+   *
+   * `remove` writes the whole tombstone in one transaction (both halves plus
+   * the graph delta), then un-indexes the event and tells HBPE. It is what
+   * `deleteEvent` calls, so a forgotten event is exactly a deleted one: it sits
+   * in the same trash, and `restore` brings it back.
+   *
+   * Its relationships are left alone, as `deleteEvent` leaves them. A tombstone
+   * cascades nothing, and that is what makes `restore` exact. The event's own
+   * node is inactive, and the deterministic edge matrix derives no edge onto an
+   * inactive endpoint.
+   *
+   * `remove` answers false when there is no live detail row to tombstone: an
+   * `Event` node that graph ingest created with no `ci.events` row behind it,
+   * or an event deleted before `remove` deactivated the base row. Both take the
+   * generic path, which deactivates the node, and that is all that is left to
+   * do for either.
+   */
+  private async trashEvents(nodes: GraphNodeEntity[], ownerId: string): Promise<Set<string>> {
+    const trashed = new Set<string>();
+
+    for (const node of nodes) {
+      // The CTI discriminator: `ci.events.entity_type` is CHECKed to it, so no
+      // node of any other type has a detail row to tombstone.
+      if (node.entity_type !== 'Event') {
+        continue;
+      }
+
+      if (await this.calendarEvents.remove({ userId: ownerId }, node.entity_id)) {
+        trashed.add(node.entity_id);
+      }
+    }
+
+    return trashed;
   }
 
   /**
@@ -207,10 +277,12 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
    *
    * Only the types whose record IS the `ci.entities` row are handled. Every
    * other graph type (Event/Item/Content/Communication/File) is the base or
-   * mirror half of a pair whose detail row this tool does not touch, so
-   * `event.deleted` for an event that still exists in `ci.events` would be
+   * mirror half of a pair whose detail row `deactivateEntities` does not touch,
+   * so `event.deleted` for an event that still exists in `ci.events` would be
    * false to every future consumer of that event, and unindexing it would
-   * desync search from a record the rest of the app still lists.
+   * desync search from a record the rest of the app still lists. (An archived
+   * Event aggregate never reaches here: {@link trashEvents} tombstones it, and
+   * `CalendarEventService.remove` un-indexes it itself.)
    */
   private async unindexEntity(node: GraphNodeEntity): Promise<void> {
     // Reuses the canonical graph→search alias table rather than restating

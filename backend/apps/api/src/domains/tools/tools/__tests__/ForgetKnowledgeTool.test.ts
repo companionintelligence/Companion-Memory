@@ -1,7 +1,12 @@
 import type { RequestContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
-import type { GraphNodeEntity, GraphUtilityService, RelationshipEntity } from '@ci/domains/memory';
+import type {
+  CalendarEventService,
+  GraphNodeEntity,
+  GraphUtilityService,
+  RelationshipEntity,
+} from '@ci/domains/memory';
 import {
   ConceptRemovedEvent,
   PersonRemovedEvent,
@@ -18,6 +23,7 @@ const CONTEXT = { userId: '00000000-0000-0000-0000-0000000000aa' } as RequestCon
 // entityIds/relationshipIds are `z.array(z.string().uuid())` in ForgetKnowledgeInputSchema, so
 // fixtures need real UUIDs or validateInput rejects the whole call before executeInternal runs.
 const E1 = '11111111-1111-1111-1111-111111111111';
+const E2 = '77777777-7777-7777-7777-777777777777';
 const E_MISSING = '88888888-8888-8888-8888-888888888888';
 const E_MISSING_ONLY = '99999999-9999-9999-9999-999999999999';
 const R1 = '22222222-2222-2222-2222-222222222222';
@@ -112,13 +118,27 @@ function makeGraphUtility(
   return { collectEntitySnapshot, getRelationships, deactivateEntities, deactivateRelationships };
 }
 
+/**
+ * Stand-in for `CalendarEventService.remove`: true exactly once for each id
+ * that has a live `ci.events` row to tombstone, false for anything else — an
+ * `Event` node with no detail row, or one already in the trash.
+ */
+function makeCalendarEvents(liveEventIds: string[] = []) {
+  const live = new Set(liveEventIds);
+  const remove = jest.fn(async (_context: { userId: string }, id: string) => live.delete(id));
+
+  return { remove };
+}
+
 function makeTool(
   graphUtility: ReturnType<typeof makeGraphUtility>,
   search: ReturnType<typeof makeSearchIndex> = makeSearchIndex(),
+  calendarEvents: ReturnType<typeof makeCalendarEvents> = makeCalendarEvents(),
 ) {
   return new ForgetKnowledgeTool(
     graphUtility as unknown as GraphUtilityService,
     search.eventService,
+    calendarEvents as unknown as CalendarEventService,
     logger(),
   );
 }
@@ -275,16 +295,123 @@ describe('ForgetKnowledgeTool search index removal', () => {
   });
 
   it('announces no deletion for a type whose record this tool did not remove', async () => {
-    // An `Event` graph node is the `ci.entities` half of a pair whose `ci.events`
-    // detail row forget never touches. Emitting `event.deleted` for a record that
-    // still exists would be false to every consumer of that event, so the tool
-    // must stay quiet rather than unindex a live record.
-    const search = makeSearchIndex([`event:${E1}`]);
-    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Event' } } });
+    // An `Item` graph node is the `ci.entities` half of a pair whose `ci.objects`
+    // detail row forget never touches. Emitting a deletion for a record that
+    // still exists would be false to every consumer of it, so the tool must stay
+    // quiet rather than unindex a live record.
+    const search = makeSearchIndex([`item:${E1}`]);
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Item' } } });
     const tool = makeTool(graphUtility, search);
 
     await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
 
     expect(search.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('ForgetKnowledgeTool events', () => {
+  it('archives an event through its own tombstone rather than deactivating the graph node', async () => {
+    const calendarEvents = makeCalendarEvents([E1]);
+    const graphUtility = makeGraphUtility({
+      nodes: { [E1]: { entityType: 'Event', relationships: [fakeRel(R_CASCADE)] } },
+    });
+    const search = makeSearchIndex();
+    const tool = makeTool(graphUtility, search, calendarEvents);
+
+    const result = await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
+
+    expect(result.success).toBe(true);
+    expect(calendarEvents.remove).toHaveBeenCalledWith({ userId: CONTEXT.userId }, E1);
+    expect(result.data?.archivedEntityIds).toEqual([E1]);
+    expect(result.data?.restorableEventIds).toEqual([E1]);
+    // `remove` owns both halves, the un-index and the HBPE nudge; the tool
+    // repeats none of it.
+    expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+    expect(search.send).not.toHaveBeenCalled();
+    // A tombstone cascades nothing, which is what lets `restore` be exact.
+    expect(graphUtility.deactivateRelationships).not.toHaveBeenCalled();
+  });
+
+  it('still deactivates explicitly named relationships alongside a trashed event', async () => {
+    const calendarEvents = makeCalendarEvents([E1]);
+    const graphUtility = makeGraphUtility({
+      nodes: { [E1]: { entityType: 'Event', relationships: [fakeRel(R_CASCADE)] } },
+      relationshipsById: { [R_EXPLICIT]: fakeRel(R_EXPLICIT) },
+    });
+    const tool = makeTool(graphUtility, makeSearchIndex(), calendarEvents);
+
+    const result = await tool.execute(CONTEXT, {
+      entityIds: [E1],
+      relationshipIds: [R_EXPLICIT],
+      mode: 'archive',
+    });
+
+    expect(graphUtility.deactivateRelationships).toHaveBeenCalledWith([R_EXPLICIT], CONTEXT.userId, false);
+    expect(result.data?.archivedRelationshipIds).toEqual([R_EXPLICIT]);
+  });
+
+  it('deactivates an Event node with no live detail row to tombstone, as before', async () => {
+    // Graph ingest can write an `Event` node with no `ci.events` row behind it,
+    // and an event deleted before `remove` covered the base row is already in
+    // the trash. Either way `remove` has nothing to do and the node itself is
+    // what is left to forget.
+    const calendarEvents = makeCalendarEvents();
+    const graphUtility = makeGraphUtility({
+      nodes: { [E1]: { entityType: 'Event', relationships: [fakeRel(R_CASCADE)] } },
+    });
+    const tool = makeTool(graphUtility, makeSearchIndex(), calendarEvents);
+
+    const result = await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
+
+    expect(calendarEvents.remove).toHaveBeenCalledWith({ userId: CONTEXT.userId }, E1);
+    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, false);
+    expect(graphUtility.deactivateRelationships).toHaveBeenCalledWith([R_CASCADE], CONTEXT.userId, false);
+    expect(result.data?.archivedEntityIds).toEqual([E1]);
+    expect(result.data?.restorableEventIds).toBeUndefined();
+  });
+
+  it('trashes only the events in a mixed batch and deactivates the rest', async () => {
+    const calendarEvents = makeCalendarEvents([E1]);
+    const graphUtility = makeGraphUtility({
+      nodes: {
+        [E1]: { entityType: 'Event', relationships: [fakeRel(R1)] },
+        [E2]: { entityType: 'Concept', relationships: [fakeRel(R_CASCADE)] },
+      },
+    });
+    const tool = makeTool(graphUtility, makeSearchIndex(), calendarEvents);
+
+    const result = await tool.execute(CONTEXT, { entityIds: [E1, E2], mode: 'archive' });
+
+    expect(calendarEvents.remove).toHaveBeenCalledTimes(1);
+    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E2], CONTEXT.userId, false);
+    expect(graphUtility.deactivateRelationships).toHaveBeenCalledWith([R_CASCADE], CONTEXT.userId, false);
+    expect(result.data?.archivedEntityIds).toEqual([E1, E2]);
+    expect(result.data?.restorableEventIds).toEqual([E1]);
+  });
+
+  it('never consults the tombstone for any other type', async () => {
+    const calendarEvents = makeCalendarEvents([E1]);
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Concept' } } });
+    const tool = makeTool(graphUtility, makeSearchIndex(), calendarEvents);
+
+    await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
+
+    expect(calendarEvents.remove).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, false);
+  });
+
+  it('leaves archive_and_delete a hard delete for events too', async () => {
+    const calendarEvents = makeCalendarEvents([E1]);
+    const graphUtility = makeGraphUtility({
+      nodes: { [E1]: { entityType: 'Event', relationships: [fakeRel(R1)] } },
+    });
+    const tool = makeTool(graphUtility, makeSearchIndex(), calendarEvents);
+
+    const result = await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive_and_delete' });
+
+    expect(calendarEvents.remove).not.toHaveBeenCalled();
+    expect(graphUtility.deactivateEntities).toHaveBeenCalledWith([E1], CONTEXT.userId, true);
+    expect(graphUtility.deactivateRelationships).toHaveBeenCalledWith([R1], CONTEXT.userId, true);
+    expect(result.data?.restorableEventIds).toBeUndefined();
   });
 });
