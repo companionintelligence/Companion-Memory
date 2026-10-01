@@ -11,7 +11,8 @@ import {
 } from './filePurge';
 
 /**
- * What a purge of content, or of an event, does about the stored photo that its content wraps.
+ * What a purge of content, of an event, or of a message does about the stored photo that its content wraps,
+ * that is linked to the event, or that the message's attachments name.
  *
  * An imported photo is two rows. `ci.files` holds the bytes, and a `ci.content` row of type `media`
  * points at it through `external_id` (the file's id, with `external_id_kind` `'file'`, or NULL on rows
@@ -23,22 +24,36 @@ import {
  * no content row at all: `ci.files.event_id` (a CI-Capture screenshot is), declared `ON DELETE SET NULL`,
  * so the event's purge nulled the link and kept the file.
  *
+ * A message names files too, and had the same hole. `ci.communications.attachments` is free-form JSON
+ * that the importer fills with `[{type: 'file', id}, {type: 'content', id}]`: the stored files, and for
+ * Messenger the content rows over them. Nothing in the schema joins it to anything, so forgetting a
+ * message left every file it named, and a file kept here because a message named it was never deleted
+ * later, when that message was forgotten. A purge of a message is the third caller of this plan: the
+ * files its `attachments` name are candidates, named by the message, and a message that is being purged
+ * is not one that uses a file. The content rows its attachments name go with it, which
+ * {@link purgeCommunicationAggregates} decides before it calls this, and which this sees as content rows
+ * being purged.
+ *
  * **The rule: delete the file when nothing else uses it, and keep it, and say why, when something
  * does.** It was decided with the alternatives measured: never deleting leaves every photo in the store
  * until somebody forgets its `File` node as a second step, and always deleting pulls the bytes out from
  * under records that were never named. That second one is not a corner case. On a real corpus (13,438 files, 327,168 messages), 739 files are wrapped by content,
  * one wrapper each, so "no other content row wraps it" never blocks; and 722 of those 739 are also
  * named by a message's `attachments` (228 of the 240 on an event too). Always deleting would have
- * taken 739 attachments out of messages nobody had asked about.
+ * taken 739 attachments out of messages nobody had asked about. It is as true the other way round:
+ * 8,006 files are named by messages, and 644 of them by two to 150 messages each (627 of the 644 are
+ * Google Voice chats, where one image is attached to 150 messages), so a purge of one message must never
+ * take a file another message still names.
  *
  * What counts as using a file, because a record that is still there should not lose the thing it shows:
  *
  *  - **another content row** that wraps it (`external_id`, kind `'file'` or NULL: never `'external_uri'`,
  *    whatever it holds, which is the rule `ContentService.findIdsByFileIds` uses). Any owner, and any row
  *    whose `user_id` is NULL: a row that is not the caller's still shows the file.
- *  - **a message** whose `attachments` name it. The column is free-form (`unknown[]`) and the importer
- *    writes `[{type: 'file', id}, {type: 'content', id}]`, so this takes every uuid anywhere in the JSON
- *    text (a key, a value, a URL that carries one), which errs toward keeping.
+ *  - **another message** whose `attachments` name it (never one of the messages being purged). The column
+ *    is free-form (`unknown[]`) and the importer writes `[{type: 'file', id}, {type: 'content', id}]`, so
+ *    this takes every uuid anywhere in the JSON text (a key, a value, a URL that carries one), which errs
+ *    toward keeping.
  *  - **a chat message** that attaches it (`ci.message_files`), which would lose the attachment by cascade.
  *  - **a surviving event** it is linked to (`ci.files.event_id`): a file that belongs to an event nobody
  *    is forgetting is that event's.
@@ -136,6 +151,11 @@ export interface WrappedFileSource {
   content: Array<{ id: string; named: string }>;
   /** The events being purged, whose directly linked files (`ci.files.event_id`) are candidates too. */
   eventIds: string[];
+  /**
+   * The messages being purged. The files their `attachments` name are candidates, each named by the message,
+   * and a message that is being purged is not one that uses a file.
+   */
+  messageIds: string[];
 }
 
 /** Where the objects of the wrapped files are deleted from, and what to do once they are gone. */
@@ -174,8 +194,11 @@ const sorted = (values: string[]): string[] => unique(values).sort();
 /** The shape of a uuid, so that a content row's `external_id` is only cast to one when it is. */
 const UUID_SHAPE = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
 
-/** A uuid anywhere in some text: in a JSON value, in a URL that carries one. */
-const UUID_TOKEN = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+/**
+ * A uuid anywhere in some text: in a JSON value, in a URL that carries one. It has no group, so Postgres's
+ * `regexp_matches` answers the whole match as `match[1]`, and a match is always safe to cast to `uuid`.
+ */
+export const UUID_TOKEN = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 
 interface Candidate {
   fileId: string;
@@ -184,9 +207,12 @@ interface Candidate {
 }
 
 /**
- * The files that the purge reaches: the ones a content row being purged wraps, and the ones linked
- * straight to an event being purged. A content row's `external_id` is text, and only a uuid is a file,
- * so it is cast inside a CASE, which Postgres evaluates in order.
+ * The files that the purge reaches: the ones a content row being purged wraps, the ones linked
+ * straight to an event being purged, and the ones the attachments of a message being purged name. A content
+ * row's `external_id` is text, and only a uuid is a file, so it is cast inside a CASE, which Postgres
+ * evaluates in order. A message's attachments are free-form, so every uuid in their text that is a file is
+ * one, found as {@link findFileUsers} finds the messages that name one; such a token is always a valid
+ * uuid, so it is cast with no guard.
  *
  * Whose they are is not asked here. {@link lockFiles} takes only the caller's own, in the statement that
  * locks them, so a file that is somebody else's is dropped there, whoever's content names it. Asking in
@@ -223,6 +249,23 @@ async function findCandidates(manager: EntityManager, source: WrappedFileSource)
 
     for (const row of linked) {
       candidates.push({ fileId: row.fileId, named: row.eventId });
+    }
+  }
+
+  if (source.messageIds.length > 0) {
+    // Only the purged messages' own rows are read, by key, so this is cheap however many messages exist.
+    const attached: Array<{ fileId: string; messageId: string }> = await manager.query(
+      `SELECT DISTINCT f.id AS "fileId", m.id AS "messageId"
+         FROM ci.communications m
+        CROSS JOIN LATERAL regexp_matches(m.attachments::text, $2, 'g') AS t(match)
+         JOIN ci.files f ON f.id = lower(t.match[1])::uuid
+        WHERE m.id = ANY($1::uuid[])
+        ORDER BY f.id, m.id`,
+      [source.messageIds, UUID_TOKEN],
+    );
+
+    for (const row of attached) {
+      candidates.push({ fileId: row.fileId, named: row.messageId });
     }
   }
 
@@ -267,20 +310,21 @@ async function findFileUsers(
     usersOf(row.fileId).contentIds.push(row.contentId);
   }
 
-  // Messages. Every uuid anywhere in a message's attachments, whatever shape the writer gave it, is
-  // pulled out of the JSON text and matched against the files by hash. That is one pass over the
-  // messages that have attachments at all, however many files are asked about. Searching the text for
-  // each file's id in turn costs a pass for every file: 15 s at 5,000 files on a real corpus, against
-  // 1.4 s this way, and the purge holds its locks while it waits.
+  // Messages, other than the ones being purged. Every uuid anywhere in a message's attachments, whatever
+  // shape the writer gave it, is pulled out of the JSON text and matched against the files by hash. That
+  // is one pass over the messages that have attachments at all, however many files are asked about.
+  // Searching the text for each file's id in turn costs a pass for every file: 15 s at 5,000 files on a
+  // real corpus, against 1.4 s this way, and the purge holds its locks while it waits.
   const messages: Array<{ messageId: string; fileId: string }> = await manager.query(
     `SELECT DISTINCT m.id AS "messageId", lower(t.match[1]) AS "fileId"
        FROM ci.communications m
       CROSS JOIN LATERAL regexp_matches(m.attachments::text, $2, 'g') AS t(match)
       WHERE m.attachments IS NOT NULL
         AND m.attachments <> '[]'::jsonb
+        AND m.id <> ALL($3::uuid[])
         AND lower(t.match[1]) = ANY($1::text[])
       ORDER BY m.id`,
-    [ids, UUID_TOKEN],
+    [ids, UUID_TOKEN, source.messageIds],
   );
 
   for (const row of messages) {
@@ -303,8 +347,8 @@ async function findFileUsers(
 }
 
 /**
- * Finds the files that content or events being purged wrap, locks them, and decides which go: a wrapped
- * file goes when nothing else uses it ({@link FileUsers}), and stays, reported, when something does.
+ * Finds the files that content, events or messages being purged wrap, link or name, locks them, and decides
+ * which go: a file goes when nothing else uses it ({@link FileUsers}), and stays, reported, when something does.
  * Changes nothing. Call it before anything is deleted, in the transaction that deletes it, and follow it
  * with {@link deleteWrappedFileObjects} and then {@link deleteWrappedFileRows}.
  *
@@ -317,7 +361,7 @@ export async function planWrappedFiles(
   userId: string,
   source: WrappedFileSource,
 ): Promise<WrappedFilePlan> {
-  if (source.content.length === 0 && source.eventIds.length === 0) {
+  if (source.content.length === 0 && source.eventIds.length === 0 && source.messageIds.length === 0) {
     return noPlan();
   }
 
@@ -480,7 +524,7 @@ export const FILE_REFERENCE_COLUMNS: Record<
   'ci.communications.attachments': {
     effect: 'keeps',
     reason:
-      'a message shows its attachments. Free-form JSON, so the id is looked for anywhere in its text, which errs toward keeping.',
+      'a message shows its attachments, so one that survives keeps the file. Free-form JSON, so the id is looked for anywhere in its text, which errs toward keeping. A message being purged is the other direction: the files its attachments name are candidates, decided by this same rule.',
   },
   'ci.message_files.file_id': {
     effect: 'keeps',

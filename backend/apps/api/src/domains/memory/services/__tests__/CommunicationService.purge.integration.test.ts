@@ -16,6 +16,7 @@ import { CommunicationBaseEntity } from '../../entities/CommunicationBaseEntity'
 import { CommunicationEntity } from '../../entities/CommunicationEntity';
 import { CommunicationService } from '../CommunicationService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
+import { nothingWrapped } from '../wrappedFilePurge';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -413,7 +414,12 @@ describeWithDb(`CommunicationService.purge against Postgres (${availability.targ
 
     const purged = await communications.purge(owner, [doomed.communicationId]);
 
-    expect(purged).toEqual({ communicationIds: [doomed.communicationId] });
+    // These have no attachments, so nothing but the message goes: no content row, no stored file.
+    expect(purged).toEqual({
+      communicationIds: [doomed.communicationId],
+      contentIds: [],
+      files: nothingWrapped(),
+    });
     expect(await footprint(doomed)).toEqual(EMPTY);
     // The control communication is exactly as it was, row for row.
     expect(await footprint(control)).toEqual(controlBefore);
@@ -463,7 +469,11 @@ describeWithDb(`CommunicationService.purge against Postgres (${availability.targ
     expect(await exists('SELECT count(*) FROM ci.entities WHERE entity_id = $1', bare)).toBe(true);
     expect(await exists('SELECT count(*) FROM ci.communications WHERE id = $1', bare)).toBe(true);
 
-    expect(await communications.purge(owner, [bare])).toEqual({ communicationIds: [bare] });
+    expect(await communications.purge(owner, [bare])).toEqual({
+      communicationIds: [bare],
+      contentIds: [],
+      files: nothingWrapped(),
+    });
     expect(await exists('SELECT count(*) FROM ci.entities WHERE entity_id = $1', bare)).toBe(false);
     expect(await exists('SELECT count(*) FROM ci.communications WHERE id = $1', bare)).toBe(false);
   });
@@ -590,7 +600,7 @@ describeWithDb(`CommunicationService.purge against Postgres (${availability.targ
 
     const purged = await communications.purge(owner, [theirs.communicationId, uuidv7()]);
 
-    expect(purged).toEqual({ communicationIds: [] });
+    expect(purged).toEqual({ communicationIds: [], contentIds: [], files: nothingWrapped() });
     expect(await footprint(theirs)).toEqual(theirsBefore);
     expect(published).toEqual([]);
     expect(notified).toEqual([]);
@@ -609,14 +619,22 @@ describeWithDb(`CommunicationService.purge against Postgres (${availability.targ
     published.length = 0;
     notified.length = 0;
 
-    expect(await communications.purge(owner, [graphOnly])).toEqual({ communicationIds: [] });
+    expect(await communications.purge(owner, [graphOnly])).toEqual({
+      communicationIds: [],
+      contentIds: [],
+      files: nothingWrapped(),
+    });
     expect(await exists('SELECT count(*) FROM ci.entities WHERE entity_id = $1', graphOnly)).toBe(true);
     expect(published).toEqual([]);
     expect(notified).toEqual([]);
   });
 
   it('does nothing for an empty request', async () => {
-    expect(await communications.purge(owner, [])).toEqual({ communicationIds: [] });
+    expect(await communications.purge(owner, [])).toEqual({
+      communicationIds: [],
+      contentIds: [],
+      files: nothingWrapped(),
+    });
     expect(published).toEqual([]);
     expect(notified).toEqual([]);
   });
@@ -668,7 +686,11 @@ describeWithDb(`CommunicationService.purge against Postgres (${availability.targ
     }
 
     // Having waited, the purge saw the committed row: the new day, which is the one HBPE has to redo.
-    expect(await purging).toEqual({ communicationIds: [doomed.communicationId] });
+    expect(await purging).toEqual({
+      communicationIds: [doomed.communicationId],
+      contentIds: [],
+      files: nothingWrapped(),
+    });
     expect(notified).toEqual([{ userId: ownerId, days: [dayOf(MOVED_TO)] }]);
     expect(await footprint(doomed)).toEqual(EMPTY);
   });

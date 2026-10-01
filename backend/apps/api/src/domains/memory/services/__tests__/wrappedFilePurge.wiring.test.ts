@@ -4,16 +4,19 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
+import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
 import { FileService as FileStorageService } from '@ci/domains/files';
 
 import { BaseEntity } from '../../entities/BaseEntity';
+import { CommunicationEntity } from '../../entities/CommunicationEntity';
 import { ContentBaseEntity } from '../../entities/ContentBaseEntity';
 import { ContentEntity } from '../../entities/ContentEntity';
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import { MemoryModule } from '../../index';
 import { CalendarEventService } from '../CalendarEventService';
+import { CommunicationService } from '../CommunicationService';
 import { ContentService } from '../ContentService';
 import { STORED_OBJECTS } from '../filePurge';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
@@ -23,9 +26,10 @@ import { GraphDeltaWriter } from '../GraphDeltaWriter';
  * THE OBJECT STORE REACHES THE SERVICES THAT DELETE A PHOTO'S BYTES.
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * `ContentService.purge` and `CalendarEventService.purge` delete the stored file a photo's content wraps, which
- * takes an object store. They take it through an optional injection token, so that a service built without one
- * still does everything else, and every other suite builds them by hand and passes the store in.
+ * `ContentService.purge`, `CalendarEventService.purge` and `CommunicationService.purge` delete the stored file a
+ * photo's content wraps, that an event is linked to, or that a message's attachments name, which takes an object
+ * store. They take it through an optional injection token, so that a service built without one still does
+ * everything else, and every other suite builds them by hand and passes the store in.
  *
  * That is exactly what cannot catch the wiring going wrong. Were the token dropped from a constructor, or the
  * provider from `MemoryModule`, Nest would build both services without a store and say nothing, and every purge
@@ -35,25 +39,29 @@ import { GraphDeltaWriter } from '../GraphDeltaWriter';
 describe('the object store reaches the services that delete a photo’s bytes', () => {
   const store = { deleteObjects: jest.fn(async () => undefined) };
 
-  /** Everything else the two services take, which is not what this is about. */
+  /** Everything else the three services take, which is not what this is about. */
   const others = [
     { provide: getRepositoryToken(ContentEntity), useValue: {} },
+    { provide: getRepositoryToken(CommunicationEntity), useValue: {} },
     { provide: getRepositoryToken(ContentBaseEntity), useValue: {} },
     { provide: getRepositoryToken(EventEntity), useValue: {} },
     { provide: getRepositoryToken(EventBaseEntity), useValue: {} },
     { provide: getRepositoryToken(BaseEntity), useValue: {} },
     { provide: EventService, useValue: {} },
+    // `CommunicationService` names its logger in its constructor.
+    { provide: LoggerService, useValue: { setContext: jest.fn() } },
     { provide: GraphDeltaWriter, useValue: {} },
     { provide: DataSource, useValue: {} },
   ];
 
   const storeOf = (service: unknown): unknown => (service as { storedObjects?: unknown }).storedObjects;
 
-  it('hands it to ContentService and CalendarEventService, under the token they ask for it by', async () => {
+  it('hands it to ContentService, CalendarEventService and CommunicationService, under the token they ask for it by', async () => {
     const module = await Test.createTestingModule({
       providers: [
         ContentService,
         CalendarEventService,
+        CommunicationService,
         ...others,
         { provide: STORED_OBJECTS, useValue: store },
       ],
@@ -61,15 +69,17 @@ describe('the object store reaches the services that delete a photo’s bytes', 
 
     expect(storeOf(module.get(ContentService))).toBe(store);
     expect(storeOf(module.get(CalendarEventService))).toBe(store);
+    expect(storeOf(module.get(CommunicationService))).toBe(store);
   });
 
-  it('builds both without one, which is what lets everything that has no stored bytes still be purged', async () => {
+  it('builds all three without one, which is what lets everything that has no stored bytes still be purged', async () => {
     const module = await Test.createTestingModule({
-      providers: [ContentService, CalendarEventService, ...others],
+      providers: [ContentService, CalendarEventService, CommunicationService, ...others],
     }).compile();
 
     expect(storeOf(module.get(ContentService))).toBeUndefined();
     expect(storeOf(module.get(CalendarEventService))).toBeUndefined();
+    expect(storeOf(module.get(CommunicationService))).toBeUndefined();
   });
 
   it('is provided by MemoryModule, from the files domain’s own service, which is the one that deletes objects', () => {

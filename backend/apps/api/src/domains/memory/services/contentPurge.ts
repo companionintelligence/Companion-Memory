@@ -117,6 +117,7 @@ export async function purgeContentAggregates(
   const plan = await planWrappedFiles(manager, userId, {
     content: contentIds.map((id) => ({ id, named: id })),
     eventIds: [],
+    messageIds: [],
   });
   const stored = await deleteWrappedFileObjects(manager, plan, storage);
 

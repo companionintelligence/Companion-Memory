@@ -1,4 +1,4 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
@@ -26,17 +26,25 @@ import {
   type KeysetPage,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
+import { FileRemovedEvent } from '@ci/domains/files/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { CommunicationBaseEntity } from '../entities/CommunicationBaseEntity';
 import { CommunicationEntity, Communication, previewFromContent } from '../entities/CommunicationEntity';
-import { CommunicationCreatedEvent, CommunicationUpdatedEvent, CommunicationRemovedEvent } from '../events';
+import {
+  CommunicationCreatedEvent,
+  CommunicationUpdatedEvent,
+  CommunicationRemovedEvent,
+  ContentRemovedEvent,
+} from '../events';
 import { ledgerPlatform } from '../identity';
 import { CreateCommunicationDto, UpdateCommunicationDto } from '../types';
 
-import { purgeCommunicationAggregates } from './communicationPurge';
+import { type PurgedCommunications, purgeCommunicationAggregates } from './communicationPurge';
 import { CtiAggregate, type RepositoryProvider } from './CtiAggregate';
+import { STORED_OBJECTS, StoredObjectsDeletedError, type StoredObjects } from './filePurge';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { nothingWrapped, type WrappedFilesPurged } from './wrappedFilePurge';
 
 interface Options {
   limit?: number;
@@ -94,6 +102,12 @@ export class CommunicationService {
     private readonly dataSource: DataSource,
     private readonly graphDeltaWriter: GraphDeltaWriter,
     @Optional() private readonly hbpeNotify?: HbpeNotifyService,
+    /**
+     * The object store, which {@link purge} deletes the stored files of a message's attachments from.
+     * Optional so that a service built without one still does everything else; a purge that would have to
+     * delete stored bytes and has no store is refused before it changes anything.
+     */
+    @Optional() @Inject(STORED_OBJECTS) private readonly storedObjects?: StoredObjects,
   ) {
     this.logger.setContext(CommunicationService.name);
     this.aggregate = new CtiAggregate({
@@ -742,27 +756,62 @@ export class CommunicationService {
    * {@link purgeCommunicationAggregates} for what goes, and for how it differs
    * from `remove`.
    *
-   * Everything is one transaction. Search is told afterwards, and so is HBPE,
-   * which re-serialises the days the messages fell on. The ids that were not the
-   * caller's, or no longer exist, are simply left out of the result.
+   * What a message's attachments name goes with it: the content rows over its files, and the stored
+   * files themselves when nothing else uses them. A file that something else still uses stays,
+   * reported in `files.kept` ({@link planWrappedFiles}). The objects are deleted from the object store
+   * inside the transaction, while the rows are locked, and before any row is.
    *
-   * @returns the ids that were purged.
+   * Everything is one transaction. Search is told afterwards, and so is HBPE, which
+   * re-serialises the days the messages fell on. The ids that were not the caller's,
+   * or no longer exist, are simply left out of the result.
+   *
+   * @throws {StoredObjectsDeletedError} if the stored files were deleted and the rows
+   *   then could not be. The messages named in it are still there, still naming files that
+   *   no longer open, and purging them again finishes the job. Anything that failed before
+   *   that left everything as it was.
+   * @returns the ids that were purged, the content rows that went with them, and what was
+   *   done about the files.
    */
-  async purge(context: UserServiceContext, ids: string[]): Promise<{ communicationIds: string[] }> {
+  async purge(
+    context: UserServiceContext,
+    ids: string[],
+  ): Promise<{ communicationIds: string[]; contentIds: string[]; files: WrappedFilesPurged }> {
     const requested = Array.from(new Set(ids));
 
     if (requested.length === 0) {
-      return { communicationIds: [] };
+      return { communicationIds: [], contentIds: [], files: nothingWrapped() };
     }
 
-    const purged = await this.communicationRepository.manager.transaction((manager) =>
-      purgeCommunicationAggregates(manager, context.userId, requested),
-    );
+    // Named by the purge itself once the objects are gone, and read here rather than there
+    // because the commit that follows can fail too.
+    let objectsGoneFor: string[] = [];
+    let purged: PurgedCommunications;
+
+    try {
+      purged = await this.communicationRepository.manager.transaction((manager) =>
+        purgeCommunicationAggregates(manager, context.userId, requested, {
+          objects: this.storedObjects,
+          onObjectsDeleted: (named) => {
+            objectsGoneFor = named;
+          },
+        }),
+      );
+    } catch (error) {
+      throw objectsGoneFor.length > 0 ? new StoredObjectsDeletedError(objectsGoneFor, error) : error;
+    }
 
     // The index rows were deleted in the transaction. This tells anything else
     // that listens, and is what announces a removal everywhere else in the app.
     for (const { id } of purged.communications) {
       await this.eventService.send(CommunicationRemovedEvent, { communicationId: id });
+    }
+
+    for (const contentId of purged.contentIds) {
+      await this.eventService.send(ContentRemovedEvent, { contentId });
+    }
+
+    for (const fileId of purged.files.fileIds) {
+      await this.eventService.send(FileRemovedEvent, { fileId });
     }
 
     if (purged.communications.length > 0) {
@@ -772,7 +821,11 @@ export class CommunicationService {
       );
     }
 
-    return { communicationIds: purged.communications.map((communication) => communication.id) };
+    return {
+      communicationIds: purged.communications.map((communication) => communication.id),
+      contentIds: purged.contentIds,
+      files: purged.files,
+    };
   }
 
   /**

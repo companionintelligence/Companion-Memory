@@ -115,6 +115,7 @@ export async function purgeEventAggregates(
   const plan = await planWrappedFiles(manager, userId, {
     content: content.map((row) => ({ id: row.id, named: row.eventId })),
     eventIds,
+    messageIds: [],
   });
   const stored = await deleteWrappedFileObjects(manager, plan, storage);
 
