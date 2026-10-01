@@ -53,11 +53,17 @@ log = logging.getLogger(__name__)
 # newest day-with-data, so days ~47–90 back are no longer rewritten nightly —
 # yet they are not purged either, because they still hold an hourly summary and
 # so never match the purge tier. Their hbpe.token_stream rows FREEZE at whatever
-# the last run that selected them wrote, and a late-arriving edit to one of
-# those days (a backfilled event, a re-labeled summary) can never be serialized.
-# The bimodal corpus is the only shape where this bites; on any corpus whose
-# recent end holds events the two content tiers overlap and the fill still
-# covers the whole trailing window.
+# the last run that selected them wrote. The bimodal corpus is the only shape
+# where this bites INSIDE the trailing window; on any corpus whose recent end
+# holds events the two content tiers overlap and the fill still covers it.
+#
+# Below the budget, every corpus has frozen days. A day that ages out of the
+# budget keeps its rows, because it still has a source and so never matches the
+# purge tier. What thaws a frozen day is the re-serialize queue (see
+# RESERIALIZE_DAY_CAP), and only for a change the API announces: an event
+# created, edited, deleted, restored or re-statused on that day. A late label, a
+# re-labeled summary, or a pipeline write that bypasses HbpeNotifyService still
+# never reaches a frozen day.
 SERIALIZE_WINDOW_DAYS = 90
 
 # Of the ``SERIALIZE_WINDOW_DAYS + 1`` content days, the share reserved for days
@@ -88,8 +94,9 @@ EVENT_DAY_FLOOR = 45
 # they must not be funded out of the content budget, where a handful of
 # deletions would evict real days. They still need a bound of their own, or one
 # bulk delete — a whole year of events removed at once — makes a single night's
-# serialize_day count unbounded. At this cap the worst night is twice the
-# serialize_day count the content budget alone implies — and to keep that true
+# serialize_day count unbounded. At this cap the purge tier at most doubles the
+# serialize_day count the content budget alone implies (the re-serialize queue
+# adds a third budget on top; see RESERIALIZE_DAY_CAP) — and to keep that true
 # for a caller that shrank ``window_days``, the effective cap is clamped to that
 # caller's own budget (see token_source_days), exactly as EVENT_DAY_FLOOR is.
 #
@@ -103,6 +110,34 @@ EVENT_DAY_FLOOR = 45
 # nothing writes ci.tasks.l0_class; see the ci.tasks note below, which a future
 # writer of that column has to act on.
 PURGE_DAY_CAP = SERIALIZE_WINDOW_DAYS + 1
+
+# Cap on the queued days one run may re-serialize, ON TOP of both budgets above.
+#
+# hbpe.reserialize_days (see reserialize_queue) holds the past days the API
+# announced a change on, which the ingester did not rewrite because they were
+# not today. Most of them are inside the content budget and get rewritten
+# tonight anyway. The queue exists for the rest: a frozen day, older than the
+# budget and still holding a source, which neither the content tiers nor the
+# purge tier will ever visit again. Before the queue, a meeting cancelled on
+# such a day stayed in hbpe.token_stream, and recurrence (180 days), seasonal
+# (800) and HMT training went on counting it.
+#
+# It gets its own budget for the same two reasons the purge tier does. Funded
+# from the content budget, a burst of edits to old days would evict real days
+# for the night. Uncapped, one bulk edit (re-timing a year of imported events)
+# would make a single night unbounded. With all three caps the worst night is
+# three times the content budget: 273 serialize_day calls at the default
+# window. In steady state the queue uses a handful of them, because it holds
+# only days that changed.
+#
+# It converges. Rows come only from notifications and from the migration's
+# one-time seed, and a re-serialized day is never queued again: serialize_day
+# notifies nobody, and the ingester's poll path never enqueues. Days beyond the
+# cap wait for the next night, so the queue drains whenever fewer than this many
+# old days change per night. Unlike the purge cap it is not clamped to
+# ``window_days``, because only serialize_token_stream drains the queue and it
+# always runs at the default window.
+RESERIALIZE_DAY_CAP = SERIALIZE_WINDOW_DAYS + 1
 
 # The N most recent calendar days that hold anything the serializer can publish,
 # newest first, with nothing after today.
@@ -153,6 +188,11 @@ PURGE_DAY_CAP = SERIALIZE_WINDOW_DAYS + 1
 #      all, newest first. Delete-only work, added ON TOP of the content budget
 #      under PURGE_DAY_CAP; see that constant for why on-top-but-capped, and
 #      the branch itself for why "source-less" and not "outside the budget".
+#
+# The re-serialize queue is not a tier of this query: serialize_token_stream
+# drains it after walking this list, under RESERIALIZE_DAY_CAP, and a queued
+# day this list already holds (content or purge) is settled without a second
+# visit. See reserialize_queue.
 #
 # Tiers A and B are exactly the flat budget on every corpus whose recent end
 # holds events, because the two tiers then draw from overlapping sets: dense
@@ -399,9 +439,9 @@ def _token_source_rows(
     # Same reasoning, same reason: window_days is a caller parameter, so a flat
     # cap would let an 11-day request return 11 content days and up to 91 purge
     # days — a night eight times the size the caller asked for. Capped at the
-    # content budget, the "worst night is at most twice the content budget"
-    # bound PURGE_DAY_CAP documents holds for every window, not just the
-    # default (where budget == PURGE_DAY_CAP and this is a no-op).
+    # content budget, the purge tier's share of the bound PURGE_DAY_CAP
+    # documents (at most one more content budget) holds for every window, not
+    # just the default (where budget == PURGE_DAY_CAP and this is a no-op).
     purge_cap = min(PURGE_DAY_CAP, budget)
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -614,11 +654,72 @@ def label_recency_start(user_id: str, window_days: int = SERIALIZE_WINDOW_DAYS) 
 # ── Activities ─────────────────────────────────────────────────────────────────
 
 
+def _snapshot_reserialize_queue(
+    user_id: str,
+) -> tuple[dict[date, datetime] | None, str]:
+    """
+    The queue snapshot serialize_token_stream drains, and why it is None if so.
+
+    ``"unavailable"`` is deploy skew (the sidecar is running ahead of the API
+    migration that creates the table); ``"error"`` is any other failed read.
+    Neither may stop the serialize pass, which never depended on the queue.
+    """
+    from ci.hbpe.pipeline import reserialize_queue
+
+    try:
+        queued = reserialize_queue.snapshot(user_id)
+    except Exception:
+        log.exception("serialize: re-serialize queue unreadable; no drain this run")
+        return None, "error"
+    return (queued, "ok") if queued is not None else (None, "unavailable")
+
+
+def _drain_reserialize_queue(
+    user_id: str,
+    snapshot: tuple[dict[date, datetime] | None, str],
+    visited: set[date],
+    today: date,
+    serializer,
+) -> dict:
+    """reserialize_queue.drain under RESERIALIZE_DAY_CAP, never raising."""
+    from ci.hbpe.pipeline import reserialize_queue
+
+    queued, status = snapshot
+    if queued is None:
+        return {"status": status}
+    try:
+        return reserialize_queue.drain(
+            user_id,
+            queued,
+            visited=visited,
+            today=today,
+            cap=RESERIALIZE_DAY_CAP,
+            serializer=serializer,
+        )
+    except Exception as exc:
+        # The pass has already published the budget, and the queue rows are
+        # still there for the next run: failing the step here would abort a
+        # bootstrap over work that is purely additive.
+        log.exception("serialize: re-serialize queue drain failed")
+        return {"status": "error", "error": str(exc)}
+
+
 async def serialize_token_stream(user_id: str) -> dict:
-    """Serialize all labeled events/content into hbpe.token_stream."""
+    """
+    Serialize all labeled events/content into hbpe.token_stream, then drain the
+    re-serialize queue (days outside that list whose source changed).
+    """
 
     def _run() -> dict:
         from ci.hbpe.tokenizer.serializer import TokenSerializer
+
+        today = _utc_today()
+        # The queue is read BEFORE the day list, not after the pass. Every
+        # serialize_day below then reads its sources after the change behind
+        # each snapshotted row had committed, which is what lets a queued day
+        # the pass visits be settled without a second visit. See
+        # reserialize_queue.
+        queued = _snapshot_reserialize_queue(user_id)
 
         # Days that hold data — a budget of SERIALIZE_WINDOW_DAYS + 1 of them,
         # with EVENT_DAY_FLOOR reserved for event-bearing days — plus up to
@@ -628,19 +729,30 @@ async def serialize_token_stream(user_id: str) -> dict:
         # events two years old, hourly summaries still being written today) the
         # list holds both ends instead of only the live one. See
         # token_source_days.
-        content, purge = _token_source_rows(user_id, SERIALIZE_WINDOW_DAYS, None)
+        content, purge = _token_source_rows(user_id, SERIALIZE_WINDOW_DAYS, today)
         days = sorted(content + purge)
+        serializer = TokenSerializer()
         if not days:
+            # No token row at or before today survives an empty day list (the
+            # purge tier would have listed it), so this drain only consumes:
+            # it keeps the queue converging for a user whose corpus emptied.
+            requeue = _drain_reserialize_queue(
+                user_id, queued, set(), today, serializer
+            )
             # One extra query, only on the empty path, to keep the two legacy
             # reason strings apart: they are the operator's only signal for why
             # a bootstrap aborted with no_token_data, and the day list clamps
             # future dates away so it cannot tell "nothing" from "all future".
             bounds = event_date_bounds(user_id)
             reason = "no_events" if bounds is None else "only_future_events"
-            return {"rows": 0, "reason": reason}
+            return {"rows": 0, "reason": reason, "reserialize_queue": requeue}
 
-        serializer = TokenSerializer()
         total_rows = sum(serializer.serialize_day(user_id, d.isoformat()) for d in days)
+        # After the pass, so a queued day the pass rewrote is settled rather
+        # than rewritten twice; before the rollups, so they see the rewrites.
+        requeue = _drain_reserialize_queue(
+            user_id, queued, set(days), today, serializer
+        )
         from ci.hbpe.pipeline.token_rollup import rebuild_token_rollups
 
         rollup = rebuild_token_rollups(user_id)
@@ -649,13 +761,15 @@ async def serialize_token_stream(user_id: str) -> dict:
         # reporting days[0] made the nightly result claim a start date for an
         # appliance whose model corpus begins months later — the same days[0]
         # conflation that let the purge tier hijack label_recency_start. Purge
-        # days are counted separately because they are delete-only work.
+        # days are counted separately because they are delete-only work, and
+        # the queue's rewrites under their own key: "rows" stays the budget's.
         return {
             "rows": total_rows,
             "start": content[0].isoformat() if content else None,
             "end": content[-1].isoformat() if content else None,
             "days": len(content),
             "purge_days": len(purge),
+            "reserialize_queue": requeue,
             "rollup": rollup,
         }
 

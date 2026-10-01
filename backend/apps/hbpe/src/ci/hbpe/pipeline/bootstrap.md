@@ -10,9 +10,12 @@ publication, HMT training, calibration, and model export.
 `token_source_days` spends a budget of `SERIALIZE_WINDOW_DAYS + 1` calendar
 days that hold an event or an hourly summary, with nothing dated after today,
 plus the emptied days that still need purging (`content_source_days` returns the
-first half alone — see [Two callers, two day sets](#two-callers-two-day-sets)). It is a **list of days**, not a
-contiguous `(MIN, MAX)` range, and the difference is load-bearing in both
-directions:
+first half alone — see [Two callers, two day sets](#two-callers-two-day-sets)).
+After walking that list, `serialize_token_stream` drains the re-serialize queue:
+older days the API announced a change on (see
+[Re-serializing a day outside the budget](#re-serializing-a-day-outside-the-budget)).
+The day list is a **list of days**, not a contiguous `(MIN, MAX)` range, and the
+difference is load-bearing in both directions:
 
 - Hourly summaries are written continuously, so on any running appliance the
   union's `MAX` is today. A contiguous trailing window therefore contains zero
@@ -47,6 +50,11 @@ The tiers, in order:
 | A — reserved | newest days that hold **events**, from the event branch alone | `min(EVENT_DAY_FLOOR, budget ÷ 2)` — 45 at the default window |
 | B — fill | newest remaining days from events ∪ summaries, minus tier A | `budget − count(A)` |
 | C — purge | days with `hbpe.token_stream` rows and **no live source**, newest first | `min(PURGE_DAY_CAP, budget)` — 91 at the default window, *on top of* the budget |
+
+The re-serialize queue is not a tier of this query. It is drained after the list
+is walked, under its own `RESERIALIZE_DAY_CAP` (91), on top of both budgets
+above. That makes the worst night three content budgets, 273 `serialize_day`
+calls.
 
 Every tier's `ORDER BY` is `DESC`, and that is policy rather than formatting.
 ASC parses, runs, and returns a full budget: on a bimodal corpus an ASC tier B
@@ -112,10 +120,16 @@ On a bimodal corpus tier B reaches back only 46 days from the newest
 day-with-data, so days ~47–90 back stop being rewritten nightly — and they are
 not purged either, because they still hold an hourly summary and so never match
 tier C. Their `hbpe.token_stream` rows **freeze** at whatever the last run that
-selected them wrote, and a late-arriving edit to one of those days (a backfilled
-event, a re-labeled summary) can never be serialized. Bimodal is the only shape
-where this bites; anywhere the recent end holds events the two content tiers
-overlap and tier B still covers the whole trailing window.
+selected them wrote. Bimodal is the only shape where this bites *inside* the
+trailing window; anywhere the recent end holds events the two content tiers
+overlap and tier B still covers it.
+
+Below the budget every corpus has frozen days, for the same reason: a day that
+ages out of the budget keeps its rows, because it still has a source. The
+re-serialize queue thaws a frozen day when the API announces a change on it.
+Changes the API does not announce still never reach it: a re-labeled summary,
+a late label, a pipeline write. See
+[Re-serializing a day outside the budget](#re-serializing-a-day-outside-the-budget).
 
 ### Purging a day that emptied out
 
@@ -160,6 +174,79 @@ select" would delete the profiler's own history every night. The flip side is a
 gap the old policy left: a day that emptied out below the 91st newest was never
 revisited at all, and its rows have been feeding recurrence ever since. Those
 days are now reachable, newest first.
+
+### Re-serializing a day outside the budget
+
+The day list rewrites every day it holds, every night. Every other day keeps
+the `hbpe.token_stream` rows that the last run to select it wrote, and on a
+running appliance that is most of the table. A day that ages out of the content
+budget still has its event or summary behind it, so it never reaches tier C
+either. `recurrence.HISTORY_DAYS` reads 180 days of the table,
+`seasonal.MAX_HISTORY_DAYS` 800, and HMT training all of it, while the ingester
+rewrites today and nothing else. So before the queue, a meeting deleted,
+cancelled or edited on a day older than the budget went on counting forever. A
+SQL migration cannot repair that: deleting such a day's rows would delete its
+live events' tokens too, with nothing to write them back.
+
+`hbpe.reserialize_days` (`reserialize_queue.py`, table created by an API
+migration) is the queue that reaches those days:
+
+| | |
+|---|---|
+| **Producer** | `EventIngester`. A `ci_events` notification for a day **before today** is upserted, keyed `(user_id, date)`; a repeat bumps `queued_at`. Today is still rewritten on the spot. A future day holds no tokens. The poll path never enqueues: it reports HBPE's own writes, so it would re-arm every day the drain rewrites. The other two channels feed nothing the serializer reads. |
+| **Consumer** | `serialize_token_stream`, after its pass and before the rollups. |
+| **Budget** | `RESERIALIZE_DAY_CAP` (91) rewrites a night, newest first, on top of the content budget and tier C. |
+
+What the drain does with each queued day:
+
+- **The pass visited it**: consumed. The pass read its sources after the change
+  (see the snapshot below), so a second visit would only double the work.
+- **It holds no token rows** (every day after today included): consumed.
+  Nothing is stale, and writing the day would serialize it for the first time,
+  outside the budget, which only the day list decides.
+- **It holds token rows**: rewritten with `serialize_day(...,
+  require_complete=True)`, then consumed. A day rewritten once is not rewritten
+  again tomorrow, so a partial read, such as a failed summary read, must not be
+  written. A rewrite that raises, or that is refused for an incomplete read,
+  stays queued for the next night.
+- **Beyond the cap**: deferred, still queued.
+
+**The snapshot comes first.** The run reads the queue *before* the day list,
+and consumes a row only while its `queued_at` still equals the value it read.
+Every change behind a snapshotted row committed before the snapshot, since the
+API notifies after its commit and the ingester enqueues after that. Every
+`serialize_day` in the run reads its sources after the snapshot. So whatever
+settles a row has already seen the change. A notification that lands mid-run
+bumps `queued_at` and survives to the next night. Read after the pass instead,
+a day the pass had already read and that was then queued would count as
+visited, and its row would be consumed. If the day then aged out of the budget,
+the change would never land.
+
+**It converges.** Rows come only from notifications, which are real changes,
+and from the migration's one-time seed. Re-serializing a day never queues it
+again: `serialize_day` notifies nobody, and the poll path never enqueues. The
+queue drains whenever fewer than 91 old days change per night.
+
+**Deploy skew.** HBPE ships as its own image and can run before the migration.
+With the table missing, the ingester drops the request, which is what happened
+to an older day's change before the queue existed. The nightly serializes as
+before and reports the drain as `{"status": "unavailable"}`. A drain that fails
+for any other reason is reported as `"error"` and never fails the serialize
+step: bootstrap aborts a cold start on a failed step, and the queue's work is
+purely additive.
+
+**The seed.** The migration queues the backlog it can already see: token days
+holding a labeled event that did not happen (the #2892 backlog), or one that
+was updated or labeled after the day's last serialization.
+
+**What the queue does not reach:**
+
+- a change nothing announces: a re-labeled summary, a late label from the
+  drain's historical phase, a pipeline stage that writes `ci.events` directly
+  (such as `TemporalRepairStage`), any write that bypasses `HbpeNotifyService`;
+- a notification sent while the sidecar is down (LISTEN/NOTIFY is not durable);
+- the day an event left, when its writer names only the new day. The API's
+  `update` and `reschedule` name both.
 
 ### Why `ci.tasks` is not a source branch
 

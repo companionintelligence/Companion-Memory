@@ -1696,6 +1696,7 @@ export class CalendarEventService {
     // Thursday is still 90 minutes, even though the caller only names a start.
     const priorSpanMs =
       event.endTime && event.startTime ? event.endTime.getTime() - event.startTime.getTime() : 0;
+    const previousStart = event.startTime;
 
     event.startTime = startTime;
     event.endTime = endTime ?? (priorSpanMs > 0 ? new Date(startTime.getTime() + priorSpanMs) : null);
@@ -1712,6 +1713,9 @@ export class CalendarEventService {
     await this.eventRepository.save(event);
 
     await this.signallingEventService.send(EventUpdatedEvent, { eventId: event.id });
+    // Both days, as in update(): the move empties a slot on the old day and
+    // fills one on the new, and HBPE re-serializes only the days it is told.
+    await this.hbpeNotify?.notifyEvents(event.userId, [previousStart, event.startTime]);
 
     return this.findById(context, id);
   }
@@ -2019,6 +2023,7 @@ export class CalendarEventService {
     // One transaction across both halves of the aggregate (see CtiAggregate).
     // A title/description-only patch still bumps ci.events.updated_at so
     // detail-side incremental consumers see the change.
+    let previousStart: Date | null | undefined;
     const updated = await this.aggregate.applyUpdate(
       context,
       id,
@@ -2028,7 +2033,8 @@ export class CalendarEventService {
         base: basePatch,
       },
       {
-        withinTx: async ({ manager }) => {
+        withinTx: async ({ manager, before }) => {
+          previousStart = before.startTime;
           const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
           await this.graphDeltaWriter.entityUpdated({
             entityId: id,
@@ -2055,7 +2061,11 @@ export class CalendarEventService {
     await this.signallingEventService.send(EventUpdatedEvent, {
       eventId: updated.id,
     });
-    await this.hbpeNotify?.notifyEvents(updated.userId, updated.startTime);
+    // The day it left as well as the day it is on: a retimed event's tokens
+    // stay on its old day until HBPE re-serializes that day, and the payload
+    // is the only way HBPE learns which day it was. The service sends one
+    // notification per distinct UTC day, so an unmoved event costs one.
+    await this.hbpeNotify?.notifyEvents(updated.userId, [previousStart, updated.startTime]);
 
     // The transaction already reloaded the detail row; one base fetch
     // completes the egress composition.

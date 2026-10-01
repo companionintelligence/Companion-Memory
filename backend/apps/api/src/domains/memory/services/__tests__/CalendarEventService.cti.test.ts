@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import type { ServiceContext, UserServiceContext } from '@ci/common/context';
+import { HbpeNotifyService } from '@ci/common/hbpe';
 import { EventService } from '@ci/domains/events';
 
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
@@ -35,6 +36,7 @@ describe('CalendarEventService CTI aggregate', () => {
     update: jest.Mock;
     delete: jest.Mock;
   };
+  let hbpeNotify: { notifyEvents: jest.Mock };
 
   const ctx = { userId: 'user-1' } as UserServiceContext;
 
@@ -65,6 +67,8 @@ describe('CalendarEventService CTI aggregate', () => {
       },
     };
 
+    hbpeNotify = { notifyEvents: jest.fn(async () => undefined) };
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         CalendarEventService,
@@ -73,6 +77,7 @@ describe('CalendarEventService CTI aggregate', () => {
         { provide: EventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: {} },
         { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
+        { provide: HbpeNotifyService, useValue: hbpeNotify },
       ],
     }).compile();
     service = moduleRef.get(CalendarEventService);
@@ -136,6 +141,29 @@ describe('CalendarEventService CTI aggregate', () => {
     expect(repo.update).toHaveBeenCalledWith({ id: 'e1' }, expect.objectContaining({ category: 'social' }));
     expect(repo.update.mock.calls[0][1]).not.toHaveProperty('title');
     expect(result?.title).toBe('Renamed');
+  });
+
+  it('update tells HBPE about the day a retimed event left, not just the day it moved to', async () => {
+    // HBPE serializes tokens per UTC day and re-serializes only the days it is
+    // notified about. Naming just the new day left the old one holding the
+    // event's tokens, and a day older than HBPE's nightly budget is never
+    // rewritten otherwise.
+    const left = new Date('2026-03-02T09:00:00Z');
+    const moved = new Date('2026-03-05T09:00:00Z');
+    repo.findOne
+      // The authorizing before-load inside the transaction …
+      .mockResolvedValueOnce(
+        Object.assign(new EventEntity(), { id: 'e1', userId: 'user-1', startTime: left }),
+      )
+      // … and the reload after the patch.
+      .mockResolvedValueOnce(
+        Object.assign(new EventEntity(), { id: 'e1', userId: 'user-1', startTime: moved }),
+      );
+
+    await service.update({ userId: 'user-1' } as ServiceContext, 'e1', { start_time: moved });
+
+    expect(hbpeNotify.notifyEvents).toHaveBeenCalledTimes(1);
+    expect(hbpeNotify.notifyEvents).toHaveBeenCalledWith('user-1', [left, moved]);
   });
 
   it('remove tombstones the detail row instead of destroying the aggregate', async () => {

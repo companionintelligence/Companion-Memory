@@ -45,7 +45,9 @@ _INSERT_SQL = """
 class TokenSerializer:
     """Serializes a day's token assignments to ci.token_stream."""
 
-    def serialize_day(self, user_id: str, date: str) -> int:
+    def serialize_day(
+        self, user_id: str, date: str, *, require_complete: bool = False
+    ) -> int:
         """
         Write the token stream for one calendar date to ci.token_stream.
 
@@ -58,19 +60,28 @@ class TokenSerializer:
         keep reading them — a deleted event still nudging the forecast.
 
         The one exception is an incomplete read; see _fetch_tokens_for_day.
+        By default only an incomplete read that found NOTHING is refused, so a
+        day still publishes its events when the summary read fails. That is
+        safe for a day the nightly rewrites every night. It is not safe for a
+        day rewritten once, which is what reserialize_queue.drain does to a day
+        outside the budget: the summary tokens a partial read drops would stay
+        dropped until the day next changed. ``require_complete`` refuses every
+        incomplete read and keeps the stored rows instead, so the caller can
+        retry.
 
-        Returns the number of rows written (0 for a day that yields nothing).
+        Returns the number of rows written (0 for a day that yields nothing,
+        and for a refused read).
         """
         rows, read_complete = _fetch_tokens_for_day(user_id, date)
 
-        if not rows and not read_complete:
+        if not read_complete and (require_complete or not rows):
             # "No tokens" and "couldn't read the tokens" are the same empty
             # list here, because two of the three sources swallow their own
             # read errors. Deleting on that would let a single transient DB
             # blip wipe a good day, so an incomplete read keeps whatever is
             # already stored and the next clean run converges instead.
             log.warning(
-                "Skipping empty-day delete for user=%s date=%s: token read was incomplete",
+                "Keeping stored tokens for user=%s date=%s: token read was incomplete",
                 user_id,
                 date,
             )

@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import type { ServiceContext, UserServiceContext } from '@ci/common/context';
+import { HbpeNotifyService } from '@ci/common/hbpe';
 import { EventService } from '@ci/domains/events';
 
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
@@ -30,6 +31,7 @@ describe('CalendarEventService.reschedule — moving an event on the calendar', 
   let service: CalendarEventService;
   let repo: { findOne: jest.Mock; save: jest.Mock; find: jest.Mock };
   let signalling: { send: jest.Mock };
+  let hbpeNotify: { notifyEvents: jest.Mock };
   let saved: EventEntity | undefined;
 
   async function setup(row: EventEntity | null) {
@@ -44,6 +46,7 @@ describe('CalendarEventService.reschedule — moving an event on the calendar', 
       find: jest.fn(async () => []),
     };
     signalling = { send: jest.fn() };
+    hbpeNotify = { notifyEvents: jest.fn(async () => undefined) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -54,6 +57,7 @@ describe('CalendarEventService.reschedule — moving an event on the calendar', 
         { provide: EventService, useValue: signalling },
         { provide: DataSource, useValue: { getRepository: jest.fn() } },
         { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
+        { provide: HbpeNotifyService, useValue: hbpeNotify },
       ],
     }).compile();
 
@@ -114,11 +118,27 @@ describe('CalendarEventService.reschedule — moving an event on the calendar', 
     expect(signalling.send).toHaveBeenCalledTimes(1);
   });
 
+  it('tells HBPE about the day the event left as well as the day it landed on', async () => {
+    // HBPE re-serializes only the days it is notified about. A move that
+    // reached it not at all — or named only the new day — left the old day
+    // holding the event's tokens.
+    await setup(existing({ userId: 'user-1' }));
+
+    await service.reschedule(ctx, 'e1', newStart);
+
+    expect(hbpeNotify.notifyEvents).toHaveBeenCalledTimes(1);
+    expect(hbpeNotify.notifyEvents).toHaveBeenCalledWith('user-1', [
+      new Date('2026-08-03T14:00:00Z'),
+      newStart,
+    ]);
+  });
+
   it('returns null for an event the viewer does not own', async () => {
     await setup(null);
 
     await expect(service.reschedule(ctx, 'missing', newStart)).resolves.toBeNull();
     expect(repo.save).not.toHaveBeenCalled();
+    expect(hbpeNotify.notifyEvents).not.toHaveBeenCalled();
   });
 });
 
