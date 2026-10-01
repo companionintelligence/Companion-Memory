@@ -136,7 +136,7 @@ export function icsDescriptionText(description: string): string {
  * RECURRENCE-ID and STATUS:CANCELLED. It has to land as `cancelled`, not be
  * dropped. `dropExistingOverrides` (memory/recurrence/queries.ts) reads the
  * stored override as the reason not to synthesize that occurrence, and
- * `LIVE_EVENT_SQL` keeps the row itself off the calendar.
+ * `LIVE_EVENT_SQL` keeps the row itself out of every reader that applies it.
  */
 export function icsEventStatus(value: string | undefined): ImportedEventStatus | undefined {
   switch (value?.trim().toUpperCase()) {

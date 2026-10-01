@@ -92,9 +92,10 @@ export type LineItemRecord = Record<
  * A value outside this list is dropped rather than sent: `events_status_check`
  * would refuse it and fail the whole batch it rides in.
  *
- * `cancelled` is the one that matters to readers. It is in
- * `DEAD_EVENT_STATUSES`, so the calendar, the planner, Known places, daily
- * metrics and HBPE's schedule reconciliation leave the event out.
+ * `cancelled` is the one that matters to readers. The calendar, the planner and
+ * Known places leave it out through `LIVE_EVENT_SQL` (`DEAD_EVENT_STATUSES`);
+ * daily metrics and HBPE's schedule reconciliation each exclude it with a
+ * predicate of their own.
  */
 export const IMPORTED_EVENT_STATUSES = ['confirmed', 'tentative', 'cancelled'] as const;
 export type ImportedEventStatus = (typeof IMPORTED_EVENT_STATUSES)[number];

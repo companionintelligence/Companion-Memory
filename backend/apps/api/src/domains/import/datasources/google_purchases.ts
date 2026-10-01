@@ -217,9 +217,9 @@ export class GooglePurchasesFileImporter implements FileImporter {
     const title = merchant ? `${name} — ${merchant}` : name;
     // Google's own flag, a JSON boolean on the booking or the waitlist entry.
     // It rides verbatim as `Canceled`, and `true` is also stated as the event's
-    // status so the push writes `ci.events.status = 'cancelled'`: `Canceled`
-    // alone left the row 'confirmed', and every reader of the column counted a
-    // booking the user cancelled as a night out. `false` (or no flag) states
+    // status so the push writes `ci.events.status = 'cancelled'`. `Canceled`
+    // alone left the row 'confirmed', so every reader of the column counted a
+    // cancelled booking as one that happened. `false` (or no flag) states
     // nothing beyond the column DEFAULT, so it sets no status.
     const eventStatus: ImportedEventStatus | undefined = b.canceled === true ? 'cancelled' : undefined;
     const g: Graph = {
