@@ -24,6 +24,8 @@ the data model, the migration and backfill plan — is
 | `services/EnrichmentWindowService.ts` | Whether the nightly enrichment window is open, from a zoned wall clock + `ci.pipeline_turns`. |
 | `services/BackpressureService.ts` | `QUEUE_READY_CAPS` — the admission gate that stops the pipeline committing more work to a queue than it can re-decide. |
 | `services/EdgeProjectionReopenService.ts` | Bound to maintenance's `EDGE_PROJECTION_REOPENER`: a linkage writer that is NOT a stage (the `link_*` maintenance legs) re-opens the `promote.edge_*` leg's decision for the rows it wrote, in its own transaction. `STAGE_REOPENS`' counterpart for writers that report no `done`. |
+| `services/EventTimeReopenService.ts` | Bound to memory's `EVENT_TIME_REOPENER`: `CalendarEventService` re-opens `clean.temporal_repair` and `enrich.estimate_location` for an event whose time a source or a person just moved, in the transaction that moved it. |
+| `services/EventStatusReopenService.ts` | Bound to memory's `EVENT_STATUS_REOPENER`: `CalendarEventService` asks it when a status calls an event off or reinstates it. It takes back the estimate `enrich.estimate_location` lent an event that did not happen (`withdrawEstimates`, which that stage cannot do: its sweep never offers such an event) and re-opens the stage's ledger row so a reinstated event is offered again. |
 | `controllers/PipelineController.ts` | The operator HTTP surface (state, runs, pause/resume/cancel, dead letters + replay, quarantine release). |
 | `listeners/PipelineSliceListener.ts` | THE generic worker. One class serves every stage that will ever exist. |
 | `listeners/PipelineTickCron.ts` | The five-minute control tick (`20 */5 * * * *`), advisory-locked, calling whatever is bound to `PIPELINE_TICK`. |

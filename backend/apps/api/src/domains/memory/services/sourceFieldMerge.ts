@@ -110,7 +110,12 @@ function sameInstant(left: Date | null, right: Date | null): boolean {
   return left.getTime() === right.getTime();
 }
 
-function sameTimes(
+/**
+ * Whether two events start and end at the same instants — what "the time did
+ * not move" means to everything that reacts to a move (the merge here, and the
+ * writers that settle the pipeline's decisions on the old time).
+ */
+export function sameTimes(
   left: Pick<EventWhen, 'startTime' | 'endTime'>,
   right: Pick<EventWhen, 'startTime' | 'endTime'>,
 ): boolean {

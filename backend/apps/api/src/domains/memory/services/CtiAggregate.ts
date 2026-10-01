@@ -90,8 +90,17 @@ export interface CtiWriteHooks<TDetail> {
   /**
    * Runs inside the write transaction after detail/base patches (update) or
    * immediately before the base-row delete (remove), so the trail shares the tx.
+   *
+   * An {@link CtiAggregate.applyUpdate} hook that itself wrote to the detail
+   * row hands it back as it now stands, and `applyUpdate` answers with that row:
+   * the reload it took for `after` predates the hook. Anything else a hook
+   * returns is ignored, and so is a returned row on `remove` and `restore`.
    */
-  withinTx?: (args: { manager: EntityManager; before: TDetail; after: TDetail | null }) => Promise<void>;
+  withinTx?: (args: {
+    manager: EntityManager;
+    before: TDetail;
+    after: TDetail | null;
+  }) => Promise<TDetail | void>;
 }
 
 export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase extends LinkedBase> {
@@ -293,8 +302,11 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
       }
 
       const reloaded = await repository.findOne({ where });
+
       if (hooks?.withinTx) {
-        await hooks.withinTx({ manager, before, after: reloaded });
+        const rewritten = await hooks.withinTx({ manager, before, after: reloaded });
+
+        return rewritten ?? reloaded;
       }
 
       return reloaded;

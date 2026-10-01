@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { DataSource } from 'typeorm';
+import { DataSource, type EntityManager } from 'typeorm';
 
 import { DEAD_EVENT_STATUSES, LIVE_EVENT_SQL } from '@ci/domains/memory';
 
@@ -21,6 +21,7 @@ import {
   eventHappenedSql,
   liveEventStatusSql,
   RESERVATION_CANCELED_KEY,
+  withdrawEstimates,
 } from '../enrich/EstimateLocationStage';
 import { FORWARD_GEOCODE_PROVIDER_GENERATION } from '../enrich/GeocodeStage';
 
@@ -549,13 +550,16 @@ describe('EstimateLocationStage — an event that did not happen neither lends n
     expect(RESERVATION_CANCELED_KEY).toBe('Canceled');
   });
 
-  it('applies the one rule to the sweep, the donor branch and the load', async () => {
+  it('applies the one rule to the sweep, the donor branch, the write and the load', async () => {
     const h = makeStage([loadedRow(1)]);
 
     await h.stage.run(ctx, [eventId(1)]);
 
     expect(h.stage.source.predicate).toContain(eventHappenedSql('s'));
     expect(h.update()!.sql).toContain(`AND ${eventHappenedSql('n')} AND`);
+    // The write re-checks its own target, so a slice already running cannot put
+    // back an estimate the writer of a cancellation has just taken back.
+    expect(h.update()!.sql).toContain(`WHERE tgt.event_id = c.event_id AND ${eventHappenedSql('tgt')}`);
     expect(h.statements[0].sql).toContain(`NOT (${eventHappenedSql('e')}) AS did_not_happen`);
   });
 
@@ -589,6 +593,105 @@ describe('EstimateLocationStage — an event that did not happen neither lends n
   it('is rule generation 3 or later, so the sweep re-offers every row decided before the rule', () => {
     // Generations 1 and 2 took any undeleted located event as a donor.
     expect(ESTIMATE_RULE_GENERATION).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('withdrawEstimates — an estimate on an event called off is taken back by the writer of its status', () => {
+  // Proven against Postgres, through the real service, ledger and stage, in
+  // EventWritesSettlePipeline.integration.spec.ts. These pin the text, which
+  // is what catches an equivalent mutant: a guard dropped from a clause that
+  // only an inconsistent row could show.
+  const ids = [eventId(1), eventId(2)];
+
+  function run(rows: Array<{ event_id: string }> = [{ event_id: eventId(1) }]) {
+    const query = jest.fn(async (..._args: unknown[]) => rows);
+
+    return { query, done: withdrawEstimates({ query } as unknown as Pick<EntityManager, 'query'>, ids) };
+  }
+
+  /** The statement it ran, on one line: these pin its clauses, not how they are laid out. */
+  const statement = (query: jest.Mock): string =>
+    (query.mock.calls[0] as unknown as [string])[0].replace(/\s+/g, ' ').trim();
+
+  it("is one statement on the caller's manager, and counts the events it took an estimate from", async () => {
+    const { query, done } = run([{ event_id: eventId(1) }, { event_id: eventId(2) }]);
+
+    await expect(done).resolves.toBe(2);
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0]).toEqual([expect.any(String), [ids, ESTIMATED_CONFIDENCE, 'estimated']]);
+  });
+
+  it('is wrapped in a CTE, so the rows come back as rows and not as [rows, rowCount]', async () => {
+    const { query, done } = run();
+    await done;
+
+    const sql = statement(query);
+    expect(sql).toMatch(/^WITH withdrawn AS \( UPDATE ci\.events e /);
+    expect(sql).toMatch(/ SELECT event_id FROM withdrawn$/);
+  });
+
+  it('acts only on an event whose stored status says it did not happen', async () => {
+    const { query, done } = run();
+    await done;
+
+    const sql = statement(query);
+    // The status clause alone: deletion and prediction are not asked about.
+    expect(sql).toContain(`AND NOT (${liveEventStatusSql('e')})`);
+    expect(sql).not.toContain('is_deleted');
+    expect(sql).not.toContain('is_predicted');
+  });
+
+  it('acts only on a coordinate the estimator owns, that nothing hangs on', async () => {
+    const { query, done } = run();
+    await done;
+
+    const sql = statement(query);
+    expect(sql).toContain("AND e.metadata->>'location_source' = $3::text");
+    expect(sql).toContain('AND e.location_coordinates IS NOT NULL');
+    // The test the write applies to its own target, and the geocoder to its candidates.
+    expect(sql).toContain("AND (e.location_name IS NULL OR btrim(e.location_name) = '')");
+  });
+
+  it('is the inverse of what the estimator writes, as far as the row still proves it', async () => {
+    const { query, done } = run();
+    await done;
+
+    const sql = statement(query);
+    expect(sql).toContain('location_coordinates = NULL');
+    expect(sql).toContain("metadata = COALESCE(e.metadata, '{}'::jsonb) - 'location_source'");
+    // The inference and the confidence go back only while they are still the estimate's.
+    expect(sql).toContain(
+      "is_inferred = CASE WHEN e.inference_sources->>'method' = 'temporal_nn' THEN false ELSE e.is_inferred END",
+    );
+    expect(sql).toContain(
+      "inference_sources = CASE WHEN e.inference_sources->>'method' = 'temporal_nn' THEN '{}'::jsonb ELSE e.inference_sources END",
+    );
+    expect(sql).toContain(
+      'confidence_score = CASE WHEN e.confidence_score = $2::float8 THEN 1.0 ELSE e.confidence_score END',
+    );
+    expect(sql).toContain('updated_at = now()');
+  });
+
+  it("spells the estimator's method the way the estimator writes it", async () => {
+    const h = makeStage([loadedRow(1)]);
+    await h.stage.run({ userId: USER }, [eventId(1)]);
+    const { query, done } = run();
+    await done;
+
+    const withdrawal = statement(query);
+    expect(h.update()!.sql).toContain("'method', 'temporal_nn'");
+    expect(withdrawal).toContain("e.inference_sources->>'method' = 'temporal_nn'");
+    // And the marker and confidence it keys on are the ones the write is given.
+    expect((h.update()!.params as unknown[]).slice(3, 5)).toEqual([ESTIMATED_CONFIDENCE, 'estimated']);
+  });
+
+  it('touches nothing for no events', async () => {
+    const query = jest.fn();
+
+    await expect(withdrawEstimates({ query } as unknown as Pick<EntityManager, 'query'>, [])).resolves.toBe(
+      0,
+    );
+    expect(query).not.toHaveBeenCalled();
   });
 });
 

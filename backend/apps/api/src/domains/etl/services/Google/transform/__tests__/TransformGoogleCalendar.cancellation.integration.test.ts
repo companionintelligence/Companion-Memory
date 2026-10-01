@@ -172,12 +172,22 @@ describeWithDb(
       await dataSource.initialize();
       schemaLock = await acquireSchemaWriteLock(dataSource, 'etl/TransformGoogleCalendar.cancellation');
 
+      // A status that calls an event off settles what the pipeline decided about
+      // it; this suite is about the transform, so PipelineModule's binding is a
+      // no-op here (CalendarEventService.pipelineDecisions covers what asks).
+      const pipelineReopeners = {
+        reopenTimeDecisions: async (): Promise<number> => 0,
+        reopenStatusDecisions: async (): Promise<number> => 0,
+      };
+
       events = new CalendarEventService(
         dataSource.getRepository(EventEntity),
         dataSource.getRepository(EventBaseEntity),
         noopSignalling as never,
         dataSource,
         new GraphDeltaWriter(dataSource, noopLogger),
+        undefined,
+        { get: () => pipelineReopeners } as never,
       );
       transform = new GoogleCalendarTransformService(
         events,

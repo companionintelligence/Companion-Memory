@@ -6,6 +6,7 @@ import {
   In,
   IsNull,
   Repository,
+  type EntityManager,
   type FindOptionsOrder,
   type FindOptionsWhere,
   type ObjectLiteral,
@@ -46,6 +47,7 @@ import { CreateEventDto, UpdateEventDto, SearchEventDto, type SourceAssertedFiel
 
 import { CtiAggregate } from './CtiAggregate';
 import { purgeEventAggregates } from './eventPurge';
+import { resolveEventStatusReopener } from './eventStatusReopener';
 import { resolveEventTimeReopener } from './eventTimeReopener';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
 import {
@@ -55,9 +57,10 @@ import {
   mergeSourceTitle,
   mergeSourceWhen,
   recurrenceOf,
+  sameTimes,
   sameWhen,
 } from './sourceFieldMerge';
-import { mergeSourceStatus } from './sourceStatusMerge';
+import { DEFAULT_EVENT_STATUS, mergeSourceStatus } from './sourceStatusMerge';
 
 interface Options {
   limit?: number;
@@ -250,6 +253,22 @@ function isLivePlannedBlock(row: EventEntity): boolean {
   return !(DEAD_EVENT_STATUSES as readonly string[]).includes(status);
 }
 
+/** Whether a status says the event did not happen ({@link DEAD_EVENT_STATUSES}); none counts as the column default. */
+function isDeadStatus(status: string | null | undefined): boolean {
+  return (DEAD_EVENT_STATUSES as readonly string[]).includes(status ?? DEFAULT_EVENT_STATUS);
+}
+
+/**
+ * Whether a status change moved an event across the line between "still
+ * counts" and "called off", in either direction. Those are the only status
+ * changes the pipeline's decisions on whether the event happened have to hear
+ * about (eventStatusReopener.ts): `confirmed` → `tentative` changes none of
+ * them, and `cancelled` → `no_show` leaves it called off.
+ */
+function crossedLiveLine(from: string | null | undefined, to: string | null | undefined): boolean {
+  return isDeadStatus(from) !== isDeadStatus(to);
+}
+
 /**
  * Whether an identity belongs to a SOURCE — a calendar connection, the
  * importer, a capture client — whose later re-deliveries may move the row's
@@ -422,9 +441,12 @@ export class CalendarEventService {
     private readonly graphDeltaWriter: GraphDeltaWriter,
     @Optional() private readonly hbpeNotify?: HbpeNotifyService,
     /**
-     * Resolves EVENT_TIME_REOPENER (bound by PipelineModule) when a source moves
-     * an event's time — see eventTimeReopener.ts. Optional only so suites can
-     * construct the service by hand; a time move without it throws.
+     * Resolves EVENT_TIME_REOPENER and EVENT_STATUS_REOPENER (bound by
+     * PipelineModule) when a write moves an event's time, or calls it off or
+     * reinstates it — a source's re-delivery, or a person's `update` or
+     * `reschedule`. See eventTimeReopener.ts and eventStatusReopener.ts.
+     * Optional only so suites can construct the service by hand; such a write
+     * without it throws.
      */
     @Optional() private readonly moduleRef?: ModuleRef,
   ) {
@@ -882,7 +904,9 @@ export class CalendarEventService {
    * It also clears what `clean.temporal_repair` recorded about the OLD time
    * and re-opens the decisions stages made on it, in this transaction (see
    * eventTimeReopener.ts). It does not stamp `last_moved_at`, which says a
-   * person moved the row (sourceFieldMerge.ts reads it).
+   * person moved the row (sourceFieldMerge.ts reads it). A status that calls
+   * the event off, or reinstates it, settles the pipeline's decisions on
+   * whether it happened in the same transaction (eventStatusReopener.ts).
    *
    * A tombstone follows its source as well, so the trash's Undo brings back
    * what the source says NOW rather than what it said when the row was
@@ -1053,6 +1077,15 @@ export class CalendarEventService {
         await resolveEventTimeReopener(this.moduleRef).reopenTimeDecisions([id], manager);
       }
 
+      // A cancellation takes back the location the estimator lent the event; a
+      // reinstatement offers it to the estimator again. A status the merge left
+      // alone (the user's stands) is the stored one, so it crosses nothing. A
+      // tombstone's status follows its source like any other, so the same
+      // applies to one — quietly.
+      if (status && crossedLiveLine(row.status, status.status)) {
+        await resolveEventStatusReopener(this.moduleRef).reopenStatusDecisions([id], manager);
+      }
+
       const published = visible && !row.is_deleted;
 
       if (published) {
@@ -1109,6 +1142,52 @@ export class CalendarEventService {
     }
 
     return reloaded;
+  }
+
+  /**
+   * A person has just moved this event's start or end (`update`, `reschedule`):
+   * what the pipeline recorded about the OLD time no longer describes the row.
+   * Take it back, on `manager`, the transaction that moved it.
+   *
+   * What the move does to the clean stage's record of the old time:
+   *
+   *  - It clears all four columns the stage writes: `time_source`,
+   *    `time_precision`, `start_time_original` and `end_time_original`. The
+   *    stage documents its undo as `SET start_time = start_time_original WHERE
+   *    start_time_original IS NOT NULL`; left in place, that would put the
+   *    time the source had before the repair over the one the person has just
+   *    typed. And it writes the pair `COALESCE(start_time_original,
+   *    start_time)` — once, on the first repair — so with the old one still
+   *    there, a later repair of the new time would keep the stale original for
+   *    good. `time_source` ('repaired', or 'ingest' on an undated event the
+   *    person has now dated) and `time_precision` describe the old instant just
+   *    as much. Cleared, the time reads as unexamined, which is what NULL
+   *    means on a fresh insert, until the stage looks at it again. The source
+   *    refresh does the same for a source's move.
+   *  - It keeps `last_moved_at`, which the callers stamp. That column is how
+   *    the merge (sourceFieldMerge.ts) tells a person's time from the one the
+   *    stage left, and it reads the stamp, not these columns.
+   *  - It re-opens the stage, and the location estimate's, so both look at the
+   *    new time (eventTimeReopener.ts).
+   *
+   * Only when the start or end moved. The Plan page's edit sends both times on
+   * every save, a rename included, and a save that repeats the stored time has
+   * moved nothing: erasing the record of a repair that still holds would lose
+   * it for no reason. (Such a save still stamps `last_moved_at`, as it always
+   * has.)
+   */
+  private async settleTimeMove(manager: EntityManager, id: string): Promise<void> {
+    await manager.query(
+      `UPDATE ci.events
+          SET time_source = NULL, time_precision = NULL,
+              start_time_original = NULL, end_time_original = NULL
+        WHERE event_id = $1
+          AND (time_source IS NOT NULL OR time_precision IS NOT NULL
+               OR start_time_original IS NOT NULL OR end_time_original IS NOT NULL)`,
+      [id],
+    );
+
+    await resolveEventTimeReopener(this.moduleRef).reopenTimeDecisions([id], manager);
   }
 
   /**
@@ -1667,6 +1746,10 @@ export class CalendarEventService {
    * there — `PlannedBlockService.scheduleTaskAt` passes `{ isAuto: false }` for
    * exactly that reason. Omit it (the plain `rescheduleEvent` GraphQL mutation
    * does) to leave `isAuto` as it was.
+   *
+   * A move that changes the start or the end also takes back what the pipeline
+   * recorded about the old time, in the same transaction
+   * ({@link CalendarEventService.settleTimeMove}).
    */
   async reschedule(
     context: ServiceContext,
@@ -1696,9 +1779,13 @@ export class CalendarEventService {
     // Thursday is still 90 minutes, even though the caller only names a start.
     const priorSpanMs =
       event.endTime && event.startTime ? event.endTime.getTime() - event.startTime.getTime() : 0;
+    const newEnd = endTime ?? (priorSpanMs > 0 ? new Date(startTime.getTime() + priorSpanMs) : null);
+    // Against what is stored, before the row takes the new values: a drop on the
+    // slot it already holds moves nothing (settleTimeMove).
+    const moved = !sameTimes(event, { startTime, endTime: newEnd });
 
     event.startTime = startTime;
-    event.endTime = endTime ?? (priorSpanMs > 0 ? new Date(startTime.getTime() + priorSpanMs) : null);
+    event.endTime = newEnd;
     event.lastMovedAt = new Date();
 
     if (opts?.isAuto !== undefined) {
@@ -1709,7 +1796,14 @@ export class CalendarEventService {
       event.externalSyncStatus = 'pending';
     }
 
-    await this.eventRepository.save(event);
+    // The move and what the pipeline decided on the old time commit together.
+    await this.eventRepository.manager.transaction(async (manager) => {
+      await manager.getRepository(EventEntity).save(event);
+
+      if (moved) {
+        await this.settleTimeMove(manager, event.id);
+      }
+    });
 
     await this.signallingEventService.send(EventUpdatedEvent, { eventId: event.id });
 
@@ -1839,6 +1933,13 @@ export class CalendarEventService {
     return result ? this.composeOne(result) : null;
   }
 
+  /**
+   * Patch an event. A patch that moves its start or end, or calls it off or
+   * reinstates it, also takes back what the pipeline decided about the old time
+   * or about whether it happened, in the same transaction
+   * ({@link CalendarEventService.settleTimeMove}, eventStatusReopener.ts). The
+   * event it returns is the row as it stands after that.
+   */
   async update(context: ServiceContext, id: string, data: UpdateEventDto): Promise<Event | null> {
     const updateData: Partial<EventEntity> = {};
 
@@ -2028,7 +2129,7 @@ export class CalendarEventService {
         base: basePatch,
       },
       {
-        withinTx: async ({ manager }) => {
+        withinTx: async ({ manager, before, after }) => {
           const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
           await this.graphDeltaWriter.entityUpdated({
             entityId: id,
@@ -2044,6 +2145,28 @@ export class CalendarEventService {
             changedByUserId: typeof context.userId === 'string' ? context.userId : null,
             manager,
           });
+
+          // What the pipeline decided about the old time, and about whether the
+          // event happened, taken back in this transaction. Judged against the
+          // row as this transaction found it: a patch that repeats what is
+          // stored changes neither.
+          const moved = after !== null && !sameTimes(before, after);
+          const calledOffOrReinstated = after !== null && crossedLiveLine(before.status, after.status);
+
+          if (moved) {
+            await this.settleTimeMove(manager, id);
+          }
+
+          if (calledOffOrReinstated) {
+            await resolveEventStatusReopener(this.moduleRef).reopenStatusDecisions([id], manager);
+          }
+
+          // `after` was read before either wrote to the row, so the caller is
+          // handed the row as it stands now: cleared markers and a withdrawn
+          // estimate, not the ones the move just replaced.
+          return moved || calledOffOrReinstated
+            ? ((await manager.getRepository(EventEntity).findOne({ where: { id } })) ?? undefined)
+            : undefined;
         },
       },
     );

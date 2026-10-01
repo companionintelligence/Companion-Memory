@@ -120,7 +120,14 @@ describe('CalendarEventService CTI aggregate', () => {
   });
 
   it('update routes title/description to the base row and detail fields to the detail row', async () => {
-    const row = Object.assign(new EventEntity(), { id: 'e1', userId: 'user-1' });
+    // The stored time and status are what `update` judges a move, or a call-off, against.
+    const row = Object.assign(new EventEntity(), {
+      id: 'e1',
+      userId: 'user-1',
+      startTime: new Date('2026-01-01T09:00:00Z'),
+      endTime: null,
+      status: 'confirmed',
+    });
     repo.findOne.mockResolvedValue(row);
     baseRepo.find.mockResolvedValue([
       Object.assign(new EventBaseEntity(), { id: 'e1', name: 'Renamed', description: null }),

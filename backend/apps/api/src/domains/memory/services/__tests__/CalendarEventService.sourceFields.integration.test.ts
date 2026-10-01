@@ -16,6 +16,7 @@ import { calendarEventIdentity, platformIdentity } from '../../identity';
 import { clearExpansionZoneCache } from '../../recurrence/queries';
 import type { CreateEventDto } from '../../types';
 import { CalendarEventService } from '../CalendarEventService';
+import { EVENT_STATUS_REOPENER } from '../eventStatusReopener';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
 /**
@@ -104,6 +105,8 @@ describeWithDb(
     // What PipelineModule binds to EVENT_TIME_REOPENER. Here, only whether it
     // was asked, and on which transaction.
     const reopener = { reopenTimeDecisions: jest.fn(async () => 0) };
+    // And EVENT_STATUS_REOPENER, which a delivery that cancels the event asks.
+    const statusReopener = { reopenStatusDecisions: jest.fn(async () => 0) };
     const noopLogger = {
       setContext: () => undefined,
       log: () => undefined,
@@ -229,7 +232,7 @@ describeWithDb(
         dataSource,
         new GraphDeltaWriter(dataSource, noopLogger),
         hbpe as never,
-        { get: () => reopener } as never,
+        { get: (token: string) => (token === EVENT_STATUS_REOPENER ? statusReopener : reopener) } as never,
       );
     });
 
@@ -689,6 +692,7 @@ describeWithDb(
       it('keeps a repaired row a person has moved since', async () => {
         const id = await repairedAllDay('repaired');
         await service.reschedule(ctx, id, new Date('2026-12-24T08:00:00Z'), new Date('2026-12-25T08:00:00Z'));
+        jest.clearAllMocks();
 
         await service.create(
           ctx,
@@ -699,10 +703,15 @@ describeWithDb(
           }),
         );
 
+        // The person's slot stands, and so does what their move cleared: the
+        // stage's record of the time the person replaced is not put back.
         expect(await row(id)).toMatchObject({
           start_time: new Date('2026-12-24T08:00:00Z'),
-          start_time_original: DAY,
+          time_source: null,
+          start_time_original: null,
+          source_start_time: new Date('2026-12-28T00:00:00Z'),
         });
+        expect(reopener.reopenTimeDecisions).not.toHaveBeenCalled();
       });
 
       it("keeps the stage's times when the source changes only a repaired series' rule", async () => {

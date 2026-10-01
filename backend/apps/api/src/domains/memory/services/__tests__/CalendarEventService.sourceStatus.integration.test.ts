@@ -16,6 +16,8 @@ import type { CreateEventDto } from '../../types';
 import { CalendarEventService } from '../CalendarEventService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
+import { stubPipelineReopeners } from './harness/pipelineReopeners';
+
 /**
  * ═══════════════════════════════════════════════════════════════════════════
  * A SOURCE'S RE-DELIVERED STATUS, AGAINST THE ROWS IT LANDS ON. IN POSTGRES.
@@ -61,6 +63,9 @@ describeWithDb(`CalendarEventService — a source re-delivering a status (${avai
   const ctx: UserServiceContext = { userId: uuidv7() } as UserServiceContext;
   const signalling = { send: jest.fn(async () => undefined) };
   const hbpe = { notifyEvents: jest.fn(async () => undefined) };
+  // What PipelineModule binds: a status that calls an event off settles the
+  // pipeline's decisions on it. Here, only whether it was asked.
+  const pipeline = stubPipelineReopeners();
   const noopLogger = {
     setContext: () => undefined,
     log: () => undefined,
@@ -143,6 +148,7 @@ describeWithDb(`CalendarEventService — a source re-delivering a status (${avai
       dataSource,
       new GraphDeltaWriter(dataSource, noopLogger),
       hbpe as never,
+      pipeline.moduleRef as never,
     );
   });
 

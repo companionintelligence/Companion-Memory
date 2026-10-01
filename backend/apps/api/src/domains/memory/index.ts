@@ -298,6 +298,11 @@ export {
   type EventTimeReopener,
   resolveEventTimeReopener,
 } from './services/eventTimeReopener';
+export {
+  EVENT_STATUS_REOPENER,
+  type EventStatusReopener,
+  resolveEventStatusReopener,
+} from './services/eventStatusReopener';
 export type { MapPin } from './services/CalendarEventService';
 // What `FileService.purge` answers with, and the error that says a purge deleted a file's stored
 // objects and then could not delete its records.

@@ -161,4 +161,59 @@ describe('CtiAggregate.applyUpdate', () => {
     // would assert `{ description: undefined }` instead of the real value.
     expect(baseRepo.update).toHaveBeenCalledWith({ id: 'd1' }, { description: 'Real summary' });
   });
+
+  /**
+   * The reload `applyUpdate` hands a hook as `after` predates the hook. A hook
+   * that writes to the detail row itself (CalendarEventService clears what the
+   * clean stage recorded about a time a person just moved) hands back the row
+   * as it now stands, and that is what `applyUpdate` answers with.
+   */
+  describe('a hook that wrote to the detail row', () => {
+    const before = { id: 'd1', name: 'Old name', summary: null };
+    const reloaded = { ...before, name: 'New name' };
+
+    it('answers with the row the hook hands back', async () => {
+      const { aggregate, detailRepo } = makeAggregate();
+      detailRepo.findOne.mockResolvedValueOnce(before).mockResolvedValueOnce(reloaded);
+      const rewritten = { ...reloaded, summary: 'Rewritten inside the transaction' };
+      const withinTx = jest.fn(async () => rewritten);
+
+      const result = await aggregate.applyUpdate(
+        {} as never,
+        'd1',
+        { detail: { name: 'New name' } } as never,
+        { withinTx } as never,
+      );
+
+      expect(result).toBe(rewritten);
+      // The hook still sees the row before the write and the reload after it.
+      expect(withinTx).toHaveBeenCalledWith(expect.objectContaining({ before, after: reloaded }));
+    });
+
+    it.each([
+      ['nothing', async () => undefined],
+      ['null', async () => null],
+    ])('answers with its own reload when the hook returns %s', async (_what, hook) => {
+      const { aggregate, detailRepo } = makeAggregate();
+      detailRepo.findOne.mockResolvedValueOnce(before).mockResolvedValueOnce(reloaded);
+
+      const result = await aggregate.applyUpdate(
+        {} as never,
+        'd1',
+        { detail: { name: 'New name' } } as never,
+        { withinTx: hook } as never,
+      );
+
+      expect(result).toBe(reloaded);
+    });
+
+    it('still answers with the reload when no hook was given', async () => {
+      const { aggregate, detailRepo } = makeAggregate();
+      detailRepo.findOne.mockResolvedValueOnce(before).mockResolvedValueOnce(reloaded);
+
+      await expect(
+        aggregate.applyUpdate({} as never, 'd1', { detail: { name: 'New name' } } as never),
+      ).resolves.toBe(reloaded);
+    });
+  });
 });

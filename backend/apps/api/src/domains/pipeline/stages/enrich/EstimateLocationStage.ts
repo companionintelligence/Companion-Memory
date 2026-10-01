@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, type EntityManager } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -221,6 +221,102 @@ export function eventHappenedSql(alias: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Taking an estimate back
+// ---------------------------------------------------------------------------
+
+/**
+ * `inference_sources.method` both estimators write beside
+ * {@link LOCATION_SOURCE_ESTIMATED}: the stage below, and the legacy
+ * `LocationEstimateService`. It is what says the inference on the row is the
+ * estimator's, because a later reverse geocode can overwrite the token.
+ */
+const ESTIMATE_METHOD = 'temporal_nn';
+
+/**
+ * Take back the estimate an event was lent, once its status calls it off.
+ *
+ * This stage never withdraws a coordinate, and it cannot: the sweep does not
+ * offer an event that did not happen (see {@link ESTIMATE_LOCATION_SOURCE}), and
+ * a slice that carries one anyway is recorded `skipped: event_did_not_happen`
+ * and written nothing. So an event estimated while it stood and cancelled
+ * afterwards would keep a coordinate that says the user was near somewhere
+ * when it happened. The writer of the status takes it back, through
+ * `EVENT_STATUS_REOPENER` (`EventStatusReopenService`), in the transaction that
+ * calls the event off.
+ *
+ * What an event gets back is the inverse of what {@link writeEstimates}
+ * wrote, as far as the row still proves it, and the same as migration
+ * `20260930035044_clear_estimates_on_events_with_own_location`:
+ *
+ *  - `location_coordinates` is cleared, and `metadata.location_source` with it;
+ *  - `is_inferred` and `inference_sources` go back to false and `'{}'` when the
+ *    inference is still the estimator's (`method = temporal_nn`). It replaced
+ *    `inference_sources` wholesale, so it was the row's only recorded one;
+ *  - `confidence_score` goes back to 1.0 where it is exactly the estimate's 0.4.
+ *    It wrote `LEAST(existing, 0.4)`, so a lower value is the importer's own.
+ *
+ * Only an estimate the estimator owns, and nothing hangs on:
+ *
+ *  - the status is a dead one ({@link liveEventStatusSql}), judged from the
+ *    stored row, and nothing else is asked about. A tombstone whose source
+ *    cancels it is as called off as any event, and one that is only deleted is
+ *    never passed here, because deleting it changes no status (a tombstone keeps
+ *    what it has, so that restoring it is exact);
+ *  - `metadata.location_source` is `estimated`, the one value whose coordinate
+ *    this stage will overwrite. A measured, imported or geocoded coordinate is
+ *    the event's own and a cancelled meeting still has its venue;
+ *  - `location_name` is blank. A name makes the coordinate more than an
+ *    estimate: `promote.place` links such a row to a Location, and the edge
+ *    leg projects from the link, none of which this takes back. v2 estimates
+ *    only an event with no name, so a name beside an estimate is one a person
+ *    typed afterwards, or a legacy reverse geocode wrote.
+ *
+ * Known limit: `location_source` is the estimator's marker and nothing clears
+ * it when a person later types a coordinate over the estimate
+ * (`CalendarEventService.update` leaves `metadata` alone). A cancellation
+ * would then take that coordinate back with the estimate. The stage itself
+ * recomputes such a row the same way, on the next bump.
+ *
+ * Idempotent, and a no-op for an event with no estimate. Runs on `manager`, the
+ * caller's transaction. Returns how many events it took an estimate from.
+ */
+export async function withdrawEstimates(
+  manager: Pick<EntityManager, 'query'>,
+  eventIds: readonly string[],
+): Promise<number> {
+  if (eventIds.length === 0) {
+    return 0;
+  }
+
+  // The UPDATE is wrapped in a CTE for the reason `writeEstimates` is: TypeORM
+  // answers a bare `UPDATE … RETURNING` with `[rows, rowCount]`.
+  const rows = (await manager.query(
+    `WITH withdrawn AS (
+       UPDATE ci.events e
+          SET location_coordinates = NULL,
+              metadata             = COALESCE(e.metadata, '{}'::jsonb) - 'location_source',
+              is_inferred          = CASE WHEN e.inference_sources->>'method' = '${sqlToken('method', ESTIMATE_METHOD)}'
+                                          THEN false ELSE e.is_inferred END,
+              inference_sources    = CASE WHEN e.inference_sources->>'method' = '${sqlToken('method', ESTIMATE_METHOD)}'
+                                          THEN '{}'::jsonb ELSE e.inference_sources END,
+              confidence_score     = CASE WHEN e.confidence_score = $2::float8
+                                          THEN 1.0 ELSE e.confidence_score END,
+              updated_at           = now()
+        WHERE e.event_id = ANY($1::uuid[])
+          AND NOT (${liveEventStatusSql('e')})
+          AND e.metadata->>'location_source' = $3::text
+          AND e.location_coordinates IS NOT NULL
+          AND (e.location_name IS NULL OR btrim(e.location_name) = '')
+       RETURNING e.event_id
+     )
+     SELECT event_id FROM withdrawn`,
+    [[...eventIds], ESTIMATED_CONFIDENCE, LOCATION_SOURCE_ESTIMATED],
+  )) as Array<{ event_id: string }>;
+
+  return rows.length;
+}
+
+// ---------------------------------------------------------------------------
 // The version, DERIVED rather than chosen
 // ---------------------------------------------------------------------------
 
@@ -402,12 +498,17 @@ function quotedSourceSystems(systems: readonly string[] = ESTIMATE_SOURCE_SYSTEM
  * change back. A meeting cancelled before the sweep reached it has no ledger
  * row, so if it is un-cancelled the next sweep offers it, with no bump. The
  * cost is the mirror image: a row estimated while live and cancelled
- * afterwards keeps its estimate, because the sweep no longer offers it (the
- * same as a system removed from {@link ESTIMATE_SOURCE_SYSTEMS}). That
- * includes an estimate an earlier generation wrote onto an event already
- * cancelled: the v3 bump cannot reach it. The reference corpus had none. A
- * row called off between the sweep and its slice is recorded as
- * `skipped: event_did_not_happen`.
+ * afterwards would keep its estimate, because the sweep no longer offers it
+ * (the same as a system removed from {@link ESTIMATE_SOURCE_SYSTEMS}) and this
+ * stage never withdraws a coordinate. So the writer of the status takes it
+ * back ({@link withdrawEstimates}), in the transaction that calls the event
+ * off, and re-opens this stage's ledger row in the same one, so that a
+ * reinstated event is offered again. What that cannot reach is an estimate on
+ * an event called off before that existed, or by a writer that does not go
+ * through `CalendarEventService`: including one an earlier generation wrote
+ * onto an event already cancelled, which the v3 bump cannot reach either. The
+ * reference corpus had none. A row called off between the sweep and its slice
+ * is recorded as `skipped: event_did_not_happen`.
  *
  * ── What is NOT here, and why that is an improvement ───────────────────────
  *
@@ -670,10 +771,11 @@ export class EstimateLocationStage implements Stage {
 
       if (row == null) {
         // Not returned by the UPDATE, so the LATERAL found no donor inside the
-        // window. (It also covers a row that flipped to `is_predicted`, or gained
-        // a `location_name`, between the load and the write, which the
-        // statement's own guards exclude — rare enough that a shared reason is
-        // better than a second round trip to tell them apart.)
+        // window. (It also covers a row that was deleted, flipped to
+        // `is_predicted`, was called off, or gained a `location_name`, between
+        // the load and the write, which the statement's own guards exclude —
+        // rare enough that a shared reason is better than a second round trip to
+        // tell them apart.)
         results.set(id, { outcome: 'skipped', reason: 'no_donor_in_window' });
 
         continue;
@@ -849,7 +951,15 @@ export class EstimateLocationStage implements Stage {
    *    donor branch. Read that constant before touching this statement.
    *  - **The target re-checks `location_name`**, so the `has_location_name` rule is
    *    transactional rather than advisory: a name written between the load and
-   *    this statement still wins. Same shape as the `is_predicted` guard beside it.
+   *    this statement still wins. Same shape as the guard beside it.
+   *  - **The target re-checks that it happened** ({@link eventHappenedSql}): not
+   *    deleted, not a prediction, not called off. Postgres re-evaluates this
+   *    against the row's newest version when it has waited on a lock, so an
+   *    event called off between the load and this statement is not written, and
+   *    an estimate taken back by the writer of the status ({@link
+   *    withdrawEstimates}) cannot be put back by a slice that was already
+   *    running. The sweep and the load say the same; this is the one that holds
+   *    under a concurrent write.
    *  - **A donor event must have happened** ({@link eventHappenedSql}, v3). A
    *    cancelled meeting, a prediction or a cancelled reservation keeps a
    *    coordinate of its own, but it is not evidence of where the user was,
@@ -917,7 +1027,7 @@ export class EstimateLocationStage implements Stage {
             LIMIT 1
          ) d
         WHERE tgt.event_id = c.event_id
-          AND COALESCE(tgt.is_predicted, false) = false
+          AND ${eventHappenedSql('tgt')}
           AND (tgt.location_name IS NULL OR btrim(tgt.location_name) = '')
        RETURNING tgt.event_id,
                  d.donor,

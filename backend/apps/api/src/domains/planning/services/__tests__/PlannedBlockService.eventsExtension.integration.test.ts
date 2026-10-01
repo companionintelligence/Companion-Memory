@@ -126,12 +126,21 @@ describeWithDb('ci.events M3 extension (integration)', () => {
       [owner.userId, `planning.ext.${owner.userId}@example.test`],
     );
 
+    // Moving a block settles what the pipeline decided on its old time; this
+    // suite is about the block, so PipelineModule's binding is a no-op here.
+    const pipelineReopeners = {
+      reopenTimeDecisions: async (): Promise<number> => 0,
+      reopenStatusDecisions: async (): Promise<number> => 0,
+    };
+
     const eventService = new CalendarEventService(
       dataSource.getRepository(EventEntity),
       dataSource.getRepository(EventBaseEntity),
       noopSignalling as never,
       dataSource,
       new GraphDeltaWriter(dataSource, noopLogger),
+      undefined,
+      { get: () => pipelineReopeners } as never,
     );
 
     taskService = new TaskService(

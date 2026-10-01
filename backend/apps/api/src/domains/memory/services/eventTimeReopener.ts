@@ -7,7 +7,7 @@ import type { EntityManager } from 'typeorm';
  * it (`EventTimeReopenService`) and PipelineModule binds
  * {@link EVENT_TIME_REOPENER} to that implementation.
  *
- * ── Why the source refresh has to say anything ─────────────────────────────
+ * ── Why the writers of a time have to say anything ─────────────────────────
  *
  * Stages decide on an event's time once, record `done`, and THE ONE RULE never
  * offers the row again at that version. Two of those decisions are wrong the
@@ -18,14 +18,17 @@ import type { EntityManager } from 'typeorm';
  *    the source moves that event, the refresh writes the source's new UTC
  *    midnight and clears the stage's markers; without a re-open the row would
  *    keep that until the stage's next version bump, drawn a day early for
- *    everyone west of Greenwich.
+ *    everyone west of Greenwich. When a person moves it (`update`,
+ *    `reschedule`), the stage's record of the old time is just as stale: the
+ *    undo it documents would put the old time back over the person's, and the
+ *    row would go on being called corrected.
  *  - `enrich.estimate_location` lent the event a coordinate from where the
  *    user was around its OLD time. It recomputes its own estimates, but only
  *    when offered the row again.
  *
- * A stage's `done` re-opens its consumers through `STAGE_REOPENS`. The refresh
- * is not a stage, so it re-opens the decisions itself, in the SAME transaction
- * as the write that moved the time: both commit, or neither.
+ * A stage's `done` re-opens its consumers through `STAGE_REOPENS`. A writer of
+ * a time is not a stage, so it re-opens the decisions itself, in the SAME
+ * transaction as the write that moved the time: both commit, or neither.
  *
  * ── Why a token ────────────────────────────────────────────────────────────
  *
@@ -54,9 +57,9 @@ export interface EventTimeReopener {
  *
  * Never returns null, for the reason `resolveEdgeProjectionReopener` gives: a
  * time move whose re-open cannot run leaves the row in a state no stage ever
- * revisits, so the move must fail (its transaction rolls back, the sync logs
- * the event and the source's next delivery retries it) rather than land
- * half-done. The api and the worker both import PipelineModule, so the only
+ * revisits, so the move must fail (its transaction rolls back; the sync logs
+ * the event and the source's next delivery retries it, or the person's edit is
+ * refused) rather than land half-done. The api and the worker both import PipelineModule, so the only
  * way here is a container assembled without it, or a service constructed by
  * hand without a ModuleRef.
  */
@@ -67,7 +70,7 @@ export function resolveEventTimeReopener(moduleRef: ModuleRef | undefined): Even
     reopener = moduleRef?.get<EventTimeReopener>(EVENT_TIME_REOPENER, { strict: false });
   } catch (err: unknown) {
     throw new Error(
-      `No provider is bound to ${EVENT_TIME_REOPENER}. A source's time move cannot re-open the ` +
+      `No provider is bound to ${EVENT_TIME_REOPENER}. A time move cannot re-open the ` +
         `pipeline's decisions on the event's time without it (PipelineModule binds it). Cause: ` +
         `${err instanceof Error ? err.message : String(err)}`,
     );
@@ -75,7 +78,7 @@ export function resolveEventTimeReopener(moduleRef: ModuleRef | undefined): Even
 
   if (reopener == null) {
     throw new Error(
-      `${EVENT_TIME_REOPENER} is unavailable (no ModuleRef): a source's time move cannot re-open the ` +
+      `${EVENT_TIME_REOPENER} is unavailable (no ModuleRef): a time move cannot re-open the ` +
         `pipeline's decisions on the event's time. Construct the service through Nest, or hand it a ` +
         `ModuleRef that resolves the token.`,
     );
