@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   Brackets,
@@ -23,6 +23,7 @@ import {
   type KeysetPage,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
+import { FileRemovedEvent } from '@ci/domains/files/events';
 import { ContentCreatedEvent, ContentRemovedEvent, ContentUpdatedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
@@ -42,10 +43,12 @@ import {
   contentTypeOptions,
   distinctColumnSql,
 } from './contentFacetsSql';
-import { purgeContentAggregates } from './contentPurge';
+import { type PurgedContentAggregates, purgeContentAggregates } from './contentPurge';
 import { CtiAggregate } from './CtiAggregate';
+import { STORED_OBJECTS, StoredObjectsDeletedError, type StoredObjects } from './filePurge';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
 import { clearHbpeLinks } from './purgeTeardown';
+import { nothingWrapped } from './wrappedFilePurge';
 
 /** The provenance triple shared by a content row and the event it auto-links to. */
 /** Scoped filter for {@link ContentService.findPage}: the content library's pickers. */
@@ -144,6 +147,12 @@ export class ContentService {
     private readonly eventRepository: Repository<EventEntity>,
     private readonly eventService: EventService,
     private readonly graphDeltaWriter: GraphDeltaWriter,
+    /**
+     * The object store, which {@link purge} deletes the stored files of a photo from. Optional so that a
+     * service built without one still does everything else; a purge that would have to delete stored
+     * bytes and has no store is refused before it changes anything.
+     */
+    @Optional() @Inject(STORED_OBJECTS) private readonly storedObjects?: StoredObjects,
   ) {
     this.aggregate = new CtiAggregate({
       detailRepository: this.contentRepository,
@@ -1415,6 +1424,11 @@ export class ContentService {
    * goes, for what a plain delete of the base row would have failed on, and for
    * how it differs from `remove`.
    *
+   * A photo's file goes with its content when nothing else uses it, and stays, reported
+   * in `files.kept`, when something does: see {@link planWrappedFiles}. The files'
+   * objects are deleted from the object store inside the transaction, while the rows are
+   * locked, and before any row is.
+   *
    * Content attached to an event is purged like any other and the event is left
    * alone; purging the event is what takes its content with it
    * ({@link CalendarEventService.purge}).
@@ -1422,26 +1436,48 @@ export class ContentService {
    * Everything is one transaction. Search is told afterwards, and the ids that
    * were not the caller's, or no longer exist, are simply left out of the result.
    *
-   * @returns the ids that were purged.
+   * @throws {StoredObjectsDeletedError} if the stored files were deleted and the rows
+   *   then could not be. The content named in it is still there, still wrapping a file
+   *   that no longer opens, and purging it again finishes the job. Anything that failed
+   *   before that left everything as it was.
+   * @returns the ids that were purged, and what was done about the files they wrapped.
    */
-  async purge(context: UserServiceContext, ids: string[]): Promise<{ contentIds: string[] }> {
+  async purge(context: UserServiceContext, ids: string[]): Promise<PurgedContentAggregates> {
     const requested = Array.from(new Set(ids));
 
     if (requested.length === 0) {
-      return { contentIds: [] };
+      return { contentIds: [], files: nothingWrapped() };
     }
 
-    const contentIds = await this.contentRepository.manager.transaction((manager) =>
-      purgeContentAggregates(manager, context.userId, requested),
-    );
+    // Named by the purge itself once the objects are gone, and read here rather than there
+    // because the commit that follows can fail too.
+    let objectsGoneFor: string[] = [];
+    let purged: PurgedContentAggregates;
+
+    try {
+      purged = await this.contentRepository.manager.transaction((manager) =>
+        purgeContentAggregates(manager, context.userId, requested, {
+          objects: this.storedObjects,
+          onObjectsDeleted: (named) => {
+            objectsGoneFor = named;
+          },
+        }),
+      );
+    } catch (error) {
+      throw objectsGoneFor.length > 0 ? new StoredObjectsDeletedError(objectsGoneFor, error) : error;
+    }
 
     // The index rows were deleted in the transaction. This tells anything else
     // that listens, and is what announces a removal everywhere else in the app.
-    for (const contentId of contentIds) {
+    for (const contentId of purged.contentIds) {
       await this.eventService.send(ContentRemovedEvent, { contentId });
     }
 
-    return { contentIds };
+    for (const fileId of purged.files.fileIds) {
+      await this.eventService.send(FileRemovedEvent, { fileId });
+    }
+
+    return purged;
   }
 
   /**

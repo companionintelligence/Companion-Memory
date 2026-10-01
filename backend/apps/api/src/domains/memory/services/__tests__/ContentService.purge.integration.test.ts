@@ -17,6 +17,7 @@ import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import { ContentService } from '../ContentService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
+import { nothingWrapped } from '../wrappedFilePurge';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -454,7 +455,7 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
 
       const purged = await contents.purge(owner, [doomed.contentId]);
 
-      expect(purged).toEqual({ contentIds: [doomed.contentId] });
+      expect(purged).toEqual({ contentIds: [doomed.contentId], files: nothingWrapped() });
       expect(await footprint(doomed)).toEqual(EMPTY);
       // The control content is exactly as it was, row for row.
       expect(await footprint(control)).toEqual(controlBefore);
@@ -508,7 +509,7 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
       expect(await exists('SELECT count(*) FROM ci.entities WHERE entity_id = $1', bare)).toBe(true);
       expect(await exists('SELECT count(*) FROM ci.content WHERE id = $1', bare)).toBe(true);
 
-      expect(await contents.purge(owner, [bare])).toEqual({ contentIds: [bare] });
+      expect(await contents.purge(owner, [bare])).toEqual({ contentIds: [bare], files: nothingWrapped() });
       expect(await exists('SELECT count(*) FROM ci.entities WHERE entity_id = $1', bare)).toBe(false);
       expect(await exists('SELECT count(*) FROM ci.content WHERE id = $1', bare)).toBe(false);
     });
@@ -563,7 +564,7 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
 
       const purged = await contents.purge(owner, [doomed.contentId]);
 
-      expect(purged).toEqual({ contentIds: [doomed.contentId] });
+      expect(purged).toEqual({ contentIds: [doomed.contentId], files: nothingWrapped() });
       expect(await footprint(doomed)).toEqual(EMPTY);
 
       // The event is the owner of its own life: purging its content does not touch it.
@@ -617,7 +618,7 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
 
       const purged = await contents.purge(owner, [theirs.contentId, uuidv7()]);
 
-      expect(purged).toEqual({ contentIds: [] });
+      expect(purged).toEqual({ contentIds: [], files: nothingWrapped() });
       expect(await footprint(theirs)).toEqual(theirsBefore);
       expect(published).toEqual([]);
 
@@ -631,7 +632,7 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
       // of its to clear, and the generic node delete handles it. This is not the purge’s to guess at.
       const orphan = await bareContent('Legacy note', null);
 
-      expect(await contents.purge(owner, [orphan])).toEqual({ contentIds: [] });
+      expect(await contents.purge(owner, [orphan])).toEqual({ contentIds: [], files: nothingWrapped() });
       expect(await exists('SELECT count(*) FROM ci.content WHERE id = $1', orphan)).toBe(true);
       expect(await exists('SELECT count(*) FROM ci.entities WHERE entity_id = $1', orphan)).toBe(true);
     });
@@ -642,13 +643,13 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
 
       published.length = 0;
 
-      expect(await contents.purge(owner, [graphOnly])).toEqual({ contentIds: [] });
+      expect(await contents.purge(owner, [graphOnly])).toEqual({ contentIds: [], files: nothingWrapped() });
       expect(await exists('SELECT count(*) FROM ci.entities WHERE entity_id = $1', graphOnly)).toBe(true);
       expect(published).toEqual([]);
     });
 
     it('does nothing for an empty request', async () => {
-      expect(await contents.purge(owner, [])).toEqual({ contentIds: [] });
+      expect(await contents.purge(owner, [])).toEqual({ contentIds: [], files: nothingWrapped() });
       expect(published).toEqual([]);
     });
 
@@ -705,7 +706,7 @@ describeWithDb(`ContentService.purge and remove against Postgres (${availability
       }
 
       // Having waited, the purge sees the membership that just committed and clears it with the rest.
-      expect(await purging).toEqual({ contentIds: [doomed.contentId] });
+      expect(await purging).toEqual({ contentIds: [doomed.contentId], files: nothingWrapped() });
       expect(await footprint(doomed)).toEqual(EMPTY);
     });
 

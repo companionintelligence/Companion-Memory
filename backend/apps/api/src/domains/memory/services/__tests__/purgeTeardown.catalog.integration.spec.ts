@@ -2,6 +2,7 @@ import { DataSource } from 'typeorm';
 
 import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
 import { HBPE_LINKS } from '../purgeTeardown';
+import { FILE_REFERENCE_COLUMNS } from '../wrappedFilePurge';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -49,6 +50,13 @@ import { HBPE_LINKS } from '../purgeTeardown';
  * What it does not see: a column that holds a node's id and has no foreign key. A
  * purge does not fail on those, it leaves them pointing at nothing. They are the
  * `deleteBareReferences` list, which has no catalog to be held against.
+ *
+ * There is one exception, because getting it wrong is silent in both directions: the columns
+ * that can name a STORED FILE. A purge of content or of an event deletes the file it wraps when
+ * nothing else uses it ({@link FILE_REFERENCE_COLUMNS}), and "nothing else" is a list of columns.
+ * A new column that names a file and is not on it either lets a purge delete bytes out from under
+ * a record that shows them, or keeps a file the user asked to forget. They are found by name,
+ * which is the one thing the catalog has for a column with no foreign key.
  *
  * Opt-in like its neighbours: set `MEMORY_TEST_DATABASE_URL` to a migrated
  * database of your OWN, or run `make test-db`, which provides one.
@@ -341,6 +349,73 @@ describe('comparing the file foreign keys with the catalog', () => {
   });
 });
 
+/**
+ * What is wrong, if anything, between the columns the catalog has that can name a stored file and the ones
+ * a decision was taken about. Every list is empty when they agree.
+ */
+function compareFileReferences(catalog: string[], decided: string[], existing: string[]) {
+  return {
+    // A new column that can name a stored file. Decide whether a record that holds one keeps the file
+    // (`keeps`), only mentions it (`mention`), goes with it (`cascade`) or is not a file id at all
+    // (`unrelated`), and add it to FILE_REFERENCE_COLUMNS.
+    addedAndNotDecided: catalog.filter((column) => !decided.includes(column)).sort(),
+    // The column has gone: remove the entry.
+    decidedAndGone: decided.filter((column) => !existing.includes(column)).sort(),
+  };
+}
+
+const FILE_REFERENCES_AGREE = { addedAndNotDecided: [], decidedAndGone: [] };
+
+describe('comparing the columns that can name a stored file with the decisions', () => {
+  const decided = Object.keys(FILE_REFERENCE_COLUMNS);
+
+  it('is quiet when the catalog is what was decided', () => {
+    expect(compareFileReferences(decided, decided, decided)).toEqual(FILE_REFERENCES_AGREE);
+  });
+
+  it('names a new column that can name a file and that nobody has decided on', () => {
+    const added = 'ci.albums.cover_file_id';
+
+    expect(compareFileReferences([...decided, added], decided, decided)).toEqual({
+      ...FILE_REFERENCES_AGREE,
+      addedAndNotDecided: [added],
+    });
+  });
+
+  it('names a decision about a column that has gone', () => {
+    const [gone, ...stillThere] = decided;
+
+    expect(compareFileReferences(stillThere, decided, stillThere)).toEqual({
+      ...FILE_REFERENCES_AGREE,
+      decidedAndGone: [gone],
+    });
+  });
+
+  it('says what each column does, with a reason, so that a later reader knows what was decided', () => {
+    for (const [column, { effect, reason }] of Object.entries(FILE_REFERENCE_COLUMNS)) {
+      expect({ column, effect: ['keeps', 'mention', 'cascade', 'unrelated'].includes(effect) }).toEqual({
+        column,
+        effect: true,
+      });
+      expect({ column, reason: reason.length > 20 }).toEqual({ column, reason: true });
+    }
+  });
+
+  it('keeps a file for the four kinds of record that show it, and for nothing else', () => {
+    expect(
+      Object.entries(FILE_REFERENCE_COLUMNS)
+        .filter(([, { effect }]) => effect === 'keeps')
+        .map(([column]) => column)
+        .sort(),
+    ).toEqual([
+      'ci.communications.attachments',
+      'ci.content.external_id',
+      'ci.files.event_id',
+      'ci.message_files.file_id',
+    ]);
+  });
+});
+
 describeWithDb(`the tables that can block a node delete (${availability.target})`, () => {
   let dataSource: DataSource;
 
@@ -451,5 +526,39 @@ describeWithDb(`the tables that can block a node delete (${availability.target})
 
     expect((await keysOnto(['ci.entities'], ['c'])).length).toBeGreaterThan(0);
     expect(compareWithCatalog(await keysOnto(['ci.entities'], ['c']), [], decided)).toEqual(NOTHING_WRONG);
+  });
+
+  /** `schema.table.column` for every column of a real table, narrowed by `where`. */
+  async function columns(where: string, params: unknown[] = []): Promise<string[]> {
+    const rows: Array<{ key: string }> = await dataSource.query(
+      `SELECT n.nspname || '.' || c.relname || '.' || a.attname AS key
+         FROM pg_attribute a
+         JOIN pg_class c ON c.oid = a.attrelid AND c.relkind IN ('r', 'p')
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE a.attnum > 0
+          AND NOT a.attisdropped
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+          AND n.nspname NOT LIKE '\\_timescaledb%'
+          AND ${where}
+        ORDER BY 1`,
+      params,
+    );
+
+    return rows.map((row) => row.key);
+  }
+
+  it('the columns that can name a stored file are exactly the ones a decision was taken about', async () => {
+    // Found by name: `file` or `files` as a word of the column's name, or an attachment. A foreign key is not
+    // required, and for the ones that matter here there is none.
+    const catalog = await columns(`(a.attname ~ '(^|_)files?(_|$)' OR a.attname ~ 'attachment')`);
+    const decided = Object.keys(FILE_REFERENCE_COLUMNS);
+    const existing = await columns(`(n.nspname || '.' || c.relname || '.' || a.attname) = ANY ($1::text[])`, [
+      decided,
+    ]);
+
+    // Precondition: the catalog has columns of this kind. A guard that read nothing would pass.
+    expect(catalog.length).toBeGreaterThan(0);
+
+    expect(compareFileReferences(catalog, decided, existing)).toEqual(FILE_REFERENCES_AGREE);
   });
 });

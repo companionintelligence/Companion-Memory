@@ -12,6 +12,15 @@ export interface StoredObjects {
 }
 
 /**
+ * The injection token `ContentService` and `CalendarEventService` take the object store under. They purge
+ * the stored files that content and events wrap ({@link planWrappedFiles}), so they need the same
+ * {@link StoredObjects} the files purge uses, and take it by this token rather than by the files
+ * domain's class: that keeps that domain's whole barrel out of two services that are loaded all over.
+ * Optional, because a service built without it can still purge everything that wraps no stored object.
+ */
+export const STORED_OBJECTS = Symbol('STORED_OBJECTS');
+
+/**
  * How long a purge waits for the object store while it holds its row locks.
  * Nothing else bounds it: the S3 client sets no timeout, and neither the database
  * (`idle_in_transaction_session_timeout` is 0) nor the tool framework ends a
@@ -65,7 +74,11 @@ export function nothingPurged(): PurgedFiles {
  */
 export class StoredObjectsDeletedError extends Error {
   constructor(
-    /** The `File` nodes the caller named whose files lost their stored objects. */
+    /**
+     * What the caller named whose files lost their stored objects, and which is still there: the `File`
+     * nodes, for a purge of files, and for a purge of content or of an event, the content or the events,
+     * which still wrap a photo that no longer opens. Forgetting them again finishes the job.
+     */
     readonly nodeIds: string[],
     cause: unknown,
   ) {
@@ -80,22 +93,40 @@ export interface PurgeFileOptions {
   /** Overrides {@link STORED_OBJECT_DELETE_DEADLINE_MS}. */
   deadlineMs?: number;
   /**
-   * Called once the objects are deleted and before anything else is, with the named nodes whose
-   * files lost them. Whatever fails after this leaves {@link StoredObjectsDeletedError}'s state,
-   * and the caller is the one placed to say so, because the commit itself can fail too.
+   * Called once the objects are deleted and before anything else is, with the ids the caller named
+   * whose files lost them: `File` nodes for a purge of files, and for a purge of what wraps a file
+   * ({@link planWrappedFiles}) the content or the events. Whatever fails after this leaves
+   * {@link StoredObjectsDeletedError}'s state, and the caller is the one placed to say so, because
+   * the commit itself can fail too.
    */
-  onObjectsDeleted?: (namedNodeIds: string[]) => void;
+  onObjectsDeleted?: (namedIds: string[]) => void;
 }
 
-interface LockedFile {
+export interface LockedFile {
   id: string;
   bucket: string | null;
   key: string | null;
+  /** The file this is a variant of, when it is one. */
+  parentId: string | null;
+  /** The event it is linked to directly (`ci.files.event_id`), which is how a capture screenshot is. */
+  eventId: string | null;
+}
+
+/** Where a purge starts from: the files it was asked to delete, named one of two ways. */
+export interface FileRoots {
+  /** `File` nodes. Each stands for the `ci.files` row its `linked_id` names. */
+  nodeIds?: string[];
+  /**
+   * `ci.files` rows by their own id: for a caller that reached a file through something that wraps it,
+   * a content row or an event, and so has no node to name. A file whose node was never written (graph
+   * presence is written by a listener, after the upload) is still a file.
+   */
+  fileIds?: string[];
 }
 
 /**
- * Each named `File` node's stored file and every variant under it (previews, thumbnails, playback
- * copies, to any depth), locked in key order in one statement.
+ * Each named file's stored row and every variant under it (previews, thumbnails, playback copies, to
+ * any depth), locked in key order in one statement. A file is named by its `File` node, or by its own id.
  *
  * Only the caller's own: the node and its file must both be theirs, and so must every variant.
  * Variants are written under their original's owner (`FileService.create` takes the caller's
@@ -115,11 +146,14 @@ interface LockedFile {
  * variant that was committed while the lock was being waited for is in the second answer and not the
  * first, and the statement runs again with it.
  */
-async function lockFiles(
+export async function lockFiles(
   manager: EntityManager,
   userId: string,
-  requestedNodeIds: string[],
+  roots: FileRoots,
 ): Promise<LockedFile[]> {
+  const nodeIds = roots.nodeIds ?? [];
+  const fileIds = roots.fileIds ?? [];
+
   for (let attempt = 0; attempt < MAX_LOCK_ATTEMPTS; attempt += 1) {
     const locked: LockedFile[] = await manager.query(
       `WITH RECURSIVE tree AS (
@@ -132,17 +166,22 @@ async function lockFiles(
             AND e.owner_user_id = $2
             AND f.user_id = $2
          UNION
+         SELECT f.id
+           FROM ci.files f
+          WHERE f.id = ANY($3::uuid[])
+            AND f.user_id = $2
+         UNION
          SELECT c.id
            FROM ci.files c
            JOIN tree t ON c.parent_id = t.id
           WHERE c.user_id = $2
        )
-       SELECT f.id, f.bucket, f.key
+       SELECT f.id, f.bucket, f.key, f.parent_id AS "parentId", f.event_id AS "eventId"
          FROM ci.files f
         WHERE f.id IN (SELECT id FROM tree)
         ORDER BY f.id
           FOR UPDATE`,
-      [requestedNodeIds, userId],
+      [nodeIds, userId, fileIds],
     );
 
     if (locked.length === 0) {
@@ -188,7 +227,7 @@ async function objectsToDelete(
   files: LockedFile[],
 ): Promise<{ byBucket: Map<string, string[]>; deleted: number; kept: number }> {
   const stored = files.filter(
-    (file): file is { id: string; bucket: string; key: string } => file.bucket !== null && file.key !== null,
+    (file): file is LockedFile & { bucket: string; key: string } => file.bucket !== null && file.key !== null,
   );
   const byBucket = new Map<string, string[]>();
 
@@ -237,6 +276,126 @@ function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T>
   });
 
   return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Deletes the stored objects of these locked files, and says how many went and how many stayed because a
+ * `ci.files` row outside the set also names them ({@link objectsToDelete}). This is the part of a purge that
+ * is not the database's, so the wait is bounded ({@link STORED_OBJECT_DELETE_DEADLINE_MS}), and a failure
+ * says that nothing was deleted from the database, which is true: the rows are still there and still locked.
+ *
+ * Called with every row in place. `objects` is only needed when something stored is to be deleted: files
+ * that came from a source with an `external_id` have no bytes here, and purging only those needs no
+ * store. When there is something to delete and no store, that is refused before anything is touched.
+ */
+export async function deleteStoredObjects(
+  manager: EntityManager,
+  files: LockedFile[],
+  objects: StoredObjects | undefined,
+  deadlineMs: number = STORED_OBJECT_DELETE_DEADLINE_MS,
+): Promise<{ deleted: number; kept: number }> {
+  const stored = await objectsToDelete(manager, files);
+
+  if (stored.byBucket.size === 0) {
+    return { deleted: stored.deleted, kept: stored.kept };
+  }
+
+  if (objects === undefined) {
+    throw new Error(
+      'The stored objects could not be deleted, so nothing was deleted from the database: no object store is configured for this service.',
+    );
+  }
+
+  try {
+    await withDeadline(
+      (async () => {
+        for (const [bucket, keys] of stored.byBucket) {
+          await objects.deleteObjects(bucket, keys.sort());
+        }
+      })(),
+      deadlineMs,
+      'The object store',
+    );
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+
+    // Nothing in the database has been touched. Some objects may already be gone, if the store
+    // failed halfway; deleting again is safe, and is the repair.
+    throw new Error(
+      `The stored objects could not be deleted, so nothing was deleted from the database (some may already be gone, and forgetting again is safe): ${reason}`,
+      { cause },
+    );
+  }
+
+  return { deleted: stored.deleted, kept: stored.kept };
+}
+
+/** The `File` nodes that shadow some files, and the chunks of their extracted text. */
+export interface FileTrail {
+  nodes: Array<{ entity_id: string; linked_id: string }>;
+  chunkIds: string[];
+}
+
+/**
+ * Reads what the rows of these files leave to be deleted along with them, which the rows themselves
+ * do not say: the nodes that shadow them, which nothing joins to them by a foreign key, and the chunks
+ * of their text, whose search rows are keyed by the chunk's own id.
+ *
+ * The extracted text goes with its file by cascade, and the search index holds two rows for each chunk,
+ * keyed by the chunk's own id: the words of the document, and an embedding of them
+ * (`FileChunkSearchIndexListener`). They are read here, while the chunks still exist, and cleared with
+ * the rest. The files are locked, so a parse that is writing more chunks waits and then fails on the
+ * foreign key, and cannot add one this misses.
+ */
+export async function readFileTrail(
+  manager: EntityManager,
+  userId: string,
+  fileIds: string[],
+): Promise<FileTrail> {
+  const nodes: Array<{ entity_id: string; linked_id: string }> = await manager.query(
+    `SELECT entity_id, linked_id
+       FROM ci.entities
+      WHERE entity_type = 'File'
+        AND linked_table = 'files'
+        AND linked_id = ANY($1::uuid[])
+        AND owner_user_id = $2
+      ORDER BY entity_id`,
+    [fileIds, userId],
+  );
+  const chunks: Array<{ id: string }> = await manager.query(
+    `SELECT id
+       FROM ci.file_chunks
+      WHERE file_id = ANY($1::uuid[])
+      ORDER BY id`,
+    [fileIds],
+  );
+
+  return { nodes, chunkIds: chunks.map((chunk) => chunk.id) };
+}
+
+/**
+ * Deletes every row that names these files and has no foreign key to say so ({@link deleteBareReferences},
+ * by the ids of the nodes, the files and the chunks together), then the `File` nodes, then the `ci.files`
+ * rows. The variants, the chunks and the chat attachment links go by cascade, and an unfurl's poster pointer
+ * is nulled.
+ *
+ * Called after the objects are gone ({@link deleteStoredObjects}), in the same transaction.
+ */
+export async function deleteFileRows(
+  manager: EntityManager,
+  userId: string,
+  fileIds: string[],
+  trail: FileTrail,
+): Promise<void> {
+  const nodeIds = trail.nodes.map((node) => node.entity_id);
+
+  await deleteBareReferences(manager, [...nodeIds, ...fileIds, ...trail.chunkIds], FILE_REFERENCES);
+  await manager.query(
+    `DELETE FROM ci.entities
+      WHERE entity_type = 'File' AND entity_id = ANY($1::uuid[]) AND owner_user_id = $2`,
+    [nodeIds, userId],
+  );
+  await manager.query('DELETE FROM ci.files WHERE id = ANY($1::uuid[])', [fileIds]);
 }
 
 /**
@@ -296,7 +455,8 @@ function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T>
  * file does not forget what was in the photo. They are reported
  * ({@link PurgedFiles.wrappingContentIds}), and forgetting one is a call of its own.
  *
- * The same goes for an event: the file of a photo event is not deleted when the event is.
+ * The other direction, forgetting the content or the event that wraps a file, is {@link planWrappedFiles}:
+ * there the file is deleted when nothing else uses it, and kept, and reported, when something does.
  *
  * Only the caller's own files are purged. An id that does not exist, or belongs to someone else, is
  * left out of the result rather than raising. So is a `File` node with no `ci.files` row behind it:
@@ -311,27 +471,18 @@ export async function purgeFileAggregates(
   objects: StoredObjects,
   options: PurgeFileOptions = {},
 ): Promise<PurgedFiles> {
-  const files = await lockFiles(manager, userId, requestedNodeIds);
+  const files = await lockFiles(manager, userId, { nodeIds: requestedNodeIds });
 
   if (files.length === 0) {
     return nothingPurged();
   }
 
   const fileIds = files.map((file) => file.id);
-  const nodes: Array<{ entity_id: string; linked_id: string }> = await manager.query(
-    `SELECT entity_id, linked_id
-       FROM ci.entities
-      WHERE entity_type = 'File'
-        AND linked_table = 'files'
-        AND linked_id = ANY($1::uuid[])
-        AND owner_user_id = $2
-      ORDER BY entity_id`,
-    [fileIds, userId],
-  );
+  const trail = await readFileTrail(manager, userId, fileIds);
   const asked = new Set(requestedNodeIds);
-  const namedNodeIds = nodes.map((node) => node.entity_id).filter((id) => asked.has(id));
+  const namedNodeIds = trail.nodes.map((node) => node.entity_id).filter((id) => asked.has(id));
   const namedFileIds = new Set(
-    nodes.filter((node) => asked.has(node.entity_id)).map((node) => node.linked_id),
+    trail.nodes.filter((node) => asked.has(node.entity_id)).map((node) => node.linked_id),
   );
 
   // Read now, and only reported: see the header for why a content row that wraps a file stays.
@@ -346,60 +497,15 @@ export async function purgeFileAggregates(
     [fileIds, userId],
   );
 
-  // The extracted text goes with its file by cascade, and the search index holds two rows for each chunk,
-  // keyed by the chunk's own id: the words of the document, and an embedding of them
-  // (`FileChunkSearchIndexListener`). They are read here, while the chunks still exist, and cleared with
-  // the rest. The rows are locked, so a parse that is writing more chunks waits and then fails on the
-  // foreign key, and cannot add one this misses.
-  const chunks: Array<{ id: string }> = await manager.query(
-    `SELECT id
-       FROM ci.file_chunks
-      WHERE file_id = ANY($1::uuid[])
-      ORDER BY id`,
-    [fileIds],
-  );
-
-  const stored = await objectsToDelete(manager, files);
-  const deadlineMs = options.deadlineMs ?? STORED_OBJECT_DELETE_DEADLINE_MS;
-
-  try {
-    await withDeadline(
-      (async () => {
-        for (const [bucket, keys] of stored.byBucket) {
-          await objects.deleteObjects(bucket, keys.sort());
-        }
-      })(),
-      deadlineMs,
-      'The object store',
-    );
-  } catch (cause) {
-    const reason = cause instanceof Error ? cause.message : String(cause);
-
-    // Nothing in the database has been touched. Some objects may already be gone, if the store
-    // failed halfway; deleting again is safe, and is the repair.
-    throw new Error(
-      `The stored objects could not be deleted, so nothing was deleted from the database (some may already be gone, and forgetting again is safe): ${reason}`,
-      { cause },
-    );
-  }
+  const stored = await deleteStoredObjects(manager, files, objects, options.deadlineMs);
 
   if (stored.deleted > 0) {
     options.onObjectsDeleted?.(namedNodeIds);
   }
 
-  const nodeIds = nodes.map((node) => node.entity_id);
+  const nodeIds = trail.nodes.map((node) => node.entity_id);
 
-  await deleteBareReferences(
-    manager,
-    [...nodeIds, ...fileIds, ...chunks.map((chunk) => chunk.id)],
-    FILE_REFERENCES,
-  );
-  await manager.query(
-    `DELETE FROM ci.entities
-      WHERE entity_type = 'File' AND entity_id = ANY($1::uuid[]) AND owner_user_id = $2`,
-    [nodeIds, userId],
-  );
-  await manager.query('DELETE FROM ci.files WHERE id = ANY($1::uuid[])', [fileIds]);
+  await deleteFileRows(manager, userId, fileIds, trail);
 
   return {
     nodeIds,

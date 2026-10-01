@@ -16,6 +16,7 @@ import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import { CalendarEventService } from '../CalendarEventService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
+import { nothingWrapped } from '../wrappedFilePurge';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -495,7 +496,11 @@ describeWithDb(`CalendarEventService.purge against Postgres (${availability.targ
 
     const purged = await calendar.purge(owner, [doomed.eventId]);
 
-    expect(purged).toEqual({ eventIds: [doomed.eventId], contentIds: [doomed.contentId] });
+    expect(purged).toEqual({
+      eventIds: [doomed.eventId],
+      contentIds: [doomed.contentId],
+      files: nothingWrapped(),
+    });
     expect(await footprint(doomed)).toEqual(EMPTY);
     // The control aggregate is exactly as it was, row for row.
     expect(await footprint(control)).toEqual(controlBefore);
@@ -614,7 +619,7 @@ describeWithDb(`CalendarEventService.purge against Postgres (${availability.targ
 
     const purged = await calendar.purge(owner, [theirs.eventId, uuidv7()]);
 
-    expect(purged).toEqual({ eventIds: [], contentIds: [] });
+    expect(purged).toEqual({ eventIds: [], contentIds: [], files: nothingWrapped() });
     expect(await footprint(theirs)).toEqual(theirsBefore);
     expect(published).toEqual([]);
     expect(notified).toEqual([]);
@@ -625,7 +630,11 @@ describeWithDb(`CalendarEventService.purge against Postgres (${availability.targ
   });
 
   it('does nothing for an empty request', async () => {
-    expect(await calendar.purge(owner, [])).toEqual({ eventIds: [], contentIds: [] });
+    expect(await calendar.purge(owner, [])).toEqual({
+      eventIds: [],
+      contentIds: [],
+      files: nothingWrapped(),
+    });
     expect(notified).toEqual([]);
   });
 
@@ -682,7 +691,11 @@ describeWithDb(`CalendarEventService.purge against Postgres (${availability.targ
     }
 
     // Having waited, the purge sees the membership that just committed and clears it with the rest.
-    expect(await purging).toEqual({ eventIds: [doomed.eventId], contentIds: [doomed.contentId] });
+    expect(await purging).toEqual({
+      eventIds: [doomed.eventId],
+      contentIds: [doomed.contentId],
+      files: nothingWrapped(),
+    });
     expect(await footprint(doomed)).toEqual(EMPTY);
   });
 
@@ -738,7 +751,11 @@ describeWithDb(`CalendarEventService.purge against Postgres (${availability.targ
     }
 
     // Having waited, the purge sees the membership that just committed and clears it with the rest.
-    expect(await purging).toEqual({ eventIds: [doomed.eventId], contentIds: [doomed.contentId] });
+    expect(await purging).toEqual({
+      eventIds: [doomed.eventId],
+      contentIds: [doomed.contentId],
+      files: nothingWrapped(),
+    });
     expect(await footprint(doomed)).toEqual(EMPTY);
   });
 

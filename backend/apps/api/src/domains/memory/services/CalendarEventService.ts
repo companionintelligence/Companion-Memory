@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Optional } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -28,6 +28,7 @@ import {
   INGEST_REFRESH_COLUMNS,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
+import { FileRemovedEvent } from '@ci/domains/files/events';
 import {
   ContentRemovedEvent,
   EventCreatedEvent,
@@ -48,9 +49,10 @@ import { CreateEventDto, UpdateEventDto, SearchEventDto, type SourceAssertedFiel
 
 import { CtiAggregate } from './CtiAggregate';
 import { resolveEventLocationReopener } from './eventLocationReopener';
-import { purgeEventAggregates } from './eventPurge';
+import { type PurgedEventAggregates, purgeEventAggregates } from './eventPurge';
 import { resolveEventStatusReopener } from './eventStatusReopener';
 import { resolveEventTimeReopener } from './eventTimeReopener';
+import { STORED_OBJECTS, StoredObjectsDeletedError, type StoredObjects } from './filePurge';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
 import {
   type EventWhen,
@@ -78,6 +80,7 @@ import {
   sameLocation,
 } from './sourceLocationMerge';
 import { DEFAULT_EVENT_STATUS, mergeSourceStatus } from './sourceStatusMerge';
+import { nothingWrapped, type WrappedFilesPurged } from './wrappedFilePurge';
 
 interface Options {
   limit?: number;
@@ -564,6 +567,12 @@ export class CalendarEventService {
      * without it throws.
      */
     @Optional() private readonly moduleRef?: ModuleRef,
+    /**
+     * The object store, which {@link purge} deletes the stored files of a photo from. Optional so that a
+     * service built without one still does everything else; a purge that would have to delete stored
+     * bytes and has no store is refused before it changes anything.
+     */
+    @Optional() @Inject(STORED_OBJECTS) private readonly storedObjects?: StoredObjects,
   ) {
     this.aggregate = new CtiAggregate({
       detailRepository: this.eventRepository,
@@ -2575,6 +2584,12 @@ export class CalendarEventService {
    * cannot be undone. See {@link purgeEventAggregates} for what goes, and for
    * what a plain delete of the base row would have left behind, or failed on.
    *
+   * The photos of an event go with it when nothing else uses them: the files its
+   * content wraps, and the ones linked straight to it. A file that something else
+   * still uses stays, reported in `files.kept` ({@link planWrappedFiles}). Their
+   * objects are deleted from the object store inside the transaction, while the
+   * rows are locked, and before any row is.
+   *
    * It works on an event in any state, including one already in the trash, so
    * "empty the trash" is the same call. An event that arrived from a source that
    * syncs again will arrive again: only the tombstone, which this removes, stood
@@ -2584,21 +2599,39 @@ export class CalendarEventService {
    * re-serialise the days the events were on, and the ids that were not the
    * caller's, or no longer exist, are simply left out of the result.
    *
-   * @returns the ids that were purged, and the content that went with them.
+   * @throws {StoredObjectsDeletedError} if the stored files were deleted and the rows
+   *   then could not be. The events named in it are still there, and purging them
+   *   again finishes the job. Anything that failed before that left everything as it was.
+   * @returns the ids that were purged, the content that went with them, and what was
+   *   done about the files.
    */
   async purge(
     context: UserServiceContext,
     ids: string[],
-  ): Promise<{ eventIds: string[]; contentIds: string[] }> {
+  ): Promise<{ eventIds: string[]; contentIds: string[]; files: WrappedFilesPurged }> {
     const requested = Array.from(new Set(ids));
 
     if (requested.length === 0) {
-      return { eventIds: [], contentIds: [] };
+      return { eventIds: [], contentIds: [], files: nothingWrapped() };
     }
 
-    const purged = await this.eventRepository.manager.transaction((manager) =>
-      purgeEventAggregates(manager, context.userId, requested),
-    );
+    // Named by the purge itself once the objects are gone, and read here rather than there
+    // because the commit that follows can fail too.
+    let objectsGoneFor: string[] = [];
+    let purged: PurgedEventAggregates;
+
+    try {
+      purged = await this.eventRepository.manager.transaction((manager) =>
+        purgeEventAggregates(manager, context.userId, requested, {
+          objects: this.storedObjects,
+          onObjectsDeleted: (named) => {
+            objectsGoneFor = named;
+          },
+        }),
+      );
+    } catch (error) {
+      throw objectsGoneFor.length > 0 ? new StoredObjectsDeletedError(objectsGoneFor, error) : error;
+    }
 
     // The index rows were deleted in the transaction. These tell anything else
     // that listens, and are what announces a removal everywhere else in the app.
@@ -2610,6 +2643,10 @@ export class CalendarEventService {
       await this.signallingEventService.send(ContentRemovedEvent, { contentId });
     }
 
+    for (const fileId of purged.files.fileIds) {
+      await this.signallingEventService.send(FileRemovedEvent, { fileId });
+    }
+
     if (purged.events.length > 0) {
       await this.hbpeNotify?.notifyEvents(
         context.userId,
@@ -2617,7 +2654,11 @@ export class CalendarEventService {
       );
     }
 
-    return { eventIds: purged.events.map((event) => event.id), contentIds: purged.contentIds };
+    return {
+      eventIds: purged.events.map((event) => event.id),
+      contentIds: purged.contentIds,
+      files: purged.files,
+    };
   }
 
   async search(context: ServiceContext, query: SearchEventDto): Promise<Event[]> {

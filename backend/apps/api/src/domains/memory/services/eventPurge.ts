@@ -2,6 +2,14 @@ import type { EntityManager } from 'typeorm';
 
 import { teardownContent } from './contentPurge';
 import { clearHbpeLinks, deleteBareReferences, EVENT_REFERENCES } from './purgeTeardown';
+import {
+  deleteWrappedFileObjects,
+  deleteWrappedFileRows,
+  nothingWrapped,
+  planWrappedFiles,
+  type WrappedFilesPurged,
+  type WrappedFileStorage,
+} from './wrappedFilePurge';
 
 /** What one purge removed, for the caller to announce once the transaction has committed. */
 export interface PurgedEventAggregates {
@@ -9,6 +17,8 @@ export interface PurgedEventAggregates {
   events: Array<{ id: string; startTime: Date | null }>;
   /** The `Content` aggregates that hung off those events and went with them. */
   contentIds: string[];
+  /** What was done about the stored files that content wrapped, and the ones linked straight to the events. */
+  files: WrappedFilesPurged;
 }
 
 /**
@@ -39,10 +49,19 @@ export interface PurgedEventAggregates {
  *
  * What it deliberately leaves alone is every record that merely MENTIONS the
  * event, whose foreign key is `ON DELETE SET NULL`: receipts, object
- * observations, capture events, files, event candidates and a recurring series'
+ * observations, capture events, event candidates and a recurring series'
  * overrides. Those are records in their own right, and the schema already chose
- * what happens to them. A photo event's file is one: the content row only
- * links to it.
+ * what happens to them.
+ *
+ * A stored file is not one of them. A photo event's photo is a file that its
+ * content row wraps, and a capture screenshot is a file linked to the event
+ * itself (`ci.files.event_id`, which would be nulled and the file kept). Both are
+ * the event's, so they go with it, with their previews and their bytes, when
+ * nothing else uses them, and stay, reported in the result, when something does:
+ * a message that attached the same photo, say ({@link planWrappedFiles}). They
+ * are decided and have their objects deleted before any row is, and a failure
+ * after that leaves rows that still say where the bytes were, this event's
+ * among them.
  *
  * It is not a tombstone. {@link CalendarEventService.remove} is what the app's
  * delete uses, and what `restore` can undo. This cannot be undone, and an event
@@ -59,6 +78,7 @@ export async function purgeEventAggregates(
   manager: EntityManager,
   userId: string,
   requestedEventIds: string[],
+  storage?: WrappedFileStorage,
 ): Promise<PurgedEventAggregates> {
   // Locked, and in a fixed order, so two purges cannot deadlock each other and
   // HBPE cannot assign a cluster to an event after this has cleared its rows.
@@ -73,7 +93,7 @@ export async function purgeEventAggregates(
   );
 
   if (events.length === 0) {
-    return { events: [], contentIds: [] };
+    return { events: [], contentIds: [], files: nothingWrapped() };
   }
 
   const eventIds = events.map((event) => event.id);
@@ -82,11 +102,21 @@ export async function purgeEventAggregates(
   // owns the row: the foreign key cascades to it regardless, so leaving its base
   // row behind would only strand it. HBPE labels content too, so it is locked
   // before its links are cleared, which `teardownContent` sees to.
-  const content: Array<{ id: string }> = await manager.query(
-    `SELECT id FROM ci.content WHERE event_id = ANY($1::uuid[]) ORDER BY id`,
+  const content: Array<{ id: string; eventId: string }> = await manager.query(
+    `SELECT id, event_id AS "eventId" FROM ci.content WHERE event_id = ANY($1::uuid[]) ORDER BY id`,
     [eventIds],
   );
   const contentIds = content.map((row) => row.id);
+
+  // The photos these events own are locked, decided and have their objects deleted before anything
+  // is touched. Each content row is named by its event: that is what a caller is told to forget
+  // again if the purge fails once the bytes are gone. The files come before the content in lock
+  // order, as they do in the purge of content on its own.
+  const plan = await planWrappedFiles(manager, userId, {
+    content: content.map((row) => ({ id: row.id, named: row.eventId })),
+    eventIds,
+  });
+  const stored = await deleteWrappedFileObjects(manager, plan, storage);
 
   // 1. What blocks the delete, and what only points at the events, with no
   // foreign key to say so.
@@ -113,5 +143,9 @@ export async function purgeEventAggregates(
     eventIds,
   ]);
 
-  return { events, contentIds };
+  // 4. The files that nothing uses now. Last, so that the content that wrapped them and the events that
+  // they were linked to, which the foreign key would have nulled, are gone first.
+  const files = await deleteWrappedFileRows(manager, userId, plan, stored);
+
+  return { events, contentIds, files };
 }

@@ -23,7 +23,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { BrowserActivityModule, BrowserActivityEntity } from '@ci/domains/browser-activity';
 import { EventsModule } from '@ci/domains/events';
-import { FilesModule } from '@ci/domains/files';
+import { FileService as FileStorageService, FilesModule } from '@ci/domains/files';
 // Deep file imports, NOT `@ci/domains/graph`. GraphModule already imports
 // MemoryModule, so pulling the graph BARREL in here would close a CommonJS
 // require cycle between the two index files — whichever loaded second would see
@@ -81,6 +81,7 @@ import { CommunicationService } from './services/CommunicationService';
 import { ConceptService } from './services/ConceptService';
 import { ContentService } from './services/ContentService';
 import { EntityMergeBlockService } from './services/EntityMergeBlockService';
+import { STORED_OBJECTS } from './services/filePurge';
 import { FileService } from './services/FileService';
 import { GraphDeltaWriter } from './services/GraphDeltaWriter';
 import { GraphEventService } from './services/GraphEventService';
@@ -148,6 +149,10 @@ import { UserContextService } from './services/UserContextService';
   ],
   providers: [
     GraphDeltaWriter,
+    // The object store, for the stored files that a purge of content or of an event deletes with
+    // the photo they wrap. Taken by this token, not by the files domain's class, so that the two
+    // services that want it do not load that domain's barrel.
+    { provide: STORED_OBJECTS, useExisting: FileStorageService },
     CommunicationService,
     ContentService,
     CalendarEventService,
@@ -318,6 +323,9 @@ export type { MapPin } from './services/CalendarEventService';
 // What `FileService.purge` answers with, and the error that says a purge deleted a file's stored
 // objects and then could not delete its records.
 export { StoredObjectsDeletedError, type PurgedFiles } from './services/filePurge';
+// What a purge of content or of an event did about the stored files it wrapped: the ones it deleted,
+// and the ones it kept because something else still uses them.
+export type { KeptFile, WrappedFilesPurged } from './services/wrappedFilePurge';
 export { DEAD_EVENT_STATUSES, LIVE_EVENT_SQL } from './services/CalendarEventService';
 // "This `ci.events` row happened" (alias `event`): the calendar's LIVE_EVENT_SQL plus deleted, predicted
 // and cancelled-reservation. What a place's visit count, the Places date browse and Known places apply.

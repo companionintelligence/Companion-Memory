@@ -1,6 +1,13 @@
 import type { EntityManager } from 'typeorm';
 
 import { clearHbpeLinks, CONTENT_REFERENCES, deleteBareReferences } from './purgeTeardown';
+import {
+  deleteWrappedFileObjects,
+  deleteWrappedFileRows,
+  planWrappedFiles,
+  type WrappedFilesPurged,
+  type WrappedFileStorage,
+} from './wrappedFilePurge';
 
 /**
  * Permanently deletes these content rows, and everything that has no meaning
@@ -42,6 +49,14 @@ export async function teardownContent(manager: EntityManager, contentIds: string
   );
 }
 
+/** What one purge of content removed, for the caller to announce once the transaction has committed. */
+export interface PurgedContentAggregates {
+  /** The content rows that went. */
+  contentIds: string[];
+  /** What was done about the stored files those rows wrapped. */
+  files: WrappedFilesPurged;
+}
+
 /**
  * Permanently deletes content: the `Content` node, its `ci.content` row, and
  * everything that points at either. The content half of what
@@ -54,6 +69,14 @@ export async function teardownContent(manager: EntityManager, contentIds: string
  * node's deltas are deleted with it and none is written, and the edges, ledger,
  * pipeline state, tags and search rows go too.
  *
+ * A photo is two rows, and the bytes are the part that is the photo: the content row
+ * wraps a `ci.files` row through `external_id`. That file goes with the content when
+ * nothing else uses it, and stays, reported in the result, when something does
+ * ({@link planWrappedFiles}). The file is decided and its objects deleted BEFORE any row
+ * is, so a failure in the store rolls everything back, and a failure after it leaves
+ * rows that still say where the bytes were; this content row is one of them, still
+ * wrapping the file, so forgetting it again finishes the job.
+ *
  * Only the caller's own content is purged. An id that does not exist, or that
  * belongs to someone else, is left out of the result rather than raising. So is
  * a `Content` node with no `ci.content` row behind it, which graph ingest can
@@ -63,14 +86,17 @@ export async function teardownContent(manager: EntityManager, contentIds: string
  * Content attached to an event is purged like any other, and the event is left
  * alone. Purging the event is what takes its content with it.
  *
- * @returns the ids that were purged, for the caller to announce once the
- *   transaction has committed.
+ * @param storage the object store, for the stored files this deletes. Without one, a purge
+ *   that would have to delete stored bytes is refused before anything is changed.
+ * @returns the ids that were purged and what was done about the files they wrapped, for the
+ *   caller to announce once the transaction has committed.
  */
 export async function purgeContentAggregates(
   manager: EntityManager,
   userId: string,
   requestedContentIds: string[],
-): Promise<string[]> {
+  storage?: WrappedFileStorage,
+): Promise<PurgedContentAggregates> {
   // Whose a row is, `user_id` says, as it does for events. The lock is not taken
   // here but by `teardownContent`, in key order, as the first thing it does to
   // them: it is what has to come before the links are cleared, and nothing else
@@ -85,7 +111,18 @@ export async function purgeContentAggregates(
   );
   const contentIds = content.map((row) => row.id);
 
+  // The files this content wraps are locked, decided and have their objects deleted before anything
+  // else is touched. The files come before the content in lock order, here and in the event's purge,
+  // so that two purges that share a file cannot wait on each other.
+  const plan = await planWrappedFiles(manager, userId, {
+    content: contentIds.map((id) => ({ id, named: id })),
+    eventIds: [],
+  });
+  const stored = await deleteWrappedFileObjects(manager, plan, storage);
+
   await teardownContent(manager, contentIds);
 
-  return contentIds;
+  const files = await deleteWrappedFileRows(manager, userId, plan, stored);
+
+  return { contentIds, files };
 }
