@@ -18,16 +18,17 @@ function makeListener(created: boolean, entityType: string | undefined = 'Concep
     node: { entity_id: 'entity-1', entity_type: entityType },
     created,
   }));
+  const dropStalePersonIndex = jest.fn(async () => ({ vectors: 0, embeddings: 0, indexSkips: 0, ledger: 0 }));
   const send = jest.fn(async () => ['job-1']);
   const logger = { setContext: jest.fn(), log: jest.fn(), debug: jest.fn(), error: jest.fn() };
 
   const listener = new GraphEventListener(
-    { createOrUpdateNode } as never,
+    { createOrUpdateNode, dropStalePersonIndex } as never,
     { send } as never,
     logger as never,
   );
 
-  return { listener, createOrUpdateNode, send, logger };
+  return { listener, createOrUpdateNode, dropStalePersonIndex, send, logger };
 }
 
 function payload(entityType?: string): Payload {
@@ -153,6 +154,116 @@ describe('GraphEventListener.handleNodeUpserted', () => {
     }
 
     expect(write).toMatchObject({ entityId: 'entity-1', properties: { occupation: 'dentist' } });
+  });
+});
+
+describe('GraphEventListener.handleNodeUpserted — a node that is no longer a Person', () => {
+  // The person sweeps select `entity_type = 'Person'`, so a row retyped out of it
+  // is invisible to them and keeps its person search rows and its two person
+  // ledger rows. The handler removes them after the write.
+
+  it('drops the person search index of an existing node whose stored type is not Person', async () => {
+    const { listener, dropStalePersonIndex, send } = makeListener(false, 'Concept');
+
+    await listener.handleNodeUpserted(payload('Concept'));
+
+    expect(dropStalePersonIndex).toHaveBeenCalledTimes(1);
+    expect(dropStalePersonIndex).toHaveBeenCalledWith('owner-1', 'entity-1');
+    // What the node became is still indexed, as before.
+    expect(send).toHaveBeenCalledWith('concept.updated', { conceptId: 'entity-1' });
+  });
+
+  it.each(['Concept', 'Location', 'Organization', 'Contact', 'PERSON'])(
+    'drops it whenever the stored type is %s: only the exact Person discriminator is indexed as one',
+    async (stored) => {
+      const { listener, dropStalePersonIndex } = makeListener(false, stored);
+
+      await listener.handleNodeUpserted(payload(stored));
+
+      expect(dropStalePersonIndex).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('decides from the stored type, not the payload: an update that sends no entityType on a Concept still drops', async () => {
+    // The row was retyped earlier (or by a failed first attempt); this write only
+    // renames it. The index state is still stale.
+    const { listener, dropStalePersonIndex } = makeListener(false, 'Concept');
+
+    await listener.handleNodeUpserted(payload(undefined));
+
+    expect(dropStalePersonIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a node that is still a Person alone', async () => {
+    const { listener, dropStalePersonIndex, send } = makeListener(false, 'Person');
+
+    await listener.handleNodeUpserted(payload('Person'));
+
+    expect(dropStalePersonIndex).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith('person.updated', { personId: 'entity-1' });
+  });
+
+  it('leaves a created node alone: it has no index state yet', async () => {
+    const { listener, dropStalePersonIndex } = makeListener(true, 'Concept');
+
+    await listener.handleNodeUpserted(payload('Concept'));
+
+    expect(dropStalePersonIndex).not.toHaveBeenCalled();
+  });
+
+  it('drops it BEFORE emitting the search event, so a failed emit still leaves the person index clean', async () => {
+    const { listener, dropStalePersonIndex, send } = makeListener(false, 'Concept');
+    const order: string[] = [];
+    dropStalePersonIndex.mockImplementation(async () => {
+      order.push('drop');
+
+      return { vectors: 1, embeddings: 1, indexSkips: 0, ledger: 2 };
+    });
+    send.mockImplementation(async () => {
+      order.push('emit');
+
+      return ['job-1'];
+    });
+
+    await listener.handleNodeUpserted(payload('Concept'));
+
+    expect(order).toEqual(['drop', 'emit']);
+  });
+
+  it('fails the job when the cleanup fails, and the retry — which finds the row already retyped — finishes it', async () => {
+    // First attempt: the write commits, then the cleanup fails. pg-boss re-runs
+    // the job. createOrUpdateNode now reports an EXISTING Concept, and nothing
+    // in it says the type just changed — so a cleanup gated on "did the type
+    // change?" would never run again. Gated on the stored type, it does.
+    const { listener, dropStalePersonIndex, send } = makeListener(false, 'Concept');
+    dropStalePersonIndex.mockRejectedValueOnce(new Error('connection reset'));
+
+    await expect(listener.handleNodeUpserted(payload('Concept'))).rejects.toThrow('connection reset');
+    expect(send).not.toHaveBeenCalled();
+
+    await listener.handleNodeUpserted(payload('Concept'));
+
+    expect(dropStalePersonIndex).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs what it dropped, and says nothing when there was nothing to drop', async () => {
+    const quiet = makeListener(false, 'Concept');
+    await quiet.listener.handleNodeUpserted(payload('Concept'));
+    expect(quiet.logger.log).not.toHaveBeenCalled();
+
+    const dropped = makeListener(false, 'Concept');
+    dropped.dropStalePersonIndex.mockResolvedValueOnce({
+      vectors: 1,
+      embeddings: 1,
+      indexSkips: 1,
+      ledger: 2,
+    });
+    await dropped.listener.handleNodeUpserted(payload('Concept'));
+    expect(dropped.logger.log).toHaveBeenCalledWith(
+      'Dropped the person search index of a node that is no longer a Person',
+      { entityId: 'entity-1', vectors: 1, embeddings: 1, indexSkips: 1, ledger: 2 },
+    );
   });
 });
 
