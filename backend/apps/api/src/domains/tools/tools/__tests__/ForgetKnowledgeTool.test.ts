@@ -11,10 +11,12 @@ import {
   type GraphNodeEntity,
   type GraphUtilityService,
   type ItemService,
+  type KeptFile,
   type PersonService,
   type PlaceService,
   type PurgedFiles,
   type RelationshipEntity,
+  type WrappedFilesPurged,
 } from '@ci/domains/memory';
 import {
   CommunicationRemovedEvent,
@@ -150,6 +152,34 @@ function makeGraphUtility(
 }
 
 /**
+ * What a purge of content or of an event answers about the stored files it wrapped: nothing, unless a case
+ * says otherwise.
+ */
+function wrapped(extra: Partial<WrappedFilesPurged> = {}): WrappedFilesPurged {
+  return {
+    wrappedFileIds: [],
+    fileIds: [],
+    nodeIds: [],
+    deletedObjects: 0,
+    keptObjects: 0,
+    kept: [],
+    ...extra,
+  };
+}
+
+/** A wrapped file that was kept, with nothing using it unless a case says what. */
+function keptFile(
+  fileId: string,
+  extra: { nodeId?: string; usedBy?: Partial<KeptFile['usedBy']> } = {},
+): KeptFile {
+  return {
+    fileId,
+    nodeId: extra.nodeId ?? null,
+    usedBy: { contentIds: [], messageIds: [], chatMessageIds: [], eventId: null, ...extra.usedBy },
+  };
+}
+
+/**
  * Stand-in for `CalendarEventService`. `remove` is true exactly once for each id
  * that has a live `ci.events` row to tombstone, false for anything else: an
  * `Event` node with no detail row, or one already in the trash. `purge` takes
@@ -161,6 +191,7 @@ function makeCalendarEvents(
   liveEventIds: string[] = [],
   trashedEventIds: string[] = [],
   contentOfEvents: Record<string, string[]> = {},
+  files: WrappedFilesPurged = wrapped(),
 ) {
   const live = new Set(liveEventIds);
   const trashed = new Set(trashedEventIds);
@@ -168,7 +199,7 @@ function makeCalendarEvents(
   const purge = jest.fn(async (_context: { userId: string }, ids: string[]) => {
     const eventIds = ids.filter((id) => live.has(id) || trashed.has(id));
 
-    return { eventIds, contentIds: eventIds.flatMap((id) => contentOfEvents[id] ?? []) };
+    return { eventIds, contentIds: eventIds.flatMap((id) => contentOfEvents[id] ?? []), files };
   });
 
   return { remove, purge };
@@ -179,10 +210,11 @@ function makeCalendarEvents(
  * (`purgeableContentIds`) and answers with the ones it took; a `Content` node with
  * no detail row is not among them, as for the real one.
  */
-function makeContents(purgeableContentIds: string[] = []) {
+function makeContents(purgeableContentIds: string[] = [], files: WrappedFilesPurged = wrapped()) {
   const purgeable = new Set(purgeableContentIds);
   const purge = jest.fn(async (_context: { userId: string }, ids: string[]) => ({
     contentIds: ids.filter((id) => purgeable.has(id)),
+    files,
   }));
 
   return { purge };
@@ -1984,6 +2016,393 @@ describe('ForgetKnowledgeTool people, places and concepts, archive_and_delete', 
     expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
     expect(search.send).not.toHaveBeenCalled();
     expect(search.lookup('person', E1)).toBe(true);
+  });
+});
+
+describe('ForgetKnowledgeTool wrapped files, archive_and_delete', () => {
+  const FILE = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const FILE_2 = 'aaaaaaaa-0000-0000-0000-000000000002';
+  const COPY = 'aaaaaaaa-0000-0000-0000-0000000000c1';
+  const NODE = 'bbbbbbbb-0000-0000-0000-000000000001';
+  const MESSAGE = 'cccccccc-0000-0000-0000-000000000001';
+  const MESSAGE_2 = 'cccccccc-0000-0000-0000-000000000002';
+
+  /** A tool whose only interesting collaborators are the graph, the content service and the calendar. */
+  function wrapTool(
+    graphUtility: ReturnType<typeof makeGraphUtility>,
+    parts: {
+      calendarEvents?: ReturnType<typeof makeCalendarEvents>;
+      contents?: ReturnType<typeof makeContents>;
+      files?: ReturnType<typeof makeFiles>;
+    },
+  ) {
+    return makeTool(
+      graphUtility,
+      makeSearchIndex(),
+      parts.calendarEvents ?? makeCalendarEvents(),
+      parts.contents ?? makeContents(),
+      makeCommunications(),
+      makeItems(),
+      parts.files ?? makeFiles(),
+    );
+  }
+
+  describe('what it says went', () => {
+    it('says which stored files went with content, and that nothing else used them', async () => {
+      const contents = makeContents(
+        [E1],
+        wrapped({ wrappedFileIds: [FILE], fileIds: [FILE], nodeIds: [NODE] }),
+      );
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Content' } } });
+
+      const result = await wrapTool(graphUtility, { contents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data?.archivedEntityIds).toEqual([E1]);
+      expect(result.data?.warnings).toEqual([
+        `Also deleted, along with the content or event that held them, because nothing else used them: stored file(s) ${FILE}.`,
+      ]);
+    });
+
+    it('says the same of the files of an event, and counts the copies that went with them', async () => {
+      const calendarEvents = makeCalendarEvents(
+        [E1],
+        [],
+        {},
+        wrapped({ wrappedFileIds: [FILE, FILE_2], fileIds: [FILE, FILE_2, COPY], nodeIds: [] }),
+      );
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Event' } } });
+
+      const result = await wrapTool(graphUtility, { calendarEvents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.data?.warnings).toEqual([
+        `Also deleted, along with the content or event that held them, because nothing else used them: stored file(s) ${FILE}, ${FILE_2}, and 1 copy(ies) of them (previews, thumbnails, playback versions).`,
+      ]);
+    });
+
+    it('lists the first few of a long run of deleted files and counts the rest, so that an album is one line', async () => {
+      const ids = Array.from({ length: 8 }, (_, index) => `aaaaaaaa-0000-0000-0000-00000000020${index}`);
+      const contents = makeContents([E1], wrapped({ wrappedFileIds: ids, fileIds: ids }));
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Content' } } });
+
+      const result = await wrapTool(graphUtility, { contents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.data?.warnings).toEqual([
+        `Also deleted, along with the content or event that held them, because nothing else used them: stored file(s) ${ids.slice(0, 5).join(', ')} and 3 more.`,
+      ]);
+    });
+
+    it('says when a stored object stayed because another file record still names it', async () => {
+      const contents = makeContents(
+        [E1],
+        wrapped({ wrappedFileIds: [FILE], fileIds: [FILE], keptObjects: 2 }),
+      );
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Content' } } });
+
+      const result = await wrapTool(graphUtility, { contents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.data?.warnings).toContain(
+        '2 stored object(s) were not deleted because another file record still names them.',
+      );
+    });
+
+    it('says nothing of files when the content wrapped none', async () => {
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Content' } } });
+
+      const result = await wrapTool(graphUtility, { contents: makeContents([E1]) }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.data?.warnings).toBeUndefined();
+    });
+  });
+
+  describe('what it says stayed, and why', () => {
+    it('names a kept file, what still uses it, and the File node to forget to delete it anyway', async () => {
+      const contents = makeContents(
+        [E1],
+        wrapped({
+          kept: [
+            keptFile(FILE, {
+              nodeId: NODE,
+              usedBy: {
+                messageIds: [MESSAGE, MESSAGE_2],
+                contentIds: [E2],
+                chatMessageIds: ['m1', 'm2'],
+                eventId: E3,
+              },
+            }),
+          ],
+        }),
+      );
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Content' } } });
+
+      const result = await wrapTool(graphUtility, { contents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      // The content went and the call succeeded: a kept file is not a failure, it is what the user is told.
+      expect(result.success).toBe(true);
+      expect(result.data?.warnings).toEqual([
+        `Not deleted: stored file ${FILE} is still used by message(s) ${MESSAGE}, ${MESSAGE_2}; other content ${E2}; 2 chat message(s) that attach it; event ${E3}. Forget its File node ${NODE} to delete it anyway.`,
+      ]);
+    });
+
+    it('does not offer a File node that does not exist', async () => {
+      const contents = makeContents(
+        [E1],
+        wrapped({ kept: [keptFile(FILE, { usedBy: { messageIds: [MESSAGE] } })] }),
+      );
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Content' } } });
+
+      const result = await wrapTool(graphUtility, { contents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.data?.warnings).toEqual([
+        `Not deleted: stored file ${FILE} is still used by message(s) ${MESSAGE}.`,
+      ]);
+    });
+
+    it('names only the first few of a long list of users, so that one file is one line', async () => {
+      const messages = Array.from({ length: 7 }, (_, index) => `cccccccc-0000-0000-0000-00000000010${index}`);
+      const contents = makeContents(
+        [E1],
+        wrapped({ kept: [keptFile(FILE, { usedBy: { messageIds: messages } })] }),
+      );
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Content' } } });
+
+      const result = await wrapTool(graphUtility, { contents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.data?.warnings).toEqual([
+        `Not deleted: stored file ${FILE} is still used by message(s) ${messages.slice(0, 5).join(', ')} and 2 more.`,
+      ]);
+    });
+
+    it('lists the first ten kept files and counts the rest', async () => {
+      const kept = Array.from({ length: 12 }, (_, index) =>
+        keptFile(`aaaaaaaa-0000-0000-0000-0000000001${String(index).padStart(2, '0')}`, {
+          usedBy: { messageIds: [MESSAGE] },
+        }),
+      );
+      const calendarEvents = makeCalendarEvents([E1], [], {}, wrapped({ kept }));
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Event' } } });
+
+      const result = await wrapTool(graphUtility, { calendarEvents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      const warnings = result.data?.warnings ?? [];
+
+      expect(warnings).toHaveLength(11);
+      expect(warnings.slice(0, 10).every((line) => line.startsWith('Not deleted: stored file '))).toBe(true);
+      expect(warnings[10]).toBe(
+        '2 more stored file(s) were not deleted either, because something else still uses them.',
+      );
+    });
+
+    it('says what went and what stayed in the same call', async () => {
+      const contents = makeContents(
+        [E1],
+        wrapped({
+          wrappedFileIds: [FILE],
+          fileIds: [FILE],
+          kept: [keptFile(FILE_2, { nodeId: NODE, usedBy: { messageIds: [MESSAGE] } })],
+        }),
+      );
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Content' } } });
+
+      const result = await wrapTool(graphUtility, { contents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.data?.warnings).toEqual([
+        `Also deleted, along with the content or event that held them, because nothing else used them: stored file(s) ${FILE}.`,
+        `Not deleted: stored file ${FILE_2} is still used by message(s) ${MESSAGE}. Forget its File node ${NODE} to delete it anyway.`,
+      ]);
+    });
+  });
+
+  describe('a File node named in the same call', () => {
+    it('is not purged a second time when it went with the content that wrapped it', async () => {
+      const contents = makeContents(
+        [E1],
+        wrapped({ wrappedFileIds: [FILE], fileIds: [FILE], nodeIds: [E2] }),
+      );
+      const files = makeFiles([E2]);
+      const graphUtility = makeGraphUtility({
+        nodes: { [E1]: { entityType: 'Content' }, [E2]: { entityType: 'File' } },
+      });
+
+      const result = await wrapTool(graphUtility, { contents, files }).execute(CONTEXT, {
+        entityIds: [E1, E2],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.success).toBe(true);
+      // Its node went with the content's purge, so neither the file purge nor the generic delete has it.
+      expect(files.purge).not.toHaveBeenCalled();
+      expect(graphUtility.deactivateEntities).not.toHaveBeenCalled();
+      expect(result.data?.archivedEntityIds).toEqual([E1, E2]);
+    });
+
+    it('is still purged, and is the way to delete a kept file anyway', async () => {
+      // The content went and the file stayed, because a message uses it. Naming its node is the explicit ask.
+      const contents = makeContents(
+        [E1],
+        wrapped({ kept: [keptFile(FILE, { nodeId: E2, usedBy: { messageIds: [MESSAGE] } })] }),
+      );
+      const files = makeFiles([E2]);
+      const graphUtility = makeGraphUtility({
+        nodes: { [E1]: { entityType: 'Content' }, [E2]: { entityType: 'File' } },
+      });
+
+      const result = await wrapTool(graphUtility, { contents, files }).execute(CONTEXT, {
+        entityIds: [E1, E2],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.success).toBe(true);
+      expect(files.purge).toHaveBeenCalledWith({ userId: CONTEXT.userId }, [E2]);
+    });
+  });
+
+  describe('when the purge fails', () => {
+    it('names the content whose photo is gone, and says that forgetting it again finishes the job', async () => {
+      const contents = makeContents([E1]);
+
+      contents.purge.mockRejectedValueOnce(
+        new StoredObjectsDeletedError([E1], new Error('deadlock detected')),
+      );
+
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Content' } } });
+
+      const result = await wrapTool(graphUtility, { contents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatchObject({
+        code: 'EXECUTION_ERROR',
+        retryable: true,
+        details: { storedObjectsDeletedFor: [E1] },
+      });
+      expect(result.error?.message).toContain('deadlock detected');
+      expect(result.error?.message).toContain(`Forgetting them again finishes the job: ${E1}.`);
+      expect(result.error?.details).not.toHaveProperty('deletedEntityIds');
+    });
+
+    it('names the events whose photos are gone', async () => {
+      const calendarEvents = makeCalendarEvents([E1]);
+
+      calendarEvents.purge.mockRejectedValueOnce(
+        new StoredObjectsDeletedError([E1], new Error('connection reset')),
+      );
+
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Event' } } });
+
+      const result = await wrapTool(graphUtility, { calendarEvents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.error).toMatchObject({
+        code: 'EXECUTION_ERROR',
+        details: { storedObjectsDeletedFor: [E1] },
+      });
+      expect(result.error?.message).toContain(`Forgetting them again finishes the job: ${E1}.`);
+    });
+
+    it('does not call a foreign-key violation retryable, and does not promise that forgetting again helps', async () => {
+      const contents = makeContents([E1]);
+
+      contents.purge.mockRejectedValueOnce(
+        new StoredObjectsDeletedError([E1], pgFailure('23503', { constraint: 'new_fkey', table: 'content' })),
+      );
+
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Content' } } });
+
+      const result = await wrapTool(graphUtility, { contents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.error).toMatchObject({
+        code: 'CONSTRAINT_VIOLATION',
+        retryable: false,
+        details: { storedObjectsDeletedFor: [E1] },
+      });
+      expect(result.error?.message).toContain(
+        `Retrying cannot finish the job until what references them is removed: ${E1}.`,
+      );
+      expect(result.error?.message).not.toContain('Forgetting them again finishes the job');
+    });
+
+    it('says nothing of half-gone files when the object store failed first, and nothing was deleted', async () => {
+      const contents = makeContents([E1]);
+
+      contents.purge.mockRejectedValueOnce(
+        new Error(
+          'The stored objects could not be deleted, so nothing was deleted from the database: ECONNREFUSED',
+        ),
+      );
+
+      const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Content' } } });
+
+      const result = await wrapTool(graphUtility, { contents }).execute(CONTEXT, {
+        entityIds: [E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.error).toMatchObject({ code: 'EXECUTION_ERROR', retryable: true });
+      expect(result.error?.details).not.toHaveProperty('storedObjectsDeletedFor');
+      expect(result.error?.details).not.toHaveProperty('deletedEntityIds');
+    });
+
+    it('lists what an earlier purge destroyed together with the content whose photo is gone', async () => {
+      const calendarEvents = makeCalendarEvents([E3]);
+      const contents = makeContents([E1]);
+
+      contents.purge.mockRejectedValueOnce(
+        new StoredObjectsDeletedError([E1], new Error('connection reset')),
+      );
+
+      const graphUtility = makeGraphUtility({
+        nodes: { [E3]: { entityType: 'Event' }, [E1]: { entityType: 'Content' } },
+      });
+
+      const result = await wrapTool(graphUtility, { calendarEvents, contents }).execute(CONTEXT, {
+        entityIds: [E3, E1],
+        mode: 'archive_and_delete',
+      });
+
+      expect(result.error).toMatchObject({
+        details: { deletedEntityIds: [E3], storedObjectsDeletedFor: [E1] },
+      });
+      expect(result.error?.message).toContain(`Already deleted: ${E3}.`);
+      expect(result.error?.message).toContain(`Forgetting them again finishes the job: ${E1}.`);
+    });
   });
 });
 

@@ -19,7 +19,9 @@ import {
   PlaceService,
   RelationshipEntity,
   StoredObjectsDeletedError,
+  type KeptFile,
   type PurgedFiles,
+  type WrappedFilesPurged,
 } from '@ci/domains/memory';
 import {
   CommunicationRemovedEvent,
@@ -71,7 +73,9 @@ export interface ForgetKnowledgeOutput {
  *
  * A file can also be half gone: a purge deletes its stored objects before its records, so a failure
  * in between leaves a file that is still listed and no longer opens. Those are named separately,
- * because they are not deleted and the way to finish them is to forget them again.
+ * because they are not deleted and the way to finish them is to forget them again. The same goes for
+ * content and events, whose purge deletes the stored photo they wrap: the ones named are the content
+ * or events that are still there, wrapping a photo that no longer opens.
  */
 class PartialForgetError extends Error {
   constructor(
@@ -112,6 +116,61 @@ function storedContentsGone(ids: string[], retryHelps = true): string {
   }: ${ids.join(', ')}.`;
 }
 
+/**
+ * A purge that deleted the stored objects and then failed. The caller is told which of the things it named
+ * are the ones left half gone, and the error that propagates is the cause, which is what says whether
+ * trying again can help.
+ */
+function unwrapStoredObjectsDeleted(error: unknown, contentsOnly: Set<string>): unknown {
+  if (error instanceof StoredObjectsDeletedError) {
+    error.nodeIds.forEach((id) => contentsOnly.add(id));
+
+    return error.cause;
+  }
+
+  return error;
+}
+
+const keptObjectsWarning = (count: number): string =>
+  `${count} stored object(s) were not deleted because another file record still names them.`;
+
+/** How many kept files a call lists one by one before it only counts the rest. */
+const MAX_KEPT_FILES_LISTED = 10;
+
+/** How many ids of one kind a line lists. A file one message names a hundred times over, or an album of a thousand photos, is still one line. */
+const MAX_IDS_LISTED = 5;
+
+function listIds(ids: string[]): string {
+  return ids.length > MAX_IDS_LISTED
+    ? `${ids.slice(0, MAX_IDS_LISTED).join(', ')} and ${ids.length - MAX_IDS_LISTED} more`
+    : ids.join(', ');
+}
+
+/** One line about a wrapped file that stayed: what still uses it, and how to delete it anyway. */
+function keptFileWarning(kept: KeptFile): string {
+  const users: string[] = [];
+
+  if (kept.usedBy.messageIds.length > 0) {
+    users.push(`message(s) ${listIds(kept.usedBy.messageIds)}`);
+  }
+
+  if (kept.usedBy.contentIds.length > 0) {
+    users.push(`other content ${listIds(kept.usedBy.contentIds)}`);
+  }
+
+  if (kept.usedBy.chatMessageIds.length > 0) {
+    users.push(`${kept.usedBy.chatMessageIds.length} chat message(s) that attach it`);
+  }
+
+  if (kept.usedBy.eventId !== null) {
+    users.push(`event ${kept.usedBy.eventId}`);
+  }
+
+  return `Not deleted: stored file ${kept.fileId} is still used by ${users.join('; ')}.${
+    kept.nodeId === null ? '' : ` Forget its File node ${kept.nodeId} to delete it anyway.`
+  }`;
+}
+
 @Injectable()
 export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKnowledgeOutput> {
   readonly schema: IntentDefinition = {
@@ -145,7 +204,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
           enum: ['archive', 'archive_and_delete'],
           default: 'archive',
           description:
-            "Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, an item, person, place or concept goes with the duplicates that were merged into it, a file goes with its previews and other copies and with its stored bytes, and anything that came from a source that syncs again can arrive again. A forgotten person's email addresses, phone numbers and handles are remembered as digests, so messages that still name them do not create them again; their messages and events are not deleted. An item that is another item's parent is refused until its children are named too, and the user's own person is always refused. The content record of a photo is not deleted with its file: it is listed in warnings, to be forgotten on its own.",
+            "Archive marks nodes/relationships inactive (an event is moved to the trash, where it can be restored). archive_and_delete permanently deletes them and cannot be undone: an event goes with its attached content, an item, person, place or concept goes with the duplicates that were merged into it, a file goes with its previews and other copies and with its stored bytes, and anything that came from a source that syncs again can arrive again. The stored photo of content or of an event goes with it, bytes included, only when nothing else uses it: if another content record, a message's attachment, a chat attachment or another event still does, the file stays and is listed in warnings with what uses it and the File node to forget to delete it anyway. A forgotten person's email addresses, phone numbers and handles are remembered as digests, so messages that still name them do not create them again; their messages and events are not deleted. An item that is another item's parent is refused until its children are named too, and the user's own person is always refused. The content record of a photo is not deleted with its file: it is listed in warnings, to be forgotten on its own.",
         },
         reason: {
           type: 'string',
@@ -378,13 +437,14 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     warnings: string[],
   ): Promise<Set<string>> {
     const destroyed = new Set<string>();
-    // Files whose stored contents were deleted and whose records then could not be: neither
-    // destroyed nor intact, and the only state a purge can leave that is.
+    // Entities whose stored files were deleted and which then could not be: neither destroyed nor
+    // intact, and the only state a purge can leave that is. A file, or the content or event that
+    // wrapped the file, depending on what was named.
     const contentsOnly = new Set<string>();
 
     try {
-      await this.purgeEvents(nodes, ownerId, destroyed);
-      await this.purgeContent(nodes, ownerId, destroyed);
+      await this.purgeEvents(nodes, ownerId, destroyed, warnings, contentsOnly);
+      await this.purgeContent(nodes, ownerId, destroyed, warnings, contentsOnly);
       await this.purgeCommunications(nodes, ownerId, destroyed);
       await this.purgePeople(nodes, ownerId, destroyed, warnings);
       await this.purgePlaces(nodes, ownerId, destroyed, warnings);
@@ -412,6 +472,8 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     nodes: GraphNodeEntity[],
     ownerId: string,
     destroyed: Set<string>,
+    warnings: string[],
+    contentsOnly: Set<string>,
   ): Promise<void> {
     const eventIds = nodes.filter((node) => node.entity_type === 'Event').map((node) => node.entity_id);
 
@@ -419,9 +481,16 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
       return;
     }
 
-    const purged = await this.calendarEvents.purge({ userId: ownerId }, eventIds);
+    let purged: Awaited<ReturnType<CalendarEventService['purge']>>;
+
+    try {
+      purged = await this.calendarEvents.purge({ userId: ownerId }, eventIds);
+    } catch (error) {
+      throw unwrapStoredObjectsDeleted(error, contentsOnly);
+    }
 
     purged.eventIds.forEach((id) => destroyed.add(id));
+    this.reportWrappedFiles(purged.files, nodes, destroyed, warnings);
 
     // A content node named in this call that hung off one of those events went with it. It is gone, so
     // it is neither the next step's to purge nor the generic path's to delete.
@@ -445,6 +514,8 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     nodes: GraphNodeEntity[],
     ownerId: string,
     destroyed: Set<string>,
+    warnings: string[],
+    contentsOnly: Set<string>,
   ): Promise<void> {
     const contentIds = nodes
       .filter((node) => node.entity_type === 'Content' && !destroyed.has(node.entity_id))
@@ -454,9 +525,58 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
       return;
     }
 
-    const purged = await this.contents.purge({ userId: ownerId }, contentIds);
+    let purged: Awaited<ReturnType<ContentService['purge']>>;
+
+    try {
+      purged = await this.contents.purge({ userId: ownerId }, contentIds);
+    } catch (error) {
+      throw unwrapStoredObjectsDeleted(error, contentsOnly);
+    }
 
     purged.contentIds.forEach((id) => destroyed.add(id));
+    this.reportWrappedFiles(purged.files, nodes, destroyed, warnings);
+  }
+
+  /**
+   * Says what a purge of content or of an event did about the stored photos it wrapped, which nobody
+   * named and which are the part that is the photo: the ones that went, with their copies; the objects
+   * that stayed because another file record names them; and the files that were kept because something
+   * else still uses them, each with what uses it and the `File` node to forget to delete it anyway.
+   *
+   * A `File` node that was named in this call and went with its content is gone, so it is neither the
+   * next step's to purge nor the generic path's to delete.
+   */
+  private reportWrappedFiles(
+    files: WrappedFilesPurged,
+    nodes: GraphNodeEntity[],
+    destroyed: Set<string>,
+    warnings: string[],
+  ): void {
+    const named = new Set(nodes.filter((node) => node.entity_type === 'File').map((node) => node.entity_id));
+
+    files.nodeIds.filter((id) => named.has(id)).forEach((id) => destroyed.add(id));
+
+    if (files.wrappedFileIds.length > 0) {
+      const copies = files.fileIds.length - files.wrappedFileIds.length;
+
+      warnings.push(
+        `Also deleted, along with the content or event that held them, because nothing else used them: stored file(s) ${listIds(files.wrappedFileIds)}${
+          copies > 0 ? `, and ${copies} copy(ies) of them (previews, thumbnails, playback versions)` : ''
+        }.`,
+      );
+    }
+
+    if (files.keptObjects > 0) {
+      warnings.push(keptObjectsWarning(files.keptObjects));
+    }
+
+    files.kept.slice(0, MAX_KEPT_FILES_LISTED).forEach((kept) => warnings.push(keptFileWarning(kept)));
+
+    if (files.kept.length > MAX_KEPT_FILES_LISTED) {
+      warnings.push(
+        `${files.kept.length - MAX_KEPT_FILES_LISTED} more stored file(s) were not deleted either, because something else still uses them.`,
+      );
+    }
   }
 
   /**
@@ -676,7 +796,11 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     warnings: string[],
     contentsOnly: Set<string>,
   ): Promise<void> {
-    const named = new Set(nodes.filter((node) => node.entity_type === 'File').map((node) => node.entity_id));
+    const named = new Set(
+      nodes
+        .filter((node) => node.entity_type === 'File' && !destroyed.has(node.entity_id))
+        .map((node) => node.entity_id),
+    );
 
     if (named.size === 0) {
       return;
@@ -687,14 +811,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     try {
       purged = await this.files.purge({ userId: ownerId }, Array.from(named));
     } catch (error) {
-      if (error instanceof StoredObjectsDeletedError) {
-        error.nodeIds.forEach((id) => contentsOnly.add(id));
-
-        // The cause is what failed, and is what says whether trying again can help.
-        throw error.cause;
-      }
-
-      throw error;
+      throw unwrapStoredObjectsDeleted(error, contentsOnly);
     }
 
     purged.nodeIds.filter((id) => named.has(id)).forEach((id) => destroyed.add(id));
@@ -706,9 +823,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
     }
 
     if (purged.keptObjects > 0) {
-      warnings.push(
-        `${purged.keptObjects} stored object(s) were not deleted because another file record still names them.`,
-      );
+      warnings.push(keptObjectsWarning(purged.keptObjects));
     }
 
     if (purged.wrappingContentIds.length > 0) {
