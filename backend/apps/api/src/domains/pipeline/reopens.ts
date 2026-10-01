@@ -92,15 +92,18 @@ import { STAGE_ID_LIST, STAGE_IDS, type StageId } from './constants';
  *    `CommunicationParticipantLinkListener`. They were the writer behind 17,416
  *    of those 17,417 messages. The legacy `GeocodeBatchListener`, which also
  *    writes `ci.events.location_entity_id`, still does not.
- *  - A person merge that RACES the projection. `PersonMergeService` re-points
- *    the losers' edges to the survivor, then deletes whatever loser edges are
- *    left, and re-points the message's columns to the survivor. A projection
- *    that commits a loser's edge between those two statements loses it, while
- *    the leg's ledger row is still `running`, so no re-open could reach it
- *    either. Five SENT/RECEIVED edges were lost this way on the reference
- *    appliance at 15:23 on 2026-09-30, during a `DeterministicPersonMergeCron`
- *    drain. Repair migration `20260930161359` re-opens rows left like that, but
- *    only once; closing the race belongs in the merge.
+ *  - A person merge that RACES the projection, in the one window the merge
+ *    cannot close. `PersonMergeService` re-points the losers' edges to the
+ *    survivor and then sweeps what is left, moving a loser edge a projection
+ *    committed in between onto the survivor. It used to delete it, with the
+ *    leg's ledger row still `running`, so no re-open could have reached it:
+ *    five SENT/RECEIVED edges were lost that way on the reference appliance at
+ *    15:23 on 2026-09-30, during a `DeterministicPersonMergeCron` drain, and
+ *    repair migration `20260930161359` re-opened those five. What is left is a
+ *    projection whose own snapshot predates the merge's commit and that commits
+ *    after the sweep: its edge stays on the tombstone while the row is `done`.
+ *    That window is the length of the sweep plus the rest of the merge's
+ *    transaction; closing it would take a lock the projection also takes.
  *
  * ── Rules ─────────────────────────────────────────────────────────────────
  *

@@ -4,7 +4,7 @@ import type { UserServiceContext } from '@ci/common/context';
 
 import { PersonEntity } from '../entities/PersonEntity';
 
-import { PersonMergeService } from './PersonMergeService';
+import { PersonMergeService, RELATIONSHIP_COLUMNS } from './PersonMergeService';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
 const TARGET = '00000000-0000-0000-0000-0000000000b1';
@@ -47,10 +47,26 @@ interface ClaimRow {
   disposition: 'confirmed' | 'rejected' | null;
 }
 
+/** One edge a sweep reports having moved onto the target, as the sweep statement returns it. */
+interface RescuedRow {
+  relationship_id: string;
+  relationship_type: string;
+  from_entity_id: string;
+  to_entity_id: string;
+  was: string;
+}
+
+/** What one sweep statement answers: the rows its DELETE removed, and the ones its INSERT put back. */
+interface SweepAnswer {
+  deleted: number;
+  rescued: RescuedRow[];
+}
+
 interface Harness {
   service: PersonMergeService;
   statements: Array<{ sql: string; params: unknown[] | undefined; inTransaction: boolean }>;
   send: jest.Mock;
+  recordMany: jest.Mock;
 }
 
 /**
@@ -70,8 +86,12 @@ const REPOINTED: Array<[fragment: string, count: number]> = [
   ['UPDATE ci.relationships r SET to_entity_id', 19],
 ];
 
-/** The three relationship DELETEs, in the order the merge issues them; they sum to relationshipsDropped. */
-const DROPPED = [1, 2, 4];
+/** The self-reference DELETE, then the two sweeps (from, then to) — in the order the merge issues them. They sum to relationshipsDropped. */
+const DROPPED_SELF_REFERENCES = 1;
+const SWEPT: SweepAnswer[] = [
+  { deleted: 2, rescued: [] },
+  { deleted: 4, rescued: [] },
+];
 
 const EXPECTED_COUNTS = {
   identifiers: 3,
@@ -84,6 +104,7 @@ const EXPECTED_COUNTS = {
   relationshipsFrom: 17,
   relationshipsTo: 19,
   relationshipsDropped: 7,
+  relationshipsRescued: 0,
 };
 
 /**
@@ -94,10 +115,11 @@ function makeHarness(
   entityRows: EntityRow[],
   selfEntityId: string | null = SELF,
   claims: ClaimRow[] = [],
+  swept: Array<SweepAnswer | 'wrong-shape'> = SWEPT,
 ): Harness {
   const statements: Harness['statements'] = [];
   let inTransaction = false;
-  const dropped = [...DROPPED];
+  const sweeps = [...swept];
 
   // Answers each statement the way TypeORM's Postgres runner does, so this
   // mock cannot flatter the service: a SELECT — which is what a counting CTE
@@ -132,9 +154,21 @@ function makeHarness(
       return [{ count: moved.length }];
     }
 
+    // A sweep ends in a plain SELECT, so the driver hands its one row back as is.
+    if (sql.includes('WITH gone AS (')) {
+      const answer = sweeps.shift() ?? { deleted: 0, rescued: [] };
+
+      // What a statement whose OUTER command is a DELETE would get back.
+      if (answer === 'wrong-shape') {
+        return [[], 0];
+      }
+
+      return [{ deleted: answer.deleted, rescued: answer.rescued }];
+    }
+
     if (/SELECT count\(\*\)::int AS count FROM/.test(sql)) {
       const count = sql.includes('DELETE FROM ci.relationships')
-        ? dropped.shift()
+        ? DROPPED_SELF_REFERENCES
         : REPOINTED.find(([fragment]) => sql.includes(fragment))?.[1];
 
       return [{ count: count ?? 0 }];
@@ -174,6 +208,7 @@ function makeHarness(
   const repository = { manager, findOne };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
   const send = jest.fn(async () => []);
+  const recordMany = jest.fn(async () => undefined);
 
   const service = new PersonMergeService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -186,11 +221,11 @@ function makeHarness(
       entityCreated: jest.fn(async () => undefined),
       entityUpdated: jest.fn(async () => undefined),
       entityDeleted: jest.fn(async () => undefined),
-      recordMany: jest.fn(async () => undefined),
+      recordMany,
     } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
   );
 
-  return { service, statements, send };
+  return { service, statements, send, recordMany };
 }
 
 function statementsMatching(harness: Harness, fragment: string) {
@@ -262,7 +297,8 @@ describe('PersonMergeService', () => {
       expect(matches[0].params).toEqual([USER, [SOURCE_A, SOURCE_B], TARGET]);
     }
 
-    // Relationships: self-ref cleanup, guarded from/to re-points, dupe deletes.
+    // Relationships: self-ref cleanup, guarded from/to re-points, then the two
+    // sweeps (each one a DELETE, so three in all).
     expect(statementsMatching(harness, 'DELETE FROM ci.relationships')).toHaveLength(3);
     expect(statementsMatching(harness, 'UPDATE ci.relationships r SET from_entity_id')).toHaveLength(1);
     expect(statementsMatching(harness, 'UPDATE ci.relationships r SET to_entity_id')).toHaveLength(1);
@@ -302,6 +338,186 @@ describe('PersonMergeService', () => {
 
     // Target re-indexes after commit.
     expect(harness.send).toHaveBeenCalledWith(expect.anything(), { personId: TARGET });
+  });
+
+  it('sweeps what the guarded re-points left only AFTER both of them, putting each edge back on the target rather than dropping it', async () => {
+    const harness = makeHarness([personRow(TARGET), personRow(SOURCE_A), personRow(SOURCE_B)]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
+
+    const order = harness.statements.map(({ sql }) => sql);
+    const at = (fragment: string) => order.findIndex((sql) => sql.includes(fragment));
+    const sweeps = harness.statements.filter(({ sql }) => sql.includes('WITH gone AS ('));
+
+    expect(sweeps).toHaveLength(2);
+
+    // The re-points are the long statements and the sweeps the short ones, so
+    // the sweeps go last: a sweep's snapshot is the one that decides what a
+    // concurrent commit can still slip past, and it should be as late as it can be.
+    const fromRepoint = at('UPDATE ci.relationships r SET from_entity_id');
+    const toRepoint = at('UPDATE ci.relationships r SET to_entity_id');
+    expect(fromRepoint).toBeLessThan(toRepoint);
+    expect(toRepoint).toBeLessThan(order.indexOf(sweeps[0].sql));
+    expect(order.indexOf(sweeps[0].sql)).toBeLessThan(order.indexOf(sweeps[1].sql));
+
+    for (const sweep of sweeps) {
+      expect(sweep.inTransaction).toBe(true);
+      expect(sweep.params).toEqual([USER, [SOURCE_A, SOURCE_B], TARGET]);
+    }
+
+    // Every column of the edge is handed from the DELETE to the INSERT, and the
+    // only one that changes is the end being re-pointed.
+    const columns = RELATIONSHIP_COLUMNS.join(', ');
+    const valuesMoving = (moved: string) =>
+      RELATIONSHIP_COLUMNS.map((column) => (column === moved ? '$3::uuid' : `gone.${column}`)).join(', ');
+
+    const [from, to] = sweeps.map(({ sql }) => sql.replace(/\s+/g, ' '));
+
+    expect(from).toContain(
+      'DELETE FROM ci.relationships WHERE owner_user_id = $1 AND from_entity_id = ANY($2::uuid[])',
+    );
+    expect(from).toContain(`RETURNING ${columns} )`);
+    expect(from).toContain(
+      `INSERT INTO ci.relationships (${columns}) SELECT ${valuesMoving('from_entity_id')} FROM gone`,
+    );
+    // An edge whose other end is a source or the target would be a
+    // self-reference once re-pointed: dropped, since no ON CONFLICT absorbs a CHECK.
+    expect(from).toContain(
+      'WHERE gone.to_entity_id <> $3::uuid AND NOT (gone.to_entity_id = ANY($2::uuid[]))',
+    );
+
+    expect(to).toContain(
+      'DELETE FROM ci.relationships WHERE owner_user_id = $1 AND to_entity_id = ANY($2::uuid[])',
+    );
+    expect(to).toContain(
+      `INSERT INTO ci.relationships (${columns}) SELECT ${valuesMoving('to_entity_id')} FROM gone`,
+    );
+    expect(to).toContain(
+      'WHERE gone.from_entity_id <> $3::uuid AND NOT (gone.from_entity_id = ANY($2::uuid[]))',
+    );
+
+    for (const sql of [from, to]) {
+      // Oldest first, so the oldest of several sources' edges of one shape is
+      // the one the unique index keeps; and a duplicate of an edge the target
+      // already holds conflicts with that index and is dropped.
+      expect(sql).toContain('ORDER BY gone.created_at ASC, gone.relationship_id ASC ON CONFLICT DO NOTHING');
+    }
+  });
+
+  it('records one relationship delta per edge a sweep moved, counts them apart from the dropped ones, and says which source it came from', async () => {
+    const MESSAGE_1 = '00000000-0000-0000-0000-0000000000f1';
+    const MESSAGE_2 = '00000000-0000-0000-0000-0000000000f2';
+    const OTHER = '00000000-0000-0000-0000-0000000000e1';
+    const edge = (id: string, type: string, from: string, to: string, was: string): RescuedRow => ({
+      relationship_id: id,
+      relationship_type: type,
+      from_entity_id: from,
+      to_entity_id: to,
+      was,
+    });
+    const E1 = '00000000-0000-0000-0000-00000000ee01';
+    const E2 = '00000000-0000-0000-0000-00000000ee02';
+    const E3 = '00000000-0000-0000-0000-00000000ee03';
+
+    const harness = makeHarness(
+      [personRow(TARGET), personRow(SOURCE_A), personRow(SOURCE_B)],
+      SELF,
+      [],
+      [
+        // Three rows deleted, two put back: one was a duplicate and stays dropped.
+        {
+          deleted: 3,
+          rescued: [
+            edge(E1, 'SENT', TARGET, MESSAGE_1, SOURCE_A),
+            edge(E2, 'RECEIVED', TARGET, MESSAGE_2, SOURCE_B),
+          ],
+        },
+        { deleted: 1, rescued: [edge(E3, 'MENTORS', OTHER, TARGET, SOURCE_A)] },
+      ],
+    );
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
+
+    const [audit] = statementsMatching(harness, 'INSERT INTO ci.entity_merges');
+    const { counts } = JSON.parse(audit.params?.[3] as string) as { counts: Record<string, number> };
+
+    // dropped = the self-reference DELETE's 1 + (3 − 2) + (1 − 1); rescued = 2 + 1.
+    expect(counts.relationshipsDropped).toBe(DROPPED_SELF_REFERENCES + 1);
+    expect(counts.relationshipsRescued).toBe(3);
+    // The rows the guarded UPDATEs moved are a different number and stay one.
+    expect(counts.relationshipsFrom).toBe(17);
+    expect(counts.relationshipsTo).toBe(19);
+
+    const relationshipDeltas = harness.recordMany.mock.calls.filter(([inputs]) =>
+      inputs.some((input: { nodeType: string }) => input.nodeType === 'relationship'),
+    );
+    expect(relationshipDeltas).toHaveLength(2);
+
+    const common = {
+      nodeType: 'relationship',
+      changeType: 'updated',
+      ownerUserId: USER,
+      changeSource: 'PersonMergeService.mergePeople',
+      changeReason: 'person_merge.rescued_edge',
+      changedByUserId: USER,
+    };
+
+    expect(relationshipDeltas[0][0]).toEqual([
+      {
+        ...common,
+        relationshipId: E1,
+        relationshipType: 'SENT',
+        fromEntityId: TARGET,
+        toEntityId: MESSAGE_1,
+        changedFields: { from_entity_id: { old: SOURCE_A, new: TARGET } },
+      },
+      {
+        ...common,
+        relationshipId: E2,
+        relationshipType: 'RECEIVED',
+        fromEntityId: TARGET,
+        toEntityId: MESSAGE_2,
+        changedFields: { from_entity_id: { old: SOURCE_B, new: TARGET } },
+      },
+    ]);
+    expect(relationshipDeltas[1][0]).toEqual([
+      {
+        ...common,
+        relationshipId: E3,
+        relationshipType: 'MENTORS',
+        fromEntityId: OTHER,
+        toEntityId: TARGET,
+        changedFields: { to_entity_id: { old: SOURCE_A, new: TARGET } },
+      },
+    ]);
+
+    // In the merge's own transaction, like every other delta the merge writes.
+    for (const [, manager] of relationshipDeltas) {
+      expect(manager).toEqual(expect.objectContaining({ query: expect.any(Function) }));
+    }
+  });
+
+  it('writes no relationship delta when the sweeps moved nothing — a plain drop of a duplicate leaves no trail, as before', async () => {
+    const harness = makeHarness([personRow(TARGET), personRow(SOURCE_A)]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    for (const [inputs] of harness.recordMany.mock.calls) {
+      for (const input of inputs) {
+        expect(input.nodeType).toBe('entity');
+      }
+    }
+  });
+
+  it('refuses a sweep answer that is not one { deleted, rescued } row, rather than reading it as "nothing swept"', async () => {
+    // A statement whose outer command is a DELETE comes back from TypeORM as
+    // [rows, rowCount]; reading that as an empty sweep would let the audit row
+    // report zero edges dropped while the merge deleted them.
+    const harness = makeHarness([personRow(TARGET), personRow(SOURCE_A)], SELF, [], ['wrong-shape']);
+
+    await expect(harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET)).rejects.toThrow(
+      /sweepLeftoverEdges expected one \{ deleted, rescued \} row/,
+    );
   });
 
   it('drops duplicate source ids and self-merges from the source list', async () => {

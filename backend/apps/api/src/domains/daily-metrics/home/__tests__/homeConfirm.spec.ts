@@ -19,6 +19,8 @@ function candidate(overrides: Partial<KnownPlaceCandidate> = {}): KnownPlaceCand
     eventCount: 9,
     sampleEvents: [],
     confidence: 0.7,
+    presenceDays: 0,
+    presenceNights: 0,
     ...overrides,
   };
 }
@@ -84,26 +86,16 @@ describe('HomeConfirmService.candidateOptions / topHomeCandidate', () => {
 
   it('keeps only located candidates as selector options', () => {
     const options = service.candidateOptions([
-      {
-        locationId: 'loc-1',
-        label: 'Oak St',
-        kind: 'home',
-        lat: 1,
-        lng: 2,
-        eventCount: 9,
-        sampleEvents: [],
-        confidence: 0.7,
-      },
-      {
+      candidate(),
+      candidate({
         locationId: null,
         label: 'Grid cell',
         kind: 'other',
         lat: 3,
         lng: 4,
         eventCount: 2,
-        sampleEvents: [],
         confidence: 0.4,
-      },
+      }),
     ]);
 
     expect(options).toEqual([{ id: 'loc-1', label: 'Oak St' }]);
@@ -111,26 +103,16 @@ describe('HomeConfirmService.candidateOptions / topHomeCandidate', () => {
 
   it('prefers the night-ranked home candidate', () => {
     const top = service.topHomeCandidate([
-      {
+      candidate({
         locationId: 'work',
         label: 'Office',
         kind: 'work',
         lat: 0,
         lng: 0,
         eventCount: 20,
-        sampleEvents: [],
         confidence: 0.8,
-      },
-      {
-        locationId: 'home',
-        label: 'Oak St',
-        kind: 'home',
-        lat: 1,
-        lng: 2,
-        eventCount: 9,
-        sampleEvents: [],
-        confidence: 0.7,
-      },
+      }),
+      candidate({ locationId: 'home' }),
     ]);
 
     expect(top?.locationId).toBe('home');

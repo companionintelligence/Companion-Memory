@@ -290,6 +290,8 @@ export {
 };
 
 export type { Content } from './entities/ContentEntity';
+// How a graph write spells `entity_type`; `memory.remember` sends the model's type through these.
+export { canonicalEntityType, isStorableEntityType, sameEntityType } from './graph.types';
 export { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from './services/selfEntityProvisioner';
 export type { MapPin } from './services/CalendarEventService';
 export { DEAD_EVENT_STATUSES, LIVE_EVENT_SQL } from './services/CalendarEventService';

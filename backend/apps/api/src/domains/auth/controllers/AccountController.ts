@@ -116,7 +116,7 @@ export class AccountController {
       email: user.email,
       hasFederatedIdentity: federatedIdentities.length > 0,
       hasOwnPassword: Boolean(user.passwordSetAt),
-      emailManagedByHub: this.hubBridge.namesAccount(req, user.email),
+      emailManagedByHub: await this.hubBridge.namesAccount(req, user.email),
     };
   }
 
@@ -191,12 +191,13 @@ export class AccountController {
    * has one, and for a recent sign-in otherwise.
    *
    * Refused outright (409), before any proof is asked for, while the Hub signs
-   * this request in as this account. The Hub forward-auth bridge finds a Hub
-   * person's account by this address alone, so the next page load after a
-   * change would sign them into a newly created, empty account and leave their
-   * memories behind an address the Hub never names. Nothing on either side
-   * follows a rename — the Hub's own username change strands the account the
-   * same way — so the settings page explains this instead of offering the form.
+   * this request in as this account and finds it by this address: a Hub that
+   * sends no stable id, or a stable id the bridge has not linked yet. A change
+   * would then sign them into a newly created, empty account on the next page
+   * load and leave their memories behind an address the Hub never names, so the
+   * settings page explains this instead of offering the form. Once the bridge
+   * has linked the Hub person's stable id to this account, the link finds them
+   * whatever the address says, and the change goes through like any other.
    */
   @Patch('email')
   @UseGuards(JwtAuthGuard)
@@ -208,7 +209,7 @@ export class AccountController {
     const serviceContext = toServiceContext(context);
     const user = await this.requireUser(serviceContext);
 
-    if (this.hubBridge.namesAccount(req, user.email)) {
+    if (await this.hubBridge.namesAccount(req, user.email)) {
       throw new ConflictException(EMAIL_MANAGED_BY_HUB);
     }
 

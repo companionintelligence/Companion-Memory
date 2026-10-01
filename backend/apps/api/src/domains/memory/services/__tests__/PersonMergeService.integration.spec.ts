@@ -9,7 +9,7 @@ import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/supp
 import { PersonEntity } from '../../entities/PersonEntity';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 import { MergeCandidateService } from '../MergeCandidateService';
-import { type MergeCounts, PersonMergeService } from '../PersonMergeService';
+import { type MergeCounts, PersonMergeService, RELATIONSHIP_COLUMNS } from '../PersonMergeService';
 
 /**
  * The counts a person merge records, checked against the rows it moved — in
@@ -273,6 +273,9 @@ describeWithDb(`PersonMergeService — audit counts, in Postgres (${availability
       relationshipsFrom: 3,
       relationshipsTo: 3,
       relationshipsDropped: 7,
+      // Nothing commits to a source mid-merge here, so the sweeps find only the
+      // duplicates the guarded UPDATEs declined and drop them, as they always did.
+      relationshipsRescued: 0,
     };
 
     // One audit row per source, each carrying the merge's counts.
@@ -325,9 +328,25 @@ describeWithDb(`PersonMergeService — audit counts, in Postgres (${availability
       relationshipsFrom: 0,
       relationshipsTo: 0,
       relationshipsDropped: 0,
+      relationshipsRescued: 0,
     };
 
     expect(await auditCounts(target)).toEqual([{ source, counts: nothingMoved }]);
+  });
+
+  it('copies every column of ci.relationships when a sweep puts an edge back on the survivor', async () => {
+    // The sweep re-creates a leftover edge column for column, from an explicit
+    // list. A column added to the table and not to that list would be reset to
+    // its default on exactly the rows the sweep rescues — rare enough that
+    // nothing else would ever notice. The race itself is pinned by
+    // pipeline/stages/__tests__/PersonMergeRacesEdgeProjection.integration.spec.ts.
+    const columns: Array<{ column_name: string }> = await dataSource.query(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'ci' AND table_name = 'relationships'
+        ORDER BY ordinal_position`,
+    );
+
+    expect(columns.map((row) => row.column_name)).toEqual([...RELATIONSHIP_COLUMNS]);
   });
 
   it('resolvePairs reports the pending candidates it stamped', async () => {

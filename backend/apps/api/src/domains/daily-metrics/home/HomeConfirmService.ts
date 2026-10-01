@@ -167,6 +167,8 @@ export class HomeConfirmService {
           eventCount: 0,
           sampleEvents: [],
           confidence: 0.8,
+          presenceDays: 0,
+          presenceNights: 0,
         }
       );
     }

@@ -51,8 +51,9 @@ export class UserService {
 
   /**
    * @param alongside work the account must not exist without — redeeming the invitation that
-   *   admitted it (`SignupCodeService.consume`) — run in the transaction that inserts the row. If it
-   *   throws, the account is rolled back and its error reaches the caller as thrown.
+   *   admitted it (`SignupCodeService.consume`), or the Hub forward-auth bridge's binding of the Hub
+   *   person it is created for — run in the transaction that inserts the row. If it throws, the
+   *   account is rolled back and its error reaches the caller as thrown.
    */
   async create(context: ServiceContext, data: CreateUserDto, alongside?: WithNewAccount): Promise<User> {
     if (context.userId !== SYSTEM_USER) {
@@ -498,6 +499,24 @@ export class UserService {
     });
 
     return result ? UserEntity.toEgressType(result) : null;
+  }
+
+  /**
+   * Every live account whose address equals `email` once both are case-folded.
+   *
+   * `email` is `TEXT UNIQUE` and {@link findByEmail} compares it exactly, while the Hub lower-cases
+   * every username it signs (CI-Hub migration 0062 folded the old ones in place). An account signed
+   * up as `Owner@Example.com` is the same person the Hub calls `owner@example.com`, and an exact
+   * lookup misses them. Soft-deleted rows are left out, as everywhere else on this repository.
+   */
+  async findByEmailIgnoringCase(email: string): Promise<User[]> {
+    const results = await this.userRepository
+      .createQueryBuilder('user')
+      .where('LOWER(user.email) = LOWER(:email)', { email: email.trim() })
+      .orderBy('user.createdAt', 'ASC')
+      .getMany();
+
+    return results.map((result) => UserEntity.toEgressType(result));
   }
 
   async onboard(id: string): Promise<void> {

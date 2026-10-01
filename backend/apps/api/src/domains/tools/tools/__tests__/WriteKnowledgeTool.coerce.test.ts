@@ -74,6 +74,12 @@ describe('WriteKnowledgeTool Qwen argument shapes', () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({ createdNodes: 2, createdRelationships: 1, failures: 0 });
+    // The lower-case types Qwen sends go out as ci.entities stores them:
+    // `valid_entity_type` refuses `person`, and the write dead-lettered.
+    expect(created).toEqual([
+      { entityType: 'Place', name: 'Example Home' },
+      { entityType: 'Person', name: 'alex' },
+    ]);
     expect(relationships).toEqual([
       expect.objectContaining({
         fromEntityId: 'id-2',

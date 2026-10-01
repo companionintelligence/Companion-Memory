@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import type { HubStableId } from '@ci/common/crypto';
 import { HubForwardAuthGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import { NodeService } from '@ci/domains/graph';
@@ -40,11 +41,16 @@ export class AuditController {
    */
   @Get('forward-auth/whoami')
   @UseGuards(HubForwardAuthGuard)
-  forwardAuthWhoami(@Req() req: Request & { hubForwardAuthUser?: string }) {
+  forwardAuthWhoami(
+    @Req() req: Request & { hubForwardAuthUser?: string; hubForwardAuthStableId?: HubStableId | null },
+  ) {
     return {
       success: true,
       data: {
         username: req.hubForwardAuthUser ?? null,
+        // The Hub person's rename-proof id, when the Hub sent one (null from an older Hub).
+        issuer: req.hubForwardAuthStableId?.issuer ?? null,
+        subject: req.hubForwardAuthStableId?.subject ?? null,
         source: 'ci-hub-forward-auth',
       },
     };

@@ -195,6 +195,8 @@ SQL migration files in `backend/apps/api/db/postgres/migrations/` are hand-writt
 
 **Never hand-write the timestamp prefix.** Create migration files with `yarn workspace @ci/be-api migrate:make <name>`, which stamps the real UTC time to the second. Hand-picked round timestamps (…120000) have collided across parallel branches; dbmate keys `schema_migrations` on the prefix, so a duplicate breaks `migrate` for everyone. Uniqueness is enforced by `bin/check-migration-versions.js` (runs in lint-staged and before `yarn migrate`). It is plain CommonJS, not TypeScript, because `migrate` runs it inside the production image, which has no devDependencies — keep it dependency-free.
 
+**Never let a comment line start with `-- migrate:up` or `-- migrate:down`.** dbmate finds its directives with a line-anchored regex, so prose that wraps onto one is a directive. Since dbmate 2.29 each extra `-- migrate:up` opens a new section, and the file fails with `dbmate requires each migration to define a down block`. That is how 20260930025958 stopped `migrate` once #2865 took dbmate from 2.27 to 2.36. In prose, quote the word (`` -- `migrate:up` ``). `bin/check-migration-directives.js`, which runs in the same two places, requires exactly one of each per file.
+
 ## GraphQL codegen
 
 `backend/apps/api/src/domains/graphql/__generated__/schema.graphql` and everything under

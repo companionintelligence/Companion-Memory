@@ -7,6 +7,7 @@ import { LoggerService } from '@ci/common/logging';
 
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
+import { canonicalEntityType, sameEntityType } from '../graph.types';
 
 /**
  * GraphUtilityService - Core graph operations service
@@ -690,6 +691,13 @@ export class GraphUtilityService {
    * A write that would put the row on a linked key another row already holds —
    * by retyping it, re-keying it, or inserting it there — fails before anything
    * is written. See {@link assertLinkedKeyFree}.
+   *
+   * `entityType` is written in its canonical spelling (`person` lands as
+   * `Person`), and a type that names the stored one in another case or by
+   * another name (`contact` for a Person) keeps the stored type; see
+   * {@link canonicalEntityType} and {@link sameEntityType}. `memory.remember`
+   * already sends it that way. This is for a payload queued before it did: a
+   * dead letter replayed from the jobs page is re-sent verbatim.
    */
   async createOrUpdateNode(
     ownerUserId: string,
@@ -719,7 +727,7 @@ export class GraphUtilityService {
       node = this.entityRepo.create({
         entity_id: entityId,
         owner_user_id: ownerUserId,
-        entity_type: payload.entityType,
+        entity_type: canonicalEntityType(payload.entityType),
         name: payload.name ?? null,
         description: payload.description ?? payload.name ?? null,
         properties: nextProperties({}, payload),
@@ -730,8 +738,8 @@ export class GraphUtilityService {
         is_archived: false,
       });
     } else {
-      if (payload.entityType) {
-        node.entity_type = payload.entityType;
+      if (payload.entityType && !sameEntityType(node.entity_type, payload.entityType)) {
+        node.entity_type = canonicalEntityType(payload.entityType);
       }
 
       if (payload.name !== undefined) {

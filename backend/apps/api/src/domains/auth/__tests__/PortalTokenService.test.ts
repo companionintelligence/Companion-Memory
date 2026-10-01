@@ -233,6 +233,8 @@ describe('PortalTokenService', () => {
 
     expect(await service.verifyAndProvision(TOKEN)).toBeNull();
     expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+    // Only OIDC identities count as "linked elsewhere": a Hub person's own binding must not refuse them.
+    expect(federatedIdentityService.listForUser).toHaveBeenCalledWith('u-existing', { oidcOnly: true });
   });
 
   it('SECURITY: an unverified email never adopts an existing account', async () => {

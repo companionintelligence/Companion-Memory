@@ -370,7 +370,10 @@ export class PortalTokenService implements PortalTokenVerifier {
     if (claimedEmail && emailVerified) {
       const existing = await this.userService.findByEmail(claimedEmail);
       if (existing) {
-        const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id);
+        // OIDC identities only: a Hub person's own binding is not another identity's claim.
+        const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id, {
+          oidcOnly: true,
+        });
         if (alreadyFederated.length > 0) {
           this.logger.warn(
             `refusing email link for ${issuer}#${sub}: user already bound to another identity`,

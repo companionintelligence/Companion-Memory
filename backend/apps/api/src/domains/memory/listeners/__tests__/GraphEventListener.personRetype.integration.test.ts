@@ -256,7 +256,7 @@ describeWithDb(`GraphEventListener — a node retyped out of Person (${availabil
     expect(send).toHaveBeenCalledWith('concept.updated', { conceptId: jo });
   });
 
-  it.each(['Location', 'Organization', 'PERSON'])(
+  it.each(['Location', 'Organization'])(
     'drops the same five rows when the Person is retyped to %s',
     async (type) => {
       const jo = await indexedPerson(alice, 'Jo Park');
@@ -267,6 +267,37 @@ describeWithDb(`GraphEventListener — a node retyped out of Person (${availabil
       expect(await indexState(jo)).toEqual(CLEANED);
     },
   );
+
+  it.each(['PERSON', 'person', 'Contact'])(
+    'is not a retype when the Person is written as %s: it stays a Person and keeps its index',
+    async (type) => {
+      // createOrUpdateNode reads another case, or another name, of the stored
+      // type as that type (sameEntityType). Storing `PERSON` used to move the row
+      // out of the predicate the person sweeps select on, and this cleanup then
+      // took the index of a person who was never retyped.
+      const jo = await indexedPerson(alice, 'Jo Park');
+
+      await upsert(alice, { entityId: jo, entityType: type, properties: { note: 'x' } });
+
+      expect(await storedType(jo)).toBe('Person');
+      expect(await indexState(jo)).toEqual(INDEXED_AS_PERSON);
+      expect(await orphanedPersonVectors(alice)).toBe(0);
+    },
+  );
+
+  it('drops the index of a row an older tool stored as a case variant of Person, which the sweeps never see', async () => {
+    // Before memory.remember spelled types the way ci.entities stores them, a
+    // retype to `PERSON` passed valid_entity_type and was stored, and migration
+    // 20260930165839 puts such rows back. One still there is not a Person to the
+    // sweeps (they match 'Person' exactly), so its person index goes the same way.
+    const jo = await indexedPerson(alice, 'Jo Park');
+    await runner.query(`UPDATE ci.entities SET entity_type = 'PERSON' WHERE entity_id = $1`, [jo]);
+
+    await upsert(alice, { entityId: jo, name: 'Jo Park-Lee' });
+
+    expect(await storedType(jo)).toBe('PERSON');
+    expect(await indexState(jo)).toEqual(CLEANED);
+  });
 
   it("leaves the node's other ledger rows alone: they are not person-index state", async () => {
     const jo = await indexedPerson(alice, 'Jo Park');

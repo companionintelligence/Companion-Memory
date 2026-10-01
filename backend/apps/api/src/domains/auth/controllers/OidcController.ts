@@ -939,7 +939,8 @@ export class OidcController {
     // once, only when the issuer vouches for it, and never one that is already
     // somebody's. Both refusals are terminal for this sign-in: the caller must
     // not fall through to the first-time flow with the same address in hand.
-    const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id);
+    // OIDC identities only: a Hub person's own binding is not another identity's claim.
+    const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id, { oidcOnly: true });
     if (alreadyFederated.length > 0) {
       this.logger.warn(
         `refusing email link for ${identity.issuer}#${identity.subject ?? '?'}: user already bound to another identity`,
