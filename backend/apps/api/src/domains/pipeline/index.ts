@@ -43,7 +43,7 @@ import { EventsModule } from '@ci/domains/events';
 import { FileEntity, FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { IntelligenceModule } from '@ci/domains/intelligence';
-import { MaintenanceModule } from '@ci/domains/maintenance';
+import { EDGE_PROJECTION_REOPENER, MaintenanceModule } from '@ci/domains/maintenance';
 import { MemoryModule } from '@ci/domains/memory';
 
 import { STAGE_IDS } from './constants';
@@ -64,6 +64,7 @@ import { StageArrivalListener } from './listeners/StageArrivalListener';
 import { UnfurlSweepRequestListener } from './listeners/UnfurlSweepRequestListener';
 import { VideoPlaybackSweepRequestListener } from './listeners/VideoPlaybackSweepRequestListener';
 import { BackpressureService } from './services/BackpressureService';
+import { EdgeProjectionReopenService } from './services/EdgeProjectionReopenService';
 import { EnrichmentWindowService } from './services/EnrichmentWindowService';
 import { IdentifierArrivalService } from './services/IdentifierArrivalService';
 import { PipelineControlService } from './services/PipelineControlService';
@@ -316,6 +317,13 @@ const stageProviders: Provider[] = [
     // (Phase 5) replaces the cron, not the tick.
     { provide: PIPELINE_TICK, useExisting: PipelineControlService },
     DeadLetterReaperListener,
+    // The linkage writers that are NOT stages (the maintenance linkers) cannot
+    // report a `done` for `STAGE_REOPENS` to act on, so they re-open the edge
+    // legs' decisions themselves, in their own transaction, through this
+    // binding. Maintenance owns the contract (this module imports that one, not
+    // the reverse) and resolves it lazily.
+    EdgeProjectionReopenService,
+    { provide: EDGE_PROJECTION_REOPENER, useExisting: EdgeProjectionReopenService },
     ...stageProviders,
   ],
   controllers: [PipelineController],

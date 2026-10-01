@@ -20,7 +20,7 @@
 -- Ship it WITH or AFTER that fix, never before: applied without it, the next
 -- import of each survivor's card erases the values again, and dbmate never
 -- re-runs a migration. (The statement below is idempotent, so running the
--- migrate:up half again by hand is safe if the census at the bottom ever finds
+-- `migrate:up` half again by hand is safe if the census at the bottom ever finds
 -- stragglers.)
 --
 -- ## Where the values come from

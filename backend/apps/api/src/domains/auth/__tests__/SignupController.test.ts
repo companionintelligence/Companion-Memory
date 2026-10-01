@@ -22,6 +22,9 @@ const MOCK_SESSION_ID = 'session-id-1';
 
 const mockUser = { id: 'user-1', name: 'New User', email: 'new@example.com' };
 
+/** The transaction `UserService.create` runs its `alongside` work in. */
+const accountTransaction = { name: 'the transaction creating the account' };
+
 const mockAuthService = {
   issueSessionToken: jest
     .fn()
@@ -31,9 +34,23 @@ const mockAuthService = {
   resolveCsrfScope: jest.fn().mockReturnValue(null),
 };
 
+/**
+ * `create`'s contract: `alongside` runs inside the transaction that inserts the account, and if it
+ * throws, the account is rolled back and the error reaches the caller as thrown.
+ */
+const createAccount = async (
+  _context: unknown,
+  _data: unknown,
+  alongside?: (manager: unknown, user: unknown) => Promise<unknown>,
+) => {
+  await alongside?.(accountTransaction, mockUser);
+
+  return mockUser;
+};
+
 const mockUserService = {
   checkEmailAvailability: jest.fn().mockResolvedValue(false),
-  create: jest.fn().mockResolvedValue(mockUser),
+  create: jest.fn(createAccount),
   // Default to an appliance that already has an account, so the signup-code
   // tests below exercise the gate rather than the first-account exemption:
   // createFirstAccount declines, and the requirements endpoint says "claimed".
@@ -43,7 +60,7 @@ const mockUserService = {
 
 const mockSignupCodeService = {
   findOne: jest.fn().mockResolvedValue({ signup_code: 'valid-code', used: false }),
-  update: jest.fn().mockResolvedValue(undefined),
+  consume: jest.fn().mockResolvedValue(true),
 };
 
 const mockFeatureService = {
@@ -107,7 +124,7 @@ describe('SignupController', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockUserService.checkEmailAvailability.mockResolvedValue(false);
-    mockUserService.create.mockResolvedValue(mockUser);
+    mockUserService.create.mockImplementation(createAccount);
     mockAuthService.issueSessionToken.mockResolvedValue({
       sessionToken: 'session-token-value',
       sessionId: MOCK_SESSION_ID,
@@ -115,6 +132,7 @@ describe('SignupController', () => {
     mockAuthService.issueAccessToken.mockReturnValue('access-token-value');
     mockFeatureService.isFeatureEnabled.mockResolvedValue(false);
     mockSignupCodeService.findOne.mockResolvedValue({ signup_code: 'valid-code', used: false });
+    mockSignupCodeService.consume.mockResolvedValue(true);
     mockUserService.createFirstAccount.mockResolvedValue(null);
     mockUserService.hasNoUsers.mockResolvedValue(false);
   });
@@ -173,6 +191,16 @@ describe('SignupController', () => {
       await request(app.getHttpServer()).post('/signup').send({ email: 'test@example.com' }).expect(400);
     });
 
+    it('spends no code where none is required, even one that is offered', async () => {
+      await request(app.getHttpServer())
+        .post('/signup')
+        .send({ ...validPayload, signup_code: 'valid-code' })
+        .expect(201);
+
+      expect(mockUserService.create).toHaveBeenCalledWith(expect.anything(), expect.anything(), undefined);
+      expect(mockSignupCodeService.consume).not.toHaveBeenCalled();
+    });
+
     it('should return 400 when password is too short', async () => {
       await request(app.getHttpServer())
         .post('/signup')
@@ -194,7 +222,7 @@ describe('SignupController', () => {
         mockFeatureService.isFeatureEnabled.mockResolvedValue(true);
       });
 
-      it('should succeed with a valid signup code', async () => {
+      it('should succeed with a valid signup code, redeeming it in the transaction creating the account', async () => {
         const response = await request(app.getHttpServer())
           .post('/signup')
           .send({ ...validPayload, signup_code: 'valid-code' })
@@ -203,7 +231,26 @@ describe('SignupController', () => {
         const cookies = parseCookies(response);
 
         expect(cookies[COOKIE_NAME]).toBeDefined();
-        expect(mockSignupCodeService.update).toHaveBeenCalledWith('valid-code', { used: true });
+        // Inside the account's transaction, so a signup that fails spends nothing.
+        expect(mockSignupCodeService.consume).toHaveBeenCalledWith('valid-code', accountTransaction);
+      });
+
+      // The look-up only refuses early: two signups presenting one code both pass it. The one that
+      // redeems it second must be refused — and its account, already written in that transaction,
+      // rolled back — or one invitation admits two people.
+      it('refuses a code another signup redeemed first, rolling back the account it was creating', async () => {
+        mockSignupCodeService.consume.mockResolvedValue(false);
+
+        const response = await request(app.getHttpServer())
+          .post('/signup')
+          .send({ ...validPayload, signup_code: 'valid-code' })
+          .expect(400);
+
+        expect(response.body.message).toBe('Must provide a valid signup code');
+        await expect(mockUserService.create.mock.results[0].value).rejects.toThrow(
+          'Must provide a valid signup code',
+        );
+        expect(mockAuthService.issueSessionToken).not.toHaveBeenCalled();
       });
 
       it('should return 400 when signup code is missing', async () => {
@@ -217,6 +264,11 @@ describe('SignupController', () => {
           .post('/signup')
           .send({ ...validPayload, signup_code: 'bad-code' })
           .expect(400);
+
+        // Refused before anything else is looked at — whether the address is taken included.
+        expect(mockUserService.checkEmailAvailability).not.toHaveBeenCalled();
+        expect(mockUserService.create).not.toHaveBeenCalled();
+        expect(mockSignupCodeService.consume).not.toHaveBeenCalled();
       });
 
       // A self-hosted appliance starts with an empty user table AND an empty
@@ -235,7 +287,7 @@ describe('SignupController', () => {
         );
         expect(mockUserService.create).not.toHaveBeenCalled();
         expect(mockSignupCodeService.findOne).not.toHaveBeenCalled();
-        expect(mockSignupCodeService.update).not.toHaveBeenCalled();
+        expect(mockSignupCodeService.consume).not.toHaveBeenCalled();
       });
 
       it('requires a code again once the appliance has an account', async () => {
@@ -261,7 +313,7 @@ describe('SignupController', () => {
         expect(mockUserService.create).not.toHaveBeenCalled();
       });
 
-      it('admits a signup that lost the first-account race when it holds a code, and burns it', async () => {
+      it('admits a signup that lost the first-account race when it holds a code, and redeems it', async () => {
         mockUserService.createFirstAccount.mockResolvedValue(null);
 
         await request(app.getHttpServer())
@@ -270,7 +322,7 @@ describe('SignupController', () => {
           .expect(201);
 
         expect(mockUserService.create).toHaveBeenCalledTimes(1);
-        expect(mockSignupCodeService.update).toHaveBeenCalledWith('valid-code', { used: true });
+        expect(mockSignupCodeService.consume).toHaveBeenCalledWith('valid-code', accountTransaction);
       });
     });
 

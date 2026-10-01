@@ -33,6 +33,22 @@ import { STAGE_ID_LIST, STAGE_IDS, type StageId } from './constants';
  * never projected. The edge leg runs hourly at any hour and `promote.place`
  * nightly, so the order that loses the edge is the ordinary one, not a race.
  *
+ * `promote.edge_communication` is another, and a message is decided on the
+ * FIRST of its columns to arrive:
+ *
+ *   from_entity_id, to_entity_ids   ← the importer's push (whatever it could
+ *                                     resolve at ingest), enrich.person_link,
+ *                                     and the maintenance linkers
+ *   attachments                     ← the importer's push
+ *
+ * A Twitter DM with an attachment is decided on its ATTACHED_TO edge before its
+ * participants have people. A WhatsApp message the owner sent arrives with its
+ * recipient and no sender. Whatever links the rest afterwards has to re-open
+ * the decision, or the SENT / RECEIVED edges for it never exist (17,417
+ * messages on the reference appliance, 2026-09-30). `enrich.person_link` does
+ * it through the declaration below. The same holds for
+ * `enrich.event_person_link` against the event leg.
+ *
  * ── What a declaration here means ─────────────────────────────────────────
  *
  * `[producer]: [consumer, …]` — when the producer records `done` for an id,
@@ -66,9 +82,28 @@ import { STAGE_ID_LIST, STAGE_IDS, type StageId } from './constants';
  *    two stages working the same id within the same seconds, which
  *    `STAGE_DEPENDENCIES` and the queue's FIFO order make rare. Closing it
  *    needs a ledger that can mark a claimed row dirty, which this one cannot.
- *  - A write by something that is not a stage never reports `done`, so it never
- *    re-opens anything — the legacy `GeocodeBatchListener` also writes
- *    `ci.events.location_entity_id`.
+ *  - A write by something that is not a stage never reports `done`, so nothing
+ *    here can see it. Such a writer re-opens the decision ITSELF, in its own
+ *    transaction, through `EDGE_PROJECTION_REOPENER`
+ *    (`maintenance/edgeProjectionReopener.ts`, bound to
+ *    `EdgeProjectionReopenService`). The maintenance linkers do:
+ *    `CommunicationLinkBackfillService` and `EventParticipantBackfillService`
+ *    (the `link_*` legs smart-rotation's `graph_link` runs every two hours) and
+ *    `CommunicationParticipantLinkListener`. They were the writer behind 17,416
+ *    of those 17,417 messages. The legacy `GeocodeBatchListener`, which also
+ *    writes `ci.events.location_entity_id`, still does not.
+ *  - A person merge that RACES the projection, in the one window the merge
+ *    cannot close. `PersonMergeService` re-points the losers' edges to the
+ *    survivor and then sweeps what is left, moving a loser edge a projection
+ *    committed in between onto the survivor. It used to delete it, with the
+ *    leg's ledger row still `running`, so no re-open could have reached it:
+ *    five SENT/RECEIVED edges were lost that way on the reference appliance at
+ *    15:23 on 2026-09-30, during a `DeterministicPersonMergeCron` drain, and
+ *    repair migration `20260930161359` re-opened those five. What is left is a
+ *    projection whose own snapshot predates the merge's commit and that commits
+ *    after the sweep: its edge stays on the tombstone while the row is `done`.
+ *    That window is the length of the sweep plus the rest of the merge's
+ *    transaction; closing it would take a lock the projection also takes.
  *
  * ── Rules ─────────────────────────────────────────────────────────────────
  *
@@ -86,6 +121,15 @@ import { STAGE_ID_LIST, STAGE_IDS, type StageId } from './constants';
  */
 export const STAGE_REOPENS: Readonly<Partial<Record<StageId, readonly StageId[]>>> = {
   [STAGE_IDS.PROMOTE_PLACE]: [STAGE_IDS.PROMOTE_EDGE_EVENT],
+  // The person-link legs MERGE into the linkage columns: a `done` can add a
+  // sender or recipients to a message the edge leg projected when it had only
+  // an attachment, or only its other half. On a real import this is the NORMAL
+  // order: the edge leg projects the push's rows hourly, the linkers run
+  // nightly. `done` also covers a pass that added nothing new; re-deciding
+  // that costs one idempotent projection. `IdentifierArrivalService`'s re-opens
+  // of these producers reach the edge legs through this too, when they finish.
+  [STAGE_IDS.ENRICH_PERSON_LINK]: [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION],
+  [STAGE_IDS.ENRICH_EVENT_PERSON_LINK]: [STAGE_IDS.PROMOTE_EDGE_EVENT],
 };
 
 /** The consumers a producer's `done` results re-open. Empty for most stages. */

@@ -210,6 +210,22 @@ export {
   type DeterministicEdgeRule,
   type DeterministicEdgeSource,
 } from './services/deterministicEdgeMatrix';
+// The contract a linkage writer here re-opens the edge projection through;
+// PipelineModule binds the token (see the file for why it is a token).
+export {
+  EDGE_PROJECTION_REOPENER,
+  resolveEdgeProjectionReopener,
+  type EdgeProjectionReopener,
+} from './edgeProjectionReopener';
+// The two linkage writers that re-open through it.
+export {
+  CommunicationLinkBackfillService,
+  type CommunicationLinkBackfillResult,
+} from './services/CommunicationLinkBackfillService';
+export {
+  EventParticipantBackfillService,
+  type EventParticipantBackfillResult,
+} from './services/EventParticipantBackfillService';
 export {
   SearchIndexBackfillService,
   BACKFILLABLE_ENTITIES,

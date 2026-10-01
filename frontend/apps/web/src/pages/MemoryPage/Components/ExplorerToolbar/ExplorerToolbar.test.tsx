@@ -1,15 +1,17 @@
 import { Children, isValidElement, type ReactNode } from 'react';
 
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useSearchParams } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
+import { SearchBox } from '@/components/SearchBox/SearchBox';
 import { DropdownProvider } from '@/components/SearchBox/useDropdown';
 import { gql } from '@/graphql';
+import { GetSavedSearchDocument, GetSavedSearchesForPickerDocument } from '@/graphql/graphql';
 import { mockQuery } from '@/test/gql';
 import { renderWithProviders, type RenderWithProvidersOptions } from '@/test/renderWithProviders';
 
-import { ExplorerToolbar, MemoryExplorerFilterControls } from './ExplorerToolbar';
+import { ExplorerToolbar, MemoryExplorerFilterControls, SearchPanelFilters } from './ExplorerToolbar';
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
@@ -111,7 +113,7 @@ function ParamsProbe() {
   return <div data-testid="params">{params.toString()}</div>;
 }
 
-function renderToolbar(ui: ReactNode, options: RenderWithProvidersOptions = {}) {
+function renderToolbar(ui: ReactNode, { mocks = [], ...options }: RenderWithProvidersOptions = {}) {
   return renderWithProviders(
     <DropdownProvider args={[{ changeSearchParams: true }]}>
       <ParamsProbe />
@@ -119,6 +121,7 @@ function renderToolbar(ui: ReactNode, options: RenderWithProvidersOptions = {}) 
     </DropdownProvider>,
     {
       mocks: [
+        ...mocks,
         mockQuery(SOURCE_SYSTEMS_QUERY, {}, { sourceSystems: ['gmail', 'reddit'] }),
         mockQuery(EVENT_TYPES_QUERY, {}, { eventTypes: ['messaged', 'visited'] }),
         mockQuery(
@@ -528,5 +531,101 @@ describe('ExplorerToolbar', () => {
       // "Has a location" is forwarded to the graph, so it stays a plain control.
       expect(screen.getByRole('button', { name: 'Has a location' })).toBeInTheDocument();
     });
+  });
+});
+
+const TRIP_ID = btoa('saved-search:trip-1');
+
+const OWN_SAVED_SEARCHES = mockQuery(
+  GetSavedSearchesForPickerDocument,
+  { first: 8, query: undefined },
+  {
+    savedSearches: {
+      __typename: 'SavedSearchConnection' as const,
+      totalCount: 1,
+      edges: [
+        {
+          __typename: 'SavedSearchEdge' as const,
+          node: { __typename: 'SavedSearchType' as const, id: TRIP_ID, name: 'My trip', description: null },
+        },
+      ],
+    },
+  },
+);
+
+const TRIP = mockQuery(
+  GetSavedSearchDocument,
+  { id: TRIP_ID },
+  {
+    savedSearch: {
+      __typename: 'SavedSearchType' as const,
+      id: TRIP_ID,
+      name: 'My trip',
+      description: null,
+      query: 'paris',
+      entityTypes: [],
+      tags: ['vacation'],
+      filters: null,
+    },
+  },
+);
+
+describe('SearchPanelFilters in the header search panel', () => {
+  // The header box on a page outside Memory's lists, with its panel open.
+  function openHeaderPanel(
+    options: RenderWithProvidersOptions = {},
+    onOpenSavedSearch?: (params: URLSearchParams) => void,
+  ) {
+    // SearchBox asks the document whether it has focus, which jsdom never reports.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    renderToolbar(
+      <SearchBox
+        displayResults
+        openOnFocus
+        results={[]}
+        panelFooter={<SearchPanelFilters modal={false} onOpenSavedSearch={onOpenSavedSearch} />}
+      />,
+      { route: '/plan/tasks?view=board', ...options },
+    );
+
+    const input = screen.getByRole('textbox');
+    fireEvent.pointerDown(input);
+    fireEvent.focus(input);
+  }
+
+  it('keeps Save this search open, and the panel under it, when you click into the dialog', async () => {
+    openHeaderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Save this search' });
+    const name = within(dialog).getByLabelText('Name');
+
+    // The dialog is portaled out of the panel, so this used to read as a
+    // click outside it: the panel closed and took the dialog with it.
+    fireEvent.pointerDown(name);
+    fireEvent.change(name, { target: { value: 'Paris trip' } });
+
+    expect(screen.getByRole('dialog', { name: 'Save this search' })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByLabelText('Name')).toHaveValue('Paris trip');
+    // By text: the open dialog hides the panel from the accessibility tree.
+    expect(screen.getByText('Load search')).toBeInTheDocument();
+  });
+
+  it('hands a search picked from Load search to the header to open, leaving this page alone', async () => {
+    const onOpenSavedSearch = vi.fn();
+
+    openHeaderPanel({ mocks: [OWN_SAVED_SEARCHES, TRIP] }, onOpenSavedSearch);
+
+    fireEvent.click(screen.getByRole('button', { name: /Load search/ }));
+    fireEvent.click(await screen.findByText('My trip'));
+
+    await waitFor(() => expect(onOpenSavedSearch).toHaveBeenCalledTimes(1));
+    const opened: URLSearchParams = onOpenSavedSearch.mock.calls[0][0];
+    expect(opened.get('search')).toBe('paris');
+    expect(opened.get('tags')).toBe('vacation');
+    // Nothing of this page rides along, and this page's URL is untouched.
+    expect(opened.has('view')).toBe(false);
+    expect(screen.getByTestId('params')).toHaveTextContent(/^view=board$/);
   });
 });

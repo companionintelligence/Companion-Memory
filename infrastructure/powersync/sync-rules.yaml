@@ -222,6 +222,16 @@ bucket_definitions:
       # things — names, birth dates, geography, dossiers — off devices entirely.
       # The explicit entity_type check is redundant today and kept anyway, so a
       # future change to the trigger cannot silently widen what syncs.
+      #
+      # is_active = true is the other half of the tombstone. The events query
+      # above drops a deleted event through is_deleted, but THIS row is the one
+      # that holds its title and description, and nothing about it said the event
+      # was gone: a deleted or forgotten event left its name on every device,
+      # with no event row left to hang it on. CalendarEventService.remove sets
+      # is_active = false in the same transaction that sets is_deleted, and
+      # restore sets both back, so the two queries evict an event and bring it
+      # back together. Same mechanism as is_deleted above: a row that stops
+      # matching leaves the bucket.
       - SELECT entity_id AS id, owner_user_id AS user_id, entity_type,
                name, description, linked_table, linked_id,
                is_active, is_archived, sync_period, created_at, updated_at
@@ -229,6 +239,7 @@ bucket_definitions:
         WHERE owner_user_id = bucket.user_id
           AND sync_period IS NOT NULL
           AND entity_type = 'Event'
+          AND is_active = true
 
   # entity_tag has no user_id of its own — it is owned transitively via the tag it
   # points at. Sync rules don't support JOINs (see header comment), so this follows

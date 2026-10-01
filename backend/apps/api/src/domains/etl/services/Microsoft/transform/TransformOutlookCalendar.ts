@@ -75,6 +75,12 @@ interface OutlookCalendarEvent {
   createdDateTime?: string;
   lastModifiedDateTime?: string;
   webLink?: string;
+  /**
+   * Set only on a calendarView/delta tombstone, which carries nothing but `id`
+   * and this: an event deleted since the last round, or one that changed
+   * outside the view's date range.
+   */
+  '@removed'?: { reason?: string };
 }
 
 interface Participant {
@@ -83,6 +89,15 @@ interface Participant {
   responseStatus: string;
   isOrganizer: boolean;
 }
+
+/**
+ * Events processed concurrently. A job carries every calendar's events (see
+ * extractCalendarEvents), and each event is a create() plus two
+ * PromoteService.processParticipants calls; the same unbounded Promise.all in
+ * GoogleCalendarTransformService crash-looped the API on OOM until it was
+ * batched the same way.
+ */
+const CALENDAR_TRANSFORM_BATCH_SIZE = 10;
 
 @Injectable()
 export class OutlookCalendarTransformService {
@@ -124,16 +139,20 @@ export class OutlookCalendarTransformService {
         eventCount: events.length,
       });
 
-      await Promise.all(
-        events.map(
-          async (event) =>
-            await this.processCalendarEvent({
-              event,
-              connectionId: connection.id,
-              userId,
-            }),
-        ),
-      );
+      for (let i = 0; i < events.length; i += CALENDAR_TRANSFORM_BATCH_SIZE) {
+        const batch = events.slice(i, i + CALENDAR_TRANSFORM_BATCH_SIZE);
+
+        await Promise.all(
+          batch.map(
+            async (event) =>
+              await this.processCalendarEvent({
+                event,
+                connectionId: connection.id,
+                userId,
+              }),
+          ),
+        );
+      }
 
       this.logger.log('Outlook Calendar transformation completed', {
         userId,
@@ -163,11 +182,28 @@ export class OutlookCalendarTransformService {
 
     const dataObj = data as Record<string, unknown>;
 
-    // Handle the structure from Microsoft Graph API
+    // Handle the structure from Microsoft Graph API. SyncOutlookCalendar
+    // returns every calendar in /me/calendars, each carrying its own `events`,
+    // so the job's events are all of them concatenated. This used to `return`
+    // from inside the loop, which imported the first calendar's events and
+    // silently dropped every other calendar the user has.
     if ('calendars' in dataObj && Array.isArray(dataObj.calendars)) {
-      for (const calendar of dataObj.calendars) {
-        return calendar.events as OutlookCalendarEvent[];
-      }
+      return dataObj.calendars.flatMap((calendar: unknown) => {
+        const events = (calendar as { events?: unknown } | null)?.events;
+
+        if (!Array.isArray(events)) {
+          // Both sync paths set `events` on every calendar they return, so this
+          // is a malformed payload. Skip the one calendar, not the whole job.
+          this.logger.warn('Outlook calendar has no events array; skipping it', {
+            calendarId: (calendar as { id?: unknown } | null)?.id,
+            eventsType: events === null ? 'null' : typeof events,
+          });
+
+          return [];
+        }
+
+        return events as OutlookCalendarEvent[];
+      });
     }
 
     this.logger.warn('No Outlook Calendar events found in data', {
@@ -189,6 +225,22 @@ export class OutlookCalendarTransformService {
     try {
       const eventId = event.id || 'unknown';
       const subject = event.subject || 'Untitled Event';
+
+      // A delta tombstone is not an event. With no start, subject or iCalUId,
+      // transforming it minted an "Untitled Event" stamped at ingest time under
+      // the Graph-id fallback identity, which is never the identity the deleted
+      // event was stored under, so it could not even dedup against that row.
+      // Removing the stored event is still not implemented.
+      if ('@removed' in event) {
+        this.logger.debug('Skipping removed event (Graph delta tombstone)', {
+          userId,
+          connectionId,
+          eventId,
+          reason: event['@removed']?.reason,
+        });
+
+        return;
+      }
 
       // Skip cancelled events
       if (event.isCancelled) {

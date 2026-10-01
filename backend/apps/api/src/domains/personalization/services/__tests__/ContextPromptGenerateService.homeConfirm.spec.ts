@@ -27,6 +27,8 @@ function candidate(overrides: Partial<KnownPlaceCandidate>): KnownPlaceCandidate
     eventCount: 3,
     sampleEvents: [],
     confidence: 0.5,
+    presenceDays: 0,
+    presenceNights: 0,
     ...overrides,
   };
 }

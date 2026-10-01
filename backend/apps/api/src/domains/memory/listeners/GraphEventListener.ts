@@ -89,7 +89,31 @@ export class GraphEventListener {
     // time this job runs), so a swallowed failure would be invisible
     // everywhere. Let it throw so the @OnEvent wrapper's ack.fail() engages
     // pg-boss's retryLimit/dead-letter path instead.
+    //
+    // A node that is no longer a Person keeps what the person index wrote while
+    // it was one: the person sweeps select `entity_type = 'Person'`, so a retyped
+    // row is invisible to them and nothing of theirs would ever remove it. That
+    // is decided from the type the row has NOW, not from "did it just change":
+    // after a failed attempt the retry finds the row already retyped, and the
+    // cleanup the first attempt never reached would be skipped for good. A
+    // created node has no index state yet. Ahead of the emit, so a failed emit
+    // still leaves the person index clean.
+    if (!created && node.entity_type !== 'Person') {
+      await this.dropStalePersonIndex(payload.ownerId, node.entity_id);
+    }
+
     await this.emitSearchIndexEvent(node.entity_type, node.entity_id, created);
+  }
+
+  private async dropStalePersonIndex(ownerId: string, entityId: string): Promise<void> {
+    const dropped = await this.graphUtility.dropStalePersonIndex(ownerId, entityId);
+
+    if (dropped.vectors + dropped.embeddings + dropped.indexSkips + dropped.ledger > 0) {
+      this.logger.log('Dropped the person search index of a node that is no longer a Person', {
+        entityId,
+        ...dropped,
+      });
+    }
   }
 
   @OnEvent(Events.GRAPH_RELATIONSHIP_UPSERTED)

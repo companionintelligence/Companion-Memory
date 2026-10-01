@@ -50,8 +50,10 @@ export class UserService {
   ) {}
 
   /**
-   * @param alongside work that must commit or roll back with the account — the Hub forward-auth
-   *   bridge's binding of the Hub person it is created for, so the account never exists unbound.
+   * @param alongside work the account must not exist without — redeeming the invitation that
+   *   admitted it (`SignupCodeService.consume`), or the Hub forward-auth bridge's binding of the Hub
+   *   person it is created for — run in the transaction that inserts the row. If it throws, the
+   *   account is rolled back and its error reaches the caller as thrown.
    */
   async create(context: ServiceContext, data: CreateUserDto, alongside?: WithNewAccount): Promise<User> {
     if (context.userId !== SYSTEM_USER) {

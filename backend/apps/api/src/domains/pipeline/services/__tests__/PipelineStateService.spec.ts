@@ -721,6 +721,24 @@ describe('PipelineStateService.reopen', () => {
     await expect(service.reopen(ENTITY_TYPE, STAGE_ID, [])).resolves.toBe(0);
     expect(statements).toHaveLength(0);
   });
+
+  it("runs on the caller's transaction when handed one, and never on its own connection", async () => {
+    // A linkage writer that is not a stage re-opens inside the transaction that
+    // writes the link, so the two commit together or not at all.
+    const { service, statements } = make([]);
+    const managerQuery = jest.fn(async () => [{ entity_id: srcId(1) }]);
+
+    await expect(
+      service.reopen(ENTITY_TYPE, STAGE_ID, [srcId(1)], { query: managerQuery } as never),
+    ).resolves.toBe(1);
+
+    expect(managerQuery).toHaveBeenCalledTimes(1);
+    expect(managerQuery.mock.calls[0]).toEqual([
+      expect.stringContaining('WITH reopened AS'),
+      [ENTITY_TYPE, STAGE_ID, [srcId(1)]],
+    ]);
+    expect(statements).toHaveLength(0);
+  });
 });
 
 describe('PipelineStateService.reopenChangedSources', () => {

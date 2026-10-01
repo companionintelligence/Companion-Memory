@@ -9,7 +9,7 @@ import { normalizeIcsRecurrenceId } from '@ci/domains/memory';
 import { htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { ImportParams } from './timeline';
+import type { ImportedEventStatus, ImportParams } from './timeline';
 import { timeframeContains } from './timeline';
 
 interface CalendarOptions {
@@ -34,6 +34,11 @@ export interface ParsedIcsEvent {
   isAllDay: boolean;
   /** `RRULE` present and non-empty (the VEVENT is a series master). */
   isRecurring: boolean;
+  /**
+   * The block's own `STATUS`, as the `ci.events.status` it means (see
+   * {@link icsEventStatus}). Absent when the block states none.
+   */
+  status?: ImportedEventStatus;
   /**
    * MIME Content-IDs of inline images referenced from the description as
    * `[cid:...]` (Exchange/Outlook exports). The .ics carries no attachment
@@ -111,6 +116,39 @@ export function icsDescriptionText(description: string): string {
   return ICS_HTML_TAG.test(description)
     ? htmlToText(description, { preserveNewlines: true, keepLinkUrls: true })
     : description;
+}
+
+/**
+ * A VEVENT's `STATUS` value as the `ci.events.status` it means.
+ *
+ * RFC 5545 §3.8.1.11 gives a VEVENT three: TENTATIVE, CONFIRMED and CANCELLED,
+ * the same three `TransformGoogleCalendar.normalizeStatus` maps for the API copy
+ * of the same event. The two pipelines converge on one row
+ * (`calendarEventIdentity`), and whichever arrives first keeps it, so they must
+ * agree on what they write. Case-insensitive, because §3.2 makes every
+ * enumerated property value so.
+ *
+ * Anything else (no STATUS, or a VTODO/VJOURNAL value such as NEEDS-ACTION)
+ * states nothing about the event and returns undefined, leaving the column
+ * DEFAULT, 'confirmed'.
+ *
+ * This matters most for a cancelled occurrence of a series: a block with
+ * RECURRENCE-ID and STATUS:CANCELLED. It has to land as `cancelled`, not be
+ * dropped. `dropExistingOverrides` (memory/recurrence/queries.ts) reads the
+ * stored override as the reason not to synthesize that occurrence, and
+ * `LIVE_EVENT_SQL` keeps the row itself out of every reader that applies it.
+ */
+export function icsEventStatus(value: string | undefined): ImportedEventStatus | undefined {
+  switch (value?.trim().toUpperCase()) {
+    case 'CANCELLED':
+      return 'cancelled';
+    case 'TENTATIVE':
+      return 'tentative';
+    case 'CONFIRMED':
+      return 'confirmed';
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -263,6 +301,9 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
       ? normalizeIcsRecurrenceId(rawRecurrenceId, recurrenceTzid ?? null)
       : '';
     const id = recurrenceId ? `${baseId}#${recurrenceId}` : baseId;
+    // Read from the depth-0 `map`, so a nested component's STATUS cannot stand
+    // in for the event's own (see the depth counter above).
+    const status = icsEventStatus(map['STATUS']);
     out.push({
       id,
       summary,
@@ -272,6 +313,7 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
       dtEnd,
       isAllDay,
       isRecurring,
+      ...(status ? { status } : {}),
       ...(inlineCids.length ? { inlineCids } : {}),
     });
   }
@@ -375,6 +417,8 @@ export class CalendarFileImporter implements FileImporter {
           Location: ev.location,
           isAllDay: ev.isAllDay,
           isRecurring: ev.isRecurring,
+          // Lifted to ci.events.status by the push (see icsEventStatus).
+          eventStatus: ev.status,
           // Inline images the export dropped (see ParsedIcsEvent.inlineCids).
           InlineAttachmentCids: ev.inlineCids?.join(', '),
         },

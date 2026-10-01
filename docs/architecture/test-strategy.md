@@ -155,8 +155,9 @@ laptop with no stack must not fail), but it means a green local run, or a green
 `ci.yml` run, can have executed none of the DB-backed coverage. `ci.yml`'s
 backend job now runs a `services: postgres`, bootstraps the role and extensions
 (`scripts/test-db/bootstrap.sql`, shared with `make test-db`), migrates, and sets
-every per-suite variable, so the DB-backed suites do run there. What still skips in that job is the seven suites gating on
-`scratchDatabaseAvailability()`, because `DATABASE_ADMIN_PASSWORD` is
+every per-suite variable, so the DB-backed suites do run there. What still skips in that job is every suite gating on
+`scratchDatabaseAvailability()` (`git grep -l 'scratchDatabaseAvailability()' -- '*.spec.ts'`
+lists them), because `DATABASE_ADMIN_PASSWORD` is
 deliberately unset — a cost decision the workflow states in a comment rather
 than hides. `consent-path-gate.yml` remains the stronger guarantee for the
 consent path: it fails if any suite in scope skips.

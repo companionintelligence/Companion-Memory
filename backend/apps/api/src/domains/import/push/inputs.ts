@@ -2322,6 +2322,12 @@ export function toEventInput(rec: CanonicalRecord): CreateEventDto {
     input.is_recurring = rec.isRecurring;
   }
 
+  // Only a stated status is sent. Without one the column DEFAULT ('confirmed')
+  // applies, which is what every import wrote before sources could say.
+  if (rec.eventStatus) {
+    input.status = rec.eventStatus;
+  }
+
   if (rec.coordinates) {
     input.location_coordinates = {
       type: 'Point',

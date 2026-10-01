@@ -107,7 +107,7 @@ const mockLogger = {
     { provide: OidcNativeCodeService, useValue: mockOidcNativeCodeService },
     // Confirm-account never reaches the invite path; present so Nest can construct
     // the controller.
-    { provide: SignupCodeService, useValue: { findOne: jest.fn(), update: jest.fn() } },
+    { provide: SignupCodeService, useValue: { findOne: jest.fn(), consume: jest.fn() } },
     { provide: FederatedIdentityService, useValue: mockFederatedIdentityService },
     { provide: HubForwardAuthBridgeService, useValue: { verifyUsername: jest.fn().mockReturnValue(null) } },
     { provide: LoggerService, useValue: mockLogger },

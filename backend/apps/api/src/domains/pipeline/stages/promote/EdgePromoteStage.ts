@@ -201,13 +201,23 @@ promoteEdgeStageVersion(PROMOTE_EDGE_PLACE_STAGE_ID, PROMOTE_EDGE_PLACE_VERSION)
 
 /**
  * Applicability: a communication SOME linker has already resolved at least one
- * participant of. The linkage columns are INPUTS here (written by
- * `enrich.person_link` and the arrival listener, never by this stage — this
+ * participant of, or that carries an attachment. The linkage columns are
+ * INPUTS here (written by the importer's push, `enrich.person_link`, the
+ * maintenance linkers and the arrival listener, never by this stage — this
  * stage writes `ci.relationships`), so the predicate is what a row IS, not
  * what has been done to it: an unlinked communication is simply not yet a
  * candidate, and it BECOMES one — never-run, immediately due — the night the
  * linker fills its columns. That is what makes this stage continuous without a
  * ratchet.
+ *
+ * It holds for an UNLINKED message only. The OR decides a message on
+ * whichever of its columns arrives first. A message with an attachment, or
+ * with one half of its linkage, is projected and recorded `done`, and the
+ * other half filled in later would never be offered again. Every late linker
+ * therefore re-opens this leg's decision for the rows it writes:
+ * `enrich.person_link` through `STAGE_REOPENS` (`reopens.ts`), and the
+ * maintenance linkers, which are not stages, through `EDGE_PROJECTION_REOPENER`
+ * in the transaction that writes the link.
  */
 export const PROMOTE_EDGE_COMMUNICATION_SOURCE: StageSource = {
   schema: 'ci',
@@ -227,12 +237,14 @@ export const PROMOTE_EDGE_COMMUNICATION_SOURCE: StageSource = {
  * Same shape over `ci.events`: any of the four linkage columns populated
  * (parent_event_id feeds the `event.child_of` PART_OF rule).
  *
- * Unlike the communication leg's, this OR spans two PRODUCERS, so "becomes a
+ * Like the communication leg's, this OR spans several WRITERS, so "becomes a
  * candidate the night the linker fills its columns" does not hold for every
  * column: an event with participants is projected and recorded `done` before
  * `promote.place` writes `location_entity_id`, and nothing here would ever
  * offer it again. `STAGE_REOPENS` (`reopens.ts`) re-opens it when
- * `promote.place` records the link, so its `event.happened_at` edge follows.
+ * `promote.place` records the link, so its `event.happened_at` edge follows,
+ * and likewise when `enrich.event_person_link` adds people. The non-stage
+ * `link_events` leg re-opens it through `EDGE_PROJECTION_REOPENER`.
  */
 export const PROMOTE_EDGE_EVENT_SOURCE: StageSource = {
   schema: 'ci',

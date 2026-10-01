@@ -80,6 +80,26 @@ export type LineItemRecord = Record<
   string | number | boolean | null | undefined | ObjectIdentifierRef[]
 >;
 
+/**
+ * The `ci.events.status` values an importer may write: what the SOURCE says
+ * became of an event. A datasource states one as `metadata.eventStatus`; the
+ * push lifts it (`push/canonical.ts` toCanonical) and writes the column
+ * (`push/inputs.ts` toEventInput).
+ *
+ * A closed three of the column's nine values, the three RFC 5545 §3.8.1.11
+ * defines for a VEVENT and the three `TransformGoogleCalendar` maps. The rest
+ * (`completed`, `no_show`, `planned`, `skipped`, …) are the planner's to write.
+ * A value outside this list is dropped rather than sent: `events_status_check`
+ * would refuse it and fail the whole batch it rides in.
+ *
+ * `cancelled` is the one that matters to readers. The calendar, the planner and
+ * Known places leave it out through `LIVE_EVENT_SQL` (`DEAD_EVENT_STATUSES`);
+ * daily metrics and HBPE's schedule reconciliation each exclude it with a
+ * predicate of their own.
+ */
+export const IMPORTED_EVENT_STATUSES = ['confirmed', 'tentative', 'cancelled'] as const;
+export type ImportedEventStatus = (typeof IMPORTED_EVENT_STATUSES)[number];
+
 export type MetadataValue =
   | string
   | number

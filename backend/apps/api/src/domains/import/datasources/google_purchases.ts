@@ -9,7 +9,7 @@ import path from 'node:path';
 
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { ImportParams, Graph, LineItemRecord } from './timeline';
+import type { ImportedEventStatus, ImportParams, Graph, LineItemRecord } from './timeline';
 import { timeframeContains } from './timeline';
 
 // action_<digits>.json — the per-record file Google Takeout emits under
@@ -215,6 +215,13 @@ export class GooglePurchasesFileImporter implements FileImporter {
     const name = str(b.name) || (waitlist ? 'Waitlist' : 'Reservation');
     const merchant = str(b.merchantName);
     const title = merchant ? `${name} — ${merchant}` : name;
+    // Google's own flag, a JSON boolean on the booking or the waitlist entry.
+    // It rides verbatim as `Canceled`, and `true` is also stated as the event's
+    // status so the push writes `ci.events.status = 'cancelled'`. `Canceled`
+    // alone left the row 'confirmed', so every reader of the column counted a
+    // cancelled booking as one that happened. `false` (or no flag) states
+    // nothing beyond the column DEFAULT, so it sets no status.
+    const eventStatus: ImportedEventStatus | undefined = b.canceled === true ? 'cancelled' : undefined;
     const g: Graph = {
       item: {
         id: `gpurchase:${uid}`,
@@ -234,6 +241,7 @@ export class GooglePurchasesFileImporter implements FileImporter {
           Service: str(b.service),
           Address: str(b.address),
           Canceled: typeof b.canceled === 'boolean' ? b.canceled : undefined,
+          eventStatus,
           Kind: waitlist ? 'waitlist' : 'reservation',
           Source: 'Google',
         },

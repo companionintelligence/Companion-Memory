@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'path';
 
-import { CalendarFileImporter, parseIcsEvents } from '../calendar';
+import { CalendarFileImporter, icsEventStatus, parseIcsEvents } from '../calendar';
 import type { ImportParams } from '../timeline';
 
 import { metaText, type EmittedGraph } from './support/emitted';
@@ -430,5 +430,109 @@ describe('Calendar datasource', () => {
     } finally {
       fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
     }
+  });
+
+  /**
+   * STATUS, RFC 5545 §3.8.1.11.
+   *
+   * The parser read STATUS into its property map and then never used it, so a
+   * cancelled event was stored as `confirmed`, and every reader of
+   * `ci.events.status` took it for something that happened.
+   */
+  describe('STATUS', () => {
+    it('maps the three VEVENT statuses, in any case, and nothing else', () => {
+      expect(icsEventStatus('CANCELLED')).toBe('cancelled');
+      expect(icsEventStatus('TENTATIVE')).toBe('tentative');
+      expect(icsEventStatus('CONFIRMED')).toBe('confirmed');
+      // §3.2: enumerated property values are case-insensitive.
+      expect(icsEventStatus('Cancelled')).toBe('cancelled');
+      expect(icsEventStatus(' tentative ')).toBe('tentative');
+
+      // VTODO and VJOURNAL values say nothing about an event, and no STATUS at
+      // all leaves the column DEFAULT.
+      expect(icsEventStatus('NEEDS-ACTION')).toBeUndefined();
+      expect(icsEventStatus('COMPLETED')).toBeUndefined();
+      expect(icsEventStatus('')).toBeUndefined();
+      expect(icsEventStatus(undefined)).toBeUndefined();
+    });
+
+    it('states a cancelled occurrence of a series as cancelled, under its override id', async () => {
+      // How Google Takeout writes "delete just this one": the series master,
+      // then a block repeating its UID with the occurrence's RECURRENCE-ID and
+      // STATUS:CANCELLED. The override has to arrive cancelled. The stored row
+      // is what stops the calendar synthesizing that occurrence
+      // (`dropExistingOverrides`), so dropping the block instead would bring
+      // the meeting back.
+      const icsPath = icsFile('ci-ics-status-', 'status.ics', [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//Google Inc//Google Calendar 70.9054//EN',
+        'BEGIN:VEVENT',
+        'DTSTART;TZID=America/Los_Angeles:20221006T010000',
+        'DTEND;TZID=America/Los_Angeles:20221006T020000',
+        'RRULE:FREQ=WEEKLY;BYDAY=TH',
+        'UID:weekly-sync@google.com',
+        'STATUS:CONFIRMED',
+        'SUMMARY:Weekly sync',
+        'END:VEVENT',
+        'BEGIN:VEVENT',
+        'DTSTART;TZID=America/Los_Angeles:20221013T010000',
+        'DTEND;TZID=America/Los_Angeles:20221013T020000',
+        'UID:weekly-sync@google.com',
+        'RECURRENCE-ID;TZID=America/Los_Angeles:20221013T010000',
+        'STATUS:CANCELLED',
+        'SUMMARY:Weekly sync',
+        'END:VEVENT',
+        'BEGIN:VEVENT',
+        'DTSTART:20221014T170000Z',
+        'UID:maybe-lunch@google.com',
+        'STATUS:TENTATIVE',
+        'SUMMARY:Lunch?',
+        'END:VEVENT',
+        'BEGIN:VEVENT',
+        'DTSTART:20221015T170000Z',
+        'UID:no-status@example.com',
+        'SUMMARY:A calendar that writes no STATUS',
+        'END:VEVENT',
+        'END:VCALENDAR',
+      ]);
+
+      try {
+        const items = (await importIcs(icsPath)).filter((graph) => graph.item).map((graph) => graph.item);
+        const statusOf = (id: string) => items.find((item) => item.id === id)?.metadata.eventStatus;
+
+        // 01:00 America/Los_Angeles on 2022-10-13 (PDT, UTC-7) is 08:00Z.
+        expect(items.map((item) => item.id)).toContain('weekly-sync@google.com#20221013T080000Z');
+        expect(statusOf('weekly-sync@google.com#20221013T080000Z')).toBe('cancelled');
+        expect(statusOf('weekly-sync@google.com')).toBe('confirmed');
+        expect(statusOf('maybe-lunch@google.com')).toBe('tentative');
+        expect(statusOf('no-status@example.com')).toBeUndefined();
+      } finally {
+        fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
+      }
+    });
+
+    it("reads the event's own STATUS, never a nested component's", () => {
+      // RFC 5545 gives VALARM no STATUS, but the parser must not rely on that:
+      // a stray one inside the block cannot cancel the event around it.
+      const block = (own: string[]) =>
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:nested@x',
+          'DTSTART:20260101T090000Z',
+          ...own,
+          'BEGIN:VALARM',
+          'ACTION:DISPLAY',
+          'TRIGGER:-PT10M',
+          'STATUS:CANCELLED',
+          'END:VALARM',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n');
+
+      expect(parseIcsEvents(block([]), 'nested.ics')[0].status).toBeUndefined();
+      expect(parseIcsEvents(block(['STATUS:CONFIRMED']), 'nested.ics')[0].status).toBe('confirmed');
+    });
   });
 });

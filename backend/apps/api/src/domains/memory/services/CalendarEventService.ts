@@ -1469,12 +1469,21 @@ export class CalendarEventService {
    * disappears from the explorer exactly as a physical delete would — but
    * nothing that referenced it is cascaded away and {@link restore} can bring it
    * back verbatim.
+   *
+   * The tombstone covers BOTH halves of the aggregate. Readers of `ci.events`
+   * decide liveness from `is_deleted`, but graph readers only ever see the
+   * `ci.entities` base row and decide it from `is_active` — node reads and
+   * counts in GraphUtilityService, and the deterministic edge matrix, whose
+   * endpoint join would otherwise keep deriving fresh edges onto a deleted
+   * event. Flipping one flag without the other leaves an event that is gone
+   * from one family of readers and present in the other.
    */
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     let removedAt: { userId: string; time: Date | null } | undefined;
     const removed = await this.aggregate.remove(context, id, {
       withinTx: async ({ manager, before }) => {
         removedAt = { userId: before.userId, time: before.startTime };
+        await manager.getRepository(EventBaseEntity).update({ id }, { isActive: false });
         const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
         await this.graphDeltaWriter.entityDeleted({
           entityId: id,
@@ -1507,12 +1516,17 @@ export class CalendarEventService {
    * accidental deletion is recoverable (this is what the "Undo" affordance on
    * the delete toast calls). A no-op for an event that was never deleted.
    *
+   * Reactivates the base row too, the mirror of {@link remove}. A tombstone
+   * written before `remove` deactivated it has an active base row already, so
+   * the write changes nothing there.
+   *
    * @returns the restored event, or `null` when the caller has no tombstoned
    *   event with that id.
    */
   async restore(context: ServiceContext, id: string): Promise<Event | null> {
     const restored = await this.aggregate.restore(context, id, {
       withinTx: async ({ manager, after }) => {
+        await manager.getRepository(EventBaseEntity).update({ id }, { isActive: true });
         const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
         await this.graphDeltaWriter.entityCreated({
           entityId: id,

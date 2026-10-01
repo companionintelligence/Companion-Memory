@@ -7,6 +7,7 @@ import { LoggerService } from '@ci/common/logging';
 
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
+import { canonicalEntityType, sameEntityType } from '../graph.types';
 
 /**
  * GraphUtilityService - Core graph operations service
@@ -118,6 +119,23 @@ function nextProperties(
   }
 
   return next;
+}
+
+/**
+ * The `ci.pipeline_state` stages that index a Person; their ledger rows are
+ * recorded under entity type `person`. Literals rather than `STAGE_IDS`: the
+ * pipeline domain imports this one, so importing it back is a cycle.
+ * `GraphUtilityService.dropStalePersonIndex.test.ts` pins them to the declared
+ * stage ids.
+ */
+export const PERSON_INDEX_LEDGER_STAGES = ['index.embed_person', 'index.vector_person'] as const;
+
+/** What {@link GraphUtilityService.dropStalePersonIndex} removed, per table. */
+export interface DroppedPersonIndex {
+  vectors: number;
+  embeddings: number;
+  indexSkips: number;
+  ledger: number;
 }
 
 @Injectable()
@@ -673,6 +691,13 @@ export class GraphUtilityService {
    * A write that would put the row on a linked key another row already holds —
    * by retyping it, re-keying it, or inserting it there — fails before anything
    * is written. See {@link assertLinkedKeyFree}.
+   *
+   * `entityType` is written in its canonical spelling (`person` lands as
+   * `Person`), and a type that names the stored one in another case or by
+   * another name (`contact` for a Person) keeps the stored type; see
+   * {@link canonicalEntityType} and {@link sameEntityType}. `memory.remember`
+   * already sends it that way. This is for a payload queued before it did: a
+   * dead letter replayed from the jobs page is re-sent verbatim.
    */
   async createOrUpdateNode(
     ownerUserId: string,
@@ -702,7 +727,7 @@ export class GraphUtilityService {
       node = this.entityRepo.create({
         entity_id: entityId,
         owner_user_id: ownerUserId,
-        entity_type: payload.entityType,
+        entity_type: canonicalEntityType(payload.entityType),
         name: payload.name ?? null,
         description: payload.description ?? payload.name ?? null,
         properties: nextProperties({}, payload),
@@ -713,8 +738,8 @@ export class GraphUtilityService {
         is_archived: false,
       });
     } else {
-      if (payload.entityType) {
-        node.entity_type = payload.entityType;
+      if (payload.entityType && !sameEntityType(node.entity_type, payload.entityType)) {
+        node.entity_type = canonicalEntityType(payload.entityType);
       }
 
       if (payload.name !== undefined) {
@@ -843,6 +868,88 @@ export class GraphUtilityService {
       .execute();
 
     return node;
+  }
+
+  /**
+   * Remove the person-search state of a node that is not a Person.
+   *
+   * An entity retyped out of `Person` (`memory.remember` `entity.update` with
+   * another `entityType`) falls out of everything that indexes people:
+   * `INDEX_EMBED_PERSON_SOURCE` selects `entity_type = 'Person'`, and the
+   * staleness sweep is an anti-join inside that predicate, so a row that leaves
+   * it is neither refreshed nor cleaned. What the person stages wrote while it
+   * was one stays: the `ci_search.vectors` row (the search CANDIDATE source), the
+   * embedding, a skip marker, and the two `ci.pipeline_state` rows the person
+   * stages recorded, whatever their status (a ledger-only reader such as
+   * `hasOverdueRetry` would keep seeing a stale `failed` one). This deletes all of
+   * them, in one statement.
+   *
+   * `OrphanCleanupCron` reaps the three `ci_search` tables nightly (a person row
+   * whose entity is no longer `Person` is an orphan by its source map), so what
+   * this adds is the wait until 02:50 and the ledger, which no sweep touches.
+   *
+   * The deletes are conditioned on the row's CURRENT type, read inside the
+   * statement, not on a type the caller saw. It is a no-op for a Person, so it
+   * can never take a live person out of the index, and it can follow any write,
+   * a retried one included: a second attempt finds the row already retyped, so
+   * a caller that gated this on "the type just changed" would skip, for good,
+   * the cleanup the failed attempt never reached.
+   *
+   * Left alone on purpose: the other ledger rows an entity carries (identifier
+   * normalisation still applies to the node; the Person-only claim and duplicate
+   * stages are inert for it), dead letters (a record of what failed) and
+   * `ci_search.entity_tag` (the user's own tags). No re-index is scheduled: what
+   * the node became is indexed by the event the caller emits for its new type.
+   *
+   * Raw SQL because this domain cannot import the pipeline or search-ingress
+   * domains (both import this one), as `PersonMergeService` deletes its
+   * `ci_search` rows.
+   */
+  async dropStalePersonIndex(ownerUserId: string, entityId: string): Promise<DroppedPersonIndex> {
+    // The outer SELECT is what makes TypeORM hand back rows: a bare DELETE
+    // resolves to `[rows, rowCount]`.
+    const [row] = (await this.entityRepo.query(
+      `WITH not_a_person AS (
+         SELECT entity_id
+           FROM ci.entities
+          WHERE entity_id = $1::uuid
+            AND owner_user_id = $2::uuid
+            AND entity_type <> 'Person'
+       ),
+       dropped_vectors AS (
+         DELETE FROM ci_search.vectors v USING not_a_person n
+          WHERE v.entity_type = 'person' AND v.entity_id = n.entity_id
+         RETURNING 1
+       ),
+       dropped_embeddings AS (
+         DELETE FROM ci_search.embeddings e USING not_a_person n
+          WHERE e.entity_type = 'person' AND e.entity_id = n.entity_id
+         RETURNING 1
+       ),
+       dropped_skips AS (
+         DELETE FROM ci_search.index_skips s USING not_a_person n
+          WHERE s.entity_type = 'person' AND s.entity_id = n.entity_id
+         RETURNING 1
+       ),
+       dropped_ledger AS (
+         DELETE FROM ci.pipeline_state p USING not_a_person n
+          WHERE p.entity_type = 'person' AND p.entity_id = n.entity_id
+            AND p.stage = ANY($3::text[])
+         RETURNING 1
+       )
+       SELECT (SELECT count(*) FROM dropped_vectors)::int    AS vectors,
+              (SELECT count(*) FROM dropped_embeddings)::int AS embeddings,
+              (SELECT count(*) FROM dropped_skips)::int      AS index_skips,
+              (SELECT count(*) FROM dropped_ledger)::int     AS ledger`,
+      [entityId, ownerUserId, [...PERSON_INDEX_LEDGER_STAGES]],
+    )) as Array<{ vectors: number; embeddings: number; index_skips: number; ledger: number }>;
+
+    return {
+      vectors: Number(row?.vectors ?? 0),
+      embeddings: Number(row?.embeddings ?? 0),
+      indexSkips: Number(row?.index_skips ?? 0),
+      ledger: Number(row?.ledger ?? 0),
+    };
   }
 
   async softDeleteNode(entityId: string, ownerUserId: string): Promise<void> {

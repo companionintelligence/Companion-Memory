@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, type EntityManager } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 
@@ -430,11 +430,25 @@ export class PipelineStateService {
    * a place link `promote.place` wrote after `promote.edge_event` had already
    * projected the event (see `STAGE_REOPENS`, applied by
    * PipelineSliceListener), or a source row that changed after it was decided
-   * ({@link reopenChangedSources}). Nothing else re-visits a decided row, by
-   * design: "tried and produced nothing" is a recorded answer, not an
-   * invitation to try again every tick.
+   * ({@link reopenChangedSources}), or linkage a writer that is not a stage
+   * filled in after an edge leg had already projected the row (the maintenance
+   * linkers, through `EdgeProjectionReopenService`). Nothing else re-visits a
+   * decided row, by design: "tried and produced nothing" is a recorded answer,
+   * not an invitation to try again every tick.
+   *
+   * `manager` runs the re-open on the CALLER's transaction. Pass it when the
+   * re-open answers a write the caller is making in that transaction: the
+   * decision then re-opens exactly when the write commits, and not at all if
+   * it rolls back. Run separately, a crash between the two commits would leave
+   * the new linkage written and the old decision standing, and nothing would
+   * ever notice.
    */
-  async reopen(entityType: string, stageId: string, ids: string[]): Promise<number> {
+  async reopen(
+    entityType: string,
+    stageId: string,
+    ids: readonly string[],
+    manager?: Pick<EntityManager, 'query'>,
+  ): Promise<number> {
     const uniqueIds = [...new Set(ids)];
 
     if (uniqueIds.length === 0) {
@@ -447,7 +461,7 @@ export class PipelineStateService {
     // it counted the tuple: this returned 2 whether it moved no rows or ten
     // thousand. The CTE form comes back as plain rows. `releaseQuarantined()`
     // below hit the same shape and destructures the pair instead.
-    const rows = await this.dataSource.query<Array<{ entity_id: string }>>(
+    const rows: Array<{ entity_id: string }> = await (manager ?? this.dataSource).query(
       `WITH reopened AS (
          UPDATE ci.pipeline_state ps
             SET stage_version = 0,

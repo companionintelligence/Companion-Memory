@@ -93,17 +93,42 @@ function makeIngestService(
 
 function makeDataSource() {
   const calls: Array<{ sql: string; params: unknown[] }> = [];
+  // Statement order across the write's transaction, including the re-open.
+  const order: string[] = [];
+  const query = jest.fn(async (sql: string, params: unknown[]) => {
+    calls.push({ sql, params });
 
-  return {
-    dataSource: {
-      query: jest.fn(async (sql: string, params: unknown[]) => {
-        calls.push({ sql, params });
+    if (sql.includes('UPDATE ci.communications')) {
+      order.push('update');
+    }
 
-        return [];
-      }),
-    },
-    calls,
+    return [];
+  });
+  const managers: Array<{ query: typeof query }> = [];
+  const transaction = jest.fn(async (cb: (em: { query: typeof query }) => Promise<unknown>) => {
+    const em = { query };
+    managers.push(em);
+    order.push('begin');
+    const result = await cb(em);
+    order.push('commit');
+
+    return result;
+  });
+
+  return { dataSource: { query, transaction }, calls, order, managers };
+}
+
+/** `EDGE_PROJECTION_REOPENER` as the lazily-resolving ModuleRef returns it. */
+function makeReopener(order?: string[]) {
+  const reopener = {
+    reopen: jest.fn(async (_source: string, ids: readonly string[], _manager: unknown) => {
+      order?.push('reopen');
+
+      return ids.length;
+    }),
   };
+
+  return { reopener, moduleRef: { get: jest.fn(() => reopener) } };
 }
 
 function makeListener(
@@ -116,6 +141,7 @@ function makeListener(
   const graphIngestService = makeIngestService(identifierService.indexedByComposite, ingestAssigns);
   const ds = makeDataSource();
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+  const { reopener, moduleRef } = makeReopener(ds.order);
 
   const listener = new CommunicationParticipantLinkListener(
     communicationService as never,
@@ -124,9 +150,10 @@ function makeListener(
     { getTrustMode: jest.fn(async () => 'balanced') } as never,
     ds.dataSource as never,
     logger as never,
+    moduleRef as never,
   );
 
-  return { listener, communicationService, identifierService, graphIngestService, ds };
+  return { listener, communicationService, identifierService, graphIngestService, ds, reopener };
 }
 
 function updateCalls(ds: ReturnType<typeof makeDataSource>) {
@@ -172,6 +199,57 @@ describe('CommunicationParticipantLinkListener.handleCreated', () => {
     expect(sql).toContain('id = $2');
     expect(sql).toContain('time = $5');
     expect(params).toEqual([USER, COMM_ID, EXISTING_FROM, [NEW_TO_1], COMM_TIME]);
+  });
+
+  it("re-opens the edge leg's decision for the message in the UPDATE's own transaction", async () => {
+    // Created with an attachment, a message is a candidate for
+    // promote.edge_communication before this job links anyone; if the leg got
+    // there first, only a re-open brings its SENT / RECEIVED edges.
+    const comm: FakeCommunication = {
+      id: COMM_ID,
+      time: COMM_TIME,
+      userId: USER,
+      fromEntityId: null,
+      toEntityIds: null,
+      participantsMetadata: { from: 'sender@example.com' },
+    };
+
+    const { listener, ds, reopener } = makeListener(comm, { 'email:sender@example.com': EXISTING_FROM });
+
+    await listener.handleCreated({ communicationId: COMM_ID });
+
+    expect(reopener.reopen).toHaveBeenCalledTimes(1);
+    expect(reopener.reopen).toHaveBeenCalledWith('communications', [COMM_ID], ds.managers[0]);
+    expect(ds.order).toEqual(['begin', 'update', 'reopen', 'commit']);
+  });
+
+  it('writes nothing, and re-opens nothing, when no re-opener is bound', async () => {
+    const comm: FakeCommunication = {
+      id: COMM_ID,
+      time: COMM_TIME,
+      userId: USER,
+      fromEntityId: null,
+      toEntityIds: null,
+      participantsMetadata: { from: 'sender@example.com' },
+    };
+    const communicationService = makeCommunicationService(comm);
+    const identifierService = makeIdentifierService({ 'email:sender@example.com': EXISTING_FROM });
+    const ds = makeDataSource();
+    const listener = new CommunicationParticipantLinkListener(
+      communicationService as never,
+      identifierService as never,
+      makeIngestService(identifierService.indexedByComposite) as never,
+      { getTrustMode: jest.fn(async () => 'balanced') } as never,
+      ds.dataSource as never,
+      { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as never,
+    );
+
+    // Thrown so the people-linking job fails and retries, rather than linking
+    // a message the edge leg may already have decided.
+    await expect(listener.handleCreated({ communicationId: COMM_ID })).rejects.toThrow(
+      /EDGE_PROJECTION_REOPENER/,
+    );
+    expect(updateCalls(ds)).toHaveLength(0);
   });
 
   it('skips stub creation entirely when every identifier is already in the index', async () => {
@@ -361,14 +439,16 @@ describe('CommunicationParticipantLinkListener.handleCreated', () => {
     // The self-identity query is the only one carrying UNION ALL (see self.ts);
     // every other query used by the listener (resolveSelfEntityId, the UPDATE)
     // must keep succeeding so the failure is isolated to readSelfIdentity.
-    const dataSource = {
-      query: jest.fn(async (sql: string, _params: unknown[]) => {
-        if (sql.includes('UNION ALL')) {
-          throw new Error('connection terminated unexpectedly');
-        }
+    const query = jest.fn(async (sql: string, _params: unknown[]) => {
+      if (sql.includes('UNION ALL')) {
+        throw new Error('connection terminated unexpectedly');
+      }
 
-        return [];
-      }),
+      return [];
+    });
+    const dataSource = {
+      query,
+      transaction: jest.fn(async (cb: (em: { query: typeof query }) => Promise<unknown>) => cb({ query })),
     };
 
     const listener = new CommunicationParticipantLinkListener(
@@ -378,6 +458,7 @@ describe('CommunicationParticipantLinkListener.handleCreated', () => {
       { getTrustMode: jest.fn(async () => 'balanced') } as never,
       dataSource as never,
       logger as never,
+      makeReopener().moduleRef as never,
     );
 
     await listener.handleCreated({ communicationId: COMM_ID });

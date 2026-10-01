@@ -383,6 +383,36 @@ describe('UserService.createFirstAccount', () => {
 });
 
 /**
+ * `create`'s `alongside`: work an ordinary account must not exist without — redeeming the invitation
+ * that admitted it (`SignupCodeService.consume`) — written in the transaction that inserts it.
+ */
+describe('UserService.create — work committed alongside the account', () => {
+  it('runs it in the transaction that inserts the account, after the promotion and before the commit', async () => {
+    const { service, transactionManager, journal } = makeService();
+
+    const alongside = jest.fn(async () => {
+      journal.push('alongside');
+    });
+
+    const user = await service.create(SYSTEM, NEW_USER, alongside);
+
+    // The transaction's own manager, so a redemption written here rolls back with the account.
+    expect(alongside).toHaveBeenCalledWith(transactionManager, expect.objectContaining({ id: user.id }));
+    expect(journal).toEqual(['hash', 'lock', 'insert', 'promote', 'alongside', 'commit', 'event']);
+  });
+
+  it('hands the caller the error it throws, as thrown, and announces nothing', async () => {
+    // The transaction rolls the account back with it; that part is Postgres's, and is proven
+    // against a real one in `auth/__tests__/SignupCodeRedemption.integration.spec.ts`.
+    const { service, eventService } = makeService();
+    const refusal = new Error('the invitation was redeemed by another signup first');
+
+    await expect(service.create(SYSTEM, NEW_USER, () => Promise.reject(refusal))).rejects.toBe(refusal);
+    expect(eventService.send).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * The fake above is only worth anything while it answers the way TypeORM's Postgres driver does. If
  * it drifts back to plain rows for an UPDATE, every case in this file loses the ability to see the
  * bug it exists to catch. The driver itself is exercised in

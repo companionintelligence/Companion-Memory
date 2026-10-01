@@ -38,6 +38,7 @@ import {
   type FilterDragKind,
 } from '@/components/SearchBox/filterDrag';
 import { EntityNameFilter } from '@/components/SearchBox/NameFilter';
+import { SEARCH_PANEL_LAYER_PROPS } from '@/components/SearchBox/SearchBox';
 import { AVAILABLE_ENTITY_TYPES, useDropdown } from '@/components/SearchBox/useDropdown';
 import { type FragmentType } from '@/graphql';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
@@ -1154,12 +1155,15 @@ function FilterControlsRow({
   modal,
   includeEntityTypeFilter = false,
   showSave = true,
+  onOpenSavedSearch,
 }: {
   modal: boolean;
   /** Off on `/memory` — entity types live in MemoryEntityTypeNav instead. */
   includeEntityTypeFilter?: boolean;
   /** Save sits with the filter chip row on `/memory`; stays here in the header panel. */
   showSave?: boolean;
+  /** Passed to Load search: open the picked search instead of applying it here (see SavedSearchPicker). */
+  onOpenSavedSearch?: (params: URLSearchParams) => void;
 }) {
   const [searchParams] = useSearchParams();
   const { pathname } = useLocation();
@@ -1198,7 +1202,7 @@ function FilterControlsRow({
       {showSave && (
         <div className="ml-auto flex shrink-0 items-center gap-2">
           <FilterCountLabel />
-          <SavedSearchPicker />
+          <SavedSearchPicker onOpen={onOpenSavedSearch} />
           <SaveSearchButton />
         </div>
       )}
@@ -1209,11 +1213,19 @@ function FilterControlsRow({
 /**
  * Advanced filters for the header search dropdown on non-`/memory` pages. Includes
  * the What picker here; the main Memory explorer uses MemoryEntityTypeNav instead.
+ * `onOpenSavedSearch` is where Load search sends the picked search: these pages
+ * have nothing that reads `?search=`, so the header opens it in the explorer.
  */
-export function SearchPanelFilters({ modal }: { modal: boolean }) {
+export function SearchPanelFilters({
+  modal,
+  onOpenSavedSearch,
+}: {
+  modal: boolean;
+  onOpenSavedSearch?: (params: URLSearchParams) => void;
+}) {
   return (
     <div className="p-3">
-      <FilterControlsRow modal={modal} includeEntityTypeFilter />
+      <FilterControlsRow modal={modal} includeEntityTypeFilter onOpenSavedSearch={onOpenSavedSearch} />
     </div>
   );
 }
@@ -1366,7 +1378,10 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
           </Button>
         )}
       </Dialog.Trigger>
-      <Dialog.Content className="sm:max-w-[420px]">
+      {/* Part of the search panel it opens from, though portaled out of it: a
+          click inside must not read as a click outside the panel, which would
+          close the panel and unmount this dialog with it. */}
+      <Dialog.Content {...SEARCH_PANEL_LAYER_PROPS} className="sm:max-w-[420px]">
         <Dialog.Header>
           <Dialog.Title>Save this search</Dialog.Title>
           <Dialog.Description>
@@ -1409,7 +1424,11 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
       </Dialog.Content>
 
       {savedSearchToShare && (
-        <ShareSavedSearchModal savedSearch={savedSearchToShare} onClose={() => setSavedSearchToShare(null)} />
+        <ShareSavedSearchModal
+          savedSearch={savedSearchToShare}
+          onClose={() => setSavedSearchToShare(null)}
+          contentProps={SEARCH_PANEL_LAYER_PROPS}
+        />
       )}
     </Dialog>
   );

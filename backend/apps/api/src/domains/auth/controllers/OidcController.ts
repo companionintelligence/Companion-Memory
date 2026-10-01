@@ -75,6 +75,17 @@ const SIGNUP_CODE_COOKIE = 'oidc_signup_code';
 const SIGNUP_INTENT_MAX_AGE = 10 * 60 * 1000;
 
 /**
+ * Rolls back an account being created for an invitation that another sign-in redeemed first.
+ * Thrown inside that account's transaction and caught by `OidcController.createOidcUser`; it never
+ * reaches the caller.
+ */
+class InvitationRedeemedElsewhere extends Error {
+  constructor() {
+    super('The invitation was redeemed by another sign-in first');
+  }
+}
+
+/**
  * Body of the confirm-account form POST. Mirrors ConnectController's
  * `approveSchema`: the fields arrive from a no-JS form, so they must be
  * constrained to strings before reaching the CSRF comparison, which would
@@ -511,11 +522,12 @@ export class OidcController {
       // an OIDC redirect cannot carry a code, so before this every unknown
       // identity was refused outright and a claimed appliance could never admit
       // a second person at all.
-      const offeredCode = req.cookies?.[SIGNUP_CODE_COOKIE];
+      const cookieCode: unknown = req.cookies?.[SIGNUP_CODE_COOKIE];
+      const offeredCode = typeof cookieCode === 'string' && cookieCode.length > 0 ? cookieCode : null;
+      // Enough to refuse on, never to admit on: every sign-in presenting the
+      // same code sees it unused here until one of them redeems it.
       const invitedByCode =
-        typeof offeredCode === 'string' && offeredCode.length > 0
-          ? Boolean(await this.signupCodeService.findOne(offeredCode))
-          : false;
+        offeredCode != null && (await this.signupCodeService.findOne(offeredCode)) != null;
       // Signed into this Hub (verified forward-auth) is an invitation: the
       // person already passed the Hub org-member gate.
       const invitedByHub = Boolean(this.hubBridge.verifyUsername(req));
@@ -523,9 +535,10 @@ export class OidcController {
 
       res.clearCookie(SIGNUP_CODE_COOKIE, { path: '/' });
 
+      const signupCodesRequired = await this.featureService.isFeatureEnabled('require.signup.codes');
       // Whether this person needs an invitation they do not hold. Waived only
       // for the first account; anyone else is refused here.
-      const codeRequired = !invited && (await this.featureService.isFeatureEnabled('require.signup.codes'));
+      const codeRequired = !invited && signupCodesRequired;
 
       if (codeRequired && !unclaimed) {
         this.logger.warn(`OIDC sign-in rejected for unknown user (signup codes required): ${userInfo.email}`);
@@ -535,11 +548,16 @@ export class OidcController {
           : res.redirect('/login?error=signup_code_required');
       }
 
-      // Burn the invitation as soon as it has admitted someone, so it cannot be
-      // replayed by the next person to reach this appliance.
-      if (invited) {
-        await this.signupCodeService.update(offeredCode, { used: true });
-      }
+      // Where the admission rests on the code — no Hub vouches for this
+      // person, and it is a native sign-in or codes are required, the two
+      // cases that turn away an unknown identity without one — it is redeemed
+      // before anyone is admitted on it, and atomically, so that it admits one
+      // person however many present it at once. Where the account is created
+      // in this request, that happens in the same transaction; otherwise it
+      // happens before the confirmation page (see below). A code nothing rests
+      // on is left unspent, for whoever it was meant for.
+      const invitation =
+        invitedByCode && !invitedByHub && (isNative || signupCodesRequired) ? offeredCode : null;
 
       // Native first-time sign-in can't run the web "create account?" confirmation
       // (it lives outside the deep-link flow), so surface it as an error the app can
@@ -552,9 +570,9 @@ export class OidcController {
       // would ask about. An invitation answers it too: the owner chose to issue
       // it and this person chose to present it, which is the whole of what the
       // confirmation asks. Refusing here anyway — as this did — meant the code
-      // was burned a few lines up and the person was still turned away, so every
-      // attempt an invited person made from the desktop cost the owner an
-      // invitation and admitted nobody.
+      // was burned and the person was still turned away, so every attempt an
+      // invited person made from the desktop cost the owner an invitation and
+      // admitted nobody.
       if (isNative && !unclaimed && !invited) {
         return res.redirect(this.nativeRedirectUrl({ error: 'signup_required' }));
       }
@@ -565,7 +583,22 @@ export class OidcController {
         let created: { id: string } | null;
 
         if (invited) {
-          created = await this.createOidcUser(userInfo.email, userInfo.name);
+          created = await this.createOidcUser(userInfo.email, userInfo.name, invitation);
+
+          if (created == null) {
+            // Another sign-in redeemed the invitation after it was checked
+            // above. Refused as it would be with a code that was already used.
+            this.logger.warn(
+              `OIDC sign-in refused for ${userInfo.email}: its invitation was redeemed by another sign-in first`,
+            );
+
+            return res.redirect(
+              this.nativeRedirectUrl({
+                error: signupCodesRequired ? 'signup_code_required' : 'signup_required',
+              }),
+            );
+          }
+
           await this.bindIfPossible(created.id, issuer, userInfo.sub, userInfo.email);
         } else {
           created = await this.claimApplianceFor(
@@ -612,6 +645,20 @@ export class OidcController {
       // Where the code was waived only because the appliance is empty, the
       // intent says so: the confirm step may run minutes from now, and must
       // create the account only if it is still the first.
+      //
+      // An invitation is redeemed here, before that page, rather than by the
+      // step that creates the account: reaching the page is then a promise the
+      // confirm step keeps, not a race with whoever else holds the code for the
+      // intent's lifetime. The price is that declining the confirmation, or
+      // letting it expire, spends the invitation too.
+      if (invitation != null && !(await this.signupCodeService.consume(invitation))) {
+        this.logger.warn(
+          `OIDC sign-in refused for ${userInfo.email}: its invitation was redeemed by another sign-in first`,
+        );
+
+        return res.redirect('/login?error=signup_code_required');
+      }
+
       res.cookie(
         SIGNUP_INTENT_COOKIE,
         this.authService.issueSignupIntentToken(
@@ -915,8 +962,47 @@ export class OidcController {
     return { kind: 'user', user: existing };
   }
 
-  private async createOidcUser(email: string, name?: string): Promise<{ id: string; email: string }> {
-    return this.userService.create({ userId: SYSTEM_USER }, this.oidcAccount(email, name));
+  /**
+   * The account a native or Hub-admitted OIDC sign-in creates.
+   *
+   * @param invitation the signup code admitting this person, if one is. It is redeemed in the
+   *   transaction that creates the account, so of two sign-ins presenting it only the one that
+   *   redeems it gets an account — and a sign-in whose account cannot be created leaves it unspent.
+   * @returns the new account; `null`, with nothing created, when another sign-in redeemed
+   *   `invitation` first.
+   */
+  private createOidcUser(email: string, name?: string): Promise<{ id: string; email: string }>;
+
+  private createOidcUser(
+    email: string,
+    name: string | undefined,
+    invitation: string | null,
+  ): Promise<{ id: string; email: string } | null>;
+
+  private async createOidcUser(
+    email: string,
+    name?: string,
+    invitation: string | null = null,
+  ): Promise<{ id: string; email: string } | null> {
+    try {
+      return await this.userService.create(
+        { userId: SYSTEM_USER },
+        this.oidcAccount(email, name),
+        invitation == null
+          ? undefined
+          : async (manager) => {
+              if (!(await this.signupCodeService.consume(invitation, manager))) {
+                throw new InvitationRedeemedElsewhere();
+              }
+            },
+      );
+    } catch (err) {
+      if (err instanceof InvitationRedeemedElsewhere) {
+        return null;
+      }
+
+      throw err;
+    }
   }
 
   /** The account a native or Hub-invited OIDC sign-in creates. */
