@@ -368,8 +368,9 @@ does. Separately, the reachability probe now tries three times, a fraction of a
 second apart, before believing "nothing is listening": one dropped handshake on a
 loaded machine used to skip a whole suite silently.
 
-`ci.yml`'s backend job does **not** set it yet, deliberately: its seven
-scratch-database suites need `DATABASE_ADMIN_PASSWORD`, which that job leaves
+`ci.yml`'s backend job does **not** set it yet, deliberately: its
+scratch-database suites (`git grep -l 'scratchDatabaseAvailability()' -- '*.spec.ts'`)
+need `DATABASE_ADMIN_PASSWORD`, which that job leaves
 unset as a cost decision (see the comment in the workflow), and under
 `CI_REQUIRE_DB=1` they would fail rather than skip. Decide that first. Other
 gaps in this area: `consent-path-gate.yml` still carries its own copy of the
