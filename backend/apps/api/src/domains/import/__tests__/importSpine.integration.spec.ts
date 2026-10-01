@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 
 import type { ImportRunService } from '../services/ImportRunService';
+import { CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY } from '../staging/identity';
 import { StagedWriter } from '../staging/StagedWriter';
 
 import { createStagingHarness, importDatabase, type StagingHarness } from './support/stagingHarness';
@@ -705,14 +706,21 @@ describeWithDatabase(`the import spine (${importDatabase.target})`, () => {
       await writer.settled();
 
       const [row] = await dataSource.query<
-        Array<{ metadata: Record<string, unknown>; graph_dirty: boolean }>
-      >(`SELECT metadata, graph_dirty FROM ci_import.staged_entities WHERE run_id = $1::uuid`, [runId]);
+        Array<{ metadata: Record<string, unknown>; graph_dirty: boolean; accumulate: string[] | null }>
+      >(`SELECT metadata, graph_dirty, accumulate FROM ci_import.staged_entities WHERE run_id = $1::uuid`, [
+        runId,
+      ]);
 
       expect(row.metadata.prices).toEqual(['10.19', '15.92']);
       // The push resumes from a high-water mark, so a row that changed after it
       // was already sent would never be revisited without this.
       expect(row.graph_dirty).toBe(true);
       expect(writer.totals.entitiesGrown).toBe(1);
+      // And the declaration itself is kept, so the push unions `prices` into
+      // the graph row too instead of replacing what an earlier run put there.
+      // This entity is a contact (it has an email), and staging adds the keys it
+      // accumulates for every contact (`withContactIdentifiers`) to the parser's.
+      expect(row.accumulate).toEqual(['prices', ...CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY]);
     });
 
     it('does not collapse item→item edges that point at different items', async () => {

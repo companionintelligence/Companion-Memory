@@ -90,4 +90,10 @@ export default {
   workerIdleMemoryLimit: '768MB',
 
   setupFilesAfterEnv: ['reflect-metadata'],
+
+  // `default` is what jest uses when this is unset. The second one exists
+  // because the default drops the console output of any file whose tests were
+  // ALL skipped — which is exactly where a database-backed spec prints why it
+  // did not run. It lists those files, with their reasons, above the totals.
+  reporters: ['default', '<rootDir>/src/domains/__tests__/support/skippedSuitesReporter.js'],
 };

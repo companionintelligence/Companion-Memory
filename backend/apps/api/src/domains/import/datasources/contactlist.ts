@@ -76,7 +76,8 @@ interface FormatDef {
  * Left out, deliberately:
  *  - `Assistant's Phone` reaches the assistant, not the contact.
  *  - `Business Fax`, `Home Fax` and `Other Fax` are office equipment, which
- *    must never key a contact.
+ *    must never key a contact. They are read only as evidence that a number is
+ *    a fax (see OUTLOOK_FAX_COLUMN).
  *  - `Pager` and `TTY/TDD Phone` often hold a number shared by many people: a
  *    paging service with the contact's PIN written beside it, a relay service.
  *    `ISDN` is a data line more often than a voice one.
@@ -86,6 +87,14 @@ interface FormatDef {
  *  - `Telex` is not a phone number.
  */
 const OUTLOOK_PHONES_READ_SINCE_2026_09 = /^((business|home) phone 2|(car|radio) phone)$/i;
+
+/**
+ * Outlook's fax columns. None of them is read as a phone, but a number in one
+ * is a fax wherever else the export lists it — see faxSourcesOf. Matched
+ * outside the dialects, like NAME_PARTS, so they cannot change which dialect
+ * wins a header.
+ */
+const OUTLOOK_FAX_COLUMN = /^(business|home|other) fax$/i;
 
 // Mirroring Go formats (simplified)
 const formats: FormatDef[] = [
@@ -221,6 +230,73 @@ function withNameParts(
   return { ...mapping, ...matchColumns(header, NAME_PARTS) };
 }
 
+/**
+ * A cell that can say a number is a fax: the number's column, and the column
+ * of the label that decides it, when one does.
+ */
+interface FaxSource {
+  value: number;
+  label?: number;
+}
+
+/**
+ * Where a row states a fax number: in each of Outlook's three fax columns, and
+ * in each Google phone column whose label cell says fax. Google writes a
+ * number's kind beside it, `Phone 1 - Label` in the export since 2023 and
+ * `Phone 1 - Type` in the older one, as `Work Fax`, `Home Fax`, `Other Fax` or
+ * whatever a custom label says. It is matched as vcard.ts `faxNumbersOf`
+ * matches an `X-ABLabel`.
+ *
+ * A fax is office equipment, so every card from one office lists it, and
+ * whether a number is a fax is a fact about the NUMBER. Once one row says so,
+ * it is a fax on every row of the export that lists it, under any label and in
+ * any column, and markSharedContactHandles keeps it from keying anyone.
+ *
+ * A number Google labels a fax stays an identity attribute of its contact, as a
+ * vCard's FAX TEL does, and is only marked shared. Dropping it would break the
+ * re-key. The row already in `ci.entities` was keyed on the smallest handle
+ * this parser read, the fax included, and `legacyEntityIdentityKey` can name
+ * that key only while the fax is among the attributes. It would also change
+ * which rows the usefulness filter keeps.
+ */
+function faxSourcesOf(header: readonly string[], phoneColumns: readonly number[]): FaxSource[] {
+  const sources: FaxSource[] = [];
+  header.forEach((col, idx) => {
+    if (OUTLOOK_FAX_COLUMN.test(col)) {
+      sources.push({ value: idx });
+    }
+  });
+
+  for (const idx of phoneColumns) {
+    const n = /^phone (\d+) - value$/i.exec(header[idx])?.[1];
+    if (n == null) {
+      continue;
+    }
+
+    const label = header.findIndex((col) =>
+      [`phone ${n} - label`, `phone ${n} - type`].includes(col.toLowerCase()),
+    );
+    if (label !== -1) {
+      sources.push({ value: idx, label });
+    }
+  }
+
+  return sources;
+}
+
+/** The fax numbers one row states, as written. See faxSourcesOf. */
+function faxNumbersOf(row: readonly string[], sources: readonly FaxSource[]): string[] {
+  const faxes: string[] = [];
+  for (const { value, label } of sources) {
+    const v = row[value]?.trim();
+    if (v && (label == null || /fax/i.test(row[label] ?? ''))) {
+      faxes.push(v);
+    }
+  }
+
+  return faxes;
+}
+
 export class ContactListFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const full = entry.fullPath || entry.fsRoot || entry.filename;
@@ -289,11 +365,14 @@ export class ContactListFileImporter implements FileImporter {
     } // insufficient mapping
 
     const columns = withNameParts(header, mapping);
+    const faxSources = faxSourcesOf(header, columns[CANON.PHONE] ?? []);
 
     // Emitted together after the last row: an Outlook export's "Company Main
-    // Phone" column puts one switchboard on every colleague's row, and only the
-    // whole file shows that — see markSharedContactHandles.
+    // Phone" column puts one switchboard on every colleague's row, a number one
+    // row calls a fax is a fax on every row, and only the whole file shows
+    // either — see markSharedContactHandles.
     const contacts: Entity[] = [];
+    const faxes: string[] = [];
 
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
@@ -301,6 +380,10 @@ export class ContactListFileImporter implements FileImporter {
         params.pipeline.drop?.('malformed_row', `row ${i}`);
         continue;
       } // skip malformed
+
+      // Before the usefulness filter: a row too thin to import still says
+      // which of its numbers is a fax.
+      faxes.push(...faxNumbersOf(row, faxSources));
 
       const vals: Record<string, string[]> = {};
       for (const [canon, idxs] of Object.entries(columns)) {
@@ -397,7 +480,7 @@ export class ContactListFileImporter implements FileImporter {
       });
     }
 
-    for (const entity of markSharedContactHandles(contacts)) {
+    for (const entity of markSharedContactHandles(contacts, faxes)) {
       params.pipeline.push({ entity });
     }
   }

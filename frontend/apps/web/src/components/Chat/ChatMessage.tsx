@@ -4,14 +4,31 @@ import { ToolBlock } from './blocks/ToolBlock';
 import { UserMessage } from './blocks/UserMessage';
 import { parseChatContent } from './parser';
 
+interface ToolCallShape {
+  function?: { name?: string };
+}
+
 interface Props {
   role: string;
   content: string;
   createdAt?: string;
   source?: 'openclaw' | 'memory' | 'user';
+  toolCalls?: object[] | null;
 }
 
-export function ChatMessage({ role, content, createdAt, source }: Props) {
+function persistedToolNames(toolCalls: object[] | null | undefined): string[] {
+  if (!toolCalls?.length) {
+    return [];
+  }
+
+  return toolCalls.flatMap((call) => {
+    const name = (call as ToolCallShape).function?.name;
+
+    return name ? [name] : [];
+  });
+}
+
+export function ChatMessage({ role, content, createdAt, source, toolCalls }: Props) {
   if (role === 'tool') {
     return null;
   }
@@ -21,8 +38,10 @@ export function ChatMessage({ role, content, createdAt, source }: Props) {
   }
 
   const segments = parseChatContent(content);
+  const contentShowsTools = segments.some((segment) => segment.type === 'tool');
+  const toolNames = contentShowsTools ? [] : persistedToolNames(toolCalls);
 
-  if (segments.length === 0) {
+  if (segments.length === 0 && toolNames.length === 0) {
     return null;
   }
 
@@ -40,6 +59,9 @@ export function ChatMessage({ role, content, createdAt, source }: Props) {
             return null;
         }
       })}
+      {toolNames.map((toolName, index) => (
+        <ToolBlock key={`${toolName}-${index}`} toolName={toolName} />
+      ))}
     </>
   );
 }

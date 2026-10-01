@@ -16,3 +16,5 @@ export type {
   PersonDraftSource,
 } from './personDraft';
 export { PersonProfileCard } from './PersonProfileCard';
+export { pendingRefusals, refusedContactsFrom } from './refusedContacts';
+export type { RefusedContact } from './refusedContacts';

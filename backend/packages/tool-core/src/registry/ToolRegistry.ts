@@ -1,4 +1,5 @@
 import type { ToolRequestContext } from '../context';
+import { coerceArgumentsToSchema } from '../core/coerceArguments';
 import type { ToolHandle } from '../core/ToolHandle';
 import {
   canonicalizeExecutableToolName,
@@ -457,7 +458,10 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
       provider: this.toolToProvider.get(toolName),
     });
 
-    const result = await tool.execute(context, input);
+    // Typed to the schema the model was shown, before the tool's own validation sees it: every
+    // transport reaches this line, so a `"15"` for an integer is fixed once here rather than in
+    // each markup salvager and engine parser. See coerceArgumentsToSchema.
+    const result = await tool.execute(context, coerceArgumentsToSchema(input, tool.schema.parameters));
 
     await this.recordInvocation({
       ...this.invocationFacts(toolName, tool, context),

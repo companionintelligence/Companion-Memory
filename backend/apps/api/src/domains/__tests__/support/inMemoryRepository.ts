@@ -18,8 +18,22 @@
  * (`In(...)`, `IsNull()`) is rejected rather than silently matching nothing —
  * a service that starts using one needs a real database, not a wider fake.
  */
+
+/** The INSERT chain `GraphUtilityService` builds on a repository. */
+interface InMemoryInsert<T> {
+  insert(): InMemoryInsert<T>;
+  into(target: unknown): InMemoryInsert<T>;
+  values(row: T): InMemoryInsert<T>;
+  onConflict(clause: string): InMemoryInsert<T>;
+  returning(columns: string[]): InMemoryInsert<T>;
+  execute(): Promise<{ raw: T[] }>;
+}
+
 export class InMemoryRepository<T extends object> {
   private readonly rows = new Map<string, T>();
+
+  /** What `Repository.metadata.target` is: the insert chain reads it and ignores it. */
+  readonly metadata = { target: {} };
 
   constructor(private readonly primaryKey: keyof T & string) {}
 
@@ -69,5 +83,36 @@ export class InMemoryRepository<T extends object> {
     this.seed(row);
 
     return structuredClone(row);
+  }
+
+  /**
+   * The INSERT … ON CONFLICT chain `GraphUtilityService` uses for a new node or
+   * edge. A yielded insert (a row already on the conflict key) is not modelled:
+   * the specs that need that run against Postgres.
+   */
+  createQueryBuilder(): InMemoryInsert<T> {
+    let row: T | undefined;
+    const builder = {
+      insert: () => builder,
+      into: () => builder,
+      values: (next: T) => {
+        row = next;
+
+        return builder;
+      },
+      onConflict: () => builder,
+      returning: () => builder,
+      execute: async () => {
+        if (row === undefined) {
+          throw new Error('InMemoryRepository.createQueryBuilder: insert without values');
+        }
+
+        this.seed(row);
+
+        return { raw: [structuredClone(row)] };
+      },
+    };
+
+    return builder;
   }
 }

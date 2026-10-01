@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { createDateTimeFormatter, DEVICE_DATE_TIME_FORMATTER } from '@/lib/dateTimeFormat';
+
 import {
   channelSentence,
   consentLockLabel,
@@ -183,10 +185,21 @@ describe('consentSentence', () => {
 
 describe('formatMoment', () => {
   it('renders a real timestamp', () => {
-    expect(formatMoment('2026-08-26T12:00:00.000Z')).not.toBe('2026-08-26T12:00:00.000Z');
+    expect(formatMoment('2026-08-26T12:00:00.000Z', DEVICE_DATE_TIME_FORMATTER)).not.toBe(
+      '2026-08-26T12:00:00.000Z',
+    );
   });
 
   it('falls back to the raw string rather than printing Invalid Date', () => {
-    expect(formatMoment('not a date')).toBe('not a date');
+    expect(formatMoment('not a date', DEVICE_DATE_TIME_FORMATTER)).toBe('not a date');
+  });
+
+  it("writes the time in the owner's time format and zone", () => {
+    const at = '2026-08-26T22:43:00.000Z'; // 15:43 in Los Angeles
+    const inLosAngeles = (timeFormat: 'h12' | 'h23') =>
+      formatMoment(at, createDateTimeFormatter({ timeFormat, timeZone: 'America/Los_Angeles' }));
+
+    expect(inLosAngeles('h23')).toMatch(/\b15:43$/);
+    expect(inLosAngeles('h12')).toMatch(/\b3:43\sPM$/i);
   });
 });

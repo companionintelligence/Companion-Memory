@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { createDateTimeFormatter, DEVICE_DATE_TIME_FORMATTER } from '@/lib/dateTimeFormat';
 import type { MemoryEntity } from '@/pages/MemoryPage/useEntityService';
 
 import { entityToAgentChatContext } from './entityToAgentChatContext';
@@ -18,6 +19,7 @@ describe('entityToAgentChatContext', () => {
           title: 'Picnic',
           content: '<p>Bring <b>snacks</b>.</p>',
         }),
+        DEVICE_DATE_TIME_FORMATTER,
       ),
     ).toEqual({
       title: 'Picnic',
@@ -37,6 +39,7 @@ describe('entityToAgentChatContext', () => {
         startTime: '2026-06-17T19:00:00Z',
         locationName: 'Malibu',
       }),
+      DEVICE_DATE_TIME_FORMATTER,
     );
 
     expect(context.title).toBe('Dinner with Sam');
@@ -59,6 +62,7 @@ describe('entityToAgentChatContext', () => {
         sourceSystem: 'google_maps',
         tags: [{ label: 'walk' }, { label: 'sf' }],
       }),
+      DEVICE_DATE_TIME_FORMATTER,
     );
 
     expect(context.title).toBe('Walk in the park');
@@ -80,6 +84,7 @@ describe('entityToAgentChatContext', () => {
         bucketTimeSource: 'ingest',
         galleryLocationName: 'Home',
       }),
+      DEVICE_DATE_TIME_FORMATTER,
     );
 
     expect(context.body).not.toMatch(/^When:/m);
@@ -95,6 +100,7 @@ describe('entityToAgentChatContext', () => {
           subject: 'Flights',
           preview: 'Land at 4pm',
         }),
+        DEVICE_DATE_TIME_FORMATTER,
       ),
     ).toEqual({
       title: 'Flights',
@@ -113,6 +119,7 @@ describe('entityToAgentChatContext', () => {
         chunkContent: 'Valid through 2027.',
         file: { filename: 'manual.pdf' },
       }),
+      DEVICE_DATE_TIME_FORMATTER,
     );
 
     expect(context.title).toBe('Warranty');
@@ -128,6 +135,7 @@ describe('entityToAgentChatContext', () => {
           answer: 'Blue',
           question: { text: 'Favorite color?' },
         }),
+        DEVICE_DATE_TIME_FORMATTER,
       ),
     ).toEqual({
       title: 'Favorite color?',
@@ -147,6 +155,7 @@ describe('entityToAgentChatContext', () => {
           entityType: 'place',
           description: 'The house on Oak',
         }),
+        DEVICE_DATE_TIME_FORMATTER,
       ),
     ).toEqual({
       title: 'Home',
@@ -165,10 +174,23 @@ describe('entityToAgentChatContext', () => {
         url: 'https://example.com/tides',
         time: '2026-06-09T18:30:00Z',
       }),
+      DEVICE_DATE_TIME_FORMATTER,
     );
 
     expect(context.title).toBe('Tide chart');
     expect(context.body).toContain('URL: https://example.com/tides');
     expect(context.body).toContain('When:');
+  });
+
+  it("writes When in the owner's time format and zone", () => {
+    const whenLine = (timeFormat: 'h12' | 'h23') =>
+      entityToAgentChatContext(
+        asEntity({ __typename: 'EventType', id: 'e2', title: 'Swim', startTime: '2026-06-17T22:43:00Z' }),
+        createDateTimeFormatter({ timeFormat, timeZone: 'America/Los_Angeles' }),
+      ).body?.match(/^When: (.*)$/m)?.[1];
+
+    // 22:43 UTC is 15:43 in Los Angeles.
+    expect(whenLine('h23')).toMatch(/\b15:43$/);
+    expect(whenLine('h12')).toMatch(/\b3:43\sPM$/i);
   });
 });

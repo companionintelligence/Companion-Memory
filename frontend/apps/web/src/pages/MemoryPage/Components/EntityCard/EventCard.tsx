@@ -3,6 +3,7 @@ import { Calendar, Clock, MapPin, Play } from '@ci/shadcn/icons';
 
 import { PendingImage } from '@/components/PendingImage';
 import { gql, useFragment, type FragmentType } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import { useEntityService } from '../../useEntityService';
 import { resolveStaticUrl } from '../EntityDetails/EntityDetailScaffold';
@@ -70,6 +71,7 @@ export const EVENT_FRAGMENT = gql(`
 
 export function EventCard({ entity }: Props) {
   const data = useFragment(EVENT_FRAGMENT, entity);
+  const fmt = useDateTimeFormat();
   const [, { setActiveEntity }] = useEntityService();
   // startTime is NOT NULL, so this is always truthy — but for an
   // ingest-sourced record (see INGEST_TIME_SOURCE above) it is the import
@@ -141,7 +143,7 @@ export function EventCard({ entity }: Props) {
             <span className="text-sm italic text-muted-foreground">Date unknown</span>
           ) : (
             <span className="text-sm tabular-nums text-card-foreground">
-              {formatEventTimeRange(data.startTime, data.endTime)}
+              {formatEventTimeRange(data.startTime, data.endTime, fmt)}
             </span>
           )}
         </div>

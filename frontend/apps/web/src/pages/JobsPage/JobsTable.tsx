@@ -4,6 +4,9 @@ import { useOverflowsRight } from '@ci/common';
 import { Badge, Button, Card, Collapsible, Input, Skeleton, cn } from '@ci/shadcn';
 import { AlertTriangle, ChevronDown, ChevronRight, type LucideIcon } from '@ci/shadcn/icons';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
+
 import { FoldCard, cardPad, usePhone } from './Fold';
 import {
   JOB_SYSTEMS,
@@ -426,6 +429,7 @@ function JobFailureLine({ message }: { message: string }) {
 
 function JobRow({ job, expanded, onToggle }: { job: JobListItem; expanded: boolean; onToggle: () => void }) {
   const Chevron = expanded ? ChevronDown : ChevronRight;
+  const fmt = useDateTimeFormat();
 
   return (
     <>
@@ -473,7 +477,9 @@ function JobRow({ job, expanded, onToggle }: { job: JobListItem; expanded: boole
         <td className="py-1.5 pr-3 text-right tabular-nums text-xs text-muted-foreground">
           {job.retryCount}/{job.retryLimit}
         </td>
-        <td className="py-1.5 text-right text-xs text-muted-foreground">{formatTimestamp(job.createdOn)}</td>
+        <td className="py-1.5 text-right text-xs text-muted-foreground">
+          {formatTimestamp(job.createdOn, fmt)}
+        </td>
       </tr>
       {expanded ? (
         <tr className="border-b border-border/40 bg-muted/20">
@@ -488,6 +494,8 @@ function JobRow({ job, expanded, onToggle }: { job: JobListItem; expanded: boole
 }
 
 function JobCard({ job, expanded, onToggle }: { job: JobListItem; expanded: boolean; onToggle: () => void }) {
+  const fmt = useDateTimeFormat();
+
   return (
     <div className="border-b border-border/40 last:border-0">
       <button
@@ -511,7 +519,7 @@ function JobCard({ job, expanded, onToggle }: { job: JobListItem; expanded: bool
         <p className="text-xs text-muted-foreground">
           {formatDuration(job.durationMs)}
           {' · '}
-          {formatTimestamp(job.createdOn)}
+          {formatTimestamp(job.createdOn, fmt)}
           {job.retryCount > 0 ? ` · Retried ${job.retryCount} of ${job.retryLimit}` : ''}
           {job.interactive ? ' · interactive' : ''}
         </p>
@@ -531,6 +539,8 @@ function JobCard({ job, expanded, onToggle }: { job: JobListItem; expanded: bool
  * but a phone card leaves out of its summary.
  */
 function JobDetails({ job, names = false }: { job: JobListItem; names?: boolean }) {
+  const fmt = useDateTimeFormat();
+
   return (
     <>
       <p className="mb-2 max-w-3xl text-xs text-muted-foreground">{job.description}</p>
@@ -553,8 +563,8 @@ function JobDetails({ job, names = false }: { job: JobListItem; names?: boolean 
           }
         />
         <Detail label="Payload" value={`${job.payloadBytes.toLocaleString()} bytes`} />
-        <Detail label="Started" value={formatTimestamp(job.startedOn)} />
-        <Detail label="Completed" value={formatTimestamp(job.completedOn)} />
+        <Detail label="Started" value={formatTimestamp(job.startedOn, fmt)} />
+        <Detail label="Completed" value={formatTimestamp(job.completedOn, fmt)} />
         {job.workType ? <Detail label="Work type" value={job.workType} /> : null}
       </dl>
       {job.failure ? (
@@ -562,7 +572,7 @@ function JobDetails({ job, names = false }: { job: JobListItem; names?: boolean 
           <p className="break-words text-xs font-medium text-destructive">{job.failure.message}</p>
           {job.failure.failedAt ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Failed {formatTimestamp(job.failure.failedAt)}
+              Failed {formatTimestamp(job.failure.failedAt, fmt)}
             </p>
           ) : null}
           {job.failure.stack ? (
@@ -801,7 +811,7 @@ function formatDuration(ms: number | null): string {
   return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
 
-function formatTimestamp(value?: string | null): string {
+function formatTimestamp(value: string | null | undefined, fmt: DateTimeFormatter): string {
   if (!value) {
     return '—';
   }
@@ -812,11 +822,11 @@ function formatTimestamp(value?: string | null): string {
     return '—';
   }
 
-  return new Intl.DateTimeFormat(undefined, {
+  return fmt.dateTime(date, {
     month: 'short',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-  }).format(date);
+  });
 }

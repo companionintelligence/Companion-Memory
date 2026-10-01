@@ -52,7 +52,9 @@ const mockUserService = {
   checkEmailAvailability: jest.fn().mockResolvedValue(false),
   create: jest.fn(createAccount),
   // Default to an appliance that already has an account, so the signup-code
-  // tests below exercise the gate rather than the first-account exemption.
+  // tests below exercise the gate rather than the first-account exemption:
+  // createFirstAccount declines, and the requirements endpoint says "claimed".
+  createFirstAccount: jest.fn().mockResolvedValue(null),
   hasNoUsers: jest.fn().mockResolvedValue(false),
 };
 
@@ -131,6 +133,7 @@ describe('SignupController', () => {
     mockFeatureService.isFeatureEnabled.mockResolvedValue(false);
     mockSignupCodeService.findOne.mockResolvedValue({ signup_code: 'valid-code', used: false });
     mockSignupCodeService.consume.mockResolvedValue(true);
+    mockUserService.createFirstAccount.mockResolvedValue(null);
     mockUserService.hasNoUsers.mockResolvedValue(false);
   });
 
@@ -205,6 +208,15 @@ describe('SignupController', () => {
         .expect(400);
     });
 
+    it('does not ask whether this is the first account when signup codes are off', async () => {
+      // There is no exemption to decide, so an ordinary create — which admits the second person
+      // as readily as the first — is the whole of it.
+      await request(app.getHttpServer()).post('/signup').send(validPayload).expect(201);
+
+      expect(mockUserService.createFirstAccount).not.toHaveBeenCalled();
+      expect(mockUserService.create).toHaveBeenCalledTimes(1);
+    });
+
     describe('with signup codes required', () => {
       beforeEach(() => {
         mockFeatureService.isFeatureEnabled.mockResolvedValue(true);
@@ -265,18 +277,52 @@ describe('SignupController', () => {
       // never create the first account on it. The exemption is exactly one
       // account wide.
       it('allows the first account on an unclaimed appliance, with no code', async () => {
-        mockUserService.hasNoUsers.mockResolvedValue(true);
+        mockUserService.createFirstAccount.mockResolvedValue(mockUser);
 
         await request(app.getHttpServer()).post('/signup').send(validPayload).expect(201);
 
+        expect(mockUserService.createFirstAccount).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ email: validPayload.email, password: validPayload.password }),
+        );
+        expect(mockUserService.create).not.toHaveBeenCalled();
         expect(mockSignupCodeService.findOne).not.toHaveBeenCalled();
         expect(mockSignupCodeService.consume).not.toHaveBeenCalled();
       });
 
       it('requires a code again once the appliance has an account', async () => {
-        mockUserService.hasNoUsers.mockResolvedValue(false);
+        mockUserService.createFirstAccount.mockResolvedValue(null);
 
         await request(app.getHttpServer()).post('/signup').send(validPayload).expect(400);
+
+        expect(mockUserService.create).not.toHaveBeenCalled();
+      });
+
+      // Two people signing up to a fresh appliance at once both used to be
+      // exempt: each asked "is it empty?" and then created an account. The
+      // exemption is now decided as the account is created, and a signup that
+      // loses it is held to the code like anyone arriving a moment later.
+      it('never grants the exemption on an earlier look at the appliance', async () => {
+        mockUserService.hasNoUsers.mockResolvedValue(true);
+        mockUserService.createFirstAccount.mockResolvedValue(null);
+
+        const response = await request(app.getHttpServer()).post('/signup').send(validPayload).expect(400);
+
+        expect(response.body.message).toBe('Must provide a valid signup code');
+        expect(mockUserService.hasNoUsers).not.toHaveBeenCalled();
+        expect(mockUserService.create).not.toHaveBeenCalled();
+      });
+
+      it('admits a signup that lost the first-account race when it holds a code, and redeems it', async () => {
+        mockUserService.createFirstAccount.mockResolvedValue(null);
+
+        await request(app.getHttpServer())
+          .post('/signup')
+          .send({ ...validPayload, signup_code: 'valid-code' })
+          .expect(201);
+
+        expect(mockUserService.create).toHaveBeenCalledTimes(1);
+        expect(mockSignupCodeService.consume).toHaveBeenCalledWith('valid-code', accountTransaction);
       });
     });
 

@@ -8,6 +8,7 @@ import { Link } from 'react-router-dom';
 import { useNodeGraphService } from '@/api/useNodeGraphService';
 import { ChatAbout } from '@/components/ChatWithAgent';
 import { Tag } from '@/components/Tag';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { namedChatContext } from '@/lib/agentChat';
 
 import {
@@ -334,6 +335,7 @@ export function EntityRelationshipCards({
   heading = 'Connections',
 }: Props) {
   const apolloClient = useApolloClient();
+  const fmt = useDateTimeFormat();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [visibleCardCount, setVisibleCardCount] = useState(DEFAULT_VISIBLE_CARDS);
   const [expanded, setExpanded] = useState(false);
@@ -405,7 +407,7 @@ export function EntityRelationshipCards({
             description: otherEntityDescription,
             entityProperties: otherEntityProperties,
           }),
-          when: formatCardWhen(recency),
+          when: formatCardWhen(recency, fmt),
           strength: typeof link.strength === 'number' ? link.strength : 0,
           recency,
           // Stash raw link props for communication id recovery in the click handler.
@@ -415,7 +417,7 @@ export function EntityRelationshipCards({
       .filter(
         (card) => !entityAllowlist || entityAllowlist.has(normalizeGraphEntityType(card.otherEntityType)),
       );
-  }, [data, entityId, relationshipTypes, entityTypes]);
+  }, [data, entityId, relationshipTypes, entityTypes, fmt]);
 
   // Deterministic ordering: strongest first, then most recent, then a stable
   // id tiebreak — so the same relationships always surface (no random subset).

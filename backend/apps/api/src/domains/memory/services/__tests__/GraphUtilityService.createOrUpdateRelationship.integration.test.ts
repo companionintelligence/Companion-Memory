@@ -345,4 +345,141 @@ describeWithDb(`GraphUtilityService.createOrUpdateRelationship (${availability.t
     ]);
     expect(await edgesBetween(alex, sam)).toEqual([]);
   });
+
+  describe('a write by id that puts its row on a coordinate another active edge holds', () => {
+    // The by-id branch assigned the payload's from/to/type and save()d, so a
+    // retype, a move, or a forgotten row brought back onto a held coordinate
+    // was an UPDATE this index refuses. Through GraphEventListener the job
+    // dead-lettered — after `memory.remember` had answered "Updated
+    // relationship". It now stops before any statement runs.
+    const edge = async (relationshipId: string): Promise<StoredEdge> => {
+      const [found] = await runner.query(
+        `SELECT relationship_id, owner_user_id, from_entity_id, to_entity_id, relationship_type,
+                strength, is_bidirectional, properties, is_active
+           FROM ci.relationships WHERE relationship_id = $1`,
+        [relationshipId],
+      );
+
+      return found as StoredEdge;
+    };
+
+    const forget = (relationshipId: string) =>
+      runner.query(`UPDATE ci.relationships SET is_active = false WHERE relationship_id = $1`, [
+        relationshipId,
+      ]);
+
+    it('control: the by-id retype as it used to be written — load, assign, save() — violates the index', async () => {
+      const knows = await importedEdge();
+      await importedEdge({ relationship_type: 'FRIENDS_WITH', properties: { met: 'school' } });
+
+      const row = await edges.findOneOrFail({ where: { relationship_id: knows } });
+      row.relationship_type = 'FRIENDS_WITH';
+
+      await expect(edges.save(row)).rejects.toThrow('relationships_unique_directed_idx');
+    });
+
+    it.each([
+      [
+        'retypes it',
+        async () => {
+          const moved = await importedEdge();
+          const held = await importedEdge({
+            relationship_type: 'FRIENDS_WITH',
+            properties: { met: 'school' },
+          });
+
+          return {
+            moved,
+            held,
+            write: { fromEntityId: alex, toEntityId: sam, relationshipType: 'FRIENDS_WITH' },
+          };
+        },
+      ],
+      [
+        'moves it to other endpoints',
+        async () => {
+          const jo = await newPerson(owner, 'Jo Park');
+          const moved = await importedEdge();
+          const held = await importedEdge({ to_entity_id: jo, properties: { met: 'work' } });
+
+          return { moved, held, write: { fromEntityId: alex, toEntityId: jo, relationshipType: 'KNOWS' } };
+        },
+      ],
+      [
+        'brings a forgotten row back',
+        async () => {
+          const moved = await importedEdge();
+          await forget(moved);
+          const held = await importedEdge({ properties: { source: 'linkedin' } });
+
+          return { moved, held, write: { fromEntityId: alex, toEntityId: sam, relationshipType: 'KNOWS' } };
+        },
+      ],
+    ])(
+      'refuses a write that %s before writing anything, and names the edge in the way',
+      async (_label, arrange) => {
+        const { moved, held, write } = await arrange();
+        const [movedBefore, heldBefore] = [await edge(moved), await edge(held)];
+
+        await expect(
+          service.createOrUpdateRelationship(owner, {
+            relationshipId: moved,
+            ...write,
+            properties: { context: 'dentist' },
+            strength: 0.9,
+          }),
+        ).rejects.toThrow(
+          `Relationship ${moved} cannot become ${write.fromEntityId} -[${write.relationshipType}]-> ` +
+            `${write.toEntityId}: relationship ${held} is already the active edge there`,
+        );
+
+        // Reading at all proves no statement failed: a unique violation would
+        // have aborted the transaction.
+        expect(await edge(moved)).toEqual(movedBefore);
+        expect(await edge(held)).toEqual(heldBefore);
+      },
+    );
+
+    it('retypes a row onto a coordinate only a forgotten edge holds, which the partial index allows', async () => {
+      const knows = await importedEdge();
+      const forgotten = await importedEdge({ relationship_type: 'FRIENDS_WITH' });
+      await forget(forgotten);
+
+      const { relationship, created } = await service.createOrUpdateRelationship(owner, {
+        relationshipId: knows,
+        fromEntityId: alex,
+        toEntityId: sam,
+        relationshipType: 'FRIENDS_WITH',
+        properties: { context: 'dentist' },
+      });
+
+      expect(created).toBe(false);
+      expect(relationship.relationship_id).toBe(knows);
+      expect(await edge(knows)).toMatchObject({
+        relationship_type: 'FRIENDS_WITH',
+        strength: 0.4,
+        properties: { source: 'google-contacts', context: 'dentist' },
+        is_active: true,
+      });
+      expect(await edge(forgotten)).toMatchObject({ relationship_type: 'FRIENDS_WITH', is_active: false });
+    });
+
+    it("refuses a coordinate another owner's edge holds, since the index is not scoped to an owner", async () => {
+      const stranger = await newUser('GraphUtility-relationshipCoordinate-stranger');
+      const knows = await importedEdge();
+      const foreign = await importedEdge({ owner_user_id: stranger, relationship_type: 'FRIENDS_WITH' });
+
+      await expect(
+        service.createOrUpdateRelationship(owner, {
+          relationshipId: knows,
+          fromEntityId: alex,
+          toEntityId: sam,
+          relationshipType: 'FRIENDS_WITH',
+        }),
+      ).rejects.toThrow(`the active edge there does not belong to owner ${owner}`);
+
+      expect(await edge(knows)).toMatchObject({ relationship_type: 'KNOWS', is_active: true });
+      expect(await edge(foreign)).toMatchObject({ owner_user_id: stranger, is_active: true });
+    });
+  });
 });

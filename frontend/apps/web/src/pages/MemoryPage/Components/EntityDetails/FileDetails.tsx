@@ -3,6 +3,7 @@ import { useMutation } from '@apollo/client';
 import { FILE_FRAGMENT } from '@/components/entities/grid/FileGridItem';
 import { resolveFileTileUrl, resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
 import { gql, useFragment } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import type { MemoryEntityOf } from '../../useEntityService';
 
@@ -27,6 +28,7 @@ interface Props {
 export function FileDetails({ entity }: Props) {
   const data = useFragment(FILE_FRAGMENT, entity);
   const [updateFile] = useMutation(UPDATE_FILE);
+  const fmt = useDateTimeFormat();
 
   const isVideo = data.contentType?.startsWith('video/') ?? false;
   // Video plays the server's browser-playable rendition when one exists (the
@@ -71,7 +73,7 @@ export function FileDetails({ entity }: Props) {
         { label: 'Filename', value: data.filename },
         { label: 'Content type', value: data.contentType },
         { label: 'Size', value: formatBytes(data.size) },
-        { label: 'Created', value: data.createdAt ? new Date(data.createdAt).toLocaleString() : null },
+        { label: 'Created', value: data.createdAt ? fmt.dateTime(data.createdAt) : null },
       ]}
       rawData={data}
     >

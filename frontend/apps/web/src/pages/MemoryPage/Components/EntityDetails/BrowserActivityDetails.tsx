@@ -1,6 +1,7 @@
 import { useMutation } from '@apollo/client';
 
 import { gql, useFragment } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import type { MemoryEntityOf } from '../../useEntityService';
 import { BROWSER_ACTIVITY_FRAGMENT } from '../EntityCard/BrowserActivityCard';
@@ -24,6 +25,7 @@ interface Props {
 export function BrowserActivityDetails({ entity }: Props) {
   const data = useFragment(BROWSER_ACTIVITY_FRAGMENT, entity);
   const [updateBrowserActivity] = useMutation(UPDATE_BROWSER_ACTIVITY);
+  const fmt = useDateTimeFormat();
 
   return (
     <EntityDetailScaffold
@@ -42,7 +44,7 @@ export function BrowserActivityDetails({ entity }: Props) {
       }}
       metaItems={[
         { label: 'Action', value: data.actionType },
-        { label: 'When', value: data.time ? new Date(data.time).toLocaleString() : null },
+        { label: 'When', value: data.time ? fmt.dateTime(data.time) : null },
       ]}
       rawData={data}
     />

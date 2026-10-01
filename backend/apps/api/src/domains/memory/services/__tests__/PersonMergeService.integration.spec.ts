@@ -312,21 +312,22 @@ describeWithDb(`PersonMergeService — audit counts, in Postgres (${availability
 
     await merger.mergePeople(owner, [source], target);
 
-    expect(await auditCounts(target)).toEqual([
-      {
-        source,
-        counts: {
-          identifiers: 0,
-          communicationsFrom: 0,
-          communicationsTo: 0,
-          eventsOrganizer: 0,
-          eventsParticipants: 0,
-          relationshipsFrom: 0,
-          relationshipsTo: 0,
-          relationshipsDropped: 0,
-        },
-      },
-    ]);
+    // Typed, so a count added to `MergeCounts` is a compile error here rather
+    // than a test failure that only shows when someone dispatches CI.
+    const nothingMoved: MergeCounts = {
+      identifiers: 0,
+      claims: 0,
+      blocksCarried: 0,
+      communicationsFrom: 0,
+      communicationsTo: 0,
+      eventsOrganizer: 0,
+      eventsParticipants: 0,
+      relationshipsFrom: 0,
+      relationshipsTo: 0,
+      relationshipsDropped: 0,
+    };
+
+    expect(await auditCounts(target)).toEqual([{ source, counts: nothingMoved }]);
   });
 
   it('resolvePairs reports the pending candidates it stamped', async () => {

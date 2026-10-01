@@ -213,10 +213,11 @@ function OverlayRail({
         // 300px, less a 56px strip of page on the narrowest phones, so there
         // is always some scrim left to tap.
         'fixed inset-y-0 left-0 z-40 flex w-[min(300px,calc(100vw-56px))] flex-col overflow-x-hidden px-2 pb-[max(0.5rem,var(--safe-area-bottom))] pt-[var(--safe-area-top)] transition-transform duration-200',
-        // Opaque. A translucent pane let whatever sat behind it — a bright
-        // card, the chat page's empty-state icon — bleed through between the
-        // rows.
-        'border-r border-border bg-background shadow-xl',
+        // Glass, deliberately: the page stays in view behind the drawer,
+        // frosted. The blur is what keeps the rows readable — colour comes
+        // through, text does not — so a bright shape behind it (the chat
+        // page's empty-state icon) reads as a soft glow, not clutter.
+        'border-r border-white/55 bg-white/35 shadow-xl backdrop-blur-xl dark:border-white/20 dark:bg-white/10',
         expanded ? 'translate-x-0' : 'pointer-events-none -translate-x-full',
       )}
     >

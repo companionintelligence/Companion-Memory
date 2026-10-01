@@ -1,4 +1,4 @@
-import type { OnboardingProgress } from './entities/UserEntity';
+import type { OnboardingProgress, TimeFormat } from './entities/UserEntity';
 
 export interface CreateUserDto {
   id?: string;
@@ -28,5 +28,6 @@ export interface UpdateUserDto {
   onboarded?: boolean;
   entityId?: string;
   timezone?: string;
+  timeFormat?: TimeFormat;
   onboardingProgress?: OnboardingProgress | null;
 }

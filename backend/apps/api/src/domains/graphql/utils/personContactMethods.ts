@@ -1,4 +1,4 @@
-import { hasPhoneExtension, normalizeIdentifier } from '@ci/domains/graph';
+import { hasPhoneExtension, normalizeIdentifier, type IdentifierKind } from '@ci/domains/graph';
 
 import type { PersonIdentifierType } from '../types/PersonIdentifierType';
 
@@ -291,4 +291,43 @@ function readContactEntries(value: unknown): Array<{ value: string; label: strin
   }
 
   return entries;
+}
+
+/**
+ * The unusable contact values (`unusableIdentifiers`) worth failing a person
+ * edit over: every one except a row the user left untouched — one the
+ * person's own record states, with the same label.
+ *
+ * The edit form seeds its contact list from `identifiers`, which shows a phone
+ * carrying an extension as typed, and every save re-submits the whole list.
+ * Refusing those would fail every later save of the person — a fix to their
+ * name included — over a number nobody touched, and one this form cannot
+ * remove anyway: it lives in properties, not in the index. It stays where it
+ * is, shown and inert for matching.
+ *
+ * Anything else the user asserted is refused, a relabelled row included: the
+ * label has nowhere to go either, and dropping it without a word is the
+ * failure this refusal exists to end. {@link contactsToReconcile} does not
+ * make this redundant: it cannot key an unusable value, because it has no
+ * normalized form, so it passes those rows through.
+ */
+export function unusableToSurface<T extends { kind: IdentifierKind; value: string; label?: string | null }>(
+  unusable: readonly T[],
+  person: { email?: string | null; properties?: Record<string, unknown> | null },
+): T[] {
+  if (unusable.length === 0) {
+    return [];
+  }
+
+  // An unusable value is displayed with the typed string as its `value`, and
+  // the form sends that back trimmed, as it sends a missing label back as ''.
+  const statedLabels = new Map(
+    contactMethodsFromPersonProperties(person).map((row) => [`${row.kind}:${row.value}`, row.label ?? null]),
+  );
+
+  return unusable.filter((entry) => {
+    const key = `${entry.kind}:${entry.value.trim()}`;
+
+    return !statedLabels.has(key) || (entry.label?.trim() || null) !== statedLabels.get(key);
+  });
 }

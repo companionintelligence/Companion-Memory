@@ -84,6 +84,75 @@ export function isChatCapableModel(
   return !NON_CHAT_NAME.test(model.id);
 }
 
+/**
+ * What a bare llama-server says about itself on `GET /props`: the window it loaded the model with
+ * (`default_generation_settings.n_ctx`) and whether it took a vision projector (`modalities.vision`).
+ * One model per server, so the answer applies to whatever the server lists. Lemonade does not
+ * proxy the route (its `/props` is the web UI), vLLM has none; both yield `null`.
+ */
+export interface ServerProps {
+  contextTokens: number | null;
+  vision: boolean | null;
+}
+
+/** `null` unless the payload is llama-server's `/props` shape — an HTML page or another JSON is not. */
+export function serverPropsFromPayload(payload: unknown): ServerProps | null {
+  if (payload == null || typeof payload !== 'object') {
+    return null;
+  }
+
+  const record = payload as Record<string, unknown>;
+  const settings = record.default_generation_settings;
+  const modalities = record.modalities;
+
+  if (
+    (settings == null || typeof settings !== 'object') &&
+    (modalities == null || typeof modalities !== 'object')
+  ) {
+    return null;
+  }
+
+  const vision = (modalities as Record<string, unknown> | undefined)?.vision;
+
+  return {
+    contextTokens: positiveInteger((settings as Record<string, unknown> | undefined)?.n_ctx),
+    vision: typeof vision === 'boolean' ? vision : null,
+  };
+}
+
+/**
+ * Names that belong only to models that read images, for a backend that publishes no capability
+ * (vLLM, Ollama's `/v1`, a llama-server whose `/props` could not be read). Short and specific: a
+ * false positive sends every image-description job to a model that answers with prose about a
+ * missing image, so a family that ships both sighted and blind sizes (Gemma 3's 1B) is left out
+ * unless the name says which.
+ */
+const VISION_NAME =
+  /(^|[^a-z])(vl|llava|pixtral|molmo|idefics|internvl|minicpm-v|smolvlm)([^a-z]|$)|vision|gemma-?3-(4b|12b|27b)|gemma-?4/i;
+
+/**
+ * Whether a served model reads images, from the best signal the backend gives: a `vision` label
+ * where labels are published at all (Lemonade — a labelled row without it cannot see), else the
+ * server's own `/props` (llama-server), else the name. Before 2026-09-30 only the label counted, so
+ * vLLM and llama.cpp reported no vision for any model.
+ */
+export function servedModelSeesImages(
+  model: { id: string; labels?: string[] },
+  props?: ServerProps | null,
+): boolean {
+  const labels = model.labels ?? [];
+
+  if (labels.length > 0) {
+    return labels.includes('vision');
+  }
+
+  if (props?.vision != null) {
+    return props.vision;
+  }
+
+  return VISION_NAME.test(model.id);
+}
+
 /** `nomic-embed-text` and `nomic-embed-text:latest` name the same Ollama model. */
 function sameBaseModel(a: string, b: string): boolean {
   const base = (id: string) => (id.endsWith(':latest') ? id.slice(0, -':latest'.length) : id);

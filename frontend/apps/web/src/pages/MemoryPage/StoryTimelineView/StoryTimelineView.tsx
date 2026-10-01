@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import { TimelineJsHost } from '@/components/TimelineJs';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import {
   Empty,
@@ -43,6 +44,7 @@ export function StoryTimelineView() {
 
   const [{ data, loading, loadingMore, hasNextPage, loadMore, error, refetch }, { setActiveEntity }] =
     useEntityService();
+  const fmt = useDateTimeFormat();
   const [focusId, setFocusId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -88,11 +90,11 @@ export function StoryTimelineView() {
     focusIndex,
   } = useMemo(
     () =>
-      buildMemoryTimelineData(data, new Date(), {
+      buildMemoryTimelineData(data, fmt, new Date(), {
         anchor: dateFiltered ? 'range-start' : 'now',
         focusId: dateFiltered ? null : focusId,
       }),
-    [data, dateFiltered, focusId],
+    [data, fmt, dateFiltered, focusId],
   );
 
   const filling = isTimelineFilling({

@@ -151,9 +151,14 @@ export interface Entity {
    * record is the set of them, not whichever arrived first.
    *
    * Values for a listed key are stored as a list of DISTINCT values in
-   * first-seen order (see persistence.ts mergeAccumulatedMetadata). Sources
+   * first-seen order (see staging/identity.ts mergeAccumulatedMetadata). Sources
    * should emit these keys as arrays so the shape is the same on the first
    * write as on the tenth, and should name them plurally to match.
+   *
+   * The declaration holds ACROSS imports too: it is kept on the staged row
+   * (`staged_entities.accumulate`), and the push unions these keys into the
+   * graph row an earlier import made instead of replacing them
+   * (graph/utils/ingestedProperties.ts).
    *
    * Unlisted keys keep the existing first-write-wins behavior.
    */

@@ -1,4 +1,5 @@
 import { zonedParts } from '@/components/HorizonGrid/zonedClock';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 /** The slice of a pending change the Plan card words. */
 export interface PendingChangeCopy {
@@ -34,12 +35,18 @@ function parseInstant(value: string | null | undefined): Date | null {
  * `Mon, Sep 28 at 4:00 PM` on `zone`'s clock, with the year only when it is
  * not this year there. The weekday is there because a proposal lands inside a
  * one-week window, where "which day" is the question and the date alone makes
- * the reader count.
+ * the reader count. The time is written in the person's hour cycle (`fmt`).
  *
  * `locale` is the viewer's by default, like every other clock on the schedule
  * surface; tests pin it.
  */
-export function formatSlot(instant: Date, zone: string, now: Date = new Date(), locale?: string): string {
+export function formatSlot(
+  instant: Date,
+  zone: string,
+  fmt: DateTimeFormatter,
+  now: Date = new Date(),
+  locale?: string,
+): string {
   const sameYear = zonedParts(instant, zone).year === zonedParts(now, zone).year;
   const day = new Intl.DateTimeFormat(locale, {
     timeZone: zone,
@@ -48,11 +55,7 @@ export function formatSlot(instant: Date, zone: string, now: Date = new Date(), 
     day: 'numeric',
     ...(sameYear ? {} : { year: 'numeric' }),
   }).format(instant);
-  const time = new Intl.DateTimeFormat(locale, {
-    timeZone: zone,
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(instant);
+  const time = fmt.time(instant, { timeZone: zone, hour: 'numeric', minute: '2-digit' }, locale);
 
   return `${day} at ${time}`;
 }
@@ -79,13 +82,14 @@ export function formatSlot(instant: Date, zone: string, now: Date = new Date(), 
 export function describePendingChange(
   change: PendingChangeCopy,
   zone: string,
+  fmt: DateTimeFormatter,
   now: Date = new Date(),
   locale?: string,
 ): string | null {
   const start = change.kind === 'schedule' ? parseInstant(change.startTime) : null;
 
   if (start) {
-    return `Place on the calendar on ${formatSlot(start, zone, now, locale)}?`;
+    return `Place on the calendar on ${formatSlot(start, zone, fmt, now, locale)}?`;
   }
 
   if (!change.rationale) {
@@ -95,6 +99,6 @@ export function describePendingChange(
   return change.rationale.replace(ISO_INSTANT, (match, at: string | undefined, iso: string) => {
     const instant = parseInstant(iso);
 
-    return instant ? `${at ? 'on ' : ''}${formatSlot(instant, zone, now, locale)}` : match;
+    return instant ? `${at ? 'on ' : ''}${formatSlot(instant, zone, fmt, now, locale)}` : match;
   });
 }

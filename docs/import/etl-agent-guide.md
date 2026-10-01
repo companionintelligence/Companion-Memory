@@ -1121,12 +1121,13 @@ already cleared (so the two must be disjoint), a `name` already NULL (so the
 migration is idempotent).
 
 The suite skips legibly when there is no database rather than failing every test
-on a connection error (`domains/__tests__/support/databaseConnection.ts`;
-`databaseAvailability()` prints the reason). Point it at a scratch database with
-the suite's own variable — `IMPORT_TEST_DATABASE_URL` for the import suites,
-`PIPELINE_TEST_DATABASE_URL`, `MEMORY_TEST_DATABASE_URL`, etc. Take the value
-from `make dburl`: the dev stack reallocates ports on every `up`, and a stale
-port reads as "no database".
+on a connection error (`domains/__tests__/support/databaseConnection.ts`; the
+end of the jest run lists every skipped file with its reason). Point it at a
+scratch database with the suite's own variable — `IMPORT_TEST_DATABASE_URL` for
+the import suites, `PIPELINE_TEST_DATABASE_URL`, `MEMORY_TEST_DATABASE_URL`,
+etc. Take the value from `make dburl`: the dev stack reallocates ports on every
+`up`, and a URL you set that nothing answers on now FAILS the suite, naming the
+variable, where it used to skip as "no database".
 
 ### 4.4 The commands
 

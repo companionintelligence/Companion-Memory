@@ -863,3 +863,236 @@ describe('Outlook desktop export', () => {
     expect(entities.map(legacyEntityIdentityKey)).toEqual(['5550100100', 'tom@example.com']);
   });
 });
+
+/**
+ * A fax is office equipment, and must never key a contact — the rule vcard.ts
+ * has followed since the office-line fix. Every contact below whose key moves
+ * keeps the key its existing row was minted under as its legacy key: the
+ * smallest handle, fax included, of the ones this parser read before. The
+ * push moves that row onto the new key instead of minting a second Person
+ * (push/legacyKeys.ts).
+ */
+describe('Fax numbers', () => {
+  /**
+   * Google writes each number's kind in the label column beside it. Read as an
+   * ordinary phone, Ana's work fax sorted below her mobile and keyed her, and
+   * Ben, whose only other handle is an email, keyed on the fax his custom label
+   * names, since digits sort before letters. The label is read per row:
+   * Castellanos's `Phone 1` is his work line, and his key stays. Each fax stays
+   * among its card's attributes, marked shared, which is what keeps it the
+   * legacy key.
+   */
+  it('passes over a number Google labels a fax, and keeps it as the legacy key', async () => {
+    const { entities, dropped } = await importCsv(
+      csvOf(GOOGLE_HEADER, [
+        {
+          'First Name': 'Ana',
+          'Last Name': 'Ruiz',
+          'Phone 1 - Label': 'Work Fax',
+          'Phone 1 - Value': '555-010-0110',
+          'Phone 2 - Label': 'Mobile',
+          'Phone 2 - Value': '555-010-0151',
+        },
+        {
+          'First Name': 'Ben',
+          'Last Name': 'Okafor',
+          'E-mail 1 - Value': 'ben.okafor@example.org',
+          'Phone 1 - Label': 'Office fax',
+          'Phone 1 - Value': '555-010-0111',
+        },
+        {
+          'Last Name': 'Castellanos',
+          'E-mail 1 - Value': 'castellanos@example.com',
+          'Phone 1 - Label': 'Work',
+          'Phone 1 - Value': '555-010-0112',
+        },
+      ]),
+    );
+
+    expect(dropped).toEqual([]);
+    expect(entities.map(entityIdentityKey)).toEqual(['5550100151', 'ben.okafor@example.org', '5550100112']);
+    expect(entities.map(legacyEntityIdentityKey)).toEqual(['5550100110', '5550100111', '5550100112']);
+    expect(phonesOf(entities[0]).map((phone) => [phone.value, phone.shared === true])).toEqual([
+      ['555-010-0110', true],
+      ['555-010-0151', false],
+    ]);
+  });
+
+  /** The older export names a number's kind in `Phone N - Type`. */
+  it("reads the older export's Phone N - Type the same way", async () => {
+    const { entities } = await importCsv(
+      csvOf(
+        [...LEGACY_GOOGLE_HEADER, 'Phone 2 - Type', 'Phone 2 - Value'],
+        [
+          {
+            Name: 'Dana Reyes',
+            'E-mail 1 - Value': 'dana@example.com',
+            'Phone 1 - Type': 'Home Fax',
+            'Phone 1 - Value': '555-010-0113',
+            'Phone 2 - Type': 'Mobile',
+            'Phone 2 - Value': '555-010-0153',
+          },
+        ],
+      ),
+    );
+
+    expect(entities.map(entityIdentityKey)).toEqual(['5550100153']);
+    expect(entities.map(legacyEntityIdentityKey)).toEqual(['5550100113']);
+  });
+
+  /**
+   * Whether a number is a fax is decided for the export, not the card. Ana's
+   * two copies of her card disagree about the office fax, as real duplicates
+   * do: one labels it a fax, the other `Work`. Her brother Luis lists it as
+   * `Work` too. All three keyed on it and staged as ONE entity. The shared-line
+   * rule cannot part them, because a shared surname is no evidence of two
+   * people. The fax rule does, because a fax keys no one, and Ana's copies still
+   * agree with each other. All three keep the fax as their legacy key, so the
+   * push can hand the row minted under it to the Ana it is named after.
+   */
+  it('treats a number as a fax on every card once one card labels it so', async () => {
+    const { entities } = await importCsv(
+      csvOf(GOOGLE_HEADER, [
+        {
+          'First Name': 'Ana',
+          'Last Name': 'Ruiz',
+          'E-mail 1 - Value': 'ana.ruiz@example.com',
+          'Phone 1 - Label': 'Work Fax',
+          'Phone 1 - Value': '555-010-0114',
+        },
+        {
+          'First Name': 'Ana',
+          'Last Name': 'Ruiz',
+          'E-mail 1 - Value': 'ana.ruiz@example.com',
+          'Phone 1 - Label': 'Work',
+          'Phone 1 - Value': '(555) 010-0114',
+        },
+        {
+          'First Name': 'Luis',
+          'Last Name': 'Ruiz',
+          'Phone 1 - Label': 'Work',
+          'Phone 1 - Value': '555-010-0114',
+          'Phone 2 - Label': 'Mobile',
+          'Phone 2 - Value': '555-010-0160',
+        },
+      ]),
+    );
+
+    expect(entities.map(entityIdentityKey)).toEqual([
+      'ana.ruiz@example.com',
+      'ana.ruiz@example.com',
+      '5550100160',
+    ]);
+    expect(entities.map(legacyEntityIdentityKey)).toEqual(['5550100114', '5550100114', '5550100114']);
+  });
+
+  /**
+   * A card whose only number is a fax keys on its name, as a vCard does: the
+   * fax says nothing about who the card is. The fax is still an attribute, so
+   * the card is kept and the fax is still its legacy key.
+   */
+  it('keys a named card whose only number is a fax on its name, with the fax as its legacy key', async () => {
+    const { entities, dropped } = await importCsv(
+      csvOf(GOOGLE_HEADER, [
+        {
+          'Organization Name': 'Harbor Plumbing',
+          'Phone 1 - Label': 'Work Fax',
+          'Phone 1 - Value': '555-010-0115',
+        },
+      ]),
+    );
+
+    expect(dropped).toEqual([]);
+    expect(entities.map((e) => e.name)).toEqual(['Harbor Plumbing']);
+    expect(entities.map(entityIdentityKey)).toEqual([null]);
+    expect(entities.map(legacyEntityIdentityKey)).toEqual(['5550100115']);
+  });
+
+  /**
+   * With no name either, the smallest fax stays the key: a key the card may
+   * share still beats none, which the push drops an entity for. Nothing moves.
+   */
+  it('leaves a nameless card whose every number is a fax keyed on its smallest fax', async () => {
+    const { entities } = await importCsv(
+      csvOf(GOOGLE_HEADER, [
+        {
+          'Phone 1 - Label': 'Work Fax',
+          'Phone 1 - Value': '555-010-0117',
+          'Phone 2 - Label': 'Home Fax',
+          'Phone 2 - Value': '555-010-0116',
+        },
+      ]),
+    );
+
+    expect(entities.map(entityIdentityKey)).toEqual(['5550100116']);
+    expect(entities.map(legacyEntityIdentityKey)).toEqual(['5550100116']);
+  });
+
+  /**
+   * Outlook files a fax under `Business Fax`, `Home Fax` or `Other Fax`, and
+   * this parser reads none of them as a phone. A number in one is still a fax on
+   * every row. Tom files the office fax as his `Other Phone`, which keyed him on
+   * it. Kofi runs his home office on one line and files it as both his `Home
+   * Phone` and his `Home Fax`, so his key moves to his email as well. Priya's
+   * fax is in no phone column: it keys no one and is no attribute of hers, as
+   * before.
+   */
+  it("takes Outlook's fax columns as evidence without reading them as phones", async () => {
+    const { entities } = await importCsv(
+      csvOf(OUTLOOK_HEADER, [
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Priya',
+          'Last Name': 'Natarajan',
+          'E-mail Address': 'priya@example.com',
+          'Business Fax': '555-010-0118',
+          'Business Phone': '555-010-0119',
+        },
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Tom',
+          'Last Name': 'Becker',
+          'E-mail Address': 'tom@example.com',
+          'Other Phone': '555-010-0118',
+        },
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Kofi',
+          'Last Name': 'Mensah',
+          'E-mail Address': 'kofi@example.org',
+          'Home Phone': '555-010-0121',
+          'Home Fax': '555-010-0121',
+        },
+      ]),
+    );
+
+    expect(entities.map(entityIdentityKey)).toEqual(['5550100119', 'tom@example.com', 'kofi@example.org']);
+    expect(entities.map(legacyEntityIdentityKey)).toEqual(['5550100119', '5550100118', '5550100121']);
+    expect(phonesOf(entities[0]).map((phone) => phone.value)).toEqual(['555-010-0119']);
+  });
+
+  /**
+   * The fax pass reads every well-formed row, including one the usefulness
+   * filter then drops. An Outlook row holding only a company's fax has no name
+   * this dialect reads and no attribute but Outlook's `0/0/00` birthday, so it
+   * is not imported, but its fax is still a fax on Lena's card.
+   */
+  it('counts a fax stated on a row too thin to import', async () => {
+    const { entities, dropped } = await importCsv(
+      csvOf(OUTLOOK_HEADER, [
+        { ...OUTLOOK_BLANKS, Company: 'Harbor Plumbing', 'Business Fax': '555-010-0120' },
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Lena',
+          'Last Name': 'Ortiz',
+          'Business Phone': '555-010-0120',
+          'Mobile Phone': '555-010-0170',
+        },
+      ]),
+    );
+
+    expect(dropped).toEqual(['insufficient_attributes']);
+    expect(entities.map(entityIdentityKey)).toEqual(['5550100170']);
+    expect(entities.map(legacyEntityIdentityKey)).toEqual(['5550100120']);
+  });
+});

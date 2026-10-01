@@ -46,11 +46,13 @@ import { SignupCodeService } from '../services/SignupCodeService';
  * creates the account it admits — or, for a browser sign-in, before the confirmation page.
  *
  * Each race forces the interleaving rather than hoping for it ({@link forceRace}): every racer
- * waits at the look-up until all have seen the code unused, and again inside its own account's
- * transaction, at the redemption, until all are there with their account rows written. The one
- * that redeems the code then holds its transaction open until the others are seen WAITING ON ITS
- * ROW LOCK — which is what proves the redemption serialized them, and did not merely happen to run
- * one after the other.
+ * waits at the look-up until all have seen the code unused, and again at the redemption. Inside an
+ * account's transaction the first racer there waits until every other one is seen QUEUED ON A LOCK
+ * behind it — every account creation takes the claim lock — so a pass means the redemption was
+ * serialized with the account it pays for, not that the racers merely happened to run one after the
+ * other. The browser flow redeems outside any transaction; there every racer reaches the redemption
+ * and they go on together, so the one statement alone decides. The row lock that statement takes is
+ * exercised directly, with two transactions held open by hand.
  *
  * ── Why a database of its own ─────────────────────────────────────────────
  *
@@ -130,21 +132,15 @@ const mintedIntent = (res: FakeResponse) => res.cookie.mock.calls.some(([name]) 
 interface RaceLineUp {
   /** The look-up (`findOne`): had every racer seen the code unused before any went on? */
   codeCheck: 'waiting' | 'all answered' | 'gave up';
-  /** The redemption (`consume`): had every racer reached it before any redeemed? */
-  redemption: 'waiting' | 'all arrived' | 'gave up';
   /**
-   * Only where the redemption runs inside an account's transaction: what the others were doing
-   * while the racer that redeemed the code held that transaction open.
+   * The redemption (`consume`), as the first racer there found the rest: there too — only possible
+   * where nothing serializes them — or queued on a lock behind it.
    */
-  whileRedeemed?: 'the others waited on its row lock' | 'another redemption returned first' | 'gave up';
+  redemption: 'waiting' | 'all arrived' | 'the others queued on a lock' | 'gave up';
 }
 
-/** A race the redemption serialized, inside the transactions creating the accounts. */
-const SERIALIZED: RaceLineUp = {
-  codeCheck: 'all answered',
-  redemption: 'all arrived',
-  whileRedeemed: 'the others waited on its row lock',
-};
+/** A race serialized with the transactions creating the accounts. */
+const SERIALIZED: RaceLineUp = { codeCheck: 'all answered', redemption: 'the others queued on a lock' };
 
 const quietLogger = () => ({
   setContext: jest.fn(),
@@ -261,20 +257,25 @@ describeWithDatabase(`signup-code redemption, against real Postgres (${availabil
   const RENDEZVOUS_BOUND_MS = 10_000;
 
   /**
-   * Sessions in this (scratch) database waiting for a row another transaction has locked: on that
-   * transaction's id, or — queued behind another waiter — on the row's tuple lock.
+   * Sessions in this (scratch) database waiting on a lock another transaction holds — of the given
+   * kinds (`pg_stat_activity.wait_event`), or of any kind. A row lock is waited on as `transactionid`
+   * (the holder's transaction) or, queued behind another waiter, `tuple`; the claim lock as
+   * `advisory`.
    */
-  const waitingOnRowLocks = async (): Promise<number> => {
+  const waitingOnLocks = async (kinds: string[] | null = null): Promise<number> => {
     const [row] = (await dataSource.query(
       `SELECT count(*)::int AS waiting
          FROM pg_stat_activity
         WHERE datname = current_database()
           AND wait_event_type = 'Lock'
-          AND wait_event IN ('transactionid', 'tuple')`,
+          AND ($1::text[] IS NULL OR wait_event = ANY ($1::text[]))`,
+      [kinds],
     )) as Array<{ waiting: number }>;
 
     return row.waiting;
   };
+
+  const waitingOnRowLocks = () => waitingOnLocks(['transactionid', 'tuple']);
 
   /** Resolve once `condition` holds; fail the case if it never does. */
   const eventually = async (condition: () => Promise<boolean>, what: string): Promise<void> => {
@@ -327,11 +328,11 @@ describeWithDatabase(`signup-code redemption, against real Postgres (${availabil
    *  1. The look-up (`findOne`). Every racer gets its answer before any goes on, so all of them have
    *     seen the code unused — the interleaving that let one invitation admit two people while that
    *     answer was the one acted on.
-   *  2. The redemption (`consume`) — inside each racer's own account transaction, where there is one,
-   *     so every racer's account row is already written when they all go on together. There the racer
-   *     that redeems the code holds its transaction open until every other racer is WAITING ON ITS ROW
-   *     LOCK, and {@link RaceLineUp.whileRedeemed} records whether they were — or whether another
-   *     redemption returned first, which only an unserialized redemption can do.
+   *  2. The redemption (`consume`). The first racer there waits until every other one is there too,
+   *     or QUEUED ON A LOCK — inside an account's transaction, the claim lock every account creation
+   *     takes, which holds the rest back until this racer's account and redemption have committed or
+   *     rolled back. {@link RaceLineUp.redemption} records which, so a pass means "serialized" and
+   *     not "happened not to overlap".
    *
    * Both are bounded, so a path that never reaches one fails its assertion instead of hanging.
    */
@@ -358,44 +359,40 @@ describeWithDatabase(`signup-code redemption, against real Postgres (${availabil
 
     // ── 2. the redemption ──
     const redeem = signupCodeService.consume.bind(signupCodeService);
-    const atRedemption = rendezvous(
-      racers,
-      () => (lineUp.redemption = 'all arrived'),
-      () => (lineUp.redemption = 'gave up'),
-    );
-    let returned = 0;
+    let atRedemption = 0;
 
     spies.push(
       jest.spyOn(signupCodeService, 'consume').mockImplementation(async (code, manager?: EntityManager) => {
-        await atRedemption();
+        if (lineUp.redemption === 'waiting') {
+          atRedemption += 1;
 
-        const redeemed = await redeem(code, manager);
+          const deadline = Date.now() + RENDEZVOUS_BOUND_MS;
 
-        returned += 1;
+          while (lineUp.redemption === 'waiting') {
+            const queued = await waitingOnLocks();
 
-        if (!redeemed || manager?.queryRunner?.isTransactionActive !== true || lineUp.whileRedeemed != null) {
-          return redeemed;
-        }
+            // Counted AFTER the query, and only acted on if no other racer settled it meanwhile: a
+            // racer can arrive while the query runs, and "0 queued of 0 still elsewhere" is not
+            // serialization.
+            const elsewhere = racers - atRedemption;
 
-        const deadline = Date.now() + RENDEZVOUS_BOUND_MS;
+            if (lineUp.redemption !== 'waiting') {
+              break;
+            }
 
-        while (lineUp.whileRedeemed == null) {
-          const waiting = await waitingOnRowLocks();
-
-          // Read AFTER the query: a racer can return while it runs, and one that has returned is not
-          // waiting on anything.
-          if (returned > 1) {
-            lineUp.whileRedeemed = 'another redemption returned first';
-          } else if (waiting >= racers - 1) {
-            lineUp.whileRedeemed = 'the others waited on its row lock';
-          } else if (Date.now() > deadline) {
-            lineUp.whileRedeemed = 'gave up';
-          } else {
-            await new Promise((resolve) => setTimeout(resolve, 10));
+            if (elsewhere <= 0) {
+              lineUp.redemption = 'all arrived';
+            } else if (queued >= elsewhere) {
+              lineUp.redemption = 'the others queued on a lock';
+            } else if (Date.now() > deadline) {
+              lineUp.redemption = 'gave up';
+            } else {
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
           }
         }
 
-        return redeemed;
+        return redeem(code, manager);
       }),
     );
 
@@ -679,7 +676,8 @@ describeWithDatabase(`signup-code redemption, against real Postgres (${availabil
 
     it('web: sends exactly one of two sign-ins presenting the same code on to the confirmation', async () => {
       // The browser flow redeems at the callback, before the confirmation page — outside any account
-      // transaction, so there is no transaction to hold open, but the one statement still decides.
+      // transaction, so nothing holds the racers apart there: they arrive together, and the one
+      // statement decides.
       const owner = await claimedWithCodesRequired();
       const { signup_code: code } = await signupCodeService.create();
       const race = forceRace(2);

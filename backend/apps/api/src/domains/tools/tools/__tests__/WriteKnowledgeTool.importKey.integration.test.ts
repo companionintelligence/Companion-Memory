@@ -540,4 +540,332 @@ describeWithDb(`WriteKnowledgeTool on an imported entity (${availability.target}
       ]);
     });
   });
+
+  describe('relationship.update retyping an edge onto a type the two entities already have', () => {
+    // Retyping the imported KNOWS to FRIENDS_WITH moves it onto the coordinate the
+    // imported FRIENDS_WITH holds, and relationships_unique_directed_idx allows
+    // one active edge there. The tool used to queue that write and report
+    // "Updated relationship"; flush() — the listener's write — then threw
+    // `duplicate key value violates unique constraint
+    // "relationships_unique_directed_idx"`, which in production dead-letters.
+    const SAM = { ...ALEX, key: 'google-contacts:contact:sam@example.com', name: 'Sam Lee', properties: {} };
+
+    /** Import Alex and Sam with an edge of each type from Alex to Sam. */
+    const importPair = async (types: string[]) => {
+      const result = await ingest.ingest(context, {
+        entities: [ALEX, SAM],
+        relationships: types.map((type) => ({
+          fromKey: ALEX.key,
+          toKey: SAM.key,
+          type,
+          properties: { source: 'google-contacts' },
+        })),
+      });
+      expect(result.errors).toEqual([]);
+      const [alexId, samId] = [ALEX.key, SAM.key].map(
+        (key) => result.entities.find((e) => e.key === key)!.entityId,
+      );
+
+      return { alexId, samId };
+    };
+
+    /** Alex's active edges to Sam by type — sorted here: the database's collation is not the test's. */
+    const edgesByType = async (alexId: string, samId: string) => {
+      const rows: Array<{
+        relationship_id: string;
+        relationship_type: string;
+        strength: number;
+        properties: object;
+      }> = await runner.query(
+        `SELECT relationship_id, relationship_type, strength, properties
+             FROM ci.relationships
+            WHERE from_entity_id = $1 AND to_entity_id = $2 AND is_active`,
+        [alexId, samId],
+      );
+
+      return Object.fromEntries(rows.map((edge) => [edge.relationship_type, edge]));
+    };
+
+    it('refuses the retype, names the FRIENDS_WITH edge already there, and writes nothing', async () => {
+      const { alexId, samId } = await importPair(['KNOWS', 'FRIENDS_WITH']);
+      const before = await edgesByType(alexId, samId);
+
+      const written = await tool.execute(context, {
+        operations: [
+          {
+            kind: 'relationship.update',
+            relationshipId: before.KNOWS.relationship_id,
+            relationshipType: 'friends with',
+            properties: { context: 'dentist' },
+          },
+        ],
+      });
+      await flush();
+
+      expect(written.data).toMatchObject({ updatedRelationships: 0, failures: 1 });
+      expect(written.data?.results[0].message).toContain(
+        `relationship ${before.FRIENDS_WITH.relationship_id} already is one between the same entities`,
+      );
+      expect(await edgesByType(alexId, samId)).toEqual(before);
+    });
+
+    it('the write the tool used to queue for that call now stops when it lands — named, not on the index', async () => {
+      // Field for field the payload relationship.update sent before the check.
+      const { alexId, samId } = await importPair(['KNOWS', 'FRIENDS_WITH']);
+      const before = await edgesByType(alexId, samId);
+
+      await graphEvents.upsertRelationship(owner, {
+        relationshipId: before.KNOWS.relationship_id,
+        fromEntityId: alexId,
+        toEntityId: samId,
+        relationshipType: 'FRIENDS_WITH',
+        properties: { context: 'dentist' },
+        mergeProperties: true,
+      });
+
+      await expect(flush()).rejects.toThrow(
+        `Relationship ${before.KNOWS.relationship_id} cannot become ${alexId} -[FRIENDS_WITH]-> ${samId}: ` +
+          `relationship ${before.FRIENDS_WITH.relationship_id} is already the active edge there`,
+      );
+      // Reading at all proves the transaction survived: the index would have aborted it.
+      expect(await edgesByType(alexId, samId)).toEqual(before);
+    });
+
+    it('an import that lands FRIENDS_WITH while the retype is still queued stops the write the same way', async () => {
+      const { alexId, samId } = await importPair(['KNOWS']);
+      const { KNOWS: knows } = await edgesByType(alexId, samId);
+
+      const written = await tool.execute(context, {
+        operations: [
+          {
+            kind: 'relationship.update',
+            relationshipId: knows.relationship_id,
+            relationshipType: 'FRIENDS_WITH',
+          },
+        ],
+      });
+      // Nothing held FRIENDS_WITH when the tool looked.
+      expect(written.data).toMatchObject({ updatedRelationships: 1, failures: 0 });
+
+      await importPair(['KNOWS', 'FRIENDS_WITH']);
+      const before = await edgesByType(alexId, samId);
+
+      await expect(flush()).rejects.toThrow(
+        `relationship ${before.FRIENDS_WITH.relationship_id} is already the active edge there`,
+      );
+      expect(await edgesByType(alexId, samId)).toEqual(before);
+    });
+
+    it('retypes the edge when nothing holds the new type, keeping its strength and properties', async () => {
+      const { alexId, samId } = await importPair(['KNOWS']);
+      const { KNOWS: knows } = await edgesByType(alexId, samId);
+      await runner.query(`UPDATE ci.relationships SET strength = 0.4 WHERE relationship_id = $1`, [
+        knows.relationship_id,
+      ]);
+
+      const written = await tool.execute(context, {
+        operations: [
+          {
+            kind: 'relationship.update',
+            relationshipId: knows.relationship_id,
+            relationshipType: 'friends_with',
+            properties: { context: 'dentist' },
+          },
+        ],
+      });
+      await flush();
+
+      expect(written.data).toMatchObject({ updatedRelationships: 1, failures: 0 });
+      expect(await edgesByType(alexId, samId)).toEqual({
+        FRIENDS_WITH: {
+          relationship_id: knows.relationship_id,
+          relationship_type: 'FRIENDS_WITH',
+          strength: 0.4,
+          properties: { source: 'google-contacts', context: 'dentist' },
+        },
+      });
+    });
+  });
+
+  describe('a node write onto a linked key another entity holds', () => {
+    // entities_linked_uniq allows one of an owner's rows per (entity_type,
+    // linked_table, linked_id), and it is partial on linked_table alone, so a
+    // forgotten or merged-away row still holds its key. A card an older parser
+    // filed as a Concept and a later import filed as a Person are twins on one
+    // linked key (20260819092314_retype_contact_sourced_concepts_as_people.sql).
+    // "This Concept is really a Person" was queued and answered "Updated
+    // entity"; flush() — the listener's write — then threw `duplicate key value
+    // violates unique constraint "entities_linked_uniq"`, which in production
+    // dead-letters.
+    const LINKED_ID = GraphIngestService.linkedIdFor(ALEX.key);
+    const HELD = `the Person linked to import:google-contacts record ${LINKED_ID}`;
+
+    /** Import ALEX as the Concept an older parser filed him as — and, unless `withPerson` is false, as a Person too. */
+    const importTwins = async (withPerson = true) => {
+      const concept = await ingest.ingest(context, {
+        entities: [{ ...ALEX, entityType: 'Concept' }],
+        relationships: [],
+      });
+      expect(concept.errors).toEqual([]);
+
+      return {
+        conceptId: concept.entities[0].entityId,
+        personId: withPerson ? await importAlex() : '',
+      };
+    };
+
+    const forget = (entityId: string) =>
+      runner.query(`UPDATE ci.entities SET is_active = false WHERE entity_id = $1`, [entityId]);
+
+    it('control: the retype as createOrUpdateNode used to write it — load, assign, save() — violates the index', async () => {
+      const { conceptId } = await importTwins();
+      const nodes = runner.manager.getRepository(GraphNodeEntity);
+
+      const concept = await nodes.findOneOrFail({ where: { entity_id: conceptId } });
+      concept.entity_type = 'Person';
+
+      await expect(nodes.save(concept)).rejects.toThrow('entities_linked_uniq');
+    });
+
+    it('control: a forgotten Person twin holds the key just the same', async () => {
+      const { conceptId, personId } = await importTwins();
+      await forget(personId);
+
+      await expect(
+        runner.query(`UPDATE ci.entities SET entity_type = 'Person' WHERE entity_id = $1`, [conceptId]),
+      ).rejects.toThrow('entities_linked_uniq');
+    });
+
+    it('refuses the retype, names the Person already on the key and what to do instead, and writes nothing', async () => {
+      const { conceptId, personId } = await importTwins();
+      const before = [await row(conceptId), await row(personId)];
+
+      const written = await tool.execute(context, {
+        operations: [
+          {
+            kind: 'entity.update',
+            entityId: conceptId,
+            entityType: 'Person',
+            properties: { occupation: 'dentist' },
+          },
+        ],
+      });
+      await flush();
+
+      expect(written.data).toMatchObject({ updatedNodes: 0, failures: 1 });
+      expect(written.data?.results[0].message).toBe(
+        `Entity ${conceptId} cannot become ${HELD}: entity ${personId} already is. Update ${personId} instead, ` +
+          `and forget ${conceptId} (memory.forget) if it is a duplicate of ${personId}.`,
+      );
+      expect([await row(conceptId), await row(personId)]).toEqual(before);
+    });
+
+    it('the write the tool used to queue for that call now stops when it lands — named, not on the index', async () => {
+      // Field for field the payload entity.update sent before the check.
+      const { conceptId, personId } = await importTwins();
+      const before = [await row(conceptId), await row(personId)];
+
+      await graphEvents.upsertNode(owner, {
+        entityId: conceptId,
+        entityType: 'Person',
+        properties: { occupation: 'dentist' },
+        mergeProperties: true,
+      });
+
+      await expect(flush()).rejects.toThrow(
+        `Entity ${conceptId} cannot become ${HELD}: entity ${personId} already is`,
+      );
+      // Reading at all proves the transaction survived: the index would have aborted it.
+      expect([await row(conceptId), await row(personId)]).toEqual(before);
+    });
+
+    it('an import that lands the Person while the retype is still queued stops the write the same way', async () => {
+      const { conceptId } = await importTwins(false);
+
+      const written = await tool.execute(context, {
+        operations: [{ kind: 'entity.update', entityId: conceptId, entityType: 'Person' }],
+      });
+      // Nothing held the Person's key when the tool looked.
+      expect(written.data).toMatchObject({ updatedNodes: 1, failures: 0 });
+
+      const personId = await importAlex();
+      const before = [await row(conceptId), await row(personId)];
+
+      await expect(flush()).rejects.toThrow(
+        `Entity ${conceptId} cannot become ${HELD}: entity ${personId} already is`,
+      );
+      expect([await row(conceptId), await row(personId)]).toEqual(before);
+    });
+
+    it('a forgotten Person twin still holds the key: the tool refuses the retype, and so does the write', async () => {
+      const { conceptId, personId } = await importTwins();
+      await forget(personId);
+      const before = await row(conceptId);
+
+      const written = await tool.execute(context, {
+        operations: [{ kind: 'entity.update', entityId: conceptId, entityType: 'Person' }],
+      });
+      expect(written.data).toMatchObject({ updatedNodes: 0, failures: 1 });
+      expect(written.data?.results[0].message).toContain(
+        `entity ${personId} still is, although it has been forgotten or merged into another entity`,
+      );
+
+      await graphEvents.upsertNode(owner, { entityId: conceptId, entityType: 'Person' });
+      await expect(flush()).rejects.toThrow(`entity ${personId} already is, although it is no longer active`);
+      expect(await row(conceptId)).toEqual(before);
+    });
+
+    it('retypes the Concept when no Person holds its key, and the next Person import then finds it', async () => {
+      const { conceptId } = await importTwins(false);
+
+      const written = await tool.execute(context, {
+        operations: [
+          {
+            kind: 'entity.update',
+            entityId: conceptId,
+            entityType: 'Person',
+            properties: { occupation: 'dentist' },
+          },
+        ],
+      });
+      await flush();
+
+      expect(written.data).toMatchObject({ updatedNodes: 1, failures: 0 });
+      expect(await row(conceptId)).toMatchObject({
+        entity_type: 'Person',
+        linked_table: 'import:google-contacts',
+        linked_id: LINKED_ID,
+        properties: { ...ALEX.properties, occupation: 'dentist' },
+      });
+      expect(await importAlex()).toBe(conceptId);
+    });
+
+    it("entity.create refuses a new entity on the imported Person's key, and the insert it used to queue stops by name", async () => {
+      const personId = await importAlex();
+      const newAlex = {
+        entityType: 'Person',
+        name: 'Alex R.',
+        linkedTable: 'import:google-contacts',
+        linkedId: LINKED_ID,
+      };
+
+      const written = await tool.execute(context, { operations: [{ kind: 'entity.create', ...newAlex }] });
+      await flush();
+
+      expect(written.data).toMatchObject({ createdNodes: 0, failures: 1 });
+      expect(written.data?.results[0].message).toContain(
+        `Cannot create ${HELD}: entity ${personId} already is.`,
+      );
+
+      await graphEvents.upsertNode(owner, newAlex);
+      await expect(flush()).rejects.toThrow(`cannot become ${HELD}: entity ${personId} already is`);
+
+      const onTheKey = await runner.query(
+        `SELECT entity_id FROM ci.entities
+          WHERE owner_user_id = $1 AND linked_table = 'import:google-contacts' AND linked_id = $2`,
+        [owner, LINKED_ID],
+      );
+      expect(onTheKey).toEqual([{ entity_id: personId }]);
+    });
+  });
 });

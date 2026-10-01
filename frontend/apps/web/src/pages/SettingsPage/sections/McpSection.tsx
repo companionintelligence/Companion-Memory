@@ -31,6 +31,8 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { useAuth, useCurrentUser } from '@/hooks';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 type McpTransport = 'stdio' | 'http';
 type McpConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -445,14 +447,14 @@ function connectionLabel(status: McpConnectionStatus): string {
   }
 }
 
-function formatDateTime(value: string | undefined | null): string | null {
+function formatDateTime(value: string | undefined | null, fmt: DateTimeFormatter): string | null {
   if (!value) {
     return null;
   }
 
   const date = new Date(value);
 
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? value : fmt.dateTime(date);
 }
 
 interface EnvRowsEditorProps {
@@ -659,6 +661,7 @@ function AuthFieldsEditor({ auth, onChange }: AuthFieldsEditorProps) {
 export function McpSection() {
   const { t } = useTranslation();
   const [{ authToken }] = useAuth();
+  const fmt = useDateTimeFormat();
 
   /**
    * Every route that CHANGES a server config is admin-gated server-side (`AdminOnlyGuard` on
@@ -1140,7 +1143,7 @@ export function McpSection() {
                               {connectionLabel(server.connectionStatus)}
                             </span>
                             {server.lastConnectedAt && (
-                              <span>Last connected {formatDateTime(server.lastConnectedAt)}</span>
+                              <span>Last connected {formatDateTime(server.lastConnectedAt, fmt)}</span>
                             )}
                           </div>
                           {server.lastError && (

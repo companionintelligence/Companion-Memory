@@ -283,6 +283,10 @@ export function toGraphEntity(staged: StagedEntity): GraphEntityInputDto | null 
     name: usableName ?? handle ?? null,
     sourceSystem: staged.dataSource ?? 'unknown',
     properties,
+    // The parser's own statement of which keys are sets. A re-import unions
+    // them into the graph row instead of replacing them — see
+    // GraphIngestService's property merge.
+    ...(staged.accumulate?.length ? { accumulate: [...staged.accumulate] } : {}),
   };
 }
 

@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from .config import resolve_embedding_api_base, resolve_embedding_api_key, settings
+from .config import resolve_embedding_api_key, resolve_embedding_target, settings
 from .llm_config import LLMConfig, run_agent_sync
 
 MAX_HOURLY_PROMPT_CHARS = 24_000
@@ -713,12 +713,14 @@ def generate_embedding(llm_config: LLMConfig, text: str) -> list[float]:
         return []
 
     try:
-        embedding_base = resolve_embedding_api_base(settings.llm_api_base)
+        embedding_base, embedding_model = resolve_embedding_target(
+            settings.llm_api_base
+        )
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
                 f"{embedding_base}/embeddings",
                 json={
-                    "model": settings.embedding_model,
+                    "model": embedding_model,
                     "input": text[:8000],  # Limit input size
                 },
                 headers={

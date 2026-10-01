@@ -15,6 +15,8 @@ import {
 } from 'recharts';
 
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import { FoldBody, FoldCard, FoldTrigger, cardPad, usePhone } from './Fold';
 import { categoryChartColor, categoryLabel } from './jobCategories';
@@ -57,8 +59,12 @@ type ChartKey = (typeof CHARTS)[number]['key'];
 
 export function JobHistoryCharts({ data, loading, error, windowHours, onWindowChange, queue }: Props) {
   const phone = usePhone();
+  const fmt = useDateTimeFormat();
   const [activeChart, setActiveChart] = useState<ChartKey>('backlog');
-  const points = useMemo(() => (data?.points ?? []).map(toChartPoint), [data?.points]);
+  const points = useMemo(
+    () => (data?.points ?? []).map((point) => toChartPoint(point, fmt)),
+    [data?.points, fmt],
+  );
 
   const hasThroughput = points.some((point) => point.completed > 0 || point.failed > 0);
   const hasBacklog = points.some((point) => point.backlog > 0);
@@ -280,15 +286,16 @@ export function JobHistoryCharts({ data, loading, error, windowHours, onWindowCh
  */
 function CategoryVolumeChart({ windowHours }: { windowHours: number }) {
   const { data, loading, error } = useJobCategoryHistory(windowHours);
+  const fmt = useDateTimeFormat();
 
   const categories = data?.categories ?? [];
   const points = useMemo(
     () =>
       (data?.points ?? []).map((point) => ({
-        label: bucketLabel(point.at),
+        label: bucketLabel(point.at, fmt),
         ...point.counts,
       })),
-    [data?.points],
+    [data?.points, fmt],
   );
 
   // Summed off the response rather than the flattened chart rows: those carry a
@@ -417,22 +424,22 @@ type ChartPoint = {
 };
 
 /** One bucket's x-axis label. Shared, so the two charts' axes cannot disagree. */
-function bucketLabel(at: string): string {
+function bucketLabel(at: string, fmt: DateTimeFormatter): string {
   const date = new Date(at);
 
   return Number.isNaN(date.getTime())
     ? '—'
-    : new Intl.DateTimeFormat(undefined, {
+    : fmt.dateTime(date, {
         month: 'short',
         day: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
-      }).format(date);
+      });
 }
 
-function toChartPoint(point: JobHistoryPoint): ChartPoint {
+function toChartPoint(point: JobHistoryPoint, fmt: DateTimeFormatter): ChartPoint {
   return {
-    label: bucketLabel(point.at),
+    label: bucketLabel(point.at, fmt),
     pending: point.pending,
     active: point.active,
     retry: point.retry,

@@ -38,6 +38,7 @@ import {
   usePreventOverscroll,
   useStatusBarScrollToTop,
 } from '@/hooks';
+import { DateTimeFormatProvider } from '@/hooks/useDateTimeFormat';
 import { Centered as CenteredLayout, Main as MainLayout } from '@/layouts';
 import { CHAT_BASE, chatThreadPath } from '@/pages/ChatPage/chatPaths';
 import DesktopSignInPage from '@/pages/DesktopSignInPage';
@@ -190,7 +191,11 @@ function Providers({ children }: { children: ReactNode }) {
                     <ModelProvider args={[]}>
                       <CaptureModalProvider args={[]}>
                         <ApolloProvider>
-                          <PowerSyncBoundary>{children}</PowerSyncBoundary>
+                          {/* Inside Apollo: it reads the signed-in person's time format and
+                              timezone, and hands every page the formatters that apply them. */}
+                          <DateTimeFormatProvider>
+                            <PowerSyncBoundary>{children}</PowerSyncBoundary>
+                          </DateTimeFormatProvider>
                         </ApolloProvider>
                       </CaptureModalProvider>
                     </ModelProvider>

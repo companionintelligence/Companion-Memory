@@ -1,5 +1,6 @@
 import { Badge, Button, Card } from '@ci/shadcn';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { appLabel } from '@/lib/appLabel';
 
 import type { ApprovalReason, PendingApproval } from './useApprovals';
@@ -37,6 +38,7 @@ interface Props {
 }
 
 export function ApprovalCard({ action, onAnswer, busy = false }: Props) {
+  const fmt = useDateTimeFormat();
   const expires = action.expiresAt ? new Date(action.expiresAt) : null;
 
   return (
@@ -71,7 +73,7 @@ export function ApprovalCard({ action, onAnswer, busy = false }: Props) {
 
       <div className="flex items-center justify-between gap-3">
         <span className="text-xs text-muted-foreground">
-          {expires ? `Expires ${expires.toLocaleString()}` : 'No expiry'}
+          {expires ? `Expires ${fmt.dateTime(expires)}` : 'No expiry'}
         </span>
         <div className="flex gap-2">
           {/* Decline first, and not styled as the destructive action: the

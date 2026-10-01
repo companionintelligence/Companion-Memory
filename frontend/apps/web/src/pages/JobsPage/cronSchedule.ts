@@ -11,6 +11,8 @@
 // NOTE: these are line comments deliberately. A cron step like `*/15` closes a
 // block comment early, which is a genuinely confusing build error to chase.
 
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
+
 export interface CronSchedule {
   /** How often it repeats — "Every 15 min", "Hourly", "Daily". */
   readonly frequency: string;
@@ -22,7 +24,7 @@ export interface CronSchedule {
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-export function describeCronExpression(raw: string | null | undefined): CronSchedule {
+export function describeCronExpression(raw: string | null | undefined, fmt: DateTimeFormatter): CronSchedule {
   const expression = (raw ?? '').trim();
   const parts = expression.split(/\s+/).filter(Boolean);
 
@@ -73,7 +75,7 @@ export function describeCronExpression(raw: string | null | undefined): CronSche
     return done('Hourly', atMinutes(minute));
   }
 
-  const time = `${pad(hour)}:${pad(minute)}`;
+  const time = clockOf(hour, minute, fmt);
 
   if (dayOfWeek !== '*' && dayOfWeek !== '?') {
     return done('Weekly', `${weekdayLabel(dayOfWeek)} at ${time}`);
@@ -116,6 +118,18 @@ function every(value: number, short: string, long: string): string {
   }
 
   return long === 'hour' ? 'Hourly' : `Every ${long}`;
+}
+
+// The time of a fixed-hour schedule. Written the way the cron fields read ("04:25") unless the
+// person has chosen an hour cycle, which then applies here like everywhere else ("4:25 AM").
+// It is the cron's own wall clock, so no zone is applied. A list or range in either field has
+// no single time to write, and stays as written.
+function clockOf(hour: string, minute: string, fmt: DateTimeFormatter): string {
+  if (fmt.timeFormat === 'auto' || !/^\d+$/.test(hour) || !/^\d+$/.test(minute)) {
+    return `${pad(hour)}:${pad(minute)}`;
+  }
+
+  return fmt.clock(Number(hour), Number(minute));
 }
 
 function pad(field: string): string {

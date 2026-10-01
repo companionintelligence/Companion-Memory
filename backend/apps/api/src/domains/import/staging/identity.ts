@@ -1039,6 +1039,29 @@ function accumulationKey(value: unknown): string {
 }
 
 /**
+ * The keys an entity declared as accumulating, cleaned for storage: trimmed,
+ * blanks dropped, de-duplicated in first-seen order. Null when it declared
+ * none, which is what `staged_entities.accumulate` holds for most entity types.
+ *
+ * `previous` is what an earlier sighting already stored. The two are unioned,
+ * because a run can stage one person from two parsers and each declaration is
+ * a promise about ITS keys.
+ */
+export function declaredAccumulate(entity: Entity, previous?: readonly string[] | null): string[] | null {
+  const keys: string[] = [];
+
+  for (const key of [...(previous ?? []), ...(entity.accumulate ?? [])]) {
+    const trimmed = typeof key === 'string' ? key.trim() : '';
+
+    if (trimmed !== '' && !keys.includes(trimmed)) {
+      keys.push(trimmed);
+    }
+  }
+
+  return keys.length > 0 ? keys : null;
+}
+
+/**
  * Grow stored metadata with whatever this sighting adds, for the keys the entity
  * declared as accumulating.
  *
