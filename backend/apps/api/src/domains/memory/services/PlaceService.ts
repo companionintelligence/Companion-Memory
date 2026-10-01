@@ -25,6 +25,7 @@ import {
 } from './appearanceBrowse';
 import { EVENT_HAPPENED_SQL } from './eventHappened';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { type PurgedPlaces, purgePlaceAggregates } from './placePurge';
 
 /** One Google-style address component ({long_name, short_name, types[]}). */
 interface AddressComponent {
@@ -1205,6 +1206,40 @@ export class PlaceService {
     });
 
     return true;
+  }
+
+  /**
+   * Permanently deletes places, with everything that only exists because of them.
+   * This is `memory.forget`'s `archive_and_delete` for a place node, and the other
+   * end from {@link remove}: see {@link purgePlaceAggregates} for what goes, for how
+   * the children are grafted onto the nearest place that stays (as `remove` does),
+   * and for what is left because it is a record in its own right.
+   *
+   * The duplicates that were merged into a place go with it, and are named in the
+   * result separately because nobody asked for them.
+   *
+   * Everything is one transaction. Search is told afterwards, once for every place
+   * that went, and the ids that were not the caller's, or no longer exist, are
+   * simply left out of the result.
+   */
+  async purge(context: UserServiceContext, ids: string[]): Promise<PurgedPlaces> {
+    const requested = Array.from(new Set(ids));
+
+    if (requested.length === 0) {
+      return { placeIds: [], duplicateIds: [] };
+    }
+
+    const purged = await this.placeRepository.manager.transaction((manager) =>
+      purgePlaceAggregates(manager, context.userId, requested),
+    );
+
+    // The index rows were deleted in the transaction. This tells anything else
+    // that listens, and is what announces a removal everywhere else in the app.
+    for (const placeId of [...purged.placeIds, ...purged.duplicateIds]) {
+      await this.eventService.send(PlaceRemovedEvent, { placeId });
+    }
+
+    return purged;
   }
 }
 
