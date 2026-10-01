@@ -41,6 +41,10 @@ const STUB_SOURCE_SYSTEM = 'communications:participant';
  *     to write back to; the index still benefits downstream queries that
  *     resolve those addresses on future communications).
  *
+ * An identifier on `ci.forgotten_identifiers` gets no stub: it belongs to a person
+ * the owner asked `memory.forget` to erase, and a new message from them must not
+ * bring them back. The participant stays unresolved.
+ *
  * Closes the long-standing TODO at `CommunicationService.create`.
  *
  * NOTE — bulk path is deliberately excluded: `CommunicationService.createMany`
@@ -165,10 +169,13 @@ export class CommunicationParticipantLinkListener {
 
     const allKeys = [...seenByComposite.values()].map((s) => s.key);
     const existing = await this.entityIdentifierService.findEntityIdsByIdentifiers(ownerId, allKeys);
+    // The owner asked `memory.forget` to erase the person these belong to. The mail that names them is
+    // still here, and without this a stub for each would be minted again, and the history re-attached.
+    const forgotten = await this.entityIdentifierService.findForgottenIdentifiers(ownerId, allKeys);
 
     const newEntities: GraphEntityInputDto[] = [];
     for (const [composite, seen] of seenByComposite) {
-      if (existing.has(composite)) {
+      if (existing.has(composite) || forgotten.has(composite)) {
         continue;
       }
 

@@ -927,6 +927,7 @@ export class MaintenanceController {
         examined: 0,
         identifiersSeen: 0,
         identifiersExisting: 0,
+        identifiersForgotten: 0,
         peopleCreated: 0,
         identifiersIndexed: 0,
         errors: [],

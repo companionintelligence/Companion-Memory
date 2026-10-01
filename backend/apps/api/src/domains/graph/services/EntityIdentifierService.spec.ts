@@ -374,6 +374,55 @@ describe('EntityIdentifierService.findEntityIdsByIdentifiers', () => {
   });
 });
 
+describe('EntityIdentifierService.findForgottenIdentifiers', () => {
+  it('short-circuits without a query for empty input', async () => {
+    const managerQuery = jest.fn();
+    const { service } = makeService({ managerQuery });
+
+    const result = await service.findForgottenIdentifiers(OWNER, []);
+
+    expect(result.size).toBe(0);
+    expect(managerQuery).not.toHaveBeenCalled();
+  });
+
+  it('never asks about a display name, which is shared by many people and is never recorded', async () => {
+    const managerQuery = jest.fn();
+    const { service } = makeService({ managerQuery });
+
+    const result = await service.findForgottenIdentifiers(OWNER, [
+      { kind: 'name', valueNormalized: 'dana quill' },
+    ]);
+
+    expect(result.size).toBe(0);
+    expect(managerQuery).not.toHaveBeenCalled();
+  });
+
+  it('asks once, for the owner, and hashes in the database with the function the purge recorded them with', async () => {
+    const managerQuery = jest.fn().mockResolvedValue([{ kind: 'email', value_normalized: 'a@b.com' }]);
+    const { service } = makeService({ managerQuery });
+
+    const result = await service.findForgottenIdentifiers(OWNER, [
+      { kind: 'email', valueNormalized: 'a@b.com' },
+      { kind: 'phone', valueNormalized: '4155550100' },
+      // a name in the same set is left out of the question, and a duplicate is asked once
+      { kind: 'name', valueNormalized: 'dana quill' },
+      { kind: 'email', valueNormalized: 'a@b.com' },
+    ]);
+
+    expect(managerQuery).toHaveBeenCalledTimes(1);
+    const [sql, params] = managerQuery.mock.calls[0];
+
+    // The digest is the database's, defined once in the migration, so the writer and this reader cannot disagree.
+    expect(sql).toContain('ci.forgotten_identifier_digest($1::uuid, t.kind, t.value_normalized)');
+    expect(sql).toContain('f.owner_user_id = $1::uuid');
+    expect(params).toEqual([OWNER, ['email', 'phone'], ['a@b.com', '4155550100']]);
+
+    // Keyed the way `findEntityIdsByIdentifiers` keys, so callers test both with the same composite.
+    expect(result).toEqual(new Set(['email:a@b.com']));
+    expect(result.has('phone:4155550100')).toBe(false);
+  });
+});
+
 describe('EntityIdentifierService.findEntityIdByIdentifier', () => {
   it('returns the matched entity id', async () => {
     const findOne = jest.fn().mockResolvedValue({ entityId: ENTITY });

@@ -29,14 +29,24 @@ interface IngestEntityCapture {
   properties?: Record<string, unknown> | null;
 }
 
-function makeIdentifierService(initial: Record<string, string>) {
+function makeIdentifierService(initial: Record<string, string>, forgotten: string[] = []) {
   // The service performs two lookups per run (pre-ingest + post-ingest). The
   // post-ingest lookup must reflect any keys the ingest mock landed, so we
   // expose the map for tests to mutate.
   const indexedByComposite = new Map(Object.entries(initial));
+  const listed = new Set(forgotten);
 
   return {
     indexedByComposite,
+    // `ci.forgotten_identifiers`: the identifiers of people the owner asked memory.forget to erase.
+    findForgottenIdentifiers: jest.fn(
+      async (_userId: string, keys: Array<{ kind: string; valueNormalized: string }>) =>
+        new Set(
+          keys
+            .map((key) => `${key.kind}:${key.valueNormalized}`)
+            .filter((composite) => listed.has(composite)),
+        ),
+    ),
     findEntityIdsByIdentifiers: jest.fn(
       async (_userId: string, keys: Array<{ kind: string; valueNormalized: string }>) => {
         const out = new Map<string, string>();
@@ -135,9 +145,10 @@ function makeListener(
   comm: FakeCommunication | null,
   initialIndex: Record<string, string>,
   ingestAssigns: Record<string, string> = {},
+  forgotten: string[] = [],
 ) {
   const communicationService = makeCommunicationService(comm);
-  const identifierService = makeIdentifierService(initialIndex);
+  const identifierService = makeIdentifierService(initialIndex, forgotten);
   const graphIngestService = makeIngestService(identifierService.indexedByComposite, ingestAssigns);
   const ds = makeDataSource();
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
@@ -494,5 +505,106 @@ describe('CommunicationParticipantLinkListener.handleCreated', () => {
 
     expect(updateCalls(ds)).toHaveLength(0);
     expect(graphIngestService.ingest).not.toHaveBeenCalled();
+  });
+
+  describe('a person the owner asked memory.forget to erase', () => {
+    const FORGOTTEN = 'email:dana@example.com';
+
+    it('is not created again by a new message from them, and everyone else on it is still linked', async () => {
+      const comm: FakeCommunication = {
+        id: COMM_ID,
+        time: COMM_TIME,
+        userId: USER,
+        fromEntityId: null,
+        toEntityIds: null,
+        participantsMetadata: { from: 'Dana Quill <dana@example.com>', to: ['unknown@example.com'] },
+      };
+
+      const { listener, graphIngestService, ds } = makeListener(
+        comm,
+        {},
+        { 'email:unknown@example.com': NEW_TO_1 },
+        [FORGOTTEN],
+      );
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      // Only the stranger is minted. The sender is left unresolved: nobody is there to resolve to.
+      expect(graphIngestService.ingest).toHaveBeenCalledTimes(1);
+      expect(graphIngestService.ingest.mock.calls[0][1].entities.map((e: { key: string }) => e.key)).toEqual([
+        'communications:participant:email:unknown@example.com',
+      ]);
+
+      const updates = updateCalls(ds);
+
+      expect(updates).toHaveLength(1);
+      expect(updates[0].params).toEqual([USER, COMM_ID, null, [NEW_TO_1], COMM_TIME]);
+    });
+
+    it('is created again by a new message from them when the owner did not ask for them to be forgotten', async () => {
+      const comm: FakeCommunication = {
+        id: COMM_ID,
+        time: COMM_TIME,
+        userId: USER,
+        fromEntityId: null,
+        toEntityIds: null,
+        participantsMetadata: { from: 'Dana Quill <dana@example.com>' },
+      };
+
+      const { listener, graphIngestService } = makeListener(
+        comm,
+        {},
+        { 'email:dana@example.com': NEW_TO_1 },
+        [],
+      );
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(graphIngestService.ingest).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the message alone when they are the only person on it', async () => {
+      const comm: FakeCommunication = {
+        id: COMM_ID,
+        time: COMM_TIME,
+        userId: USER,
+        fromEntityId: null,
+        toEntityIds: null,
+        participantsMetadata: { from: 'dana@example.com' },
+      };
+
+      const { listener, graphIngestService, ds } = makeListener(comm, {}, {}, [FORGOTTEN]);
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(graphIngestService.ingest).not.toHaveBeenCalled();
+      expect(updateCalls(ds)).toHaveLength(0);
+    });
+
+    it('asks about every identifier on the message in one query, for the owner whose mail it is', async () => {
+      const comm: FakeCommunication = {
+        id: COMM_ID,
+        time: COMM_TIME,
+        userId: USER,
+        fromEntityId: null,
+        toEntityIds: null,
+        participantsMetadata: { from: 'a@example.com', to: ['b@example.com'], cc: 'c@example.com' },
+      };
+
+      const { listener, identifierService } = makeListener(comm, {});
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(identifierService.findForgottenIdentifiers).toHaveBeenCalledTimes(1);
+
+      const [userArg, keysArg] = identifierService.findForgottenIdentifiers.mock.calls[0];
+
+      expect(userArg).toBe(USER);
+      expect(keysArg.map((key) => `${key.kind}:${key.valueNormalized}`).sort()).toEqual([
+        'email:a@example.com',
+        'email:b@example.com',
+        'email:c@example.com',
+      ]);
+    });
   });
 });
