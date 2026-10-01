@@ -25,6 +25,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# @swc/core >= 1.16 ships its native addon zstd-compressed and unpacks it on
+# first load into a per-user cache, by default `$HOME/.cache`. It refuses a
+# cache root whose parent another user can write to. In these `container:`
+# jobs the step runs as root but HOME is `/github/home`, a runner-owned mount,
+# so every swc load (jest, ts-node --swc, @swc/register) fails with
+# ERR_SWC_NATIVE_CACHE before a single test runs. `/tmp` is root-owned and
+# sticky, which swc trusts. `0` does not avoid the check: it still validates
+# the default cache root. See
+# https://github.com/swc-project/swc/blob/main/docs/native-addon-carriers.md
+env:
+  SWC_NATIVE_BINDING_CACHE: /tmp/swc-native-cache
+
 jobs:
   install:
     name: Install dependencies
