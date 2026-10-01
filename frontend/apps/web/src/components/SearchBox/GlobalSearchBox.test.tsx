@@ -37,7 +37,18 @@ vi.mock('./useSearchService', () => ({
 // useAuth/useMutation context this test doesn't provide. GlobalSearchBox only
 // composes it in; assert that composition without dragging its internals in.
 vi.mock('@/pages/MemoryPage/Components/ExplorerToolbar/ExplorerToolbar', () => ({
-  SearchPanelFilters: () => <div>advanced filters</div>,
+  // Load search stands in as one button that hands over a picked search.
+  SearchPanelFilters: ({ onOpenSavedSearch }: { onOpenSavedSearch?: (params: URLSearchParams) => void }) => (
+    <>
+      <div>advanced filters</div>
+      <button
+        type="button"
+        onClick={() => onOpenSavedSearch?.(new URLSearchParams('search=paris&tags=vacation'))}
+      >
+        Load a saved search
+      </button>
+    </>
+  ),
 }));
 
 // The phone footer (its sheets have their own suite); here, only what the box
@@ -249,6 +260,19 @@ describe('GlobalSearchBox off the memory lists (jump-to launcher)', () => {
     engage(screen.getByRole('textbox'));
 
     expect(screen.getByText('advanced filters')).toBeInTheDocument();
+  });
+
+  it('opens a saved search picked in the panel in the explorer, with its query in the box', async () => {
+    renderAt('/plan/tasks?view=board');
+
+    engage(screen.getByRole('textbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Load a saved search' }));
+
+    await waitFor(() => expect(path()).toBe('/memory'));
+    expect(params().get('search')).toBe('paris');
+    expect(params().get('tags')).toBe('vacation');
+    expect(params().has('view')).toBe(false);
+    await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue('paris'));
   });
 
   it('does not write the current route while typing — only the "jump to" suggestions react', async () => {

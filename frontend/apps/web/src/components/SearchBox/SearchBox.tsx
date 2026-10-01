@@ -36,8 +36,9 @@ import { DropdownProvider, useDropdown } from './useDropdown';
 const PORTALED_FILTER_IDS = ['entity-type-filters'];
 
 /**
- * Spread onto a portaled layer that belongs to the panel: on a phone, the
- * filter and saved-search sheets its footer opens. A tap or focus inside one
+ * Spread onto a portaled layer that belongs to the panel: the dialogs its
+ * footer opens (Save this search, and on a phone the filter and saved-search
+ * sheets). A tap or focus inside one
  * counts as inside the panel, and while one is open the panel stays as it is
  * underneath, so closing the sheet (Done, or a tap on its scrim) returns to
  * the same results. The layer handles its own dismissal.

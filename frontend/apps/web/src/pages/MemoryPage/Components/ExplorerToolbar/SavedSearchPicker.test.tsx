@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { useLocation } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { GetSavedSearchDocument, GetSavedSearchesForPickerDocument } from '@/graphql/graphql';
 import { mockQuery } from '@/test/gql';
@@ -74,6 +74,55 @@ describe('SavedSearchPicker', () => {
 
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('search=paris'));
     expect(screen.getByTestId('location')).toHaveTextContent('tags=vacation');
+  });
+
+  it('hands the picked search to onOpen instead of applying it to this page', async () => {
+    const id = btoa('saved-search:trip-1');
+    const onOpen = vi.fn();
+
+    renderWithProviders(
+      <>
+        <SavedSearchPicker onOpen={onOpen} />
+        <LocationProbe />
+      </>,
+      {
+        route: '/plan/tasks?view=board',
+        mocks: [
+          mockQuery(
+            GetSavedSearchesForPickerDocument,
+            { first: 8, query: undefined },
+            pickerResult(id, 'My trip'),
+          ),
+          mockQuery(
+            GetSavedSearchDocument,
+            { id },
+            {
+              savedSearch: {
+                __typename: 'SavedSearchType' as const,
+                id,
+                name: 'My trip',
+                description: null,
+                query: 'paris',
+                entityTypes: [],
+                tags: ['vacation'],
+                filters: null,
+              },
+            },
+          ),
+        ],
+      },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Load search/ }));
+    fireEvent.click(await screen.findByText('My trip'));
+
+    await waitFor(() => expect(onOpen).toHaveBeenCalledTimes(1));
+    const opened: URLSearchParams = onOpen.mock.calls[0][0];
+    expect(opened.get('search')).toBe('paris');
+    expect(opened.get('tags')).toBe('vacation');
+    expect(opened.has('view')).toBe(false);
+    expect(screen.getByTestId('location')).toHaveTextContent('/plan/tasks?view=board');
+    expect(screen.getByTestId('location')).not.toHaveTextContent('search=');
   });
 
   it('sends typed filter text as the query variable', async () => {

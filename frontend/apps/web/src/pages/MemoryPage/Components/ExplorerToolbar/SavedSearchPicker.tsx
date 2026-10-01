@@ -51,7 +51,7 @@ interface SavedSearchListProps {
   touch?: boolean;
   /**
    * Hand the picked search's params to the caller instead of applying them to
-   * this page's URL. The phone search panel only shows its footer off the
+   * this page's URL. The header search panel only shows its footer off the
    * explorer, where nothing reads `?search=`, so it opens the search there.
    */
   onOpen?: (params: URLSearchParams) => void;
@@ -61,7 +61,7 @@ interface SavedSearchListProps {
  * The "load one of my saved searches" list: a filter box, the user's own
  * saved searches (isSeed: false), and a way to the full Saved Searches page.
  * Picking one applies it to the URL in place, or hands it to `onOpen` (the
- * phone search panel, which opens it in the explorer). Rendered by the desktop picker's popover and
+ * header search panel, which opens it in the explorer). Rendered by the desktop picker's popover and
  * by the phone search panel's sheet, so both load a search the same way.
  */
 export function SavedSearchList({
@@ -160,9 +160,9 @@ export function SavedSearchList({
  * Save button — lets a saved search be applied without a trip to the Saved
  * Searches page and back. Scoped to the user's own searches (isSeed: false);
  * the starter library is for browsing on the Saved Searches page, not for
- * this always-visible convenience control.
+ * this always-visible convenience control. `onOpen` as on {@link SavedSearchList}.
  */
-export function SavedSearchPicker() {
+export function SavedSearchPicker({ onOpen }: { onOpen?: (params: URLSearchParams) => void } = {}) {
   const [open, setOpen] = useState(false);
   const [filterText, setFilterText] = useState('');
 
@@ -180,6 +180,7 @@ export function SavedSearchPicker() {
           filterText={filterText}
           onFilterTextChange={setFilterText}
           onClose={() => setOpen(false)}
+          onOpen={onOpen}
         />
       </Popover.Content>
     </Popover>

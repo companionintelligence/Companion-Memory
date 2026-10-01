@@ -188,8 +188,9 @@ export function GlobalSearchBox() {
     [addRecentSearch, clearInput, navigate, onLiveSearchPage, searchParams, setSearchParams],
   );
 
-  // A saved search picked from the phone panel's sheet. That footer only shows
-  // off the explorer, so the search opens there, and the box remounts the way it
+  // A saved search picked from the panel's footer: Load search on desktop, the
+  // Saved searches sheet on a phone. That footer only shows off the explorer,
+  // so the search opens there, and the box remounts the way it
   // does after committing a query from a launcher page: a fresh, unfocused box
   // picks the query up from `?search=`, where the old one (still counted as
   // focused while the sheet was open) would have auto-submitted its empty input
@@ -653,7 +654,7 @@ export function GlobalSearchBox() {
                     onOpenSavedSearch={openSavedSearch}
                   />
                 ) : (
-                  <SearchPanelFilters modal={false} />
+                  <SearchPanelFilters modal={false} onOpenSavedSearch={openSavedSearch} />
                 )}
               </DropdownProvider>
             ) : undefined
