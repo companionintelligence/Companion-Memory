@@ -313,7 +313,7 @@ export class OutlookCalendarTransformService {
       // one cancelled occurrence, now an exception with the same
       // `originalStart`) arrives, and `create` carries the status onto the row
       // already stored under the same identity — unless the user set a status
-      // of their own (see CalendarEventService.applySourceStatus).
+      // of their own (see CalendarEventService.refreshFromSource).
       const eventDto = await this.transformToEventDto(event, userId, connectionId);
 
       const [stored] = await this.eventService.create({ userId }, eventDto);
@@ -556,6 +556,14 @@ export class OutlookCalendarTransformService {
       is_recurring: !!event.recurrence || !!event.seriesMasterId,
       is_all_day: event.isAllDay || false,
       status: this.normalizeStatus(event.isCancelled),
+      // An attendee's copy of a cancelled meeting comes back from Exchange with
+      // its subject rewritten ("Canceled: Lunch with Ada", in the mailbox's
+      // language). That is the cancellation talking, not the organizer renaming
+      // the meeting, so such a delivery speaks for the status and the time only:
+      // a row already stored keeps its title (CalendarEventService
+      // `refreshFromSource`), and the meeting's own subject is still the base
+      // if it is ever reinstated.
+      ...(event.isCancelled ? { source_asserts: ['status', 'time'] as const } : {}),
       // Outlook gave no start.dateTime: this instant is a wall-clock fallback,
       // not a real occurrence time -- same stamp import/push/inputs.ts's
       // toEventInput uses for the identical "no real date" case.
