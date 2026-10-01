@@ -13,6 +13,7 @@ import { type Concept, ConceptEntity } from '../entities/ConceptEntity';
 import { ConceptCreatedEvent, ConceptRemovedEvent, ConceptUpdatedEvent } from '../events';
 import { CreateConceptDto, UpdateConceptDto } from '../types';
 
+import { type PurgedConcepts, purgeConceptAggregates } from './conceptPurge';
 import { EntityService } from './EntityService';
 
 @Injectable()
@@ -316,6 +317,36 @@ export class ConceptService extends EntityService<ConceptEntity, Concept> {
     });
 
     return true;
+  }
+
+  /**
+   * Permanently deletes concepts, with everything that only exists because of them.
+   * This is `memory.forget`'s `archive_and_delete` for a `Concept` node, and the
+   * other end from {@link remove}: see {@link purgeConceptAggregates} for what goes
+   * and what is left.
+   *
+   * Everything is one transaction. Search is told afterwards, once for every concept
+   * that went, and the ids that were not the caller's, or no longer exist, are
+   * simply left out of the result.
+   */
+  async purge(context: UserServiceContext, ids: string[]): Promise<PurgedConcepts> {
+    const requested = Array.from(new Set(ids));
+
+    if (requested.length === 0) {
+      return { conceptIds: [], duplicateIds: [] };
+    }
+
+    const purged = await this.repository.manager.transaction((manager) =>
+      purgeConceptAggregates(manager, context.userId, requested),
+    );
+
+    // The index rows were deleted in the transaction. This tells anything else
+    // that listens, and is what announces a removal everywhere else in the app.
+    for (const conceptId of [...purged.conceptIds, ...purged.duplicateIds]) {
+      await this.eventService.send(ConceptRemovedEvent, { conceptId });
+    }
+
+    return purged;
   }
 
   async search(context: ServiceContext, query: UpdateConceptDto): Promise<Concept[]> {

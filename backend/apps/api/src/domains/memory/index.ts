@@ -292,6 +292,9 @@ export {
 export type { Content } from './entities/ContentEntity';
 // How a graph write spells `entity_type`; `memory.remember` sends the model's type through these.
 export { canonicalEntityType, isStorableEntityType, sameEntityType } from './graph.types';
+// Which nodes are a Person, a Place or a Concept, under every spelling `ci.entities` holds them in;
+// `memory.forget` sends each to its own purge.
+export { GRAPH_ENTITY_TYPES, graphEntityKindOf, type GraphEntityKind } from './graph.types';
 export { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from './services/selfEntityProvisioner';
 export {
   EVENT_TIME_REOPENER,

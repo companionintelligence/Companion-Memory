@@ -164,6 +164,46 @@ export function sameEntityType(stored: string, requested: string): boolean {
 }
 
 /**
+ * The kinds of node that ARE a `ci.entities` row, with no detail table behind them: a Person, a
+ * Place and a Concept. They are the ones `memory.forget` purges through `PersonService`,
+ * `PlaceService` and `ConceptService`, and the ones `ci.entity_identifiers` can resolve to.
+ */
+export type GraphEntityKind = 'person' | 'place' | 'concept';
+
+function entityTypesOf(resourceType: GraphEntityKind): string[] {
+  return Object.entries(GRAPH_TYPE_TO_SOURCE)
+    .filter(([, source]) => source.origin === 'entity' && source.resourceType === resourceType)
+    .map(([type]) => type);
+}
+
+/**
+ * Every `entity_type` spelling that stands for each {@link GraphEntityKind}, read off
+ * {@link GRAPH_TYPE_TO_SOURCE} so a spelling cannot be added there and missed here. A person is a
+ * `Person` or a `Contact`; a place is a `Location` (what the geocoder mints) or a `Place` (what
+ * `memory.remember` writes); a concept is a `Concept`.
+ */
+export const GRAPH_ENTITY_TYPES: Readonly<Record<GraphEntityKind, readonly string[]>> = {
+  person: entityTypesOf('person'),
+  place: entityTypesOf('place'),
+  concept: entityTypesOf('concept'),
+};
+
+/** Which {@link GraphEntityKind} a stored `entity_type` is, or `null` for any other node. */
+export function graphEntityKindOf(entityType: string | null | undefined): GraphEntityKind | null {
+  if (entityType == null) {
+    return null;
+  }
+
+  for (const kind of Object.keys(GRAPH_ENTITY_TYPES) as GraphEntityKind[]) {
+    if (GRAPH_ENTITY_TYPES[kind].includes(entityType)) {
+      return kind;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Given the explorer entity types the user currently has *selected*, returns the set of graph
  * `entity_type` values to exclude — i.e. the graph types mapped from the *deselected* explorer
  * types, MINUS every graph type a *selected* explorer type maps to. Connective graph types
