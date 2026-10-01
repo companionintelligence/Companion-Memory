@@ -1759,6 +1759,8 @@ type KnownPlaceCandidateType {
   lat: Float!
   lng: Float!
   locationId: String
+  presenceDays: Int!
+  presenceNights: Int!
   sampleEvents: [KnownPlaceSampleEventType!]!
 }
 

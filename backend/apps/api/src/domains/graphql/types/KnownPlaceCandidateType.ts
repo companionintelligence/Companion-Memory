@@ -54,6 +54,17 @@ export class KnownPlaceCandidateType {
   @Field(() => Float)
   confidence!: number;
 
+  /**
+   * Distinct local days the user's location history puts them in this
+   * candidate's grid cell. 0 on a candidate anchored to a Location.
+   */
+  @Field(() => Int)
+  presenceDays!: number;
+
+  /** Distinct local nights (21:00–06:00) of location history in the cell. */
+  @Field(() => Int)
+  presenceNights!: number;
+
   static toType(candidate: KnownPlaceCandidate): KnownPlaceCandidateType {
     return {
       locationId: candidate.locationId,
@@ -64,6 +75,8 @@ export class KnownPlaceCandidateType {
       eventCount: candidate.eventCount,
       sampleEvents: candidate.sampleEvents.map((event) => KnownPlaceSampleEventType.toType(event)),
       confidence: candidate.confidence,
+      presenceDays: candidate.presenceDays,
+      presenceNights: candidate.presenceNights,
     };
   }
 }

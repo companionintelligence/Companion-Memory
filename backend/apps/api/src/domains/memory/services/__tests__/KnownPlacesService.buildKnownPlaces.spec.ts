@@ -51,7 +51,12 @@ function row(overrides: Partial<RawRow> = {}): RawRow {
 }
 
 function makeService(rows: RawRow[]) {
-  const query = jest.fn<Promise<RawRow[]>, [string, unknown[]?]>().mockResolvedValue(rows);
+  // Events only: the ci.position read finds nothing, so these cases pin the
+  // event rules exactly as they run for a user with no location history.
+  // KnownPlacesService.presence.spec.ts covers the measured-presence side.
+  const query = jest
+    .fn<Promise<RawRow[]>, [string, unknown[]?]>()
+    .mockImplementation(async (sql) => (sql.includes('ci.position') ? [] : rows));
   const dataSource = { query } as unknown as DataSource;
   const logger = {
     setContext: jest.fn(),
