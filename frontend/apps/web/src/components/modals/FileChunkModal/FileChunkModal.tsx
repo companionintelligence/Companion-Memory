@@ -1,5 +1,6 @@
 import { Button, Dialog } from '@ci/shadcn';
 
+import { resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
 import { type FragmentType, useFragment } from '@/graphql';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { FILE_CHUNK_CARD_FRAGMENT } from '@/pages/MemoryPage/Components/EntityCard/FileChunkCard';
@@ -20,7 +21,7 @@ export function FileChunkModal({ entity, onClose }: Props) {
 
   const title = getFileChunkTitle(data);
   const subtitle = getFileChunkSubtitle(data);
-  const sourceUrl = data.file?.sourceUrl ? `/static${data.file.sourceUrl}` : null;
+  const sourceUrl = resolveMediaUrl(data.file?.sourceUrl) ?? null;
 
   return (
     <Dialog open={entity != null} onOpenChange={(open) => !open && onClose()}>

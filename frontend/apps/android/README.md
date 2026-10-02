@@ -24,7 +24,13 @@ stay that way.
   `localStorage`**. On first launch with no server set, it routes to the in-app
   `/device-connect` screen (Portal picker). `/server` is Advanced URL entry.
 - All `/api/...` calls resolve through `buildApiUrl()` (`@ci/common`): `''` on web
-  (same-origin), the configured origin on native.
+  (same-origin), the configured origin on native. That covers every `fetch`, XHR,
+  `src`, `href` and `window.open`, not just GraphQL: the page origin is
+  `https://localhost`, so a bare `/api/...` or `/static/...` there is a request to
+  the app's own bundle. Media paths go through `resolveMediaUrl()` (it adds the
+  `/static` prefix and the origin), and a link meant for another device — a share
+  link, a QR code, a webhook address — takes `getWebOrigin()`, never
+  `window.location.origin`.
 - The native web build sets `VITE_DISABLE_PWA=true` so the Workbox service worker
   doesn't fight Capacitor's local asset serving.
 

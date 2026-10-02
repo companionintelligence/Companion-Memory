@@ -18,7 +18,7 @@ import { Link, useInRouterContext } from 'react-router-dom';
 
 import { useTagEntityService } from '@/api';
 import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
-import { isSameOriginUrl } from '@/components/entities/resolveMediaUrl';
+import { isSameOriginUrl, resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
 import {
   EntityFields,
   EntityMetaList,
@@ -217,13 +217,14 @@ function readTags(entity: MemoryEntity): string[] {
   return tags.map((tag) => tag?.label?.trim() ?? '').filter((label): label is string => label.length > 0);
 }
 
-/** Prefix relative storage paths with `/static`; pass absolute/data URLs through. */
+/**
+ * Prefix relative storage paths with `/static` (and, on the native shells, the
+ * Memory origin); pass absolute/data URLs through. One implementation with
+ * {@link resolveMediaUrl} — a second copy is how a drawer ended up loading from
+ * the WebView's own `capacitor://localhost` origin.
+ */
 export function resolveStaticUrl(value?: string | null): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  return /^https?:\/\//.test(value) || value.startsWith('data:') ? value : `/static${value}`;
+  return resolveMediaUrl(value);
 }
 
 /**
