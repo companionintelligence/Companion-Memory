@@ -617,8 +617,13 @@ jobs:
       - name: Build
         if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
+        # bash, not the windows-latest default pwsh: pwsh strips the inner quotes of
+        # an escaped-JSON argument, so Tauri received `{\` as its --config and the
+        # build failed. The Windows lane had never run before (it skips without
+        # signing secrets), which is why this was never seen.
+        shell: bash
         run: |
-          npx --yes @tauri-apps/cli@2 build --target x86_64-pc-windows-msvc -c "{\"bundle\":{\"createUpdaterArtifacts\":false}}"
+          npx --yes @tauri-apps/cli@2 build --target x86_64-pc-windows-msvc -c '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Azure login for Artifact Signing
         if: steps.secrets.outputs.present == 'true'
