@@ -44,9 +44,13 @@
 #   APPLE_ID                    Apple ID used for notarization
 #   APPLE_PASSWORD               app-specific password for that Apple ID
 #   APPLE_TEAM_ID                10-char team ID
-# Windows:
-#   WINDOWS_CERTIFICATE_BASE64    base64 of the code-signing .pfx
-#   WINDOWS_CERTIFICATE_PASSWORD  that .pfx's password
+# Windows (Azure Artifact Signing over GitHub OIDC, same as CI-Hub's
+# desktop-release.yml — no certificate file is stored anywhere). Set these on
+# the `production` GitHub Environment; the Entra app's federated credential
+# subject is repo:companionintelligence@<org id>/Companion-Memory@<repo id>:environment:production
+# (the numeric ids are in the azure/login failure log if it ever stops matching):
+#   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_SUBSCRIPTION_ID,
+#   AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT, AZURE_CERTIFICATE_PROFILE
 #
 # None of the above are currently provisioned in this repo. Each platform's
 # job is SKIPPED (not failed) when its secrets are absent, so macOS/Windows
@@ -511,6 +515,13 @@ jobs:
     needs: [verify-desktop-build-passed, version]
     runs-on: windows-latest
     timeout-minutes: 60
+    # Azure's OIDC subject is environment:production, so the Azure secrets live
+    # on that Environment and this job must run in it.
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -522,9 +533,15 @@ jobs:
         id: secrets
         shell: bash
         env:
-          CERT: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERTIFICATE_PROFILE: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
         run: |
-          if [ -n "$CERT" ]; then
+          if [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_SUBSCRIPTION_ID" ] \
+            && [ -n "$AZURE_SIGNING_ENDPOINT" ] && [ -n "$AZURE_SIGNING_ACCOUNT" ] && [ -n "$AZURE_CERTIFICATE_PROFILE" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
@@ -586,34 +603,39 @@ jobs:
           "
           sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.name }}"/' Cargo.toml
 
-      - name: Decode signing certificate
-        if: steps.secrets.outputs.present == 'true'
-        shell: bash
-        env:
-          CERT_B64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
-        run: |
-          echo "$CERT_B64" | base64 --decode > "$RUNNER_TEMP/signing.pfx"
-          echo "WINDOWS_CERTIFICATE_PATH=$RUNNER_TEMP/signing.pfx" >> "$GITHUB_ENV"
-
       - name: Build
         if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
         run: |
           npx --yes @tauri-apps/cli@2 build --target x86_64-pc-windows-msvc -c "{\"bundle\":{\"createUpdaterArtifacts\":false}}"
 
+      - name: Azure login for Artifact Signing
+        if: steps.secrets.outputs.present == 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Sign artifacts
         if: steps.secrets.outputs.present == 'true'
-        shell: pwsh
-        env:
-          CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          $signtool = (Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
-            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1).FullName
-          $files = Get-ChildItem -Path "frontend/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle" -Recurse -Include *.msi,*-setup.exe
-          foreach ($file in $files) {
-            & $signtool sign /f "$env:WINDOWS_CERTIFICATE_PATH" /p "$env:CERT_PASSWORD" `
-              /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "$file.FullName"
-          }
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+          files-folder: frontend/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle
+          files-folder-filter: exe,msi
+          files-folder-recurse: true
+          files-folder-depth: 3
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
 
       - name: Upload Windows artifact
         if: steps.secrets.outputs.present == 'true'
@@ -625,11 +647,6 @@ jobs:
             frontend/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             frontend/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
           if-no-files-found: error
-
-      - name: Clean up certificate
-        if: always() && steps.secrets.outputs.present == 'true'
-        shell: bash
-        run: rm -f "$RUNNER_TEMP/signing.pfx" || true
 
   linux:
     name: Linux (unsigned)
@@ -807,7 +824,7 @@ jobs:
             NAMES="${NAMES:+$NAMES, }Windows"
             LINES="${LINES}"$'\n'"- Windows — signed .msi and setup .exe"
           else
-            LINES="${LINES}"$'\n'"- Windows — NOT INCLUDED (no release-windows artifact; Windows job result: ${WINDOWS_RESULT}. Usual cause: the WINDOWS_CERTIFICATE_* signing secrets are unprovisioned, which makes every build/sign step skip.)"
+            LINES="${LINES}"$'\n'"- Windows — NOT INCLUDED (no release-windows artifact; Windows job result: ${WINDOWS_RESULT}. Usual cause: the AZURE_* signing secrets on the production Environment are unprovisioned, which makes every build/sign step skip.)"
           fi
           # Linux is unconditional here: the job gate above already required
           # needs.linux.result == 'success'.
