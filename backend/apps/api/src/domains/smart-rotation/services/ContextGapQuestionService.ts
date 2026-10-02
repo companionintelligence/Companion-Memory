@@ -33,8 +33,8 @@ const LLM_QUESTION_COOLDOWN_MS = 24 * 60 * 60 * 1000;
  * long as the underlying fetch took to fail on its own, rather than failing
  * fast and being retried. Same fix, same 60s budget, as
  * AnswerInferenceListener's first version (it has since moved to
- * `llm.answerInferenceTimeoutMs`) — see its header comment for the full
- * contention story. Stays on {@link PROMPT_MODEL}
+ * `llm.answerInferenceTimeoutMs`) — see the comment at its timeout for the
+ * full contention story. Stays on {@link PROMPT_MODEL}
  * deliberately: this generates the actual question text a person reads on
  * their feed, so it is a bounds-only fix, not a model change.
  */

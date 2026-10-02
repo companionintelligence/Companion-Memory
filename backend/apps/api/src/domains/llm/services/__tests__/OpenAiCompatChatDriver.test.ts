@@ -1,5 +1,6 @@
-import config from '@ci/configuration';
 import type { Message as OllamaMessage, Tool } from 'ollama';
+
+import config from '@ci/configuration';
 
 import {
   extractEmbeddedToolCalls,
@@ -437,6 +438,37 @@ describe('OpenAiCompatChatDriver.chat usage and deadline', () => {
       prompt_eval_count: 0,
       eval_count: 0,
     });
+  });
+
+  async function streamed(chunks: Array<Record<string, unknown>>) {
+    const create = jest.fn(async () => ({
+      async *[Symbol.asyncIterator]() {
+        yield* chunks;
+      },
+    }));
+    const out = [];
+
+    for await (const chunk of driverWith(create).chatStream(request)) {
+      out.push(chunk);
+    }
+
+    return out;
+  }
+
+  it('reports the usage block a stream ends with on the final chunk', async () => {
+    // The usage block rides a last chunk with no choices at all.
+    const chunks = await streamed([
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [], usage: { prompt_tokens: 6690, completion_tokens: 178 } },
+    ]);
+
+    expect(chunks.at(-1)).toMatchObject({ done: true, prompt_eval_count: 6690, eval_count: 178 });
+  });
+
+  it('reports zero for a stream that carried no usage block', async () => {
+    const chunks = await streamed([{ choices: [{ delta: { content: 'ok' } }] }]);
+
+    expect(chunks.at(-1)).toMatchObject({ done: true, prompt_eval_count: 0, eval_count: 0 });
   });
 
   it('lets one call set its own deadline, and defaults to the configured one', async () => {

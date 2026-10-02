@@ -25,9 +25,11 @@
  * fails against the pre-fix code: (1) never called `abort()`, (2) sent no
  * `options`, (3) sent no `keep_alive`.
  */
+import config from '@ci/configuration';
 import { ModelTierRouter } from '@ci/domains/model-routing';
 import { ToolRegistry } from '@ci/domains/tools';
 
+import { LlmFirstResponseTimeoutError } from '../../firstResponseDeadline';
 import { toolResultByteBudget } from '../../toolResultBudget';
 import { OllamaService, UTILITY_MODEL, type ChatRequestContext } from '../OllamaService';
 
@@ -246,6 +248,103 @@ describe('native chat generation bounds', () => {
 
     expect(chatMock).toHaveBeenCalledTimes(2);
     expect(chatMock.mock.calls[1]![0]).toMatchObject({ options: { num_ctx: 4_096 } });
+  });
+});
+
+/**
+ * A caller whose generation legitimately outlasts `llm.firstResponseTimeoutMs`
+ * (background answer inference through a Hub pool, on a slow node) passes its
+ * own `firstResponseTimeoutMs`. The deadline is enforced by the injected fetch,
+ * so each case below hangs the underlying fetch and watches WHEN the typed
+ * deadline error arrives. Without the plumbing the call is cut at the global
+ * default no matter what the caller asked for.
+ */
+describe('per-call first-response deadline (native)', () => {
+  const CALLER_MS = config.llm.firstResponseTimeoutMs + 180_000;
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    // A backend that never answers: settles only when the deadline aborts it.
+    globalThis.fetch = ((_input: unknown, init: { signal: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+      })) as never;
+    // The mocked client issues its request through the config.fetch the service handed it.
+    chatMock.mockImplementation(async () =>
+      constructedWith[constructedWith.length - 1].fetch('http://backend.invalid/api/chat', {
+        method: 'POST',
+      }),
+    );
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    globalThis.fetch = realFetch;
+  });
+
+  /** Runs `start`, advances `ms`, and reports whether it had settled and with what. */
+  async function settleAfter(start: () => Promise<unknown>, ms: number) {
+    const outcome: { settled: boolean; error?: LlmFirstResponseTimeoutError } = { settled: false };
+
+    void start().then(
+      () => (outcome.settled = true),
+      (error: LlmFirstResponseTimeoutError) => Object.assign(outcome, { settled: true, error }),
+    );
+    await jest.advanceTimersByTimeAsync(ms);
+
+    return outcome;
+  }
+
+  it('cuts a call at llm.firstResponseTimeoutMs when the caller sets nothing', async () => {
+    const service = makeService();
+
+    const settled = await settleAfter(
+      () => service.chat(context, messages, { model: MODEL }),
+      config.llm.firstResponseTimeoutMs + 1,
+    );
+
+    expect(settled.error).toBeInstanceOf(LlmFirstResponseTimeoutError);
+    expect(settled.error?.deadlineMs).toBe(config.llm.firstResponseTimeoutMs);
+  });
+
+  it("waits out the caller's own window, then fails with that window in the error", async () => {
+    const service = makeService();
+    const call = () => service.chat(context, messages, { model: MODEL, firstResponseTimeoutMs: CALLER_MS });
+
+    // Past the global default, still waiting.
+    expect((await settleAfter(call, config.llm.firstResponseTimeoutMs + 1_000)).settled).toBe(false);
+
+    const settled = await settleAfter(call, CALLER_MS + 1);
+
+    expect(settled.error).toBeInstanceOf(LlmFirstResponseTimeoutError);
+    expect(settled.error?.deadlineMs).toBe(CALLER_MS);
+  });
+
+  it('gives the tool-call follow-up turn the same window', async () => {
+    const service = makeService();
+    const toolTurn = {
+      model: MODEL,
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ function: { name: 'nope', arguments: {} } }],
+      },
+    };
+    const hang = chatMock.getMockImplementation()!;
+
+    chatMock.mockReset();
+    chatMock.mockResolvedValueOnce(toolTurn).mockImplementation(hang);
+
+    const call = () =>
+      service.chat(context, messages, { model: MODEL, enableTools: true, firstResponseTimeoutMs: CALLER_MS });
+
+    expect((await settleAfter(call, config.llm.firstResponseTimeoutMs + 1_000)).settled).toBe(false);
+    expect(chatMock).toHaveBeenCalledTimes(2);
+
+    const settled = await settleAfter(call, CALLER_MS + 1);
+
+    expect(settled.error?.deadlineMs).toBe(CALLER_MS);
   });
 });
 
@@ -485,6 +584,42 @@ describe('openai-compat chat generation bounds', () => {
 
     expect(openAiChat).toHaveBeenCalledTimes(2);
     expect(openAiChat.mock.calls[1]![0]).toMatchObject({ signal: controller.signal, maxTokens: 800 });
+  });
+
+  it('hands the per-call first-response window to the driver, on both turns', async () => {
+    const openAiChat = jest
+      .fn()
+      .mockResolvedValueOnce({
+        model: MODEL,
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ function: { name: 'knowledge_search', arguments: {} } }],
+        },
+      })
+      .mockResolvedValueOnce({ model: MODEL, message: { role: 'assistant', content: 'done' } });
+    const service = makeOpenAiService(openAiChat);
+
+    await service.chat(context, messages, {
+      model: MODEL,
+      enableTools: true,
+      firstResponseTimeoutMs: 270_000,
+    });
+
+    expect(openAiChat).toHaveBeenCalledTimes(2);
+    expect(openAiChat.mock.calls[0]![0]).toMatchObject({ timeoutMs: 270_000 });
+    expect(openAiChat.mock.calls[1]![0]).toMatchObject({ timeoutMs: 270_000 });
+  });
+
+  it('leaves the driver to its own configured deadline when the caller sets none', async () => {
+    const openAiChat = jest
+      .fn()
+      .mockResolvedValue({ model: MODEL, message: { role: 'assistant', content: '{}' } });
+    const service = makeOpenAiService(openAiChat);
+
+    await service.chat(context, messages, { model: MODEL });
+
+    expect(openAiChat.mock.calls[0]![0].timeoutMs).toBeUndefined();
   });
 });
 

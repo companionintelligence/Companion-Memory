@@ -316,8 +316,15 @@ export class OpenAiCompatChatDriver {
       request.salvageTools === true ||
       request.discardToolMarkup === true;
 
+    // The `usage` block, when the backend sends one: it rides a final chunk with no choices. Not
+    // requested (`stream_options` is not sent), so a backend that does not volunteer it still
+    // reports zero, as before.
+    let usage: { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
+
     try {
       for await (const part of stream) {
+        usage = part.usage ?? usage;
+
         const delta = part.choices[0]?.delta;
 
         if (delta == null) {
@@ -389,7 +396,7 @@ export class OpenAiCompatChatDriver {
       yield toChatResponse(request.model, { toolCalls, done: false });
     }
 
-    yield toChatResponse(request.model, { done: true });
+    yield toChatResponse(request.model, { done: true, usage });
   }
 }
 

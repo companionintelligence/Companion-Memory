@@ -533,26 +533,49 @@ describe('AnswerInferenceListener.inferQuestionAnswer — confidence floor', () 
   });
 
   it('gives the call the configured pool-sized budget, not the old 60s', async () => {
-    // 60s aborted every call a Hub pool placed on a slow CPU node (54-147s to
-    // first byte). The same budget must reach the backend's own deadline, or
-    // `llm.firstResponseTimeoutMs` (90s) cuts the call instead.
-    const { listener, ollamaService } = buildListener({});
-    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    // 60s aborted every call a Hub pool placed on a slow CPU node. The same
+    // budget must reach the backend's own deadline, or `llm.firstResponseTimeoutMs`
+    // (90s) cuts the call instead.
+    const budget = config.llm.answerInferenceTimeoutMs;
+
+    // Above the stacked 90s default, and below undici's 300s headersTimeout, which
+    // would otherwise be the bound that fires.
+    expect(budget).toBeGreaterThan(config.llm.firstResponseTimeoutMs);
+    expect(budget).toBeLessThan(300_000);
+
+    jest.useFakeTimers();
 
     try {
-      await listener.inferQuestionAnswer({ ownerId: 'user-1', questionId: 'q-1' } as Payload);
+      // A backend that never answers: settles only when the caller's signal aborts.
+      const chat = jest.fn(
+        (
+          _context: unknown,
+          _messages: unknown,
+          options: { signal: AbortSignal; firstResponseTimeoutMs?: number },
+        ) =>
+          new Promise((_resolve, reject) => {
+            options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          }),
+      );
+      const { listener } = buildListener({ ollamaService: { chat } as unknown as Partial<OllamaService> });
+      const run = listener
+        .inferQuestionAnswer({ ownerId: 'user-1', questionId: 'q-1' } as Payload)
+        .catch(() => undefined);
 
-      const [, , options] = (ollamaService.chat as jest.Mock).mock.calls[0] as [
-        unknown,
-        unknown,
-        { firstResponseTimeoutMs?: number },
-      ];
+      await jest.advanceTimersByTimeAsync(0);
 
-      expect(config.llm.answerInferenceTimeoutMs).toBeGreaterThan(147_000);
-      expect(options.firstResponseTimeoutMs).toBe(config.llm.answerInferenceTimeoutMs);
-      expect(setTimeoutSpy.mock.calls.map(([, ms]) => ms)).toContain(config.llm.answerInferenceTimeoutMs);
+      const options = chat.mock.calls[0]![2];
+
+      expect(options.firstResponseTimeoutMs).toBe(budget);
+
+      await jest.advanceTimersByTimeAsync(budget - 1);
+      expect(options.signal.aborted).toBe(false);
+
+      await jest.advanceTimersByTimeAsync(1);
+      expect(options.signal.aborted).toBe(true);
+      await run;
     } finally {
-      setTimeoutSpy.mockRestore();
+      jest.useRealTimers();
     }
   });
 

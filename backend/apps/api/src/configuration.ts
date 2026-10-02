@@ -359,12 +359,20 @@ export const ConfigSchema = z.object({
       /**
        * Budget for ONE background answer-inference generation (AnswerInferenceListener):
        * it replaces `firstResponseTimeoutMs` for that call and is also the listener's own abort
-       * timer. The call is non-streaming, so the first byte IS the finished answer; through a Hub
-       * pool a ~22 KB prompt placed on a slow CPU node took 54-147 s to first byte (measured
-       * 2026-10-01, gemma4:e4b), which both the old 60 s abort and the 90 s default cut short. The
-       * job queue expires at 600 s, so keep this below that.
+       * timer. The call is non-streaming, so the first byte IS the finished answer. Through a
+       * Hub pool a prompt placed on a slow CPU node waits far longer than a local GPU does:
+       * comparable pool calls (14-36k tokens) took 54-147 s to first byte on such a node, and
+       * the old 60 s abort cut this call there (`clientClosed` at 59,991 ms in the pool log).
+       *
+       * 270 s sits strictly below undici's 300 s `headersTimeout`, which bounds both the native
+       * Ollama client and the OpenAI SDK (both go through undici fetch) and is also the Hub
+       * pool's non-stream completion default, so THIS is the bound that fires and the socket is
+       * closed by us. A value above ~300 s does nothing: undici cuts the request there. It also
+       * leaves the job's 600 s queue expiry room for the retrieval embeds that run first. Raising
+       * it holds the single-slot `ollama-background` lane (shared with thread titles) that much
+       * longer per attempt, on a plain single-node appliance too, so it is a deliberate trade.
        */
-      answerInferenceTimeoutMs: z.coerce.number().int().positive().default(300_000),
+      answerInferenceTimeoutMs: z.coerce.number().int().positive().default(270_000),
       chat: z
         .object({
           groundedRecall: z

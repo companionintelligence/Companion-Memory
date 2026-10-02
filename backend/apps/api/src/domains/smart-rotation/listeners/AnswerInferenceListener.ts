@@ -40,28 +40,6 @@ const RELATED_ANSWER_LIMIT = 10;
 const RECENT_ANSWER_FALLBACK = 5;
 
 /**
- * This call was previously unbounded — no signal, no timeout — so a hung or
- * slow-loading model held its job (and the single-slot LLM_BACKGROUND_QUEUE behind it)
- * indefinitely, up to pg-boss's own 900s `expireInSeconds`. Observed on a real
- * appliance as `infer.question.answer` jobs dead-lettering with a raw "fetch
- * failed" and no useful diagnosis, under the SAME contention pattern documented
- * on `TodoScanService.SCAN_TIMEOUT_MS`: a request that cannot be cancelled
- * holds its model slot regardless of what killed the caller, so retries queue
- * behind their own predecessors' orphaned generations instead of behind
- * nothing.
- *
- * The budget is `llm.answerInferenceTimeoutMs` (300s by default), not the 60s
- * the other planning-domain calls use. The call is non-streaming, so the first
- * byte is the finished answer, and a ~22 KB prompt the Hub pool placed on a slow
- * CPU node took 54-147s to get there: at 60s every such call was aborted
- * (`clientClosed` at 59,991 ms in the pool log) and retried into the same node.
- * It is also handed to the backend as that call's first-response deadline, which
- * would otherwise cut it at `llm.firstResponseTimeoutMs`. Unlike the planning
- * calls this one stays on {@link PROMPT_MODEL} rather than moving to the utility
- * tier — see that constant's use below.
- */
-
-/**
  * Output cap (Ollama `options.num_predict`). The schema's `answer` is
  * documented as "ONE short first-person sentence at most" and `rationale` as
  * "one line" — generous headroom over a legitimate response, sized only to
@@ -421,6 +399,16 @@ ${evidence.block}`
     ];
 
     const controller = new AbortController();
+    // The call must be bounded and cancellable: unbounded, a hung or slow-loading model held its
+    // job and the single-slot LLM_BACKGROUND_QUEUE behind it, and a request that cannot be
+    // cancelled keeps its model slot (see `TodoScanService.SCAN_TIMEOUT_MS`), so retries queued
+    // behind their own predecessors' orphaned generations.
+    //
+    // The bound is `llm.answerInferenceTimeoutMs` (270s), not the 60s the other planning-domain
+    // calls use: the call is non-streaming, so the first byte is the finished answer, and a pool
+    // placement on a slow CPU node was aborted at 60s and retried. It is also handed to the
+    // backend as this call's first-response deadline, which would otherwise cut it at
+    // `llm.firstResponseTimeoutMs`. Unlike the planning calls this one stays on PROMPT_MODEL.
     const timeoutMs = config.llm.answerInferenceTimeoutMs;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
