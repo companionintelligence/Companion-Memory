@@ -17,6 +17,7 @@ import { clearExpansionZoneCache } from '../../recurrence/queries';
 import type { CreateEventDto } from '../../types';
 import { CalendarEventService } from '../CalendarEventService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
+
 import { stubPipelineReopeners } from './harness/pipelineReopeners';
 
 /**
