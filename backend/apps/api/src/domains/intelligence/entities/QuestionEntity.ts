@@ -31,6 +31,25 @@ export class QuestionEntity {
   @Column({ type: 'integer', nullable: true, name: 'seed_position' })
   seedPosition?: number | null;
 
+  /**
+   * Whether the appliance may try to answer this question from the owner's own
+   * corpus. 'traceable' (the column default) means it may; 'hand_entry' means
+   * only the owner can say — a diagnosis, a body measurement, a sexual
+   * orientation — so nothing may write one on their behalf. Both inference
+   * selectors skip a 'hand_entry' row. See 20260825074747_add_question_evidence_class
+   * and 20260825185434_sensitive_questions_hand_entry.
+   *
+   * Classified by those migrations, by text, so nothing in the app decides it and
+   * no API accepts it. The one thing the app does is CARRY it: `forkSharedQuestion`
+   * copies it from the origin, because the fork hides the origin from the
+   * selectors and, left to the column default, would turn a 'hand_entry' question
+   * back into a 'traceable' one the moment its owner rewords it.
+   *
+   * Not in `toEgressType`, so neither REST nor GraphQL exposes it.
+   */
+  @Column({ type: 'text', default: 'traceable', name: 'evidence_class' })
+  evidenceClass?: 'traceable' | 'hand_entry';
+
   @Column({ name: 'question_text' })
   text!: string;
 

@@ -484,6 +484,39 @@ describe('QuestionService privacy scoping (is_private_to)', () => {
       expect(seed.key).toBe('blood_type');
     });
 
+    it("carries the origin's evidence class onto the copy, so rewording a hand-entry question does not make it inferable", async () => {
+      // Both inference selectors skip a hand_entry question, and the origin is
+      // hidden from whoever forked it. A copy that fell back to the column default
+      // ('traceable') would be the only version of it the job can still see — and
+      // it is a question nothing may answer on this person's behalf. The class is
+      // not on the egress type, so this reads the stored row.
+      const seed = makeSeedQuestion('seed-1');
+      seed.evidenceClass = 'hand_entry';
+      const { service, rows } = makeScopedService([seed]);
+
+      await service.update(CONTEXT, 'seed-1', { text: 'my wording' });
+
+      const fork = rows.find((row) => row.forkedFromQuestionId === 'seed-1');
+
+      expect(fork?.evidenceClass).toBe('hand_entry');
+      expect(seed.evidenceClass).toBe('hand_entry');
+    });
+
+    it('leaves the class of an existing copy alone on a later edit, even when the origin is looser', async () => {
+      // Copying the origin's class again would overwrite a copy that is stricter
+      // than its origin — one classified on its own wording — with 'traceable'.
+      const seed = makeSeedQuestion('seed-1');
+      seed.evidenceClass = 'traceable';
+      const strictCopy = makeQuestion('my-copy', { isPrivateTo: USER, forkedFromQuestionId: 'seed-1' });
+      strictCopy.evidenceClass = 'hand_entry';
+      const { service } = makeScopedService([seed, strictCopy]);
+
+      const result = await service.update(CONTEXT, 'seed-1', { text: 'edited' });
+
+      expect(result?.id).toBe('my-copy');
+      expect(strictCopy.evidenceClass).toBe('hand_entry');
+    });
+
     it('marks the copy as neither seed content nor LLM-written, whatever the origin was', async () => {
       const { service } = makeScopedService([makeSeedQuestion('seed-1')]);
 

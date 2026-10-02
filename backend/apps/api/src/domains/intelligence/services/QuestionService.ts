@@ -844,6 +844,10 @@ export class QuestionService {
     });
 
     if (existingFork) {
+      // Its evidence class is deliberately left as it is, not copied from the
+      // origin again: that would overwrite a copy that is stricter than its origin
+      // with the looser one. An edit cannot move it either (it is not on
+      // UpdateQuestionDto), so only a migration ever changes it.
       Object.assign(existingFork, updateData, {
         isPrivateTo: userId,
         forkedFromQuestionId: origin.id,
@@ -867,6 +871,12 @@ export class QuestionService {
       // (question_key, is_private_to), which is what lets the copy hold the
       // same key as the shared row it replaces.
       key: origin.key ?? null,
+      // The class comes across for the same reason, with more at stake. Both
+      // inference selectors skip a 'hand_entry' question and the origin is hidden
+      // from whoever forked it, so a copy left to the column default
+      // ('traceable') is a question the job must never answer on this person's
+      // behalf, offered to it the moment they reword it.
+      evidenceClass: origin.evidenceClass,
       category: origin.category,
       answerTier: origin.answerTier ?? null,
       contextTags: origin.contextTags,
