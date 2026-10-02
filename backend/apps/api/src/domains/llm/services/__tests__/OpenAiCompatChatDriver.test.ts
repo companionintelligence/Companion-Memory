@@ -1,3 +1,4 @@
+import config from '@ci/configuration';
 import type { Message as OllamaMessage, Tool } from 'ollama';
 
 import {
@@ -402,5 +403,52 @@ describe('OpenAiCompatChatDriver.chatStream and tool markup', () => {
     const { content } = await collect(driver.chatStream(request));
 
     expect(content).toBe('Hello there');
+  });
+});
+
+describe('OpenAiCompatChatDriver.chat usage and deadline', () => {
+  function driverWith(create: jest.Mock) {
+    const driver = new OpenAiCompatChatDriver('http://backend.invalid/v1', 'key');
+    (
+      driver as unknown as { client: { chat: { completions: { create: jest.Mock } } } }
+    ).client.chat.completions.create = create;
+
+    return driver;
+  }
+
+  const request = { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }] };
+
+  it('reports the token counts the backend returned', async () => {
+    const create = jest.fn(async () => ({
+      choices: [{ message: { role: 'assistant', content: 'ok' } }],
+      usage: { prompt_tokens: 5400, completion_tokens: 37, total_tokens: 5437 },
+    }));
+
+    await expect(driverWith(create).chat(request)).resolves.toMatchObject({
+      prompt_eval_count: 5400,
+      eval_count: 37,
+    });
+  });
+
+  it('reports zero when the backend sent no usage block', async () => {
+    const create = jest.fn(async () => ({ choices: [{ message: { role: 'assistant', content: 'ok' } }] }));
+
+    await expect(driverWith(create).chat(request)).resolves.toMatchObject({
+      prompt_eval_count: 0,
+      eval_count: 0,
+    });
+  });
+
+  it('lets one call set its own deadline, and defaults to the configured one', async () => {
+    const create = jest.fn(async (_body: unknown, _opts: { timeout?: number }) => ({
+      choices: [{ message: { role: 'assistant', content: 'ok' } }],
+    }));
+    const driver = driverWith(create);
+
+    await driver.chat({ ...request, timeoutMs: 300_000 });
+    await driver.chat(request);
+
+    expect(create.mock.calls[0][1].timeout).toBe(300_000);
+    expect(create.mock.calls[1][1].timeout).toBe(config.llm.firstResponseTimeoutMs);
   });
 });

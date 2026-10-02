@@ -50,11 +50,16 @@ const RECENT_ANSWER_FALLBACK = 5;
  * behind their own predecessors' orphaned generations instead of behind
  * nothing.
  *
- * 60s matches the other planning-domain budgets. Unlike those, this call
- * stays on {@link PROMPT_MODEL} rather than moving to the utility tier — see
- * that constant's use below. This is a bounds-only fix.
+ * The budget is `llm.answerInferenceTimeoutMs` (300s by default), not the 60s
+ * the other planning-domain calls use. The call is non-streaming, so the first
+ * byte is the finished answer, and a ~22 KB prompt the Hub pool placed on a slow
+ * CPU node took 54-147s to get there: at 60s every such call was aborted
+ * (`clientClosed` at 59,991 ms in the pool log) and retried into the same node.
+ * It is also handed to the backend as that call's first-response deadline, which
+ * would otherwise cut it at `llm.firstResponseTimeoutMs`. Unlike the planning
+ * calls this one stays on {@link PROMPT_MODEL} rather than moving to the utility
+ * tier — see that constant's use below.
  */
-const INFERENCE_TIMEOUT_MS = 60_000;
 
 /**
  * Output cap (Ollama `options.num_predict`). The schema's `answer` is
@@ -416,7 +421,8 @@ ${evidence.block}`
     ];
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), INFERENCE_TIMEOUT_MS);
+    const timeoutMs = config.llm.answerInferenceTimeoutMs;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     let llmResponse;
 
@@ -428,6 +434,7 @@ ${evidence.block}`
         // INFERRED_ANSWER_JSON_SCHEMA.
         format: INFERRED_ANSWER_JSON_SCHEMA,
         signal: controller.signal,
+        firstResponseTimeoutMs: timeoutMs,
         maxOutputTokens: INFERENCE_MAX_OUTPUT_TOKENS,
         keepAlive: INFERENCE_KEEP_ALIVE,
       });

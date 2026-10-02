@@ -278,6 +278,14 @@ interface BasePromptOptions {
    */
   maxOutputTokens?: number;
   /**
+   * How long this call may wait for the backend's first response, in ms,
+   * replacing `llm.firstResponseTimeoutMs` for it. For a non-streaming call
+   * the first response is the whole answer, so a caller whose generations
+   * legitimately outlast the default (background inference through a pool, on
+   * a slow node) raises it here rather than raising it for everyone.
+   */
+  firstResponseTimeoutMs?: number;
+  /**
    * `'json'` asks for syntactically valid JSON and nothing more — the model is
    * still free to invent key names, which small models reliably do. A JSON
    * Schema object instead constrains generation to that shape via grammar, so
@@ -590,10 +598,11 @@ export class OllamaService implements OnModuleInit {
   private boundedClient(
     model: string,
     signal?: AbortSignal,
+    deadlineMs: number = config.llm.firstResponseTimeoutMs,
   ): { client: Ollama; deadline: FirstResponseFetch } {
     const deadline = createFirstResponseFetch({
       model,
-      deadlineMs: config.llm.firstResponseTimeoutMs,
+      deadlineMs,
       signal,
     });
 
@@ -660,6 +669,7 @@ export class OllamaService implements OnModuleInit {
     numCtx,
     maxOutputTokens,
     keepAlive,
+    firstResponseTimeoutMs,
     enableThinking = false,
   }: {
     model: string;
@@ -670,6 +680,7 @@ export class OllamaService implements OnModuleInit {
     numCtx?: number;
     maxOutputTokens?: number;
     keepAlive?: string | number;
+    firstResponseTimeoutMs?: number;
     enableThinking?: boolean;
   }): Promise<ChatResponse> {
     // A signal that is ALREADY aborted must not start a generation at all.
@@ -680,7 +691,7 @@ export class OllamaService implements OnModuleInit {
     // abort listener attached to an already-aborted signal never fires.
     signal?.throwIfAborted();
 
-    const { client, deadline } = this.boundedClient(model, signal);
+    const { client, deadline } = this.boundedClient(model, signal, firstResponseTimeoutMs);
 
     try {
       return await client.chat({
@@ -1179,6 +1190,7 @@ export class OllamaService implements OnModuleInit {
       signal,
       maxOutputTokens,
       keepAlive,
+      firstResponseTimeoutMs,
     } = options;
     const selection: UtilityModelChoice =
       options.tier === 'utility' ? await this.resolveUtilityModel() : { model: options.model };
@@ -1211,6 +1223,7 @@ export class OllamaService implements OnModuleInit {
             enableThinking,
             signal,
             maxTokens: maxOutputTokens,
+            timeoutMs: firstResponseTimeoutMs,
           })
         : await this.runNativeChat({
             model,
@@ -1221,6 +1234,7 @@ export class OllamaService implements OnModuleInit {
             numCtx,
             maxOutputTokens,
             keepAlive,
+            firstResponseTimeoutMs,
             enableThinking,
           });
     } catch (err: unknown) {
@@ -1268,6 +1282,7 @@ export class OllamaService implements OnModuleInit {
         enableThinking,
         signal,
         maxTokens: maxOutputTokens,
+        timeoutMs: firstResponseTimeoutMs,
       });
     }
 
@@ -1284,6 +1299,7 @@ export class OllamaService implements OnModuleInit {
       numCtx,
       maxOutputTokens,
       keepAlive,
+      firstResponseTimeoutMs,
       enableThinking,
     });
   }

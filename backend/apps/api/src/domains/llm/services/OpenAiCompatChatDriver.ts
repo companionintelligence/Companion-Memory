@@ -198,6 +198,8 @@ export class OpenAiCompatChatDriver {
      * which is what `OllamaService` already threads through on that path.
      */
     maxTokens?: number;
+    /** Deadline for the response, in ms; absent uses `llm.firstResponseTimeoutMs`. */
+    timeoutMs?: number;
   }): Promise<ChatResponse> {
     const extraBody = vllmThinkingExtraBody(request.enableThinking);
     const create = (format: ResponseFormat | undefined) =>
@@ -210,7 +212,11 @@ export class OpenAiCompatChatDriver {
           ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
           ...extraBody,
         },
-        { signal: request.signal, timeout: config.llm.firstResponseTimeoutMs, maxRetries: 0 },
+        {
+          signal: request.signal,
+          timeout: request.timeoutMs ?? config.llm.firstResponseTimeoutMs,
+          maxRetries: 0,
+        },
       );
 
     const format = toResponseFormat(request.format, this.jsonSchemaRejected);
@@ -250,6 +256,7 @@ export class OpenAiCompatChatDriver {
       content,
       toolCalls,
       done: true,
+      usage: response.usage,
     });
   }
 
@@ -389,7 +396,14 @@ export class OpenAiCompatChatDriver {
 /** Assemble an Ollama-`ChatResponse`-shaped chunk from the given parts. */
 function toChatResponse(
   model: string,
-  parts: { content?: string; thinking?: string; toolCalls?: ToolCall[]; done: boolean },
+  parts: {
+    content?: string;
+    thinking?: string;
+    toolCalls?: ToolCall[];
+    done: boolean;
+    /** The OpenAI `usage` block, when the backend sent one. */
+    usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+  },
 ): ChatResponse {
   return {
     model,
@@ -404,9 +418,9 @@ function toChatResponse(
     done_reason: parts.done ? 'stop' : '',
     total_duration: 0,
     load_duration: 0,
-    prompt_eval_count: 0,
+    prompt_eval_count: parts.usage?.prompt_tokens ?? 0,
     prompt_eval_duration: 0,
-    eval_count: 0,
+    eval_count: parts.usage?.completion_tokens ?? 0,
     eval_duration: 0,
   };
 }

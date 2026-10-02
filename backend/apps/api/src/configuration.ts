@@ -356,6 +356,15 @@ export const ConfigSchema = z.object({
        * too short costs churn, too long costs a person's patience.
        */
       firstResponseTimeoutMs: z.coerce.number().int().positive().default(90_000),
+      /**
+       * Budget for ONE background answer-inference generation (AnswerInferenceListener):
+       * it replaces `firstResponseTimeoutMs` for that call and is also the listener's own abort
+       * timer. The call is non-streaming, so the first byte IS the finished answer; through a Hub
+       * pool a ~22 KB prompt placed on a slow CPU node took 54-147 s to first byte (measured
+       * 2026-10-01, gemma4:e4b), which both the old 60 s abort and the 90 s default cut short. The
+       * job queue expires at 600 s, so keep this below that.
+       */
+      answerInferenceTimeoutMs: z.coerce.number().int().positive().default(300_000),
       chat: z
         .object({
           groundedRecall: z

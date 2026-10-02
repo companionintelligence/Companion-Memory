@@ -33,8 +33,8 @@ const FEED_QUEUE_LIMIT = 3;
  *
  * Six hours against a 20-minute tick (`SMART_ROTATION_CRONS.answer_infer`), so
  * a question is retried at most four times a day. Short enough that a genuinely
- * transient failure — an Ollama restart, a model reload, the 60s
- * `INFERENCE_TIMEOUT_MS` firing under load — costs the question a few hours
+ * transient failure — an Ollama restart, a model reload, the
+ * `llm.answerInferenceTimeoutMs` budget firing under load — costs the question a few hours
  * rather than its place in the rotation; long enough that re-asking is never
  * what the appliance spends an inference slot on while something untried is
  * waiting.

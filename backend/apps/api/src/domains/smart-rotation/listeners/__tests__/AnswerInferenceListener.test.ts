@@ -532,6 +532,30 @@ describe('AnswerInferenceListener.inferQuestionAnswer — confidence floor', () 
     expect(options.keepAlive).toBeTruthy();
   });
 
+  it('gives the call the configured pool-sized budget, not the old 60s', async () => {
+    // 60s aborted every call a Hub pool placed on a slow CPU node (54-147s to
+    // first byte). The same budget must reach the backend's own deadline, or
+    // `llm.firstResponseTimeoutMs` (90s) cuts the call instead.
+    const { listener, ollamaService } = buildListener({});
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+
+    try {
+      await listener.inferQuestionAnswer({ ownerId: 'user-1', questionId: 'q-1' } as Payload);
+
+      const [, , options] = (ollamaService.chat as jest.Mock).mock.calls[0] as [
+        unknown,
+        unknown,
+        { firstResponseTimeoutMs?: number },
+      ];
+
+      expect(config.llm.answerInferenceTimeoutMs).toBeGreaterThan(147_000);
+      expect(options.firstResponseTimeoutMs).toBe(config.llm.answerInferenceTimeoutMs);
+      expect(setTimeoutSpy.mock.calls.map(([, ms]) => ms)).toContain(config.llm.answerInferenceTimeoutMs);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it('states the confidence scale to the model in the system prompt', async () => {
     const { listener, ollamaService } = buildListener({});
 
