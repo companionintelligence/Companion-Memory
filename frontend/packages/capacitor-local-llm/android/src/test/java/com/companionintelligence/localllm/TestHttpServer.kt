@@ -15,7 +15,7 @@ import kotlin.concurrent.thread
  * A real HTTP server on loopback, used instead of a mocked client.
  *
  * Everything worth testing in this module's network code lives *below* the client object —
- * the exact request path (`/api/api/intents`), the `Range` header a resumed download sends,
+ * the exact request path (`/api/intents`), the `Range` header a resumed download sends,
  * whether a `Mcp-Session-Id` is echoed on the second call, whether a 206 body is appended or
  * overwritten. A mock of `CompanionIntentClient` or `HttpURLConnection` would assert that we
  * asked for those things in the shape we already believe; a socket asserts what actually goes

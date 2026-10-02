@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
+import { enterNativeShell, NATIVE_MEMORY_ORIGIN } from '@/test/nativeShell';
+
 import { initialsFor, paletteFor, PersonAvatar } from './PersonAvatar';
 
 /**
@@ -70,6 +72,24 @@ describe('PersonAvatar', () => {
     render(<PersonAvatar name="Ada Lovelace" avatarUrl={dataUri} />);
 
     expect(screen.getByRole('img')).toHaveAttribute('src', dataUri);
+  });
+
+  it('loads a relative avatarUrl from the paired Memory origin on the native shell', () => {
+    // The bundled app is served from capacitor://localhost, so a bare
+    // /static/... asked the WebView itself for the photo and the avatar fell
+    // back to initials for every person (QA MEM-06).
+    const leaveNativeShell = enterNativeShell();
+
+    try {
+      render(<PersonAvatar name="Ada Lovelace" avatarUrl="/avatars/ada.png" />);
+
+      expect(screen.getByRole('img')).toHaveAttribute(
+        'src',
+        `${NATIVE_MEMORY_ORIGIN}/static/avatars/ada.png`,
+      );
+    } finally {
+      leaveNativeShell();
+    }
   });
 
   it('renders initials, not a broken-image glyph, when there is no avatarUrl', () => {

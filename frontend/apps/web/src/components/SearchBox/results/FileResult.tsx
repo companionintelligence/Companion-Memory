@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 
+import { resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { SearchResultRow } from './SearchResultRow';
@@ -19,9 +20,7 @@ interface Props {
 export function FileResult({ file }: Props) {
   const data = useFragment(FILE_FRAGMENT, file);
 
-  const url = useMemo(() => {
-    return data.previewUrl ? `/static${data.previewUrl}` : undefined;
-  }, [data.previewUrl]);
+  const url = useMemo(() => resolveMediaUrl(data.previewUrl), [data.previewUrl]);
 
   return (
     <SearchResultRow

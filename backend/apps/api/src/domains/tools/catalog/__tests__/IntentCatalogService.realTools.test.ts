@@ -1,4 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
 import { NativeToolProvider } from '../../providers/NativeToolProvider';
 import { openGate } from '../../registry/__tests__/gateDouble';
 import { ToolRegistry } from '../../registry/ToolRegistry';
@@ -23,6 +26,7 @@ import { SuggestionsFeedbackTool } from '../../tools/SuggestionsFeedbackTool';
 import { SuggestionsListTool } from '../../tools/SuggestionsListTool';
 import { WriteKnowledgeTool } from '../../tools/WriteKnowledgeTool';
 import { IntentCatalogService } from '../IntentCatalogService';
+import type { ManifestIntent } from '../types';
 
 /**
  * End-to-end broadcast check with the REAL tool classes: build the ToolRegistry from the real
@@ -155,6 +159,25 @@ describe('IntentCatalogService broadcast (real tools)', () => {
   });
 
   /**
+   * What a phone can bind. The iOS app hand-writes one struct per intent (`CompanionIntentTools.swift`) and looks each
+   * one's ruling up in this manifest by its executable name, so a rename — or a flip to `queue` — here silently leaves
+   * the on-device model without that tool; Android binds whatever is `execute` and follows on its own. Asserted by name,
+   * like the list above: changing what the on-device tier may run is a decision, not a side effect.
+   */
+  it('tells the on-device tier it may run the three intents the iOS app binds, and to queue memory.forget', async () => {
+    const manifest = (await buildCatalog()).getManifest({ tier: 'local' });
+    const decisions = Object.fromEntries(manifest.intents.map((i) => [i.tool, i.dispatch?.decision]));
+
+    expect(manifest.tier).toBe('local');
+    expect(decisions).toMatchObject({
+      knowledge_search: 'execute',
+      memory_recall: 'execute',
+      people_find: 'execute',
+      memory_forget: 'queue',
+    });
+  });
+
+  /**
    * The invariant ToolsRegistrationService fails the boot on. Asserted against the real catalog
    * too, because the boot check only protects a running appliance — this protects the manifest a
    * device may have cached from a build that never booted here.
@@ -187,3 +210,227 @@ describe('IntentCatalogService broadcast (real tools)', () => {
     }
   });
 });
+
+/**
+ * What the phones send. Android binds whatever the manifest publishes, schema and all, so it cannot disagree with it.
+ * iOS cannot work that way (LiteRT-LM's Swift `Tool` is a compile-time struct), so `CompanionIntentTools.swift`
+ * hand-writes one per intent, and nothing but this test ties its argument names to the schema the appliance validates
+ * against. It did not hold: `memory_recall` declared `query` / `startDate` / `endDate` where the schema takes
+ * `personName`, `filters` and so on (zod strips what it does not know, so every call quietly returned the user's own
+ * graph), and `memory_remember` sent `content` where `operations` is required (so every call failed validation). Both
+ * typecheck, build and bind, and neither could be seen from either side.
+ *
+ * The rule is the simplest that rules those out: each `@ToolParam` is a same-named property of the intent's published
+ * schema, `run()` sends exactly the parameters it declares, and everything the schema requires is a required parameter.
+ */
+describe('the on-device clients send arguments the published schemas accept', () => {
+  const root = repoRoot();
+  const IOS_TOOLS = join(root, 'frontend/apps/ios/ios/App/App/LocalLLM/CompanionIntentTools.swift');
+  const ANDROID_PROVIDER = join(
+    root,
+    'frontend/packages/capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/intents/IntentToolProvider.kt',
+  );
+
+  /** The two structs this app used to bind (comments aside), so the check can be shown to fail on them. */
+  const SHAPES_THE_APP_USED_TO_SEND = `
+struct RecallMemoryTool: Tool {
+  static let name = "memory_recall"
+  static let description =
+    "Recall what the user did, saw or discussed, optionally within a date range. Prefer this over guessing."
+
+  @ToolParam(description: "What to recall, in the user's own words")
+  var query: String
+
+  @ToolParam(description: "Optional earliest date to consider, ISO-8601 (e.g. 2026-01-31)")
+  var startDate: String?
+
+  @ToolParam(description: "Optional latest date to consider, ISO-8601 (e.g. 2026-02-28)")
+  var endDate: String?
+
+  func run() async throws -> Any {
+    var arguments: [String: Any] = ["query": query]
+    if let startDate { arguments["startDate"] = startDate }
+    if let endDate { arguments["endDate"] = endDate }
+
+    return await CompanionToolContext.execute(Self.name, arguments: arguments)
+  }
+}
+
+struct RememberTool: Tool {
+  static let name = "memory_remember"
+  static let description = "Save something to the user's memory so it can be recalled later."
+
+  @ToolParam(description: "The text to remember, in the user's own words")
+  var content: String
+
+  func run() async throws -> Any {
+    await CompanionToolContext.execute(Self.name, arguments: ["content": content])
+  }
+}
+`;
+
+  interface SwiftParam {
+    name: string;
+    type: string;
+    optional: boolean;
+  }
+
+  interface SwiftTool {
+    name: string;
+    params: SwiftParam[];
+    /** The argument keys `run()` puts on the wire. */
+    sent: string[];
+  }
+
+  const SWIFT_TO_JSON_TYPE: Record<string, string> = {
+    String: 'string',
+    Int: 'integer',
+    Bool: 'boolean',
+    Double: 'number',
+    Float: 'number',
+  };
+
+  /** Each `struct X: Tool` in the file: its executable name, its `@ToolParam`s, and the keys its `run()` sends. */
+  function swiftTools(source: string): SwiftTool[] {
+    // Comments quote argument names and types as prose; the code is what is sent.
+    const code = source.replace(/^\s*\/\/.*$/gm, '');
+    const chunks = code.split(/^(?=struct \w+: Tool \{)/m).filter((chunk) => chunk.startsWith('struct '));
+
+    return chunks.map((chunk) => {
+      // `@ToolParam(…)` may wrap onto several lines; the declaration it decorates is the next `var`.
+      const params = [
+        ...chunk.matchAll(/@ToolParam\([\s\S]*?\)\s*\n\s*var (\w+):\s*(\[\w+\]|\w+)(\?)?/g),
+      ].map((match) => ({ name: match[1], type: match[2], optional: match[3] === '?' }));
+
+      const run = chunk.slice(Math.max(chunk.indexOf('func run()'), 0));
+      const sent = [
+        ...[...run.matchAll(/"(\w+)"\s*:/g)].map((match) => match[1]),
+        ...[...run.matchAll(/\["(\w+)"\]/g)].map((match) => match[1]),
+      ];
+
+      return { name: /static let name = "([^"]+)"/.exec(chunk)?.[1] ?? '', params, sent: [...new Set(sent)] };
+    });
+  }
+
+  /** Every way `source`'s tools disagree with what the appliance publishes; empty when they agree. */
+  function contractViolations(source: string, intents: ManifestIntent[]): string[] {
+    const byTool = new Map(intents.map((intent) => [intent.tool, intent]));
+    const tools = swiftTools(source);
+    const violations: string[] = [];
+
+    if (tools.length === 0) {
+      return ['no `struct X: Tool` was found, so nothing was checked'];
+    }
+
+    for (const tool of tools) {
+      const intent = byTool.get(tool.name);
+
+      if (!intent) {
+        violations.push(`${tool.name}: no published intent has that executable name`);
+
+        continue;
+      }
+
+      if (intent.dispatch?.decision !== 'execute') {
+        violations.push(
+          `${tool.name}: the local tier rules "${intent.dispatch?.decision}", so the phone could never run it`,
+        );
+      }
+
+      const properties = intent.parameters.properties ?? {};
+      const required = intent.parameters.required ?? [];
+
+      for (const param of tool.params) {
+        const schema = properties[param.name];
+
+        if (!schema) {
+          violations.push(
+            `${tool.name}: "${param.name}" is not a property of the published schema (${Object.keys(properties).join(', ')})`,
+          );
+
+          continue;
+        }
+
+        const expected = param.type.startsWith('[') ? 'array' : SWIFT_TO_JSON_TYPE[param.type];
+
+        if (schema.type && expected && schema.type !== expected) {
+          violations.push(
+            `${tool.name}: "${param.name}" is ${param.type} in Swift but "${schema.type}" in the schema`,
+          );
+        }
+
+        if (required.includes(param.name) && param.optional) {
+          violations.push(`${tool.name}: "${param.name}" is required by the schema but optional in Swift`);
+        }
+      }
+
+      for (const key of required) {
+        if (!tool.params.some((param) => param.name === key)) {
+          violations.push(`${tool.name}: the schema requires "${key}" and the tool has no such parameter`);
+        }
+      }
+
+      const declared = tool.params.map((param) => param.name).sort();
+      const sent = [...tool.sent].sort();
+
+      if (declared.join() !== sent.join()) {
+        violations.push(
+          `${tool.name}: run() sends [${sent.join(', ')}] but declares [${declared.join(', ')}]`,
+        );
+      }
+    }
+
+    return violations;
+  }
+
+  it('every tool the iOS app binds takes exactly the arguments of the intent it names', async () => {
+    const { intents } = (await buildCatalog()).getManifest({ tier: 'local' });
+    const source = readFileSync(IOS_TOOLS, 'utf8');
+
+    // By name, like EXPECTED_INTENTS: which tools a 0.6B model is shown is a decision. `memory_remember` is not one of
+    // them — the appliance has no intent the local tier may run that makes a Note, and a flat `content` can only fail
+    // the `operations` schema — so re-adding it with that shape fails below before it reaches a phone.
+    expect(
+      swiftTools(source)
+        .map((tool) => tool.name)
+        .sort(),
+    ).toEqual(['knowledge_search', 'memory_recall', 'people_find']);
+    expect(contractViolations(source, intents)).toEqual([]);
+  });
+
+  it('fails on the shapes the app used to send: memory_recall’s query / startDate / endDate, and memory_remember’s content', async () => {
+    const { intents } = (await buildCatalog()).getManifest({ tier: 'local' });
+    const violations = contractViolations(SHAPES_THE_APP_USED_TO_SEND, intents);
+
+    expect(violations).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('memory_recall: "query" is not a property of the published schema'),
+        expect.stringContaining('memory_recall: "startDate" is not a property'),
+        expect.stringContaining('memory_recall: "endDate" is not a property'),
+        expect.stringContaining('memory_remember: "content" is not a property of the published schema'),
+        expect.stringContaining('memory_remember: the schema requires "operations"'),
+      ]),
+    );
+  });
+
+  it('Android binds the published schema untouched, so it has nothing hand-written to drift', () => {
+    // `IntentTool` hands LiteRT-LM the manifest's own `parameters`; a Kotlin copy of an argument name could drift the
+    // way iOS's did, so the day one appears this should be the place that says so.
+    expect(readFileSync(ANDROID_PROVIDER, 'utf8')).toMatch(/\.put\("parameters",\s*intent\.parameters\)/);
+  });
+});
+
+/** The directory holding both workspaces — the clients this test reads live under `frontend/`. */
+function repoRoot(): string {
+  let dir = __dirname;
+
+  for (let i = 0; i < 12; i++) {
+    if (existsSync(join(dir, 'frontend')) && existsSync(join(dir, 'backend'))) {
+      return dir;
+    }
+
+    dir = resolve(dir, '..');
+  }
+
+  throw new Error('repo root not found');
+}

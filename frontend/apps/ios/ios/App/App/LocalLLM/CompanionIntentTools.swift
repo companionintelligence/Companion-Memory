@@ -66,6 +66,8 @@ enum CompanionToolContext {
         },
         uniquingKeysWith: { first, _ in first })
 
+      let executable = allTools.filter { rulings[type(of: $0).name]?.isExecutable == true }
+
       if manifest.tier == nil {
         // Pre-1.2.0 appliance: it ignored `?tier=local`, so no rulings came back and every tool
         // will refuse. Say so — silently toolless is indistinguishable from "no intents exist".
@@ -73,9 +75,15 @@ enum CompanionToolContext {
           "[LocalLLM] Appliance returned no per-tier dispatch rulings (manifest %@); "
             + "no tools will be offered. Upgrade CI-Server to 1.2.0+ for on-device tool calling.",
           manifest.version)
+      } else {
+        // The success line: without it a working catalog is only the absence of the failure line
+        // below. Android logs the same count from `IntentToolProvider`.
+        NSLog(
+          "[LocalLLM] Offering %ld of this app's %ld tools to the local model (the appliance publishes %ld intents)",
+          executable.count, allTools.count, manifest.intents.count)
       }
 
-      return allTools.filter { rulings[type(of: $0).name]?.isExecutable == true }
+      return executable
     } catch {
       NSLog("[LocalLLM] Intent catalog unavailable; the local model will run without tools: %@",
             error.localizedDescription)
@@ -85,9 +93,17 @@ enum CompanionToolContext {
   }
 
   /// Every intent this app knows how to expose. Kept in sync with the appliance by hand — see the
-  /// type comment for why iOS cannot generate these.
+  /// type comment for why iOS cannot generate these. Each tool's `@ToolParam`s must be same-named
+  /// properties of that intent's published schema, and each `run()` must send exactly those:
+  /// `IntentCatalogService.realTools.test.ts` (backend) checks it against the real tool classes.
+  ///
+  /// `memory.remember` is deliberately not offered. It is the appliance's intent for storing a fact,
+  /// and it writes graph entities (`operations: [{ kind: "entity.create", … }]`), not a Note — no
+  /// intent the local tier may run creates one. The flat `content` argument this app used to send is
+  /// not in its schema, so every call failed validation; a model with no remember tool at least
+  /// cannot be told "saved" by one.
   static var allTools: [any Tool] {
-    [SearchMemoryTool(), RecallMemoryTool(), FindPeopleTool(), RememberTool()]
+    [SearchMemoryTool(), RecallMemoryTool(), FindPeopleTool()]
   }
 
   /// The subset the appliance's last ruling says may run here. Empty when tools are disabled, the
@@ -118,10 +134,14 @@ enum CompanionToolContext {
 // conversion (`ExperimentalFlags.convertCamelToSnakeCaseInToolDescription`, on by default) unchanged
 // — these names must match the manifest's `tool` field exactly, since that is what MCP dispatches on.
 
-/// `knowledge.search` — full-text search across the user's memory.
+/// `knowledge.search` — full-text search across the user's memory. This is the tool for "what do I
+/// know about X", "when did I …" and "how many …": the appliance's `memory.recall` is a graph
+/// lookup of a person, not a free-text or date search, so those questions belong here.
 struct SearchMemoryTool: Tool {
   static let name = "knowledge_search"
-  static let description = "Search the user's own memory, notes, messages and documents for a phrase."
+  static let description =
+    "Search the user's own memory (notes, messages, documents, people, places) for a word or phrase. "
+    + "Use this for any question about what the user knows, did or saw."
 
   @ToolParam(description: "What to search for, in the user's own words")
   var query: String
@@ -131,27 +151,27 @@ struct SearchMemoryTool: Tool {
   }
 }
 
-/// `memory.recall` — recall what happened, optionally bounded by time.
+/// `memory.recall` — look a person up in the user's knowledge graph, with who they are connected
+/// to. That is all the intent does: its parameters are a graph query (`personName`, `filters`,
+/// `traversal`, …), with no free-text or date range, so this exposes only `personName`. The
+/// `query` / `startDate` / `endDate` this struct used to declare were not in the appliance's schema
+/// and were silently dropped, leaving every call to return the user's own graph.
 struct RecallMemoryTool: Tool {
   static let name = "memory_recall"
   static let description =
-    "Recall what the user did, saw or discussed, optionally within a date range. Prefer this over guessing."
+    "Look up a person in the user's memory graph and who they are connected to (family, friends, "
+    + "colleagues). To search notes, messages or documents, use knowledge_search instead."
 
-  @ToolParam(description: "What to recall, in the user's own words")
-  var query: String
-
-  @ToolParam(description: "Optional earliest date to consider, ISO-8601 (e.g. 2026-01-31)")
-  var startDate: String?
-
-  @ToolParam(description: "Optional latest date to consider, ISO-8601 (e.g. 2026-02-28)")
-  var endDate: String?
+  @ToolParam(
+    description: "A name, or a relationship such as \"my wife\". Leave out for the user's own connections")
+  var personName: String?
 
   func run() async throws -> Any {
-    var arguments: [String: Any] = ["query": query]
+    var arguments: [String: Any] = [:]
     // Omitted rather than sent as null: the appliance validates against the intent's JSON Schema,
-    // and an explicit null is not the same as an absent optional there.
-    if let startDate { arguments["startDate"] = startDate }
-    if let endDate { arguments["endDate"] = endDate }
+    // and an explicit null is not the same as an absent optional there. Left out, it starts from
+    // the user themself (`useCurrentUser` defaults to true).
+    if let personName { arguments["personName"] = personName }
 
     return await CompanionToolContext.execute(Self.name, arguments: arguments)
   }
@@ -167,18 +187,5 @@ struct FindPeopleTool: Tool {
 
   func run() async throws -> Any {
     await CompanionToolContext.execute(Self.name, arguments: ["query": query])
-  }
-}
-
-/// `memory.remember` — write a new note. Non-destructive, so the local tier may run it.
-struct RememberTool: Tool {
-  static let name = "memory_remember"
-  static let description = "Save something to the user's memory so it can be recalled later."
-
-  @ToolParam(description: "The text to remember, in the user's own words")
-  var content: String
-
-  func run() async throws -> Any {
-    await CompanionToolContext.execute(Self.name, arguments: ["content": content])
   }
 }

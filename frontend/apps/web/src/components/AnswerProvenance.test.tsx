@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -276,6 +276,91 @@ describe('AnswerProvenance — keyboard and assistive tech', () => {
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(onAncestorClick).not.toHaveBeenCalled();
+  });
+});
+
+describe('AnswerProvenance — dismissing the drawer by swiping it down', () => {
+  // REFL-08 step 5: Close and the swipe both dismiss the sheet, and focus goes
+  // back to the dot either way.
+  const realMatchMedia = window.matchMedia;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // The phone layout: `useDeviceLayout` reads `(max-width: 895px)`.
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('max-width'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    window.matchMedia = realMatchMedia;
+  });
+
+  it('closes the sheet and hands focus back to the dot, as Close and Escape do', () => {
+    renderWithProviders(<AnswerProvenance source="user_input" details={DETAILS} />);
+
+    const badge = badgeButton();
+    fireEvent.click(badge);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    const header = document.querySelector<HTMLElement>('[data-slot="sheet-header"]')!;
+    const pointer = { pointerId: 1, isPrimary: true, button: 0 };
+    fireEvent.pointerDown(header, { ...pointer, clientY: 100 });
+    fireEvent.pointerMove(header, { ...pointer, clientY: 300 });
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    fireEvent.pointerUp(header, { ...pointer, clientY: 300 });
+    act(() => {
+      vi.advanceTimersByTime(180);
+    });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(badge).toHaveFocus();
+  });
+});
+
+describe('AnswerProvenance — the tap target', () => {
+  // REFL-08: the dot was a ~16 x 11 pt button on a phone, hit only by tapping
+  // exact coordinates. jsdom has no layout, so this pins how the size is made
+  // rather than measuring it; the numbers are in the comment on BUTTON_CLASS.
+  function classes(): string[] {
+    return badgeButton().className.split(/\s+/);
+  }
+
+  it('grows to a finger-sized hit area on a touch screen', () => {
+    renderWithProviders(<AnswerProvenance source="user_input" details={DETAILS} />);
+
+    // About 44pt each way: 4.5 units of padding above and below the 6px dot
+    // (~19px at the app's 17px root) and 8 units (~34px) to its left.
+    expect(classes()).toEqual(expect.arrayContaining(['pointer-coarse:py-4.5', 'pointer-coarse:pl-8']));
+  });
+
+  it('does not change the row’s shape to do it: every bit of padding is cancelled by margin', () => {
+    renderWithProviders(<AnswerProvenance source="user_input" details={DETAILS} />);
+
+    expect(classes()).toEqual(expect.arrayContaining(['pointer-coarse:-my-4.5', 'pointer-coarse:-ml-8']));
+  });
+
+  it('never grows to the right, where the dot already sits at the edge of its scroller', () => {
+    // More than the page gutter there would give the scroller something to pan to.
+    renderWithProviders(<AnswerProvenance source="user_input" details={DETAILS} />);
+
+    expect(classes().filter((name) => /^pointer-coarse:-?(mr|pr|mx|px)-/.test(name))).toEqual([]);
+  });
+
+  it('keeps a mouse pointer’s button as small as it was', () => {
+    renderWithProviders(<AnswerProvenance source="user_input" details={DETAILS} />);
+
+    expect(classes()).toEqual(expect.arrayContaining(['px-1', 'py-0.5', '-mx-1', '-my-0.5']));
   });
 });
 

@@ -188,9 +188,18 @@ export function SavedSearchesPage() {
   });
 
   let yourContent: ReactNode;
+  // `LoadingPage` and `EmptyState` paint as `absolute inset-0` overlays on their
+  // nearest positioned ancestor, which here is the whole scrolling page. Nothing
+  // sat under them until the Starter searches list opened into that same page on
+  // an account with no searches of its own: its rows rendered beneath the "You
+  // don't have any Saved Searches yet" block and were unreadable (QA MEM-08).
+  // An overlay therefore gets a box of its own, in the flow, and the list opens
+  // below it.
+  let yourContentIsOverlay = false;
 
   if (yourLoading && !yourData) {
     yourContent = <LoadingPage />;
+    yourContentIsOverlay = true;
   } else if (yourError && yourSearches.length === 0) {
     // `error` used to fall through to the empty state below, positively
     // telling the owner they have saved nothing and inviting them to
@@ -204,6 +213,7 @@ export function SavedSearchesPage() {
       />
     );
   } else if (yourSearches.length === 0) {
+    yourContentIsOverlay = true;
     yourContent = trimmedQuery ? (
       <EmptyState message={`No saved searches match "${trimmedQuery}".`} />
     ) : (
@@ -310,7 +320,7 @@ export function SavedSearchesPage() {
           </div>
         )}
 
-        {yourContent}
+        {yourContentIsOverlay ? <div className="relative min-h-72 w-full">{yourContent}</div> : yourContent}
 
         <Collapsible open={starterOpen} onOpenChange={setStarterOpen} className="w-full pt-2">
           <Collapsible.Trigger asChild>

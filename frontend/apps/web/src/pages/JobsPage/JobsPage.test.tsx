@@ -772,6 +772,35 @@ describe('JobsPage schedules', () => {
     });
 
     /**
+     * QA JOBS-11: a protected row was a dimmed switch and nothing else. The
+     * reason lived in the switch's `title`, a hover tooltip a touch screen
+     * cannot show, so a tap on it did nothing and said nothing.
+     */
+    it('says in words, not only in a hover title, that a protected schedule is required and why', () => {
+      withControl('JobMetricsCollector.sampleOnSchedule', {
+        locked: true,
+        lockedReason: 'Samples the queue depths this page charts.',
+      });
+      render({
+        dashboard: dashboard({ crons: [cron('JobMetricsCollector.sampleOnSchedule')] }),
+      });
+
+      const row = scheduleRow('JobMetricsCollector.sampleOnSchedule');
+
+      expect(within(row).getByText('Required, cannot be switched off')).toBeVisible();
+      expect(within(row).getByText('Samples the queue depths this page charts.')).toBeInTheDocument();
+    });
+
+    it('adds no lock note to a schedule that can be switched off', () => {
+      withControl('PlanningJobsCron.todoScan');
+      render({ dashboard: dashboard({ crons: [cron('PlanningJobsCron.todoScan')] }) });
+
+      expect(
+        within(scheduleRow('PlanningJobsCron.todoScan')).queryByText(/Required/),
+      ).not.toBeInTheDocument();
+    });
+
+    /**
      * The 11 `role: 'worker'` schedules (of 53) never reach a CI_ROLE=web
      * process's SchedulerRegistry, so the dashboard payload omits them. #2546
      * fixed that for the controls list; moving the switches into this table
@@ -1528,5 +1557,76 @@ describe('JobsPage phone layout', () => {
     expect(screen.getByText('overdue')).toBeInTheDocument();
     expect(screen.queryByText('scheduled')).not.toBeInTheDocument();
     expect(screen.getByText(/succeeded never/)).toBeInTheDocument();
+  });
+
+  it('shows a protected schedule as locked on the phone and opens its reason on a tap', async () => {
+    setViewport(true);
+    // The phone has no hover, so the switch's `title` never reaches it: the lock
+    // and the reason have to be on the row itself (QA JOBS-11).
+    controlsState.data = {
+      global: {
+        concurrency: { value: 10, effective: 10, source: 'default' },
+        perQueueConcurrency: { value: 6, effective: 6, source: 'default' },
+        nonInteractive: 'enabled',
+      },
+      topology: { role: 'all', queueWorkerProcesses: 1, perProcessConcurrency: 6 },
+      maxConcurrency: 64,
+      queues: [],
+      crons: [
+        {
+          name: 'JobMetricsCollector.sampleOnSchedule',
+          cron: '0 0 * * * *',
+          mode: 'enabled',
+          locked: true,
+          lockedReason: 'Samples the queue depths this page charts.',
+          skippedCount: 0,
+          lastSkippedAt: null,
+        },
+      ],
+    } as unknown as JobControlsResponse;
+
+    try {
+      render({
+        dashboard: dashboard({
+          crons: [
+            {
+              name: 'JobMetricsCollector.sampleOnSchedule',
+              cron: '0 0 * * * *',
+              timezone: null,
+              running: true,
+              nextRunAt: null,
+              lastRunAt: null,
+              lastSuccessAt: null,
+              overdue: false,
+            },
+          ],
+        }),
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByRole('columnheader', { name: 'Duration' })).not.toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /^Schedules/ }));
+
+      const scheduleList = screen.getByRole('group', { name: 'Schedules by category' });
+      fireEvent.click(within(scheduleList).getByRole('button', { name: /Maintenance/ }));
+
+      expect(within(scheduleList).getByRole('switch')).toBeDisabled();
+
+      const note = within(scheduleList).getByText('Required, cannot be switched off');
+      const reason = within(scheduleList).getByText('Samples the queue depths this page charts.');
+
+      expect(note).toBeVisible();
+      // Closed until tapped, so six of these do not turn a scannable list into a
+      // wall of text.
+      expect(reason).not.toBeVisible();
+
+      fireEvent.click(note);
+
+      expect(reason).toBeVisible();
+    } finally {
+      controlsState.data = null;
+    }
   });
 });

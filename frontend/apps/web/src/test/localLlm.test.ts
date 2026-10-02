@@ -8,6 +8,7 @@ import {
   isContextExhausted,
   isLocalLlmReady,
   localLlmPlatform,
+  onLocalLlmDownloadProgress,
   probeLocalLlm,
   resetLocalLlmConversation,
   streamLocalLlm,
@@ -284,6 +285,123 @@ describe('download management', () => {
     await expect(isLocalLlmReady('qwen3-0.6b-int4')).resolves.toBe(true);
     await expect(isLocalLlmReady('gemma-4-e2b-it')).resolves.toBe(false);
     await expect(isLocalLlmReady(null)).resolves.toBe(false);
+  });
+});
+
+/**
+ * `addListener` as each Capacitor surface really answers it. `window.Capacitor.Plugins.LocalLLM` is the legacy stub the
+ * native bridge injects (iOS `JSExport.swift`, Android `JSExport.java`), and its `addListener` forwards to
+ * `Capacitor.addListener` in `native-bridge.js`, which returns the BARE `{ remove }` — no Promise. A
+ * `registerPlugin()` proxy is the other shape and does return `Promise<{ remove }>`. `fakeLlm()` above only models the
+ * second, which is how `.then` on the first shipped.
+ */
+function listenerRegistry(shape: 'bare' | 'promise') {
+  const listeners = new Set<Listener>();
+  const removed = vi.fn();
+
+  const addListener = vi.fn((_event: string, listener: Listener) => {
+    listeners.add(listener);
+
+    const handle = {
+      remove: async () => {
+        removed();
+        listeners.delete(listener);
+      },
+    };
+
+    return shape === 'bare' ? handle : Promise.resolve(handle);
+  });
+
+  return {
+    addListener,
+    removed,
+    emit: (payload: unknown) => listeners.forEach((listener) => (listener as (e: unknown) => void)(payload)),
+    size: () => listeners.size,
+  };
+}
+
+/** Let the registration (a Promise, or an `await` on a bare object) settle. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe('onLocalLlmDownloadProgress', () => {
+  const progress = {
+    modelId: 'qwen3-0.6b-int4',
+    status: 'downloading',
+    bytesDownloaded: 1024,
+    totalBytes: 2048,
+  };
+
+  it('is a no-op off-device and in a shell without the plugin', () => {
+    setWindow({});
+    expect(() => onLocalLlmDownloadProgress(vi.fn())()).not.toThrow();
+
+    setWindow({ Capacitor: { isNativePlatform: () => true, getPlatform: () => 'ios', Plugins: {} } });
+    expect(() => onLocalLlmDownloadProgress(vi.fn())()).not.toThrow();
+  });
+
+  describe.each([
+    ['the legacy stub the native bridge injects (a bare { remove })', 'bare' as const],
+    ['a registerPlugin() proxy (a Promise of { remove })', 'promise' as const],
+  ])('against %s', (_label, shape) => {
+    it('subscribes without throwing, delivers progress, and removes the listener on unsubscribe', async () => {
+      const registry = listenerRegistry(shape);
+
+      nativeWindow('ios', fakeLlm({ addListener: registry.addListener }).plugin);
+
+      const listener = vi.fn();
+      let unsubscribe!: () => void;
+
+      // The throw this guards escaped from the Settings page's mount effect and replaced the page with the error boundary.
+      expect(() => {
+        unsubscribe = onLocalLlmDownloadProgress(listener);
+      }).not.toThrow();
+
+      await settle();
+      expect(registry.addListener).toHaveBeenCalledWith('modelDownloadProgress', listener);
+
+      registry.emit(progress);
+      expect(listener).toHaveBeenCalledWith(progress);
+
+      unsubscribe();
+      await settle();
+
+      expect(registry.removed).toHaveBeenCalledTimes(1);
+      expect(registry.size()).toBe(0);
+    });
+
+    it('removes a listener whose registration settled after the caller had already unsubscribed', async () => {
+      const registry = listenerRegistry(shape);
+
+      nativeWindow('ios', fakeLlm({ addListener: registry.addListener }).plugin);
+
+      // React unmounts the page before the bridge answers: nothing may be left listening, and nothing removed twice.
+      onLocalLlmDownloadProgress(vi.fn())();
+      await settle();
+
+      expect(registry.removed).toHaveBeenCalledTimes(1);
+      expect(registry.size()).toBe(0);
+    });
+  });
+
+  it('shrugs off a plugin whose addListener throws or rejects, rather than taking the caller down', async () => {
+    const throws = vi.fn(() => {
+      throw new Error('bridge not ready');
+    });
+    const rejects = vi.fn(async () => {
+      throw new Error('bridge not ready');
+    });
+
+    for (const addListener of [throws, rejects]) {
+      nativeWindow('ios', fakeLlm({ addListener }).plugin);
+
+      let unsubscribe!: () => void;
+
+      expect(() => {
+        unsubscribe = onLocalLlmDownloadProgress(vi.fn());
+      }).not.toThrow();
+      await settle();
+      expect(() => unsubscribe()).not.toThrow();
+    }
   });
 });
 

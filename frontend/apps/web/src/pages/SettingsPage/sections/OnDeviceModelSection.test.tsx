@@ -15,8 +15,18 @@ interface FakeState {
   freeDiskBytes: number;
 }
 
-/** A `window.Capacitor.Plugins.LocalLLM` whose state the test can flip, with `emit` for native events. */
-function installFakeNative(platform: 'ios' | 'android', initial: Partial<FakeState> = {}) {
+/**
+ * A `window.Capacitor.Plugins.LocalLLM` whose state the test can flip, with `emit` for native events.
+ *
+ * `bareListenerHandles` makes `addListener` answer the way the real thing does on the shell: that object is the legacy
+ * stub the native bridge injects, and its `addListener` returns the bare `{ remove }` rather than a Promise. The default
+ * keeps the Promise (a `registerPlugin()` proxy) so the rest of this file is unchanged.
+ */
+function installFakeNative(
+  platform: 'ios' | 'android',
+  initial: Partial<FakeState> = {},
+  { bareListenerHandles = false }: { bareListenerHandles?: boolean } = {},
+) {
   const state: FakeState = {
     status: {},
     loaded: { loaded: false },
@@ -62,13 +72,15 @@ function installFakeNative(platform: 'ios' | 'android', initial: Partial<FakeSta
     resetConversation: vi.fn(async () => {}),
     generateStream: vi.fn(async () => {}),
     cancel: vi.fn(async () => {}),
-    addListener: vi.fn(async (event: string, listener: Listener) => {
+    addListener: vi.fn((event: string, listener: Listener) => {
       const set = listeners.get(event) ?? new Set<Listener>();
 
       set.add(listener);
       listeners.set(event, set);
 
-      return { remove: vi.fn(async () => void set.delete(listener)) };
+      const handle = { remove: vi.fn(async () => void set.delete(listener)) };
+
+      return bareListenerHandles ? handle : Promise.resolve(handle);
     }),
   };
 
@@ -162,6 +174,27 @@ describe('OnDeviceModelSection', () => {
 
     expect(bar).toBeInTheDocument();
     expect(within(row).getByText(/164 MB of 328 MB/)).toBeInTheDocument();
+  });
+
+  it('renders, and still shows live progress, when the bridge hands back a bare listener handle (the real iOS shell)', async () => {
+    // The mount effect used to chain `.then` onto `addListener(...)`; the shell's legacy stub returns no Promise, so the
+    // page threw out of its effect and fell to the error boundary instead of showing the models.
+    const { emit } = installFakeNative('ios', {}, { bareListenerHandles: true });
+
+    render(<OnDeviceModelSection />);
+
+    const row = await screen.findByTestId('on-device-model-qwen3-0.6b-int4');
+
+    await act(async () => {
+      emit('modelDownloadProgress', {
+        modelId: 'qwen3-0.6b-int4',
+        status: 'downloading',
+        bytesDownloaded: 172_335_872,
+        totalBytes: 344_437_808,
+      });
+    });
+
+    expect(await within(row).findByRole('progressbar', { name: /downloading qwen3/i })).toBeInTheDocument();
   });
 
   it('cancels an in-flight download', async () => {

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -365,6 +365,188 @@ describe('LocalLLM — the in-app iOS half and the native catalogs', () => {
       expect(url, `${modelId} url`).toBe(LOCAL_LLM_MODELS[modelId as keyof typeof LOCAL_LLM_MODELS].url);
     }
   });
+});
+
+/**
+ * The iOS half of `LocalLLM` lives in the app target, not in an npm package, so the `packageClassList` that `cap sync`
+ * regenerates into `capacitor.config.json` never names it (`@capacitor/cli` `util/iosplugin.js` only reads the `ios/`
+ * sources of installed packages), and Capacitor 7 dropped the runtime scan that used to find such classes. The one thing
+ * that puts it on the bridge is `MainViewController`'s `registerPluginInstance(_:)`, and that needs three separate
+ * pieces to stay joined — the class, the storyboard that instantiates it, and the Xcode project that compiles it. Drop
+ * any one and the app still builds and launches; Settings → On-device model just reads "On-device models run in the iOS
+ * and Android apps." on a phone (what the 2026-10-02 iOS Simulator QA found). None of them is generated, so `cap sync`
+ * cannot undo them.
+ */
+describe('LocalLLM — the iOS app registers its in-app plugin with the Capacitor bridge', () => {
+  const IOS_APP = join(ROOT, 'frontend/apps/ios/ios/App');
+  const APP_SOURCES = join(IOS_APP, 'App');
+  const pbxproj = () => read(join(IOS_APP, 'App.xcodeproj/project.pbxproj'));
+
+  /** The `customClass` / `customModule` the storyboard gives its initial view controller. */
+  function storyboardRoot(): { customClass?: string; customModule?: string } {
+    const storyboard = read(join(APP_SOURCES, 'Base.lproj/Main.storyboard'));
+    const initialId = /\binitialViewController="([^"]+)"/.exec(storyboard)?.[1];
+
+    expect(initialId, 'Main.storyboard names an initialViewController').toBeTruthy();
+
+    const tag = new RegExp(`<viewController\\b[^>]*\\bid="${initialId}"[^>]*>`).exec(storyboard)?.[0] ?? '';
+
+    return {
+      customClass: /\bcustomClass="([^"]+)"/.exec(tag)?.[1],
+      customModule: /\bcustomModule="([^"]+)"/.exec(tag)?.[1],
+    };
+  }
+
+  /** The Swift file, directly under `App/App`, declaring `class <name>: CAPBridgeViewController`. */
+  function rootControllerSource(name: string): { file: string; source: string } {
+    const declaration = new RegExp(`\\bclass\\s+${name}\\s*:\\s*CAPBridgeViewController\\b`);
+
+    for (const file of readdirSync(APP_SOURCES).filter((entry) => entry.endsWith('.swift'))) {
+      const source = read(join(APP_SOURCES, file));
+
+      if (declaration.test(source)) {
+        return { file, source };
+      }
+    }
+
+    throw new Error(
+      `no Swift file under frontend/apps/ios/ios/App/App declares ${name}: CAPBridgeViewController`,
+    );
+  }
+
+  it('the storyboard root is an in-app CAPBridgeViewController subclass — the stock class has no registration hook', () => {
+    const { customClass, customModule } = storyboardRoot();
+
+    expect(customClass).toBeTruthy();
+    // The stock class cannot register an in-app plugin; only a subclass's `capacitorDidLoad()` can.
+    expect(customClass).not.toBe('CAPBridgeViewController');
+    // The app module, resolved from the target — not Capacitor's, where no such subclass exists.
+    expect(customModule).toBe('App');
+  });
+
+  it('that class registers LocalLLMPlugin by instance from capacitorDidLoad() — registerPluginType is a no-op here', () => {
+    const { customClass } = storyboardRoot();
+    const { source } = rootControllerSource(customClass ?? '');
+    const hook = /override\s+func\s+capacitorDidLoad\(\)\s*\{([\s\S]*?)\n\s*\}/.exec(source)?.[1] ?? '';
+
+    expect(hook).toContain('registerPluginInstance(LocalLLMPlugin())');
+    // With the default `autoRegisterPlugins` Capacitor 7's `registerPluginType` returns at once, so it would compile,
+    // run and register nothing.
+    expect(hook).not.toContain('registerPluginType');
+  });
+
+  it('SceneDelegate still takes its window from that storyboard, so the subclass is what actually runs', () => {
+    const scene = read(join(APP_SOURCES, 'SceneDelegate.swift'));
+
+    expect(scene).toContain('UIStoryboard(name: "Main", bundle: nil)');
+    expect(scene).toContain('instantiateInitialViewController()');
+  });
+
+  it('the Xcode project compiles that file into the same target as the plugin it registers', () => {
+    const { customClass } = storyboardRoot();
+    const { file } = rootControllerSource(customClass ?? '');
+    const project = pbxproj();
+
+    /** `<buildFileId>` of `<name> in Sources` and the `PBXFileReference` it points at. */
+    const buildFile = (name: string) => {
+      const match = new RegExp(
+        `([0-9A-F]{24}) /\\* ${name.replace('.', '\\.')} in Sources \\*/ = \\{isa = PBXBuildFile; fileRef = ([0-9A-F]{24})`,
+      ).exec(project);
+
+      expect(match, `${name} has a "in Sources" PBXBuildFile entry in project.pbxproj`).toBeTruthy();
+
+      return { id: match![1], fileRef: match![2] };
+    };
+
+    /** The `files = ( … )` list of the PBXSourcesBuildPhase that compiles `buildFileId`. */
+    const sourcesPhaseOf = (buildFileId: string) =>
+      [...project.matchAll(/isa = PBXSourcesBuildPhase;[\s\S]*?files = \(([\s\S]*?)\);/g)]
+        .map((match) => match[1])
+        .find((files) => files.includes(buildFileId));
+
+    const controller = buildFile(file);
+    const plugin = buildFile('LocalLLMPlugin.swift');
+
+    expect(project).toMatch(
+      new RegExp(`${controller.fileRef} /\\* ${file.replace('.', '\\.')} \\*/ = \\{isa = PBXFileReference;`),
+    );
+    // A file reference with no build phase entry compiles nowhere: the storyboard would then name a class that does not
+    // exist in the binary, and UIKit falls back to a blank plain view controller.
+    expect(sourcesPhaseOf(controller.id), `${file} is in a Sources build phase`).toBeDefined();
+    expect(sourcesPhaseOf(controller.id)).toBe(sourcesPhaseOf(plugin.id));
+  });
+});
+
+/**
+ * The intent catalog is the one URL the phone and the appliance must agree on, and nothing links them: the proxy strips
+ * a leading `/api`, Nest mounts controllers at literal paths, and the Swift and Kotlin clients each hard-code a string.
+ * Both clients asked for `/api/api/intents` — right while `IntentsController` baked its own `api/` into its mount, a 404
+ * from the day #2653 unbaked it — so every on-device model quietly ran with no tools (the 2026-10-02 iOS QA). The server's
+ * own `controllerGatewayPrefix.test.ts` cannot see the clients; this reads both sides.
+ */
+describe('LocalLLM — the native clients reach the appliance at paths its controllers actually mount', () => {
+  const BACKEND_CONTROLLERS = join(ROOT, 'backend/apps/api/src/domains');
+  const IOS_CLIENT = join(ROOT, 'frontend/apps/ios/ios/App/App/LocalLLM/CompanionIntentClient.swift');
+  const ANDROID_CLIENT = join(
+    PACKAGES,
+    'capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/intents/CompanionIntentClient.kt',
+  );
+
+  /** What a controller's `@Controller(…)` mounts, reached through the proxy: it strips `/api`, Nest sets no prefix. */
+  function publicPaths(controllerFile: string): string[] {
+    const decorator = /^@Controller\(\s*(\[[^\]]*\]|'[^']*'|"[^"]*")\s*\)/m.exec(
+      read(join(BACKEND_CONTROLLERS, controllerFile)),
+    );
+
+    expect(decorator, `${controllerFile} has an @Controller(…) decorator`).toBeTruthy();
+
+    return (decorator![1].match(/['"]([^'"]*)['"]/g) ?? []).map((quoted) => `/api/${quoted.slice(1, -1)}`);
+  }
+
+  const catalogPaths = publicPaths('agent/controllers/IntentsController.ts');
+  const mcpPaths = publicPaths('mcp/controllers/McpController.ts');
+
+  it('the server really does mount the catalog at the bare `intents` and MCP at `mcp` (a baked-in api/ would break both)', () => {
+    expect(catalogPaths).toContain('/api/intents');
+    expect(mcpPaths).toEqual(['/api/mcp']);
+  });
+
+  it.each([
+    [
+      'Swift',
+      () => {
+        const source = read(IOS_CLIENT);
+        const catalog = /authorized\(path:\s*"([^"]+)",\s*query:\s*"tier=local"\)/.exec(source)?.[1];
+        const calls = [...source.matchAll(/authorized\(path:\s*"([^"?]+)"\s*\)/g)].map((m) => m[1]);
+
+        return { catalog, calls };
+      },
+    ],
+    [
+      'Kotlin',
+      () => {
+        const source = read(ANDROID_CLIENT);
+        const catalog = /\bget\("([^"?]+)\?tier=local"\)/.exec(source)?.[1];
+        const calls = [...source.matchAll(/\bopenConnection\("([^"?]+)"\)/g)].map((m) => m[1]);
+
+        return { catalog, calls };
+      },
+    ],
+  ])(
+    'the %s client asks for the catalog and MCP at the proxy URLs of the controllers that serve them',
+    (_label, parse) => {
+      const { catalog, calls } = parse();
+
+      expect(catalog, 'the client fetches the catalog with ?tier=local').toBeTruthy();
+      expect(catalogPaths).toContain(catalog);
+      // Vacuity guard: the handshake and `tools/call` are both POSTs to the one MCP path.
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+
+      for (const call of calls) {
+        expect(mcpPaths).toContain(call);
+      }
+    },
+  );
 });
 
 describe('the bridge key @ci/common reads matches the registered name', () => {

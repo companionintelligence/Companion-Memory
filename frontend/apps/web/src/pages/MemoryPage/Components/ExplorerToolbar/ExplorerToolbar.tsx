@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
@@ -579,7 +579,17 @@ function FilterDropArea() {
               {direction != null && (
                 <FilterChip
                   icon={MessageSquare}
-                  label={`${MESSAGE_DIRECTION_LABELS[direction]} only`}
+                  // Beside a Who person the direction fixes that person's role, so
+                  // "From only" reads. On its own it is the bare row direction —
+                  // messages you received, or sent, from or to anyone — and "From
+                  // only" with nothing next to it read as a leftover of a removed
+                  // person (QA MEM-16). Name what it still filters, as the phone
+                  // filter sheet's Who row already does ("To anyone").
+                  label={
+                    selections.person.length > 0
+                      ? `${MESSAGE_DIRECTION_LABELS[direction]} only`
+                      : `${MESSAGE_DIRECTION_LABELS[direction]} anyone`
+                  }
                   removeLabel="Remove message direction"
                   inactiveReason={reasonFor('direction')}
                   onRemove={() =>
@@ -810,6 +820,18 @@ export function DateControl({
     setDraftToTime(toTimeValue);
   }, [fromTimeValue, toTimeValue]);
 
+  // "Specific time" adds its two inputs at the foot of a popover that, on a
+  // phone, already runs to the bottom edge of the screen. Bring them into view
+  // or the toggle looks like it did nothing (QA MEM-15: the inputs sat below the
+  // fold and the popover would not scroll).
+  const timeFieldsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (timeExpanded) {
+      timeFieldsRef.current?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [timeExpanded]);
+
   const applyTime = (part: 'from' | 'to', value: string) => {
     const normalizedValue = value || (part === 'from' ? START_OF_DAY_TIME : END_OF_DAY_TIME);
     const nextFromTime = part === 'from' ? normalizedValue : draftFromTime;
@@ -900,12 +922,12 @@ export function DateControl({
         )}
       </Popover.Trigger>
       <Popover.Content
-        className={cn(
-          'w-64 p-0',
-          // From a phone sheet row the calendar can outgrow the room beside
-          // the row: stay on screen and scroll instead.
-          renderTrigger && 'max-h-(--radix-popover-content-available-height) overflow-y-auto',
-        )}
+        // Never taller than the room the popover has, scrolling inside instead.
+        // The calendar, the time fields and Clear range outgrow the screen on a
+        // phone — beside a phone sheet row, and from the inline When button too,
+        // where an uncapped popover simply ran off the bottom edge and its time
+        // inputs could not be reached (QA MEM-15).
+        className="w-64 max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain p-0"
         align="start"
       >
         <div className="grid grid-cols-2 gap-2 p-2">
@@ -990,7 +1012,7 @@ export function DateControl({
               </div>
 
               {timeExpanded && (
-                <div className="grid grid-cols-2 gap-3">
+                <div ref={timeFieldsRef} className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label htmlFor="memory-filter-start-time" className="text-xs text-muted-foreground">
                       Start time

@@ -18,7 +18,7 @@ import { Link, useInRouterContext } from 'react-router-dom';
 
 import { useTagEntityService } from '@/api';
 import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
-import { isSameOriginUrl } from '@/components/entities/resolveMediaUrl';
+import { isSameOriginUrl, resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
 import {
   EntityFields,
   EntityMetaList,
@@ -51,9 +51,11 @@ export type { EditField, MetaItem };
  * The standalone page for each resource type the drawer can show, by raw id.
  * Types absent here (a file, a browser visit, a thread) have no page and get no
  * link. Kept in step with the routes in App.tsx and with `ITEM_PAGES` in the
- * API's DatabaseSearchTool, which hands the chat the same paths.
+ * API's DatabaseSearchTool, which hands the chat the same paths. Exported for
+ * the phone header's Back row (`EntityBackBar`), which must cover every page
+ * listed here.
  */
-const FULL_PAGE_PATHS: Readonly<Record<string, string>> = {
+export const FULL_PAGE_PATHS: Readonly<Record<string, string>> = {
   communication: '/communications',
   concept: '/concepts',
   content: '/content',
@@ -217,13 +219,14 @@ function readTags(entity: MemoryEntity): string[] {
   return tags.map((tag) => tag?.label?.trim() ?? '').filter((label): label is string => label.length > 0);
 }
 
-/** Prefix relative storage paths with `/static`; pass absolute/data URLs through. */
+/**
+ * Prefix relative storage paths with `/static` (and, on the native shells, the
+ * Memory origin); pass absolute/data URLs through. One implementation with
+ * {@link resolveMediaUrl} — a second copy is how a drawer ended up loading from
+ * the WebView's own `capacitor://localhost` origin.
+ */
 export function resolveStaticUrl(value?: string | null): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  return /^https?:\/\//.test(value) || value.startsWith('data:') ? value : `/static${value}`;
+  return resolveMediaUrl(value);
 }
 
 /**

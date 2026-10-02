@@ -314,17 +314,34 @@ export const questionCatalogueQuerySchema = z.object({
 
 export type QuestionCatalogueQueryDto = z.infer<typeof questionCatalogueQuerySchema>;
 
+/**
+ * The longest answer text any API accepts, in UTF-16 code units — what a JS
+ * string's `length` counts, and what the web editor's `maxLength` counts, so the
+ * two ends agree on what "5,000 characters" means.
+ */
+export const ANSWER_TEXT_MAX_LENGTH = 5000;
+
+/**
+ * The one rule for what a person may write as an answer, shared by every door
+ * that takes one: the REST schemas below, and the GraphQL answer mutations,
+ * which do not run those schemas and so used to accept any length at all.
+ *
+ * Not blank, because `ci.answers` refuses one (`answer_text_not_empty`) and a
+ * blank answer that got as far as the INSERT came back a 500 rather than a 400.
+ * Deliberately not trimmed: the text is stored as sent.
+ */
+export const answerTextSchema = z
+  .string()
+  .max(ANSWER_TEXT_MAX_LENGTH, `Answer text must be ${ANSWER_TEXT_MAX_LENGTH} characters or less`)
+  .refine((text) => text.trim().length > 0, 'Answer text is required');
+
 export const createAnswerSchema = z.object({
-  text: z.string().min(1, 'Answer text is required').max(5000, 'Answer text must be 5000 characters or less'),
+  text: answerTextSchema,
   question: z.object({
     id: z.string().uuid('Invalid question ID'),
   }),
 });
 
 export const updateAnswerSchema = z.object({
-  text: z
-    .string()
-    .min(1, 'Answer text is required')
-    .max(5000, 'Answer text must be 5000 characters or less')
-    .optional(),
+  text: answerTextSchema.optional(),
 });

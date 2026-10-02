@@ -28,6 +28,8 @@ vi.mock('./useFeedBadgeCount', () => ({ useFeedBadgeCount: () => 0 }));
 vi.mock('./usePlanBadgeCount', () => ({ usePlanBadgeCount: () => 0 }));
 
 const recentThreads = vi.hoisted(() => ({ current: [] as { id: string; name: string | null }[] }));
+// One stable function, so a test can say whether the account row actually signed anyone out.
+const logout = vi.hoisted(() => vi.fn());
 
 vi.mock('@/pages/ChatPage/useRecentThreads', async () => {
   const actual = await vi.importActual<typeof import('@/pages/ChatPage/useRecentThreads')>(
@@ -49,7 +51,7 @@ vi.mock('@/hooks', async () => {
 
   return {
     ...actual,
-    useAuth: () => [{ isAuthenticated: true, authToken: 'token' }, { logout: vi.fn() }],
+    useAuth: () => [{ isAuthenticated: true, authToken: 'token' }, { logout }],
     useCurrentUser: () => ({ user: { name: 'Test User', email: 'test@example.com', onboarded: true } }),
     useCaptureModal: () => [{ isOpen: false }, { open: vi.fn(), close: vi.fn() }],
   };
@@ -67,6 +69,7 @@ vi.mock('@/components/ThemePicker', () => ({
 beforeEach(() => {
   localStorage.removeItem(STORAGE_KEY);
   recentThreads.current = [];
+  logout.mockClear();
 });
 
 function renderRail(route = '/plan', { expanded = false }: { expanded?: boolean } = {}) {
@@ -235,6 +238,37 @@ describe('SecondaryNavigation', () => {
 
     expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings/appearance');
     expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
+  });
+
+  /**
+   * QA: on the phone the footer is pinned to the bottom edge and grows upward, so
+   * once the account row opens, "Log out" sits exactly where the chevron that
+   * opened it was. A second tap on the same spot signed two testers out, and
+   * getting back in is a trip through the Companion sign-in. The row now asks.
+   */
+  it('asks before logging out, and signs out only when that is confirmed', () => {
+    renderRail('/feed', { expanded: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Self sections' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Log out' }));
+
+    // The row alone signs nobody out: it opens a question.
+    const dialog = screen.getByRole('alertdialog');
+
+    expect(within(dialog).getByText('Log out?')).toBeInTheDocument();
+    expect(logout).not.toHaveBeenCalled();
+
+    // Backing out leaves the session alone, and the question goes away.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(logout).not.toHaveBeenCalled();
+
+    // Asked again, a yes does it — once.
+    fireEvent.click(screen.getByRole('button', { name: 'Log out' }));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Log out' }));
+
+    expect(logout).toHaveBeenCalledTimes(1);
   });
 
   // Appearance is a setting, not a peer of the places you work.

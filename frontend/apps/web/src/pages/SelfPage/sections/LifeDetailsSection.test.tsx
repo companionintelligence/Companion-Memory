@@ -1,5 +1,5 @@
 import { DeviceLayoutProvider } from '@ci/common';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { curatedQuestionKeys, curatedQuestions, type CuratedQuestion } from './lifeDetails';
@@ -537,6 +537,256 @@ describe('LifeDetailsSection', () => {
     expect(screen.queryByText('Health')).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('Answer…')).not.toBeInTheDocument();
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('29 curated question(s) are missing'));
+  });
+});
+
+/** A promise settled from outside, for holding a fetch open while the test reads the screen. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+
+  return { promise, resolve };
+}
+
+describe('LifeDetailsSection — saving does not reload the section', () => {
+  /**
+   * The saved answer as its row shows it once nothing is being typed: the button
+   * that edits it. Not `findByText` — while a save is in flight the SAME words
+   * sit in the field being typed into, and a query that finds those finds a node
+   * that is gone a moment later.
+   */
+  function savedAnswer(questionKey: string) {
+    return within(rowFor(questionKey)).findByRole('button', { name: /Edit your answer to/ });
+  }
+
+  /**
+   * The first GET returns `firstPage`; every later GET is held open until the
+   * test settles it, and every write succeeds at once. That makes the refetch
+   * after a save a thing the test can stand inside and look at.
+   */
+  function holdRefetches(firstPage: unknown = fullCataloguePage()) {
+    const refetches: Array<ReturnType<typeof deferred<unknown>>> = [];
+    let gets = 0;
+
+    fetchJson.mockImplementation((_url: string, init?: FetchCallInit) => {
+      if (init?.method) {
+        return Promise.resolve({});
+      }
+
+      gets += 1;
+
+      if (gets === 1) {
+        return Promise.resolve(firstPage);
+      }
+
+      const held = deferred<unknown>();
+      refetches.push(held);
+
+      return held.promise;
+    });
+
+    return refetches;
+  }
+
+  it('keeps every row mounted while a save refetches, instead of swapping the grid for "Loading…"', async () => {
+    // REFL-04: the refetch after a save put the WHOLE grid behind "Loading…". The
+    // section collapsed to one line, the page's scroll position was clamped to
+    // the end of the (now short) page — on an iPhone, the Delete account area —
+    // and the keyboard went with the field.
+    const refetches = holdRefetches();
+
+    render(<LifeDetailsSection />);
+
+    await screen.findByText('Do you volunteer for any organization?');
+    const bystander = rowFor(BLOOD_TYPE_KEY);
+
+    fireEvent.click(within(rowFor(VOLUNTEER_KEY)).getByRole('radio', { name: 'Yes' }));
+
+    // The POST has gone and the refetch is in flight.
+    await waitFor(() => expect(refetches).toHaveLength(1));
+
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(rowFor(BLOOD_TYPE_KEY)).toBe(bystander);
+    expect(bystander).toBeInTheDocument();
+
+    refetches[0]!.resolve(fullCataloguePage({ [VOLUNTEER_KEY]: 'Yes' }));
+
+    expect(await savedAnswer(VOLUNTEER_KEY)).toHaveTextContent('Yes');
+    // The very same node the whole way through: never unmounted and rebuilt.
+    expect(rowFor(BLOOD_TYPE_KEY)).toBe(bystander);
+  });
+
+  it('leaves what was typed in the field until the saved answer replaces it', async () => {
+    const refetches = holdRefetches();
+
+    render(<LifeDetailsSection />);
+
+    await screen.findByText('What is your blood type?');
+    fireEvent.change(within(rowFor(BLOOD_TYPE_KEY)).getByPlaceholderText('Answer…'), {
+      target: { value: 'O negative' },
+    });
+
+    await waitFor(() => expect(refetches).toHaveLength(1), { timeout: 3000 });
+
+    // Clearing the draft as soon as the POST returned left an empty field on
+    // screen for the length of the fetch.
+    expect(within(rowFor(BLOOD_TYPE_KEY)).getByPlaceholderText('Answer…')).toHaveValue('O negative');
+
+    refetches[0]!.resolve(fullCataloguePage({ [BLOOD_TYPE_KEY]: 'O negative' }));
+
+    expect(await savedAnswer(BLOOD_TYPE_KEY)).toHaveTextContent('O negative');
+    expect(within(rowFor(BLOOD_TYPE_KEY)).queryByPlaceholderText('Answer…')).not.toBeInTheDocument();
+  });
+
+  it('keeps the grid, and the editor, in place while an edit refetches', async () => {
+    const refetches = holdRefetches(
+      cataloguePage([
+        catalogueEntry(BLOOD_TYPE_KEY, 'AB positive, I think?', { source: 'inferred', confidence: 0.41 }),
+      ]),
+    );
+
+    render(<LifeDetailsSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Edit your answer to/ }));
+
+    const row = rowFor(BLOOD_TYPE_KEY);
+    fireEvent.change(within(row).getByRole('textbox'), { target: { value: 'O negative' } });
+    fireEvent.click(within(row).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(refetches).toHaveLength(1));
+
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    // Still the editor, still saving: closing it first showed the OLD answer
+    // again for as long as the fetch took.
+    expect(within(rowFor(BLOOD_TYPE_KEY)).getByRole('textbox')).toBeInTheDocument();
+    expect(screen.queryByText('AB positive, I think?')).not.toBeInTheDocument();
+
+    refetches[0]!.resolve(cataloguePage([catalogueEntry(BLOOD_TYPE_KEY, 'O negative')]));
+
+    expect(await savedAnswer(BLOOD_TYPE_KEY)).toHaveTextContent('O negative');
+    expect(within(rowFor(BLOOD_TYPE_KEY)).queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  it('does not let a slow earlier refetch put a later save back to "no answer yet"', async () => {
+    // With the grid no longer hidden behind "Loading…", a second row can be
+    // answered while the first one's refetch is still out. Whichever refetch was
+    // STARTED last is the one that knows about both.
+    const refetches = holdRefetches();
+
+    render(<LifeDetailsSection />);
+
+    await screen.findByText('Do you volunteer for any organization?');
+
+    fireEvent.click(within(rowFor(VOLUNTEER_KEY)).getByRole('radio', { name: 'Yes' }));
+    await waitFor(() => expect(refetches).toHaveLength(1));
+
+    fireEvent.click(within(rowFor(MORNING_PERSON_KEY)).getByRole('radio', { name: 'Night owl' }));
+    await waitFor(() => expect(refetches).toHaveLength(2));
+
+    // The newer refetch lands first and knows about both answers...
+    refetches[1]!.resolve(fullCataloguePage({ [VOLUNTEER_KEY]: 'Yes', [MORNING_PERSON_KEY]: 'Night owl' }));
+    expect(await savedAnswer(MORNING_PERSON_KEY)).toHaveTextContent('Night owl');
+
+    // ...then the older one arrives, from before the second save.
+    await act(async () => {
+      refetches[0]!.resolve(fullCataloguePage({ [VOLUNTEER_KEY]: 'Yes' }));
+    });
+
+    expect(await savedAnswer(MORNING_PERSON_KEY)).toHaveTextContent('Night owl');
+    expect(await savedAnswer(VOLUNTEER_KEY)).toHaveTextContent('Yes');
+  });
+});
+
+describe('LifeDetailsSection — the 5,000-character cap', () => {
+  const OVER = 'a'.repeat(5200);
+  const AT_CAP = 'a'.repeat(5000);
+
+  it.each([
+    ['a single-line answer', BLOOD_TYPE_KEY, 'Answer…'],
+    ['a narrative answer', HOBBY_KEY, 'Your answer…'],
+  ])('stops %s at 5,000 characters, however the text got there', async (_name, key, placeholder) => {
+    // REFL-07: on an iPhone the field took a 5,003-character run whole. The
+    // `maxLength` attribute is not what this asserts — jsdom ignores it, as did
+    // the device — the value the component keeps is.
+    fetchJson.mockResolvedValue(fullCataloguePage());
+
+    render(<LifeDetailsSection />);
+
+    await screen.findByText(questionFor(key).text);
+    const field = within(rowFor(key)).getByPlaceholderText(placeholder);
+
+    fireEvent.change(field, { target: { value: OVER } });
+
+    expect(field).toHaveValue(AT_CAP);
+  });
+
+  it('stops the editor at 5,000 characters, and saves exactly that much', async () => {
+    fetchJson.mockResolvedValue(cataloguePage([catalogueEntry(BLOOD_TYPE_KEY, 'AB positive')]));
+
+    render(<LifeDetailsSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Edit your answer to/ }));
+
+    const row = rowFor(BLOOD_TYPE_KEY);
+    const editor = within(row).getByRole('textbox');
+
+    fireEvent.change(editor, { target: { value: OVER } });
+    expect(editor).toHaveValue(AT_CAP);
+
+    fireEvent.click(within(row).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      const [patchCall] = callsWithMethod('PATCH');
+      expect(patchCall).toBeDefined();
+      expect(JSON.parse(patchCall![1]!.body!)).toEqual({ text: AT_CAP });
+    });
+  });
+
+  it('never leaves half of an emoji at the cut', async () => {
+    fetchJson.mockResolvedValue(cataloguePage([catalogueEntry(BLOOD_TYPE_KEY, 'AB positive')]));
+
+    render(<LifeDetailsSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Edit your answer to/ }));
+
+    const editor = within(rowFor(BLOOD_TYPE_KEY)).getByRole('textbox');
+
+    // The 5,000th UTF-16 unit is the emoji's high surrogate; keeping it would
+    // store half a character.
+    fireEvent.change(editor, { target: { value: `${'a'.repeat(4999)}😀${'b'.repeat(10)}` } });
+
+    expect(editor).toHaveValue('a'.repeat(4999));
+  });
+
+  it('lets an answer already over the cap be cut down, without eating its tail', async () => {
+    // Written before the cap existed (or through a door that did not enforce
+    // it). Truncating it to 5,000 on the first keystroke would delete text the
+    // person never chose to delete.
+    const legacy = 'x'.repeat(6000);
+    fetchJson.mockResolvedValue(cataloguePage([catalogueEntry(BLOOD_TYPE_KEY, legacy)]));
+
+    render(<LifeDetailsSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Edit your answer to/ }));
+
+    const row = rowFor(BLOOD_TYPE_KEY);
+    const editor = within(row).getByRole('textbox');
+    expect(editor).toHaveValue(legacy);
+
+    fireEvent.change(editor, { target: { value: legacy.slice(0, 5999) } });
+    expect(editor).toHaveValue(legacy.slice(0, 5999));
+
+    // It can shrink but not grow.
+    fireEvent.change(editor, { target: { value: `${legacy.slice(0, 5999)}yyyy` } });
+    expect(editor).toHaveValue(legacy.slice(0, 5999));
+
+    // And it still cannot be saved over the cap: the person is told, nothing is sent.
+    fireEvent.click(within(row).getByRole('button', { name: 'Save' }));
+
+    expect(await within(row).findByRole('alert')).toHaveTextContent('Keep it under 5,000 characters.');
+    expect(callsWithMethod('PATCH')).toHaveLength(0);
   });
 });
 

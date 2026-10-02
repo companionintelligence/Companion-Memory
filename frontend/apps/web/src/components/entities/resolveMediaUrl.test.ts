@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { enterNativeShell, NATIVE_MEMORY_ORIGIN } from '@/test/nativeShell';
 
 import { resolveContentTileUrl, resolveFileTileUrl, resolveMediaUrl } from './resolveMediaUrl';
 
@@ -11,9 +13,61 @@ describe('resolveMediaUrl', () => {
     expect(resolveMediaUrl('https://cdn.example.com/a.png')).toBe('https://cdn.example.com/a.png');
   });
 
+  it('leaves an inline data: or blob: image alone instead of gluing /static onto it', () => {
+    // vcard.ts embeds a contact's photo as a data: URI; `/staticdata:image/...`
+    // resolves to nothing, which is how every such contact lost its photo.
+    expect(resolveMediaUrl('data:image/jpeg;base64,/9j/AAA')).toBe('data:image/jpeg;base64,/9j/AAA');
+    expect(resolveMediaUrl('blob:http://localhost/1b2c')).toBe('blob:http://localhost/1b2c');
+  });
+
   it('returns undefined for empty values', () => {
     expect(resolveMediaUrl(null)).toBeUndefined();
     expect(resolveMediaUrl('')).toBeUndefined();
+  });
+});
+
+/**
+ * The bundled iOS/Android app serves its own files from `capacitor://localhost`
+ * / `https://localhost`, so a bare `/static/...` is a request to the WebView
+ * itself: every thumbnail, avatar and drawer image on the phone was a broken
+ * placeholder and "Download" navigated the WebView to the app's 404 page
+ * (QA MEM-06 / MEM-07). Native media URLs have to carry the paired Memory origin.
+ */
+describe('resolveMediaUrl on the native shell', () => {
+  let leaveNativeShell: () => void = () => undefined;
+
+  afterEach(() => leaveNativeShell());
+
+  it('puts the paired Memory origin in front of /static', () => {
+    leaveNativeShell = enterNativeShell();
+
+    expect(resolveMediaUrl('/u/shot.png?X-Amz-Signature=sig')).toBe(
+      `${NATIVE_MEMORY_ORIGIN}/static/u/shot.png?X-Amz-Signature=sig`,
+    );
+  });
+
+  it('does not double the slash when the origin was saved with a trailing one', () => {
+    leaveNativeShell = enterNativeShell({ origin: `${NATIVE_MEMORY_ORIGIN}/` });
+
+    expect(resolveMediaUrl('/u/shot.png')).toBe(`${NATIVE_MEMORY_ORIGIN}/static/u/shot.png`);
+  });
+
+  it('still leaves absolute and inline URLs alone', () => {
+    leaveNativeShell = enterNativeShell();
+
+    expect(resolveMediaUrl('https://cdn.example.com/a.png')).toBe('https://cdn.example.com/a.png');
+    expect(resolveMediaUrl('data:image/png;base64,iVBORw0KGgo=')).toBe('data:image/png;base64,iVBORw0KGgo=');
+  });
+
+  it('carries the origin through the tile resolvers every grid, row and gallery uses', () => {
+    leaveNativeShell = enterNativeShell();
+
+    expect(resolveFileTileUrl({ contentType: 'image/jpeg', previewUrl: '/p/thumb.jpg' })).toBe(
+      `${NATIVE_MEMORY_ORIGIN}/static/p/thumb.jpg`,
+    );
+    expect(resolveContentTileUrl({ mimetype: 'image/png', mediaUrl: '/u/shot.png' })).toBe(
+      `${NATIVE_MEMORY_ORIGIN}/static/u/shot.png`,
+    );
   });
 });
 

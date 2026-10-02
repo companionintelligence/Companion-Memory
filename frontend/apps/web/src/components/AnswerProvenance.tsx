@@ -106,9 +106,17 @@ const BASE_CLASS = 'inline-flex items-center gap-1.5 text-xs text-muted-foregrou
  * owes a keyboard: a hit area a touch bigger than the 6px dot, a hover tint, a
  * visible focus ring in the ring token every other control on the page uses,
  * and a pointer cursor.
+ *
+ * On a touch screen that hit area was still ~14 x 10 pt (REFL-08: found only by
+ * tapping exact coordinates), so there the button grows to ~44 pt square — the
+ * size Apple asks of a tap target. The growth is padding cancelled by an equal
+ * negative margin, so a row keeps its shape. It is taken upward, downward and to
+ * the LEFT only: the dot sits at the right edge of its row, where more than the
+ * page's own gutter would overflow the scroller and make it pan sideways.
  */
 const BUTTON_CLASS = cn(
   '-mx-1 -my-0.5 cursor-pointer rounded-sm px-1 py-0.5 transition-colors',
+  'pointer-coarse:-my-4.5 pointer-coarse:-ml-8 pointer-coarse:py-4.5 pointer-coarse:pl-8',
   'hover:bg-muted/60 hover:text-foreground',
   'focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
 );

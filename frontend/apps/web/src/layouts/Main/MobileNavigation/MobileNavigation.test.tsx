@@ -113,6 +113,25 @@ describe('MobileNavigation', () => {
     expect(screen.getByRole('banner').querySelector('img[src*="logo"]')).toBeNull();
   });
 
+  // QA MEM-05: an entity's full page had only the menu chevron on its left, so
+  // on a phone — no browser Back, no swipe back — there was no way out that
+  // kept the explorer's filters.
+  it('puts a visible Back under the top row on an entity full page, and not on the explorer', () => {
+    const { unmount } = renderMobileNav('/memory');
+
+    expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument();
+    unmount();
+
+    renderMobileNav('/events/e-1');
+
+    const back = screen.getByRole('button', { name: 'Back' });
+
+    expect(back).toBeVisible();
+    // Below the header row, not inside it: the search box keeps its room.
+    expect(screen.getByRole('banner')).not.toContainElement(back);
+    expect(screen.getByRole('button', { name: 'Open menu' })).toBeInTheDocument();
+  });
+
   it('opens the drawer with the same destinations as the desktop list', async () => {
     renderMobileNav();
 

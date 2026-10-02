@@ -17,6 +17,7 @@ export {
   buildApiUrl,
   clearPersistedApiBaseUrl,
   getApiBaseUrl,
+  getWebOrigin,
   initApiBaseUrl,
   isIosPlatform,
   isLocalApplianceOrigin,

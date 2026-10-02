@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { useQuery, gql } from '@apollo/client';
-import { GlobalUID } from '@ci/common';
+import { GlobalUID, getWebOrigin } from '@ci/common';
 import { cn, Dialog, Button } from '@ci/shadcn';
 import {
   Activity,
@@ -310,7 +310,7 @@ export function ServiceIntegrationsSection({
   const { data: oauthData } = useQuery(GET_OAUTH_CALLBACK_URL);
   const blueBubbles = useBlueBubblesStatus();
 
-  const callbackUrl = oauthData?.oAuthCallbackUrl ?? `${window.location.origin}/oauth/callback`;
+  const callbackUrl = oauthData?.oAuthCallbackUrl ?? `${getWebOrigin()}/oauth/callback`;
 
   const [setupProvider, setSetupProvider] = useState<SetupProviderState | null>(null);
 

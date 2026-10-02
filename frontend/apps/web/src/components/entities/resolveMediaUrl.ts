@@ -1,14 +1,27 @@
+import { buildApiUrl } from '@ci/common';
+
 /**
  * Resolve a media path for the Memory UI.
- * Absolute http(s) URLs are used as-is; relative object-store keys are served
- * under `/static` (same contract as Gallery `getEntityMedia` / FileDetails).
+ * Absolute http(s) URLs, and inline `data:` / `blob:` images (a vCard's embedded
+ * contact photo), are used as-is; relative object-store keys are served under
+ * `/static` (same contract as Gallery `getEntityMedia` / FileDetails).
+ *
+ * This is the ONE place that prefix is applied — every tile, drawer, avatar,
+ * lightbox and download link goes through it — because the prefix alone is not
+ * a loadable URL on the native shells. Capacitor serves the bundle from
+ * `capacitor://localhost` (iOS) / `https://localhost` (Android), so a bare
+ * `/static/...` resolves against the WebView itself: thumbnails and avatars
+ * stayed broken-image placeholders, the drawer said "Media couldn't be loaded",
+ * and Download navigated the whole WebView to the app's own 404 page.
+ * `buildApiUrl` adds the Memory origin the phone is paired with; on web that
+ * origin is `''`, so the URL stays a same-origin path and nothing changes.
  */
 export function resolveMediaUrl(value?: string | null): string | undefined {
   if (!value) {
     return undefined;
   }
 
-  return /^https?:\/\//.test(value) ? value : `/static${value}`;
+  return /^(?:https?:\/\/|data:|blob:)/i.test(value) ? value : buildApiUrl(`/static${value}`);
 }
 
 /**

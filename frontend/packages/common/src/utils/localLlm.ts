@@ -82,6 +82,14 @@ interface ListenerHandle {
   remove(): Promise<void> | void;
 }
 
+/**
+ * What `addListener` hands back. A `registerPlugin()` proxy returns a `Promise<ListenerHandle>`, but this module
+ * reads `window.Capacitor.Plugins.LocalLLM`, which is the legacy stub the native bridge injects — and that stub's
+ * `addListener` returns the bare `{ remove }` with no Promise around it. The union keeps `.then` off the result at
+ * compile time: `await` is the one thing that takes both shapes.
+ */
+type ListenerRegistration = ListenerHandle | Promise<ListenerHandle>;
+
 /** Structural mirror of `LocalLlmPlugin` in `@ci/capacitor-local-llm`'s `src/definitions.ts`. */
 export interface LocalLlmPluginApi {
   isAvailable(): Promise<LocalLlmAvailability>;
@@ -103,8 +111,8 @@ export interface LocalLlmPluginApi {
   addListener(
     eventName: 'modelDownloadProgress',
     listener: (event: LocalLlmDownloadProgress) => void,
-  ): Promise<ListenerHandle>;
-  addListener(eventName: 'llmToken', listener: (event: LocalLlmTokenEvent) => void): Promise<ListenerHandle>;
+  ): ListenerRegistration;
+  addListener(eventName: 'llmToken', listener: (event: LocalLlmTokenEvent) => void): ListenerRegistration;
 }
 
 /** The `LocalLLM` plugin off the runtime Capacitor bridge, or undefined when absent. */
@@ -264,16 +272,23 @@ export function onLocalLlmDownloadProgress(listener: (event: LocalLlmDownloadPro
   let cancelled = false;
   let handle: ListenerHandle | undefined;
 
-  void plugin
-    .addListener('modelDownloadProgress', listener)
-    .then((registered) => {
+  // An async body rather than a `.then` chain: the legacy stub's `addListener` returns a bare `{ remove }`, not a
+  // Promise, so `.then` threw a TypeError out of the mount effect and sent the whole On-device model page to the
+  // error boundary on iOS. `await` takes either shape, and the try/catch also covers a stub that throws outright —
+  // a failed subscription only costs the live progress bar, which the page re-reads from the native side anyway.
+  void (async () => {
+    try {
+      const registered = await plugin.addListener('modelDownloadProgress', listener);
+
       if (cancelled) {
         void registered.remove();
       } else {
         handle = registered;
       }
-    })
-    .catch(() => {});
+    } catch {
+      // Best effort, as above.
+    }
+  })();
 
   return () => {
     cancelled = true;

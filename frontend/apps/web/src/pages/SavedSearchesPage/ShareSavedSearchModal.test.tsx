@@ -1,6 +1,7 @@
 import { fireEvent, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
+import { enterNativeShell, NATIVE_MEMORY_ORIGIN } from '@/test/nativeShell';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { mockSavedSearch } from './_storyHelpers';
@@ -53,5 +54,35 @@ describe('ShareSavedSearchModal — no controls that promise a public link', () 
     // The fallback: the same URL the code encodes, selectable rather than scanned.
     expect(screen.getAllByText(/\/shared\//).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Hide QR code' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * QA MEM-09: inside the iOS app the page origin is `capacitor://localhost`, and
+ * the link field, the QR code and the Email / Message tiles all took it — a
+ * "share link" that opens nowhere on any other device. On the native shells the
+ * link has to point at the Memory server the phone is paired with.
+ */
+describe('ShareSavedSearchModal on the native shell', () => {
+  let leaveNativeShell: () => void = () => undefined;
+
+  afterEach(() => leaveNativeShell());
+
+  it('shows, copies and hands off a link on the paired Memory origin, not the WebView origin', async () => {
+    leaveNativeShell = enterNativeShell();
+    const link = `${NATIVE_MEMORY_ORIGIN}/shared/b6f3a1c20d9e4f7a8c1b2d3e4f5a6b7c`;
+
+    renderWithProviders(<ShareSavedSearchModal savedSearch={mockSavedSearch()} onClose={() => {}} />);
+
+    expect(await screen.findByDisplayValue(link)).toBeInTheDocument();
+
+    // Email / Message carry the same link, encoded into the body.
+    const email = screen.getByRole('link', { name: /email/i });
+    expect(decodeURIComponent(email.getAttribute('href') ?? '')).toContain(link);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show QR code' }));
+
+    // The QR code's text fallback is the same URL it encodes.
+    expect(screen.getAllByText(link).length).toBeGreaterThan(0);
   });
 });

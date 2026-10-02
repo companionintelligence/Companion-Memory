@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 
 import { fetchJson, usePageTitle } from '@ci/common';
 import { Accordion, Badge, Card, Skeleton, Switch, cn } from '@ci/shadcn';
-import { AlertTriangle } from '@ci/shadcn/icons';
+import { AlertTriangle, ChevronDown, Lock } from '@ci/shadcn/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
@@ -581,7 +581,8 @@ function lastSucceeded(cron: ScheduleRow['cron'], fmt: DateTimeFormatter): strin
  * belongs next to the thing it switches.
  *
  * A locked schedule renders a disabled switch rather than nothing: the state is
- * still worth showing, and the title says who locked it.
+ * still worth showing, and the title says who locked it. The title is a hover
+ * tooltip, so {@link ScheduleLockNote} says it again where there is no hover.
  */
 function ScheduleSwitch({
   cron,
@@ -620,6 +621,35 @@ function ScheduleSwitch({
         void onSave({ crons: [{ name: cron, mode: next ? 'enabled' : 'disabled' }] })
       }
     />
+  );
+}
+
+/**
+ * Why a protected schedule's switch will not move, in a form a touch screen can
+ * show.
+ *
+ * `ScheduleSwitch` puts the reason in its `title`, and a `title` is a hover
+ * tooltip: on a phone there is no hover, so a protected schedule read as a
+ * dimmed switch that ignored taps and never said why (QA JOBS-11). Queue rows
+ * already carry a visible "required" badge for the same state; this is the
+ * schedule rows' version of it. A native `<details>`, because the state is
+ * "open or not" and nothing else — no handler, nothing to dismiss, and the
+ * whole sentence instead of a tooltip's worth.
+ */
+function ScheduleLockNote({ control }: { control: JobCronControl | null }) {
+  if (!control?.locked) {
+    return null;
+  }
+
+  return (
+    <details className="group mt-0.5 text-xs text-muted-foreground">
+      <summary className="inline-flex min-h-8 cursor-pointer list-none items-center gap-1 [&::-webkit-details-marker]:hidden">
+        <Lock aria-hidden className="h-3 w-3 shrink-0" />
+        <span>Required, cannot be switched off</span>
+        <ChevronDown aria-hidden className="h-3 w-3 shrink-0 transition-transform group-open:rotate-180" />
+      </summary>
+      <p className="pb-1">{control.lockedReason ?? 'This schedule is locked on.'}</p>
+    </details>
   );
 }
 
@@ -691,6 +721,7 @@ function SchedulesTable({
                   <span className="truncate">{descriptor.label}</span>
                   {descriptor.unnamed && <UnnamedCronWarning />}
                 </span>
+                <ScheduleLockNote control={control} />
               </td>
               <td className="py-1.5 pr-3 text-muted-foreground">{descriptor.categoryLabel}</td>
               <td className="py-1.5 pr-3 whitespace-nowrap" title={schedule.raw}>
@@ -788,6 +819,7 @@ function SchedulesPhoneList({
                       {' · succeeded '}
                       {lastSucceeded(cron, fmt)}
                     </p>
+                    <ScheduleLockNote control={control} />
                   </li>
                 ))}
               </ul>

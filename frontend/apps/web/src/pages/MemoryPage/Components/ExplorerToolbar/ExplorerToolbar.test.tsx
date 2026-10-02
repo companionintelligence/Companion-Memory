@@ -194,6 +194,54 @@ describe('ExplorerToolbar', () => {
       expect(screen.getByTestId('params').textContent).not.toMatch(/from=|to=|when=/);
       expect(screen.getByRole('button', { name: 'When' })).toBeInTheDocument();
     });
+
+    /**
+     * QA MEM-15: on a phone the custom range's calendar, "Specific time" and
+     * "Clear range" stack taller than the screen. Only the popover opened from
+     * the phone filter sheet's row was capped to the room it had; the inline When
+     * button's ran off the bottom edge, so expanding "Specific time" put its
+     * Start / End inputs below the fold with nothing to scroll.
+     */
+    describe('a custom range on a short screen', () => {
+      const from = new Date(2026, 0, 1, 0, 0, 0, 0).toISOString();
+      const to = new Date(2026, 0, 31, 23, 59, 59, 999).toISOString();
+      const route = `/?when=custom&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+      const label = `${new Date(from).toLocaleDateString()} – ${new Date(to).toLocaleDateString()}`;
+
+      it('caps the popover to the room it has and scrolls inside it, from the inline When button too', () => {
+        renderToolbar(<MemoryExplorerFilterControls />, { route });
+
+        fireEvent.click(screen.getByRole('button', { name: label }));
+
+        const popover = document.querySelector('[data-slot="popover-content"]');
+
+        expect(popover).toHaveClass('max-h-(--radix-popover-content-available-height)', 'overflow-y-auto');
+      });
+
+      it('brings the Start / End time inputs into view when Specific time opens', () => {
+        const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+
+        try {
+          renderToolbar(<MemoryExplorerFilterControls />, { route });
+
+          fireEvent.click(screen.getByRole('button', { name: label }));
+          expect(screen.queryByLabelText('Start time')).not.toBeInTheDocument();
+
+          fireEvent.click(screen.getByRole('button', { name: /Specific time/ }));
+
+          const startTime = screen.getByLabelText('Start time');
+          const scrolled = scrollIntoView.mock.contexts.at(-1) as HTMLElement | undefined;
+
+          expect(scrollIntoView).toHaveBeenLastCalledWith({ block: 'nearest' });
+          // It is the row holding the two inputs that scrolls, not something
+          // elsewhere in the popover.
+          expect(scrolled).toContainElement(startTime);
+          expect(scrolled).toContainElement(screen.getByLabelText('End time'));
+        } finally {
+          scrollIntoView.mockRestore();
+        }
+      });
+    });
   });
 
   describe('activity picker', () => {
@@ -482,6 +530,44 @@ describe('ExplorerToolbar', () => {
       // Removing one chip must not clear its neighbours.
       expect(params).toContain('tags=space');
       expect(screen.getByText('#space')).toBeInTheDocument();
+    });
+
+    /**
+     * QA MEM-16: add a Who person and From, remove the person, and "From only"
+     * stayed behind next to nothing. A direction with no person is a real filter —
+     * the bare row direction, saved searches and the phone filter sheet's "From
+     * anyone" all depend on it — so the chip stays; what was wrong is that its
+     * label only made sense beside a person.
+     */
+    describe('the message direction chip', () => {
+      it('reads "From only" beside a Who person, whose role it fixes', () => {
+        renderToolbar(<ExplorerToolbar open />, { route: '/?people=Ada%20Lovelace&direction=inbound' });
+
+        expect(screen.getByText('From only')).toBeInTheDocument();
+        expect(screen.queryByText('From anyone')).not.toBeInTheDocument();
+      });
+
+      it('says what it still filters once the person is removed, and keeps filtering', () => {
+        renderToolbar(<ExplorerToolbar open />, { route: '/?people=Ada%20Lovelace&direction=inbound' });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Remove Ada Lovelace' }));
+
+        expect(screen.getByText('From anyone')).toBeInTheDocument();
+        expect(screen.queryByText('From only')).not.toBeInTheDocument();
+        // Still there, still counted, still removable on its own.
+        expect(screen.getByTestId('params').textContent).toContain('direction=inbound');
+        expect(screen.getByText('1 filter', { exact: false })).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Remove message direction' }));
+
+        expect(screen.getByTestId('params').textContent).not.toContain('direction=');
+      });
+
+      it('reads "To anyone" for a sent-messages link that names nobody', () => {
+        renderToolbar(<ExplorerToolbar open />, { route: '/?direction=outbound' });
+
+        expect(screen.getByText('To anyone')).toBeInTheDocument();
+      });
     });
   });
 

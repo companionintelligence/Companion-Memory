@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react';
 
-import { Portal, useDeviceLayout, usePageTitle } from '@ci/common';
+import { Portal, buildApiUrl, useDeviceLayout, usePageTitle } from '@ci/common';
 import { IconButton, ScrollArea } from '@ci/shadcn';
 import { Braces, ExternalLink, X } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
@@ -105,7 +105,7 @@ export function SettingsPage() {
                   so the link follows the flag rather than pointing at a 404. */}
               {isFeatureEnabled('graphql.ide') ? (
                 <a
-                  href="/api/graphiql"
+                  href={buildApiUrl('/api/graphiql')}
                   target="_blank"
                   rel="noopener noreferrer"
                   className={navLinkClass({ isActive: false })}

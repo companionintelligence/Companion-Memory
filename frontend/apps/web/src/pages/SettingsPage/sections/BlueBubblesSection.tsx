@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { fetchJson } from '@ci/common';
+import { fetchJson, getWebOrigin } from '@ci/common';
 import { Button, Card, Checkbox, Input, Label, Switch } from '@ci/shadcn';
 import {
   AlertCircle,
@@ -244,7 +244,9 @@ export function BlueBubblesSection() {
     }
   };
 
-  const webhookUrl = config?.webhookPath ? `${window.location.origin}${config.webhookPath}` : null;
+  // getWebOrigin(), not window.location.origin: on the phone that is the app's own
+  // `capacitor://localhost`, which BlueBubbles Server could never call.
+  const webhookUrl = config?.webhookPath ? `${getWebOrigin()}${config.webhookPath}` : null;
 
   const handleCopyWebhookUrl = async () => {
     if (!webhookUrl) {

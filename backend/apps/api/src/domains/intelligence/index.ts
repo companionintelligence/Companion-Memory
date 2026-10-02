@@ -68,3 +68,6 @@ export { QUESTION_ROTATION_ORDER_SQL, QUESTION_ROTATION_RANK_SQL } from './quest
 
 // Persisted retrieval provenance for an inferred answer (ci.answers.answer_evidence)
 export type { AnswerEvidence, AnswerEvidenceCitation } from './types';
+
+// What an answer's text may be, for the doors that do not run the REST schemas
+export { answerTextSchema } from './types';

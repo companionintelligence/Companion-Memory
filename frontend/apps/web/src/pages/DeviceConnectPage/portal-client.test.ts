@@ -5,6 +5,7 @@ import {
   listMemoryServers,
   persistPortalUrl,
   probeMemoryOrigin,
+  probePortalOrigin,
   readPersistedPortalUrl,
   signInToPortal,
 } from './portal-client';
@@ -110,6 +111,50 @@ describe('device-connect portal-client', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 503 })));
 
     await expect(probeMemoryOrigin('https://memory.example.com')).rejects.toThrow(/503/);
+  });
+
+  describe('probePortalOrigin (the check before the sign-in sheet opens)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('goes to the Companion origin itself, over the same native HTTP bridge as the other Portal calls', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+
+      await probePortalOrigin('https://hub.example.com/');
+
+      expect(fetch).toHaveBeenCalledWith(
+        'https://hub.example.com/api/auth/ok',
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    it.each([404, 500, 503])(
+      'counts an HTTP %i as reachable: something is listening there',
+      async (status) => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status })));
+
+        await expect(probePortalOrigin('https://hub.example.com')).resolves.toBeUndefined();
+      },
+    );
+
+    it('rejects when the request gets no answer at all (refused, DNS, offline)', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Load failed')));
+
+      await expect(probePortalOrigin('http://192.168.0.4:9')).rejects.toThrow('Load failed');
+    });
+
+    it('gives up on a host that swallows the request, even where nothing honours an abort signal', async () => {
+      vi.useFakeTimers();
+      // Never settles, and ignores the signal — what the native bridge does.
+      vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise(() => {})));
+
+      const probe = probePortalOrigin('http://192.168.0.4:9');
+      const settled = expect(probe).rejects.toThrow(/No answer from http:\/\/192\.168\.0\.4:9/);
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      await settled;
+    });
   });
 
   it('defaults cloud connect to production, not the internal Hub appliance Portal', () => {

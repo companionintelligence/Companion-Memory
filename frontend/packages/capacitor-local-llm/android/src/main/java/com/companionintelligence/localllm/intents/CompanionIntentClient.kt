@@ -10,12 +10,16 @@ import org.json.JSONObject
  * Talks to CI-Server on behalf of the on-device model: reads the intent catalog, and executes an
  * intent when the model calls one.
  *
- * Two quirks of the server are baked in here rather than left to callers:
+ * Two facts about the server are baked in here rather than left to callers:
  *
- * 1. **The catalog path has a doubled `/api`.** `IntentsController` is `@Controller('api/intents')`
- *    while the fronting proxy already strips a leading `/api`, so from an app that stores the proxy
- *    origin the real path is `<base>/api/api/intents`. `McpController` is `@Controller('mcp')` and
- *    so is reached at the ordinary `<base>/api/mcp`.
+ * 1. **The catalog is `<base>/api/intents` — one `/api`, like `<base>/api/mcp`.** The fronting
+ *    proxy strips a leading `/api`, and both `IntentsController`
+ *    (`@Controller(['intents', 'agent/intents'])`) and `McpController` (`@Controller('mcp')`) mount
+ *    at bare paths. This client used to ask for `/api/api/intents`, which only worked while the
+ *    controller baked its own `api/` into its mount (removed in #2653); on a current appliance that
+ *    is a 404 and [IntentToolProvider] quietly offers no tools, so the model answers from its
+ *    weights alone. An appliance older than #2653 is the mirror case: it only serves the doubled
+ *    path, and reads as toolless the same graceful way.
  * 2. **There is no REST "execute this intent" endpoint.** The only wire protocol for
  *    "run intent X with args Y" is MCP `tools/call` over `POST /mcp`, which is JSON-RPC and
  *    requires an `initialize` handshake first; the returned `Mcp-Session-Id` must be echoed on
@@ -36,7 +40,7 @@ class CompanionIntentClient(
 
     /** Reads the catalog with the server's own rulings for the on-device tier attached. */
     fun fetchManifest(): IntentManifest {
-        val body = get("/api/api/intents?tier=local")
+        val body = get("/api/intents?tier=local")
 
         return IntentManifest.parse(JSONObject(body))
     }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 import { Button, Input, Textarea, ToggleGroup, cn } from '@ci/shadcn';
@@ -22,6 +22,29 @@ const ANSWER_AUTOSAVE_DEBOUNCE_MS = 900;
 
 /** Mirrors `createAnswerSchema`/`updateAnswerSchema` on the API, which reject longer text. */
 const ANSWER_MAX_LENGTH = 5000;
+
+/**
+ * `value`, held to {@link ANSWER_MAX_LENGTH} (or to `previous`'s length, when an
+ * answer already longer than the cap is being cut down — the cap must never eat
+ * the tail of text the person did not choose to delete).
+ *
+ * The `maxLength` attribute on the fields is not enough by itself: on an iPhone
+ * a 5,003-character run typed into the editor was accepted whole, so the cap is
+ * also applied to the value the field reports, whatever put the text there.
+ * A surrogate pair is never left half-cut: a lone half of an emoji is not text.
+ */
+function clampAnswer(value: string, previous = ''): string {
+  const limit = Math.max(ANSWER_MAX_LENGTH, previous.length);
+
+  if (value.length <= limit) {
+    return value;
+  }
+
+  const cut = value.slice(0, limit);
+  const last = cut.charCodeAt(cut.length - 1);
+
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
 
 /** Tailwind's `max-sm`: below it each theme's grid collapses to a single column. */
 const STACKED_QUERY = '(width < 40rem)';
@@ -418,33 +441,60 @@ export function LifeDetailsSection() {
     [authToken],
   );
 
-  const loadAnswers = useCallback(async () => {
-    setLoading(true);
-    try {
-      const page = await fetchJson<CataloguePage>(curatedCatalogueUrl(), {
-        headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
-      });
-      const { byKey, missingKeys } = indexCuratedAnswers(page?.data ?? []);
+  // The newest load. Refreshes after a save now run while the person keeps using
+  // the other rows, so a slow one that started before a later save finished must
+  // not land on top of it and put that row back to "no answer yet".
+  const latestLoad = useRef(0);
 
-      // Loud, because the silent version of this is what shipped: a curated
-      // key the catalogue has never heard of used to render a perfectly
-      // normal-looking input that threw away whatever was typed into it.
-      // Rows without a question to answer are not rendered at all (below).
-      if (missingKeys.length > 0) {
-        console.error(
-          `Life details: ${missingKeys.length} curated question(s) are missing from the catalogue — ` +
-            `their seed migration has not run, or they were added to lifeDetails.ts without one: ${missingKeys.join(', ')}`,
-        );
+  const loadAnswers = useCallback(
+    async ({ background = false }: { background?: boolean } = {}) => {
+      const load = ++latestLoad.current;
+
+      // `loading` swaps the whole grid for "Loading…": right for the first load,
+      // wrong for the refetch after a save. That one unmounted every row, so the
+      // section collapsed to a line, the page scroll was clamped to the end of
+      // the (now short) page and the keyboard went with the field. A background
+      // refresh swaps rows in place instead and never touches `loading`.
+      if (!background) {
+        setLoading(true);
       }
 
-      setRows(byKey);
-      setError(false);
-    } catch {
-      setError(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [authToken]);
+      try {
+        const page = await fetchJson<CataloguePage>(curatedCatalogueUrl(), {
+          headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+        });
+
+        if (load !== latestLoad.current) {
+          return;
+        }
+
+        const { byKey, missingKeys } = indexCuratedAnswers(page?.data ?? []);
+
+        // Loud, because the silent version of this is what shipped: a curated
+        // key the catalogue has never heard of used to render a perfectly
+        // normal-looking input that threw away whatever was typed into it.
+        // Rows without a question to answer are not rendered at all (below).
+        if (missingKeys.length > 0) {
+          console.error(
+            `Life details: ${missingKeys.length} curated question(s) are missing from the catalogue — ` +
+              `their seed migration has not run, or they were added to lifeDetails.ts without one: ${missingKeys.join(', ')}`,
+          );
+        }
+
+        setRows(byKey);
+        setError(false);
+      } catch {
+        if (load === latestLoad.current) {
+          setError(true);
+        }
+      } finally {
+        if (load === latestLoad.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [authToken],
+  );
 
   useEffect(() => {
     void loadAnswers();
@@ -466,8 +516,11 @@ export function LifeDetailsSection() {
         headers: authHeaders(),
         body: JSON.stringify({ text: trimmed, question: { id: questionId } }),
       });
+      // Refresh behind the row, and clear what was typed only once the saved
+      // answer is there to replace it — clearing first left an empty field on
+      // screen for the length of the fetch.
+      await loadAnswers({ background: true });
       setDrafts((prev) => ({ ...prev, [questionKey]: '' }));
-      await loadAnswers();
     } catch {
       // Draft (if any) survives on failure so the user doesn't retype it.
     } finally {
@@ -535,9 +588,11 @@ export function LifeDetailsSection() {
         headers: authHeaders(),
         body: JSON.stringify({ text: trimmed }),
       });
+      // The editor stays (saving…) until the refreshed answer is in hand:
+      // closing it first showed the OLD answer again for the length of the fetch.
+      await loadAnswers({ background: true });
       setEditingKey(null);
       setEditDraft('');
-      await loadAnswers();
     } catch {
       // Stay in the editor with the typed text intact so it can be retried.
       setEditError("Couldn't save that. Try again.");
@@ -616,7 +671,7 @@ export function LifeDetailsSection() {
                             draft={editDraft}
                             busy={busy}
                             error={editError}
-                            onDraftChange={setEditDraft}
+                            onDraftChange={(value) => setEditDraft((prev) => clampAnswer(value, prev))}
                             onSave={(text) => void handleUpdate(question.key, row, text)}
                             onCancel={cancelEdit}
                           />
@@ -638,7 +693,10 @@ export function LifeDetailsSection() {
                                 draft={drafts[question.key] ?? ''}
                                 busy={busy}
                                 onDraftChange={(value) =>
-                                  setDrafts((prev) => ({ ...prev, [question.key]: value }))
+                                  setDrafts((prev) => ({
+                                    ...prev,
+                                    [question.key]: clampAnswer(value, prev[question.key]),
+                                  }))
                                 }
                                 onAnswer={(text) => void handleAnswer(question.key, row.id, text)}
                               />

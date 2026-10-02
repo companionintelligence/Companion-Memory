@@ -86,6 +86,26 @@ export function buildApiUrl(path: string): string {
 }
 
 /**
+ * The origin a link that LEAVES this app should carry: a share link or its QR
+ * code, a webhook address someone pastes into another system.
+ *
+ * Web and desktop: the page's own origin, exactly as before. The native Capacitor
+ * shell is the exception: it serves the bundle from `capacitor://localhost` (iOS)
+ * or `https://localhost` (Android), an origin that exists only inside this
+ * WebView, so a link built from `window.location.origin` is dead on every other
+ * device. The Memory the app is connected to serves the web UI as well as the
+ * API, so its origin is the one that opens elsewhere. Empty until a server has
+ * been configured.
+ */
+export function getWebOrigin(): string {
+  if (isNativePlatform()) {
+    return getApiBaseUrl();
+  }
+
+  return typeof window !== 'undefined' ? window.location.origin : '';
+}
+
+/**
  * Parse a Hub/user-supplied Memory address into a clean `http:`/`https:` origin.
  * Hostnames without a scheme get `https://` so a Portal row like
  * `ci-memory-core7.example.com` does not become a relative URL against the

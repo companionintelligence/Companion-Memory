@@ -24,7 +24,13 @@ stay that way.
   `localStorage`**. On first launch with no server set, it routes to the in-app
   `/device-connect` screen (Portal picker). `/server` is Advanced URL entry.
 - All `/api/...` calls resolve through `buildApiUrl()` (`@ci/common`): `''` on web
-  (same-origin), the configured origin on native.
+  (same-origin), the configured origin on native. That covers every `fetch`, XHR,
+  `src`, `href` and `window.open`, not just GraphQL: the page origin is
+  `https://localhost`, so a bare `/api/...` or `/static/...` there is a request to
+  the app's own bundle. Media paths go through `resolveMediaUrl()` (it adds the
+  `/static` prefix and the origin), and a link meant for another device — a share
+  link, a QR code, a webhook address — takes `getWebOrigin()`, never
+  `window.location.origin`.
 - The native web build sets `VITE_DISABLE_PWA=true` so the Workbox service worker
   doesn't fight Capacitor's local asset serving.
 
@@ -455,12 +461,15 @@ The local model can call CI's **published intents** as tools, so it answers from
 of its own weights. Enable it per platform with `LocalLLM.configureIntentTools({ baseUrl, apiKey })`;
 the plugin then fetches the intent catalog with `?tier=local` and binds what the appliance allows.
 
-> **Watch the doubled `/api`.** `IntentsController` is `@Controller('api/intents')` while the
-> fronting proxy already strips a leading `/api`, so from an app holding the proxy origin the real
-> path is `<base>/api/api/intents?tier=local` — which is exactly what `CompanionIntentClient`
-> requests on both platforms. `McpController` is `@Controller('mcp')`, so it is reached at the
-> ordinary `<base>/api/mcp`. (`/api/agent/intents` is the canonical prefix for new callers;
-> `/api/intents` still serves and is what these clients use.)
+> **One `/api`, for both.** The fronting proxy strips a leading `/api` and Nest sets no global
+> prefix, so `IntentsController` (mounted at the bare `intents`) is reached at
+> `<base>/api/intents?tier=local` and `McpController` (`mcp`) at `<base>/api/mcp` — which is what
+> `CompanionIntentClient` requests on both platforms. The catalog used to be `<base>/api/api/intents`,
+> while the controller baked its own `api/` into its mount; #2653 removed that, the clients kept asking
+> for the doubled path, and on-device tools silently never bound against a current appliance (a 404 is
+> swallowed so the model still loads, toolless). `capacitorPluginContract.test.ts` now checks both
+> clients' paths against the controllers' real mounts. (`/api/agent/intents` is the canonical prefix for
+> new callers; `/api/intents` still serves and is what these clients use.)
 
 **One security rule, not three.** The appliance computes the `execute` / `queue` / `deny` ruling
 (`dispatchPolicy.ts`) and publishes it per intent; the phone reads `dispatch.decision` and obeys it.
@@ -479,6 +488,18 @@ waiting on two app-store releases. Destructive and external intents always queue
 That asymmetry is structural, not an oversight: the LiteRT-LM Swift surface has no `OpenApiTool`
 equivalent (verified against the vendored source — 18 public types, one tool protocol, no
 schema-string entry point), so iOS cannot construct tools dynamically at all.
+
+**What iOS binds today.** Three hand-written structs in `CompanionIntentTools.swift`: `knowledge_search`
+(the tool for "what do I know about X", "when did I …", "how many …"), `people_find`, and `memory_recall`,
+which is a graph lookup of a *person* and who they are connected to — it takes `personName` and nothing
+else, because the appliance's `memory.recall` has no free-text or date-range parameter. Each `@ToolParam` must
+be a same-named property of the intent's published schema and each `run()` must send exactly those;
+`IntentCatalogService.realTools.test.ts` (backend) reads the Swift file against the real tool classes and fails
+when they drift (the app used to send `query` / `startDate` / `endDate` to `memory_recall`, which the server
+silently dropped, and `content` to `memory_remember`, which it rejected). `memory.remember` is **not** offered on
+iOS: it writes graph entities (`operations: [{ kind: "entity.create", … }]`), not a Note, and no intent the local
+tier may run creates a Note. Android still binds it, with the published schema, because it binds every
+`execute` intent.
 
 Execution goes over MCP `tools/call` (`POST /mcp`) — there is no REST "execute this intent"
 endpoint — authenticated with the same `x-api-key` the App Intents already use.

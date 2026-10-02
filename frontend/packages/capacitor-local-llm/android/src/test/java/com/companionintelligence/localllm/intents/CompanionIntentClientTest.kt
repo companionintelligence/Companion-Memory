@@ -24,7 +24,7 @@ import org.robolectric.RobolectricTestRunner
 class CompanionIntentClientTest {
 
     @Test
-    fun the_catalogue_path_keeps_the_servers_doubled_api_prefix_however_the_base_url_is_written() {
+    fun the_catalogue_path_is_a_single_api_prefix_however_the_base_url_is_written() {
         TestHttpServer { exchange, _ ->
             exchange.respond(200, """{"version": "1.2.0", "tier": "local", "intents": []}""")
         }.use { server ->
@@ -33,11 +33,11 @@ class CompanionIntentClientTest {
             CompanionIntentClient(server.baseUrl, "secret-key").fetchManifest()
             CompanionIntentClient(server.baseUrl + "/", "secret-key").fetchManifest()
 
-            // The doubled `/api` is not a typo: IntentsController is @Controller('api/intents')
-            // behind a proxy that already strips one `/api`. "Fixing" it 404s every install and
-            // leaves the model silently toolless.
+            // One `/api`, the one the fronting proxy strips: IntentsController mounts at the bare
+            // `intents` (since #2653). The old doubled `/api/api/intents` is a 404 on a current
+            // appliance and leaves the model silently toolless.
             assertEquals(
-                listOf("/api/api/intents?tier=local", "/api/api/intents?tier=local"),
+                listOf("/api/intents?tier=local", "/api/intents?tier=local"),
                 server.requests.map { it.path },
             )
             assertEquals("GET", server.requests[0].method)

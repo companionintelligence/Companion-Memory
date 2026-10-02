@@ -127,14 +127,15 @@ function dropDanglingLinks(data: { nodes: GraphNode[]; links: GraphLink[] }): {
 
 function buildSubgraph(
   data: { nodes: GraphNode[]; links: GraphLink[] },
-  seedId: string,
+  seedId: string | null,
   maxDepth: number,
 ): Subgraph {
   // A BFS from a seed that isn't in the payload prunes everything reachable
   // only through it — with lots of data that collapses the graph to empty.
   // Hand the payload through unpruned instead; the explorer's visibility
-  // expansion still bounds what actually renders.
-  if (!data.nodes.some((node) => node.id === seedId)) {
+  // expansion still bounds what actually renders. An account with no self
+  // Person has no seed at all, which is the same case.
+  if (seedId == null || !data.nodes.some((node) => node.id === seedId)) {
     return { nodes: data.nodes, links: data.links };
   }
 
@@ -316,7 +317,12 @@ export function useGraphOverview(
           fetchJson<GraphDataResponse>(dataUrl, { ...baseInit }),
         ]);
 
-        if (!contextResponse?.success || !contextResponse.context) {
+        // `context: null` beside `success: true` is the server saying this
+        // account has no self Person (it never onboarded, or its profile was
+        // removed). That is not a failure: the graph still has data, it just has
+        // nobody to centre on, so it renders unpruned and uncentred instead of
+        // refusing the whole tab with a raw error (QA MEM-16).
+        if (!contextResponse?.success) {
           throw new Error('Unable to resolve user context');
         }
 
@@ -324,8 +330,8 @@ export function useGraphOverview(
           throw new Error('Graph data request failed');
         }
 
-        const context = contextResponse.context!;
-        const userEntityId = context.currentUser.entityId;
+        const context = contextResponse.context;
+        const userEntityId = context?.currentUser.entityId ?? null;
         const filterMatchedEntityIds = combineMatches(graphResponse.tagMatch, graphResponse.eventMatch);
         const filterScope: FilterScope = {
           tags: graphResponse.tagMatch?.active === true,
@@ -351,8 +357,8 @@ export function useGraphOverview(
             error: null,
             userEntityId,
             subgraph,
-            quickStats: context.quickStats,
-            currentUser: context.currentUser,
+            quickStats: context?.quickStats ?? null,
+            currentUser: context?.currentUser ?? null,
             filterMatchedEntityIds,
             filterScope,
           });
