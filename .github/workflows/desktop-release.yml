@@ -864,6 +864,10 @@ jobs:
           # inventory stays at the top where it is actually read.
           body: ${{ steps.platforms.outputs.body }}
           generate_release_notes: true
+          # The desktop app's releases share this repo with the server's date-tagged
+          # releases (v2026.9.9.1 ...). Without this, each desktop release takes the
+          # "Latest" badge, and /releases/latest stops pointing at the server.
+          make_latest: 'false'
           # macOS/Windows assets may legitimately be absent if their signing
           # secrets aren't provisioned yet — see this file's header comment —
           # which is why the pattern stays a glob. `fail_on_unmatched_files`
