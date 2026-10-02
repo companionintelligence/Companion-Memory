@@ -218,11 +218,32 @@ describe('SourcesPage on a phone', () => {
     const services = await screen.findByRole('link', { name: /Services/ });
     const row = services.parentElement;
 
-    expect(row).toHaveClass('grid-cols-3');
+    expect(row?.children).toHaveLength(3);
     expect(row).toContainElement(screen.getByRole('link', { name: /Import/ }));
     expect(row).toContainElement(screen.getByRole('link', { name: /Devices/ }));
     expect(services).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: /Import/ })).not.toHaveAttribute('aria-current');
+  });
+
+  // Measured on a 402pt iPhone with 13 imports: the Import label needed 49px
+  // and, once its icon, padding and badge were paid for, had 43 of them — an
+  // equal third of the row gave the segment carrying a count the same room as
+  // the two that carry none. jsdom has no layout to measure that in, so this
+  // pins the decision that fixes it: each segment is as wide as what is in it.
+  it('sizes each segment to what is in it, rather than cutting the row into equal thirds', async () => {
+    setViewport(true);
+    h.imports = 13;
+    renderAt('/sources/connect');
+
+    const services = await screen.findByRole('link', { name: /Services/ });
+    const row = services.parentElement;
+
+    expect(row).toHaveClass('flex');
+    expect(row?.className).not.toMatch(/grid-cols/);
+
+    for (const link of screen.getAllByRole('link')) {
+      expect(link).toHaveClass('flex-auto');
+    }
   });
 
   it('shows counts as numbers, keeping the noun for screen readers', async () => {
@@ -244,7 +265,7 @@ describe('SourcesPage on a phone', () => {
 
     const services = await screen.findByRole('link', { name: /Services/ });
 
-    expect(services.parentElement).toHaveClass('grid-cols-2');
+    expect(services.parentElement?.children).toHaveLength(2);
     expect(screen.queryByRole('link', { name: /Import/ })).not.toBeInTheDocument();
   });
 });

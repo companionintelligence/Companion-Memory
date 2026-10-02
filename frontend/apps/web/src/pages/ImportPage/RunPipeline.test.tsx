@@ -307,3 +307,103 @@ describe('RunPipeline retry failed push', () => {
     expect(screen.queryByRole('button', { name: /try these again/i })).not.toBeInTheDocument();
   });
 });
+
+/**
+ * What a finished run says about each stage.
+ *
+ * The QA run of the 701,447-record Google Takeout showed a green check beside
+ * "Read parsing fitbit (56/57)", "Store files uploading" and "Save pushing", and a
+ * "Found:" line that printed the 57 recognized files' importer ids as they were
+ * stored — `google_my_activity` thirty times over.
+ */
+describe('RunPipeline stage sub-label', () => {
+  function stageOf(overrides: Partial<ImportRunDetail['stages'][number]>): ImportRunDetail['stages'][number] {
+    return {
+      id: 'stage-parse',
+      seq: 1,
+      kind: 'parse',
+      status: 'completed',
+      phase: 'parsing fitbit (56/57)',
+      processed: 706_689,
+      total: 706_689,
+      weight: 35,
+      etaSeconds: null,
+      durationMs: null,
+      error: null,
+      detail: {},
+      ...overrides,
+    };
+  }
+
+  function runOf(stage: ImportRunDetail['stages'][number]): ImportRunDetail {
+    return { ...runWith({}), stages: [stage] };
+  }
+
+  it('does not narrate a finished stage as though it were still working', () => {
+    render(<RunPipeline run={runOf(stageOf({ status: 'completed' }))} />);
+
+    expect(screen.getByText('Read')).toBeInTheDocument();
+    expect(screen.queryByText('parsing fitbit (56/57)')).not.toBeInTheDocument();
+  });
+
+  it('keeps the live sub-label on a stage that is running', () => {
+    const run = { ...runOf(stageOf({ status: 'running' })), status: 'running', finishedAt: null };
+
+    render(<RunPipeline run={run} />);
+
+    expect(screen.getByText('parsing fitbit (56/57)')).toBeInTheDocument();
+  });
+
+  it('keeps where a stage stopped when it failed', () => {
+    render(<RunPipeline run={runOf(stageOf({ status: 'failed', error: 'unexpected end of mbox' }))} />);
+
+    expect(screen.getByText('parsing fitbit (56/57)')).toBeInTheDocument();
+  });
+});
+
+describe('RunPipeline found line', () => {
+  // 57 entries, 14 distinct — the shape of the real Takeout's parse detail.
+  const RECOGNIZED = [
+    'contact_list',
+    'calendar',
+    'calendar',
+    'vcard',
+    'google_voice',
+    ...Array.from({ length: 30 }, () => 'google_my_activity'),
+    'kmlgx',
+    'google_my_activity',
+    'vcard',
+  ];
+
+  it('names each service once, however many files of it were recognized', () => {
+    render(<RunPipeline run={runWith({ recognized: RECOGNIZED })} />);
+
+    const found = screen.getByText(/^Found:/);
+
+    expect(found.textContent?.match(/google my activity/gi)).toHaveLength(1);
+    expect(found.textContent?.match(/calendar/gi)).toHaveLength(1);
+    expect(found.textContent?.match(/vcard/gi)).toHaveLength(1);
+  });
+
+  it('uses what the catalogue calls a service rather than its importer id', () => {
+    render(
+      <RunPipeline
+        run={runWith({ recognized: RECOGNIZED })}
+        sources={[
+          { name: 'google_my_activity', title: 'Google My Activity' },
+          { name: 'google_voice', title: 'Google Voice' },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText(/^Found:/).textContent).toBe(
+      'Found: contact list, calendar, vcard, Google Voice, Google My Activity, kmlgx',
+    );
+  });
+
+  it('never prints a raw snake_case importer id', () => {
+    render(<RunPipeline run={runWith({ recognized: RECOGNIZED })} />);
+
+    expect(screen.getByText(/^Found:/).textContent).not.toMatch(/_/);
+  });
+});

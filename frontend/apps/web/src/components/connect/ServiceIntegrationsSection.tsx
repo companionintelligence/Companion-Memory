@@ -345,6 +345,7 @@ export function ServiceIntegrationsSection({
         node: {
           id: string;
           name: string;
+          authType: string | null;
           localOnly: boolean;
           providerKeys: unknown;
           appSetupUrl: string | null;
@@ -364,9 +365,16 @@ export function ServiceIntegrationsSection({
 
   function handleProviderClick(rawId: string) {
     const provider = providerMap[rawId];
-    const isLocalOnlyWithoutKeys = provider?.localOnly && !provider?.providerKeys;
+    // The setup dialog is for an OAuth app, so it is for OAuth providers only.
+    // `localOnly` alone is not that signal: the server forces it true for every
+    // oauth2 provider while there are no CI Portal credentials, but Signal is
+    // seeded `local_only` for its own reason (signal-cli runs on the appliance's
+    // network, there is no cloud proxy) and signs in with an API key that its
+    // provider page asks for — an "OAuth Setup" dialog for it described an app
+    // that does not exist.
+    const needsOwnOAuthApp = provider?.authType === 'oauth2' && provider.localOnly && !provider.providerKeys;
 
-    if (isLocalOnlyWithoutKeys) {
+    if (needsOwnOAuthApp) {
       setSetupProvider({
         name: provider.name ?? 'Provider',
         appSetupUrl: provider.appSetupUrl ?? null,

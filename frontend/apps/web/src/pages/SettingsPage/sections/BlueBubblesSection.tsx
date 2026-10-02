@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 import { Button, Card, Checkbox, Input, Label, Switch } from '@ci/shadcn';
@@ -58,6 +58,27 @@ function formatTimestamp(value: string | null, fmt: DateTimeFormatter): string {
 }
 
 /**
+ * A ref for a status line that brings it into view when a value arrives for it.
+ *
+ * This form is taller than a phone's screen and its button row sits near the
+ * bottom edge of it, so what a button reports is drawn BELOW the fold: tapping
+ * "Test connection" looked like it did nothing until the person scrolled down and
+ * found the answer under "Sync now". `nearest` moves the page only as far as it
+ * takes to show the line, and not at all when it is already on screen.
+ */
+function useRevealWhenSet(value: unknown) {
+  const ref = useRef<HTMLParagraphElement | null>(null);
+
+  useEffect(() => {
+    if (value) {
+      ref.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [value]);
+
+  return ref;
+}
+
+/**
  * BlueBubbles (https://github.com/BlueBubblesApp/bluebubbles-app) connection
  * settings: host/port/credentials for the appliance-wide iMessage/SMS
  * connector, a Test connection round trip, and a Sync now trigger.
@@ -104,6 +125,10 @@ export function BlueBubblesSection() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   const [webhookCopied, setWebhookCopied] = useState(false);
+
+  const testResultRef = useRevealWhenSet(testResult);
+  const syncMessageRef = useRevealWhenSet(syncMessage);
+  const saveErrorRef = useRevealWhenSet(saveError);
 
   const authHeaders = useMemo<Record<string, string>>(() => {
     const headers: Record<string, string> = {};
@@ -433,6 +458,7 @@ export function BlueBubblesSection() {
 
               {testResult ? (
                 <p
+                  ref={testResultRef}
                   className={`text-sm ${testResult.ok ? 'text-teal-700 dark:text-teal-300' : 'text-destructive'}`}
                 >
                   {testResult.ok
@@ -441,8 +467,16 @@ export function BlueBubblesSection() {
                 </p>
               ) : null}
 
-              {syncMessage ? <p className="text-sm text-muted-foreground">{syncMessage}</p> : null}
-              {saveError ? <p className="text-sm text-destructive">{saveError}</p> : null}
+              {syncMessage ? (
+                <p ref={syncMessageRef} className="text-sm text-muted-foreground">
+                  {syncMessage}
+                </p>
+              ) : null}
+              {saveError ? (
+                <p ref={saveErrorRef} className="text-sm text-destructive">
+                  {saveError}
+                </p>
+              ) : null}
               {loadError ? <p className="text-sm text-destructive">{loadError}</p> : null}
             </div>
           )}

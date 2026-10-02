@@ -7,7 +7,7 @@ import type {
   ActiveImportStage,
 } from '@/pages/ImportPage/useImportApi';
 
-import { ImportActivity, ImportActivityCard } from './ImportActivity';
+import { ImportActivity, ImportActivityCard, describeStage } from './ImportActivity';
 
 /**
  * The pinned progress region, pinned in tests against the import it was built
@@ -390,6 +390,26 @@ describe('ImportActivityCard', () => {
     ).toBeInTheDocument();
     // Elapsed for a stage still RUNNING, where `duration_ms` is still null.
     expect(screen.getByText('45m 34s')).toBeInTheDocument();
+  });
+
+  it('does not describe a finished stage with the words it said while it was working', () => {
+    // A finished run's summary line is its LAST stage, and the runner never
+    // clears `phase` on completion: a completed Save went on reading "pushing",
+    // a completed Read "parsing fitbit (56/57)".
+    const finished = stage({
+      kind: 'push',
+      status: 'completed',
+      queueState: 'done',
+      phase: 'pushing',
+      processed: 706_689,
+      total: 706_689,
+      itemsPerSec: null,
+    });
+
+    expect(describeStage(finished)).toBe('706.7k / 706.7k');
+    expect(describeStage(stage({ ...finished, kind: 'parse', phase: 'parsing fitbit (56/57)' }))).toBe(
+      '706.7k / 706.7k',
+    );
   });
 
   /**

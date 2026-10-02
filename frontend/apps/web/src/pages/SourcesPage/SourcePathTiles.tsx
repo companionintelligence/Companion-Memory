@@ -145,16 +145,22 @@ const SEGMENT_ICON: Record<SourcePath, ReactNode> = Object.fromEntries(
  * tiles pinned 374 of 814px and left the content half the screen. One row keeps
  * the switch where it was promised to be at a line's height; the count shrinks to
  * a number, with its noun kept for screen readers.
+ *
+ * The segments are sized by what is in them (`flex-auto`), not cut into equal
+ * thirds. Equal thirds gave the segment that carries a count the same room as
+ * the two that do not, so on a 402pt phone the Import label (49px of text in 43px
+ * of room, once the icon, padding and a "13" badge were paid for) came out as
+ * "Imp…". Sized to content every label fits, down to 375pt with a count on the
+ * Import segment and at 390pt with a count on all three; only when a row
+ * genuinely cannot hold all three does `truncate` still apply, and then it shares
+ * the loss out instead of taking it all from one. The padding and gaps are
+ * minimums: `flex-auto` hands each segment its share of whatever room is left,
+ * so a roomy row does not look any tighter for them.
  */
 function SourcePathSwitch({ active, counts, paths }: Props) {
   return (
     <section aria-label="Ways to add data" className="w-full">
-      <div
-        className={cn(
-          'grid gap-1 rounded-xl border border-border bg-muted/40 p-1',
-          paths.length === 2 ? 'grid-cols-2' : 'grid-cols-3',
-        )}
-      >
+      <div className="flex gap-1 rounded-xl border border-border bg-muted/40 p-1">
         {paths.map((key) => {
           const definition = SOURCE_PATH_INFO[key];
           const count = countFor(key, counts);
@@ -166,7 +172,7 @@ function SourcePathSwitch({ active, counts, paths }: Props) {
               to={definition.to}
               aria-current={isActive ? 'page' : undefined}
               className={cn(
-                'flex h-10 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-semibold transition',
+                'flex h-10 min-w-0 flex-auto items-center justify-center gap-1 rounded-lg px-1.5 text-sm font-semibold transition',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 isActive
                   ? 'bg-primary text-primary-foreground'
@@ -178,7 +184,7 @@ function SourcePathSwitch({ active, counts, paths }: Props) {
               {count.value > 0 ? (
                 <span
                   className={cn(
-                    'shrink-0 rounded-full px-1.5 text-xs tabular-nums',
+                    'shrink-0 rounded-full px-1 text-xs tabular-nums',
                     isActive ? 'bg-primary-foreground/15' : 'bg-muted',
                   )}
                 >

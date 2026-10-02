@@ -14,6 +14,7 @@ import {
   runStatusLabel,
   serviceLabels,
   stageLabel,
+  stagePhase,
 } from '@/pages/ImportPage/runFormat';
 import { RunPipeline } from '@/pages/ImportPage/RunPipeline';
 import { StageBar } from '@/pages/ImportPage/StageBar';
@@ -516,8 +517,12 @@ export function describeStage(stage: ActiveImportStage): string {
     parts.push('Stalled — no heartbeat');
   }
 
-  if (stage.phase) {
-    parts.push(stage.phase);
+  // Not on a finished stage: the runner never clears it, so a completed Save
+  // would go on reading "pushing" in the summary line of a finished run.
+  const phase = stagePhase(stage);
+
+  if (phase) {
+    parts.push(phase);
   }
 
   if (stage.total != null && stage.total > 0) {

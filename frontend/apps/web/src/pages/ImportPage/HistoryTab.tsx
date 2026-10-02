@@ -130,6 +130,7 @@ export function HistoryTab() {
           onRetryFailedPush={() => void handleRetryFailedPush()}
           onClose={() => setActiveRunId(null)}
           services={serviceLabels(run.dataSources, sources)}
+          sources={sources}
         />
       ) : null}
 
