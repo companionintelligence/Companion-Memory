@@ -4,6 +4,7 @@ import { useMutation } from '@apollo/client';
 import { Button } from '@ci/shadcn';
 
 import {
+  EVENT_DRAFT_PROBLEM_MESSAGES,
   EventForm,
   emptyEventDraft,
   eventDraftToInput,
@@ -93,6 +94,16 @@ export function AddEventModal({ open, onClose, onCreated }: Props) {
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
             <EventForm value={draft} onChange={setDraft} problem={problem} disabled={loading} />
           </div>
+
+          {/* The form scrolls inside the modal while Add sits in a fixed footer, so
+              the line EventForm writes beside the offending field can be scrolled
+              out of view when Add is pressed — and Add then looks dead. Say it
+              here too, in the slot a rejected write already uses. */}
+          {problem && (
+            <p role="alert" className="text-sm text-destructive">
+              {EVENT_DRAFT_PROBLEM_MESSAGES[problem]}
+            </p>
+          )}
 
           {submitError && (
             <p role="alert" className="text-sm text-destructive">

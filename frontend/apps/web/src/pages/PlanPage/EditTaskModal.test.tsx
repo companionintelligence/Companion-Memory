@@ -472,6 +472,21 @@ describe('EditTaskModal', () => {
     });
   });
 
+  // ═══ THE DUE FIELD USED TO RUN UNDER MINUTES ON iOS ═══
+  //
+  // WebKit resolves `width: 100%` on a native date control as the CONTENT box
+  // and adds its padding and border on top: 26pt wider than the grid cell it
+  // sits in, so on a phone the field overlapped Minutes. `min-w-0` and the
+  // grid's `minmax(0, 1fr)` tracks cannot help, because the width is not what
+  // overflows — the box model is. Dropping the native appearance on touch
+  // devices makes it an ordinary border-box input again. jsdom lays nothing out,
+  // so this pins the class that decides it.
+  it('gives the Due field a plain box on touch devices so it stays inside its column', () => {
+    renderWithProviders(<EditTaskModal task={TASK} onClose={vi.fn()} />, { mocks: [] });
+
+    expect(screen.getByLabelText(/^due$/i)).toHaveClass('pointer-coarse:appearance-none');
+  });
+
   // ═══ THE CARET USED TO OPEN AT THE START OF THE TITLE ═══
   //
   // `autoFocus` focuses the field and leaves the caret wherever the engine

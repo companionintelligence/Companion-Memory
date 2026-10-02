@@ -361,6 +361,11 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
               <Input
                 id="edit-task-due"
                 type="date"
+                // WebKit sizes a native date control's `width: 100%` as the
+                // CONTENT box and adds its padding and border on top — 26pt too
+                // wide for this grid cell, which put the field over Minutes on
+                // iOS. `min-w-0` and the grid cannot help; an ordinary box can.
+                className="pointer-coarse:appearance-none"
                 value={draft.dueDate}
                 onChange={(e) => patch({ dueDate: e.target.value })}
               />
