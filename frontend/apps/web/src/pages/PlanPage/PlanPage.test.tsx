@@ -191,7 +191,7 @@ describe('PlanPage', () => {
   it('shows the four columns even with nothing planned', async () => {
     renderWithProviders(<PlanPage />, { mocks: [tasksMock([])] });
 
-    for (const column of ['Proposed', 'Unscheduled', 'Scheduled on calendar', 'Done']) {
+    for (const column of ['Proposed', 'Unscheduled', 'Scheduled', 'Done']) {
       expect(await screen.findByText(column)).toBeInTheDocument();
     }
   });
@@ -304,7 +304,8 @@ describe('PlanPage', () => {
     expect(screen.getByRole('heading', { name: /^overdue/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^proposed \d/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^done/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^scheduled on calendar/i })).toBeInTheDocument();
+    // Anchored with a word boundary: "Unscheduled" contains "scheduled" too.
+    expect(screen.getByRole('heading', { name: /^scheduled\b/i })).toBeInTheDocument();
     expect(screen.getByText('Someday thing')).toBeInTheDocument();
     expect(screen.getByText('Proposed thing')).toBeInTheDocument();
     expect(screen.getByText('Finished thing')).toBeInTheDocument();
@@ -405,7 +406,7 @@ describe('PlanPage', () => {
     expect(schedule).toBeInTheDocument();
     expect(schedule).toHaveClass('ci-primary-surface');
     expect(screen.getByRole('button', { name: /edit write the migration/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^scheduled on calendar 0$/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^scheduled 0$/i })).toBeInTheDocument();
   });
 
   // ═══ THE PAYLOAD USED TO BE DISCARDED HERE ═══
@@ -1095,7 +1096,7 @@ describe('PlanPage mobile tabs', () => {
     expect(await screen.findByRole('tablist')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /^proposed/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: /unscheduled/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /scheduled on calendar/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^scheduled\b/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /^done/i })).toBeInTheDocument();
     expect(screen.getByText('Proposed thing')).toBeInTheDocument();
     expect(screen.queryByText('Someday thing')).not.toBeInTheDocument();
@@ -1111,7 +1112,35 @@ describe('PlanPage mobile tabs', () => {
     expect(screen.getByRole('heading', { name: /^overdue/i })).toBeInTheDocument();
     expect(screen.getByText('1 overdue')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /unscheduled/i })).not.toHaveTextContent(/overdue/i);
-    expect(screen.getByRole('tab', { name: /scheduled on calendar/i })).not.toHaveTextContent(/overdue/i);
+    expect(screen.getByRole('tab', { name: /^scheduled\b/i })).not.toHaveTextContent(/overdue/i);
+  });
+
+  // ═══ THE FOURTH TAB USED TO SIT OFF THE EDGE OF THE PHONE ═══
+  //
+  // The strip was one non-wrapping row that scrolled sideways, and four tabs
+  // were wider than a 390pt phone: "Scheduled on calendar" was clipped at the
+  // edge and Done was out of sight behind a swipe nothing hinted at. The label
+  // is now just "Scheduled", which helps but still leaves four tabs a little
+  // wider than that row — so the strip also wraps instead of scrolling. jsdom
+  // lays nothing out, so this pins the classes that decide it (`h-auto` on the
+  // triggers is what keeps WebKit from stretching the first row over the
+  // second), and that all four tabs under their short names are there to show.
+  it('names the third tab Scheduled and wraps the strip so no tab is scrolled out of sight', async () => {
+    setViewport(true);
+
+    renderWithProviders(<PlanPage />, { mocks: [tasksMock([node({ id: 'b', title: 'Someday thing' })])] });
+
+    const list = await screen.findByRole('tablist');
+
+    const tabs = within(list).getAllByRole('tab');
+
+    expect(list).toHaveClass('flex-wrap');
+    expect(list).not.toHaveClass('overflow-x-auto');
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Proposed0', 'Unscheduled1', 'Scheduled0', 'Done0']);
+
+    for (const tab of tabs) {
+      expect(tab).toHaveClass('h-auto');
+    }
   });
 
   it('keeps every category tab even when some columns are empty', async () => {
@@ -1126,7 +1155,7 @@ describe('PlanPage mobile tabs', () => {
 
     expect(await screen.findByRole('tab', { name: /unscheduled/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: /^proposed 0$/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /scheduled on calendar 0/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^scheduled 0$/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /^done 0$/i })).toBeInTheDocument();
 
     fireEvent.mouseDown(screen.getByRole('tab', { name: /^proposed 0$/i }), { button: 0 });

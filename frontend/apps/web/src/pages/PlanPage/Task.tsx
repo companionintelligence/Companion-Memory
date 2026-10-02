@@ -466,13 +466,17 @@ export function Task({
                     // its own pixels. The checkbox beside it is positioned and
                     // grows a ::before tap target, and an unpositioned title
                     // paints beneath any of it that reaches over.
-                    'relative min-w-0 flex-1 break-words text-left font-medium line-clamp-5',
+                    'relative min-w-0 flex-1 break-words text-left font-medium',
                     done ? 'text-muted-foreground line-through' : '',
                   )}
                   onClick={activateBody}
                   onPointerDown={onSelectPointerDown}
                 >
-                  {task.title}
+                  {/* The clamp sits on a box INSIDE the button: WebKit ignores
+                      `display: -webkit-box` and `-webkit-line-clamp` on a
+                      <button> itself, so on iOS a long title ran to every line
+                      it needed instead of stopping at five. */}
+                  <span className="line-clamp-5">{task.title}</span>
                 </button>
               ) : (
                 <span

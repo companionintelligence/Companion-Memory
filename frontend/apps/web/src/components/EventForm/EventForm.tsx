@@ -72,7 +72,13 @@ function Field({
   );
 }
 
-const PROBLEM_MESSAGES: Record<EventDraftProblem, string> = {
+/**
+ * What each refusal says. Exported so a caller can say it again beside its own
+ * submit button: the line this form draws at the offending field is the one
+ * that names WHICH field, but in a long scrolling form it is not where the
+ * finger just tapped.
+ */
+export const PROBLEM_MESSAGES: Record<EventDraftProblem, string> = {
   title: 'Give the event a title',
   startDate: 'Pick a start date',
   endBeforeStart: 'The event ends before it starts',

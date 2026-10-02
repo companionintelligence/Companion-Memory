@@ -444,6 +444,29 @@ describe('Task on a phone', () => {
     expect(screen.getByRole('button', { name: /^write the migration$/i })).toHaveClass('relative');
   });
 
+  // ═══ THE PHONE TITLE NEVER CLAMPED ON THE DEVICE ═══
+  //
+  // `line-clamp-5` is `display: -webkit-box` plus `-webkit-line-clamp`, and
+  // WebKit does not apply either to a <button>: the phone card's title IS a
+  // button, so on the iOS shell a 365-character title ran to eight lines
+  // instead of five (Chromium clamps it, so it looked right everywhere but the
+  // device). jsdom lays nothing out, so this pins where the clamp sits: on a
+  // plain box INSIDE the button, which is what WebKit does honour.
+  it('clamps a long title on a box inside the title button, not on the button itself', () => {
+    const title = 'QA long title. '.concat('Word-abcdefghij '.repeat(22)).trim();
+
+    setViewport(true);
+    renderTask({ title });
+
+    const button = screen.getByRole('button', { name: title });
+    const text = within(button).getByText(title);
+
+    expect(button).not.toHaveClass('line-clamp-5');
+    expect(text).not.toBe(button);
+    expect(text).toHaveClass('line-clamp-5');
+    expect(text).not.toHaveClass('truncate');
+  });
+
   it('deletes from the action layer next to Schedule', () => {
     const onDelete = vi.fn();
 

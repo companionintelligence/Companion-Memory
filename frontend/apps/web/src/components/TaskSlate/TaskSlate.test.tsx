@@ -122,7 +122,11 @@ describe('TaskSlateDrawer — Plan backlog', () => {
     expect(await screen.findByRole('tab', { name: /^proposed/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('Try this')).toBeInTheDocument();
     expect(screen.queryByText('Call Mum')).not.toBeInTheDocument();
-    expect(screen.queryByText(/scheduled on calendar/i)).not.toBeInTheDocument();
+    // The rail is the backlog only — Scheduled and Done live on the Plan board.
+    // Anchored on the word start because "Unscheduled" contains "scheduled" too;
+    // counting the tabs is what keeps this from passing by accident.
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(screen.queryByRole('tab', { name: /^scheduled\b/i })).not.toBeInTheDocument();
 
     fireEvent.mouseDown(screen.getByRole('tab', { name: /unscheduled/i }), { button: 0 });
 
@@ -515,9 +519,87 @@ describe('TaskSlateDrawer — composing an event on the slot', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
-    expect(await screen.findByText(/give the event a title/i)).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/give the event a title/i);
     expect(sent).not.toHaveBeenCalled();
     expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  // ═══ THE REASON USED TO BE ONLY WHERE THE FINGER WASN'T ═══
+  //
+  // The composer is a long form in a bottom sheet that scrolls, and Add is the
+  // last thing in it. A refusal was written only beside the offending field —
+  // screens above the button just tapped — so on a phone Add looked dead until
+  // the person scrolled back up to find out why. The sentence now also sits in
+  // the slot a rejected write already used: directly above the buttons.
+  it('says what is wrong directly above the Add button, not only beside the field', () => {
+    compose([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    const alert = screen.getByRole('alert');
+
+    expect(alert).toHaveTextContent(/give the event a title/i);
+    expect(alert.nextElementSibling).toContainElement(screen.getByRole('button', { name: 'Add' }));
+    // …and still beside the field too, which is what says WHICH one.
+    expect(screen.getAllByText(/give the event a title/i)).toHaveLength(2);
+  });
+
+  // The reason is one more line above the buttons, so on a sheet already
+  // scrolled to its end it pushes them just below the fold — the person reads
+  // why, and Add has vanished. They are scrolled back into view with it.
+  it('keeps the buttons in view next to the reason', () => {
+    const scrollIntoView = vi.fn();
+    const had = 'scrollIntoView' in Element.prototype;
+    const original = Element.prototype.scrollIntoView;
+
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      compose([]);
+
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+      expect(scrollIntoView.mock.contexts[0]).toBe(screen.getByRole('button', { name: 'Add' }).parentElement);
+    } finally {
+      if (had) {
+        Element.prototype.scrollIntoView = original;
+      } else {
+        delete (Element.prototype as Partial<Element>).scrollIntoView;
+      }
+    }
+  });
+
+  it('says an event that ends before it starts the same way', () => {
+    const sent = vi.fn();
+
+    compose([createMock(sent)]);
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Coffee with Sam' } });
+    fireEvent.change(screen.getByLabelText('Ends'), { target: { value: '2026-08-05' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    const alert = screen.getByRole('alert');
+
+    expect(alert).toHaveTextContent(/ends before it starts/i);
+    expect(alert.nextElementSibling).toContainElement(screen.getByRole('button', { name: 'Add' }));
+    expect(sent).not.toHaveBeenCalled();
+  });
+
+  it('takes the reason away once the draft is valid and goes through', async () => {
+    const { onCreated } = compose([createMock(() => {})]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/give the event a title/i);
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Coffee with Sam' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('surfaces a rejected write instead of hanging on "Adding…"', async () => {
@@ -576,11 +658,13 @@ describe('TaskSlateDrawer — composing an event on the slot', () => {
     compose([]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
-    expect(screen.getByText(/give the event a title/i)).toBeInTheDocument();
+    // Beside the field AND above the button.
+    expect(screen.getAllByText(/give the event a title/i)).toHaveLength(2);
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     fireEvent.click(screen.getByRole('button', { name: 'New event' }));
 
     expect(screen.queryByText(/give the event a title/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

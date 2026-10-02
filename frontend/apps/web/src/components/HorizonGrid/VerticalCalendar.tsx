@@ -115,6 +115,20 @@ function isScheduleChip(target: EventTarget | null): boolean {
   return Boolean((target as HTMLElement | null)?.closest?.('[data-schedule-chip]'));
 }
 
+/**
+ * Did this click begin on the element the handler sits on, or inside it?
+ *
+ * React bubbles a portal's synthetic events up the COMPONENT tree, not the DOM
+ * tree. A chip's peek dialog is rendered under `<body>` yet is a React child of
+ * the lane, so a tap on the dialog's own date field, X or backdrop reaches the
+ * lane's `onClick` with a `target` that is nowhere inside the lane — and
+ * `isScheduleChip` cannot tell, it only finds no chip. Asking the DOM is what
+ * separates "the slot was tapped" from "something floating above it was".
+ */
+function startedInside(event: { currentTarget: HTMLElement; target: EventTarget | null }): boolean {
+  return event.currentTarget.contains(event.target as Node | null);
+}
+
 function slotPct(instant: Date, zone: string): number {
   return (zonedMinutesOfDay(instant, zone) / MINUTES_PER_DAY) * 100;
 }
@@ -779,7 +793,7 @@ const DayLane = memo(function DayLane({
       onClick={
         onSelectSlot
           ? (click) => {
-              if (isScheduleChip(click.target)) {
+              if (!startedInside(click) || isScheduleChip(click.target)) {
                 return;
               }
 
@@ -1110,7 +1124,7 @@ export function VerticalCalendar({
                 onClick={
                   onSelectSlot
                     ? (click) => {
-                        if (isScheduleChip(click.target)) {
+                        if (!startedInside(click) || isScheduleChip(click.target)) {
                           return;
                         }
 

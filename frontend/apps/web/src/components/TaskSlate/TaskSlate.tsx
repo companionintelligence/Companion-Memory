@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { useDeviceLayout } from '@ci/common';
@@ -6,6 +6,7 @@ import { Button, cn, Sheet, Tabs, Tooltip } from '@ci/shadcn';
 import { X } from '@ci/shadcn/icons';
 
 import {
+  EVENT_DRAFT_PROBLEM_MESSAGES,
   EventForm,
   eventDraftAt,
   eventDraftToInput,
@@ -362,6 +363,7 @@ export function TaskSlateDrawer({
   const [problem, setProblem] = useState<EventDraftProblem | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [createEvent, { loading: creating }] = useMutation(CREATE_EVENT);
+  const actionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!slot) {
@@ -378,6 +380,15 @@ export function TaskSlateDrawer({
       description: previous.description,
     }));
   }, [slot]);
+
+  // The reason lands one line above the buttons, which pushes them below the
+  // fold of a sheet the person had scrolled to the very end of. Bring them back
+  // into view with it, so Add is still there to press once the problem is fixed.
+  useEffect(() => {
+    if (problem) {
+      actionsRef.current?.scrollIntoView?.({ block: 'nearest' });
+    }
+  }, [problem]);
 
   /**
    * Leaving the composer takes its failure with it.
@@ -462,12 +473,21 @@ export function TaskSlateDrawer({
           {composing ? (
             <form onSubmit={handleSubmit} className="flex min-h-0 flex-col gap-4">
               <EventForm value={draft} onChange={setDraft} problem={problem} disabled={creating} />
+              {/* The form scrolls and Add is its last line, so the line EventForm
+                  writes beside the offending field is screens above the finger
+                  that just pressed Add — which then looked dead. Say it here too,
+                  in the slot a rejected write already uses. */}
+              {problem ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {EVENT_DRAFT_PROBLEM_MESSAGES[problem]}
+                </p>
+              ) : null}
               {submitError ? (
                 <p role="alert" className="text-sm text-destructive">
                   {submitError}
                 </p>
               ) : null}
-              <div className="flex justify-end gap-2">
+              <div ref={actionsRef} className="flex justify-end gap-2">
                 <Button type="button" variant="outline" size="sm" onClick={closeComposer} disabled={creating}>
                   Cancel
                 </Button>
