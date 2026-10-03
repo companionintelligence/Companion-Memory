@@ -81,3 +81,26 @@ export function settingsNavTarget(
 
   return { to: '/settings/appearance', state: { backgroundLocation: location } };
 }
+
+/**
+ * A link to one Settings section from anywhere in the app.
+ *
+ * Same split as {@link settingsNavTarget}: the phone walks to the real
+ * `/self/settings/<section>` page, desktop opens the overlay with the current
+ * page kept behind it, so closing Settings returns to where the link was.
+ */
+export function settingsSectionTarget(
+  section: string,
+  isMobile: boolean | undefined,
+  location: { pathname: string; search: string; hash: string; state: unknown; key: string },
+): { to: string; state?: { backgroundLocation: typeof location } } | null {
+  if (isMobile == null) {
+    return null;
+  }
+
+  if (isMobile) {
+    return { to: `/self/settings/${section}` };
+  }
+
+  return { to: `/settings/${section}`, state: { backgroundLocation: location } };
+}

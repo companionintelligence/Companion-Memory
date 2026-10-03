@@ -81,6 +81,6 @@ describe('ModelSelector', () => {
 
     render(<ModelSelector />);
 
-    expect(screen.getByRole('combobox', { name: 'Active model' })).toHaveTextContent('No models loaded');
+    expect(screen.getByRole('combobox', { name: 'Active model' })).toHaveTextContent('No model set up');
   });
 });

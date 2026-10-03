@@ -23,7 +23,7 @@ export function SplashPage() {
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--aqua)] opacity-75" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--aqua)]" />
               </span>
-              100% local · No cloud calls
+              Local-first · You choose what leaves
             </span>
           </Reveal>
 

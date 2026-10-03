@@ -17,16 +17,77 @@
  * Reading them from `/api/intents` at runtime was considered and rejected: the
  * endpoint is scope-guarded and the empty state must render instantly and
  * offline, so a network round trip would gate the first thing a user sees.
+ *
+ * ### Flags
+ *
+ * The intents answer whether or not the surface they talk about is switched
+ * on, so a stock install used to offer "What does tomorrow look like for me"
+ * with no Forecast page to open and "What is on Brief" with no Brief home. A
+ * starter that names a hidden surface is a starter that teaches the user the
+ * product has features it does not show them. Each entry therefore says which
+ * feature flag its surface sits behind (`requires`), and
+ * {@link starterPromptsFor} drops the ones whose flag is off.
  */
-export const STARTER_PROMPTS: readonly string[] = [
-  'What is on Brief', // brief.list
-  'Any suggested actions', // suggestions.list
-  'What does tomorrow look like for me', // forecast.read
-  'How accurate are my predictions', // forecast.calibration
-  'Anything unusual lately', // anomalies.recent
-  'What is associated with my mood', // insights.explain
-  'Where do I usually go next', // places.next
-  'Who is my family', // knowledge family/relationships
-  'What are my preferences', // preferences.get
-  'What can you import', // import.list_sources
+interface StarterPrompt {
+  readonly text: string;
+  /** The feature flag of the surface this ask talks about; absent = always offered. */
+  readonly requires?: string;
+}
+
+const STARTER_CATALOGUE: readonly StarterPrompt[] = [
+  // brief.list — Brief is the Today surface: derived insights, anomalies and actions.
+  { text: 'What is on Brief', requires: 'today.page' },
+  // brief.list (its "actions" leg) — same surface.
+  { text: 'Any suggested actions', requires: 'today.page' },
+  // forecast.read
+  { text: 'What does tomorrow look like for me', requires: 'forecast.page' },
+  // forecast.calibration
+  { text: 'How accurate are my predictions', requires: 'forecast.page' },
+  // anomalies.recent — its own tool, useful with or without the Today page
+  { text: 'Anything unusual lately' },
+  // insights.explain
+  { text: 'What is associated with my mood', requires: 'insights.page' },
+  // places.next
+  { text: 'Where do I usually go next' },
+  // people.relationships
+  { text: 'Who is my family' },
+  // knowledge.preferences
+  { text: 'What are my preferences' },
+  // import.list_sources
+  { text: 'What can you import', requires: 'import.page' },
+  // import.run_status — the ask a first-run user actually has after onboarding
+  { text: 'How is my import going', requires: 'import.page' },
 ];
+
+/** Every starter, flags ignored. What the catalogue holds; not what a given appliance shows. */
+export const STARTER_PROMPTS: readonly string[] = STARTER_CATALOGUE.map((prompt) => prompt.text);
+
+/** The starters worth offering on THIS appliance: those whose surface is switched on. */
+export function starterPromptsFor(isFeatureEnabled: (flag: string) => boolean): string[] {
+  return STARTER_CATALOGUE.filter(
+    (prompt) => prompt.requires === undefined || isFeatureEnabled(prompt.requires),
+  ).map((prompt) => prompt.text);
+}
+
+const TOPICS: ReadonlyArray<{ readonly label: string; readonly requires?: string }> = [
+  { label: 'Memory' },
+  { label: 'Plan', requires: 'planning.page' },
+  { label: 'Forecast', requires: 'forecast.page' },
+  { label: 'Brief', requires: 'today.page' },
+];
+
+/** The areas Chat can be asked about here — the composer hint must not name pages that are off. */
+export function chatTopicsFor(isFeatureEnabled: (flag: string) => boolean): string[] {
+  return TOPICS.filter((topic) => topic.requires === undefined || isFeatureEnabled(topic.requires)).map(
+    (topic) => topic.label,
+  );
+}
+
+/** "Memory", "Memory or Plan", "Memory, Plan or Forecast" — for hint copy. */
+export function joinTopics(topics: readonly string[], conjunction = 'or'): string {
+  if (topics.length <= 1) {
+    return topics.join('');
+  }
+
+  return `${topics.slice(0, -1).join(', ')} ${conjunction} ${topics[topics.length - 1]}`;
+}

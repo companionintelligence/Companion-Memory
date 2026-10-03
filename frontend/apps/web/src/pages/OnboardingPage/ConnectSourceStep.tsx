@@ -8,12 +8,7 @@ import { ServiceIntegrationsSection } from '@/components/connect/ServiceIntegrat
 import { SourceCard } from '@/components/connect/SourceCard';
 import { BROWSER_TRACKS, CAPTURE_TRACKS } from '@/pages/SourcesPage/DevicesPanel';
 
-import {
-  CAPTURE_DOWNLOAD_URL,
-  CHROME_EXTENSION_URL,
-  CI_DOWNLOAD_URL,
-  FIREFOX_EXTENSION_URL,
-} from './constants';
+import { CAPTURE_DOWNLOAD_URL, CHROME_EXTENSION_URL, FIREFOX_EXTENSION_URL } from './constants';
 import { StepHeader } from './StepHeader';
 
 // The lists are imported from the panels that own them, so setup and
@@ -22,7 +17,6 @@ import { StepHeader } from './StepHeader';
 export function ConnectSourceStep() {
   const [dialogProviderId, setDialogProviderId] = useState<string | null>(null);
 
-  const openDownload = () => window.open(CI_DOWNLOAD_URL, '_blank', 'noopener,noreferrer');
   const openCaptureDownload = () => window.open(CAPTURE_DOWNLOAD_URL, '_blank', 'noopener,noreferrer');
 
   return (
@@ -81,7 +75,10 @@ export function ConnectSourceStep() {
               { icon: AppWindow, label: 'App usage' },
               { icon: History, label: 'Screen time' },
             ]}
-            onSelect={openDownload}
+            // The iOS app is a closed preview, so there is nothing public to
+            // download: an inert "coming soon" card, not a link to a page that
+            // has no iPhone build on it.
+            comingSoon
           />
         </div>
       </div>

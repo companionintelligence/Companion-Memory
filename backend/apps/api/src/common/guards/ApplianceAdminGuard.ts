@@ -75,20 +75,34 @@ export class ApplianceAdminGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const role = (request?.user as { role?: string } | undefined)?.role;
 
-    if (role === 'admin') {
+    if (await this.admits(request?.user as { role?: string } | undefined)) {
+      return true;
+    }
+
+    throw new ForbiddenException('This action requires an administrator account');
+  }
+
+  /**
+   * The rule {@link canActivate} applies, as a boolean, for a caller that wants
+   * to KNOW the answer rather than be refused by it — a settings page that
+   * greys a control out instead of letting the click 403 (`canEdit` on
+   * `GET /privacy/outbound`).
+   *
+   * One implementation, on purpose: a page that offered a control the route then
+   * refused, or hid one the route would have allowed, would be two rules
+   * drifting. A failed admin probe still throws (`applianceHasAdmin` fails
+   * closed); a caller that would rather read that as "no" must catch it.
+   */
+  async admits(user: { role?: string } | undefined): Promise<boolean> {
+    if (user?.role === 'admin') {
       return true;
     }
 
     // Unclaimed appliance — nobody can be an admin here, so requiring one would
     // gate the control plane on a role that cannot be granted. Deliberately
     // permissive, and only in that one case.
-    if (!(await this.applianceHasAdmin())) {
-      return true;
-    }
-
-    throw new ForbiddenException('This action requires an administrator account');
+    return !(await this.applianceHasAdmin());
   }
 
   /**

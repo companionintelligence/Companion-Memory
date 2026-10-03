@@ -12,6 +12,7 @@ import {
   MessageCircle,
   Palette,
   Plug,
+  Lock,
   Shield,
 } from '@ci/shadcn/icons';
 
@@ -42,6 +43,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'agents', label: 'Agents', icon: Bot },
   { id: 'api-keys', label: 'API Keys', icon: KeyRound },
   { id: 'oauth', label: 'OAuth Credentials', icon: Key },
+  { id: 'privacy', label: 'Privacy', icon: Lock },
   { id: 'data', label: 'Your data', icon: HardDrive },
 ];
 

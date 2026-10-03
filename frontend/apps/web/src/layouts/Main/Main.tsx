@@ -6,9 +6,12 @@ import { Outlet } from 'react-router-dom';
 
 import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
+import { GettingStartedBanner } from '@/components/GettingStarted/GettingStartedBanner';
 import { MemoryContractStrip } from '@/components/MemoryContractStrip/MemoryContractStrip';
 import { useBackground, useTheme } from '@/components/ThemePicker';
 import { useUnsyncedImportsNotice } from '@/components/UnsyncedImports/useUnsyncedImportsNotice';
+import { useCurrentUser } from '@/hooks';
+import { isGettingStartedActive } from '@/lib/gettingStarted';
 
 import { MobileNavigation } from './MobileNavigation/MobileNavigation';
 import { MobileTopBar } from './MobileNavigation/MobileTopBar';
@@ -24,7 +27,12 @@ export function Main() {
 
   // Every authenticated page passes through this layout, which makes it the
   // one place a page-load check reaches "across all pages".
-  useUnsyncedImportsNotice();
+  //
+  // Held back while the getting-started banner is up: it already says "read but
+  // not saved yet" with its own Save button, and two prompts for one fact is
+  // nagging. The toast returns for everyone the banner is not owed to.
+  const { user } = useCurrentUser();
+  useUnsyncedImportsNotice({ suppressed: isGettingStartedActive(user?.id) });
 
   if (isMobile) {
     return (
@@ -42,6 +50,7 @@ export function Main() {
           />
           <MobileTopBar />
           <MemoryContractStrip />
+          <GettingStartedBanner />
           <main className="flex-1 min-w-0 overflow-hidden min-h-0 relative">
             {/* Boundary INSIDE Suspense so a failed lazy chunk is caught too,
                 and around the outlet ALONE so the bottom bar and the modal
@@ -100,6 +109,7 @@ export function Main() {
 
         <div className="overflow-hidden min-w-0 min-h-0 flex flex-col">
           <MemoryContractStrip />
+          <GettingStartedBanner />
           <Suspense fallback={<LoadingPage />}>
             <Toaster theme={themeState.mode} />
             <div className="flex flex-row h-full min-h-0">

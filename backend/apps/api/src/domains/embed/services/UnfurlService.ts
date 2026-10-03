@@ -7,6 +7,7 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { isOutboundEnabled } from '@ci/common/outbound';
 import config from '@ci/configuration';
 import { FileService, FileVariant } from '@ci/domains/files';
 
@@ -37,11 +38,27 @@ const TTL_MS: Record<UnfurlStatus, number> = {
 /** In-flight ceiling inside one slice, independent of the per-host QPS throttle. */
 const MAX_CONCURRENCY = 4;
 
-/** What a resolve produced for one key — stored row, or a reason no row was written. */
+/**
+ * What a resolve produced for one key — stored row, or a reason no row was
+ * written.
+ *
+ * `disabled` and `held` are both "nothing was fetched" and they are NOT the same
+ * answer, which is why they are two kinds:
+ *
+ *  - `disabled` is the operator's configuration (`UNFURL_ENABLED=false`,
+ *    `UNFURL_OPEN_GRAPH=false`). It is a property of the deployment and it is
+ *    recorded as a terminal `skipped`, as it always has been.
+ *  - `held` is the USER's switch (Settings -> Privacy -> "What leaves your
+ *    appliance", key `link_previews`). It is temporary by definition — the user
+ *    can turn it back on tomorrow — so it must never be written as a terminal
+ *    verdict. `UnfurlStage` records it as a transient failure (refunded, retried)
+ *    and `PipelineControlService` does not even start the stage while it holds.
+ */
 export type ResolveResult =
   | { kind: 'row'; row: UnfurlEntity; fresh: boolean }
   | { kind: 'unconfigured'; detail: string }
-  | { kind: 'disabled'; detail: string };
+  | { kind: 'disabled'; detail: string }
+  | { kind: 'held'; detail: string };
 
 @Injectable()
 export class UnfurlService {
@@ -92,12 +109,24 @@ export class UnfurlService {
     const now = Date.now();
     const pending: ResolveTarget[] = [];
 
+    // The user's switch, read once for the whole call. It gates every path in
+    // here that would contact a host — a provider lookup AND the poster repair
+    // below, which fetches the remote thumbnail — while cached rows are still
+    // answered from Postgres: reading what is already stored sends nothing.
+    const userAllowsFetching = isOutboundEnabled('link_previews');
+
     const posterless: UnfurlEntity[] = [];
     for (const [key, target] of unique) {
       const row = cached.get(key);
       if (row && (!row.expiresAt || row.expiresAt.getTime() > now)) {
         out.set(key, { kind: 'row', row, fresh: false });
-        if (row.status === 'ok' && row.thumbnailUrl && !row.posterFileId && config.unfurl.cachePosters) {
+        if (
+          userAllowsFetching &&
+          row.status === 'ok' &&
+          row.thumbnailUrl &&
+          !row.posterFileId &&
+          config.unfurl.cachePosters
+        ) {
           // A good answer whose poster copy is missing (an earlier failure, or
           // caching switched on later): repair it without re-asking the provider.
           posterless.push(row);
@@ -113,6 +142,14 @@ export class UnfurlService {
 
       if (target.resolver === 'opengraph' && !config.unfurl.openGraph) {
         out.set(key, { kind: 'disabled', detail: 'open_graph_disabled' });
+        continue;
+      }
+
+      // After the operator's settings, on purpose: a `disabled` answer is a
+      // terminal verdict and this one is not, so when both apply the operator's
+      // wins and keeps its existing (terminal) treatment.
+      if (!userAllowsFetching) {
+        out.set(key, { kind: 'held', detail: 'link_previews_off' });
         continue;
       }
 

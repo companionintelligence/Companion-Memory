@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ConnectSourceStep } from './ConnectSourceStep';
-import { FIREFOX_EXTENSION_URL } from './constants';
+import { CHROME_EXTENSION_URL, FIREFOX_EXTENSION_URL } from './constants';
 
 vi.mock('@/components/connect/ConnectedAccountsSection', () => ({
   ConnectedAccountsSection: () => <div data-testid="connected-accounts">Accounts</div>,
@@ -57,6 +57,30 @@ describe('ConnectSourceStep', () => {
 
     fireEvent.click(firefox);
     expect(open).toHaveBeenCalledWith(FIREFOX_EXTENSION_URL, '_blank', 'noopener,noreferrer');
+    open.mockRestore();
+  });
+
+  it('opens the Chrome Web Store listing without anyone\'s account index attached', () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    renderStep();
+
+    fireEvent.click(screen.getByRole('button', { name: /Chrome/ }));
+
+    expect(open).toHaveBeenCalledWith(CHROME_EXTENSION_URL, '_blank', 'noopener,noreferrer');
+    expect(CHROME_EXTENSION_URL).not.toMatch(/[?&](authuser|hl)=/);
+    open.mockRestore();
+  });
+
+  it('keeps the iPhone & iPad card inert — the iOS app is a closed preview with nothing to download', () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    renderStep();
+
+    const iphone = screen.getByRole('button', { name: /iPhone & iPad/ });
+    expect(iphone).toBeDisabled();
+    expect(iphone).toHaveTextContent(/coming soon/i);
+
+    fireEvent.click(iphone);
+    expect(open).not.toHaveBeenCalled();
     open.mockRestore();
   });
 

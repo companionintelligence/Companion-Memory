@@ -5,6 +5,7 @@ import { BACKFILL_JOB_PRIORITY, EventService, OnEvent } from '@ci/domains/events
 
 import { DEFAULT_SLICE_SIZE, MAX_SLICES_PER_SWEEP, MAX_SWEEP_HOPS, PIPELINE_QUEUES } from '../constants';
 import { PipelineSliceEvent, PipelineSweepEvent } from '../events';
+import { stageHeldByOutboundPolicy } from '../outboundHolds';
 import { pipelineSweepPayloadSchema, type PipelineSlicePayload, type PipelineSweepPayload } from '../types';
 
 import { PipelineStateService } from './PipelineStateService';
@@ -249,6 +250,33 @@ export class PipelineDispatchService {
     }
 
     const entityType = payload.entityType ?? stage.entityTypes[0];
+
+    // The user has turned off the outbound path this stage egresses on. End the
+    // chain here: dispatch nothing and do NOT re-enqueue, so a sweep that was
+    // already running when the switch was flipped stops at its next hop instead
+    // of feeding slices that would only be turned away. Nothing is written — no
+    // ledger row, no schedule stamp — so the rows stay stale and the next sweep
+    // after the switch goes back on picks them up untouched. See
+    // `stageHeldByOutboundPolicy` for the full reasoning.
+    const heldBy = stageHeldByOutboundPolicy(stage.id);
+
+    if (heldBy != null) {
+      this.logger.log('Pipeline sweep stopped: the outbound path this stage uses is turned off', {
+        stage: stage.id,
+        path: heldBy,
+        userId: payload.userId,
+        hop: payload.hop,
+      });
+
+      return {
+        stage: stage.id,
+        dispatched: 0,
+        slices: 0,
+        cursor: payload.cursor ?? null,
+        exhausted: false,
+        capped: false,
+      };
+    }
 
     if (payload.hop >= MAX_SWEEP_HOPS) {
       // Reached only by a sweep that is not converging. Stopping is the correct

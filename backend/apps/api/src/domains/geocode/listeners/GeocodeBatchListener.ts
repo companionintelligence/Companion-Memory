@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { isOutboundEnabled } from '@ci/common/outbound';
 import config from '@ci/configuration';
 import { OnEvent } from '@ci/domains/events';
 import { EventEntity, CalendarEventService, PlaceService } from '@ci/domains/memory';
@@ -12,6 +13,7 @@ import { GeocodeBatchRequestEvent, type GeocodeBatchRequestPayload } from '@ci/d
 
 import {
   GeocodeService,
+  OUTBOUND_DISABLED_STATUS,
   RETRYABLE_STATUSES,
   VIRTUAL_STATUS,
   type ReverseGeocodeOutcome,
@@ -80,6 +82,22 @@ export class GeocodeBatchListener {
     const { userId, eventIds, limit, retryNull, direction } = payload;
     const retry = retryNull ?? false;
     const batchLimit = limit ?? this.defaultLimit;
+
+    // The user has turned place lookups off. Stop before selecting candidates:
+    // nothing here would be sent, and walking up to `batchLimit` events only to
+    // have each one turned away (after the retry sleeps below) would be a
+    // minutes-long no-op. Nothing is recorded either. This listener keeps no
+    // ledger — its candidate query is derived from event state (no coordinates /
+    // no name) — so the events stay exactly as eligible as they were and the
+    // next backfill after the user switches lookups back on picks them up.
+    if (!isOutboundEnabled('place_lookups')) {
+      this.logger.log('Geocode backfill batch skipped: place lookups are turned off', {
+        userId,
+        direction: direction ?? 'forward',
+      });
+
+      return;
+    }
 
     // Reverse direction (coords -> name) shares this queue, and shares
     // GeocodeService's rate limiter with every other caller, so the two never
@@ -186,7 +204,11 @@ export class GeocodeBatchListener {
   private async geocodeWithRetry(location: string, bustCache: boolean) {
     let outcome = await this.geocodeService.geocode(location, { bustCache });
 
-    for (let attempt = 0; outcome.retryable && attempt < BACKOFF_MS.length; attempt++) {
+    for (
+      let attempt = 0;
+      outcome.retryable && outcome.status !== OUTBOUND_DISABLED_STATUS && attempt < BACKOFF_MS.length;
+      attempt++
+    ) {
       await new Promise((resolve) => setTimeout(resolve, BACKOFF_MS[attempt]));
       // A retry is always a fresh provider call; bust the cache so a transient
       // status that briefly got cached can't pin the result.
@@ -287,7 +309,14 @@ export class GeocodeBatchListener {
   ): Promise<ReverseGeocodeOutcome> {
     let outcome = await this.geocodeService.reverseGeocode(lat, lng, { bustCache });
 
-    for (let attempt = 0; outcome.retryable && attempt < BACKOFF_MS.length; attempt++) {
+    // A switched-off outcome is retryable in the sense that a LATER run may
+    // succeed, but sleeping and asking again now cannot — the user's answer will
+    // not change in six seconds — so it is excluded from the in-line backoff.
+    for (
+      let attempt = 0;
+      outcome.retryable && outcome.status !== OUTBOUND_DISABLED_STATUS && attempt < BACKOFF_MS.length;
+      attempt++
+    ) {
       await new Promise((resolve) => setTimeout(resolve, BACKOFF_MS[attempt]));
       outcome = await this.geocodeService.reverseGeocode(lat, lng, { bustCache: true });
     }

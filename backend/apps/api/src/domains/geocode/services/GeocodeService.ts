@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, type Point } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
+import { isOutboundEnabled } from '@ci/common/outbound';
 import config from '@ci/configuration';
 
 import { GeocodeCacheEntity } from '../entities/GeocodeCacheEntity';
@@ -54,6 +55,45 @@ export const RETRYABLE_STATUSES = new Set<string>(['OVER_QUERY_LIMIT', 'UNKNOWN_
 
 /** Synthetic status for denylisted non-physical "locations". */
 export const VIRTUAL_STATUS = 'virtual';
+
+/**
+ * Synthetic status: the user has turned place lookups off (Settings -> Privacy
+ * -> "What leaves your appliance"), so no request was made.
+ *
+ * ── What this outcome means, and why it is shaped the way it is ────────────
+ *
+ * It is returned with `retryable: true`, and that is a deliberate borrowing of
+ * an existing contract rather than a new one. Every caller already has a
+ * defined response to "the provider could not be asked right now, try again
+ * later", and that response is exactly right for "the user has not allowed it":
+ *
+ *  - the pipeline stages (`enrich.geocode`, `enrich.event_reverse`,
+ *    `enrich.position_reverse`) record `failed: provider_unavailable`, which is
+ *    in `TRANSIENT_FAILURE_REASONS` — the attempt is refunded, the row backs off
+ *    and is retried, and it can NEVER reach quarantine on this account;
+ *  - `GeocodeBatchListener` leaves the event untouched ("left for the next
+ *    run"), because its candidate query is derived from event state and not from
+ *    a ledger;
+ *  - the interactive and ETL callers already treat any non-OK status as "no
+ *    answer" and carry on.
+ *
+ * What it must never be is a NEGATIVE result. `ZERO_RESULTS` / `REQUEST_DENIED`
+ * are written to `ci.geocode_cache` and become `skipped` ledger rows that only a
+ * stage-version bump re-opens — so a user who flipped the switch off for a week
+ * and back on would find every place lookup they had queued permanently decided
+ * "not found". Hence: no cache row is written here (the return is BEFORE the
+ * provider call and before `writeCache`), and the status is a transient one.
+ *
+ * The pipeline additionally HOLDS these stages while the switch is off
+ * (`domains/pipeline/outboundHolds.ts`), so in the normal case a row is never
+ * claimed at all and no `failed` ledger row is written either; this outcome is
+ * the backstop for every caller the hold does not cover and for a slice that was
+ * already running when the switch was flipped.
+ *
+ * Cached answers are still served while the switch is off: a cache hit is local
+ * data and no request leaves the box.
+ */
+export const OUTBOUND_DISABLED_STATUS = 'OUTBOUND_DISABLED';
 
 /**
  * Confidence scores by Google geometry.location_type. Inferred / coarse coords
@@ -176,6 +216,16 @@ export class RateLimiter {
       await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
   }
+}
+
+function outboundDisabledOutcome(): GeocodeOutcome {
+  return {
+    status: OUTBOUND_DISABLED_STATUS,
+    point: null,
+    confidence: null,
+    cached: false,
+    retryable: true,
+  };
 }
 
 /** Options controlling a single {@link GeocodeService.geocode} call. */
@@ -318,6 +368,15 @@ export class GeocodeService {
       }
     }
 
+    // --- The user's switch -------------------------------------------------
+    // The single point every forward lookup passes through on its way to the
+    // provider, so it is the one place the switch is enforced: no request, no
+    // throttle slot spent, and — the part that matters — no cache row written.
+    // See OUTBOUND_DISABLED_STATUS for why this is `retryable`.
+    if (!isOutboundEnabled('place_lookups')) {
+      return outboundDisabledOutcome();
+    }
+
     // --- Provider call -----------------------------------------------------
     // The shared appliance-wide throttle. Applied AFTER the cache check (a hit
     // never waits) and BEFORE the network call, so every caller of this method
@@ -418,6 +477,15 @@ export class GeocodeService {
           bounds: toGeocodeBounds(cached.bounds),
         };
       }
+    }
+
+    // --- The user's switch -------------------------------------------------
+    // Same gate, same reasoning, as the forward path: before the throttle and
+    // before any cache write. A reverse lookup is the one an interactive caller
+    // ("use my location" when adding a place) is most likely to be waiting on;
+    // it gets an ordinary empty result carrying this status, not an error.
+    if (!isOutboundEnabled('place_lookups')) {
+      return { status: OUTBOUND_DISABLED_STATUS, placeName: null, cached: false, retryable: true };
     }
 
     // --- Provider call -----------------------------------------------------

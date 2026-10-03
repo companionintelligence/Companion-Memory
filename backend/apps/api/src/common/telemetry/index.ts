@@ -1,5 +1,11 @@
 export { scrubEvent, scrubString } from './scrubEvent';
 export {
+  dropWhenUserOptedOut,
+  gateSentryTransport,
+  isCrashReportsUserEnabled,
+  setCrashReportsUserEnabled,
+} from './runtimeGate';
+export {
   isLocalOnly,
   isTelemetryOptedOut,
   resolveTelemetrySettings,
