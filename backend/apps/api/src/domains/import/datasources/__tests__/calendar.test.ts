@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'path';
 
-import { CalendarFileImporter, parseIcsEvents } from '../calendar';
+import { CalendarFileImporter, icsEventStatus, parseIcsEvents } from '../calendar';
 import type { ImportParams } from '../timeline';
 
 import { metaText, type EmittedGraph } from './support/emitted';
@@ -142,6 +142,81 @@ describe('Calendar datasource', () => {
     }
   });
 
+  it('imports a Google Calendar HTML description as text, keeping its lines and links', async () => {
+    // The shape Google writes into DESCRIPTION (RFC 5545 says plain TEXT): its
+    // appointment-booking body, with markup and real `\n` escapes mixed. 194 of
+    // the 1,260 descriptions in the reference exports carried tags, and they
+    // were displayed, indexed and embedded as raw markup.
+    const icsPath = icsFile('ci-ics-html-', 'google.ics', [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Google Inc//Google Calendar 70.9054//EN',
+      'BEGIN:VEVENT',
+      'UID:html-1@google.com',
+      'DTSTART:20260704T150000Z',
+      'DTEND:20260704T160000Z',
+      'SUMMARY:Intro call',
+      'DESCRIPTION:<b>Booked by</b>\\nAda Lovelace\\nada@example.com\\n\\nQuestions? Answers <a href="https://exam',
+      ' ple.com/faq">here</a>&nbsp\\;&amp\\; more.<br><br>Join with Google Meet: https://meet.example/abc',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ]);
+
+    try {
+      const [event] = await importIcs(icsPath);
+      const text =
+        'Booked by\nAda Lovelace\nada@example.com\n\nQuestions? Answers here (https://example.com/faq) & more.\n\n' +
+        'Join with Google Meet: https://meet.example/abc';
+
+      // Metadata `Description` is what the push stores as the event's
+      // description: shown in Memory, indexed for search, and embedded.
+      expect(event.item.metadata.Description).toBe(text);
+    } finally {
+      fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
+    }
+  });
+
+  it('leaves a plain-text description exactly as written, angle brackets and all', () => {
+    // No HTML tag, so no HTML parser: one would delete `<ada@example.com>` as
+    // an unknown element and decode a literal `&amp;`.
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:plain-1@x',
+      'DTSTART:20260101T090000Z',
+      'SUMMARY:Sync',
+      'DESCRIPTION:Organizer: Ada <ada@example.com>\\nQ&amp\\;A if 2 < 3',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+
+    const [event] = parseIcsEvents(ics, 'plain.ics');
+
+    expect(event.description).toBe('Organizer: Ada <ada@example.com>\nQ&amp;A if 2 < 3');
+  });
+
+  it('keeps the UID-less event id stable: the sig hashes the raw HTML, not the text', () => {
+    const rawDescription = '<b>Booked by</b>\\nAda';
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'DTSTART:20260101T090000Z',
+      'SUMMARY:Call',
+      `DESCRIPTION:${rawDescription}`,
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\n');
+
+    const [event] = parseIcsEvents(ics, 'noUidHtml.ics');
+    const expectedSig = crypto
+      .createHash('sha1')
+      .update(['20260101T090000Z', '', 'Call', '', rawDescription].join('\0'))
+      .digest('hex');
+
+    expect(event.description).toBe('Booked by\nAda');
+    expect(event.id).toBe(`ics:noUidHtml.ics:${expectedSig}`);
+  });
+
   it('keeps the UID-less event id (sig) stable across the unescape fix', () => {
     // The sig hash seeding the id for UID-less events is computed from the RAW
     // (still-escaped) text, not the unescaped display text. Otherwise every
@@ -258,9 +333,10 @@ describe('Calendar datasource', () => {
     expect(items.map((item) => item.id)).not.toContain('04AACD36-CF84-4420-AA2A-D25CB8B9C662');
 
     // The body is the event's, not the reminder boilerplate. `\n` is a real
-    // RFC 5545 TEXT escape, decoded like everywhere else.
+    // RFC 5545 TEXT escape, decoded like everywhere else, and Google's `<b>` is
+    // converted to text (see icsDescriptionText).
     expect(booked?.metadata.Description).toBe(
-      '<b>Booked by</b>\nAva Booker\nava@example.com\n\nJoin with Google Meet: https://meet.example.com/fby-pwgg-pff',
+      'Booked by\nAva Booker\nava@example.com\n\nJoin with Google Meet: https://meet.example.com/fby-pwgg-pff',
     );
     expect(metaText(booked?.metadata.Description)).not.toContain('This is an event reminder');
     expect(booked?.metadata.Summary).toBe('Meet w/ Liam (Ava Booker)');
@@ -354,5 +430,109 @@ describe('Calendar datasource', () => {
     } finally {
       fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
     }
+  });
+
+  /**
+   * STATUS, RFC 5545 §3.8.1.11.
+   *
+   * The parser read STATUS into its property map and then never used it, so a
+   * cancelled event was stored as `confirmed`, and every reader of
+   * `ci.events.status` took it for something that happened.
+   */
+  describe('STATUS', () => {
+    it('maps the three VEVENT statuses, in any case, and nothing else', () => {
+      expect(icsEventStatus('CANCELLED')).toBe('cancelled');
+      expect(icsEventStatus('TENTATIVE')).toBe('tentative');
+      expect(icsEventStatus('CONFIRMED')).toBe('confirmed');
+      // §3.2: enumerated property values are case-insensitive.
+      expect(icsEventStatus('Cancelled')).toBe('cancelled');
+      expect(icsEventStatus(' tentative ')).toBe('tentative');
+
+      // VTODO and VJOURNAL values say nothing about an event, and no STATUS at
+      // all leaves the column DEFAULT.
+      expect(icsEventStatus('NEEDS-ACTION')).toBeUndefined();
+      expect(icsEventStatus('COMPLETED')).toBeUndefined();
+      expect(icsEventStatus('')).toBeUndefined();
+      expect(icsEventStatus(undefined)).toBeUndefined();
+    });
+
+    it('states a cancelled occurrence of a series as cancelled, under its override id', async () => {
+      // How Google Takeout writes "delete just this one": the series master,
+      // then a block repeating its UID with the occurrence's RECURRENCE-ID and
+      // STATUS:CANCELLED. The override has to arrive cancelled. The stored row
+      // is what stops the calendar synthesizing that occurrence
+      // (`dropExistingOverrides`), so dropping the block instead would bring
+      // the meeting back.
+      const icsPath = icsFile('ci-ics-status-', 'status.ics', [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//Google Inc//Google Calendar 70.9054//EN',
+        'BEGIN:VEVENT',
+        'DTSTART;TZID=America/Los_Angeles:20221006T010000',
+        'DTEND;TZID=America/Los_Angeles:20221006T020000',
+        'RRULE:FREQ=WEEKLY;BYDAY=TH',
+        'UID:weekly-sync@google.com',
+        'STATUS:CONFIRMED',
+        'SUMMARY:Weekly sync',
+        'END:VEVENT',
+        'BEGIN:VEVENT',
+        'DTSTART;TZID=America/Los_Angeles:20221013T010000',
+        'DTEND;TZID=America/Los_Angeles:20221013T020000',
+        'UID:weekly-sync@google.com',
+        'RECURRENCE-ID;TZID=America/Los_Angeles:20221013T010000',
+        'STATUS:CANCELLED',
+        'SUMMARY:Weekly sync',
+        'END:VEVENT',
+        'BEGIN:VEVENT',
+        'DTSTART:20221014T170000Z',
+        'UID:maybe-lunch@google.com',
+        'STATUS:TENTATIVE',
+        'SUMMARY:Lunch?',
+        'END:VEVENT',
+        'BEGIN:VEVENT',
+        'DTSTART:20221015T170000Z',
+        'UID:no-status@example.com',
+        'SUMMARY:A calendar that writes no STATUS',
+        'END:VEVENT',
+        'END:VCALENDAR',
+      ]);
+
+      try {
+        const items = (await importIcs(icsPath)).filter((graph) => graph.item).map((graph) => graph.item);
+        const statusOf = (id: string) => items.find((item) => item.id === id)?.metadata.eventStatus;
+
+        // 01:00 America/Los_Angeles on 2022-10-13 (PDT, UTC-7) is 08:00Z.
+        expect(items.map((item) => item.id)).toContain('weekly-sync@google.com#20221013T080000Z');
+        expect(statusOf('weekly-sync@google.com#20221013T080000Z')).toBe('cancelled');
+        expect(statusOf('weekly-sync@google.com')).toBe('confirmed');
+        expect(statusOf('maybe-lunch@google.com')).toBe('tentative');
+        expect(statusOf('no-status@example.com')).toBeUndefined();
+      } finally {
+        fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
+      }
+    });
+
+    it("reads the event's own STATUS, never a nested component's", () => {
+      // RFC 5545 gives VALARM no STATUS, but the parser must not rely on that:
+      // a stray one inside the block cannot cancel the event around it.
+      const block = (own: string[]) =>
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:nested@x',
+          'DTSTART:20260101T090000Z',
+          ...own,
+          'BEGIN:VALARM',
+          'ACTION:DISPLAY',
+          'TRIGGER:-PT10M',
+          'STATUS:CANCELLED',
+          'END:VALARM',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n');
+
+      expect(parseIcsEvents(block([]), 'nested.ics')[0].status).toBeUndefined();
+      expect(parseIcsEvents(block(['STATUS:CONFIRMED']), 'nested.ics')[0].status).toBe('confirmed');
+    });
   });
 });

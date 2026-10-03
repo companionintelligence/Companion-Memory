@@ -123,6 +123,72 @@ function isOwnerToken(sender: GVEntity): boolean {
   return (sender.name || '').trim().toLowerCase() === 'me';
 }
 
+/** One member a group file's header names, with the single string that stands for them downstream. */
+interface GVMember extends GVEntity {
+  /** The name, else the number: the same preference a one-to-one counterpart gets. */
+  readonly label: string;
+}
+
+/**
+ * The people a group conversation file is WITH.
+ *
+ * A group file names its members once, in a header —
+ *
+ *   <div class="participants">Group conversation with:
+ *     <cite class="sender vcard"><a class="tel" href="tel:+1…"><span class="fn">Name</span></a></cite>, …
+ *   </div>
+ *
+ * — and every message block after it names only its SENDER. For a message the
+ * owner sent that sender is the owner token, so the header is the only place in
+ * the file the recipients are written. It was never read: the recipient was taken
+ * from whoever had spoken EARLIER in the file, which is nobody before the first
+ * reply and one arbitrary member afterwards. On the reference export that was 446
+ * outbound group texts with no recipient at all and 3,650 attributed to a single
+ * member, of the 4,096 the owner sent into groups.
+ *
+ * A one-to-one file has no header (none of its 20,385 in the reference export
+ * does) and returns [] here, so it is read exactly as before: its counterpart
+ * comes from the filename label and from whoever spoke.
+ *
+ * Each entry is read through {@link extractSender}, the reading a message block's
+ * sender gets, so a member is the same person here as when they speak: the same
+ * name, the same number, the same staged entity. Members who never speak are the
+ * point; they exist only here. The owner token is skipped (a role, see
+ * {@link isOwnerToken}; no header in the reference export carries it), a member
+ * listed twice is one member, and one the export gives neither a name nor a
+ * number has nothing to record. Order is the header's.
+ *
+ * Not who was present at each message: the header says who the conversation is
+ * with, not when anyone joined or left, so an old message is attributed to
+ * members who arrived later. That is the approximation twitter.ts makes for group
+ * DMs, where over-reporting a member beats reporting none. And it is
+ * deliberately not the thread key either, see {@link threadKeyFor}.
+ */
+function groupHeaderMembers(raw: string): GVMember[] {
+  const header = /<div class="participants">([\s\S]*?)<\/div>/i.exec(raw)?.[1];
+  if (header === undefined) {
+    return [];
+  }
+
+  const members: GVMember[] = [];
+  const seen = new Set<string>();
+
+  for (const cite of header.matchAll(/<cite class="sender vcard">([\s\S]*?)<\/cite>/gi)) {
+    const member = extractSender(cite[1]);
+    const label = member.name || member.phone;
+    const key = member.phone ?? member.name;
+
+    if (!label || !key || isOwnerToken(member) || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    members.push({ ...member, label });
+  }
+
+  return members;
+}
+
 /** Prefix marking a Google Voice thread id that names a FILE, not a contact. */
 export const GV_FILE_THREAD_PREFIX = 'googlevoice:file:';
 
@@ -186,13 +252,16 @@ export function stripCopyIndex(basename: string): string {
  * "Group Conversation" files — up to 265 messages each — which otherwise land
  * with ci.communications.thread_id NULL and no grouping at all.
  *
- * Deliberately NOT derived from the participant set. Google Voice records only
- * the owner's own number in a group file's per-message recipients (verified on
- * the live data: every "to" in a group file is the owner), so the only
- * participant set available is "senders who happened to speak in this file" —
- * i.e. exactly this file, but computed in a way that changes whenever a member
- * stays quiet. The file id is the same grouping, stable across re-imports, and
- * can never merge two different group chats.
+ * Deliberately NOT derived from the participant set. A message block records
+ * only the owner's own number as its recipient (verified on the live data: every
+ * "to" in a group file is the owner); the members are named once, in the file's
+ * header, and that header is where a group message's recipients now come from
+ * (see {@link groupHeaderMembers}). It is still the wrong key. `thread_id` is not
+ * refreshed on a re-import (it is absent from INGEST_REFRESH_COLUMNS), so keying
+ * on the member set would split every group already stored into an old thread
+ * and a new one, and two exports of one group can list different members. The
+ * file id is the same grouping, stable across re-imports, and can never merge
+ * two different group chats.
  *
  * The extension is stripped so the value does not read as a filename, and the
  * `googlevoice:file:` prefix marks it as synthetic rather than a contact.
@@ -534,6 +603,11 @@ export class GoogleVoiceFileImporter implements FileImporter {
       return;
     }
 
+    // Who a group conversation is WITH, from its header (see groupHeaderMembers).
+    // Empty for a one-to-one file, which keeps reading its counterpart from the
+    // label and from whoever spoke.
+    const members = groupHeaderMembers(raw);
+
     // Each message is a <div class="message"> … </div> block. The real Google
     // Voice HTML uses <abbr class="dt" title="ISO">, a <cite class="sender vcard">
     // with <a class="tel" href="tel:…"><span class="fn">name</span></a>, then the
@@ -640,7 +714,13 @@ export class GoogleVoiceFileImporter implements FileImporter {
             ThreadId: thread,
             Text: text || undefined,
             Direction: isOutbound ? 'outgoing' : 'incoming',
-            To: to || undefined,
+            // A message the owner sent into a group went to the whole group, and
+            // only the header names it: `Recipients`, the key imessage.ts uses for
+            // a chat's members, in place of the one counterpart `To` would carry
+            // (nobody before the first reply, the last speaker after it).
+            ...(isOutbound && members.length > 0
+              ? { Recipients: members.map((member) => member.label) }
+              : { To: to || undefined }),
             // Provenance, not a schema field: this file has no spam/ham
             // distinction anywhere downstream, so the item is staged exactly
             // like an ordinary message — this just records where Google
@@ -649,7 +729,7 @@ export class GoogleVoiceFileImporter implements FileImporter {
             ...(fromSpam ? { Spam: true } : {}),
           },
         },
-        edges: counterpartEdges(isOutbound, sender, counterpart),
+        edges: counterpartEdges(isOutbound, sender, counterpart, members),
       });
     }
 
@@ -770,7 +850,11 @@ export class GoogleVoiceFileImporter implements FileImporter {
                   ? undefined
                   : attributed.sender.name || attributed.sender.phone || undefined,
                 Direction: attributed.isOutbound ? 'outgoing' : 'incoming',
-                To: (attributed.isOutbound ? counterpart.name : owner) || undefined,
+                // Same rule as the message loop above: an outbound message in a
+                // group names the group's members, not the last to speak.
+                ...(attributed.isOutbound && members.length > 0
+                  ? { Recipients: members.map((member) => member.label) }
+                  : { To: (attributed.isOutbound ? counterpart.name : owner) || undefined }),
               }
             : {}),
           ...(fromSpam ? { Spam: true } : {}),
@@ -794,7 +878,7 @@ export class GoogleVoiceFileImporter implements FileImporter {
       params.pipeline.push({
         item,
         edges: attributed
-          ? counterpartEdges(attributed.isOutbound, attributed.sender, counterpart)
+          ? counterpartEdges(attributed.isOutbound, attributed.sender, counterpart, members)
           : undefined,
       });
     }
@@ -956,40 +1040,65 @@ export class GoogleVoiceFileImporter implements FileImporter {
  *   the block's `<cite class="sender vcard">` actually named somebody. A
  *   filename is not evidence of who wrote a message; guessing there is how this
  *   importer previously minted 241 Person entities named after .html files.
+ *
+ * A message the owner sent into a GROUP has no single counterpart: it went to
+ * every member the file's header names (see {@link groupHeaderMembers}), so it
+ * gets one edge each, the way imessage.ts stages a group chat and the shape
+ * `resolveCorrespondents` reads as "everyone else" on an outbound message. Only
+ * the outbound side fans out. On inbound the sender must stay the FIRST
+ * `participant` edge (`resolveCorrespondents` reads `others[0]` as the sender),
+ * so `members` is not consulted for it.
  */
 function counterpartEdges(
   isOutbound: boolean,
   sender: GVEntity,
   counterpart: GVEntity,
+  members: readonly GVMember[] = [],
 ): Relationship[] | undefined {
+  if (isOutbound && members.length > 0) {
+    return members.map((member) => participantEdge(member.label, member.phone, 'outgoing'));
+  }
+
   const name = isOutbound ? counterpart.name : sender.name || sender.phone;
   if (!name) {
     return undefined;
   }
 
-  // The phone is an IDENTITY attribute (see imessage.ts contactEntity): without
-  // it the entity is keyed by name and never gets a ci.entity_identifiers row,
-  // so it can never be cross-referenced with the same number from a vCard.
-  const phone = isOutbound ? counterpart.phone : sender.phone;
-
   return [
-    {
-      relation: 'participant',
-      to: {
-        entity: {
-          // Same rule as the two entity pushes above, and it matters most here:
-          // this edge is the only one of the three that has never run against
-          // the QA corpus, so its hard-coded 'contact' was a latent `Person`
-          // named "411" waiting for the next import rather than a row anyone
-          // could see. See participantType.
-          type: participantType({ name, phone }),
-          name,
-          attributes: phone ? [{ name: 'phone', value: phone, identity: true } as EntityAttribute] : [],
-        },
-      },
-      metadata: { direction: isOutbound ? 'outgoing' : 'incoming' },
-    },
+    participantEdge(
+      name,
+      isOutbound ? counterpart.phone : sender.phone,
+      isOutbound ? 'outgoing' : 'incoming',
+    ),
   ];
+}
+
+/** One `participant` edge to a Google Voice correspondent, in the shape the push resolves. */
+function participantEdge(
+  name: string,
+  phone: string | undefined,
+  direction: 'incoming' | 'outgoing',
+): Relationship {
+  return {
+    relation: 'participant',
+    to: {
+      entity: {
+        // Same rule as the two entity pushes above, and it matters most here:
+        // this edge is the only one of the three that has never run against
+        // the QA corpus, so its hard-coded 'contact' was a latent `Person`
+        // named "411" waiting for the next import rather than a row anyone
+        // could see. See participantType.
+        type: participantType({ name, phone }),
+        name,
+        // The phone is an IDENTITY attribute (see imessage.ts contactEntity):
+        // without it the entity is keyed by name and never gets a
+        // ci.entity_identifiers row, so it can never be cross-referenced with
+        // the same number from a vCard.
+        attributes: phone ? [{ name: 'phone', value: phone, identity: true } as EntityAttribute] : [],
+      },
+    },
+    metadata: { direction },
+  };
 }
 
 /**

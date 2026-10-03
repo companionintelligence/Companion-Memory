@@ -131,9 +131,8 @@ describe('ReminderDispatchService', () => {
       { id: 'dead-sub', endpoint: 'https://push.example/dead', p256dh: 'p', auth: 'a' },
       { id: 'live-sub', endpoint: 'https://push.example/live', p256dh: 'p', auth: 'a' },
     ]);
-    webPush.sendPush.mockImplementation(
-      async (sub: { endpoint: string }): Promise<SendResult> =>
-        sub.endpoint.endsWith('/dead') ? 'gone' : 'ok',
+    webPush.sendPush.mockImplementation(async (sub: { endpoint: string }): Promise<SendResult> =>
+      sub.endpoint.endsWith('/dead') ? 'gone' : 'ok',
     );
     dataSource.query.mockResolvedValueOnce([
       [{ id: 'rem-4', taskId: 'task-1', blockId: null, source: 'manual', fireAt: new Date() }],

@@ -41,13 +41,7 @@ export function EventRow({ event, time, onClick }: Props) {
 
   return (
     <EntityRow
-      icon={
-        thumbUrl ? (
-          <PendingImage src={thumbUrl} />
-        ) : (
-          <EventIcon />
-        )
-      }
+      icon={thumbUrl ? <PendingImage src={thumbUrl} /> : <EventIcon />}
       title={title || 'Untitled event'}
       subtitle={data.description}
       time={time}

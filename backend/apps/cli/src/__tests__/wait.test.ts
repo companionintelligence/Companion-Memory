@@ -65,6 +65,32 @@ describe('waitForRuns', () => {
     expect(ctx.term.text()).toContain('parse/gmail 40/100');
   });
 
+  it('prints a stage going quiet as a line of its own', async () => {
+    // The percentage stops moving whether the work is slow or has stopped;
+    // only the stall says which. Printed once, when it changes — not per poll.
+    const polls: Array<[string, boolean]> = [
+      ['running', false],
+      ['running', true],
+      ['running', true],
+      ['completed', false],
+    ];
+    const ctx = harness({
+      getRun: async () => {
+        const [status, stalled] = polls.shift() ?? ['completed', false];
+
+        return detail(status, 30, [
+          { seq: 0, kind: 'parse', status: 'running', phase: 'gmail', processed: 40, total: 100, stalled },
+        ]);
+      },
+    });
+
+    await waitForRuns(ctx.client, ctx.term, ['run-1'], { sleep: async () => undefined });
+
+    expect(ctx.term.lines.filter((line) => line.includes('stalled: no heartbeat'))).toEqual([
+      ' 30%  running parse/gmail 40/100  stalled: no heartbeat',
+    ]);
+  });
+
   it('costs nothing when the run is already finished', async () => {
     let polls = 0;
     const ctx = harness({

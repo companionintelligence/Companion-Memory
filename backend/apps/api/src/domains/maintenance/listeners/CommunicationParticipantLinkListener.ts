@@ -1,4 +1,5 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
@@ -17,6 +18,8 @@ import { matchOwner, readSelfIdentity, shouldMapContactToSelf, type SelfIdentity
 import { CommunicationService } from '@ci/domains/memory';
 import { CommunicationCreatedEvent, type CommunicationCreatedPayload } from '@ci/domains/memory/events';
 import { PersonalizationService } from '@ci/domains/personalization';
+
+import { resolveEdgeProjectionReopener } from '../edgeProjectionReopener';
 
 /**
  * sourceSystem the on-ingest stub Person entities are stamped with — matches
@@ -37,6 +40,10 @@ const STUB_SOURCE_SYSTEM = 'communications:participant';
  *   - `cc` / `bcc`      -> stub Person + identifier ONLY (no per-row column
  *     to write back to; the index still benefits downstream queries that
  *     resolve those addresses on future communications).
+ *
+ * An identifier on `ci.forgotten_identifiers` gets no stub: it belongs to a person
+ * the owner asked `memory.forget` to erase, and a new message from them must not
+ * bring them back. The participant stays unresolved.
  *
  * Closes the long-standing TODO at `CommunicationService.create`.
  *
@@ -63,6 +70,8 @@ export class CommunicationParticipantLinkListener {
     private readonly personalization: Pick<PersonalizationService, 'getTrustMode'>,
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly logger: LoggerService,
+    /** For `EDGE_PROJECTION_REOPENER`; see `CommunicationLinkBackfillService`. */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {
     this.logger.setContext(CommunicationParticipantLinkListener.name);
   }
@@ -160,10 +169,13 @@ export class CommunicationParticipantLinkListener {
 
     const allKeys = [...seenByComposite.values()].map((s) => s.key);
     const existing = await this.entityIdentifierService.findEntityIdsByIdentifiers(ownerId, allKeys);
+    // The owner asked `memory.forget` to erase the person these belong to. The mail that names them is
+    // still here, and without this a stub for each would be minted again, and the history re-attached.
+    const forgotten = await this.entityIdentifierService.findForgottenIdentifiers(ownerId, allKeys);
 
     const newEntities: GraphEntityInputDto[] = [];
     for (const [composite, seen] of seenByComposite) {
-      if (existing.has(composite)) {
+      if (existing.has(composite) || forgotten.has(composite)) {
         continue;
       }
 
@@ -266,27 +278,38 @@ export class CommunicationParticipantLinkListener {
     // a list is never shortened by whoever resolved less.
     // No CommunicationUpdatedEvent fires so the search listener doesn't
     // redundantly re-embed the same content.
-    await this.dataSource.query(
-      `UPDATE ci.communications
-          SET from_entity_id = CASE
-                                 WHEN $3::uuid IS NOT NULL AND from_entity_id IS NULL
-                                 THEN $3::uuid
-                                 ELSE from_entity_id
-                               END,
-              to_entity_ids  = CASE
-                                 WHEN $4::uuid[] IS NULL THEN to_entity_ids
-                                 ELSE ARRAY(
-                                   SELECT m.id
-                                     FROM unnest(COALESCE(to_entity_ids, '{}'::uuid[]) || $4::uuid[])
-                                          WITH ORDINALITY AS m(id, ord)
-                                    GROUP BY m.id
-                                    ORDER BY min(m.ord))
-                               END
-        WHERE user_id = $1
-          AND id = $2
-          AND time = $5::timestamptz`,
-      [ownerId, communication.id, fromId, toIds, communication.time],
-    );
+    //
+    // The edge leg's decision re-opens in the same transaction. A message
+    // created with an attachment or one resolved participant is a candidate
+    // for `promote.edge_communication` straight away, and may be decided
+    // before this job runs. See `../edgeProjectionReopener.ts`.
+    const reopener = resolveEdgeProjectionReopener(this.moduleRef);
+
+    await this.dataSource.transaction(async (em) => {
+      await em.query(
+        `UPDATE ci.communications
+            SET from_entity_id = CASE
+                                   WHEN $3::uuid IS NOT NULL AND from_entity_id IS NULL
+                                   THEN $3::uuid
+                                   ELSE from_entity_id
+                                 END,
+                to_entity_ids  = CASE
+                                   WHEN $4::uuid[] IS NULL THEN to_entity_ids
+                                   ELSE ARRAY(
+                                     SELECT m.id
+                                       FROM unnest(COALESCE(to_entity_ids, '{}'::uuid[]) || $4::uuid[])
+                                            WITH ORDINALITY AS m(id, ord)
+                                      GROUP BY m.id
+                                      ORDER BY min(m.ord))
+                                 END
+          WHERE user_id = $1
+            AND id = $2
+            AND time = $5::timestamptz`,
+        [ownerId, communication.id, fromId, toIds, communication.time],
+      );
+
+      await reopener.reopen('communications', [communication.id], em);
+    });
   }
 
   private async resolveSelfEntityId(userId: string): Promise<string | null> {

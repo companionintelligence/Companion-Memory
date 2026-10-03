@@ -65,8 +65,7 @@ describe('enforceApiKeyScopes', () => {
  * settings UI has already told the user the key cannot record anything.
  */
 type Shape =
-  | { type: 'http'; method: string }
-  | { type: 'graphql'; operation: 'query' | 'mutation' | 'subscription' };
+  { type: 'http'; method: string } | { type: 'graphql'; operation: 'query' | 'mutation' | 'subscription' };
 
 /**
  * `shape` is what the request looks like when the route declares nothing — the

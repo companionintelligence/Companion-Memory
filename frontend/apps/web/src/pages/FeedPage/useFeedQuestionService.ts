@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { apiKeyHeaders, buildApiUrl, fetchJson } from '@ci/common';
 
-import { useAuth } from '@/hooks';
+import { useSessionAuth } from '@/hooks';
 
 export interface FeedQuestion {
   id: string;
@@ -31,7 +31,10 @@ type ReturnType = [
 const FEED_QUESTION_POLL_MS = 2 * 60 * 1000;
 
 export function useFeedQuestionService(): ReturnType {
-  const [{ authToken }] = useAuth();
+  // `ready`, not `authToken`: the token is the web JWT, which the native shell never has — its
+  // credential is a keystore API key. Gating on the token meant the feed never asked a reflection
+  // question on the phone (and answering was a silent no-op), though both routes take the key.
+  const { ready, headers: sessionHeaders } = useSessionAuth();
 
   const [question, setQuestion] = useState<FeedQuestion | null>(null);
   const [loading, setLoading] = useState(false);
@@ -39,7 +42,7 @@ export function useFeedQuestionService(): ReturnType {
   const [error, setError] = useState<unknown | null>(null);
 
   const fetchUnansweredQuestion = useCallback(async () => {
-    if (!authToken) {
+    if (!ready) {
       setQuestion(null);
       setLoading(false);
       setError(null);
@@ -55,7 +58,7 @@ export function useFeedQuestionService(): ReturnType {
         method: 'GET',
         headers: {
           ...apiKeyHeaders(),
-          Authorization: `Bearer ${authToken}`,
+          ...sessionHeaders,
           'Content-Type': 'application/json',
         },
       });
@@ -84,11 +87,11 @@ export function useFeedQuestionService(): ReturnType {
     } finally {
       setLoading(false);
     }
-  }, [authToken]);
+  }, [ready, sessionHeaders]);
 
   const submitAnswer = useCallback(
     async ({ questionId, text }: { questionId: string; text: string }): Promise<boolean> => {
-      if (!authToken) {
+      if (!ready) {
         return false;
       }
 
@@ -99,7 +102,7 @@ export function useFeedQuestionService(): ReturnType {
         await fetchJson('/api/answers', {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${authToken}`,
+            ...sessionHeaders,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
@@ -121,7 +124,7 @@ export function useFeedQuestionService(): ReturnType {
         setSubmitting(false);
       }
     },
-    [authToken, fetchUnansweredQuestion],
+    [ready, sessionHeaders, fetchUnansweredQuestion],
   );
 
   useEffect(() => {
@@ -130,7 +133,7 @@ export function useFeedQuestionService(): ReturnType {
 
   // Re-fetch periodically so stale unanswered questions can rotate server-side.
   useEffect(() => {
-    if (!authToken || !question) {
+    if (!ready || !question) {
       return;
     }
 
@@ -139,7 +142,7 @@ export function useFeedQuestionService(): ReturnType {
     }, FEED_QUESTION_POLL_MS);
 
     return () => clearInterval(handle);
-  }, [authToken, question, fetchUnansweredQuestion]);
+  }, [ready, question, fetchUnansweredQuestion]);
 
   return [
     {

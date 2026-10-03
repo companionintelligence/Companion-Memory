@@ -1,5 +1,5 @@
 import { FetchJsonError } from '@ci/common';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AccountSection } from './AccountSection';
@@ -11,21 +11,28 @@ import { AccountSection } from './AccountSection';
  * way web does — a `Bearer null` here would break the App Store build, i.e. the only
  * client the requirement is actually about.
  *
- * Change-email/change-password pin the OIDC-aware current-password requirement: a
- * federated account (a random 32-byte password it has never seen) must not be asked
- * for one it cannot supply.
+ * Change-email/change-password pin the current-password requirement, which follows
+ * the server's `hasOwnPassword` exactly: an account provisioned with a random 32-byte
+ * password it has never seen — by Portal/OIDC sign-in, or by the Hub bridge with no
+ * federated identity at all — must not be asked for one it cannot supply. And while
+ * the Hub signs the account in, its address is the Hub's link to it, so the page says
+ * so instead of offering a change.
  */
 const h = vi.hoisted(() => ({
   authToken: null as string | null,
+  // Only set where a test is about the native shell: a device API key and no web JWT, which
+  // `useAuth` reports as `authenticated` with a null `authToken`.
+  authenticated: false,
   logout: vi.fn(),
   refetch: vi.fn(),
   email: 'jsmith@example.com',
   hasFederatedIdentity: false,
   hasOwnPassword: true,
+  emailManagedByHub: false,
 }));
 
 vi.mock('@/hooks', () => ({
-  useAuth: () => [{ authToken: h.authToken }, { logout: h.logout }],
+  useAuth: () => [{ authToken: h.authToken, authenticated: h.authenticated }, { logout: h.logout }],
   useCurrentUser: () => ({
     user: { id: 'u1', email: h.email },
     loading: false,
@@ -80,9 +87,11 @@ function confirmButton() {
 
 beforeEach(() => {
   h.authToken = 'jwt-abc';
+  h.authenticated = false;
   h.email = 'jsmith@example.com';
   h.hasFederatedIdentity = false;
   h.hasOwnPassword = true;
+  h.emailManagedByHub = false;
 
   fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
     if (isAccountReadCall(url, init)) {
@@ -90,6 +99,7 @@ beforeEach(() => {
         email: h.email,
         hasFederatedIdentity: h.hasFederatedIdentity,
         hasOwnPassword: h.hasOwnPassword,
+        emailManagedByHub: h.emailManagedByHub,
       });
     }
 
@@ -193,6 +203,35 @@ describe('AccountSection — delete', () => {
     expect(await screen.findByText(/Could not delete the account/i)).toBeInTheDocument();
     expect(h.logout).not.toHaveBeenCalled();
   });
+
+  it('native: tells a device whose key the server refuses (403) to sign in again, and stays signed in', async () => {
+    // A phone that signed in before keys were minted at `full` holds a `write` one, which
+    // `DELETE /account` refuses. "Please try again" would never work; signing in again does.
+    h.authToken = null;
+    fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
+      if (isAccountReadCall(url, init)) {
+        return Promise.resolve({ email: h.email, hasFederatedIdentity: false, hasOwnPassword: true });
+      }
+
+      return Promise.reject(
+        new FetchJsonError(
+          403,
+          'Forbidden',
+          'This API key is "write" and cannot perform this action, which requires "full" access',
+        ),
+      );
+    });
+    render(<AccountSection />);
+    openDialog();
+
+    fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: 'jsmith@example.com' } });
+    fireEvent.click(confirmButton());
+
+    expect(await screen.findByText(/Sign out, sign back in, then try again/)).toBeInTheDocument();
+    expect(screen.queryByText(/Could not delete the account/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/requires "full" access/)).not.toBeInTheDocument();
+    expect(h.logout).not.toHaveBeenCalled();
+  });
 });
 
 describe('AccountSection — change email', () => {
@@ -236,6 +275,55 @@ describe('AccountSection — change email', () => {
 
     const [, init] = findCall('PATCH', '/api/account/email');
     expect(JSON.parse(init.body!)).toEqual({ newEmail: 'new@example.com' });
+  });
+
+  it('skips the current-password field for a Hub-provisioned account, which has no federated identity either', async () => {
+    // The field this used to render asked for the bridge's random password.
+    h.hasFederatedIdentity = false;
+    h.hasOwnPassword = false;
+    render(<AccountSection />);
+
+    await screen.findByText(/no password yet/i);
+
+    expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('New email'), { target: { value: 'new@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update email' }));
+
+    await waitFor(() => expect(h.refetch).toHaveBeenCalled());
+
+    const [, init] = findCall('PATCH', '/api/account/email');
+    expect(JSON.parse(init.body!)).toEqual({ newEmail: 'new@example.com' });
+  });
+
+  it('explains instead of offering the form while the Hub signs this account in by its address', async () => {
+    h.hasOwnPassword = false;
+    h.emailManagedByHub = true;
+    render(<AccountSection />);
+
+    expect(await screen.findByText(/Your Hub signs you in to Memory with this address/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('New email')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Update email' })).not.toBeInTheDocument();
+    // Only the email is the Hub's: setting a password is still offered.
+    expect(screen.getByRole('button', { name: 'Set password' })).toBeInTheDocument();
+  });
+
+  it('asks for the current password when the account read fails, rather than guessing it away', async () => {
+    fetchJson.mockImplementation((url: string, init?: FetchCallInit) =>
+      isAccountReadCall(url, init)
+        ? Promise.reject(new Error('Fetch failed: 500'))
+        : Promise.resolve(undefined),
+    );
+    render(<AccountSection />);
+
+    await waitFor(() => expect(fetchJson).toHaveBeenCalledWith('/api/account', expect.anything()));
+
+    expect(
+      await screen.findByLabelText('Current password', { selector: '#emailCurrentPassword' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Current password', { selector: '#passwordCurrentPassword' }),
+    ).toBeInTheDocument();
   });
 
   it('asks a federated account that HAS set a password for it, like any other account', async () => {
@@ -368,5 +456,144 @@ describe('AccountSection — change password', () => {
 
     const [, init] = findCall('PATCH', '/api/account/password');
     expect(JSON.parse(init.body!)).toEqual({ newPassword: 'new-password-1' });
+  });
+
+  it('lets a Hub-provisioned account set a password without one it never saw', async () => {
+    h.hasFederatedIdentity = false;
+    h.hasOwnPassword = false;
+    h.emailManagedByHub = true;
+    render(<AccountSection />);
+
+    expect(await screen.findByText('Set a password')).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Current password', { selector: '#passwordCurrentPassword' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'new-password-1' } });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'new-password-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set password' }));
+
+    await screen.findByText(/other signed-in devices/i);
+
+    const [, init] = findCall('PATCH', '/api/account/password');
+    expect(JSON.parse(init.body!)).toEqual({ newPassword: 'new-password-1' });
+  });
+
+  it('tells someone the Hub signs in how to sign in again, since a reload keeps the old session', async () => {
+    h.hasOwnPassword = false;
+    h.emailManagedByHub = true;
+    fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
+      if (isAccountReadCall(url, init)) {
+        return Promise.resolve({
+          email: h.email,
+          hasFederatedIdentity: false,
+          hasOwnPassword: false,
+          emailManagedByHub: true,
+        });
+      }
+
+      if (init?.method === 'PATCH' && url === '/api/account/password') {
+        return Promise.reject(new FetchJsonError(401, 'Unauthorized', 'REAUTH_REQUIRED'));
+      }
+
+      return Promise.resolve(undefined);
+    });
+    render(<AccountSection />);
+    await screen.findByText('Set a password');
+
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'new-password-1' } });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'new-password-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set password' }));
+
+    expect(
+      await screen.findByText('Sign out, then open Memory from your Hub again to make this change.'),
+    ).toBeInTheDocument();
+  });
+
+  it('labels a federated account that has its own password "Update password", not "Set password"', async () => {
+    // The label reads the same before the account read lands, so hold the read and
+    // assert only once it has.
+    let answerRead!: (body: unknown) => void;
+    fetchJson.mockImplementation((url: string, init?: FetchCallInit) =>
+      isAccountReadCall(url, init)
+        ? new Promise((resolve) => {
+            answerRead = resolve;
+          })
+        : Promise.resolve(undefined),
+    );
+    render(<AccountSection />);
+
+    await act(async () => {
+      answerRead({
+        email: h.email,
+        hasFederatedIdentity: true,
+        hasOwnPassword: true,
+        emailManagedByHub: false,
+      });
+    });
+
+    expect(screen.getByText('Change password')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Update password' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set password' })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * ═══ CREDENTIAL FORMS A PHONE CAN NEVER USE ═══
+ *
+ * `GET /account` and `PATCH /account/email|password` are `JwtAuthGuard`, deliberately never an
+ * API key. The native shell holds only a device key (no web JWT), so Change email and Change
+ * password could only answer "Unauthorized" — after the person had typed their current password.
+ * Say so up front instead. `DELETE /account` is the exception that has to keep working: it takes a
+ * key at `full`, and both stores require in-app deletion.
+ */
+describe('AccountSection on the native shell (device key, no web JWT)', () => {
+  beforeEach(() => {
+    h.authToken = null;
+    h.authenticated = true;
+  });
+
+  it('says plainly that changing email or password needs a web sign-in', () => {
+    render(<AccountSection />);
+
+    expect(screen.getByText('Needs a web sign-in')).toBeInTheDocument();
+    expect(
+      screen.getByText(/email and password can only be changed from a web sign-in/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('New email')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Update email' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('New password')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /update password|set password/i })).not.toBeInTheDocument();
+  });
+
+  it('does not send the account read that can only 401', async () => {
+    render(<AccountSection />);
+
+    await waitFor(() => expect(screen.getByText('Needs a web sign-in')).toBeInTheDocument());
+
+    expect(fetchJson).not.toHaveBeenCalled();
+  });
+
+  it('keeps account deletion, which takes the device key', async () => {
+    render(<AccountSection />);
+    openDialog();
+
+    fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: 'jsmith@example.com' } });
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(h.logout).toHaveBeenCalled());
+
+    const [url, init] = findCall('DELETE');
+    expect(url).toBe('/api/account');
+    expect(init.headers).not.toHaveProperty('Authorization');
+  });
+
+  it('keeps the change forms for a web session', async () => {
+    h.authToken = 'jwt-abc';
+
+    render(<AccountSection />);
+
+    expect(await screen.findByRole('button', { name: 'Update email' })).toBeInTheDocument();
+    expect(screen.queryByText('Needs a web sign-in')).not.toBeInTheDocument();
   });
 });

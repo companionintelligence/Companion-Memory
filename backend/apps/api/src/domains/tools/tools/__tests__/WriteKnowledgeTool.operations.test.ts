@@ -160,6 +160,19 @@ function makeGraph(seedNodes: FakeNode[] = [], seedRelationships: FakeRelationsh
           .filter((r): r is FakeRelationship => Boolean(r))
           .filter((r) => options.includeInactive || r.is_active),
     ),
+    // The active edge on a (from, to, type) coordinate. The reverse match for a
+    // bidirectional edge is GraphUtilityService's, exercised for real in
+    // WriteKnowledgeTool.idReuse.test.ts.
+    findActiveRelationship: jest.fn(
+      async (_owner: string, edge: { fromEntityId: string; toEntityId: string; relationshipType: string }) =>
+        [...relationships.values()].find(
+          (r) =>
+            r.is_active &&
+            r.from_entity_id === edge.fromEntityId &&
+            r.to_entity_id === edge.toEntityId &&
+            r.relationship_type === edge.relationshipType,
+        ) ?? null,
+    ),
   };
 
   return { nodes, relationships, graphEvents, graphQuery };
@@ -171,8 +184,12 @@ function makeTool(graph: ReturnType<typeof makeGraph>) {
 
 const OWNER = { userId: 'user-1' };
 
+// The doubles above record what the tool SENDS; they do not model what
+// createOrUpdateNode does with it. What a write leaves behind on a populated
+// row — merge, keep-if-unset, removal — is asserted against the real write in
+// WriteKnowledgeTool.idReuse.test.ts.
 describe('WriteKnowledgeTool entity.update', () => {
-  it('merges incoming properties onto existing ones by default and fills in the rest from the existing row', async () => {
+  it('sends only the fields it was given and asks for the properties to be merged at write time', async () => {
     const graph = makeGraph([
       node({
         entity_id: E1,
@@ -180,6 +197,8 @@ describe('WriteKnowledgeTool entity.update', () => {
         name: 'Yoga',
         description: 'A practice',
         properties: { category: 'fitness', level: 'beginner' },
+        linked_table: 'import:notes',
+        linked_id: E2,
       }),
     ]);
     const tool = makeTool(graph);
@@ -192,19 +211,19 @@ describe('WriteKnowledgeTool entity.update', () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({ updatedNodes: 1, failures: 0 });
-    expect(graph.graphEvents.upsertNode).toHaveBeenCalledWith(
-      'user-1',
-      expect.objectContaining({
-        entityId: E1,
-        entityType: 'Concept',
-        name: 'Yoga',
-        description: 'A practice',
-        properties: { category: 'fitness', level: 'intermediate', pace: 'slow' },
-      }),
-    );
+    // toEqual: every other field — name, description, search content, the
+    // linked key — must be absent, not re-sent from the read above. Re-sending
+    // it would revert anything another writer changed while this write queued.
+    const [, sent] = graph.graphEvents.upsertNode.mock.calls[0];
+    expect(sent).toEqual({
+      entityId: E1,
+      entityType: 'Concept',
+      properties: { level: 'intermediate', pace: 'slow' },
+      mergeProperties: true,
+    });
   });
 
-  it('replaces properties wholesale when mergeProperties is false', async () => {
+  it('asks for a wholesale replace when mergeProperties is false', async () => {
     const graph = makeGraph([
       node({ entity_id: E1, entity_type: 'Concept', name: 'Yoga', properties: { category: 'fitness' } }),
     ]);
@@ -221,13 +240,16 @@ describe('WriteKnowledgeTool entity.update', () => {
       ],
     });
 
-    expect(graph.graphEvents.upsertNode).toHaveBeenCalledWith(
-      'user-1',
-      expect.objectContaining({ properties: { level: 'intermediate' } }),
-    );
+    const [, sent] = graph.graphEvents.upsertNode.mock.calls[0];
+    expect(sent).toEqual({
+      entityId: E1,
+      entityType: 'Concept',
+      properties: { level: 'intermediate' },
+      mergeProperties: false,
+    });
   });
 
-  it('applies removeProperties after merging', async () => {
+  it('forwards removeProperties for the write to apply after merging', async () => {
     const graph = makeGraph([
       node({
         entity_id: E1,
@@ -249,10 +271,14 @@ describe('WriteKnowledgeTool entity.update', () => {
       ],
     });
 
-    expect(graph.graphEvents.upsertNode).toHaveBeenCalledWith(
-      'user-1',
-      expect.objectContaining({ properties: { category: 'fitness', level: 'intermediate' } }),
-    );
+    const [, sent] = graph.graphEvents.upsertNode.mock.calls[0];
+    expect(sent).toEqual({
+      entityId: E1,
+      entityType: 'Concept',
+      properties: { level: 'intermediate' },
+      mergeProperties: true,
+      removeProperties: ['stale'],
+    });
   });
 
   it('fails the operation without writing when the entity is not found or not owned by the user', async () => {
@@ -297,7 +323,7 @@ describe('WriteKnowledgeTool relationship.update', () => {
     expect(graph.graphEvents.upsertRelationship).not.toHaveBeenCalled();
   });
 
-  it('keeps the existing endpoints and merges properties, falling back to existing type/strength when omitted', async () => {
+  it('keeps the stored endpoints and type, and sends only the properties to merge', async () => {
     const graph = makeGraph(
       [],
       [
@@ -320,18 +346,17 @@ describe('WriteKnowledgeTool relationship.update', () => {
     });
 
     expect(result.data).toMatchObject({ updatedRelationships: 1, failures: 0 });
-    expect(graph.graphEvents.upsertRelationship).toHaveBeenCalledWith(
-      'user-1',
-      expect.objectContaining({
-        relationshipId: R1,
-        fromEntityId: FROM,
-        toEntityId: TO,
-        relationshipType: 'KNOWS',
-        properties: { since: '2020', closeness: 'high' },
-        strength: 0.6,
-        isBidirectional: false,
-      }),
-    );
+    // Strength and direction were not given, so they are not re-sent: the write
+    // keeps whatever the row holds when it lands.
+    const [, sent] = graph.graphEvents.upsertRelationship.mock.calls[0];
+    expect(sent).toEqual({
+      relationshipId: R1,
+      fromEntityId: FROM,
+      toEntityId: TO,
+      relationshipType: 'KNOWS',
+      properties: { closeness: 'high' },
+      mergeProperties: true,
+    });
   });
 
   it('dry-run reports the update without persisting it', async () => {
@@ -360,6 +385,121 @@ describe('WriteKnowledgeTool relationship.update', () => {
     expect(result.data).toMatchObject({ dryRun: true, updatedRelationships: 1, failures: 0 });
     expect(result.data?.results[0].message).toContain('Dry run');
     expect(graph.graphEvents.upsertRelationship).not.toHaveBeenCalled();
+  });
+
+  it('spells a new type the stored way, and fails one no spelling can store', async () => {
+    const stored: FakeRelationship = {
+      relationship_id: R1,
+      from_entity_id: FROM,
+      to_entity_id: TO,
+      relationship_type: 'KNOWS',
+      properties: {},
+      strength: 1,
+      is_bidirectional: false,
+      is_active: true,
+    };
+    const graph = makeGraph([], [stored]);
+    const tool = makeTool(graph);
+
+    const result = await tool.execute(OWNER, {
+      operations: [
+        { kind: 'relationship.update', relationshipId: R1, relationshipType: 'works with' },
+        { kind: 'relationship.update', relationshipId: R1, relationshipType: 'works@acme' },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ updatedRelationships: 1, failures: 1 });
+    expect(result.data?.results[1].message).toContain('cannot be stored');
+    expect(graph.graphEvents.upsertRelationship).toHaveBeenCalledTimes(1);
+    expect(graph.graphEvents.upsertRelationship.mock.calls[0][1]).toMatchObject({
+      relationshipType: 'WORKS_WITH',
+    });
+  });
+});
+
+describe('WriteKnowledgeTool relationship.create onto an edge that already exists', () => {
+  const ends = () => [
+    node({ entity_id: FROM, entity_type: 'Person', name: 'Alex' }),
+    node({ entity_id: TO, entity_type: 'Person', name: 'Sam' }),
+    node({ entity_id: E1, entity_type: 'Concept', name: 'Pilates' }),
+  ];
+  const knows = (): FakeRelationship => ({
+    relationship_id: R1,
+    from_entity_id: FROM,
+    to_entity_id: TO,
+    relationship_type: 'KNOWS',
+    properties: { since: '2020' },
+    strength: 0.6,
+    is_bidirectional: false,
+    is_active: true,
+  });
+
+  it("sends a restatement without an id under the stored edge's id, with only the fields it was given", async () => {
+    const graph = makeGraph(ends(), [knows()]);
+    const tool = makeTool(graph);
+
+    const result = await tool.execute(OWNER, {
+      operations: [
+        {
+          kind: 'relationship.create',
+          fromEntityId: FROM,
+          toEntityId: TO,
+          relationshipType: 'Knows',
+          properties: { closeness: 'high' },
+        },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ createdRelationships: 0, updatedRelationships: 1, failures: 0 });
+    expect(result.data?.results[0]).toMatchObject({ status: 'updated', relationshipId: R1 });
+    const [, sent] = graph.graphEvents.upsertRelationship.mock.calls[0];
+    expect(sent).toEqual({
+      relationshipId: R1,
+      fromEntityId: FROM,
+      toEntityId: TO,
+      relationshipType: 'KNOWS',
+      properties: { closeness: 'high' },
+      mergeProperties: true,
+    });
+  });
+
+  it("sends an entity.create's relationships the same way, and counts what they created and updated", async () => {
+    const graph = makeGraph(ends(), [knows()]);
+    const tool = makeTool(graph);
+
+    const result = await tool.execute(OWNER, {
+      operations: [
+        {
+          kind: 'entity.create',
+          entityId: FROM,
+          entityType: 'Person',
+          relationships: [
+            { toEntityId: TO, relationshipType: 'knows' },
+            { toEntityId: E1, relationshipType: 'interested in', strength: 0.8 },
+          ],
+        },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ updatedNodes: 1, updatedRelationships: 1, createdRelationships: 1 });
+    // No strength 1, one-way or `mergeProperties: false` over `{}`: those used
+    // to go out with every nested relationship and reset the edge they hit.
+    expect(graph.graphEvents.upsertRelationship.mock.calls.map(([, sent]) => sent)).toEqual([
+      {
+        relationshipId: R1,
+        fromEntityId: FROM,
+        toEntityId: TO,
+        relationshipType: 'KNOWS',
+        mergeProperties: true,
+      },
+      {
+        fromEntityId: FROM,
+        toEntityId: E1,
+        relationshipType: 'INTERESTED_IN',
+        strength: 0.8,
+        mergeProperties: true,
+      },
+    ]);
   });
 });
 
@@ -518,7 +658,12 @@ describe('WriteKnowledgeTool soft-delete resurrection guard', () => {
 
 describe('WriteKnowledgeTool.resolveNamedRef fuzzy matching', () => {
   it('resolves a single contains-hit even when it is not an exact name match', async () => {
-    const graph = makeGraph([node({ entity_id: E1, entity_type: 'Person', name: 'Alex' })]);
+    // From E2, not E1: an edge from Alex to "Ale" would be Alex to himself,
+    // which `no_self_references` refuses and the tool now fails up front.
+    const graph = makeGraph([
+      node({ entity_id: E1, entity_type: 'Person', name: 'Alex' }),
+      node({ entity_id: E2, entity_type: 'Person', name: 'Sam' }),
+    ]);
     graph.graphQuery.getNodes.mockResolvedValueOnce([graph.nodes.get(E1)!]);
     const tool = makeTool(graph);
 
@@ -526,7 +671,7 @@ describe('WriteKnowledgeTool.resolveNamedRef fuzzy matching', () => {
       operations: [
         {
           kind: 'relationship.create',
-          fromEntityId: E1,
+          fromEntityId: E2,
           relationshipType: 'KNOWS',
           to: { name: 'Ale' },
         },

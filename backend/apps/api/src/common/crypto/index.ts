@@ -4,11 +4,18 @@ export {
   FORWARD_AUTH_SIGNATURE_HEADER,
   FORWARD_AUTH_TIMESTAMP_HEADER,
   FORWARD_AUTH_USER_HEADER,
+  FORWARD_AUTH_USER_ID_HEADER,
+  FORWARD_AUTH_USER_ID_SIGNATURE_HEADER,
+  FORWARD_AUTH_USER_ISSUER_HEADER,
+  HUB_ISSUER_PREFIX,
   buildForwardAuthMessage,
+  buildForwardAuthUserIdMessage,
+  isHubIssuer,
   signForwardAuthUser,
+  signForwardAuthUserId,
   verifyForwardAuthHeaders,
 } from './hub-forward-auth';
-export type { ForwardAuthHeaders, ForwardAuthVerifyResult } from './hub-forward-auth';
+export type { ForwardAuthHeaders, ForwardAuthVerifyResult, HubStableId } from './hub-forward-auth';
 export {
   CONNECT_NONCE_HEADER,
   CONNECT_SIGNATURE_HEADER,

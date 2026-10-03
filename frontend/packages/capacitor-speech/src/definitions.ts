@@ -75,11 +75,7 @@ export type SpeechRecognitionTier =
  * - `unknown` — the platform exposes no way to tell (Android 23–32, iOS).
  */
 export type SpeechLanguagePackState =
-  | 'installed'
-  | 'downloadable'
-  | 'downloading'
-  | 'unsupported'
-  | 'unknown';
+  'installed' | 'downloadable' | 'downloading' | 'unsupported' | 'unknown';
 
 /** Result of {@link SpeechPlugin.getRecognitionCapability} — a pure probe, no side effects. */
 export interface SpeechRecognitionCapability {

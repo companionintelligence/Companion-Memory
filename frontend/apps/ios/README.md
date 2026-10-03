@@ -24,7 +24,13 @@ separate package and must stay that way.
   `localStorage`**. On first launch with no server set, it routes to the in-app
   `/device-connect` screen (Portal picker). `/server` is Advanced URL entry.
 - All `/api/...` calls resolve through `buildApiUrl()` (`@ci/common`): `''` on web
-  (same-origin), the configured origin on native.
+  (same-origin), the configured origin on native. That covers every `fetch`, XHR,
+  `src`, `href` and `window.open`, not just GraphQL: the page origin is
+  `capacitor://localhost`, so a bare `/api/...` or `/static/...` there is a request to
+  the app's own bundle. Media paths go through `resolveMediaUrl()` (it adds the
+  `/static` prefix and the origin), and a link meant for another device — a share
+  link, a QR code, a webhook address — takes `getWebOrigin()`, never
+  `window.location.origin`.
 - The native web build sets `VITE_DISABLE_PWA=true` so the Workbox service worker
   doesn't fight Capacitor's local asset serving.
 
@@ -332,16 +338,105 @@ the Keychain rather than `localStorage`: `CompanionConfig` reads the API key
 server / signed in. (Execution is direct REST/GraphQL today; it can later target a
 deterministic Intent-Catalog execute endpoint when `feat/intent-catalog` lands.)
 
-**On-device chat completion (LocalLLM, early preview).** A `LocalLLM` Capacitor plugin
-(`android/.../localllm/`, `ios/App/App/LocalLLM/`) starts a loopback-only HTTP server
-(`127.0.0.1`, random port, per-launch bearer token) exposing an OpenAI-compatible
-`POST /v1/chat/completions` (SSE) backed by [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM)
-running fully on-device — no appliance connection needed. JS reaches it via
-`@ci/common`'s `startLocalLlm`/`loadLocalLlmModel`/etc. (`nativeBridge.ts`) plus a direct
-SSE client (`localLlm.ts`); try it from Settings → On-device model. This is a skeleton,
-not the full offline-mode design: no model download UI wired to a real source yet (push
-a `.litertlm` file onto the device and paste its path), no capability gating, no
-integration with the appliance-routed chat page.
+**On-device chat (LocalLLM).** A `LocalLLM` Capacitor plugin runs a language model fully on the
+phone through [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) — the runtime Google's
+[AI Edge Gallery](https://github.com/google-ai-edge/gallery) ships, whose model allowlist and
+`LlmChatModelHelper` this is modelled on. Android implements it in
+`frontend/packages/capacitor-local-llm/android/`; iOS implements the **identical JS contract** in the app
+target (`ios/App/App/LocalLLM/`). Nothing you type leaves the device and it works with no connection.
+
+The web layer is `@ci/common`'s `localLlm.ts` (probe / download / load / stream over the runtime
+`window.Capacitor.Plugins.LocalLLM` bridge), `localLlmCatalog.ts` (the model list) and
+`localLlmPrefs.ts` (per-device routing preferences). The UI is **Settings → On-device model** and the
+chat page; `nativeBridge.generateOffline()` remains the one-shot helper.
+
+**Models.** The catalog is Gallery's allowlist cut down to what an anonymous in-app download can fetch.
+Every entry is Apache-2.0, ungated, and **pinned to a Hugging Face commit** with its exact byte size — the
+download is verified against that size, and a pinned URL cannot drift under it.
+
+| Model | Size | Min RAM | Backends | Reasoning | Photos | Memory tools | Platforms |
+|---|---|---|---|---|---|---|---|
+| Qwen3 0.6B | 328 MB | 4 GB | CPU | ✓ | | ✓ | iOS, Android |
+| Qwen2.5 1.5B Instruct | 1.5 GB | 6 GB | GPU, CPU | | | | iOS, Android |
+| Gemma 4 E2B | 2.4 GB | 8 GB | GPU, CPU | ✓ | ✓ | ✓ | Android |
+| Gemma 4 E4B | 3.4 GB | 12 GB | GPU, CPU | ✓ | ✓ | ✓ | Android |
+
+Left out on purpose: Gemma 3n, Gemma3-1B-IT and the FunctionGemma fine-tunes. Hugging Face serves them
+`gated` (an account plus a licence click-through), so an anonymous download answers `401 GatedRepo` — the
+bug that once left Android with no downloadable model at all. They return with an HF sign-in flow.
+Gemma 4 is Android-only because the iOS app has no `com.apple.developer.kernel.increased-memory-limit`
+entitlement (an App ID capability only the account owner can enable), and a 2.6–3.7 GB model would be
+jetsam-killed without it.
+
+**What the user sees.** Settings → On-device model lists the models this device can hold (with the reason
+when it cannot), downloads with live progress and **Cancel**, deletes, loads and unloads, and offers CPU/GPU,
+"Think before answering" and "Look things up in Memory". *When to use it* is a separate choice and defaults
+to the appliance:
+
+- **Always use my Companion** — the on-device model is never used.
+- **Use my Companion, fall back to this phone** — chat goes to the appliance; a dropped connection or a
+  502/503/504 answers on the phone instead, with a toast. A 401/403/500 is *not* treated as offline.
+- **Always answer on this phone** — never calls the appliance. If the model is missing it refuses rather than
+  quietly falling through, and attachments (which live on the appliance) are refused rather than dropped.
+  With a Gemma 4 model, "attach" picks photos that are read on the phone as base64 and never uploaded.
+
+A reply from the phone shows *Answered on this phone · model · tok/s · time to first token*. "New chat" and
+switching threads call `resetConversation()` so turns do not leak between chats. On-device turns are not
+saved as appliance threads.
+
+**Contract additions (v2).** `cancelDownload`, `getLoadedModel`, `resetConversation`; `loadModel` takes
+`accelerator` (a GPU that will not initialise falls back to the CPU and says so) and
+`enableSpeculativeDecoding`; `generate*` take `enableThinking` and `images`; results and the terminal
+`llmToken` event carry `thought` and `stats` (`timeToFirstTokenMs`, `decodeTokensPerSecond`, …);
+`isAvailable` reports `totalMemoryBytes` and `freeDiskBytes`. The disk check is now per model (remaining
+bytes + 512 MiB) instead of a global 1 GiB, and `downloadModel` refuses any URL not on `huggingface.co`.
+`capacitorPluginContract.test.ts` parses `definitions.ts`, the Kotlin and the Swift catalogs and both
+method lists, so the halves cannot drift.
+
+**Known limits (measured on LiteRT-LM 0.14.0 with the Android emulator).**
+
+- A cancelled conversation cannot be reused, so after **Stop** — or a failed turn — the next message starts a
+  fresh conversation and the model forgets earlier turns, even though the chat still shows them. Replaying
+  history through `initialMessages` is the follow-up.
+- Gemma 4 fixes thinking on or off at the first turn of a conversation, so toggling "Think before answering"
+  mid-chat also starts a fresh conversation.
+- A GPU backend can pass `initialize()` and fail only on its first token ("Can not find OpenCL library"), so a
+  GPU load probes one token and falls back to the CPU itself (`fellBackToCpu`). The plugin manifest declares
+  `libOpenCL.so` / `libvndksupport.so` (`required=false`), which Android 12+ needs before an app targeting API 31+
+  may open the vendor OpenCL library; that effect needs a real GPU device to confirm.
+- The catalog is pinned to revisions that load on 0.14.0. Qwen3's `main` needs 0.17.1+, so bump LiteRT-LM on both
+  platforms *before* repinning it.
+- **Play Console:** the Android plugin manifest again declares `FOREGROUND_SERVICE_DATA_SYNC` and
+  `foregroundServiceType="dataSync"` on both `LocalLlmGenerationService` and WorkManager's
+  `SystemForegroundService` (removed in #2776 while nothing could start a download; restored now that Settings →
+  On-device model and on-device chat can). Without them Android 14+ throws `SecurityException` and Android 10+
+  `IllegalArgumentException` from `startForeground()` the moment a user taps Download or sends a message. Play
+  needs the dataSync declaration (a 0.3–3.6 GB resumable model download) and a demo of that screen.
+- A conversation whose context window fills (Qwen3: 1,024 tokens, Gemma 4: 4,000) answers every later message with
+  nothing. The web layer detects that empty completed turn, says so, resets the conversation and asks once more —
+  the model loses the earlier turns, the screen does not. A native token-count check that resets *before* sending
+  is the cleaner follow-up.
+- On-device turns are ephemeral, and per-call `maxTokens`/`topK`/`topP`/`temperature` on `generate` are ignored:
+  LiteRT-LM fixes the sampler when the conversation is created.
+
+**Not verified on a device.** Nothing here has run inference on a real phone. On an Android emulator (CPU) the
+engine was exercised for Qwen3 (the pinned revision), Qwen2.5, and Gemma 4 E2B — load, streaming, reset, cancel,
+thinking, a vision prompt, and the speculative-decoding flag; Gemma 4 E4B (3.65 GB) did not fit that emulator, and
+nothing on iOS has run inference at all (it compiles and its pure logic and downloader were exercised off-device).
+Compiled and unit-tested: the catalog, download resume/verification, policy decisions (RAM/disk/URL), stats maths,
+image sizing and the web layer. **Unverified until someone runs a phone:** actual generation,
+GPU/Metal init, multi-token prediction, whether a model emits the `thought` channel or leaks `<think>` tags,
+photo input on Gemma 4, and memory headroom (iOS `physicalMemory` reports below the marketing figure — a
+"6 GB" iPhone reports ~5.6 GB and will not be offered Qwen2.5). **Not built** from Gallery: Prompt Lab,
+Agent Skills, Mobile Actions (FunctionGemma), audio input, the benchmark screen, importing a model file,
+and NPU backends.
+
+**Checking the iOS pure logic on a Mac.** `bash scripts/test-local-llm-pure.sh` (from this directory; needs only
+`swiftc`) compiles the app's own `LocalLLMStreaming.swift`, `LocalLLMPolicy.swift` and `LocalLLMModels.swift`, plus
+the vendored `LiteRTLMError.swift`, together with `tests/local-llm-pure/main.swift`, and runs it — reply assembly
+(including the stripping of leaked chat-template markers such as `<|endoftext|>`), how a failed generation is worded
+for the log and for JS, and the shaping of tool results. The project has no XCTest target, so these are plain
+assertions that exit non-zero; anything that needs the engine, Capacitor or the xcframework is out of reach there.
 
 - **Android:** minSdk stays 23; the plugin itself gates on `Build.VERSION.SDK_INT >= 31`
   (LiteRT-LM's AAR requires Android 12), so older devices keep the rest of the app.
@@ -353,9 +448,8 @@ integration with the appliance-routed chat page.
   xcframework is 81MB and not committed** — run
   `ios/App/Frameworks/fetch-clitertlm-xcframework.sh` once before building for iOS (also
   needed in any CI job that builds this target).
-- Neither platform's Simulator/emulator reliably runs LiteRT-LM inference (confirmed via
-  an open upstream issue for iOS Simulator; untested on Android emulator) — test on a
-  real device.
+- The **iOS Simulator** does not reliably run LiteRT-LM inference (an open upstream issue) — test
+  on a real device. The Android emulator does run it, on the CPU only (see "Known limits" below).
 
 ## On-device agent tooling (intent hooks, both platforms)
 
@@ -363,18 +457,32 @@ The local model can call CI's **published intents** as tools, so it answers from
 of its own weights. Enable it per platform with `LocalLLM.configureIntentTools({ baseUrl, apiKey })`;
 the plugin then fetches the intent catalog with `?tier=local` and binds what the appliance allows.
 
-> **Watch the doubled `/api`.** `IntentsController` is `@Controller('api/intents')` while the
-> fronting proxy already strips a leading `/api`, so from an app holding the proxy origin the real
-> path is `<base>/api/api/intents?tier=local` — which is exactly what `CompanionIntentClient`
-> requests on both platforms. `McpController` is `@Controller('mcp')`, so it is reached at the
-> ordinary `<base>/api/mcp`. (`/api/agent/intents` is the canonical prefix for new callers;
-> `/api/intents` still serves and is what these clients use.)
+> **One `/api`, for both.** The fronting proxy strips a leading `/api` and Nest sets no global
+> prefix, so `IntentsController` (mounted at the bare `intents`) is reached at
+> `<base>/api/intents?tier=local` and `McpController` (`mcp`) at `<base>/api/mcp` — which is what
+> `CompanionIntentClient` requests on both platforms. The catalog used to be `<base>/api/api/intents`,
+> while the controller baked its own `api/` into its mount; #2653 removed that, the clients kept asking
+> for the doubled path, and on-device tools silently never bound against a current appliance (a 404 is
+> swallowed so the model still loads, toolless). `capacitorPluginContract.test.ts` now checks both
+> clients' paths against the controllers' real mounts. (`/api/agent/intents` is the canonical prefix for
+> new callers; `/api/intents` still serves and is what these clients use.)
 
 **One security rule, not three.** The appliance computes the `execute` / `queue` / `deny` ruling
 (`dispatchPolicy.ts`) and publishes it per intent; the phone reads `dispatch.decision` and obeys it.
 Neither Kotlin nor Swift re-derives the policy — `dispatchPolicy.ts` says why ("two copies of a
 security rule are two rules"), and it means a policy change ships with the appliance instead of
 waiting on two app-store releases. Destructive and external intents always queue on-device.
+
+**A tool's result is bounded before the model sees it (iOS).** The appliance answers a tool call with the whole
+result, pretty-printed — 25 hits from `knowledge_search` is ~45 KB — and a small model's context window cannot hold
+it: Qwen3-0.6B's is 1,024 tokens, and its system prompt and tool declarations already take ~500 of them. Left alone,
+that is many times the window. `ToolResultShaper` (in `LocalLLMPolicy.swift`) cuts it to half the window in bytes
+(`toolResultByteBudget(contextTokens:)` — 512 for Qwen3-0.6B): a result that fits goes through untouched; otherwise
+JSON is re-emitted compactly with long strings capped, each hit's `type`/`link`/`title` first, the search header
+whole and as many whole hits as fit, and a closing note saying how many were left out. It is the device twin of the
+appliance's own `toolResultBudget.ts`, and the budget is an estimate to tune on a device. `CompanionToolContext`
+logs sizes only (`[LocalLLM] knowledge_search returned 45598 bytes; passing 482 …`), never the result. The Android
+adapter returns the result unbounded and does not yet do this.
 
 **The binding is per-platform, because the runtimes genuinely differ:**
 
@@ -388,6 +496,18 @@ That asymmetry is structural, not an oversight: the LiteRT-LM Swift surface has 
 equivalent (verified against the vendored source — 18 public types, one tool protocol, no
 schema-string entry point), so iOS cannot construct tools dynamically at all.
 
+**What iOS binds today.** Three hand-written structs in `CompanionIntentTools.swift`: `knowledge_search`
+(the tool for "what do I know about X", "when did I …", "how many …"), `people_find`, and `memory_recall`,
+which is a graph lookup of a *person* and who they are connected to — it takes `personName` and nothing
+else, because the appliance's `memory.recall` has no free-text or date-range parameter. Each `@ToolParam` must
+be a same-named property of the intent's published schema and each `run()` must send exactly those;
+`IntentCatalogService.realTools.test.ts` (backend) reads the Swift file against the real tool classes and fails
+when they drift (the app used to send `query` / `startDate` / `endDate` to `memory_recall`, which the server
+silently dropped, and `content` to `memory_remember`, which it rejected). `memory.remember` is **not** offered on
+iOS: it writes graph entities (`operations: [{ kind: "entity.create", … }]`), not a Note, and no intent the local
+tier may run creates a Note. Android still binds it, with the published schema, because it binds every
+`execute` intent.
+
 Execution goes over MCP `tools/call` (`POST /mcp`) — there is no REST "execute this intent"
 endpoint — authenticated with the same `x-api-key` the App Intents already use.
 
@@ -398,6 +518,25 @@ endpoint — authenticated with the same `x-api-key` the App Intents already use
 `<name>.part` and the next attempt continues with an HTTP `Range` request, so a force-quit or a lost
 connection costs nothing. It still lives in the app target rather than that package (which declares
 itself Android-only); moving it there needs a podspec + vendored xcframework + Podfile regeneration.
+
+Because it lives in the app target, **nothing generated knows it exists**: the `packageClassList` that
+`cap sync` writes into `capacitor.config.json` is built from the `ios/` sources of *installed npm
+packages*, and Capacitor 7 has no runtime scan. `ios/App/App/MainViewController.swift` is what puts it on
+the bridge — a `CAPBridgeViewController` subclass whose `capacitorDidLoad()` calls
+`bridge?.registerPluginInstance(LocalLLMPlugin())` (not `registerPluginType`, which is a no-op with the
+default auto-registration). Three hand-maintained pieces must stay joined — the class, the root
+`customClass` in `Main.storyboard`, and the file's entry in the App target's Sources — and `cap sync`
+touches none of them, but `cap add ios` would restore the stock class: Settings → On-device model would
+then read "On-device models run in the iOS and Android apps." on a phone.
+`capacitorPluginContract.test.ts` fails if any of the three drifts.
+
+> ✅ **Fixed 2026-09-29 — Qwen3's `resolve/main` URL had drifted twice over.** The 2026-08-26 fix recorded
+> `Qwen3-0.6B` at 344,437,808 bytes against a `resolve/main` URL. On 2026-09-20 Hugging Face's `main` became a
+> re-export (344,671,744 bytes) that needs LiteRT-LM 0.17.1+: the downloader fetched all of it and failed its
+> `length != expected` check on every attempt, and had it passed, the file fails `Engine.initialize()` on the
+> 0.14.0 both platforms link. Every catalog URL is now pinned to a commit (`resolve/<sha>/…`), Qwen3 to the
+> last revision that loads on 0.14.0 (`154c5de0…`, exercised on an emulator), and a test refuses `resolve/main`.
+> Bumping LiteRT-LM is what would unlock the newer file.
 
 > ✅ **Fixed 2026-08-26 — Android's model catalog used to be broken.** It pointed at
 > `litert-community/Gemma3-1B-IT`, a repo Hugging Face now serves `gated: "auto"`, so the `.task`

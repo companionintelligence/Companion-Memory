@@ -121,12 +121,7 @@ export interface LocalHubPlugin {
 }
 
 export type NativeLocationAuthorization =
-  | 'notDetermined'
-  | 'denied'
-  | 'restricted'
-  | 'whenInUse'
-  | 'always'
-  | 'unsupported';
+  'notDetermined' | 'denied' | 'restricted' | 'whenInUse' | 'always' | 'unsupported';
 
 export interface NativeCurrentLocation {
   latitude: number;

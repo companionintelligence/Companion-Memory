@@ -34,6 +34,7 @@ import {
 import { ImportRetentionService, type DiscardedRun } from '../services/ImportRetentionService';
 import { ImportRunService } from '../services/ImportRunService';
 import { ObjectCountService, type ObjectCountEntry } from '../services/ObjectCountService';
+import { isStageStalled } from '../services/stageLiveness';
 
 /** A run as the progress UI reads it. */
 export interface RunSummary {
@@ -70,6 +71,13 @@ export interface RunSummary {
    * fetching every run's stages. Zero for a run that has not pushed yet.
    */
   records?: number;
+  /**
+   * A stage of this run is `running` but has stopped heartbeating — see
+   * {@link StageSummary.stalled}. The run's own `status` is a cache written on
+   * transitions, so without this it goes on reading `running` for as long as
+   * recovery takes. On the list and the detail; absent where neither computed it.
+   */
+  stalled?: boolean;
 }
 
 /** One box of the stage bar. */
@@ -105,6 +113,20 @@ export interface StageSummary {
    */
   startedAt: Date | null;
   finishedAt: Date | null;
+  /**
+   * The claim's last sign of life. A running stage is touched by its worker's
+   * heartbeat and every progress write, so this is "when did anything last
+   * happen here" — the number that tells a slow stage from an abandoned one.
+   */
+  heartbeatAt: Date;
+  /**
+   * `running`, and silent past `IMPORT_STAGE_STALLED_SECONDS`: its worker is
+   * gone or wedged. Until this existed that read as a plain `running`, progress
+   * frozen and no error, for as long as recovery took to notice. If the worker
+   * is gone, the orphan reaper retries the stage within minutes, and
+   * `detail.interrupted` then says what happened.
+   */
+  stalled: boolean;
 }
 
 export interface RunDetail extends RunSummary {
@@ -294,7 +316,7 @@ export class ImportRunsController {
       },
     );
 
-    return runs.map((run) => ({ ...toRunSummary(run), records: run.records }));
+    return runs.map((run) => ({ ...toRunSummary(run), records: run.records, stalled: run.stalled }));
   }
 
   /**
@@ -370,7 +392,9 @@ export class ImportRunsController {
       throw new NotFoundException(`No import run ${runId}`);
     }
 
-    return { ...toRunSummary(detail.run), stages: detail.stages.map(toStageSummary) };
+    const stages = detail.stages.map(toStageSummary);
+
+    return { ...toRunSummary(detail.run), stalled: stages.some((stage) => stage.stalled), stages };
   }
 
   /**
@@ -716,5 +740,7 @@ function toStageSummary(stage: ImportStage): StageSummary {
     detail: stage.detail ?? {},
     startedAt: stage.startedAt,
     finishedAt: stage.finishedAt,
+    heartbeatAt: stage.updatedAt,
+    stalled: isStageStalled(stage),
   };
 }

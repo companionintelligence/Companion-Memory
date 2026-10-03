@@ -9,6 +9,16 @@ import type {
 
 import config from '@ci/configuration';
 
+import {
+  type ServedModel,
+  type ServerProps,
+  servedModelFromRow,
+  serverPropsFromPayload,
+} from './servedModels';
+
+/** How long one `/props` answer stands in for the server: the values change only when the server is restarted. */
+const SERVER_PROPS_TTL_MS = 5 * 60_000;
+
 /**
  * OpenAI-protocol transport for the chat path, used when `LLM_API_BASE` points
  * at a non-Ollama backend (a Hub-selected vLLM instance, or any other
@@ -44,10 +54,69 @@ export function vllmThinkingExtraBody(enableThinking?: boolean): {
   };
 }
 
+type ResponseFormat =
+  | { type: 'json_object' }
+  | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown> } };
+
+/**
+ * Ollama's `format` as an OpenAI `response_format`. A JSON Schema goes over as `json_schema`, which
+ * vLLM, llama.cpp (so Lemonade), SGLang and Ollama's own `/v1` all enforce during decoding; plain
+ * `json_object` only promises some valid JSON, which is what structured callers used to get on every
+ * OpenAI-compatible backend. Once a backend has rejected `json_schema`, schemas degrade to
+ * `json_object` for it.
+ */
+export function toResponseFormat(
+  format: string | Record<string, unknown> | undefined,
+  jsonSchemaRejected = false,
+): ResponseFormat | undefined {
+  if (format === 'json') {
+    return { type: 'json_object' };
+  }
+
+  if (format == null || typeof format !== 'object') {
+    return undefined;
+  }
+
+  return jsonSchemaRejected
+    ? { type: 'json_object' }
+    : { type: 'json_schema', json_schema: { name: 'response', schema: format } };
+}
+
+/**
+ * A 4xx that blames the response format — how a backend without structured-output support refuses
+ * `json_schema` (vLLM started without guided decoding, older llama.cpp builds). Anything else
+ * (overflow, unknown model, auth) is not retried here.
+ */
+export function isResponseFormatRejection(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+
+  if (typeof status !== 'number' || status < 400 || status >= 500) {
+    return false;
+  }
+
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+
+  return ['response_format', 'json_schema', 'structured output', 'guided decoding', 'grammar'].some(
+    (marker) => message.includes(marker),
+  );
+}
+
 export class OpenAiCompatChatDriver {
   private readonly client: OpenAI;
 
-  constructor(baseURL: string, apiKey: string) {
+  /** Set once this endpoint has refused a `json_schema` response format; see {@link toResponseFormat}. */
+  private jsonSchemaRejected = false;
+
+  /** The last `/props` answer (a `null` answer is remembered too) and when it was taken. */
+  private serverPropsCache: { at: number; value: ServerProps | null } | null = null;
+
+  constructor(
+    /** The `/v1` root this driver talks to, for a caller that speaks a route the SDK does not. */
+    readonly baseUrl: string,
+    readonly apiKey: string,
+  ) {
+    const baseURL = baseUrl;
+
     this.client = new OpenAI({
       baseURL,
       apiKey,
@@ -61,18 +130,66 @@ export class OpenAiCompatChatDriver {
     });
   }
 
+  /**
+   * llama-server's `GET /props`, read from the server root beside `/v1`: the loaded context window
+   * and the modalities the model took. `null` for any server that does not answer it in that
+   * shape (Lemonade's `/props` is its web page; vLLM has no such route) — remembered for a few
+   * minutes either way, so a listing does not cost an extra round trip each time.
+   */
+  async serverProps(): Promise<ServerProps | null> {
+    const now = Date.now();
+
+    if (this.serverPropsCache && now - this.serverPropsCache.at < SERVER_PROPS_TTL_MS) {
+      return this.serverPropsCache.value;
+    }
+
+    let value: ServerProps | null = null;
+
+    try {
+      const response = await fetch(`${this.baseUrl.replace(/\/$/, '').replace(/\/v1$/, '')}/props`, {
+        headers: {
+          Accept: 'application/json',
+          ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+        },
+        signal: AbortSignal.timeout(3_000),
+      });
+
+      if (response.ok && (response.headers.get('content-type') ?? '').includes('json')) {
+        value = serverPropsFromPayload(await response.json());
+      }
+    } catch {
+      value = null;
+    }
+
+    this.serverPropsCache = { at: now, value };
+
+    return value;
+  }
+
   /** Model ids served by the backend (`GET /v1/models`). */
   async listModels(): Promise<string[]> {
+    return (await this.listServedModels()).map((model) => model.id);
+  }
+
+  /**
+   * Served models with whatever each backend adds to its `/v1/models` rows: capability labels
+   * (Lemonade) and the context window it runs the model with (Lemonade, vLLM). See
+   * {@link servedModelFromRow}; a backend that adds nothing yields empty labels and a `null` window.
+   */
+  async listServedModels(): Promise<ServedModel[]> {
     const models = await this.client.models.list();
 
-    return models.data.map((model) => model.id);
+    return models.data.map((model) =>
+      servedModelFromRow(model as unknown as { id: string } & Record<string, unknown>),
+    );
   }
 
   async chat(request: {
     model: string;
     messages: OllamaMessage[];
     tools?: Tool[];
-    format?: string;
+    /** Ollama's `format`: `'json'`, or a JSON Schema object the reply must match. */
+    format?: string | Record<string, unknown>;
     enableThinking?: boolean;
     signal?: AbortSignal;
     /**
@@ -81,20 +198,42 @@ export class OpenAiCompatChatDriver {
      * which is what `OllamaService` already threads through on that path.
      */
     maxTokens?: number;
+    /** Deadline for the response, in ms; absent uses `llm.firstResponseTimeoutMs`. */
+    timeoutMs?: number;
   }): Promise<ChatResponse> {
     const extraBody = vllmThinkingExtraBody(request.enableThinking);
-    const response = await this.client.chat.completions.create(
-      {
-        model: request.model,
-        messages: toOpenAiMessages(request.messages),
-        ...(request.tools && request.tools.length > 0 && { tools: toOpenAiTools(request.tools) }),
-        // Ollama's `format: 'json'` maps onto the OpenAI json_object response format.
-        ...(request.format === 'json' && { response_format: { type: 'json_object' as const } }),
-        ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
-        ...extraBody,
-      },
-      { signal: request.signal, timeout: config.llm.firstResponseTimeoutMs, maxRetries: 0 },
-    );
+    const create = (format: ResponseFormat | undefined) =>
+      this.client.chat.completions.create(
+        {
+          model: request.model,
+          messages: toOpenAiMessages(request.messages),
+          ...(request.tools && request.tools.length > 0 && { tools: toOpenAiTools(request.tools) }),
+          ...(format && { response_format: format }),
+          ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
+          ...extraBody,
+        },
+        {
+          signal: request.signal,
+          timeout: request.timeoutMs ?? config.llm.firstResponseTimeoutMs,
+          maxRetries: 0,
+        },
+      );
+
+    const format = toResponseFormat(request.format, this.jsonSchemaRejected);
+    let response: Awaited<ReturnType<typeof create>>;
+
+    try {
+      response = await create(format);
+    } catch (err) {
+      if (format?.type !== 'json_schema' || !isResponseFormatRejection(err)) {
+        throw err;
+      }
+
+      // Remembered for this driver's life (one per configured endpoint), so a backend without
+      // schema support costs one rejected request, not one per structured call.
+      this.jsonSchemaRejected = true;
+      response = await create({ type: 'json_object' });
+    }
 
     const choice = response.choices[0];
     const structured = (choice?.message?.tool_calls ?? [])
@@ -117,6 +256,7 @@ export class OpenAiCompatChatDriver {
       content,
       toolCalls,
       done: true,
+      usage: response.usage,
     });
   }
 
@@ -134,6 +274,16 @@ export class OpenAiCompatChatDriver {
     signal?: AbortSignal;
     enableThinking?: boolean;
     salvageTools?: boolean;
+    /**
+     * Buffer the text and strip any tool markup from it, but emit no tool
+     * calls at all — not the engine's structured ones, not salvaged ones. The
+     * forced prose round: its answer is final, so a call the model still
+     * emits is dropped, and this keeps the markup from reaching the viewer as
+     * text. Measured 2026-09-30 on Lemonade: the model was told tool use was
+     * over, apologised for a bad argument, and streamed a fresh
+     * `<tool_call>…</tool_call>` block which the chat showed verbatim.
+     */
+    discardToolMarkup?: boolean;
     /**
      * Cap on the completion, in tokens. Unlike Ollama's `num_ctx` this bounds
      * only the answer — the prompt is bounded upstream by the context budget's
@@ -161,10 +311,20 @@ export class OpenAiCompatChatDriver {
     // Buffer text whenever this chat may emit tool markup — including follow-up
     // turns that no longer advertise tools. Streaming `<toolcall>` as TEXT is
     // what made Confirm-home look like a successful call.
-    const bufferContent = Boolean(request.tools && request.tools.length > 0) || request.salvageTools === true;
+    const bufferContent =
+      Boolean(request.tools && request.tools.length > 0) ||
+      request.salvageTools === true ||
+      request.discardToolMarkup === true;
+
+    // The `usage` block, when the backend sends one: it rides a final chunk with no choices. Not
+    // requested (`stream_options` is not sent), so a backend that does not volunteer it still
+    // reports zero, as before.
+    let usage: { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
 
     try {
       for await (const part of stream) {
+        usage = part.usage ?? usage;
+
         const delta = part.choices[0]?.delta;
 
         if (delta == null) {
@@ -221,9 +381,10 @@ export class OpenAiCompatChatDriver {
 
     const rawContent = contentChunks.join('');
     const salvaged = extractEmbeddedToolCalls(rawContent);
-    const toolCalls = structured.length > 0 ? structured : salvaged.toolCalls;
+    const emitted = structured.length > 0 ? structured : salvaged.toolCalls;
+    const toolCalls = request.discardToolMarkup ? [] : emitted;
     const prose =
-      toolCalls.length > 0 || salvaged.toolCalls.length > 0 || /<tool_?call\b|<function=/i.test(rawContent)
+      emitted.length > 0 || salvaged.toolCalls.length > 0 || /<tool_?call\b|<function=/i.test(rawContent)
         ? stripToolMarkup(rawContent)
         : rawContent;
 
@@ -235,14 +396,21 @@ export class OpenAiCompatChatDriver {
       yield toChatResponse(request.model, { toolCalls, done: false });
     }
 
-    yield toChatResponse(request.model, { done: true });
+    yield toChatResponse(request.model, { done: true, usage });
   }
 }
 
 /** Assemble an Ollama-`ChatResponse`-shaped chunk from the given parts. */
 function toChatResponse(
   model: string,
-  parts: { content?: string; thinking?: string; toolCalls?: ToolCall[]; done: boolean },
+  parts: {
+    content?: string;
+    thinking?: string;
+    toolCalls?: ToolCall[];
+    done: boolean;
+    /** The OpenAI `usage` block, when the backend sent one. */
+    usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+  },
 ): ChatResponse {
   return {
     model,
@@ -257,9 +425,9 @@ function toChatResponse(
     done_reason: parts.done ? 'stop' : '',
     total_duration: 0,
     load_duration: 0,
-    prompt_eval_count: 0,
+    prompt_eval_count: parts.usage?.prompt_tokens ?? 0,
     prompt_eval_duration: 0,
-    eval_count: 0,
+    eval_count: parts.usage?.completion_tokens ?? 0,
     eval_duration: 0,
   };
 }
@@ -312,12 +480,10 @@ export function toOpenAiMessages(messages: OllamaMessage[]): ChatCompletionMessa
     if (message.images && message.images.length > 0 && message.role === 'user') {
       const parts: ChatCompletionContentPart[] = [
         { type: 'text', text: message.content ?? '' },
-        ...message.images.map(
-          (image): ChatCompletionContentPart => ({
-            type: 'image_url',
-            image_url: { url: toDataUrl(image) },
-          }),
-        ),
+        ...message.images.map((image): ChatCompletionContentPart => ({
+          type: 'image_url',
+          image_url: { url: toDataUrl(image) },
+        })),
       ];
 
       converted.push({ role: 'user', content: parts });
@@ -331,7 +497,45 @@ export function toOpenAiMessages(messages: OllamaMessage[]): ChatCompletionMessa
     });
   }
 
-  return hoistSystemMessages(converted);
+  return mergeAdjacentTurns(hoistSystemMessages(converted));
+}
+
+/**
+ * Join neighbouring plain-text turns of the same role into one. Qwen's chat
+ * template as llama.cpp (so Lemonade) renders it refuses a transcript whose
+ * last two messages are both assistant turns — `400 Cannot have 2 or more
+ * assistant messages at the end of the list` — and the thread-title job sends
+ * exactly that, because it keeps every assistant row of a tool turn and drops
+ * the tool rows between them. Ollama's template never minded. Only text turns
+ * are joined: an assistant turn carrying tool calls, a tool result, and a
+ * user turn with images keep their own positions.
+ */
+function mergeAdjacentTurns(messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
+  const merged: ChatCompletionMessageParam[] = [];
+
+  for (const message of messages) {
+    const previous = merged[merged.length - 1];
+    const joinable =
+      previous != null &&
+      previous.role === message.role &&
+      (message.role === 'user' || message.role === 'assistant') &&
+      typeof previous.content === 'string' &&
+      typeof message.content === 'string' &&
+      !('tool_calls' in previous && previous.tool_calls) &&
+      !('tool_calls' in message && message.tool_calls);
+
+    if (joinable) {
+      merged[merged.length - 1] = {
+        ...previous,
+        content: [previous.content, message.content].filter((part) => part !== '').join('\n\n'),
+      };
+      continue;
+    }
+
+    merged.push(message);
+  }
+
+  return merged;
 }
 
 /**

@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next';
 import type { AnswerEvidenceWire } from '@/components/AnswerDetails';
 import { AnswerProvenance, isInferred } from '@/components/AnswerProvenance';
 import { PageContent } from '@/components/layout';
-import { useAuth } from '@/hooks';
+import { useSessionAuth } from '@/hooks';
 
 import { AnswerQuestionPrompt } from './AnswerQuestionPrompt';
 import { EditAnswerDialog } from './EditAnswerDialog';
@@ -43,7 +43,10 @@ export function PromptsPage() {
   usePageTitle('Reflections - Companion Memory');
 
   const { t } = useTranslation();
-  const [{ authToken }] = useAuth();
+  // `ready`, not `authToken`: the token is the web JWT, which the native shell never has — its
+  // credential is a keystore API key (`apiKeyHeaders`). Gating on the token made "Your answers"
+  // report "Authentication token not found" on the phone, and Try Again could never clear it.
+  const { ready, headers: sessionHeaders } = useSessionAuth();
 
   // Defaults to the full browsable catalogue (~1.3k questions) rather than
   // "Your answers" — the answers tab is naturally near-empty for anyone who
@@ -64,15 +67,15 @@ export function PromptsPage() {
       setLoading(true);
       setError(null);
 
-      if (!authToken) {
-        console.error('AnswersPage: No authentication token found');
-        throw new Error('Authentication token not found');
+      if (!ready) {
+        console.error('AnswersPage: Not signed in');
+        throw new Error('You are not signed in');
       }
 
       const response = await fetch(buildApiUrl('/api/answers'), {
         headers: {
           ...apiKeyHeaders(),
-          Authorization: `Bearer ${authToken}`,
+          ...sessionHeaders,
           'Content-Type': 'application/json',
         },
       });
@@ -122,13 +125,19 @@ export function PromptsPage() {
   };
 
   useEffect(() => {
+    // Nothing to ask until signed in; on the native shell `ready` flips true once the key has
+    // been restored from the keystore.
+    if (!ready) {
+      return;
+    }
+
     console.log('AnswersPage: Component mounted, fetching answers');
     fetchAnswers();
 
     return () => {
       console.log('AnswersPage: Component unmounting');
     };
-  }, []);
+  }, [ready]);
 
   const toggleTextExpansion = (textId: string) => {
     setExpandedTexts((prev) => {
@@ -174,15 +183,15 @@ export function PromptsPage() {
   };
 
   const handleSaveAnswer = async (answerId: string, answerText: string) => {
-    if (!authToken) {
-      throw new Error('Authentication token not found');
+    if (!ready) {
+      throw new Error('You are not signed in');
     }
 
     const response = await fetch(buildApiUrl(`/api/answers/${answerId}`), {
       method: 'PATCH',
       headers: {
         ...apiKeyHeaders(),
-        Authorization: `Bearer ${authToken}`,
+        ...sessionHeaders,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({

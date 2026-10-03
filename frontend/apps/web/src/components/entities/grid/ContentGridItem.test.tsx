@@ -90,7 +90,10 @@ describe('ContentGridItem', () => {
       />,
     );
 
-    expect(container.querySelector('img')).toHaveAttribute('src', 'https://i.scdn.co/image/ab67616d00001e02abc');
+    expect(container.querySelector('img')).toHaveAttribute(
+      'src',
+      'https://i.scdn.co/image/ab67616d00001e02abc',
+    );
   });
 
   it("falls back to the player's templated poster when there is no unfurl thumbnail", () => {

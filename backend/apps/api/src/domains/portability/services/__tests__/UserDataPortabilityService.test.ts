@@ -62,6 +62,7 @@ describe('UserDataPortabilityService', () => {
       onboarded: true,
       onboardedAt: null,
       timezone: 'UTC',
+      timeFormat: 'h23',
       onboardingProgress: null,
       createdAt: new Date('2026-01-01T00:00:00.000Z'),
       updatedAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -72,6 +73,7 @@ describe('UserDataPortabilityService', () => {
     expect(archive.version).toBe(1);
     expect(archive.userId).toBe('user-1');
     expect(archive.profile?.email).toBe('jane@example.com');
+    expect(archive.profile?.timeFormat).toBe('h23');
     expect(archive.tables['ci.notes']).toEqual([{ id: 'n1', title: 'Hello', user_id: 'user-1' }]);
     expect(archive.fileBlobs).toEqual([]);
   });

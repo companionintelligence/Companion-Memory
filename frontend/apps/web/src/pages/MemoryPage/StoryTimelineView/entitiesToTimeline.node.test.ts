@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { createDateTimeFormatter, DEVICE_DATE_TIME_FORMATTER } from '@/lib/dateTimeFormat';
+
 import type { EntityItem } from '../useEntityService';
 
 import {
@@ -39,6 +41,7 @@ describe('buildMemoryTimelineData', () => {
           bucketStartTime: now.toISOString(),
         }),
       ],
+      DEVICE_DATE_TIME_FORMATTER,
       now,
     );
 
@@ -52,6 +55,7 @@ describe('buildMemoryTimelineData', () => {
         eventAt('earlier', new Date(2026, 7, 16, 10), 'Earlier'),
         eventAt('today', new Date(2026, 7, 18, 9), 'Today item'),
       ],
+      DEVICE_DATE_TIME_FORMATTER,
       now,
     );
 
@@ -65,7 +69,7 @@ describe('buildMemoryTimelineData', () => {
       eventAt(`e-${index}`, new Date(2026, 6, 1 + index, 10), `Item ${index}`),
     );
 
-    const { data, startAtSlide } = buildMemoryTimelineData(flood, now);
+    const { data, startAtSlide } = buildMemoryTimelineData(flood, DEVICE_DATE_TIME_FORMATTER, now);
 
     expect(data.events).toHaveLength(MEMORY_TIMELINE_MAX_SLIDES);
     expect(data.events[startAtSlide].text.headline).toBe('Item 48');
@@ -97,6 +101,7 @@ describe('buildMemoryTimelineData', () => {
           gallerySourceUrl: '/files/clip.mp4',
         }),
       ],
+      DEVICE_DATE_TIME_FORMATTER,
       now,
     );
 
@@ -109,9 +114,14 @@ describe('buildMemoryTimelineData', () => {
       eventAt(`e-${index}`, new Date(2026, 6, 1 + index, 10), `Item ${index}`),
     );
 
-    const { data, startAtSlide, datedCount } = buildMemoryTimelineData(flood, now, {
-      anchor: 'range-start',
-    });
+    const { data, startAtSlide, datedCount } = buildMemoryTimelineData(
+      flood,
+      DEVICE_DATE_TIME_FORMATTER,
+      now,
+      {
+        anchor: 'range-start',
+      },
+    );
 
     expect(datedCount).toBe(80);
     expect(data.events).toHaveLength(80);
@@ -124,14 +134,54 @@ describe('buildMemoryTimelineData', () => {
       eventAt(`e-${index}`, new Date(2026, 6, 1 + index, 10), `Item ${index}`),
     );
 
-    const { data, startAtSlide, focusIndex } = buildMemoryTimelineData(flood, now, {
-      focusId: 'e-10',
-    });
+    const { data, startAtSlide, focusIndex } = buildMemoryTimelineData(
+      flood,
+      DEVICE_DATE_TIME_FORMATTER,
+      now,
+      {
+        focusId: 'e-10',
+      },
+    );
 
     expect(focusIndex).toBe(10);
     expect(data.events).toHaveLength(MEMORY_TIMELINE_MAX_SLIDES);
     expect(data.events[startAtSlide]?.unique_id).toBe('e-10');
     expect(data.events[0]?.unique_id).toBe('e-0');
+  });
+
+  it("writes each slide's time in the person's time format and zone", () => {
+    const at = new Date('2026-08-18T22:43:00Z'); // 15:43 in Los Angeles
+    const deck = (timeFormat: 'h12' | 'h23') =>
+      buildMemoryTimelineData(
+        [
+          eventAt('walk', at, 'Walk'),
+          entity({
+            __typename: 'CommunicationType',
+            id: 'mail',
+            bucketTime: at.toISOString(),
+            subject: 'Hello',
+          }),
+          entity({
+            __typename: 'BrowserActivityType',
+            id: 'page',
+            bucketTime: at.toISOString(),
+            title: 'Docs',
+          }),
+        ],
+        createDateTimeFormatter({ timeFormat, timeZone: 'America/Los_Angeles' }),
+        at,
+      ).data.events.map((slide) => slide.text.text);
+
+    expect(deck('h23')).toEqual([
+      expect.stringMatching(/^15:43/),
+      expect.stringMatching(/^15:43/),
+      expect.stringMatching(/^15:43/),
+    ]);
+    expect(deck('h12')).toEqual([
+      expect.stringMatching(/^3:43\sPM/),
+      expect.stringMatching(/^3:43\sPM/),
+      expect.stringMatching(/^3:43\sPM/),
+    ]);
   });
 });
 

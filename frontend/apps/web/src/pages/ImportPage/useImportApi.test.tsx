@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 
 import { act, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { enterNativeShell, NATIVE_MEMORY_ORIGIN } from '@/test/nativeShell';
 
 import { useActiveImports, useImportApi, useRunProgress } from './useImportApi';
 
@@ -524,5 +526,142 @@ describe('useActiveImports on a hidden tab', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     hide('visible');
+  });
+});
+
+/**
+ * QA ETL-03 / ETL-04: every wizard upload from the phone — Photo Library or
+ * Files — ended "failed — The object is in an invalid state", with nothing
+ * staged and nothing for Retry to fix.
+ *
+ * The bundled iOS/Android app serves its own files from `capacitor://localhost`
+ * / `https://localhost`. The upload opened its XHR on the bare path
+ * `/api/import/uploads`, which Capacitor's XHR patch treats as the WebView's own
+ * request: it never calls the native `open()`, so the next `setRequestHeader`
+ * throws exactly that DOMException. `post` and `del` (start a run, Sync, cancel,
+ * discard, retry) were bare `fetch('/api/…')` — a request to the app's own
+ * bundle — and none of the raw requests sent the keystore API key, the only
+ * credential a phone has. Each has to name the paired Memory and sign itself.
+ */
+describe('useImportApi on the native shell', () => {
+  class NativeXHR {
+    static instances: NativeXHR[] = [];
+
+    url = '';
+
+    headers: Record<string, string> = {};
+
+    upload = { onprogress: null };
+
+    onerror: (() => void) | null = null;
+
+    ontimeout: (() => void) | null = null;
+
+    onload: (() => void) | null = null;
+
+    status = 0;
+
+    responseText = '';
+
+    constructor() {
+      NativeXHR.instances.push(this);
+    }
+
+    open(_method: string, url: string) {
+      this.url = url;
+    }
+
+    setRequestHeader(name: string, value: string) {
+      this.headers[name] = value;
+    }
+
+    send() {}
+  }
+
+  let leaveNativeShell: () => void = () => undefined;
+
+  function useProbeApi() {
+    let captured: ReturnType<typeof useImportApi> | null = null;
+
+    function Probe() {
+      captured = useImportApi();
+
+      return null;
+    }
+
+    render(<Probe />);
+
+    return captured as unknown as ReturnType<typeof useImportApi>;
+  }
+
+  function stubFetch() {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify([{ dropId: 'drop-1' }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    return fetchMock;
+  }
+
+  beforeEach(() => {
+    NativeXHR.instances = [];
+    vi.stubGlobal('XMLHttpRequest', NativeXHR as unknown as typeof XMLHttpRequest);
+    leaveNativeShell = enterNativeShell({ apiKey: 'native-key' });
+  });
+
+  afterEach(() => leaveNativeShell());
+
+  it('opens the upload XHR on the paired Memory origin, signed with the keystore key', () => {
+    const api = useProbeApi();
+
+    void api.uploadFile(new File(['bytes'], 'export.zip'));
+
+    const [xhr] = NativeXHR.instances;
+
+    expect(xhr.url).toBe(`${NATIVE_MEMORY_ORIGIN}/api/import/uploads`);
+    expect(xhr.headers['x-api-key']).toBe('native-key');
+  });
+
+  it('uploads an unzipped folder to the paired Memory origin too', async () => {
+    const fetchMock = stubFetch();
+    const api = useProbeApi();
+
+    await api.uploadFolder([new File(['bytes'], 'a.txt')]);
+
+    const [url, init] = fetchMock.mock.calls[0];
+
+    expect(url).toBe(`${NATIVE_MEMORY_ORIGIN}/api/import/uploads`);
+    expect(new Headers(init?.headers).get('x-api-key')).toBe('native-key');
+  });
+
+  it('starts a run on the paired Memory origin, signed with the keystore key', async () => {
+    const fetchMock = stubFetch();
+    const api = useProbeApi();
+
+    await api.startRun('drop-1');
+
+    const [url, init] = fetchMock.mock.calls[0];
+
+    expect(url).toBe(`${NATIVE_MEMORY_ORIGIN}/api/import/runs`);
+    expect(init?.method).toBe('POST');
+    expect(new Headers(init?.headers).get('x-api-key')).toBe('native-key');
+  });
+
+  it('discards a run on the paired Memory origin, signed with the keystore key', async () => {
+    const fetchMock = stubFetch();
+    const api = useProbeApi();
+
+    await api.discardRun('run-1');
+
+    const [url, init] = fetchMock.mock.calls[0];
+
+    expect(url).toBe(`${NATIVE_MEMORY_ORIGIN}/api/import/runs/run-1?confirm=discard`);
+    expect(init?.method).toBe('DELETE');
+    expect(new Headers(init?.headers).get('x-api-key')).toBe('native-key');
   });
 });

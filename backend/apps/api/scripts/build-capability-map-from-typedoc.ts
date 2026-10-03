@@ -323,11 +323,7 @@ interface CapabilityEnum {
 }
 
 type CapabilityItem =
-  | CapabilityService
-  | CapabilityFunction
-  | CapabilityInterface
-  | CapabilityTypeAlias
-  | CapabilityEnum;
+  CapabilityService | CapabilityFunction | CapabilityInterface | CapabilityTypeAlias | CapabilityEnum;
 
 /* -------------------- Collector -------------------- */
 

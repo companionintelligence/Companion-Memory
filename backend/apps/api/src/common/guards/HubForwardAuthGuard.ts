@@ -5,6 +5,10 @@ import {
   FORWARD_AUTH_SIGNATURE_HEADER,
   FORWARD_AUTH_TIMESTAMP_HEADER,
   FORWARD_AUTH_USER_HEADER,
+  FORWARD_AUTH_USER_ID_HEADER,
+  FORWARD_AUTH_USER_ID_SIGNATURE_HEADER,
+  FORWARD_AUTH_USER_ISSUER_HEADER,
+  type HubStableId,
   verifyForwardAuthHeaders,
 } from '@ci/common/crypto';
 import config from '@ci/configuration';
@@ -19,12 +23,15 @@ import config from '@ci/configuration';
  * route without provisioning the secret fails closed rather than trusting an
  * unsigned header.
  *
- * On success the verified username is attached as `req.hubForwardAuthUser`.
+ * On success the verified username is attached as `req.hubForwardAuthUser`, and
+ * the person's stable id — when the Hub sent one — as `req.hubForwardAuthStableId`.
  */
 @Injectable()
 export class HubForwardAuthGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
-    const req = context.switchToHttp().getRequest<Request & { hubForwardAuthUser?: string }>();
+    const req = context
+      .switchToHttp()
+      .getRequest<Request & { hubForwardAuthUser?: string; hubForwardAuthStableId?: HubStableId | null }>();
     const cfg = config.auth.hubForwardAuth;
 
     if (!cfg.enabled) {
@@ -46,6 +53,9 @@ export class HubForwardAuthGuard implements CanActivate {
         user: headerValue(FORWARD_AUTH_USER_HEADER),
         timestamp: headerValue(FORWARD_AUTH_TIMESTAMP_HEADER),
         signature: headerValue(FORWARD_AUTH_SIGNATURE_HEADER),
+        issuer: headerValue(FORWARD_AUTH_USER_ISSUER_HEADER),
+        userId: headerValue(FORWARD_AUTH_USER_ID_HEADER),
+        userIdSignature: headerValue(FORWARD_AUTH_USER_ID_SIGNATURE_HEADER),
       },
       { maxSkewMs: cfg.maxSkewMs },
     );
@@ -55,6 +65,7 @@ export class HubForwardAuthGuard implements CanActivate {
     }
 
     req.hubForwardAuthUser = result.username;
+    req.hubForwardAuthStableId = result.stableId;
 
     return true;
   }

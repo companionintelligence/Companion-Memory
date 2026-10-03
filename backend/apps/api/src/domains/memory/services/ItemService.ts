@@ -5,7 +5,12 @@ import { v7 as uuid7 } from 'uuid';
 
 import { SYSTEM_USER, type UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { type BulkInsertResult, bulkInsertIdempotent, INGEST_REFRESH_COLUMNS } from '@ci/common/persistence';
+import {
+  type BulkInsertResult,
+  bulkInsertIdempotent,
+  INGEST_REFRESH_COLUMNS,
+  keysetSeek,
+} from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ItemCreatedEvent, ItemUpdatedEvent, ItemRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
@@ -18,12 +23,14 @@ import type {
   FindItemsFilter,
   ItemKeyset,
   ItemPage,
+  ItemPosition,
   PhysicalItemPropertiesDto,
   UpdateItemDto,
 } from '../types';
 
 import { CtiAggregate } from './CtiAggregate';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { type PurgedItems, purgeItemAggregates } from './itemPurge';
 
 /** Page size {@link ItemService.findPage} uses when the caller names none. */
 const DEFAULT_ITEM_PAGE_SIZE = 50;
@@ -501,6 +508,31 @@ export class ItemService {
    * Replaces the load-everything-then-slice shape {@link findAll} has: cost is
    * bounded by the page size regardless of how many things the user owns, and
    * one sentinel row past the page answers `hasMore` without a second COUNT.
+   *
+   * ── A cursor is a row's EXACT position ────────────────────────────────────
+   * `ci.objects.created_at` is `timestamptz(6)`: microseconds, `DEFAULT now()`,
+   * and a bulk import stamps a whole batch with one. The driver reads it into a
+   * `Date`, which holds milliseconds (`.123456` comes back as `.123`), and the
+   * cursor used to be built from that `Date`. It named the millisecond that
+   * contains its row, not the row's instant, and `created_at = :cursor` matched
+   * no microsecond value, so every item of that instant sorting after the page
+   * boundary was skipped, and the next cursor was minted from the page that
+   * skipped them. So each row is also read as TEXT, formatted by Postgres to the
+   * microsecond in UTC ({@link ItemPage.positions}), the cursor carries that, and
+   * the seek binds it back: Postgres parses it as the column's own type, so the
+   * cursor is the row's exact `(created_at, object_id)`. A cursor minted before
+   * this carries milliseconds only and seeks as it always did.
+   *
+   * ── Why the seek is a row-value comparison ─────────────────────────────────
+   * `(created_at, object_id) < (:c, :id)` is the form the planner turns into an
+   * index condition on `objects_live_keyset_idx`: it positions on the cursor and
+   * reads the page. The `created_at < :c OR (created_at = :c AND object_id < :id)`
+   * this used to be is not one. It walked the user's index from the newest row
+   * and filtered everything newer than the cursor, on every page (500,020 rows
+   * removed for a cursor 500,000 deep in a user's 1,000,000 things). The bounded
+   * OR of `keysetSeekExact` cures that and still walks the served part of a
+   * same-instant batch on every page (50,001 rows for a cursor halfway through a
+   * 100,000-item import), where this reads none.
    */
   async findPage(
     context: ServiceContext,
@@ -511,6 +543,13 @@ export class ItemService {
 
     const qb = this.itemRepository
       .createQueryBuilder('item')
+      // Each row's exact position, as text (see the note above). The id rides along so the raw rows
+      // are matched to their entities by key, not by order.
+      .addSelect('item.object_id', 'position_id')
+      .addSelect(
+        `to_char(item.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+        'position_created_at',
+      )
       .where('item.merged_into_object_id IS NULL')
       .orderBy('item.created_at', 'DESC')
       .addOrderBy('item.object_id', 'DESC')
@@ -556,21 +595,34 @@ export class ItemService {
     // alone drops every row that shares a timestamp with the cursor, which on a
     // bulk import is most of the page.
     if (keyset.afterCreatedAt != null && keyset.afterId != null) {
-      qb.andWhere(
-        '(item.created_at < :afterCreatedAt OR (item.created_at = :afterCreatedAt AND item.object_id < :afterId))',
-        { afterCreatedAt: keyset.afterCreatedAt, afterId: keyset.afterId },
-      );
+      qb.andWhere('(item.created_at, item.object_id) < (:afterCreatedAt, :afterId)', {
+        afterCreatedAt: keyset.afterCreatedAt,
+        afterId: keyset.afterId,
+      });
     }
 
-    const rows = await qb.getMany();
+    const { entities: rows, raw } = await qb.getRawAndEntities<{
+      position_id: string;
+      position_created_at: string | null;
+    }>();
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
-    const last = page[page.length - 1];
+    const exactCreatedAt = new Map(raw.map((row) => [row.position_id, row.position_created_at]));
+    const positions: ItemPosition[] = page.map((row) => {
+      const createdAt = exactCreatedAt.get(row.id);
+
+      if (createdAt == null) {
+        throw new Error(`Item ${row.id} has no created_at, so it has no place in the things list`);
+      }
+
+      return { createdAt, id: row.id };
+    });
 
     return {
       items: await this.composeMany(page),
+      positions,
       hasMore,
-      nextCursor: hasMore && last ? { createdAt: last.createdAt, id: last.id } : null,
+      nextCursor: hasMore ? (positions[positions.length - 1] ?? null) : null,
     };
   }
 
@@ -631,17 +683,18 @@ export class ItemService {
       query = query.andWhere('item.updated_at <= :endTime', { endTime: options.endTime });
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in
-    // (updated_at DESC, object_id DESC) — see ContentService.getEntitiesForContents.
+    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at, object_id), in
+    // `order` — see keysetSeek.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(item.updated_at < :afterTime OR (item.updated_at = :afterTime AND item.object_id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('item.updated_at', 'item.object_id', order, options.afterTime, options.afterId),
       );
     }
 
-    // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query.orderBy('item.updated_at', options.order ?? 'DESC').addOrderBy('item.object_id', 'DESC');
+    // Deterministic tiebreak so same-timestamp rows page consistently: the id runs the way the time does.
+    query = query.orderBy('item.updated_at', order).addOrderBy('item.object_id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -895,5 +948,39 @@ export class ItemService {
     });
 
     return true;
+  }
+
+  /**
+   * Permanently deletes items, with everything that only exists because of them.
+   * This is `memory.forget`'s `archive_and_delete` for an `Item` node, and the
+   * other end from {@link remove}: see {@link purgeItemAggregates} for what goes,
+   * for what is refused (an item that is another item's parent), and for how it
+   * differs from `remove`.
+   *
+   * The duplicates that were merged into an item go with it, and are named in the
+   * result separately because nobody asked for them.
+   *
+   * Everything is one transaction. Search is told afterwards, once for every item
+   * that went, and the ids that were not the caller's, or no longer exist, are
+   * simply left out of the result.
+   */
+  async purge(context: UserServiceContext, ids: string[]): Promise<PurgedItems> {
+    const requested = Array.from(new Set(ids));
+
+    if (requested.length === 0) {
+      return { itemIds: [], duplicateIds: [] };
+    }
+
+    const purged = await this.itemRepository.manager.transaction((manager) =>
+      purgeItemAggregates(manager, context.userId, requested),
+    );
+
+    // The index rows were deleted in the transaction. This tells anything else
+    // that listens, and is what announces a removal everywhere else in the app.
+    for (const itemId of [...purged.itemIds, ...purged.duplicateIds]) {
+      await this.eventService.send(ItemRemovedEvent, { itemId });
+    }
+
+    return purged;
   }
 }

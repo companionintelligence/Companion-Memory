@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import {
   In,
   type DeepPartial,
@@ -89,8 +90,17 @@ export interface CtiWriteHooks<TDetail> {
   /**
    * Runs inside the write transaction after detail/base patches (update) or
    * immediately before the base-row delete (remove), so the trail shares the tx.
+   *
+   * An {@link CtiAggregate.applyUpdate} hook that itself wrote to the detail
+   * row hands it back as it now stands, and `applyUpdate` answers with that row:
+   * the reload it took for `after` predates the hook. Anything else a hook
+   * returns is ignored, and so is a returned row on `remove` and `restore`.
    */
-  withinTx?: (args: { manager: EntityManager; before: TDetail; after: TDetail | null }) => Promise<void>;
+  withinTx?: (args: {
+    manager: EntityManager;
+    before: TDetail;
+    after: TDetail | null;
+  }) => Promise<TDetail | void>;
 }
 
 export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase extends LinkedBase> {
@@ -116,13 +126,50 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
    * STI child metadata emits the discriminator for every row. The caller names
    * the ON CONFLICT action (DO NOTHING for insert-only aggregates, a guarded
    * DO UPDATE where the base label must follow detail refreshes).
+   *
+   * Throws — rolling the caller's transaction back — when any id is held by a
+   * base row another owner holds; see {@link assertBaseRowsOwned}.
    */
   async insertBaseRows(manager: RepositoryProvider, rows: TBase[], onConflict: string): Promise<void> {
     if (rows.length === 0) {
       return;
     }
 
-    await chunkedConflictInsert(manager.getRepository(this.options.baseEntity), rows, onConflict);
+    const repository = manager.getRepository(this.options.baseEntity);
+
+    await chunkedConflictInsert(repository, rows, onConflict);
+    await this.assertBaseRowsOwned(repository, rows);
+  }
+
+  /**
+   * Refuse base rows whose id another owner's entity already held — or no
+   * owner's, once its user was deleted.
+   *
+   * `ci.entities`' primary key is `entity_id` alone and every caller's conflict
+   * target is that key, so an id another owner's entity holds is not an error
+   * to the INSERT but a conflict it resolves: DO NOTHING leaves the detail row
+   * the caller just wrote hanging off that entity, and a DO UPDATE rewrites its
+   * label as well. The detail tables' deferred `(id, entity_type)` keys reject
+   * another TYPE's entity at COMMIT; nothing rejected another owner's entity of
+   * the same type with no detail row of its own. Read after the INSERT, in the
+   * same transaction, so a row that took the id after any earlier read is
+   * caught too.
+   */
+  private async assertBaseRowsOwned(repository: Repository<TBase>, rows: TBase[]): Promise<void> {
+    const [foreign] = (await repository.query(
+      `SELECT held.entity_id, written.owner_user_id
+         FROM ci.entities held
+         JOIN unnest($1::uuid[], $2::uuid[]) AS written (entity_id, owner_user_id) USING (entity_id)
+        WHERE held.owner_user_id IS DISTINCT FROM written.owner_user_id
+        LIMIT 1`,
+      [rows.map((row) => row.id), rows.map((row) => row.userId ?? null)],
+    )) as Array<{ entity_id: string; owner_user_id: string | null }>;
+
+    if (foreign) {
+      throw new ForbiddenException(
+        `Entity ${foreign.entity_id} is not owned by ${foreign.owner_user_id}; refusing to write it`,
+      );
+    }
   }
 
   /**
@@ -216,16 +263,13 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
 
       const detailPatch = patches.detail ?? {};
       const detailTouched = Object.keys(detailPatch).length > 0;
-      if (detailTouched) {
-        await repository.update(byId, detailPatch);
-      }
 
       // Before-state merged with the patch — what the detail row now holds —
       // without waiting on the reload, so base derivation sees real values.
       // withoutUndefined() guards this the same way RelationshipService.update
       // and TaskService.update do (#2703, #2713): an untouched field arriving
       // as `key: undefined` must not clobber `before`'s real value here, since
-      // `after` (unlike the `repository.update()` call above, which TypeORM
+      // `after` (unlike the `repository.update()` call below, which TypeORM
       // already normalizes) is built with a plain Object.assign.
       const after = Object.assign(
         Object.create(Object.getPrototypeOf(before) as object),
@@ -234,24 +278,35 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
       ) as TDetail;
 
       const basePatch = typeof patches.base === 'function' ? patches.base(after) : (patches.base ?? null);
-      if (basePatch && Object.keys(basePatch).length > 0) {
+      const baseTouched = basePatch != null && Object.keys(basePatch).length > 0;
+
+      // The DETAIL row is written first, always: every write to an aggregate
+      // takes the detail row's lock before the base row's, so two writers can
+      // never hold one each and wait on the other. A base-only change (e.g. a
+      // rename) still writes it — the watermark below — which is also what
+      // keeps updated_at truthful for consumers sweeping the detail table.
+      // CalendarEventService's source refresh locks in the same order.
+      const updateDateColumn = this.options.detailRepository.metadata?.updateDateColumn;
+      if (detailTouched) {
+        await repository.update(byId, detailPatch);
+      } else if (baseTouched && updateDateColumn) {
+        await repository.update(byId, {
+          [updateDateColumn.propertyName]: new Date(),
+        } as unknown as QueryDeepPartialEntity<TDetail>);
+      }
+
+      if (baseTouched) {
         await manager
           .getRepository(this.options.baseEntity)
           .update({ id } as FindOptionsWhere<TBase>, basePatch);
-
-        // A base-only change (e.g. a rename) must keep the detail watermark
-        // truthful for consumers sweeping the detail table by updated_at.
-        const updateDateColumn = this.options.detailRepository.metadata?.updateDateColumn;
-        if (!detailTouched && updateDateColumn) {
-          await repository.update(byId, {
-            [updateDateColumn.propertyName]: new Date(),
-          } as unknown as QueryDeepPartialEntity<TDetail>);
-        }
       }
 
       const reloaded = await repository.findOne({ where });
+
       if (hooks?.withinTx) {
-        await hooks.withinTx({ manager, before, after: reloaded });
+        const rewritten = await hooks.withinTx({ manager, before, after: reloaded });
+
+        return rewritten ?? reloaded;
       }
 
       return reloaded;
@@ -281,19 +336,29 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
         return false;
       }
 
+      const softDeleteFlag = this.options.softDeleteFlag;
+
+      if (softDeleteFlag) {
+        // The tombstone first, then the hook: the detail row's lock before
+        // anything the hook writes to the base row — the one lock order every
+        // write to the aggregate keeps (see applyUpdate).
+        await manager
+          .getRepository(this.options.detailEntity)
+          .update({ id } as FindOptionsWhere<TDetail>, this.flagPatch(softDeleteFlag, true));
+
+        if (hooks?.withinTx) {
+          await hooks.withinTx({ manager, before, after: null });
+        }
+
+        return true;
+      }
+
+      // A physical delete has to run the hook while the rows still exist.
       if (hooks?.withinTx) {
         await hooks.withinTx({ manager, before, after: null });
       }
 
-      const softDeleteFlag = this.options.softDeleteFlag;
-
-      if (softDeleteFlag) {
-        await manager
-          .getRepository(this.options.detailEntity)
-          .update({ id } as FindOptionsWhere<TDetail>, this.flagPatch(softDeleteFlag, true));
-      } else {
-        await manager.getRepository(this.options.baseEntity).delete({ id } as FindOptionsWhere<TBase>);
-      }
+      await manager.getRepository(this.options.baseEntity).delete({ id } as FindOptionsWhere<TBase>);
 
       return true;
     });

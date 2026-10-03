@@ -2,15 +2,16 @@ import { useRef, useEffect, useState, useCallback } from 'react';
 
 import { useQuery, useMutation } from '@apollo/client';
 import {
-  GlobalUID,
-  LoadingPage,
   buildNoteRecord,
   captureNote,
   forgetQueuedNote,
+  GlobalUID,
   isQueuedNote,
+  LoadingPage,
   newNoteId,
-  usePageTitle,
+  useDeviceLayout,
   useOutboxQueue,
+  usePageTitle,
 } from '@ci/common';
 import { Editor } from '@ci/editor';
 import { Spinner } from '@ci/shadcn';
@@ -23,9 +24,23 @@ import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
 import { namedChatContext } from '@/lib/agentChat';
 
+import {
+  claimMintedNote,
+  createNoteEditorSession,
+  editorContentSeed,
+  syncNoteEditorSession,
+  type NoteEditorSession,
+} from './noteEditorSession';
 import { useEntityReference } from './useEntityReference';
 
 const AUTOSAVE_THROTTLE_MS = 1000;
+
+/**
+ * The save status's words ("Saving", "Saved offline", "5m"). A phone's toolbar has
+ * no room left beside the formatting buttons, so there only the icon shows and the
+ * words stay in the accessible name; wider screens show both, as before.
+ */
+const STATUS_WORDS = 'sr-only device:not-sr-only';
 
 const GET_NOTE = gql(`
   query GetNote($id: ID!) {
@@ -70,6 +85,7 @@ export function NotePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { reference, onReferenceClick } = useEntityReference();
+  const { isMobile } = useDeviceLayout();
 
   const { data, loading, refetch } = useQuery(GET_NOTE, {
     variables: { id: GlobalUID.encode('note', id!) },
@@ -129,16 +145,14 @@ export function NotePage() {
   /**
    * The note as THIS page authored it, held only while the appliance is out of reach.
    *
-   * Two jobs, and the second is a safety guard rather than a convenience:
+   * It is the proof that a later snapshot is safe to queue. Queueing overwrites the
+   * whole note, so it may only ever be done with content we actually hold. Having
+   * authored it here is one of the two ways to hold it; the other is `note`, which
+   * means the appliance served it to us.
    *
-   * 1. It survives the editor remount. Navigating from `/notes/new` to the minted id
-   *    changes `<Editor key>`, so the editor rebuilds from `content` — which is
-   *    `note?.content`, and offline there is no `note`. Without this the text the user
-   *    just typed would vanish from the screen the instant it was safely queued.
-   * 2. It is the proof that a later snapshot is safe to queue. Queueing overwrites the
-   *    whole note, so it may only ever be done with content we actually hold. Having
-   *    authored it here is one of the two ways to hold it; the other is `note`, which
-   *    means the appliance served it to us.
+   * The editor itself is not remounted when this draft's id is minted (see
+   * `editorSessionRef`), so the text the user just typed stays on screen without
+   * being copied back in through `content`.
    */
   const [authoredContent, setAuthoredContent] = useState<string | null>(null);
   const [localTitle, setLocalTitle] = useState<string | null>(null);
@@ -151,6 +165,18 @@ export function NotePage() {
   authoredContentRef.current = authoredContent;
 
   const note = data?.note;
+
+  // One editor for a draft and the id it mints. A new route id would otherwise
+  // remount the editor and focus it at the start, which is the same moment the
+  // chat control appears.
+  const editorSessionRef = useRef<NoteEditorSession | null>(null);
+  const editorSession = (editorSessionRef.current ??= createNoteEditorSession(id));
+  const editorKey = syncNoteEditorSession(id, editorSession);
+
+  // Set once the editor for this key has been shown, so a note query that starts
+  // at the mint handoff cannot swap the page for a loader and destroy the editor.
+  const editorShownForKeyRef = useRef<string | null>(null);
+  const contentSeedRef = useRef<{ key: string; content?: string } | null>(null);
 
   /**
    * Queue one complete snapshot of the note under `noteId`.
@@ -284,6 +310,10 @@ export function NotePage() {
           if (result.data?.createNote?.note?.id) {
             const newId = GlobalUID.parse('note', result.data.createNote.note.id);
 
+            if (editorSessionRef.current) {
+              claimMintedNote(editorSessionRef.current, newId);
+            }
+
             navigate(`/notes/${newId}`, { replace: true });
           }
 
@@ -299,6 +329,10 @@ export function NotePage() {
           const localId = newNoteId();
 
           if (await queueSnapshot(localId, title, content)) {
+            if (editorSessionRef.current) {
+              claimMintedNote(editorSessionRef.current, localId);
+            }
+
             navigate(`/notes/${localId}`, { replace: true });
           }
         } finally {
@@ -359,21 +393,23 @@ export function NotePage() {
   // Not while we are holding the note ourselves: navigating to a freshly minted id
   // starts a query that will fail (that is why the note was queued), and blanking the
   // page for it would take the user's just-typed text off the screen and back.
-  if (loading && authoredContent === null) {
+  // Also not when this editor is already on screen — the mint handoff starts the
+  // note query (and mounts the chat control) while the user is still typing.
+  if (loading && authoredContent === null && editorShownForKeyRef.current !== editorKey) {
     return <LoadingPage />;
   }
 
+  editorShownForKeyRef.current = editorKey;
+
+  const contentSeed = (contentSeedRef.current = editorContentSeed(
+    contentSeedRef.current,
+    editorKey,
+    note?.content ?? authoredContent,
+  ));
+
   return (
     <>
-      {/* `authoredContent` carries an offline note across the remount that navigating to
-          its minted id forces (`key` changes), where there is no server `note` to rebuild
-          from. See the state declaration. */}
-      <Editor
-        key={id}
-        content={note?.content ?? authoredContent ?? undefined}
-        onUpdate={handleUpdate}
-        reference={reference}
-      >
+      <Editor key={editorKey} content={contentSeed.content} onUpdate={handleUpdate} reference={reference}>
         <div className="flex h-full flex-col overflow-hidden">
           <Editor.Menu>
             <div className="flex w-full items-center justify-between gap-2">
@@ -386,7 +422,7 @@ export function NotePage() {
                 ) : updating || creating ? (
                   <>
                     <Spinner size={12} variant="circle" color="rgb(6,108,128)" />
-                    <div>Saving</div>
+                    <div className={STATUS_WORDS}>Saving</div>
                   </>
                 ) : queuedAt ? (
                   // Queued is a SAVED state, not a pending one: the note is committed to
@@ -395,7 +431,10 @@ export function NotePage() {
                   // warning, because there is nothing for the user to do about it.
                   <>
                     <CloudOff className="text-amber-400 h-4 w-4" strokeWidth={1.5} />
-                    <div title="Saved on this device. It syncs to your Companion automatically.">
+                    <div
+                      className={STATUS_WORDS}
+                      title="Saved on this device. It syncs to your Companion automatically."
+                    >
                       Saved offline
                     </div>
                   </>
@@ -403,13 +442,17 @@ export function NotePage() {
                   <>
                     <TriangleAlert className="text-amber-300 h-4 w-4" strokeWidth={1.5} />
                     {note?.updatedAt ? (
-                      <TimeAgo date={note.updatedAt} minPeriod={5} formatter={shortFormatter} />
+                      <span className={STATUS_WORDS}>
+                        <TimeAgo date={note.updatedAt} minPeriod={5} formatter={shortFormatter} />
+                      </span>
                     ) : null}
                   </>
                 ) : id !== 'new' && note?.updatedAt ? (
                   <>
                     <Check className="text-[rgb(6,108,128)] h-4 w-4 -mr-0.5" />
-                    <TimeAgo date={note.updatedAt} minPeriod={5} formatter={shortFormatter} />
+                    <span className={STATUS_WORDS}>
+                      <TimeAgo date={note.updatedAt} minPeriod={5} formatter={shortFormatter} />
+                    </span>
                   </>
                 ) : null}
               </div>
@@ -426,7 +469,9 @@ export function NotePage() {
                     sourceKind: 'NoteType',
                     sourceId: note.id,
                   })}
-                  size="sm"
+                  // A phone gets the one-icon menu (same actions, "Open chat" first):
+                  // the two labelled buttons need ~290px the toolbar row does not have.
+                  size={isMobile ? 'icon' : 'sm'}
                 />
               ) : null}
             </div>

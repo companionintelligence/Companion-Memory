@@ -1,4 +1,5 @@
 import type { AgentChatContext } from '@/lib/agentChat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { formatMinor } from '@/lib/money';
 import { eventDisplayTitle } from '@/pages/MemoryPage/Components/utils';
 import { getFileChunkTitle } from '@/pages/MemoryPage/fileChunks';
@@ -50,7 +51,7 @@ function humanize(value: string): string {
   return value.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function formatWhen(value: unknown): string | null {
+function formatWhen(value: unknown, fmt: DateTimeFormatter): string | null {
   if (value == null) {
     return null;
   }
@@ -61,7 +62,7 @@ function formatWhen(value: unknown): string | null {
     return null;
   }
 
-  return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return fmt.dateTime(date, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 function readTags(record: Record<string, unknown>): string | null {
@@ -97,7 +98,7 @@ function readUrl(record: Record<string, unknown>): string | null {
   );
 }
 
-function readWhen(record: Record<string, unknown>): string | null {
+function readWhen(record: Record<string, unknown>, fmt: DateTimeFormatter): string | null {
   const timeSource = readString(record, 'bucketTimeSource', 'timeSource');
 
   // Import wall-clock, not a real event time — skip so chat doesn't cite it.
@@ -107,6 +108,7 @@ function readWhen(record: Record<string, unknown>): string | null {
 
   return formatWhen(
     record.startTime ?? record.bucketStartTime ?? record.time ?? record.bucketTime ?? record.bucketAppearedAt,
+    fmt,
   );
 }
 
@@ -140,7 +142,7 @@ function joinBody(prose: string | null, facts: Array<[string, string | null | un
  * tags, eventType, …) — those go into the draft so chat is specific even
  * when the spread fragment's `description` is hidden.
  */
-export function entityToAgentChatContext(entity: MemoryEntity): AgentChatContext {
+export function entityToAgentChatContext(entity: MemoryEntity, fmt: DateTimeFormatter): AgentChatContext {
   const record = asRecord(entity);
   const sourceKind = entity.__typename;
   const sourceId = typeof entity.id === 'string' ? entity.id : undefined;
@@ -259,7 +261,7 @@ export function entityToAgentChatContext(entity: MemoryEntity): AgentChatContext
   const uniqueProse = prose && prose.trim() !== resolvedTitle ? prose : null;
 
   const body = joinBody(uniqueProse, [
-    ['When', readWhen(record)],
+    ['When', readWhen(record, fmt)],
     ['Where', readString(record, 'locationName', 'galleryLocationName')],
     ['Kind', eventKind ? humanize(eventKind) : null],
     ['Source', sourceSystem ? humanize(sourceSystem) : null],

@@ -1,7 +1,11 @@
 import { type Message as OllamaMessage } from 'ollama';
 
+import { TOOLS_OFF_TURN_CONTEXT_HEADER } from '../../toolsOff';
 import { ChatGenerationBroker } from '../ChatGenerationBroker';
 import { ChatTurnService, TURN_CONTEXT_HEADER } from '../ChatTurnService';
+
+// This suite's model has no tools, so its data message carries the tool-less heading; a tools-on one carries the other.
+const DATA_HEADERS = [TURN_CONTEXT_HEADER, TOOLS_OFF_TURN_CONTEXT_HEADER];
 
 const payload = {
   ownerId: 'user-1',
@@ -159,7 +163,7 @@ describe('ChatTurnService prompt prefix stability', () => {
     const system = systemContent(sentMessages[0]);
 
     expect(system).toContain('# User Context');
-    for (const marker of [TURN_CONTEXT_HEADER, '## Plan', '## Forecast', '## Brief', '## Stats']) {
+    for (const marker of [...DATA_HEADERS, '## Plan', '## Forecast', '## Brief', '## Stats']) {
       expect(system).not.toContain(marker);
     }
   });
@@ -173,7 +177,7 @@ describe('ChatTurnService prompt prefix stability', () => {
     const messages = sentMessages[0];
 
     expect(messages).toHaveLength(3);
-    expect(messages[1].content.startsWith(TURN_CONTEXT_HEADER)).toBe(true);
+    expect(DATA_HEADERS.some((header) => messages[1].content.startsWith(header))).toBe(true);
     expect(messages[1].content).toContain('## Plan');
     expect(messages[1].content).toContain('## Forecast');
     expect(messages[1].content).toContain('## Brief');
@@ -216,7 +220,7 @@ describe('ChatTurnService prompt prefix stability', () => {
       },
     );
 
-    expect(written.some((content) => content.includes(TURN_CONTEXT_HEADER))).toBe(false);
+    expect(written.some((content) => DATA_HEADERS.some((header) => content.includes(header)))).toBe(false);
     expect(written.some((content) => content.includes('## Plan'))).toBe(false);
   });
 
@@ -233,6 +237,8 @@ describe('ChatTurnService prompt prefix stability', () => {
     expect(systemContent(second)).toBe(systemContent(first));
     // The flag-off branch carries no snapshots at all, so nothing is injected.
     expect(first).toHaveLength(2);
-    expect(first.every((message) => !message.content.includes(TURN_CONTEXT_HEADER))).toBe(true);
+    expect(first.every((message) => DATA_HEADERS.every((header) => !message.content.includes(header)))).toBe(
+      true,
+    );
   });
 });

@@ -9,8 +9,7 @@
  */
 
 export type ImportBatch =
-  | { kind: 'file'; files: File[] }
-  | { kind: 'directory'; name: string; files: File[] };
+  { kind: 'file'; files: File[] } | { kind: 'directory'; name: string; files: File[] };
 
 export function relativePathOf(file: File): string {
   return (file.webkitRelativePath || file.name).replace(/\\/g, '/');

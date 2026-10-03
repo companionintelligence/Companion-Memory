@@ -79,8 +79,9 @@ export class PlaceType implements Node, Taggable {
   parentId!: string | null;
 
   /**
-   * First real visit inside the active search date window (an event whose
-   * location_entity_id is this place, excluding ingest wall-clock times).
+   * First real visit inside the active search date window (an event that
+   * happened whose location_entity_id is this place, excluding ingest
+   * wall-clock times).
    * Null when the browse has no date filter or this place was not visited in
    * the window. SearchResolver stamps this from the identifier's sortTime; do
    * not add a ResolveField that overwrites it with first-ever.

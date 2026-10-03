@@ -14,6 +14,7 @@ import {
   type FindItemsFilter,
   type ObjectLifecycleState,
   type Item,
+  type ItemPosition,
   ItemService,
   ObjectDuplicateService,
   ObjectMergeService,
@@ -287,9 +288,10 @@ export class ItemResolver {
       afterId: after?.id ?? null,
     });
 
-    const edges: ItemEdge[] = page.items.map((entity) => ({
+    // Every edge's cursor carries its row's exact position: a client may hand back any of them.
+    const edges: ItemEdge[] = page.items.map((entity, at) => ({
       node: ItemType.toType(entity),
-      cursor: encodeItemCursor({ createdAt: entity.createdAt, id: entity.id }),
+      cursor: encodeItemCursor(page.positions[at]),
     }));
 
     return {
@@ -376,7 +378,7 @@ export class ItemResolver {
     filter: FindItemsFilter,
   ): Promise<{ window: Item[]; truncated: boolean }> {
     const window: Item[] = [];
-    let cursor: { createdAt: Date; id: string } | null = null;
+    let cursor: ItemPosition | null = null;
 
     while (window.length < MAX_REFINE_SCAN) {
       const page = await this.itemService.findPage(serviceContext, filter, {

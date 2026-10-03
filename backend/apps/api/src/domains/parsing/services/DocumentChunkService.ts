@@ -5,6 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { keysetSeek } from '@ci/common/persistence';
 import { type EntityIdentifier, type IndexableEntity } from '@ci/domains/search-next';
 
 import { FileChunkEntity, type FileChunk } from '../entities/FileChunkEntity';
@@ -58,6 +59,36 @@ export class DocumentChunkService {
     });
   }
 
+  /**
+   * The first `limit` chunks of one file, in reading order, for a prompt.
+   *
+   * Scoped to the caller, which {@link findByFileId} is not: that one is a purge helper and takes
+   * the file id on the caller's word. Here the chunk row names its owner and the query names the
+   * caller, so a file id that is not theirs reads as a file with nothing parsed. The condition is a
+   * bound parameter rather than a `find({ where })` object on purpose: an object whose `userId` is
+   * undefined silently loses that condition, and this is the read that must never cross owners.
+   */
+  async findLeadingByFileId(
+    context: ServiceContext,
+    fileId: string,
+    limit: number,
+  ): Promise<Pick<FileChunk, 'chunkIndex' | 'content'>[]> {
+    if (!context.userId || !fileId || limit < 1) {
+      return [];
+    }
+
+    const rows = await this.chunkRepository
+      .createQueryBuilder('chunk')
+      .select(['chunk.chunkIndex', 'chunk.content'])
+      .where('chunk.fileId = :fileId', { fileId })
+      .andWhere('chunk.userId = :userId', { userId: context.userId })
+      .orderBy('chunk.chunkIndex', 'ASC')
+      .limit(limit)
+      .getMany();
+
+    return rows.map((row) => ({ chunkIndex: row.chunkIndex, content: row.content }));
+  }
+
   async findByIds(ids: string[]): Promise<FileChunk[]> {
     if (ids.length === 0) {
       return [];
@@ -72,9 +103,10 @@ export class DocumentChunkService {
   /**
    * Time-ordered chunk identifiers for the Memory browse/timed search path.
    * Mirrors the other entity services' `getEntitiesFor*` contract: orders by
-   * created_at (DESC by default) with an id tiebreak, and honours the composite
-   * (afterTime, afterId) keyset so pagination is stable across the large
-   * same-timestamp clusters a single document's chunks produce.
+   * updated_at (DESC by default) with an id tiebreak running the same way, and
+   * honours the composite (afterTime, afterId) keyset in that direction so
+   * pagination is stable across the large same-timestamp clusters a single
+   * document's chunks produce.
    */
   async getEntitiesForFileChunks(
     context: ServiceContext,
@@ -100,14 +132,15 @@ export class DocumentChunkService {
       query = query.andWhere('chunk.updated_at <= :endTime', { endTime: options.endTime });
     }
 
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(chunk.updated_at < :afterTime OR (chunk.updated_at = :afterTime AND chunk.id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('chunk.updated_at', 'chunk.id', order, options.afterTime, options.afterId),
       );
     }
 
-    query = query.orderBy('chunk.updated_at', options.order ?? 'DESC').addOrderBy('chunk.id', 'DESC');
+    query = query.orderBy('chunk.updated_at', order).addOrderBy('chunk.id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);

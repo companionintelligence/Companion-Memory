@@ -13,6 +13,8 @@ export interface MemoryCheckOptions {
 export interface MemoryConfigureOptions {
   backend?: string;
   port?: string;
+  /** OpenAI-compatible only: the server's API root, `/v1` unless it mounts it elsewhere (Lemonade: `/api/v1`). */
+  basePath?: string;
   backendApiKey?: string;
   clearApiKey?: boolean;
   json?: boolean;
@@ -87,9 +89,22 @@ function parseSettings(options: MemoryConfigureOptions): LlmEndpointUpdate {
     throw new CliError('--backend-api-key and --clear-api-key cannot be used together.');
   }
 
+  const basePath = options.basePath?.trim();
+
+  if (basePath && backend !== 'openai_compatible') {
+    throw new CliError(
+      '--base-path applies to the openai-compatible backend only; Ollama serves its routes at fixed paths.',
+    );
+  }
+
+  if (basePath && !/^\/?[A-Za-z0-9._~-]+(\/[A-Za-z0-9._~-]+)*\/?$/.test(basePath)) {
+    throw new CliError('--base-path must be a plain URL path such as /v1 or /api/v1.');
+  }
+
   return {
     backend,
     port,
+    ...(basePath ? { basePath } : {}),
     ...(apiKey ? { apiKey } : {}),
     ...(options.clearApiKey ? { clearApiKey: true } : {}),
   };
@@ -110,6 +125,10 @@ function parseBackend(value: string): LlmEndpointUpdate['backend'] {
 function renderEndpoint(ctx: CliContext, endpoint: LlmEndpointConfig): void {
   ctx.term.out(`backend     ${displayBackend(endpoint.backend)}`);
   ctx.term.out(`endpoint    ${endpoint.endpoint}`);
+  if (endpoint.basePath) {
+    ctx.term.out(`api root    ${endpoint.basePath}`);
+  }
+
   ctx.term.out(`credential  ${endpoint.apiKeyConfigured ? 'configured (write-only)' : 'none'}`);
   ctx.term.out(
     `managed     ${endpoint.locked ? 'by Companion Hub / host environment' : 'by this appliance'}`,

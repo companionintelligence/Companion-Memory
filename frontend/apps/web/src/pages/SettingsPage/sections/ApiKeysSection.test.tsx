@@ -1,21 +1,30 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiKeysSection } from './ApiKeysSection';
 
 // ApiKeysSection reads useAuth from the @/hooks barrel and talks to /api/keys through fetchJson.
 const h = vi.hoisted(() => ({
   fetchJson: vi.fn(),
+  // The web session: a JWT. The native shell holds only a device API key, so there is no JWT
+  // there (`authToken` null) while the session is still `authenticated`.
+  authToken: 'token' as string | null,
+  authenticated: true,
 }));
 
 vi.mock('@/hooks', () => ({
-  useAuth: () => [{ authToken: 'token' }, {}],
+  useAuth: () => [{ authToken: h.authToken, authenticated: h.authenticated }, {}],
 }));
 
 vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
   fetchJson: h.fetchJson,
 }));
+
+afterEach(() => {
+  h.authToken = 'token';
+  h.authenticated = true;
+});
 
 /** The parsed body of the key-creation POST, or undefined if it was never sent. */
 function createBody(): Record<string, unknown> | undefined {
@@ -489,5 +498,96 @@ describe('ApiKeysSection delete confirmation', () => {
     await openDeleteFor('laptop');
 
     expect(screen.queryByText(/managed by Companion Hub/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * ═══ "FAILED TO LOAD API KEYS" AND "NO API KEYS CREATED YET" AT ONCE ═══
+ *
+ * A failed load leaves `keys` empty, and the empty state keyed off `keys` alone — so the red
+ * banner said the list could not be read while the card under it said there was nothing to read.
+ */
+describe('ApiKeysSection load failure', () => {
+  beforeEach(() => {
+    h.authToken = 'token';
+    h.authenticated = true;
+    h.fetchJson.mockReset();
+  });
+
+  it('does not claim there are no keys when the list could not be loaded', async () => {
+    h.fetchJson.mockRejectedValue(new Error('network down'));
+
+    render(<ApiKeysSection />);
+
+    expect(await screen.findByText('Failed to load API keys')).toBeInTheDocument();
+    expect(screen.queryByText('No API keys created yet.')).not.toBeInTheDocument();
+  });
+
+  it('still shows the empty state when the load succeeded and there are none', async () => {
+    h.fetchJson.mockResolvedValue([]);
+
+    render(<ApiKeysSection />);
+
+    expect(await screen.findByText('No API keys created yet.')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load API keys')).not.toBeInTheDocument();
+  });
+
+  it('keeps the empty state when only a later action failed', async () => {
+    // A failed create sets the same banner, but the list itself loaded fine and is empty.
+    h.fetchJson.mockImplementation((_url: string, init?: { method?: string }) =>
+      init?.method === 'POST' ? Promise.reject(new Error('nope')) : Promise.resolve([]),
+    );
+
+    render(<ApiKeysSection />);
+    await openCreateDialogAndName();
+    submit();
+
+    expect(await screen.findByText('Failed to create API key')).toBeInTheDocument();
+    expect(screen.getByText('No API keys created yet.')).toBeInTheDocument();
+  });
+});
+
+/**
+ * ═══ A SCREEN THE PHONE CAN NEVER USE ═══
+ *
+ * `/api/keys` is `JwtOrPortalAuthGuard`, deliberately never an API key — a leaked key that could
+ * mint replacement keys would outlive its own revocation. The native shell holds only a device
+ * key (no web JWT), so the request could only 401, and the page then said "Failed to load API
+ * keys" above "No API keys created yet." Say what is true instead, and do not send the request.
+ */
+describe('ApiKeysSection on the native shell (device key, no web JWT)', () => {
+  beforeEach(() => {
+    h.authToken = null;
+    h.authenticated = true;
+    h.fetchJson.mockReset();
+    h.fetchJson.mockResolvedValue([]);
+  });
+
+  it('says plainly that a web sign-in is needed', () => {
+    render(<ApiKeysSection />);
+
+    expect(screen.getByText('Needs a web sign-in')).toBeInTheDocument();
+    expect(screen.getByText(/never allowed to mint or revoke keys/i)).toBeInTheDocument();
+  });
+
+  it('does not send a request that can only 401, and shows no load failure or empty state', async () => {
+    render(<ApiKeysSection />);
+
+    // Let any effect settle before asserting nothing happened.
+    await waitFor(() => expect(screen.getByText('Needs a web sign-in')).toBeInTheDocument());
+
+    expect(h.fetchJson).not.toHaveBeenCalled();
+    expect(screen.queryByText('Failed to load API keys')).not.toBeInTheDocument();
+    expect(screen.queryByText('No API keys created yet.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /create api key/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the normal page for a web session', async () => {
+    h.authToken = 'token';
+
+    render(<ApiKeysSection />);
+
+    expect(await screen.findByText('No API keys created yet.')).toBeInTheDocument();
+    expect(screen.queryByText('Needs a web sign-in')).not.toBeInTheDocument();
   });
 });

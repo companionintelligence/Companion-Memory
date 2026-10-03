@@ -42,6 +42,8 @@ describe('WriteKnowledgeTool Qwen argument shapes', () => {
         ids.map((id) => nodes.get(id)).filter(Boolean),
       ),
       searchNodesByPrefix: jest.fn(async () => []),
+      // Both entities are new in this batch, so no edge between them exists yet.
+      findActiveRelationship: jest.fn(async () => null),
     };
 
     const tool = new WriteKnowledgeTool(graphEvents as never, graphQuery as never, makeLogger() as never);
@@ -72,6 +74,12 @@ describe('WriteKnowledgeTool Qwen argument shapes', () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({ createdNodes: 2, createdRelationships: 1, failures: 0 });
+    // The lower-case types Qwen sends go out as ci.entities stores them:
+    // `valid_entity_type` refuses `person`, and the write dead-lettered.
+    expect(created).toEqual([
+      { entityType: 'Place', name: 'Example Home' },
+      { entityType: 'Person', name: 'alex' },
+    ]);
     expect(relationships).toEqual([
       expect.objectContaining({
         fromEntityId: 'id-2',

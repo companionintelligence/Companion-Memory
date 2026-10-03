@@ -40,6 +40,7 @@ if str(SRC) not in sys.path:
 
 from ci.hbpe import data_client as dc  # noqa: E402
 from ci.hbpe import database as db  # noqa: E402
+from ci.hbpe.event_status import LIVE_EVENT_SQL  # noqa: E402
 from ci.hbpe.pipeline import bootstrap as bs  # noqa: E402
 from ci.hbpe.pipeline import nightly_runner as nr  # noqa: E402
 from ci.hbpe.pipeline import recurrence as rec  # noqa: E402
@@ -262,6 +263,12 @@ class _DayQueryCursor:
     # forgets the same predicate, which is exactly the mutation to catch.
     _PLANNED_ONLY = "FROM ci.events (planned blocks only)"
 
+    # Days whose ONLY events did not happen: cancelled, no_show or skipped. Both
+    # reads leave those out by status (event_status.LIVE_EVENT_SQL), so the same
+    # rule applies: the event branch sees these days only if it forgets the
+    # predicate.
+    _DEAD_ONLY = "FROM ci.events (did not happen only)"
+
     def __init__(self, sources: dict[str, list[dt.date]], calls: list) -> None:
         self._sources = sources
         self._calls = calls
@@ -273,12 +280,22 @@ class _DayQueryCursor:
         days = {d for d in self._sources.get(table, ()) if d <= end}
         if table == "FROM ci.events" and "planned_block" not in flat:
             days |= {d for d in self._sources.get(self._PLANNED_ONLY, ()) if d <= end}
+        if table == "FROM ci.events" and LIVE_EVENT_SQL not in flat:
+            days |= {d for d in self._sources.get(self._DEAD_ONLY, ()) if d <= end}
         return sorted(days)
 
     def execute(self, sql, params=None):
         flat = " ".join(str(sql).split())
         params = tuple(params or ())
         self._calls.append((flat, params))
+
+        if "hbpe.reserialize_days" in flat:
+            # serialize_token_stream also reads its re-serialize queue. These
+            # tests are about the day list, so the queue is always empty here;
+            # test_reserialize_queue.py interprets that SQL.
+            self._result = []
+            self.rowcount = 0
+            return
 
         if "MIN(source_date)" in flat:
             days = sorted(
@@ -669,6 +686,56 @@ def test_purge_tier_reclaims_a_day_left_holding_only_planned_blocks(monkeypatch)
 
     assert stranded in got
     assert got == [stranded, *sorted(_run_back(TODAY, BUDGET))]
+
+
+DEAD_ONLY = _DayQueryCursor._DEAD_ONLY
+
+
+def test_reserved_tier_ignores_days_whose_only_events_did_not_happen(monkeypatch):
+    """
+    The status predicate, on the reservation side. Both reads this query
+    predicts leave out cancelled, no_show and skipped events
+    (event_status.LIVE_EVENT_SQL), so a day whose only events did not happen
+    serializes to zero event tokens and has nothing to label. Google Calendar
+    sync keeps a meeting the source cancelled as a row, so a synced calendar
+    produces such days. Counted as sources, the 60 newest here would take 60 of
+    the 91 slots and push 60 real event days out of the budget.
+    """
+    last_event = dt.date(2024, 1, 15)
+    got = _day_list(
+        monkeypatch,
+        {
+            "FROM ci.events": _run_back(last_event, 200),
+            DEAD_ONLY: _run_back(TODAY, 60),
+        },
+    )
+
+    assert got == sorted(_run_back(last_event, BUDGET))
+
+
+def test_purge_tier_reclaims_a_day_whose_last_live_event_was_cancelled(monkeypatch):
+    """
+    The cleanup the status fix relies on for days the nightly no longer
+    rewrites. 2024-06-03 held one meeting, serialize wrote its tokens, and the
+    source later cancelled it. The ingester re-serializes only today, and the
+    content budget stopped reaching 2024-06-03 long ago, so the purge tier is
+    the only path back to it. That path opens only if ``event_days`` stops
+    counting the cancelled meeting as a source. Otherwise its rows feed
+    recurrence, seasonal and HMT training indefinitely.
+    """
+    live = _run_back(TODAY, 200)
+    cancelled = dt.date(2024, 6, 3)
+    got = _day_list(
+        monkeypatch,
+        {
+            "FROM ci.events": live,
+            DEAD_ONLY: [cancelled],
+            "FROM hbpe.token_stream": [*live, cancelled],
+        },
+    )
+
+    assert cancelled in got
+    assert got == [cancelled, *sorted(_run_back(TODAY, BUDGET))]
 
 
 # ── Each tier's ORDER BY direction ────────────────────────────────────────────
@@ -1190,6 +1257,21 @@ def test_drain_excludes_mapped_kinds_on_the_capture_kind_column(monkeypatch):
     assert "e.event_type LIKE" not in sql
 
 
+def test_drain_does_not_queue_events_that_did_not_happen(monkeypatch):
+    """
+    The serializer never publishes a cancelled, no_show or skipped event, so a
+    label for one reaches nothing. The drain would spend Qwen time on it and
+    mint L1 vocabulary from a meeting that never took place. The predicate binds
+    no parameters, so the param-order assertions below hold unchanged.
+    """
+    sql, params = _capture(monkeypatch)
+    assert (
+        "AND e.event_type IS DISTINCT FROM 'planned_block' "
+        f"AND {LIVE_EVENT_SQL} AND ec.event_id IS NULL" in sql
+    )
+    assert params == [USER, 1000]
+
+
 def test_ascending_keyset_uses_a_greater_than_comparison(monkeypatch):
     after = dt.datetime(2026, 5, 1, tzinfo=UTC)
     sql, params = _capture(monkeypatch, after_start=after, after_id="abc")
@@ -1239,6 +1321,17 @@ def test_window_and_keyset_params_bind_in_query_order(monkeypatch):
 
 _SERIALIZED_DAYS: list[str] = []
 _ROWS_PER_DAY = 59
+# What serialize_token_stream reports for its re-serialize queue when the queue
+# is empty, as every fake in this file serves it.
+_EMPTY_QUEUE = {
+    "status": "ok",
+    "queued": 0,
+    "serialized": 0,
+    "rows": 0,
+    "settled": 0,
+    "deferred": 0,
+    "failed": 0,
+}
 
 
 class _DaySerializer:
@@ -1259,10 +1352,16 @@ def _run_serialize(monkeypatch, days, bounds=None, today=TODAY):
     _SERIALIZED_DAYS.clear()
 
     class _Cur:
-        def execute(self, *_a, **_k):
-            return None
+        rowcount = 0
+
+        def execute(self, sql, *_a, **_k):
+            # The re-serialize queue serialize_token_stream also reads is empty
+            # here; test_reserialize_queue.py covers it.
+            self._queue = "hbpe.reserialize_days" in str(sql)
 
         def fetchall(self):
+            if self._queue:
+                return []
             # (source_date, is_content); this fake models content days only.
             return [(d.isoformat(), True) for d in sorted(days, reverse=True)]
 
@@ -1418,13 +1517,21 @@ def test_serialize_reports_a_corpus_that_is_entirely_in_the_future(monkeypatch):
     result = _run_serialize(
         monkeypatch, [], bounds=(dt.date(2026, 9, 1), dt.date(2026, 10, 15))
     )
-    assert result == {"rows": 0, "reason": "only_future_events"}
+    assert result == {
+        "rows": 0,
+        "reason": "only_future_events",
+        "reserialize_queue": _EMPTY_QUEUE,
+    }
     assert _SERIALIZED_DAYS == []
 
 
 def test_serialize_reports_an_empty_corpus(monkeypatch):
     result = _run_serialize(monkeypatch, [], bounds=None)
-    assert result == {"rows": 0, "reason": "no_events"}
+    assert result == {
+        "rows": 0,
+        "reason": "no_events",
+        "reserialize_queue": _EMPTY_QUEUE,
+    }
     assert _SERIALIZED_DAYS == []
 
 

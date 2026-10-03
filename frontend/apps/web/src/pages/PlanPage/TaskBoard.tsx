@@ -127,9 +127,27 @@ export function TaskBoard<T extends SectionedTask>({
 
     return (
       <Tabs value={activeTab} onValueChange={setTab} className="flex h-full min-h-0 flex-1 flex-col gap-2">
-        <Tabs.List className="h-auto max-w-full justify-start overflow-x-auto">
+        {/*
+          ═══ THE FOURTH TAB USED TO SIT OFF THE EDGE OF THE PHONE ═══
+
+          This was one non-wrapping row that scrolled sideways. Four tabs were
+          wider than a 390pt phone ("Scheduled on calendar" alone was ~11rem), so
+          "Scheduled on c" was cut off at the edge and Done sat wholly out of
+          sight behind a swipe nothing hinted at. The label is now just
+          "Scheduled", which helps but still leaves four tabs a little wider than
+          that row — so the strip also wraps, and every tab stays on screen
+          whatever the width, the type size, or a count that grows a digit.
+
+          The triggers carry `h-auto` for a WebKit reason. Their base height is
+          `calc(100% - 1px)`, and once the strip wraps, Safari resolves that
+          against the strip's own height: on the iOS Simulator the first row
+          stretched to fill the whole strip and the second row — Scheduled and
+          Done — spilled out underneath the cards. jsdom lays nothing out, so
+          only a device shows it.
+        */}
+        <Tabs.List className="h-auto max-w-full flex-wrap justify-start gap-1">
           {columns.map((section) => (
-            <Tabs.Trigger key={section.key} value={section.key} className="shrink-0">
+            <Tabs.Trigger key={section.key} value={section.key} className="h-auto shrink-0">
               {section.label}
               <span className="ml-2 font-normal">{section.count}</span>
             </Tabs.Trigger>

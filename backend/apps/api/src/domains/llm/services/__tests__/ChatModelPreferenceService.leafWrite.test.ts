@@ -123,3 +123,106 @@ describe('ChatModelPreferenceService writes one leaf per setting', () => {
     await expect(drive(person, service.getThinkingEnabled(CONTEXT.userId!))).resolves.toBe(false);
   });
 });
+
+describe('ChatModelPreferenceService writes for a user who has no self entity yet', () => {
+  // `ci.users.entity_id` stays NULL until something self-anchored is ingested, and
+  // an account whose data came from an import never gets one. Picking a model
+  // from the composer then threw "Self entity not found" — a 500 the picker
+  // answered by reverting to the default, six times in a row on an iOS QA run.
+  const NEW_SELF_ID = 'provisioned-self-entity';
+
+  function harnessWithoutSelf(provisioner?: { ensureSelfEntityForOwner: jest.Mock }) {
+    const row = new FakePropertiesRow({});
+    const person = fakePersonServiceOver(row, NEW_SELF_ID);
+    const written: string[] = [];
+    const inner = person.service.patchPropertyLeaves as (
+      c: unknown,
+      id: string,
+      l: unknown,
+    ) => Promise<unknown>;
+    person.service.patchPropertyLeaves = jest.fn(async (context: unknown, id: string, leaves: unknown) => {
+      written.push(id);
+
+      return inner(context, id, leaves);
+    });
+    const userContextService = { getSelfIdentity: jest.fn(async () => null) };
+    const moduleRef = provisioner ? { get: jest.fn(() => provisioner) } : undefined;
+
+    return {
+      row,
+      written,
+      userContextService,
+      moduleRef,
+      service: new ChatModelPreferenceService(
+        person.service as never,
+        userContextService as never,
+        moduleRef as never,
+      ),
+    };
+  }
+
+  it('provisions the self entity and writes the preference onto it', async () => {
+    const provisioner = {
+      ensureSelfEntityForOwner: jest.fn(async () => ({ id: NEW_SELF_ID, type: 'Person' })),
+    };
+    const { service, row, written, moduleRef } = harnessWithoutSelf(provisioner);
+
+    await expect(service.setChatModel(CONTEXT, 'qwen3.5:2b-mlx')).resolves.toBe('qwen3.5:2b-mlx');
+
+    expect(moduleRef!.get).toHaveBeenCalledWith('SELF_ENTITY_PROVISIONER', { strict: false });
+    expect(provisioner.ensureSelfEntityForOwner).toHaveBeenCalledWith(CONTEXT);
+    expect(written).toStrictEqual([NEW_SELF_ID]);
+    expect(row.planner.chat_model).toBe('qwen3.5:2b-mlx');
+  });
+
+  it('does the same for the tools and thinking toggles, which live on the same entity', async () => {
+    const provisioner = {
+      ensureSelfEntityForOwner: jest.fn(async () => ({ id: NEW_SELF_ID, type: 'Person' })),
+    };
+    const { service, row } = harnessWithoutSelf(provisioner);
+
+    await service.setToolsEnabled(CONTEXT, false);
+    await service.setThinkingEnabled(CONTEXT, false);
+
+    expect(row.planner.tools_enabled).toBe(false);
+    expect(row.planner.thinking_enabled).toBe(false);
+  });
+
+  it('does not provision when the user already has a self entity', async () => {
+    const provisioner = { ensureSelfEntityForOwner: jest.fn() };
+    const { service, userContextService, written } = harnessWithoutSelf(provisioner);
+    userContextService.getSelfIdentity.mockResolvedValue({ entityId: SELF_ID } as never);
+
+    await service.setChatModel(CONTEXT, 'qwen3.6:27b');
+
+    expect(provisioner.ensureSelfEntityForOwner).not.toHaveBeenCalled();
+    expect(written).toStrictEqual([SELF_ID]);
+  });
+
+  it('still fails, naming the real problem, when nothing can provision one', async () => {
+    const withoutBinding = harnessWithoutSelf();
+    const provisionerDeclines = harnessWithoutSelf({ ensureSelfEntityForOwner: jest.fn(async () => null) });
+
+    await expect(withoutBinding.service.setChatModel(CONTEXT, 'x')).rejects.toThrow('Self entity not found');
+    await expect(provisionerDeclines.service.setChatModel(CONTEXT, 'x')).rejects.toThrow(
+      'Self entity not found',
+    );
+  });
+
+  it('treats a missing provider binding like no provisioner rather than crashing on the lookup', async () => {
+    const row = new FakePropertiesRow({});
+    const person = fakePersonServiceOver(row, NEW_SELF_ID);
+    const moduleRef = {
+      get: jest.fn(() => {
+        throw new Error('Nest could not find SELF_ENTITY_PROVISIONER');
+      }),
+    };
+    const service = new ChatModelPreferenceService(
+      person.service as never,
+      { getSelfIdentity: async () => null } as never,
+      moduleRef as never,
+    );
+
+    await expect(service.setChatModel(CONTEXT, 'x')).rejects.toThrow('Self entity not found');
+  });
+});

@@ -16,5 +16,8 @@ export interface Thread {
   description: string | null;
   generationStatus?: 'idle' | 'queued' | 'running' | 'failed';
   kind?: 'chat' | 'dispatch';
+  /** ISO timestamps. The API returns both; optional here because fixtures and older appliances may omit them. */
+  createdAt?: string;
+  updatedAt?: string;
   messages?: Message[];
 }

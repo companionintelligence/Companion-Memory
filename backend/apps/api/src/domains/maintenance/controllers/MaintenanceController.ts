@@ -582,10 +582,11 @@ export class MaintenanceController {
 
   /**
    * Reverse-geocode backfill (geodata-plan Phase 2): the inverse of
-   * geocode-locations. Counts events that HAVE coordinates (photo EXIF / GPS /
-   * estimation) but no readable location_name, and emits a
+   * geocode-locations. Counts events that HAVE measured coordinates (photo EXIF
+   * / GPS) but no readable location_name, and emits a
    * {@link GeocodeBatchRequestEvent} with direction 'reverse' so the batch
    * listener resolves a place name for each — turning bare map pins into labels.
+   * Estimated coordinates are not counted: the listener refuses to name them.
    */
   @Post('reverse-geocode-locations')
   async reverseGeocodeLocations(
@@ -603,13 +604,15 @@ export class MaintenanceController {
     const retryNull = body.retryNull ?? false;
 
     // Candidate set: coordinates present, name missing — the inverse of the
-    // forward backfill's filter.
+    // forward backfill's filter — minus estimated coordinates, which the
+    // listener refuses (GeocodeBatchListener.selectReverseCandidates).
     const candidateCount = await this.dataSource
       .getRepository(EventEntity)
       .createQueryBuilder('event')
       .where('event.user_id = :userId', { userId })
       .andWhere('event.location_coordinates IS NOT NULL')
       .andWhere("(event.location_name IS NULL OR btrim(event.location_name) = '')")
+      .andWhere("COALESCE(event.metadata->>'location_source', '') <> 'estimated'")
       .getCount();
 
     const estimatedEventCount = Math.min(candidateCount, limit);
@@ -858,6 +861,7 @@ export class MaintenanceController {
       examined: 0,
       fromLinked: 0,
       toLinked: 0,
+      edgeDecisionsReopened: 0,
       windows: 0,
       range: null,
     };
@@ -923,6 +927,7 @@ export class MaintenanceController {
         examined: 0,
         identifiersSeen: 0,
         identifiersExisting: 0,
+        identifiersForgotten: 0,
         peopleCreated: 0,
         identifiersIndexed: 0,
         errors: [],
@@ -965,6 +970,7 @@ export class MaintenanceController {
       examined: 0,
       organizersLinked: 0,
       participantsLinked: 0,
+      edgeDecisionsReopened: 0,
       pages: 0,
     };
 

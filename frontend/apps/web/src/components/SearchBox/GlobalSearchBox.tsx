@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { GlobalUID } from '@ci/common';
-import { Tooltip } from '@ci/shadcn';
+import { GlobalUID, useDeviceLayout } from '@ci/common';
+import { Tooltip, cn } from '@ci/shadcn';
 import { Clock, FilterX, Search, SearchX, X } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -21,6 +21,7 @@ import {
   addEntityFilter,
   countActiveFilters,
 } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
+import { MobileSearchPanelFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/MobileSearchPanelFilters';
 
 import type { FilterDragPayload } from './filterDrag';
 import { CommunicationResult } from './results/CommunicationResult';
@@ -69,6 +70,7 @@ export function GlobalSearchBox() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { isMobile } = useDeviceLayout();
 
   const onMemoryExplorer = isMemoryExplorerPath(location.pathname);
   const onMemoryHub = isMemoryHubPath(location.pathname);
@@ -184,6 +186,21 @@ export function GlobalSearchBox() {
       clearInput();
     },
     [addRecentSearch, clearInput, navigate, onLiveSearchPage, searchParams, setSearchParams],
+  );
+
+  // A saved search picked from the panel's footer: Load search on desktop, the
+  // Saved searches sheet on a phone. That footer only shows off the explorer,
+  // so the search opens there, and the box remounts the way it
+  // does after committing a query from a launcher page: a fresh, unfocused box
+  // picks the query up from `?search=`, where the old one (still counted as
+  // focused while the sheet was open) would have auto-submitted its empty input
+  // and cleared the search straight back out of the URL.
+  const openSavedSearch = useCallback(
+    (params: URLSearchParams) => {
+      navigate(`/memory?${params.toString()}`);
+      clearInput();
+    },
+    [clearInput, navigate],
   );
 
   // The query only — the counterpart to `clearFilters`. Remounting SearchBox
@@ -315,9 +332,9 @@ export function GlobalSearchBox() {
             {
               id: CLEAR_FILTERS_ACTION_ID,
               content: (
-                <div className="flex items-center gap-2">
-                  <FilterX className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
-                  <span className="text-muted-foreground">Clear search filters</span>
+                <div className="flex min-w-0 items-center gap-2">
+                  <FilterX className="h-6 w-6 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+                  <span className="min-w-0 text-muted-foreground">Clear search filters</span>
                 </div>
               ),
             },
@@ -330,9 +347,9 @@ export function GlobalSearchBox() {
         {
           id: CLEAR_QUERY_ACTION_ID,
           content: (
-            <div className="flex items-center gap-2">
-              <SearchX className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
-              <span className="text-muted-foreground">Clear search query</span>
+            <div className="flex min-w-0 items-center gap-2">
+              <SearchX className="h-6 w-6 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+              <span className="min-w-0 text-muted-foreground">Clear search query</span>
             </div>
           ),
         },
@@ -340,12 +357,12 @@ export function GlobalSearchBox() {
         {
           id: SEARCH_ACTION_ID,
           content: (
-            <div className="flex items-center gap-2">
-              <Search className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+              <Search className="h-6 w-6 shrink-0 text-muted-foreground" strokeWidth={1.5} />
               <span className="text-muted-foreground">
                 {onMemoryExplorer ? 'Search Memory for' : 'Search all of Memory for'}
               </span>
-              <span className="font-medium">“{trimmed}”</span>
+              <span className="max-w-full min-w-0 truncate font-medium">“{trimmed}”</span>
             </div>
           ),
         },
@@ -361,19 +378,27 @@ export function GlobalSearchBox() {
     // Empty + focused → clear-filters (when active), then recent searches.
     return [
       ...clearFiltersRows,
-      ...recentSearches.map((recent) => ({
+      ...recentSearches.map((recent, index) => ({
         id: `${RECENT_PREFIX}${recent}`,
+        // On a phone the recents sit above the Filters / Saved searches rows,
+        // so they get a caption to tell the two apart.
+        heading: isMobile && index === 0 ? t('SEARCH_RECENT_HEADING') : undefined,
         content: (
-          <div className="flex items-center gap-2">
-            <Clock className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
-            <span className="flex-1 truncate">{recent}</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <Clock className="h-6 w-6 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+            <span className="min-w-0 flex-1 truncate">{recent}</span>
             <Tooltip delayDuration={600}>
               <Tooltip.Content>{t('SEARCH_RECENT_REMOVE', { query: recent })}</Tooltip.Content>
               <Tooltip.Trigger asChild>
                 <button
                   type="button"
                   aria-label={t('SEARCH_RECENT_REMOVE', { query: recent })}
-                  className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className={cn(
+                    'rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground',
+                    // A thumb-sized target on a phone; the negative margins keep
+                    // it from making the row any taller.
+                    isMobile && '-my-1 -mr-2 grid size-11 place-items-center p-0',
+                  )}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -388,7 +413,17 @@ export function GlobalSearchBox() {
         ),
       })),
     ];
-  }, [activeFilterCount, onMemoryExplorer, query, recentSearches, removeRecentSearch, suggestions, t, tags]);
+  }, [
+    activeFilterCount,
+    isMobile,
+    onMemoryExplorer,
+    query,
+    recentSearches,
+    removeRecentSearch,
+    suggestions,
+    t,
+    tags,
+  ]);
 
   // Live, debounced. Drives the suggestion query everywhere, and on a live-search
   // page also writes `?search` so the page filters as you type (replace: keep
@@ -502,6 +537,15 @@ export function GlobalSearchBox() {
       if (id.startsWith(RECENT_PREFIX)) {
         commitSearch(id.slice(RECENT_PREFIX.length));
 
+        // On a list page the commit filters the page in place and leaves the
+        // input alone — right for a typed query, which the input already shows.
+        // A recent search starts from an empty input, so let go of focus: the
+        // panel closes (and a phone's keyboard with it) and the input picks the
+        // query up from `?search=`, so the tap visibly does something.
+        if (onLiveSearchPage) {
+          inputRef.current?.blur();
+        }
+
         return;
       }
 
@@ -563,7 +607,7 @@ export function GlobalSearchBox() {
           break;
       }
     },
-    [addRecentSearch, clearFilters, clearInput, clearQuery, commitSearch, navigate, query],
+    [addRecentSearch, clearFilters, clearInput, clearQuery, commitSearch, navigate, onLiveSearchPage, query],
   );
 
   // Expand + focus. The focus call only lands when already expanded (a hidden
@@ -588,6 +632,7 @@ export function GlobalSearchBox() {
           onFilterAdd={onMemoryExplorer ? handleFilterAdd : undefined}
           variant="compact"
           placeholder="Search memory…"
+          fullWidthOnPhone
           autoSubmit
           autoSubmitEmpty={onLiveSearchPage}
           displayResults
@@ -599,7 +644,18 @@ export function GlobalSearchBox() {
           panelFooter={
             explorerFiltersApply && !onMemoryExplorer ? (
               <DropdownProvider args={[{ changeSearchParams: true }]}>
-                <SearchPanelFilters modal={false} />
+                {/* A phone has no room for the row of controls: it gets a
+                    Filters row and a Saved searches row that open sheets. */}
+                {isMobile ? (
+                  <MobileSearchPanelFilters
+                    filterCount={activeFilterCount}
+                    showSavedSearches={!(query ?? '').trim()}
+                    onClearFilters={clearFilters}
+                    onOpenSavedSearch={openSavedSearch}
+                  />
+                ) : (
+                  <SearchPanelFilters modal={false} onOpenSavedSearch={openSavedSearch} />
+                )}
               </DropdownProvider>
             ) : undefined
           }

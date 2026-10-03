@@ -53,7 +53,11 @@ function buildService(options: {
     resolveModel: jest.fn(async () => ({
       model: payload.model,
       enableThinking: true,
-      enableTools: false,
+      // With tools the minimal prompt of a user with no context is no system
+      // message at all, which is what these index-based assertions assume. A
+      // turn without tools gets the tool-less guard as a system message even then
+      // (see ChatTurnService.noTools.test.ts), and this suite is not about that.
+      enableTools: true,
     })),
     chatStream: options.chatStream,
     ...(options.resolveChatContextTokens && { resolveChatContextTokens: options.resolveChatContextTokens }),
@@ -161,7 +165,7 @@ describe('ChatTurnService context budget', () => {
           id: 'm1',
           role: 'user',
           content: filler,
-          files: [{ key: 'dropped-photo', size: 1000 }],
+          files: [{ key: 'dropped-photo', size: 1000, contentType: 'image/jpeg' }],
         }),
         row({ id: 'm2', role: 'assistant', content: filler }),
         row({ id: 'm3', role: 'user', content: 'hello again' }),
@@ -180,11 +184,26 @@ describe('ChatTurnService context budget', () => {
     const chatStream = jest.fn(async () => streamFrom([{ role: 'assistant', content: 'hi' }]));
     const { service } = buildService({
       rows: [
-        row({ id: 'm1', role: 'user', content: 'photo 1', files: [{ key: 'a', size: 10 }] }),
+        row({
+          id: 'm1',
+          role: 'user',
+          content: 'photo 1',
+          files: [{ key: 'a', size: 10, contentType: 'image/jpeg' }],
+        }),
         row({ id: 'm2', role: 'assistant', content: 'nice' }),
-        row({ id: 'm3', role: 'user', content: 'photo 2', files: [{ key: 'b', size: 10 }] }),
+        row({
+          id: 'm3',
+          role: 'user',
+          content: 'photo 2',
+          files: [{ key: 'b', size: 10, contentType: 'image/jpeg' }],
+        }),
         row({ id: 'm4', role: 'assistant', content: 'also nice' }),
-        row({ id: 'm5', role: 'user', content: 'photo 3', files: [{ key: 'c', size: 10 }] }),
+        row({
+          id: 'm5',
+          role: 'user',
+          content: 'photo 3',
+          files: [{ key: 'c', size: 10, contentType: 'image/jpeg' }],
+        }),
       ],
       chatStream,
       getFileContent,
@@ -216,7 +235,7 @@ describe('ChatTurnService context budget', () => {
           id: 'm1',
           role: 'user',
           content: 'huge',
-          files: [{ key: 'huge', size: 8 * 1024 * 1024 }],
+          files: [{ key: 'huge', size: 8 * 1024 * 1024, contentType: 'image/jpeg' }],
         }),
       ],
       chatStream,

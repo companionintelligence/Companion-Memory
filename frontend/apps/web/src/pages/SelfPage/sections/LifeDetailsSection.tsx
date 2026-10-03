@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 import { Button, Input, Textarea, ToggleGroup, cn } from '@ci/shadcn';
 import { Loader2, NotebookPen, Pencil } from '@ci/shadcn/icons';
 
-import { AnswerProvenance } from '@/components/AnswerProvenance';
+import { AnswerProvenance, ProvenanceLegend } from '@/components/AnswerProvenance';
 import { useAuth } from '@/hooks';
 import type { CatalogueAnswer, CataloguePage } from '@/pages/PromptsPage/catalogue';
 
@@ -24,6 +24,64 @@ const ANSWER_AUTOSAVE_DEBOUNCE_MS = 900;
 const ANSWER_MAX_LENGTH = 5000;
 
 /**
+ * `value`, held to {@link ANSWER_MAX_LENGTH} (or to `previous`'s length, when an
+ * answer already longer than the cap is being cut down — the cap must never eat
+ * the tail of text the person did not choose to delete).
+ *
+ * The `maxLength` attribute on the fields is not relied on alone: a QA run saw a
+ * 5,003-character run accepted whole on an iPhone (a short run of the same kind
+ * stops at the attribute on iOS Safari, so what let that one through is not
+ * established). The cap is also applied to the value the field reports, whatever
+ * put the text there, so nothing over it is ever autosaved or sent.
+ * A surrogate pair is never left half-cut: a lone half of an emoji is not text.
+ */
+function clampAnswer(value: string, previous = ''): string {
+  const limit = Math.max(ANSWER_MAX_LENGTH, previous.length);
+
+  if (value.length <= limit) {
+    return value;
+  }
+
+  const cut = value.slice(0, limit);
+  const last = cut.charCodeAt(cut.length - 1);
+
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+/** Tailwind's `max-sm`: below it each theme's grid collapses to a single column. */
+const STACKED_QUERY = '(width < 40rem)';
+
+/**
+ * Whether the rows are stacked (question above answer), i.e. a phone. Read at
+ * first render and kept current, so the provenance badge is rendered once, in
+ * the place that suits the layout, rather than twice with one hidden.
+ */
+function useStacked(): boolean {
+  const [stacked, setStacked] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia(STACKED_QUERY).matches,
+  );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') {
+      return;
+    }
+
+    const query = window.matchMedia(STACKED_QUERY);
+    const update = () => setStacked(query.matches);
+
+    update();
+    query.addEventListener?.('change', update);
+
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+
+  return stacked;
+}
+
+/**
  * Both cells of one row, side by side in the theme's shared grid.
  *
  * The wrapper is `display: contents` on purpose: the row needs to exist in the
@@ -39,11 +97,24 @@ const ANSWER_MAX_LENGTH = 5000;
  * the question's own rule is dropped there — otherwise every question would be
  * separated from its own answer by a divider.
  */
-function Row({ question, children }: { question: CuratedQuestion; children: React.ReactNode }) {
+function Row({
+  question,
+  status,
+  children,
+}: {
+  question: CuratedQuestion;
+  /** The answer's provenance badge, when the rows are stacked. */
+  status?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className="contents" data-question-key={question.key}>
-      <div className="pt-2.5 text-sm text-muted-foreground sm:border-b sm:border-border/60 sm:pb-2.5 sm:pr-6">
-        {question.text}
+      <div className="flex items-start justify-between gap-2 pt-2.5 text-sm text-muted-foreground sm:block sm:border-b sm:border-border/60 sm:pb-2.5 sm:pr-6">
+        <span>{question.text}</span>
+        {/* Stacked (a phone), the answer sits under its question at full width,
+            so the badge moves up onto the question's line instead of wrapping
+            onto a line of its own under the answer. */}
+        {status ? <span className="mt-1 flex shrink-0">{status}</span> : null}
       </div>
       <div className="border-b border-border/60 pb-2.5 pt-1 sm:pt-2.5">{children}</div>
     </div>
@@ -60,10 +131,13 @@ function AnswerDisplay({
   question,
   answer,
   onEdit,
+  showBadge,
 }: {
   question: CuratedQuestion;
   answer: CatalogueAnswer;
   onEdit: () => void;
+  /** False when stacked: the badge is on the question's line instead. */
+  showBadge: boolean;
 }) {
   return (
     // Side by side once there is width for it, so the badges line up as their
@@ -95,20 +169,39 @@ function AnswerDisplay({
           `onEdit` hands straight back to `startEdit`, the SAME inline editor the
           answer text opens, which PATCHes `{text}` alone and re-stamps the row as
           the user's. There is deliberately no second write path in the drawer. */}
-      <AnswerProvenance
-        source={answer.source}
-        confidence={answer.confidence}
-        rationale={answer.rationale}
-        details={{
-          question: question.text,
-          answerText: answer.text,
-          answeredAt: answer.answeredAt,
-          record: answer,
-          onEdit,
-        }}
-        className="shrink-0 sm:mt-px"
-      />
+      {showBadge ? (
+        <AnswerBadge question={question} answer={answer} onEdit={onEdit} className="shrink-0 sm:mt-px" />
+      ) : null}
     </div>
+  );
+}
+
+/** One answer's provenance badge: beside the answer, or on its question's line when stacked. */
+function AnswerBadge({
+  question,
+  answer,
+  onEdit,
+  className,
+}: {
+  question: CuratedQuestion;
+  answer: CatalogueAnswer;
+  onEdit: () => void;
+  className?: string;
+}) {
+  return (
+    <AnswerProvenance
+      source={answer.source}
+      confidence={answer.confidence}
+      rationale={answer.rationale}
+      details={{
+        question: question.text,
+        answerText: answer.text,
+        answeredAt: answer.answeredAt,
+        record: answer,
+        onEdit,
+      }}
+      className={className}
+    />
   );
 }
 
@@ -324,9 +417,20 @@ function AnswerPrompt({
   );
 }
 
+interface LifeDetailsSectionProps {
+  /**
+   * Called after an answer has been written (saved or edited) and the section
+   * has refreshed, so a page that lists the same answers elsewhere — About you's
+   * "Recent answers" — can refresh too instead of showing the old words until a
+   * reload.
+   */
+  onAnswersChanged?: () => void;
+}
+
 /** A fixed, hand-curated slice of your Reflections answers — see lifeDetails.ts for why these questions and not a generic category browse. */
-export function LifeDetailsSection() {
+export function LifeDetailsSection({ onAnswersChanged }: LifeDetailsSectionProps) {
   const [{ authToken }] = useAuth();
+  const stacked = useStacked();
   const [rows, setRows] = useState<CuratedAnswers>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -341,6 +445,35 @@ export function LifeDetailsSection() {
   const [editDraft, setEditDraft] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
 
+  const sectionRef = useRef<HTMLElement>(null);
+  const lastEditedKey = useRef<string | null>(null);
+
+  // A long answer makes a tall editor, and a cancelled draft (or one saved much
+  // shorter than it was) collapses it to the saved answer in one step. WebKit has
+  // no scroll anchoring, so the scroller keeps its scrollTop and the page lands on
+  // whatever used to be below the row — a screenful or the whole page away (QA:
+  // 2,500 characters left the page ~1,400pt past the row, 5,000 at the very end).
+  // Once the editor is gone, bring the row back into view; `nearest` leaves the
+  // page alone when the row is still on screen, so a short edit moves nothing.
+  useLayoutEffect(() => {
+    if (editingKey !== null) {
+      lastEditedKey.current = editingKey;
+
+      return;
+    }
+
+    const closedKey = lastEditedKey.current;
+    lastEditedKey.current = null;
+
+    if (closedKey !== null) {
+      sectionRef.current
+        ?.querySelector<HTMLElement>(`[data-question-key="${closedKey}"]`)
+        // The row wrapper is `display: contents` and has no box of its own; its
+        // first child is the question cell, the top of the row.
+        ?.firstElementChild?.scrollIntoView?.({ block: 'nearest' });
+    }
+  }, [editingKey]);
+
   const authHeaders = useCallback(
     () => ({
       'Content-Type': 'application/json',
@@ -349,33 +482,60 @@ export function LifeDetailsSection() {
     [authToken],
   );
 
-  const loadAnswers = useCallback(async () => {
-    setLoading(true);
-    try {
-      const page = await fetchJson<CataloguePage>(curatedCatalogueUrl(), {
-        headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
-      });
-      const { byKey, missingKeys } = indexCuratedAnswers(page?.data ?? []);
+  // The newest load. Refreshes after a save now run while the person keeps using
+  // the other rows, so a slow one that started before a later save finished must
+  // not land on top of it and put that row back to "no answer yet".
+  const latestLoad = useRef(0);
 
-      // Loud, because the silent version of this is what shipped: a curated
-      // key the catalogue has never heard of used to render a perfectly
-      // normal-looking input that threw away whatever was typed into it.
-      // Rows without a question to answer are not rendered at all (below).
-      if (missingKeys.length > 0) {
-        console.error(
-          `Life details: ${missingKeys.length} curated question(s) are missing from the catalogue — ` +
-            `their seed migration has not run, or they were added to lifeDetails.ts without one: ${missingKeys.join(', ')}`,
-        );
+  const loadAnswers = useCallback(
+    async ({ background = false }: { background?: boolean } = {}) => {
+      const load = ++latestLoad.current;
+
+      // `loading` swaps the whole grid for "Loading…": right for the first load,
+      // wrong for the refetch after a save. That one unmounted every row, so the
+      // section collapsed to a line, the page scroll was clamped to the end of
+      // the (now short) page and the keyboard went with the field. A background
+      // refresh swaps rows in place instead and never touches `loading`.
+      if (!background) {
+        setLoading(true);
       }
 
-      setRows(byKey);
-      setError(false);
-    } catch {
-      setError(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [authToken]);
+      try {
+        const page = await fetchJson<CataloguePage>(curatedCatalogueUrl(), {
+          headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+        });
+
+        if (load !== latestLoad.current) {
+          return;
+        }
+
+        const { byKey, missingKeys } = indexCuratedAnswers(page?.data ?? []);
+
+        // Loud, because the silent version of this is what shipped: a curated
+        // key the catalogue has never heard of used to render a perfectly
+        // normal-looking input that threw away whatever was typed into it.
+        // Rows without a question to answer are not rendered at all (below).
+        if (missingKeys.length > 0) {
+          console.error(
+            `Life details: ${missingKeys.length} curated question(s) are missing from the catalogue — ` +
+              `their seed migration has not run, or they were added to lifeDetails.ts without one: ${missingKeys.join(', ')}`,
+          );
+        }
+
+        setRows(byKey);
+        setError(false);
+      } catch {
+        if (load === latestLoad.current) {
+          setError(true);
+        }
+      } finally {
+        if (load === latestLoad.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [authToken],
+  );
 
   useEffect(() => {
     void loadAnswers();
@@ -397,8 +557,12 @@ export function LifeDetailsSection() {
         headers: authHeaders(),
         body: JSON.stringify({ text: trimmed, question: { id: questionId } }),
       });
+      // Refresh behind the row, and clear what was typed only once the saved
+      // answer is there to replace it — clearing first left an empty field on
+      // screen for the length of the fetch.
+      await loadAnswers({ background: true });
       setDrafts((prev) => ({ ...prev, [questionKey]: '' }));
-      await loadAnswers();
+      onAnswersChanged?.();
     } catch {
       // Draft (if any) survives on failure so the user doesn't retype it.
     } finally {
@@ -466,9 +630,12 @@ export function LifeDetailsSection() {
         headers: authHeaders(),
         body: JSON.stringify({ text: trimmed }),
       });
+      // The editor stays (saving…) until the refreshed answer is in hand:
+      // closing it first showed the OLD answer again for the length of the fetch.
+      await loadAnswers({ background: true });
       setEditingKey(null);
       setEditDraft('');
-      await loadAnswers();
+      onAnswersChanged?.();
     } catch {
       // Stay in the editor with the typed text intact so it can be retried.
       setEditError("Couldn't save that. Try again.");
@@ -483,7 +650,7 @@ export function LifeDetailsSection() {
   };
 
   return (
-    <section>
+    <section ref={sectionRef}>
       <div className="mb-3 flex items-center gap-2">
         <NotebookPen className="h-5 w-5 text-muted-foreground" strokeWidth={1.5} />
         <h2 className="text-lg font-semibold">Life details</h2>
@@ -494,6 +661,7 @@ export function LifeDetailsSection() {
 
       {!loading && !error && (
         <div className="flex flex-col gap-4">
+          <ProvenanceLegend className="-mt-1" />
           {LIFE_DETAIL_THEMES.map((theme) => {
             // Only questions the catalogue actually returned a row for. An
             // input with no question behind it cannot save, so rendering one
@@ -527,14 +695,26 @@ export function LifeDetailsSection() {
                     const busy = submittingKeys.has(question.key);
 
                     return (
-                      <Row key={question.key} question={question}>
+                      <Row
+                        key={question.key}
+                        question={question}
+                        status={
+                          stacked && answer && editingKey !== question.key ? (
+                            <AnswerBadge
+                              question={question}
+                              answer={answer}
+                              onEdit={() => startEdit(question.key)}
+                            />
+                          ) : undefined
+                        }
+                      >
                         {answer && editingKey === question.key ? (
                           <AnswerEditor
                             question={question}
                             draft={editDraft}
                             busy={busy}
                             error={editError}
-                            onDraftChange={setEditDraft}
+                            onDraftChange={(value) => setEditDraft((prev) => clampAnswer(value, prev))}
                             onSave={(text) => void handleUpdate(question.key, row, text)}
                             onCancel={cancelEdit}
                           />
@@ -543,6 +723,7 @@ export function LifeDetailsSection() {
                             question={question}
                             answer={answer}
                             onEdit={() => startEdit(question.key)}
+                            showBadge={!stacked}
                           />
                         ) : (
                           // Same two-part shape as AnswerDisplay so the status
@@ -555,13 +736,21 @@ export function LifeDetailsSection() {
                                 draft={drafts[question.key] ?? ''}
                                 busy={busy}
                                 onDraftChange={(value) =>
-                                  setDrafts((prev) => ({ ...prev, [question.key]: value }))
+                                  setDrafts((prev) => ({
+                                    ...prev,
+                                    [question.key]: clampAnswer(value, prev[question.key]),
+                                  }))
                                 }
                                 onAnswer={(text) => void handleAnswer(question.key, row.id, text)}
                               />
                             </div>
 
-                            <AnswerProvenance answered={false} className="shrink-0 sm:mt-px" />
+                            {/* Not on a phone: the empty field already says there is no
+                                answer, and a marker under every one read as an error. */}
+                            <AnswerProvenance
+                              answered={false}
+                              className="hidden shrink-0 sm:mt-px sm:inline-flex"
+                            />
                           </div>
                         )}
                       </Row>

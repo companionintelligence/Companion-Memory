@@ -80,6 +80,26 @@ export type LineItemRecord = Record<
   string | number | boolean | null | undefined | ObjectIdentifierRef[]
 >;
 
+/**
+ * The `ci.events.status` values an importer may write: what the SOURCE says
+ * became of an event. A datasource states one as `metadata.eventStatus`; the
+ * push lifts it (`push/canonical.ts` toCanonical) and writes the column
+ * (`push/inputs.ts` toEventInput).
+ *
+ * A closed three of the column's nine values, the three RFC 5545 §3.8.1.11
+ * defines for a VEVENT and the three `TransformGoogleCalendar` maps. The rest
+ * (`completed`, `no_show`, `planned`, `skipped`, …) are the planner's to write.
+ * A value outside this list is dropped rather than sent: `events_status_check`
+ * would refuse it and fail the whole batch it rides in.
+ *
+ * `cancelled` is the one that matters to readers. The calendar, the planner and
+ * Known places leave it out through `LIVE_EVENT_SQL` (`DEAD_EVENT_STATUSES`);
+ * daily metrics and HBPE's schedule reconciliation each exclude it with a
+ * predicate of their own.
+ */
+export const IMPORTED_EVENT_STATUSES = ['confirmed', 'tentative', 'cancelled'] as const;
+export type ImportedEventStatus = (typeof IMPORTED_EVENT_STATUSES)[number];
+
 export type MetadataValue =
   | string
   | number
@@ -111,6 +131,27 @@ export interface EntityAttribute {
   name: string;
   value?: string | number | boolean | null;
   identity?: boolean;
+  /**
+   * The handle is this entity's, but not ITS ALONE: a fax, or a line another
+   * person's card in the same export also lists. It is still an identity — it
+   * is still how to reach them, and it still makes the entity a contact — but
+   * it is never the entity's KEY, because keying two people on one office
+   * number is what made them one Person. Set by the parser, which is the only
+   * place that can see the rest of the export; see
+   * `staging/identity.ts markSharedContactHandles`.
+   */
+  shared?: boolean;
+  /**
+   * The handle comes from a field an earlier revision of its parser did not
+   * read, so a row already minted for this entity was keyed without it. It is
+   * an identity and keys the entity like any other handle. Only
+   * `legacyEntityIdentityKey`, which names the key that older row carries,
+   * passes over it. Without the mark, a contact whose newly-read number sorts
+   * smallest would record as its old key one that no row was minted under, and
+   * the push, finding nothing there to move, would mint a second Person beside
+   * the first. See `staging/identity.ts legacyEntityIdentityKey`.
+   */
+  newSinceLegacyKey?: boolean;
 }
 export interface Entity {
   id?: string | number;
@@ -130,9 +171,14 @@ export interface Entity {
    * record is the set of them, not whichever arrived first.
    *
    * Values for a listed key are stored as a list of DISTINCT values in
-   * first-seen order (see persistence.ts mergeAccumulatedMetadata). Sources
+   * first-seen order (see staging/identity.ts mergeAccumulatedMetadata). Sources
    * should emit these keys as arrays so the shape is the same on the first
    * write as on the tenth, and should name them plurally to match.
+   *
+   * The declaration holds ACROSS imports too: it is kept on the staged row
+   * (`staged_entities.accumulate`), and the push unions these keys into the
+   * graph row an earlier import made instead of replacing them
+   * (graph/utils/ingestedProperties.ts).
    *
    * Unlisted keys keep the existing first-write-wins behavior.
    */

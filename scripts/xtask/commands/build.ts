@@ -40,14 +40,7 @@ export type Env = 'local' | 'staging' | 'production';
 export const VALID_ENVS: Env[] = ['local', 'staging', 'production'];
 
 export type ImageKey =
-  | 'api'
-  | 'gateway'
-  | 'setup-database'
-  | 'database'
-  | 'object-store'
-  | 'setup-secrets'
-  | 'summary'
-  | 'hbpe';
+  'api' | 'gateway' | 'setup-database' | 'database' | 'object-store' | 'setup-secrets' | 'summary' | 'hbpe';
 
 /** Build order — matches the pre-port Makefile exactly. */
 export const IMAGE_ORDER: ImageKey[] = [

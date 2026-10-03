@@ -107,6 +107,10 @@
       "__name": "LLM_FIRST_RESPONSE_TIMEOUT_MS",
       "__format": "json"
     },
+    "answerInferenceTimeoutMs": {
+      "__name": "LLM_ANSWER_INFERENCE_TIMEOUT_MS",
+      "__format": "json"
+    },
     "chat": {
       "groundedRecall": {
         "enabled": {
@@ -171,10 +175,15 @@
     "sidecarAuthSecret": "SIDECAR_AUTH_SECRET"
   },
   "embedding": {
-    "host": "OLLAMA_EMBED_HOST",
+    "apiBase": "LLM_EMBEDDING_API_BASE",
+    "legacyHost": "OLLAMA_EMBED_HOST",
     "model": "CI_EMBED_MODEL",
     "batchSize": {
       "__name": "CI_EMBED_BATCH_SIZE",
+      "__format": "json"
+    },
+    "maxInputChars": {
+      "__name": "CI_EMBED_MAX_INPUT_CHARS",
       "__format": "json"
     },
     "concurrency": {

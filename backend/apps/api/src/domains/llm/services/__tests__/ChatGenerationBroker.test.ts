@@ -31,6 +31,27 @@ function mockResponse() {
 }
 
 describe('ChatGenerationBroker', () => {
+  // The appliance gateway's generic `/api/` location buffers a proxied response
+  // by default, which turns a token stream into bursts. `/api/llm/generate` is
+  // unbuffered by config, but re-attaching to a turn in flight
+  // (`GET /llm/threads/:id/stream`) is not — the response has to say so itself.
+  it('tells a buffering proxy to pass the stream through, and exposes the thread id', () => {
+    const broker = new ChatGenerationBroker();
+    const { res } = mockResponse();
+
+    broker.pipeToResponse(res as never, 'thread-1');
+
+    expect(res.writeHead).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({
+        'Content-Type': 'text/event-stream',
+        'X-Accel-Buffering': 'no',
+        'X-Thread-Id': 'thread-1',
+      }),
+    );
+    expect(res.flushHeaders).toHaveBeenCalled();
+  });
+
   it('does not abort the generation signal when an HTTP viewer disconnects', () => {
     const broker = new ChatGenerationBroker();
     const signal = broker.signal('thread-1');
@@ -69,5 +90,23 @@ describe('ChatGenerationBroker', () => {
     broker.complete('thread-1');
 
     expect(res.end).toHaveBeenCalled();
+  });
+
+  it('replays tool calls that already happened to a viewer who attaches late', () => {
+    const broker = new ChatGenerationBroker();
+    broker.ensure('thread-1');
+    broker.publish('thread-1', { channel: Channel.TEXT, text: 'Let me look.' });
+    broker.publish('thread-1', {
+      channel: Channel.TOOL,
+      text: JSON.stringify([{ function: { name: 'places_find' } }]),
+    });
+
+    const { res, chunks } = mockResponse();
+    broker.pipeToResponse(res as never, 'thread-1');
+
+    const raw = Buffer.concat(chunks).toString('utf8');
+
+    expect(raw).toContain('Let me look.');
+    expect(raw.indexOf('Let me look.')).toBeLessThan(raw.indexOf('places_find'));
   });
 });

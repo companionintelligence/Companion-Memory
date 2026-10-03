@@ -76,7 +76,7 @@ export function migrationVersionsOnDisk(dir: string = resolveMigrationsDir()): s
 export function resolveMigrationsDir(): string {
   const suffix = path.join('db', 'postgres', 'migrations');
 
-  for (let dir = __dirname; ; ) {
+  for (let dir = __dirname; ;) {
     if (existsSync(path.join(dir, suffix))) {
       return path.join(dir, suffix);
     }

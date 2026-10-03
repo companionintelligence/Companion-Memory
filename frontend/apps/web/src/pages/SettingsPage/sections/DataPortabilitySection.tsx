@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react';
 
+import { isNativePlatform } from '@ci/common';
 import { Button, Card, Dialog, Input, Label } from '@ci/shadcn';
 import { Download, Upload } from '@ci/shadcn/icons';
 
+import { WebSignInRequired } from '@/components/WebSignInRequired';
 import { useAuth, useCurrentUser } from '@/hooks';
 import {
   downloadAccountExport,
@@ -33,6 +35,11 @@ export function DataPortabilitySection() {
 
   const email = user?.email ?? '';
   const matches = email.length > 0 && confirmEmail.trim().toLowerCase() === email.trim().toLowerCase();
+  // Export and import stream one very large file each way, and the native shell can do neither: it
+  // carries no file-save or share plugin, and the helpers fetch a relative `/api/...` — the app's own
+  // `capacitor://localhost` origin, not the Memory server — with no `x-api-key`. On the phone the export
+  // still reported "Export downloaded." with no file to show for it. So say so, rather than offer it.
+  const native = isNativePlatform();
 
   const handleExport = async () => {
     setExporting(true);
@@ -86,37 +93,47 @@ export function DataPortabilitySection() {
       </div>
 
       <div className="space-y-4">
-        <Card>
-          <Card.Content className="space-y-4 pt-6">
-            <div className="space-y-1">
-              <h3 className="text-sm font-medium">Export all data</h3>
-              <p className="text-sm text-muted-foreground">
-                Streams an NDJSON archive of your memories, files, graph, schedule, and settings. Large
-                accounts are supported without a single-file size cap.
-              </p>
-            </div>
-            <Button onClick={() => void handleExport()} disabled={exporting}>
-              <Download className="mr-1.5 h-4 w-4" strokeWidth={1.5} />
-              {exporting ? 'Preparing export…' : 'Export all my data'}
-            </Button>
-          </Card.Content>
-        </Card>
+        {native ? (
+          <WebSignInRequired>
+            Export and import move your whole Memory as one very large file, which this app cannot save or
+            open yet. Open Companion Memory in a web browser, sign in, and use Your data there to export or
+            restore it.
+          </WebSignInRequired>
+        ) : (
+          <>
+            <Card>
+              <Card.Content className="space-y-4 pt-6">
+                <div className="space-y-1">
+                  <h3 className="text-sm font-medium">Export all data</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Streams an NDJSON archive of your memories, files, graph, schedule, and settings. Large
+                    accounts are supported without a single-file size cap.
+                  </p>
+                </div>
+                <Button onClick={() => void handleExport()} disabled={exporting}>
+                  <Download className="mr-1.5 h-4 w-4" strokeWidth={1.5} />
+                  {exporting ? 'Preparing export…' : 'Export all my data'}
+                </Button>
+              </Card.Content>
+            </Card>
 
-        <Card>
-          <Card.Content className="space-y-4 pt-6">
-            <div className="space-y-1">
-              <h3 className="text-sm font-medium">Import data</h3>
-              <p className="text-sm text-muted-foreground">
-                Replaces your current Memory data with a CI Memory export file (.ndjson, or legacy .json).
-                This cannot be undone.
-              </p>
-            </div>
-            <Button variant="outline" onClick={() => setImportOpen(true)}>
-              <Upload className="mr-1.5 h-4 w-4" strokeWidth={1.5} />
-              Import from file
-            </Button>
-          </Card.Content>
-        </Card>
+            <Card>
+              <Card.Content className="space-y-4 pt-6">
+                <div className="space-y-1">
+                  <h3 className="text-sm font-medium">Import data</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Replaces your current Memory data with a CI Memory export file (.ndjson, or legacy .json).
+                    This cannot be undone.
+                  </p>
+                </div>
+                <Button variant="outline" onClick={() => setImportOpen(true)}>
+                  <Upload className="mr-1.5 h-4 w-4" strokeWidth={1.5} />
+                  Import from file
+                </Button>
+              </Card.Content>
+            </Card>
+          </>
+        )}
 
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
         {success ? <p className="text-sm text-muted-foreground">{success}</p> : null}

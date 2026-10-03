@@ -83,8 +83,7 @@ function boundEventNames(prototype: object): string[] {
     }
 
     const metadata = Reflect.getMetadata(EVENT_LISTENER_METADATA, descriptor.value) as
-      | Array<{ event: string }>
-      | undefined;
+      Array<{ event: string }> | undefined;
 
     for (const entry of metadata ?? []) {
       names.push(entry.event);

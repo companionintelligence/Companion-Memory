@@ -5,7 +5,12 @@ import { type Message as OllamaMessage, type ToolCall } from 'ollama';
 import { type RequestContext, type ServiceContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
-import { fenceUntrusted, untrustedBlock } from '@ci/common/prompt/untrustedBlock';
+import {
+  UntrustedMarkerScrubber,
+  fenceUntrusted,
+  stripUntrustedMarkers,
+  untrustedBlock,
+} from '@ci/common/prompt/untrustedBlock';
 import { Channel } from '@ci/common/rpc';
 import config from '@ci/configuration';
 // Deep import, not the `@ci/domains/agent` barrel: AgentModule already imports
@@ -18,20 +23,39 @@ import { Events, EventService, INTERACTIVE_JOB_PRIORITY } from '@ci/domains/even
 import { FileService } from '@ci/domains/files';
 import { ActionService } from '@ci/domains/intelligence';
 import { UserContextService } from '@ci/domains/memory';
+import { FileChunkService } from '@ci/domains/parsing';
 import { ACTIVE_TASK_STATUSES, TaskService } from '@ci/domains/planning';
 import { HbpeService } from '@ci/domains/predictions';
 import { SummaryService } from '@ci/domains/summaries';
 
+import {
+  ATTACHMENT_NOTES,
+  attachmentContentBudget,
+  attachmentNoRoomStub,
+  attachmentTextDemand,
+  classifyAttachment,
+  decodeAttachmentText,
+  documentTextDemand,
+  keptDocuments,
+  planDocument,
+  quoteDocumentText,
+  renderAttachmentBlock,
+  type AttachmentEntry,
+} from '../attachmentText';
 import { LLM_BACKGROUND_QUEUE, LLM_QUEUE, type ThreadGenerationStatus } from '../constants';
 import {
   MAX_CONTEXT_SHRINK_LEVEL,
   MAX_INLINE_IMAGES_PER_MESSAGE,
   MAX_INLINE_IMAGE_BYTES,
+  MAX_INLINE_TEXT_BYTES_PER_FILE,
+  MAX_PARSED_CHUNKS_PER_FILE,
+  MIN_INLINE_TEXT_BYTES,
   attachmentStub,
   isContextOverflowError,
   messageBytes,
   NUM_CTX_ENV_VAR,
   parseNumCtx,
+  planAttachmentTextAllowance,
   planContextAdmission,
   planInlineAttachments,
   resolveContextBudget,
@@ -40,10 +64,25 @@ import {
 import { ChatGenerateEvent, type ChatGeneratePayload } from '../events';
 import { isFirstResponseTimeout } from '../firstResponseDeadline';
 import { foldHistory } from '../foldHistory';
-import { THREAD_TITLE_SYSTEM_PROMPT, sidebarTitleFromModel } from '../threadTitle';
+import {
+  THREAD_TITLE_SYSTEM_PROMPT,
+  provisionalTitleFromMessage,
+  sidebarTitleFromModel,
+} from '../threadTitle';
+import {
+  TOOLS_OFF_BASE_PROMPT,
+  TOOLS_OFF_GUARD,
+  TOOLS_OFF_REFUSAL,
+  TOOLS_OFF_TURN_CONTEXT_HEADER,
+  TOOLS_OFF_TURN_REMINDER,
+  isWriteRequest,
+} from '../toolsOff';
 
 import { ChatGenerationBroker } from './ChatGenerationBroker';
 import { OllamaService, type ChatRequestContext } from './OllamaService';
+
+/** A file attached to a chat message that has bytes behind it. */
+type AttachedFile = NonNullable<Message['files']>[number] & { key: string };
 
 interface TurnContextOptions {
   leadingAssistantMessages?: OllamaMessage[];
@@ -51,6 +90,8 @@ interface TurnContextOptions {
   recallQuery?: string | null;
   /** Bytes the conversation left unspent, which the recall block may use. */
   recallBudgetBytes?: number;
+  /** Whether this turn has tools; when it has none the block ends with {@link TOOLS_OFF_TURN_REMINDER}. */
+  toolsEnabled?: boolean;
 }
 
 /**
@@ -182,6 +223,14 @@ export class ChatTurnService {
      * today's behaviour, not to a crash, when it is missing.
      */
     @Optional() private readonly moduleRef?: ModuleRef,
+    /**
+     * The text the parse pipeline extracted from a PDF or an Office document, which is how a file the
+     * model cannot read as bytes reaches it. Optional for the same reason as `moduleRef`: a caller
+     * that builds this service by hand has no container, and a document then reads as having no text
+     * available rather than crashing the turn. The app gets it from `ParsingModule`, which
+     * `LLMModule` imports; `ChatTurnService.di.test.ts` is what proves that stays true.
+     */
+    @Optional() private readonly fileChunkService?: FileChunkService,
   ) {
     this.logger.setContext(ChatTurnService.name);
   }
@@ -238,6 +287,20 @@ export class ChatTurnService {
 
         model = prepared.model;
 
+        // A turn with no tools cannot change anything, so a plain instruction to
+        // ("add a task…", "forget…") is answered here, in code, not by a model
+        // that will say "Okay." The model is never asked.
+        if (!prepared.enableTools && isWriteRequest(latestUserText(seededMessages))) {
+          this.logger.log('Refused a request to change data on a turn with no tools', {
+            threadId: payload.threadId,
+            model: prepared.model,
+          });
+          latestText = TOOLS_OFF_REFUSAL;
+          this.broker.publish(payload.threadId, { channel: Channel.TEXT, text: TOOLS_OFF_REFUSAL });
+
+          break;
+        }
+
         const stream = await this.ollamaService.chatStream(requestContext, prepared.messages, {
           model: prepared.model,
           signal,
@@ -247,20 +310,32 @@ export class ChatTurnService {
           maxOutputTokens: prepared.budget.reservedOutputTokens,
         });
 
+        // The fence markers are markup for the model; a small one echoes them
+        // into its reply. Held-back text is released before anything else is
+        // published, so what a person sees stays in the order it was produced.
+        const scrubber = new UntrustedMarkerScrubber();
+        const showText = (text: string) => {
+          if (text) {
+            latestText += text;
+            this.broker.publish(payload.threadId, { channel: Channel.TEXT, text });
+          }
+        };
+
         for await (const chunk of stream) {
           // Native Ollama can put thinking and content on the same chunk; vLLM
           // (OpenAI-compat) yields them as separate deltas. Handle both.
           if (chunk.message?.content) {
-            latestText += chunk.message.content;
-            this.broker.publish(payload.threadId, { channel: Channel.TEXT, text: chunk.message.content });
+            showText(scrubber.push(chunk.message.content));
           }
 
           if (chunk.message?.thinking) {
+            showText(scrubber.flush());
             latestThink += chunk.message.thinking;
             this.broker.publish(payload.threadId, { channel: Channel.THINK, text: chunk.message.thinking });
           }
 
           if (chunk.message?.tool_calls?.length) {
+            showText(scrubber.flush());
             this.broker.publish(payload.threadId, {
               channel: Channel.TOOL,
               text: JSON.stringify(chunk.message.tool_calls),
@@ -276,6 +351,8 @@ export class ChatTurnService {
             });
           }
         }
+
+        showText(scrubber.flush());
 
         // `chatStream` logs and swallows backend failures rather than throwing,
         // so an overflow reaches us as `stream.error` on an empty stream. Only
@@ -324,7 +401,13 @@ export class ChatTurnService {
           throw streamError;
         }
 
-        generated = stream.messages;
+        // What is stored is what was shown: the same echoed fence markers come
+        // out of the accumulated rows the live stream already had them removed from.
+        generated = stream.messages.map((message) =>
+          message.role === 'assistant' && message.content
+            ? { ...message, content: stripUntrustedMarkers(message.content) }
+            : message,
+        );
 
         break;
       }
@@ -382,7 +465,22 @@ export class ChatTurnService {
             // LLM_BACKGROUND_QUEUE_OPTIONS is `policy: 'short'`, which is
             // queue-wide — a keyless send here would collapse with every other
             // thread's summarization under COALESCE(singleton_key,'').
-            { queue: LLM_BACKGROUND_QUEUE, singletonKey: `chat-summarize:${thread.id}` },
+            //
+            // The interactive tier, because pg-boss serves equal priorities in
+            // arrival order and this queue also carries the answer-inference
+            // cron's jobs — one per unanswered question, hundreds at a time, at
+            // the default tier. A title is one short call and the only job here
+            // a person is looking at (the thread list reads "Chat · <time>"
+            // until it lands); without this it waited behind every one of them.
+            // Priority only reorders THIS queue: the lane it shares with
+            // image-description and the other background queues is still
+            // first come, first served, so a title can still wait out the one
+            // job already running there.
+            {
+              queue: LLM_BACKGROUND_QUEUE,
+              singletonKey: `chat-summarize:${thread.id}`,
+              priority: INTERACTIVE_JOB_PRIORITY,
+            },
           );
         }
       }
@@ -431,13 +529,38 @@ export class ChatTurnService {
 
     const name = sidebarTitleFromModel(result.message.content);
 
+    // A reply with nothing usable in it (empty, only a thinking trace, only punctuation) is a FAILURE, not a quiet
+    // success: returning here completed the job, so the queue never retried and the thread stayed untitled — 5 of 8
+    // title jobs on the iOS QA re-test, each "done" in about 0.15 s. Throwing hands it back to the queue's bounded
+    // retries; the listener falls back to the person's first words only once those are spent.
     if (!name) {
-      return;
+      throw new Error(
+        `The model returned no usable thread title (reply: ${JSON.stringify((result.message.content ?? '').slice(0, 80))})`,
+      );
     }
 
     await this.threadService.update(context, thread.id, { name });
 
     this.logger.log('Processed chat summarization event', { payload, name });
+  }
+
+  /**
+   * The title of last resort: the person's own first message, cut at a word boundary (see
+   * `provisionalTitleFromMessage`). Written only if the thread is STILL unnamed — `nameIfUnnamed` is one conditional
+   * UPDATE, so a real title that lands meanwhile always wins. Returns whether it wrote.
+   */
+  async nameThreadFromFirstMessage(payload: { ownerId: string; threadId: string }): Promise<boolean> {
+    const context = toServiceContext({ userId: payload.ownerId });
+    const messages = await this.messageService.findByThreadId(context, payload.threadId);
+    const name = provisionalTitleFromMessage(
+      messages.find((message) => message.role === 'user' && message.content?.trim())?.content,
+    );
+
+    if (!name) {
+      return false;
+    }
+
+    return this.threadService.nameIfUnnamed(context, payload.threadId, name);
   }
 
   enqueueGenerate(payload: ChatGeneratePayload): Promise<string[]> {
@@ -544,21 +667,40 @@ export class ChatTurnService {
         ? ((await this.ollamaService.resolveChatContextTokens?.(payload.model)) ?? null)
         : null;
     const budget = resolveContextBudget({ shrinkLevel: options.shrinkLevel, measuredContextTokens });
+
+    // Which messages re-send their attachments is settled over the whole thread, BEFORE admission,
+    // because the text of an attachment (unlike an image) costs what it weighs and so has to be
+    // counted when the thread is fitted to the budget. The newest messages that carry attachments
+    // are the newest the window can hold, so deciding here and then dropping what admission drops
+    // picks the same messages as deciding afterwards did. Only the file ROWS are read here — sizes
+    // and types — never the bytes: those are still fetched after admission, and only for a message
+    // that survived it.
+    const inlineAttachments = planInlineAttachments(
+      foldedMessages.map((message) => message.files?.length ?? 0),
+    );
+    const attachmentTextBytes = planAttachmentTextAllowance(
+      foldedMessages.map((message, index) =>
+        inlineAttachments[index] ? attachmentTextDemand(message.files) : 0,
+      ),
+      budget.promptBudgetBytes,
+    );
     const plan = planContextAdmission(
-      foldedMessages.map((message) => ({
+      foldedMessages.map((message, index) => ({
         role: message.role,
-        bytes: messageBytes(message.content, message.toolCalls),
+        bytes: messageBytes(message.content, message.toolCalls) + attachmentTextBytes[index],
       })),
       budget.promptBudgetBytes,
     );
 
     const admittedMessages = plan.admitted.map((index) => foldedMessages[index]);
-    const inlineAttachments = planInlineAttachments(
-      admittedMessages.map((message) => message.files?.length ?? 0),
-    );
     const inputMessages: OllamaMessage[] = await Promise.all(
-      admittedMessages.map((message, index) =>
-        this.resolveMessage(requestContext, message, inlineAttachments[index]),
+      plan.admitted.map((index) =>
+        this.resolveMessage(
+          requestContext,
+          foldedMessages[index],
+          inlineAttachments[index],
+          attachmentTextBytes[index],
+        ),
       ),
     );
 
@@ -583,11 +725,12 @@ export class ChatTurnService {
     // preamble) goes into `turnContext` instead, which is injected just before
     // the newest user turn — see `insertTurnContext`.
     const systemPrompt = options.systemPromptEnabled
-      ? await this.buildSystemPrompt(requestContext)
-      : await this.buildL0OnlySystemPrompt(requestContext);
+      ? await this.buildSystemPrompt(requestContext, enableTools)
+      : await this.buildL0OnlySystemPrompt(requestContext, enableTools);
 
     const turnContext = options.systemPromptEnabled
       ? await this.buildTurnContext(requestContext, {
+          toolsEnabled: enableTools,
           leadingAssistantMessages,
           recallQuery: latestUserText(admittedMessages),
           // The recall block is the only part of the turn context whose size is
@@ -623,7 +766,8 @@ export class ChatTurnService {
       admittedBytes: plan.admittedBytes,
       systemPromptBytes,
       systemPromptOverReserve: systemPromptBytes > budget.reservedSystemTokens,
-      inlineAttachmentMessages: inlineAttachments.filter(Boolean).length,
+      inlineAttachmentMessages: plan.admitted.filter((index) => inlineAttachments[index]).length,
+      attachmentTextBytes: plan.admitted.reduce((total, index) => total + attachmentTextBytes[index], 0),
       estimatedPromptTokensUpperBound: systemPromptBytes + plan.admittedBytes,
       overBudget: plan.overBudget,
     });
@@ -634,46 +778,196 @@ export class ChatTurnService {
   /**
    * Hydrate one persisted row into a model message.
    *
-   * `inlineImages` is the attachment policy talking. When it is false the file
+   * `inlineAttachments` is the attachment policy talking. When it is false the file
    * bytes are NOT fetched — the message says in text that attachments exist
    * instead. This is what stops a thread with three photos from re-uploading
    * three full images from Minio on every single turn, forever.
+   *
+   * What an attachment becomes depends on what it is (`classifyAttachment`). An
+   * image goes to the model as image bytes, which is also what makes a turn a
+   * vision turn. Everything else goes in as TEXT, in the message, inside the
+   * untrusted-content fence, bounded by `textAllowanceBytes`: a model backend
+   * rejects bytes that are not an image, and that rejection used to surface as
+   * an empty turn and the generic fallback reply, with the file never read.
    */
   private async resolveMessage(
     context: RequestContext,
     message: Message,
-    inlineImages = true,
+    inlineAttachments = true,
+    textAllowanceBytes = 0,
   ): Promise<OllamaMessage> {
     const serviceContext = toServiceContext(context);
-    const attachments = (message.files ?? []).filter(
-      (file): file is typeof file & { key: string } => file.key != null,
-    );
+    const attachments = (message.files ?? []).filter((file): file is AttachedFile => file.key != null);
 
     let images: Uint8Array[] = [];
     let omitted = attachments.length;
+    let attachmentBlock = '';
+    let noRoom = 0;
 
-    if (inlineImages && attachments.length > 0) {
+    if (inlineAttachments && attachments.length > 0) {
       // Newest-last ordering: keep the most recent attachments on the message,
       // and skip anything over the per-image cap WITHOUT fetching it — `size`
       // is on the row, so an oversized photo costs no object read.
       const selected = attachments
+        .filter((file) => classifyAttachment(file) === 'image')
         .slice(-MAX_INLINE_IMAGES_PER_MESSAGE)
         .filter((file) => (file.size ?? 0) <= MAX_INLINE_IMAGE_BYTES);
 
       images = await Promise.all(
         selected.map((file) => this.fileService.getFileContent(serviceContext, file.key)),
       );
-      omitted = attachments.length - images.length;
+
+      // A file that is not an image is either given as text or, when its text is
+      // not to be had, SAID not to be: either way the model is told about it, so
+      // it counts as shown. Only what is over the per-message cap is "omitted".
+      const documents = keptDocuments(attachments);
+      let documentsShown = 0;
+
+      if (documents.length > 0) {
+        const entries = await this.readDocumentEntries(serviceContext, documents, textAllowanceBytes);
+
+        if (entries) {
+          attachmentBlock = renderAttachmentBlock(entries);
+          documentsShown = documents.length;
+        } else {
+          noRoom = documents.length;
+        }
+      }
+
+      omitted = attachments.length - images.length - documentsShown - noRoom;
     }
 
-    const stub = attachmentStub(omitted);
-    const content = stub ? [message.content, stub].filter(Boolean).join('\n\n') : message.content;
+    // The files come BEFORE the person's own words, so the last thing the model reads is what the
+    // person typed and not a document somebody else wrote — the order the Live snapshots message
+    // already keeps relative to the newest question.
+    const stubs = [attachmentStub(omitted), attachmentNoRoomStub(noRoom)].filter(Boolean);
+    const content =
+      attachmentBlock || stubs.length > 0
+        ? [attachmentBlock, message.content, ...stubs].filter(Boolean).join('\n\n')
+        : message.content;
 
     return {
       role: message.role,
       content,
       ...(images.length > 0 && { images }),
       ...(message.toolCalls && { tool_calls: message.toolCalls as unknown as ToolCall[] }),
+    };
+  }
+
+  /**
+   * The text of a message's non-image attachments, one entry per file, for the
+   * message's prompt; or null when `allowanceBytes` does not even cover the fence
+   * and a header for each file, so there is no block to put them in.
+   *
+   * It never throws. A file that cannot be read becomes an entry that says so,
+   * because an attachment must not be able to end a turn: not by a storage
+   * hiccup, not by a parse that is still running, not by a file that is not
+   * text. The model is then told what the person attached and why it has no
+   * text, and can say so.
+   */
+  private async readDocumentEntries(
+    context: ServiceContext,
+    documents: readonly AttachedFile[],
+    allowanceBytes: number,
+  ): Promise<AttachmentEntry[] | null> {
+    let remaining = attachmentContentBudget(documents, allowanceBytes);
+
+    if (remaining < 0) {
+      return null;
+    }
+
+    const entries: AttachmentEntry[] = [];
+
+    for (const file of documents) {
+      const source = planDocument(file, classifyAttachment(file) === 'text' ? 'text' : 'other');
+
+      if (source.from === 'none') {
+        entries.push({ file, note: source.note });
+
+        continue;
+      }
+
+      // Too little room to be worth starting on, unless the whole file is smaller than that.
+      if (remaining < Math.min(MIN_INLINE_TEXT_BYTES, documentTextDemand(file))) {
+        entries.push({ file, note: ATTACHMENT_NOTES.noRoom });
+
+        continue;
+      }
+
+      try {
+        const read =
+          source.from === 'object'
+            ? await this.readObjectText(context, file)
+            : await this.readParsedText(context, file);
+
+        if ('note' in read) {
+          entries.push({ file, note: read.note });
+
+          continue;
+        }
+
+        const quoted = quoteDocumentText(read.text, Math.min(MAX_INLINE_TEXT_BYTES_PER_FILE, remaining));
+
+        if (quoted.lines.length === 0) {
+          entries.push({ file, note: ATTACHMENT_NOTES.empty });
+
+          continue;
+        }
+
+        remaining -= quoted.bytes;
+        entries.push({
+          file,
+          lines: quoted.lines,
+          ...((quoted.truncated || read.more) && { note: ATTACHMENT_NOTES.truncated }),
+        });
+      } catch (error) {
+        this.logger.warn('Could not read an attachment for the prompt; telling the model so', {
+          fileId: file.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        entries.push({ file, note: ATTACHMENT_NOTES.unavailable });
+      }
+    }
+
+    return entries;
+  }
+
+  /** A text file, read out of object storage. {@link planDocument} has already checked its size. */
+  private async readObjectText(
+    context: ServiceContext,
+    file: AttachedFile,
+  ): Promise<{ text: string; more: boolean } | { note: string }> {
+    const text = decodeAttachmentText(await this.fileService.getFileContent(context, file.key));
+
+    return text === null ? { note: ATTACHMENT_NOTES.binary } : { text, more: false };
+  }
+
+  /** What the parse pipeline extracted from a file: its first chunks, in reading order. */
+  private async readParsedText(
+    context: ServiceContext,
+    file: AttachedFile,
+  ): Promise<{ text: string; more: boolean } | { note: string }> {
+    if (!this.fileChunkService) {
+      return { note: ATTACHMENT_NOTES.unavailable };
+    }
+
+    // One more than is used, to know whether the file goes on past what was read.
+    const chunks = await this.fileChunkService.findLeadingByFileId(
+      context,
+      file.id,
+      MAX_PARSED_CHUNKS_PER_FILE + 1,
+    );
+
+    if (chunks.length === 0) {
+      return { note: ATTACHMENT_NOTES.noText };
+    }
+
+    return {
+      text: chunks
+        .slice(0, MAX_PARSED_CHUNKS_PER_FILE)
+        .map((chunk) => chunk.content)
+        .join('\n\n'),
+      more: chunks.length > MAX_PARSED_CHUNKS_PER_FILE,
     };
   }
 
@@ -711,7 +1005,18 @@ export class ChatTurnService {
     return [syntheticActionMessage, ...messages];
   }
 
-  private async buildL0OnlySystemPrompt(context: RequestContext): Promise<string | null> {
+  private async buildL0OnlySystemPrompt(
+    context: RequestContext,
+    toolsEnabled = true,
+  ): Promise<string | null> {
+    const l0 = await this.buildL0Context(context);
+
+    // The minimal prompt has no base instructions to rewrite, but a turn with no
+    // tools must still say so: this is the only text that can tell the model.
+    return toolsEnabled ? l0 : [l0, TOOLS_OFF_GUARD].filter(Boolean).join('\n\n---\n\n');
+  }
+
+  private async buildL0Context(context: RequestContext): Promise<string | null> {
     if (!context.userId) {
       return null;
     }
@@ -738,7 +1043,7 @@ export class ChatTurnService {
    * L0 dossier. Nothing that changes between turns of the same conversation
    * belongs here — see {@link buildTurnContext}.
    */
-  private async buildSystemPrompt(context: RequestContext): Promise<string> {
+  private async buildSystemPrompt(context: RequestContext, toolsEnabled = true): Promise<string> {
     const basePrompt = `You are Companion, a helpful AI assistant with access to various tools and information about the user.
     You are designed to take in various data sources that the user connects you to (via Sources) and help the user with not just everyday tasks, but with their pursuit of happiness.
 
@@ -775,27 +1080,33 @@ Communication style:
 - Please be as concise as possible while still conveying substantially all information relevant to any question.
 - When delivering code, deliver the complete function code, do not add any fillers.`;
 
+    // A turn with no tools gets the tool-less twin of the base prompt, so
+    // nothing in it advertises a toolbox the turn does not have, and ends on
+    // the rules for answering without one — after the user's context, where a
+    // small model attends to them best. With tools the prompt is unchanged.
+    const head = toolsEnabled ? basePrompt : TOOLS_OFF_BASE_PROMPT;
+    const assemble = (...sections: string[]): string =>
+      (toolsEnabled ? sections : [...sections, TOOLS_OFF_GUARD]).join('\n\n---\n\n');
+
     if (!context.userId) {
-      return basePrompt;
+      return assemble(head);
     }
 
     try {
       const userContext = await this.userContextService.getUserContextForLLM(context.userId);
 
       if (!userContext) {
-        return basePrompt;
+        return assemble(head);
       }
 
-      return [basePrompt, this.userContextService.formatContextForSystemPrompt(userContext)].join(
-        '\n\n---\n\n',
-      );
+      return assemble(head, this.userContextService.formatContextForSystemPrompt(userContext));
     } catch (error) {
       this.logger.warn('Failed to fetch user context for system prompt', {
         userId: context.userId,
         error: error instanceof Error ? error.message : String(error),
       });
 
-      return basePrompt;
+      return assemble(head);
     }
   }
 
@@ -824,7 +1135,16 @@ Communication style:
       return null;
     }
 
-    return [TURN_CONTEXT_HEADER, ...sections].join('\n\n');
+    // Last, after the fence: the final words a tool-less model reads before the
+    // question, and our own instruction rather than data, so outside the region.
+    if (options?.toolsEnabled === false) {
+      sections.push(TOOLS_OFF_TURN_REMINDER);
+    }
+
+    return [
+      options?.toolsEnabled === false ? TOOLS_OFF_TURN_CONTEXT_HEADER : TURN_CONTEXT_HEADER,
+      ...sections,
+    ].join('\n\n');
   }
 
   /**

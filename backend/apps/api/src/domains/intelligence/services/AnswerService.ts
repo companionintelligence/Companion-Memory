@@ -4,7 +4,7 @@ import { In, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
-import { computeChunkSize } from '@ci/common/persistence';
+import { computeChunkSize, keysetSeek } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { AnswerCreatedEvent, AnswerUpdatedEvent, AnswerRemovedEvent } from '@ci/domains/intelligence/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
@@ -13,6 +13,17 @@ import { Answer, AnswerEntity } from '../entities/AnswerEntity';
 import type { CreateAnswerDto, UpdateAnswerDto } from '../types';
 
 import { QuestionService } from './QuestionService';
+
+/**
+ * `ci.answers.answer_method` for words a person typed. `update` has always
+ * stamped it on a user correction; `create` left it NULL, so the same answer
+ * read differently depending on whether it had been edited yet. NULL is also not
+ * "answered" to the two inference selectors (`answer_method IN ('user',
+ * 'inferred')` in QuestionService.findUnansweredByUserId and
+ * SmartRotationListener), so a question the person had already answered by hand
+ * kept being offered to the model, which then discarded its own answer.
+ */
+const USER_ANSWER_METHOD = 'user';
 
 /**
  * Hourly UTC per-user answer count. Declared locally so this domain carries
@@ -53,6 +64,16 @@ export class AnswerService {
   ): Promise<Answer> {
     const { emitCreated = true } = options;
 
+    // No method named, and no source other than the user's own (the column's
+    // default is 'user_input'): this is a typed answer. An explicit method — the
+    // inference writer's, a survey's — is never overridden, and neither is a row
+    // whose source says someone else wrote it.
+    const answerMethod =
+      data.answerMethod ??
+      (data.answerSource === undefined || data.answerSource === 'user_input'
+        ? USER_ANSWER_METHOD
+        : undefined);
+
     const instance = this.answerRepository.create({
       id: data.id ?? uuidv7(),
       answer: data.text,
@@ -62,7 +83,7 @@ export class AnswerService {
       user: {
         id: context.userId,
       },
-      ...(data.answerMethod !== undefined ? { answerMethod: data.answerMethod } : {}),
+      ...(answerMethod !== undefined ? { answerMethod } : {}),
       ...(data.answerSource !== undefined ? { answerSource: data.answerSource } : {}),
       ...(data.answerConfidence !== undefined ? { answerConfidence: data.answerConfidence } : {}),
       ...(data.answerRationale !== undefined ? { answerRationale: data.answerRationale } : {}),
@@ -115,6 +136,9 @@ export class AnswerService {
       this.answerRepository.create({
         id: item.id ?? uuidv7(),
         answer: item.text,
+        // The batch form of `create`: rows get the column's default source
+        // ('user_input'), so they get the typed answer's method too.
+        answerMethod: item.answerMethod ?? USER_ANSWER_METHOD,
         question: {
           id: item.question.id,
         },
@@ -401,20 +425,19 @@ export class AnswerService {
       query = query.andWhere('answer.answered_at <= :endTime', { endTime: options.endTime });
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in
-    // (answered_at DESC, answer_id DESC) — see ContentService.getEntitiesForContents.
+    // Composite keyset: page strictly past (afterTime, afterId) in (answered_at, answer_id), in
+    // `order` — see keysetSeek.
     // Answers order by answered_at, which is also what getEntityTimestamp sorts them on.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(answer.answered_at < :afterTime OR (answer.answered_at = :afterTime AND answer.answer_id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('answer.answered_at', 'answer.answer_id', order, options.afterTime, options.afterId),
       );
     }
 
-    // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query
-      .orderBy('answer.answered_at', options.order ?? 'DESC')
-      .addOrderBy('answer.answer_id', 'DESC');
+    // Deterministic tiebreak so same-timestamp rows page consistently: the id runs the way the time does.
+    query = query.orderBy('answer.answered_at', order).addOrderBy('answer.answer_id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);

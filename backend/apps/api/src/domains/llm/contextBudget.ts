@@ -363,12 +363,65 @@ export function attachmentStub(count: number): string {
 }
 
 /**
+ * Attachment TEXT — a text file, or the parsed text of a PDF — is the opposite case to an image.
+ *
+ * An image is a few hundred tokens to a vision model however many megabytes it is, so it is bounded
+ * by its own rules and kept out of the byte budget. Text costs what it weighs: every byte of it is
+ * prompt. So it is bounded three ways, and the third is what makes the first two safe on a small
+ * window: a cap per file, a cap on how many files a message may inline, and a share of THIS turn's
+ * prompt budget that all of it together may take ({@link INLINE_TEXT_BUDGET_SHARE}). The share is
+ * set aside from the history before history is admitted, so a thread that has filled its window
+ * still has room for the file the person has just attached to the question they are asking.
+ */
+export const MAX_INLINE_DOCUMENTS_PER_MESSAGE = 4;
+/** The most of one file's text that goes into the prompt, fence and line prefixes included. */
+export const MAX_INLINE_TEXT_BYTES_PER_FILE = 32 * 1024;
+/** The largest text object that is read whole out of object storage; a bigger one is read as parsed text or not at all. */
+export const MAX_INLINE_TEXT_FETCH_BYTES = 1024 * 1024;
+/** How many parsed chunks of one file are read for the prompt, however small they are. */
+export const MAX_PARSED_CHUNKS_PER_FILE = 64;
+export const INLINE_TEXT_BUDGET_SHARE = 0.75;
+/** Less room than this for a file's text is not worth a header, so the file is left out and said to be. */
+export const MIN_INLINE_TEXT_BYTES = 128;
+
+/**
+ * How many bytes of the prompt budget each message's attachment text may take.
+ *
+ * Newest first, because the newest message is the one being asked about: it claims what it needs up
+ * to the turn's share, and an older message that still carries its attachments gets what is left.
+ * The answer is added to the message's own bytes when the conversation is admitted, which is how
+ * the history that fits shrinks to make room, and it is the ceiling the message's attachment block
+ * is then built to — never a promise to fill it.
+ *
+ * @param demands the most each message could use (0 when it has no attachment text), chronological.
+ */
+export function planAttachmentTextAllowance(demands: readonly number[], promptBudgetBytes: number): number[] {
+  const allowances = demands.map(() => 0);
+  let remaining = Math.max(0, Math.floor(promptBudgetBytes * INLINE_TEXT_BUDGET_SHARE));
+
+  for (let index = demands.length - 1; index >= 0 && remaining > 0; index -= 1) {
+    const granted = Math.min(Math.max(0, demands[index]), remaining);
+
+    allowances[index] = granted;
+    remaining -= granted;
+  }
+
+  return allowances;
+}
+
+/**
  * True when the backend refused the call because the prompt did not fit its
  * context window.
  *
  * `LLM_QUEUE_OPTIONS` sets `retryLimit: 3`, so without this an overflow is
  * replayed verbatim three times — three guaranteed failures at full prefill
  * cost. Classified, it becomes a retry with a smaller window instead.
+ *
+ * Matched on wording because every backend words it differently: Ollama and
+ * vLLM say "context length", OpenAI `context_length_exceeded`, llama.cpp's
+ * server (so Lemonade) "the request exceeds the available context size" with
+ * type `exceed_context_size_error`, and TGI "`inputs` tokens + `max_new_tokens`
+ * must be <= N".
  */
 export function isContextOverflowError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -377,10 +430,13 @@ export function isContextOverflowError(error: unknown): boolean {
   return (
     lower.includes('context length') ||
     lower.includes('context window') ||
+    lower.includes('context size') ||
     lower.includes('maximum context') ||
     lower.includes('context_length_exceeded') ||
+    lower.includes('exceed_context_size') ||
     lower.includes('too many tokens') ||
     (lower.includes('prompt') && lower.includes('too long')) ||
-    (lower.includes('exceeds') && lower.includes('token'))
+    (lower.includes('exceeds') && lower.includes('token')) ||
+    (lower.includes('max_new_tokens') && lower.includes('must be <='))
   );
 }

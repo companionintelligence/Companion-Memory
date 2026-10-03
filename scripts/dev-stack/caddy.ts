@@ -13,6 +13,11 @@ import { note, ok } from './log';
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Tries per admin call when the connection fails, pausing 150 ms, 300 ms, ...
+ * between them: about 1.5 s in all, enough to ride out a Caddy reload. */
+const MAX_ATTEMPTS = 5;
+const backoff = (attempt: number): Promise<void> => delay(150 * attempt);
+
 /** Caddy resets in-flight admin connections while it reloads the HTTP app to
  * bring up a new :443 listener (and the HTTP/3 UDP listener) — the first
  * mutating call that introduces the listener typically lands but the socket is
@@ -30,6 +35,23 @@ function isTransientError(err: unknown): boolean {
     /socket hang up/i.test(message)
   );
 }
+
+/** Caddy answered, and refused: a non-2xx status. */
+class CaddyAdminError extends Error {
+  constructor(
+    method: string,
+    urlPath: string,
+    readonly status: number,
+    readonly body: string,
+  ) {
+    super(`Caddy admin ${method} ${urlPath} returned ${status} ${body}`);
+  }
+}
+
+/** PUT creates and never replaces, so Caddy answers it 409 "key already exists"
+ * when the key is there. For a caller ensuring that the key exists, that is done. */
+const isAlreadyExists = (err: unknown): boolean =>
+  err instanceof CaddyAdminError && err.status === 409 && /already exists/.test(err.body);
 
 export type CaddyRoute = {
   '@id'?: string;
@@ -106,6 +128,14 @@ export class CaddyClient {
           port: this.port,
           method,
           path: urlPath,
+          // A fresh connection per call, never a pooled one. Node's default
+          // agent keeps sockets alive (since Node 19), and up() blocks the event
+          // loop in spawnSync for minutes between two admin calls (compose,
+          // migrate). Caddy's admin server drops an idle socket after 60 s, Node
+          // cannot read that FIN while blocked, and the next call went out on
+          // the dead socket and was reset. Admin calls are few; keep-alive saves
+          // nothing.
+          agent: false,
           headers:
             payload === undefined
               ? {}
@@ -118,6 +148,10 @@ export class CaddyClient {
           let data = '';
 
           res.on('data', (chunk) => (data += chunk));
+          // A connection cut mid-answer is reported here (ECONNRESET, so it
+          // is retried), and only to a listener: without one the call could
+          // stay pending forever.
+          res.on('error', reject);
           res.on('end', () =>
             resolve({
               status: res.statusCode ?? 0,
@@ -144,15 +178,15 @@ export class CaddyClient {
    * bring up the :443 listener. `verify`, when given, reports whether the change
    * already took effect: a reset often still applies the config, and the call is
    * a non-idempotent append (POST), so we must not blindly retry and duplicate
-   * it — if verify() is true we treat the reset as success instead. */
+   * it — if verify() is true we treat the reset as success instead. If verify()
+   * cannot read Caddy either, there is no telling, so we give up rather than
+   * retry. */
   private async send(
     method: string,
     urlPath: string,
     body?: unknown,
     verify?: () => Promise<boolean>,
   ): Promise<void> {
-    const maxAttempts = 5;
-
     for (let attempt = 1; ; attempt++) {
       let res: AdminResponse;
 
@@ -160,12 +194,26 @@ export class CaddyClient {
         res = await this.request(method, urlPath, body);
       } catch (err) {
         // A reset may have still applied the change; if so, we're done.
-        if (verify && (await verify().catch(() => false))) {
-          return;
+        if (verify) {
+          let applied: boolean;
+
+          try {
+            applied = await verify();
+          } catch (verifyErr) {
+            throw new Error(
+              `Caddy admin ${method} ${urlPath} failed, and reading back whether it applied failed too; ` +
+                `is Caddy running on :${this.port}?`,
+              { cause: verifyErr },
+            );
+          }
+
+          if (applied) {
+            return;
+          }
         }
 
-        if (isTransientError(err) && attempt < maxAttempts) {
-          await delay(150 * attempt);
+        if (isTransientError(err) && attempt < MAX_ATTEMPTS) {
+          await backoff(attempt);
           continue;
         }
 
@@ -178,14 +226,13 @@ export class CaddyClient {
         return;
       }
 
-      throw new Error(`Caddy admin ${method} ${urlPath} returned ${res.status} ${res.text}`);
+      throw new CaddyAdminError(method, urlPath, res.status, res.text);
     }
   }
 
-  /** Whether the admin API answers at all. config() deliberately swallows a dead
-   * admin socket and returns {}, which is indistinguishable from "running but
-   * unconfigured" — callers that need to tell the two apart (to say "start Caddy"
-   * versus "no stacks up") probe with this first. */
+  /** Whether the admin API answers at all, in one try. config() also fails on a
+   * dead admin socket, but only after retrying; callers that just want to say
+   * "start Caddy" up front (rather than "no stacks up") probe with this first. */
   async reachable(): Promise<boolean> {
     try {
       const res = await this.request('GET', '/config/');
@@ -196,31 +243,48 @@ export class CaddyClient {
     }
   }
 
+  /** The whole config, `{}` when Caddy has none.
+   *
+   * A read that fails is retried as send() retries, and if it keeps failing it
+   * throws. It is never passed off as an empty config, because every caller acts
+   * on what it reads: ensureServer() took a failed read for "no server yet" and
+   * PUT one, which Caddy refuses with a 409 while another stack's server is up. */
   async config(): Promise<CaddyConfig> {
     // A plain GET on /config/ always returns 200 (literal `null` when
     // unconfigured), so we read whole-config state rather than probing deep
     // paths/@ids that 404 and make Caddy log scary errors during normal flow.
-    let res: AdminResponse;
+    for (let attempt = 1; ; attempt++) {
+      let res: AdminResponse;
 
-    try {
-      res = await this.request('GET', '/config/');
-    } catch {
-      return {};
-    }
+      try {
+        res = await this.request('GET', '/config/');
+      } catch (err) {
+        if (isTransientError(err) && attempt < MAX_ATTEMPTS) {
+          await backoff(attempt);
+          continue;
+        }
 
-    if (res.status !== 200) {
-      return {};
-    }
+        throw new Error(`Caddy admin GET /config/ failed; is Caddy running on :${this.port}?`, {
+          cause: err,
+        });
+      }
 
-    const text = res.text.trim();
-    if (!text || text === 'null') {
-      return {};
-    }
+      if (res.status !== 200) {
+        throw new CaddyAdminError('GET', '/config/', res.status, res.text);
+      }
 
-    try {
-      return JSON.parse(text);
-    } catch {
-      return {};
+      const text = res.text.trim();
+      if (!text || text === 'null') {
+        return {};
+      }
+
+      try {
+        return JSON.parse(text);
+      } catch (err) {
+        throw new Error(`Caddy admin GET /config/ returned a body that is not JSON: ${text.slice(0, 200)}`, {
+          cause: err,
+        });
+      }
     }
   }
 
@@ -233,12 +297,22 @@ export class CaddyClient {
 
   /** Create the shared :443 server if it isn't there yet. */
   async ensureServer(): Promise<void> {
-    if ((await this.server()) === undefined) {
+    if ((await this.server()) !== undefined) {
+      return;
+    }
+
+    try {
       await this.send('PUT', `/config/apps/http/servers/${this.serverName}`, {
         listen: [':443'],
         routes: [],
         tls_connection_policies: [{}],
       });
+    } catch (err) {
+      // It was created after our read, by another worktree's `make dev` or by
+      // this very PUT before a reset made send() retry it. Either way it's there.
+      if (!isAlreadyExists(err)) {
+        throw err;
+      }
     }
   }
 
@@ -290,27 +364,41 @@ export class CaddyClient {
   // --- tls automation --------------------------------------------------------
 
   /** Ensure apps.tls.automation.policies exists as an array, creating only the
-   * missing level so we never clobber existing tls config. */
+   * missing level so we never clobber existing tls config. A 409 means the level
+   * we PUT was created after our read; unlike ensureServer() we can't stop there,
+   * because what is beneath it may still be missing, so read again. */
   private async ensureTlsPolicies(): Promise<void> {
-    const cfg = await this.config();
-    const tls = cfg.apps?.tls;
+    for (let attempt = 1; ; attempt++) {
+      const cfg = await this.config();
+      const tls = cfg.apps?.tls;
 
-    if (Array.isArray(tls?.automation?.policies)) {
-      return;
-    }
+      if (Array.isArray(tls?.automation?.policies)) {
+        return;
+      }
 
-    if (tls?.automation) {
-      await this.send('PUT', '/config/apps/tls/automation/policies', []);
-    } else if (tls) {
-      await this.send('PUT', '/config/apps/tls/automation', {
-        policies: [],
-      });
-    } else {
-      await this.send('PUT', '/config/apps/tls', {
-        automation: {
-          policies: [],
-        },
-      });
+      try {
+        if (tls?.automation) {
+          await this.send('PUT', '/config/apps/tls/automation/policies', []);
+        } else if (tls) {
+          await this.send('PUT', '/config/apps/tls/automation', {
+            policies: [],
+          });
+        } else {
+          await this.send('PUT', '/config/apps/tls', {
+            automation: {
+              policies: [],
+            },
+          });
+        }
+
+        return;
+      } catch (err) {
+        // A genuine race conflicts at most once per level (tls, automation,
+        // policies); the read after the third finds the array.
+        if (!isAlreadyExists(err) || attempt > 3) {
+          throw err;
+        }
+      }
     }
   }
 

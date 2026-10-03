@@ -162,6 +162,39 @@ export class ThreadService {
     return this.findById(context, id);
   }
 
+  /**
+   * Give a thread a title, and ONLY if it still has none. Returns whether it wrote.
+   *
+   * One conditional UPDATE, not a read followed by a write: a stand-in title (the person's first words, written when
+   * the model could not name the thread) must never replace a real one, and a title job takes seconds — a later turn's
+   * job, or a rename, can land inside that gap. Here the row decides, atomically.
+   */
+  async nameIfUnnamed(context: ServiceContext, id: string, name: string): Promise<boolean> {
+    const query = this.threadRepository
+      .createQueryBuilder()
+      .update(ThreadEntity)
+      .set({ name })
+      .where('thread_id = :id', { id })
+      .andWhere('is_archived = false')
+      .andWhere("(title IS NULL OR btrim(title) = '')");
+
+    if (context.userId !== SYSTEM_USER) {
+      query.andWhere('user_id = :userId', { userId: context.userId });
+    }
+
+    const result = await query.execute();
+
+    if (!result.affected) {
+      return false;
+    }
+
+    await this.eventService.send(ThreadUpdatedEvent, {
+      threadId: id,
+    });
+
+    return true;
+  }
+
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     const result = await this.threadRepository.delete({
       id,

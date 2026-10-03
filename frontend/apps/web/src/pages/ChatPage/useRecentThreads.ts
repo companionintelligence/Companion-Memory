@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from '@ci/common';
 
 import { useSessionAuth } from '@/hooks/useSessionAuth';
+import { DEVICE_DATE_TIME_FORMATTER, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import type { Thread } from './types';
 
@@ -13,13 +14,35 @@ export const RECENT_THREAD_LIMIT = 10;
 const STALE_MS = 30_000;
 
 /**
- * What to call a thread nobody named.
+ * What to call a thread.
  *
- * Shared so the drawer submenu and the desktop sidebar cannot drift into two
- * different names for the same conversation.
+ * Shared so the drawer submenu, the desktop sidebar and the phone's chat list
+ * cannot drift into different names for the same conversation.
+ *
+ * A thread's title is written by a background job after the first reply and can
+ * arrive late, so an untitled thread is the normal state for a while. Its id
+ * says nothing — chats started within about a minute of each other share the
+ * same first eight characters, because a UUIDv7 opens with a timestamp — so it
+ * is named for when it started, which at least tells two of them apart. The id
+ * remains the last resort.
  */
-export function threadLabel(thread: Pick<Thread, 'id' | 'name'>): string {
-  return thread.name || `Thread ${thread.id.slice(0, 8)}`;
+export function threadLabel(
+  thread: Pick<Thread, 'id' | 'name' | 'createdAt'>,
+  fmt: DateTimeFormatter = DEVICE_DATE_TIME_FORMATTER,
+): string {
+  const name = thread.name?.trim();
+
+  if (name) {
+    return name;
+  }
+
+  const started = thread.createdAt ? new Date(thread.createdAt) : null;
+
+  if (started && !Number.isNaN(started.getTime())) {
+    return `Chat · ${fmt.dateTime(started, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+  }
+
+  return `Thread ${thread.id.slice(0, 8)}`;
 }
 
 interface Options {

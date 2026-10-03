@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react-swc';
-import { defineConfig, type Plugin } from 'vite';
+import { defaultAllowedOrigins, defineConfig, type Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 function getAllowedHosts(): string[] {
@@ -187,6 +187,18 @@ export default defineConfig({
     // Tunnel (see infrastructure/cloudflare/). The tunnel normally rewrites the
     // Host to <stack>.localhost, but this also permits preserving the public host.
     allowedHosts: ['.localhost', '.companionintelligence.com', ...getAllowedHosts()],
+    // Vite's own CORS middleware answers EVERY preflight itself, ahead of the
+    // `/api` proxy below, and its default allowlist is http(s) localhost only. A
+    // bundled iOS shell calling this dev server (its Memory Server set to
+    // http://<lan-ip>:5173) runs at `capacitor://localhost`, so its preflight got
+    // a 204 with no `Access-Control-Allow-Origin`: the WebView refused it,
+    // `streamingFetch` fell back to the buffered CapacitorHttp path, and every
+    // chat reply arrived whole after the generation ended — with no Stop control,
+    // because a buffered reply is never "streaming". The appliance origin was
+    // never affected: nginx forwards the preflight to the API, which already allows
+    // these origins (`main.ts`). Android's `http(s)://localhost` is in Vite's
+    // default, so only the two custom schemes are added to it.
+    cors: { origin: [defaultAllowedOrigins, 'capacitor://localhost', 'ionic://localhost'] },
     // Dev-only: the app calls `/api/*` (and `/api/graphql`) as same-origin paths.
     // On `make dev`'s Caddy route, Caddy strips the `/api` prefix and forwards to
     // the API, so this block is not involved there. Whenever the Vite port is

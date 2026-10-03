@@ -724,6 +724,173 @@ describe('VerticalCalendar — moving an event without a drag', () => {
 });
 
 /**
+ * ═══ A TAP IN THE DIALOG USED TO LAND ON THE CALENDAR BEHIND IT ═══
+ *
+ * The chip's peek dialog is a Radix portal — its DOM sits under `<body>` — but
+ * React bubbles a portal's synthetic events up the COMPONENT tree, and there it
+ * is a child of the day lane. The lane's `onClick` tells a chip tap from a slot
+ * tap by walking the DOM from `event.target` (`isScheduleChip`), and nothing in
+ * `<body>` has a lane or a chip for an ancestor, so every tap on the dialog's
+ * date field, time field, text, X or backdrop read as a tap on the empty slot
+ * under the finger. On the phone that closed the dialog and opened "Add to
+ * calendar" at whatever hour was beneath it (the Move button did both its move
+ * AND the add), so a placed event's time could never be edited.
+ *
+ * The other tests in this file render with no `onSelectSlot`, which is exactly
+ * why none of them could see it.
+ */
+describe('VerticalCalendar — a tap inside a chip dialog is not a tap on the slot behind it', () => {
+  const grid = (props: Partial<React.ComponentProps<typeof VerticalCalendar>>) => (
+    <VerticalCalendar
+      start={MONDAY}
+      days={1}
+      events={[event()]}
+      rhythm={[]}
+      onMoveEvent={() => {}}
+      {...props}
+    />
+  );
+
+  it('does not select a slot when the Move fields, text or X are tapped', () => {
+    const onSelectSlot = vi.fn();
+
+    render(grid({ onSelectSlot }));
+
+    fireEvent.click(screen.getByLabelText(/^Standup,/));
+
+    const dialog = screen.getByRole('dialog');
+
+    fireEvent.click(within(dialog).getByLabelText('Move to time'));
+    fireEvent.click(within(dialog).getByLabelText('Move to date'));
+    fireEvent.click(within(dialog).getByText('Standup'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+
+    expect(onSelectSlot).not.toHaveBeenCalled();
+  });
+
+  // The backdrop is the dialog's sibling inside the same portal, not part of
+  // its content, so it is its own case: a guard on the content alone misses it.
+  it('does not select a slot when the backdrop is tapped', () => {
+    const onSelectSlot = vi.fn();
+
+    render(grid({ onSelectSlot }));
+
+    fireEvent.click(screen.getByLabelText(/^Standup,/));
+    fireEvent.click(document.querySelector('[data-slot="dialog-overlay"]') as Element);
+
+    expect(onSelectSlot).not.toHaveBeenCalled();
+  });
+
+  it('moves the event without also selecting a slot', () => {
+    const onSelectSlot = vi.fn();
+    const onMove = vi.fn();
+
+    render(grid({ onSelectSlot, onMoveEvent: onMove }));
+
+    fireEvent.click(screen.getByLabelText(/^Standup,/));
+
+    const dialog = screen.getByRole('dialog');
+
+    fireEvent.change(within(dialog).getByLabelText('Move to time'), { target: { value: '16:00' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }));
+
+    expect(onMove).toHaveBeenCalledTimes(1);
+    expect(onMove.mock.calls[0][1].getHours()).toBe(16);
+    expect(onSelectSlot).not.toHaveBeenCalled();
+  });
+
+  it('keeps an all-day event’s dialog off the all-day row behind it', () => {
+    const onSelectSlot = vi.fn();
+
+    render(
+      grid({
+        onSelectSlot,
+        events: [
+          event({
+            id: 'all',
+            title: 'Offsite',
+            isAllDay: true,
+            startTime: MONDAY.toISOString(),
+            endTime: addDays(MONDAY, 1).toISOString(),
+          }),
+        ],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('listitem', { name: /^Offsite, all day/ }));
+
+    const dialog = screen.getByRole('dialog');
+
+    fireEvent.click(within(dialog).getByLabelText('Move to date'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+
+    expect(onSelectSlot).not.toHaveBeenCalled();
+  });
+
+  // A folded cluster chip carries one Move form per member, in the same kind of
+  // portal dialog — and busy hours are exactly where a phone needs it most.
+  it('keeps a micro-cluster’s dialog off the slot behind it too', () => {
+    const onSelectSlot = vi.fn();
+    const onMove = vi.fn();
+    const tick = (id: string, title: string, minute: number) =>
+      event({
+        id,
+        title,
+        sourceSystem: 'ci-browser-extension',
+        startTime: new Date(2026, 7, 3, 9, minute).toISOString(),
+        endTime: new Date(2026, 7, 3, 9, minute + 5).toISOString(),
+      });
+
+    render(
+      grid({
+        onSelectSlot,
+        onMoveEvent: onMove,
+        events: [tick('m1', 'Tab one', 0), tick('m2', 'Tab two', 10)],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('listitem', { name: '2 overlapping activities' }));
+
+    const dialog = screen.getByRole('dialog');
+
+    fireEvent.click(within(dialog).getByLabelText('Move Tab two to time'));
+    fireEvent.change(within(dialog).getByLabelText('Move Tab two to time'), { target: { value: '14:30' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move Tab two' }));
+
+    expect(onMove).toHaveBeenCalledTimes(1);
+    expect(onSelectSlot).not.toHaveBeenCalled();
+  });
+
+  it('still selects the slot when the empty grid itself is tapped', () => {
+    const onSelectSlot = vi.fn();
+
+    render(grid({ onSelectSlot }));
+
+    fireEvent.click(screen.getByTestId('vertical-day-lane'), { clientY: 0 });
+
+    expect(onSelectSlot).toHaveBeenCalledTimes(1);
+  });
+
+  // ═══ …AND THE PICKER USED TO OPEN BEFORE ANYONE TOUCHED ANYTHING ═══
+  //
+  // Radix focuses the first tabbable thing in a dialog when it opens, and here
+  // that is the date input. Focusing a date input is what raises iOS's picker,
+  // so it covered the screen the instant the dialog appeared. Focus now lands
+  // on the dialog itself — the fields are still one tap or one Tab away.
+  it('opens with focus on the dialog, not on the date field', () => {
+    render(grid({}));
+
+    fireEvent.click(screen.getByLabelText(/^Standup,/));
+
+    const dialog = screen.getByRole('dialog');
+
+    expect(within(dialog).getByLabelText('Move to date')).not.toHaveFocus();
+    expect(within(dialog).getByLabelText('Move to time')).not.toHaveFocus();
+    expect(dialog).toHaveFocus();
+  });
+});
+
+/**
  * The toggle upstream was only ever proved as far as the legend and a stubbed
  * prop hand-off, so a `colorMode` that arrived here and went no further — never
  * reaching `eventColor` or the rhythm cells — would have shipped green.

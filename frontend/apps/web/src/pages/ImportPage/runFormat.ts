@@ -131,20 +131,49 @@ export function runStatusLabel(status: string): string {
   return RUN_STATUS_LABELS[status] ?? status;
 }
 
+/** What each importer is called, as far as labelling a run needs the catalogue. */
+export type ServiceTitles = readonly { readonly name: string; readonly title: string }[];
+
 /**
  * Turn a run's detected data-source names into what the catalogue calls them.
  *
  * Falls back to a de-underscored version of the raw name rather than hiding a
  * source the catalogue does not know about: a parser can outlive its catalogue
  * entry, and "kindle_reading" read badly but read.
+ *
+ * Each service is named ONCE, in the order it first appears. `data_sources`
+ * records one entry per recognized FILE, not per service — a real Google Takeout
+ * is 47 entries of which 30 are `google_my_activity` — so the one-for-one map
+ * this used to be put the same badge on a run card three times over and made the
+ * "+44" it counted from them a count of files. Deduped on the LABEL, not the
+ * raw name, so two importers the catalogue gives one title read as one service
+ * too.
  */
-export function serviceLabels(
-  names: readonly string[],
-  sources: readonly { readonly name: string; readonly title: string }[],
-): string[] {
+export function serviceLabels(names: readonly string[], sources: ServiceTitles): string[] {
   const titles = new Map(sources.map((source) => [source.name, source.title]));
 
-  return names.map((name) => titles.get(name) ?? name.replace(/_/g, ' '));
+  return [...new Set(names.map((name) => titles.get(name) ?? name.replace(/_/g, ' ')))];
+}
+
+/**
+ * The runner's sub-label for a stage ("parsing gmail (1/2)", "pushing") — while
+ * it is still true.
+ *
+ * The runner writes `phase` as a stage works and nothing clears it when the
+ * stage ends (`ImportRunService.completeStage` leaves the column alone), so a
+ * finished stage keeps whatever it said last: a completed Read reading "parsing
+ * fitbit (56/57)" and a completed Save reading "pushing", in-progress words under
+ * a green check. A completed stage has no sub-label; the check says it.
+ *
+ * A failed or cancelled stage keeps its phase on purpose: where it stopped is the
+ * first thing anyone asks about one that did not finish.
+ */
+export function stagePhase(stage: { readonly status: string; readonly phase: string | null }): string | null {
+  if (stage.status === 'completed' || !stage.phase) {
+    return null;
+  }
+
+  return stage.phase;
 }
 
 /**

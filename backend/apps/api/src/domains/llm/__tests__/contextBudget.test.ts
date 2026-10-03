@@ -1,12 +1,14 @@
 import { TIER_PROFILES } from '@ci/domains/model-routing';
 
 import {
+  INLINE_TEXT_BUDGET_SHARE,
   MAX_INLINE_IMAGE_MESSAGES,
   NUM_CTX_ENV_VAR,
   attachmentStub,
   isContextOverflowError,
   messageBytes,
   parseNumCtx,
+  planAttachmentTextAllowance,
   planContextAdmission,
   planInlineAttachments,
   resolveContextBudget,
@@ -284,12 +286,60 @@ describe('attachmentStub', () => {
   });
 });
 
+describe('planAttachmentTextAllowance', () => {
+  it('lets the newest message claim what it needs first, and an older one have what is left', () => {
+    const share = Math.floor(4096 * INLINE_TEXT_BUDGET_SHARE);
+
+    expect(planAttachmentTextAllowance([0, 2000, 0, 2000], 4096)).toStrictEqual([0, share - 2000, 0, 2000]);
+  });
+
+  it('never grants more than a message asked for', () => {
+    expect(planAttachmentTextAllowance([0, 100, 0, 200], 100_000)).toStrictEqual([0, 100, 0, 200]);
+  });
+
+  it('never grants more, in all, than the share of the prompt budget set aside for attachment text', () => {
+    for (const budget of [2048, 4096, 8192, 20_480, 131_072]) {
+      const total = planAttachmentTextAllowance([5000, 40_000, 0, 9000, 70_000], budget).reduce(
+        (sum, bytes) => sum + bytes,
+        0,
+      );
+
+      expect(total).toBeLessThanOrEqual(Math.floor(budget * INLINE_TEXT_BUDGET_SHARE));
+    }
+  });
+
+  it('gives nothing to a message that asks for nothing, nor to anything when there is no budget', () => {
+    expect(planAttachmentTextAllowance([0, 0, 0], 4096)).toStrictEqual([0, 0, 0]);
+    expect(planAttachmentTextAllowance([500, 500], 0)).toStrictEqual([0, 0]);
+    expect(planAttachmentTextAllowance([500, -5], 4096)).toStrictEqual([500, 0]);
+    expect(planAttachmentTextAllowance([], 4096)).toStrictEqual([]);
+  });
+
+  it('shrinks with the budget, so a retry after a context overflow makes room', () => {
+    const first = planAttachmentTextAllowance(
+      [9000],
+      resolveContextBudget({ env: { [NUM_CTX_ENV_VAR]: '8192' } }).promptBudgetBytes,
+    );
+    const second = planAttachmentTextAllowance(
+      [9000],
+      resolveContextBudget({ env: { [NUM_CTX_ENV_VAR]: '8192' }, shrinkLevel: 1 }).promptBudgetBytes,
+    );
+
+    expect(second[0]).toBeLessThan(first[0]);
+  });
+});
+
 describe('isContextOverflowError', () => {
   it.each([
     "This model's maximum context length is 8192 tokens, however you requested 9001",
     'Requested token count exceeds the model context window',
     'context_length_exceeded',
     'prompt is too long: 12000 tokens > 8192',
+    // llama.cpp's server, and so Lemonade, as the openai client surfaces it.
+    '400 the request exceeds the available context size, try increasing it',
+    'exceed_context_size_error',
+    // Hugging Face TGI.
+    'Input validation error: `inputs` tokens + `max_new_tokens` must be <= 4096. Given: 4000 `inputs` tokens and 512 `max_new_tokens`',
   ])('classifies %s as an overflow', (message) => {
     expect(isContextOverflowError(new Error(message))).toBe(true);
   });

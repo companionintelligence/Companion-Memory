@@ -4,6 +4,8 @@ import { Sidebar, Tooltip, cn } from '@ci/shadcn';
 import { Plus, RefreshCw, Trash2, MessageSquare, ChevronLeft } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+
 import type { Thread } from './types';
 import { threadLabel } from './useRecentThreads';
 
@@ -21,9 +23,10 @@ interface ChatSidebarProps {
  * Thread management for the desktop chat: create, pick, delete, refresh.
  *
  * Portaled into `tertiary-navigation`, a slot only the desktop layout renders —
- * on the phone this component mounts and portals into nothing. Switching
- * threads there is the Power Rail drawer's Chat submenu, which shows the same
- * threads under the same names (see `threadLabel`) as read-only links.
+ * on the phone this component mounts and portals into nothing. The phone has
+ * `PhoneChatBar` for the same jobs, and the Power Rail drawer's Chat submenu
+ * for switching, which shows the same threads under the same names (see
+ * `threadLabel`) as read-only links.
  */
 export const ChatSidebar = memo(function ChatSidebar({
   threads,
@@ -35,6 +38,7 @@ export const ChatSidebar = memo(function ChatSidebar({
   onRefresh,
 }: ChatSidebarProps) {
   const { t } = useTranslation();
+  const fmt = useDateTimeFormat();
   const [isExpanded, setIsExpanded] = useState(true);
 
   // Auto-collapse on mobile screens
@@ -204,7 +208,7 @@ export const ChatSidebar = memo(function ChatSidebar({
                           <MessageSquare className="h-4 w-4 text-muted-foreground" />
                         </div>
                         <div className="flex-1 min-w-0 text-left">
-                          <div className="truncate font-medium text-sm">{threadLabel(thread)}</div>
+                          <div className="truncate font-medium text-sm">{threadLabel(thread, fmt)}</div>
                           {thread.description && (
                             <div className="text-xs text-muted-foreground truncate mt-0.5">
                               {thread.description}
@@ -219,7 +223,7 @@ export const ChatSidebar = memo(function ChatSidebar({
                                 e.stopPropagation();
                                 onDeleteThread(thread.id);
                               }}
-                              className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-destructive/10 hover:text-destructive transition-all duration-200 cursor-pointer"
+                              className="opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 p-1.5 rounded-lg hover:bg-destructive/10 hover:text-destructive transition-all duration-200 cursor-pointer"
                               aria-label={t('CHAT_THREAD_DELETE')}
                               role="button"
                               tabIndex={0}
@@ -268,7 +272,7 @@ export const ChatSidebar = memo(function ChatSidebar({
             {threads.map((thread) => (
               <div key={thread.id} className="flex justify-center">
                 <Tooltip delayDuration={600}>
-                  <Tooltip.Content>{threadLabel(thread)}</Tooltip.Content>
+                  <Tooltip.Content>{threadLabel(thread, fmt)}</Tooltip.Content>
                   <Tooltip.Trigger asChild>
                     <button
                       onClick={() => onSelectThread(thread.id)}
@@ -276,7 +280,7 @@ export const ChatSidebar = memo(function ChatSidebar({
                         'w-10 h-10 rounded-lg hover:bg-muted/60 transition-all duration-200 relative flex items-center justify-center',
                         selectedThreadId === thread.id && 'bg-primary/10',
                       )}
-                      aria-label={threadLabel(thread)}
+                      aria-label={threadLabel(thread, fmt)}
                     >
                       <div
                         className={cn(

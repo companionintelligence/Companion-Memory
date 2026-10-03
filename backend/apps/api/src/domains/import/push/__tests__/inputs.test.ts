@@ -1298,6 +1298,40 @@ describe('toEventInput', () => {
 
     expect(toEventInput(inPerson).location_name).toBe('Golden Gate Park, San Francisco, CA');
   });
+
+  it('writes the status the source stated', () => {
+    // The two sources that state one today: an .ics STATUS:CANCELLED, and a
+    // Takeout reservation with `canceled: true`. Either used to land
+    // 'confirmed', the column DEFAULT.
+    const cancelledOverride = recordFor({
+      dataSource: 'calendar',
+      classification: 'event',
+      contentHash: 'weekly-sync@google.com#20221013T080000Z',
+      metadata: { Source: 'ICS', eventStatus: 'cancelled' },
+    });
+    const cancelledBooking = recordFor({
+      dataSource: 'google_purchases',
+      classification: 'event',
+      metadata: { Kind: 'reservation', Canceled: true, eventStatus: 'cancelled' },
+    });
+
+    expect(toEventInput(cancelledOverride)).toMatchObject({
+      status: 'cancelled',
+      source_system: 'calendar',
+      source_id: 'weekly-sync@google.com#20221013T080000Z',
+    });
+    expect(toEventInput(cancelledBooking).status).toBe('cancelled');
+    expect(
+      toEventInput(recordFor({ classification: 'event', metadata: { eventStatus: 'tentative' } })).status,
+    ).toBe('tentative');
+  });
+
+  it('sends no status when the source stated none, leaving the column DEFAULT', () => {
+    // Absent rather than null. `Canceled: false` says no more than the DEFAULT.
+    const input = toEventInput(recordFor({ classification: 'event', metadata: { Canceled: false } }));
+
+    expect(input).not.toHaveProperty('status');
+  });
 });
 
 /**

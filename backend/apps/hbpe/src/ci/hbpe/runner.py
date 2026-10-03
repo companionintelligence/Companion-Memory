@@ -20,6 +20,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 import structlog
@@ -233,7 +234,8 @@ class FunctionRunner:
                     "function_run_callback_error",
                     run_id=record.run_id,
                     attempt=attempt,
-                    error=str(exc),
+                    url=url,
+                    error=describe_transport_error(exc),
                 )
 
         # Loud on purpose: the pg-boss job now recovers only via queue
@@ -244,6 +246,7 @@ class FunctionRunner:
             job_id=record.job_id,
             queue=record.queue,
             url=url,
+            hint=callback_unreachable_hint(url),
         )
 
     def _auth_headers(self, token: str | None) -> dict[str, str]:
@@ -292,3 +295,31 @@ async def list_functions() -> dict[str, Any]:
 
 
 __all__ = ["FunctionRunner", "RunRequest", "router", "runner"]
+
+
+def describe_transport_error(exc: BaseException) -> str:
+    """
+    `str(exc)` for a connect timeout is the empty string in both httpx and requests, so the
+    callback log read `error=` and said nothing for hours (2026-09-30: every callback to the dev
+    stack's API was dropped by the host firewall). The exception's type is the message then.
+    """
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+def callback_unreachable_hint(url: str) -> str:
+    """
+    What an operator can do about a callback URL that never answers. Only the dev stack has
+    the API on the host and this sidecar in a container (`make dev`); a Hub or compose install
+    reaches it as `http://api:3030` inside one network, where no firewall sits in the way.
+    """
+    host = urlsplit(url).hostname or ""
+    port = urlsplit(url).port or 80
+    if host in {"host.docker.internal", "gateway.docker.internal"} or host.endswith(
+        ".internal"
+    ):
+        return (
+            f"The API runs on the host; allow this container's network to reach it, e.g. "
+            f"`sudo ufw allow from 172.16.0.0/12 to any port {port} proto tcp`."
+        )
+    return "Check that the API is up and that API_URL names an address this container can reach."

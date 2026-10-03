@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { useQuery, gql } from '@apollo/client';
-import { GlobalUID } from '@ci/common';
+import { GlobalUID, getWebOrigin } from '@ci/common';
 import { cn, Dialog, Button } from '@ci/shadcn';
 import {
   Activity,
@@ -131,7 +131,6 @@ export const SERVICE_PROVIDERS: ServiceProviderConfig[] = [
       { icon: MessageSquare, label: 'Posts' },
       { icon: Image, label: 'Photos' },
       { icon: Video, label: 'Videos' },
-      { icon: Users, label: 'Friends' },
     ],
   },
   {
@@ -311,7 +310,7 @@ export function ServiceIntegrationsSection({
   const { data: oauthData } = useQuery(GET_OAUTH_CALLBACK_URL);
   const blueBubbles = useBlueBubblesStatus();
 
-  const callbackUrl = oauthData?.oAuthCallbackUrl ?? `${window.location.origin}/oauth/callback`;
+  const callbackUrl = oauthData?.oAuthCallbackUrl ?? `${getWebOrigin()}/oauth/callback`;
 
   const [setupProvider, setSetupProvider] = useState<SetupProviderState | null>(null);
 
@@ -346,6 +345,7 @@ export function ServiceIntegrationsSection({
         node: {
           id: string;
           name: string;
+          authType: string | null;
           localOnly: boolean;
           providerKeys: unknown;
           appSetupUrl: string | null;
@@ -365,9 +365,16 @@ export function ServiceIntegrationsSection({
 
   function handleProviderClick(rawId: string) {
     const provider = providerMap[rawId];
-    const isLocalOnlyWithoutKeys = provider?.localOnly && !provider?.providerKeys;
+    // The setup dialog is for an OAuth app, so it is for OAuth providers only.
+    // `localOnly` alone is not that signal: the server forces it true for every
+    // oauth2 provider while there are no CI Portal credentials, but Signal is
+    // seeded `local_only` for its own reason (signal-cli runs on the appliance's
+    // network, there is no cloud proxy) and signs in with an API key that its
+    // provider page asks for — an "OAuth Setup" dialog for it described an app
+    // that does not exist.
+    const needsOwnOAuthApp = provider?.authType === 'oauth2' && provider.localOnly && !provider.providerKeys;
 
-    if (isLocalOnlyWithoutKeys) {
+    if (needsOwnOAuthApp) {
       setSetupProvider({
         name: provider.name ?? 'Provider',
         appSetupUrl: provider.appSetupUrl ?? null,

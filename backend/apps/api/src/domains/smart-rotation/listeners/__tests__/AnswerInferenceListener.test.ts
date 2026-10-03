@@ -1,3 +1,4 @@
+import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import type { RecallService } from '@ci/domains/agent';
@@ -126,6 +127,16 @@ function makeQuestion(id: string, text: string, questionType?: string) {
   return { id, text, questionType } as Awaited<ReturnType<QuestionService['findById']>>;
 }
 
+type Standing = NonNullable<Awaited<ReturnType<QuestionService['findInferenceStanding']>>>;
+
+/**
+ * What `ci.questions` says about a question both selectors would still queue:
+ * active, not `hand_entry`, and not replaced by one of the owner's forks. Every
+ * build in this file starts from it, so a test of anything else is not also a
+ * test of the execution-time gate.
+ */
+const ELIGIBLE_STANDING: Standing = { isActive: true, evidenceClass: 'traceable', forkedByCaller: false };
+
 function makeAnswer(
   overrides: {
     id?: string;
@@ -169,6 +180,7 @@ function buildListener(overrides: {
 
   const questionService = {
     findById: jest.fn().mockResolvedValue(makeQuestion('q-1', 'What is your favorite color?')),
+    findInferenceStanding: jest.fn().mockResolvedValue(ELIGIBLE_STANDING),
     ...overrides.questionService,
   } as unknown as QuestionService;
 
@@ -197,7 +209,14 @@ function buildListener(overrides: {
     ...overrides.ollamaService,
   } as unknown as OllamaService;
 
-  const logger = { setContext() {}, log() {}, warn() {}, error() {} } as unknown as LoggerService;
+  // `jest.fn` so a test can assert WHAT was logged and at which level.
+  const logger = {
+    setContext: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  };
 
   const listener = new AnswerInferenceListener(
     answerService,
@@ -206,7 +225,7 @@ function buildListener(overrides: {
     recallService,
     personalizationService,
     ollamaService,
-    logger,
+    logger as unknown as LoggerService,
   );
 
   return {
@@ -217,6 +236,7 @@ function buildListener(overrides: {
     recallService,
     personalizationService,
     ollamaService,
+    logger,
   };
 }
 
@@ -269,6 +289,141 @@ describe('AnswerInferenceListener.inferQuestionAnswer — early exits', () => {
     ];
     expect(ragThread[0].content).not.toContain('User Context');
     expect(ragThread[0].content).not.toContain('User dossier');
+  });
+});
+
+describe('AnswerInferenceListener.inferQuestionAnswer — a job outlives the question it was queued for', () => {
+  // Both selectors check that a question is active, not `hand_entry`, and not
+  // replaced by one of the owner's forks WHEN THEY QUEUE the job. The job then
+  // waits in pg-boss behind the single-slot LLM queue, and the row can change in
+  // the gap: a migration retires it, a reclassification marks it hand-entry, the
+  // owner forks it. `findById`, which is how this listener resolves the
+  // question, settles who may READ the row and nothing else — so before the
+  // execution-time gate, such a job still ran the model and wrote an inferred
+  // answer onto a question the owner is no longer asked.
+  //
+  // `findInferenceStanding` is mocked here to say what ci.questions says WHEN THE
+  // JOB RUNS. The SQL behind it, fork rows included, runs against a real Postgres
+  // in AnswerInferenceListener.executionGate.integration.spec.ts.
+
+  const JOB = { ownerId: 'user-1', questionId: 'q-1' } as Payload;
+  const SKIPPED = 'Answer inference skipped — the question no longer qualifies';
+
+  /** A build whose question row reads as `standing` by the time the job runs. */
+  function buildAt(standing: Standing | null) {
+    return buildListener({
+      questionService: { findInferenceStanding: jest.fn().mockResolvedValue(standing) },
+    });
+  }
+
+  /** Nothing downstream of the gate ran: no retrieval, no model call, no write. */
+  function expectNothingRan(built: ReturnType<typeof buildListener>) {
+    expect(built.searchService.search).not.toHaveBeenCalled();
+    expect(built.answerService.findAll).not.toHaveBeenCalled();
+    expect(built.recallService.recall).not.toHaveBeenCalled();
+    expect(built.ollamaService.chat).not.toHaveBeenCalled();
+    expect(built.personalizationService.decideAction).not.toHaveBeenCalled();
+    expect(built.answerService.findByQuestionId).not.toHaveBeenCalled();
+    expect(built.answerService.create).not.toHaveBeenCalled();
+    expect(built.answerService.update).not.toHaveBeenCalled();
+  }
+
+  it('does not infer for a question that was deactivated after the job was queued', async () => {
+    const built = buildAt({ ...ELIGIBLE_STANDING, isActive: false });
+
+    await built.listener.inferQuestionAnswer(JOB);
+
+    expectNothingRan(built);
+    expect(built.logger.debug).toHaveBeenCalledWith(SKIPPED, {
+      userId: 'user-1',
+      questionId: 'q-1',
+      reason: 'inactive',
+    });
+  });
+
+  it('does not infer for a question re-marked hand_entry after the job was queued', async () => {
+    const built = buildAt({ ...ELIGIBLE_STANDING, evidenceClass: 'hand_entry' });
+
+    await built.listener.inferQuestionAnswer(JOB);
+
+    expectNothingRan(built);
+    expect(built.logger.debug).toHaveBeenCalledWith(SKIPPED, {
+      userId: 'user-1',
+      questionId: 'q-1',
+      reason: 'hand-entry',
+    });
+  });
+
+  it('does not infer for a shared question the owner has since forked — the fork is what they are asked', async () => {
+    const built = buildAt({ ...ELIGIBLE_STANDING, forkedByCaller: true });
+
+    await built.listener.inferQuestionAnswer(JOB);
+
+    expectNothingRan(built);
+    expect(built.logger.debug).toHaveBeenCalledWith(SKIPPED, {
+      userId: 'user-1',
+      questionId: 'q-1',
+      reason: 'forked',
+    });
+    // Whose forks: the job's OWNER, not whoever happens to be running it.
+    expect(built.questionService.findInferenceStanding).toHaveBeenCalledWith({ userId: 'user-1' }, 'q-1');
+  });
+
+  it('does not infer when the question disappears between the two reads', async () => {
+    const built = buildAt(null);
+
+    await built.listener.inferQuestionAnswer(JOB);
+
+    expectNothingRan(built);
+    expect(built.logger.debug).toHaveBeenCalledWith(SKIPPED, {
+      userId: 'user-1',
+      questionId: 'q-1',
+      reason: 'gone',
+    });
+  });
+
+  it('still infers for an active, traceable question the owner has not forked', async () => {
+    const built = buildAt(ELIGIBLE_STANDING);
+
+    await built.listener.inferQuestionAnswer(JOB);
+
+    expect(built.questionService.findInferenceStanding).toHaveBeenCalledWith({ userId: 'user-1' }, 'q-1');
+    expect(built.ollamaService.chat).toHaveBeenCalledTimes(1);
+    expect(built.answerService.create).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      expect.objectContaining({ question: { id: 'q-1' }, answerSource: 'inferred' }),
+    );
+    // A job that qualifies is not a skip, and says nothing at debug about one.
+    expect(built.logger.debug).not.toHaveBeenCalled();
+  });
+
+  it('keeps inferring a question whose evidence class is anything but hand_entry', async () => {
+    // Both selectors say `evidence_class <> 'hand_entry'`, so a class added to the
+    // CHECK constraint later is inferable until somebody says otherwise. A gate
+    // that only let `traceable` through would drop jobs the selectors queue.
+    const built = buildAt({ ...ELIGIBLE_STANDING, evidenceClass: 'some_future_class' });
+
+    await built.listener.inferQuestionAnswer(JOB);
+
+    expect(built.ollamaService.chat).toHaveBeenCalledTimes(1);
+    expect(built.answerService.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('gates the JOB, not the decision — a probe can still put a hand-entry question to the model', async () => {
+    // `inferAnswerForQuestion` is split out of the handler so that a probe or a
+    // test can inspect the model's decision without writing ci.answers (see its
+    // doc comment). Gating it would stop a probe from asking about a hand-entry
+    // question at all, so the gate lives in the event handler instead.
+    const built = buildAt({ ...ELIGIBLE_STANDING, evidenceClass: 'hand_entry' });
+
+    const outcome = await built.listener.inferAnswerForQuestion({ userId: 'user-1' } as UserServiceContext, {
+      id: 'q-1',
+      text: 'How tall are you?',
+    });
+
+    expect(outcome.status).toBe('ok');
+    expect(built.ollamaService.chat).toHaveBeenCalledTimes(1);
+    expect(built.questionService.findInferenceStanding).not.toHaveBeenCalled();
   });
 });
 
@@ -375,6 +530,53 @@ describe('AnswerInferenceListener.inferQuestionAnswer — confidence floor', () 
     expect(options.signal?.aborted).toBe(false);
     expect(options.maxOutputTokens).toBeGreaterThan(0);
     expect(options.keepAlive).toBeTruthy();
+  });
+
+  it('gives the call the configured pool-sized budget, not the old 60s', async () => {
+    // 60s aborted every call a Hub pool placed on a slow CPU node. The same
+    // budget must reach the backend's own deadline, or `llm.firstResponseTimeoutMs`
+    // (90s) cuts the call instead.
+    const budget = config.llm.answerInferenceTimeoutMs;
+
+    // Above the stacked 90s default, and below undici's 300s headersTimeout, which
+    // would otherwise be the bound that fires.
+    expect(budget).toBeGreaterThan(config.llm.firstResponseTimeoutMs);
+    expect(budget).toBeLessThan(300_000);
+
+    jest.useFakeTimers();
+
+    try {
+      // A backend that never answers: settles only when the caller's signal aborts.
+      const chat = jest.fn(
+        (
+          _context: unknown,
+          _messages: unknown,
+          options: { signal: AbortSignal; firstResponseTimeoutMs?: number },
+        ) =>
+          new Promise((_resolve, reject) => {
+            options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          }),
+      );
+      const { listener } = buildListener({ ollamaService: { chat } as unknown as Partial<OllamaService> });
+      const run = listener
+        .inferQuestionAnswer({ ownerId: 'user-1', questionId: 'q-1' } as Payload)
+        .catch(() => undefined);
+
+      await jest.advanceTimersByTimeAsync(0);
+
+      const options = chat.mock.calls[0]![2];
+
+      expect(options.firstResponseTimeoutMs).toBe(budget);
+
+      await jest.advanceTimersByTimeAsync(budget - 1);
+      expect(options.signal.aborted).toBe(false);
+
+      await jest.advanceTimersByTimeAsync(1);
+      expect(options.signal.aborted).toBe(true);
+      await run;
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('states the confidence scale to the model in the system prompt', async () => {

@@ -370,7 +370,10 @@ export class PortalTokenService implements PortalTokenVerifier {
     if (claimedEmail && emailVerified) {
       const existing = await this.userService.findByEmail(claimedEmail);
       if (existing) {
-        const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id);
+        // OIDC identities only: a Hub person's own binding is not another identity's claim.
+        const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id, {
+          oidcOnly: true,
+        });
         if (alreadyFederated.length > 0) {
           this.logger.warn(
             `refusing email link for ${issuer}#${sub}: user already bound to another identity`,
@@ -392,32 +395,43 @@ export class PortalTokenService implements PortalTokenVerifier {
     }
 
     // 3. Nobody here has claimed this Portal identity. Only an UNCLAIMED
-    //    appliance admits it — the sign-in becomes the owner (UserService.create
-    //    promotes the first account to admin). On a claimed appliance the answer
-    //    is no: the owner already exists, and household members are invited
-    //    through the browser flow as email-and-password accounts.
-    if (!(await this.userService.hasNoUsers())) {
-      this.logger.warn(`refusing to provision ${issuer}#${sub}: this appliance already has an owner`);
-
-      return null;
-    }
-
-    //    Portal-authenticated users have no CI-Server password; set a random one.
-    const created = await this.userService.create(
+    //    appliance admits it — the sign-in becomes the owner (the first account
+    //    is promoted to admin). On a claimed appliance the answer is no: the
+    //    owner already exists, and household members are invited through the
+    //    browser flow as email-and-password accounts.
+    //
+    //    "Unclaimed" is decided by the transaction that creates the account, not
+    //    before it. Asked first and acted on after, two first sign-ins racing on
+    //    an empty appliance both saw it empty and both got in. The binding is
+    //    written in that transaction too, so it exists exactly when the account
+    //    does.
+    const created = await this.userService.createFirstAccount(
       { userId: SYSTEM_USER },
+      //    Portal-authenticated users have no CI-Server password; set a random one.
       { name, email, password: crypto.randomBytes(32).toString('hex'), passwordChosenByUser: false },
+      (manager, user) =>
+        this.federatedIdentityService.bind(
+          { userId: user.id, issuer, subject: sub, email: claimedEmail ?? null, bindMethod: 'sub' },
+          manager,
+        ),
     );
 
     if (created) {
-      await this.federatedIdentityService.bind({
-        userId: created.id,
-        issuer,
-        subject: sub,
-        email: claimedEmail ?? null,
-        bindMethod: 'sub',
-      });
+      return created;
     }
 
-    return created;
+    //    Not the first account. It may be THIS identity's, though: a client that
+    //    has just signed in fires its first requests concurrently, one of them
+    //    claims the appliance, and its account and binding commit together before
+    //    the rest get their answer. Path 1 finds them now; refusing would sign the
+    //    owner out of the box they just claimed.
+    const claimedBy = await this.federatedIdentityService.findUserId(issuer, sub);
+    if (claimedBy) {
+      return this.userService.findById({ userId: SYSTEM_USER }, claimedBy);
+    }
+
+    this.logger.warn(`refusing to provision ${issuer}#${sub}: this appliance already has an owner`);
+
+    return null;
   }
 }

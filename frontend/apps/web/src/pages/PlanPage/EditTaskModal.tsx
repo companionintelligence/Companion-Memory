@@ -139,6 +139,7 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
   const [updateTask] = useMutation(UPDATE_TASK, { errorPolicy: 'all' });
   const { toast } = useToast();
   const lastSaved = useRef<Draft>(draftFromTask(task));
+  const titleRef = useRef<HTMLTextAreaElement>(null);
   const discardRef = useRef<HTMLButtonElement>(null);
   const attempt = useRef(0);
   const persistRef = useRef<(next: Draft) => Promise<PersistResult>>(async () => 'failed');
@@ -305,7 +306,26 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
 
   return (
     <Dialog open onOpenChange={(open) => !open && void handleClose()}>
-      <Dialog.Content className="overflow-x-hidden sm:max-w-[425px]">
+      <Dialog.Content
+        className="overflow-x-hidden sm:max-w-[425px]"
+        // The title used to take `autoFocus`, which focuses it and leaves the
+        // caret wherever the engine put it — position 0 on iOS, so a keystroke
+        // straight after opening landed IN FRONT of the title. Opening a task
+        // to edit its title means appending to it, so focus it here and park
+        // the caret after the last character.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+
+          const title = titleRef.current;
+
+          if (!title) {
+            return;
+          }
+
+          title.focus();
+          title.setSelectionRange(title.value.length, title.value.length);
+        }}
+      >
         <Dialog.Header>
           <Dialog.Title>Edit task</Dialog.Title>
           <Dialog.Description>Changes save as you type. Close when you are done.</Dialog.Description>
@@ -316,9 +336,9 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
             <Label htmlFor="edit-task-title">Title</Label>
             <Textarea
               id="edit-task-title"
+              ref={titleRef}
               value={draft.title}
               onChange={(e) => patch({ title: e.target.value })}
-              autoFocus
               rows={4}
               className="field-sizing-fixed min-h-20 min-w-0 resize-y break-all"
             />
@@ -341,9 +361,28 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
               <Input
                 id="edit-task-due"
                 type="date"
+                // WebKit sizes a native date control's `width: 100%` as the
+                // CONTENT box and adds its padding and border on top — 26pt too
+                // wide for this grid cell, which put the field over Minutes on
+                // iOS. `min-w-0` and the grid cannot help; an ordinary box can.
+                className="pointer-coarse:appearance-none"
                 value={draft.dueDate}
                 onChange={(e) => patch({ dueDate: e.target.value })}
               />
+              {/* A native date input has no dependable way to be emptied: on
+                  iOS the picker's Reset puts back the value it opened with, so
+                  a due date, once set, could never be removed. */}
+              {draft.dueDate ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="self-start"
+                  onClick={() => patch({ dueDate: '' })}
+                >
+                  Clear due date
+                </Button>
+              ) : null}
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="edit-task-estimate">Minutes</Label>

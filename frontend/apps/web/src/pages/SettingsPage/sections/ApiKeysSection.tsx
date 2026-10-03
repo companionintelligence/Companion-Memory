@@ -31,6 +31,7 @@ import {
 import { CalendarIcon, Check, ClipboardCopy, KeyRound, Lock, Pencil, Plus, Trash, X } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { useNeedsWebSignIn, WebSignInRequired } from '@/components/WebSignInRequired';
 import { useAuth } from '@/hooks';
 
 interface ApiKeyResponse {
@@ -173,6 +174,12 @@ export function ApiKeysSection() {
   const [keys, setKeys] = useState<ApiKeyResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Set only by the list load failing. `error` is shared with create/update/delete, so it cannot say
+  // whether an empty list is real or just what a failed load left behind.
+  const [loadFailed, setLoadFailed] = useState(false);
+  // The native shell holds only a device key, and `/api/keys` takes a session JWT or a Portal bearer —
+  // never a key, so a leaked one cannot mint successors that outlive its revocation.
+  const needsWebSignIn = useNeedsWebSignIn();
 
   // Create dialog
   const [createOpen, setCreateOpen] = useState(false);
@@ -214,18 +221,25 @@ export function ApiKeysSection() {
     try {
       setLoading(true);
       setError(null);
+      setLoadFailed(false);
       const data = await fetchJson<ApiKeyResponse[]>('/api/keys', { headers: headers() });
       setKeys(data ?? []);
     } catch {
       setError('Failed to load API keys');
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
   }, [headers]);
 
   useEffect(() => {
+    // A request that can only 401 is not worth sending; the notice below says why.
+    if (needsWebSignIn) {
+      return;
+    }
+
     fetchKeys();
-  }, [fetchKeys]);
+  }, [fetchKeys, needsWebSignIn]);
 
   /**
    * Reset the form whenever the dialog closes. Without this a cancelled dialog reopens holding the
@@ -407,6 +421,25 @@ export function ApiKeysSection() {
     return new Date(expiresAt) < new Date();
   };
 
+  if (needsWebSignIn) {
+    return (
+      <>
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold">API Keys</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Create keys to grant other applications access to your account.
+          </p>
+        </div>
+
+        <WebSignInRequired>
+          API keys are created, listed and revoked from a web sign-in only. This app signs in with its own
+          device key, and a key is never allowed to mint or revoke keys — that way a leaked key cannot outlive
+          its revocation. Open Companion Memory in a web browser and sign in to manage your keys.
+        </WebSignInRequired>
+      </>
+    );
+  }
+
   return (
     <>
       <div className="mb-6 flex items-center justify-between">
@@ -479,11 +512,15 @@ export function ApiKeysSection() {
       {loading ? (
         <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">Loading…</div>
       ) : keys.length === 0 ? (
-        <Card>
-          <Card.Content className="flex flex-col items-center justify-center py-12 text-center">
-            <p className="text-sm text-muted-foreground">No API keys created yet.</p>
-          </Card.Content>
-        </Card>
+        // A failed load leaves the list empty. The banner above already says so; "No API keys
+        // created yet." under it would contradict it.
+        loadFailed ? null : (
+          <Card>
+            <Card.Content className="flex flex-col items-center justify-center py-12 text-center">
+              <p className="text-sm text-muted-foreground">No API keys created yet.</p>
+            </Card.Content>
+          </Card>
+        )
       ) : (
         <div className="space-y-3">
           {keys.map((key) => (

@@ -103,7 +103,7 @@ function statusKind(status: string): 'proposed' | 'active' | 'closed' {
 const COLUMN_LABELS: Record<ColumnKey, string> = {
   proposed: 'Proposed',
   unscheduled: 'Unscheduled',
-  scheduled: 'Scheduled on calendar',
+  scheduled: 'Scheduled',
   done: 'Done',
 };
 
@@ -155,7 +155,7 @@ export function localDateOf(instant: Date, timeZone?: string): string {
  *   proposed + needs confirmation → Proposed / inbox
  *   still-deferred → Proposed / Proposed upcoming
  *   accepted work without a calendar block (dated or not) → Unscheduled
- *   those same date buckets with a placed calendar block → Scheduled on calendar
+ *   those same date buckets with a placed calendar block → Scheduled
  *   `scheduledFor` without a block is a preferred date, not a placement.
  *   done / skipped / archived → Done
  *

@@ -16,8 +16,10 @@ import {
   selectMemoryPortalBearers,
 } from './oidc';
 import {
+  DEFAULT_PORTAL_URL,
   listMemoryServers,
   probeMemoryOrigin,
+  probePortalOrigin,
   readPersistedPortalUrl,
   type MemoryServerDevice,
   type PortalAuth,
@@ -27,6 +29,17 @@ type Step = 'sign-in' | 'pick';
 
 const TOUCH = 'min-h-[44px]';
 const PORTAL_AUTH_KEY = 'ci.deviceConnect.portalAuth';
+
+/**
+ * What Log in says when the Companion server does not answer. The two cases
+ * need different advice: the default host being down is the connection's
+ * problem, a custom one is most likely a mistyped Advanced setting.
+ */
+function portalUnreachableMessage(portalUrl: string): string {
+  return portalUrl === DEFAULT_PORTAL_URL
+    ? `Could not reach the Companion server (${portalUrl}). Check your connection and try again.`
+    : `Could not reach the Companion server at ${portalUrl}. Check the Companion URL under Advanced.`;
+}
 
 function writePortalAuth(auth: PortalAuth): void {
   const raw = JSON.stringify(auth);
@@ -225,12 +238,25 @@ export function DeviceConnectPage() {
     // before the sheet opens so a cancelled switch cannot snap back to it.
     clearStoredPortalAuth();
     setAuth(null);
-    const controller = new AbortController();
-    setOidcController(controller);
     setBusy(true);
     setSignInError(null);
 
     try {
+      // Before the sheet opens: an unreachable Companion URL would otherwise
+      // show up only inside it, as a browser error page that dismisses silently.
+      try {
+        await probePortalOrigin(portalUrl);
+      } catch {
+        setSignInError(portalUnreachableMessage(portalUrl));
+
+        return;
+      }
+
+      // Created only once the sheet is really about to open — the "finish
+      // signing in" hint and its Cancel belong to the sheet, not to the probe.
+      const controller = new AbortController();
+      setOidcController(controller);
+
       const tokens = await loginWithPortalOidc(portalUrl, { signal: controller.signal });
       await loadDevices({
         token: tokens.accessToken,

@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 
 import { type UserServiceContext } from '@ci/common/context';
-import { PersonService, UserContextService } from '@ci/domains/memory';
+import { PersonService, UserContextService, ensureSelfEntityId } from '@ci/domains/memory';
 
 const CACHE_TTL_MS = 60_000;
 
@@ -42,6 +43,13 @@ export class ChatModelPreferenceService {
   constructor(
     private readonly personService: PersonService,
     private readonly userContextService: UserContextService,
+    /**
+     * For `SELF_ENTITY_PROVISIONER`, resolved lazily by `ensureSelfEntityId` —
+     * see its doc for why it cannot be injected. Optional so a hand-built service
+     * (the unit tests) still constructs; without it a user who has no self entity
+     * gets the old error rather than a new one.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
   invalidate(userId: string): void {
@@ -86,17 +94,15 @@ export class ChatModelPreferenceService {
     value: string | boolean | null,
   ): Promise<void> {
     const userId = context.userId!;
-    const selfIdentity = await this.userContextService.getSelfIdentity(userId);
-
-    if (!selfIdentity) {
-      throw new Error('Self entity not found');
-    }
+    // Provisioned when the user has none: an imported account has no self entity
+    // to store the preference on, and picking a model answered 500 for it.
+    const selfEntityId = await ensureSelfEntityId(context, this.userContextService, this.moduleRef);
 
     // A single-leaf write, like ImageDescriptionPreferenceService — never a
     // rebuilt `planner` object, which would clobber trust_mode or the other
     // two preferences this service itself owns if a concurrent write lands
     // between our read and our write.
-    await this.personService.patchPropertyLeaves(context, selfIdentity.entityId, [
+    await this.personService.patchPropertyLeaves(context, selfEntityId, [
       { path: ['planner', leaf], value },
       { path: ['planner', 'source'], value: 'settings' },
     ]);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactElement } from 'react';
 
 import { Button, DropdownMenu } from '@ci/shadcn';
 import { ChevronDown, Shapes } from '@ci/shadcn/icons';
@@ -14,10 +14,21 @@ interface Props {
    * wording used elsewhere (e.g. the saved-search editor).
    */
   label?: string;
+  /**
+   * The caller's own trigger, given the selected types — the phone filter
+   * sheet opens this menu from a row. It becomes the menu trigger, so it must
+   * pass its props and ref on to a button.
+   */
+  renderTrigger?: (selectedEntityTypes: string[]) => ReactElement;
+  /** Controlled open state, for a caller that has to close the menu itself (the phone filter sheet). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function EntityTypeFilter({ modal = true, label }: Props) {
-  const [isOpen, setIsOpen] = useState(false);
+export function EntityTypeFilter({ modal = true, label, renderTrigger, open, onOpenChange }: Props) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const isOpen = open ?? uncontrolledOpen;
+  const setIsOpen = onOpenChange ?? setUncontrolledOpen;
   const [{ selectedEntityTypes }, { clearEntityTypes, selectAllEntityTypes, toggleEntityType }] =
     useDropdown();
 
@@ -53,13 +64,17 @@ export function EntityTypeFilter({ modal = true, label }: Props) {
   return (
     <DropdownMenu modal={modal} open={isOpen} onOpenChange={setIsOpen}>
       <Trigger asChild>
-        <Button type="button" variant="outline">
-          {label && <Shapes className="mr-2 h-4 w-4 text-muted-foreground" />}
-          {getDisplayText()}
-          <ChevronDown
-            className={`ml-2 h-4 w-4 opacity-50 transition-transform ${isOpen ? 'rotate-180' : ''}`}
-          />
-        </Button>
+        {renderTrigger ? (
+          renderTrigger(selectedEntityTypes)
+        ) : (
+          <Button type="button" variant="outline">
+            {label && <Shapes className="mr-2 h-4 w-4 text-muted-foreground" />}
+            {getDisplayText()}
+            <ChevronDown
+              className={`ml-2 h-4 w-4 opacity-50 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+            />
+          </Button>
+        )}
       </Trigger>
 
       <Content id="entity-type-filters" align="start" sideOffset={4} className="z-[9999] w-72 p-2">

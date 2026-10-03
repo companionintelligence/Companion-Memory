@@ -5,7 +5,12 @@ import { DataSource } from 'typeorm';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { Events, EventService, OnEvent } from '@ci/domains/events';
-import { excludeForkedOriginsSql, QuestionService } from '@ci/domains/intelligence';
+import {
+  excludeForkedOriginsSql,
+  QUESTION_ROTATION_ORDER_SQL,
+  QUESTION_ROTATION_RANK_SQL,
+  QuestionService,
+} from '@ci/domains/intelligence';
 import { LLM_BACKGROUND_QUEUE } from '@ci/domains/llm';
 import { GraphEnrichmentService, MaintenanceOrchestratorService } from '@ci/domains/maintenance';
 import {
@@ -28,8 +33,8 @@ const FEED_QUEUE_LIMIT = 3;
  *
  * Six hours against a 20-minute tick (`SMART_ROTATION_CRONS.answer_infer`), so
  * a question is retried at most four times a day. Short enough that a genuinely
- * transient failure — an Ollama restart, a model reload, the 60s
- * `INFERENCE_TIMEOUT_MS` firing under load — costs the question a few hours
+ * transient failure — an Ollama restart, a model reload, the
+ * `llm.answerInferenceTimeoutMs` budget firing under load — costs the question a few hours
  * rather than its place in the rotation; long enough that re-asking is never
  * what the appliance spends an inference slot on while something untried is
  * waiting.
@@ -412,6 +417,15 @@ export class SmartRotationListener {
    * letters, and left ci.answers EMPTY. The other 1,278 eligible questions were
    * never offered to the model once.
    *
+   * ═══ WHICH UNTRIED QUESTION GOES FIRST ═══
+   *
+   * The catalogue's rotation order, from questionOrder.ts: tier, then batch
+   * age, then a round-robin across categories in the order the seed files list
+   * them. It is the same definition QuestionService.findUnansweredByUserId
+   * uses, deliberately — this second copy of "next unanswered question" had
+   * drifted from that one before (it skipped the tier rank, and it broke ties
+   * on question_id, which is a different shuffle on every appliance).
+   *
    * ═══ WHERE THE ATTEMPT HISTORY COMES FROM ═══
    *
    * pg-boss's own job rows, which are the durable record of what this listener
@@ -433,8 +447,9 @@ export class SmartRotationListener {
    * The queue name is matched as well as the event name so Postgres can prune
    * to the `llm-background` partition (`AnswerInferenceListener` binds
    * `Events.INFER_QUESTION_ANSWER` to `LLM_BACKGROUND_QUEUE`). If that binding ever moves,
-   * this reads as "no attempt history" and degrades to the old
-   * oldest-unanswered order — which is the safe direction to fail.
+   * this reads as "no attempt history" and degrades to the plain rotation
+   * order, as if nothing had ever been tried — which is the safe direction to
+   * fail.
    *
    * The owner id is bound TWICE, as $1 and $5. Postgres deduces a single type
    * per parameter, and this query compares the owner both to a uuid column
@@ -465,10 +480,12 @@ export class SmartRotationListener {
             AND data->>'ownerId' = $5
         ) dispatched
         GROUP BY 1
-      )
+      ),
+      rotation AS (${QUESTION_ROTATION_RANK_SQL})
       SELECT q.question_id AS id
       FROM ci.questions q
       LEFT JOIN attempts a ON a.question_id = q.question_id::text
+      LEFT JOIN rotation qr ON qr.question_id = q.question_id
       WHERE q.is_active = TRUE
         -- Same guard as QuestionService.findUnansweredByUserId. This is a
         -- SECOND, independent copy of "next unanswered question", and it did
@@ -489,18 +506,17 @@ export class SmartRotationListener {
             AND TRIM(ans.answer_text) <> ''
         )
         AND (a.last_attempt_at IS NULL OR a.last_attempt_at < NOW() - make_interval(hours => $4))
-      -- The whole fix, in one line. NULLS FIRST is what puts every untried
-      -- question ahead of every retry; the created_at tiebreak keeps the
-      -- original oldest-first order WITHIN each of those two groups, so the
-      -- rotation still works the backlog in the order it was seeded.
+      -- The head-of-line fix, in one term: NULLS FIRST puts every untried
+      -- question ahead of every retry. Within those two groups, the
+      -- catalogue's rotation order — the same terms
+      -- QuestionService.findUnansweredByUserId uses.
       --
-      -- question_id last, because created_at alone is not a total order here:
-      -- the seed catalogue was inserted in bulk, so 1,278 of these rows share a
-      -- created_at to the microsecond and Postgres is free to return them in
-      -- any order. Without a deterministic tiebreak the row this returns for a
-      -- tied group could vary run to run, which is the same shape of problem
-      -- the fix is for.
-      ORDER BY a.last_attempt_at ASC NULLS FIRST, q.created_at ASC, q.question_id ASC
+      -- The tie used to fall to q.question_id, on the idea that the ids keep
+      -- seed order. They do not: the seeded catalogue has random v4 ids, and
+      -- most of it shares one created_at to the microsecond, so every
+      -- appliance worked that batch in its own shuffled order. The rotation
+      -- order is total without the id; see questionOrder.ts.
+      ORDER BY a.last_attempt_at ASC NULLS FIRST, ${QUESTION_ROTATION_ORDER_SQL}
       LIMIT 1;
       `,
       [userId, LLM_BACKGROUND_QUEUE, Events.INFER_QUESTION_ANSWER, INFERENCE_ATTEMPT_COOLDOWN_HOURS, userId],

@@ -1,4 +1,4 @@
-import { useState, type ComponentType, type ReactNode } from 'react';
+import { useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
 
 import { useQuery } from '@apollo/client';
 import { Button, DropdownMenu, cn } from '@ci/shadcn';
@@ -118,6 +118,23 @@ function categoryButtonClass(selected: boolean, active: boolean) {
         ? 'border-border bg-background text-foreground hover:bg-accent'
         : 'border-border bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground',
   );
+}
+
+/**
+ * The What strip's width with every button at rest: the floor it keeps when it
+ * shares a line with the filter controls (see the strip in MemoryEntityTypeNav).
+ *
+ * Mirrors the buttons' own classes: `border` and `px-2` around a 1rem icon make
+ * 2rem + 2px ({@link categoryButtonClass}), a dropdown adds its 0.875rem caret
+ * ({@link chevronClass}, `h-3.5` with no margin at rest), and `md:gap-1.5` sits
+ * between buttons. A revealed label (selected, or under the pointer) is left
+ * out on purpose: it scrolls inside the strip rather than widening it.
+ */
+function restingStripWidth(categories: WhatCategory[]): string {
+  const dropdowns = categories.filter((category) => category.kind !== 'standalone').length;
+  const rem = categories.length * 2 + dropdowns * 0.875 + Math.max(0, categories.length - 1) * 0.375;
+
+  return `calc(${rem}rem + ${categories.length * 2}px)`;
 }
 
 function CategoryIcon({
@@ -555,10 +572,24 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
         {/* Below `xl` the strip takes the whole line (`basis-0`, grows) and scrolls
           the categories inside it if it must; the filter controls sit on a
           line of their own and wrap there. From `xl` up the strip and the
-          controls share the line: each has a floor (16rem here, 24rem there),
+          controls share the line: each has a floor (every What button at
+          rest here — `restingStripWidth` — and 24rem there),
           the room beyond both floors is split between them, and the strip
           never grows past its content (`max-w-max`) so the excess goes to the
-          controls. Measured 2026-09-22 at the controls' natural width of
+          controls.
+
+          The strip's floor is its buttons at rest (392 px for /memory's eight
+          at the 17px root), so none starts out scrolled out of sight. A fixed
+          16rem hid the Tags button whenever the rail was pinned below
+          ~1,600 px, with no scrollbar to say it was there. Not `min-w-max`:
+          max-content includes a label sliding out under the pointer, so the
+          strip grew on hover, squeezed the controls onto another line and the
+          bar jumped a line at 1,280 and 1,440 px. Computed from the
+          categories, not a constant, because the events explorer shows four.
+          The cost is a third line of controls with the rail pinned at
+          1,280–1,366 px.
+
+          Measured 2026-09-22 at the controls' natural width of
           ~1,280 px: inline from `xl` gives a 99 px bar at 1,400 px, while
           inline from `md` gave a 233 px bar at 900 px with the strip cut to
           five buttons — the controls' own line is the shorter layout below
@@ -571,7 +602,10 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
           strip was left a 57 px sliver — one What button and part of the next,
           scrolling behind the controls — and below ~1,350 px the controls
           dropped to a second line and ran off the right edge. */}
-        <div className="scrollbar-none min-w-0 flex-1 basis-0 overflow-x-auto overscroll-x-contain xl:min-w-[16rem] xl:max-w-max">
+        <div
+          className="scrollbar-none min-w-0 flex-1 basis-0 overflow-x-auto overscroll-x-contain xl:min-w-(--what-strip-floor) xl:max-w-max"
+          style={{ '--what-strip-floor': restingStripWidth(categories) } as CSSProperties}
+        >
           <div className="flex w-max items-center gap-1 md:gap-1.5">
             {categories.map((category) => {
               if (category.kind === 'standalone') {

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { fetchJson } from '@ci/common';
+import { fetchJson, getWebOrigin } from '@ci/common';
 import { Button, Card, Checkbox, Input, Label, Switch } from '@ci/shadcn';
 import {
   AlertCircle,
@@ -12,7 +12,9 @@ import {
   Pencil,
 } from '@ci/shadcn/icons';
 
-import { useAuth, useCurrentUser } from '@/hooks';
+import { useCurrentUser, useSessionAuth } from '@/hooks';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 interface BlueBubblesConfigResponse {
   host: string;
@@ -43,16 +45,37 @@ interface TestConnectionResult {
 
 const DEFAULT_PORT = '1234';
 
-function formatTimestamp(value: string | null): string {
+function formatTimestamp(value: string | null, fmt: DateTimeFormatter): string {
   if (!value) {
     return 'never';
   }
 
   try {
-    return new Date(value).toLocaleString();
+    return fmt.dateTime(value);
   } catch {
     return value;
   }
+}
+
+/**
+ * A ref for a status line that brings it into view when a value arrives for it.
+ *
+ * This form is taller than a phone's screen and its button row sits near the
+ * bottom edge of it, so what a button reports is drawn BELOW the fold: tapping
+ * "Test connection" looked like it did nothing until the person scrolled down and
+ * found the answer under "Sync now". `nearest` moves the page only as far as it
+ * takes to show the line, and not at all when it is already on screen.
+ */
+function useRevealWhenSet(value: unknown) {
+  const ref = useRef<HTMLParagraphElement | null>(null);
+
+  useEffect(() => {
+    if (value) {
+      ref.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [value]);
+
+  return ref;
 }
 
 /**
@@ -66,7 +89,12 @@ function formatTimestamp(value: string | null): string {
  * other imported source does (Memory, Import Runs).
  */
 export function BlueBubblesSection() {
-  const [{ authToken }] = useAuth();
+  // `ready`, not `authToken`: the token is the web JWT, which the native shell never has — its
+  // credential is a keystore API key that `fetchJson` attaches as `x-api-key`. Gating on the token
+  // meant the saved connection never filled the form on the phone, and `dirty` (which needs a loaded
+  // config) kept Save disabled for good. The controller is `JwtOrApiKeyAuthGuard`.
+  const { ready, headers: authHeaders } = useSessionAuth();
+  const fmt = useDateTimeFormat();
   // The BlueBubbles connection is one configuration for the whole appliance, and "test
   // connection" makes the appliance dial an arbitrary host. Both are administrator actions on
   // the server (ApplianceAdminGuard); reading the current settings is not.
@@ -102,15 +130,9 @@ export function BlueBubblesSection() {
 
   const [webhookCopied, setWebhookCopied] = useState(false);
 
-  const authHeaders = useMemo<Record<string, string>>(() => {
-    const headers: Record<string, string> = {};
-
-    if (authToken) {
-      headers.Authorization = `Bearer ${authToken}`;
-    }
-
-    return headers;
-  }, [authToken]);
+  const testResultRef = useRevealWhenSet(testResult);
+  const syncMessageRef = useRevealWhenSet(syncMessage);
+  const saveErrorRef = useRevealWhenSet(saveError);
 
   const applyConfig = useCallback((next: BlueBubblesConfigResponse) => {
     setConfig(next);
@@ -124,7 +146,7 @@ export function BlueBubblesSection() {
   }, []);
 
   const load = useCallback(async () => {
-    if (!authToken) {
+    if (!ready) {
       setLoading(false);
 
       return;
@@ -146,7 +168,7 @@ export function BlueBubblesSection() {
     } finally {
       setLoading(false);
     }
-  }, [authToken, authHeaders, applyConfig]);
+  }, [ready, authHeaders, applyConfig]);
 
   useEffect(() => {
     void load();
@@ -241,7 +263,9 @@ export function BlueBubblesSection() {
     }
   };
 
-  const webhookUrl = config?.webhookPath ? `${window.location.origin}${config.webhookPath}` : null;
+  // getWebOrigin(), not window.location.origin: on the phone that is the app's own
+  // `capacitor://localhost`, which BlueBubbles Server could never call.
+  const webhookUrl = config?.webhookPath ? `${getWebOrigin()}${config.webhookPath}` : null;
 
   const handleCopyWebhookUrl = async () => {
     if (!webhookUrl) {
@@ -430,6 +454,7 @@ export function BlueBubblesSection() {
 
               {testResult ? (
                 <p
+                  ref={testResultRef}
                   className={`text-sm ${testResult.ok ? 'text-teal-700 dark:text-teal-300' : 'text-destructive'}`}
                 >
                   {testResult.ok
@@ -438,8 +463,16 @@ export function BlueBubblesSection() {
                 </p>
               ) : null}
 
-              {syncMessage ? <p className="text-sm text-muted-foreground">{syncMessage}</p> : null}
-              {saveError ? <p className="text-sm text-destructive">{saveError}</p> : null}
+              {syncMessage ? (
+                <p ref={syncMessageRef} className="text-sm text-muted-foreground">
+                  {syncMessage}
+                </p>
+              ) : null}
+              {saveError ? (
+                <p ref={saveErrorRef} className="text-sm text-destructive">
+                  {saveError}
+                </p>
+              ) : null}
               {loadError ? <p className="text-sm text-destructive">{loadError}</p> : null}
             </div>
           )}
@@ -493,11 +526,11 @@ export function BlueBubblesSection() {
             <dl className="grid gap-1 text-sm text-muted-foreground">
               <div className="flex justify-between gap-4">
                 <dt>Last sync</dt>
-                <dd>{formatTimestamp(config.lastSyncCursor)}</dd>
+                <dd>{formatTimestamp(config.lastSyncCursor, fmt)}</dd>
               </div>
               <div className="flex justify-between gap-4">
                 <dt>Last webhook received</dt>
-                <dd>{formatTimestamp(config.lastWebhookReceivedAt)}</dd>
+                <dd>{formatTimestamp(config.lastWebhookReceivedAt, fmt)}</dd>
               </div>
             </dl>
           </Card.Content>

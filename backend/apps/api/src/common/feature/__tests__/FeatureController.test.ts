@@ -19,8 +19,7 @@ describe('FeatureController', () => {
 
   it('accepts a session token or an API key on the full map', () => {
     const guards = Reflect.getMetadata(GUARDS_METADATA, FeatureController.prototype.features) as
-      | unknown[]
-      | undefined;
+      unknown[] | undefined;
 
     expect(guards).toContain(JwtOrApiKeyAuthGuard);
   });

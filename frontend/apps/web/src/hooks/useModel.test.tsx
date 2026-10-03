@@ -13,6 +13,12 @@ const h = vi.hoisted(() => ({
     loading: false,
     error: null,
   },
+  toastError: vi.fn(),
+}));
+
+vi.mock('@ci/shadcn', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/shadcn')>()),
+  useToast: () => ({ toast: { error: h.toastError } }),
 }));
 
 vi.mock('./useAuth', () => ({
@@ -208,6 +214,66 @@ describe('useModel', () => {
     expect(result.current[0].selectedModel).toBe('qwen-vl');
 
     await waitFor(() => expect(result.current[0].selectedModel).toBe('llama3'));
+  });
+
+  // The revert alone read as "the tap did nothing": an iOS QA run tapped a model
+  // six times, the server answered 500 six times (an account with no self entity
+  // to store the preference on), and the label snapped back to the default each
+  // time with no word about why.
+  it('says so when the server rejects the write, instead of reverting in silence', async () => {
+    const { fetchMock } = setFetch();
+    const { result } = renderHook(() => useModel(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, status: 500, text: async () => '{}' } as Response),
+    );
+
+    act(() => result.current[1].selectModel('qwen-vl'));
+
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledTimes(1));
+    expect(h.toastError).toHaveBeenCalledWith(expect.stringMatching(/wasn't saved/));
+    expect(result.current[0].selectedModel).toBe('llama3');
+  });
+
+  it('stays quiet when the write succeeds', async () => {
+    const { fetchMock } = setFetch();
+    const { result } = renderHook(() => useModel(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+
+    act(() => result.current[1].selectModel('qwen-vl'));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/personalization/chat-model',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+    expect(h.toastError).not.toHaveBeenCalled();
+  });
+
+  it('says so when the Tools or Thinking setting cannot be saved, and puts the toggle back', async () => {
+    const { fetchMock } = setFetch();
+    const { result } = renderHook(() => useModel(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    act(() => result.current[1].selectModel('qwen-vl'));
+    await waitFor(() => expect(result.current[0].selectedModel).toBe('qwen-vl'));
+
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, status: 500, text: async () => '{}' } as Response),
+    );
+    act(() => result.current[1].toggleTools());
+
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith(expect.stringMatching(/Tools setting/)));
+    await waitFor(() => expect(result.current[0].toolsEnabled).toBe(true));
+
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, status: 500, text: async () => '{}' } as Response),
+    );
+    act(() => result.current[1].toggleThinking());
+
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith(expect.stringMatching(/Thinking setting/)));
+    await waitFor(() => expect(result.current[0].thinkingEnabled).toBe(true));
   });
 
   it('derives thinking/tools support from the selected model, and persists the toggle server-side', async () => {

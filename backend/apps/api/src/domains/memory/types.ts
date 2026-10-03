@@ -40,6 +40,12 @@ export const updateContentSchema = z.object({
   event_id: z.string().optional(),
 });
 
+/**
+ * A field a source owns on a stored event, and refreshes when it re-delivers
+ * the event — see {@link CreateEventDto.source_asserts}.
+ */
+export type SourceAssertedField = 'status' | 'time' | 'title' | 'location';
+
 export interface CreateEventDto {
   id?: string;
   title: string;
@@ -119,6 +125,23 @@ export interface CreateEventDto {
     id: string;
   };
   content?: CreateContentDto[];
+  /**
+   * Which of this delivery's values are its SOURCE's word, for the refresh of
+   * an event already stored under its identity (CalendarEventService
+   * `refreshFromSource`). Omitted: all of them. A delivery that has to fill in
+   * fields its source did not send — a cancelled occurrence rebuilt from its
+   * series, whose time and title are the series' — names only the ones it
+   * does know, so a stored row's own time and title are not replaced by the
+   * filler. A new row is written with everything either way.
+   *
+   * `location` is the name and the point together (sourceLocationMerge.ts).
+   * Unlike the time and the title it can be genuinely absent, so a delivery
+   * that does not name `source_asserts` and sends no `location_name` is a
+   * source that says the event has no place, and clears one the source gave it
+   * earlier; a delivery that has no word on the place at all must leave
+   * `location` out of the list.
+   */
+  source_asserts?: readonly SourceAssertedField[];
 }
 
 export interface UpdateEventDto {
@@ -733,19 +756,36 @@ export interface FindItemsFilter {
   acquiredTo?: Date;
 }
 
-/** Keyset cursor for {@link ItemService.findPage}: `(createdAt, id)` DESC. */
+/**
+ * Where a row sits in the things list: its `(created_at, object_id)`.
+ *
+ * `createdAt` is TEXT, to the microsecond, in UTC: `2026-05-01T00:00:00.123456Z`. It is never a
+ * `Date`. `ci.objects.created_at` is `timestamptz(6)` and the driver reads it at milliseconds
+ * (`.123456` comes back as `.123`), so a position built from the entity's `Date` names the
+ * millisecond that contains its row, not the row's instant, and a seek past it skips every row of
+ * that instant that sorts after the page boundary. Postgres formats the text itself (see
+ * `ItemService.findPage`) and parses it back as the column's own type, so nothing rounds.
+ */
+export interface ItemPosition {
+  createdAt: string;
+  id: string;
+}
+
+/** Keyset cursor for {@link ItemService.findPage}: `(createdAt, id)` DESC. Pass both halves of an {@link ItemPosition}. */
 export interface ItemKeyset {
   limit?: number;
-  afterCreatedAt?: Date | null;
+  afterCreatedAt?: string | null;
   afterId?: string | null;
 }
 
 /** One page of owned units, newest first. */
 export interface ItemPage {
   items: Item[];
+  /** Where each of {@link items} sits, index for index: a client may resume from any row, not only the last. */
+  positions: ItemPosition[];
   hasMore: boolean;
   /** Cursor to pass back as `afterCreatedAt`/`afterId`; null when the page is the last. */
-  nextCursor: { createdAt: Date; id: string } | null;
+  nextCursor: ItemPosition | null;
 }
 
 export interface CreatePersonDto {

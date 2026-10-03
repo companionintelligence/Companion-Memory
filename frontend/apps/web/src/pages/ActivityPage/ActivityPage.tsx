@@ -2,6 +2,8 @@ import { useState } from 'react';
 
 import { Button } from '@ci/shadcn';
 
+import { WebSignInRequired } from '@/components/WebSignInRequired';
+
 import { ActivityRow } from './ActivityRow';
 import { useActivity, type ActivityFilters } from './useActivity';
 
@@ -43,7 +45,28 @@ export function ActivityPage() {
   // lookup cannot miss — no fallback branch to get wrong.
   const active = TABS.find((candidate) => candidate.key === tab) ?? TABS[0];
 
-  const { rows, loading, loadingMore, error, hasMore, loadMore } = useActivity(active.filters);
+  const { rows, loading, loadingMore, error, hasMore, loadMore, needsWebSignIn } = useActivity(
+    active.filters,
+  );
+
+  if (needsWebSignIn) {
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        <header className="flex flex-col gap-1">
+          <h1 className="text-xl font-semibold">Activity</h1>
+          <p className="text-sm text-muted-foreground">
+            Every tool your appliance ran on your behalf, and everything it refused to.
+          </p>
+        </header>
+
+        <WebSignInRequired>
+          The activity ledger can only be read from a web sign-in. It records which key called what, so a
+          device key — which is all this app signs in with — is never allowed to read it. Open Companion
+          Memory in a web browser and sign in to see it.
+        </WebSignInRequired>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4 p-4">

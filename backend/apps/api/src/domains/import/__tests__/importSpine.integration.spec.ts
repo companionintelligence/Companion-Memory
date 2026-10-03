@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 
 import type { ImportRunService } from '../services/ImportRunService';
+import { CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY } from '../staging/identity';
 import { StagedWriter } from '../staging/StagedWriter';
 
 import { createStagingHarness, importDatabase, type StagingHarness } from './support/stagingHarness';
@@ -370,6 +371,54 @@ describeWithDatabase(`the import spine (${importDatabase.target})`, () => {
       expect(await service.beginStage(stages[0].id)).toBe(true);
     });
 
+    it('never takes back a stage the calling process says it is running, however silent', async () => {
+      // A process KNOWS its own work is alive. Silence past the window used to
+      // be enough on its own: a parser that blocked the event loop — or a
+      // database away for longer than the window — lost its stage to the very
+      // process running it.
+      const { run, stages } = await startRun(await stageDrop());
+
+      expect(await service.beginStage(stages[0].id)).toBe(true);
+      await age(stages[0].id);
+      events.send.mockClear();
+
+      await service.resumeInterrupted({ liveStageIds: [stages[0].id] });
+
+      const [stage] = await dataSource.query<Array<{ status: string }>>(
+        `SELECT status FROM ci_import.import_stages WHERE id = $1::uuid`,
+        [stages[0].id],
+      );
+
+      expect(stage.status).toBe('running');
+      expect(sendsFor(run.id)).toEqual([]);
+    });
+
+    it('fences out the claim it takes back', async () => {
+      // The worker it judged dead may only have been slow. Its token is cleared
+      // with the reclaim, so its progress, completion and failure all miss —
+      // rather than landing in the attempt that replaces it.
+      const { stages } = await startRun(await stageDrop());
+      const token = await service.claimStage(stages[0].id);
+
+      expect(token).not.toBeNull();
+      await age(stages[0].id);
+
+      await service.resumeInterrupted();
+
+      expect(await service.touchStage(stages[0].id, token!)).toBe(false);
+      expect(await service.recordProgress(stages[0].id, { processed: 5 }, token!)).toBe(false);
+      expect(await service.completeStage(stages[0].id, { processed: 5, total: 5, detail: {} }, token!)).toBe(
+        false,
+      );
+
+      const [stage] = await dataSource.query<Array<{ status: string; claim_token: string | null }>>(
+        `SELECT status, claim_token FROM ci_import.import_stages WHERE id = $1::uuid`,
+        [stages[0].id],
+      );
+
+      expect(stage).toEqual({ status: 'queued', claim_token: null });
+    });
+
     it('leaves a LIVE claim alone, however it got there', async () => {
       // The failure the staleness gate exists for, observed in the wild: a dev
       // restart leaked the old process, its push loop was alive and writing
@@ -657,14 +706,21 @@ describeWithDatabase(`the import spine (${importDatabase.target})`, () => {
       await writer.settled();
 
       const [row] = await dataSource.query<
-        Array<{ metadata: Record<string, unknown>; graph_dirty: boolean }>
-      >(`SELECT metadata, graph_dirty FROM ci_import.staged_entities WHERE run_id = $1::uuid`, [runId]);
+        Array<{ metadata: Record<string, unknown>; graph_dirty: boolean; accumulate: string[] | null }>
+      >(`SELECT metadata, graph_dirty, accumulate FROM ci_import.staged_entities WHERE run_id = $1::uuid`, [
+        runId,
+      ]);
 
       expect(row.metadata.prices).toEqual(['10.19', '15.92']);
       // The push resumes from a high-water mark, so a row that changed after it
       // was already sent would never be revisited without this.
       expect(row.graph_dirty).toBe(true);
       expect(writer.totals.entitiesGrown).toBe(1);
+      // And the declaration itself is kept, so the push unions `prices` into
+      // the graph row too instead of replacing what an earlier run put there.
+      // This entity is a contact (it has an email), and staging adds the keys it
+      // accumulates for every contact (`withContactIdentifiers`) to the parser's.
+      expect(row.accumulate).toEqual(['prices', ...CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY]);
     });
 
     it('does not collapse item→item edges that point at different items', async () => {

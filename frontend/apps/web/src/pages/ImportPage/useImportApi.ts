@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { fetchJson } from '@ci/common';
+import { apiFetch, apiKeyHeaders, buildApiUrl, fetchJson } from '@ci/common';
 
 import { useAuth } from '@/hooks';
 
@@ -133,6 +133,15 @@ export interface ActiveImportStage extends ImportStage {
    * long it took. Null for `blocked`, which is not waiting on anything yet.
    */
   readonly elapsedMs: number | null;
+  /** The claim's last sign of life — heartbeat or progress write. Absent from older servers. */
+  readonly heartbeatAt?: string | null;
+  /**
+   * `running`, but silent past the server's threshold: its worker is gone or
+   * wedged. Beside `queueState` rather than a fifth value of it, because the
+   * stage still holds its slot. The appliance retries a stage whose worker is
+   * gone within minutes; until then, this is the only honest word for it.
+   */
+  readonly stalled?: boolean;
 }
 
 export interface ActiveImportRun extends ImportRun {
@@ -348,9 +357,15 @@ export function useImportApi() {
    * the reason `useJobsAuth` documents — the conditional form infers
    * `{ Authorization?: undefined }`, which `exactOptionalPropertyTypes` refuses
    * to widen.
+   *
+   * The keystore key is added here too, because the multipart upload, `post`
+   * and `del` below do NOT go through `fetchJson`: without it those requests
+   * reach the server unauthenticated on a phone. Read per call, like the token,
+   * so a long-lived closure signs with whatever is live at SEND time. Repeating
+   * it on a `fetchJson` call is harmless — same header, same value.
    */
   const authHeaders = useCallback((): Record<string, string> => {
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { ...apiKeyHeaders() };
 
     if (tokenRef.current) {
       headers.Authorization = `Bearer ${tokenRef.current}`;
@@ -452,7 +467,12 @@ export function useImportApi() {
 
         const xhr = new XMLHttpRequest();
 
-        xhr.open('POST', '/api/import/uploads');
+        // `buildApiUrl`, not the bare path: on the native shell the page origin is
+        // `capacitor://localhost`, and Capacitor's XHR patch treats a relative URL
+        // as the WebView's own — it never calls the native `open()`, so the very
+        // next `setRequestHeader` throws "The object is in an invalid state", and
+        // every wizard upload from a phone failed with exactly that text.
+        xhr.open('POST', buildApiUrl('/api/import/uploads'));
 
         for (const [name, value] of Object.entries(authHeaders())) {
           xhr.setRequestHeader(name, value);
@@ -961,8 +981,11 @@ export function useActiveImports(
   return { snapshot, error, refresh };
 }
 
+// `apiFetch` resolves the path against the Memory origin (a no-op on web) and, on
+// the native shells, goes out through CapacitorHttp — a bare `fetch('/api/...')`
+// there is a request to the app's own `capacitor://localhost` bundle.
 async function del<T>(url: string, headers: Record<string, string>): Promise<T> {
-  const response = await fetch(url, { method: 'DELETE', headers });
+  const response = await apiFetch(url, { method: 'DELETE', headers });
 
   if (!response.ok) {
     throw new Error(await describeFailure(response, 'Request failed'));
@@ -972,7 +995,7 @@ async function del<T>(url: string, headers: Record<string, string>): Promise<T> 
 }
 
 async function post<T>(url: string, headers: Record<string, string>, body: unknown): Promise<T> {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -996,7 +1019,7 @@ async function postUpload(form: FormData, headers: Record<string, string>): Prom
   let response: Response;
 
   try {
-    response = await fetch('/api/import/uploads', {
+    response = await apiFetch('/api/import/uploads', {
       method: 'POST',
       headers,
       body: form,

@@ -116,8 +116,10 @@ hub tabs) and `layouts/Main/SecondaryNavigation/selfSections.ts` (the Self tabs)
   submenu. Chat's recent threads render nested under its own row in the rail
   submenu (moved from the old, now-removed Chat rail group); on the phone,
   ChatSidebar's own thread list is unreachable (it portals to a slot mobile
-  never renders), so the drawer submenu is the only way to switch conversation
-  there. The Explorer is the Events section at `/memory/events`; `/memory` on
+  never renders), so the page carries its own **Chats** and **New chat**
+  buttons (`PhoneChatBar`) and the drawer submenu is how you switch
+  conversation from elsewhere. The Explorer is the Events section at
+  `/memory/events`; `/memory` on
   its own is now a **real route** (the unfiltered explorer, all kinds), not a
   redirect.
 

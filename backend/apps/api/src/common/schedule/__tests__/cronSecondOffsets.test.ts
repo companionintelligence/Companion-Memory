@@ -55,8 +55,7 @@ const PREEXISTING_OFFSETS: Record<string, string> = {
 
 function registeredExpression(method: unknown): string {
   const options = Reflect.getMetadata(SCHEDULE_CRON_OPTIONS, method as object) as
-    | { cronTime?: string }
-    | undefined;
+    { cronTime?: string } | undefined;
 
   expect(options?.cronTime).toEqual(expect.any(String));
 

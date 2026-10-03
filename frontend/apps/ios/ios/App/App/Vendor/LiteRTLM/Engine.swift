@@ -90,6 +90,13 @@ public actor Engine {
     if let cacheDir = engineConfig.cacheDir {
       litert_lm_engine_settings_set_cache_dir(settings, cacheDir)
     }
+    // CI PATCH (engine-tuning)
+    if let prefillChunkSize = engineConfig.prefillChunkSize, prefillChunkSize > 0 {
+      litert_lm_engine_settings_set_prefill_chunk_size(settings, Int32(prefillChunkSize))
+    }
+    if let numThreads = engineConfig.numThreads, numThreads > 0 {
+      litert_lm_engine_settings_set_num_threads(settings, Int32(numThreads))
+    }
     if let loraRank = engineConfig.loraRank {
       litert_lm_engine_settings_set_lora_rank(settings, Int32(loraRank))
       if loraRank > 0 {
@@ -237,7 +244,18 @@ public actor Engine {
       throw LiteRTLMError.engine(.failedToCreateConversation)
     }
 
-    return Conversation(handle: conversationHandle, toolManager: toolManager)
+    return Conversation(handle: conversationHandle, toolManager: toolManager, owner: self)
+  }
+
+  /// CI PATCH (tokenizer). How many tokens `text` is, by the loaded model's own tokenizer — the
+  /// exact figure a context budget is spent in. `nil` when the engine is not initialised or the
+  /// runtime cannot tokenize. Read-only, so it is safe to call while a conversation is idle.
+  public func tokenCount(of text: String) -> Int? {
+    guard let handle else { return nil }
+    guard let result = litert_lm_engine_tokenize(handle, text) else { return nil }
+    defer { litert_lm_tokenize_result_delete(result) }
+
+    return Int(litert_lm_tokenize_result_get_num_tokens(result))
   }
 
   deinit {

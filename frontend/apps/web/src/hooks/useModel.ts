@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createHookContext, fetchJson } from '@ci/common';
+import { useToast } from '@ci/shadcn';
 
 import { useSessionAuth } from './useSessionAuth';
 
@@ -46,6 +47,7 @@ type Value = [
 
 function useModel(): Value {
   const { ready, headers } = useSessionAuth();
+  const { toast } = useToast();
 
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [selectedVisionModel, setSelectedVisionModel] = useState<string | null>(null);
@@ -76,16 +78,19 @@ function useModel(): Value {
       // Fire-and-forget from the caller's point of view (ModelSelector calls
       // this synchronously from an onValueChange handler) — revert the
       // optimistic update on failure rather than leaving the UI showing a
-      // model the server never actually recorded.
+      // model the server never actually recorded. And say so: the revert alone
+      // looked like the tap had done nothing (six taps, six silent reverts, on
+      // an iOS QA run whose account the server could not write for).
       void fetchJson('/api/personalization/chat-model', {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ chatModel: model }),
       }).catch(() => {
         setSelectedModel(previous);
+        toast.error("Couldn't switch models — your choice wasn't saved. Try again.");
       });
     },
-    [activeModels, headers, selectedModel],
+    [activeModels, headers, selectedModel, toast],
   );
 
   const selectVisionModel = useCallback((model: string | null) => {
@@ -108,11 +113,12 @@ function useModel(): Value {
         body: JSON.stringify({ enabled: next }),
       }).catch(() => {
         setThinkingPreferred(current);
+        toast.error("Couldn't save the Thinking setting. Try again.");
       });
 
       return next;
     });
-  }, [headers]);
+  }, [headers, toast]);
 
   const toggleTools = useCallback(() => {
     setToolsPreferred((current) => {
@@ -124,11 +130,12 @@ function useModel(): Value {
         body: JSON.stringify({ enabled: next }),
       }).catch(() => {
         setToolsPreferred(current);
+        toast.error("Couldn't save the Tools setting. Try again.");
       });
 
       return next;
     });
-  }, [headers]);
+  }, [headers, toast]);
 
   const fetchModels = useCallback(async () => {
     setActiveModels([]);

@@ -1,0 +1,168 @@
+{
+  "seedEntityIds": [
+    "01991a74-e891-7b65-9fd4-39078906e1c5"
+  ],
+  "nodes": [
+    {
+      "id": "01991a74-e891-7b65-9fd4-39078906e1c5",
+      "type": "person",
+      "name": "Maria Alvarez",
+      "description": "Pastry chef at Lakeside Bakery in Oakland. Close friend since the 2019 pottery class.",
+      "properties": {
+        "relationship": "friend",
+        "birthDate": "1989-06-14",
+        "email": "maria.alvarez@example.com"
+      },
+      "metadata": {
+        "createdAt": "2024-11-03T18:20:00.000Z",
+        "updatedAt": "2026-09-14T09:05:00.000Z",
+        "linkedTable": null,
+        "linkedId": "01994a29-849c-7f57-9782-4a1e249e0698"
+      }
+    },
+    {
+      "id": "01993365-2c77-7987-9259-d8399aeee490",
+      "type": "person",
+      "name": "Sam Rivera",
+      "description": "The user.",
+      "metadata": {
+        "createdAt": "2024-11-03T18:20:00.000Z",
+        "updatedAt": "2026-09-14T09:05:00.000Z",
+        "linkedTable": null,
+        "linkedId": "0199aa8a-8a66-72f0-9b4a-49301ef6e9ba"
+      }
+    },
+    {
+      "id": "0199a51c-928b-74c4-9d46-37b3b9eca905",
+      "type": "organization",
+      "name": "Lakeside Bakery",
+      "description": "A bakery on the north shore of Lake Merritt.",
+      "properties": {
+        "category": "food"
+      },
+      "metadata": {
+        "createdAt": "2024-11-03T18:20:00.000Z",
+        "updatedAt": "2026-09-14T09:05:00.000Z",
+        "linkedTable": null,
+        "linkedId": "01995a2c-a872-7990-9903-f84398e32f12"
+      }
+    },
+    {
+      "id": "0199336c-81ff-7df8-9fd4-92f9b59a939c",
+      "type": "place",
+      "name": "Oakland",
+      "properties": {
+        "region": "CA",
+        "country": "US"
+      },
+      "metadata": {
+        "createdAt": "2024-11-03T18:20:00.000Z",
+        "updatedAt": "2026-09-14T09:05:00.000Z",
+        "linkedTable": null,
+        "linkedId": "0199891d-63e7-7d4d-9ae9-ceaf1923d77e"
+      }
+    },
+    {
+      "id": "0199a7d3-f6e6-786a-9a46-a7467ef3e726",
+      "type": "concept",
+      "name": "Pottery class 2019",
+      "description": "Wheel-throwing evening class at the community studio.",
+      "properties": {
+        "year": 2019
+      },
+      "metadata": {
+        "createdAt": "2024-11-03T18:20:00.000Z",
+        "updatedAt": "2026-09-14T09:05:00.000Z",
+        "linkedTable": null,
+        "linkedId": "019914d6-6a94-7298-93fd-5b2a0bac0d92"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "0199bdd4-a30a-7ee3-9a7d-8193a5f20c29",
+      "type": "FRIEND_OF",
+      "from": {
+        "id": "01993365-2c77-7987-9259-d8399aeee490",
+        "name": "Sam Rivera"
+      },
+      "to": {
+        "id": "01991a74-e891-7b65-9fd4-39078906e1c5",
+        "name": "Maria Alvarez"
+      },
+      "properties": {
+        "since": "2019"
+      },
+      "strength": 0.8,
+      "bidirectional": true
+    },
+    {
+      "id": "0199c3b8-716a-77ff-91fc-3c8a8e933f88",
+      "type": "WORKS_AT",
+      "from": {
+        "id": "01991a74-e891-7b65-9fd4-39078906e1c5",
+        "name": "Maria Alvarez"
+      },
+      "to": {
+        "id": "0199a51c-928b-74c4-9d46-37b3b9eca905",
+        "name": "Lakeside Bakery"
+      },
+      "properties": {
+        "role": "Pastry chef"
+      },
+      "strength": 0.9,
+      "bidirectional": false
+    },
+    {
+      "id": "01998cfc-839e-7529-97ee-bef2db73283f",
+      "type": "LIVES_IN",
+      "from": {
+        "id": "01991a74-e891-7b65-9fd4-39078906e1c5",
+        "name": "Maria Alvarez"
+      },
+      "to": {
+        "id": "0199336c-81ff-7df8-9fd4-92f9b59a939c",
+        "name": "Oakland"
+      },
+      "properties": {},
+      "strength": 0.9,
+      "bidirectional": false
+    },
+    {
+      "id": "01998722-73b7-73fe-9989-160c45ecb796",
+      "type": "ATTENDED",
+      "from": {
+        "id": "01991a74-e891-7b65-9fd4-39078906e1c5",
+        "name": "Maria Alvarez"
+      },
+      "to": {
+        "id": "0199a7d3-f6e6-786a-9a46-a7467ef3e726",
+        "name": "Pottery class 2019"
+      },
+      "properties": {},
+      "strength": 0.6,
+      "bidirectional": false
+    },
+    {
+      "id": "019961ed-b98a-7320-9ead-fbf4fbfa2d1b",
+      "type": "ATTENDED",
+      "from": {
+        "id": "01993365-2c77-7987-9259-d8399aeee490",
+        "name": "Sam Rivera"
+      },
+      "to": {
+        "id": "0199a7d3-f6e6-786a-9a46-a7467ef3e726",
+        "name": "Pottery class 2019"
+      },
+      "properties": {},
+      "strength": 0.6,
+      "bidirectional": false
+    }
+  ],
+  "stats": {
+    "nodeCount": 5,
+    "edgeCount": 5,
+    "truncatedNodes": false,
+    "truncatedEdges": false
+  }
+}

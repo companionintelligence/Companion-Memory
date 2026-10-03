@@ -26,7 +26,17 @@ const TRUST_MODE_LABELS: Record<string, string> = {
   hands_off: 'Hands-off — acts on its own',
 };
 
-export function AboutYouSection() {
+interface AboutYouSectionProps {
+  /**
+   * The page changes this when an answer listed below ("Recent answers") has
+   * been written elsewhere on it — Life details saving or editing one. A new
+   * value refetches the profile in place; without it the list kept showing the
+   * old words until the page was reloaded.
+   */
+  refreshToken?: number;
+}
+
+export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
   const [{ authToken }] = useAuth();
   const [view, setView] = useState<AboutYouView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -44,21 +54,57 @@ export function AboutYouSection() {
   const [{ loading: composing, error: composeError, result: composed }, { compose, apply, clear }] =
     usePersonaCompose();
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setView(await fetchAboutYou(authToken));
-    } catch {
-      setError('Could not load what Companion knows about you.');
-    } finally {
-      setLoading(false);
-    }
-  }, [authToken]);
+  // The newest load: a slow refresh that started before a later one must not land on top of it.
+  const latestLoad = useRef(0);
+
+  const load = useCallback(
+    async ({ background = false }: { background?: boolean } = {}) => {
+      const current = ++latestLoad.current;
+
+      // `loading` swaps the whole section for "Loading…". That is right for the
+      // first load and wrong for a refresh: it collapsed the section, and the
+      // scroller with it (see LifeDetailsSection.loadAnswers). A background
+      // refresh swaps the content in place and, if it fails, keeps what is shown.
+      if (!background) {
+        setLoading(true);
+        setError(null);
+      }
+
+      try {
+        const next = await fetchAboutYou(authToken);
+
+        if (current === latestLoad.current) {
+          setView(next);
+        }
+      } catch {
+        if (!background && current === latestLoad.current) {
+          setError('Could not load what Companion knows about you.');
+        }
+      } finally {
+        if (!background && current === latestLoad.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [authToken],
+  );
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Refetch when the page says an answer changed. The first render's token is the
+  // baseline, not a change, so nothing is fetched twice on mount.
+  const seenToken = useRef(refreshToken);
+
+  useEffect(() => {
+    if (refreshToken === seenToken.current) {
+      return;
+    }
+
+    seenToken.current = refreshToken;
+    void load({ background: true });
+  }, [refreshToken, load]);
 
   const handleCorrection = async () => {
     const trimmed = correction.trim();
@@ -73,7 +119,7 @@ export function AboutYouSection() {
       setCorrection('');
       setAnswering(null);
       setSavedNote('Saved — the next “How you’d do it” will use this.');
-      await load();
+      await load({ background: true });
     } catch {
       setSavedNote('Could not save that correction.');
     } finally {

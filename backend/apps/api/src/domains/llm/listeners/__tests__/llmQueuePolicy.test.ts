@@ -48,6 +48,21 @@ describe('llm queue policy', () => {
     expect(LLM_BACKGROUND_QUEUE_OPTIONS.expireInSeconds).toBeLessThan(LLM_QUEUE_OPTIONS.expireInSeconds!);
   });
 
+  /**
+   * Neither llm-background listener swallows its failures any more (a title that failed once used to be marked done
+   * and never retried), so a failing job is retried — and the retries have to stay BOUNDED, or a dead model would
+   * spin the one slot this queue shares with everything else on its lane. pg-boss spaces them by `retryDelay`
+   * doubled each time (the appliance-wide retryBackoff: ~10-20 s, ~20-40 s, ~40-80 s) and dead-letters the job
+   * once the limit is spent.
+   */
+  it('bounds retries on llm-background, so a failing title or inference cannot spin the shared slot', () => {
+    const { retryLimit, retryDelay } = LLM_BACKGROUND_QUEUE_OPTIONS;
+
+    expect(retryLimit).toBeGreaterThan(0);
+    expect(retryLimit).toBeLessThanOrEqual(3);
+    expect(retryDelay).toBeGreaterThanOrEqual(10);
+  });
+
   it('puts llm-background on the shared ollama-background lane, and keeps llm off it', () => {
     // Chat must never wait behind a background generation for a slot.
     expect(LLM_BACKGROUND_QUEUE_OPTIONS.lane).toBe(OLLAMA_BACKGROUND_LANE);

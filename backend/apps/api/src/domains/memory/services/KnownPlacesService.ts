@@ -1,14 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { isValidTimezone } from '@ci/common/time/zoned';
-import { hourDowInTz } from '@ci/domains/daily-metrics/places/transitionMath';
+import { isValidTimezone, wallClockInTZ } from '@ci/common/time/zoned';
 
+import { EVENT_HAPPENED_SQL } from './eventHappened';
 import { PlaceService } from './PlaceService';
+import { SELF_ENTITY_PROVISIONER, type SelfEntityProvisioner } from './selfEntityProvisioner';
 
 /** Role a known place plays in the user's life. */
 export type KnownPlaceKind = 'home' | 'work' | 'school' | 'social' | 'other';
@@ -58,13 +60,23 @@ export interface KnownPlaceCandidate {
   locationId: string | null;
   /** Representative display name (location_name of the cluster's events). */
   label: string;
-  /** Suggested kind from the clustering heuristic (home/work/other). */
+  /**
+   * Suggested kind from the clustering heuristic. At most one candidate is
+   * `home` and one `work`, and only on evidence that recurs over several weeks
+   * (see {@link KnownPlacesService.assignPrimaryKinds}). A user with too little
+   * evidence gets none: every candidate is `other`.
+   */
   kind: KnownPlaceKind;
   /** Cluster centroid latitude. */
   lat: number;
   /** Cluster centroid longitude. */
   lng: number;
-  /** Number of events supporting this cluster. */
+  /**
+   * Number of events supporting this cluster. Only events that happened and
+   * whose coordinate is their own count. A temporal estimate never does, and
+   * nor does a deleted, predicted or cancelled event (see
+   * {@link KnownPlacesService.buildKnownPlaces}).
+   */
   eventCount: number;
   /**
    * A few of the supporting events, newest first, so an "Unknown place" can
@@ -73,6 +85,37 @@ export interface KnownPlaceCandidate {
   sampleEvents: KnownPlaceSampleEvent[];
   /** Heuristic confidence in the candidate (0..1). */
   confidence: number;
+  /**
+   * Distinct local days on which `ci.position` puts the user in this
+   * candidate's grid cell. Always 0 on a Location-anchored candidate: presence
+   * is measured per cell and joins only the cell's grid candidate (see
+   * {@link KnownPlacesService.readMeasuredPresence}).
+   */
+  presenceDays: number;
+  /** Distinct local nights (21:00–06:00) with a fix in the cell; see {@link presenceDays}. */
+  presenceNights: number;
+}
+
+/**
+ * One routine signal seen at a cluster: how many of its events fall in the
+ * signal's window, the distinct local days they fall on, and the distinct
+ * weeks those days fall in. Days are day numbers on the user's wall clock (see
+ * {@link localTime}); weeks are those days' {@link weekOf}.
+ */
+interface RoutineEvidence {
+  events: number;
+  days: Set<number>;
+  weeks: Set<number>;
+}
+
+function emptyEvidence(): RoutineEvidence {
+  return { events: 0, days: new Set(), weeks: new Set() };
+}
+
+function addEvidence(evidence: RoutineEvidence, day: number): void {
+  evidence.events += 1;
+  evidence.days.add(day);
+  evidence.weeks.add(weekOf(day));
 }
 
 /** Cluster the frequency pass accumulates before ranking. */
@@ -83,10 +126,21 @@ interface Cluster {
   lngSum: number;
   eventCount: number;
   samples: KnownPlaceSampleEvent[];
-  /** Count of supporting events whose start hour is in 21:00–06:00 (home signal). */
-  nightCount: number;
-  /** Count of supporting events on weekdays in 09:00–17:00 (work signal). */
-  workHoursCount: number;
+  /**
+   * Home signal: events starting in 21:00–06:00. Their day is the night's
+   * EVENING, so 01:00 on a Saturday is Friday night.
+   */
+  night: RoutineEvidence;
+  /** Work signal: events starting Monday–Friday in 09:00–17:00. */
+  workHours: RoutineEvidence;
+  /** Measured presence in the cell; grid clusters only (see readMeasuredPresence). */
+  presenceDays: number;
+  presenceNights: number;
+  /** Distinct Monday-based weeks the presence nights fall in. */
+  presenceNightWeeks: number;
+  /** Mean position of the cell's visits: the centroid of a cluster with no events. */
+  presenceLat: number;
+  presenceLng: number;
 }
 
 /**
@@ -119,6 +173,75 @@ function rememberSampleEvent(
 
 /** Coordinate grid size (degrees) for snapping nearby events into one cluster (~1.1km). */
 const CLUSTER_PRECISION = 2;
+
+/**
+ * `metadata.location_source` on a coordinate the location estimator copied onto
+ * an event from the nearest-in-time GPS fix or located event. Both estimators
+ * write it: `enrich.estimate_location` and the legacy `LocationEstimateService`.
+ *
+ * This is a copy of the literal, as `EventReverseStage` has one.
+ * `EstimateLocationStage` keeps its copy private. The pipeline domain also
+ * imports this one, so importing from it here would be a cycle. The copies
+ * MUST stay identical. If they drift, estimates start counting as places
+ * again, and nothing fails.
+ */
+const LOCATION_SOURCE_ESTIMATED = 'estimated';
+
+/**
+ * `inference_sources.method` that both estimators write next to
+ * {@link LOCATION_SOURCE_ESTIMATED}. Unlike the token, it survives the legacy
+ * reverse-geocode leg (below).
+ */
+const ESTIMATE_METHOD = 'temporal_nn';
+
+/**
+ * The token the legacy reverse-geocode leg writes over
+ * {@link LOCATION_SOURCE_ESTIMATED}. `GeocodeBatchListener` with
+ * `direction: 'reverse'` picked up every coordinate that had no name,
+ * estimates included. It named the event, linked a Location, and set
+ * `location_source` to this, while `inference_sources` still said
+ * {@link ESTIMATE_METHOD}. Ingest self-heal runs that leg, so this is not
+ * limited to manual maintenance.
+ *
+ * `EventReverseStage`, which replaces the leg, refuses estimates
+ * (`skipped: coordinates_estimated`), and PR #2823 adds the same guard to the
+ * leg itself. Neither repairs rows that were already relabelled. Such a row is
+ * an estimate with a name and a Location, and it looks like a measured visit.
+ * Only the pair of this token and {@link ESTIMATE_METHOD} identifies it. The
+ * token alone does not: `EventReverseStage` writes it on measured coordinates,
+ * and those must still count.
+ */
+const LOCATION_SOURCE_REVERSE_GEOCODED = 'reverse_geocoded';
+
+/**
+ * How many different weeks a candidate must show the night-time signal in
+ * before it can be Home, or the weekday office-hours signal in before it can
+ * be Work. Weeks rather than events or days, because a home or a workplace is
+ * somewhere the user keeps coming back to, and a trip is a single burst
+ * however many days it lasts. The rule and the measurements behind the number
+ * are on {@link KnownPlacesService.assignPrimaryKinds}.
+ */
+const MIN_ROUTINE_WEEKS = 3;
+
+const MS_PER_DAY = 86_400_000;
+
+/**
+ * Where an instant falls on the user's wall clock. `day` is the local
+ * calendar date as a day number, counted from 1970-01-01, so a night can step
+ * back to its evening and a week can be taken by division. `weekday` counts
+ * from 0 for Sunday, as `Date#getUTCDay` does.
+ */
+function localTime(instant: Date, timezone: string): { day: number; hour: number; weekday: number } {
+  const wall = wallClockInTZ(instant, timezone);
+  const day = Date.UTC(wall.year, wall.month - 1, wall.day) / MS_PER_DAY;
+
+  return { day, hour: wall.hour, weekday: new Date(day * MS_PER_DAY).getUTCDay() };
+}
+
+/** The Monday-based week a day number falls in. Day 0, 1970-01-01, was a Thursday. */
+function weekOf(day: number): number {
+  return Math.floor((day + 3) / 7);
+}
 
 /** The graph relationship types that express a known place. */
 const KNOWN_PLACE_RELATIONSHIP_TYPES = ['LIVES_IN', 'WORKS_AT', 'VISITED'] as const;
@@ -174,17 +297,171 @@ interface KnownPlaceRow {
   name: string | null;
 }
 
+// ── Measured presence (ci.position) ──────────────────────────────────────────
+// The rule is documented where it is applied: the signal and its cost bound on
+// KnownPlacesService.readMeasuredPresence, the Home pick on assignPrimaryKinds.
+
+/** Grid cells per degree: {@link CLUSTER_PRECISION} decimal places. */
+const CELL_SCALE = 10 ** CLUSTER_PRECISION;
+
+/**
+ * The grid-cluster key for a coordinate. {@link KNOWN_PLACE_PRESENCE_SQL}
+ * computes the same `floor(x * scale + 0.5)` in float8, so a fix and an event at
+ * one coordinate always share a cell: both sides round the same IEEE doubles the
+ * same way. `toFixed(2)`, which this replaces, does not agree with Postgres'
+ * `round(x::numeric, 2)`: 139.765 is 139.76 in one and 139.77 in the other.
+ */
+function gridCellKey(lat: number, lng: number): string {
+  return cellKey(Math.floor(lat * CELL_SCALE + 0.5), Math.floor(lng * CELL_SCALE + 0.5));
+}
+
+function cellKey(latCell: number, lngCell: number): string {
+  return `${latCell},${lngCell}`;
+}
+
+/**
+ * Local hours that count as night, for events and fixes alike: [21:00, 06:00).
+ * A night belongs to the evening it began on, so 01:00 on a Saturday is Friday
+ * night.
+ */
+const NIGHT_START_HOUR = 21;
+const NIGHT_END_HOUR = 6;
+
+/**
+ * The cost bound on the presence read: it aggregates only the user's newest
+ * this-many usable fixes. See {@link KnownPlacesService.readMeasuredPresence}.
+ */
+const PRESENCE_MAX_FIXES = 200_000;
+
+/**
+ * Cells the presence read returns, most days first. Only
+ * {@link MAX_CANDIDATES} candidates survive ranking, and on the reference
+ * corpus the 50th cell by days has 5 and the 200th has 1 (of 411 cells), so a
+ * cell past this cap cannot move a candidate by more than a day.
+ */
+const PRESENCE_MAX_CELLS = 200;
+
+/**
+ * A fix reporting worse accuracy is dropped; one with no accuracy is kept. The
+ * same rule `PlaceClusterService` (daily-metrics) applies before it detects
+ * stays.
+ */
+const PRESENCE_MAX_ACCURACY_M = 100;
+
+/**
+ * The presence read: distinct local days and nights per grid cell over the
+ * newest usable fixes, and the distinct Monday-based weeks those nights fall
+ * in (`date_trunc('week')` is Monday-based, like {@link weekOf}), most days
+ * first. Exported so the integration spec can run it against Postgres with a
+ * small cap.
+ *
+ * $1 user_id, $2 IANA timezone, $3 max accuracy (m), $4 max fixes,
+ * $5 cells per degree, $6 night start hour, $7 night end hour, $8 max cells.
+ *
+ * `recent` is the bound: `ORDER BY time DESC` under a LIMIT, which TimescaleDB
+ * serves by visiting chunks newest first and stopping. `visits` collapses a
+ * track to one row per cell, day and night before anything is counted.
+ */
+export const KNOWN_PLACE_PRESENCE_SQL = `
+WITH recent AS (
+  SELECT pos.time AT TIME ZONE $2::text AS local_time,
+         ST_Y(pos.location::geometry)  AS lat,
+         ST_X(pos.location::geometry)  AS lng
+    FROM ci.position pos
+   WHERE pos.user_id = $1::uuid
+     AND pos.location IS NOT NULL
+     AND (pos.accuracy_meters IS NULL OR pos.accuracy_meters <= $3::float8)
+   ORDER BY pos.time DESC
+   LIMIT $4::int
+), visits AS (
+  SELECT floor(recent.lat * $5::float8 + 0.5) AS lat_cell,
+         floor(recent.lng * $5::float8 + 0.5) AS lng_cell,
+         recent.local_time::date AS day,
+         CASE WHEN extract(hour FROM recent.local_time) >= $6::int
+                OR extract(hour FROM recent.local_time) < $7::int
+              THEN (recent.local_time - make_interval(hours => $7::int))::date
+         END AS night,
+         avg(recent.lat) AS lat,
+         avg(recent.lng) AS lng
+    FROM recent
+   GROUP BY 1, 2, 3, 4
+)
+SELECT visits.lat_cell,
+       visits.lng_cell,
+       count(DISTINCT visits.day)   AS days,
+       count(DISTINCT visits.night) AS nights,
+       count(DISTINCT date_trunc('week', visits.night::timestamp)) AS night_weeks,
+       avg(visits.lat)              AS lat,
+       avg(visits.lng)              AS lng,
+       (SELECT count(DISTINCT every_visit.day) FROM visits every_visit) AS total_days
+  FROM visits
+ GROUP BY visits.lat_cell, visits.lng_cell
+ ORDER BY days DESC, nights DESC, visits.lat_cell, visits.lng_cell
+ LIMIT $8::int
+`;
+
+/** One grid cell of measured presence. */
+interface PresenceCell {
+  /** {@link gridCellKey} of the cell. */
+  key: string;
+  days: number;
+  nights: number;
+  nightWeeks: number;
+  lat: number;
+  lng: number;
+}
+
+interface MeasuredPresence {
+  cells: PresenceCell[];
+  /** Distinct local days with any usable fix in the window, whatever the cell. */
+  totalDays: number;
+}
+
+/** A candidate together with the cluster it came from, so kinds are read off the right one. */
+interface RankedCandidate {
+  cluster: Cluster;
+  candidate: KnownPlaceCandidate;
+}
+
+/** What a candidate is ranked by: supporting events plus measured presence days. */
+function candidateSupport(candidate: KnownPlaceCandidate): number {
+  return candidate.eventCount + candidate.presenceDays;
+}
+
+function newCluster(locationId: string | null): Cluster {
+  return {
+    locationId,
+    labelCounts: new Map(),
+    latSum: 0,
+    lngSum: 0,
+    eventCount: 0,
+    samples: [],
+    night: emptyEvidence(),
+    workHours: emptyEvidence(),
+    presenceDays: 0,
+    presenceNights: 0,
+    presenceNightWeeks: 0,
+    presenceLat: Number.NaN,
+    presenceLng: Number.NaN,
+  };
+}
+
 /**
  * Known places: derives Home / Work and per-person common locations from the
- * event stream, and persists user-confirmed roles as graph relationships on the
+ * event stream and from measured presence in `ci.position` (see
+ * {@link KnownPlacesService.readMeasuredPresence}), and persists user-confirmed
+ * roles as graph relationships on the
  * EXISTING place shapes — there is no `known_place_labels` table. A confirmed
  * known place is just a `LIVES_IN` / `WORKS_AT` / `VISITED` relationship from the
  * user's self node to a `ci.entities` Location node, with `strength` as the
  * confidence, `start_date`/`end_date` as the era, and `properties` for the rest.
  *
- * Building is read-only and idempotent (pure aggregation over events with
- * coordinates). Confirmation (updateKnownPlace) upserts the relationship in
- * place on the existing partial-unique index, so re-confirming never duplicates.
+ * Building is read-only and idempotent: a pure aggregation over events that
+ * happened and whose coordinates are their own (never a temporal estimate, nor
+ * a deleted, predicted or cancelled event; see
+ * {@link KnownPlacesService.buildKnownPlaces}). Confirmation (updateKnownPlace)
+ * upserts the relationship in place on the existing partial-unique index, so
+ * re-confirming never duplicates.
  */
 @Injectable()
 export class KnownPlacesService {
@@ -192,15 +469,107 @@ export class KnownPlacesService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly logger: LoggerService,
     private readonly placeService: PlaceService,
+    /**
+     * For {@link SELF_ENTITY_PROVISIONER}, resolved lazily — see its doc for
+     * why it cannot be injected. Optional so a hand-built service (the unit
+     * specs) still constructs; without it a user who has no self entity gets
+     * the old error rather than a new one.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {
     this.logger.setContext(KnownPlacesService.name);
   }
 
   /**
    * Frequency + coarse coordinate-cluster pass over the user's geolocated
-   * events. Returns the user's most-common places as Home/Work/other candidates,
+   * events and measured GPS presence ({@link readMeasuredPresence}). Returns
+   * the user's most-common places as Home/Work/other candidates,
    * ranked by support. Pure read — surfaces confirmable insights; persistence
    * happens in {@link updateKnownPlace}.
+   *
+   * ── Estimates are not evidence ─────────────────────────────────────────────
+   *
+   * A located event counts only if the coordinate is its own: measured,
+   * imported or geocoded. An `approximate` geocode (a city centroid at 0.4)
+   * counts too; it is coarse, but it is still the event's own claim. A temporal
+   * estimate does not count. `enrich.estimate_location` fills an event that has
+   * no location with the coordinate of the nearest GPS fix or located event
+   * within 24 h. That tells us nothing new about where the user was: the donor
+   * already said it. What the estimate does add is a time, the event's
+   * `start_time`, which can be up to a day from the donor's. The night and
+   * work-hours signals below are read from exactly that time. The estimator's
+   * own docs say known-place clustering must discount its output.
+   *
+   * Measured on the reference corpus after a complete estimator sweep, 2,007 of
+   * the 2,098 located events were estimates, 1,928 of them `google_fit`
+   * activities. Counted as measurements, estimates were the majority of every
+   * one of the top 15 candidates. Fourteen of those were unnamed grid cells of
+   * 19 to 84 rows such as "Walking" and "Activity … (N steps)". Home went to 8
+   * rows at LAX. Seven of them were estimates from flight days: pre-dawn airport
+   * walks, and daily step summaries stamped 00:00, which always count as night.
+   * Work went to 8 estimates in Manhattan.
+   *
+   * They are excluded rather than down-weighted, because down-weighting was
+   * measured too and did not help. With each estimate weighted by its 0.4
+   * confidence, the top eight candidates were still mostly estimates (2,007 ×
+   * 0.4 is nearly nine times the 91 measured rows). Home did not move at all,
+   * because {@link assignPrimaryKinds} picks by night SHARE, and a weight on
+   * every row of an all-estimate cluster cancels out of a share.
+   * `confidence_score` is also an event-level column that other writers set for
+   * reasons of their own.
+   *
+   * What this gives up: on that corpus the Google Maps "Home" address was the
+   * top candidate only because of 413 estimates copied from the Google Fit GPS
+   * tracks that start and end there. Without them it has 2 events. That GPS
+   * evidence is real, but it reaches this pass only after being copied onto
+   * other events' times. The right way to use it is to read `ci.position`
+   * directly, which {@link readMeasuredPresence} does. Re-admitting estimates
+   * is not a substitute.
+   *
+   * An estimate is recognised by either of two markers. The first is
+   * {@link LOCATION_SOURCE_ESTIMATED}. The second is an estimate that the legacy
+   * reverse-geocode leg has renamed, which is what
+   * {@link LOCATION_SOURCE_REVERSE_GEOCODED} describes. Each side is
+   * COALESCEd. Without that, a row with no `location_source` key compares as
+   * NULL, and the WHERE drops it. That is most measured rows, because
+   * `metadata` defaults to `'{}'`.
+   *
+   * ── Nor is an event that did not happen ────────────────────────────────────
+   *
+   * Three more kinds of located event are left out, by {@link EVENT_HAPPENED_SQL},
+   * which a place's visit count and the Places date browse apply as well. Their
+   * coordinates are their own, so the rule above lets them through, but none of
+   * them says the user was there.
+   *
+   *  - Deleted (`is_deleted`). The user removed it. The column's contract is
+   *    that a tombstoned row is left out of every read and never returned to a
+   *    client, and a candidate's `sampleEvents` go to the Places page, titles
+   *    included. Undo (`CalendarEventService.restore`) clears the flag, and
+   *    the event counts again.
+   *  - Predicted (`is_predicted`). A guess about where the user will be, not a
+   *    record of where they were. Suggestions stay in `ci.event_candidates`
+   *    until the user accepts one, which writes `is_predicted = false`, and
+   *    that event counts. Nothing writes `true` today except an account
+   *    import, which restores rows verbatim.
+   *  - Cancelled. The status test is the calendar's own `LIVE_EVENT_SQL`,
+   *    so `no_show` and `skipped` go with `cancelled`. Google Calendar sync
+   *    keeps a cancelled meeting as a row and geocodes its venue, but the
+   *    user never went. A Google Takeout reservation also records its
+   *    cancellation in `metadata.Canceled`, so that key is read as well.
+   *    `tentative`, `planned`, `in_progress`, `rescheduled` and `completed`
+   *    still count, as they do on the calendar.
+   *
+   * Some rows that did not happen carry no marker, so they still count; the
+   * doc of {@link EVENT_HAPPENED_SQL} says which. Every one of its clauses is
+   * NULL-safe without leaning on a constraint, and the estimate clauses above
+   * are COALESCEd the same way.
+   *
+   * None of this occurs among the reference corpus's located events, so its
+   * candidates do not change. It does hold five cancelled reservations. They
+   * have no coordinate only because `enrich.geocode` failed on all 42
+   * reservations there (`provider_unavailable`). Once geocoding succeeds,
+   * those that only `metadata` marks as cancelled would count without the
+   * reservation clause.
    */
   async buildKnownPlaces(context: UserServiceContext): Promise<KnownPlaceCandidate[]> {
     const rows: Array<{
@@ -228,20 +597,25 @@ export class KnownPlacesService {
          ON entity.entity_id = event.event_id
         AND entity.entity_type = 'Event'
        WHERE event.user_id = $1
-         AND event.location_coordinates IS NOT NULL`,
-      [context.userId],
+         AND event.location_coordinates IS NOT NULL
+         AND ${EVENT_HAPPENED_SQL}
+         AND COALESCE(event.metadata->>'location_source', '') <> $2
+         AND NOT (COALESCE(event.metadata->>'location_source', '') = $3
+                  AND COALESCE(event.inference_sources->>'method', '') = $4)`,
+      [context.userId, LOCATION_SOURCE_ESTIMATED, LOCATION_SOURCE_REVERSE_GEOCODED, ESTIMATE_METHOD],
     );
-
-    if (rows.length === 0) {
-      return [];
-    }
 
     // Night/work-hours buckets are judged on the user's wall clock, not UTC:
     // a Los Angeles user's 22:00 is 05:00/06:00 UTC, which would otherwise
     // land half their evenings outside the "night" window and shift weekday
-    // office hours by a full working day's worth of offset.
-    const rawTimezone = rows[0]?.timezone?.trim();
-    const timezone = rawTimezone && isValidTimezone(rawTimezone) ? rawTimezone : 'UTC';
+    // office hours by a full working day's worth of offset. Presence days and
+    // nights are cut on the same clock.
+    const timezone = await this.userTimezone(context, rows[0]);
+    const presence = await this.readMeasuredPresence(context, timezone);
+
+    if (rows.length === 0 && presence.cells.length === 0) {
+      return [];
+    }
 
     const clusters = new Map<string, Cluster>();
 
@@ -254,21 +628,11 @@ export class KnownPlacesService {
 
       // Cluster key: the Location node when present, else a snapped coord grid
       // cell so nearby unlinked events still aggregate.
-      const key =
-        row.location_entity_id ?? `${lat.toFixed(CLUSTER_PRECISION)},${lng.toFixed(CLUSTER_PRECISION)}`;
+      const key = row.location_entity_id ?? gridCellKey(lat, lng);
 
       let cluster = clusters.get(key);
       if (!cluster) {
-        cluster = {
-          locationId: row.location_entity_id,
-          labelCounts: new Map(),
-          latSum: 0,
-          lngSum: 0,
-          eventCount: 0,
-          samples: [],
-          nightCount: 0,
-          workHoursCount: 0,
-        };
+        cluster = newCluster(row.location_entity_id);
         clusters.set(key, cluster);
       }
 
@@ -282,29 +646,65 @@ export class KnownPlacesService {
         cluster.labelCounts.set(name, (cluster.labelCounts.get(name) ?? 0) + 1);
       }
 
-      const { hour, dow: day } = hourDowInTz(new Date(row.start_time), timezone); // day: 0 = Sunday
-      if (hour >= 21 || hour < 6) {
-        cluster.nightCount += 1;
+      const start = new Date(row.start_time);
+      if (Number.isNaN(start.getTime())) {
+        continue;
       }
 
-      if (day >= 1 && day <= 5 && hour >= 9 && hour < 17) {
-        cluster.workHoursCount += 1;
+      const { day, hour, weekday } = localTime(start, timezone);
+      if (hour >= NIGHT_START_HOUR || hour < NIGHT_END_HOUR) {
+        addEvidence(cluster.night, hour < NIGHT_END_HOUR ? day - 1 : day);
+      }
+
+      if (weekday >= 1 && weekday <= 5 && hour >= 9 && hour < 17) {
+        addEvidence(cluster.workHours, day);
       }
     }
 
-    const totalEvents = rows.length;
+    // Measured presence joins the grid cluster of its cell: the one the cell's
+    // unlinked events built above, or a new one when none fell there. It never
+    // joins a Location-anchored cluster. Presence says the user was somewhere in
+    // a ~1 km cell, not which of the places in it they were at. On the reference
+    // corpus the biggest cluster in the home cell was a Location named for a
+    // foreign airport: 12 calendar events the location estimator had pinned
+    // there. Joining the biggest cluster would have made that Home.
+    for (const cell of presence.cells) {
+      let cluster = clusters.get(cell.key);
+      if (!cluster) {
+        cluster = newCluster(null);
+        clusters.set(cell.key, cluster);
+      }
 
-    const candidates: KnownPlaceCandidate[] = [...clusters.values()]
-      .map((cluster) => this.clusterToCandidate(cluster, totalEvents))
-      .sort((a, b) => b.eventCount - a.eventCount)
+      cluster.presenceDays = cell.days;
+      cluster.presenceNights = cell.nights;
+      cluster.presenceNightWeeks = cell.nightWeeks;
+      cluster.presenceLat = cell.lat;
+      cluster.presenceLng = cell.lng;
+    }
+
+    const entries: RankedCandidate[] = [...clusters.values()].map((cluster) => ({
+      cluster,
+      candidate: this.clusterToCandidate(cluster, { events: rows.length, presenceDays: presence.totalDays }),
+    }));
+
+    // Ranked by support, events plus presence days. With no ci.position rows
+    // this is the event-count ranking it always was.
+    const ranked = [...entries].sort((a, b) => candidateSupport(b.candidate) - candidateSupport(a.candidate));
+
+    // The pool the event routines are read over: the top clusters by event
+    // count, which is what the candidate list itself was before presence.
+    // Presence reorders the list; it must not change what the event rules see.
+    const eventPool = entries
+      .filter((entry) => entry.cluster.eventCount > 0)
+      .sort((a, b) => b.cluster.eventCount - a.cluster.eventCount)
       .slice(0, MAX_CANDIDATES);
 
-    // Mark the single strongest night-weighted cluster as the Home candidate and
-    // the strongest work-hours cluster as Work, so the top two surface as the
-    // confirmable Home/Work insights.
-    this.assignPrimaryKinds(candidates, clusters);
+    // Tag at most one Home and one Work, and only where the evidence recurs
+    // week after week; with too little evidence, nothing is tagged. Whatever
+    // is tagged stays in the list, whatever its rank.
+    const { home, work } = this.assignPrimaryKinds(eventPool, ranked);
 
-    return candidates;
+    return topWithPinned(ranked, MAX_CANDIDATES, [home, work]).map((entry) => entry.candidate);
   }
 
   /**
@@ -407,7 +807,7 @@ export class KnownPlacesService {
       ...(coordinates ? { coordinates: [coordinates.lng, coordinates.lat] } : {}),
     };
 
-    const relationshipId = await this.upsertSelfRelationship(context.userId, locationId, relationshipType, {
+    const relationshipId = await this.upsertSelfRelationship(context, locationId, relationshipType, {
       strength,
       startDate: input.activeFrom ?? null,
       endDate: input.activeTo ?? null,
@@ -459,6 +859,110 @@ export class KnownPlacesService {
   // Helpers
   // ---------------------------------------------------------------------------
 
+  /**
+   * The user's IANA timezone, UTC when unset or unknown. The event read carries
+   * it on every row; a user with no located events costs one lookup.
+   */
+  private async userTimezone(
+    context: UserServiceContext,
+    eventRow: { timezone: string | null } | undefined,
+  ): Promise<string> {
+    let stored = eventRow?.timezone ?? null;
+    if (!eventRow) {
+      const rows: Array<{ timezone: string | null }> = await this.dataSource.query(
+        `SELECT timezone FROM ci.users WHERE id = $1`,
+        [context.userId],
+      );
+      stored = rows[0]?.timezone ?? null;
+    }
+
+    const timezone = stored?.trim();
+
+    return timezone && isValidTimezone(timezone) ? timezone : 'UTC';
+  }
+
+  /**
+   * Measured presence: where `ci.position` puts the user, as distinct local
+   * days and nights per grid cell, and the weeks those nights fall in, never as
+   * raw fixes. A GPS track samples every few seconds, so one walk leaves
+   * hundreds of fixes in every cell it crosses. Counted in days, that walk is
+   * one day in each cell, and a place the user is at on 172 separate days is
+   * 172. The cells are the ones the unlinked events cluster on
+   * ({@link gridCellKey}). Nights and weeks are cut as the event pass cuts
+   * them: 21:00–06:00 on the user's clock, counted toward the evening, in
+   * Monday-based weeks.
+   *
+   * Measured on the reference corpus: 63,043 fixes, 62,832 of them Google Fit
+   * tracks, on 555 local days between 2013 and 2026. The cell holding the
+   * user's Google Maps "Home" has 172 days and 12 nights in 11 weeks; the next
+   * cell by days has 37. Before this read, that evidence reached Known places
+   * only as temporal estimates copied onto other events, and without them the
+   * cell had 2 events, none of them at night.
+   *
+   * Cost: `ci.position` is a compressed hypertable, and nothing indexes a
+   * cell, so this is a scan of the user's fixes. It is bounded by the
+   * {@link PRESENCE_MAX_FIXES} newest usable ones: `ORDER BY time DESC` under a
+   * LIMIT lets TimescaleDB visit chunks newest first and stop (a 5,000 cap
+   * visits 19 of the reference's 46 chunks). Time is linear in the fixes read:
+   * on a synthetic one-fix-per-5-seconds user, 100k took 0.5 s, 200k 1.0–1.2 s
+   * and all 691k 4.2 s, on a machine at load ~115. The aggregation runs in SQL,
+   * so at most {@link PRESENCE_MAX_CELLS} rows come back.
+   *
+   * The cap counts fixes, not days, so a dense logger gets less history: at one
+   * fix per 5 seconds it is about 12 days. That is still nights at home in
+   * three different weeks for a continuous logger. The whole reference history
+   * is under a third of it.
+   */
+  private async readMeasuredPresence(
+    context: UserServiceContext,
+    timezone: string,
+  ): Promise<MeasuredPresence> {
+    const rows: Array<Record<string, unknown>> = await this.dataSource.query(KNOWN_PLACE_PRESENCE_SQL, [
+      context.userId,
+      timezone,
+      PRESENCE_MAX_ACCURACY_M,
+      PRESENCE_MAX_FIXES,
+      CELL_SCALE,
+      NIGHT_START_HOUR,
+      NIGHT_END_HOUR,
+      PRESENCE_MAX_CELLS,
+    ]);
+
+    // Number(null) is 0, a real cell; a missing value must not become one.
+    const numberOrNaN = (value: unknown): number =>
+      value === null || value === undefined ? NaN : Number(value);
+
+    const cells: PresenceCell[] = [];
+    for (const row of rows) {
+      const latCell = numberOrNaN(row.lat_cell);
+      const lngCell = numberOrNaN(row.lng_cell);
+      const days = numberOrNaN(row.days);
+      const nights = numberOrNaN(row.nights);
+      const nightWeeks = numberOrNaN(row.night_weeks);
+      const lat = numberOrNaN(row.lat);
+      const lng = numberOrNaN(row.lng);
+      if (![latCell, lngCell, days, nights, nightWeeks, lat, lng].every(Number.isFinite) || days <= 0) {
+        continue;
+      }
+
+      cells.push({ key: cellKey(latCell, lngCell), days, nights, nightWeeks, lat, lng });
+    }
+
+    const totalDays = numberOrNaN(rows[0]?.total_days);
+
+    return { cells, totalDays: cells.length > 0 && Number.isFinite(totalDays) ? totalDays : 0 };
+  }
+
+  private selfEntityProvisioner(): SelfEntityProvisioner | null {
+    try {
+      return this.moduleRef?.get<SelfEntityProvisioner>(SELF_ENTITY_PROVISIONER, { strict: false }) ?? null;
+    } catch {
+      // No binding (a container without GraphModule): fall through to the
+      // "no self entity" error, which names the actual problem.
+      return null;
+    }
+  }
+
   private rowToKnownPlace(row: KnownPlaceRow): KnownPlace {
     const props = row.properties ?? {};
     const coordsRaw = props.coordinates;
@@ -509,7 +1013,7 @@ export class KnownPlacesService {
    * on the existing partial-unique index. Returns the relationship_id.
    */
   private async upsertSelfRelationship(
-    userId: string,
+    context: UserServiceContext,
     locationId: string,
     relationshipType: KnownPlaceRelationship,
     opts: {
@@ -519,11 +1023,19 @@ export class KnownPlacesService {
       properties: Record<string, unknown>;
     },
   ): Promise<string> {
+    const userId = context.userId;
     const selfRows: Array<{ entity_id: string | null }> = await this.dataSource.query(
       `SELECT entity_id FROM ci.users WHERE id = $1`,
       [userId],
     );
-    const selfEntityId = selfRows[0]?.entity_id;
+    // `ci.users.entity_id` stays NULL until something self-anchored is
+    // ingested, and nothing guarantees that ever happens: after a full
+    // 13-source import of the reference corpus it was still NULL, so every
+    // Confirm on the Places page — and the daily "is this home?" answer, which
+    // lands here too — failed. Provision the self entity the way graph ingest
+    // does rather than refusing.
+    const selfEntityId =
+      selfRows[0]?.entity_id ?? (await this.selfEntityProvisioner()?.ensureSelfEntityForOwner(context))?.id;
     if (!selfEntityId) {
       throw new Error('Cannot write known-place relationship: user has no self entity');
     }
@@ -564,82 +1076,209 @@ export class KnownPlacesService {
     return rows[0].relationship_id;
   }
 
-  private clusterToCandidate(cluster: Cluster, totalEvents: number): KnownPlaceCandidate {
+  private clusterToCandidate(
+    cluster: Cluster,
+    totals: { events: number; presenceDays: number },
+  ): KnownPlaceCandidate {
     const label = [...cluster.labelCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'Unknown place';
 
     // Support fraction drives the base confidence; capped so an inferred
-    // candidate never reaches the 1.0 ground-truth weight.
-    const support = cluster.eventCount / Math.max(totalEvents, 1);
+    // candidate never reaches the 1.0 ground-truth weight. Events and presence
+    // days pool into one fraction, which without presence is the events-only
+    // fraction it always was.
+    const support =
+      (cluster.eventCount + cluster.presenceDays) / Math.max(totals.events + totals.presenceDays, 1);
     const confidence = Math.min(0.4 + support, 0.9);
+    // A cluster with presence but no events sits where the user's fixes do.
+    const hasEvents = cluster.eventCount > 0;
 
     return {
       locationId: cluster.locationId,
       label,
       kind: 'other',
-      lat: cluster.latSum / cluster.eventCount,
-      lng: cluster.lngSum / cluster.eventCount,
+      lat: hasEvents ? cluster.latSum / cluster.eventCount : cluster.presenceLat,
+      lng: hasEvents ? cluster.lngSum / cluster.eventCount : cluster.presenceLng,
       eventCount: cluster.eventCount,
       sampleEvents: cluster.samples,
       confidence: Number(confidence.toFixed(3)),
+      presenceDays: cluster.presenceDays,
+      presenceNights: cluster.presenceNights,
     };
   }
 
   /**
-   * Tag the most home-like and most work-like candidate among the top clusters.
-   * Home = highest share of night-time events; Work = highest share of weekday
-   * 9–5 events. The two are distinct clusters where possible.
+   * Tag at most one candidate Home and one Work, and only on evidence that
+   * recurs week after week. Returns the two, so the caller can keep them in the
+   * list whatever their rank.
+   *
+   * ── Measured presence picks Home first ─────────────────────────────────────
+   *
+   * Home comes from measured presence ({@link readMeasuredPresence}) when some
+   * cell's GPS nights fall in at least {@link MIN_ROUTINE_WEEKS} different
+   * weeks. Of those cells, the one with the most presence days wins, then the
+   * one with the most presence nights. Only when no cell qualifies does the
+   * event rule below pick Home.
+   *
+   * The weeks floor is the event rule's, for the same reason: a trip is a
+   * single burst however many nights it lasts. Days rank, and nights only
+   * gate, because of what GPS nights turn out to be. The reference corpus's
+   * fixes are Google Fit tracks, which record walks, not sleep: of the 165
+   * nights with any fix, 153 have none in the home cell. That cell's 12 nights
+   * (in 11 weeks) beat downtown Los Angeles's 10 (in 7) by two, while its 172
+   * days beat the next qualifying cell's 37 more than four times over.
+   *
+   * Presence does not pick Work. On the same corpus the cell with the most
+   * weekday 09:00–17:00 days is home itself (100), a home office, and the next
+   * is the residential cell beside it (21). Tracks that start and end at home
+   * say nothing about an office.
+   *
+   * ── The event rule ─────────────────────────────────────────────────────────
+   *
+   * Home is where the user's nights are: events that start 21:00–06:00 on
+   * their wall clock, each counted toward the evening it began. Work is where
+   * their weekday office hours are: events that start Monday–Friday,
+   * 09:00–17:00. A candidate qualifies for a role only if its signal falls in
+   * at least {@link MIN_ROUTINE_WEEKS} different weeks. Of the candidates that
+   * qualify, the one with the most distinct nights (for Work, weekdays) wins.
+   * A tie goes to the larger share of the candidate's events in the window,
+   * then to the busier candidate. Work is never the Home candidate: when one
+   * place is best for both, as a home office is, no Work is tagged. When
+   * nothing qualifies, nothing is tagged, and a caller must not stand a guess
+   * in for the missing tag (see `HomeConfirmService.topHomeCandidate`).
+   *
+   * The event rule reads `eventPool`, the clusters with the most events, which
+   * is the list it read before presence existed. Ranking by support lets
+   * presence-only cells push event clusters out of the top
+   * {@link MAX_CANDIDATES}, and the event rule's picks must not depend on that.
+   *
+   * The old rule took the highest SHARE of a cluster's events in the window,
+   * however few events that was. One event at 23:00 scored 1.0 and beat a real
+   * home at 0.75. The alternatives were measured on the reference corpus: 134
+   * located events, mostly ride pickups, or 91 once temporal estimates are
+   * left out. Each rule picked the same places on both sets:
+   *
+   *  - share (the old rule): Home was one late pickup in another city, and
+   *    Work was two pickups at an airport.
+   *  - at least 3 events, or 3 distinct days, then share: Home was an airport
+   *    cell with 2 nights, and Work a cell with 2 weekdays.
+   *  - night COUNT: Home was one trip, 2 nights in a single week.
+   *  - a Laplace- or Wilson-smoothed share: Home was the one-event cell or the
+   *    airport cell, and Work the two airport pickups.
+   *  - at least 3 distinct nights or weekdays: no Home, but Work was 3
+   *    weekdays spread over two business trips.
+   *  - at least 3 distinct weeks (this rule): no Home and no Work.
+   *
+   * No Home and no Work is the right answer for the events alone on that
+   * corpus. The user's own GPS puts the most nights (12, in 11 weeks) and the
+   * most office-hours weekdays in the cell of their Google Maps "Home", which
+   * is a home office. None of that cell's located events is at night, so no
+   * rule over events can find it; measured presence, above, does.
+   *
+   * Nights are counted rather than night events, so a busy evening, such as a
+   * party with twenty photos, is one night. Ranking by that count rather than
+   * by share stops a weekly night out, whose events are all at night, from
+   * outranking a home that also has daytime events. What the floor cannot
+   * stop is a place the user really does keep returning to at night, such as
+   * a frequent flyer's airport. That qualifies like any other place, and it
+   * wins whenever the home has fewer nights in the event stream.
    */
-  private assignPrimaryKinds(candidates: KnownPlaceCandidate[], clusters: Map<string, Cluster>): void {
-    // An id-anchored candidate resolves ONLY by locationId (the cluster map is
-    // keyed by location_entity_id when present, so this is an exact O(1)
-    // lookup, not a heuristic match). The coordinate-centroid fallback is
-    // scoped to clusters WITHOUT a locationId, so it only ever matches
-    // grid-only candidates — two Location-anchored clusters that happen to
-    // share a centroid can never be confused with each other.
-    const clusterFor = (candidate: KnownPlaceCandidate): Cluster | undefined => {
-      if (candidate.locationId) {
-        return clusters.get(candidate.locationId);
-      }
+  private assignPrimaryKinds(
+    eventPool: RankedCandidate[],
+    ranked: RankedCandidate[],
+  ): { home: RankedCandidate | null; work: RankedCandidate | null } {
+    const home = pickPresenceHome(ranked) ?? strongestRoutine(eventPool, (cluster) => cluster.night);
+    const bestWork = strongestRoutine(eventPool, (cluster) => cluster.workHours);
+    const work = bestWork === home ? null : bestWork;
 
-      return [...clusters.values()].find(
-        (cluster) =>
-          !cluster.locationId &&
-          Math.abs(cluster.latSum / cluster.eventCount - candidate.lat) < 1e-6 &&
-          Math.abs(cluster.lngSum / cluster.eventCount - candidate.lng) < 1e-6,
-      );
-    };
-
-    let homeIdx = -1;
-    let workIdx = -1;
-    let bestNight = 0;
-    let bestWork = 0;
-
-    candidates.forEach((candidate, idx) => {
-      const cluster = clusterFor(candidate);
-      if (!cluster) {
-        return;
-      }
-
-      const nightShare = cluster.nightCount / cluster.eventCount;
-      const workShare = cluster.workHoursCount / cluster.eventCount;
-
-      if (nightShare > bestNight) {
-        bestNight = nightShare;
-        homeIdx = idx;
-      }
-
-      if (workShare > bestWork) {
-        bestWork = workShare;
-        workIdx = idx;
-      }
-    });
-
-    if (homeIdx >= 0 && bestNight > 0) {
-      candidates[homeIdx].kind = 'home';
+    if (home) {
+      home.candidate.kind = 'home';
     }
 
-    if (workIdx >= 0 && workIdx !== homeIdx && bestWork > 0) {
-      candidates[workIdx].kind = 'work';
+    if (work) {
+      work.candidate.kind = 'work';
+    }
+
+    return { home, work };
+  }
+}
+
+/**
+ * The entry with the strongest qualifying evidence for one routine, or null
+ * when none qualifies. The rule is documented on
+ * {@link KnownPlacesService.assignPrimaryKinds}.
+ */
+function strongestRoutine(
+  entries: RankedCandidate[],
+  evidenceOf: (cluster: Cluster) => RoutineEvidence,
+): RankedCandidate | null {
+  let best: RankedCandidate | null = null;
+  let bestDays = 0;
+  let bestShare = 0;
+
+  for (const entry of entries) {
+    const evidence = evidenceOf(entry.cluster);
+    if (evidence.weeks.size < MIN_ROUTINE_WEEKS) {
+      continue;
+    }
+
+    const days = evidence.days.size;
+    const share = evidence.events / entry.cluster.eventCount;
+
+    // Entries arrive busiest first, so a full tie keeps the busier one.
+    if (days > bestDays || (days === bestDays && share > bestShare)) {
+      best = entry;
+      bestDays = days;
+      bestShare = share;
     }
   }
+
+  return best;
+}
+
+/**
+ * The entry measured presence names Home: presence nights in at least
+ * {@link MIN_ROUTINE_WEEKS} weeks, then the most presence days, the most
+ * presence nights, and the higher rank. Null when no cell qualifies. See
+ * {@link KnownPlacesService.assignPrimaryKinds}.
+ */
+function pickPresenceHome(ranked: RankedCandidate[]): RankedCandidate | null {
+  let best: RankedCandidate | null = null;
+
+  for (const entry of ranked) {
+    const { presenceDays, presenceNights, presenceNightWeeks } = entry.cluster;
+    if (presenceNightWeeks < MIN_ROUTINE_WEEKS) {
+      continue;
+    }
+
+    const bestDays = best?.cluster.presenceDays ?? -1;
+    const bestNights = best?.cluster.presenceNights ?? -1;
+    if (presenceDays > bestDays || (presenceDays === bestDays && presenceNights > bestNights)) {
+      best = entry;
+    }
+  }
+
+  return best;
+}
+
+/**
+ * The first `limit` of `ranked`, but keeping every pinned entry: one ranked
+ * below the cut displaces the lowest-ranked unpinned entry, and the list stays
+ * in rank order. Clusters with many events can outrank a Home whose evidence
+ * is all GPS, and presence days can push the event rule's Work below the cut.
+ */
+function topWithPinned(
+  ranked: RankedCandidate[],
+  limit: number,
+  pinned: Array<RankedCandidate | null>,
+): RankedCandidate[] {
+  const keep = new Set(pinned.filter((entry): entry is RankedCandidate => entry !== null));
+  const top = ranked.filter((entry, index) => index < limit || keep.has(entry));
+
+  for (let index = top.length - 1; top.length > limit && index >= 0; index--) {
+    if (!keep.has(top[index])) {
+      top.splice(index, 1);
+    }
+  }
+
+  return top;
 }

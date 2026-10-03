@@ -1,7 +1,16 @@
 import { Badge, Button, Card, cn } from '@ci/shadcn';
 import { AlertTriangle, Check, ChevronUp, RefreshCcw, X } from '@ci/shadcn/icons';
 
-import { DESTINATION_LABELS, compactNumber, runStatusLabel, stageLabel, STAGE_BLURBS } from './runFormat';
+import {
+  DESTINATION_LABELS,
+  compactNumber,
+  runStatusLabel,
+  serviceLabels,
+  stageLabel,
+  stagePhase,
+  STAGE_BLURBS,
+  type ServiceTitles,
+} from './runFormat';
 import { ServiceBadges } from './ServiceBadges';
 import { StageBar } from './StageBar';
 import type { ImportRunDetail, ImportStage } from './useImportApi';
@@ -21,6 +30,12 @@ export interface RunPipelineProps {
   onClose?: () => void;
   /** Detected services, already resolved to display titles. */
   services?: readonly string[];
+  /**
+   * The importer catalogue, so the "Found:" line can say what each recognized
+   * importer is called. Optional: without it that line falls back to the importer
+   * name with its underscores removed.
+   */
+  sources?: ServiceTitles;
 }
 
 /**
@@ -39,6 +54,7 @@ export function RunPipeline({
   onRetryFailedPush,
   onClose,
   services = [],
+  sources = [],
 }: RunPipelineProps) {
   const finished = run.finishedAt != null;
 
@@ -76,6 +92,7 @@ export function RunPipeline({
           <StageRow
             key={stage.id}
             stage={stage}
+            sources={sources}
             onRetry={onRetryStage}
             onRetryFailedPush={onRetryFailedPush}
           />
@@ -104,14 +121,17 @@ export function RunPipeline({
 
 function StageRow({
   stage,
+  sources,
   onRetry,
   onRetryFailedPush,
 }: {
   stage: ImportStage;
+  sources: ServiceTitles;
   onRetry?: (stageId: string) => void;
   onRetryFailedPush?: () => void;
 }) {
   const retryable = stage.status === 'failed' || stage.status === 'cancelled';
+  const phase = stagePhase(stage);
 
   return (
     <li className="space-y-1">
@@ -119,8 +139,10 @@ function StageRow({
         <div className="flex min-w-0 items-center gap-2">
           <StageStatusIcon status={stage.status} />
           <span className="font-medium">{stageLabel(stage.kind)}</span>
-          {/* The sub-label the runner sets: "parsing gmail (1/2)", "expanding". */}
-          {stage.phase ? <span className="truncate text-sm text-muted-foreground">{stage.phase}</span> : null}
+          {/* The sub-label the runner sets: "parsing gmail (1/2)", "expanding".
+              Only while the stage is not done — the runner never clears it, so
+              a completed stage would go on saying what it was doing. */}
+          {phase ? <span className="truncate text-sm text-muted-foreground">{phase}</span> : null}
         </div>
 
         {retryable && onRetry ? (
@@ -142,7 +164,7 @@ function StageRow({
 
       {stage.error ? <p className="text-xs text-destructive">{stage.error}</p> : null}
 
-      <StageDetail stage={stage} onRetryFailedPush={onRetryFailedPush} />
+      <StageDetail stage={stage} sources={sources} onRetryFailedPush={onRetryFailedPush} />
     </li>
   );
 }
@@ -154,7 +176,15 @@ function StageRow({
  * was saved and where, what could not be read. A stage that simply worked says
  * nothing beyond its bar.
  */
-function StageDetail({ stage, onRetryFailedPush }: { stage: ImportStage; onRetryFailedPush?: () => void }) {
+function StageDetail({
+  stage,
+  sources,
+  onRetryFailedPush,
+}: {
+  stage: ImportStage;
+  sources: ServiceTitles;
+  onRetryFailedPush?: () => void;
+}) {
   const detail = stage.detail ?? {};
 
   const recognized = Array.isArray(detail.recognized) ? (detail.recognized as string[]) : [];
@@ -205,7 +235,10 @@ function StageDetail({ stage, onRetryFailedPush }: { stage: ImportStage; onRetry
 
   return (
     <div className="space-y-1 pt-1 text-xs text-muted-foreground">
-      {recognized.length ? <p>Found: {recognized.join(', ')}</p> : null}
+      {/* One entry per recognized FILE, so a Takeout lists `google_my_activity`
+          thirty times — and as the importer's id, not its name. Said once each,
+          in the catalogue's words. */}
+      {recognized.length ? <p>Found: {serviceLabels(recognized, sources).join(', ')}</p> : null}
 
       {destinations ? (
         <p>

@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatSidebar } from './ChatSidebar';
 import type { Thread } from './types';
 
-const thread = (id: string, name?: string, description?: string) =>
-  ({ id, name, description }) as unknown as Thread;
+const thread = (id: string, name?: string, description?: string, createdAt?: string) =>
+  ({ id, name, description, createdAt }) as unknown as Thread;
 
 function setup(overrides: Partial<Parameters<typeof ChatSidebar>[0]> = {}) {
   const props = {
@@ -47,6 +47,21 @@ describe('ChatSidebar', () => {
     expect(screen.getByText('Thread abcdef12')).toBeInTheDocument();
   });
 
+  it('tells untitled threads apart by when they started', () => {
+    setup({
+      threads: [
+        thread('01a0fd3b-aaaa', undefined, undefined, '2026-10-02T16:24:00Z'),
+        thread('01a0fd3b-bbbb', undefined, undefined, '2026-10-02T17:31:00Z'),
+      ],
+    });
+
+    const labels = screen.getAllByText(/^Chat · /).map((node) => node.textContent);
+
+    expect(labels).toHaveLength(2);
+    expect(new Set(labels).size).toBe(2);
+    expect(screen.queryByText(/^Thread /)).not.toBeInTheDocument();
+  });
+
   it('triggers new-thread and refresh actions', () => {
     const { onNewThread, onRefresh } = setup();
 
@@ -55,6 +70,14 @@ describe('ChatSidebar', () => {
 
     fireEvent.click(screen.getByLabelText('Refresh threads'));
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  // The trash is hover-revealed, and a touch screen never hovers — a tablet is in this (desktop) layout, so it
+  // has to be visible without one.
+  it('keeps the delete control visible on a touch screen', () => {
+    setup();
+
+    expect(screen.getAllByLabelText('Delete thread')[0].className).toContain('pointer-coarse:opacity-100');
   });
 
   it('deletes a thread without also selecting it', () => {

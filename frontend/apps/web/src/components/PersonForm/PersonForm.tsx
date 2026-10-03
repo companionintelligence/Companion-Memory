@@ -22,6 +22,7 @@ import {
   emptyAddress,
   emptyContact,
 } from './personDraft';
+import { type RefusedContact, keepContactInNote, refusalFor } from './refusedContacts';
 
 /**
  * Suggestions, not a closed set. Gender, pronouns and contact labels are stored
@@ -63,6 +64,8 @@ function Field({
   type,
   listId,
   autoFocus,
+  errorId,
+  inputClassName,
 }: {
   id: string;
   label: string;
@@ -72,6 +75,10 @@ function Field({
   type?: string;
   listId?: string;
   autoFocus?: boolean;
+  /** Id of the message saying what is wrong with the value, when something is. */
+  errorId?: string;
+  /** Extra classes for the input itself (the wrapper is not the thing to style). */
+  inputClassName?: string;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
@@ -85,8 +92,39 @@ function Field({
         value={value}
         placeholder={placeholder}
         autoFocus={autoFocus}
+        aria-invalid={errorId ? true : undefined}
+        aria-describedby={errorId}
+        className={inputClassName}
         onChange={(event) => onChange(event.target.value)}
       />
+    </div>
+  );
+}
+
+/** What is wrong with a refused contact row, and what can be done about it. */
+function RefusedContactNote({
+  id,
+  refusal,
+  onKeepInNote,
+}: {
+  id: string;
+  refusal: RefusedContact;
+  onKeepInNote: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <p id={id} className="text-sm text-destructive">
+        {refusal.reason === 'extension'
+          ? "Has an extension, so it can't be matched to calls and messages."
+          : `Not a ${refusal.kind === 'email' ? 'usable email address' : 'phone number that can be saved'}.`}
+      </p>
+      {/* Only an extension: it is a real number worth keeping. A "phone" with
+          no digits is better fixed or removed than filed away. */}
+      {refusal.reason === 'extension' && (
+        <Button type="button" size="sm" variant="outline" onClick={onKeepInNote}>
+          <StickyNote className="size-4" /> Keep it in a note
+        </Button>
+      )}
     </div>
   );
 }
@@ -106,6 +144,12 @@ interface Props {
    * against.
    */
   autoFocusName?: boolean;
+  /**
+   * Contact values the last save was refused over (`refusedContactsFrom` the
+   * error). Each is shown under the row still holding it — with an offer to move
+   * an extension number into the notes — and drops off once the row changes.
+   */
+  refusedContacts?: readonly RefusedContact[];
 }
 
 /**
@@ -116,7 +160,14 @@ interface Props {
  * single field each: a person has a home address *and* a work one, a personal
  * email *and* a work email, and collapsing them loses which is which.
  */
-export function PersonForm({ value, onChange, nameError, disabled, autoFocusName = true }: Props) {
+export function PersonForm({
+  value,
+  onChange,
+  nameError,
+  disabled,
+  autoFocusName = true,
+  refusedContacts = [],
+}: Props) {
   const uid = useId();
   const genderListId = `${uid}-genders`;
   const pronounListId = `${uid}-pronouns`;
@@ -224,11 +275,17 @@ export function PersonForm({ value, onChange, nameError, disabled, autoFocusName
             listId={genderListId}
             onChange={(next) => set('gender', next)}
           />
+          {/* iOS WebKit lays a native date input out as content-box with a forced
+              min-width, so `w-full` came out ~28px wider than the card: the field
+              stuck out of it and the page panned sideways. Without the native
+              appearance it is an ordinary box again; the picker still opens, and
+              the value stays left-aligned like its neighbours. */}
           <Field
             id={`${uid}-birth-date`}
             label="Birthday"
             type="date"
             value={value.birthDate}
+            inputClassName="appearance-none [&::-webkit-date-and-time-value]:text-left"
             onChange={(next) => set('birthDate', next)}
           />
         </div>
@@ -242,62 +299,80 @@ export function PersonForm({ value, onChange, nameError, disabled, autoFocusName
               only field that actually matters — about three characters wide.
               `order-*` puts the value under the other three rather than
               between them once the row wraps. */}
-          {value.contacts.map((contact) => (
-            <div key={contact.key} className="flex flex-wrap items-end gap-2">
-              <div className="order-1 flex w-24 shrink-0 flex-col gap-1.5">
-                <Label className="text-xs text-muted-foreground">Type</Label>
-                <Select
-                  value={contact.kind}
-                  onValueChange={(kind) => updateContact(contact.key, { kind: kind as PersonContactKind })}
-                >
-                  <Select.Trigger className="w-full">
-                    <Select.Value />
-                  </Select.Trigger>
-                  <Select.Content>
-                    <Select.Item value="email">Email</Select.Item>
-                    <Select.Item value="phone">Phone</Select.Item>
-                  </Select.Content>
-                </Select>
-              </div>
+          {value.contacts.map((contact) => {
+            const refusal = refusalFor(contact, refusedContacts);
+            const refusalId = `${uid}-${contact.key}-refused`;
 
-              <div className="order-4 w-full min-w-0 sm:order-2 sm:w-auto sm:flex-1">
-                <Field
-                  id={`${uid}-${contact.key}-value`}
-                  label={contact.kind === 'email' ? 'Email address' : 'Phone number'}
-                  type={contact.kind === 'email' ? 'email' : 'tel'}
-                  value={contact.value}
-                  placeholder={contact.kind === 'email' ? 'name@example.com' : '+1 555 010 0100'}
-                  onChange={(next) => updateContact(contact.key, { value: next })}
-                />
-              </div>
+            return (
+              <div key={contact.key} className="flex flex-col gap-1.5">
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="order-1 flex w-24 shrink-0 flex-col gap-1.5">
+                    <Label className="text-xs text-muted-foreground">Type</Label>
+                    <Select
+                      value={contact.kind}
+                      onValueChange={(kind) =>
+                        updateContact(contact.key, { kind: kind as PersonContactKind })
+                      }
+                    >
+                      <Select.Trigger className="w-full">
+                        <Select.Value />
+                      </Select.Trigger>
+                      <Select.Content>
+                        <Select.Item value="email">Email</Select.Item>
+                        <Select.Item value="phone">Phone</Select.Item>
+                      </Select.Content>
+                    </Select>
+                  </div>
 
-              <div className="order-2 min-w-0 flex-1 sm:order-3 sm:w-28 sm:flex-none">
-                <Field
-                  id={`${uid}-${contact.key}-label`}
-                  label="Label"
-                  value={contact.label}
-                  listId={contactLabelListId}
-                  placeholder="home"
-                  onChange={(next) => updateContact(contact.key, { label: next })}
-                />
-              </div>
+                  <div className="order-4 w-full min-w-0 sm:order-2 sm:w-auto sm:flex-1">
+                    <Field
+                      id={`${uid}-${contact.key}-value`}
+                      label={contact.kind === 'email' ? 'Email address' : 'Phone number'}
+                      type={contact.kind === 'email' ? 'email' : 'tel'}
+                      value={contact.value}
+                      placeholder={contact.kind === 'email' ? 'name@example.com' : '+1 555 010 0100'}
+                      errorId={refusal ? refusalId : undefined}
+                      onChange={(next) => updateContact(contact.key, { value: next })}
+                    />
+                  </div>
 
-              <IconButton
-                type="button"
-                variant="ghost"
-                className="order-3 mb-0.5 size-9 shrink-0 sm:order-4"
-                label={`Remove ${contact.kind}`}
-                onClick={() =>
-                  set(
-                    'contacts',
-                    value.contacts.filter((other) => other.key !== contact.key),
-                  )
-                }
-              >
-                <Trash2 className="size-4" />
-              </IconButton>
-            </div>
-          ))}
+                  <div className="order-2 min-w-0 flex-1 sm:order-3 sm:w-28 sm:flex-none">
+                    <Field
+                      id={`${uid}-${contact.key}-label`}
+                      label="Label"
+                      value={contact.label}
+                      listId={contactLabelListId}
+                      placeholder="home"
+                      onChange={(next) => updateContact(contact.key, { label: next })}
+                    />
+                  </div>
+
+                  <IconButton
+                    type="button"
+                    variant="ghost"
+                    className="order-3 mb-0.5 size-9 shrink-0 sm:order-4"
+                    label={`Remove ${contact.kind}`}
+                    onClick={() =>
+                      set(
+                        'contacts',
+                        value.contacts.filter((other) => other.key !== contact.key),
+                      )
+                    }
+                  >
+                    <Trash2 className="size-4" />
+                  </IconButton>
+                </div>
+
+                {refusal && (
+                  <RefusedContactNote
+                    id={refusalId}
+                    refusal={refusal}
+                    onKeepInNote={() => onChange(keepContactInNote(value, contact.key))}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
 
         <div className="flex gap-2">
@@ -396,7 +471,9 @@ export function PersonForm({ value, onChange, nameError, disabled, autoFocusName
           ))}
         </div>
 
-        <div className="flex gap-2">
+        {/* Three nowrap buttons are ~368px wide: on a 390pt phone they overflowed
+            the card and pushed the whole Self page ~5pt sideways. */}
+        <div className="flex flex-wrap gap-2">
           <Button
             type="button"
             size="sm"

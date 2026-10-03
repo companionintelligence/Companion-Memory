@@ -1153,7 +1153,13 @@ describe('PipelineRunService.replayDeadLetters against a de-duplicating queue', 
 
     async completeJob(): Promise<void> {}
 
-    async failJob(): Promise<void> {}
+    async failJob(): Promise<boolean> {
+      return false;
+    }
+
+    async getJob(): Promise<null> {
+      return null;
+    }
   }
 
   interface QueueHarness {

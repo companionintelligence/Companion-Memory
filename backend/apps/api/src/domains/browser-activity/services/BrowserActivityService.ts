@@ -12,7 +12,9 @@ import {
   INGEST_MERGE_KINDS,
   INGEST_PRODUCER_PREFERENCE,
   INGEST_REFRESH_COLUMNS,
+  keysetOrderOf,
   keysetPaginate,
+  keysetSeek,
   type KeysetPageArgs,
   type KeysetPage,
 } from '@ci/common/persistence';
@@ -385,20 +387,29 @@ export class BrowserActivityService {
       query = query.limit(options.limit);
     }
 
+    // The direction `order` asks for (its first key, as for the primary sort); the tiebreak and the
+    // keyset below run the same way, so a page is always the rows PAST the cursor in that direction.
+    const direction = keysetOrderOf(options.order);
+
     if (options.order) {
-      for (const [field, direction] of Object.entries(options.order)) {
-        query = query.orderBy(`browser-activity.${field}`, direction as 'ASC' | 'DESC');
+      for (const [field, fieldDirection] of Object.entries(options.order)) {
+        query = query.orderBy(`browser-activity.${field}`, fieldDirection as 'ASC' | 'DESC');
       }
 
       // Deterministic tiebreak so same-timestamp rows page consistently.
-      query = query.addOrderBy('browser-activity.id', 'DESC');
+      query = query.addOrderBy('browser-activity.id', direction);
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in (time DESC, id DESC).
+    // Composite keyset: page strictly past (afterTime, afterId) in (time, id), in `order` — see keysetSeek.
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(browser-activity.time < :afterTime OR (browser-activity.time = :afterTime AND browser-activity.id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek(
+          'browser-activity.time',
+          'browser-activity.id',
+          direction,
+          options.afterTime,
+          options.afterId,
+        ),
       );
     }
 

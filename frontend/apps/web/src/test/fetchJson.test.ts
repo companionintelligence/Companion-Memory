@@ -232,6 +232,96 @@ describe('fetchJson — native CapacitorHttp', () => {
   });
 });
 
+/**
+ * iOS QA CHAT-03: deleting a chat answered 204, and the row stayed in the open list.
+ *
+ * CapacitorHttp reports an empty body as `data: ''` (or nothing), and
+ * `new Response('', { status: 204 })` THROWS a TypeError — the Fetch spec says a
+ * null-body status (204, 205, 304) takes a null body. The throw happened inside
+ * the wrapper, after the server had already acted, so the caller saw a failure
+ * for a delete that had happened and never refreshed its list.
+ */
+describe('fetchJson — native CapacitorHttp responses with no body', () => {
+  function nativeRequest(result: { status: number; data?: unknown; headers?: Record<string, string> }) {
+    const request = vi.fn(async () => result);
+
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: { CapacitorHttp: { request } },
+    };
+    setApiBaseUrl('https://memory.example.com');
+
+    return request;
+  }
+
+  beforeEach(() => {
+    setApiBaseUrl('');
+    setApiKey(null);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setApiBaseUrl('');
+    setApiKey(null);
+    delete (window as unknown as { Capacitor?: unknown }).Capacitor;
+  });
+
+  it.each([
+    ['an empty string', ''],
+    ['no data', undefined],
+    ['null', null],
+  ])('apiFetch resolves a native DELETE answered 204 with %s', async (_label, data) => {
+    nativeRequest({ status: 204, data });
+
+    const res = await apiFetch('/api/threads/t-1', { method: 'DELETE' });
+
+    expect(res.status).toBe(204);
+    expect(res.ok).toBe(true);
+    expect(res.body).toBeNull();
+    expect(await res.text()).toBe('');
+  });
+
+  it('fetchJson resolves a native DELETE answered 204 to undefined instead of throwing', async () => {
+    nativeRequest({ status: 204, data: '' });
+
+    await expect(fetchJson('/api/keys/k-1', { method: 'DELETE' })).resolves.toBeUndefined();
+  });
+
+  it.each([205, 304])('builds a %i response without a body', async (status) => {
+    nativeRequest({ status, data: '' });
+
+    const res = await apiFetch('/api/x');
+
+    expect(res.status).toBe(status);
+    expect(res.body).toBeNull();
+  });
+
+  it('builds a HEAD response without a body', async () => {
+    nativeRequest({ status: 200, data: '', headers: { 'Content-Length': '12' } });
+
+    const res = await apiFetch('/api/files/f-1', { method: 'HEAD' });
+
+    expect(res.ok).toBe(true);
+    expect(res.body).toBeNull();
+    expect(res.headers.get('Content-Length')).toBe('12');
+  });
+
+  it.each([200, 201, 202, 400, 404, 500])('keeps the body of a %i response', async (status) => {
+    nativeRequest({ status, data: { message: 'kept' }, headers: { 'Content-Type': 'application/json' } });
+
+    const res = await apiFetch('/api/x');
+
+    expect(res.status).toBe(status);
+    expect(await res.json()).toEqual({ message: 'kept' });
+  });
+
+  it('still reads a 200 with an empty body as no data', async () => {
+    nativeRequest({ status: 200, data: '' });
+
+    await expect(fetchJson('/api/x')).resolves.toBeUndefined();
+  });
+});
+
 describe('streamingFetch', () => {
   beforeEach(() => {
     setApiBaseUrl('');
@@ -292,5 +382,23 @@ describe('streamingFetch', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     const body = new Uint8Array(await res.arrayBuffer());
     expect(Array.from(body)).toEqual(Array.from(bytes));
+  });
+
+  it('builds the binary fallback response for a 204 (chat cancel) without a body', async () => {
+    const request = vi.fn(async () => ({ status: 204, data: '' }));
+
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: { CapacitorHttp: { request } },
+    };
+
+    setApiBaseUrl('https://memory.example.com');
+    (window as unknown as { __ciUnpatchedFetch?: typeof fetch }).__ciUnpatchedFetch = (() =>
+      Promise.reject(new TypeError('Load failed'))) as typeof fetch;
+
+    const res = await streamingFetch('/api/llm/threads/t-1/cancel', { method: 'POST' });
+
+    expect(res.status).toBe(204);
+    expect(res.body).toBeNull();
   });
 });

@@ -71,6 +71,8 @@ function makeCollector(
     categoryMetricsTable?: boolean;
     categoryGauges?: Array<Record<string, unknown>>;
     categoryFlow?: Array<Record<string, unknown>>;
+    /** What the purge's counting CTE reports removing from `ci.job_metrics`. */
+    purgedSamples?: number;
   } = {},
 ): Capture {
   const statements: { sql: string; params: unknown[] }[] = [];
@@ -96,6 +98,11 @@ function makeCollector(
 
         if (sql.includes('WITH settled')) {
           return [];
+        }
+
+        // The purge's counting CTE: an outer SELECT, so rows — one count row.
+        if (sql.includes('WITH purged')) {
+          return [{ count: options.purgedSamples ?? 0 }];
         }
 
         // The per-category pair. `WITH recent` first: the flow query also
@@ -281,13 +288,31 @@ describe('JobMetricsCollector — the per-category sweep', () => {
 
     const deletes = capture.statements.filter((statement) => statement.sql.includes('DELETE FROM'));
 
-    expect(deletes.map((statement) => statement.sql.trim())).toEqual([
-      'DELETE FROM ci.job_metrics WHERE sampled_at < $1',
-      'DELETE FROM ci.job_category_metrics WHERE sampled_at < $1',
-    ]);
+    expect(deletes).toHaveLength(2);
+    expect(deletes[0].sql).toContain('DELETE FROM ci.job_metrics WHERE sampled_at < $1');
+    expect(deletes[1].sql.trim()).toBe('DELETE FROM ci.job_category_metrics WHERE sampled_at < $1');
     // Same cutoff for both: the two charts sit on the same screen, and a window
     // that runs off the end of one of them is worse than a shorter window on
     // both.
     expect(deletes[0].params[0]).toEqual(deletes[1].params[0]);
+  });
+
+  it('logs the number of samples the purge removed, read from a counting CTE', async () => {
+    const capture = makeCollector({ purgedSamples: 7 });
+    const debug = jest.spyOn(logger, 'debug');
+
+    try {
+      await capture.collector.purge(new Date('2026-09-01T12:00:00.000Z'));
+
+      // A bare DELETE comes back from TypeORM as `[rows, rowCount]`; the
+      // `.length` this line used to log was 2 however much was purged.
+      const purge = capture.statements.find((statement) => statement.sql.includes('ci.job_metrics'));
+
+      expect(purge?.sql).toMatch(/^WITH purged AS \(DELETE FROM ci\.job_metrics .* RETURNING 1\)/);
+      expect(purge?.sql).toMatch(/SELECT count\(\*\)::int AS count FROM purged$/);
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining('Purged job metrics'), { rows: 7 });
+    } finally {
+      debug.mockRestore();
+    }
   });
 });

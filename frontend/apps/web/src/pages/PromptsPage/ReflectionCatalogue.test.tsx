@@ -4,8 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CatalogueEntry, CataloguePage } from './catalogue';
 import { ReflectionCatalogue } from './ReflectionCatalogue';
 
-vi.mock('@/hooks', () => ({
-  useAuth: () => [{ authToken: 'tok', expired: false, loading: false, error: null }, {}],
+// The real `useSessionAuth` runs on top of this (the catalogue hook gates on it).
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: () => [{ authToken: 'tok', authenticated: true, expired: false, loading: false, error: null }, {}],
 }));
 
 function entry(overrides: Partial<CatalogueEntry> = {}): CatalogueEntry {
@@ -232,6 +233,61 @@ describe('ReflectionCatalogue', () => {
       expect(trigger).toHaveClass('w-full');
       expect(trigger.className).toMatch(/sm:w-\[\d+px]/);
     }
+  });
+
+  // Radix caps the open list at the room on the side it opens toward, and with 21 categories on a
+  // phone that is upward, all the way to the top edge: under the status bar / Dynamic Island, where a
+  // tap on the first entry ("All categories") reaches the status bar instead. The cap has to stop at
+  // the safe area on whichever side it opens.
+  it('keeps the open category list clear of the status bar and the home indicator', async () => {
+    setFetch(() => ok(pageOf([entry()])));
+
+    render(<ReflectionCatalogue />);
+    await screen.findByText('What foods are you allergic to?');
+
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Filter by category' }), { key: 'ArrowDown' });
+    await screen.findByRole('option', { name: 'All categories' });
+
+    const list = document.querySelector('[data-slot="select-content"]');
+    expect(list?.className).toContain(
+      'data-[side=top]:max-h-[calc(var(--radix-select-content-available-height)-var(--safe-area-top,0px))]',
+    );
+    expect(list?.className).toContain(
+      'data-[side=bottom]:max-h-[calc(var(--radix-select-content-available-height)-var(--safe-area-bottom,0px))]',
+    );
+  });
+
+  // `line-clamp-1` only clamps a block-level box, and the trigger also made the value `display: flex`,
+  // which switches the clamp off: a long category ("Relationships & People") was cut off mid-letter
+  // with no ellipsis. The value is a truncating block now.
+  it('ends a long category name in an ellipsis instead of cutting it off mid-letter', async () => {
+    setFetch(() => ok(pageOf([entry()])));
+
+    render(<ReflectionCatalogue />);
+    await screen.findByText('What foods are you allergic to?');
+
+    const trigger = screen.getByLabelText('Filter by category');
+
+    expect(trigger.className).toContain('*:data-[slot=select-value]:truncate');
+    expect(trigger.className).not.toContain('*:data-[slot=select-value]:flex');
+  });
+
+  // The facet counts ignore the category / answer-type / answered filters, so once one narrows the list
+  // "23 answered, 1,261 unanswered" no longer adds up to what is listed: it has to say it is a total.
+  it('labels the answered and unanswered counts as totals once a filter narrows the list', async () => {
+    setFetch(() => ok(pageOf([entry()], { totalCount: 157 })));
+
+    render(<ReflectionCatalogue />);
+
+    const header = await screen.findByText(/1,261 unanswered/);
+    expect(header).not.toHaveTextContent('in total');
+
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Filter by category' }), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Health & Body/ }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/1,261 unanswered/)).toHaveTextContent('1,261 unanswered in total'),
+    );
   });
 
   it('says so when a filter combination matches nothing', async () => {

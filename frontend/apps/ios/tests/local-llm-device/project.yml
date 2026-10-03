@@ -1,0 +1,65 @@
+# Spec for the on-device bench app (see README.md). `xcodegen generate` writes LocalLLMBench.xcodeproj,
+# which is git-ignored: this file is the source of truth.
+#
+# The target compiles the app's OWN on-device LLM sources and the vendored LiteRT-LM wrapper by
+# reference (nothing is copied), plus the bench's Sources/. Capacitor and the Pods are not involved,
+# so the bench builds in about a minute and measures exactly the engine code that ships.
+name: LocalLLMBench
+options:
+  bundleIdPrefix: com.companionintelligence.app
+  deploymentTarget:
+    iOS: "15.5"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    # Same team as the app. The bundle id below is deliberately different from the app's
+    # (com.companionintelligence.app), so installing the bench never replaces an installed app or
+    # touches its data, and the team's wildcard development profile can sign it with no new App ID.
+    DEVELOPMENT_TEAM: 68U45V853Y
+    CODE_SIGN_STYLE: Automatic
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  LocalLLMBench:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: ../../ios/App/App/LocalLLM
+        excludes:
+          - LocalLLMPlugin.swift # needs Capacitor
+          - ModelDownloader.swift # the bench pushes model files itself
+      - path: ../../ios/App/App/Vendor/LiteRTLM
+    dependencies:
+      - framework: ../../ios/App/Frameworks/CLiteRTLM.xcframework
+        embed: true
+        codeSign: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.companionintelligence.app.llmbench
+        PRODUCT_NAME: LocalLLMBench
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: LLM Bench
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
+        # CLiteRTLM is a static-in-dynamic wrapper whose Swift binding needs every object loaded,
+        # exactly like the app target (App.xcodeproj: OTHER_LDFLAGS = -all_load).
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -all_load
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/Frameworks"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) LOCAL_LLM_BENCH"
+schemes:
+  LocalLLMBench:
+    build:
+      targets:
+        LocalLLMBench: all
+    run:
+      config: Debug

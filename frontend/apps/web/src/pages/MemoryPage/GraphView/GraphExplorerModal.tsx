@@ -171,7 +171,9 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   /** The query matched more nodes than the canvas cap draws (server-reported). */
   const [searchTruncated, setSearchTruncated] = useState(false);
 
-  const [{ authToken }] = useAuth();
+  // `authenticated` gates the search, not `authToken`: the token is the web JWT, which the native
+  // shell never has — its credential is a keystore API key (`apiKeyHeaders`).
+  const [{ authToken, authenticated }] = useAuth();
 
   /**
    * DOTS overview: the default zoomed-out picture — every data type as thousands of tiny dots from
@@ -371,7 +373,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       return;
     }
 
-    if (!authToken) {
+    if (!authenticated) {
       setSearchError('Authentication required for graph search.');
       setSearchNodes([]);
       setSearchLinks([]);
@@ -431,7 +433,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
         const response = await fetch(buildApiUrl(`/api/graph/search?${params.toString()}`), {
           headers: {
             ...apiKeyHeaders(),
-            Authorization: `Bearer ${authToken}`,
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
           },
           signal: controller.signal,
         });
@@ -530,6 +532,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     };
   }, [
     authToken,
+    authenticated,
     isSearchMode,
     trimmedSearchQuery,
     explorerIncludeTypes,
@@ -872,6 +875,12 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
             onViewportChange={handleViewportChange}
             forceLod={dotsEligible && mode === 'overview'}
             ambientBreath={dotsEligible && mode === 'overview'}
+            // The canvas is the whole view here, with no page around it to scroll, so every swipe
+            // belongs to the graph.
+            verticalSwipe="graph"
+            // Zoom buttons clear of the floating chrome: stacked above the 2D/3D toggle on a desktop,
+            // and top-right on a phone, where the legend spans most of the bottom edge.
+            controlsClassName={variant === 'mobile' ? 'bottom-auto top-3' : 'bottom-9'}
           />
         ))}
 

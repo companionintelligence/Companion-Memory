@@ -240,9 +240,7 @@ export class PersonaComposeService {
         { kind: 'insight' as const, id: 'persona-compose', note: 'how you’d do it' },
         ...result.evidence.slice(0, 3).map((e) => ({
           kind: (e.kind === 'answer' ? 'answer' : e.kind === 'summary' ? 'summary' : 'insight') as
-            | 'answer'
-            | 'summary'
-            | 'insight',
+            'answer' | 'summary' | 'insight',
           id: e.id ?? e.kind,
           note: e.note,
         })),

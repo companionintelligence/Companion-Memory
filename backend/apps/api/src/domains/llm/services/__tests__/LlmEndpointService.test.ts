@@ -72,6 +72,50 @@ describe('LlmEndpointService', () => {
     expect(service.getOllamaHost()).toBe('http://localhost:11434');
   });
 
+  it('points at a Lemonade by its own API root, persists it, and reports it in the view', () => {
+    const { writeSharedConfig } = jest.requireMock('../llmEndpointShared') as {
+      writeSharedConfig: jest.Mock;
+    };
+    const service = new LlmEndpointService(logger as never);
+    service.onModuleInit();
+
+    // A trailing slash and a missing leading one are the same setting.
+    service.update({ backend: 'openai_compatible', port: 13305, basePath: 'api/v1/' });
+
+    expect(service.getView()).toMatchObject({
+      backend: 'openai_compatible',
+      port: 13305,
+      basePath: '/api/v1',
+      endpoint: 'http://localhost:13305/api/v1',
+    });
+    expect(service.getOpenAiDriver()?.baseUrl).toBe('http://localhost:13305/api/v1');
+    expect(writeSharedConfig).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.objectContaining({ backend: 'openai_compatible', port: 13305, basePath: '/api/v1' }),
+    );
+
+    // Back to Ollama: no path is stored or shown, since Ollama's native routes are fixed.
+    service.update({ backend: 'ollama', port: 11434 });
+    expect(service.getView()).not.toHaveProperty('basePath');
+    expect(writeSharedConfig).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.not.objectContaining({ basePath: expect.anything() }),
+    );
+  });
+
+  it("reports an injected LLM_API_BASE's own path, not an assumed /v1", () => {
+    (config as { llm: { apiBase?: string } }).llm.apiBase = 'http://localhost:13305/api/v1';
+    const service = new LlmEndpointService(logger as never);
+    service.onModuleInit();
+
+    expect(service.getView()).toMatchObject({
+      backend: 'openai_compatible',
+      port: 13305,
+      basePath: '/api/v1',
+      locked: true,
+    });
+  });
+
   it('treats a non-Ollama LLM_API_BASE port as locked Hub config', () => {
     (config as { llm: { apiBase?: string } }).llm.apiBase = 'http://host.docker.internal:8000/v1';
 

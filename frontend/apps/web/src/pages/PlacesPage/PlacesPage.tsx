@@ -94,6 +94,8 @@ const GET_KNOWN_PLACES = gql(`
       lat
       lng
       eventCount
+      presenceDays
+      presenceNights
       confidence
       sampleEvents {
         id
@@ -224,8 +226,38 @@ export interface LocatedCandidate {
   lng: number;
   label: string;
   eventCount: number;
+  /** Days and nights of GPS in the candidate's area; see {@link candidateEvidence}. */
+  presenceDays: number;
+  presenceNights: number;
   /** Place entity id when this cluster is already a place. Null for a coordinate-only cluster. */
   locationId: string | null;
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * What a candidate rests on: "4 events · GPS on 172 days (12 nights)". A
+ * candidate can come from GPS alone, and "0 events" would read as no evidence.
+ */
+function candidateEvidence(candidate: {
+  eventCount: number;
+  presenceDays: number;
+  presenceNights: number;
+}): string {
+  const parts: string[] = [];
+
+  if (candidate.eventCount > 0 || candidate.presenceDays === 0) {
+    parts.push(plural(candidate.eventCount, 'event'));
+  }
+
+  if (candidate.presenceDays > 0) {
+    const nights = candidate.presenceNights > 0 ? ` (${plural(candidate.presenceNights, 'night')})` : '';
+    parts.push(`GPS on ${plural(candidate.presenceDays, 'day')}${nights}`);
+  }
+
+  return parts.join(' · ');
 }
 
 /** Close enough to read street-level context around one cluster. */
@@ -284,7 +316,7 @@ function KnownPlaceCandidateRow({
     <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
       <div className="min-w-0 flex-1">
         <label htmlFor={inputId} className="text-sm text-muted-foreground">
-          {candidate.eventCount} events
+          {candidateEvidence(candidate)}
           {unnamed ? ` near ${candidate.lat.toFixed(4)}, ${candidate.lng.toFixed(4)}` : ''} · looks like{' '}
           <span className="capitalize">{candidate.kind}</span>
         </label>
@@ -386,6 +418,8 @@ function KnownPlacesCard({
         lng: candidate.lng,
         label: candidate.label,
         eventCount: candidate.eventCount,
+        presenceDays: candidate.presenceDays,
+        presenceNights: candidate.presenceNights,
         locationId: candidate.locationId ?? null,
       })),
     [candidates],
@@ -435,8 +469,8 @@ function KnownPlacesCard({
       <Card.Header>
         <Card.Title className="text-base">Known places</Card.Title>
         <Card.Description>
-          Frequent places detected from your events. Name them and pick what they are so home and work anchor
-          your memory.
+          Frequent places detected from your events and GPS history. Name them and pick what they are so home
+          and work anchor your memory.
         </Card.Description>
       </Card.Header>
       <Card.Content className="flex flex-col gap-3">
@@ -477,6 +511,8 @@ function KnownPlacesCard({
                       lng: target.lng,
                       label: target.label,
                       eventCount: target.eventCount,
+                      presenceDays: target.presenceDays,
+                      presenceNights: target.presenceNights,
                       locationId: target.locationId ?? null,
                     },
               )
@@ -677,7 +713,7 @@ export function PlacesPage() {
                             onClick={() => openCandidatePlace(locatedCandidate.locationId)}
                           >
                             <Tooltip permanent direction="top" offset={[0, -56]}>
-                              {locatedCandidate.label} · {locatedCandidate.eventCount} events
+                              {locatedCandidate.label} · {candidateEvidence(locatedCandidate)}
                             </Tooltip>
                           </Map.Marker>
                         )}

@@ -86,7 +86,7 @@ package manager's own `licenses` command.
 77. [`csv-parse`](https://csv.js.org/parse) `7.0.2` — runtime
 78. [`dataloader`](https://github.com/graphql/dataloader) `2.2.3` — runtime
 79. [`date-fns`](https://github.com/date-fns/date-fns) `4.4.0` — runtime
-80. [`dbmate`](https://github.com/amacneil/dbmate#readme) `2.27.0` — runtime
+80. [`dbmate`](https://github.com/amacneil/dbmate#readme) `2.36.0` — runtime
 81. [`dlv`](developit/dlv) `1.1.3` — runtime
 82. [`embla-carousel-react`](https://www.embla-carousel.com) `8.6.0` — runtime
 83. [`exifr`](https://mutiny.cz/exifr/) `7.1.3` — runtime

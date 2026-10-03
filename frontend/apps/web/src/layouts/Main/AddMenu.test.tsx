@@ -1,12 +1,17 @@
 /**
- * The Add menu's Thing modal is the ONE modal here that has to refresh
- * something after it writes.
+ * Two of the Add menu's modals have to refresh something after they write.
  *
  * `ThingModal` used to splice the new thing into every cached `items`
  * field itself (a `cache.modify` block); that was replaced by an `onSaved`
  * callback, and this call site was left without one — so a thing created from
  * "+" stayed invisible until a manual reload, including on the Things browse
  * the user was looking at when they created it.
+ *
+ * `AddEventModal` is the same hazard arriving by a different route: the Memory
+ * explorer used to carry its own "New event" button wired to that page's
+ * `refetch`, and when that button was folded into this menu the refresh had to
+ * come with it. AddMenu renders above `EntityServiceProvider`, so it cannot
+ * reach that `refetch` — it evicts the root `search`/`mapPins` fields instead.
  */
 
 import { useEffect } from 'react';
@@ -21,6 +26,7 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 import { AddMenu } from './AddMenu';
 
 const savedProps: { onSaved?: () => Promise<unknown> | void }[] = [];
+const eventProps: { onCreated?: () => Promise<unknown> | void }[] = [];
 
 vi.mock('@/components/modals/ThingModal', () => ({
   ThingModal: (props: { onSaved?: () => Promise<unknown> | void }) => {
@@ -35,7 +41,11 @@ vi.mock('@/components/modals/ThingModal', () => ({
 vi.mock('@/components/modals/CaptureModal', () => ({ CaptureModal: () => null }));
 vi.mock('@/components/modals/UploadModal', () => ({ UploadModal: () => null }));
 vi.mock('@/components/modals/AddItemModal', () => ({
-  AddEventModal: () => null,
+  AddEventModal: (props: { onCreated?: () => Promise<unknown> | void }) => {
+    eventProps.push(props);
+
+    return null;
+  },
   AddPersonModal: () => null,
   AddPlaceModal: () => null,
 }));
@@ -75,6 +85,7 @@ function ClientProbe({ onClient }: { onClient: (client: ApolloClient<object>) =>
 
 async function renderAddMenu(): Promise<ApolloClient<object>> {
   savedProps.length = 0;
+  eventProps.length = 0;
 
   let captured: ApolloClient<object> | null = null;
 
@@ -142,5 +153,52 @@ describe('AddMenu', () => {
     options.updateCache(client.cache);
 
     expect(itemFields()).toEqual([]);
+  });
+
+  it('gives the Event modal an onCreated — the explorer has no other create affordance', async () => {
+    await renderAddMenu();
+
+    expect(eventProps.length).toBeGreaterThan(0);
+    expect(typeof eventProps.at(-1)?.onCreated).toBe('function');
+  });
+
+  it('refreshes the explorer and the map by evicting the root `search`/`mapPins` fields', async () => {
+    const client = await renderAddMenu();
+
+    const refetchQueries = vi.spyOn(client, 'refetchQueries').mockResolvedValue([]);
+
+    // The explorer's `search` and the map's `mapPins` are server-composed
+    // connections, so seed them as the raw root fields Apollo actually writes
+    // (there is no exported document to writeQuery through).
+    client.cache.restore({
+      ROOT_QUERY: {
+        __typename: 'Query',
+        'search({"input":{"query":""}})': { __typename: 'SearchConnection', totalCount: 0, edges: [] },
+        'mapPins({"input":{"query":""}})': { __typename: 'MapPinsType', totalCount: 0, pins: [] },
+      },
+    });
+
+    const rootFields = (prefix: string) =>
+      Object.keys(
+        ((client.cache.extract() as Record<string, unknown>).ROOT_QUERY ?? {}) as Record<string, unknown>,
+      ).filter((key) => key.startsWith(prefix));
+
+    expect(rootFields('search').length).toBeGreaterThan(0);
+    expect(rootFields('mapPins').length).toBeGreaterThan(0);
+
+    await eventProps.at(-1)?.onCreated?.();
+
+    expect(refetchQueries).toHaveBeenCalledTimes(1);
+
+    const options = refetchQueries.mock.calls[0]![0] as {
+      updateCache: (cache: typeof client.cache) => void;
+    };
+
+    options.updateCache(client.cache);
+
+    // Both, not just the explorer: an event created with a location is a new
+    // pin, and the map would otherwise keep serving the pre-create set.
+    expect(rootFields('search')).toEqual([]);
+    expect(rootFields('mapPins')).toEqual([]);
   });
 });

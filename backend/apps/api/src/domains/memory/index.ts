@@ -23,7 +23,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { BrowserActivityModule, BrowserActivityEntity } from '@ci/domains/browser-activity';
 import { EventsModule } from '@ci/domains/events';
-import { FilesModule } from '@ci/domains/files';
+import { FileService as FileStorageService, FilesModule } from '@ci/domains/files';
 // Deep file imports, NOT `@ci/domains/graph`. GraphModule already imports
 // MemoryModule, so pulling the graph BARREL in here would close a CommonJS
 // require cycle between the two index files — whichever loaded second would see
@@ -81,6 +81,7 @@ import { CommunicationService } from './services/CommunicationService';
 import { ConceptService } from './services/ConceptService';
 import { ContentService } from './services/ContentService';
 import { EntityMergeBlockService } from './services/EntityMergeBlockService';
+import { STORED_OBJECTS } from './services/filePurge';
 import { FileService } from './services/FileService';
 import { GraphDeltaWriter } from './services/GraphDeltaWriter';
 import { GraphEventService } from './services/GraphEventService';
@@ -148,6 +149,10 @@ import { UserContextService } from './services/UserContextService';
   ],
   providers: [
     GraphDeltaWriter,
+    // The object store, for the stored files that a purge of content or of an event deletes with
+    // the photo they wrap. Taken by this token, not by the files domain's class, so that the two
+    // services that want it do not load that domain's barrel.
+    { provide: STORED_OBJECTS, useExisting: FileStorageService },
     CommunicationService,
     ContentService,
     CalendarEventService,
@@ -290,8 +295,47 @@ export {
 };
 
 export type { Content } from './entities/ContentEntity';
+// How a graph write spells `entity_type`; `memory.remember` sends the model's type through these.
+export { canonicalEntityType, isStorableEntityType, sameEntityType } from './graph.types';
+// Which nodes are a Person, a Place or a Concept, under every spelling `ci.entities` holds them in;
+// `memory.forget` sends each to its own purge.
+export { GRAPH_ENTITY_TYPES, graphEntityKindOf, type GraphEntityKind } from './graph.types';
+export {
+  SELF_ENTITY_PROVISIONER,
+  ensureSelfEntityId,
+  resolveSelfEntityProvisioner,
+  type SelfEntityProvisioner,
+  type SelfIdentityLookup,
+} from './services/selfEntityProvisioner';
+export {
+  EVENT_TIME_REOPENER,
+  type EventTimeReopener,
+  resolveEventTimeReopener,
+} from './services/eventTimeReopener';
+export {
+  EVENT_STATUS_REOPENER,
+  type EventStatusReopener,
+  resolveEventStatusReopener,
+} from './services/eventStatusReopener';
+export {
+  EVENT_LOCATION_REOPENER,
+  type EventLocationReopener,
+  resolveEventLocationReopener,
+} from './services/eventLocationReopener';
+// The pipeline's `metadata.location_source` / `promote.stage` vocabulary as the location refresh reads it;
+// pipeline/__tests__/sourceLocationVocabulary.spec.ts holds the stages to it.
+export { SOURCE_LOCATION_VOCABULARY } from './services/sourceLocationMerge';
 export type { MapPin } from './services/CalendarEventService';
+// What `FileService.purge` answers with, and the error that says a purge deleted a file's stored
+// objects and then could not delete its records.
+export { StoredObjectsDeletedError, type PurgedFiles } from './services/filePurge';
+// What a purge of content or of an event did about the stored files it wrapped: the ones it deleted,
+// and the ones it kept because something else still uses them.
+export type { KeptFile, WrappedFilesPurged } from './services/wrappedFilePurge';
 export { DEAD_EVENT_STATUSES, LIVE_EVENT_SQL } from './services/CalendarEventService';
+// "This `ci.events` row happened" (alias `event`): the calendar's LIVE_EVENT_SQL plus deleted, predicted
+// and cancelled-reservation. What a place's visit count, the Places date browse and Known places apply.
+export { EVENT_HAPPENED_SQL } from './services/eventHappened';
 export { MAX_EXPANDED_OCCURRENCES, MAX_RECURRING_MASTERS } from './services/CalendarEventService';
 // Read-time RRULE expansion. Exported so `peers` can expand the same series for
 // free/busy without routing that read through findInRange, which would silently
@@ -329,7 +373,13 @@ export type {
   PlaceDuplicatePage,
   PlaceDuplicateReason,
 } from './services/PlaceDuplicateService';
-export type { CreateEventDto, UpdateEventDto, CreateContentDto, UpdateContentDto } from './types';
+export type {
+  CreateEventDto,
+  UpdateEventDto,
+  CreateContentDto,
+  UpdateContentDto,
+  SourceAssertedField,
+} from './types';
 // Cross-pipeline identity: the ONLY constructors of source_system/source_id.
 // Every domain that stamps a provenance pair imports the builders from here —
 // see docs/design/cross-pipeline-identity.md.
@@ -419,6 +469,7 @@ export type {
   FindItemsFilter,
   ItemKeyset,
   ItemPage,
+  ItemPosition,
 } from './types';
 export { FIND_OR_CREATE_IDENTITY_CONFIDENCE } from './services/ProductModelService';
 export type { ReceiptExtractionResult, ReceiptPage, ReceiptWithLines } from './services/ReceiptService';
@@ -527,11 +578,22 @@ export {
   profileFactsSqlObject,
   profileUrlSqlPrefilter,
 } from './utils/profileUrls';
+// A shared email's one guard: never folded into the self Person over a name
+// that contradicts the owner's. Read by the detector and the drain.
+export {
+  type EmailCheckReason,
+  type EmailEndpoint,
+  EMAIL_EVIDENCE,
+  EMAIL_HELD_SCORE,
+  emailHoldReason,
+  holdEmailEvidence,
+} from './utils/emailIdentity';
 // Phone numbers as duplicate evidence. The same arrangement as profile URLs:
 // one adjudicator, read by the duplicate detector and by the auto-merger's
 // live re-check, and the only producer of a 0.95 phone item.
 export {
   type GivenNameRelation,
+  type LivePhoneSupport,
   type NanpNumberClass,
   type ParsedPhone,
   type PhoneBasis,
@@ -547,6 +609,8 @@ export {
   type PhoneRegion,
   type PhoneUnusableReason,
   type PhoneVerdict,
+  type RevalidatedPhoneEvidence,
+  FAX_FACT_PROPERTY_KEYS,
   NANP_TIMEZONES,
   PHONE_CLAIM_E164_SQL,
   PHONE_EVIDENCE,
@@ -559,6 +623,7 @@ export {
   PhoneHolders,
   applyPhoneVerdict,
   capUnadjudicatedPhones,
+  carriedPhoneLines,
   classifyPhoneName,
   derivePhoneRegion,
   extractPhoneFacts,
@@ -571,7 +636,9 @@ export {
   parsePhone,
   phoneCorpusFacts,
   phoneEvidenceFor,
+  phoneEvidenceNumbers,
   phoneFactsSqlObject,
+  revalidatePhoneEvidence,
   sharedPhoneLines,
   statedPhoneNumbers,
 } from './utils/phoneIdentity';

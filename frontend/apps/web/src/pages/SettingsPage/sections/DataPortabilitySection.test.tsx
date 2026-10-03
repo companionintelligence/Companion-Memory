@@ -6,11 +6,17 @@ import { DataPortabilitySection } from './DataPortabilitySection';
 const h = vi.hoisted(() => ({
   authToken: 'jwt-abc' as string | null,
   email: 'jsmith@example.com',
+  native: false,
 }));
 
 vi.mock('@/hooks', () => ({
   useAuth: () => [{ authToken: h.authToken }],
   useCurrentUser: () => ({ user: { id: 'u1', email: h.email }, loading: false, error: undefined }),
+}));
+
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
+  isNativePlatform: () => h.native,
 }));
 
 const downloadAccountExport = vi.hoisted(() => vi.fn());
@@ -24,7 +30,7 @@ vi.mock('@/lib/accountDataPortability', () => ({
 }));
 
 vi.mock('./WorkingSetSection', () => ({
-  WorkingSetSection: () => null,
+  WorkingSetSection: () => <div data-testid="working-set" />,
 }));
 
 /** The hidden `<input type="file">` — its `<Label>` targets a nonexistent id, so it
@@ -55,6 +61,7 @@ function replaceButton() {
 describe('DataPortabilitySection', () => {
   beforeEach(() => {
     h.authToken = 'jwt-abc';
+    h.native = false;
     h.email = 'jsmith@example.com';
     downloadAccountExport.mockResolvedValue(undefined);
     uploadAccountImport.mockResolvedValue({
@@ -230,5 +237,58 @@ describe('DataPortabilitySection', () => {
 
     expect(screen.getByRole('button', { name: 'export.ndjson' })).toBeInTheDocument();
     expect(screen.getByLabelText(/to confirm/i)).toHaveValue(h.email);
+  });
+});
+
+/**
+ * ═══ "EXPORT DOWNLOADED." AND NOTHING WAS SAVED ═══
+ *
+ * On the native shell the export fetched a relative `/api/account/export` — the app's own
+ * `capacitor://localhost` origin, not the Memory server — with no API key, then clicked a
+ * download anchor in the web view. The page said "Export downloaded." and the QA run could find
+ * no file. The shells carry no file-save or share plugin, and a streamed whole-account archive is
+ * not something a phone can hold in memory, so the honest thing is to say it needs the web app.
+ * Import has the same two problems (it can only fail), so both cards give way to one explanation.
+ */
+describe('DataPortabilitySection on the native shell', () => {
+  beforeEach(() => {
+    h.native = true;
+    h.authToken = null;
+    downloadAccountExport.mockReset();
+    uploadAccountImport.mockReset();
+    uploadLegacyAccountImport.mockReset();
+  });
+
+  it('says plainly that a web sign-in is needed, instead of offering buttons that cannot work', () => {
+    render(<DataPortabilitySection />);
+
+    expect(screen.getByText('Needs a web sign-in')).toBeInTheDocument();
+    expect(screen.getByText(/cannot save or open yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Export all my data' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /import from file/i })).not.toBeInTheDocument();
+  });
+
+  it('never claims an export was downloaded', () => {
+    render(<DataPortabilitySection />);
+
+    expect(downloadAccountExport).not.toHaveBeenCalled();
+    expect(screen.queryByText('Export downloaded.')).not.toBeInTheDocument();
+  });
+
+  it('keeps the on-device cache controls, which are about this phone', () => {
+    render(<DataPortabilitySection />);
+
+    expect(screen.getByTestId('working-set')).toBeInTheDocument();
+  });
+
+  it('keeps export and import on the web', () => {
+    h.native = false;
+    h.authToken = 'jwt-abc';
+
+    render(<DataPortabilitySection />);
+
+    expect(screen.getByRole('button', { name: 'Export all my data' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /import from file/i })).toBeInTheDocument();
+    expect(screen.queryByText('Needs a web sign-in')).not.toBeInTheDocument();
   });
 });

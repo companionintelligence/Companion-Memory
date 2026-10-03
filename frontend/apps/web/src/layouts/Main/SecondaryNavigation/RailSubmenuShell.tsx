@@ -6,6 +6,21 @@ import { Link, useLocation } from 'react-router-dom';
 
 import { usePowerRail } from '../PowerRailContext';
 
+import {
+  RAIL_ACCOUNT_HEIGHT,
+  RAIL_CHILD_HEIGHT,
+  RAIL_CHILD_INSET,
+  RAIL_COLLAPSED_BADGE,
+  RAIL_ICON_ACTIVE,
+  RAIL_LEAF_HEIGHT,
+  RAIL_LEAF_INSET,
+  RAIL_SECTION_HEIGHT,
+  RAIL_SECTION_INSET,
+  RailChildren,
+  RailIndentedRow,
+  railRowTone,
+} from './railRow';
+
 /**
  * One shared shape for every Power Rail group — Planning, Memory, Self, and
  * any destination carrying `children` (Saved Searches, Jobs). Owns the
@@ -14,8 +29,10 @@ import { usePowerRail } from '../PowerRailContext';
  * icons, badges), never in how they open, close, or look doing it.
  *
  * Collapsed, a head click still opens the group's children — in the same
- * rail lane, icons only, same row padding as the expanded accordion. The
- * page beside it never reflows. Expanded keeps labels and the chevron.
+ * rail lane, icons only, at the same row heights as the expanded accordion,
+ * so pinning the rail open never moves an icon. The page beside it never
+ * reflows. Expanded keeps labels and the chevron, and hangs the children off
+ * a guide line under the head's icon ({@link RailChildren}).
  *
  * Open/close state itself stays with the caller (via {@link useRailSubmenuOpen}),
  * not this component — a couple of callers (Memory, for its recent-threads
@@ -42,8 +59,11 @@ export interface RailSubmenuShellProps {
   collapsedBadge?: ReactNode;
   /** Full head-row content: icon + label (+ badge), or Self's avatar tile. */
   head: ReactNode;
-  /** Self's two-line avatar tile is shorter than the standard icon+label row. */
-  compactHead?: boolean;
+  /**
+   * Self's two-line avatar tile: a taller row than a section, with the wider
+   * avatar centred on the icon column instead of starting on it.
+   */
+  accountHead?: boolean;
   testId: string;
   /** Appended after `children`, inside the same collapsible content (Self's NavUserMenu). */
   footer?: ReactNode;
@@ -62,7 +82,7 @@ export function RailSubmenuShell({
   collapsedIcon,
   collapsedBadge,
   head,
-  compactHead = false,
+  accountHead = false,
   testId,
   footer,
   children,
@@ -70,6 +90,10 @@ export function RailSubmenuShell({
   const { expanded } = usePowerRail();
   const { pathname } = useLocation();
   const rootActive = pathname === to;
+  // The current page's fill is on the row box, so each half hovers over it.
+  const headHover = rootActive
+    ? 'hover:bg-primary/10 hover:text-primary'
+    : 'hover:bg-accent hover:text-accent-foreground';
 
   if (!expanded) {
     const collapsed = (
@@ -78,13 +102,16 @@ export function RailSubmenuShell({
         aria-label={ariaLabel}
         aria-expanded={clickOpen}
         onClick={onHeadClick}
+        // Same height as the expanded head, so pinning the rail open never
+        // moves an icon; the group you are in is a filled cell.
         className={cn(
-          'relative flex items-center justify-center rounded-md border-l-2 border-transparent p-2 transition hover:bg-accent hover:text-accent-foreground',
-          routeOpen && 'border-l-primary text-primary hover:text-primary',
+          'relative flex items-center justify-center rounded-md transition',
+          accountHead ? RAIL_ACCOUNT_HEIGHT : RAIL_SECTION_HEIGHT,
+          railRowTone(routeOpen),
         )}
       >
         {collapsedIcon}
-        {collapsedBadge}
+        {collapsedBadge ? <span className={RAIL_COLLAPSED_BADGE}>{collapsedBadge}</span> : null}
       </Link>
     );
 
@@ -101,7 +128,7 @@ export function RailSubmenuShell({
           )}
 
           <Collapsible.Content className="min-w-0 overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
-            <div className="flex min-w-0 flex-col">
+            <div className="flex min-w-0 flex-col gap-0.5">
               {children}
               {footer}
             </div>
@@ -114,11 +141,14 @@ export function RailSubmenuShell({
   return (
     <div data-testid={testId} className="min-w-0 w-full overflow-hidden">
       <Collapsible open={open} onOpenChange={onOpenChange} className="min-w-0 w-full">
-        {/* One row: the head + chevron share the same box (same geometry as NavLink). */}
+        {/* One row: the head + chevron share the same box (same geometry as
+            NavLink). The current page fills the whole box, so the link and
+            the chevron read as one row; each still hovers on its own. */}
         <div
           className={cn(
-            'flex min-w-0 w-full items-center rounded-md border-l-2 border-transparent',
-            rootActive && 'border-l-primary text-primary',
+            'flex min-w-0 w-full items-stretch rounded-md',
+            accountHead ? RAIL_ACCOUNT_HEIGHT : RAIL_SECTION_HEIGHT,
+            rootActive && 'bg-primary/10 text-primary',
           )}
         >
           <Link
@@ -127,15 +157,21 @@ export function RailSubmenuShell({
             aria-current={rootActive ? 'page' : undefined}
             onClick={onHeadClick}
             className={cn(
-              'flex min-w-0 flex-1 items-center gap-3 rounded-l-md px-2 transition hover:bg-accent hover:text-accent-foreground',
-              compactHead ? 'py-1.5' : 'py-2',
-              rootActive && 'text-primary hover:text-primary',
+              'flex min-w-0 flex-1 items-center rounded-l-md transition',
+              // The avatar is wider than an icon, so the account row centres it
+              // on the icon column and closes the gap: the name then starts on
+              // the same label column as every section above it.
+              accountHead ? 'gap-2 py-1 pl-1.5 pr-2' : ['gap-3', RAIL_SECTION_INSET],
+              headHover,
             )}
           >
             {head}
           </Link>
           <Collapsible.Trigger
-            className="flex shrink-0 items-center self-stretch rounded-r-md px-2 transition hover:bg-accent hover:text-accent-foreground [&[data-state=open]>svg]:rotate-90"
+            className={cn(
+              'flex shrink-0 items-center rounded-r-md px-2 transition [&[data-state=open]>svg]:rotate-90',
+              headHover,
+            )}
             aria-label={open ? `Collapse ${chevronLabel} sections` : `Expand ${chevronLabel} sections`}
           >
             <ChevronRight className="h-4 w-4 shrink-0 transition-transform duration-200" />
@@ -143,10 +179,10 @@ export function RailSubmenuShell({
         </div>
 
         <Collapsible.Content className="min-w-0 overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
-          <div className="flex min-w-0 flex-col">
+          <RailChildren>
             {children}
             {footer}
-          </div>
+          </RailChildren>
         </Collapsible.Content>
       </Collapsible>
     </div>
@@ -172,7 +208,13 @@ export function RailSubmenuHead({
   );
 }
 
-/** One child row inside an opened group — same shape for every submenu, including nested rows (e.g. Memory's recent threads). */
+/**
+ * One child row inside an opened group — the same shape for every submenu.
+ *
+ * Expanded, it starts just past the group's guide line with its icon, and the
+ * current page carries the bar on the group's guide line. Collapsed, it is an
+ * icon in the rail lane with its label in a tooltip.
+ */
 export function RailSubmenuRow({
   to,
   label,
@@ -190,37 +232,86 @@ export function RailSubmenuRow({
 }) {
   const { expanded } = usePowerRail();
 
-  const link = (
-    <Link
-      to={to}
-      state={state}
-      aria-label={label}
-      aria-current={active ? 'page' : undefined}
-      className={cn(
-        'relative flex min-w-0 items-center rounded-md border-l-2 border-transparent px-2 py-0 text-sm leading-tight transition hover:bg-accent hover:text-accent-foreground',
-        expanded ? 'gap-2' : 'justify-center',
-        active && 'border-l-primary text-primary hover:text-primary',
-      )}
-    >
-      <span className="grid size-6 shrink-0 place-items-center" aria-hidden>
-        {icon}
-      </span>
-      {expanded ? <span className="truncate">{label}</span> : null}
-      {expanded ? badge : null}
-      {!expanded && badge ? (
-        <span className="pointer-events-none absolute right-0 top-0">{badge}</span>
-      ) : null}
-    </Link>
-  );
-
   if (expanded) {
-    return link;
+    return (
+      <RailIndentedRow active={active}>
+        <Link
+          to={to}
+          state={state}
+          aria-label={label}
+          aria-current={active ? 'page' : undefined}
+          className={cn(
+            'flex min-w-0 items-center gap-2 rounded-md text-sm transition',
+            RAIL_CHILD_HEIGHT,
+            RAIL_CHILD_INSET,
+            railRowTone(active),
+          )}
+        >
+          <span
+            className={cn('grid size-4 shrink-0 place-items-center', active && RAIL_ICON_ACTIVE)}
+            aria-hidden
+          >
+            {icon}
+          </span>
+          <span className="truncate">{label}</span>
+          {badge}
+        </Link>
+      </RailIndentedRow>
+    );
   }
 
   return (
     <Tooltip delayDuration={600}>
-      <Tooltip.Trigger asChild>{link}</Tooltip.Trigger>
+      <Tooltip.Trigger asChild>
+        <Link
+          to={to}
+          state={state}
+          aria-label={label}
+          aria-current={active ? 'page' : undefined}
+          className={cn(
+            'relative flex min-w-0 items-center justify-center rounded-md transition',
+            RAIL_CHILD_HEIGHT,
+            railRowTone(active),
+          )}
+        >
+          <span
+            className={cn('grid size-6 shrink-0 place-items-center', active && RAIL_ICON_ACTIVE)}
+            aria-hidden
+          >
+            {icon}
+          </span>
+          {badge ? <span className={RAIL_COLLAPSED_BADGE}>{badge}</span> : null}
+        </Link>
+      </Tooltip.Trigger>
       <Tooltip.Content side="right">{label}</Tooltip.Content>
     </Tooltip>
+  );
+}
+
+/**
+ * A row one level below a child — Chat's recent threads under Memory → Chat.
+ *
+ * Text only, smaller and muted, and indented again so three levels read as
+ * three levels instead of one long list. Labels only, so it has no collapsed
+ * form: the icon rail never shows this level.
+ */
+export function RailSubmenuLeaf({ to, label, active }: { to: string; label: string; active: boolean }) {
+  return (
+    <RailIndentedRow active={active}>
+      <Link
+        to={to}
+        aria-label={label}
+        aria-current={active ? 'page' : undefined}
+        className={cn(
+          'flex min-w-0 items-center rounded-md text-xs transition',
+          RAIL_LEAF_HEIGHT,
+          RAIL_LEAF_INSET,
+          !active && 'text-muted-foreground',
+          railRowTone(active),
+        )}
+      >
+        <span className="truncate">{label}</span>
+      </Link>
+    </RailIndentedRow>
   );
 }

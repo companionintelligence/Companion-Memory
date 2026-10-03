@@ -28,7 +28,9 @@ export function isChatableHarness(harness: AgentHarnessStatus): boolean {
 export function useChatAboutActions(context: AgentChatContext) {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [{ authToken }] = useAuth();
+  // `authenticated`, not `authToken`: the token is the web JWT, which the native shell never has —
+  // its credential is a keystore API key, and `POST /v1/agent/jobs` takes it.
+  const [{ authToken, authenticated }] = useAuth();
   const { harnesses, loading } = useAgentHarnesses();
 
   const installedHarnesses = useMemo(
@@ -60,7 +62,7 @@ export function useChatAboutActions(context: AgentChatContext) {
   }, []);
 
   const dispatchToOpenClaw = useCallback(async () => {
-    if (!authToken) {
+    if (!authenticated) {
       toast.error('Sign in to Dispatch to OpenClaw.');
 
       return;
@@ -82,7 +84,7 @@ export function useChatAboutActions(context: AgentChatContext) {
     try {
       const sourceKind = context.sourceKind ?? 'GenericEntity';
       const sourceId = context.sourceId ?? context.title;
-      const job = await createDispatchJob(authToken, {
+      const job = await createDispatchJob(authToken ?? null, {
         sourceKind,
         sourceId,
         title: context.title,
@@ -102,7 +104,7 @@ export function useChatAboutActions(context: AgentChatContext) {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Dispatch did not start.');
     }
-  }, [authToken, context, navigate, openclaw, toast]);
+  }, [authToken, authenticated, context, navigate, openclaw, toast]);
 
   return {
     harnesses: installedHarnesses,

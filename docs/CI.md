@@ -202,6 +202,218 @@ grep -rn -B1 '^[[:space:]]*#\[(tokio::)?test\]' -E frontend/apps/desktop/src-tau
   --include='*.rs' | grep 'target_os'
 ```
 
+### Running the database-backed suites locally: `make test-db`
+
+Most of `@ci/be-api`'s integration suites need a real Postgres, and without one
+every one of them **skips** — with jest still exiting 0. So a green `make test`
+(or a green CI run with no database) can have executed none of them. Pointing
+them at "the database `.env` names" is worse: that is your real corpus, and they
+write to it.
+
+`make test-db` is the third way. It starts a throwaway container of the
+appliance's own database image (the local `ci/database:latest` when you have
+built it, else the pin in `ci.yml`'s backend job) on a random loopback port with
+random passwords, bootstraps it with `scripts/test-db/bootstrap.sql` — the same
+file `ci.yml` runs, so the two cannot drift — migrates it, runs the `be-api` jest
+suite against it, judges the run, and removes the container. **Docker is the only
+prerequisite.** It scrubs every database-shaped name out of the environment its
+children inherit, so nothing points them at your real corpus (`migrate` loads the
+repo-root `.env`, but a value the command has already set wins over it); it never
+binds a fixed host port, and only
+ever touches containers it created itself (name `ci-testdb-*` *and* label
+`ci.test-db=1`). Ctrl-C, `kill` and the terminal going away (**SIGHUP** — closing
+the window, an SSH connection dropping) are all handled the same way: the signal
+is forwarded to jest's whole process tree (`yarn` is only a wrapper, and a signal
+sent to it alone would leave jest and its workers running), the container and
+this run's temp directory are removed, the summary is still printed, and the exit
+is nonzero.
+
+**Start it with `make test-db`, not `yarn tsx scripts/xtask/index.ts test-db`.**
+The `tsx` CLI wrapper relays Ctrl-C and `kill` to its child and SIGKILLs it if it
+has not answered within about 60 ms — which a command blocked in Docker or jest
+cannot do. Measured through the wrapper, a signal at start-up leaked the container
+2 of 2 times, and 10 of 11 signals during jest killed the command with no summary
+and its temp directory left behind (the container leaked in some of those);
+started as `node --import tsx` (which is what the Makefile runs), 27 of 27 signals
+were handled cleanly. `scripts/xtask/makefile.test.ts` fails if a recipe goes
+back, and the command prints a warning when it finds itself under the wrapper.
+Anything a leak does leave is removed by the stale-container reaper on the next
+run — see [Stale containers and `--keep`](#stale-containers-and---keep) for what
+it removes and, as importantly, what it leaves alone.
+
+```bash
+make test-db                                  # the whole be-api suite
+make test-db ARGS='src/domains/import'        # jest path patterns; any jest flag works too
+make test-db KEEP=1                           # leave the container up (prints how to connect)
+make test-db KEEP_FOR=12h                     # ...and say how long later runs must leave it alone (implies KEEP=1)
+make test-db WORKERS=2 DB_IMAGE=my/db:tag     # jest workers (default 4); another image
+make test-db NO_RETRY=1                       # a failing test file fails the run at once (see below)
+```
+
+The run **fails** on any of:
+
+| Check | What it catches |
+|---|---|
+| jest's own verdict | a failing test, or a suite that failed to *run*, **that also fails again on the serial retry** (see [Flaky tests](#flaky-tests-the-serial-retry)) |
+| no unexplained skip | any `skipped` / `pending` / `todo` test not forgiven by `scripts/test-db/allowed-skips.json` |
+| database crash sentinel | crash-restart signatures in the container's own log (`untracked child process … exited with exit code 2`, `terminating any other active server processes`, `was terminated by signal`, `PANIC`, `in recovery` …) |
+
+The allow-list exists because "zero skips" is not achievable — a suite that needs
+`vips`, or `pdftotext`, or a real archive legitimately skips on a machine without
+it. Every entry needs a **reason**, and where the reason is environmental it
+states the condition (`when`: a missing binary, a platform, an unset opt-in), so a
+skip is forgiven only while that condition is true. A vips suite that skips on a
+machine that *has* vips fails the run. Add an entry only for a real environmental
+need; if a suite skips for any other reason, fix the suite.
+
+The sentinel exists because a run whose database crash-restarted underneath it can
+still exit 0 — the suites mid-query fail with connection errors that read like
+bugs in the code under test, and the rest pass. Its evidence is only in the
+container's log. If it trips, the fault is the database or the harness, not
+(usually) the tests: look at the reported log lines first.
+
+#### Stale containers and `--keep`
+
+Every `make test-db` starts by removing what earlier runs left behind: a run that
+was `SIGKILL`ed, a machine that went to sleep mid-run, a `KEEP=1` database nobody
+came back to. But a database is not stale just because it is old — a `KEEP=1`
+container is exactly what a session runs jest against, in a loop, for hours — so a
+container named `ci-testdb-*` that carries the `ci.test-db=1` label is removed only
+when **all three** of these hold:
+
+1. **It is more than two hours old.**
+2. **It is outside its `--keep` window.** A container made with `--keep` is labelled
+   `ci.test-db.keep-until=<ISO time>` when it is created — 24 hours ahead by
+   default; `--keep-for 12h` (`KEEP_FOR=12h`) sets it, to at most 7 days, and
+   implies `--keep`. The reaper leaves it alone until that instant whether or not
+   anything is connected, because between two jest runs nothing is.
+3. **Nothing is connected to it.** The reaper counts the client backends in
+   `pg_stat_activity` from inside the container, so a database a sibling session is
+   running jest against survives even when it has no window (the TimescaleDB
+   workers, the checkpointer and the like are other backend types and do not
+   count). A container with nothing running in it (created, exited) has no
+   clients and is removed. One the reaper could not ask — a timeout, a database
+   still starting up, a paused container — is left alone and named, with the
+   `docker rm -f -v` to run by hand: *could not tell* is never read as *idle*.
+
+A container left alone is said so, with its name, its age and why.
+
+- **The window is a label, and a label cannot be changed on a running container.**
+  Choose `--keep-for` when you start it. To protect a container for longer than the
+  cap, or one that was made without `--keep`, `docker rename` it to anything that
+  does not start with `ci-testdb-`: the reaper only ever touches `ci-testdb-*`
+  names, and a rename keeps the same container, port and live connections. Remove it
+  yourself afterwards, by its new name.
+- **A container made by a checkout older than this has no window**, so only the
+  client count protects it — and an older checkout's `make test-db` still removes by
+  age alone. Rebase before relying on any of this.
+- **What it cannot see:** a run that has itself been going for more than two hours (a
+  badly overloaded machine) and happens, at that instant, to have no connection open
+  — between jest's first run and its serial retry, say. Only `--keep` covers that.
+
+**If Docker itself misbehaves**, the command says what it does and does not know.
+Every docker call on the start-up and clean-up path has a time limit — a daemon
+that accepts a call and never answers fails the call after a bounded time (20 s
+for a lookup, 40 s for a removal, 5 minutes for `docker run`) instead of hanging
+the run; even the first-run image pull, whose duration is the network's, has a
+30-minute ceiling — and a container counts as removed only when the daemon said
+so or a verification that *succeeded* found it absent. A removal whose
+verification also failed is reported as **unknown**, the container stays tracked
+by the exit-time backstop, and the message gives the
+exact `docker rm -f -v ci-testdb-…` to run. The same holds when `docker run`
+itself dies after the daemon created the container: it is found again by its
+exact name and removed only if it carries the `ci.test-db=1` label. The rule is
+the same for every question put to the daemon: *could not tell* is never read as
+*no*. A failed image lookup stops the run with that message rather than pulling
+or picking another image on a guess, and a failed listing of stale containers is
+reported instead of printing a tick for a check that did not happen.
+
+#### Flaky tests: the serial retry
+
+Under parallel load a few suites fail for reasons that have nothing to do with the
+change: an swc `failed printing to stderr … (os error 35)` while a suite loads, a
+`deadlock detected` between two suites inserting into the same table, a
+timing-sensitive controller test. So the policy is explicit, and it is **not** a
+search for a green tick:
+
+1. After the parallel run, each test **file** that failed is re-run **once**,
+   serially (`--runInBand`, by exact path), against the same database. A `-t`
+   name filter and a `--testTimeout` are carried over so the retry runs the same
+   tests at the same limit; nothing else from your jest arguments is.
+2. A file that failed the parallel run and **passed** serially is a **FLAKE**. It
+   does not fail the run, but it is printed as a warning block naming the file
+   and the first line of its error, and the final line says
+   `passed WITH n FLAKE(S)` — it is never folded into a plain "passed".
+3. A file that failed **both** times is **REAL** and fails the run (the summary
+   shows the serial run's error, which has no load noise in it).
+4. A file nobody re-ran is **UNRETRIED**, which also fails the run: not knowing
+   is not passing. That happens with `--no-retry` (`NO_RETRY=1`), when the run
+   was interrupted, and when **more than 20 files** failed — that is a broken
+   run or a dead database, not flaky tests, and re-running them serially would
+   take longer than the run did.
+
+The exit code is 0 only if everything passed or was a FLAKE. A flake can never
+excuse a REAL failure beside it, a crash-sentinel hit, or an unexplained skip.
+The no-skip check is run on the report with each flaked file's entry replaced by
+what its serial re-run reported, so a test that *skipped* on the retry is still
+caught. There is no separate JSON summary: the summary is the printed table plus
+the FLAKE/REAL blocks, and jest's own `--json` report is a temp file that is
+removed with the run.
+
+A flake is a defect report with a low priority, not a non-event: a file that
+keeps showing up in the FLAKE block has a real race in it (or in the code it
+tests) and deserves a ticket.
+
+#### The environment the suites see
+
+`buildTestEnv` starts from your shell's environment, **removes** every variable
+whose name could reach a database, and only then sets its own. The rule is
+deliberately broad, because writing to your real corpus cannot be undone and a
+false positive merely removes a variable nothing here needs. It drops (case
+insensitively) any name that
+
+- contains `DATABASE`, `POSTGRES`, `REPLICATION` or `POWERSYNC` — always, even
+  on the keep-list; or
+- starts `PG`, contains `DB_`, ends `_DB`, `_URI` or `_URL`, or starts `COMPOSE_`
+  — unless it is on the keep-list.
+
+So `HBPE_DATABASE_URL`, `PS_REPLICATION_URI`, `POWERSYNC_DATABASE_PASSWORD`,
+`DB_HOST` and `COMPOSE_PROJECT_NAME` never reach jest — and neither, as a cost
+of the breadth, do things like `ANTHROPIC_BASE_URL`. The keep-list is tiny and
+exists for what yarn, jest and docker need: `PATH`, `HOME`, `TMPDIR`, `USER`,
+`LOGNAME`, `SHELL`, `NODE_OPTIONS`, `TERM`, `CI`, `TZ`, `LANG`, `LC_*`, `YARN_*`,
+`DOCKER_HOST`, `DOCKER_CONFIG`. Everything else passes through.
+
+Then the throwaway's values are set, and `assertOnlyThrowaway` checks the
+finished environment before any child process starts. It does not trust the
+scrub: a variable it sets must name the container's loopback port, and any
+database-shaped variable it did *not* set is refused outright, whatever its
+value. It names the variable, never the value.
+
+#### The `CI_REQUIRE_DB` contract
+
+`CI_REQUIRE_DB=1` turns "no database here" from a **skip** into a **failure**. It
+is read by the two availability helpers every DB-backed suite goes through
+(`databaseAvailability()` and `scratchDatabaseAvailability()` in
+`backend/apps/api/src/domains/__tests__/support/`): with it set, a missing or
+unreachable database makes the suite throw at load, jest reports *Test suite
+failed to run*, and the message names the variable to set and the target it tried.
+Unset, behaviour is unchanged — the suite skips and prints a `SKIPPED —` line — so
+a laptop with no stack running still works.
+
+Set it in any run that provisions a database and means to use it; `make test-db`
+does. Separately, the reachability probe now tries three times, a fraction of a
+second apart, before believing "nothing is listening": one dropped handshake on a
+loaded machine used to skip a whole suite silently.
+
+`ci.yml`'s backend job does **not** set it yet, deliberately: its
+scratch-database suites (`git grep -l 'scratchDatabaseAvailability()' -- '*.spec.ts'`)
+need `DATABASE_ADMIN_PASSWORD`, which that job leaves
+unset as a cost decision (see the comment in the workflow), and under
+`CI_REQUIRE_DB=1` they would fail rather than skip. Decide that first. Other
+gaps in this area: `consent-path-gate.yml` still carries its own copy of the
+role/extension bootstrap, and none of the workflows runs the no-skip check.
+
 ---
 
 Default branch: `main`

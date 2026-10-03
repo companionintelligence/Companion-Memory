@@ -43,8 +43,13 @@ import { EventsModule } from '@ci/domains/events';
 import { FileEntity, FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { IntelligenceModule } from '@ci/domains/intelligence';
-import { MaintenanceModule } from '@ci/domains/maintenance';
-import { MemoryModule } from '@ci/domains/memory';
+import { EDGE_PROJECTION_REOPENER, MaintenanceModule } from '@ci/domains/maintenance';
+import {
+  EVENT_LOCATION_REOPENER,
+  EVENT_STATUS_REOPENER,
+  EVENT_TIME_REOPENER,
+  MemoryModule,
+} from '@ci/domains/memory';
 
 import { STAGE_IDS } from './constants';
 import { PipelineController } from './controllers/PipelineController';
@@ -64,7 +69,11 @@ import { StageArrivalListener } from './listeners/StageArrivalListener';
 import { UnfurlSweepRequestListener } from './listeners/UnfurlSweepRequestListener';
 import { VideoPlaybackSweepRequestListener } from './listeners/VideoPlaybackSweepRequestListener';
 import { BackpressureService } from './services/BackpressureService';
+import { EdgeProjectionReopenService } from './services/EdgeProjectionReopenService';
 import { EnrichmentWindowService } from './services/EnrichmentWindowService';
+import { EventLocationReopenService } from './services/EventLocationReopenService';
+import { EventStatusReopenService } from './services/EventStatusReopenService';
+import { EventTimeReopenService } from './services/EventTimeReopenService';
 import { IdentifierArrivalService } from './services/IdentifierArrivalService';
 import { PipelineControlService } from './services/PipelineControlService';
 import { PipelineDispatchService } from './services/PipelineDispatchService';
@@ -316,6 +325,28 @@ const stageProviders: Provider[] = [
     // (Phase 5) replaces the cron, not the tick.
     { provide: PIPELINE_TICK, useExisting: PipelineControlService },
     DeadLetterReaperListener,
+    // The linkage writers that are NOT stages (the maintenance linkers) cannot
+    // report a `done` for `STAGE_REOPENS` to act on, so they re-open the edge
+    // legs' decisions themselves, in their own transaction, through this
+    // binding. Maintenance owns the contract (this module imports that one, not
+    // the reverse) and resolves it lazily.
+    EdgeProjectionReopenService,
+    { provide: EDGE_PROJECTION_REOPENER, useExisting: EdgeProjectionReopenService },
+    // The same arrangement for an event's TIME: when its source or a person
+    // moves it, CalendarEventService (memory, which this module imports)
+    // re-opens the decisions stages made on the old time, in the transaction
+    // that moved it.
+    EventTimeReopenService,
+    { provide: EVENT_TIME_REOPENER, useExisting: EventTimeReopenService },
+    // And for an event's STATUS: a write that calls it off takes back the
+    // location the estimator lent it, and one that reinstates it offers it to
+    // the estimator again, in the transaction that wrote the status.
+    EventStatusReopenService,
+    { provide: EVENT_STATUS_REOPENER, useExisting: EventStatusReopenService },
+    // And for its LOCATION: the same arrangement, re-opening the geocode,
+    // reverse-geocode, estimate and place-link decisions made on the old place.
+    EventLocationReopenService,
+    { provide: EVENT_LOCATION_REOPENER, useExisting: EventLocationReopenService },
     ...stageProviders,
   ],
   controllers: [PipelineController],

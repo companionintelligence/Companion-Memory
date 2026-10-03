@@ -1,6 +1,8 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createDateTimeFormatter } from '@/lib/dateTimeFormat';
+
 import type { Thread } from './types';
 import { RECENT_THREAD_LIMIT, threadLabel, useRecentThreads } from './useRecentThreads';
 
@@ -18,7 +20,8 @@ vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => [h.auth, {}],
 }));
 
-const thread = (id: string, name: string | null = null) => ({ id, name }) as unknown as Thread;
+const thread = (id: string, name: string | null = null, createdAt?: string) =>
+  ({ id, name, createdAt }) as unknown as Thread;
 
 function setFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
   const mock = vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
@@ -41,9 +44,35 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('threadLabel', () => {
-  it('names an unnamed thread by a shortened id', () => {
+  // Pinned so the expected text does not depend on the machine's zone or its 12/24-hour habit.
+  const fmt = createDateTimeFormatter({ timeFormat: 'h23', timeZone: 'UTC' });
+
+  it('uses the title when there is one', () => {
+    expect(threadLabel(thread('t1', 'Dinner plans', '2026-10-02T16:24:00Z'), fmt)).toBe('Dinner plans');
+  });
+
+  it('falls back to a shortened id when it has neither a title nor a start time', () => {
     expect(threadLabel(thread('abcdef1234567890'))).toBe('Thread abcdef12');
-    expect(threadLabel(thread('t1', 'Dinner plans'))).toBe('Dinner plans');
+    expect(threadLabel(thread('abcdef1234567890', null, 'not a date'))).toBe('Thread abcdef12');
+    expect(threadLabel(thread('abcdef1234567890', '   '))).toBe('Thread abcdef12');
+  });
+
+  // Titles arrive late (a background job after the first reply), and `Thread 01a0fd3b` is the same for every chat
+  // started within about a minute — so rows in the drawer and the phone's chat list were indistinguishable.
+  it('names an untitled thread for when it started, so two of them can be told apart', () => {
+    const first = threadLabel(thread('01a0fd3b-aaaa', null, '2026-10-02T16:24:00Z'), fmt);
+    const second = threadLabel(thread('01a0fd3b-bbbb', null, '2026-10-02T16:25:30Z'), fmt);
+
+    expect(first).toMatch(/^Chat · .*16:24/);
+    expect(second).toMatch(/^Chat · .*16:25/);
+    expect(first).not.toBe(second);
+    expect(first).not.toContain('01a0fd3b');
+  });
+
+  it('writes the time the way the person chose to read times', () => {
+    const h12 = createDateTimeFormatter({ timeFormat: 'h12', timeZone: 'UTC' });
+
+    expect(threadLabel(thread('t1', null, '2026-10-02T16:24:00Z'), h12)).toMatch(/4:24\s?PM/);
   });
 });
 

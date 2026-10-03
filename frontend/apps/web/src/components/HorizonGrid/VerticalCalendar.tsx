@@ -14,6 +14,7 @@ import { Button, Input, Tooltip, cn } from '@ci/shadcn';
 import type { ForecastBucket } from '@/api/useForecastService';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
 import { SlotTooltip } from '@/components/ForecastStrip';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import {
   type ColorMode,
   CLASS_LABEL,
@@ -25,6 +26,7 @@ import {
   normalizeClass,
   sourceOf,
 } from '@/lib/activityPalette';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { EVENT_DRAG_TYPE, parseEventDrag } from '@/lib/scheduleDrag';
 import { detectBrowserTimeZone } from '@/lib/timezone';
 
@@ -63,20 +65,31 @@ const HOUR_HEIGHT_PX = 52;
 const GRID_HEIGHT_PX = HOUR_HEIGHT_PX * HOURS_PER_DAY;
 const AXIS_HOURS = Array.from({ length: HOURS_PER_DAY }, (_, hour) => hour);
 
-function formatHour(hour: number): string {
-  return new Date(2000, 0, 1, hour).toLocaleTimeString([], { hour: 'numeric' });
+/**
+ * An hour-axis label: "1 PM" / "13" by the person's hour cycle. The axis is wall-clock hours of
+ * the day being drawn, not instants, so only the cycle applies — the rows are already in `zone`.
+ */
+function formatHour(hour: number, fmt: DateTimeFormatter): string {
+  return fmt.clock(hour, 0, { hour: 'numeric' });
 }
 
 function isExternallyOwned(event: ScheduleEvent): boolean {
   return Boolean(event.sourceSystem);
 }
 
-function blockLabel(event: ScheduleEvent, colorMode: ColorMode, zone: string): string {
+function blockLabel(
+  event: ScheduleEvent,
+  colorMode: ColorMode,
+  zone: string,
+  fmt: DateTimeFormatter,
+): string {
   const start = new Date(event.startTime);
   const end = event.endTime ? new Date(event.endTime) : null;
   const parts = [
     event.title,
-    event.isAllDay ? 'all day' : `${formatClock(start, zone)}${end ? ` to ${formatClock(end, zone)}` : ''}`,
+    event.isAllDay
+      ? 'all day'
+      : `${formatClock(start, fmt, zone)}${end ? ` to ${formatClock(end, fmt, zone)}` : ''}`,
     colorMode === 'source' ? sourceOf(event) : CLASS_LABEL[classifyEvent(event)],
   ];
 
@@ -102,6 +115,20 @@ function isScheduleChip(target: EventTarget | null): boolean {
   return Boolean((target as HTMLElement | null)?.closest?.('[data-schedule-chip]'));
 }
 
+/**
+ * Did this click begin on the element the handler sits on, or inside it?
+ *
+ * React bubbles a portal's synthetic events up the COMPONENT tree, not the DOM
+ * tree. A chip's peek dialog is rendered under `<body>` yet is a React child of
+ * the lane, so a tap on the dialog's own date field, X or backdrop reaches the
+ * lane's `onClick` with a `target` that is nowhere inside the lane — and
+ * `isScheduleChip` cannot tell, it only finds no chip. Asking the DOM is what
+ * separates "the slot was tapped" from "something floating above it was".
+ */
+function startedInside(event: { currentTarget: HTMLElement; target: EventTarget | null }): boolean {
+  return event.currentTarget.contains(event.target as Node | null);
+}
+
 function slotPct(instant: Date, zone: string): number {
   return (zonedMinutesOfDay(instant, zone) / MINUTES_PER_DAY) * 100;
 }
@@ -116,6 +143,7 @@ interface EventTooltipProps {
 
 function EventTooltipBody({ event, color, colorMode, movable, zone }: EventTooltipProps) {
   const url = eventUrl(event);
+  const fmt = useDateTimeFormat();
 
   return (
     <div className="max-w-64 space-y-1 text-left">
@@ -135,8 +163,8 @@ function EventTooltipBody({ event, color, colorMode, movable, zone }: EventToolt
       <p className="text-[10px] opacity-75">
         {event.isAllDay
           ? 'All day'
-          : `${formatClock(new Date(event.startTime), zone)}${
-              event.endTime ? ` – ${formatClock(new Date(event.endTime), zone)}` : ''
+          : `${formatClock(new Date(event.startTime), fmt, zone)}${
+              event.endTime ? ` – ${formatClock(new Date(event.endTime), fmt, zone)}` : ''
             }`}
       </p>
       {describes(event) && <p className="text-[11px] leading-snug opacity-90">{event.description}</p>}
@@ -173,6 +201,7 @@ function ClusterBlock({
   zone: string;
   onMoveEvent?: (eventId: string, startTime: Date) => void;
 }) {
+  const fmt = useDateTimeFormat();
   const lead = item.spans[0]?.event;
   const color = lead ? eventColor(lead, colorMode) : 'var(--activity-none)';
   const count = item.spans.length;
@@ -190,7 +219,7 @@ function ClusterBlock({
               <li key={event.id} className="text-[11px] leading-snug">
                 <span className="font-medium">{event.title}</span>
                 <span className="ml-1.5 text-[10px] opacity-75 tabular-nums">
-                  {formatClock(new Date(event.startTime), zone)}
+                  {formatClock(new Date(event.startTime), fmt, zone)}
                 </span>
               </li>
             ))}
@@ -394,7 +423,8 @@ function TimedBlock({
   // reschedule: offering the drag would only ever end in a snap-back.
   const movable = Boolean(onMoveEvent) && !event.seriesMasterId;
   const short = widthPct < (45 / MINUTES_PER_DAY) * 100;
-  const label = blockLabel(event, colorMode, zone);
+  const fmt = useDateTimeFormat();
+  const label = blockLabel(event, colorMode, zone, fmt);
 
   return (
     <EventPeek
@@ -475,8 +505,8 @@ function TimedBlock({
         )}
         {!short && (
           <span className="block truncate text-[10px] tabular-nums text-muted-foreground">
-            {formatClock(new Date(event.startTime), zone)}
-            {event.endTime ? ` – ${formatClock(new Date(event.endTime), zone)}` : ''}
+            {formatClock(new Date(event.startTime), fmt, zone)}
+            {event.endTime ? ` – ${formatClock(new Date(event.endTime), fmt, zone)}` : ''}
           </span>
         )}
       </div>
@@ -497,7 +527,8 @@ function AllDayChip({
 }) {
   const color = eventColor(event, colorMode);
   const url = eventUrl(event);
-  const label = blockLabel(event, colorMode, zone);
+  const fmt = useDateTimeFormat();
+  const label = blockLabel(event, colorMode, zone, fmt);
   // See TimedBlock: an expanded occurrence has no row to move.
   const movable = Boolean(onMoveEvent) && !event.seriesMasterId;
 
@@ -716,6 +747,7 @@ const DayLane = memo(function DayLane({
   selectedSlot,
   onSelectSlot,
 }: DayLaneProps) {
+  const fmt = useDateTimeFormat();
   const [dropPct, setDropPct] = useState<number | null>(null);
   const timedSpans = useMemo(
     () =>
@@ -761,7 +793,7 @@ const DayLane = memo(function DayLane({
       onClick={
         onSelectSlot
           ? (click) => {
-              if (isScheduleChip(click.target)) {
+              if (!startedInside(click) || isScheduleChip(click.target)) {
                 return;
               }
 
@@ -859,7 +891,7 @@ const DayLane = memo(function DayLane({
             className="pointer-events-none absolute left-1 z-20 -translate-y-1/2 rounded bg-primary px-1 py-px text-[10px] text-primary-foreground tabular-nums"
             style={{ top: `${markerPct}%` }}
           >
-            {formatClock(markerAt, zone)}
+            {formatClock(markerAt, fmt, zone)}
           </div>
         </>
       )}
@@ -946,6 +978,7 @@ export function VerticalCalendar({
   footer,
   className,
 }: VerticalCalendarProps) {
+  const fmt = useDateTimeFormat();
   const zone = timeZone ?? detectBrowserTimeZone();
   const now = new Date();
   const today = startOfLocalDay(now, zone);
@@ -1091,7 +1124,7 @@ export function VerticalCalendar({
                 onClick={
                   onSelectSlot
                     ? (click) => {
-                        if (isScheduleChip(click.target)) {
+                        if (!startedInside(click) || isScheduleChip(click.target)) {
                           return;
                         }
 
@@ -1127,7 +1160,7 @@ export function VerticalCalendar({
                   className="absolute right-0 -translate-y-1/2 text-[10px] tabular-nums text-muted-foreground"
                   style={{ top: `${(hour / HOURS_PER_DAY) * 100}%` }}
                 >
-                  {hour === 0 ? '' : formatHour(hour)}
+                  {hour === 0 ? '' : formatHour(hour, fmt)}
                 </span>
               ))}
             </div>

@@ -7,7 +7,7 @@ import type {
   ActiveImportStage,
 } from '@/pages/ImportPage/useImportApi';
 
-import { ImportActivity, ImportActivityCard } from './ImportActivity';
+import { ImportActivity, ImportActivityCard, describeStage } from './ImportActivity';
 
 /**
  * The pinned progress region, pinned in tests against the import it was built
@@ -390,6 +390,101 @@ describe('ImportActivityCard', () => {
     ).toBeInTheDocument();
     // Elapsed for a stage still RUNNING, where `duration_ms` is still null.
     expect(screen.getByText('45m 34s')).toBeInTheDocument();
+  });
+
+  it('does not describe a finished stage with the words it said while it was working', () => {
+    // A finished run's summary line is its LAST stage, and the runner never
+    // clears `phase` on completion: a completed Save went on reading "pushing",
+    // a completed Read "parsing fitbit (56/57)".
+    const finished = stage({
+      kind: 'push',
+      status: 'completed',
+      queueState: 'done',
+      phase: 'pushing',
+      processed: 706_689,
+      total: 706_689,
+      itemsPerSec: null,
+    });
+
+    expect(describeStage(finished)).toBe('706.7k / 706.7k');
+    expect(describeStage(stage({ ...finished, kind: 'parse', phase: 'parsing fitbit (56/57)' }))).toBe(
+      '706.7k / 706.7k',
+    );
+  });
+
+  /**
+   * Reproduced 2026-09-29: a worker restarted mid-parse, and this line went on
+   * pulsing "running" over counts frozen at 8141, with no error, for the twelve
+   * minutes recovery took to notice. The server now says when a running
+   * stage's heartbeat has gone silent; the line has to say it too.
+   */
+  it('says a running stage has stalled, instead of pulsing over frozen counts', () => {
+    render(
+      <ImportActivityCard
+        snapshot={snapshot({
+          runs: [
+            run({
+              stages: [
+                stage({
+                  id: 'stalled-parse',
+                  kind: 'parse',
+                  status: 'running',
+                  queueState: 'running',
+                  phase: 'parsing google_activity (3/56)',
+                  processed: 8_141,
+                  total: null,
+                  itemsPerSec: 12,
+                  etaSeconds: 600,
+                  durationMs: null,
+                  finishedAt: null,
+                  elapsedMs: 9 * 60_000,
+                  heartbeatAt: '2026-08-19T01:20:00.000Z',
+                  stalled: true,
+                }),
+              ],
+            }),
+          ],
+        })}
+      />,
+    );
+
+    // The reason to look first, and no ETA — a stalled stage's is a lie.
+    expect(
+      screen.getByText('Stalled — no heartbeat · parsing google_activity (3/56) · 8.1k · 12/s'),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('stalled')).toBeInTheDocument();
+    expect(screen.queryByLabelText('running')).not.toBeInTheDocument();
+  });
+
+  it('says why a stage that was halfway through is back in the queue', () => {
+    render(
+      <ImportActivityCard
+        snapshot={snapshot({
+          runs: [
+            run({
+              stages: [
+                stage({
+                  id: 'requeued-parse',
+                  kind: 'parse',
+                  status: 'queued',
+                  queueState: 'waiting',
+                  queuePosition: 1,
+                  processed: 0,
+                  total: null,
+                  durationMs: null,
+                  startedAt: null,
+                  finishedAt: null,
+                  elapsedMs: 20_000,
+                  detail: { interrupted: { reason: 'worker stopped heartbeating', processed: 8141 } },
+                }),
+              ],
+            }),
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByText('Next in the read queue · retrying, its worker stopped')).toBeInTheDocument();
   });
 
   it("puts a failed stage error on the stage, in the stage's own words", () => {

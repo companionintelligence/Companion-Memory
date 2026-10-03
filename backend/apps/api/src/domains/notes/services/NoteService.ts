@@ -5,7 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { computeChunkSize, withoutUndefined } from '@ci/common/persistence';
+import { computeChunkSize, keysetSeek, withoutUndefined } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
@@ -338,17 +338,18 @@ export class NoteService {
       query = query.andWhere('note.updated_at <= :endTime', { endTime: options.endTime });
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in
-    // (updated_at DESC, id DESC) — see ContentService.getEntitiesForContents.
+    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at, id), in
+    // `order` — see keysetSeek.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(note.updated_at < :afterTime OR (note.updated_at = :afterTime AND note.id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('note.updated_at', 'note.id', order, options.afterTime, options.afterId),
       );
     }
 
-    // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query.orderBy('note.updated_at', options.order ?? 'DESC').addOrderBy('note.id', 'DESC');
+    // Deterministic tiebreak so same-timestamp rows page consistently: the id runs the way the time does.
+    query = query.orderBy('note.updated_at', order).addOrderBy('note.id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);

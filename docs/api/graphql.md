@@ -206,7 +206,7 @@ Gated by the **`ask` feature flag, which is now `true` by default** — the *loc
 
 **`SearchResultConnection`** carries `edges`, `pageInfo`, `totalCount` **and `matchingTags: [TagType!]!`** — the tags represented in the result set, so a client can offer tag refinement without a second round-trip.
 
-**Candidate source:** `query` → search index (ranked); else `tags` → tag membership; else **timed** (recent events + communications + browser activity merged, with a `(time,id)` keyset cursor pushed to SQL). Remaining filters AND-ed as post-filters; who/where/connector restrict to matching events. **Cursor:** opaque `base64("<iso-time>::<globalId>")`. Node is the `SearchResultType` union (§5).
+**Candidate source:** `query` → search index (ranked); else `tags` → tag membership; else **timed** (recent events + communications + browser activity merged, with a `(time,id)` keyset cursor pushed to SQL). Remaining filters AND-ed as post-filters; who/where/connector restrict to matching events. **Cursor:** opaque `base64("<iso-time>::<globalId>")`. The keyset runs in the sort direction: `sortBy: "time"` with `sortOrder: "asc"` ("Oldest first") reads every table upwards from the start of the range and the cursor walks forward, so the first page holds the oldest rows and each page continues after the last; every other sort reads newest-first. The cursor's time is millisecond precision while the stored times are microseconds, so the seek treats the cursor's millisecond as one tie group and breaks it on the id. Node is the `SearchResultType` union (§5).
 
 **`mapPins(input: SearchInput!, limit: Int): MapPinsType!`** runs the *same* `SearchInput` and returns located events as map markers, so the map and list views cannot drift apart on what "the current query" means. Two deliberate differences: `hasLocation` is **forced on** regardless of input (an unlocated event has no pin) and the result is **events-only**; and it returns the whole matching set in one read (capped at `MAP_PIN_MAX_LIMIT` pins), not a page — with `totalCount` a real `COUNT(*)` of the matching located set, so a truncated response can say how much of the map it is showing.
 
@@ -273,6 +273,8 @@ Many newer writes return a `*Payload` wrapper; note also that several entities n
 ### 4.3 Intelligence writes
 `createQuestion`/`createQuestions`/`updateQuestion`/`removeQuestion`, `createAnswer`/`createAnswers`/`updateAnswer`/`removeAnswer`, `markActionAsSeen`/`markActionAsDismissed`, `markSummaryAsSeen`/`markSummaryAsDismissed`, `refreshDailyMetrics`, `triggerHbpe` (→ `String!`, `"disabled"` if flag off).
 
+> **Answer text.** `createAnswer`/`createAnswers`/`updateAnswer` hold the text to the same rule as `POST /api/answers` and `PATCH /api/answers/:id` — not blank, at most 5,000 characters (UTF-16 code units) — and answer a violation with a 400. An answer created without a method is recorded as `answerMethod: "user"`, the same value an edit stamps.
+
 > **Shared-catalogue write scope.** Seed reflection rows are read-only: editing one **forks a private copy** rather than mutating the shared row. Any new user-scoped selector over `ci.questions` must carry the forked-origin exclusion or retired reflections reappear.
 
 ### 4.3b Planning & schedule writes
@@ -300,7 +302,7 @@ The high-throughput write paths. **Shape:** `mutation(input: [CreateXInput!]!): 
 
 **Idempotency — the provenance triple.** Each record carries `(sourceType, sourceSystem, sourceId)`; re-ingesting the same triple is a **no-op find-or-return**, enforced by set-based `INSERT … ON CONFLICT <arbiter> DO NOTHING`. A row is dedupable only when it carries the triple.
 
-**Deferred indexing (`emitCreated:false`).** The list paths **do not emit** per-row `*CreatedEvent`s (at ~1M rows the per-row PGBoss fan-out was the dominant cost). Search embedding is deferred to `POST /v1/ingest/finish` (or the older `POST /api/maintenance/search-index/backfill`). The single-row `createX` mutations **still** emit, so interactive creates index live.
+**Deferred indexing (`emitCreated:false`).** The list paths **do not emit** per-row `*CreatedEvent`s (at ~1M rows the per-row PGBoss fan-out was the dominant cost). Search embedding is deferred to `POST /v1/ingest/finish` (or the older `POST /maintenance/search-index/backfill`). The single-row `createX` mutations **still** emit, so interactive creates index live.
 
 | Mutation | Service path | Mechanism | ON CONFLICT arbiter | Scope col | Refresh on conflict |
 |---|---|---|---|---|---|

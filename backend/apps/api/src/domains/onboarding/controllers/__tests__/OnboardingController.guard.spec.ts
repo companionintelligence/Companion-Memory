@@ -14,8 +14,7 @@ describe('OnboardingController accepts the phone API key', () => {
     '%s is guarded by JwtOrApiKeyAuthGuard',
     (method) => {
       const guards = Reflect.getMetadata(GUARDS_METADATA, OnboardingController.prototype[method]) as
-        | unknown[]
-        | undefined;
+        unknown[] | undefined;
 
       expect(guards).toContain(JwtOrApiKeyAuthGuard);
     },

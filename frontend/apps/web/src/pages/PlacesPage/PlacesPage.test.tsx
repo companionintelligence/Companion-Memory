@@ -75,6 +75,8 @@ const GET_KNOWN_PLACES = gql(`
       lat
       lng
       eventCount
+      presenceDays
+      presenceNights
       confidence
       sampleEvents {
         id
@@ -191,6 +193,8 @@ function candidate(overrides: Record<string, unknown> = {}) {
     lat: 37.7749,
     lng: -122.4194,
     eventCount: 12,
+    presenceDays: 0,
+    presenceNights: 0,
     confidence: 0.8,
     sampleEvents: [] as Array<{ id: string; title: string; startTime: string }>,
     ...overrides,
@@ -577,6 +581,38 @@ describe('PlacesPage', () => {
       await waitFor(() => {
         expect(screen.queryByText('Unknown place · 12 events')).not.toBeInTheDocument();
       });
+    });
+
+    it('says what a GPS-only candidate rests on, in its row and on its pin, instead of "0 events"', async () => {
+      renderWithProviders(<PlacesPage />, {
+        mocks: [
+          noDuplicatesMock(),
+          emptyPlacesMock(),
+          knownPlacesMock({
+            knownPlaceCandidates: [
+              candidate({
+                locationId: null,
+                label: 'Unknown place',
+                kind: 'home',
+                lat: 35.66,
+                lng: 139.75,
+                eventCount: 0,
+                presenceDays: 172,
+                presenceNights: 12,
+              }),
+            ],
+          }),
+        ],
+      });
+
+      expect(
+        await screen.findByText(/^GPS on 172 days \(12 nights\) near 35\.6600, 139\.7500 · looks like/),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/0 events/)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Locate' }));
+
+      expect(await screen.findByText('Unknown place · GPS on 172 days (12 nights)')).toBeInTheDocument();
     });
 
     it('opens the place details from an unknown place pin when that cluster is already a place', async () => {

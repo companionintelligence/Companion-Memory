@@ -222,9 +222,7 @@ interface ExtractionResult {
  * allowed to stamp `processed_at`.
  */
 type BatchOutcome =
-  | { status: 'completed'; result: ExtractionResult }
-  | { status: 'unparseable' }
-  | { status: 'failed' };
+  { status: 'completed'; result: ExtractionResult } | { status: 'unparseable' } | { status: 'failed' };
 
 type PersonVariantCandidate = { id: string; name?: string | null };
 

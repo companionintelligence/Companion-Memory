@@ -5,7 +5,12 @@ import { v7 as uuid7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { type BulkInsertResult, bulkInsertIdempotent, computeChunkSize } from '@ci/common/persistence';
+import {
+  type BulkInsertResult,
+  bulkInsertIdempotent,
+  computeChunkSize,
+  keysetSeek,
+} from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
 import type { ObjectIdentifierNamespace } from '@ci/domains/graph/utils/normalizeObjectIdentifier';
@@ -313,18 +318,17 @@ export class ProductModelService {
       query = query.andWhere('product.updated_at <= :endTime', { endTime: options.endTime });
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in
-    // (updated_at DESC, product_id DESC) — see ItemService.getEntitiesForItems.
+    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at, product_id), in
+    // `order` — see keysetSeek.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(product.updated_at < :afterTime OR (product.updated_at = :afterTime AND product.product_id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('product.updated_at', 'product.product_id', order, options.afterTime, options.afterId),
       );
     }
 
-    query = query
-      .orderBy('product.updated_at', options.order ?? 'DESC')
-      .addOrderBy('product.product_id', 'DESC');
+    query = query.orderBy('product.updated_at', order).addOrderBy('product.product_id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);

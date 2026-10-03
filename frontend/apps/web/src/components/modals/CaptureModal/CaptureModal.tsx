@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { useUploadFile } from '@/api';
 import type { File as FileData, Thread } from '@/api/types';
 import { Chat, type FormData } from '@/components/Chat';
+import { resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
 import { InlineModal } from '@/components/InlineModal';
 import { ModelSelector } from '@/components/ModelSelector';
 import { useAuth, useChatRequester, useModel, useSessionAuth } from '@/hooks';
@@ -82,6 +83,8 @@ function DesktopCaptureModal({ open = false, onClose }: Props) {
   const modelVisionSupportCacheRef = useRef<Map<string, boolean>>(new Map());
 
   const [{ files: fileData }, { upload, reset: resetUploader }] = useUploadFile();
+  // `POST /api/files/upload` answers `[{ id }]`, so the header names the file from what was picked (as ChatInput does).
+  const [pickedName, setPickedName] = useState<string>();
 
   const [
     { stream, loading, streaming, hasStartedReceiving },
@@ -205,6 +208,9 @@ function DesktopCaptureModal({ open = false, onClose }: Props) {
       }
 
       const thingCapture = isImage && mode === 'thing';
+
+      setPickedName(file.name);
+
       const uploaded = await upload([file], {
         thingCapture,
         model: selectedModel ?? undefined,
@@ -224,6 +230,9 @@ function DesktopCaptureModal({ open = false, onClose }: Props) {
       }
 
       const thingCapture = mode === 'thing';
+
+      setPickedName(file.name);
+
       const uploaded = await upload([file], {
         thingCapture,
         model: selectedModel ?? undefined,
@@ -378,7 +387,7 @@ function DesktopCaptureModal({ open = false, onClose }: Props) {
             </Popover>
           </div>
 
-          <div className="flex items-center justify-center font-bold">{fileData[0]?.name}</div>
+          <div className="flex items-center justify-center font-bold">{fileData[0]?.name ?? pickedName}</div>
 
           <div className="flex items-center justify-end flex-1">
             <IconButton label={t('COMMON_CLOSE')} variant="ghost" size="icon" onClick={handleClose}>
@@ -502,7 +511,7 @@ function Files({ files }: { files?: FileData[] | null }) {
             return (
               <div key={file.id} className="aspect-video rounded-lg overflow-hidden bg-stone-100">
                 <video controls className="w-full h-full object-cover">
-                  <source src={`/static${file.url}`} type={file.contentType} />
+                  <source src={resolveMediaUrl(file.url)} type={file.contentType} />
                   Your browser does not support the video tag.
                 </video>
               </div>
@@ -514,7 +523,7 @@ function Files({ files }: { files?: FileData[] | null }) {
                 className="rounded-lg overflow-hidden bg-stone-100 p-4 flex items-center justify-center"
               >
                 <audio controls className="w-full">
-                  <source src={`/static${file.url}`} type={file.contentType} />
+                  <source src={resolveMediaUrl(file.url)} type={file.contentType} />
                   Your browser does not support the audio element.
                 </audio>
               </div>
@@ -522,7 +531,7 @@ function Files({ files }: { files?: FileData[] | null }) {
           case 'image':
             return (
               <div key={file.id} className="rounded-lg bg-stone-100">
-                <img src={`/static${file.url}`} className="w-full h-full object-cover" />
+                <img src={resolveMediaUrl(file.url)} className="w-full h-full object-cover" />
               </div>
             );
         }

@@ -31,6 +31,7 @@ export function DeleteSavedSearchModal({ savedSearchId, onClose }: Props) {
               existingSavedSearches:
                 | {
                     edges: { node: Reference }[];
+                    totalCount?: number;
                   }
                 | Reference = { edges: [] },
               { readField },
@@ -39,13 +40,24 @@ export function DeleteSavedSearchModal({ savedSearchId, onClose }: Props) {
                 return existingSavedSearches;
               }
 
+              const edges = existingSavedSearches.edges.filter((edge) => {
+                const edgeNodeId = readField('id', edge.node);
+
+                return edgeNodeId !== deletedSavedSearchId;
+              });
+              const removed = existingSavedSearches.edges.length - edges.length;
+
               return {
                 ...existingSavedSearches,
-                edges: existingSavedSearches.edges.filter((edge) => {
-                  const edgeNodeId = readField('id', edge.node);
-
-                  return edgeNodeId !== deletedSavedSearchId;
-                }),
+                edges,
+                // The count the page header ("2 saved searches") and the "1 of 2 loaded"
+                // footer read. It stayed at the old figure, even after leaving the page and
+                // coming back, because only the edges were trimmed. `modify` visits every
+                // cached variant of this field (yours, the starters, a typed search), so a
+                // list gives up a count only if it actually held the row.
+                ...(typeof existingSavedSearches.totalCount === 'number'
+                  ? { totalCount: Math.max(0, existingSavedSearches.totalCount - removed) }
+                  : {}),
               };
             },
           },

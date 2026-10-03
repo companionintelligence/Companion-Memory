@@ -73,6 +73,7 @@ ENV NODE_ENV=production
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     tini \
+    # The compose healthchecks run `curl -f http://localhost:3030/health`.
     curl \
     ca-certificates \
     # The import domain shells out to both. `unzip` streams the 40-50GB Google
@@ -116,13 +117,14 @@ RUN apt-get update && \
     libwayland-client0 \
     && rm -rf /var/lib/apt/lists/*
 
-# TARGETARCH is set by BuildKit (amd64 on x86 builders, arm64 on arm builders);
-# fall back to dpkg for non-BuildKit builds. dbmate ships both architectures.
-ARG TARGETARCH
-RUN ARCH="${TARGETARCH:-$(dpkg --print-architecture)}" && \
-    curl -fsSL "https://github.com/amacneil/dbmate/releases/download/v2.27.0/dbmate-linux-${ARCH}" \
-        -o /usr/local/bin/dbmate && \
-    chmod +x /usr/local/bin/dbmate
+# There is deliberately no standalone dbmate binary in this image. `yarn migrate`
+# runs the `dbmate` npm package — a production dependency of @ci/be-api, installed
+# by the `workspaces focus` below with the binary for the build's architecture —
+# and bin/dbmate.js reaches it only through the PATH yarn builds for the scripts
+# it runs. The curl-installed copy this step used to put in /usr/local/bin was
+# never the one that ran, yet it read like the pin for what migrates. Inside the
+# image, run `yarn dbmate …`: a bare `node bin/dbmate.js` bypasses yarn and finds
+# no dbmate at all.
 
 RUN corepack enable && corepack prepare yarn@4.9.1 --activate
 

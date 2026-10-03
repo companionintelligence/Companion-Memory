@@ -1,5 +1,10 @@
-import type { Acknowledgement, EventPayloads, Events } from '@ci/domains/events';
+import { type Acknowledgement, type EventPayloads, Events } from '@ci/domains/events';
 
+import { InMemoryRepository } from '../../../__tests__/support/inMemoryRepository';
+import { GraphNodeEntity } from '../../entities/GraphNodeEntity';
+import type { RelationshipEntity } from '../../entities/RelationshipEntity';
+import { GraphEventService } from '../../services/GraphEventService';
+import { GraphUtilityService } from '../../services/GraphUtilityService';
 import { GraphEventListener } from '../GraphEventListener';
 
 function makeAck(): Acknowledgement {
@@ -13,16 +18,17 @@ function makeListener(created: boolean, entityType: string | undefined = 'Concep
     node: { entity_id: 'entity-1', entity_type: entityType },
     created,
   }));
+  const dropStalePersonIndex = jest.fn(async () => ({ vectors: 0, embeddings: 0, indexSkips: 0, ledger: 0 }));
   const send = jest.fn(async () => ['job-1']);
   const logger = { setContext: jest.fn(), log: jest.fn(), debug: jest.fn(), error: jest.fn() };
 
   const listener = new GraphEventListener(
-    { createOrUpdateNode } as never,
+    { createOrUpdateNode, dropStalePersonIndex } as never,
     { send } as never,
     logger as never,
   );
 
-  return { listener, createOrUpdateNode, send, logger };
+  return { listener, createOrUpdateNode, dropStalePersonIndex, send, logger };
 }
 
 function payload(entityType?: string): Payload {
@@ -128,5 +134,248 @@ describe('GraphEventListener.handleNodeUpserted', () => {
     expect(ack.fail).toHaveBeenCalledWith(expect.any(Error));
     expect(ack.done).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('hands a field the payload omits to createOrUpdateNode as undefined, never null', async () => {
+    // createOrUpdateNode reads `undefined` as "leave it" and `null` as "clear
+    // it". This handler used to `?? null` every optional field, so an id-reuse
+    // write cleared the row's linked key even when nothing upstream asked it to.
+    const { listener, createOrUpdateNode } = makeListener(false, 'Person');
+
+    await listener.handleNodeUpserted({
+      ownerId: 'owner-1',
+      node: { entityId: 'entity-1', entityType: 'Person', properties: { occupation: 'dentist' } },
+    } as Payload);
+
+    expect(createOrUpdateNode).toHaveBeenCalledTimes(1);
+    const [, write] = createOrUpdateNode.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    for (const field of ['name', 'description', 'searchContent', 'linkedTable', 'linkedId']) {
+      expect(write[field]).toBeUndefined();
+    }
+
+    expect(write).toMatchObject({ entityId: 'entity-1', properties: { occupation: 'dentist' } });
+  });
+});
+
+describe('GraphEventListener.handleNodeUpserted — a node that is no longer a Person', () => {
+  // The person sweeps select `entity_type = 'Person'`, so a row retyped out of it
+  // is invisible to them and keeps its person search rows and its two person
+  // ledger rows. The handler removes them after the write.
+
+  it('drops the person search index of an existing node whose stored type is not Person', async () => {
+    const { listener, dropStalePersonIndex, send } = makeListener(false, 'Concept');
+
+    await listener.handleNodeUpserted(payload('Concept'));
+
+    expect(dropStalePersonIndex).toHaveBeenCalledTimes(1);
+    expect(dropStalePersonIndex).toHaveBeenCalledWith('owner-1', 'entity-1');
+    // What the node became is still indexed, as before.
+    expect(send).toHaveBeenCalledWith('concept.updated', { conceptId: 'entity-1' });
+  });
+
+  it.each(['Concept', 'Location', 'Organization', 'Contact', 'PERSON'])(
+    'drops it whenever the stored type is %s: only the exact Person discriminator is indexed as one',
+    async (stored) => {
+      const { listener, dropStalePersonIndex } = makeListener(false, stored);
+
+      await listener.handleNodeUpserted(payload(stored));
+
+      expect(dropStalePersonIndex).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('decides from the stored type, not the payload: an update that sends no entityType on a Concept still drops', async () => {
+    // The row was retyped earlier (or by a failed first attempt); this write only
+    // renames it. The index state is still stale.
+    const { listener, dropStalePersonIndex } = makeListener(false, 'Concept');
+
+    await listener.handleNodeUpserted(payload(undefined));
+
+    expect(dropStalePersonIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a node that is still a Person alone', async () => {
+    const { listener, dropStalePersonIndex, send } = makeListener(false, 'Person');
+
+    await listener.handleNodeUpserted(payload('Person'));
+
+    expect(dropStalePersonIndex).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith('person.updated', { personId: 'entity-1' });
+  });
+
+  it('leaves a created node alone: it has no index state yet', async () => {
+    const { listener, dropStalePersonIndex } = makeListener(true, 'Concept');
+
+    await listener.handleNodeUpserted(payload('Concept'));
+
+    expect(dropStalePersonIndex).not.toHaveBeenCalled();
+  });
+
+  it('drops it BEFORE emitting the search event, so a failed emit still leaves the person index clean', async () => {
+    const { listener, dropStalePersonIndex, send } = makeListener(false, 'Concept');
+    const order: string[] = [];
+    dropStalePersonIndex.mockImplementation(async () => {
+      order.push('drop');
+
+      return { vectors: 1, embeddings: 1, indexSkips: 0, ledger: 2 };
+    });
+    send.mockImplementation(async () => {
+      order.push('emit');
+
+      return ['job-1'];
+    });
+
+    await listener.handleNodeUpserted(payload('Concept'));
+
+    expect(order).toEqual(['drop', 'emit']);
+  });
+
+  it('fails the job when the cleanup fails, and the retry — which finds the row already retyped — finishes it', async () => {
+    // First attempt: the write commits, then the cleanup fails. pg-boss re-runs
+    // the job. createOrUpdateNode now reports an EXISTING Concept, and nothing
+    // in it says the type just changed — so a cleanup gated on "did the type
+    // change?" would never run again. Gated on the stored type, it does.
+    const { listener, dropStalePersonIndex, send } = makeListener(false, 'Concept');
+    dropStalePersonIndex.mockRejectedValueOnce(new Error('connection reset'));
+
+    await expect(listener.handleNodeUpserted(payload('Concept'))).rejects.toThrow('connection reset');
+    expect(send).not.toHaveBeenCalled();
+
+    await listener.handleNodeUpserted(payload('Concept'));
+
+    expect(dropStalePersonIndex).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs what it dropped, and says nothing when there was nothing to drop', async () => {
+    const quiet = makeListener(false, 'Concept');
+    await quiet.listener.handleNodeUpserted(payload('Concept'));
+    expect(quiet.logger.log).not.toHaveBeenCalled();
+
+    const dropped = makeListener(false, 'Concept');
+    dropped.dropStalePersonIndex.mockResolvedValueOnce({
+      vectors: 1,
+      embeddings: 1,
+      indexSkips: 1,
+      ledger: 2,
+    });
+    await dropped.listener.handleNodeUpserted(payload('Concept'));
+    expect(dropped.logger.log).toHaveBeenCalledWith(
+      'Dropped the person search index of a node that is no longer a Person',
+      { entityId: 'entity-1', vectors: 1, embeddings: 1, indexSkips: 1, ledger: 2 },
+    );
+  });
+});
+
+describe('GraphEventService → queue → GraphEventListener → GraphUtilityService', () => {
+  const OWNER = 'owner-1';
+  const PERSON = 'person-1';
+  const LINKED_ID = '6c1f7a52-9d1e-5b0a-8f3e-2a4b6c8d0e1f';
+
+  /**
+   * The real producer, the real handler and the real write, with only the
+   * queue (a JSON round-trip, as pg-boss does) and the table (a Map) standing
+   * in. Seeded with an imported Person carrying keys from writers the agent
+   * never sees.
+   */
+  function pipeline() {
+    const nodes = new InMemoryRepository<GraphNodeEntity>('entity_id');
+    nodes.seed(
+      Object.assign(new GraphNodeEntity(), {
+        entity_id: PERSON,
+        owner_user_id: OWNER,
+        entity_type: 'Person',
+        outgoing_relationships: [],
+        name: 'Alex Rivera',
+        description: 'Google Contacts card',
+        properties: { phones: ['+15551230001', '+15551230002'], planner: { trust_mode: 'ask' } },
+        dossier: null,
+        search_content: 'Alex Rivera',
+        linked_table: 'import:google-contacts',
+        linked_id: LINKED_ID,
+        is_active: true,
+        is_archived: false,
+      }),
+    );
+    const logger = { setContext: jest.fn(), log: jest.fn(), debug: jest.fn(), error: jest.fn() };
+    const graphUtility = new GraphUtilityService(
+      nodes as never,
+      new InMemoryRepository<RelationshipEntity>('relationship_id') as never,
+      logger as never,
+    );
+    const listener = new GraphEventListener(
+      graphUtility,
+      { send: jest.fn(async () => ['job']) } as never,
+      logger as never,
+    );
+
+    const queued: unknown[] = [];
+    const producer = new GraphEventService(
+      {
+        send: jest.fn(async (event: string, body: unknown) => {
+          if (event === Events.GRAPH_NODE_UPSERTED) {
+            queued.push(JSON.parse(JSON.stringify(body)));
+          }
+
+          return ['job'];
+        }),
+      } as never,
+      logger as never,
+    );
+
+    const drain = async () => {
+      for (const body of queued.splice(0)) {
+        await listener.handleNodeUpserted(body as Payload);
+      }
+    };
+
+    return { nodes, producer, drain };
+  }
+
+  it('a partial write leaves the linked key, the name and the unsent properties where they were', async () => {
+    const { nodes, producer, drain } = pipeline();
+
+    await producer.upsertNode(OWNER, {
+      entityId: PERSON,
+      entityType: 'Person',
+      properties: { occupation: 'dentist' },
+      mergeProperties: true,
+    });
+    await drain();
+
+    expect(nodes.get(PERSON)).toMatchObject({
+      entity_type: 'Person',
+      name: 'Alex Rivera',
+      description: 'Google Contacts card',
+      search_content: 'Alex Rivera',
+      linked_table: 'import:google-contacts',
+      linked_id: LINKED_ID,
+      properties: {
+        phones: ['+15551230001', '+15551230002'],
+        planner: { trust_mode: 'ask' },
+        occupation: 'dentist',
+      },
+    });
+  });
+
+  it('removeProperties reaches the write and is applied to the row as it then is', async () => {
+    const { nodes, producer, drain } = pipeline();
+
+    await producer.upsertNode(OWNER, {
+      entityId: PERSON,
+      entityType: 'Person',
+      removeProperties: ['planner'],
+    });
+    // Another writer lands while the event is still queued.
+    nodes.seed({
+      ...nodes.get(PERSON)!,
+      properties: { ...nodes.get(PERSON)!.properties, avatar_url: 'a.png' },
+    });
+    await drain();
+
+    expect(nodes.get(PERSON)?.properties).toEqual({
+      phones: ['+15551230001', '+15551230002'],
+      avatar_url: 'a.png',
+    });
   });
 });

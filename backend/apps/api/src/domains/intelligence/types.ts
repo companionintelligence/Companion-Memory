@@ -160,7 +160,7 @@ export interface UpdateAnswerDto {
 /**
  * `ci.questions.answer_tier` — which half of the catalogue a reflection belongs
  * to. Mirrors the `questions_answer_tier_check` constraint; selection orders by
- * it (see TIER_RANK_SQL in QuestionService).
+ * it (see TIER_RANK_SQL in questionOrder.ts).
  */
 export const ANSWER_TIERS = ['factual', 'preference', 'narrative'] as const;
 export type AnswerTier = (typeof ANSWER_TIERS)[number];
@@ -192,6 +192,30 @@ export interface UpdateQuestionDto {
   timesAsked?: number;
   timesAnswered?: number;
   isPrivateTo?: string;
+}
+
+/**
+ * What `ci.questions` says, right now, about whether inference may still write
+ * to a question on a caller's behalf — see
+ * {@link QuestionService.findInferenceStanding}.
+ *
+ * The three things both inference selectors filter on, kept apart rather than
+ * folded into one verdict so the job acting on them can say WHICH one stopped it.
+ */
+export interface QuestionInferenceStanding {
+  /** `ci.questions.is_active`. A retired row is neither asked nor inferred. */
+  isActive: boolean;
+  /**
+   * `ci.questions.evidence_class`: `'traceable'` (the owner's corpus may answer
+   * it) or `'hand_entry'` (only the owner can). It is not on `QuestionEntity`.
+   */
+  evidenceClass: string;
+  /**
+   * The caller holds a private fork of this row, so the row is hidden from them
+   * and the fork stands in its place (see `excludeForkedOriginsSql`). Never true
+   * for a system caller, who owns no forks.
+   */
+  forkedByCaller: boolean;
 }
 
 const questionTextSchema = z
@@ -290,17 +314,34 @@ export const questionCatalogueQuerySchema = z.object({
 
 export type QuestionCatalogueQueryDto = z.infer<typeof questionCatalogueQuerySchema>;
 
+/**
+ * The longest answer text any API accepts, in UTF-16 code units — what a JS
+ * string's `length` counts, and what the web editor's `maxLength` counts, so the
+ * two ends agree on what "5,000 characters" means.
+ */
+export const ANSWER_TEXT_MAX_LENGTH = 5000;
+
+/**
+ * The one rule for what a person may write as an answer, shared by every door
+ * that takes one: the REST schemas below, and the GraphQL answer mutations,
+ * which do not run those schemas and so used to accept any length at all.
+ *
+ * Not blank, because `ci.answers` refuses one (`answer_text_not_empty`) and a
+ * blank answer that got as far as the INSERT came back a 500 rather than a 400.
+ * Deliberately not trimmed: the text is stored as sent.
+ */
+export const answerTextSchema = z
+  .string()
+  .max(ANSWER_TEXT_MAX_LENGTH, `Answer text must be ${ANSWER_TEXT_MAX_LENGTH} characters or less`)
+  .refine((text) => text.trim().length > 0, 'Answer text is required');
+
 export const createAnswerSchema = z.object({
-  text: z.string().min(1, 'Answer text is required').max(5000, 'Answer text must be 5000 characters or less'),
+  text: answerTextSchema,
   question: z.object({
     id: z.string().uuid('Invalid question ID'),
   }),
 });
 
 export const updateAnswerSchema = z.object({
-  text: z
-    .string()
-    .min(1, 'Answer text is required')
-    .max(5000, 'Answer text must be 5000 characters or less')
-    .optional(),
+  text: answerTextSchema.optional(),
 });

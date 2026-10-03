@@ -456,6 +456,8 @@ describe('DataDeletionService.deleteAccount', () => {
     // Connections (holding OAuth tokens) are purged as part of the account sweep.
     expect(order).toContain('ci.connections');
     expect(order).toContain('ci.provider_keys');
+    // The digests memory.forget keeps so a forgotten person is not minted again are the user's data too.
+    expect(order).toContain('ci.forgotten_identifiers');
   });
 });
 

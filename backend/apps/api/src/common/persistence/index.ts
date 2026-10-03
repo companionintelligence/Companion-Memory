@@ -11,6 +11,7 @@ export type {
   SourceLedgerOptions,
   SourceTriple,
 } from './bulkUpsert';
+export { countAffected } from './countAffected';
 export { appendRecordSources } from './recordSources';
 export type { RecordSourceRow } from './recordSources';
 export {
@@ -22,6 +23,8 @@ export {
 export type { IngestEntityKind } from './ingestRefreshColumns';
 export { keysetPaginate, resolvePageShape, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from './keysetPaginate';
 export type { KeysetPageArgs, KeysetPage } from './keysetPaginate';
+export { keysetOrderOf, keysetSeek } from './keysetSeek';
+export type { KeysetOrder, KeysetSeekParams } from './keysetSeek';
 export { withoutUndefined } from './withoutUndefined';
 export {
   assertSchemaIntegrity,

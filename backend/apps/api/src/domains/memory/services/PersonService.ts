@@ -5,7 +5,7 @@ import { v7 as uuid7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { chunkedConflictInsert } from '@ci/common/persistence';
+import { chunkedConflictInsert, keysetSeek } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { PersonCreatedEvent, PersonUpdatedEvent, PersonRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
@@ -24,6 +24,7 @@ import {
 } from './appearanceBrowse';
 import { EntityService } from './EntityService';
 import { type JsonbLeafPatch, buildJsonbLeafPatchSql } from './jsonbLeafPatch';
+import { type PurgedPeople, purgePersonAggregates } from './personPurge';
 
 /** Map properties JSONB identity keys onto the typed Person columns. */
 function typedColumnsFromProperties(properties: Record<string, unknown> = {}): {
@@ -442,19 +443,18 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       .andWhere('person.is_active IS DISTINCT FROM FALSE')
       .andWhere('person.merged_into_entity_id IS NULL');
 
-    // Composite keyset: page strictly past (afterTime, afterId) in
-    // (updated_at DESC, entity_id DESC) — see ContentService.getEntitiesForContents.
+    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at, entity_id), in
+    // `order` — see keysetSeek.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(person.updated_at < :afterTime OR (person.updated_at = :afterTime AND person.entity_id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('person.updated_at', 'person.entity_id', order, options.afterTime, options.afterId),
       );
     }
 
-    // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query
-      .orderBy('person.updated_at', options.order ?? 'DESC')
-      .addOrderBy('person.entity_id', 'DESC');
+    // Deterministic tiebreak so same-timestamp rows page consistently: the id runs the way the time does.
+    query = query.orderBy('person.updated_at', order).addOrderBy('person.entity_id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -751,6 +751,40 @@ export class PersonService extends EntityService<PersonEntity, Person> {
     });
 
     return true;
+  }
+
+  /**
+   * Permanently deletes people, with everything that only exists because of them.
+   * This is `memory.forget`'s `archive_and_delete` for a `Person` node, and the
+   * other end from {@link remove}: see {@link purgePersonAggregates} for what goes,
+   * for what is remembered so the person is not created again from mail that still
+   * names them, and for the user's own node, which is refused.
+   *
+   * The duplicates that were merged into a person go with them, and are named in
+   * the result separately because nobody asked for them.
+   *
+   * Everything is one transaction. Search is told afterwards, once for every person
+   * that went, and the ids that were not the caller's, or no longer exist, are
+   * simply left out of the result.
+   */
+  async purge(context: UserServiceContext, ids: string[]): Promise<PurgedPeople> {
+    const requested = Array.from(new Set(ids));
+
+    if (requested.length === 0) {
+      return { personIds: [], duplicateIds: [], blockedIdentifiers: 0 };
+    }
+
+    const purged = await this.repository.manager.transaction((manager) =>
+      purgePersonAggregates(manager, context.userId, requested),
+    );
+
+    // The index rows were deleted in the transaction. This tells anything else
+    // that listens, and is what announces a removal everywhere else in the app.
+    for (const personId of [...purged.personIds, ...purged.duplicateIds]) {
+      await this.eventService.send(PersonRemovedEvent, { personId });
+    }
+
+    return purged;
   }
 
   async search(context: ServiceContext, query: UpdatePersonDto): Promise<Person[]> {

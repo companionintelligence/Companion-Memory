@@ -64,6 +64,22 @@ const LEADING_ORDERED_LIST = /^\d+[.)]/;
 const LINE_BREAKS = /[\r\n\u2028\u2029]+/g;
 
 /**
+ * Defang the region delimiters in a piece of untrusted text, so that text cannot close or reopen the
+ * region it is quoted inside.
+ *
+ * A soft hyphen (U+00AD) splits the delimiter for any parser looking for it
+ * while staying invisible to a reader, so a value quoting a marker cannot
+ * terminate the region it is quoted inside.
+ */
+function defangDelimiters(text: string): string {
+  let value = text;
+  value = value.split(UNTRUSTED_OPEN).join('<<<\u00adUNTRUSTED_CONTENT');
+  value = value.split(UNTRUSTED_CLOSE).join('UNTRUSTED_CONTENT\u00ad>>>');
+
+  return value;
+}
+
+/**
  * Neutralise one interpolated value so it cannot escape the slot it sits in.
  *
  * Three things happen, in order:
@@ -90,17 +106,77 @@ export function fenceUntrusted(text: string | null | undefined): string {
     return '';
   }
 
-  // A soft hyphen (U+00AD) splits the delimiter for any parser looking for it
-  // while staying invisible to a reader, so a value quoting a marker cannot
-  // terminate the region it is quoted inside.
-  value = value.split(UNTRUSTED_OPEN).join('<<<\u00adUNTRUSTED_CONTENT');
-  value = value.split(UNTRUSTED_CLOSE).join('UNTRUSTED_CONTENT\u00ad>>>');
+  value = defangDelimiters(value);
 
   if (LEADING_STRUCTURE.test(value) || LEADING_ORDERED_LIST.test(value)) {
     value = `\\${value}`;
   }
 
   return value;
+}
+
+/**
+ * What goes in front of every line of a document fenced by {@link fenceUntrustedLines}.
+ * Exported so a test can assert that none of a document's own text ever starts a line.
+ */
+export const UNTRUSTED_LINE_PREFIX = '> ';
+
+/**
+ * Every way a document may end a line, longest first. Strings rather than a regex so that none of
+ * them has to be a regex escape: the Unicode separators are built from their code points, which
+ * keeps them visible in a diff.
+ */
+const LINE_BREAK_SPELLINGS = [
+  '\r\n',
+  '\r',
+  String.fromCharCode(0x0b),
+  String.fromCharCode(0x0c),
+  String.fromCharCode(0x85),
+  String.fromCharCode(0x2028),
+  String.fromCharCode(0x2029),
+];
+
+/** Control characters other than the tab. They have no business in a prompt. */
+const CONTROL_EXCEPT_TAB = /(?!\t)\p{Cc}/gu;
+
+/**
+ * {@link fenceUntrusted} for a whole DOCUMENT: a text file the user attached, the parsed text of a
+ * PDF.
+ *
+ * `fenceUntrusted` collapses a value to one line. That is the structural half of the fence for a
+ * title or a clip and ruinous for a file: a CSV's rows would run together and a list would become
+ * one sentence. For a document the slot a value must not escape is the LINE, so the same guarantee
+ * is kept at that grain:
+ *
+ *  - every spelling of a line break is normalised and the text is split into lines;
+ *  - the region delimiters are defanged, exactly as `fenceUntrusted` does;
+ *  - control characters other than the tab are dropped, so a NUL or an escape sequence cannot reach
+ *    the prompt;
+ *  - every line is prefixed with {@link UNTRUSTED_LINE_PREFIX}, so no character of the document can
+ *    start a line of the prompt: a `## System` heading, a role declaration or a code fence inside the
+ *    file is quoted text on a quoted line, never structure. A blank line is the bare prefix and the
+ *    indentation inside a line is kept, so the text stays readable and a number stays a number
+ *    (`fenceUntrusted` would write a leading `-5` as `\-5`).
+ *
+ * Returns the lines rather than one string so a caller can spend a byte budget a whole line at a
+ * time. As with `fenceUntrusted`, fence once, at the point of interpolation.
+ */
+export function fenceUntrustedLines(text: string | null | undefined): string[] {
+  if (text === null || text === undefined) {
+    return [];
+  }
+
+  let normalised = defangDelimiters(String(text));
+
+  for (const spelling of LINE_BREAK_SPELLINGS) {
+    normalised = normalised.split(spelling).join('\n');
+  }
+
+  return normalised.split('\n').map((line) => {
+    const clean = line.replace(CONTROL_EXCEPT_TAB, '').trimEnd();
+
+    return clean ? `${UNTRUSTED_LINE_PREFIX}${clean}` : UNTRUSTED_LINE_PREFIX.trimEnd();
+  });
 }
 
 /**
@@ -120,6 +196,97 @@ export function untrustedBlock(body: string, heading?: string): string {
   const preamble = heading ? [heading, UNTRUSTED_GUARD] : [UNTRUSTED_GUARD];
 
   return [...preamble, UNTRUSTED_OPEN, trimmed, UNTRUSTED_CLOSE].join('\n');
+}
+
+/**
+ * The region delimiters as a small model gives them BACK.
+ *
+ * The fence is markup for the model, not for the person: the block that carries
+ * it is a user-role message sitting right before the user's question, and a
+ * 1B model asked "what is on Brief" will echo the end of that message — closing
+ * marker included — as the start of its reply (measured on an iOS QA run, and
+ * reproduced on gemma3:1b, which also mangles the case and spacing:
+ * `UnTRUSTED_CONTENT>>>`, `UN TRUSTED_CONTENT>>>`). So the match is tolerant of
+ * case, of the soft hyphen {@link fenceUntrusted} plants inside a quoted marker,
+ * and of whitespace inside the word; the angle brackets are what make it a
+ * marker, so a bare mention of the word in prose is left alone.
+ *
+ * Only the marker itself goes — never the whitespace around it. A streaming
+ * reader ({@link UntrustedMarkerScrubber}) cannot know whether a line break is
+ * still to come, and a rule that depended on it would make the streamed text
+ * differ from the stored text.
+ */
+const ECHOED_OPEN_MARKER = /<<<[ \t\u00ad]*UN[ \t\u00ad]*TRUSTED[ \t\u00ad_]*CONTENT/gi;
+const ECHOED_CLOSE_MARKER = /UN[ \t\u00ad]*TRUSTED[ \t\u00ad_]*CONTENT[ \t\u00ad]*>>>/gi;
+
+/**
+ * Remove every echoed region delimiter from a model's output, before a person
+ * reads it or it is stored.
+ *
+ * Everything else the model wrote is kept — including the snapshot lines it
+ * repeated, which are the user's own data and a fair answer to "what is on
+ * Brief". Only the markup around them is dropped. Idempotent.
+ */
+export function stripUntrustedMarkers(text: string): string {
+  return text.replace(ECHOED_OPEN_MARKER, '').replace(ECHOED_CLOSE_MARKER, '');
+}
+
+const MARKER_PREFIXES = ['<<<untrusted_content', 'untrusted_content>>>'] as const;
+
+/**
+ * How many trailing characters of `text` could still turn into a delimiter once
+ * more of the stream arrives — the part a streaming reader must not release yet.
+ * Canonical spelling only (case folded, soft hyphens ignored): the odd mangled
+ * variants are caught by {@link stripUntrustedMarkers} on the finished text.
+ */
+function partialMarkerTail(text: string): number {
+  const longest = Math.min(text.length, UNTRUSTED_OPEN.length);
+
+  for (let length = longest; length > 0; length -= 1) {
+    const tail = text
+      .slice(text.length - length)
+      .replace(/\u00ad/g, '')
+      .toLowerCase();
+
+    if (MARKER_PREFIXES.some((marker) => marker.length > tail.length && marker.startsWith(tail))) {
+      return length;
+    }
+  }
+
+  return 0;
+}
+
+/**
+ * {@link stripUntrustedMarkers} for a reply that arrives in pieces.
+ *
+ * A delimiter is several tokens long, so a per-chunk replace misses one that
+ * straddles two chunks. This holds back only the tail that could still become a
+ * delimiter — normally nothing, at most a handful of characters — and releases
+ * it, cleaned, with the next chunk or on {@link flush}. Call `flush()` before
+ * anything else is published (a tool call, thinking) so the order a person sees
+ * is the order the model produced, and once more when the stream ends.
+ */
+export class UntrustedMarkerScrubber {
+  private pending = '';
+
+  /** The part of `chunk` (plus anything held back) that is safe to show now. */
+  push(chunk: string): string {
+    const text = stripUntrustedMarkers(this.pending + chunk);
+    const held = partialMarkerTail(text);
+
+    this.pending = text.slice(text.length - held);
+
+    return text.slice(0, text.length - held);
+  }
+
+  /** Whatever is still held back, as the end of the text. */
+  flush(): string {
+    const rest = stripUntrustedMarkers(this.pending);
+
+    this.pending = '';
+
+    return rest;
+  }
 }
 
 /**

@@ -42,7 +42,12 @@ export {
   unixMsFromMicros,
   type BrowserSystem,
 } from './browser';
-export { calendarEventIdentity, icsRecurrenceInstant, normalizeIcsRecurrenceId } from './calendar';
+export {
+  calendarEventIdentity,
+  icsRecurrenceInstant,
+  normalizeIcsRecurrenceId,
+  utcInstantOfZonedTime,
+} from './calendar';
 export { facebookPostIdentity } from './facebook';
 export { fileIdentity } from './file';
 export {

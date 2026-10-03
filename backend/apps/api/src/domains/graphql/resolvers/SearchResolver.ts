@@ -64,9 +64,10 @@ import { Paginator } from '../utils/Paginator';
 const DEFAULT_PAGE_SIZE = 30;
 const MAX_PAGE_SIZE = 100;
 // Over-fetch per type so the merged page is guaranteed to contain the globally
-// newest `first` rows even when one type dominates a time window (a single type
-// can contribute at most `first` of them, so any multiplier >= 1 is correct;
-// the margin also absorbs same-timestamp boundary ties).
+// first `first` rows in the direction being read (newest, or oldest for "oldest
+// first") even when one type dominates a time window (a single type can
+// contribute at most `first` of them, so any multiplier >= 1 is correct; the
+// margin also absorbs same-timestamp boundary ties).
 const FETCH_MULTIPLIER = 4;
 // Candidate pool for the ranked query path. Unlike the timed path (true cursor
 // paging pushed down to SQL), the query path is paged in-memory: the Paginator
@@ -293,6 +294,28 @@ function decodeSearchCursor(cursor?: string | null): { time: Date; id: string | 
   } catch {
     return null;
   }
+}
+
+/** The direction the timed browse reads every table in. */
+type TimedOrder = 'ASC' | 'DESC';
+
+/**
+ * Which way the timed browse reads each entity type's table.
+ *
+ * Each type is fetched as its own SQL window, `first * FETCH_MULTIPLIER` rows past the cursor, and
+ * the windows are merged and cut to a page. That is only the right page if every window starts at
+ * the end of the range the sort starts at: the newest rows for "newest first", the OLDEST for
+ * "oldest first". Fetching newest-first and sorting ascending afterwards (what this did) gives "the
+ * oldest of the newest rows", and a cursor taken from that page then walks away from the true start.
+ *
+ * Ascending is read upwards only for an explicit time sort, which is the one `sortEntries` reads
+ * `sortOrder === 'asc'` for here. The two must name the same rows, so this asks the same question of
+ * the same fields: no sort key defaults to time on this path, and anything but `'asc'` is newest first.
+ * A name or relevance sort has no time direction to follow, so it keeps the newest-first fetch
+ * it has always had.
+ */
+function timedOrderOf(sortBy: string | undefined, sortOrder: string | undefined): TimedOrder {
+  return (sortBy ?? 'time') === 'time' && sortOrder === 'asc' ? 'ASC' : 'DESC';
 }
 
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -640,11 +663,15 @@ export class SearchResolver {
       identifiers = await this.searchByTags(serviceContext, tags);
     } else {
       candidateSource = 'timed';
+      // Which way every table is read: upwards only for an explicit "oldest first", so that each
+      // type's window starts at the end of the range the sort starts at (see timedOrderOf).
+      const order = timedOrderOf(input.sortBy, input.sortOrder);
       // Prefer a precise (time, id) keyset cursor: it pages strictly *past* the
       // cursor row, so a same-timestamp cluster larger than the over-fetch window
       // no longer dead-ends pagination (the old time-only window kept re-fetching
-      // the same top-N rows). Fall back to the legacy inclusive-endTime window when
-      // the cursor lacks a decodable id (older cursors).
+      // the same top-N rows). Fall back to the legacy inclusive window (endTime when
+      // reading down, startTime when reading up) when the cursor lacks a decodable id
+      // (older cursors).
       const keyset = afterCursor?.time != null && afterCursor.id != null;
       // With no filters at all, bound to "now" so we return recent items, not the entire
       // history. This is the *filter's* upper bound — stable across pages — as opposed to
@@ -664,13 +691,20 @@ export class SearchResolver {
         direction,
       };
 
+      // Without a decodable id the cursor can only bound the walk by its time, inclusively. That
+      // bound belongs to the edge of the window the walk has already left behind: the upper edge
+      // when reading down, the lower edge when reading up.
+      const legacyBound = keyset ? undefined : afterCursor?.time;
+
       [identifiers, timedTotalCount] = await Promise.all([
         this.searchByTimedEntities(serviceContext, {
           ...timedOptions,
-          endTime: keyset ? resolvedEndTime : (afterCursor?.time ?? resolvedEndTime),
+          order,
+          startTime: order === 'ASC' ? (legacyBound ?? startTime) : startTime,
+          endTime: order === 'DESC' ? (legacyBound ?? resolvedEndTime) : resolvedEndTime,
           afterTime: keyset ? afterCursor!.time : undefined,
           afterId: keyset ? afterCursor!.id! : undefined,
-          // Over-fetch per type so the merged page holds the globally newest `first` rows.
+          // Over-fetch per type so the merged page holds the globally first `first` rows in `order`.
           limit: first * FETCH_MULTIPLIER,
         }),
         this.countTimedEntities(serviceContext, { ...timedOptions, endTime: resolvedEndTime }),
@@ -909,6 +943,7 @@ export class SearchResolver {
       eventFilter,
       connectors,
       direction,
+      order = 'DESC',
       limit = 25,
     }: {
       includeTypes?: IndexableEntity[];
@@ -918,7 +953,7 @@ export class SearchResolver {
       startTime?: Date;
       endTime?: Date;
       // Composite keyset cursor: page strictly past (afterTime, afterId) in
-      // (time DESC, id DESC) order. Threaded down to each type's SQL query.
+      // (time, id) order, in `order`. Threaded down to each type's SQL query.
       afterTime?: Date;
       afterId?: string;
       eventTypes?: string[];
@@ -927,6 +962,12 @@ export class SearchResolver {
       connectors?: string[];
       /** Sent / received — communications only, see browseWants. */
       direction?: string;
+      /**
+       * Which way every table is read, and the cursor walked: each type's rows ORDERED, and SEEKED
+       * past (afterTime, afterId), in this direction, so the window a type contributes starts at the
+       * end of the range the sort starts at. See timedOrderOf.
+       */
+      order?: TimedOrder;
       limit?: number;
     },
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
@@ -955,7 +996,7 @@ export class SearchResolver {
       bbox?: number[];
     } = {
       limit,
-      order: { startTime: 'DESC' },
+      order: { startTime: order },
       ...(eventFilter ?? {}),
       ...(connectors ? { connectors } : {}),
     };
@@ -974,7 +1015,7 @@ export class SearchResolver {
       connectors?: string[];
     } = {
       limit,
-      order: { time: 'DESC' },
+      order: { time: order },
       ...(connectors ? { connectors } : {}),
     };
 
@@ -992,14 +1033,14 @@ export class SearchResolver {
       direction?: string;
     } = {
       limit,
-      order: { time: 'DESC' },
+      order: { time: order },
       ...(connectors ? { connectors } : {}),
       ...(eventFilter?.people ? { people: eventFilter.people } : {}),
       ...(direction ? { direction } : {}),
     };
 
     // Files and document chunks order by updated_at (their only timestamp) and
-    // take a plain 'DESC' rather than the FindOptionsOrder shape the memory
+    // take a plain 'ASC' | 'DESC' rather than the FindOptionsOrder shape the memory
     // services use — see their getEntitiesFor* signatures.
     const fileOptions: {
       limit: number;
@@ -1010,7 +1051,7 @@ export class SearchResolver {
       afterId?: string;
     } = {
       limit,
-      order: 'DESC',
+      order,
     };
 
     const fileChunkOptions: {
@@ -1022,7 +1063,7 @@ export class SearchResolver {
       afterId?: string;
     } = {
       limit,
-      order: 'DESC',
+      order,
     };
 
     if (startTime) {
@@ -1062,7 +1103,7 @@ export class SearchResolver {
     // existed (the Paginator could only slice within that one fetched window).
     const rowTimeOptions = {
       limit,
-      order: 'DESC' as const,
+      order,
       ...(startTime ? { startTime } : {}),
       ...(endTime ? { endTime } : {}),
       ...(afterTime && afterId ? { afterTime, afterId } : {}),

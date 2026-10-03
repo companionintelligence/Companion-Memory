@@ -58,6 +58,7 @@ import {
   isFacebookPost,
   isRedditComment,
   isRedditPost,
+  kindFor,
   mintsProductModel,
   num,
   redditMediaUrl,
@@ -1632,6 +1633,23 @@ export function isFacebookMessengerRecord(rec: CanonicalRecord): boolean {
   return rec.sourceSystem === 'facebook' && rec.kind === 'communication.message';
 }
 
+/**
+ * The same test on a staged row, before it has been canonicalized. MediaStage
+ * runs ahead of the push and keys each attachment on its parent message's
+ * identity, so it has to know the message will land under
+ * {@link FACEBOOK_MESSENGER_SOURCE_SYSTEM} rather than its data source.
+ */
+export function isFacebookMessengerRow(row: {
+  dataSource: string;
+  classification?: string | null;
+  mediaType?: string | null;
+}): boolean {
+  return (
+    row.dataSource === 'facebook' &&
+    kindFor(row.classification ?? null, row.mediaType ?? null) === 'communication.message'
+  );
+}
+
 /** The sender + recipient display names of a Messenger message. */
 export function messengerParticipantsOf(rec: CanonicalRecord): {
   sender: string | null;
@@ -2320,6 +2338,12 @@ export function toEventInput(rec: CanonicalRecord): CreateEventDto {
 
   if (rec.isRecurring != null) {
     input.is_recurring = rec.isRecurring;
+  }
+
+  // Only a stated status is sent. Without one the column DEFAULT ('confirmed')
+  // applies, which is what every import wrote before sources could say.
+  if (rec.eventStatus) {
+    input.status = rec.eventStatus;
   }
 
   if (rec.coordinates) {

@@ -1,6 +1,8 @@
 package com.companionintelligence.localllm.intents
 
 import android.util.Log
+import com.companionintelligence.localllm.LocalLlmEngine
+import com.companionintelligence.localllm.LocalLlmPolicy
 import com.google.ai.edge.litertlm.OpenApiTool
 import com.google.ai.edge.litertlm.ToolProvider
 import com.google.ai.edge.litertlm.tool
@@ -31,8 +33,34 @@ object IntentToolProvider {
      * answers from its own weights is a worse assistant, but it is still an assistant, whereas a
      * `loadModel()` that fails because the appliance is unreachable would make the offline tier
      * depend on being online — the exact failure the on-device path exists to avoid.
+     *
+     * @param resultBudgetBytes the most bytes of any one tool result that go back into the model — what the
+     *   context window can spare, from [com.companionintelligence.localllm.LocalLlmPolicy.toolResultByteBudget].
+     *   Required rather than defaulted: a tool that is not told how much room there is hands back everything
+     *   the appliance sent, which is many times the window (see [ToolResultShaper]).
      */
-    fun buildProviders(client: CompanionIntentClient): List<ToolProvider> {
+    fun buildProviders(client: CompanionIntentClient, resultBudgetBytes: Int): List<ToolProvider> =
+        buildTools(client, resultBudgetBytes).map { tool(it) }
+
+    /**
+     * The tools a load of the model is given: everything `loadModel` decides about them, in one place so that a unit test
+     * can reach it without a `PluginCall`. None for a model whose chat template has no tool slot, none when no appliance
+     * is configured, otherwise every intent the device may run — each holding its answer to the budget of the window THIS
+     * load was configured with: [spec]'s `maxTokens`, the effective value and not the model's default.
+     */
+    fun providersForLoad(spec: LocalLlmEngine.LoadSpec, client: CompanionIntentClient?): List<ToolProvider> =
+        toolsForLoad(spec, client).map { tool(it) }
+
+    /** [providersForLoad] before LiteRT-LM wraps each tool: the seam the unit tests call a tool through. */
+    internal fun toolsForLoad(spec: LocalLlmEngine.LoadSpec, client: CompanionIntentClient?): List<IntentTool> =
+        if (client == null || !spec.info.supportsTools) {
+            emptyList()
+        } else {
+            buildTools(client, LocalLlmPolicy.toolResultByteBudget(spec.maxTokens))
+        }
+
+    /** [buildProviders] before LiteRT-LM wraps each tool: the seam the unit tests call a tool through. */
+    internal fun buildTools(client: CompanionIntentClient, resultBudgetBytes: Int): List<IntentTool> {
         val manifest =
             try {
                 client.fetchManifest()
@@ -54,10 +82,14 @@ object IntentToolProvider {
                     "no tools will be offered. Upgrade CI-Server to 1.2.0+ for on-device tool calling.",
             )
         } else {
-            Log.i(TAG, "Offering ${executable.size} of ${manifest.intents.size} intents to the local model")
+            Log.i(
+                TAG,
+                "Offering ${executable.size} of ${manifest.intents.size} intents to the local model; " +
+                    "a tool result is held to $resultBudgetBytes bytes",
+            )
         }
 
-        return executable.map { tool(IntentTool(it, client)) }
+        return executable.map { IntentTool(it, client, resultBudgetBytes) }
     }
 }
 
@@ -67,10 +99,14 @@ object IntentToolProvider {
  * The argument schema is passed through from the catalog untouched, so the model is constrained by
  * the same JSON Schema the appliance validates against — rather than a hand-copied Kotlin
  * approximation that can drift from it.
+ *
+ * What the model gets back is bounded: the appliance answers with the whole result, and [execute] hands
+ * the model at most [resultBudgetBytes] of it (see [ToolResultShaper]).
  */
 internal class IntentTool(
     private val intent: ManifestIntent,
     private val client: CompanionIntentClient,
+    private val resultBudgetBytes: Int,
 ) : OpenApiTool {
 
     override fun getToolDescriptionJsonString(): String =
@@ -97,13 +133,28 @@ internal class IntentTool(
             return errorPayload(ruling?.explanation ?: "\"${intent.name}\" may not run on this device")
         }
 
-        return try {
-            client.callTool(intent.tool, arguments)
-        } catch (e: Exception) {
-            // Handed back as content, not thrown: the model can then tell the user what failed or
-            // pick a different intent, whereas an exception aborts the whole generation.
-            errorPayload(e.message ?: "The appliance could not run \"${intent.name}\"")
-        }
+        val result =
+            try {
+                client.callTool(intent.tool, arguments)
+            } catch (e: Exception) {
+                // Handed back as content, not thrown: the model can then tell the user what failed or
+                // pick a different intent, whereas an exception aborts the whole generation.
+                return errorPayload(e.message ?: "The appliance could not run \"${intent.name}\"")
+            }
+
+        // Only the successful answer is shaped. The appliance returns the whole of it — tens of kilobytes
+        // for a search — which is far more than the model's context window can take in, and a refusal or
+        // a failure above is a sentence.
+        val shaped = ToolResultShaper.shape(result, resultBudgetBytes)
+
+        // Sizes and the tool's name only: what a tool returned is the user's data, not log material.
+        Log.i(
+            TOOL_TAG,
+            "${intent.tool} returned ${ToolResultShaper.utf8Length(result)} bytes; " +
+                "passing ${ToolResultShaper.utf8Length(shaped)} to the model (budget $resultBudgetBytes)",
+        )
+
+        return shaped
     }
 
     private fun buildDescription(): String =
@@ -114,4 +165,8 @@ internal class IntentTool(
         }
 
     private fun errorPayload(message: String): String = JSONObject().put("error", message).toString()
+
+    private companion object {
+        const val TOOL_TAG = "IntentTool"
+    }
 }

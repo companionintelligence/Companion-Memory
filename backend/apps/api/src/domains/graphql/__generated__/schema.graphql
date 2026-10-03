@@ -1759,6 +1759,8 @@ type KnownPlaceCandidateType {
   lat: Float!
   lng: Float!
   locationId: String
+  presenceDays: Int!
+  presenceNights: Int!
   sampleEvents: [KnownPlaceSampleEventType!]!
 }
 
@@ -3757,6 +3759,15 @@ type ThreadType implements Node & Taggable {
   tags: [EntityTagType!]!
 }
 
+"""
+How the apps write a time of day. 'auto' leaves it to the device's language settings; 'h12' always writes 3:43 PM and 'h23' always writes 15:43.
+"""
+enum TimeFormat {
+  auto
+  h12
+  h23
+}
+
 type UnfurlType {
   authorName: String
   authorUrl: String
@@ -3862,6 +3873,7 @@ input UpdateContentInput {
 }
 
 input UpdateCurrentUserInput {
+  timeFormat: TimeFormat
   timezone: String
 }
 
@@ -4144,6 +4156,7 @@ type UserType implements Node {
   name: String!
   needsIdentityStep: Boolean!
   onboarded: Boolean!
+  timeFormat: TimeFormat!
   timezone: String!
 }
 

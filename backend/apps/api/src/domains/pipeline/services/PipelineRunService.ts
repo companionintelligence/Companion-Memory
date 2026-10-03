@@ -1220,14 +1220,14 @@ export class PipelineRunService {
       throw new ConflictException(
         routable
           ? `Dead letter ${letterId} was not re-emitted: queue ` +
-            `${queue == null ? `for event "${eventName}"` : `"${queue}"`} has a listener but accepted no ` +
-            `job. pg-boss refuses a send whose singletonKey duplicates a job still in "created" on a queue ` +
-            `with a de-duplicating policy, so this letter is most likely already queued from an earlier ` +
-            `replay; CI_QUEUE_SUPPRESS covering the queue produces the same empty result. Nothing was ` +
-            `enqueued and the claim has been released.`
+              `${queue == null ? `for event "${eventName}"` : `"${queue}"`} has a listener but accepted no ` +
+              `job. pg-boss refuses a send whose singletonKey duplicates a job still in "created" on a queue ` +
+              `with a de-duplicating policy, so this letter is most likely already queued from an earlier ` +
+              `replay; CI_QUEUE_SUPPRESS covering the queue produces the same empty result. Nothing was ` +
+              `enqueued and the claim has been released.`
           : `Dead letter ${letterId} was not re-emitted: nothing in this process listens for event ` +
-            `"${eventName}"${queue == null ? ' on any queue' : ` on queue "${queue}"`}, so the send ` +
-            `enqueued nothing. The listener's module is probably not loaded in this process.`,
+              `"${eventName}"${queue == null ? ' on any queue' : ` on queue "${queue}"`}, so the send ` +
+              `enqueued nothing. The listener's module is probably not loaded in this process.`,
       );
     }
 

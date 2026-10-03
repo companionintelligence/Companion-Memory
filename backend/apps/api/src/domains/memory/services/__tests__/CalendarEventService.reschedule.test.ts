@@ -3,12 +3,14 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import type { ServiceContext, UserServiceContext } from '@ci/common/context';
+import { HbpeNotifyService } from '@ci/common/hbpe';
 import { EventService } from '@ci/domains/events';
 
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import { platformIdentity } from '../../identity';
 import { CalendarEventService } from '../CalendarEventService';
+import { EVENT_TIME_REOPENER } from '../eventTimeReopener';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
 import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
@@ -28,12 +30,20 @@ function existing(overrides: Partial<EventEntity> = {}): EventEntity {
 
 describe('CalendarEventService.reschedule — moving an event on the calendar', () => {
   let service: CalendarEventService;
-  let repo: { findOne: jest.Mock; save: jest.Mock; find: jest.Mock };
+  let repo: { findOne: jest.Mock; save: jest.Mock; find: jest.Mock; manager: unknown };
   let signalling: { send: jest.Mock };
+  let hbpeNotify: { notifyEvents: jest.Mock };
   let saved: EventEntity | undefined;
+  /** The statements the move ran on its transaction, and the transaction they ran on. */
+  let query: jest.Mock;
+  let txManager: { getRepository: jest.Mock; query: jest.Mock };
+  /** What PipelineModule binds to EVENT_TIME_REOPENER. */
+  let reopener: { reopenTimeDecisions: jest.Mock };
 
   async function setup(row: EventEntity | null) {
     saved = undefined;
+    query = jest.fn(async () => []);
+    reopener = { reopenTimeDecisions: jest.fn(async () => 0) };
     repo = {
       findOne: jest.fn(async () => row),
       save: jest.fn(async (entity: EventEntity) => {
@@ -42,8 +52,14 @@ describe('CalendarEventService.reschedule — moving an event on the calendar', 
         return entity;
       }),
       find: jest.fn(async () => []),
+      manager: {
+        // The move and the settling of the old time share one transaction.
+        transaction: jest.fn((run: (manager: unknown) => unknown) => Promise.resolve(run(txManager))),
+      },
     };
+    txManager = { getRepository: jest.fn(() => repo), query };
     signalling = { send: jest.fn() };
+    hbpeNotify = { notifyEvents: jest.fn(async () => undefined) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -54,6 +70,8 @@ describe('CalendarEventService.reschedule — moving an event on the calendar', 
         { provide: EventService, useValue: signalling },
         { provide: DataSource, useValue: { getRepository: jest.fn() } },
         { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
+        { provide: EVENT_TIME_REOPENER, useValue: reopener },
+        { provide: HbpeNotifyService, useValue: hbpeNotify },
       ],
     }).compile();
 
@@ -114,11 +132,78 @@ describe('CalendarEventService.reschedule — moving an event on the calendar', 
     expect(signalling.send).toHaveBeenCalledTimes(1);
   });
 
+  it('tells HBPE about the day the event left as well as the day it landed on', async () => {
+    // HBPE re-serializes only the days it is notified about. A move that
+    // reached it not at all — or named only the new day — left the old day
+    // holding the event's tokens.
+    await setup(existing({ userId: 'user-1' }));
+
+    await service.reschedule(ctx, 'e1', newStart);
+
+    expect(hbpeNotify.notifyEvents).toHaveBeenCalledTimes(1);
+    expect(hbpeNotify.notifyEvents).toHaveBeenCalledWith('user-1', [
+      new Date('2026-08-03T14:00:00Z'),
+      newStart,
+    ]);
+  });
+
   it('returns null for an event the viewer does not own', async () => {
     await setup(null);
 
     await expect(service.reschedule(ctx, 'missing', newStart)).resolves.toBeNull();
     expect(repo.save).not.toHaveBeenCalled();
+    expect(hbpeNotify.notifyEvents).not.toHaveBeenCalled();
+  });
+
+  describe('what the pipeline decided about the old time', () => {
+    it('clears the clean stage’s record and re-opens its decisions, on the move’s own transaction', async () => {
+      await setup(existing());
+
+      await service.reschedule(ctx, 'e1', newStart);
+
+      // The move was saved through the transaction's manager, not beside it.
+      expect(txManager.getRepository).toHaveBeenCalledWith(EventEntity);
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(query.mock.calls[0][0]).toMatch(/SET time_source = NULL, time_precision = NULL/);
+      expect(query.mock.calls[0][0]).toMatch(/start_time_original = NULL, end_time_original = NULL/);
+      expect(query.mock.calls[0][1]).toEqual(['e1']);
+      // Only a row that has something to clear is written: most events were never examined.
+      expect((query.mock.calls[0][0] as string).replace(/\s+/g, ' ')).toContain(
+        'AND (time_source IS NOT NULL OR time_precision IS NOT NULL OR start_time_original IS NOT NULL OR end_time_original IS NOT NULL)',
+      );
+      expect(reopener.reopenTimeDecisions).toHaveBeenCalledTimes(1);
+      expect(reopener.reopenTimeDecisions).toHaveBeenCalledWith(['e1'], txManager);
+    });
+
+    it('settles a move of the end alone', async () => {
+      await setup(existing());
+
+      // Same start, a different end.
+      await service.reschedule(ctx, 'e1', existing().startTime, new Date('2026-08-03T16:00:00Z'));
+
+      expect(reopener.reopenTimeDecisions).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves both alone when the event lands on the slot it already holds', async () => {
+      await setup(existing());
+
+      // Same start; the end follows at the prior 90 minutes, so it is the same slot.
+      await service.reschedule(ctx, 'e1', existing().startTime);
+
+      expect(repo.save).toHaveBeenCalledTimes(1);
+      expect(saved?.lastMovedAt).toBeInstanceOf(Date);
+      expect(query).not.toHaveBeenCalled();
+      expect(reopener.reopenTimeDecisions).not.toHaveBeenCalled();
+    });
+
+    it('does not signal the move when the transaction fails', async () => {
+      await setup(existing());
+      reopener.reopenTimeDecisions.mockRejectedValue(new Error('pipeline unavailable'));
+
+      await expect(service.reschedule(ctx, 'e1', newStart)).rejects.toThrow('pipeline unavailable');
+
+      expect(signalling.send).not.toHaveBeenCalled();
+    });
   });
 });
 

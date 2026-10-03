@@ -19,6 +19,14 @@ fix cannot be "read-only everywhere".
 `datetime.utcnow()`: naive, so Postgres reinterpreted it in the session time
 zone when comparing against a TIMESTAMPTZ column, and stamped after the query
 returned, so a producer committing in between was skipped for good.
+
+**An older day goes on the re-serialize queue, from NOTIFY alone.** The
+ingester rewrites today only. A day older than the nightly's serialize budget is
+rewritten by nothing else, so a change to it is queued in `hbpe.reserialize_days`
+for the nightly drain. Only an event notification may queue a day: a poll hit is
+HBPE's own output (queuing it would re-arm every day the drain rewrites), and
+the other channels feed nothing the serializer reads. The queue's own contract
+is pinned in test_reserialize_queue.py.
 """
 
 from __future__ import annotations
@@ -27,12 +35,17 @@ import asyncio
 import json
 from datetime import UTC, date, datetime, timedelta
 
+import psycopg2.errors
 import pytest
 
 import ci.hbpe.database as hbpe_database
+from ci.hbpe.pipeline import ingester as ingester_mod
 from ci.hbpe.pipeline.ingester import EventIngester
 
-TODAY = date.today().isoformat()
+# Pinned through ingester._utc_today (see the autouse fixture): the payload's
+# date is a UTC day, and a wall-clock TODAY raced midnight.
+TODAY_DATE = date(2026, 10, 1)
+TODAY = TODAY_DATE.isoformat()
 USER = "11111111-2222-3333-4444-555555555555"
 
 
@@ -54,10 +67,13 @@ class FakeDb:
     DELETE/INSERT, and serves SELECTs from rows the test controls.
     """
 
-    def __init__(self, rows: list[dict]) -> None:
+    def __init__(self, rows: list[dict], *, queue_exists: bool = True) -> None:
         self.rows = rows
         self.statements: list[tuple[str, tuple]] = []
         self.select_params: list[tuple] = []
+        self.queue_exists = queue_exists
+        # (user_id, date) pairs the ingester put on hbpe.reserialize_days.
+        self.queued: list[tuple[str, date]] = []
 
     @property
     def writes(self) -> list[tuple[str, tuple]]:
@@ -91,7 +107,15 @@ class FakeCursor:
     def execute(self, sql: str, params=None) -> None:
         flat = " ".join(sql.split())
         self._db.statements.append((flat, params))
-        if flat.upper().startswith("SELECT"):
+        if flat.startswith("INSERT INTO hbpe.reserialize_days"):
+            if not self._db.queue_exists:
+                raise psycopg2.errors.UndefinedTable(
+                    'relation "hbpe.reserialize_days" does not exist'
+                )
+            user_id, _reason, days = params
+            self._db.queued.extend((user_id, d) for d in days)
+            self._rows = []
+        elif flat.upper().startswith("SELECT"):
             self._db.select_params.append(params)
             self._rows = self._db.newer_than(params[0])
         else:
@@ -148,6 +172,27 @@ async def _run_polls(ingester: EventIngester, db: FakeDb, rounds: int) -> None:
 @pytest.fixture
 def fast_debounce(monkeypatch):
     monkeypatch.setattr("ci.hbpe.pipeline.ingester.DEBOUNCE_SEC", 0.005)
+
+
+@pytest.fixture(autouse=True)
+def pinned_today(monkeypatch):
+    monkeypatch.setattr(ingester_mod, "_utc_today", lambda: TODAY_DATE)
+
+
+async def _settled(ingester: EventIngester) -> None:
+    """Wait until every debounced flush, and everything it spawned, is done."""
+    await _wait_for(
+        lambda: (
+            not ingester._pending
+            and not ingester._background_tasks
+            and all(t.done() for t in ingester._debounce_tasks.values())
+        ),
+        "the ingester to settle",
+    )
+
+
+def _notify(ingester: EventIngester, day: str, channel: str = "ci_events") -> None:
+    ingester._on_notify(None, None, channel, json.dumps({"user_id": USER, "date": day}))
 
 
 @pytest.mark.asyncio
@@ -349,7 +394,10 @@ async def test_notify_path_still_reserialises(monkeypatch, fast_debounce):
 async def test_notify_for_an_older_day_invalidates_without_reserialising(
     monkeypatch, fast_debounce
 ):
-    """Only today is re-tokenised; an older day is a cache eviction alone."""
+    """
+    Only today is re-tokenised here. An older day is evicted from the cache and
+    queued for the nightly (see the next test), never rewritten inline.
+    """
     from ci.hbpe.tokenizer.serializer import TokenSerializer
 
     db = FakeDb([])
@@ -362,12 +410,153 @@ async def test_notify_for_an_older_day_invalidates_without_reserialising(
         lambda _self, u, d: serialize_calls.append((str(u), str(d))),
     )
 
-    older = (date.today() - timedelta(days=3)).isoformat()
+    older = (TODAY_DATE - timedelta(days=3)).isoformat()
     engine = FakeEngine()
     ingester = EventIngester({USER: engine})
-    ingester._on_notify(
-        None, None, "ci_events", json.dumps({"user_id": USER, "date": older})
-    )
+    _notify(ingester, older)
 
     await _wait_for(lambda: engine.invalidated == [older], "the older day to evict")
+    await _settled(ingester)
     assert serialize_calls == []
+
+
+@pytest.mark.asyncio
+async def test_notify_for_an_older_day_queues_it_for_the_nightly(
+    monkeypatch, fast_debounce
+):
+    """
+    THE FIX. A day older than the nightly's serialize budget still has its
+    source, so neither the content tiers nor the purge tier visit it again, and
+    before the queue an event cancelled, deleted or edited on it never reached
+    hbpe.token_stream. The nightly drains what is queued here.
+    """
+    db = FakeDb([])
+    monkeypatch.setattr(hbpe_database, "get_conn", lambda: FakeConn(db))
+
+    older = TODAY_DATE - timedelta(days=200)
+    ingester = EventIngester({USER: FakeEngine()})
+    _notify(ingester, older.isoformat())
+
+    await _wait_for(lambda: db.queued == [(USER, older)], "the older day to queue")
+
+
+@pytest.mark.asyncio
+async def test_token_work_does_not_wait_for_an_engine(monkeypatch, fast_debounce):
+    """
+    Engines are created on a user's first forecast request, so after a restart
+    the registry is empty. The cache eviction needs one; rewriting today and
+    queuing an older day do not, and a change made before the user's first
+    forecast must still reach the token stream.
+    """
+    from ci.hbpe.tokenizer.serializer import TokenSerializer
+
+    db = FakeDb([])
+    monkeypatch.setattr(hbpe_database, "get_conn", lambda: FakeConn(db))
+    serialize_calls: list[tuple[str, str]] = []
+
+    def fake_serialize_day(_self, user_id, d):
+        serialize_calls.append((str(user_id), str(d)))
+        return 3
+
+    monkeypatch.setattr(TokenSerializer, "serialize_day", fake_serialize_day)
+
+    older = TODAY_DATE - timedelta(days=120)
+    ingester = EventIngester({})
+    _notify(ingester, TODAY)
+    _notify(ingester, older.isoformat())
+
+    await _wait_for(
+        lambda: serialize_calls == [(USER, TODAY)] and db.queued == [(USER, older)],
+        "today to be rewritten and the older day queued with no engine loaded",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_poll_hit_never_queues_a_day(monkeypatch, fast_debounce):
+    """
+    The poll reports HBPE's own writes back. Every day the nightly drain
+    rewrites shows up in the next poll, so queuing poll hits would re-arm the
+    drain's own output, one night at a time, forever.
+    """
+    older = (TODAY_DATE - timedelta(days=200)).isoformat()
+    db = FakeDb(
+        [{"user_id": USER, "date": older, "last_serialized": datetime.now(UTC)}]
+    )
+    monkeypatch.setattr(hbpe_database, "get_conn", lambda: FakeConn(db))
+
+    engine = FakeEngine()
+    ingester = EventIngester({USER: engine})
+    await _run_polls(ingester, db, rounds=2)
+    await _settled(ingester)
+
+    assert engine.invalidated == [older]
+    assert db.queued == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channel", ["ci_communications", "ci_browser_activity"])
+async def test_only_event_notifications_queue_a_day(
+    monkeypatch, fast_debounce, channel
+):
+    """
+    The serializer reads ci.events (and summaries and tasks, which no producer
+    notifies about). Messages and page visits feed none of it, so the days they
+    name would cost the nightly drain's cap rewrites that come out identical.
+    """
+    db = FakeDb([])
+    monkeypatch.setattr(hbpe_database, "get_conn", lambda: FakeConn(db))
+
+    older = (TODAY_DATE - timedelta(days=200)).isoformat()
+    engine = FakeEngine()
+    ingester = EventIngester({USER: engine})
+    _notify(ingester, older, channel)
+
+    await _wait_for(lambda: engine.invalidated == [older], "the eviction")
+    await _settled(ingester)
+    assert db.queued == []
+
+
+@pytest.mark.asyncio
+async def test_today_and_future_days_are_never_queued(monkeypatch, fast_debounce):
+    """
+    Today is rewritten on the spot. A future day holds no tokens (the day list
+    clamps at today), so its row could only ever be consumed unused.
+    """
+    from ci.hbpe.tokenizer.serializer import TokenSerializer
+
+    db = FakeDb([])
+    monkeypatch.setattr(hbpe_database, "get_conn", lambda: FakeConn(db))
+    monkeypatch.setattr(TokenSerializer, "serialize_day", lambda *_a: 0)
+
+    ingester = EventIngester({USER: FakeEngine()})
+    _notify(ingester, TODAY)
+    _notify(ingester, (TODAY_DATE + timedelta(days=4)).isoformat())
+    _notify(ingester, "not-a-date")
+
+    await _settled(ingester)
+    assert db.queued == []
+
+
+@pytest.mark.asyncio
+async def test_a_missing_queue_table_costs_only_the_queue(
+    monkeypatch, fast_debounce, caplog
+):
+    """
+    Deploy skew: the HBPE image can run before the API migration that creates
+    hbpe.reserialize_days. The request is dropped with a warning — exactly what
+    happened to an older day before the queue existed — and the flush carries
+    on with the cache.
+    """
+    db = FakeDb([], queue_exists=False)
+    monkeypatch.setattr(hbpe_database, "get_conn", lambda: FakeConn(db))
+
+    older = (TODAY_DATE - timedelta(days=200)).isoformat()
+    engine = FakeEngine()
+    ingester = EventIngester({USER: engine})
+    with caplog.at_level("DEBUG", logger="ci.hbpe.pipeline.reserialize_queue"):
+        _notify(ingester, older)
+        await _wait_for(lambda: engine.invalidated == [older], "the eviction")
+        await _settled(ingester)
+
+    assert db.queued == []
+    assert any("does not exist yet" in r.getMessage() for r in caplog.records)

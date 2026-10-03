@@ -58,7 +58,11 @@ export interface OccurrenceSpec {
   endTime: Date | null;
   /** RECURRENCE-ID spelling of {@link startTime} (`YYYYMMDDTHHMMSSZ`). */
   recurrenceInstant: string;
-  /** `source_id` this occurrence WOULD have if the user had edited it — the suppression key. */
+  /**
+   * `source_id` this occurrence WOULD have if the user had edited it — the
+   * suppression key. `<uid>#<recurrenceInstant>`, except for an all-day series,
+   * whose overrides are keyed by date: `<uid>#YYYYMMDD`.
+   */
   overrideSourceId: string;
   timeZoneSource: RecurrenceSpec['timeZoneSource'];
 }

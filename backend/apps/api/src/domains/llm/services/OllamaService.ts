@@ -40,7 +40,14 @@ import { boundToolResultForPrompt, toolResultByteBudget } from '../toolResultBud
 import type { OllamaModel } from '../types';
 
 import { LlmEndpointService } from './LlmEndpointService';
+import type { OpenAiCompatChatDriver } from './OpenAiCompatChatDriver';
 import { ResidencyPlannerService } from './ResidencyPlannerService';
+import {
+  isChatCapableModel,
+  type ServedModel,
+  type ServerProps,
+  servedModelSeesImages,
+} from './servedModels';
 
 /**
  * Appended to the REQUEST (never stored) for the forced prose round — the one
@@ -271,6 +278,14 @@ interface BasePromptOptions {
    */
   maxOutputTokens?: number;
   /**
+   * How long this call may wait for the backend's first response, in ms,
+   * replacing `llm.firstResponseTimeoutMs` for it. For a non-streaming call
+   * the first response is the whole answer, so a caller whose generations
+   * legitimately outlast the default (background inference through a pool, on
+   * a slow node) raises it here rather than raising it for everyone.
+   */
+  firstResponseTimeoutMs?: number;
+  /**
    * `'json'` asks for syntactically valid JSON and nothing more — the model is
    * still free to invent key names, which small models reliably do. A JSON
    * Schema object instead constrains generation to that shape via grammar, so
@@ -340,6 +355,37 @@ interface ValidateModelResult {
   model: string;
   enableThinking: boolean;
   enableTools: boolean;
+}
+
+/**
+ * Served models with their `/v1/models` labels and context window. Falls back to bare ids for a
+ * driver without {@link OpenAiCompatChatDriver.listServedModels}, which is what a test double built
+ * before it existed provides.
+ */
+async function servedModels(driver: OpenAiCompatChatDriver): Promise<ServedModel[]> {
+  if (typeof driver.listServedModels === 'function') {
+    return driver.listServedModels();
+  }
+
+  return (await driver.listModels()).map((id) => ({ id, labels: [], contextTokens: null }));
+}
+
+/** The server's `/props`, or `null` for a driver (or test double) that cannot ask. Never throws. */
+async function serverProps(driver: OpenAiCompatChatDriver): Promise<ServerProps | null> {
+  if (typeof driver.serverProps !== 'function') {
+    return null;
+  }
+
+  return driver.serverProps().catch(() => null);
+}
+
+/**
+ * Whether a served model can take a chat request: never the configured embedder, the Ollama
+ * embedders the appliance has shipped, or anything {@link isChatCapableModel} rules out by its
+ * labels or name (Lemonade lists rerankers, Whisper and TTS models beside its chat models).
+ */
+function isChatModel(model: { id: string; labels?: string[] }, name: string): boolean {
+  return !INTERNAL_MODELS.has(name) && isChatCapableModel(model, config.embedding.model);
 }
 
 /**
@@ -552,10 +598,11 @@ export class OllamaService implements OnModuleInit {
   private boundedClient(
     model: string,
     signal?: AbortSignal,
+    deadlineMs: number = config.llm.firstResponseTimeoutMs,
   ): { client: Ollama; deadline: FirstResponseFetch } {
     const deadline = createFirstResponseFetch({
       model,
-      deadlineMs: config.llm.firstResponseTimeoutMs,
+      deadlineMs,
       signal,
     });
 
@@ -622,6 +669,7 @@ export class OllamaService implements OnModuleInit {
     numCtx,
     maxOutputTokens,
     keepAlive,
+    firstResponseTimeoutMs,
     enableThinking = false,
   }: {
     model: string;
@@ -632,6 +680,7 @@ export class OllamaService implements OnModuleInit {
     numCtx?: number;
     maxOutputTokens?: number;
     keepAlive?: string | number;
+    firstResponseTimeoutMs?: number;
     enableThinking?: boolean;
   }): Promise<ChatResponse> {
     // A signal that is ALREADY aborted must not start a generation at all.
@@ -642,7 +691,7 @@ export class OllamaService implements OnModuleInit {
     // abort listener attached to an already-aborted signal never fires.
     signal?.throwIfAborted();
 
-    const { client, deadline } = this.boundedClient(model, signal);
+    const { client, deadline } = this.boundedClient(model, signal, firstResponseTimeoutMs);
 
     try {
       return await client.chat({
@@ -680,15 +729,15 @@ export class OllamaService implements OnModuleInit {
     const openAiDriver = this.llmEndpointService.getOpenAiDriver();
 
     if (openAiDriver) {
-      const modelIds = await openAiDriver.listModels();
+      const [served, props] = await Promise.all([servedModels(openAiDriver), serverProps(openAiDriver)]);
 
-      return modelIds
-        .map((id) => this.parseOllamaModel(id))
-        .filter((model) => !INTERNAL_MODELS.has(model.name))
-        .map((model) => ({
+      return served
+        .filter((row) => isChatModel(row, this.parseOllamaModel(row.id).name))
+        .map((row) => ({ model: this.parseOllamaModel(row.id), vision: servedModelSeesImages(row, props) }))
+        .map(({ model, vision }) => ({
           ...model,
-          capabilities: OPENAI_MODE_CAPABILITIES,
-          vision: false,
+          capabilities: vision ? [...OPENAI_MODE_CAPABILITIES, 'vision'] : OPENAI_MODE_CAPABILITIES,
+          vision,
           tools: true,
           thinking: true,
         }));
@@ -696,7 +745,7 @@ export class OllamaService implements OnModuleInit {
 
     const result = await this.ollama.list();
     const models = result.models.map((model) => this.parseOllamaModel(model.name));
-    const visibleModels = models.filter((model) => !INTERNAL_MODELS.has(model.name));
+    const visibleModels = models.filter((model) => isChatModel({ id: model.model }, model.name));
 
     return await Promise.all(
       visibleModels.map(async (model) => {
@@ -845,6 +894,10 @@ export class OllamaService implements OnModuleInit {
     // more generation, with tools neither advertised nor salvaged, so the
     // model has to speak to the results it already has.
     let forcedProseRound = false;
+    // The follow-up after a tool round came back with nothing a person can
+    // read. One more generation, tools off, instead of storing a blank
+    // assistant row and leaving the chat looking cut off before the lookup.
+    let scheduleForcedProse = false;
     // A backend failure inside the generator is logged and the stream ends
     // quietly (an empty assistant row) rather than throwing at the consumer —
     // long-standing behavior the SSE controller depends on. Recording it here
@@ -862,6 +915,8 @@ export class OllamaService implements OnModuleInit {
         let lastChunk: ChatResponse | undefined;
         let handleAbort = () => {};
 
+        let stopLoop = false;
+
         let deadline: FirstResponseFetch | undefined;
 
         textChunks.splice(0, textChunks.length);
@@ -876,7 +931,13 @@ export class OllamaService implements OnModuleInit {
 
         accumulatedMessages.push(...toolEvaluations);
 
-        if (generateRounds >= maxToolRounds) {
+        if (scheduleForcedProse) {
+          // Consume the one blank-follow-up retry before the cap check. The
+          // cap would otherwise break: this round has no new tool calls, and
+          // generateRounds is already at max after the silent follow-up.
+          forcedProseRound = true;
+          scheduleForcedProse = false;
+        } else if (generateRounds >= maxToolRounds) {
           if (iterationToolCalls.length === 0 || forcedProseRound) {
             break;
           }
@@ -907,6 +968,9 @@ export class OllamaService implements OnModuleInit {
               signal,
               enableThinking,
               salvageTools: enableTools && !forcedProseRound,
+              // The forced round's calls are dropped below either way; this
+              // keeps their markup out of the streamed text as well.
+              discardToolMarkup: enableTools && forcedProseRound,
               maxTokens: maxOutputTokens,
             });
 
@@ -1011,7 +1075,7 @@ export class OllamaService implements OnModuleInit {
               errorStack: error instanceof Error ? error.stack : undefined,
             });
 
-            break;
+            stopLoop = true;
           }
         } finally {
           // The forced round's answer is final whatever the model wanted:
@@ -1029,14 +1093,30 @@ export class OllamaService implements OnModuleInit {
 
           const think = thinkChunks.join('');
           const content = textChunks.join('');
+          const visible = content.trim().length > 0 || think.trim().length > 0;
+          // Tools ran and the model neither answered nor asked for another
+          // lookup. Drop the blank row and ask once more, in prose. A second
+          // blank (the forced round itself) is stored, so this cannot loop.
+          const retryBlankFollowUp =
+            !signal?.aborted &&
+            !forcedProseRound &&
+            iterationToolCalls.length > 0 &&
+            toolCalls.length === 0 &&
+            !visible;
 
-          const message = {
-            role: 'assistant',
-            content: (think ? `<think>${think}</think>` : '') + content,
-            ...(toolCalls.length > 0 && { tool_calls: toolCalls.slice() }),
-          } satisfies OllamaMessage;
+          if (retryBlankFollowUp) {
+            scheduleForcedProse = true;
+            stopLoop = false;
+            streamError = undefined;
+          } else {
+            const message = {
+              role: 'assistant',
+              content: (think ? `<think>${think}</think>` : '') + content,
+              ...(toolCalls.length > 0 && { tool_calls: toolCalls.slice() }),
+            } satisfies OllamaMessage;
 
-          accumulatedMessages.push(message);
+            accumulatedMessages.push(message);
+          }
 
           signal?.removeEventListener('abort', handleAbort);
 
@@ -1047,7 +1127,11 @@ export class OllamaService implements OnModuleInit {
             });
           }
         }
-      } while (toolCalls.length > 0);
+
+        if (stopLoop) {
+          break;
+        }
+      } while (toolCalls.length > 0 || scheduleForcedProse);
 
       const wrapUp = savedKnowledgeWrapUp(accumulatedMessages);
       if (wrapUp && !signal?.aborted) {
@@ -1106,6 +1190,7 @@ export class OllamaService implements OnModuleInit {
       signal,
       maxOutputTokens,
       keepAlive,
+      firstResponseTimeoutMs,
     } = options;
     const selection: UtilityModelChoice =
       options.tier === 'utility' ? await this.resolveUtilityModel() : { model: options.model };
@@ -1123,10 +1208,6 @@ export class OllamaService implements OnModuleInit {
     const availableTools = enableTools ? this.toolsWithinCapability(context) : [];
     const ollamaTools: Tool[] = availableTools.map(this.convertToOllamaTool);
     const openAiDriver = this.llmEndpointService.getOpenAiDriver();
-    // vLLM / OpenAI-compat only honors `format: 'json'` (json_object). A JSON
-    // Schema object is still useful on the native Ollama path; collapse it here
-    // so structured callers still get JSON rather than prose.
-    const openAiFormat = typeof format === 'string' ? format : format != null ? 'json' : undefined;
 
     const accumulatedMessages: OllamaMessage[] = [];
 
@@ -1138,10 +1219,11 @@ export class OllamaService implements OnModuleInit {
             model,
             messages: inputMessages,
             tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
-            format: openAiFormat,
+            format,
             enableThinking,
             signal,
             maxTokens: maxOutputTokens,
+            timeoutMs: firstResponseTimeoutMs,
           })
         : await this.runNativeChat({
             model,
@@ -1152,6 +1234,7 @@ export class OllamaService implements OnModuleInit {
             numCtx,
             maxOutputTokens,
             keepAlive,
+            firstResponseTimeoutMs,
             enableThinking,
           });
     } catch (err: unknown) {
@@ -1195,10 +1278,11 @@ export class OllamaService implements OnModuleInit {
         model,
         messages: inputMessages.concat(accumulatedMessages),
         tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
-        format: openAiFormat,
+        format,
         enableThinking,
         signal,
         maxTokens: maxOutputTokens,
+        timeoutMs: firstResponseTimeoutMs,
       });
     }
 
@@ -1215,6 +1299,7 @@ export class OllamaService implements OnModuleInit {
       numCtx,
       maxOutputTokens,
       keepAlive,
+      firstResponseTimeoutMs,
       enableThinking,
     });
   }
@@ -1238,18 +1323,50 @@ export class OllamaService implements OnModuleInit {
   }
 
   /**
-   * The chat model's context window as the machine can carry it, from
-   * {@link ResidencyPlannerService.resolveChatContextTokens}. The chat path
-   * asks only when `CI_LLM_NUM_CTX` is absent; `null` (no planner, planner
-   * off, OpenAI-compatible backend, or nothing provable) leaves the static
-   * tier-profile fallback in place. Never throws.
+   * The chat model's context window as the machine can carry it: on Ollama from
+   * {@link ResidencyPlannerService.resolveChatContextTokens}, on an
+   * OpenAI-compatible backend from what its `/v1/models` row reports. The chat
+   * path asks only when `CI_LLM_NUM_CTX` is absent; `null` (no planner, planner
+   * off, a backend that reports no window, or nothing provable) leaves the
+   * static tier-profile fallback in place. Never throws.
    */
   async resolveChatContextTokens(model?: string): Promise<number | null> {
+    const openAiDriver = this.llmEndpointService.getOpenAiDriver();
+
+    if (openAiDriver) {
+      return this.servedContextTokens(openAiDriver, model ?? config.llm.chatModel);
+    }
+
     if (!this.residencyPlanner) {
       return null;
     }
 
     return this.residencyPlanner.resolveChatContextTokens(model);
+  }
+
+  /**
+   * The window an OpenAI-compatible backend says it runs `model` with — Lemonade's
+   * `context_length`, vLLM's `max_model_len` (see `servedModels.ts`), else a bare llama-server's
+   * `/props` `n_ctx`. The residency planner
+   * cannot answer here (it reads Ollama's `/api/ps`), and without this the chat budget fell back to
+   * the static tier profile whatever the backend had actually loaded. `null` when the backend does
+   * not say, or cannot be asked.
+   */
+  private async servedContextTokens(driver: OpenAiCompatChatDriver, model: string): Promise<number | null> {
+    try {
+      const served = await servedModels(driver);
+      const listed = served.find((row) => row.id === model)?.contextTokens;
+
+      if (listed != null) {
+        return listed;
+      }
+
+      // A bare llama-server lists only the training window on `/v1/models`;
+      // what it loaded is on `/props`.
+      return (await serverProps(driver))?.contextTokens ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1290,6 +1407,17 @@ export class OllamaService implements OnModuleInit {
     } else {
       resolvedModel = await this.resolveServedChatModel(context, requestedModel, messages);
       resolvedModel = await this.applyTierRouting(resolvedModel, messages, resolvedThinking);
+
+      // Tools are the caller's request AND the model's ability. The web app
+      // already sends `enableTools: false` for a model that lacks them, but
+      // `POST /llm/generate` defaults the flag to TRUE, so any other client
+      // handed a no-tools model (the compiled-in default `gemma3:1b` is one) got
+      // a 400 from the backend and an empty turn — or, where the flag was right
+      // and the prompt was not, a model told to use tools it did not have. The
+      // turn runs without them, and `ChatTurnService` says so in its prompt.
+      if (resolvedTools && !(await this.modelSupportsTools(resolvedModel))) {
+        resolvedTools = false;
+      }
     }
 
     return {
@@ -1297,6 +1425,30 @@ export class OllamaService implements OnModuleInit {
       enableThinking: resolvedThinking,
       enableTools: resolvedTools,
     };
+  }
+
+  /**
+   * Whether `model` can be offered tools.
+   *
+   * Only a POSITIVE answer that it cannot turns them off. An OpenAI-compatible
+   * backend has no per-model probe (the model list advertises `tools: true` for
+   * everything it serves, so this agrees with it), an Ollama too old to report
+   * capabilities returns none at all — "none reported" is not "no tools" — and a
+   * probe that fails leaves the caller's request standing: the backend is the
+   * authority, and it will say so if it disagrees.
+   */
+  private async modelSupportsTools(model: string): Promise<boolean> {
+    if (this.llmEndpointService.getOpenAiDriver()) {
+      return true;
+    }
+
+    try {
+      const capabilities = await this.fetchModelCapabilities(model);
+
+      return capabilities.length === 0 || capabilities.includes('tools');
+    } catch {
+      return true;
+    }
   }
 
   /**
@@ -1426,18 +1578,20 @@ export class OllamaService implements OnModuleInit {
     const served = await this.listServedChatModelIds();
 
     if (served.length === 0) {
-      throw new Error('No chat model is currently loaded on vLLM or Ollama');
+      throw new Error('No chat model is currently served by the inference backend');
     }
 
     const hasVisualContent = messages.some((message) => message.images && message.images.length > 0);
 
     // Per-model capability probing (both the explicit-request check just
-    // below and resolveVisionModel's own) is meaningless on the OpenAI-compat
-    // transport: vLLM exposes exactly one served chat id and no way to ask it
-    // "can you see" — getAvailableModels hard-codes `vision: false` for that
-    // mode. resolveVisionModel already returns the plain effective chat model
-    // in that case; skip straight past it rather than calling
-    // fetchModelCapabilities against a transport that cannot answer it.
+    // below and resolveVisionModel's own) is skipped on the OpenAI-compat
+    // transport: `/v1/models` tells what getAvailableModels reports — a
+    // `vision` label where the backend publishes one (Lemonade), nothing
+    // where it doesn't (vLLM, llama.cpp) — and there is no per-model
+    // capability route to ask beyond that. resolveVisionModel already returns
+    // the plain effective chat model in that case; skip straight past it
+    // rather than calling fetchModelCapabilities against a transport that
+    // cannot answer it.
     if (hasVisualContent && !this.llmEndpointService.getOpenAiDriver()) {
       // An explicit, actually-vision-capable request wins outright — this is
       // the interactive Capture flow's own model picker (a person choosing,
@@ -1534,12 +1688,27 @@ export class OllamaService implements OnModuleInit {
     const servedIds = served ?? (await this.listServedChatModelIds());
     const effectiveChatModel = await this.resolveEffectiveChatModel(userId, servedIds);
 
-    // vLLM/OpenAI-compat exposes one served chat id with no per-model
-    // capability probe (getAvailableModels hard-codes `vision: false` for
-    // that mode) — there is no second model to prefer, and no way to ask it
-    // whether it can see.
-    if (this.llmEndpointService.getOpenAiDriver()) {
-      return { model: effectiveChatModel, supportsVision: false };
+    // OpenAI-compat has no per-model capability probe, and there is no second
+    // model to prefer. Whether the one model sees comes from the best signal
+    // the backend gives — a `vision` label on its `/v1/models` row (Lemonade,
+    // and CI-Hub's pool passes it through), llama-server's `/props`, else the
+    // model's name; see `servedModelSeesImages`.
+    const openAiDriver = this.llmEndpointService.getOpenAiDriver();
+
+    if (openAiDriver) {
+      // The model chat actually lands on: the effective one when served, else
+      // the first served — the same fall-through `resolveServedChatModel`
+      // makes — so vision work never names a model the backend does not have.
+      const model = servedIds.includes(effectiveChatModel)
+        ? effectiveChatModel
+        : (servedIds[0] ?? effectiveChatModel);
+      const [served, props] = await Promise.all([
+        servedModels(openAiDriver).catch(() => []),
+        serverProps(openAiDriver),
+      ]);
+      const row = served.find((candidate) => candidate.id === model) ?? { id: model, labels: [] };
+
+      return { model, supportsVision: servedModelSeesImages(row, props) };
     }
 
     if (UTILITY_MODEL_EXPLICITLY_CONFIGURED && servedIds.includes(UTILITY_MODEL)) {
@@ -1559,16 +1728,18 @@ export class OllamaService implements OnModuleInit {
     const openAiDriver = this.llmEndpointService.getOpenAiDriver();
 
     if (openAiDriver) {
-      const modelIds = await openAiDriver.listModels();
+      const served = await servedModels(openAiDriver);
 
-      return modelIds.filter((id) => !INTERNAL_MODELS.has(this.parseOllamaModel(id).name));
+      return served
+        .filter((row) => isChatModel(row, this.parseOllamaModel(row.id).name))
+        .map((row) => row.id);
     }
 
     const result = await this.ollama.list();
 
     return result.models
       .map((model: { name: string }) => model.name)
-      .filter((name: string) => !INTERNAL_MODELS.has(this.parseOllamaModel(name).name));
+      .filter((name: string) => isChatModel({ id: name }, this.parseOllamaModel(name).name));
   }
 
   private parseOllamaModel(model: string): OllamaModel {
@@ -1790,7 +1961,7 @@ export function savedKnowledgeWrapUp(messages: OllamaMessage[]): string | null {
     return null;
   }
 
-  let created = 0;
+  let saved = 0;
   for (const message of messages) {
     if (message.role !== 'tool' || !message.content) {
       continue;
@@ -1803,16 +1974,24 @@ export function savedKnowledgeWrapUp(messages: OllamaMessage[]): string | null {
         error?: unknown;
         createdNodes?: number;
         createdRelationships?: number;
+        updatedNodes?: number;
+        updatedRelationships?: number;
       };
       if (parsed.error) {
         continue;
       }
 
-      created += (parsed.createdNodes ?? 0) + (parsed.createdRelationships ?? 0);
+      // An update is a save too — and `memory.remember` reports a create that
+      // reused an existing id as one.
+      saved +=
+        (parsed.createdNodes ?? 0) +
+        (parsed.createdRelationships ?? 0) +
+        (parsed.updatedNodes ?? 0) +
+        (parsed.updatedRelationships ?? 0);
     } catch {
       // Tool payloads that are not JSON are not a save summary.
     }
   }
 
-  return created > 0 ? 'Saved.' : null;
+  return saved > 0 ? 'Saved.' : null;
 }

@@ -12,6 +12,7 @@ import { FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
+import { ParsingModule } from '@ci/domains/parsing';
 import { PlanningModule } from '@ci/domains/planning';
 import { PositionModule } from '@ci/domains/position';
 import { PredictionsModule } from '@ci/domains/predictions';
@@ -53,6 +54,8 @@ import { VisionRenditionService } from './services/VisionRenditionService';
     IntelligenceModule,
     ImageDescriptionPreferenceModule,
     MemoryModule,
+    // Where ChatTurnService reads the text of an attached PDF or Office document.
+    ParsingModule,
     PlanningModule,
     PositionModule,
     PredictionsModule,

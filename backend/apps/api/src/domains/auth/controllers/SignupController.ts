@@ -1,5 +1,6 @@
 import { BadRequestException, Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { Request, Response } from 'express';
+import type { EntityManager } from 'typeorm';
 import { z } from 'zod';
 
 import { SYSTEM_USER } from '@ci/common/context';
@@ -43,6 +44,10 @@ export class SignupController {
    * one is always allowed. The gate closes again the moment it exists, which is
    * the only window that matters — everyone after the owner still needs a code
    * wherever the flag is on.
+   *
+   * This is the answer for the form, which is all it can be: by the time the
+   * signup is submitted someone else may have claimed the appliance. `signup`
+   * does not act on it — it decides the exemption as it creates the account.
    */
   private async isSignupCodeRequired(): Promise<boolean> {
     if (!(await this.featureService.isFeatureEnabled('require.signup.codes'))) {
@@ -72,39 +77,48 @@ export class SignupController {
   ) {
     const { name, email, password, signup_code } = input;
 
-    const isSignupCodeRequired = await this.isSignupCodeRequired();
+    const codesRequired = await this.featureService.isFeatureEnabled('require.signup.codes');
 
-    if (isSignupCodeRequired) {
-      if (signup_code == null) {
-        throw new BadRequestException('Must provide a valid signup code');
+    // Where codes are required the first account needs none (see
+    // isSignupCodeRequired), so try this as that account first. Whether it IS
+    // the first is decided in the step that creates it: asked beforehand, two
+    // people signing up to a fresh appliance at once were both exempt.
+    let user = codesRequired
+      ? await this.userService.createFirstAccount({ userId: SYSTEM_USER }, { name, email, password })
+      : null;
+
+    if (user == null) {
+      if (codesRequired) {
+        if (signup_code == null) {
+          throw new BadRequestException('Must provide a valid signup code');
+        }
+
+        // Refuses a code that is no invitation before anything else is looked at — whether the
+        // address is taken included, which is not for someone without one to find out. It can only
+        // refuse: two signups presenting the same code both pass here. Which of them the code
+        // admits is decided as the account is created, by redeeming it.
+        const signupCodeLookup = await this.signupCodeService.findOne(signup_code);
+
+        if (!signupCodeLookup) {
+          throw new BadRequestException('Must provide a valid signup code');
+        }
       }
 
-      const signupCodeLookup = await this.signupCodeService.findOne(signup_code);
+      const userExists = await this.userService.checkEmailAvailability(email);
 
-      if (!signupCodeLookup) {
-        throw new BadRequestException('Must provide a valid signup code');
+      if (userExists) {
+        throw new BadRequestException('Email already in use');
       }
-    }
 
-    const userExists = await this.userService.checkEmailAvailability(email);
-
-    if (userExists) {
-      throw new BadRequestException('Email already in use');
-    }
-
-    const user = await this.userService.create(
-      { userId: SYSTEM_USER },
-      {
-        name,
-        email,
-        password,
-      },
-    );
-
-    if (isSignupCodeRequired) {
-      await this.signupCodeService.update(signup_code!, {
-        used: true,
-      });
+      user = await this.userService.create(
+        { userId: SYSTEM_USER },
+        {
+          name,
+          email,
+          password,
+        },
+        codesRequired ? (manager) => this.redeem(signup_code!, manager) : undefined,
+      );
     }
 
     const { sessionToken, sessionId } = await this.authService.issueSessionToken(
@@ -124,5 +138,19 @@ export class SignupController {
     return {
       accessToken,
     };
+  }
+
+  /**
+   * Spend the invitation inside the transaction creating the account it admits — or refuse, which
+   * rolls that account back.
+   *
+   * Of two signups presenting one code, the second to get here finds it used once the first commits
+   * and is refused exactly as a signup arriving after it would be. And the code is only spent if the
+   * account is created: a signup that fails leaves it for another try.
+   */
+  private async redeem(signupCode: string, manager: EntityManager): Promise<void> {
+    if (!(await this.signupCodeService.consume(signupCode, manager))) {
+      throw new BadRequestException('Must provide a valid signup code');
+    }
   }
 }

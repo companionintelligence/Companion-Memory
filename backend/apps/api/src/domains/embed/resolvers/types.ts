@@ -22,12 +22,7 @@ export interface UnfurlData {
  * for real.
  */
 export type UnfurlStatus =
-  | 'ok'
-  | 'not_found'
-  | 'not_embeddable'
-  | 'blocked'
-  | 'transport_error'
-  | 'rate_limited';
+  'ok' | 'not_found' | 'not_embeddable' | 'blocked' | 'transport_error' | 'rate_limited';
 
 export type UnfurlOutcome =
   | { status: 'ok'; data: UnfurlData }

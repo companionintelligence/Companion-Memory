@@ -10,6 +10,7 @@ import {
   type BulkInsertResult,
   bulkInsertIdempotent,
   computeChunkSize,
+  keysetSeek,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
@@ -482,19 +483,17 @@ export class ReceiptService {
       query = query.andWhere(`${RECEIPT_BROWSE_TIME} <= :endTime`, { endTime: options.endTime });
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in
-    // (browse time DESC, receipt_id DESC) — see ItemService.getEntitiesForItems.
+    // Composite keyset: page strictly past (afterTime, afterId) in (browse time, receipt_id), in
+    // `order` — see keysetSeek.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        `(${RECEIPT_BROWSE_TIME} < :afterTime
-          OR (${RECEIPT_BROWSE_TIME} = :afterTime AND receipt.receipt_id < :afterId))`,
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek(RECEIPT_BROWSE_TIME, 'receipt.receipt_id', order, options.afterTime, options.afterId),
       );
     }
 
-    query = query
-      .orderBy(RECEIPT_BROWSE_TIME, options.order ?? 'DESC')
-      .addOrderBy('receipt.receipt_id', 'DESC');
+    query = query.orderBy(RECEIPT_BROWSE_TIME, order).addOrderBy('receipt.receipt_id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);

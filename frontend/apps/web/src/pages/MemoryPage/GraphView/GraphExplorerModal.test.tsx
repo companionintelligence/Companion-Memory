@@ -1,3 +1,4 @@
+import { setApiKey } from '@ci/common';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -52,8 +53,12 @@ const useGraphDotsMock = vi.fn();
 const setActiveEntityMock = vi.fn();
 const resolveNodeEntityMock = vi.fn();
 
+// The web session holds a JWT. The native shell holds only a device API key, so there is no JWT
+// there (`authToken` null) while the session is still `authenticated`.
+const authState = vi.hoisted(() => ({ authToken: 'test-token' as string | null, authenticated: true }));
+
 vi.mock('@/hooks', () => ({
-  useAuth: () => [{ authToken: 'test-token' }],
+  useAuth: () => [authState],
 }));
 
 vi.mock('@/pages/MemoryPage/useEntityService', () => ({
@@ -166,6 +171,9 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
   });
 
   afterEach(() => {
+    authState.authToken = 'test-token';
+    authState.authenticated = true;
+    setApiKey(null);
     globalThis.requestAnimationFrame = realRequestAnimationFrame;
     globalThis.cancelAnimationFrame = realCancelAnimationFrame;
     useNodeGraphServiceMock.mockReset();
@@ -367,7 +375,7 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
     const realFetch = globalThis.fetch;
 
     function mockSearchResponse(payload: Record<string, unknown>) {
-      const fetchMock = vi.fn(async (input: RequestInfo | URL) => ({
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => ({
         url: String(input),
         ok: true,
         status: 200,
@@ -378,6 +386,18 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
 
       return fetchMock;
     }
+
+    const FRIDA_RESULT = {
+      success: true,
+      nodes: [{ entity_id: 'friend-1', entity_type: 'Person', name: 'Frida Friend' }],
+      links: [],
+      limit: 150,
+      truncated: false,
+    };
+
+    /** The headers the first search request went out with, as a plain object. */
+    const searchHeaders = (fetchMock: ReturnType<typeof mockSearchResponse>) =>
+      fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
 
     afterEach(() => {
       globalThis.fetch = realFetch;
@@ -418,6 +438,58 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
       renderShell(['/?search=frida']);
 
       expect(await screen.findByTestId('graph-search-truncated')).toBeInTheDocument();
+    });
+
+    it('searches with the bearer on the web', async () => {
+      const fetchMock = mockSearchResponse(FRIDA_RESULT);
+
+      renderShell(['/?search=frida']);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      expect(searchHeaders(fetchMock).Authorization).toBe('Bearer test-token');
+    });
+
+    /**
+     * ═══ "AUTHENTICATION REQUIRED FOR GRAPH SEARCH" ON THE PHONE ═══
+     *
+     * `authToken` is the web JWT, null in the Capacitor app — whose durable credential is a
+     * keystore API key. The search effect refused before it asked, so every graph search on the
+     * phone ended in that message for a signed-in person. `GET /graph/search` is
+     * `JwtOrApiKeyAuthGuard`, and the request already carries the key; it also sent
+     * `Authorization: Bearer null`, which is dropped here.
+     */
+    describe('native shell (API key, no web JWT)', () => {
+      beforeEach(() => {
+        authState.authToken = null;
+        setApiKey('device-key');
+      });
+
+      it('searches with the device key and no bearer, and draws the result', async () => {
+        const fetchMock = mockSearchResponse(FRIDA_RESULT);
+
+        renderShell(['/?search=frida']);
+
+        await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+        const headers = searchHeaders(fetchMock);
+        expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/graph/search');
+        expect(headers['x-api-key']).toBe('device-key');
+        expect(headers).not.toHaveProperty('Authorization');
+
+        expect(await screen.findByTestId('graph-search-chip')).toHaveTextContent('frida');
+        expect(screen.queryByText('Authentication required for graph search.')).not.toBeInTheDocument();
+      });
+    });
+
+    it('still says authentication is required when nobody is signed in, and asks nothing', async () => {
+      authState.authToken = null;
+      authState.authenticated = false;
+      const fetchMock = mockSearchResponse(FRIDA_RESULT);
+
+      renderShell(['/?search=frida']);
+
+      expect(await screen.findByText('Authentication required for graph search.')).toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 

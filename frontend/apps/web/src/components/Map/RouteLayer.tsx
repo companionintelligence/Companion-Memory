@@ -3,9 +3,14 @@ import { useEffect, useMemo, useState } from 'react';
 import L, { type LatLngExpression } from 'leaflet';
 import { useMap as useLeafletMap } from 'react-leaflet';
 
-import { useAuth } from '@/hooks/useAuth';
+import { useSessionAuth } from '@/hooks/useSessionAuth';
 
-import { isGoogleMapsConfigured, loadGoogleMaps, resolveGoogleMapsApiKey } from './googleMaps';
+import {
+  isGoogleMapsConfigured,
+  loadGoogleMaps,
+  resolveGoogleMapsApiKey,
+  type MapsSession,
+} from './googleMaps';
 import { useMap } from './useMap';
 
 class RouteEngine extends L.LayerGroup {
@@ -16,10 +21,10 @@ class RouteEngine extends L.LayerGroup {
   // continuation bails the moment a newer update() has bumped it.
   private generation = 0;
 
-  private authToken: string | null = null;
+  private session: MapsSession | null = null;
 
-  setAuthToken(token: string | null | undefined) {
-    this.authToken = token ?? null;
+  setSession(session: MapsSession | null) {
+    this.session = session;
   }
 
   async update(locations: L.LatLng[]): Promise<void> {
@@ -44,7 +49,7 @@ class RouteEngine extends L.LayerGroup {
 
   private async createRoadRoute(start: L.LatLng, end: L.LatLng, generation: number): Promise<void> {
     try {
-      await loadGoogleMaps(this.authToken);
+      await loadGoogleMaps(this.session);
     } catch (error) {
       console.warn('Google Maps Directions API failed, creating fallback route.', error);
 
@@ -121,20 +126,23 @@ class RouteEngine extends L.LayerGroup {
 export function RouteLayer({ locations = [] }: { locations?: LatLngExpression[] }) {
   const map = useLeafletMap();
   const [{ displayRoutes }] = useMap();
-  const [{ authToken }] = useAuth();
+  // `ready`, not the web JWT: the native shell never has one — its credential is a keystore API key —
+  // and gating on the token left the phone's map without its route layer.
+  const { ready, headers } = useSessionAuth();
+  const session = useMemo<MapsSession>(() => ({ ready, headers }), [ready, headers]);
   const [configured, setConfigured] = useState(() => isGoogleMapsConfigured());
 
   const engine = useMemo(() => new RouteEngine(), []);
 
   useEffect(() => {
-    engine.setAuthToken(authToken);
-  }, [engine, authToken]);
+    engine.setSession(session);
+  }, [engine, session]);
 
   // Resolve Hub-injected runtime key when Vite did not bake one in.
   useEffect(() => {
     let cancelled = false;
 
-    void resolveGoogleMapsApiKey(authToken).then((key) => {
+    void resolveGoogleMapsApiKey(session).then((key) => {
       if (!cancelled) {
         setConfigured(Boolean(key));
       }
@@ -143,7 +151,7 @@ export function RouteLayer({ locations = [] }: { locations?: LatLngExpression[] 
     return () => {
       cancelled = true;
     };
-  }, [authToken]);
+  }, [session]);
 
   // Route drawing depends on the billed Google Directions API. When no key is
   // configured, skip the layer entirely so we never hit the API (which would

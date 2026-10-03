@@ -30,7 +30,7 @@ function threadMessages() {
       // Nothing attaches files to a tool-call row today; it is here to prove
       // the fold runs *before* resolveMessage, so an elided row never costs a
       // getFileContent round trip.
-      files: [{ key: 'elided-file' }],
+      files: [{ key: 'elided-file', contentType: 'image/png' }],
     },
     { id: 'm3', role: 'tool', content: STALE_TOOL_RESULT, files: [] },
     { id: 'm4', role: 'assistant', content: 'you went running', files: [] },
@@ -38,7 +38,7 @@ function threadMessages() {
     { id: 'm6', role: 'assistant', content: 'a2', files: [] },
     { id: 'm7', role: 'user', content: 'q3', files: [] },
     { id: 'm8', role: 'assistant', content: 'a3', files: [] },
-    { id: 'user-msg', role: 'user', content: 'q4', files: [{ key: 'kept-file' }] },
+    { id: 'user-msg', role: 'user', content: 'q4', files: [{ key: 'kept-file', contentType: 'image/png' }] },
     { id: 'assistant-msg', role: 'assistant', content: '', files: [] },
   ];
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 
-import { useAuth } from '@/hooks';
+import { useSessionAuth } from '@/hooks';
 
 import { rangeToBounds, type StatsRange } from './statsRange';
 
@@ -108,10 +108,13 @@ export function useStatsService(range: StatsRange) {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [{ authToken }] = useAuth();
+  // `ready`, not `authToken`: the token is the web JWT, which the native shell never has — its
+  // credential is a keystore API key that `fetchJson` attaches as `x-api-key`. Gating on the token
+  // left Self > Stats on its skeleton forever (`loading` starts true).
+  const { ready, headers } = useSessionAuth();
 
   const load = useCallback(async () => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
@@ -131,9 +134,7 @@ export function useStatsService(range: StatsRange) {
 
       const query = params.toString();
       const response = await fetchJson<MemoryStatsResponse>(`/api/graph/stats${query ? `?${query}` : ''}`, {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-        },
+        headers,
       });
 
       if (!response?.success) {
@@ -146,7 +147,7 @@ export function useStatsService(range: StatsRange) {
       setError(err instanceof Error ? err.message : String(err));
       setLoading(false);
     }
-  }, [authToken, range]);
+  }, [ready, headers, range]);
 
   useEffect(() => {
     void load();

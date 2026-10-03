@@ -12,6 +12,7 @@ import {
   runStatusLabel,
   STAGE_BLURBS,
   stageLabel,
+  stagePhase,
 } from './runFormat';
 
 describe('computeFraction', () => {
@@ -182,5 +183,31 @@ describe('stage labels', () => {
     // the import, and it was the least explained thing on the screen.
     expect(stageLabel('media')).toBe('Store files');
     expect(STAGE_BLURBS.media).toBe('Copy its photos, videos and voicemails into storage');
+  });
+});
+
+describe('stagePhase', () => {
+  it('says nothing for a stage that is done', () => {
+    // The runner writes `phase` while a stage works and nothing clears it on
+    // completion, so a finished Read still carries "parsing fitbit (56/57)" and
+    // a finished Save still carries "pushing" — in-progress words beside a green
+    // check.
+    expect(stagePhase({ status: 'completed', phase: 'parsing fitbit (56/57)' })).toBeNull();
+    expect(stagePhase({ status: 'completed', phase: 'pushing' })).toBeNull();
+    expect(stagePhase({ status: 'completed', phase: 'expanded' })).toBeNull();
+  });
+
+  it('keeps what a running stage is doing', () => {
+    expect(stagePhase({ status: 'running', phase: 'parsing gmail (1/2)' })).toBe('parsing gmail (1/2)');
+  });
+
+  it('keeps where a stage stopped, which is the first thing asked about one that did not finish', () => {
+    expect(stagePhase({ status: 'failed', phase: 'parsing gmail (1/2)' })).toBe('parsing gmail (1/2)');
+    expect(stagePhase({ status: 'cancelled', phase: 'uploading' })).toBe('uploading');
+  });
+
+  it('has nothing to say when the runner set nothing', () => {
+    expect(stagePhase({ status: 'running', phase: null })).toBeNull();
+    expect(stagePhase({ status: 'running', phase: '' })).toBeNull();
   });
 });

@@ -1,6 +1,8 @@
 import { ConceptIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
+import { SearchResultRow } from './SearchResultRow';
+
 export const CONCEPT_FRAGMENT = gql(`
   fragment SearchResultConceptData on ConceptType {
     id
@@ -15,13 +17,5 @@ interface Props {
 export function ConceptResult({ concept }: Props) {
   const data = useFragment(CONCEPT_FRAGMENT, concept);
 
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <div className="flex items-center gap-2">
-        <ConceptIcon />
-        <div className="font-medium">{data.name}</div>
-      </div>
-      <div className="text-muted-foreground">Concept</div>
-    </div>
-  );
+  return <SearchResultRow icon={<ConceptIcon />} title={data.name} kind="Concept" />;
 }

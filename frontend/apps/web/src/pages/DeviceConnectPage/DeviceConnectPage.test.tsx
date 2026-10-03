@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   getApiBaseUrl: vi.fn(() => ''),
   signInToPortal: vi.fn(),
   listMemoryServers: vi.fn(),
+  probePortalOrigin: vi.fn(async (): Promise<void> => {}),
   loginWithPortalOidc: vi.fn(),
   resumePendingOidcLogin: vi.fn(
     async (): Promise<{
@@ -73,6 +74,9 @@ vi.mock('./portal-client', async (importOriginal) => {
     ...actual,
     signInToPortal: h.signInToPortal,
     listMemoryServers: h.listMemoryServers,
+    // Answers by default, so the sign-in tests never reach for the network; the
+    // unreachable-host tests below make it reject.
+    probePortalOrigin: h.probePortalOrigin,
   };
 });
 
@@ -87,6 +91,22 @@ vi.mock('./oidc', async (importOriginal) => {
 });
 
 beforeEach(() => {
+  // The splash mark lazily imports a 1.9 MB Lottie animation unless reduced
+  // motion is on, and `lottie-web` throws when it evaluates under jsdom (no
+  // canvas context). That surfaced as an unhandled error landing on whichever
+  // test happened to be running; the static SVG is the deterministic path — the
+  // same stub DesktopSignInPage.test.tsx uses for the same reason.
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('prefers-reduced-motion'),
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+
   h.ios = false;
   navigate.mockReset();
   h.persistApiBaseUrl.mockReset();
@@ -94,6 +114,8 @@ beforeEach(() => {
   h.getApiBaseUrl.mockReturnValue('');
   h.signInToPortal.mockReset();
   h.listMemoryServers.mockReset();
+  h.probePortalOrigin.mockReset();
+  h.probePortalOrigin.mockResolvedValue(undefined);
   h.loginWithPortalOidc.mockReset();
   h.resumePendingOidcLogin.mockReset();
   h.resumePendingOidcLogin.mockResolvedValue(null);
@@ -105,6 +127,7 @@ beforeEach(() => {
   h.profileUser = undefined;
   h.profileError = null;
   sessionStorage.clear();
+  localStorage.removeItem('ci.deviceConnect.portalUrl');
 });
 
 describe('DeviceConnectPage', () => {
@@ -149,6 +172,60 @@ describe('DeviceConnectPage', () => {
     fireEvent.click(screen.getByTestId('advanced-link'));
 
     expect(navigate).toHaveBeenCalledWith('/device-connect/advanced');
+  });
+
+  /**
+   * QA AUTH-12: with a wrong Companion URL the sign-in sheet opened on the
+   * browser's own error page, and closing it was a silent cancel, so Log in
+   * came back with nothing in the app saying what was wrong.
+   */
+  describe('a Companion URL that does not answer', () => {
+    it('says so in the app, names the URL and where to fix it, and never opens the sign-in sheet', async () => {
+      localStorage.setItem('ci.deviceConnect.portalUrl', 'http://192.168.0.4:9');
+      h.probePortalOrigin.mockRejectedValue(new Error('Load failed'));
+
+      render(<DeviceConnectPage />);
+      fireEvent.click(screen.getByTestId('oidc-login-btn'));
+
+      const alert = await screen.findByTestId('connect-signin-error');
+
+      expect(alert).toHaveTextContent('http://192.168.0.4:9');
+      expect(alert).toHaveTextContent(/Advanced/);
+      expect(h.probePortalOrigin).toHaveBeenCalledWith('http://192.168.0.4:9');
+      expect(h.loginWithPortalOidc).not.toHaveBeenCalled();
+      // Back to a usable Log in, with no "finish signing in in Safari" hint for
+      // a sheet that never opened.
+      expect(screen.getByTestId('oidc-login-btn')).toBeEnabled();
+      expect(screen.queryByText(/Finish signing in/)).not.toBeInTheDocument();
+    });
+
+    it('blames the connection, not Advanced, when the default Companion server is the one that is silent', async () => {
+      h.probePortalOrigin.mockRejectedValue(new Error('Load failed'));
+
+      render(<DeviceConnectPage />);
+      fireEvent.click(screen.getByTestId('oidc-login-btn'));
+
+      const alert = await screen.findByTestId('connect-signin-error');
+
+      expect(alert).toHaveTextContent(/check your connection/i);
+      expect(alert).not.toHaveTextContent(/Advanced/);
+      expect(h.loginWithPortalOidc).not.toHaveBeenCalled();
+    });
+
+    it('clears the message and opens the sheet once the next attempt gets an answer', async () => {
+      h.probePortalOrigin.mockRejectedValueOnce(new Error('Load failed'));
+      h.loginWithPortalOidc.mockReturnValue(new Promise(() => {}));
+
+      render(<DeviceConnectPage />);
+      fireEvent.click(screen.getByTestId('oidc-login-btn'));
+      expect(await screen.findByTestId('connect-signin-error')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('oidc-login-btn'));
+
+      expect(await screen.findByText(/Finish signing in/)).toBeInTheDocument();
+      expect(screen.queryByTestId('connect-signin-error')).not.toBeInTheDocument();
+      expect(h.loginWithPortalOidc).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('lists Memory Servers after Portal OIDC', async () => {

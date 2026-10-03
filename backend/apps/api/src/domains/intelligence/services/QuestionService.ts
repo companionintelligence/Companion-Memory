@@ -13,41 +13,19 @@ import {
 } from '@ci/domains/intelligence/events';
 
 import { Question, QuestionEntity } from '../entities/QuestionEntity';
+import { QUESTION_ROTATION_ORDER_SQL, QUESTION_ROTATION_RANK_SQL, TIER_RANK_SQL } from '../questionOrder';
 import { excludeForkedOriginsSql } from '../questionScope';
 import type {
   AnswerEvidence,
   CreateQuestionDto,
   QuestionCatalogueQueryDto,
+  QuestionInferenceStanding,
   UpdateQuestionDto,
 } from '../types';
 
 const FEED_QUESTION_QUEUE_LIMIT = 3;
 /** Unanswered front-of-queue questions rotate after this long on the feed. */
 export const FEED_QUESTION_STALE_MS = 30 * 60 * 1000;
-
-/**
- * Ask the functional questions first.
- *
- * `ci.questions.answer_tier` splits the catalogue into questions that settle a
- * fact ("What foods are you allergic to?"), questions that record a taste
- * ("Window or aisle?"), and questions that ask for a story ("How did you end up
- * in the city you live in now?"). A memory system earns the third kind by
- * getting the first two right, so every selector orders by this rank before it
- * applies its own tie-break.
- *
- * NULL sorts last, not first: an untiered row is a legacy question from the
- * pre-catalogue era, and those are exactly the abstract ones we do not want to
- * lead with. (Postgres defaults NULLs FIRST on DESC and LAST on ASC; spelling
- * the rank out as an integer avoids depending on that.)
- */
-const TIER_RANK_SQL = `
-  CASE q.answer_tier
-    WHEN 'factual'    THEN 0
-    WHEN 'preference' THEN 1
-    WHEN 'narrative'  THEN 2
-    ELSE 3
-  END
-`;
 
 const GAP_AWARE_CANDIDATE_SQL = `
   WITH category_coverage AS (
@@ -867,6 +845,10 @@ export class QuestionService {
     });
 
     if (existingFork) {
+      // Its evidence class is deliberately left as it is, not copied from the
+      // origin again: that would overwrite a copy that is stricter than its origin
+      // with the looser one. An edit cannot move it either (it is not on
+      // UpdateQuestionDto), so only a migration ever changes it.
       Object.assign(existingFork, updateData, {
         isPrivateTo: userId,
         forkedFromQuestionId: origin.id,
@@ -890,6 +872,12 @@ export class QuestionService {
       // (question_key, is_private_to), which is what lets the copy hold the
       // same key as the shared row it replaces.
       key: origin.key ?? null,
+      // The class comes across for the same reason, with more at stake. Both
+      // inference selectors skip a 'hand_entry' question and the origin is hidden
+      // from whoever forked it, so a copy left to the column default
+      // ('traceable') is a question the job must never answer on this person's
+      // behalf, offered to it the moment they reword it.
+      evidenceClass: origin.evidenceClass,
       category: origin.category,
       answerTier: origin.answerTier ?? null,
       contextTags: origin.contextTags,
@@ -996,6 +984,11 @@ export class QuestionService {
    * unanswerable question ages back in at one attempt per retention window
    * rather than being silenced for good, and if the queue binding ever moves,
    * this degrades to the old order, which is the safe direction to fail).
+   *
+   * Among questions with the same attempt standing, the order is the
+   * catalogue's rotation order from questionOrder.ts — tier, batch age, then a
+   * round-robin across categories in the order the seed files list them. The
+   * listener takes the same definition, so the two selectors cannot drift.
    */
   async findUnansweredByUserId(attemptHistory: {
     queue: string;
@@ -1045,6 +1038,7 @@ export class QuestionService {
         ) dispatched
         GROUP BY 1, 2
       ),
+      rotation AS (${QUESTION_ROTATION_RANK_SQL}),
       unanswered AS (
         SELECT
           q.question_id AS id,
@@ -1053,16 +1047,18 @@ export class QuestionService {
           ROW_NUMBER() OVER (
             PARTITION BY COALESCE(q.is_private_to, u.user_id)
             -- Never-attempted before ever-attempted, least recently attempted
-            -- first among retries; tier and age order WITHIN those groups, so
-            -- the catalogue's factual-first preference still decides what a
-            -- fresh appliance asks about first.
-            ORDER BY att.last_attempt_at ASC NULLS FIRST, ${TIER_RANK_SQL} ASC, q.created_at ASC, q.question_id ASC
+            -- first among retries; the catalogue's rotation order WITHIN those
+            -- groups, so the factual-first preference still decides what a
+            -- fresh appliance asks about first, and every appliance asks it in
+            -- the same order. Not by question_id: see questionOrder.ts.
+            ORDER BY att.last_attempt_at ASC NULLS FIRST, ${QUESTION_ROTATION_ORDER_SQL}
           ) AS rn
         FROM ci.questions q
         CROSS JOIN (SELECT DISTINCT id AS user_id FROM ci.users WHERE id IS NOT NULL) u
         LEFT JOIN attempts att
           ON att.question_id = q.question_id::text
          AND att.user_id = COALESCE(q.is_private_to, u.user_id)::text
+        LEFT JOIN rotation qr ON qr.question_id = q.question_id
         WHERE q.is_active = TRUE
           -- Never spend an inference slot on a question the corpus cannot
           -- ground (body measurements, medical facts, the make of the boiler).
@@ -1107,6 +1103,78 @@ export class QuestionService {
     }
 
     return groupedByUserId;
+  }
+
+  /**
+   * What `ci.questions` says about one question RIGHT NOW, read the way the
+   * inference selectors read it for this caller.
+   *
+   * {@link findUnansweredByUserId} and `SmartRotationListener`'s
+   * `findNextUnansweredQuestionId` only pick a question that is active, not
+   * `hand_entry`, and not hidden from the owner by one of their own forks. They
+   * check that when a job is QUEUED, and the job then waits in pg-boss — behind
+   * the single-slot LLM queue — before anything runs it. In that gap a migration
+   * can retire the row, a reclassification can mark it `hand_entry`, and the
+   * owner can fork it. {@link findById} sees none of that: it settles who may
+   * READ the row and nothing else. So `AnswerInferenceListener` asks this at the
+   * moment it RUNS.
+   *
+   * The facts come back separately, not as one verdict, so the caller can say
+   * which of them stopped a job. The `is_active` and `evidence_class` tests are
+   * spelled out in both selectors and are the contract this has to keep (see
+   * SmartRotationListener.md); the fork rule is the shared
+   * {@link excludeForkedOriginsSql}, so that one cannot drift.
+   *
+   * `null` when the caller cannot see the row at all — it does not exist, or it
+   * is private to somebody else — which is the rule {@link findById} applies.
+   */
+  async findInferenceStanding(
+    context: ServiceContext,
+    id: string,
+  ): Promise<QuestionInferenceStanding | null> {
+    type Row = {
+      is_active: boolean;
+      evidence_class: string;
+      forked_by_caller: boolean;
+    };
+
+    // SYSTEM_USER is a Symbol, so it can never be bound as a parameter. It owns
+    // no private rows and no forks either, and NULL says exactly that in SQL:
+    // only shared rows are visible, and nothing is forked.
+    const userId = context.userId && context.userId !== SYSTEM_USER ? context.userId : null;
+
+    const rows = (await this.dataSource.query(
+      `
+      SELECT
+        q.is_active,
+        q.evidence_class,
+        -- "Forked by the caller" is "does not survive the shared fork filter".
+        -- Said through excludeForkedOriginsSql rather than a second copy of its
+        -- subquery, so the two cannot disagree about what a fork is.
+        NOT EXISTS (
+          SELECT 1
+          FROM ci.questions visible
+          WHERE visible.question_id = q.question_id
+            ${excludeForkedOriginsSql('visible', '$2::uuid')}
+        ) AS forked_by_caller
+      FROM ci.questions q
+      WHERE q.question_id = $1::uuid
+        AND (q.is_private_to IS NULL OR q.is_private_to = $2::uuid)
+      `,
+      [id, userId],
+    )) satisfies Array<Row>;
+
+    const row = rows[0];
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      isActive: row.is_active,
+      evidenceClass: row.evidence_class,
+      forkedByCaller: row.forked_by_caller,
+    };
   }
 
   async findOneUnanswered(context: ServiceContext): Promise<Question | null> {
@@ -1260,32 +1328,32 @@ export class QuestionService {
     return true;
   }
 
-  /** Stamp first presentation time on the feed row and bump times_asked on the question. */
+  /**
+   * Stamp first presentation time on the feed row and bump times_asked on the question.
+   *
+   * One statement, so the bump happens exactly when the stamp does and no
+   * result has to be read back to decide it. The two-statement version gated
+   * the bump on `rows[0]?.updated` from a bare `UPDATE … RETURNING`, which
+   * TypeORM returns as the pair `[rows, rowCount]` — `rows[0]` was the rows
+   * array, `.updated` was always undefined, and times_asked never moved.
+   */
   async recordFeedQuestionPresentation(userId: string, questionId: string): Promise<void> {
-    type Row = { updated: boolean };
-    const rows = (await this.dataSource.query(
-      `
-      UPDATE ci.feed_queue
-      SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('lastPresentedAt', to_jsonb(NOW()::text))
-      WHERE user_id = $1
-        AND question_id = $2
-        AND (metadata->>'lastPresentedAt' IS NULL)
-      RETURNING TRUE AS updated;
-      `,
-      [userId, questionId],
-    )) satisfies Array<Row>;
-
-    if (!rows[0]?.updated) {
-      return;
-    }
-
     await this.dataSource.query(
       `
+      WITH presented AS (
+        UPDATE ci.feed_queue
+        SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('lastPresentedAt', to_jsonb(NOW()::text))
+        WHERE user_id = $1
+          AND question_id = $2
+          AND (metadata->>'lastPresentedAt' IS NULL)
+        RETURNING 1
+      )
       UPDATE ci.questions
       SET times_asked = times_asked + 1
-      WHERE question_id = $1;
+      WHERE question_id = $2
+        AND EXISTS (SELECT 1 FROM presented);
       `,
-      [questionId],
+      [userId, questionId],
     );
   }
 

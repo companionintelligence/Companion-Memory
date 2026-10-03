@@ -4,13 +4,31 @@ import { fetchJson, FetchJsonError } from '@ci/common';
 import { Button, Card, Dialog, Input, Label, PasswordInput } from '@ci/shadcn';
 import { TriangleAlert } from '@ci/shadcn/icons';
 
+import { useNeedsWebSignIn, WebSignInRequired } from '@/components/WebSignInRequired';
 import { useAuth, useCurrentUser } from '@/hooks';
 
-function messageFrom(error: unknown, fallback: string): string {
+/**
+ * What "sign in again" means for someone the Hub signs in: the bridge only mints a
+ * fresh session when there is no Memory session to keep, so reloading alone would
+ * keep the old one.
+ */
+const HUB_SIGN_IN_AGAIN = 'Sign out, then open Memory from your Hub again to make this change.';
+
+/**
+ * What a 403 from `DELETE /account` means. Only the device key a phone holds can meet
+ * one: the route requires a key at `full` (`AccountController.remove`), and a phone
+ * that signed in before keys were minted at `full` (#2661) still holds a `write` one.
+ * Signing in again mints a new key at `full`. A web session is never refused this way;
+ * the capability rule reads only API keys.
+ */
+const DEVICE_SIGN_IN_AGAIN_TO_DELETE =
+  'This device needs a fresh sign-in to delete the account. Sign out, sign back in, then try again.';
+
+function messageFrom(error: unknown, fallback: string, signInAgain: string): string {
   if (error instanceof FetchJsonError && error.status === 401 && error.message === 'REAUTH_REQUIRED') {
-    // A Companion-signed-in account with no password of its own proves itself by a recent
-    // sign-in instead; the window has passed.
-    return 'Sign in again to make this change.';
+    // An account with no password of its own proves itself by a recent sign-in
+    // instead; the window has passed.
+    return signInAgain;
   }
 
   return error instanceof FetchJsonError ? error.message : fallback;
@@ -33,6 +51,11 @@ const PURGE_GRACE_DESCRIPTION = '30 days';
 export function AccountSection() {
   const [{ authToken }, { logout }] = useAuth();
   const { user, refetch: refetchUser } = useCurrentUser();
+  // The native shell holds only a device key. Reading the account and changing its email or password
+  // take a session JWT (`JwtAuthGuard`) — never a key — so there they can only answer "Unauthorized",
+  // after the person has typed their current password. `DELETE /account` is the one route that takes
+  // a key (at `full`), and it stays below.
+  const needsWebSignIn = useNeedsWebSignIn();
 
   const [open, setOpen] = useState(false);
   const [confirmEmail, setConfirmEmail] = useState('');
@@ -44,25 +67,34 @@ export function AccountSection() {
   // actually be accepted — the user should never meet the 400.
   const matches = email.length > 0 && confirmEmail.trim().toLowerCase() === email.trim().toLowerCase();
 
-  // OIDC-linked accounts (`ci.federated_identities`) were given a random 32-byte
-  // password at signup that the user has never seen — asking for a "current
-  // password" to change email/password would lock them out permanently, the same
-  // reason account deletion above doesn't require one either.
-  const [hasFederatedIdentity, setHasFederatedIdentity] = useState(false);
-  // A federated account that has set a password of its own is asked for it like any other.
-  const [hasOwnPassword, setHasOwnPassword] = useState(false);
-  const asksCurrentPassword = !hasFederatedIdentity || hasOwnPassword;
+  // Accounts provisioned by Portal/OIDC sign-in or by the Hub forward-auth bridge
+  // were given a random 32-byte password the user has never seen — asking for a
+  // "current password" to change email/password would lock them out permanently,
+  // the same reason account deletion above doesn't require one either. The server
+  // decides on exactly this flag (`AccountController.requireReauth`), whatever the
+  // sign-in method; until it answers, assume the common case and ask.
+  const [hasOwnPassword, setHasOwnPassword] = useState(true);
+  const asksCurrentPassword = hasOwnPassword;
+  // The Hub signs this session in by this address, so changing it here would strand
+  // the account (`AccountController.changeEmail`). It also means "sign in again"
+  // goes through the Hub.
+  const [emailManagedByHub, setEmailManagedByHub] = useState(false);
+  const signInAgain = emailManagedByHub ? HUB_SIGN_IN_AGAIN : 'Sign in again to make this change.';
 
   useEffect(() => {
-    fetchJson<{ email: string; hasFederatedIdentity: boolean; hasOwnPassword: boolean }>('/api/account', {
+    if (needsWebSignIn) {
+      return;
+    }
+
+    fetchJson<{ email: string; hasOwnPassword: boolean; emailManagedByHub: boolean }>('/api/account', {
       headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
     })
       .then((result) => {
-        setHasFederatedIdentity(result?.hasFederatedIdentity ?? false);
-        setHasOwnPassword(result?.hasOwnPassword ?? false);
+        setHasOwnPassword(result?.hasOwnPassword ?? true);
+        setEmailManagedByHub(result?.emailManagedByHub ?? false);
       })
       .catch(() => {});
-  }, [authToken]);
+  }, [authToken, needsWebSignIn]);
 
   const [newEmail, setNewEmail] = useState('');
   const [emailCurrentPassword, setEmailCurrentPassword] = useState('');
@@ -94,7 +126,7 @@ export function AccountSection() {
       setEmailCurrentPassword('');
       await refetchUser();
     } catch (err) {
-      setEmailError(messageFrom(err, 'Could not update email.'));
+      setEmailError(messageFrom(err, 'Could not update email.', signInAgain));
     } finally {
       setEmailSaving(false);
     }
@@ -139,7 +171,7 @@ export function AccountSection() {
       setPasswordCurrentPassword('');
       setHasOwnPassword(true);
     } catch (err) {
-      setPasswordError(messageFrom(err, 'Could not update password.'));
+      setPasswordError(messageFrom(err, 'Could not update password.', signInAgain));
     } finally {
       setPasswordSaving(false);
     }
@@ -165,8 +197,12 @@ export function AccountSection() {
       // The account stops authenticating immediately, so there is nothing left to
       // stay signed in to: drop the local credential and return to a logged-out app.
       await logout();
-    } catch {
-      setError('Could not delete the account. Please try again.');
+    } catch (err) {
+      setError(
+        err instanceof FetchJsonError && err.status === 403
+          ? DEVICE_SIGN_IN_AGAIN_TO_DELETE
+          : 'Could not delete the account. Please try again.',
+      );
       setLoading(false);
     }
   };
@@ -180,117 +216,136 @@ export function AccountSection() {
         </p>
       </div>
 
-      <Card className="py-0">
-        <Card.Content>
-          <form className="space-y-4" onSubmit={handleChangeEmail}>
-            <div className="space-y-1">
-              <h3 className="text-sm font-medium">Change email</h3>
-              <p className="text-sm text-muted-foreground">You'll use this address to sign in.</p>
-            </div>
+      {needsWebSignIn ? (
+        <WebSignInRequired>
+          Your email and password can only be changed from a web sign-in; this app signs in with its own
+          device key, which cannot change them. Open Companion Memory in a web browser and sign in to change
+          them. Deleting your account works from here.
+        </WebSignInRequired>
+      ) : (
+        <>
+          <Card className="py-0">
+            <Card.Content>
+              {emailManagedByHub ? (
+                <div className="space-y-1">
+                  <h3 className="text-sm font-medium">Email</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Your Hub signs you in to Memory with this address, so it can't be changed here.
+                  </p>
+                </div>
+              ) : (
+                <form className="space-y-4" onSubmit={handleChangeEmail}>
+                  <div className="space-y-1">
+                    <h3 className="text-sm font-medium">Change email</h3>
+                    <p className="text-sm text-muted-foreground">You'll use this address to sign in.</p>
+                  </div>
 
-            {asksCurrentPassword && (
-              <div className="grid gap-2">
-                <Label htmlFor="emailCurrentPassword">Current password</Label>
-                <PasswordInput
-                  id="emailCurrentPassword"
-                  autoComplete="current-password"
-                  value={emailCurrentPassword}
-                  onChange={(e) => setEmailCurrentPassword(e.target.value)}
-                  disabled={emailSaving}
-                  required
-                />
-              </div>
-            )}
+                  {asksCurrentPassword && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="emailCurrentPassword">Current password</Label>
+                      <PasswordInput
+                        id="emailCurrentPassword"
+                        autoComplete="current-password"
+                        value={emailCurrentPassword}
+                        onChange={(e) => setEmailCurrentPassword(e.target.value)}
+                        disabled={emailSaving}
+                        required
+                      />
+                    </div>
+                  )}
 
-            <div className="grid gap-2">
-              <Label htmlFor="newEmail">New email</Label>
-              <Input
-                id="newEmail"
-                type="email"
-                autoComplete="email"
-                value={newEmail}
-                onChange={(e) => setNewEmail(e.target.value)}
-                disabled={emailSaving}
-                required
-              />
-            </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="newEmail">New email</Label>
+                    <Input
+                      id="newEmail"
+                      type="email"
+                      autoComplete="email"
+                      value={newEmail}
+                      onChange={(e) => setNewEmail(e.target.value)}
+                      disabled={emailSaving}
+                      required
+                    />
+                  </div>
 
-            {emailError && <p className="text-sm text-destructive">{emailError}</p>}
-            {emailSavedNote && <p className="text-sm text-muted-foreground">{emailSavedNote}</p>}
+                  {emailError && <p className="text-sm text-destructive">{emailError}</p>}
+                  {emailSavedNote && <p className="text-sm text-muted-foreground">{emailSavedNote}</p>}
 
-            <Button type="submit" size="sm" disabled={emailSaving || newEmail.trim().length === 0}>
-              {emailSaving ? 'Saving…' : 'Update email'}
-            </Button>
-          </form>
-        </Card.Content>
-      </Card>
+                  <Button type="submit" size="sm" disabled={emailSaving || newEmail.trim().length === 0}>
+                    {emailSaving ? 'Saving…' : 'Update email'}
+                  </Button>
+                </form>
+              )}
+            </Card.Content>
+          </Card>
 
-      <Card className="py-0">
-        <Card.Content>
-          <form className="space-y-4" onSubmit={handleChangePassword}>
-            <div className="space-y-1">
-              <h3 className="text-sm font-medium">
-                {asksCurrentPassword ? 'Change password' : 'Set a password'}
-              </h3>
-              <p className="text-sm text-muted-foreground">
-                {asksCurrentPassword
-                  ? 'Changing your password signs out every other device.'
-                  : 'You signed in with a Companion account and have no password yet — set one to also sign in with email.'}
-              </p>
-            </div>
+          <Card className="py-0">
+            <Card.Content>
+              <form className="space-y-4" onSubmit={handleChangePassword}>
+                <div className="space-y-1">
+                  <h3 className="text-sm font-medium">
+                    {asksCurrentPassword ? 'Change password' : 'Set a password'}
+                  </h3>
+                  <p className="text-sm text-muted-foreground">
+                    {asksCurrentPassword
+                      ? 'Changing your password signs out every other device.'
+                      : 'This account has no password yet — set one to also sign in with your email and password.'}
+                  </p>
+                </div>
 
-            {asksCurrentPassword && (
-              <div className="grid gap-2">
-                <Label htmlFor="passwordCurrentPassword">Current password</Label>
-                <PasswordInput
-                  id="passwordCurrentPassword"
-                  autoComplete="current-password"
-                  value={passwordCurrentPassword}
-                  onChange={(e) => setPasswordCurrentPassword(e.target.value)}
-                  disabled={passwordSaving}
-                  required
-                />
-              </div>
-            )}
+                {asksCurrentPassword && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="passwordCurrentPassword">Current password</Label>
+                    <PasswordInput
+                      id="passwordCurrentPassword"
+                      autoComplete="current-password"
+                      value={passwordCurrentPassword}
+                      onChange={(e) => setPasswordCurrentPassword(e.target.value)}
+                      disabled={passwordSaving}
+                      required
+                    />
+                  </div>
+                )}
 
-            <div className="grid gap-2">
-              <Label htmlFor="newPassword">New password</Label>
-              <PasswordInput
-                id="newPassword"
-                autoComplete="new-password"
-                minLength={6}
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                disabled={passwordSaving}
-                required
-              />
-            </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="newPassword">New password</Label>
+                  <PasswordInput
+                    id="newPassword"
+                    autoComplete="new-password"
+                    minLength={6}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    disabled={passwordSaving}
+                    required
+                  />
+                </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="confirmNewPassword">Confirm new password</Label>
-              <PasswordInput
-                id="confirmNewPassword"
-                autoComplete="new-password"
-                value={confirmNewPassword}
-                onChange={(e) => setConfirmNewPassword(e.target.value)}
-                disabled={passwordSaving}
-                required
-              />
-            </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="confirmNewPassword">Confirm new password</Label>
+                  <PasswordInput
+                    id="confirmNewPassword"
+                    autoComplete="new-password"
+                    value={confirmNewPassword}
+                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    disabled={passwordSaving}
+                    required
+                  />
+                </div>
 
-            {passwordError && <p className="text-sm text-destructive">{passwordError}</p>}
-            {passwordSavedNote && <p className="text-sm text-muted-foreground">{passwordSavedNote}</p>}
+                {passwordError && <p className="text-sm text-destructive">{passwordError}</p>}
+                {passwordSavedNote && <p className="text-sm text-muted-foreground">{passwordSavedNote}</p>}
 
-            <Button
-              type="submit"
-              size="sm"
-              disabled={passwordSaving || newPassword.length === 0 || confirmNewPassword.length === 0}
-            >
-              {passwordSaving ? 'Saving…' : hasFederatedIdentity ? 'Set password' : 'Update password'}
-            </Button>
-          </form>
-        </Card.Content>
-      </Card>
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={passwordSaving || newPassword.length === 0 || confirmNewPassword.length === 0}
+                >
+                  {passwordSaving ? 'Saving…' : asksCurrentPassword ? 'Update password' : 'Set password'}
+                </Button>
+              </form>
+            </Card.Content>
+          </Card>
+        </>
+      )}
 
       <Card className="border-destructive/40 mb-[max(1rem,var(--safe-area-bottom))]">
         <Card.Header>

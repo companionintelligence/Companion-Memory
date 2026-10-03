@@ -331,10 +331,32 @@ export function AddMenu() {
 
       <AddPersonModal open={isAddPersonModalOpen} onClose={closeAddPersonModal} />
 
-      {/* No onCreated here: the nav has no list of its own to refresh, and the
-          Memory/Places pages refetch when they mount or when their own button
-          creates one. */}
-      <AddEventModal open={isAddEventModalOpen} onClose={closeAddEventModal} />
+      {/* The Memory explorer used to carry its own "New event" button, which
+          passed the page's `refetch` straight in. That button is gone — this
+          entry is the only way to create an event now — so the refresh has to
+          happen from here. It cannot reuse that `refetch`: AddMenu renders in
+          the layout header, ABOVE `EntityServiceProvider` (mounted in
+          MemoryPage), so `useOptionalEntityService` is null here on every page.
+
+          Hence the same eviction the Thing modal below uses: the explorer reads
+          a `search` connection the server composes per query, and the map reads
+          `mapPins`, so neither has a cache entry a new event could be appended
+          to. Evicting the two root fields and letting `refetchQueries` re-run
+          whichever were active keeps the nav from having to know which surface
+          the user is looking at. */}
+      <AddEventModal
+        open={isAddEventModalOpen}
+        onClose={closeAddEventModal}
+        onCreated={() =>
+          client.refetchQueries({
+            updateCache: (cache) => {
+              cache.evict({ id: 'ROOT_QUERY', fieldName: 'search' });
+              cache.evict({ id: 'ROOT_QUERY', fieldName: 'mapPins' });
+              cache.gc();
+            },
+          })
+        }
+      />
       <AddPlaceModal open={isAddPlaceModalOpen} onClose={closeAddPlaceModal} />
 
       <AddConceptModal open={isAddConceptModalOpen} onClose={closeAddConceptModal} />

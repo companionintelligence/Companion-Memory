@@ -266,3 +266,42 @@ def test_re_serializing_an_unchanged_day_writes_the_same_row_count(wired):
     second = ser.TokenSerializer().serialize_day(USER, DATE)
 
     assert first == second and first > 2
+
+
+# ── require_complete: a day rewritten once ────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "failing",
+    [
+        {"tasks": RuntimeError("ci.tasks unreachable"), "summaries": []},
+        {"tasks": [], "summaries": RuntimeError("summary read blew up")},
+    ],
+    ids=["task read failed", "summary read failed"],
+)
+def test_require_complete_keeps_the_stored_rows_on_any_incomplete_read(wired, failing):
+    """
+    The default writes a partial read when it found something: right for a day
+    the nightly rewrites again tomorrow. reserialize_queue.drain rewrites a day
+    outside the budget once, so it asks for a complete read instead. A refused
+    read issues no SQL at all, which leaves the stored rows in place and the
+    queue row for the next night.
+    """
+    calls = wired(events=[_event(0.0)], **failing)
+
+    assert ser.TokenSerializer().serialize_day(USER, DATE, require_complete=True) == 0
+    assert calls == [], f"a refused read must issue no SQL, got {calls}"
+
+    # The same read without the flag is the unchanged default: written.
+    assert ser.TokenSerializer().serialize_day(USER, DATE) > 2
+    assert len(_inserts(calls)) == 1
+
+
+def test_require_complete_changes_nothing_when_the_read_is_complete(wired):
+    calls = wired(events=[_event(0.0), _event(600.0)], tasks=[], summaries=[])
+
+    written = ser.TokenSerializer().serialize_day(USER, DATE, require_complete=True)
+
+    assert written > 2
+    assert len(_deletes(calls)) == 1
+    assert len(_inserts(calls)) == 1

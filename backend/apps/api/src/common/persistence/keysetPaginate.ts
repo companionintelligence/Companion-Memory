@@ -1,5 +1,7 @@
 import type { ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
 
+import { keysetSeekExact } from './keysetSeek';
+
 /**
  * Keyset (seek) pagination pushed into SQL — replaces the load-the-whole-table
  * then slice-in-JS `Paginator.paginate` for large tables. The query fetches only
@@ -9,8 +11,21 @@ import type { ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
  * The cursor stays the row id (callers pass the DECODED id of the after/before
  * row), so cursors are byte-identical to the in-memory paginator's and the two
  * can coexist across resolvers with no client-visible change. The cursor row's
- * sort key is resolved with a tiny `findOne`, then the page is fetched with a
+ * sort key is resolved with a tiny lookup, then the page is fetched with a
  * `(time, id)` seek predicate.
+ *
+ * The lookup reads the sort key as TEXT, not as the entity's `Date`. Every
+ * column callers page on is `timestamptz(6)`: microseconds. The driver
+ * TRUNCATES a `Date` to milliseconds, so a cursor built from one named the
+ * millisecond that contains its row, not the row's instant, and a seek written
+ * against that point matched the wrong rows: paging down skipped every row of
+ * the cursor's instant that sorted after the page boundary (`t = :cursor` is
+ * false for `.123456` against `.123`), and paging up re-served the cursor's own
+ * millisecond for ever (`t > :cursor` is true for it). A `now()`-stamped column
+ * carries microseconds and a bulk import stamps a whole batch with one, so when
+ * a page boundary fell inside such a batch of Content (`created_at`), the rest of
+ * the batch was never served. The text is exact; see `keysetSeekExact` for the
+ * predicate.
  */
 
 /** Hard cap on page size — a client asking for `first: 100000` still gets one page. */
@@ -82,25 +97,28 @@ export async function keysetPaginate<E extends ObjectLiteral>(
   ).getCount();
 
   const cursorId = isBackward ? args.beforeId : args.afterId;
-  let cursor: { time: unknown; id: string } | null = null;
+  let cursor: { time: string; id: string } | null = null;
 
   if (cursorId) {
+    // Raw, and CAST to text: an entity read would hand the sort key back as a `Date`, which
+    // is milliseconds (see the header). The text is Postgres' own spelling, microseconds included.
     const cursorRow = await repo
       .createQueryBuilder(alias)
-      .select([`${alias}.id`, `${alias}.${timeProp}`])
+      .select(`${alias}.id`, 'cursor_id')
+      .addSelect(`CAST(${alias}.${timeProp} AS text)`, 'cursor_time')
       .where(`${alias}.id = :cursorId`, { cursorId })
-      .getOne();
+      .getRawOne<{ cursor_id: string; cursor_time: string }>();
 
     if (cursorRow) {
-      cursor = { time: (cursorRow as ObjectLiteral)[timeProp], id: (cursorRow as ObjectLiteral).id };
+      cursor = { time: cursorRow.cursor_time, id: cursorRow.cursor_id };
     }
   }
 
   // The query walks the composite (time, id) key. Forward pages read newest→oldest
-  // (DESC) with a `<` seek; backward pages read oldest→newest (ASC) with a `>` seek
-  // and are reversed back to DESC before returning.
+  // (DESC), seeking to rows that sort after the cursor; backward pages read
+  // oldest→newest (ASC), seeking to rows that sort before it, and are reversed
+  // back to DESC before returning.
   const direction = isBackward ? 'ASC' : 'DESC';
-  const seekOp = isBackward ? '>' : '<';
 
   const qb = scope(repo.createQueryBuilder(alias).where(`${alias}.${userIdProp} = :userId`, { userId }))
     .orderBy(`${alias}.${timeProp}`, direction)
@@ -108,10 +126,7 @@ export async function keysetPaginate<E extends ObjectLiteral>(
     .limit(limit + 1);
 
   if (cursor) {
-    qb.andWhere(
-      `(${alias}.${timeProp} ${seekOp} :cursorTime OR (${alias}.${timeProp} = :cursorTime AND ${alias}.id ${seekOp} :cursorRowId))`,
-      { cursorTime: cursor.time, cursorRowId: cursor.id },
-    );
+    qb.andWhere(...keysetSeekExact(`${alias}.${timeProp}`, `${alias}.id`, direction, cursor.time, cursor.id));
   } else if (cursorId) {
     // A cursor was supplied but no matching row exists — return an empty page
     // rather than silently falling back to the first page.

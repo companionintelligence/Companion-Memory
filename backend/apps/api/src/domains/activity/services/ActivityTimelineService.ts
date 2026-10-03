@@ -333,6 +333,26 @@ export class ActivityTimelineService {
     return rows.map((row) => ({ date: row.date, count: row.count }));
   }
 
+  /**
+   * Per-day counts of the events the explorer lists under these filters (the
+   * What / Who / Where / How dimensions, which only events carry).
+   *
+   * A day's number is the number of rows the list files under it, so an event
+   * counts when the list shows it: only a tombstoned one (`is_deleted`) is out.
+   * That is the test `CalendarEventService.applyEventFilters` applies for the
+   * list, its `totalCount` and the map pins, and the one
+   * `CalendarEventService.aggregateHourlyActivity` applies to the rollup the
+   * unfiltered heatmap reads. This query alone lacked it, so a deleted event
+   * counted on its day only while a filter was on.
+   *
+   * A cancelled, no-show, skipped or predicted event still counts, because the
+   * list still shows it. `EVENT_HAPPENED_SQL` answers a different question
+   * (where the user was) and would have this rail count fewer events than the
+   * list it sits beside. If those events should leave the heatmap, they leave
+   * the list and the rollup with it, as one change.
+   * `ActivityTimelineService.eventLiveness.integration.spec.ts` runs this query
+   * against the list's own reader.
+   */
   private async getFilteredEventDailyCounts(
     context: UserServiceContext,
     start: string,
@@ -344,6 +364,7 @@ export class ActivityTimelineService {
     let paramIndex = 5;
     const clauses: string[] = [
       'event.user_id = $1',
+      'event.is_deleted = false',
       `event.start_time >= ($2::date::timestamp AT TIME ZONE $4)`,
       `event.start_time < (($3::date + 1)::timestamp AT TIME ZONE $4)`,
     ];

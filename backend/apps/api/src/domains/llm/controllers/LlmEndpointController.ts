@@ -10,6 +10,16 @@ const updateSchema = z
   .object({
     backend: z.enum(['ollama', 'openai_compatible']),
     port: z.coerce.number().int().min(1).max(65535),
+    /** OpenAI-compatible only: where the server mounts its API (`/v1`; Lemonade `/api/v1`). Ignored on Ollama. */
+    basePath: z
+      .string()
+      .trim()
+      .max(200)
+      .regex(
+        /^\/?[A-Za-z0-9._~-]+(\/[A-Za-z0-9._~-]+)*\/?$|^\/?$/,
+        'basePath must be a plain URL path such as /v1 or /api/v1',
+      )
+      .optional(),
     apiKey: z.string().trim().min(1).max(4096).optional(),
     clearApiKey: z.boolean().optional(),
   })

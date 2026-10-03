@@ -33,10 +33,6 @@ export interface SessionMetadata {
   userAgent?: string;
 }
 
-export interface UpdateSignupCodeDto {
-  used?: boolean;
-}
-
 export interface RotationResult {
   /** New session token, or `null` on a grace-period match (keep the cookie). */
   sessionToken: string | null;

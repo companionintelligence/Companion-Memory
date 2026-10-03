@@ -52,8 +52,13 @@ const mockAuthService = {
 const mockUserService = {
   // Default: no account for the address yet — the ordinary first-time case.
   findByEmail: jest.fn().mockResolvedValue(null),
+  findById: jest.fn().mockResolvedValue(null),
   create: jest.fn().mockResolvedValue(mockUser),
+  createFirstAccount: jest.fn().mockResolvedValue(null),
 };
+
+/** Stands in for the transaction `UserService.createFirstAccount` runs its `alongside` work in. */
+const CLAIM_TRANSACTION = { transaction: 'first-account' };
 const mockFederatedIdentityService = {
   findUserId: jest.fn().mockResolvedValue(null),
   listForUser: jest.fn().mockResolvedValue([]),
@@ -102,7 +107,7 @@ const mockLogger = {
     { provide: OidcNativeCodeService, useValue: mockOidcNativeCodeService },
     // Confirm-account never reaches the invite path; present so Nest can construct
     // the controller.
-    { provide: SignupCodeService, useValue: { findOne: jest.fn(), update: jest.fn() } },
+    { provide: SignupCodeService, useValue: { findOne: jest.fn(), consume: jest.fn() } },
     { provide: FederatedIdentityService, useValue: mockFederatedIdentityService },
     { provide: HubForwardAuthBridgeService, useValue: { verifyUsername: jest.fn().mockReturnValue(null) } },
     { provide: LoggerService, useValue: mockLogger },
@@ -344,10 +349,16 @@ describe('OidcController — confirm-account CSRF', () => {
         expect.anything(),
         expect.objectContaining({ email: 'new@example.com', name: 'Test User' }),
       );
+      // Nothing was waived for being first, so the appliance having an owner by
+      // now is no reason to refuse.
+      expect(mockUserService.createFirstAccount).not.toHaveBeenCalled();
       // Bound at creation, so the bearer path resolves this account by
-      // (iss, sub) from its first API call — no email matching later.
+      // (iss, sub) from its first API call — no email matching later. Written
+      // after the account rather than in a claim transaction (`undefined`):
+      // an ordinary account has no first-account decision to commit with.
       expect(mockFederatedIdentityService.bind).toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'user-1', issuer: 'https://hub.test', subject: 'portal-sub-1' }),
+        undefined,
       );
       expect(mockAuthService.issueSessionToken).toHaveBeenCalledWith('user-1', expect.anything());
       expect(res.headers.location).not.toMatch(/^\/login\?error=/);
@@ -381,6 +392,94 @@ describe('OidcController — confirm-account CSRF', () => {
       const res = await validPost();
 
       expect(mockUserService.create).not.toHaveBeenCalled();
+      expect(mockAuthService.issueSessionToken).toHaveBeenCalledWith('user-1', expect.anything());
+      expect(res.headers.location).not.toMatch(/^\/login\?error=/);
+    });
+  });
+
+  /**
+   * The callback waived the signup code only because the appliance had no accounts — and wrote that
+   * into the intent, because the confirm step runs up to the intent's lifetime later. By then
+   * someone else may own the appliance. Creating the account on the callback's word is how a
+   * stranger became a member without an invitation.
+   */
+  describe('POST confirm-account — an intent that was admitted only as the first account', () => {
+    const intent = {
+      email: 'new@example.com',
+      name: 'Test User',
+      issuer: 'https://hub.test',
+      subject: 'portal-sub-1',
+      firstAccountOnly: true,
+    };
+
+    beforeEach(() => {
+      mockAuthService.verifySignupIntentToken.mockReturnValue(intent);
+      mockCsrfService.validateToken.mockImplementation(() => undefined);
+      mockAuthService.resolveCsrfScope.mockReturnValue(null);
+      mockUserService.findByEmail.mockResolvedValue(null);
+      mockUserService.findById.mockResolvedValue(null);
+      mockUserService.createFirstAccount.mockResolvedValue(null);
+      mockFederatedIdentityService.findUserId.mockResolvedValue(null);
+    });
+
+    const validPost = () =>
+      request(app.getHttpServer())
+        .post(CONFIRM_PATH)
+        .set('Cookie', [`${SIGNUP_INTENT_COOKIE}=intent`, `${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .send({ csrf: MOCK_CSRF_TOKEN });
+
+    it('creates it only as the first account, bound to the identity in the same transaction', async () => {
+      mockUserService.createFirstAccount.mockImplementation(
+        async (
+          _context: unknown,
+          _data: unknown,
+          alongside?: (m: unknown, u: unknown) => Promise<unknown>,
+        ) => {
+          await alongside?.(CLAIM_TRANSACTION, { ...mockUser, role: 'admin' });
+
+          return mockUser;
+        },
+      );
+
+      const res = await validPost();
+
+      expect(mockUserService.createFirstAccount).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ email: 'new@example.com', passwordChosenByUser: false }),
+        expect.any(Function),
+      );
+      expect(mockUserService.create).not.toHaveBeenCalled();
+      expect(mockFederatedIdentityService.bind).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', issuer: 'https://hub.test', subject: 'portal-sub-1' }),
+        CLAIM_TRANSACTION,
+      );
+      expect(mockAuthService.issueSessionToken).toHaveBeenCalledWith('user-1', expect.anything());
+      expect(res.headers.location).not.toMatch(/^\/login\?error=/);
+    });
+
+    it('SECURITY: refuses once somebody else has claimed the appliance, as the code gate would', async () => {
+      const res = await validPost().expect(303);
+
+      expect(res.headers.location).toBe('/login?error=signup_code_required');
+      expect(mockUserService.create).not.toHaveBeenCalled();
+      expect(mockAuthService.issueSessionToken).not.toHaveBeenCalled();
+      // The intent is spent: it cannot be replayed once the appliance is someone else's.
+      const cleared = parseCookies(res);
+      expect(cleared[SIGNUP_INTENT_COOKIE]?.value ?? '').toBe('');
+    });
+
+    it('signs in the account this same identity claimed the appliance with from another tab', async () => {
+      // Both tabs got past the "already exists?" check; one won. Its binding committed with the
+      // account, so the other finds it by (issuer, subject) — the same person, not a stranger.
+      mockFederatedIdentityService.findUserId.mockResolvedValue('user-1');
+      mockUserService.findById.mockResolvedValue(mockUser);
+
+      const res = await validPost();
+
+      expect(mockFederatedIdentityService.findUserId).toHaveBeenCalledWith(
+        'https://hub.test',
+        'portal-sub-1',
+      );
       expect(mockAuthService.issueSessionToken).toHaveBeenCalledWith('user-1', expect.anything());
       expect(res.headers.location).not.toMatch(/^\/login\?error=/);
     });

@@ -96,7 +96,10 @@ export class YouTubeFileImporter implements FileImporter {
         }
 
         if (names.some((n) => n === 'history')) {
-          const histPath = path.join(root, names.find((n) => n === 'history')!);
+          const histPath = path.join(
+            root,
+            names.find((n) => n === 'history')!,
+          );
           const histNames = (await readdir(histPath)).map((f) => f.toLowerCase());
           if (histNames.includes('watch-history.json') || histNames.includes('watch-history.html')) {
             return { confidence: 0.9 };

@@ -9,13 +9,7 @@
 
 /** Lifecycle states of an Ask. See ARCHITECTURE.md §6 (ask lifecycle). */
 export type AskStatus =
-  | 'sent'
-  | 'delivered'
-  | 'under_review'
-  | 'answering'
-  | 'answered'
-  | 'declined'
-  | 'expired';
+  'sent' | 'delivered' | 'under_review' | 'answering' | 'answered' | 'declined' | 'expired';
 
 /** Terminal outcome recorded in the per-ask audit log. */
 export type AskAuditOutcome = 'answered' | 'auto_answered' | 'declined' | 'expired';

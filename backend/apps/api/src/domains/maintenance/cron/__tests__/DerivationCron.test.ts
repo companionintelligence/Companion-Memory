@@ -110,8 +110,7 @@ describe('derivation-run queue', () => {
 describe('DerivationCron schedule', () => {
   it('fires off second 0, at 04:40 UTC nightly', () => {
     const options = Reflect.getMetadata(SCHEDULE_CRON_OPTIONS, DerivationCron.prototype.deriveNightly) as
-      | { cronTime?: string }
-      | undefined;
+      { cronTime?: string } | undefined;
 
     // Registered metadata, not the source constant: a rewrite to
     // `CronExpression.EVERY_DAY_AT_...` (five fields, second 0) fails here.

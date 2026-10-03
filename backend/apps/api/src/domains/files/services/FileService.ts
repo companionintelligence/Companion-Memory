@@ -20,6 +20,7 @@ import { v4 as uuidv4, v7 as uuidv7 } from 'uuid';
 import { isUniqueViolation } from '@ci/common/constants';
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { keysetSeek } from '@ci/common/persistence';
 import { serves } from '@ci/common/roles';
 import config from '@ci/configuration';
 import { EventService } from '@ci/domains/events';
@@ -298,6 +299,22 @@ export class FileService implements OnModuleInit {
    * the planner was free to change between pages, repeating or dropping rows
    * at page seams. An unknown `afterId` reads as "from the start", matching
    * what the in-memory paginator did with a stale cursor.
+   *
+   * The anchor's `created_at` is read as TEXT, never through the entity. The
+   * column is `timestamptz(6)`: microseconds, `DEFAULT now()`, and a bulk
+   * upload stamps a whole batch with one. The driver hands an entity's
+   * `Date` back at MILLISECONDS (`.123456` reads as `.123`), so a seek bound
+   * to it sorted the anchor BEFORE ITSELF: `(created_at, id) < (.123, :id)`
+   * is false for every file of the anchor's instant, and the rest of the
+   * batch at a page boundary was never served, while `totalCount` counted
+   * it. The text is Postgres' own spelling with the microseconds intact, and
+   * bound back it is parsed as the column's own type, so the anchor is the
+   * file's exact `(created_at, id)`.
+   *
+   * The seek stays a row-value comparison, not the bounded OR of
+   * `keysetSeekExact`: there is no index on `created_at` here today, so both
+   * plan as a scan, a filter and a top-N sort, and if one is added this form
+   * is the exact index range (see `ItemService.findPage`, which has one).
    */
   async findPage(
     context: ServiceContext,
@@ -312,25 +329,37 @@ export class FileService implements OnModuleInit {
 
     const totalCount = await this.fileRepository.count({ where: scope });
 
-    const query = this.fileRepository
-      .createQueryBuilder('file')
-      .where('file.variant = :variant', { variant: scope.variant })
+    // The originals this call may see, for the page and for the anchor alike: a file the page could
+    // not return (another user's, a variant, a soft-deleted one) is not an anchor either.
+    const visible = () => {
+      const originals = this.fileRepository
+        .createQueryBuilder('file')
+        .where('file.variant = :variant', { variant: scope.variant });
+
+      if (scope.userId != null) {
+        originals.andWhere('file.user_id = :userId', { userId: scope.userId });
+      }
+
+      return originals;
+    };
+
+    const query = visible()
       .orderBy('file.created_at', 'DESC')
       .addOrderBy('file.id', 'DESC')
       // One extra row answers hasNextPage without a second count.
       .take(page.limit + 1);
 
-    if (scope.userId != null) {
-      query.andWhere('file.user_id = :userId', { userId: scope.userId });
-    }
-
     if (page.afterId) {
-      const anchor = await this.fileRepository.findOne({ where: { ...scope, id: page.afterId } });
+      const anchor = await visible()
+        .select('file.id', 'anchor_id')
+        .addSelect('CAST(file.created_at AS text)', 'anchor_created_at')
+        .andWhere('file.id = :anchorId', { anchorId: page.afterId })
+        .getRawOne<{ anchor_id: string; anchor_created_at: string | null }>();
 
-      if (anchor?.createdAt != null) {
+      if (anchor?.anchor_created_at != null) {
         query.andWhere('(file.created_at, file.id) < (:anchorCreatedAt, :anchorId)', {
-          anchorCreatedAt: anchor.createdAt,
-          anchorId: anchor.id,
+          anchorCreatedAt: anchor.anchor_created_at,
+          anchorId: anchor.anchor_id,
         });
       }
     }
@@ -409,16 +438,17 @@ export class FileService implements OnModuleInit {
       query = query.andWhere('file.updated_at <= :endTime', { endTime: options.endTime });
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at DESC, id DESC).
+    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at, id), in `order`.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(file.updated_at < :afterTime OR (file.updated_at = :afterTime AND file.id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('file.updated_at', 'file.id', order, options.afterTime, options.afterId),
       );
     }
 
-    // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query.orderBy('file.updated_at', options.order ?? 'DESC').addOrderBy('file.id', 'DESC');
+    // Deterministic tiebreak so same-timestamp rows page consistently: the id runs the way the time does.
+    query = query.orderBy('file.updated_at', order).addOrderBy('file.id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);

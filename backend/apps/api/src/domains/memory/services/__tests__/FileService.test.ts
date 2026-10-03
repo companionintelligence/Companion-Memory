@@ -69,8 +69,19 @@ describe('FileService.handleFileUploaded', () => {
     repo = repoMock();
     fileStorageService = { findById: jest.fn() };
     logger = makeLogger();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    service = new FileService(fileStorageService as any, repo as any, eventRepoMock() as any, logger as any);
+    service = new FileService(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      fileStorageService as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      repo as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      eventRepoMock() as any,
+      // Nothing here removes a file, so nothing is announced.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      {} as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      logger as any,
+    );
   });
 
   it('skips entity creation when the ci.files row is not found', async () => {
@@ -189,6 +200,8 @@ describe('file.uploaded queue bindings', () => {
       fileStorageService as never,
       repo as never,
       eventRepoMock() as never,
+      // Nothing here removes a file, so nothing is announced.
+      {} as never,
       logger as unknown as LoggerService,
     );
 

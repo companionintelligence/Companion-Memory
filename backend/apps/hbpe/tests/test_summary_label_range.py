@@ -14,6 +14,7 @@ if str(SRC) not in sys.path:
 from ci.hbpe import data_client as dc  # noqa: E402
 from ci.hbpe import database as db  # noqa: E402
 from ci.hbpe import functions  # noqa: E402
+from ci.hbpe.event_status import LIVE_EVENT_SQL  # noqa: E402
 from ci.hbpe.inference import qwen as qwen_mod  # noqa: E402
 from ci.hbpe.pipeline import bootstrap as bs  # noqa: E402
 from ci.hbpe.pipeline import nightly_runner as nr  # noqa: E402
@@ -169,6 +170,40 @@ def test_token_source_days_exclude_planning_blocks_like_both_reads_do(monkeypatc
         "FROM ci.events e WHERE e.user_id = %s::uuid AND e.is_deleted = FALSE "
         "AND e.event_type IS DISTINCT FROM 'planned_block'" in bounds_sql
     )
+
+
+def test_token_source_days_exclude_events_that_did_not_happen_like_both_reads_do(
+    monkeypatch,
+):
+    """
+    The status half of the same rule. Both reads the day query predicts leave
+    out events that did not happen (event_status.LIVE_EVENT_SQL: cancelled,
+    no_show, skipped), so the event branch has to as well. A day holding only a
+    cancelled meeting yields no event tokens. A day whose last live event is
+    cancelled after it was serialized has to drop out of ``event_days``, or the
+    purge tier never sees it and the meeting's tokens stay.
+
+    Asserted as the whole event branch, like the planned-block test above.
+    """
+    calls: list[tuple] = []
+    monkeypatch.setattr(db, "get_conn", lambda: _ScalarConn([], calls))
+    bs.token_source_days(USER, today=dt.date(2026, 8, 30))
+    bs.event_date_bounds(USER)
+
+    day_sql, bounds_sql = calls[0][0], calls[1][0]
+    event_branch = (
+        "FROM ci.events e WHERE e.user_id = %s::uuid AND e.is_deleted = FALSE "
+        "AND e.event_type IS DISTINCT FROM 'planned_block' "
+        f"AND {LIVE_EVENT_SQL} AND e.start_time >= '2010-01-01'::timestamptz"
+    )
+    assert (
+        f"event_days AS ( SELECT DISTINCT e.start_time::date AS source_date {event_branch}"
+        in day_sql
+    )
+    assert event_branch in bounds_sql
+    # One read of ci.events in each query, so one copy of the predicate.
+    assert day_sql.count(LIVE_EVENT_SQL) == 1
+    assert bounds_sql.count(LIVE_EVENT_SQL) == 1
 
 
 def test_token_source_days_reserve_a_share_of_the_budget_for_event_days(monkeypatch):

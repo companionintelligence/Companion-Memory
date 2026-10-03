@@ -3,12 +3,7 @@ import { Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateColumn, Poin
 export type ObservationSourceKind = 'photo' | 'video_frame' | 'live_camera' | 'screenshot' | 'manual';
 export type ObservationLabelSource = 'yolo' | 'ollama_vision' | 'clip' | 'user' | 'import';
 export type ObservationResolutionMethod =
-  | 'identifier'
-  | 'embedding'
-  | 'place_prior'
-  | 'label'
-  | 'user'
-  | 'none';
+  'identifier' | 'embedding' | 'place_prior' | 'label' | 'user' | 'none';
 
 /** Normalized bounding box in 0..1 of the source image, origin top-left. */
 export interface ObservationBoundingBox {

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
-import { DataSource } from 'typeorm';
+import { DataSource, type EntityManager } from 'typeorm';
+
+import { DEAD_EVENT_STATUSES, LIVE_EVENT_SQL } from '@ci/domains/memory';
 
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
@@ -16,6 +18,10 @@ import {
   ESTIMATED_CONFIDENCE,
   EstimateLocationStage,
   estimateLocationStageVersion,
+  eventHappenedSql,
+  liveEventStatusSql,
+  RESERVATION_CANCELED_KEY,
+  withdrawEstimates,
 } from '../enrich/EstimateLocationStage';
 import { FORWARD_GEOCODE_PROVIDER_GENERATION } from '../enrich/GeocodeStage';
 
@@ -72,6 +78,8 @@ interface SourceRow {
   source_system: string;
   is_deleted: boolean | null;
   is_predicted: boolean | null;
+  status: string | null;
+  metadata: Record<string, unknown>;
   /** The stage's OUTPUT columns. Nothing in selection may ever read these. */
   has_coordinates: boolean;
   location_source: string | null;
@@ -84,6 +92,8 @@ function eventRow(n: number, overrides: Partial<SourceRow> = {}): SourceRow {
     source_system: 'calendar',
     is_deleted: false,
     is_predicted: false,
+    status: 'confirmed',
+    metadata: {},
     has_coordinates: false,
     location_source: null,
     ...overrides,
@@ -112,8 +122,10 @@ interface LoadedRow {
   id: string;
   has_coordinates: boolean;
   location_source: string | null;
+  has_location_name: boolean;
   is_deleted: boolean | null;
   is_predicted: boolean | null;
+  did_not_happen: boolean;
 }
 
 function loadedRow(n: number, overrides: Partial<LoadedRow> = {}): LoadedRow {
@@ -121,8 +133,10 @@ function loadedRow(n: number, overrides: Partial<LoadedRow> = {}): LoadedRow {
     id: eventId(n),
     has_coordinates: false,
     location_source: null,
+    has_location_name: false,
     is_deleted: false,
     is_predicted: false,
+    did_not_happen: false,
     ...overrides,
   };
 }
@@ -205,15 +219,19 @@ function ledgerKey(entityType: string, entityId: string, stage: string): string 
 /**
  * The stage's applicability predicate, mirrored in TypeScript.
  *
- * Kept faithful to `ESTIMATE_LOCATION_SOURCE.predicate`: a live, non-predicted
- * physical-presence event. Note what it does NOT consult —
- * `location_coordinates` or `metadata->>'location_source'`, the two columns the
- * service's predicate is built out of.
+ * Kept faithful to `ESTIMATE_LOCATION_SOURCE.predicate`: a physical-presence
+ * event that happened — not deleted, not predicted, not called off. Note what
+ * it does NOT consult — `location_coordinates` or
+ * `metadata->>'location_source'`, the two columns the service's predicate is
+ * built out of. Postgres evaluates the real one in
+ * `EstimateLocationDidNotHappen.integration.spec.ts`.
  */
 function isApplicable(row: SourceRow): boolean {
   return (
     (row.is_deleted ?? false) === false &&
     (row.is_predicted ?? false) === false &&
+    !(DEAD_EVENT_STATUSES as readonly string[]).includes(row.status ?? 'confirmed') &&
+    String(row.metadata[RESERVATION_CANCELED_KEY] ?? '') !== 'true' &&
     ESTIMATE_SOURCE_SYSTEMS.includes(row.source_system)
   );
 }
@@ -383,6 +401,26 @@ describe('EstimateLocationStage — candidate selection asks the LEDGER, not loc
     expect(ids).toEqual([eventId(1), eventId(6)]);
   });
 
+  it('excludes events that did not happen, and keeps the near misses (v3)', async () => {
+    const { stage } = makeStage();
+    const reservation = { Kind: 'reservation', Source: 'Google' };
+    const h = makeLedgerHarness([
+      eventRow(1, { status: 'cancelled' }),
+      eventRow(2, { status: 'no_show' }),
+      eventRow(3, { status: 'skipped' }),
+      eventRow(4, { source_system: 'google_purchases', metadata: { ...reservation, Canceled: true } }),
+      // Still live on the calendar, so still estimable.
+      eventRow(5, { status: 'tentative' }),
+      eventRow(6, { status: 'rescheduled' }),
+      eventRow(7, { is_predicted: null }),
+      eventRow(8, { source_system: 'google_purchases', metadata: { ...reservation, Canceled: false } }),
+    ]);
+
+    const ids = await h.service.selectStale(stage as never, USER, null, 10);
+
+    expect(ids).toEqual([eventId(5), eventId(6), eventId(7), eventId(8)]);
+  });
+
   it('stops re-selecting a row with no donor, and re-opens it on a bump', async () => {
     // The service has no way to express this: a candidate with no donor is simply
     // not filled, so it is counted again on every single run forever.
@@ -483,6 +521,177 @@ describe('EstimateLocationStage — the version derives from the geocoder its do
     expect(estimateLocationStageVersion({ [ENRICH_ESTIMATE_LOCATION_STAGE_ID]: () => 99 })).toBe(
       ESTIMATE_LOCATION_VERSION,
     );
+  });
+});
+
+describe('EstimateLocationStage — an event that did not happen neither lends nor receives (v3)', () => {
+  // Proven against Postgres, case by case, in
+  // EstimateLocationDidNotHappen.integration.spec.ts. These pin the text, which
+  // is what catches an equivalent mutant: dropping a COALESCE from a column
+  // that is NOT NULL today changes nothing Postgres can show.
+  const ctx = { userId: USER };
+
+  /**
+   * The rule for a donor aliased `n`, as both estimators must interpolate it.
+   * `LocationEstimateService.spec.ts` pins its copy to this same text.
+   */
+  const HAPPENED_N =
+    'COALESCE(n.is_deleted, false) = false ' +
+    'AND COALESCE(n.is_predicted, false) = false ' +
+    `AND ${LIVE_EVENT_SQL.replace('event.status', 'n.status')} ` +
+    "AND COALESCE(n.metadata->>'Canceled', '') <> 'true'";
+
+  it("reads status through the calendar's own LIVE_EVENT_SQL, re-aliased and nothing else", () => {
+    expect(liveEventStatusSql('event')).toBe(LIVE_EVENT_SQL);
+  });
+
+  it('states the rule in the text the legacy service states it in', () => {
+    expect(eventHappenedSql('n')).toBe(HAPPENED_N);
+    expect(RESERVATION_CANCELED_KEY).toBe('Canceled');
+  });
+
+  it('applies the one rule to the sweep, the donor branch, the write and the load', async () => {
+    const h = makeStage([loadedRow(1)]);
+
+    await h.stage.run(ctx, [eventId(1)]);
+
+    expect(h.stage.source.predicate).toContain(eventHappenedSql('s'));
+    expect(h.update()!.sql).toContain(`AND ${eventHappenedSql('n')} AND`);
+    // The write re-checks its own target, so a slice already running cannot put
+    // back an estimate the writer of a cancellation has just taken back.
+    expect(h.update()!.sql).toContain(`WHERE tgt.event_id = c.event_id AND ${eventHappenedSql('tgt')}`);
+    expect(h.statements[0].sql).toContain(`NOT (${eventHappenedSql('e')}) AS did_not_happen`);
+  });
+
+  it('SKIPS a row called off between the sweep and the slice, and writes nothing', async () => {
+    const h = makeStage([loadedRow(1, { did_not_happen: true })]);
+
+    const results = await h.stage.run(ctx, [eventId(1)]);
+
+    expect(results.get(eventId(1))).toEqual({ outcome: 'skipped', reason: 'event_did_not_happen' });
+    expect(h.update()).toBeUndefined();
+  });
+
+  it('keeps the more specific reason for a deleted or predicted row', async () => {
+    // `did_not_happen` covers both, since it is NOT eventHappenedSql.
+    const h = makeStage([
+      loadedRow(1, { is_deleted: true, did_not_happen: true }),
+      loadedRow(2, { is_predicted: true, did_not_happen: true }),
+    ]);
+
+    const results = await h.stage.run(ctx, [eventId(1), eventId(2)]);
+
+    expect(results.get(eventId(1))).toMatchObject({ outcome: 'skipped', reason: 'event_deleted' });
+    expect(results.get(eventId(2))).toMatchObject({ outcome: 'skipped', reason: 'predicted_event' });
+  });
+
+  it('refuses to interpolate an alias that is not a plain token', () => {
+    expect(() => eventHappenedSql('n; DROP TABLE ci.events')).toThrow(/plain/);
+    expect(() => liveEventStatusSql('n.status')).toThrow(/plain/);
+  });
+
+  it('is rule generation 3 or later, so the sweep re-offers every row decided before the rule', () => {
+    // Generations 1 and 2 took any undeleted located event as a donor.
+    expect(ESTIMATE_RULE_GENERATION).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('withdrawEstimates — an estimate on an event called off is taken back by the writer of its status', () => {
+  // Proven against Postgres, through the real service, ledger and stage, in
+  // EventWritesSettlePipeline.integration.spec.ts. These pin the text, which
+  // is what catches an equivalent mutant: a guard dropped from a clause that
+  // only an inconsistent row could show.
+  const ids = [eventId(1), eventId(2)];
+
+  function run(rows: Array<{ event_id: string }> = [{ event_id: eventId(1) }]) {
+    const query = jest.fn(async (..._args: unknown[]) => rows);
+
+    return { query, done: withdrawEstimates({ query } as unknown as Pick<EntityManager, 'query'>, ids) };
+  }
+
+  /** The statement it ran, on one line: these pin its clauses, not how they are laid out. */
+  const statement = (query: jest.Mock): string =>
+    (query.mock.calls[0] as unknown as [string])[0].replace(/\s+/g, ' ').trim();
+
+  it("is one statement on the caller's manager, and counts the events it took an estimate from", async () => {
+    const { query, done } = run([{ event_id: eventId(1) }, { event_id: eventId(2) }]);
+
+    await expect(done).resolves.toBe(2);
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0]).toEqual([expect.any(String), [ids, ESTIMATED_CONFIDENCE, 'estimated']]);
+  });
+
+  it('is wrapped in a CTE, so the rows come back as rows and not as [rows, rowCount]', async () => {
+    const { query, done } = run();
+    await done;
+
+    const sql = statement(query);
+    expect(sql).toMatch(/^WITH withdrawn AS \( UPDATE ci\.events e /);
+    expect(sql).toMatch(/ SELECT event_id FROM withdrawn$/);
+  });
+
+  it('acts only on an event whose stored status says it did not happen', async () => {
+    const { query, done } = run();
+    await done;
+
+    const sql = statement(query);
+    // The status clause alone: deletion and prediction are not asked about.
+    expect(sql).toContain(`AND NOT (${liveEventStatusSql('e')})`);
+    expect(sql).not.toContain('is_deleted');
+    expect(sql).not.toContain('is_predicted');
+  });
+
+  it('acts only on a coordinate the estimator owns, that nothing hangs on', async () => {
+    const { query, done } = run();
+    await done;
+
+    const sql = statement(query);
+    expect(sql).toContain("AND e.metadata->>'location_source' = $3::text");
+    expect(sql).toContain('AND e.location_coordinates IS NOT NULL');
+    // The test the write applies to its own target, and the geocoder to its candidates.
+    expect(sql).toContain("AND (e.location_name IS NULL OR btrim(e.location_name) = '')");
+  });
+
+  it('is the inverse of what the estimator writes, as far as the row still proves it', async () => {
+    const { query, done } = run();
+    await done;
+
+    const sql = statement(query);
+    expect(sql).toContain('location_coordinates = NULL');
+    expect(sql).toContain("metadata = COALESCE(e.metadata, '{}'::jsonb) - 'location_source'");
+    // The inference and the confidence go back only while they are still the estimate's.
+    expect(sql).toContain(
+      "is_inferred = CASE WHEN e.inference_sources->>'method' = 'temporal_nn' THEN false ELSE e.is_inferred END",
+    );
+    expect(sql).toContain(
+      "inference_sources = CASE WHEN e.inference_sources->>'method' = 'temporal_nn' THEN '{}'::jsonb ELSE e.inference_sources END",
+    );
+    expect(sql).toContain(
+      'confidence_score = CASE WHEN e.confidence_score = $2::float8 THEN 1.0 ELSE e.confidence_score END',
+    );
+    expect(sql).toContain('updated_at = now()');
+  });
+
+  it("spells the estimator's method the way the estimator writes it", async () => {
+    const h = makeStage([loadedRow(1)]);
+    await h.stage.run({ userId: USER }, [eventId(1)]);
+    const { query, done } = run();
+    await done;
+
+    const withdrawal = statement(query);
+    expect(h.update()!.sql).toContain("'method', 'temporal_nn'");
+    expect(withdrawal).toContain("e.inference_sources->>'method' = 'temporal_nn'");
+    // And the marker and confidence it keys on are the ones the write is given.
+    expect((h.update()!.params as unknown[]).slice(3, 5)).toEqual([ESTIMATED_CONFIDENCE, 'estimated']);
+  });
+
+  it('touches nothing for no events', async () => {
+    const query = jest.fn();
+
+    await expect(withdrawEstimates({ query } as unknown as Pick<EntityManager, 'query'>, [])).resolves.toBe(
+      0,
+    );
+    expect(query).not.toHaveBeenCalled();
   });
 });
 
@@ -782,6 +991,93 @@ describe('EstimateLocationStage.run — it never overwrites a location the row a
     });
 
     expect((await h.stage.run(ctx, [eventId(1)])).get(eventId(1))?.outcome).toBe('done');
+  });
+});
+
+describe("EstimateLocationStage.run — an event that names its own location is the geocoder's (v2)", () => {
+  const ctx = { userId: USER };
+
+  it("SKIPS a named row with no coordinate instead of lending it a neighbour's", async () => {
+    // The v1 defect: a calendar event "Bangkok BKK" with no geocode yet was
+    // filled from the nearest GPS fix — the user's home — and promote.place then
+    // linked it to the home Location.
+    const h = makeStage([loadedRow(1, { has_location_name: true })]);
+
+    const results = await h.stage.run(ctx, [eventId(1)]);
+
+    expect(results.get(eventId(1))).toEqual({
+      outcome: 'skipped',
+      reason: 'has_location_name',
+      detail: { locationSource: null },
+    });
+    expect(h.update()).toBeUndefined();
+  });
+
+  it('SKIPS a named row that still carries a v1 estimate, and leaves the estimate to the migration', async () => {
+    // Re-estimating it would re-pin it; withdrawing it here would strand
+    // promote.place's link on a row that stage can no longer select. The
+    // detail says which of these rows still carry one.
+    const h = makeStage([
+      loadedRow(1, { has_location_name: true, has_coordinates: true, location_source: 'estimated' }),
+    ]);
+
+    const results = await h.stage.run(ctx, [eventId(1)]);
+
+    expect(results.get(eventId(1))).toMatchObject({
+      outcome: 'skipped',
+      reason: 'has_location_name',
+      detail: { locationSource: 'estimated' },
+    });
+    expect(h.update()).toBeUndefined();
+  });
+
+  it('keeps `has_own_location` as the reason when a named row also has a real coordinate', async () => {
+    const h = makeStage([
+      loadedRow(1, { has_location_name: true, has_coordinates: true, location_source: 'geocoded' }),
+    ]);
+
+    expect((await h.stage.run(ctx, [eventId(1)])).get(eventId(1))).toMatchObject({
+      outcome: 'skipped',
+      reason: 'has_own_location',
+    });
+  });
+
+  it('estimates only the unnamed rows of a mixed slice', async () => {
+    const h = makeStage([loadedRow(1), loadedRow(2, { has_location_name: true }), loadedRow(3)], {
+      filled: [filledRow(1), filledRow(3)],
+    });
+
+    const results = await h.stage.run(ctx, [eventId(1), eventId(2), eventId(3)]);
+
+    expect(results.get(eventId(1))?.outcome).toBe('done');
+    expect(results.get(eventId(2))?.reason).toBe('has_location_name');
+    expect(results.get(eventId(3))?.outcome).toBe('done');
+    // The named row never reaches the write.
+    expect((h.update()!.params as [string[]])[0]).toEqual([eventId(1), eventId(3)]);
+  });
+
+  it("tests the name with GEOCODE_SOURCE's own expression, in the load and again in the write", async () => {
+    const h = makeStage([loadedRow(1)]);
+
+    await h.stage.run(ctx, [eventId(1)]);
+
+    // The load decides; the write re-checks, so a name that lands between the
+    // two still wins — the same shape as the is_predicted guard.
+    expect(h.statements[0].sql).toMatch(
+      /\(e\.location_name IS NOT NULL AND btrim\(e\.location_name\) <> ''\) AS has_location_name/i,
+    );
+    expect(h.update()!.sql).toMatch(
+      /AND \(tgt\.location_name IS NULL OR btrim\(tgt\.location_name\) = ''\)/i,
+    );
+  });
+
+  it('is decided per row, not by the sweep — the predicate still offers named rows', async () => {
+    // A recorded skip is countable and a generation bump re-opens it; a
+    // filtered-out row is neither. eventLocationProducers.spec.ts refuses a
+    // `location_name IS NULL` test in any ci.events predicate for that reason.
+    const { stage } = makeStage();
+
+    expect(stage.source.predicate).not.toMatch(/location_name/i);
   });
 });
 

@@ -4,7 +4,7 @@ import { apiKeyHeaders, buildApiUrl } from '@ci/common';
 import { Button, Card, Textarea, Spinner } from '@ci/shadcn';
 import { Send } from '@ci/shadcn/icons';
 
-import { useAuth } from '@/hooks';
+import { useSessionAuth } from '@/hooks';
 
 interface Question {
   id: string;
@@ -19,7 +19,9 @@ interface Props {
 }
 
 export function AnswerQuestionPrompt({ onAnswerSubmitted }: Props) {
-  const [{ authToken }] = useAuth();
+  // `ready`, not `authToken`: the token is the web JWT, which the native shell never has — its
+  // credential is a keystore API key (`apiKeyHeaders`). Gating on the token left the card spinning.
+  const { ready, headers: sessionHeaders } = useSessionAuth();
   const [question, setQuestion] = useState<Question | null>(null);
   const [loading, setLoading] = useState(false);
   const [fetchingQuestion, setFetchingQuestion] = useState(true);
@@ -29,7 +31,7 @@ export function AnswerQuestionPrompt({ onAnswerSubmitted }: Props) {
   const formRef = useRef<HTMLFormElement>(null);
 
   const fetchUnansweredQuestion = useCallback(async () => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
@@ -40,7 +42,7 @@ export function AnswerQuestionPrompt({ onAnswerSubmitted }: Props) {
       const response = await fetch(buildApiUrl('/api/questions/unanswered'), {
         headers: {
           ...apiKeyHeaders(),
-          Authorization: `Bearer ${authToken}`,
+          ...sessionHeaders,
           'Content-Type': 'application/json',
         },
       });
@@ -68,17 +70,17 @@ export function AnswerQuestionPrompt({ onAnswerSubmitted }: Props) {
     } finally {
       setFetchingQuestion(false);
     }
-  }, [authToken]);
+  }, [ready, sessionHeaders]);
 
   useEffect(() => {
     fetchUnansweredQuestion();
-  }, [authToken]);
+  }, [ready, sessionHeaders]);
 
   const handleSubmit = useCallback(
     async (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
 
-      if (!question || !authToken) {
+      if (!question || !ready) {
         return;
       }
 
@@ -106,7 +108,7 @@ export function AnswerQuestionPrompt({ onAnswerSubmitted }: Props) {
           method: 'POST',
           headers: {
             ...apiKeyHeaders(),
-            Authorization: `Bearer ${authToken}`,
+            ...sessionHeaders,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
@@ -135,7 +137,7 @@ export function AnswerQuestionPrompt({ onAnswerSubmitted }: Props) {
         setLoading(false);
       }
     },
-    [question, authToken, onAnswerSubmitted, fetchUnansweredQuestion],
+    [question, ready, sessionHeaders, onAnswerSubmitted, fetchUnansweredQuestion],
   );
 
   /**
@@ -149,7 +151,7 @@ export function AnswerQuestionPrompt({ onAnswerSubmitted }: Props) {
    * one (or nothing, if the queue only had this one question).
    */
   const handleDismiss = useCallback(() => {
-    if (!authToken || !question?.presentationId) {
+    if (!ready || !question?.presentationId) {
       setDismissed(true);
 
       return;
@@ -159,14 +161,14 @@ export function AnswerQuestionPrompt({ onAnswerSubmitted }: Props) {
       method: 'POST',
       headers: {
         ...apiKeyHeaders(),
-        Authorization: `Bearer ${authToken}`,
+        ...sessionHeaders,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ presentationId: question.presentationId }),
     })
       .catch(() => undefined)
       .then(() => fetchUnansweredQuestion());
-  }, [authToken, question, fetchUnansweredQuestion]);
+  }, [ready, sessionHeaders, question, fetchUnansweredQuestion]);
 
   // Don't render if dismissed or no question and not loading
   if (dismissed || (!question && !fetchingQuestion)) {

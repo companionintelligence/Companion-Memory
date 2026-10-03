@@ -72,6 +72,15 @@ export function expandAll(
       }
 
       const recurrenceInstant = icsRecurrenceInstant(start);
+      // An all-day series' overrides carry a DATE-valued RECURRENCE-ID in both
+      // pipelines: TransformGoogleCalendar keys one from
+      // `originalStartTime.date` as `YYYYMMDD`, and normalizeIcsRecurrenceId
+      // keeps an .ics `RECURRENCE-ID;VALUE=DATE` as written. The suppression
+      // key has to be spelled the same way, or an all-day occurrence the user
+      // cancelled or moved is synthesized right back. All-day series are
+      // walked in UTC (parseRecurrence), so the date is the instant's first
+      // eight digits.
+      const overrideRecurrenceId = spec.isAllDay ? recurrenceInstant.slice(0, 8) : recurrenceInstant;
 
       specs.push({
         seriesId: master.id,
@@ -79,7 +88,7 @@ export function expandAll(
         startTime: start,
         endTime: occurrenceEnd(spec, start),
         recurrenceInstant,
-        overrideSourceId: `${uid}#${recurrenceInstant}`,
+        overrideSourceId: `${uid}#${overrideRecurrenceId}`,
         timeZoneSource: spec.timeZoneSource,
       });
     }

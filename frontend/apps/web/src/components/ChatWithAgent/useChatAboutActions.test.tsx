@@ -1,6 +1,6 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentHarnessStatus } from '@/api/useAgentHarnesses';
 import { namedChatContext } from '@/lib/agentChat';
@@ -10,6 +10,15 @@ import { useChatAboutActions } from './useChatAboutActions';
 const h = vi.hoisted(() => ({
   createDispatchJob: vi.fn(async () => ({ threadId: 'thread-1' })),
   harnesses: [] as AgentHarnessStatus[],
+  // The web session holds a JWT. The native shell holds only a device API key, so there is no
+  // JWT there (`authToken` null) while the session is still `authenticated`.
+  auth: { authToken: 'test-token' as string | null, authenticated: true },
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
+
+vi.mock('@ci/shadcn', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/shadcn')>()),
+  useToast: () => ({ toast: h.toast }),
 }));
 
 vi.mock('@/api/useAgentHarnesses', () => ({
@@ -22,8 +31,16 @@ vi.mock('@/api/useDispatchJob', () => ({
 
 vi.mock('@/hooks', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks')>()),
-  useAuth: () => [{ authToken: 'test-token' }],
+  useAuth: () => [h.auth],
 }));
+
+beforeEach(() => {
+  h.auth.authToken = 'test-token';
+  h.auth.authenticated = true;
+  h.createDispatchJob.mockClear();
+  h.toast.error.mockClear();
+  h.toast.success.mockClear();
+});
 
 const openclaw: AgentHarnessStatus = {
   id: 'openclaw',
@@ -84,5 +101,53 @@ describe('useChatAboutActions — dispatch id form', () => {
 
     await waitFor(() => expect(h.createDispatchJob).toHaveBeenCalled());
     expect(h.createDispatchJob).toHaveBeenCalledWith('test-token', expect.objectContaining({ taskId: null }));
+  });
+});
+
+/**
+ * ═══ "SIGN IN TO DISPATCH" ON A SIGNED-IN PHONE ═══
+ *
+ * The harness list is now fetched on the phone too, so its menus carry OpenClaw and Dispatch.
+ * `dispatchToOpenClaw` refused unless there was a web JWT — which the Capacitor app never has; its
+ * durable credential is a keystore API key `fetchJson` attaches as `x-api-key`. `POST
+ * /v1/agent/jobs` is `JwtOrApiKeyAuthGuard` with `write` capability, which the device key meets.
+ */
+describe('useChatAboutActions — dispatch auth', () => {
+  function dispatch() {
+    h.harnesses = [openclaw];
+
+    const context = namedChatContext({
+      title: 'Book the dentist',
+      body: 'Any Friday morning',
+      sourceKind: 'NoteType',
+      sourceId: 'note-1',
+    });
+
+    return renderHook(() => useChatAboutActions(context), { wrapper: MemoryRouter });
+  }
+
+  it('dispatches on the native shell with no web JWT', async () => {
+    h.auth.authToken = null;
+
+    const { result } = dispatch();
+    await result.current.dispatchToOpenClaw();
+
+    await waitFor(() => expect(h.createDispatchJob).toHaveBeenCalled());
+    expect(h.createDispatchJob).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ title: 'Book the dentist' }),
+    );
+    expect(h.toast.error).not.toHaveBeenCalled();
+  });
+
+  it('still asks a signed-out caller to sign in, and sends nothing', async () => {
+    h.auth.authToken = null;
+    h.auth.authenticated = false;
+
+    const { result } = dispatch();
+    await result.current.dispatchToOpenClaw();
+
+    expect(h.toast.error).toHaveBeenCalledWith('Sign in to Dispatch to OpenClaw.');
+    expect(h.createDispatchJob).not.toHaveBeenCalled();
   });
 });

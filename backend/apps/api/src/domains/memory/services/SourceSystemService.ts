@@ -5,13 +5,7 @@ import type { UserServiceContext } from '@ci/common/context';
 
 /** The search-index type names the explorer filters by (SearchInput.includeTypes). */
 export type SourcedBrowseType =
-  | 'event'
-  | 'communication'
-  | 'content'
-  | 'browser-activity'
-  | 'receipt'
-  | 'product'
-  | 'item';
+  'event' | 'communication' | 'content' | 'browser-activity' | 'receipt' | 'product' | 'item';
 
 export interface SourcedBrowseTable {
   type: SourcedBrowseType;

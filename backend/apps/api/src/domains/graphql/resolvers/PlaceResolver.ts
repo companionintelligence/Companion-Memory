@@ -512,7 +512,10 @@ export class PlaceResolver {
     return tags.map((tag) => EntityTagType.toType(tag));
   }
 
-  /** Aggregated event visit stats for this place (events.location_entity_id). */
+  /**
+   * Aggregated event visit stats for this place (events.location_entity_id).
+   * Only events that happened count: see PlaceService.getVisitStats.
+   */
   @ResolveField(() => PlaceVisitStatsType)
   async visitStats(
     @Context() context: RequestContext,

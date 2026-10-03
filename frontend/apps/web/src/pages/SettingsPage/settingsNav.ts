@@ -1,4 +1,4 @@
-import { isIosPlatform } from '@ci/common';
+import { isIosPlatform, isNativePlatform } from '@ci/common';
 import type { LucideIcon } from '@ci/shadcn/icons';
 import {
   Bot,
@@ -14,6 +14,7 @@ import {
   Plug,
   Lock,
   Shield,
+  Smartphone,
 } from '@ci/shadcn/icons';
 
 export interface SettingsSection {
@@ -22,6 +23,8 @@ export interface SettingsSection {
   readonly icon: LucideIcon;
   /** Bundled Safari Web Extension — only the iOS Memory app contains it. */
   readonly iosOnly?: boolean;
+  /** Needs the native iOS/Android shell — the on-device model engine does not exist in a browser. */
+  readonly nativeOnly?: boolean;
 }
 
 /**
@@ -36,6 +39,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'preferences', label: 'Preferences', icon: Globe },
   { id: 'autonomy', label: 'Autonomy', icon: Shield },
   { id: 'model', label: 'Model', icon: Cpu },
+  { id: 'on-device', label: 'On-device model', icon: Smartphone, nativeOnly: true },
   { id: 'location', label: 'Location', icon: MapPin },
   { id: 'safari', label: 'Safari', icon: Compass, iosOnly: true },
   { id: 'bluebubbles', label: 'BlueBubbles', icon: MessageCircle },
@@ -48,7 +52,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
 ];
 
 export function visibleSettingsSections(): SettingsSection[] {
-  return SETTINGS_SECTIONS.filter((section) => !section.iosOnly || isIosPlatform());
+  return SETTINGS_SECTIONS.filter(
+    (section) => (!section.iosOnly || isIosPlatform()) && (!section.nativeOnly || isNativePlatform()),
+  );
 }
 
 export function settingsPathToProfile(pathname: string): string {

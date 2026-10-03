@@ -1,0 +1,893 @@
+{
+  "summary": "Showing the top 25 of at least 25 matches. The count is not exact.",
+  "totalMatches": null,
+  "truncated": true,
+  "limit": 25,
+  "mode": "hybrid",
+  "items": [
+    {
+      "id": "0199bb21-24bb-75f8-92ca-d2fa14886d7c",
+      "title": "Heron spotting at Lake Merritt",
+      "content": "Saturday March 8, 2025. Got to Lake Merritt at 7:15 am, before the joggers. A great blue heron was standing in the shallows near the boathouse for almost twenty minutes, perfectly still, then caught a fish and flew off toward the Rotary Nature Center. Maria met me there with the good camera. Want to go back in April when the nesting starts.",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "createdAt": "2025-03-08T18:04:00.000Z",
+      "updatedAt": "2025-03-08T18:04:00.000Z",
+      "type": "note",
+      "link": "/notes/0199bb21-24bb-75f8-92ca-d2fa14886d7c"
+    },
+    {
+      "id": "01996090-eee0-7bc7-93c8-f38b4c822e55",
+      "entityType": "communication",
+      "time": "2025-03-08T17:42:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "01992712-bdf0-73b7-9d8e-c9b1d2cbe21d",
+      "fromEntityId": "01999602-8825-7c23-9d29-b87934204c7b",
+      "toEntityIds": [
+        "0199aa02-2c03-7308-9183-fb9637d4a973"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Maria Alvarez",
+          "address": "+15105558538"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": [
+          "birding"
+        ]
+      },
+      "subject": null,
+      "content": "Did you see the blue heron by the boathouse this morning?? I sent the best photo to your email. Lake Merritt never disappoints. Same time next Saturday?",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [
+        "birding"
+      ],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Did you see the blue heron by the boathouse this morning?? I…",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-12ee95d17c48c951",
+      "type": "communication",
+      "link": "/communications/01996090-eee0-7bc7-93c8-f38b4c822e55"
+    },
+    {
+      "id": "0199bc92-e7fe-784c-9e95-d07df3bcdab8",
+      "entityType": "content",
+      "type": "photo",
+      "title": "IMG_4412.jpeg",
+      "text": "A great blue heron standing in shallow water at the edge of a lake, early morning light, reeds in the background.",
+      "mimetype": "image/jpeg",
+      "externalId": "IMG-dba205f4d7",
+      "externalIdKind": "apple_photos",
+      "sourceUrl": null,
+      "sourceData": {
+        "width": 4032,
+        "height": 3024,
+        "takenAt": "2025-03-08T15:21:00.000Z",
+        "camera": "iPhone 15 Pro",
+        "place": "Lake Merritt, Oakland"
+      },
+      "sourceType": "import",
+      "sourceSystem": "apple_photos",
+      "sourceId": "asset-d927844e7fcf0623",
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "eventId": null,
+      "createdAt": "2025-03-08T15:21:00.000Z",
+      "updatedAt": "2025-03-08T15:21:00.000Z",
+      "mimeCategory": "image",
+      "tags": [],
+      "type": "content",
+      "link": "/content/0199bc92-e7fe-784c-9e95-d07df3bcdab8"
+    },
+    {
+      "id": "0199a2cd-a1f9-7e15-9714-4bb388870cd2",
+      "entityType": "event",
+      "title": "Birding at Lake Merritt",
+      "eventType": "calendar",
+      "category": "hobby",
+      "startTime": "2025-03-08T15:00:00.000Z",
+      "endTime": "2025-03-08T17:00:00.000Z",
+      "timeSource": "source",
+      "timePrecision": "minute",
+      "observedAt": null,
+      "durationMinutes": 60,
+      "locationName": "Lake Merritt, Oakland",
+      "locationCoordinates": {
+        "x": -122.2612,
+        "y": 37.8044
+      },
+      "locationEntityId": "0199f55c-4fb0-7249-9198-172c17ae48dd",
+      "participantEntityIds": [
+        "01991cb5-eeec-7e43-9672-750f25a9828a"
+      ],
+      "organizerEntityId": "0199228a-e5ce-72dc-9761-1840f96a80c7",
+      "sourceType": "calendar",
+      "sourceSystem": "google_calendar",
+      "sourceId": "evt_95dd4af7405a008e4eae",
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "captureTickId": null,
+      "confidenceScore": 1,
+      "isRecurring": false,
+      "recurrencePattern": null,
+      "isAllDay": false,
+      "isPrivate": false,
+      "priority": 0,
+      "metadata": {
+        "htmlLink": "https://calendar.example.com/event?eid=c1cf1e7e2170887c6e61ba05",
+        "reminders": [
+          {
+            "method": "popup",
+            "minutes": 30
+          }
+        ]
+      },
+      "isPredicted": false,
+      "isInferred": false,
+      "inferenceSources": {},
+      "tags": [
+        "birding",
+        "outdoors"
+      ],
+      "sentimentScore": null,
+      "energyLevel": null,
+      "status": "confirmed",
+      "sourceStatus": "confirmed",
+      "sourceStartTime": "2025-03-08T15:00:00.000Z",
+      "sourceEndTime": "2025-03-08T17:00:00.000Z",
+      "sourceRecurrence": null,
+      "sourceTitle": "Birding at Lake Merritt",
+      "type": "event",
+      "link": "/events/0199a2cd-a1f9-7e15-9714-4bb388870cd2"
+    },
+    {
+      "id": "0199819f-6719-77b5-951a-2c088b5d6147",
+      "entityType": "communication",
+      "time": "2025-03-11T12:00:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "email",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "01996a95-b2e4-79c5-99c5-30a5d11d03b8",
+      "fromEntityId": "0199b666-7e49-7a4a-9594-8fc233c1a592",
+      "toEntityIds": [
+        "0199dfa0-da1c-7f8c-9904-d5738c6c600d"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Golden Gate Audubon",
+          "address": "golden.gate.audubon@example.com"
+        }
+      },
+      "metadata": {
+        "platform": "gmail",
+        "service": "Gmail",
+        "importBatch": "takeout-2026-09",
+        "labels": [
+          "newsletter"
+        ]
+      },
+      "subject": "Bay Area Bird Report: herons return to the lake",
+      "content": "Great blue herons are returning to their nesting colonies around Lake Merritt and the East Bay shoreline. The best viewing is early morning on the north shore. Bring binoculars and keep a respectful distance from the nests.",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "newsletter",
+      "summary": null,
+      "tags": [
+        "newsletter"
+      ],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Great blue herons are returning to their nesting colonies ar…",
+      "sourceType": "import",
+      "sourceSystem": "google_takeout",
+      "sourceId": "msg-9b39dab8314f295d",
+      "type": "communication",
+      "link": "/communications/0199819f-6719-77b5-951a-2c088b5d6147"
+    },
+    {
+      "id": "01997313-fe69-7d18-93f5-8e23d072ce7d",
+      "entityType": "communication",
+      "time": "2024-01-01T06:00:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "019920b2-8941-7c6d-958f-c8f0a0050495",
+      "fromEntityId": "01993008-44d4-7c73-9309-5ce476eff0ad",
+      "toEntityIds": [
+        "01997f25-518a-7fd1-993a-f506460b511c"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Alex Kim",
+          "address": "+15105559549"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Thanks for dinner last night, the soup was perfect",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Thanks for dinner last night, the soup was perfect",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-961bd03630fb7667",
+      "type": "communication",
+      "link": "/communications/01997313-fe69-7d18-93f5-8e23d072ce7d"
+    },
+    {
+      "id": "0199bcf6-efbc-7cf0-9f07-5cdccf77e985",
+      "entityType": "communication",
+      "time": "2025-06-04T13:11:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "email",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "019912dc-853f-7294-9653-9b2652a612f8",
+      "fromEntityId": "0199bbd6-29fe-78a7-99dd-e4d2548a8663",
+      "toEntityIds": [
+        "01997cea-9307-757f-97cb-10729faea06a"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Calendar",
+          "address": "calendar@example.com"
+        }
+      },
+      "metadata": {
+        "platform": "gmail",
+        "service": "Gmail",
+        "importBatch": "takeout-2026-09",
+        "labels": [
+          "updates"
+        ]
+      },
+      "subject": "Re: Blue ceramic mugs, second batch",
+      "content": "Your appointment with the accountant is confirmed for Tuesday, November 18 at 10:00 AM. Please bring last year's return and any new forms. Parking is available behind the building.",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "notification",
+      "summary": null,
+      "tags": [
+        "updates"
+      ],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Your appointment with the accountant is confirmed for Tuesda…",
+      "sourceType": "import",
+      "sourceSystem": "google_takeout",
+      "sourceId": "msg-f103ae406d79f79f",
+      "type": "communication",
+      "link": "/communications/0199bcf6-efbc-7cf0-9f07-5cdccf77e985"
+    },
+    {
+      "id": "01998c55-4f7c-74fe-9f3f-d4a132b2cb7c",
+      "title": "Grocery list",
+      "content": "Oat milk, lemons, eggs, sourdough, bananas, the good butter, parsley, two limes, olive oil if we are low. Check whether the farmers market still has the plums.",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "createdAt": "2026-11-07T20:22:00.000Z",
+      "updatedAt": "2026-11-07T20:22:00.000Z",
+      "type": "note",
+      "link": "/notes/01998c55-4f7c-74fe-9f3f-d4a132b2cb7c"
+    },
+    {
+      "id": "0199d47a-c28f-7d40-931b-db328e6da783",
+      "entityType": "communication",
+      "time": "2024-04-10T12:33:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "outbound",
+      "threadId": "019987ce-e0ea-74ad-9dcc-748e2461b4c2",
+      "fromEntityId": "0199e0ac-7b0f-7735-9d30-3ef157e79b8f",
+      "toEntityIds": [
+        "0199621f-947d-79f6-9d0c-7b87a571059a"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Sam Patel",
+          "address": "+15105555743"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Running ten minutes late, save me a seat",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Running ten minutes late, save me a seat",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-85573f80352f2d67",
+      "type": "communication",
+      "link": "/communications/0199d47a-c28f-7d40-931b-db328e6da783"
+    },
+    {
+      "id": "0199830d-8827-7d61-917f-f9be912aaeed",
+      "entityType": "content",
+      "type": "photo",
+      "title": "IMG_4148.jpeg",
+      "text": "A plate of pastries on a wooden table next to a cup of coffee.",
+      "mimetype": "image/jpeg",
+      "externalId": "IMG-c2530968d0",
+      "externalIdKind": "apple_photos",
+      "sourceUrl": null,
+      "sourceData": {
+        "width": 4032,
+        "height": 3024,
+        "takenAt": "2025-09-13T19:44:00.000Z",
+        "camera": "iPhone 15 Pro",
+        "place": null
+      },
+      "sourceType": "import",
+      "sourceSystem": "apple_photos",
+      "sourceId": "asset-a3279a601fdcb9f2",
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "eventId": null,
+      "createdAt": "2025-09-13T19:44:00.000Z",
+      "updatedAt": "2025-09-13T19:44:00.000Z",
+      "mimeCategory": "image",
+      "tags": [],
+      "type": "content",
+      "link": "/content/0199830d-8827-7d61-917f-f9be912aaeed"
+    },
+    {
+      "id": "0199975d-1af5-7398-9109-8e77fa7d54a5",
+      "entityType": "communication",
+      "time": "2026-02-16T11:55:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "outbound",
+      "threadId": "01992e02-6030-758b-9865-9b44e2a064e2",
+      "fromEntityId": "0199e7d6-4d2d-784e-9c68-2bdc02224373",
+      "toEntityIds": [
+        "0199efa8-93bc-7729-92b4-512278c74199"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Sam Patel",
+          "address": "+15105551841"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Happy birthday!! Hope it is a great one",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Happy birthday!! Hope it is a great one",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-1a362053a7d50082",
+      "type": "communication",
+      "link": "/communications/0199975d-1af5-7398-9109-8e77fa7d54a5"
+    },
+    {
+      "id": "01997eca-447b-7f64-9d24-8f557f0019e2",
+      "entityType": "communication",
+      "time": "2024-07-19T18:06:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "email",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "0199161f-9b90-71b2-98b7-a672a41ceaa7",
+      "fromEntityId": "0199fcc1-15fd-7b1d-9395-b9291549721a",
+      "toEntityIds": [
+        "019926f4-445d-78c6-9493-e2ff12728366"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Billing",
+          "address": "billing@example.com"
+        }
+      },
+      "metadata": {
+        "platform": "gmail",
+        "service": "Gmail",
+        "importBatch": "takeout-2026-09",
+        "labels": [
+          "updates"
+        ]
+      },
+      "subject": "Your statement is ready",
+      "content": "Your appointment with the accountant is confirmed for Tuesday, November 18 at 10:00 AM. Please bring last year's return and any new forms. Parking is available behind the building.",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "notification",
+      "summary": null,
+      "tags": [
+        "updates"
+      ],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Your appointment with the accountant is confirmed for Tuesda…",
+      "sourceType": "import",
+      "sourceSystem": "google_takeout",
+      "sourceId": "msg-ed183aff342d025e",
+      "type": "communication",
+      "link": "/communications/01997eca-447b-7f64-9d24-8f557f0019e2"
+    },
+    {
+      "id": "01999518-39d4-748b-9960-40c018538a5a",
+      "title": "Ideas for the garden",
+      "content": "Chapter three is where it turns. The idea that trees communicate through the soil is less settled than the book makes it sound, but the writing about the chestnut is worth rereading. Quote to remember on page 61.",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "createdAt": "2025-12-22T10:17:00.000Z",
+      "updatedAt": "2025-12-22T10:17:00.000Z",
+      "type": "note",
+      "link": "/notes/01999518-39d4-748b-9960-40c018538a5a"
+    },
+    {
+      "id": "0199a12a-7d6f-7dcb-9b50-25e3f6856c4f",
+      "entityType": "communication",
+      "time": "2026-05-25T17:28:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "01996133-9b4e-7864-979d-a16ee9eebcd8",
+      "fromEntityId": "019917bd-49e1-7581-9b8e-d84713e62ea7",
+      "toEntityIds": [
+        "01993391-f914-75b8-933c-8619db8a589a"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Sam Patel",
+          "address": "+15105559882"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Maria's Taqueria has a new al pastor special, want to try it Friday?",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Maria's Taqueria has a new al pastor special, want to try it…",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-6efbaea7e30b32e3",
+      "type": "communication",
+      "link": "/communications/0199a12a-7d6f-7dcb-9b50-25e3f6856c4f"
+    },
+    {
+      "id": "0199f21d-e2dc-7d6a-9fc2-e549df28ed21",
+      "title": "Return the blue folder",
+      "description": null,
+      "status": "pending",
+      "priority": "medium",
+      "dueDate": "2024-10-01T00:00:00.000Z",
+      "completedAt": null,
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "tags": [],
+      "createdAt": "2026-09-01T08:00:00.000Z",
+      "updatedAt": "2026-09-01T08:00:00.000Z",
+      "type": "task",
+      "link": "/tasks/0199f21d-e2dc-7d6a-9fc2-e549df28ed21"
+    },
+    {
+      "id": "0199bddb-21bf-7c8a-9a51-d1f060c42996",
+      "entityType": "communication",
+      "time": "2025-03-04T16:50:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "0199a55c-fbf6-7686-9cac-20306caa1fd3",
+      "fromEntityId": "01995436-8fd2-71ef-9924-d045f493d4b1",
+      "toEntityIds": [
+        "01995ec9-10bd-7bcc-979a-1024aab5e79b"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Robin Okafor",
+          "address": "+15105551616"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Landing at 6:40, the Uber is booked",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Landing at 6:40, the Uber is booked",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-14120ca8dc6547e6",
+      "type": "communication",
+      "link": "/communications/0199bddb-21bf-7c8a-9a51-d1f060c42996"
+    },
+    {
+      "id": "019995a8-4e5f-7aa7-9eb0-5863876cb61c",
+      "entityType": "communication",
+      "time": "2026-08-07T08:01:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "email",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "01993270-315c-7b07-98e3-e0c77bf552be",
+      "fromEntityId": "01992085-58dd-7633-9e9e-99aee42e436a",
+      "toEntityIds": [
+        "01996d62-7a19-74fb-9297-90b90ef1c6ef"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Neighborhood Association",
+          "address": "neighborhood.association@example.com"
+        }
+      },
+      "metadata": {
+        "platform": "gmail",
+        "service": "Gmail",
+        "importBatch": "takeout-2026-09",
+        "labels": [
+          "updates"
+        ]
+      },
+      "subject": "Heron Street neighborhood association minutes",
+      "content": "The neighborhood association met on Tuesday evening. Items discussed: the repaving schedule for Heron Street, a proposal for a community garden on the vacant lot, and the annual block party. Minutes are attached. The next meeting is the first Tuesday of next month.",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "notification",
+      "summary": null,
+      "tags": [
+        "updates"
+      ],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "The neighborhood association met on Tuesday evening. Items d…",
+      "sourceType": "import",
+      "sourceSystem": "google_takeout",
+      "sourceId": "msg-40d29a883763a355",
+      "type": "communication",
+      "link": "/communications/019995a8-4e5f-7aa7-9eb0-5863876cb61c"
+    },
+    {
+      "id": "019993ae-4a8e-7cc7-915b-b2c506229bdb",
+      "title": "Grocery list",
+      "content": "Oat milk, lemons, eggs, sourdough, bananas, the good butter, parsley, two limes, olive oil if we are low. Check whether the farmers market still has the plums.",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "createdAt": "2024-01-10T15:12:00.000Z",
+      "updatedAt": "2024-01-10T15:12:00.000Z",
+      "type": "note",
+      "link": "/notes/019993ae-4a8e-7cc7-915b-b2c506229bdb"
+    },
+    {
+      "id": "0199bd23-6dda-74ab-9335-babc9ef4bc3d",
+      "entityType": "communication",
+      "time": "2025-06-13T07:23:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "outbound",
+      "threadId": "01999c4d-c218-7398-93e0-9c58236d18b8",
+      "fromEntityId": "0199fa08-13e4-73bb-9b69-5905027c89ef",
+      "toEntityIds": [
+        "0199cde7-6824-7fd6-9c75-54b33a64710c"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Sam Patel",
+          "address": "+15105556653"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Alvarez and Sons is quoting the fence repair at nine hundred dollars",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Alvarez and Sons is quoting the fence repair at nine hundred…",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-3f0465703909a31f",
+      "type": "communication",
+      "link": "/communications/0199bd23-6dda-74ab-9335-babc9ef4bc3d"
+    },
+    {
+      "id": "01997ef5-687f-7614-9258-f67a719e9323",
+      "entityType": "content",
+      "type": "photo",
+      "title": "IMG_4518.jpeg",
+      "text": "A heron-shaped weather vane on top of a barn roof against a cloudy sky.",
+      "mimetype": "image/jpeg",
+      "externalId": "IMG-76ad2813ac",
+      "externalIdKind": "apple_photos",
+      "sourceUrl": null,
+      "sourceData": {
+        "width": 4032,
+        "height": 3024,
+        "takenAt": "2026-11-16T14:34:00.000Z",
+        "camera": "iPhone 15 Pro",
+        "place": null
+      },
+      "sourceType": "import",
+      "sourceSystem": "apple_photos",
+      "sourceId": "asset-b51e0f1ed6faa4d6",
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "eventId": null,
+      "createdAt": "2026-11-16T14:34:00.000Z",
+      "updatedAt": "2026-11-16T14:34:00.000Z",
+      "mimeCategory": "image",
+      "tags": [],
+      "type": "content",
+      "link": "/content/01997ef5-687f-7614-9258-f67a719e9323"
+    },
+    {
+      "id": "0199b0d3-1598-7e39-99e1-dfb04f87108a",
+      "entityType": "communication",
+      "time": "2024-04-19T06:45:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "outbound",
+      "threadId": "019999e3-ff2f-76db-9dd3-115052773578",
+      "fromEntityId": "01997280-cbc0-7beb-92db-f174013e196b",
+      "toEntityIds": [
+        "0199beb5-c3b9-7ba7-990d-f36d6a7a584e"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Maria Gonzalez",
+          "address": "+15105555277"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Can you pick up oat milk on the way home?",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Can you pick up oat milk on the way home?",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-655baa9499ebdd4d",
+      "type": "communication",
+      "link": "/communications/0199b0d3-1598-7e39-99e1-dfb04f87108a"
+    },
+    {
+      "id": "0199baae-7ecd-7160-9835-23f17685bf14",
+      "entityType": "communication",
+      "time": "2025-09-22T13:56:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "email",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "0199b06e-6f8c-75ac-949f-7c659c719de7",
+      "fromEntityId": "019970c3-3b27-71d4-9652-8bb54afd621d",
+      "toEntityIds": [
+        "01998121-7115-7f7b-99a4-ec7626e2aae4"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Accounts",
+          "address": "accounts@example.com"
+        }
+      },
+      "metadata": {
+        "platform": "gmail",
+        "service": "Gmail",
+        "importBatch": "takeout-2026-09",
+        "labels": [
+          "updates"
+        ]
+      },
+      "subject": "Confirmation: appointment with your accountant",
+      "content": "Here is your monthly summary. Your balance changed by a small amount this period, and there are two transactions that need your review. Sign in to see the details and to download the statement as a PDF for your records.",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "notification",
+      "summary": null,
+      "tags": [
+        "updates"
+      ],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Here is your monthly summary. Your balance changed by a smal…",
+      "sourceType": "import",
+      "sourceSystem": "google_takeout",
+      "sourceId": "msg-b3e07467accbc7e5",
+      "type": "communication",
+      "link": "/communications/0199baae-7ecd-7160-9835-23f17685bf14"
+    },
+    {
+      "id": "01999fdb-9de7-7579-91cc-97ea2f0c8ebd",
+      "title": "Book notes: The Overstory",
+      "content": "Agreed to move the launch review to the second week. Open question on the budget line for tooling. Action items: send the revised timeline, book the room, ask finance about the Q4 forecast. Next sync is Thursday.",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "createdAt": "2026-02-25T20:07:00.000Z",
+      "updatedAt": "2026-02-25T20:07:00.000Z",
+      "type": "note",
+      "link": "/notes/01999fdb-9de7-7579-91cc-97ea2f0c8ebd"
+    },
+    {
+      "id": "0199d5fd-98a5-7988-94be-e44365f6767f",
+      "entityType": "communication",
+      "time": "2024-07-01T12:18:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "01997e14-63f7-767c-9a77-4ddf197a3152",
+      "fromEntityId": "019969c7-b922-7e57-93ac-927bbe6db555",
+      "toEntityIds": [
+        "0199635f-d92a-7427-9ac1-e596ed2ef3df"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Robin Okafor",
+          "address": "+15105551343"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Heron Street is closed this weekend for repaving, park on Alder instead",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Heron Street is closed this weekend for repaving, park on Al…",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-7c44c2772b3a61bd",
+      "type": "communication",
+      "link": "/communications/0199d5fd-98a5-7988-94be-e44365f6767f"
+    },
+    {
+      "id": "019971e8-d1ab-7cf8-9c71-a59953e18042",
+      "title": "Send revised timeline",
+      "description": null,
+      "status": "pending",
+      "priority": "medium",
+      "dueDate": "2025-12-04T00:00:00.000Z",
+      "completedAt": null,
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "tags": [],
+      "createdAt": "2026-09-01T08:00:00.000Z",
+      "updatedAt": "2026-09-01T08:00:00.000Z",
+      "type": "task",
+      "link": "/tasks/019971e8-d1ab-7cf8-9c71-a59953e18042"
+    }
+  ]
+}

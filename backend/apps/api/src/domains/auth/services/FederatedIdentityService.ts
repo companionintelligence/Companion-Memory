@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Like, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
+import { HUB_ISSUER_PREFIX } from '@ci/common/crypto';
 import { LoggerService } from '@ci/common/logging';
 
 import { type FederatedIdentity, FederatedIdentityEntity } from '../entities/FederatedIdentityEntity';
@@ -42,15 +43,26 @@ export class FederatedIdentityService {
     return entity.userId;
   }
 
-  /** Bind an external identity to a local user (idempotent on (issuer, subject)). */
-  async bind(data: {
-    userId: string;
-    issuer: string;
-    subject: string;
-    email?: string | null;
-    bindMethod?: 'sub' | 'email_link';
-  }): Promise<FederatedIdentity> {
-    const existing = await this.repository.findOne({
+  /**
+   * Bind an external identity to a local user (idempotent on (issuer, subject)).
+   *
+   * @param manager the transaction to write in, when the binding has to commit or roll back with
+   *   something else — the account it binds, when a sign-in claims an empty appliance
+   *   (`UserService.createFirstAccount`).
+   */
+  async bind(
+    data: {
+      userId: string;
+      issuer: string;
+      subject: string;
+      email?: string | null;
+      bindMethod?: 'sub' | 'email_link';
+    },
+    manager?: EntityManager,
+  ): Promise<FederatedIdentity> {
+    const repository = manager?.getRepository(FederatedIdentityEntity) ?? this.repository;
+
+    const existing = await repository.findOne({
       where: { issuer: data.issuer, subject: data.subject },
     });
 
@@ -58,7 +70,7 @@ export class FederatedIdentityService {
       return FederatedIdentityEntity.toEgressType(existing);
     }
 
-    const record = this.repository.create({
+    const record = repository.create({
       id: uuidv7(),
       userId: data.userId,
       issuer: data.issuer,
@@ -68,16 +80,35 @@ export class FederatedIdentityService {
       lastSeenAt: new Date(),
     });
 
-    const saved = await this.repository.save(record);
+    const saved = await repository.save(record);
     this.logger.log(`bound ${data.issuer}#${data.subject} → user ${data.userId} (${saved.bindMethod})`);
 
     return FederatedIdentityEntity.toEgressType(saved);
   }
 
-  /** All external identities bound to a local user. */
-  async listForUser(userId: string): Promise<FederatedIdentity[]> {
-    const entities = await this.repository.find({ where: { userId } });
+  /**
+   * All external identities bound to a local user.
+   *
+   * @param options.oidcOnly leave out Hub forward-auth identities (`urn:ci-hub:` issuers). The
+   *   one-time Portal email link asks this: its "already bound" refusal stops a second OIDC
+   *   identity adopting an account a first one claimed, and a Hub person's own binding must not
+   *   turn their first Portal sign-in into `account_linked_elsewhere`.
+   */
+  async listForUser(userId: string, options: { oidcOnly?: boolean } = {}): Promise<FederatedIdentity[]> {
+    const entities = await this.repository.find({
+      where: options.oidcOnly ? { userId, issuer: Not(Like(`${HUB_ISSUER_PREFIX}%`)) } : { userId },
+    });
 
     return entities.map(FederatedIdentityEntity.toEgressType);
+  }
+
+  /**
+   * The binding `userId` holds from one issuer — for a Hub user directory, the one person of that
+   * Hub the account belongs to (a partial unique index allows at most one) — or null.
+   */
+  async findForUserFromIssuer(userId: string, issuer: string): Promise<FederatedIdentity | null> {
+    const entity = await this.repository.findOne({ where: { userId, issuer } });
+
+    return entity ? FederatedIdentityEntity.toEgressType(entity) : null;
   }
 }

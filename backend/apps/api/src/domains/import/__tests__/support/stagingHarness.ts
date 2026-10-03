@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 
 import { DataSource } from 'typeorm';
 
+import type { EventService } from '@ci/domains/events';
 import { EntityIdentifierEntity, NodeEntity, RelationshipEntity } from '@ci/domains/graph';
 
 import { SYNTHETIC_TEST_USER_DOMAIN, syntheticTestUserEmail } from '../../../__tests__/support/applianceUser';
@@ -75,8 +76,12 @@ export interface StagingHarness {
   dataSource: DataSource;
   service: ImportRunService;
   stagedSources: StagedSourceService;
-  /** Records what {@link ImportRunService} enqueued, in place of a real queue. */
-  events: { send: jest.Mock };
+  /**
+   * Records what {@link ImportRunService} enqueued, in place of a real queue —
+   * unless the suite handed the harness a real event service, in which case
+   * this stub is unused.
+   */
+  events: { send: jest.Mock; getJob: jest.Mock; failJob: jest.Mock };
   userId: string;
   /** Stage a drop the way the upload endpoint would, and return its dropId. */
   stageDrop(filename?: string): Promise<string>;
@@ -98,8 +103,13 @@ export interface StagingHarness {
  *
  * A reachable database MISSING `ci_import` fails loudly, naming the command that
  * fixes it: a missing migration must never read as a passing test.
+ *
+ * `eventService` swaps the queue stub for a real one — the orphan-recovery
+ * spec hands in a `PGBossEventService` on a private pg-boss schema, because
+ * what it asserts is pg-boss's own behaviour. Everything else stays shared,
+ * cleanup included.
  */
-export async function createStagingHarness(): Promise<{
+export async function createStagingHarness(options: { eventService?: EventService } = {}): Promise<{
   harness: StagingHarness;
   teardown: () => Promise<void>;
 }> {
@@ -169,14 +179,33 @@ export async function createStagingHarness(): Promise<{
       log: jest.fn(),
       warn: jest.fn(),
       debug: jest.fn(),
+      error: jest.fn(),
     }) as never;
 
-  const events = { send: jest.fn(async () => undefined) };
+  const events = {
+    send: jest.fn(async () => undefined),
+    // This stub has no queue, so it cannot say what became of a job — and it
+    // REFUSES to, rather than answering "no such job". The difference matters
+    // because every suite on this database shares one appliance-wide sweep:
+    // `reclaimOrphanedStages` asks about a stage's job before it touches the
+    // stage, and "no such job" would send a sibling suite's sweep off to
+    // re-queue a stage that the orphan-recovery spec is holding against a REAL
+    // pg-boss. A refusal is caught and logged per stage, and leaves it alone.
+    getJob: jest.fn(async () => {
+      throw new Error('the staging harness has no queue to look a job up in');
+    }),
+    failJob: jest.fn(async () => false),
+  };
   // A REAL StagedSourceService over the same connection: the spine specs assert
   // claim/consume/release transitions, and a mock would agree with whatever
   // the spec author believed.
   const stagedSources = new StagedSourceService(dataSource.getRepository(StagedSourceEntity), stubLogger());
-  const service = new ImportRunService(dataSource, events as never, stagedSources, stubLogger());
+  const service = new ImportRunService(
+    dataSource,
+    (options.eventService ?? events) as never,
+    stagedSources,
+    stubLogger(),
+  );
 
   const userId = randomUUID();
   const userEmail = syntheticTestUserEmail('import-harness', userId);

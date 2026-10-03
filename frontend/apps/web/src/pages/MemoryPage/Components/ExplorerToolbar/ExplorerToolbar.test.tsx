@@ -1,15 +1,17 @@
 import { Children, isValidElement, type ReactNode } from 'react';
 
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useSearchParams } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
+import { SearchBox } from '@/components/SearchBox/SearchBox';
 import { DropdownProvider } from '@/components/SearchBox/useDropdown';
 import { gql } from '@/graphql';
+import { GetSavedSearchDocument, GetSavedSearchesForPickerDocument } from '@/graphql/graphql';
 import { mockQuery } from '@/test/gql';
 import { renderWithProviders, type RenderWithProvidersOptions } from '@/test/renderWithProviders';
 
-import { ExplorerToolbar, MemoryExplorerFilterControls } from './ExplorerToolbar';
+import { ExplorerToolbar, MemoryExplorerFilterControls, SearchPanelFilters } from './ExplorerToolbar';
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
@@ -111,7 +113,7 @@ function ParamsProbe() {
   return <div data-testid="params">{params.toString()}</div>;
 }
 
-function renderToolbar(ui: ReactNode, options: RenderWithProvidersOptions = {}) {
+function renderToolbar(ui: ReactNode, { mocks = [], ...options }: RenderWithProvidersOptions = {}) {
   return renderWithProviders(
     <DropdownProvider args={[{ changeSearchParams: true }]}>
       <ParamsProbe />
@@ -119,6 +121,7 @@ function renderToolbar(ui: ReactNode, options: RenderWithProvidersOptions = {}) 
     </DropdownProvider>,
     {
       mocks: [
+        ...mocks,
         mockQuery(SOURCE_SYSTEMS_QUERY, {}, { sourceSystems: ['gmail', 'reddit'] }),
         mockQuery(EVENT_TYPES_QUERY, {}, { eventTypes: ['messaged', 'visited'] }),
         mockQuery(
@@ -190,6 +193,54 @@ describe('ExplorerToolbar', () => {
 
       expect(screen.getByTestId('params').textContent).not.toMatch(/from=|to=|when=/);
       expect(screen.getByRole('button', { name: 'When' })).toBeInTheDocument();
+    });
+
+    /**
+     * QA MEM-15: on a phone the custom range's calendar, "Specific time" and
+     * "Clear range" stack taller than the screen. Only the popover opened from
+     * the phone filter sheet's row was capped to the room it had; the inline When
+     * button's ran off the bottom edge, so expanding "Specific time" put its
+     * Start / End inputs below the fold with nothing to scroll.
+     */
+    describe('a custom range on a short screen', () => {
+      const from = new Date(2026, 0, 1, 0, 0, 0, 0).toISOString();
+      const to = new Date(2026, 0, 31, 23, 59, 59, 999).toISOString();
+      const route = `/?when=custom&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+      const label = `${new Date(from).toLocaleDateString()} – ${new Date(to).toLocaleDateString()}`;
+
+      it('caps the popover to the room it has and scrolls inside it, from the inline When button too', () => {
+        renderToolbar(<MemoryExplorerFilterControls />, { route });
+
+        fireEvent.click(screen.getByRole('button', { name: label }));
+
+        const popover = document.querySelector('[data-slot="popover-content"]');
+
+        expect(popover).toHaveClass('max-h-(--radix-popover-content-available-height)', 'overflow-y-auto');
+      });
+
+      it('brings the Start / End time inputs into view when Specific time opens', () => {
+        const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+
+        try {
+          renderToolbar(<MemoryExplorerFilterControls />, { route });
+
+          fireEvent.click(screen.getByRole('button', { name: label }));
+          expect(screen.queryByLabelText('Start time')).not.toBeInTheDocument();
+
+          fireEvent.click(screen.getByRole('button', { name: /Specific time/ }));
+
+          const startTime = screen.getByLabelText('Start time');
+          const scrolled = scrollIntoView.mock.contexts.at(-1) as HTMLElement | undefined;
+
+          expect(scrollIntoView).toHaveBeenLastCalledWith({ block: 'nearest' });
+          // It is the row holding the two inputs that scrolls, not something
+          // elsewhere in the popover.
+          expect(scrolled).toContainElement(startTime);
+          expect(scrolled).toContainElement(screen.getByLabelText('End time'));
+        } finally {
+          scrollIntoView.mockRestore();
+        }
+      });
     });
   });
 
@@ -480,6 +531,44 @@ describe('ExplorerToolbar', () => {
       expect(params).toContain('tags=space');
       expect(screen.getByText('#space')).toBeInTheDocument();
     });
+
+    /**
+     * QA MEM-16: add a Who person and From, remove the person, and "From only"
+     * stayed behind next to nothing. A direction with no person is a real filter —
+     * the bare row direction, saved searches and the phone filter sheet's "From
+     * anyone" all depend on it — so the chip stays; what was wrong is that its
+     * label only made sense beside a person.
+     */
+    describe('the message direction chip', () => {
+      it('reads "From only" beside a Who person, whose role it fixes', () => {
+        renderToolbar(<ExplorerToolbar open />, { route: '/?people=Ada%20Lovelace&direction=inbound' });
+
+        expect(screen.getByText('From only')).toBeInTheDocument();
+        expect(screen.queryByText('From anyone')).not.toBeInTheDocument();
+      });
+
+      it('says what it still filters once the person is removed, and keeps filtering', () => {
+        renderToolbar(<ExplorerToolbar open />, { route: '/?people=Ada%20Lovelace&direction=inbound' });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Remove Ada Lovelace' }));
+
+        expect(screen.getByText('From anyone')).toBeInTheDocument();
+        expect(screen.queryByText('From only')).not.toBeInTheDocument();
+        // Still there, still counted, still removable on its own.
+        expect(screen.getByTestId('params').textContent).toContain('direction=inbound');
+        expect(screen.getByText('1 filter', { exact: false })).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Remove message direction' }));
+
+        expect(screen.getByTestId('params').textContent).not.toContain('direction=');
+      });
+
+      it('reads "To anyone" for a sent-messages link that names nobody', () => {
+        renderToolbar(<ExplorerToolbar open />, { route: '/?direction=outbound' });
+
+        expect(screen.getByText('To anyone')).toBeInTheDocument();
+      });
+    });
   });
 
   // VIEW-06: every view runs the same URL filter set. Where one genuinely
@@ -528,5 +617,101 @@ describe('ExplorerToolbar', () => {
       // "Has a location" is forwarded to the graph, so it stays a plain control.
       expect(screen.getByRole('button', { name: 'Has a location' })).toBeInTheDocument();
     });
+  });
+});
+
+const TRIP_ID = btoa('saved-search:trip-1');
+
+const OWN_SAVED_SEARCHES = mockQuery(
+  GetSavedSearchesForPickerDocument,
+  { first: 8, query: undefined },
+  {
+    savedSearches: {
+      __typename: 'SavedSearchConnection' as const,
+      totalCount: 1,
+      edges: [
+        {
+          __typename: 'SavedSearchEdge' as const,
+          node: { __typename: 'SavedSearchType' as const, id: TRIP_ID, name: 'My trip', description: null },
+        },
+      ],
+    },
+  },
+);
+
+const TRIP = mockQuery(
+  GetSavedSearchDocument,
+  { id: TRIP_ID },
+  {
+    savedSearch: {
+      __typename: 'SavedSearchType' as const,
+      id: TRIP_ID,
+      name: 'My trip',
+      description: null,
+      query: 'paris',
+      entityTypes: [],
+      tags: ['vacation'],
+      filters: null,
+    },
+  },
+);
+
+describe('SearchPanelFilters in the header search panel', () => {
+  // The header box on a page outside Memory's lists, with its panel open.
+  function openHeaderPanel(
+    options: RenderWithProvidersOptions = {},
+    onOpenSavedSearch?: (params: URLSearchParams) => void,
+  ) {
+    // SearchBox asks the document whether it has focus, which jsdom never reports.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    renderToolbar(
+      <SearchBox
+        displayResults
+        openOnFocus
+        results={[]}
+        panelFooter={<SearchPanelFilters modal={false} onOpenSavedSearch={onOpenSavedSearch} />}
+      />,
+      { route: '/plan/tasks?view=board', ...options },
+    );
+
+    const input = screen.getByRole('textbox');
+    fireEvent.pointerDown(input);
+    fireEvent.focus(input);
+  }
+
+  it('keeps Save this search open, and the panel under it, when you click into the dialog', async () => {
+    openHeaderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Save this search' });
+    const name = within(dialog).getByLabelText('Name');
+
+    // The dialog is portaled out of the panel, so this used to read as a
+    // click outside it: the panel closed and took the dialog with it.
+    fireEvent.pointerDown(name);
+    fireEvent.change(name, { target: { value: 'Paris trip' } });
+
+    expect(screen.getByRole('dialog', { name: 'Save this search' })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByLabelText('Name')).toHaveValue('Paris trip');
+    // By text: the open dialog hides the panel from the accessibility tree.
+    expect(screen.getByText('Load search')).toBeInTheDocument();
+  });
+
+  it('hands a search picked from Load search to the header to open, leaving this page alone', async () => {
+    const onOpenSavedSearch = vi.fn();
+
+    openHeaderPanel({ mocks: [OWN_SAVED_SEARCHES, TRIP] }, onOpenSavedSearch);
+
+    fireEvent.click(screen.getByRole('button', { name: /Load search/ }));
+    fireEvent.click(await screen.findByText('My trip'));
+
+    await waitFor(() => expect(onOpenSavedSearch).toHaveBeenCalledTimes(1));
+    const opened: URLSearchParams = onOpenSavedSearch.mock.calls[0][0];
+    expect(opened.get('search')).toBe('paris');
+    expect(opened.get('tags')).toBe('vacation');
+    // Nothing of this page rides along, and this page's URL is untouched.
+    expect(opened.has('view')).toBe(false);
+    expect(screen.getByTestId('params')).toHaveTextContent(/^view=board$/);
   });
 });

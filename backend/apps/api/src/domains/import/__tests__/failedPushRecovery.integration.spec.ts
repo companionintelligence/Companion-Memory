@@ -582,8 +582,9 @@ describeWithDatabase(`failed push rows (${importDatabase.target})`, () => {
       expect(sendsFor(runId)).toEqual([]);
       expect(await stageRow(push.id)).toMatchObject({ status: 'failed' });
 
-      // …nor does pg-boss redelivering the job (retryLimit 3 on every queue).
-      await expect(listener.runStage(payload)).resolves.toBeUndefined();
+      // …nor does pg-boss redelivering the job (retryLimit 3 on every queue):
+      // the delivery finds the run finished and completes as nothing to do.
+      await expect(listener.runStage(payload)).resolves.toBe('skipped');
       expect(pushRunner.run).toHaveBeenCalledTimes(1);
 
       // A person re-drives it once the database is healthy.

@@ -5,7 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { isUniqueViolation } from '@ci/common/constants';
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
-import { computeChunkSize } from '@ci/common/persistence';
+import { computeChunkSize, keysetSeek } from '@ci/common/persistence';
 import { isGeocodingConfigured } from '@ci/configuration';
 import { EventService } from '@ci/domains/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
@@ -23,7 +23,9 @@ import {
   placeAppearanceCountSql,
   placeAppearanceListSql,
 } from './appearanceBrowse';
+import { EVENT_HAPPENED_SQL } from './eventHappened';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { type PurgedPlaces, purgePlaceAggregates } from './placePurge';
 
 /** One Google-style address component ({long_name, short_name, types[]}). */
 interface AddressComponent {
@@ -32,7 +34,12 @@ interface AddressComponent {
   types?: string[];
 }
 
-/** Aggregated event stats for a place (PlaceType.visitStats). */
+/**
+ * Aggregated event stats for a place (PlaceType.visitStats). Only events that
+ * happened are visits (see {@link EVENT_HAPPENED_SQL}): a deleted, predicted or
+ * cancelled event linked to the place is neither counted nor a first or last
+ * visit date.
+ */
 export interface PlaceVisitStats {
   visitCount: number;
   firstVisitAt: Date | null;
@@ -43,7 +50,9 @@ export interface PlaceVisitStats {
    * promotion for this user has work outstanding, so an event that WILL
    * eventually count as a visit here just hasn't been linked yet. A place
    * with a non-zero visitCount is always `confirmed` — enrichment being
-   * behind cannot make an already-counted visit less real.
+   * behind cannot make an already-counted visit less real. A place whose
+   * only linked events did not happen has a visitCount of 0 and is judged
+   * like any other zero.
    */
   status: 'confirmed' | 'pending_enrichment';
 }
@@ -513,21 +522,30 @@ export class PlaceService {
     // no admin_area_level_1 is common outside the US), so the same city can be
     // resolved first without a parent and later with one; without this the
     // keyed lookup below would miss and mint a duplicate city node.
+    //
+    // Read back through a CTE: a bare UPDATE … RETURNING resolves to the pair
+    // [rows, rowCount], whose length is always 2 and whose [0] is the rows
+    // array — so every call with a parent used to return `undefined` without
+    // minting the node, and the chain broke below it (see
+    // __tests__/PlaceService.hierarchy.integration.spec.ts).
     if (parentId) {
       const adopted: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
-        `UPDATE ci.entities
-            SET parent_place_id = $4
-          WHERE entity_id = (
-            SELECT entity_id
-              FROM ci.entities
-             WHERE entity_type = 'Location'
-               AND owner_user_id = $1
-               AND place_kind = $2
-               AND lower(btrim(name)) = lower(btrim($3))
-               AND parent_place_id IS NULL
-             ORDER BY created_at ASC
-             LIMIT 1)
-          RETURNING entity_id`,
+        `WITH adopted AS (
+           UPDATE ci.entities
+              SET parent_place_id = $4
+            WHERE entity_id = (
+              SELECT entity_id
+                FROM ci.entities
+               WHERE entity_type = 'Location'
+                 AND owner_user_id = $1
+                 AND place_kind = $2
+                 AND lower(btrim(name)) = lower(btrim($3))
+                 AND parent_place_id IS NULL
+               ORDER BY created_at ASC
+               LIMIT 1)
+            RETURNING entity_id
+         )
+         SELECT entity_id FROM adopted`,
         [context.userId, kind, name, parentId],
       );
 
@@ -657,6 +675,23 @@ export class PlaceService {
   /**
    * Aggregated visit stats for a batch of places from events.location_entity_id
    * (indexed by events_location_entity_idx). One grouped query per batch.
+   *
+   * Only an event that happened is a visit ({@link EVENT_HAPPENED_SQL}), and
+   * that is decided here, on the read, rather than left to whoever wrote the
+   * link. `promote.place` refuses such events and withdrew its own earlier
+   * links, but the legacy GeocodeBatchListener and the importers link them
+   * anyway, and an event cancelled after it was linked keeps its link, which
+   * the sweep no longer offers. Counted, they added visits that never took
+   * place and moved the first and last visit dates.
+   *
+   * `status` follows from the count and is not changed by that. A place whose
+   * only linked events did not happen is a zero like any other: `confirmed`
+   * when no enrichment is outstanding for the user, `pending_enrichment` while
+   * some is. The outstanding-work test below is per user and does not look at
+   * which event the work is for, so a ledger row left on an event that was
+   * deleted or cancelled after it failed can hold every zero of that user at
+   * `pending_enrichment`. That errs towards not stating a zero that is not yet
+   * known, and it was already so for deleted events.
    */
   async getVisitStats(context: ServiceContext, placeIds: string[]): Promise<Map<string, PlaceVisitStats>> {
     const out = new Map<string, PlaceVisitStats>();
@@ -695,13 +730,15 @@ export class PlaceService {
 
     const rows: Array<{ place_id: string; n: string; first_at: Date | null; last_at: Date | null }> =
       await this.placeRepository.manager.query(
-        `SELECT location_entity_id AS place_id,
+        `SELECT event.location_entity_id AS place_id,
                 COUNT(*) AS n,
-                MIN(start_time) AS first_at,
-                MAX(start_time) AS last_at
-           FROM ci.events
-          WHERE user_id = $1 AND location_entity_id = ANY($2::uuid[])
-          GROUP BY location_entity_id`,
+                MIN(event.start_time) AS first_at,
+                MAX(event.start_time) AS last_at
+           FROM ci.events event
+          WHERE event.user_id = $1
+            AND event.location_entity_id = ANY($2::uuid[])
+            AND ${EVENT_HAPPENED_SQL}
+          GROUP BY event.location_entity_id`,
         [context.userId, placeIds],
       );
 
@@ -914,17 +951,18 @@ export class PlaceService {
       .where('place.entity_type = :entityType', { entityType: 'Location' })
       .andWhere('place.owner_user_id = :userId', { userId: context.userId });
 
-    // Composite keyset: page strictly past (afterTime, afterId) in
-    // (updated_at DESC, entity_id DESC) — see ContentService.getEntitiesForContents.
+    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at, entity_id), in
+    // `order` — see keysetSeek.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(place.updated_at < :afterTime OR (place.updated_at = :afterTime AND place.entity_id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('place.updated_at', 'place.entity_id', order, options.afterTime, options.afterId),
       );
     }
 
-    // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query.orderBy('place.updated_at', options.order ?? 'DESC').addOrderBy('place.entity_id', 'DESC');
+    // Deterministic tiebreak so same-timestamp rows page consistently: the id runs the way the time does.
+    query = query.orderBy('place.updated_at', order).addOrderBy('place.entity_id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -938,7 +976,8 @@ export class PlaceService {
   /**
    * Date-windowed Places browse: one row per place, timestamped at MIN(event
    * start_time in the window) where this place is `location_entity_id`. Ingest
-   * wall-clock events are excluded. Places with no real visit in the window
+   * wall-clock events are excluded, and so are events that did not happen
+   * ({@link EVENT_HAPPENED_SQL}). Places with no real visit in the window
    * drop out. See appearanceBrowse.ts.
    */
   private async listPlacesByAppearance(
@@ -1168,6 +1207,40 @@ export class PlaceService {
     });
 
     return true;
+  }
+
+  /**
+   * Permanently deletes places, with everything that only exists because of them.
+   * This is `memory.forget`'s `archive_and_delete` for a place node, and the other
+   * end from {@link remove}: see {@link purgePlaceAggregates} for what goes, for how
+   * the children are grafted onto the nearest place that stays (as `remove` does),
+   * and for what is left because it is a record in its own right.
+   *
+   * The duplicates that were merged into a place go with it, and are named in the
+   * result separately because nobody asked for them.
+   *
+   * Everything is one transaction. Search is told afterwards, once for every place
+   * that went, and the ids that were not the caller's, or no longer exist, are
+   * simply left out of the result.
+   */
+  async purge(context: UserServiceContext, ids: string[]): Promise<PurgedPlaces> {
+    const requested = Array.from(new Set(ids));
+
+    if (requested.length === 0) {
+      return { placeIds: [], duplicateIds: [] };
+    }
+
+    const purged = await this.placeRepository.manager.transaction((manager) =>
+      purgePlaceAggregates(manager, context.userId, requested),
+    );
+
+    // The index rows were deleted in the transaction. This tells anything else
+    // that listens, and is what announces a removal everywhere else in the app.
+    for (const placeId of [...purged.placeIds, ...purged.duplicateIds]) {
+      await this.eventService.send(PlaceRemovedEvent, { placeId });
+    }
+
+    return purged;
   }
 }
 

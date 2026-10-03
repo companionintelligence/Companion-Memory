@@ -92,6 +92,48 @@ export async function probeMemoryOrigin(origin: string): Promise<void> {
   }
 }
 
+/** How long {@link probePortalOrigin} waits for any answer before calling the host unreachable. */
+const PORTAL_PROBE_TIMEOUT_MS = 8_000;
+
+/**
+ * Reachability probe for the Companion (Portal) origin, run BEFORE the system
+ * sign-in sheet opens.
+ *
+ * A wrong Companion URL (Advanced) used to show up only inside that sheet, as
+ * the browser's own error page, and dismissing the sheet is a silent cancel — so
+ * Log in simply came back with nothing in the app saying why (QA AUTH-12).
+ * Probing first puts the failure where the person can read it.
+ *
+ * Any HTTP answer counts, a 404 included: it proves something is listening
+ * there, and this deliberately does not guess at a health route the Portal may
+ * not serve. Only a request that gets no answer at all throws. It goes through
+ * the same native HTTP bridge as every other Portal call, so what it can reach
+ * is what the token exchange after the sheet can reach.
+ */
+export async function probePortalOrigin(portalUrl: string = DEFAULT_PORTAL_URL): Promise<void> {
+  const portal = normalizePortalUrl(portalUrl);
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  // The native bridge ignores an AbortSignal, so the signal alone would not
+  // bound a host that swallows the request — race a timer against it instead.
+  const unanswered = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`No answer from ${portal}`));
+    }, PORTAL_PROBE_TIMEOUT_MS);
+  });
+
+  try {
+    await Promise.race([
+      apiFetch(`${portal}/api/auth/ok`, { method: 'GET', signal: controller.signal }),
+      unanswered,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function portalFetch(url: string, init: RequestInit = {}): Promise<Response> {
   return apiFetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(15_000) });
 }

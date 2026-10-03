@@ -881,7 +881,14 @@ describe('useAuth', () => {
     await waitFor(() => expect(result.current[0].authToken).toBe('tok-1'));
     expect(refreshCalls).toBe(1);
 
-    vi.mocked(jwtDecode).mockReturnValue({ sub: 'u1', iat: 0, exp: pastExp() });
+    // Only the token already in hand is expired. The refreshed token has to
+    // decode as still-valid, or the scheduler treats delay 0 as "due now" and
+    // refreshes in a loop.
+    vi.mocked(jwtDecode).mockImplementation((token) => ({
+      sub: 'u1',
+      iat: 0,
+      exp: token === 'tok-1' ? pastExp() : futureExp(),
+    }));
 
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'));

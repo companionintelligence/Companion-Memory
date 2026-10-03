@@ -26,11 +26,15 @@ interface FakeRow {
  */
 function makeDataSource(rows: FakeRow[]) {
   const updates: Array<{ sql: string; params: unknown[] }> = [];
+  // Every statement and re-open in order, so a spec can assert what ran inside
+  // which transaction and in what sequence.
+  const calls: string[] = [];
   let selectServed = false;
 
   const query = jest.fn(async (sql: string, params: unknown[]) => {
     if (sql.includes('UPDATE ci.communications')) {
       updates.push({ sql, params });
+      calls.push('update');
 
       return [];
     }
@@ -49,11 +53,39 @@ function makeDataSource(rows: FakeRow[]) {
     return [];
   });
 
-  // The service wraps each page's UPDATE in dataSource.transaction(); route the
-  // entity-manager's query() back to the same mock so SET LOCAL + UPDATE land here.
-  const transaction = jest.fn(async (cb: (em: { query: typeof query }) => Promise<unknown>) => cb({ query }));
+  // The service wraps each page's UPDATE and its edge re-open in
+  // dataSource.transaction(); route the entity manager's query() back to the
+  // same mock so the UPDATE lands here, and record the order.
+  const managers: Array<{ query: typeof query }> = [];
+  const transaction = jest.fn(async (cb: (em: { query: typeof query }) => Promise<unknown>) => {
+    const em = { query };
+    managers.push(em);
+    calls.push('begin');
+    const result = await cb(em);
+    calls.push('commit');
 
-  return { dataSource: { query, transaction }, updates, query };
+    return result;
+  });
+
+  return { dataSource: { query, transaction }, updates, query, calls, managers };
+}
+
+/**
+ * The pipeline's `EDGE_PROJECTION_REOPENER` binding, as the lazily-resolving
+ * ModuleRef hands it back. Reports one re-opened row per id, the most a
+ * re-open can move.
+ */
+function makeReopener(calls?: string[]) {
+  const reopener = {
+    reopen: jest.fn(async (_source: string, ids: readonly string[], _manager: unknown) => {
+      calls?.push('reopen');
+
+      return ids.length;
+    }),
+  };
+  const moduleRef = { get: jest.fn(() => reopener) };
+
+  return { reopener, moduleRef };
 }
 
 function makeIdentifierService(map: Record<string, string>) {
@@ -78,6 +110,7 @@ function makeService(rows: FakeRow[], identifierMap: Record<string, string>) {
   const ds = makeDataSource(rows);
   const ids = makeIdentifierService(identifierMap);
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+  const { reopener, moduleRef } = makeReopener(ds.calls);
 
   const service = new CommunicationLinkBackfillService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -86,9 +119,11 @@ function makeService(rows: FakeRow[], identifierMap: Record<string, string>) {
     ids as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    moduleRef as any,
   );
 
-  return { service, ds, ids };
+  return { service, ds, ids, reopener };
 }
 
 describe('CommunicationLinkBackfillService.backfill', () => {
@@ -135,6 +170,73 @@ describe('CommunicationLinkBackfillService.backfill', () => {
     expect(params[4]).toEqual([JSON.stringify([TO_ENTITY_1, TO_ENTITY_2])]);
   });
 
+  it("re-opens the edge leg's decision for the rows it wrote, inside the write's transaction", async () => {
+    // The row the reference appliance stranded 16,000 times: its sender was
+    // linked at ingest, so the edge leg projected it (SENT) and recorded `done`
+    // before anything linked its recipient. Filling the recipient here must
+    // re-open that decision, or its RECEIVED edge never exists.
+    const rows: FakeRow[] = [
+      {
+        id: 'row-1',
+        time: new Date('2026-01-07T00:00:00.000Z'),
+        user_id: USER,
+        from_entity_id: FROM_ENTITY,
+        to_entity_ids: [],
+        participants_metadata: { from: 'sender@example.com', to: ['+14155550100'] },
+      },
+      {
+        id: 'row-2',
+        time: new Date('2026-01-06T00:00:00.000Z'),
+        user_id: USER,
+        from_entity_id: null,
+        to_entity_ids: null,
+        participants_metadata: { from: 'nobody@example.com' },
+      },
+    ];
+
+    const { service, ds, reopener } = makeService(rows, { 'phone:4155550100': TO_ENTITY_1 });
+
+    const result = await service.backfill(USER, { startTime: START, endTime: END });
+
+    // Only the row this page wrote; the unresolved one was never touched.
+    expect(reopener.reopen).toHaveBeenCalledTimes(1);
+    expect(reopener.reopen).toHaveBeenCalledWith('communications', ['row-1'], ds.managers[0]);
+    // After the UPDATE, before the COMMIT: the write and its re-open are one unit.
+    expect(ds.calls).toEqual(['begin', 'update', 'reopen', 'commit']);
+    expect(result.edgeDecisionsReopened).toBe(1);
+  });
+
+  it('fails the page before it writes anything when no re-opener is bound', async () => {
+    const rows: FakeRow[] = [
+      {
+        id: 'row-1',
+        time: new Date('2026-01-07T00:00:00.000Z'),
+        user_id: USER,
+        from_entity_id: null,
+        to_entity_ids: null,
+        participants_metadata: { from: 'sender@example.com' },
+      },
+    ];
+    const ds = makeDataSource(rows);
+    const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+    // Hand-built with no ModuleRef: a container without PipelineModule.
+    const service = new CommunicationLinkBackfillService(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ds.dataSource as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeIdentifierService({ 'email:sender@example.com': FROM_ENTITY }) as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      logger as any,
+    );
+
+    await expect(service.backfill(USER, { startTime: START, endTime: END })).rejects.toThrow(
+      /EDGE_PROJECTION_REOPENER/,
+    );
+    // A link written without its re-open is the defect; better no link at all.
+    expect(ds.updates).toHaveLength(0);
+    expect(ds.dataSource.transaction).not.toHaveBeenCalled();
+  });
+
   it('leaves links NULL and skips the UPDATE when nothing matches', async () => {
     const rows: FakeRow[] = [
       {
@@ -147,7 +249,7 @@ describe('CommunicationLinkBackfillService.backfill', () => {
       },
     ];
 
-    const { service, ds } = makeService(rows, {});
+    const { service, ds, reopener } = makeService(rows, {});
 
     const result = await service.backfill(USER, { startTime: START, endTime: END });
 
@@ -155,6 +257,9 @@ describe('CommunicationLinkBackfillService.backfill', () => {
     expect(result.fromLinked).toBe(0);
     expect(result.toLinked).toBe(0);
     expect(ds.updates).toHaveLength(0); // no stub creation, no write
+    // Nothing written, so nothing the edge leg decided is stale.
+    expect(reopener.reopen).not.toHaveBeenCalled();
+    expect(result.edgeDecisionsReopened).toBe(0);
   });
 
   it('only fills the missing side (from already set -> resolves to only)', async () => {
@@ -211,7 +316,14 @@ describe('CommunicationLinkBackfillService.backfill', () => {
 
     const result = await service.backfill(USER, { startTime: END, endTime: START });
 
-    expect(result).toEqual({ examined: 0, fromLinked: 0, toLinked: 0, windows: 0, range: null });
+    expect(result).toEqual({
+      examined: 0,
+      fromLinked: 0,
+      toLinked: 0,
+      edgeDecisionsReopened: 0,
+      windows: 0,
+      range: null,
+    });
     expect(ds.query).not.toHaveBeenCalled();
     expect(ids.findEntityIdsByIdentifiers).not.toHaveBeenCalled();
   });
@@ -260,6 +372,7 @@ describe('CommunicationLinkBackfillService.backfill', () => {
       return [];
     });
 
+    // The page's UPDATE and its edge re-open run in one transaction.
     const transaction = jest.fn(async (cb: (em: { query: typeof query }) => Promise<unknown>) =>
       cb({ query }),
     );
@@ -272,6 +385,8 @@ describe('CommunicationLinkBackfillService.backfill', () => {
       ids as any,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       logger as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeReopener().moduleRef as any,
     );
 
     const result = await service.backfill(USER);

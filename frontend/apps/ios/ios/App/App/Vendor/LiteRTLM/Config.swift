@@ -61,6 +61,12 @@ public struct EngineConfig {
   public let loraRank: Int?
   /// The rank of the audio LoRA weights. If 0 or nil, audio LoRA is disabled.
   public let audioLoraRank: Int?
+  /// CI PATCH (engine-tuning). The most tokens the CPU backend prefills in one go for a dynamically
+  /// exported model; longer inputs are fed in chunks of this size. `nil` leaves the runtime's default
+  /// (no chunking).
+  public let prefillChunkSize: Int?
+  /// CI PATCH (engine-tuning). Threads the CPU backend uses. `nil` leaves the runtime's default (4).
+  public let numThreads: Int?
 
   /// - Parameters:
   ///   - modelPath: The file path to the LiteRT-LM model.
@@ -83,7 +89,9 @@ public struct EngineConfig {
     maxNumTokens: Int? = nil,
     cacheDir: String? = nil,
     loraRank: Int? = nil,
-    audioLoraRank: Int? = nil
+    audioLoraRank: Int? = nil,
+    prefillChunkSize: Int? = nil,
+    numThreads: Int? = nil
   ) throws {
     if let maxNumTokens, maxNumTokens <= 0 {
       throw LiteRTLMError.config(.invalidMaxNumTokens)
@@ -96,6 +104,8 @@ public struct EngineConfig {
     self.cacheDir = cacheDir
     self.loraRank = loraRank
     self.audioLoraRank = audioLoraRank
+    self.prefillChunkSize = prefillChunkSize
+    self.numThreads = numThreads
   }
 }
 

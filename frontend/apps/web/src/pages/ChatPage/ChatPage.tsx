@@ -1,9 +1,17 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
-import { Portal, usePageTitle } from '@ci/common';
+import {
+  FetchJsonError,
+  findLocalLlmModel,
+  Portal,
+  resetLocalLlmConversation,
+  useDeviceLayout,
+  usePageTitle,
+  type LocalLlmGenerationStats,
+} from '@ci/common';
 import { Button, Card } from '@ci/shadcn';
-import { RefreshCw, Send, Sparkles, X } from '@ci/shadcn/icons';
-import { useNavigate, useParams } from 'react-router-dom';
+import { RefreshCw, Send, Smartphone, Sparkles, X } from '@ci/shadcn/icons';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { v7 as uuid7 } from 'uuid';
 
 import { useThreadService } from '@/api';
@@ -12,15 +20,55 @@ import { useFeatures } from '@/common/feature';
 import { Chat, type FormData } from '@/components/Chat';
 import { ErrorState } from '@/components/ErrorState';
 import { MemoryHubShell } from '@/components/MemoryHub';
+import { useToolsOffReason } from '@/components/ModelSelector';
 import { useAuth, useChatRequester, useCounter, useModel } from '@/hooks';
+import { useLocalLlmPrefs } from '@/hooks/useOnDeviceModel';
 import { clearAgentChatContext, formatAgentChatDraft, readAgentChatContext } from '@/lib/agentChat';
 
 import { CHAT_BASE, chatThreadPath } from './chatPaths';
 import { ChatNoModelState } from './ChatNoModelState';
 import { ChatSidebar } from './ChatSidebar';
-import { chatTopicsFor, joinTopics, starterPromptsFor } from './starterPrompts';
+import { PhoneChatBar } from './PhoneChatBar';
+import { TOOL_STARTER_PROMPTS, chatTopicsFor, joinTopics, starterPromptsFor } from './starterPrompts';
 import { type Message } from './types';
 import { useThreadListService } from './useThreadListService';
+
+/**
+ * The server answers 404 for a thread this person no longer has: deleted from this device or another, or never
+ * theirs. Nothing the page does later changes that. Every other failure (offline, a timeout, a 5xx) is a failed
+ * FETCH of a thread that is still there.
+ */
+function isThreadGone(error: unknown): boolean {
+  return error instanceof FetchJsonError && error.status === 404;
+}
+
+/**
+ * Says the last reply came from this phone rather than the Companion, and how fast. The speed is the same
+ * time-to-first-token / decode-rate pair Google AI Edge Gallery shows under a reply; it is the one honest
+ * signal of whether this device is coping with the model it chose.
+ *
+ * It wraps rather than truncating: time to first token is the last thing on the line, and on a 402pt phone
+ * the line ended in an ellipsis just before it.
+ */
+function OnDeviceBadge({ modelId, stats }: { modelId: string; stats: LocalLlmGenerationStats | null }) {
+  const label = findLocalLlmModel(modelId)?.label ?? modelId;
+
+  return (
+    <p
+      role="status"
+      data-testid="on-device-badge"
+      className="text-muted-foreground border-border mx-auto mb-2 flex w-full max-w-xl items-start gap-2 rounded-md border px-3 py-1.5 text-xs"
+    >
+      <Smartphone className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 break-words">
+        Answered on this phone · {label}
+        {stats
+          ? ` · ${stats.decodeTokensPerSecond.toFixed(1)} tok/s${stats.tokensEstimated ? ' (est.)' : ''} · ${(stats.timeToFirstTokenMs / 1000).toFixed(1)}s to first token`
+          : ''}
+      </span>
+    </p>
+  );
+}
 
 function ChatPageContent() {
   const resolvedThreadId = useRef<string | null>(null);
@@ -29,6 +77,8 @@ function ChatPageContent() {
   const threadTitleRefreshTimeoutRef = useRef<number | null>(null);
 
   const navigate = useNavigate();
+  const location = useLocation();
+  const { isMobile } = useDeviceLayout();
 
   const { id: initialThreadId } = useParams<{ id?: string }>();
   const [initialMessages, setInitialMessages] = useState<Message[]>([]);
@@ -36,13 +86,25 @@ function ChatPageContent() {
   const [{ selectedModel, loading: modelsLoading, error: modelsError }, { refetch: refetchModels }] =
     useModel();
   const { isFeatureEnabled } = useFeatures();
+  const toolsOff = useToolsOffReason() !== null;
+  const [localPrefs] = useLocalLlmPrefs();
+  // With a phone model chosen and routing on, chat works with no appliance model at all — the case where
+  // the appliance is unreachable and `useModel` has nothing to select.
+  const localChatEnabled = localPrefs.mode !== 'appliance' && localPrefs.modelId !== null;
+  // Photos are read on the phone (never uploaded) only when the phone alone answers and its model can see.
+  const localImages =
+    localPrefs.mode === 'device' &&
+    Boolean(localPrefs.modelId && findLocalLlmModel(localPrefs.modelId)?.capabilities.includes('vision'));
+  // The phone alone answers but nothing on it can read a file: attaching could only upload it to the appliance,
+  // which "Always answer on this phone" promises never happens.
+  const blockUploads = localPrefs.mode === 'device' && !localImages;
 
   const [
     { threads, loading: threadsLoading, error: threadsError },
     { refetch: refetchThreads, delete: deleteThread },
   ] = useThreadListService();
 
-  const [{ authToken }] = useAuth();
+  const [{ authToken, authenticated }] = useAuth();
   const [{ thread, loading: threadLoading, error: threadError }, { refetch: refetchThread }] =
     useThreadService(resolvedThreadId.current);
   const isDispatch = thread?.kind === 'dispatch';
@@ -61,12 +123,13 @@ function ChatPageContent() {
   );
 
   const [
-    { stream, loading: chatRequestLoading, streaming: chatRequestStreaming, hasStartedReceiving },
+    { stream, loading: chatRequestLoading, streaming: chatRequestStreaming, hasStartedReceiving, local },
     {
       submit: submitChatRequest,
       stop: stopChatRequest,
       attach: attachChatStream,
       detach: detachChatStream,
+      reset: resetChatStream,
       cancel: cancelGeneration,
     },
   ] = useChatRequester({
@@ -74,18 +137,67 @@ function ChatPageContent() {
     onNewThread: handleNewThread,
   });
 
-  const navigateToChatList = useCallback(() => {
+  /**
+   * Back to an empty chat. A new chat must not inherit the previous one's turns — the native conversation keeps
+   * them — or its stream, or the "answered on this phone" badge, or the starter ask that was echoed into the
+   * message list, or the draft "Chat about this" seeded the composer with.
+   */
+  const startNewChat = useCallback(() => {
     incrementNewThreadCount();
-    detachChatStream();
+    resetChatStream();
+    void resetLocalLlmConversation();
     resolvedThreadId.current = null;
+    setInitialMessages([]);
+    setChatDraft('');
+  }, [incrementNewThreadCount, resetChatStream]);
+
+  const navigateToChatList = useCallback(() => {
+    startNewChat();
     navigate(CHAT_BASE);
-  }, [incrementNewThreadCount, detachChatStream, navigate]);
+  }, [startNewChat, navigate]);
 
   useEffect(() => {
     setInitialMessages([]);
     hasSetInitialMessages.current = initialThreadId ? false : true;
     resolvedThreadId.current = initialThreadId ?? null;
   }, [initialThreadId]);
+
+  // The sidebar's `onSelectThread` resets the conversation it is leaving, but the phone drawer's thread rows (and
+  // the browser's back button) are plain router navigations that never pass through it — so the route change
+  // itself has to say the conversation changed. Skipped on mount: nothing has been left yet.
+  const routedThreadId = useRef(initialThreadId);
+
+  useEffect(() => {
+    if (routedThreadId.current === initialThreadId) {
+      return;
+    }
+
+    routedThreadId.current = initialThreadId;
+    resetChatStream();
+    void resetLocalLlmConversation();
+    // Declared before the seeding effect below, so a fresh "Chat about this" seed still lands after this clears.
+    setChatDraft('');
+  }, [initialThreadId, resetChatStream]);
+
+  // The first message of a new chat moves the address bar to its thread without telling the router (see
+  // `handleNewThread`), so the router still believes it is on the bare chat path. A link to that path — the Chat
+  // row in the phone drawer, the Chat tab on every Memory page — then lands "where it already is", and the chat
+  // kept its conversation. A fresh navigation to the bare path with something to start over from has to mean a
+  // new chat: a thread, or an on-device turn (which never has one — the badge is what says it happened). Declared
+  // after the effect above: when the route itself dropped the thread, that one has already cleared it.
+  const seenLocationKey = useRef(location.key);
+
+  useEffect(() => {
+    if (seenLocationKey.current === location.key) {
+      return;
+    }
+
+    seenLocationKey.current = location.key;
+
+    if (!initialThreadId && (resolvedThreadId.current != null || local != null)) {
+      startNewChat();
+    }
+  }, [location.key, initialThreadId, local, startNewChat]);
 
   useEffect(() => {
     if (initialThreadId) {
@@ -127,11 +239,12 @@ function ChatPageContent() {
   const handleSelectThread = useCallback(
     (threadId: string) => {
       if (resolvedThreadId.current !== threadId) {
-        detachChatStream();
+        resetChatStream();
+        void resetLocalLlmConversation();
         navigate(chatThreadPath(threadId));
       }
     },
-    [navigate, detachChatStream],
+    [navigate, resetChatStream],
   );
 
   const handleDeleteThread = useCallback(
@@ -170,8 +283,9 @@ function ChatPageContent() {
     async (data: FormData, e?: FormEvent) => {
       e?.preventDefault();
 
-      if (isDispatch && dispatchJob && authToken) {
-        await steerDispatchJob(authToken, dispatchJob.id, {
+      // `authenticated`, not `authToken`: the token is the web JWT, which the native shell never has.
+      if (isDispatch && dispatchJob && authenticated) {
+        await steerDispatchJob(authToken ?? null, dispatchJob.id, {
           action: 'continue',
           message: data.message,
         });
@@ -182,7 +296,7 @@ function ChatPageContent() {
 
       return submitChatRequest(data);
     },
-    [authToken, dispatchJob, isDispatch, refetchThread, submitChatRequest],
+    [authToken, authenticated, dispatchJob, isDispatch, refetchThread, submitChatRequest],
   );
 
   useEffect(() => {
@@ -220,7 +334,7 @@ function ChatPageContent() {
    */
   const handleStarterPrompt = useCallback(
     (prompt: string) => {
-      if (selectedModel == null || chatRequestLoading) {
+      if ((selectedModel == null && !localChatEnabled) || chatRequestLoading) {
         return;
       }
 
@@ -228,7 +342,7 @@ function ChatPageContent() {
         ...prev,
         {
           id: uuid7(),
-          model: selectedModel,
+          model: selectedModel ?? localPrefs.modelId ?? '',
           role: 'user',
           content: prompt,
           mimetype: null,
@@ -239,22 +353,31 @@ function ChatPageContent() {
 
       void submitChatRequest({ message: prompt });
     },
-    [chatRequestLoading, selectedModel, submitChatRequest],
+    [chatRequestLoading, localChatEnabled, localPrefs.modelId, selectedModel, submitChatRequest],
   );
 
   const loading = threadsLoading || threadLoading || chatRequestLoading;
-  const isSubmitDisabled = selectedModel == null;
+  const isSubmitDisabled = selectedModel == null && !localChatEnabled;
   // Still fetching is not "no model": the list arrives a beat after the page, and
-  // flashing a setup prompt at someone whose model is about to appear is worse
-  // than the blank it replaces.
-  const hasNoModel = selectedModel == null && !modelsLoading;
+  // flashing a setup prompt at someone whose model is about to appear is worth
+  // less than the blank it replaces. A phone model that answers is a model too.
+  const hasNoModel = selectedModel == null && !modelsLoading && !localChatEnabled;
   const topics = joinTopics(chatTopicsFor(isFeatureEnabled), 'or');
   const inputPlaceholder = hasNoModel
     ? 'Chat is off until a model is set up — Settings → Model'
     : resolvedThreadId.current == null
       ? `Ask about ${topics}…`
       : `Continue — ${topics}…`;
-  const starterPrompts = starterPromptsFor(isFeatureEnabled);
+
+  // With no tools, only the starters the snapshots can answer: a tool-only one
+  // would be answered with an invented place or a literal tool call.
+  const enabledStarters = starterPromptsFor(isFeatureEnabled);
+  const starterPrompts = toolsOff
+    ? enabledStarters.filter((prompt) => !TOOL_STARTER_PROMPTS.has(prompt))
+    : enabledStarters;
+
+  // Nothing can be sent into a thread the server no longer has: the reply would only 404 and the message be lost.
+  const threadGone = initialMessages.length === 0 && isThreadGone(threadError);
 
   let emptyState: ReactNode;
 
@@ -266,7 +389,19 @@ function ChatPageContent() {
     // /chat/:id while the API is failing therefore looked exactly like a thread
     // whose history had been deleted, and typing into it would start appending
     // to a conversation whose real contents were never shown.
-    emptyState = (
+    //
+    // A thread the server no longer has is the one failure where "your messages are still here" is false and Try
+    // again can only fail again, so it says so and offers the way back instead.
+    emptyState = threadGone ? (
+      <ErrorState
+        title="This chat was deleted."
+        description="It is no longer on your Companion, so there is nothing left to open. Start a new chat to carry on."
+      >
+        <Button size="sm" onClick={navigateToChatList}>
+          New chat
+        </Button>
+      </ErrorState>
+    ) : (
       <ErrorState
         title="Could not load this conversation"
         description="Your messages are still here — this device could not reach them just now."
@@ -352,12 +487,26 @@ function ChatPageContent() {
         </Portal.Slot>
 
         <div className="flex min-h-0 flex-1 flex-col">
+          {isMobile ? (
+            <PhoneChatBar
+              threads={threads}
+              loading={threadsLoading}
+              selectedThreadId={resolvedThreadId.current}
+              onSelectThread={handleSelectThread}
+              onNewThread={navigateToChatList}
+              onDeleteThread={handleDeleteThread}
+              onRefresh={refetchThreads}
+            />
+          ) : null}
+          {local ? <OnDeviceBadge modelId={local.modelId} stats={local.stats} /> : null}
           <Chat
             key={initialThreadId ?? `new-thread-${newThreadCount}`}
             loading={loading}
             streaming={chatRequestStreaming}
             hasStartedReceiving={hasStartedReceiving}
-            disabled={isSubmitDisabled}
+            disabled={isSubmitDisabled || threadGone}
+            localImages={localImages}
+            blockUploads={blockUploads}
             placeholder={inputPlaceholder}
             initialDraft={chatDraft}
             messages={initialMessages}

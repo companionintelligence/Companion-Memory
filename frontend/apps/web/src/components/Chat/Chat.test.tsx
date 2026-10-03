@@ -1,4 +1,5 @@
-import { fireEvent, waitFor } from '@testing-library/react';
+import { LocalLlmGenerationError } from '@ci/common';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -8,6 +9,7 @@ import { Channel, FrameEncoder } from './utils';
 
 vi.mock('@/components/ModelSelector', () => ({
   ModelSelector: () => <div data-testid="model-selector" />,
+  ToolsOffNotice: () => <div data-testid="tools-off-notice" />,
 }));
 
 vi.mock('@/api/useUploadFile', () => ({
@@ -51,6 +53,83 @@ describe('Chat', () => {
     await waitFor(() => expect(getByText('what is up')).toBeInTheDocument());
   });
 
+  /**
+   * A refused send leaves its text in the composer (ChatInput only clears on `true`), so the transcript must not
+   * also claim it was sent: each refused try added a user bubble with no reply, two tries gave two bubbles.
+   */
+  describe('a refused send', () => {
+    // The composer's own text node would match too — React mirrors a textarea's value into its default value.
+    const bubbles = (text: string) => screen.queryAllByText(text, { ignore: 'textarea, script, style' });
+
+    const typeAndSend = (text: string) => {
+      const textbox = screen.getByRole('textbox');
+
+      fireEvent.change(textbox, { target: { value: text } });
+      fireEvent.keyDown(textbox, { key: 'Enter' });
+    };
+
+    it('shows the bubble while the send is still pending', async () => {
+      renderWithProviders(<Chat onSubmit={() => new Promise<boolean>(() => undefined)} />);
+
+      typeAndSend('what is up');
+
+      await waitFor(() => expect(bubbles('what is up')).toHaveLength(1));
+    });
+
+    it('takes its user bubble back, and the empty state returns with it', async () => {
+      const onSubmit = vi.fn().mockResolvedValue(false);
+
+      renderWithProviders(<Chat onSubmit={onSubmit} emptyState={<div>Start the conversation</div>} />);
+      typeAndSend('what is up');
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(bubbles('what is up')).toHaveLength(0));
+      expect(screen.getByText('Start the conversation')).toBeInTheDocument();
+      // Still in the box, so it can be fixed and sent again.
+      expect(screen.getByRole('textbox')).toHaveValue('what is up');
+    });
+
+    it('leaves no bubble however many times it is tried', async () => {
+      const onSubmit = vi.fn().mockResolvedValue(false);
+
+      renderWithProviders(<Chat onSubmit={onSubmit} />);
+
+      typeAndSend('try again');
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(bubbles('try again')).toHaveLength(0));
+
+      typeAndSend('try again!');
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(bubbles('try again!')).toHaveLength(0));
+    });
+
+    it('shows exactly one bubble once the retry is accepted', async () => {
+      const onSubmit = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+
+      renderWithProviders(<Chat onSubmit={onSubmit} />);
+
+      typeAndSend('hello');
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(bubbles('hello')).toHaveLength(0));
+
+      typeAndSend('hello!');
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(bubbles('hello!')).toHaveLength(1));
+      expect(bubbles('hello')).toHaveLength(0);
+    });
+
+    it('keeps the bubble of an accepted send', async () => {
+      const onSubmit = vi.fn().mockResolvedValue(true);
+
+      renderWithProviders(<Chat onSubmit={onSubmit} />);
+      typeAndSend('what is up');
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(bubbles('what is up')).toHaveLength(1);
+    });
+  });
+
   it('never loads a remote image while a reply streams in', async () => {
     // The live reply is painted by the streaming renderer, not by Markdown, so
     // Markdown's own image rule never saw it. The URL arrives split across
@@ -74,6 +153,57 @@ describe('Chat', () => {
 
     await waitFor(() => expect(container.querySelector('a[data-remote-image]')).toHaveAttribute('href', src));
     expect(container.querySelector('img')).toBeNull();
+  });
+
+  /**
+   * A turn whose stream dies — the on-device model failing right after a tool call was the case that motivated this.
+   * The notice always says the reply is incomplete; it adds the reason only when the failure carries one.
+   */
+  describe('a reply whose stream dies', () => {
+    const dying = (error: unknown) =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(error);
+        },
+      });
+
+    const renderDying = (error: unknown) => {
+      // Chat logs the failure for whoever has the console open; the log is not what is under test.
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      return renderWithProviders(
+        <Chat messages={[{ role: 'user', content: 'search my memory' }]} readable={dying(error)} />,
+      );
+    };
+
+    it('keeps the generic wording, and adds nothing, for a failure with no reason of its own', async () => {
+      renderDying(new Error('socket hang up'));
+
+      expect(await screen.findByText(/The response stream was interrupted/)).toBeInTheDocument();
+      expect(screen.queryByText(/Reason:/)).not.toBeInTheDocument();
+      // An arbitrary error's text is not the user's business: only a native model failure is explained.
+      expect(screen.queryByText(/socket hang up/)).not.toBeInTheDocument();
+    });
+
+    it('says why an on-device turn failed, under the generic wording', async () => {
+      renderDying(
+        new LocalLlmGenerationError(
+          'Generation failed: Invalid response from native layer: Input token ids are too long.',
+        ),
+      );
+
+      expect(await screen.findByText(/The response stream was interrupted/)).toBeInTheDocument();
+      expect(
+        screen.getByText('Reason: Invalid response from native layer: Input token ids are too long.'),
+      ).toBeInTheDocument();
+    });
+
+    it('keeps the generic wording alone when the on-device failure had no reason to give', async () => {
+      renderDying(new LocalLlmGenerationError('Generation failed'));
+
+      expect(await screen.findByText(/The response stream was interrupted/)).toBeInTheDocument();
+      expect(screen.queryByText(/Reason:/)).not.toBeInTheDocument();
+    });
   });
 
   it('submits a typed message through ChatInput', async () => {

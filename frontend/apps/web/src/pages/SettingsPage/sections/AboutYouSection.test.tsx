@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AboutYouView, HowYoudDoItResult } from '@/api/usePersonaCompose';
@@ -165,5 +165,157 @@ describe('AboutYouSection', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(screen.getByText('About you')).toBeInTheDocument());
+  });
+});
+
+/** The profile as the server returns it with one recent answer. */
+function viewWithAnswer(answer: string): AboutYouView {
+  return {
+    ...view,
+    recentAnswers: [
+      {
+        id: 'a1',
+        question: 'What skill are you trying to get better at this year?',
+        answer,
+        answeredAt: '2026-10-02T09:40:00.000Z',
+      },
+    ],
+  };
+}
+
+/** A promise settled from outside, for holding a fetch open while the test reads the screen. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+
+  return { promise, resolve };
+}
+
+describe('AboutYouSection — "Recent answers" after an answer changes elsewhere on the page', () => {
+  it('refetches in place when the page bumps `refreshToken`, so an edited answer shows its new words', async () => {
+    // The Self page lets you edit an answer in Life details; this list used to
+    // keep showing the old words until the page was reloaded.
+    h.fetchAboutYou
+      .mockReset()
+      .mockResolvedValueOnce(viewWithAnswer('Piano'))
+      .mockResolvedValueOnce(viewWithAnswer('Violin'));
+
+    const { rerender } = render(<AboutYouSection refreshToken={0} />);
+
+    expect(await screen.findByText('Piano')).toBeInTheDocument();
+    expect(h.fetchAboutYou).toHaveBeenCalledTimes(1);
+
+    rerender(<AboutYouSection refreshToken={1} />);
+
+    expect(await screen.findByText('Violin')).toBeInTheDocument();
+    expect(screen.queryByText('Piano')).not.toBeInTheDocument();
+    expect(h.fetchAboutYou).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not fetch a second time on mount just because a token was passed', async () => {
+    h.fetchAboutYou.mockReset().mockResolvedValue(viewWithAnswer('Piano'));
+
+    render(<AboutYouSection refreshToken={3} />);
+
+    await screen.findByText('Piano');
+
+    expect(h.fetchAboutYou).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the section on screen while it refreshes — no "Loading…" in its place', async () => {
+    // A refresh that swapped the section for "Loading…" collapsed it, and the
+    // page scroller with it, on every answer saved above.
+    const refresh = deferred<AboutYouView>();
+    h.fetchAboutYou
+      .mockReset()
+      .mockResolvedValueOnce(viewWithAnswer('Piano'))
+      .mockReturnValueOnce(refresh.promise);
+
+    const { rerender } = render(<AboutYouSection refreshToken={0} />);
+    await screen.findByText('Piano');
+    const heading = screen.getByText('About you');
+
+    rerender(<AboutYouSection refreshToken={1} />);
+    await waitFor(() => expect(h.fetchAboutYou).toHaveBeenCalledTimes(2));
+
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(screen.getByText('About you')).toBe(heading);
+    expect(screen.getByText('Piano')).toBeInTheDocument();
+
+    await act(async () => {
+      refresh.resolve(viewWithAnswer('Violin'));
+    });
+
+    expect(await screen.findByText('Violin')).toBeInTheDocument();
+  });
+
+  it('keeps what is shown when a refresh fails, rather than replacing it with an error', async () => {
+    h.fetchAboutYou
+      .mockReset()
+      .mockResolvedValueOnce(viewWithAnswer('Piano'))
+      .mockRejectedValueOnce(new Error('offline'));
+
+    const { rerender } = render(<AboutYouSection refreshToken={0} />);
+    await screen.findByText('Piano');
+
+    rerender(<AboutYouSection refreshToken={1} />);
+    await waitFor(() => expect(h.fetchAboutYou).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByText('Piano')).toBeInTheDocument();
+    expect(screen.queryByText('Could not load what Companion knows about you.')).not.toBeInTheDocument();
+  });
+
+  it('lets only the newest refresh write, whatever order the answers come back in', async () => {
+    const first = deferred<AboutYouView>();
+    const second = deferred<AboutYouView>();
+    h.fetchAboutYou
+      .mockReset()
+      .mockResolvedValueOnce(viewWithAnswer('Piano'))
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    const { rerender } = render(<AboutYouSection refreshToken={0} />);
+    await screen.findByText('Piano');
+
+    rerender(<AboutYouSection refreshToken={1} />);
+    await waitFor(() => expect(h.fetchAboutYou).toHaveBeenCalledTimes(2));
+    rerender(<AboutYouSection refreshToken={2} />);
+    await waitFor(() => expect(h.fetchAboutYou).toHaveBeenCalledTimes(3));
+
+    // The newer answer lands first, then the older one arrives late.
+    await act(async () => {
+      second.resolve(viewWithAnswer('Cello'));
+    });
+    expect(await screen.findByText('Cello')).toBeInTheDocument();
+
+    await act(async () => {
+      first.resolve(viewWithAnswer('Violin'));
+    });
+
+    expect(screen.getByText('Cello')).toBeInTheDocument();
+    expect(screen.queryByText('Violin')).not.toBeInTheDocument();
+  });
+
+  it('reloads after a correction without swapping the section for "Loading…" either', async () => {
+    const reload = deferred<AboutYouView>();
+    h.fetchAboutYou.mockReset().mockResolvedValueOnce(view).mockReturnValueOnce(reload.promise);
+
+    await renderSection();
+
+    fireEvent.change(screen.getByPlaceholderText(/I prefer short meetings/), {
+      target: { value: 'I hate evening calls.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save correction' }));
+
+    await waitFor(() => expect(h.fetchAboutYou).toHaveBeenCalledTimes(2));
+
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(screen.getByText('About you')).toBeInTheDocument();
+
+    await act(async () => {
+      reload.resolve(view);
+    });
   });
 });

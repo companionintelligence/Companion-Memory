@@ -40,23 +40,6 @@ const RELATED_ANSWER_LIMIT = 10;
 const RECENT_ANSWER_FALLBACK = 5;
 
 /**
- * This call was previously unbounded — no signal, no timeout — so a hung or
- * slow-loading model held its job (and the single-slot LLM_BACKGROUND_QUEUE behind it)
- * indefinitely, up to pg-boss's own 900s `expireInSeconds`. Observed on a real
- * appliance as `infer.question.answer` jobs dead-lettering with a raw "fetch
- * failed" and no useful diagnosis, under the SAME contention pattern documented
- * on `TodoScanService.SCAN_TIMEOUT_MS`: a request that cannot be cancelled
- * holds its model slot regardless of what killed the caller, so retries queue
- * behind their own predecessors' orphaned generations instead of behind
- * nothing.
- *
- * 60s matches the other planning-domain budgets. Unlike those, this call
- * stays on {@link PROMPT_MODEL} rather than moving to the utility tier — see
- * that constant's use below. This is a bounds-only fix.
- */
-const INFERENCE_TIMEOUT_MS = 60_000;
-
-/**
  * Output cap (Ollama `options.num_predict`). The schema's `answer` is
  * documented as "ONE short first-person sentence at most" and `rationale` as
  * "one line" — generous headroom over a legitimate response, sized only to
@@ -195,6 +178,15 @@ export type InferenceOutcome =
       confidence?: number;
     };
 
+/**
+ * Why a queued job was dropped before any retrieval or model call.
+ *
+ * `gone` is the row vanishing between the listener's two reads of it; the other
+ * three are the filters both inference selectors apply when they queue a job
+ * (see {@link QuestionService.findInferenceStanding}).
+ */
+type InferenceSkipReason = 'gone' | 'inactive' | 'hand-entry' | 'forked';
+
 @Injectable()
 export class AnswerInferenceListener {
   constructor(
@@ -236,6 +228,33 @@ export class AnswerInferenceListener {
       return;
     }
 
+    // ═══ THE EXECUTION-TIME GATE ═══
+    //
+    // `findById` settles who may READ the row and nothing else. The selectors
+    // that queue this job also require the question to be active, not
+    // `hand_entry`, and not replaced by one of the owner's own forks — but they
+    // check that when they QUEUE it, and a job waits in pg-boss, behind the
+    // single-slot LLM queue, before anything runs it. In that gap a migration can
+    // retire the row, a reclassification can mark it `hand_entry`, and the owner
+    // can fork it, and nothing in the payload knows. Unchecked, the job ran the
+    // model anyway and wrote an inferred answer onto a question the owner is no
+    // longer asked.
+    //
+    // Here, and not in `inferAnswerForQuestion`: that is what a probe or a test
+    // calls to inspect the model's decision without writing anything, and gating
+    // it would stop a probe from asking about a hand-entry question at all.
+    const skipReason = await this.findSkipReason(serviceContext, question.id);
+
+    if (skipReason) {
+      this.logger.debug('Answer inference skipped — the question no longer qualifies', {
+        userId: ownerId,
+        questionId: payload.questionId,
+        reason: skipReason,
+      });
+
+      return;
+    }
+
     const outcome = await this.inferAnswerForQuestion(serviceContext, question);
 
     if (outcome.status !== 'ok') {
@@ -245,6 +264,43 @@ export class AnswerInferenceListener {
     const { inferred, confidence, evidence } = outcome;
 
     await this.persistInferredAnswer(serviceContext, payload.questionId, inferred, confidence, evidence);
+  }
+
+  /**
+   * Why a queued job must not run any more, or null when the question still
+   * qualifies.
+   *
+   * Reads the three facts fresh from `ci.questions` and decides here, so the
+   * decision is this listener's and the SQL stays the service's. The order is
+   * only the order the reason is reported in: a retired question the owner has
+   * also forked is `inactive`, and either way the job does not run.
+   */
+  private async findSkipReason(
+    serviceContext: UserServiceContext,
+    questionId: string,
+  ): Promise<InferenceSkipReason | null> {
+    const standing = await this.questionService.findInferenceStanding(serviceContext, questionId);
+
+    // Readable a moment ago and not now: deleted between the two reads.
+    if (!standing) {
+      return 'gone';
+    }
+
+    if (!standing.isActive) {
+      return 'inactive';
+    }
+
+    // A deny-list, as in both selectors (`evidence_class <> 'hand_entry'`): a
+    // class added later stays inferable until somebody says it is not.
+    if (standing.evidenceClass === 'hand_entry') {
+      return 'hand-entry';
+    }
+
+    if (standing.forkedByCaller) {
+      return 'forked';
+    }
+
+    return null;
   }
 
   /**
@@ -343,7 +399,18 @@ ${evidence.block}`
     ];
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), INFERENCE_TIMEOUT_MS);
+    // The call must be bounded and cancellable: unbounded, a hung or slow-loading model held its
+    // job and the single-slot LLM_BACKGROUND_QUEUE behind it, and a request that cannot be
+    // cancelled keeps its model slot (see `TodoScanService.SCAN_TIMEOUT_MS`), so retries queued
+    // behind their own predecessors' orphaned generations.
+    //
+    // The bound is `llm.answerInferenceTimeoutMs` (270s), not the 60s the other planning-domain
+    // calls use: the call is non-streaming, so the first byte is the finished answer, and a pool
+    // placement on a slow CPU node was aborted at 60s and retried. It is also handed to the
+    // backend as this call's first-response deadline, which would otherwise cut it at
+    // `llm.firstResponseTimeoutMs`. Unlike the planning calls this one stays on PROMPT_MODEL.
+    const timeoutMs = config.llm.answerInferenceTimeoutMs;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     let llmResponse;
 
@@ -355,6 +422,7 @@ ${evidence.block}`
         // INFERRED_ANSWER_JSON_SCHEMA.
         format: INFERRED_ANSWER_JSON_SCHEMA,
         signal: controller.signal,
+        firstResponseTimeoutMs: timeoutMs,
         maxOutputTokens: INFERENCE_MAX_OUTPUT_TOKENS,
         keepAlive: INFERENCE_KEEP_ALIVE,
       });

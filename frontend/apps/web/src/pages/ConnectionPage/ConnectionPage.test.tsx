@@ -1,6 +1,6 @@
-import { GlobalUID } from '@ci/common';
+import { GlobalUID, setApiKey } from '@ci/common';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -12,13 +12,23 @@ vi.mock('@ci/common', async (importOriginal) => {
   return { ...actual, usePageTitle: () => {} };
 });
 
+// The web session holds a JWT. The native shell holds only a device API key, so there is no JWT
+// there (`authToken` null) while the session is still `authenticated`.
+const authState = vi.hoisted(() => ({ authToken: 'test-token' as string | null, authenticated: true }));
+
 // `useAuth` reads AuthProvider context, which `renderWithProviders` does not
 // supply (it fetches on mount) — the established pattern for pages that need
 // it is to mock the hook directly.
 vi.mock('@/hooks', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
 
-  return { ...actual, useAuth: () => [{ authToken: 'test-token', authenticated: true }] };
+  return { ...actual, useAuth: () => [authState] };
+});
+
+afterEach(() => {
+  authState.authToken = 'test-token';
+  authState.authenticated = true;
+  setApiKey(null);
 });
 
 const CONNECTION_ID = GlobalUID.encode('connection', 'c1');
@@ -105,5 +115,115 @@ describe('ConnectionPage — Edit does not touch the sync schedule', () => {
     const input = saved[0].input as Record<string, unknown>;
     expect(input).not.toHaveProperty('schedule');
     expect(input.name).toBe('Google Photos (renamed)');
+  });
+});
+
+function updateConnectionMock(saved: Record<string, unknown>[]) {
+  return {
+    request: { query: UPDATE_CONNECTION },
+    variableMatcher: () => true,
+    result: (variables: Record<string, unknown>) => {
+      saved.push(variables);
+
+      return {
+        data: {
+          updateConnection: {
+            __typename: 'UpdateConnectionPayload',
+            success: true,
+            connection: connectionRow({ name: 'Google Photos (renamed)' }),
+          },
+        },
+      };
+    },
+  };
+}
+
+/**
+ * ═══ "AUTHENTICATION TOKEN OR CONNECTION NOT FOUND" ON THE PHONE ═══
+ *
+ * `authToken` is the web JWT, null in the Capacitor app — whose durable credential is a keystore
+ * API key. Saving an edit threw on `!authToken` before it sent anything, though the save is a
+ * GraphQL mutation that authenticates through the Apollo link (which attaches the key) and never
+ * reads the token. The phone could open Edit but never save it.
+ */
+describe('ConnectionPage — native shell (API key, no web JWT)', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('saves an edit without a web JWT', async () => {
+    authState.authToken = null;
+    const saved: Record<string, unknown>[] = [];
+
+    renderWithProviders(<ConnectionPage />, {
+      route: '/connections/c1',
+      path: '/connections/:id',
+      mocks: [connectionMock(connectionRow()), updateConnectionMock(saved)],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /^edit$/i }));
+
+    const nameField = await screen.findByDisplayValue('Google Photos');
+    fireEvent.change(nameField, { target: { value: 'Google Photos (renamed)' } });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect((saved[0].input as Record<string, unknown>).name).toBe('Google Photos (renamed)');
+    expect(screen.queryByText(/not found/i)).not.toBeInTheDocument();
+  });
+
+  function stubReauthUrl() {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ url: '#reauthorize' }),
+    }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    return fetchMock;
+  }
+
+  /** The headers the first reauthorization request went out with, as a plain object. */
+  function reauthHeaders(fetchMock: ReturnType<typeof stubReauthUrl>): Record<string, string> {
+    const init = fetchMock.mock.calls[0]?.[1];
+
+    return { ...(init?.headers as Record<string, string> | undefined) };
+  }
+
+  async function clickReauthorize() {
+    renderWithProviders(<ConnectionPage />, {
+      route: '/connections/c1',
+      path: '/connections/:id',
+      mocks: [connectionMock(connectionRow({ needsReauth: true }))],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /reauthorize connection/i }));
+  }
+
+  it('asks for the reauthorization address with the device key and no bearer', async () => {
+    authState.authToken = null;
+    setApiKey('device-key');
+    const fetchMock = stubReauthUrl();
+
+    await clickReauthorize();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    const headers = reauthHeaders(fetchMock);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/connections/c1/connect');
+    expect(headers['x-api-key']).toBe('device-key');
+    expect(headers).not.toHaveProperty('Authorization');
+  });
+
+  it('still sends the bearer on the web', async () => {
+    const fetchMock = stubReauthUrl();
+
+    await clickReauthorize();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    expect(reauthHeaders(fetchMock).Authorization).toBe('Bearer test-token');
   });
 });

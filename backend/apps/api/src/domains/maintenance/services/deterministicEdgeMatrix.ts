@@ -157,6 +157,19 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     toIdExpr: 'e.event_id',
     candidateWhere: 'e.participant_entity_ids IS NOT NULL AND cardinality(e.participant_entity_ids) > 0',
   },
+  // Deliberately NOT gated on the event having happened. This rule is a pure
+  // projection of `events.location_entity_id`, and the link's writers decide
+  // whether the event happened there: `promote.place` (PROMOTE_PLACE_SOURCE) and
+  // `GeocodeBatchListener` (placeForEvent) both refuse an event that did not
+  // (`eventHappenedSql` and the memory domain's `EVENT_HAPPENED_SQL`, one rule
+  // in two texts). A gate here could only stop NEW edges, because a projection
+  // never withdraws one. And it would let the edge disagree with its link: an
+  // event cancelled between the link and the projection, then reinstated, keeps
+  // the link, but `promote.edge_event` would have recorded `done` having
+  // skipped the edge, and nothing re-opens it on a status change
+  // (`EVENT_TIME_STAGES` covers a move in time, not a status). It would also
+  // take an EDGE_PROJECTION_RULE_GENERATION bump, which re-projects every leg
+  // for no effect.
   {
     id: 'event.happened_at',
     description: 'Event → Place it happened at (canonical LOCATED_AT; HAPPENED_AT is a write alias)',

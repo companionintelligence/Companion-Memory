@@ -30,11 +30,11 @@ const host = { setActiveEntity: vi.fn(), refetch: vi.fn() };
 /** A routable entity: `event` used to resolve to an `/events/:id` "full page". */
 const EVENT_UUID = '019fd7c0-641c-76dd-8ed7-a5053faff6f1';
 
-function routableEvent(): EntityItem {
+function routableEvent(name = "Mom's birthday"): EntityItem {
   return {
     __typename: 'EventType',
     id: btoa(`event:${EVENT_UUID}`),
-    name: "Mom's birthday",
+    name,
     description: 'Cake at seven.',
     tags: [],
   } as unknown as EntityItem;
@@ -111,6 +111,41 @@ describe('EntityDetailScaffold', () => {
 
     // Nothing in the drawer body sends iOS out to Safari.
     expect(sheet.querySelectorAll('a[target="_blank"]')).toHaveLength(0);
+  });
+
+  /**
+   * QA re-test of #2930: an Instagram message whose title ends in a URL
+   * (`… https://www.threads.com/@hannahstocking/post/DZoTALDGmu6`) drew a heading
+   * 496pt wide on a 402pt screen. It ran under the close button and pushed the four
+   * header actions (Open full page, Chat, Edit, Delete) off the right edge.
+   *
+   * A flex item will not shrink below its longest unbreakable word unless it is
+   * allowed to (`min-w-0`), and a word is only broken where the box is narrower
+   * than it (`break-words`). jsdom does no layout, so what can be pinned here is
+   * the structure that decides it: the title may shrink and wrap, and the actions
+   * beside it may not give way.
+   */
+  it('lets a long unbroken URL in the title wrap, so the header actions are not pushed off screen', async () => {
+    const url = 'https://www.threads.com/@hannahstocking/post/DZoTALDGmu6';
+
+    renderWithProviders(
+      <EntityDrawerHostProvider value={host}>
+        <Sheet open>
+          <FallbackDetails entity={routableEvent(`rest in peace to my buddy ${url}`)} />
+        </Sheet>
+      </EntityDrawerHostProvider>,
+    );
+
+    const title = await screen.findByRole('heading', { name: new RegExp(url.replace(/[.?]/g, '\\$&')) });
+    const openFullPage = screen.getByRole('link', { name: /open full page/i });
+    const actions = openFullPage.parentElement;
+
+    // The title can shrink below the URL and breaks it where it must…
+    expect(title).toHaveClass('min-w-0', 'break-words');
+    // …in the same flex row as the actions, which hold their size instead.
+    expect(title.parentElement).toHaveClass('flex');
+    expect(title.parentElement).toContainElement(actions);
+    expect(actions).toHaveClass('shrink-0');
   });
 });
 

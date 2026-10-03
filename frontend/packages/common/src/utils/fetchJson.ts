@@ -278,6 +278,33 @@ function isBinaryBody(body: BodyInit | null | undefined): boolean {
   return typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(body);
 }
 
+// Statuses a Response may not carry a body with (the Fetch spec's "null body
+// status"). `new Response(body, { status })` THROWS a TypeError for these when
+// `body` is anything but null — the empty string included.
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
+
+/**
+ * Wrap a CapacitorHttp result in a Response.
+ *
+ * CapacitorHttp reports an empty body as `data: ''` (or no data at all), and the
+ * wrapper used to hand that straight to `new Response('', { status: 204 })`,
+ * which throws. So every native request the server answered 204 rejected in
+ * here AFTER the server had acted: the caller saw a failure for a delete that
+ * had happened. A deleted chat stayed in the open list (iOS QA, CHAT-03); the
+ * same shape hit account deletion, API-key revoke and MCP-server removal. HEAD
+ * has no body either, so it is built without one too. Every other status keeps
+ * its body exactly as before.
+ */
+function toResponse(
+  result: { status: number; headers?: HeadersInit },
+  body: BodyInit,
+  method: string,
+): Response {
+  const bodyless = NULL_BODY_STATUSES.has(result.status) || method === 'HEAD';
+
+  return new Response(bodyless ? null : body, { status: result.status, headers: result.headers });
+}
+
 /**
  * Native webview `fetch` is CORS-bound and has no Hub cookie. CapacitorHttp
  * goes out as a real origin-less request so Traefik/Memory see the call.
@@ -299,11 +326,12 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
   }
 
   let result: { status: number; data?: unknown; headers?: HeadersInit };
+  const method = (init.method ?? 'GET').toUpperCase();
 
   try {
     result = await cap.request({
       url: input,
-      method: (init.method ?? 'GET').toUpperCase(),
+      method,
       headers: flattenHeaders(init.headers),
       data: requestData(init.body),
       ...(timeout != null ? { connectTimeout: timeout, readTimeout: timeout } : {}),
@@ -320,7 +348,7 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
 
   const body = typeof result.data === 'string' ? result.data : JSON.stringify(result.data ?? {});
 
-  return new Response(body, { status: result.status, headers: result.headers });
+  return toResponse(result, body, method);
 }
 
 /**
@@ -441,18 +469,16 @@ async function nativeBinaryFetch(url: string, init: RequestInit): Promise<Respon
     throw new Error(`Native HTTP needs an absolute http(s) URL (got "${url}"). Pick a Memory Server again.`);
   }
 
+  const method = (init.method ?? 'GET').toUpperCase();
   const result = await cap.request({
     url,
-    method: (init.method ?? 'GET').toUpperCase(),
+    method,
     headers: flattenHeaders(init.headers),
     data: requestData(init.body),
     responseType: 'arraybuffer',
   });
 
-  return new Response(decodeCapacitorBinaryBody(result.data), {
-    status: result.status,
-    headers: result.headers,
-  });
+  return toResponse(result, decodeCapacitorBinaryBody(result.data), method);
 }
 
 export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T | undefined> {

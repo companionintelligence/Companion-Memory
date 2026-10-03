@@ -271,8 +271,11 @@ media and push legs proceed meanwhile; they do not make the parses overlap. So:
 | Constant | Value | Where | Why |
 |---|---|---|---|
 | `PROGRESS_THROTTLE_MS` | 1,000 ms | `ImportStageListener.ts` | A parse ticking per record would write a row per record for the length of a 40GB import |
-| `STAGE_HEARTBEAT_MS` | 30,000 ms | `ImportStageListener.ts` | Keeps the claim fresh through silent stretches (a giant archive mid-extract says nothing for minutes) |
-| `STALE_STAGE_MINUTES` | 10 | `ImportRunService.ts` | A live stage is never silent this long, so silence *is* death — whoever the worker was |
+| `IMPORT_STAGE_HEARTBEAT_SECONDS` | 30 s | `constants.ts` | Keeps the claim fresh through silent stretches (a giant archive mid-extract says nothing for minutes). Every threshold below is a multiple of it |
+| `IMPORT_STAGE_STALLED_SECONDS` | 90 s (3 beats) | `constants.ts` | A `running` stage silent this long is reported **stalled** — on the run detail, the active snapshot, `ci runs` and the import activity panel. A report, never an action |
+| `IMPORT_STAGE_ORPHAN_SECONDS` | 180 s (6 beats) | `constants.ts` | A stage claimed through a pg-boss job and silent this long is taken back, and the job **failed through pg-boss**, which retries it in place (same id, same place in line) or dead-letters it. Short is safe because the reaper never touches a stage its own process is running, and claims are fenced — see below |
+| `ORPHAN_REAP_CRON` | `15 * * * * *` | `ImportStageListener.ts` | The orphan reaper, every minute (and at boot, inside the sweep) |
+| `STALE_STAGE_MINUTES` | 10 | `ImportRunService.ts` | The **backstop**: claims no pg-boss job holds (in-process connector runs, pre-claim-ownership rows) and anything the reaper failed to handle. A live stage is never silent this long |
 | `RESUME_SWEEP_CRON` | `30 */5 * * * *` | `ImportStageListener.ts` | Recovery is periodic, not boot-only, so a crash is picked up without a restart |
 | `STAGE_FAILURE_RECORD_RETRY` | 10 min budget, 1s → 30s | `ImportStageListener.ts` | A failure is recorded through a database that is away (not ready *or* crashed), so the sweep never re-runs a stage whose failure write was lost |
 
@@ -280,13 +283,38 @@ Every recovery gate is a **staleness test on `updated_at`**, never an assumption
 about who else is running. The comment on `resumeInterrupted` records why: the
 first version assumed "at bootstrap, any running stage is orphaned", and a dev
 restart that leaked the old process disproved it — two executors interleaved
-progress writes with different totals on the same stage.
+progress writes with different totals on the same stage. The one thing a
+process does know for certain is what IT is running, so both recovery passes
+take the caller's live stages (`liveStageIds`) and never touch them, however
+silent — a parser blocking the event loop, or a database away, no longer costs
+a stage to the very process running it.
+
+**Claims are fenced.** `claimStage` mints a `claim_token` per claim and records
+the delivering job (`claim_job_id`, `claim_queue`); the listener's heartbeat,
+progress, completion and failure writes all land only while the token still
+matches, and both recovery passes clear it. A worker that was only slow and lost
+its stage therefore finds out at its next beat or progress report, stops, cannot
+complete the stage or advance the run behind its replacement, and acknowledges
+its delivery with `defer` — pg-boss re-issued the job under the same id, so
+completing it would mark the replacement's job done.
+
+**A dead worker is retried, and pg-boss counts the retries.** The orphan
+reaper (`ImportRunService.reclaimOrphanedStages`) fails the dead worker's job
+through pg-boss rather than enqueueing a new one: the retry keeps the job's id
+and `created_on`, so the interrupted run resumes at the head of its kind's queue
+instead of behind every run that queued meanwhile, and nothing is left `active`
+for a twelve-hour lease. It also means the queue's `retryLimit: 3` applies: a
+stage whose worker dies a fourth time is FAILED, with its job dead-lettered and
+a message saying the worker kept dying — where the ten-minute sweep would have
+re-run a worker-killing stage forever. Stage `detail.interrupted` records each
+take (when, how far it had got, which retry is next); `ci runs <id>` prints it.
 
 **Failure is recorded, not retried.** A throw fails the stage and is rethrown so
 pg-boss dead-letters it, but the redelivery is a deliberate no-op: `beginStage`
 only claims a `queued` stage, so a redelivered job for a `failed` stage logs and
-returns (the queue's `retryLimit: 3` with backoff therefore re-runs nothing, and
-neither does the recovery sweep, which leaves a `failed` stage alone). That
+returns (the queue's `retryLimit: 3` with backoff therefore re-runs nothing for a
+*recorded* failure, and neither does the recovery sweep, which leaves a `failed`
+stage alone — the retries it does spend are on workers that died, above). That
 holds only if the failure is actually *recorded* — a stage left `running` is
 exactly what the recovery sweep re-queues after `STALE_STAGE_MINUTES` — so
 `ImportStageListener` records it through an absent database:
@@ -985,6 +1013,23 @@ gets missed under time pressure. Two real shapes:
 - **Amazon Appstore entitlements** — the code fix landed first; the 92 existing
   rows would have stayed typed `'media'` forever. Migration `20260818224249`,
   commit `5dafcf14b`, PR #2079.
+- **A contact's natural key** — the phone join key kept the last ten digits of
+  line + extension, so `(212) 555-0147;229` keyed a card as `contact:5550147229`.
+  Fixing the rule MOVES the key, so every affected card re-imports as a
+  duplicate beside its old row. Migration `20260930020117` could only re-key
+  the rows whose own `properties.Phones` still held the typed line (vCard); the
+  Apple Contacts and CSV parsers kept their numbers only in identity
+  ATTRIBUTES, which staging never persists. Two things close the gap: staging
+  records the key the card was minted under (`legacy_identity_key`, read with
+  the pre-fix rule) and the push moves the old row onto the new key
+  (`push/legacyKeys.ts`, PR #2795's mechanism for shared office lines); and
+  those parsers now keep `Phones` / `Emails`, so `push/truncatedPhoneKeys.ts`
+  can prove from the card that the old key was a truncation and undo what it
+  reached. `contactKeyRecomputable.test.ts` fails any contact parser whose key
+  cannot be rebuilt from its own metadata. **The rule for a new parser:** every
+  value its key is derived from must reach `metadata`, and a change to the key
+  rule must keep the OLD rule callable (`legacyEntityIdentityKey`) until every
+  stored row has been re-imported — or no fix can reach rows already stored.
 
 **Why it recurs:** the test suite goes green on the code fix, and green feels
 like done. It is not; the corpus is the deliverable.
@@ -1076,12 +1121,13 @@ already cleared (so the two must be disjoint), a `name` already NULL (so the
 migration is idempotent).
 
 The suite skips legibly when there is no database rather than failing every test
-on a connection error (`domains/__tests__/support/databaseConnection.ts`;
-`databaseAvailability()` prints the reason). Point it at a scratch database with
-the suite's own variable — `IMPORT_TEST_DATABASE_URL` for the import suites,
-`PIPELINE_TEST_DATABASE_URL`, `MEMORY_TEST_DATABASE_URL`, etc. Take the value
-from `make dburl`: the dev stack reallocates ports on every `up`, and a stale
-port reads as "no database".
+on a connection error (`domains/__tests__/support/databaseConnection.ts`; the
+end of the jest run lists every skipped file with its reason). Point it at a
+scratch database with the suite's own variable — `IMPORT_TEST_DATABASE_URL` for
+the import suites, `PIPELINE_TEST_DATABASE_URL`, `MEMORY_TEST_DATABASE_URL`,
+etc. Take the value from `make dburl`: the dev stack reallocates ports on every
+`up`, and a URL you set that nothing answers on now FAILS the suite, naming the
+variable, where it used to skip as "no database".
 
 ### 4.4 The commands
 

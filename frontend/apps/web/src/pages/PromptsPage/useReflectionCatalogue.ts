@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 
-import { useAuth } from '@/hooks';
+import { useSessionAuth } from '@/hooks';
 
 import {
   type AnswerTier,
@@ -47,10 +47,10 @@ export interface ReflectionCatalogueActions {
   setActive: (id: string, isActive: boolean) => Promise<void>;
 }
 
-function authHeaders(authToken: string | null | undefined): Record<string, string> {
+function authHeaders(sessionHeaders: Record<string, string>): Record<string, string> {
   return {
     'Content-Type': 'application/json',
-    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    ...sessionHeaders,
   };
 }
 
@@ -67,7 +67,10 @@ function message(err: unknown, fallback: string): string {
  * facet counts and the answered/unanswered split stay honest.
  */
 export function useReflectionCatalogue(): [State, ReflectionCatalogueActions] {
-  const [{ authToken }] = useAuth();
+  // `ready`, not `authToken`: the token is the web JWT, which the native shell never has — its
+  // credential is a keystore API key that `fetchJson` attaches as `x-api-key`. Gating on the token
+  // left the list on skeletons forever (`loading` starts true) and a new reflection never refreshed it.
+  const { ready, headers: sessionHeaders } = useSessionAuth();
 
   const [state, setState] = useState<State>({
     page: null,
@@ -102,7 +105,7 @@ export function useReflectionCatalogue(): [State, ReflectionCatalogueActions] {
   }, [searchInput, filters.search]);
 
   useEffect(() => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
@@ -113,7 +116,7 @@ export function useReflectionCatalogue(): [State, ReflectionCatalogueActions] {
 
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
-    fetchJson<CataloguePage>(catalogueUrl(filters), { headers: authHeaders(authToken) })
+    fetchJson<CataloguePage>(catalogueUrl(filters), { headers: authHeaders(sessionHeaders) })
       .then((page) => {
         if (cancelled || requestRef.current !== requestId || !page) {
           return;
@@ -136,7 +139,7 @@ export function useReflectionCatalogue(): [State, ReflectionCatalogueActions] {
     return () => {
       cancelled = true;
     };
-  }, [authToken, filters, reloadToken]);
+  }, [ready, sessionHeaders, filters, reloadToken]);
 
   const refresh = useCallback(() => setReloadToken((token) => token + 1), []);
 
@@ -147,7 +150,7 @@ export function useReflectionCatalogue(): [State, ReflectionCatalogueActions] {
       try {
         await fetchJson(path, {
           method,
-          headers: authHeaders(authToken),
+          headers: authHeaders(sessionHeaders),
           body: JSON.stringify(body),
         });
       } catch (err) {
@@ -159,7 +162,7 @@ export function useReflectionCatalogue(): [State, ReflectionCatalogueActions] {
       setState((prev) => ({ ...prev, savingId: null }));
       refresh();
     },
-    [authToken, refresh],
+    [sessionHeaders, refresh],
   );
 
   const actions = useMemo<ReflectionCatalogueActions>(

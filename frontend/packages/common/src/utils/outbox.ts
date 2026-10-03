@@ -155,8 +155,7 @@ export type OutboxAttemptOutcome =
 export type OutboxFailureReason = 'unavailable' | 'full' | 'not_found' | 'error';
 
 export type OutboxResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; reason: OutboxFailureReason; message: string };
+  { ok: true; value: T } | { ok: false; reason: OutboxFailureReason; message: string };
 
 const UNAVAILABLE = {
   ok: false,

@@ -33,10 +33,11 @@ import { MIN_POPULATION, PROBE_K, RecallProbeService, SAMPLES_PER_TYPE } from '.
  *
  * ── What this corpus does and does not prove ──────────────────────────────
  *
- * ~2,500 rows of uniform random vectors. At that size Postgres does not use the
- * HNSW index at all — it sequential-scans and sorts, which IS the exact answer
- * — so recall comes out at 1.0 and that number is a statement about the
- * planner, not about pgvector's recall. It is asserted here anyway, because it
+ * ~2,500 rows of uniform random vectors. At that size, with current planner
+ * statistics (`beforeAll` runs an ANALYZE for exactly that reason), Postgres does
+ * not use the HNSW index at all — it sequential-scans and sorts, which IS the
+ * exact answer — so recall comes out at 1.0 and that number is a statement about
+ * the planner, not about pgvector's recall. It is asserted here anyway, because it
  * is the one thing that is knowable at this size and because a corpus this
  * small reading anything OTHER than 1.0 would mean the exact leg and the
  * production leg disagree about which rows exist.
@@ -149,6 +150,17 @@ describeWithDatabase(`RecallProbeService against the live schema (${availability
     );
     await seed('note', CORPUS_ROWS);
     await seed('event', SMALL_CORPUS_ROWS);
+
+    // `recall === 1` below presumes the planner answers the production statement
+    // with an exact plan at this size, and that is a cost decision made from
+    // statistics this seed does not write: the table's and the HNSW index's own
+    // `reltuples`. They carry whatever ran in this database before. A VACUUM of an
+    // emptied table leaves the index at 0, and another suite's ANALYZE inside a
+    // rolled-back transaction still overwrites both in place. With the index at 0
+    // the planner prices an HNSW scan at a tenth of the sequential scan, and the
+    // default `ef_search` leg would come back from the approximate index. ANALYZE
+    // makes the choice a function of this spec's own rows.
+    await dataSource.query('ANALYZE ci_search.embeddings');
 
     service = new RecallProbeService(
       dataSource,

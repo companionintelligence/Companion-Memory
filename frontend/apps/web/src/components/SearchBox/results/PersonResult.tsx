@@ -3,6 +3,8 @@ import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { startFilterDrag } from '../filterDrag';
 
+import { SearchResultRow } from './SearchResultRow';
+
 export const PERSON_FRAGMENT = gql(`
   fragment SearchResultPersonData on PersonType {
     id
@@ -22,16 +24,13 @@ export function PersonResult({ person }: Props) {
   return (
     // Draggable onto the Memory explorer's filter drop area to add this person
     // as a who-filter; clicking still navigates to the person.
-    <div
+    <SearchResultRow
       draggable={Boolean(name)}
       onDragStart={(event) => startFilterDrag(event, 'person', name)}
-      className="flex cursor-grab items-center justify-between gap-2 active:cursor-grabbing"
-    >
-      <div className="flex items-center gap-2">
-        <PersonIcon />
-        <div className="font-medium">{data.name}</div>
-      </div>
-      <div className="text-muted-foreground">Person</div>
-    </div>
+      className="cursor-grab active:cursor-grabbing"
+      icon={<PersonIcon />}
+      title={data.name}
+      kind="Person"
+    />
   );
 }

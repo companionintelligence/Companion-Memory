@@ -36,6 +36,9 @@ export function useThreadService(id: string | null): ReturnType {
 
       if (!opts?.silent) {
         setLoading(true);
+        // What failed last time describes THAT request. Left in place it outlives the page moving to another chat or
+        // the person tapping Try again, and then reads as this request's failure.
+        setError(null);
       }
 
       try {
@@ -47,6 +50,7 @@ export function useThreadService(id: string | null): ReturnType {
         });
 
         setThread(thread ?? null);
+        setError(null);
       } catch (err) {
         setError(err);
       } finally {

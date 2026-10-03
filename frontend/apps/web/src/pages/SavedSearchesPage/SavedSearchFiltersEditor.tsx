@@ -118,7 +118,14 @@ function ExactValueField({
   );
 }
 
-/** ISO timestamp -> the yyyy-mm-dd a <input type="date"> expects (local date). */
+/**
+ * ISO timestamp -> the yyyy-mm-dd a <input type="date"> expects (local date).
+ *
+ * Local, because `setDate` builds the stored instant from the picked day in local
+ * time (`T23:59:59.999` for To). Reading it back as the UTC date showed the NEXT day
+ * for an evening end time west of Greenwich (a Pacific To of Sep 30 came back as
+ * Oct 1), and the PREVIOUS day for a start of day east of it.
+ */
 function toDateInput(iso?: string | null): string {
   if (!iso) {
     return '';
@@ -126,7 +133,13 @@ function toDateInput(iso?: string | null): string {
 
   const date = new Date(iso);
 
-  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 /**

@@ -1,11 +1,15 @@
 import type { MockedResponse } from '@apollo/client/testing';
 import { screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { mockQuery } from '@/test/gql';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { CommunicationPage, GET_COMMUNICATION } from './CommunicationPage';
+
+// The change-history panel runs its own queries and has nothing to do with the
+// header under test.
+vi.mock('@/components/EntityEvolution/EntityEvolutionPanel', () => ({ EntityEvolutionPanel: () => null }));
 
 const RAW_ID = 'cm-1';
 // The route carries the raw id; the page re-encodes it with
@@ -40,5 +44,48 @@ describe('CommunicationPage', () => {
 
     expect(await screen.findByText('Communication not found')).toBeInTheDocument();
     expect(screen.queryByText('Could not load this communication')).not.toBeInTheDocument();
+  });
+
+  /**
+   * QA re-test of #2930: a chat message whose text ends in a URL has no break
+   * point, so its heading kept the URL's full width and pushed the edit control
+   * off the right edge of the page. jsdom does no layout; what can be pinned is the
+   * structure that decides it: the title group and the title may shrink, and the
+   * title breaks the URL where it must.
+   */
+  it('lets a long unbroken URL in the heading wrap, so the edit control stays on screen', async () => {
+    const url = 'https://www.threads.com/@hannahstocking/post/DZoTALDGmu6';
+
+    renderPage(
+      mockQuery(
+        GET_COMMUNICATION,
+        { id: COMMUNICATION_ID },
+        {
+          communication: {
+            __typename: 'CommunicationType',
+            id: COMMUNICATION_ID,
+            type: 'instagram_message',
+            subject: null,
+            preview: `rest in peace to my buddy olivertree ${url}`,
+            content: 'rest in peace',
+            time: '2026-09-01T12:00:00.000Z',
+            direction: 'inbound',
+            from: null,
+            to: { __typename: 'PersonConnection', edges: [] },
+            tags: [],
+          },
+        },
+      ),
+    );
+
+    const heading = await screen.findByRole('heading', { name: new RegExp(url.replace(/[.?]/g, '\\$&')) });
+
+    // The heading shrinks below the URL and breaks it…
+    expect(heading).toHaveClass('min-w-0', 'break-words');
+    // …inside a title group that may shrink too, so the control beside it holds its place…
+    expect(heading.parentElement).toHaveClass('min-w-0');
+    // …and the icon next to the heading keeps its size rather than being squeezed to a sliver
+    // by the same shrinking (measured at 4px of 24 in a 402pt browser pane before this class).
+    expect(heading.previousElementSibling).toHaveClass('shrink-0');
   });
 });

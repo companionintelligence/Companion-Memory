@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
@@ -38,8 +38,11 @@ import {
   type FilterDragKind,
 } from '@/components/SearchBox/filterDrag';
 import { EntityNameFilter } from '@/components/SearchBox/NameFilter';
+import { SEARCH_PANEL_LAYER_PROPS } from '@/components/SearchBox/SearchBox';
 import { AVAILABLE_ENTITY_TYPES, useDropdown } from '@/components/SearchBox/useDropdown';
 import { type FragmentType } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import { CREATE_SAVED_SEARCH } from '../../../SavedSearchesPage/CreateSavedSearchModal';
 import type { SavedSearchGridItemFragment } from '../../../SavedSearchesPage/SavedSearch';
@@ -157,7 +160,7 @@ function rangeHasDetailedTime(dateFrom: string, dateTo: string): boolean {
   return fromHasTime || toHasTime;
 }
 
-function formatDateLabel(dateFrom: string, dateTo: string): string {
+function formatDateLabel(dateFrom: string, dateTo: string, formatter: DateTimeFormatter): string {
   const includeTime = rangeHasDetailedTime(dateFrom, dateTo);
   const fmt = (value: string) => {
     const date = new Date(value);
@@ -167,7 +170,10 @@ function formatDateLabel(dateFrom: string, dateTo: string): string {
       return dateLabel;
     }
 
-    return `${dateLabel}, ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    // The time the person typed into this device's time input, read back on the same clock —
+    // so only the hour cycle applies. The profile zone would echo a different hour than the
+    // one they entered whenever the device is somewhere else.
+    return `${dateLabel}, ${formatter.clock(date.getHours(), date.getMinutes())}`;
   };
 
   if (dateFrom && dateTo) {
@@ -313,6 +319,7 @@ function readNativeFilterDrag(event: DragEvent): ReturnType<typeof readFilterDra
  */
 function FilterDropArea() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const dateTimeFormat = useDateTimeFormat();
   const selections = useMemo(
     () => ({
       person: readCsvParam(searchParams, 'people'),
@@ -572,7 +579,17 @@ function FilterDropArea() {
               {direction != null && (
                 <FilterChip
                   icon={MessageSquare}
-                  label={`${MESSAGE_DIRECTION_LABELS[direction]} only`}
+                  // Beside a Who person the direction fixes that person's role, so
+                  // "From only" reads. On its own it is the bare row direction —
+                  // messages you received, or sent, from or to anyone — and "From
+                  // only" with nothing next to it read as a leftover of a removed
+                  // person (QA MEM-16). Name what it still filters, as the phone
+                  // filter sheet's Who row already does ("To anyone").
+                  label={
+                    selections.person.length > 0
+                      ? `${MESSAGE_DIRECTION_LABELS[direction]} only`
+                      : `${MESSAGE_DIRECTION_LABELS[direction]} anyone`
+                  }
                   removeLabel="Remove message direction"
                   inactiveReason={reasonFor('direction')}
                   onRemove={() =>
@@ -590,7 +607,7 @@ function FilterDropArea() {
                   label={
                     isRollingDatePreset(whenPreset)
                       ? (datePresetLabel(whenPreset) ?? 'When')
-                      : formatDateLabel(dateFrom, dateTo)
+                      : formatDateLabel(dateFrom, dateTo, dateTimeFormat)
                   }
                   removeLabel="Remove date range"
                   inactiveReason={reasonFor('date')}
@@ -691,6 +708,31 @@ function FilterDropArea() {
 }
 
 /**
+ * A boolean URL flag (located-only / semantic): whether it is on, a toggle
+ * for it, and — via `dimension` — why the current view cannot apply it, if it
+ * can't. Shared by the toolbar's toggle chips and the phone filter sheet's
+ * switches, so both read and write the flag the same way.
+ */
+export function useFilterToggle(param: string, dimension: FilterDimension) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const active = searchParams.get(param) === '1';
+  const reason = unsupportedReason(readMemoryView(searchParams.get('view')), dimension);
+
+  const toggle = () =>
+    setSearchParams((params) => {
+      if (active) {
+        params.delete(param);
+      } else {
+        params.set(param, '1');
+      }
+
+      return params;
+    });
+
+  return { active, reason, toggle };
+}
+
+/**
  * A boolean URL flag rendered as a toggle button (used for located-only /
  * semantic). `dimension` lets the control say when the current view cannot
  * apply the flag: it stays clickable — the flag is a property of the query, not
@@ -708,9 +750,7 @@ function ToggleChip({
   icon: React.ReactNode;
   dimension: FilterDimension;
 }) {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const active = searchParams.get(param) === '1';
-  const reason = unsupportedReason(readMemoryView(searchParams.get('view')), dimension);
+  const { active, reason, toggle } = useFilterToggle(param, dimension);
 
   const button = (
     <Button
@@ -718,17 +758,7 @@ function ToggleChip({
       variant={active ? 'secondary' : 'outline'}
       className={cn(reason && 'opacity-70')}
       aria-label={reason ? `${label} — not applied in this view. ${reason}` : undefined}
-      onClick={() =>
-        setSearchParams((params) => {
-          if (active) {
-            params.delete(param);
-          } else {
-            params.set(param, '1');
-          }
-
-          return params;
-        })
-      }
+      onClick={toggle}
     >
       {icon}
       <span className={cn('ml-1', reason && 'line-through')}>{label}</span>
@@ -748,9 +778,20 @@ function ToggleChip({
   );
 }
 
-/** Date-range picker bound to the `when` / `from` / `to` URL params. */
-function DateControl() {
+/**
+ * Date-range picker bound to the `when` / `from` / `to` URL params.
+ * `renderTrigger` swaps the button for the caller's own element (the phone
+ * filter sheet's row), given the applied range's label, or null for none; it
+ * becomes the popover trigger, so it must pass its props and ref on to a button.
+ * `modal` is for a caller that is itself modal (that sheet): only a modal
+ * popover can scroll its own content under the sheet's scroll lock.
+ */
+export function DateControl({
+  renderTrigger,
+  modal = false,
+}: { renderTrigger?: (value: string | null) => ReactElement; modal?: boolean } = {}) {
   const [{ dateFrom, dateTo, whenPreset }, { setDateRange, setDatePreset }] = useDropdown();
+  const dateTimeFormat = useDateTimeFormat();
   const [open, setOpen] = useState(false);
   const [customMode, setCustomMode] = useState(
     () => whenPreset === 'custom' || (!isRollingDatePreset(whenPreset) && Boolean(dateFrom || dateTo)),
@@ -778,6 +819,18 @@ function DateControl() {
     setDraftFromTime(fromTimeValue);
     setDraftToTime(toTimeValue);
   }, [fromTimeValue, toTimeValue]);
+
+  // "Specific time" adds its two inputs at the foot of a popover that, on a
+  // phone, already runs to the bottom edge of the screen. Bring them into view
+  // or the toggle looks like it did nothing (QA MEM-15: the inputs sat below the
+  // fold and the popover would not scroll).
+  const timeFieldsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (timeExpanded) {
+      timeFieldsRef.current?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [timeExpanded]);
 
   const applyTime = (part: 'from' | 'to', value: string) => {
     const normalizedValue = value || (part === 'from' ? START_OF_DAY_TIME : END_OF_DAY_TIME);
@@ -834,17 +887,19 @@ function DateControl() {
       ? 'custom'
       : null;
 
-  const triggerLabel = isRollingDatePreset(whenPreset)
+  const appliedLabel = isRollingDatePreset(whenPreset)
     ? datePresetLabel(whenPreset)
     : dateFrom || dateTo
-      ? formatDateLabel(dateFrom, dateTo)
-      : 'When';
+      ? formatDateLabel(dateFrom, dateTo, dateTimeFormat)
+      : null;
+  const triggerLabel = appliedLabel ?? 'When';
 
   const showCustomPicker = customMode || activePreset === 'custom';
 
   return (
     <Popover
       open={open}
+      modal={modal}
       onOpenChange={(next) => {
         setOpen(next);
 
@@ -856,13 +911,25 @@ function DateControl() {
       }}
     >
       <Popover.Trigger asChild>
-        <Button variant="outline" className="group">
-          <CalendarIcon className="mr-2 h-4 w-4 text-muted-foreground" />
-          {triggerLabel}
-          <ChevronDown className="ml-2 h-4 w-4 opacity-50 transition-transform group-data-[state=open]:rotate-180" />
-        </Button>
+        {renderTrigger ? (
+          renderTrigger(appliedLabel)
+        ) : (
+          <Button variant="outline" className="group">
+            <CalendarIcon className="mr-2 h-4 w-4 text-muted-foreground" />
+            {triggerLabel}
+            <ChevronDown className="ml-2 h-4 w-4 opacity-50 transition-transform group-data-[state=open]:rotate-180" />
+          </Button>
+        )}
       </Popover.Trigger>
-      <Popover.Content className="w-64 p-0" align="start">
+      <Popover.Content
+        // Never taller than the room the popover has, scrolling inside instead.
+        // The calendar, the time fields and Clear range outgrow the screen on a
+        // phone — beside a phone sheet row, and from the inline When button too,
+        // where an uncapped popover simply ran off the bottom edge and its time
+        // inputs could not be reached (QA MEM-15).
+        className="w-64 max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain p-0"
+        align="start"
+      >
         <div className="grid grid-cols-2 gap-2 p-2">
           {WHEN_PRESET_GRID.map(({ value, label }) => {
             const selected = activePreset === value;
@@ -945,7 +1012,7 @@ function DateControl() {
               </div>
 
               {timeExpanded && (
-                <div className="grid grid-cols-2 gap-3">
+                <div ref={timeFieldsRef} className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label htmlFor="memory-filter-start-time" className="text-xs text-muted-foreground">
                       Start time
@@ -1011,14 +1078,29 @@ function DateControl() {
   );
 }
 
+/** What the phone filter sheet's Sort row needs to draw itself. */
+interface SortTriggerState {
+  /** The selected preset's label. */
+  label: string;
+  /** Whether the selection is something other than the list's default. */
+  active: boolean;
+  /** Why the current view ignores the sort, or null when it applies. */
+  reason: string | null;
+}
+
 /**
  * Sort preset selector bound to the `sortBy`/`sortOrder` URL params. Which
  * presets it offers depends on where it is: the everything browse on `/memory`
  * defaults to relevance and only offers Newest / Oldest inside a When filter
  * (see sortOptions). The graph has no result order to sort, so there the
  * control says so instead of accepting a choice that quietly does nothing.
+ *
+ * `renderTrigger` replaces the trigger (the phone filter sheet's row) and
+ * must return a `Select.Trigger`; the caller then shows `reason` itself.
  */
-function SortControl() {
+export function SortControl({
+  renderTrigger,
+}: { renderTrigger?: (state: SortTriggerState) => ReactElement } = {}) {
   const [{ sortBy, sortOrder }, { setSort }] = useDropdown();
   const [searchParams] = useSearchParams();
   const { pathname } = useLocation();
@@ -1036,13 +1118,22 @@ function SortControl() {
         setSort(option?.sortBy || undefined, option?.sortOrder || undefined);
       }}
     >
-      {/* Hug the selected label. A fixed width either clipped it or left a
-          gap that `justify-between` used to center the word between the icon
-          and the caret. */}
-      <Select.Trigger className={cn('w-fit shrink-0 justify-start text-left', reason && 'opacity-70')}>
-        <ArrowUpDown className="mr-2 h-4 w-4 text-muted-foreground" />
-        <Select.Value placeholder="Sort" />
-      </Select.Trigger>
+      {renderTrigger ? (
+        renderTrigger({
+          label: options.find((option) => option.value === currentSort)?.label ?? currentSort,
+          // The first preset is the list's own default (Default, or Relevance on /memory).
+          active: currentSort !== options[0]?.value,
+          reason,
+        })
+      ) : (
+        // Hug the selected label. A fixed width either clipped it or left a
+        // gap that `justify-between` used to center the word between the icon
+        // and the caret.
+        <Select.Trigger className={cn('w-fit shrink-0 justify-start text-left', reason && 'opacity-70')}>
+          <ArrowUpDown className="mr-2 h-4 w-4 text-muted-foreground" />
+          <Select.Value placeholder="Sort" />
+        </Select.Trigger>
+      )}
       <Select.Content>
         {options.map((option) => (
           <Select.Item key={option.value} value={option.value}>
@@ -1053,7 +1144,7 @@ function SortControl() {
     </Select>
   );
 
-  if (!reason) {
+  if (!reason || renderTrigger) {
     return select;
   }
 
@@ -1086,12 +1177,15 @@ function FilterControlsRow({
   modal,
   includeEntityTypeFilter = false,
   showSave = true,
+  onOpenSavedSearch,
 }: {
   modal: boolean;
   /** Off on `/memory` — entity types live in MemoryEntityTypeNav instead. */
   includeEntityTypeFilter?: boolean;
   /** Save sits with the filter chip row on `/memory`; stays here in the header panel. */
   showSave?: boolean;
+  /** Passed to Load search: open the picked search instead of applying it here (see SavedSearchPicker). */
+  onOpenSavedSearch?: (params: URLSearchParams) => void;
 }) {
   const [searchParams] = useSearchParams();
   const { pathname } = useLocation();
@@ -1130,7 +1224,7 @@ function FilterControlsRow({
       {showSave && (
         <div className="ml-auto flex shrink-0 items-center gap-2">
           <FilterCountLabel />
-          <SavedSearchPicker />
+          <SavedSearchPicker onOpen={onOpenSavedSearch} />
           <SaveSearchButton />
         </div>
       )}
@@ -1141,11 +1235,19 @@ function FilterControlsRow({
 /**
  * Advanced filters for the header search dropdown on non-`/memory` pages. Includes
  * the What picker here; the main Memory explorer uses MemoryEntityTypeNav instead.
+ * `onOpenSavedSearch` is where Load search sends the picked search: these pages
+ * have nothing that reads `?search=`, so the header opens it in the explorer.
  */
-export function SearchPanelFilters({ modal }: { modal: boolean }) {
+export function SearchPanelFilters({
+  modal,
+  onOpenSavedSearch,
+}: {
+  modal: boolean;
+  onOpenSavedSearch?: (params: URLSearchParams) => void;
+}) {
   return (
     <div className="p-3">
-      <FilterControlsRow modal={modal} includeEntityTypeFilter />
+      <FilterControlsRow modal={modal} includeEntityTypeFilter onOpenSavedSearch={onOpenSavedSearch} />
     </div>
   );
 }
@@ -1214,8 +1316,10 @@ function FilterCountLabel() {
 /**
  * "Save" — captures a name and persists the current query + selected
  * entity types + tags as a SavedSearch (shown on the Saved Searches page).
+ * `trigger` replaces the Save button (the phone filter sheet's "Save search");
+ * it becomes the dialog trigger, so it must pass its props and ref on.
  */
-function SaveSearchButton() {
+export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
   const [searchParams] = useSearchParams();
   const [{ selectedEntityTypes }] = useDropdown();
   const { toast } = useToast();
@@ -1289,12 +1393,17 @@ function SaveSearchButton() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
-        <Button>
-          <Save className="mr-2 h-4 w-4" />
-          Save
-        </Button>
+        {trigger ?? (
+          <Button>
+            <Save className="mr-2 h-4 w-4" />
+            Save
+          </Button>
+        )}
       </Dialog.Trigger>
-      <Dialog.Content className="sm:max-w-[420px]">
+      {/* Part of the search panel it opens from, though portaled out of it: a
+          click inside must not read as a click outside the panel, which would
+          close the panel and unmount this dialog with it. */}
+      <Dialog.Content {...SEARCH_PANEL_LAYER_PROPS} className="sm:max-w-[420px]">
         <Dialog.Header>
           <Dialog.Title>Save this search</Dialog.Title>
           <Dialog.Description>
@@ -1337,7 +1446,11 @@ function SaveSearchButton() {
       </Dialog.Content>
 
       {savedSearchToShare && (
-        <ShareSavedSearchModal savedSearch={savedSearchToShare} onClose={() => setSavedSearchToShare(null)} />
+        <ShareSavedSearchModal
+          savedSearch={savedSearchToShare}
+          onClose={() => setSavedSearchToShare(null)}
+          contentProps={SEARCH_PANEL_LAYER_PROPS}
+        />
       )}
     </Dialog>
   );

@@ -4,6 +4,7 @@ Configuration management for CI-Summary Service.
 
 import logging
 import os
+import re
 from functools import lru_cache
 from urllib.parse import urlparse
 
@@ -41,32 +42,166 @@ def openai_v1_base(host: str) -> str:
     return base if base.endswith("/v1") else f"{base}/v1"
 
 
-def resolve_embedding_api_base(llm_api_base: str) -> str:
-    """
-    Embeddings stay on Ollama even when chat is pointed at vLLM.
+# The chat backend confirmed to serve the embedder, as (base, the id it lists it under). Cleared
+# when the base changes; never holds a failed listing, so a backend that was slow to start is asked
+# again on the next embed. Mirrors `target` in the API's EmbeddingGenerationService.
+_embedder_on_chat_backend: tuple[str, str] | None = None
 
-    The API already splits this (`OLLAMA_EMBED_HOST` vs `LLM_API_BASE`). Summary
-    used to POST `/v1/embeddings` at the chat backend, which 404s on a chat-only
-    vLLM and silently stores zero vectors.
-    """
-    explicit = os.getenv("EMBEDDING_API_BASE", "").strip()
-    if explicit:
-        return openai_v1_base(explicit)
 
-    ollama_host = (
-        os.getenv("OLLAMA_EMBED_HOST")
-        or os.getenv("CI_OLLAMA_EMBED_HOST")
-        or os.getenv("OLLAMA_HOST")
-        or ""
+def _embedder_served_by_chat_backend(llm_api_base: str, model: str) -> str | None:
+    """
+    The id the chat backend lists the embedder under, or None when it does not serve it (or
+    could not be asked). Any spelling of the indexed model counts: Lemonade lists the weights
+    Ollama calls `nomic-embed-text` as `user.nomic-embed-text-v1.5-GGUF`.
+    """
+    global _embedder_on_chat_backend
+
+    cached = _embedder_on_chat_backend
+    if cached is not None and cached[0] == llm_api_base:
+        return cached[1]
+
+    try:
+        rows = _served_models()
+    except Exception as exc:
+        logger.warning(
+            "Could not list models at %s (%s); embedding on the Ollama host this time.",
+            llm_api_base,
+            exc,
+        )
+        return None
+
+    served = [str(row.get("id")) for row in rows]
+    same_weights = NOMIC_V15_EMBED_NAMES if model in NOMIC_V15_EMBED_NAMES else {model}
+    listed = next((tag for tag in served if tag == model), None) or next(
+        (tag for tag in served if tag in same_weights), None
+    )
+    if listed is not None:
+        _embedder_on_chat_backend = (llm_api_base, listed)
+        logger.info(
+            "Embedding on the chat backend %s, which serves %s.", llm_api_base, listed
+        )
+    return listed
+
+
+def resolve_embedding_target(llm_api_base: str) -> tuple[str, str]:
+    """
+    Where embeddings go and what to call the model there, as (`/v1` base, model id).
+
+    Mirrors `EmbeddingGenerationService.resolveTarget` in the API; keep the two in step:
+
+    1. A pinned endpoint — `EMBEDDING_API_BASE`, else `LLM_EMBEDDING_API_BASE` (the API's name for
+       the same thing, the sibling of `LLM_API_BASE`), else the deprecated `OLLAMA_EMBED_HOST` /
+       `CI_OLLAMA_EMBED_HOST` — with the configured model. An operator sets one; CI-Hub hands out
+       its pool.
+    2. Else the chat backend, under the id it lists the embedder as, when it serves the same
+       weights. One engine then holds one card's budget: until 2026-09-30 this preferred
+       `OLLAMA_HOST`, so a Lemonade or llama.cpp host that served the embedder still sent every
+       summary embedding to an Ollama that had been pushed off the GPU by the chat model.
+    3. Else `OLLAMA_HOST`, else the chat backend regardless (the only host there is).
+
+    Summary used to POST `/v1/embeddings` at the chat backend unconditionally, which 404s on a
+    chat-only vLLM and silently stores zero vectors; rule 2 asks first.
+    """
+    model = settings.embedding_model
+
+    explicit = (
+        os.getenv("EMBEDDING_API_BASE") or os.getenv("LLM_EMBEDDING_API_BASE") or ""
     ).strip()
+    if explicit:
+        return openai_v1_base(explicit), model
+
+    pinned = (
+        os.getenv("OLLAMA_EMBED_HOST") or os.getenv("CI_OLLAMA_EMBED_HOST") or ""
+    ).strip()
+    if pinned:
+        return openai_v1_base(pinned), model
+
+    chat_base = openai_v1_base(llm_api_base)
+    ollama_host = (os.getenv("OLLAMA_HOST") or "").strip()
+    if chat_base and (
+        not ollama_host or _origin(chat_base) != _origin(openai_v1_base(ollama_host))
+    ):
+        listed = _embedder_served_by_chat_backend(llm_api_base, model)
+        if listed is not None:
+            return chat_base, listed
+
     if ollama_host:
-        return openai_v1_base(ollama_host)
+        return openai_v1_base(ollama_host), model
 
-    return openai_v1_base(llm_api_base)
+    return chat_base, model
 
 
-def resolve_embedding_api_key() -> str:
-    return os.getenv("EMBEDDING_API_KEY", "").strip() or "ollama"
+def resolve_embedding_api_base(llm_api_base: str) -> str:
+    """The `/v1` base embeddings go to; see `resolve_embedding_target`."""
+    return resolve_embedding_target(llm_api_base)[0]
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    parsed = urlparse(url)
+    return (parsed.scheme, parsed.hostname or "", parsed.port)
+
+
+def resolve_embedding_api_key(embedding_base: str | None = None) -> str:
+    """
+    The bearer token for embedding calls: `EMBEDDING_API_KEY`, else `LLM_API_KEY` when the
+    embeddings go to the same origin as chat, else the placeholder Ollama ignores.
+
+    CI-Hub points both at its pool (`http://ci-hub:5002/api/inference/pool`), which checks the key.
+    Sending the placeholder there came back as an error that `generate_embedding` turns into `[]`,
+    silently. The chat key is only sent to the chat origin, never to some other embedding host.
+    """
+    explicit = os.getenv("EMBEDDING_API_KEY", "").strip()
+    if explicit:
+        return explicit
+
+    llm_base = os.getenv("LLM_API_BASE", "").strip()
+    llm_key = os.getenv("LLM_API_KEY", "").strip()
+    base = (
+        embedding_base
+        if embedding_base is not None
+        else resolve_embedding_api_base(llm_base)
+    )
+    if llm_key and llm_base and base and _origin(base) == _origin(llm_base):
+        return llm_key
+
+    return "ollama"
+
+
+# Every engine's name for the embedding model the index is built with: nomic-embed-text v1.5
+# (Ollama's tags, and the Lemonade registration CI-Hub installs). Mirrors EMBED_MODEL_ALIASES in the
+# API's common/embeddings/embedModelIdentity.ts; keep the two in step. Lemonade's own
+# `nomic-embed-text-v1-GGUF` is deliberately absent: v1 vectors agree with v1.5's at cosine ~0.7.
+NOMIC_V15_EMBED_NAMES = frozenset(
+    {
+        "nomic-embed-text",
+        "nomic-embed-text:latest",
+        "nomic-embed-text:v1.5",
+        "nomic-embed-text-v1.5-GGUF",
+        "user.nomic-embed-text-v1.5-GGUF",
+    }
+)
+
+
+def resolve_embedding_model() -> str:
+    """
+    `EMBEDDING_MODEL` as given; else CI-Hub's `LLM_DEFAULT_EMBEDDING_MODEL` when it names the model
+    the index is built with; else `nomic-embed-text`. An older Hub hands out Lemonade's v1, and
+    embedding summaries with it would put a different vector space in the same column.
+    """
+    explicit = os.getenv("EMBEDDING_MODEL", "").strip()
+    if explicit:
+        return explicit
+
+    handed_out = os.getenv("LLM_DEFAULT_EMBEDDING_MODEL", "").strip()
+    if not handed_out or handed_out in NOMIC_V15_EMBED_NAMES:
+        return handed_out or "nomic-embed-text"
+
+    logger.error(
+        "LLM_DEFAULT_EMBEDDING_MODEL=%s is not the model the index is built with; embedding with "
+        "nomic-embed-text instead. Update CI-Hub, or set EMBEDDING_MODEL deliberately.",
+        handed_out,
+    )
+    return "nomic-embed-text"
 
 
 # Where an unconfigured service looks for chat. Written for the container this
@@ -96,24 +231,11 @@ def _default_llm_api_base() -> str:
 
 
 def _default_output_mode() -> str:
+    # `auto` defers the choice to resolve_output_mode(), which asks the endpoint
+    # what it is; that needs a network call, so it cannot happen here while
+    # Settings is being built at import.
     explicit = os.getenv("SUMMARY_OUTPUT_MODE")
-    if explicit:
-        return explicit.lower()
-
-    # Native json_schema is an Ollama feature. vLLM typically rejects it (or
-    # accepts it and then thinks for minutes); either way the first attempt
-    # occupies the GPU before we fall back to prompted. Skip that when chat
-    # is not Ollama.
-    try:
-        port = urlparse(os.getenv("LLM_API_BASE", "")).port
-    except ValueError:
-        port = None
-
-    if port == 11434:
-        return "native"
-    if port:
-        return "prompted"
-    return "native"
+    return explicit.lower() if explicit else "auto"
 
 
 def _llm_model_from_env() -> str:
@@ -151,7 +273,9 @@ class Settings(BaseSettings):
     # schemas. Note the wrapping: a comment line starting with "type:" is
     # parsed by mypy as a PEP 484 type comment and fails as invalid syntax.
     # Options:
-    #   native   — Ollama json_schema response_format (server-enforced; default)
+    #   auto     — pick native or prompted from the endpoint (default; see
+    #              resolve_output_mode)
+    #   native   — json_schema response_format (server-enforced)
     #   prompted — schema in the prompt, parse the text reply (model-agnostic)
     #   tool     — original tool-calling behaviour
     output_mode: str = Field(default_factory=_default_output_mode)
@@ -172,12 +296,7 @@ class Settings(BaseSettings):
         return value
 
     # Embedding Configuration
-    embedding_model: str = Field(
-        default_factory=lambda: (
-            os.getenv("EMBEDDING_MODEL")
-            or os.getenv("LLM_DEFAULT_EMBEDDING_MODEL", "nomic-embed-text")
-        )
-    )
+    embedding_model: str = Field(default_factory=resolve_embedding_model)
     embedding_dimensions: int = Field(
         default_factory=lambda: int(os.getenv("EMBEDDING_DIMENSIONS", 768))
     )
@@ -260,14 +379,18 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-def _served_model_ids() -> list[str]:
-    """Model ids served by the OpenAI-compatible endpoint (GET /models)."""
+def _served_models() -> list[dict]:
+    """Rows of the OpenAI-compatible endpoint's GET /models listing."""
     url = f"{settings.llm_api_base.rstrip('/')}/models"
     response = httpx.get(
         url, headers={"Authorization": f"Bearer {settings.llm_api_key}"}, timeout=10.0
     )
     response.raise_for_status()
-    return [model["id"] for model in response.json().get("data", []) if model.get("id")]
+    return [
+        model
+        for model in response.json().get("data", [])
+        if isinstance(model, dict) and model.get("id")
+    ]
 
 
 def _is_served(model: str, served: list[str]) -> bool:
@@ -276,12 +399,113 @@ def _is_served(model: str, served: list[str]) -> bool:
     return any(tag == model or tag.startswith(f"{model}:") for tag in served)
 
 
-def _pick_chat_model(served: list[str]) -> str | None:
-    # /models has no capability metadata, so exclude embedding models by name.
-    for tag in served:
-        if "embed" not in tag.lower():
-            return tag
+# Mirrors the API's domains/llm/services/servedModels.ts; keep the two in step.
+# Tags naming a job other than chat. Lemonade publishes these on /models; every
+# chat model it lists also carries `chat`, and a hand-registered one only
+# `custom`, so a model is dropped only for a non-chat tag without `chat`.
+_NON_CHAT_LABELS = frozenset(
+    {
+        "3d",
+        "audio-generation",
+        "classification",
+        "edit",
+        "embedding",
+        "embeddings",
+        "image",
+        "realtime-transcription",
+        "rerank",
+        "reranking",
+        "transcription",
+        "tts",
+        "upscaling",
+        "voice-design",
+    }
+)
+# For backends that publish no tags (vLLM, Ollama): name fragments of model
+# families that never chat. Short on purpose; a false match hides a chat model.
+_NON_CHAT_NAME = re.compile(
+    r"embed|rerank|whisper|kokoro|minilm|(^|[^a-z0-9])(tts|bge)([^a-z0-9]|$)", re.I
+)
+
+
+def is_chat_model(row: dict) -> bool:
+    """Whether a /models row can take a chat request."""
+    model_id = str(row.get("id", ""))
+    embedder = resolve_embedding_model()
+    if model_id.removesuffix(":latest") == embedder.removesuffix(":latest"):
+        return False
+
+    labels = row.get("labels")
+    labels = (
+        [label for label in labels if isinstance(label, str)]
+        if isinstance(labels, list)
+        else []
+    )
+    if "chat" in labels:
+        return True
+    if any(label in _NON_CHAT_LABELS for label in labels):
+        return False
+    return not _NON_CHAT_NAME.search(model_id)
+
+
+def _pick_chat_model(served: list[dict]) -> str | None:
+    for row in served:
+        if is_chat_model(row):
+            return str(row["id"])
     return None
+
+
+_resolved_output_mode: str | None = None
+
+
+def resolve_output_mode() -> str:
+    """
+    The pydantic-ai output mode: SUMMARY_OUTPUT_MODE when set, else chosen from
+    what the endpoint is.
+
+    `native` (json_schema response_format, enforced while decoding) works on
+    Ollama, llama.cpp and so Lemonade, and SGLang. vLLM stays on `prompted`, as
+    it did under the port rule (402be25e2): it typically rejects json_schema, or
+    accepts it and then thinks for minutes on the GPU. vLLM is recognised by `owned_by: "vllm"` on
+    its /models rows, which CI-Hub's pool passes through, instead of by port:
+    the old rule (anything but 11434 is prompted) put every backend behind the
+    Hub pool, and Lemonade on 13305, on the weaker mode. Any other backend that
+    refuses json_schema still falls back per call (llm_config.run_agent_sync).
+
+    Cached once decided; an endpoint that cannot be read yet answers `native`
+    for this call only and is asked again next time.
+    """
+    global _resolved_output_mode
+
+    if _resolved_output_mode is not None:
+        return _resolved_output_mode
+
+    configured = (settings.output_mode or "auto").lower()
+    if configured != "auto":
+        _resolved_output_mode = configured
+        return configured
+
+    try:
+        port = urlparse(settings.llm_api_base).port
+    except ValueError:
+        port = None
+    if port == 11434:
+        _resolved_output_mode = "native"
+        return "native"
+
+    try:
+        rows = _served_models()
+    except Exception as exc:
+        logger.warning(
+            "Could not list models at %s (%s); using native output mode for now.",
+            settings.llm_api_base,
+            exc,
+        )
+        return "native"
+
+    is_vllm = any(str(row.get("owned_by", "")).lower() == "vllm" for row in rows)
+    _resolved_output_mode = "prompted" if is_vllm else "native"
+    return _resolved_output_mode
 
 
 @lru_cache(maxsize=1)
@@ -298,7 +522,7 @@ def resolve_llm_model() -> str:
     configured = settings.llm_model
 
     try:
-        served = _served_model_ids()
+        rows = _served_models()
     except Exception as exc:
         if configured:
             # Endpoint not reachable yet: trust the configured model rather
@@ -315,10 +539,12 @@ def resolve_llm_model() -> str:
             "Set LLM_DEFAULT_CHAT_MODEL (normally injected by CI Hub) or make the endpoint reachable."
         ) from exc
 
+    served = [str(row["id"]) for row in rows]
+
     if configured:
         if _is_served(configured, served):
             return configured
-        fallback = _pick_chat_model(served)
+        fallback = _pick_chat_model(rows)
         if fallback:
             logger.warning(
                 "Configured model %r is not served by %s; using available model %r instead.",
@@ -334,7 +560,7 @@ def resolve_llm_model() -> str:
         )
         return configured
 
-    discovered = _pick_chat_model(served)
+    discovered = _pick_chat_model(rows)
     if not discovered:
         raise RuntimeError(
             f"No LLM model configured and {settings.llm_api_base} serves no chat model. "

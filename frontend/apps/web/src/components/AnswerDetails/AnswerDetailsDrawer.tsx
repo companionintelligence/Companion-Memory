@@ -4,6 +4,8 @@ import { useDeviceLayout } from '@ci/common';
 import { Button, Separator, Sheet, cn } from '@ci/shadcn';
 import { Pencil, Sparkles, UserRound } from '@ci/shadcn/icons';
 
+import { useSwipeToDismiss } from '@/hooks/useSwipeToDismiss';
+
 import { formatCitationDate, readEvidenceSummary } from './answerEvidence';
 import { confidenceLabel, confidenceSentence, isInferred } from './confidence';
 import { EvidenceSection } from './EvidenceSection';
@@ -107,6 +109,13 @@ export function AnswerDetailsDrawer({ details, open, onOpenChange }: Props) {
   const { question, answerText, source, confidence, rationale, answeredAt, onEdit } = details;
   const { isMobile } = useDeviceLayout();
 
+  // The grabber below promises that dragging the sheet down closes it; this is
+  // what keeps the promise. Phone layout only — the desktop panel has no grabber.
+  const swipe = useSwipeToDismiss<HTMLDivElement>({
+    enabled: Boolean(isMobile),
+    onDismiss: () => onOpenChange(false),
+  });
+
   // Only the model name is read here; everything else about the retrieval is
   // read — and reconciled — inside `EvidenceSection`.
   const summary = useMemo(() => readEvidenceSummary(details.record), [details.record]);
@@ -137,6 +146,7 @@ export function AnswerDetailsDrawer({ details, open, onOpenChange }: Props) {
         it.
       */}
       <Sheet.Content
+        ref={swipe.sheetRef}
         side={isMobile ? 'bottom' : 'right'}
         className={cn(
           // Header and footer are siblings of the scroll region, not inside
@@ -147,13 +157,21 @@ export function AnswerDetailsDrawer({ details, open, onOpenChange }: Props) {
             : 'w-full sm:max-w-[36rem]',
         )}
       >
+        {/* The grabber and the header are the drag handle (`handleProps`): they
+            are the parts that do not scroll. The bar is 6px tall, so it sits in
+            a strip a thumb can actually catch. */}
         {isMobile && (
-          <div className="mx-auto mt-3 h-1.5 w-10 shrink-0 rounded-full bg-muted-foreground/30" aria-hidden />
+          <div className="shrink-0 pt-3" data-testid="answer-details-grabber" {...swipe.handleProps}>
+            <div className="mx-auto h-1.5 w-10 rounded-full bg-muted-foreground/30" aria-hidden />
+          </div>
         )}
 
         {/* `pr-12` clears the primitive's own close button, which is absolutely
             positioned at top-right and would otherwise sit on the title. */}
-        <Sheet.Header className="shrink-0 gap-2 border-b border-border/60 px-6 pt-4 pr-12 pb-3 text-left">
+        <Sheet.Header
+          className="shrink-0 gap-2 border-b border-border/60 px-6 pt-4 pr-12 pb-3 text-left"
+          {...swipe.handleProps}
+        >
           <Sheet.Title className="flex items-center gap-2 text-base">
             {inferred ? (
               <Sparkles className="h-4 w-4 shrink-0 text-amber-500" strokeWidth={1.5} aria-hidden="true" />

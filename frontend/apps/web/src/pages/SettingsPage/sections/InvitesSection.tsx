@@ -4,6 +4,8 @@ import { apiKeyHeaders, fetchJson, FetchJsonError } from '@ci/common';
 import { Button, Card } from '@ci/shadcn';
 import { Copy } from '@ci/shadcn/icons';
 
+import { useAuth } from '@/hooks';
+
 interface SignupCode {
   signup_code: string;
   created_at?: string;
@@ -28,21 +30,34 @@ function messageFrom(error: unknown, fallback: string): string {
  * admits someone.
  */
 export function InvitesSection() {
+  const [{ authToken }] = useAuth();
   const [codes, setCodes] = useState<SignupCode[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
+  // On the web `apiKeyHeaders()` is empty: a browser session's only credential
+  // is its Bearer token, and JwtOrApiKeyAuthGuard reads no other. Sending the
+  // API key alone 401'd both calls for the owner, so no invitation could be
+  // listed or created from the web. The native app's key still rides along.
+  const authHeaders = useCallback(
+    (): Record<string, string> => ({
+      ...apiKeyHeaders(),
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    }),
+    [authToken],
+  );
+
   const load = useCallback(async () => {
     try {
-      const result = await fetchJson<SignupCode[]>('/api/signup-codes', { headers: apiKeyHeaders() });
+      const result = await fetchJson<SignupCode[]>('/api/signup-codes', { headers: authHeaders() });
 
       setCodes(Array.isArray(result) ? result : []);
       setError(null);
     } catch (err) {
       setError(messageFrom(err, 'Could not load invitations.'));
     }
-  }, []);
+  }, [authHeaders]);
 
   useEffect(() => {
     void load();
@@ -52,7 +67,7 @@ export function InvitesSection() {
     setBusy(true);
 
     try {
-      await fetchJson<SignupCode>('/api/signup-codes', { method: 'POST', headers: apiKeyHeaders() });
+      await fetchJson<SignupCode>('/api/signup-codes', { method: 'POST', headers: authHeaders() });
       await load();
       setError(null);
     } catch (err) {

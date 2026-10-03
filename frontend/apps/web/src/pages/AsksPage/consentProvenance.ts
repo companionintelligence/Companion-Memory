@@ -25,6 +25,8 @@
  * should do about it.
  */
 
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
+
 /** How the request that produced a disclosure arrived. */
 export interface ChannelFacts {
   /** RFC 7638 thumbprint of the key that signed it. Null = unsigned channel. */
@@ -234,12 +236,12 @@ export function consentSentence(consent: ConsentSource, askerName: string): stri
  * An unparseable value falls back to the raw string. Showing what is stored
  * beats showing "Invalid Date" on somebody's own audit trail.
  */
-export function formatMoment(iso: string): string {
+export function formatMoment(iso: string, fmt: DateTimeFormatter): string {
   const at = new Date(iso);
 
   if (Number.isNaN(at.getTime())) {
     return iso;
   }
 
-  return at.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return fmt.dateTime(at, { dateStyle: 'medium', timeStyle: 'short' });
 }

@@ -11,6 +11,7 @@ import { type EntityTag, EntityTagEntity } from '../entities/EntityTagEntity';
 import { TagCategoryEntity } from '../entities/TagCategoryEntity';
 import { TagDirectionEntity } from '../entities/TagDirectionEntity';
 import { type Tag, TagEntity, TimestampedTag } from '../entities/TagEntity';
+import { TAGGABLE_ENTITY_OWNERSHIP_QUERIES } from '../taggableEntityOwnership';
 import {
   TAG_KINDS,
   type CreateTagDto,
@@ -31,6 +32,13 @@ type FindOpts = {
  * mirrors that rather than adding a DB constraint nothing else here has).
  */
 const ENTITY_CATEGORY_CAP = 3;
+
+/**
+ * Shape check only, run before an entity id reaches a `uuid` column: a value
+ * that fails it can name no entity, and letting Postgres reject the cast would
+ * answer "not yours" with an error instead of a refusal.
+ */
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type UpdateTagResult = {
   /** The surviving tag. On a merge this is the pre-existing target, not the edited one. */
@@ -586,7 +594,10 @@ export class TagService {
   // (`server/src/services/tags.ts`, the "Tag taxonomy" sections). Every write
   // below is owner-scoped through the SAME `userScope`/ownership pattern the
   // rest of this file already uses, and every DELETE against these five
-  // tables lives here — nowhere else may grow its own.
+  // tables lives here — nowhere else may grow its own. `setEntityCategories`
+  // is the one write keyed on a caller-named ENTITY rather than on a tag, so
+  // it owner-checks the entity too (`ownsEntity`); scoping the tags alone left
+  // its DELETE open to any entity id.
   //
   // `entity_tag.level` deliberately gets no setter here: this milestone adds
   // the column (default 1, so nothing that predates it changes) but nothing
@@ -852,13 +863,28 @@ export class TagService {
    * `entity_tag`'s own shape is app- rather than FK-enforced). Any id that is
    * not one of the caller's own `kind = 'category'` tags is silently dropped.
    * An empty array clears the entity's categories.
+   *
+   * Returns null when the entity does not exist or belongs to another user. It
+   * is the same answer for both, so a refusal says nothing about someone else's
+   * ids. `entity_categories` has no FK to the entity, so this check is the only
+   * thing standing between a caller and any uuid they name. Without it, one
+   * user's call deleted another user's assignments on that entity and attached
+   * the caller's own categories in their place.
+   *
+   * User context only, because the check needs a concrete owner to compare
+   * against. A system caller would have to name one, the way `tagEntities`
+   * makes it pass `forUserId`, and nothing needs that yet.
    */
   async setEntityCategories(
-    context: ServiceContext,
+    context: UserServiceContext,
     entityId: EntityIdentifier<TaggableEntity>,
     categoryTagIds: string[],
-  ): Promise<Tag[]> {
+  ): Promise<Tag[] | null> {
     const { type, id } = entityId;
+
+    if (!UUID_SHAPE.test(id)) {
+      return null;
+    }
 
     const uniqueIds = [...new Set(categoryTagIds)].slice(0, ENTITY_CATEGORY_CAP);
 
@@ -876,7 +902,20 @@ export class TagService {
       .filter((candidate): candidate is TagEntity => candidate != null);
 
     return this.dataSource.transaction(async (manager) => {
-      await manager.getRepository(EntityCategoryEntity).delete({ entityType: type, entityId: id });
+      if (!(await this.ownsEntity(manager, context.userId, entityId))) {
+        return null;
+      }
+
+      // Only rows pointing at the caller's own category tags. The ownership
+      // check above is the fix. This bounds the damage of a mistake in it (a
+      // wrong owner column for one type) to the caller's own rows.
+      await manager.query(
+        `DELETE FROM ci_search.entity_categories ec
+          WHERE ec.entity_type = $1
+            AND ec.entity_id = $2
+            AND ec.category_tag_id IN (SELECT t.id FROM ci_search.tags t WHERE t.user_id = $3)`,
+        [type, id, context.userId],
+      );
 
       for (const [position, category] of ordered.entries()) {
         await manager
@@ -895,6 +934,31 @@ export class TagService {
   /** User-scoping fragment shared by the owner-checked reads and writes. */
   private userScope(context: ServiceContext): { userId?: string } {
     return context.userId === SYSTEM_USER ? {} : { userId: context.userId };
+  }
+
+  /**
+   * Whether `entity` names a row `userId` owns (see `taggableEntityOwnership.ts`
+   * for which rows, per type). Takes the write's own manager so the check runs
+   * inside its transaction, ahead of its first statement.
+   */
+  private async ownsEntity(
+    manager: EntityManager,
+    userId: string,
+    entity: EntityIdentifier<TaggableEntity>,
+  ): Promise<boolean> {
+    const query = TAGGABLE_ENTITY_OWNERSHIP_QUERIES.get(entity.type);
+
+    if (query == null) {
+      throw new Error(`Invalid entity type: ${entity.type}`);
+    }
+
+    const [row]: Array<{ owned: boolean }> = await manager.query(query.sql, [
+      entity.id,
+      userId,
+      ...query.discriminatorParams,
+    ]);
+
+    return row?.owned === true;
   }
 
   /**

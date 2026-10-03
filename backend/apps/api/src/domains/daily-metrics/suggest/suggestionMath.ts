@@ -7,10 +7,7 @@ export const CONVERSATIONS_LOW_RATIO = 0.4;
 export const SCREEN_SPIKE_RATIO = 1.6;
 
 export type SuggestionArmKey =
-  | 'rel.conversations_low'
-  | 'attention.screen_spike'
-  | 'places.one_place'
-  | 'money.spend_spike';
+  'rel.conversations_low' | 'attention.screen_spike' | 'places.one_place' | 'money.spend_spike';
 
 export interface ArmTrigger {
   key: SuggestionArmKey;

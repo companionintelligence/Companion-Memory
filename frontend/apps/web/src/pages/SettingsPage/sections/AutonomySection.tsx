@@ -4,7 +4,7 @@ import { fetchJson } from '@ci/common';
 import { Button, Card } from '@ci/shadcn';
 import { Check } from '@ci/shadcn/icons';
 
-import { useAuth } from '@/hooks';
+import { useSessionAuth } from '@/hooks';
 
 import { TRUST_OPTIONS } from '../../OnboardingPage/TrustDialStep';
 
@@ -15,7 +15,11 @@ type PersonalizationProfile = {
 };
 
 export function AutonomySection() {
-  const [{ authToken }] = useAuth();
+  // `ready`, not `authToken`: the token is the web JWT, which the native shell never has — its
+  // credential is a keystore API key that `fetchJson` attaches as `x-api-key`. Gating on the token
+  // left every option and Save disabled forever on the phone, though `/personalization/*` accepts
+  // the key (`JwtOrApiKeyAuthGuard`).
+  const { ready, headers } = useSessionAuth();
   const [selected, setSelected] = useState<TrustMode>('balanced');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -23,14 +27,14 @@ export function AutonomySection() {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
     setLoading(true);
     try {
       const profile = await fetchJson<PersonalizationProfile>('/api/personalization/profile', {
-        headers: { Authorization: `Bearer ${authToken}` },
+        headers,
       });
       setSelected(profile?.trustMode ?? 'balanced');
     } catch {
@@ -38,14 +42,14 @@ export function AutonomySection() {
     } finally {
       setLoading(false);
     }
-  }, [authToken]);
+  }, [ready, headers]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   const handleSave = async () => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
@@ -55,7 +59,7 @@ export function AutonomySection() {
       await fetchJson('/api/personalization/trust-mode', {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...headers,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ trustMode: selected }),

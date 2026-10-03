@@ -1,15 +1,20 @@
-# Signed, tag-triggered release of the desktop app (frontend/apps/desktop):
+# Signed, tag-named release of the desktop app (frontend/apps/desktop):
 #   git tag -a desktop-v0.1.0 -m "Desktop 0.1.0" && git push origin desktop-v0.1.0
+#   gh workflow run desktop-release.yml --ref desktop-v0.1.0
 #
-# This is one of only four workflows in this repo (of fourteen — the count
-# docs/CI.md keeps) that run without someone dispatching them: pr-gate.yml on
+# Used to be one of only four workflows in this repo (of fourteen — the count
+# docs/CI.md keeps) that ran without someone dispatching them: pr-gate.yml on
 # every PR, benchmark-unit.yml on scripts/benchmark/** changes, and the two
-# tag-triggered release lanes, mobile-release.yml and this one. Keep this list
-# and docs/CI.md's table in step; that table is the canonical one.
+# tag-triggered release lanes, mobile-release.yml and this one. All thirteen
+# surviving workflow files (pr-gate.yml was deleted) are `workflow_dispatch`-
+# only as of 2026-09-17, to cut the GitHub Actions bill — keep this line and
+# docs/CI.md's table in step; that table is the canonical one.
 #
-# A tag push here always builds AND publishes a GitHub Release; there is no
-# dry-run for this workflow (unlike mobile-release.yml, there is no app-store
-# submission step to rehearse separately from the build itself).
+# A tag push here used to always build AND publish a GitHub Release by
+# itself; now it only names the version, and the dispatch above is what
+# actually builds it. There is still no dry-run once dispatched (unlike
+# mobile-release.yml, there is no app-store submission step to rehearse
+# separately from the build itself).
 #
 # desktop-build.yml remains the credential-free lane that produces unsigned
 # artifacts on manual dispatch. This is the DISTRIBUTION lane.
@@ -44,9 +49,13 @@
 #   APPLE_ID                    Apple ID used for notarization
 #   APPLE_PASSWORD               app-specific password for that Apple ID
 #   APPLE_TEAM_ID                10-char team ID
-# Windows:
-#   WINDOWS_CERTIFICATE_BASE64    base64 of the code-signing .pfx
-#   WINDOWS_CERTIFICATE_PASSWORD  that .pfx's password
+# Windows (Azure Artifact Signing over GitHub OIDC, same as CI-Hub's
+# desktop-release.yml — no certificate file is stored anywhere). Set these on
+# the `production` GitHub Environment; the Entra app's federated credential
+# subject is repo:companionintelligence@<org id>/Companion-Memory@<repo id>:environment:production
+# (the numeric ids are in the azure/login failure log if it ever stops matching):
+#   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_SUBSCRIPTION_ID,
+#   AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT, AZURE_CERTIFICATE_PROFILE
 #
 # None of the above are currently provisioned in this repo. Each platform's
 # job is SKIPPED (not failed) when its secrets are absent, so macOS/Windows
@@ -124,8 +133,11 @@ on:
       # Same escape hatch, same name, same accountability requirements as
       # publish.yml's input of this name — the two release lanes are operated
       # by the same people and must not need two different mental models.
-      # Unavailable on a tag push (the `inputs` context is empty there), which
-      # is deliberate: bypassing the gate has to be a conscious dispatch.
+      # Used to be unavailable on a tag push (the `inputs` context is empty
+      # there), which was deliberate: bypassing the gate had to be a conscious
+      # dispatch. This workflow is `workflow_dispatch`-only since 2026-09-17
+      # (docs/CI.md), so every run now goes through this input regardless —
+      # the same deliberateness, enforced structurally instead.
       skip_test_gate:
         description: >-
           Release even though no successful desktop-build.yml run exists for
@@ -191,8 +203,11 @@ jobs:
           # No checkout in this job, so gh cannot infer the repo from a git
           # remote — name it explicitly.
           GH_REPO: ${{ github.repository }}
-          # Empty string on a tag push (no `inputs` context there), which is
-          # the enforcing path — the bypass is dispatch-only.
+          # Used to read as an empty string on a tag push (no `inputs`
+          # context there), which was the enforcing path — the bypass was
+          # dispatch-only. Every run is a dispatch now, so `inputs` is always
+          # populated; the bypass still needs an explicit `-f
+          # skip_test_gate=true` either way.
           SKIP_TEST_GATE: ${{ inputs.skip_test_gate }}
           BYPASS_REASON: ${{ inputs.bypass_reason }}
         run: |
@@ -247,9 +262,9 @@ jobs:
 
   version:
     name: Resolve version and server image tag
-    # Gated so a tag pushed without a green build burns one minute, not three
-    # 60-minute platform jobs — and so nothing downstream can observe a
-    # resolved tag from an unverified commit.
+    # Gated so a release dispatched without a green build burns one minute,
+    # not three 60-minute platform jobs — and so nothing downstream can
+    # observe a resolved tag from an unverified commit.
     needs: verify-desktop-build-passed
     runs-on: ubuntu-latest
     outputs:
@@ -511,6 +526,13 @@ jobs:
     needs: [verify-desktop-build-passed, version]
     runs-on: windows-latest
     timeout-minutes: 60
+    # Azure's OIDC subject is environment:production, so the Azure secrets live
+    # on that Environment and this job must run in it.
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -522,9 +544,15 @@ jobs:
         id: secrets
         shell: bash
         env:
-          CERT: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERTIFICATE_PROFILE: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
         run: |
-          if [ -n "$CERT" ]; then
+          if [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_SUBSCRIPTION_ID" ] \
+            && [ -n "$AZURE_SIGNING_ENDPOINT" ] && [ -n "$AZURE_SIGNING_ACCOUNT" ] && [ -n "$AZURE_CERTIFICATE_PROFILE" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
@@ -586,34 +614,44 @@ jobs:
           "
           sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.name }}"/' Cargo.toml
 
-      - name: Decode signing certificate
-        if: steps.secrets.outputs.present == 'true'
-        shell: bash
-        env:
-          CERT_B64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
-        run: |
-          echo "$CERT_B64" | base64 --decode > "$RUNNER_TEMP/signing.pfx"
-          echo "WINDOWS_CERTIFICATE_PATH=$RUNNER_TEMP/signing.pfx" >> "$GITHUB_ENV"
-
       - name: Build
         if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
+        # bash, not the windows-latest default pwsh: pwsh strips the inner quotes of
+        # an escaped-JSON argument, so Tauri received `{\` as its --config and the
+        # build failed. The Windows lane had never run before (it skips without
+        # signing secrets), which is why this was never seen.
+        shell: bash
         run: |
-          npx --yes @tauri-apps/cli@2 build --target x86_64-pc-windows-msvc -c "{\"bundle\":{\"createUpdaterArtifacts\":false}}"
+          npx --yes @tauri-apps/cli@2 build --target x86_64-pc-windows-msvc -c '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Azure login for Artifact Signing
+        if: steps.secrets.outputs.present == 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Sign artifacts
         if: steps.secrets.outputs.present == 'true'
-        shell: pwsh
-        env:
-          CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          $signtool = (Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
-            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1).FullName
-          $files = Get-ChildItem -Path "frontend/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle" -Recurse -Include *.msi,*-setup.exe
-          foreach ($file in $files) {
-            & $signtool sign /f "$env:WINDOWS_CERTIFICATE_PATH" /p "$env:CERT_PASSWORD" `
-              /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "$file.FullName"
-          }
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+          files-folder: frontend/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle
+          files-folder-filter: exe,msi
+          files-folder-recurse: true
+          files-folder-depth: 3
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
 
       - name: Upload Windows artifact
         if: steps.secrets.outputs.present == 'true'
@@ -625,11 +663,6 @@ jobs:
             frontend/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             frontend/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
           if-no-files-found: error
-
-      - name: Clean up certificate
-        if: always() && steps.secrets.outputs.present == 'true'
-        shell: bash
-        run: rm -f "$RUNNER_TEMP/signing.pfx" || true
 
   linux:
     name: Linux (unsigned)
@@ -807,7 +840,7 @@ jobs:
             NAMES="${NAMES:+$NAMES, }Windows"
             LINES="${LINES}"$'\n'"- Windows — signed .msi and setup .exe"
           else
-            LINES="${LINES}"$'\n'"- Windows — NOT INCLUDED (no release-windows artifact; Windows job result: ${WINDOWS_RESULT}. Usual cause: the WINDOWS_CERTIFICATE_* signing secrets are unprovisioned, which makes every build/sign step skip.)"
+            LINES="${LINES}"$'\n'"- Windows — NOT INCLUDED (no release-windows artifact; Windows job result: ${WINDOWS_RESULT}. Usual cause: the AZURE_* signing secrets on the production Environment are unprovisioned, which makes every build/sign step skip.)"
           fi
           # Linux is unconditional here: the job gate above already required
           # needs.linux.result == 'success'.
@@ -831,6 +864,10 @@ jobs:
           # inventory stays at the top where it is actually read.
           body: ${{ steps.platforms.outputs.body }}
           generate_release_notes: true
+          # The desktop app's releases share this repo with the server's date-tagged
+          # releases (v2026.9.9.1 ...). Without this, each desktop release takes the
+          # "Latest" badge, and /releases/latest stops pointing at the server.
+          make_latest: 'false'
           # macOS/Windows assets may legitimately be absent if their signing
           # secrets aren't provisioned yet — see this file's header comment —
           # which is why the pattern stays a glob. `fail_on_unmatched_files`

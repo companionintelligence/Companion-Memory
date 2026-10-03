@@ -73,8 +73,7 @@ function discoverCronSites(): CronSite[] {
       }
 
       const options = Reflect.getMetadata(SCHEDULE_CRON_OPTIONS, descriptor.value) as
-        | { cronTime?: unknown }
-        | undefined;
+        { cronTime?: unknown } | undefined;
 
       if (typeof options?.cronTime !== 'string') {
         continue;

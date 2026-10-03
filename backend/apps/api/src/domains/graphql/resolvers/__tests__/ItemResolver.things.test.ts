@@ -12,6 +12,8 @@ const ITEM_B = '550e8400-e29b-41d4-a716-446655440002';
 const PRODUCT_A = '550e8400-e29b-41d4-a716-4466554400aa';
 
 const CREATED_AT = new Date('2026-01-02T03:04:05.000Z');
+/** The same instant as Postgres formats it: the microseconds the `Date` above has lost. */
+const CREATED_AT_EXACT = '2026-01-02T03:04:05.000789Z';
 
 function makeItem(overrides: Record<string, unknown> = {}) {
   return {
@@ -108,7 +110,12 @@ describe('ItemResolver.items', () => {
     const item = makeItem();
     const { resolver, itemService } = build({
       itemService: {
-        findPage: jest.fn(async () => ({ items: [item], hasMore: true, nextCursor: null })),
+        findPage: jest.fn(async () => ({
+          items: [item],
+          positions: [{ createdAt: CREATED_AT_EXACT, id: ITEM_A }],
+          hasMore: true,
+          nextCursor: null,
+        })),
       },
     });
 
@@ -128,28 +135,78 @@ describe('ItemResolver.items', () => {
     const item = makeItem();
     const { resolver, itemService } = build({
       itemService: {
-        findPage: jest.fn(async () => ({ items: [item], hasMore: false, nextCursor: null })),
+        findPage: jest.fn(async () => ({
+          items: [item],
+          positions: [{ createdAt: CREATED_AT_EXACT, id: ITEM_A }],
+          hasMore: false,
+          nextCursor: null,
+        })),
       },
     });
 
     const first = await resolver.items(context, { first: 1 });
     const cursor = first.edges[0].cursor;
 
-    expect(decodeItemCursor(cursor)).toEqual({ createdAt: CREATED_AT, id: ITEM_A });
+    // The row's exact position, from the service: NOT `item.createdAt`, whose Date has lost the microseconds.
+    expect(decodeItemCursor(cursor)).toEqual({ createdAt: CREATED_AT_EXACT, id: ITEM_A });
 
     await resolver.items(context, { first: 1, after: cursor });
 
     expect(itemService.findPage).toHaveBeenLastCalledWith(
       { userId: 'user-1' },
       {},
-      { limit: 1, afterCreatedAt: CREATED_AT, afterId: ITEM_A },
+      { limit: 1, afterCreatedAt: CREATED_AT_EXACT, afterId: ITEM_A },
+    );
+  });
+
+  it("gives every edge its own row's position, not just the last", async () => {
+    const mug = makeItem({ id: ITEM_A });
+    const kettle = makeItem({ id: ITEM_B, name: 'Kettle' });
+    const { resolver } = build({
+      itemService: {
+        findPage: jest.fn(async () => ({
+          items: [mug, kettle],
+          positions: [
+            { createdAt: '2026-01-02T03:04:05.000789Z', id: ITEM_A },
+            { createdAt: '2026-01-02T03:04:05.000123Z', id: ITEM_B },
+          ],
+          hasMore: false,
+          nextCursor: null,
+        })),
+      },
+    });
+
+    const connection = await resolver.items(context, { first: 2 });
+
+    expect(connection.edges.map((edge) => decodeItemCursor(edge.cursor))).toEqual([
+      { createdAt: '2026-01-02T03:04:05.000789Z', id: ITEM_A },
+      { createdAt: '2026-01-02T03:04:05.000123Z', id: ITEM_B },
+    ]);
+    expect(connection.pageInfo.startCursor).toBe(connection.edges[0].cursor);
+    expect(connection.pageInfo.endCursor).toBe(connection.edges[1].cursor);
+  });
+
+  it('resumes from a cursor an earlier release minted, which holds milliseconds', async () => {
+    const { resolver, itemService } = build({
+      itemService: {
+        findPage: jest.fn(async () => ({ items: [], positions: [], hasMore: false, nextCursor: null })),
+      },
+    });
+    const legacy = Buffer.from(`${CREATED_AT.toISOString()}|${ITEM_A}`).toString('base64');
+
+    await resolver.items(context, { first: 1, after: legacy });
+
+    expect(itemService.findPage).toHaveBeenLastCalledWith(
+      { userId: 'user-1' },
+      {},
+      { limit: 1, afterCreatedAt: '2026-01-02T03:04:05.000Z', afterId: ITEM_A },
     );
   });
 
   it('pushes category, brand and lifecycleState into SQL rather than filtering after the fact', async () => {
     const { resolver, itemService } = build({
       itemService: {
-        findPage: jest.fn(async () => ({ items: [], hasMore: false, nextCursor: null })),
+        findPage: jest.fn(async () => ({ items: [], positions: [], hasMore: false, nextCursor: null })),
       },
     });
 
@@ -192,7 +249,7 @@ describe('ItemResolver.items', () => {
         findPage: jest.fn(async () => ({
           items: [makeItem()],
           hasMore: true,
-          nextCursor: { createdAt: CREATED_AT, id: ITEM_A },
+          nextCursor: { createdAt: CREATED_AT_EXACT, id: ITEM_A },
         })),
       },
     });
@@ -210,6 +267,43 @@ describe('ItemResolver.items', () => {
     );
 
     expect(connection.pageInfo.hasNextPage).toBe(true);
+  });
+
+  it("hands each chunk's exact position to the next, so the drain cannot skip the rest of an instant", async () => {
+    const mug = makeItem({ id: ITEM_A });
+    const kettle = makeItem({ id: ITEM_B, name: 'Kettle' });
+    const findPage = jest
+      .fn()
+      .mockResolvedValueOnce({
+        items: [mug],
+        positions: [{ createdAt: CREATED_AT_EXACT, id: ITEM_A }],
+        hasMore: true,
+        nextCursor: { createdAt: CREATED_AT_EXACT, id: ITEM_A },
+      })
+      .mockResolvedValueOnce({ items: [kettle], positions: [], hasMore: false, nextCursor: null });
+    const { resolver } = build({ itemService: { findPage } });
+
+    const connection = await resolver.items(
+      context,
+      { first: 10 },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ItemSortOrder.NAME_ASC,
+    );
+
+    expect(connection.edges).toHaveLength(2);
+    expect(findPage).toHaveBeenCalledTimes(2);
+    expect(findPage.mock.calls[0][2]).toEqual({ limit: 200, afterCreatedAt: null, afterId: null });
+    // The text the service reported, microseconds and all: not a Date, which would be `.000`.
+    expect(findPage.mock.calls[1][2]).toEqual({
+      limit: 200,
+      afterCreatedAt: CREATED_AT_EXACT,
+      afterId: ITEM_A,
+    });
   });
 });
 

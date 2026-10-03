@@ -20,6 +20,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { PageContent } from '@/components/layout';
 import { gql, makeFragmentData } from '@/graphql';
 import { useAuth } from '@/hooks';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { Endpoints, ENDPOINTS_FRAGMENT } from '@/pages/ProviderPage/Endpoints';
 
 export interface Provider {
@@ -168,6 +170,7 @@ function computeEndpointStatus(
   jobs: StatusJob[],
   endpoint: { name: string; TTL?: number | null },
   jobType: 'historical' | 'incremental' | null,
+  fmt: DateTimeFormatter,
 ) {
   const endpointJobs = jobs
     .filter(
@@ -210,7 +213,7 @@ function computeEndpointStatus(
       icon: <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-500 flex-shrink-0" />,
       text: (
         <span className="text-muted-foreground">
-          Successfully run at {new Date(latest.completedAt as string).toLocaleString()}
+          Successfully run at {fmt.dateTime(latest.completedAt as string)}
         </span>
       ),
     };
@@ -256,6 +259,7 @@ interface EndpointStatusRowProps {
  * the endpoint name as its label.
  */
 function EndpointStatusRow({ connectionId, endpoint, jobType, label }: EndpointStatusRowProps) {
+  const fmt = useDateTimeFormat();
   const { data } = useQuery(GET_CONNECTION_SYNC_JOBS, {
     variables: {
       connectionId,
@@ -268,7 +272,7 @@ function EndpointStatusRow({ connectionId, endpoint, jobType, label }: EndpointS
   const jobs: StatusJob[] =
     (data?.connectionSyncJobs.edges.map((edge) => edge.node) as StatusJob[] | undefined) ?? [];
 
-  const { icon, text } = computeEndpointStatus(jobs, endpoint, jobType);
+  const { icon, text } = computeEndpointStatus(jobs, endpoint, jobType, fmt);
 
   return (
     <li className="flex items-center gap-2 text-sm">
@@ -283,7 +287,10 @@ export function ConnectionPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [{ authToken }] = useAuth();
+  // `authenticated`, not `authToken`: the token is the web JWT, which the native shell never has — its
+  // credential is a keystore API key. The edit below is a GraphQL mutation that authenticates through the
+  // Apollo link and never reads the token, so gating on it only stopped the phone from saving.
+  const [{ authToken, authenticated }] = useAuth();
 
   const [showEditModal, setShowEditModal] = useState(false);
   const [editFormData, setEditFormData] = useState({
@@ -361,8 +368,8 @@ export function ConnectionPage() {
       setModalLoading(true);
       setModalError(null);
 
-      if (!authToken || !connection) {
-        throw new Error('Authentication token or connection not found');
+      if (!authenticated || !connection) {
+        throw new Error('You are not signed in, or this connection was not found');
       }
 
       if (!editFormData.name) {
@@ -435,7 +442,7 @@ export function ConnectionPage() {
           method: 'GET',
           headers: {
             ...apiKeyHeaders(),
-            Authorization: `Bearer ${authToken}`,
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
           },
         },
       );

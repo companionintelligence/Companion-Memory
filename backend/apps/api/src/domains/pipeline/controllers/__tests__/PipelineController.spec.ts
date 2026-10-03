@@ -94,25 +94,23 @@ function makeService() {
       jobIds: ['job-1'],
       replayedAt: new Date('2026-08-09T12:00:00Z'),
     })),
-    replayDeadLetters: jest.fn(
-      async (): Promise<DeadLetterBulkReplayResult> => ({
-        requested: 1,
-        claimed: 1,
-        limit: 50,
-        replayed: [
-          {
-            id: LETTER_ID,
-            eventName: 'infer.question.answer',
-            queue: null,
-            jobIds: ['job-1'],
-            replayedAt: new Date('2026-08-18T12:00:00Z'),
-          },
-        ],
-        failed: [],
-        skipped: [],
-        notAttempted: [],
-      }),
-    ),
+    replayDeadLetters: jest.fn(async (): Promise<DeadLetterBulkReplayResult> => ({
+      requested: 1,
+      claimed: 1,
+      limit: 50,
+      replayed: [
+        {
+          id: LETTER_ID,
+          eventName: 'infer.question.answer',
+          queue: null,
+          jobIds: ['job-1'],
+          replayedAt: new Date('2026-08-18T12:00:00Z'),
+        },
+      ],
+      failed: [],
+      skipped: [],
+      notAttempted: [],
+    })),
   };
 }
 

@@ -28,7 +28,12 @@ import {
   type ObjectIdentifierNamespace,
 } from '@ci/domains/graph';
 
-import { mimeForFile, type MediaAttachment } from '../datasources/timeline';
+import {
+  IMPORTED_EVENT_STATUSES,
+  mimeForFile,
+  type ImportedEventStatus,
+  type MediaAttachment,
+} from '../datasources/timeline';
 import type { StagedItem } from '../entities/StagedItemEntity';
 
 import { readCommerceField } from './commerceKeys';
@@ -100,6 +105,14 @@ export interface CanonicalRecord {
    * Null when the source doesn't distinguish.
    */
   isRecurring: boolean | null;
+  /**
+   * What became of the event, as its source stated it (`metadata.eventStatus`,
+   * one of {@link IMPORTED_EVENT_STATUSES}). First-class for the same reason as
+   * isAllDay: events.status needs it, and a cancellation that sat in metadata
+   * reached no reader of the column. Null when the source states none, or a
+   * value outside that list, which leaves the column DEFAULT, 'confirmed'.
+   */
+  eventStatus: ImportedEventStatus | null;
   /** Media type. From items.media_type. */
   mediaType: string | null;
   /** Content hash, a secondary dedup signal. From items.content_hash. */
@@ -417,13 +430,7 @@ export function backfillEntityTypesFor(destinations: Iterable<Destination>): Bac
  * it does not recognise.
  */
 export type EdgeProjectionSource =
-  | 'communications'
-  | 'events'
-  | 'content'
-  | 'objects'
-  | 'positions'
-  | 'receipts'
-  | 'observations';
+  'communications' | 'events' | 'content' | 'objects' | 'positions' | 'receipts' | 'observations';
 
 /**
  * Map an import {@link Destination} to the edge-projection source its rows land
@@ -1728,6 +1735,16 @@ export function identifiersFrom(metadata: Record<string, unknown> | undefined | 
   return out;
 }
 
+/**
+ * `metadata.eventStatus` when it is one of {@link IMPORTED_EVENT_STATUSES},
+ * otherwise null. Exact spelling only: the datasource maps its source's own
+ * vocabulary (`icsEventStatus`, the Takeout `canceled` flag), and a value that
+ * reached here unmapped must not reach `events_status_check`.
+ */
+function importedEventStatus(value: unknown): ImportedEventStatus | null {
+  return IMPORTED_EVENT_STATUSES.find((status) => status === value) ?? null;
+}
+
 export function toCanonical(row: StagedItem): CanonicalRecord {
   const metadata: Record<string, unknown> = { ...(row.metadata ?? {}) };
   if (row.filename) {
@@ -1780,6 +1797,7 @@ export function toCanonical(row: StagedItem): CanonicalRecord {
     locationName,
     isAllDay: typeof metadata.isAllDay === 'boolean' ? metadata.isAllDay : null,
     isRecurring: typeof metadata.isRecurring === 'boolean' ? metadata.isRecurring : null,
+    eventStatus: importedEventStatus(metadata.eventStatus),
     mediaType: row.mediaType,
     contentHash: row.contentHash,
     // Source file path for media items, so the push can upload + link the bytes.

@@ -26,8 +26,11 @@ if [ -d "${DEST}" ]; then
   exit 0
 fi
 
-TMP_ZIP="$(mktemp -t clitertlm-xcframework).zip"
-trap 'rm -f "${TMP_ZIP}"' EXIT
+# Download into a mktemp -d directory: appending .zip to a mktemp file writes
+# to a path mktemp never created and leaves its empty file behind.
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${TMP_DIR}"' EXIT
+TMP_ZIP="${TMP_DIR}/CLiteRTLM.xcframework.zip"
 
 echo "Downloading CLiteRTLM.xcframework v${VERSION}..."
 curl -fL --progress-bar -o "${TMP_ZIP}" "${URL}"

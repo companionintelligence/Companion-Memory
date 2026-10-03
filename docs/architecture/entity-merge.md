@@ -24,7 +24,13 @@ Section **2.1(b)** is cited from `GraphIngestService.ts`. Do not renumber it.
 - `ci.entities.merged_into_entity_id` — tombstone pointer, indexed.
 - `ci.entity_merges` — audit log, one row per `(source_entity_id → target_entity_id)`, with
   per-table re-point counts and the source's pre-merge properties in
-  `details` (`{ counts, sourceProperties }`).
+  `details` (`{ counts, sourceProperties }`). **The Person and Location `counts` were constants
+  until the `countAffected` fix** (2026-09-29): each was `….length` of a bare
+  `UPDATE/DELETE … RETURNING`, which TypeORM resolves to the pair `[rows, rowCount]`, so every
+  Person count read 2 and `relationshipsDropped` 6, and every Location count 2, 4 or 6, whatever
+  moved. Rows written before the fix still carry those numbers — see §5.4. `relationshipsRescued`
+  (the final relationship sweep, §5.2) is newer still: a Person or Location merge row written before
+  it has no such key, which means "not counted", not "none".
 - `ci.entity_identifiers` grew from a bare lookup into a real contact-method table:
   `raw_value`, `label`, `is_primary`, `source`, `verified_at`.
 - `PersonDuplicateService` — candidate groups by shared normalized email / phone / name.
@@ -39,9 +45,11 @@ The hard parts are handled well and should not be re-litigated: the self person 
 *target* but never a *source*; relationship re-points are guarded against both the
 `no_self_references` CHECK and the `relationships_unique_directed_idx` partial unique index, with a
 `DISTINCT ON` so two duplicates carrying the same edge cannot collapse onto the index mid-UPDATE;
-the hypertable re-point lifts `timescaledb.max_tuples_decompressed_per_dml_transaction` for the
-transaction; tombstones are removed from *both* search stores (`ci_search.embeddings` and
-`ci_search.vectors`).
+tombstones are removed from *both* search stores (`ci_search.embeddings` and
+`ci_search.vectors`). The merge used to lift `timescaledb.max_tuples_decompressed_per_dml_transaction`
+for its `ci.communications` re-points; that table stopped being a hypertable in
+`20260807072321_dehypertable_communications`, and the dead lift was removed. `PlaceMergeService`
+keeps it, because `ci.position` is still a compressed hypertable.
 
 ### 1.2 Object identity — schema (`20260803223013`–`20260803223025`), services since #2176
 
@@ -84,6 +92,37 @@ as open:
     candidate generation rescores pending pairs without resurrecting rejected ones.
 
   `DuplicateDetectStage` currently covers `entity_type = 'Person'` only.
+
+  **A merge carries the claims with it** (2026-09-29). Until then `PersonMergeService` re-pointed
+  `ci.entity_identifiers` but not `ci.identifier_claims.entity_id`, so a source's claims — its
+  `enrich.person_self_claim` self claims included — stayed on the tombstone. The detector's holder
+  join admits live people only, so they stopped being evidence, and the source~third pair it had
+  already proposed went moot with the source. Nothing re-examined the survivor either: the ledger
+  re-runs a stage only on a version bump. A third copy sharing only the merged-away card's address
+  or number was therefore never proposed against the survivor. Two halves now close it:
+  - **In the merge transaction**, every claim that resolved to a source is re-pointed to the target.
+    Only `entity_id` moves — the observation (`subject_type`/`subject_id`, role, value), its
+    `method`/`confidence` and a human's `disposition` stay. It cannot collide, because
+    `identifier_claims_observation_uniq` does not include `entity_id`. A `rejected` claim moves
+    too and stays rejected: every reader excludes rejected claims on both sides, and
+    `enrich.person_link`'s own upsert would move it the same way. The count is
+    `details.counts.claims`. In the same transaction each source's `ci.entity_merge_blocks` row is
+    carried to the target as a new (target, X) row (`details.counts.blocksCarried`). Without it,
+    the re-examination below would re-find a pair a human had ruled out; one evidenced by a shared
+    address would then be folded by the deterministic drain.
+  - **On the ledger**, `IdentifierArrivalService` (called by the control tick) re-opens a live
+    survivor's `enrich.person_self_claim` and `clean.duplicate_detect` decisions recorded before a
+    `ci.entity_merges` row into it, with a `CLAIM_LEASE_SECONDS` margin. The merge does not write
+    the ledger itself: `PipelineStateService` is its only writer, and memory does not depend on the
+    pipeline domain. The merge's audit row, committed with the claims, is the signal. It counts only
+    if it records `counts.blocksCarried`. A merge from before this change moved no claims and
+    carried no blocks, so its survivor waits for the next version bump, as before. That bump is
+    where the old merges' uncarried blocks bite: a survivor whose self claims are re-derived from
+    its folded card can be proposed against someone a human ruled out for the source.
+
+  Proven against Postgres in `pipeline/__tests__/mergeSurvivorEvidence.integration.spec.ts`. Take
+  away either half and the third copy is never proposed; take away the block carry and the
+  ruled-out stranger is.
 
 ### 1.4 The promotion paths
 
@@ -336,8 +375,9 @@ Carried from the design draft, annotated with where they now stand.
 **P1 — The ledger is the merge; re-pointing is a projection.**
 A merge takes effect the instant its ledger row commits; rewriting the ~20 referrer columns can be
 an asynchronous, resumable sweep. *Today `PersonMergeService` does both synchronously in one
-transaction, which is fine at current corpus sizes and is the reason the hypertable re-point has to
-lift `max_tuples_decompressed_per_dml_transaction`. §5.3 is what P1 would buy.*
+transaction, which is fine at current corpus sizes; `PlaceMergeService` does the same, and its
+`ci.position` re-point is why it has to lift `max_tuples_decompressed_per_dml_transaction`. §5.3 is
+what P1 would buy.*
 
 **P2 — Canonicalisation should be a SQL-level primitive, not only a service method.**
 The HBPE sidecar reads `ci.*` directly as its training corpus. Resolution that lives only in
@@ -359,18 +399,46 @@ pairs in three deterministic tiers:
 
 | Tier | Evidence | Where it is graded |
 |------|----------|--------------------|
-| Email | a shared normalized mailbox (evidence, claims or `properties`) | `SHARES_EXACT_EMAIL` |
+| Email | a shared normalized mailbox (evidence, claims or `properties`) — held for review, never folded, when one side is the owner and the other's name contradicts theirs (`email_check: self_endpoint`), or when two contacts' full names share nothing (`email_check: name_conflict`) | `SHARES_EXACT_EMAIL`; `utils/emailIdentity.ts` `emailHoldReason` |
 | Phone | one equal, valid, ordinary number in both people's own `properties`, names compatible, line not shared (`phone` 0.95) — see the rule table below | `utils/phoneIdentity.ts` `PhoneHolders.adjudicate` |
 | Profile URL | equal LinkedIn `/in/` URL sets, corroborated by a shared name token or an agreeing "Connected On" date, contradicted by neither (`profile_url` 0.95) | `utils/profileUrls.ts` `adjudicateProfileUrls` |
 
-The phone tier (`clean.duplicate_detect` v6, `DUPLICATE_SCORING_GENERATION` 5) reads `Phones`
-(the vCard's numbers as typed), the `phones`/`phone` ten-digit keys and a display name that is a
-number (the Google Voice participant stub). Its adjudicator is the only producer of a 0.95 phone
-item; the claim pass's unguarded E.164 tier is capped at 0.85 (`phone_check: unadjudicated`), and
-the drain no longer joins `identifier_claims.value_e164` at all.
+The phone tier (`clean.duplicate_detect` v8: `DUPLICATE_SCORING_GENERATION` 6,
+`DUPLICATE_CANDIDATE_GENERATION` 3) reads `Phones` (the vCard's numbers as typed), `Faxes` (only to
+refuse them), the `phones`/`phone` ten-digit keys and a display name that is a number (the Google
+Voice participant stub). Its adjudicator is the only producer of a 0.95 phone item; the claim pass's
+unguarded E.164 tier is capped at 0.85 (`phone_check: unadjudicated`), and the drain no longer joins
+`identifier_claims.value_e164` at all.
+
+What a contact states reaches both tiers whole. Staging used to keep ONE handle per contact — the
+smallest, which is also its natural key — so a card with any phone never indexed its email (600 of
+1,018 cards with an email in one real export) and mail from it minted a stub. Staging now records
+every email and phone a contact states as `emails` / `phones` (`import/staging/identity.ts`
+`contactIdentifiers`), less a shared handle (a fax anywhere in the export, or a line another card
+lists under a name that describes someone else — `markSharedContactHandles`, the same rule that
+keeps them from keying the card), a fax, a number with an extension and a role inbox (`info@`),
+reading a Google CSV cell joined with ` ::: ` value by value, and the push indexes them all —
+except on a row that is several people: staging collapses sightings on their identity key, and a
+household on one home line stays together (#2795 cannot tell a shared surname from a nickname), so
+its lists hold every member's addresses. The sightings' names (`contactNames`) show it, and such a
+row is indexed on its handle alone (`describesSeveralPeople`).
+
+Migration `20260930022046` repaired the vCard rows already imported, from their own `Emails` /
+`Phones`. It skips a row whose `Names` are several people, and indexes a value only when no other
+card lists it under a different name: first writer wins would hand an office line, or the owner's
+address, to whichever card is older. It also dropped the fake numbers extensions had left in
+`phones` and in the index ("(310) 447-8675;229" keyed as 4478675229): any key the card's own typed
+`Phones` proves, by one extension rule (`PHONE_EXTENSION_PATTERN`) shared by the TypeScript and the
+SQL. That includes a fake a form save marked verified, because `replaceForEntity` promotes every
+row it round-trips. It never removes a row a user typed (those keep their `raw_value`), and never
+touches a merge survivor, whose ten digits can be a merged-in record's real line.
+
+`enrich.person_self_claim` (v2) turns a record's `emails` / `phones` into claims, and retracts the
+ones it no longer states (its own rows only).
 
 | Rule | Detail |
 |------|--------|
+| Fax | A number either record files under `Faxes` is never evidence, whatever else states it: one office's fax is on every card from that office. The vCard parser files a number under `Faxes` on every card of an export once any card in it types that number FAX (`TEL;TYPE=FAX`, or a fax label): one person's duplicate cards type it on one copy and leave it bare on the next. |
 | Parsing | Stated when the value says its country: `+`, `00`, `011` (NANP only), or eleven digits led by `1`. A national value is read as `+1` only under a NANP owner region and only when it is a valid geographic number. Toll-free (800/833/844/855/866/877/888, reserved 822/880–887/889), premium (900, NXX 976), personal/non-geographic (456, 500, 521–529, 533, 544, 566, 577, 588, 600, 622, 700, 710), N11 and 950/958/959 exchanges, reserved area codes (N11, N9X, 37X, 96X, 555), extensions, short codes and anything invalid are never evidence. |
 | Region | The owner's own stated numbers if unanimous, else an explicit list of North American IANA zones (`UTC` and `America/Mexico_City` give none). Once the corpus states ≥ 20 numbers, ≥ 50% must be `+1` or no region is used. No region: national numbers match at most as "country not confirmed" (0.75). |
 | Stated vs inferred | Per last ten digits a stated form beats an inferred one, two stated forms that disagree are unresolved, a refused raw value (a UK "020 …" number, an extension) beats the inferred reading of its own truncated `phones` key, and digits any person or claim states under another country are never read as `+1`. |
@@ -399,7 +467,28 @@ Guards, all on every merge:
 - **Phone live re-check.** A phone-only pair is re-graded by `PhoneHolders.adjudicate` on the live
   endpoints against the owner's whole phone corpus (read once per drain, kept in step after every
   merge); a rename, a number that became over-common or gained a second real identity, or a self
-  endpoint demotes it to a labelled review row.
+  endpoint demotes it to a labelled review row. A pair whose two records no longer share ANY number
+  keeps its phone item only while both people are still observed with it (a claim other than their
+  own self claim), held below the tier; with nothing left the row is retired, not floored.
+- **Review-queue re-check.** The detector never withdraws a pair and is not re-run when a record
+  changes, so before the People page shows the queue, `MergeCandidateService.revalidatePhoneEvidence`
+  checks every pending pair's phone evidence as a FACT — is the number still on both records (their
+  own lines, less a fax), or still observed for both? — and takes out what is not: a row that lost
+  some is rewritten, a row left with nothing is deleted (pending rows only; the detector re-proposes
+  if evidence returns). It never reads `ci.entity_identifiers` (unique per value, so two people can
+  never both hold a number there) and never re-grades, so it needs no corpus read.
+- **Two people on one mailbox.** A card that lists one person's address under another person's
+  name would fold the two, and carry the card's other addresses along. The detector writes such a
+  pair held (0.85, with an `email_check` marker), the drain re-checks live names before every email
+  fold, and the marker keeps the pair off every tier and on the queue. Two holds:
+  `self_endpoint` when one side is the self Person and the other's real name contradicts the
+  owner's (the owner's own mail stubs, named by the address, still fold), and `name_conflict` when
+  two contacts' full names share nothing (a different given name AND surname, no nickname prefix,
+  not one token in common). The second is the one that matters in practice: the owner's own contact
+  cards are ordinary Persons (the self Person is minted from `ci.users`), so a friend's card listing
+  the owner's work address meets them as two contacts. In one real 4,927-card export, it holds that
+  friend card against the owner's two cards and one double-typo pair, and folds the other 20
+  differently spelled pairs among the 63 addresses shared across cards.
 - **Self.** `users.entity_id` and any `is_self` row are always the target; a pair with two self
   endpoints is skipped. Otherwise the target is a real name over a placeholder, then the fuller name
   (`chooseMergeTarget`), because `PersonMergeService` keeps the target's display name.
@@ -452,6 +541,29 @@ Type-specific rules:
 - **Tags** (`ci_search.entity_tag`) → union, deduped on the `(entity_type, entity_id, tag_id)`
   unique index.
 
+**What a later import does to the survivor — built (2026-09-29).** The survivor is usually some
+source's own row, and that source keeps re-importing it. `GraphIngestService` used to refresh it
+with `properties = EXCLUDED.properties`, which quietly undid every merge into an imported contact:
+the next import of the survivor's card replaced the folded `phones`/`Phones`/`names` with the card's
+own. The refresh is now a merge, run inside the upsert against the locked row
+(`graph/utils/ingestedProperties.ts`):
+
+- keys the source does not send are left alone, and a JSON null says nothing;
+- the plural identity keys this fold unions (`IDENTITY_LIST_KEYS`) and the parser's own
+  `accumulate[]` keys (carried on `ci_import.staged_entities.accumulate`) are unioned;
+- any other key the source sends takes its new value, and `name`/`description` do too unless null.
+
+The re-key that moves a row onto a new import key (`rekeyImportedEntities`, `resetProperties`) rests
+on the same rule: it empties what the SOURCE put in the row and keeps the identity values its
+standing merges brought in — the same `IDENTITY_LIST_KEYS` — and the ingest that follows unions the
+card's values into them. Before this refresh was a merge, that following ingest would have replaced
+the kept values too. The repair migration `restore_merged_person_identity_lists` (#2796) puts back
+what earlier re-imports erased; it only stays put with this refresh in place.
+
+Two limits follow from there being no per-key provenance yet: an import cannot *remove* a member of
+a unioned list, and a key the source itself sends (`avatar_url` on a vCard) still overrides a user
+edit of it. The precedence scheme above is what resolves the second.
+
 ### 5.2 Relationship folding
 
 Two hazards, both already encoded as constraints on `ci.relationships`, and both already guarded in
@@ -473,6 +585,50 @@ rather than fail:
 
 Both directions must be swept — the loser can appear as `from_entity_id` or `to_entity_id`.
 
+**Edges that arrive while the merge runs.** `PersonMergeService.repointReferences` and
+`PlaceMergeService.repointReferences` are each one READ COMMITTED transaction, so each statement sees
+what had committed when *it* started. The edge projection reads the very columns the merge is
+rewriting and, until the merge commits, still sees the loser: it writes the **loser's** edge, to a
+table with no foreign key that could make it wait. (For people that is `promote.edge_communication` /
+`promote.edge_event`; for places `promote.edge_event`, `promote.edge_position` and `promote.edge_place`,
+which read `events.location_entity_id`, `position.location_entity_id` and `parent_place_id` — the last
+puts the loser at the *from* end of its `Place → Place` edge.) The guarded UPDATEs cannot move an edge
+they cannot see, and the statement after them used to be a plain `DELETE` of whatever loser edges were
+left — on the premise that the UPDATEs had declined each as a duplicate. An edge committed in
+between was deleted instead: no delta, the merge committed the columns pointing at the survivor, and
+the leg's ledger row (`running` throughout) was stamped `done`, so nothing ever offered the row
+again. Five SENT/RECEIVED edges went that way in one person merge on the reference appliance.
+
+That statement is now a **sweep**, one per end of the edge, run after both guarded re-points
+(`sweepLeftoverEdges` in `memory/services/mergeEdgeSweep.ts`, shared by both merges). Its DELETE and
+its INSERT share a snapshot, so whatever the DELETE sees the INSERT puts back on the target — the
+same row, `relationship_id` and every other column kept — except that:
+
+- an active edge whose shape the target already holds conflicts with
+  `relationships_unique_directed_idx` and is dropped (`ON CONFLICT DO NOTHING`), as the UPDATE would
+  have declined it; of several sources' edges of one shape the oldest is kept;
+- an edge whose other end is a source or the target is dropped, not inserted — re-pointed it would
+  be a self-reference, and `no_self_references` is a CHECK, which no `ON CONFLICT` absorbs and which
+  would abort the merge;
+- an inactive edge is outside the index and kept, as the UPDATE keeps it.
+
+An edge the sweep moves is written as a `relationship/updated` delta (`change_source`
+`PersonMergeService.mergePeople` / `PlaceMergeService.mergePlaces`, `change_reason`
+`person_merge.rescued_edge` / `place_merge.rescued_edge`, `changed_fields` naming the source it came
+from) and counted in `relationshipsRescued`; an edge it drops leaves no trail, as before. The id is kept so a delta for a relationship that no longer exists in
+`ci.relationships` stays an exact signal of a hard delete.
+
+What this does **not** close: a projection whose own snapshot predates the merge's commit and that
+commits after the sweep leaves its edge on the tombstone — a window the length of the sweep plus the
+rest of the transaction. On the reference appliance no edge sits on any of 3,079 merged-away people
+(checked 2026-09-30), against the five the straddle lost; no such check has been made for places.
+Closing it entirely would take a lock the projection also takes. `PlaceMergeService` ended in the
+same plain `DELETE` and had the same race for `Event → Place`, `Person → Place` and `Place → Place`
+edges; it now ends in the same sweep. Proven against Postgres in
+`pipeline/stages/__tests__/PersonMergeRacesEdgeProjection.integration.spec.ts` and
+`pipeline/stages/__tests__/PlaceMergeRacesEdgeProjection.integration.spec.ts`, which interleave the
+real merge with the real projection stages on two connections.
+
 ### 5.3 Referrer registry and the sweep
 
 **A registry that cannot silently rot.** `20260127185821_remove_relationship_foreign_keys_to_entities.sql`
@@ -490,6 +646,9 @@ export const ENTITY_REFERRERS = [
   { table: 'ci.activities',     column: 'participant_entity_ids', kind: 'array' },
   { table: 'ci_search.embeddings', column: 'entity_id', kind: 'scalar', onCollision: 'delete_loser' },
   { table: 'ci_search.entity_tag', column: 'entity_id', kind: 'scalar', onCollision: 'delete_loser' },
+  // Re-pointed by PersonMergeService since 2026-09-29 (§1.3). Never collides: its unique key
+  // is the observation, and entity_id is not part of it.
+  { table: 'ci.identifier_claims', column: 'entity_id', kind: 'scalar' },
   // … position, documents, files, devices, sensors, agents, goals, document_chunks
 ] as const;
 ```
@@ -503,6 +662,14 @@ The list above is a starting point, not a survey — it must be derived, which i
 An earlier draft of it carried `ci.objects.object_entity_id`, which
 `20260811061402_convert_inventory_to_cti.sql` had already dropped as "a dead precursor of this link
 (no writer anywhere, all NULL)". A hand-maintained registry rots in both directions.
+
+`ci.identifier_claims.entity_id` is the latest case: an unregistered referrer for seven weeks, and a
+stranded claim fails silently, because the detector simply stops seeing it (§1.3). The guard's
+pattern needs widening too. `%entity_id` / `%entity_ids` misses the ordered pairs
+`ci.merge_candidates.entity_id_a/_b` and `ci.entity_merge_blocks.entity_id_a/_b`. Since 2026-09-29
+`PersonMergeService` carries a source's blocks to the target; otherwise the survivor's
+re-examination would re-propose, as (target, X), a (source, X) pair a human rejected. It leaves the
+source's pending candidates moot, for that re-examination to re-derive against the survivor.
 
 **The sweep**, driven off the ledger, resumable, idempotent (re-running finds zero rows):
 
@@ -518,9 +685,14 @@ An earlier draft of it carried `ci.objects.object_entity_id`, which
 - **Unique-constrained** (`ci_search.embeddings` is `UNIQUE (entity_type, entity_id)`;
   `entity_tag` is `UNIQUE (entity_type, entity_id, tag_id)`): a plain UPDATE throws on collision.
   Delete the loser's row, keep the survivor's, then enqueue re-embed.
-- **Hypertable** (`ci.communications`): window by `time` in `DEFAULT_WINDOW_DAYS` slices exactly as
-  `CommunicationLinkBackfillService` does, so Postgres can exclude chunks. Never an unbounded scan —
-  that is the all-chunk Append that segfaulted TSDB 2.28.
+- **Hypertable** (`ci.position`, the one referrer still a compressed hypertable;
+  `ci.communications` stopped being one in `20260807072321_dehypertable_communications`): window by
+  `time` in `DEFAULT_WINDOW_DAYS` slices, the way `CommunicationLinkBackfillService` windowed
+  communications, so Postgres can exclude chunks. Never an unbounded scan — that is the all-chunk
+  Append that segfaulted TSDB 2.28. A counting CTE (`WITH x AS (UPDATE … RETURNING 1) SELECT
+  count(*) …`) is safe here: it decompresses and counts rows in compressed and partially compressed
+  chunks exactly as a bare UPDATE does, and honours the decompression cap
+  (`PlaceMergeService.integration.spec.ts`; checked on TimescaleDB 2.30.1).
 
 Splitting the sweep out of the merge transaction is only safe once reads resolve through a
 canonical primitive (P2): a half-swept merge is then *correct*, just not yet compact.
@@ -536,6 +708,13 @@ things are missing before a replay is exact:
   the target approximately — and say which in the API.
 - There is no `reverted_at` / `reverted_reason` column, so a reverted merge is indistinguishable
   from a live one. Add them, or unmerge cannot be idempotent.
+
+**Do not trust `details.counts` on rows written before the `countAffected` fix** (2026-09-29,
+§1.1). Those rows hold the constants TypeORM's `[rows, rowCount]` pair produced — for a Person
+merge every count 2 and `relationshipsDropped` 6 — and no field marks a row as pre- or post-fix. A
+replay must not size or verify anything from them. If it needs to tell the two apart, stamp a
+marker on new rows first; the constant signature is only a heuristic. Even an exact count says how
+many rows moved, not which ones, so the reverse sweep has to find its referrers either way.
 
 The replay itself:
 

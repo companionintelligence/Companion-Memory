@@ -4,7 +4,18 @@ import path from 'node:path';
 
 import { DataSource } from 'typeorm';
 
-import { isPortOpen, resolveConnection, type DatabaseAvailability } from './databaseConnection';
+import {
+  availabilityOrThrow,
+  decideAvailability,
+  failIfRequired,
+  isExplicitlySet,
+  probePort,
+  probeTimeoutMs,
+  resolveConnection,
+  type AvailabilityDecision,
+  type DatabaseAvailability,
+  type TestDatabaseConfiguration,
+} from './databaseConnection';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -141,34 +152,49 @@ export interface AdminConnection {
 const DEFAULT_ADMIN_USERNAME = 'postgres';
 const DEFAULT_MAINTENANCE_DATABASE = 'postgres';
 
+const ADMIN_URL_ENV_VAR = 'PIPELINE_TEST_ADMIN_DATABASE_URL';
+const PROBE_TIMEOUT_ENV_VAR = 'PIPELINE_TEST_PROBE_TIMEOUT_MS';
+
 /**
- * Where to create the scratch database, or `null` when the environment does
- * not describe an administrative connection.
+ * What the environment says about an administrative connection — the same
+ * three-way answer `resolveConfiguration()` gives for the application one, so
+ * both kinds of suite decide "can this run?" by the one table at the top of
+ * `databaseConnection.ts`.
  *
  * Precedence: an explicit admin URL, then the admin password paired with the
  * SERVER coordinates the ordinary harness already resolves. Note what is not
  * here — no fallback to the application credential. A suite that cannot make
  * itself a database must not run at all; the alternative is the one this
  * module exists to prevent.
+ *
+ * Only `PIPELINE_TEST_ADMIN_DATABASE_URL`, set for this run, counts as asking
+ * for the suite to run. `DATABASE_ADMIN_PASSWORD` is what `.env.default`
+ * ships, so like the application's discrete variables it only says where the
+ * dev stack's server would be.
  */
-export function resolveAdminConnection(): AdminConnection | null {
-  const url = process.env.PIPELINE_TEST_ADMIN_DATABASE_URL;
+export function resolveAdminConfiguration(): TestDatabaseConfiguration {
+  const url = process.env[ADMIN_URL_ENV_VAR];
 
   if (url != null && url.trim().length > 0) {
     try {
       const parsed = new URL(url);
 
       return {
-        host: parsed.hostname,
-        port: parsed.port.length > 0 ? Number(parsed.port) : 5432,
-        username: decodeURIComponent(parsed.username) || DEFAULT_ADMIN_USERNAME,
-        password: decodeURIComponent(parsed.password),
-        database: parsed.pathname.replace(/^\//, '') || DEFAULT_MAINTENANCE_DATABASE,
+        kind: 'configured',
+        variable: ADMIN_URL_ENV_VAR,
+        explicit: isExplicitlySet(ADMIN_URL_ENV_VAR),
+        connection: {
+          host: parsed.hostname.replace(/^\[(.*)\]$/, '$1'),
+          port: parsed.port.length > 0 ? Number(parsed.port) : 5432,
+          username: decodeURIComponent(parsed.username) || DEFAULT_ADMIN_USERNAME,
+          password: decodeURIComponent(parsed.password),
+          database: parsed.pathname.replace(/^\//, '') || DEFAULT_MAINTENANCE_DATABASE,
+        },
       };
     } catch {
-      // Reported as "no admin connection" rather than thrown, so the suite
-      // skips legibly instead of failing every test on a parse error.
-      return null;
+      // A configuration mistake, not an absent server: the availability check
+      // fails the suite and names the variable, rather than skipping it.
+      return { kind: 'malformed', variable: ADMIN_URL_ENV_VAR };
     }
   }
 
@@ -178,7 +204,7 @@ export function resolveAdminConnection(): AdminConnection | null {
   // gives about the application password: everything else about this server is
   // public knowledge, and the absence of the secret IS the signal.
   if (password == null || password.length === 0) {
-    return null;
+    return { kind: 'none' };
   }
 
   // The SERVER, from whatever the ordinary harness resolves — which is how
@@ -187,58 +213,63 @@ export function resolveAdminConnection(): AdminConnection | null {
   const server = resolveConnection();
 
   return {
-    host: server?.host ?? process.env.DATABASE_HOST ?? 'localhost',
-    port: server?.port ?? Number(process.env.DATABASE_PORT ?? 5432),
-    username: process.env.DATABASE_ADMIN_USERNAME ?? DEFAULT_ADMIN_USERNAME,
-    password,
-    database: DEFAULT_MAINTENANCE_DATABASE,
+    kind: 'configured',
+    variable: 'DATABASE_ADMIN_PASSWORD',
+    explicit: false,
+    connection: {
+      host: server?.host ?? process.env.DATABASE_HOST ?? 'localhost',
+      port: server?.port ?? Number(process.env.DATABASE_PORT ?? 5432),
+      username: process.env.DATABASE_ADMIN_USERNAME ?? DEFAULT_ADMIN_USERNAME,
+      password,
+      database: DEFAULT_MAINTENANCE_DATABASE,
+    },
   };
 }
 
-let cachedAvailability: DatabaseAvailability | null = null;
+/**
+ * Where to create the scratch database, or `null` when the environment does
+ * not describe a usable administrative connection. See
+ * {@link resolveAdminConfiguration}.
+ */
+export function resolveAdminConnection(): AdminConnection | null {
+  const configuration = resolveAdminConfiguration();
+
+  return configuration.kind === 'configured' ? configuration.connection : null;
+}
+
+let cachedDecision: AvailabilityDecision | null = null;
 
 /**
  * Whether a scratch database can be created for this run — answered
  * SYNCHRONOUSLY, so a spec can pick `describe` vs `describe.skip` at collection
- * time. See the README beside this file for why that matters.
+ * time. See the README beside this file for why that matters. Throws, like
+ * `databaseAvailability()`, when the answer is "fail" rather than "skip".
  */
 export function scratchDatabaseAvailability(): DatabaseAvailability {
-  if (cachedAvailability != null) {
-    return cachedAvailability;
-  }
+  if (cachedDecision == null) {
+    const configuration = resolveAdminConfiguration();
+    const probe =
+      configuration.kind === 'configured'
+        ? probePort(configuration.connection.host, configuration.connection.port, {
+            timeoutMs: probeTimeoutMs(PROBE_TIMEOUT_ENV_VAR),
+          })
+        : null;
 
-  const admin = resolveAdminConnection();
-
-  if (admin == null) {
-    cachedAvailability = {
-      available: false,
-      reason:
+    cachedDecision = decideAvailability(configuration, probe, {
+      noneReason:
         'no administrative database connection configured — this suite creates and drops a database of ' +
         'its own, which the application role deliberately cannot do. Set DATABASE_ADMIN_PASSWORD (it is ' +
         'in .env.default, and `make dev` copies that to .env on first run) or PIPELINE_TEST_ADMIN_DATABASE_URL. ' +
         'There is no fallback to the application connection on purpose: that is the operator’s archive.',
-      target: '(unset)',
-    };
-
-    return cachedAvailability;
+      urlEnvVar: ADMIN_URL_ENV_VAR,
+      probeTimeoutEnvVar: PROBE_TIMEOUT_ENV_VAR,
+    });
   }
 
-  const target = `${admin.host}:${admin.port}`;
-  const timeoutMs = Number(process.env.PIPELINE_TEST_PROBE_TIMEOUT_MS ?? 2_000);
-
-  if (!isPortOpen(admin.host, admin.port, timeoutMs)) {
-    cachedAvailability = {
-      available: false,
-      reason: `nothing accepting connections at ${target} (probe timeout ${timeoutMs} ms)`,
-      target,
-    };
-
-    return cachedAvailability;
-  }
-
-  cachedAvailability = { available: true, reason: `Postgres reachable at ${target}`, target };
-
-  return cachedAvailability;
+  return failIfRequired(
+    availabilityOrThrow(cachedDecision),
+    'the scratch-database suite (it creates and drops a database of its own)',
+  );
 }
 
 // ---------------------------------------------------------------------------

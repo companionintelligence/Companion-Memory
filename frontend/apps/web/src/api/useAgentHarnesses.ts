@@ -39,17 +39,17 @@ const CACHE_TTL_MS = 30_000;
 let cached: { expiresAt: number; value: AgentHarnessesResponse } | null = null;
 let inflight: Promise<AgentHarnessesResponse> | null = null;
 
-function authHeaders(authToken: string | null | undefined): HeadersInit {
-  return {
-    Authorization: `Bearer ${authToken}`,
-  };
+/** Whether to ask, and what to send when asking: a bearer only when the session has a web JWT. */
+interface SessionAuth {
+  ready: boolean;
+  headers: Record<string, string>;
 }
 
 export async function fetchAgentHarnesses(
-  authToken: string | null | undefined,
+  session: SessionAuth,
   options: { force?: boolean } = {},
 ): Promise<AgentHarnessesResponse> {
-  if (!authToken) {
+  if (!session.ready) {
     return { harnesses: [] };
   }
 
@@ -62,7 +62,7 @@ export async function fetchAgentHarnesses(
   }
 
   inflight = fetchJson<AgentHarnessesResponse>('/api/v1/intelligence/agent-harnesses', {
-    headers: authHeaders(authToken),
+    headers: session.headers,
   })
     .then((result) => {
       const value = result ?? { harnesses: [] };
@@ -81,13 +81,32 @@ export async function fetchAgentHarnesses(
 
 /** Discover Hub agent harnesses (Hermes / OpenClaw) with Portal-resolved open URLs. */
 export function useAgentHarnesses() {
-  const [{ authToken }] = useAuth();
+  // `authenticated`, not `authToken`: the token is the web JWT, which the native shell never has —
+  // its credential is a keystore API key that `fetchJson` attaches as `x-api-key`. Gating on the token
+  // made the phone's Agents list (and its chat-about menus) report no harnesses though the server
+  // listed them; the route takes the key (`JwtOrApiKeyAuthGuard`, `memory` scope, `read`).
+  //
+  // Reads `useAuth` rather than `useSessionAuth` on purpose: this hook sits under the chat-about menu,
+  // which many screens render, and `useAuth` is the one seam every one of their tests already stubs.
+  const [{ authToken, authenticated }] = useAuth();
+  const ready = Boolean(authenticated);
+  // Stable per token, because the load callbacks below take it as a dependency. Built rather than
+  // ternaried: the conditional form infers `{ Authorization?: undefined }` for the empty arm, which
+  // `exactOptionalPropertyTypes` refuses to widen to Record<string, string>.
+  const headers = useMemo<Record<string, string>>(() => {
+    const next: Record<string, string> = {};
+    if (authToken) {
+      next.Authorization = `Bearer ${authToken}`;
+    }
+
+    return next;
+  }, [authToken]);
   const [harnesses, setHarnesses] = useState<AgentHarnessStatus[]>(cached?.value.harnesses ?? []);
   const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    if (!authToken) {
+    if (!ready) {
       setHarnesses([]);
       setLoading(false);
 
@@ -98,7 +117,7 @@ export function useAgentHarnesses() {
     setError(null);
 
     try {
-      const result = await fetchAgentHarnesses(authToken, { force: true });
+      const result = await fetchAgentHarnesses({ ready, headers }, { force: true });
       setHarnesses(result.harnesses);
 
       return result;
@@ -108,12 +127,12 @@ export function useAgentHarnesses() {
     } finally {
       setLoading(false);
     }
-  }, [authToken]);
+  }, [ready, headers]);
 
   useEffect(() => {
     let cancelled = false;
 
-    if (!authToken) {
+    if (!ready) {
       setHarnesses([]);
       setLoading(false);
 
@@ -121,7 +140,7 @@ export function useAgentHarnesses() {
     }
 
     setLoading(!cached);
-    void fetchAgentHarnesses(authToken)
+    void fetchAgentHarnesses({ ready, headers })
       .then((result) => {
         if (!cancelled) {
           setHarnesses(result.harnesses);
@@ -141,7 +160,7 @@ export function useAgentHarnesses() {
     return () => {
       cancelled = true;
     };
-  }, [authToken]);
+  }, [ready, headers]);
 
   const runningHarnesses = useMemo(
     () => harnesses.filter((harness) => harness.running && harness.openUrl),

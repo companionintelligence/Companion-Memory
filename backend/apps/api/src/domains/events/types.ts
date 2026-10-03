@@ -132,6 +132,32 @@ export type QueueOptions = {
 
 export type EventPayload<E extends keyof EventPayloads> = EventPayloads[E];
 
+/** pg-boss's job lifecycle, in its own words. */
+export type QueuedJobState = 'created' | 'retry' | 'active' | 'completed' | 'cancelled' | 'failed';
+
+/**
+ * One job as the queue sees it — what {@link EventService.getJob} returns.
+ *
+ * Deliberately the few fields a caller deciding "is this delivery still alive,
+ * and what will failing it do?" needs, rather than pg-boss's whole row: the
+ * events domain owns `pgboss.job`, and a domain that wants to reason about one
+ * of its own jobs should not have to learn that table's column names to do it.
+ */
+export interface QueuedJob {
+  id: string;
+  queue: string;
+  state: QueuedJobState;
+  /**
+   * Retries already spent. pg-boss increments it when it fetches a job that
+   * has been started before, so failing a job whose `retryCount` has reached
+   * `retryLimit` dead-letters it instead of retrying it.
+   */
+  retryCount: number;
+  retryLimit: number;
+  /** When the current (or last) delivery was fetched. Null if it never has been. */
+  startedOn: Date | null;
+}
+
 /**
  * Options accepted by {@link EventService.send} and {@link EventService.sendMany}.
  */

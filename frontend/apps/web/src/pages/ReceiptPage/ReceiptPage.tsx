@@ -11,6 +11,7 @@ import { ErrorState } from '@/components/ErrorState';
 import { ReceiptIcon } from '@/components/icons';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { namedChatContext } from '@/lib/agentChat';
 import { formatMinor } from '@/lib/money';
 import { humanizeEnum } from '@/lib/utils';
@@ -170,6 +171,7 @@ function EvidencePane({ documentContentId }: { documentContentId: string }) {
 
 export function ReceiptPage() {
   const { id } = useParams<{ id: string }>();
+  const fmt = useDateTimeFormat();
 
   const { data, loading, error, refetch } = useQuery(GET_RECEIPT, {
     variables: { id: GlobalUID.encode('receipt', id!) },
@@ -202,8 +204,7 @@ export function ReceiptPage() {
     content = <EmptyState icon={<ReceiptIcon size={48} colorized={false} />} message="Receipt not found" />;
   } else {
     const purchasedAt = receipt.purchasedAt ? new Date(receipt.purchasedAt) : null;
-    const dateLabel =
-      purchasedAt && !Number.isNaN(purchasedAt.getTime()) ? purchasedAt.toLocaleString() : null;
+    const dateLabel = purchasedAt && !Number.isNaN(purchasedAt.getTime()) ? fmt.dateTime(purchasedAt) : null;
     const currency = receipt.currency;
 
     content = (

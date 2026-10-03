@@ -4,7 +4,9 @@ import type { PlaceVisitStats } from '@ci/domains/memory';
 
 /**
  * Aggregated visit stats for a place, derived from events linked via
- * events.location_entity_id.
+ * events.location_entity_id. Only events that happened are visits: a deleted,
+ * predicted or cancelled event linked to the place is neither counted nor a
+ * first or last visit date.
  */
 @ObjectType()
 export class PlaceVisitStatsType {

@@ -145,4 +145,64 @@ describe('SavedSearchesPage', () => {
     expect(await screen.findByText('Yoga for the Power Mad')).toBeInTheDocument();
     expect(screen.getByText('Starter')).toBeInTheDocument();
   });
+
+  /**
+   * QA MEM-08: on an account with no searches of its own, opening Starter
+   * searches drew the "You don't have any Saved Searches yet" block ON TOP of the
+   * starter rows. `EmptyState` is an `absolute inset-0` overlay on its nearest
+   * positioned ancestor, and that was the whole scrolling page — the very box the
+   * starter list opens into. jsdom does no layout, so the assertion is on the
+   * structure that decides it: the overlay's positioning box must be a slot of
+   * its own that the starter rows are not inside.
+   */
+  it('keeps the empty state in a box of its own, so the starter searches open below it, not under it', async () => {
+    renderWithProviders(<SavedSearchesPage />, {
+      mocks: [
+        mockQuery(GetSavedSearchesDocument, BASE_VARIABLES, connectionOf([])),
+        mockQuery(
+          GetSavedSearchesDocument,
+          STARTER_VARIABLES,
+          connectionOf([makeSavedSearch('seed-1', 'Recent Images', { isSeed: true })]),
+        ),
+      ],
+    });
+
+    const message = await screen.findByText("You don't have any Saved Searches yet.");
+
+    fireEvent.click(screen.getByRole('button', { name: /Starter searches/ }));
+
+    const starter = await screen.findByText('Recent Images');
+    const overlay = message.closest('.absolute');
+    const box = overlay?.parentElement;
+
+    expect(overlay).not.toBeNull();
+    expect(box).toHaveClass('relative');
+    expect(box).not.toContainElement(starter);
+    // …and it is not the page itself, which is where the overlay used to land.
+    expect(box).not.toHaveAttribute('data-page-scroll');
+  });
+
+  it('gives the no-match state the same box, for the same reason', async () => {
+    renderWithProviders(<SavedSearchesPage />, {
+      route: '/saved-searches?q=zzz',
+      mocks: [
+        mockQuery(GetSavedSearchesDocument, { ...BASE_VARIABLES, query: 'zzz' }, connectionOf([])),
+        mockQuery(
+          GetSavedSearchesDocument,
+          { ...STARTER_VARIABLES, query: 'zzz' },
+          connectionOf([makeSavedSearch('seed-2', 'Zzz starter', { isSeed: true })]),
+        ),
+      ],
+    });
+
+    const message = await screen.findByText('No saved searches match "zzz".');
+
+    fireEvent.click(screen.getByRole('button', { name: /Starter searches/ }));
+
+    const starter = await screen.findByText('Zzz starter');
+    const box = message.closest('.absolute')?.parentElement;
+
+    expect(box).toHaveClass('relative');
+    expect(box).not.toContainElement(starter);
+  });
 });

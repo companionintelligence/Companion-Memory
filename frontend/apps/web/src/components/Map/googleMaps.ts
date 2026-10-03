@@ -1,27 +1,54 @@
 // Google Maps utility functions
 
+import { fetchJson } from '@ci/common';
+
 // Optional build-time key (local Vite). Hub-installed Memory images have no
 // baked key — they resolve GOOGLE_MAPS_KEY at runtime via GET /api/config/maps.
 const BUILD_TIME_GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
-let resolvedApiKey: string | null =
+const BAKED_GOOGLE_MAPS_API_KEY: string | null =
   typeof BUILD_TIME_GOOGLE_MAPS_API_KEY === 'string' && BUILD_TIME_GOOGLE_MAPS_API_KEY.length > 0
     ? BUILD_TIME_GOOGLE_MAPS_API_KEY
     : null;
+
+let resolvedApiKey: string | null = BAKED_GOOGLE_MAPS_API_KEY;
 
 let resolveKeyPromise: Promise<string | null> | null = null;
 let googleMapsLoadingPromise: Promise<void> | null = null;
 
 /**
+ * Test seam: the key and its in-flight lookup are module-level, so a suite that resolves it once
+ * would hand every later test the first answer.
+ */
+export function resetGoogleMapsKeyForTests(): void {
+  resolvedApiKey = BAKED_GOOGLE_MAPS_API_KEY;
+  resolveKeyPromise = null;
+}
+
+/**
+ * Whether to ask, and what to send when asking. `ready` is a signed-in session of either kind; the
+ * headers carry a bearer only when that session has a web JWT. The native shell has none — its
+ * credential is a keystore API key, which `fetchJson` attaches as `x-api-key` on its own.
+ */
+export interface MapsSession {
+  ready: boolean;
+  headers: Record<string, string>;
+}
+
+/**
  * Resolve the Maps JS API key: Vite env first, otherwise authenticated
  * GET /api/config/maps (Hub-injected GOOGLE_MAPS_KEY on the api container).
+ *
+ * Gated on a signed-in session, not on a web JWT: `/config/maps` is `JwtOrApiKeyAuthGuard`, and a
+ * JWT-only gate left the phone's map without its route layer, silently. Asked through `fetchJson`,
+ * not a bare `fetch('/api/...')`, which in the native app is the shell's own origin with no key.
  */
-export async function resolveGoogleMapsApiKey(authToken?: string | null): Promise<string | null> {
+export async function resolveGoogleMapsApiKey(session?: MapsSession | null): Promise<string | null> {
   if (resolvedApiKey) {
     return resolvedApiKey;
   }
 
-  if (!authToken) {
+  if (!session?.ready) {
     return null;
   }
 
@@ -31,18 +58,11 @@ export async function resolveGoogleMapsApiKey(authToken?: string | null): Promis
 
   resolveKeyPromise = (async () => {
     try {
-      const res = await fetch('/api/config/maps', {
-        headers: { Authorization: `Bearer ${authToken}` },
-        credentials: 'include',
+      const data = await fetchJson<{ configured?: boolean; apiKey?: string }>('/api/config/maps', {
+        headers: session.headers,
       });
 
-      if (!res.ok) {
-        return null;
-      }
-
-      const data = (await res.json()) as { configured?: boolean; apiKey?: string };
-
-      if (data.configured && typeof data.apiKey === 'string' && data.apiKey.trim()) {
+      if (data?.configured && typeof data.apiKey === 'string' && data.apiKey.trim()) {
         resolvedApiKey = data.apiKey.trim();
 
         return resolvedApiKey;
@@ -70,11 +90,11 @@ export function isGoogleMapsConfigured(): boolean {
 
 /**
  * Load Google Maps API and return a promise that resolves when ready.
- * Pass the session access token so Hub-deployed Memory can fetch the key
+ * Pass the session so Hub-deployed Memory can fetch the key
  * from `/api/config/maps` when Vite did not bake one in.
  */
-export async function loadGoogleMaps(authToken?: string | null): Promise<void> {
-  const apiKey = await resolveGoogleMapsApiKey(authToken);
+export async function loadGoogleMaps(session?: MapsSession | null): Promise<void> {
+  const apiKey = await resolveGoogleMapsApiKey(session);
 
   if (!apiKey) {
     throw new Error(
