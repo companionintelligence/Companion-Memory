@@ -25,12 +25,15 @@ export function resetUnsyncedImportsNoticeForTests(): void {
  * and Sync now performs exactly what the wizard's Sync card performs —
  * `POST /import/push` over every eligible run.
  */
-export function useUnsyncedImportsNotice(): void {
+export function useUnsyncedImportsNotice({ suppressed = false }: { suppressed?: boolean } = {}): void {
   const api = useImportApi();
   const { toast } = useToast();
 
   useEffect(() => {
-    if (!api.ready || notifiedThisLoad) {
+    // Suppressed does NOT claim the once-per-load flag: if the banner that
+    // suppresses this is dismissed and the shell remounts, the toast is still
+    // owed.
+    if (!api.ready || notifiedThisLoad || suppressed) {
       return;
     }
 
@@ -78,5 +81,5 @@ export function useUnsyncedImportsNotice(): void {
         // wizard's Sync card remains the fallback surface.
       }
     })();
-  }, [api, toast]);
+  }, [api, suppressed, toast]);
 }

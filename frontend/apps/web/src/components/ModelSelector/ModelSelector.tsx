@@ -99,7 +99,9 @@ export function ModelSelector({
       ? 'Loading models…'
       : error
         ? "Couldn't load models"
-        : 'No models loaded';
+        : // A greyed-out select with no way to act on it: name the state so the
+          // Chat empty state's "Open Settings → Model" reads as the fix for it.
+          'No model set up';
 
   const selector = (
     <Select

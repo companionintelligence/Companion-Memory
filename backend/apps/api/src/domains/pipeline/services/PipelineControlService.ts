@@ -7,6 +7,7 @@ import { DataSource } from 'typeorm';
 import { LoggerService } from '@ci/common/logging';
 
 import { SHARD_LEASE_SECONDS, STAGE_ID_LIST, STAGE_IDS, type StageId } from '../constants';
+import { stageHeldByOutboundPolicy } from '../outboundHolds';
 import {
   automaticStageIds,
   isMeteredStage as scheduleIsMeteredStage,
@@ -889,7 +890,15 @@ export class PipelineControlService {
     }
 
     const stageIds = this.stageSetFor(row);
-    const legs = this.legsFor(stageIds);
+
+    // Legs whose stage is held by one of the user's outbound switches are not
+    // probed, stamped or swept — see `stageHeldByOutboundPolicy` for why the
+    // hold sits here, before any ledger or `ci.pipeline_schedule` write. The
+    // held leg's `last_started_at` therefore does not move, so it is exactly as
+    // due the moment the switch goes back on as it was when it went off.
+    const allLegs = this.legsFor(stageIds);
+    const legs = allLegs.filter((leg) => stageHeldByOutboundPolicy(leg.stageId) == null);
+    const legsHeld = allLegs.length - legs.length;
 
     // ── 2. What is worth sweeping ──────────────────────────────────────────
     const candidates = new Map<string, boolean>();
@@ -1016,10 +1025,15 @@ export class PipelineControlService {
       // not time" — the second is the expected end of a run on an appliance with
       // a weekly stage, and reporting it as `drained` would make the geocoder
       // look converged while 95 events still wait for it.
+      //
+      // A leg held by an outbound switch was not even probed, so it counts as
+      // work that is waiting rather than as drained: reporting `drained` would
+      // claim the geocoder had converged when it has merely been told to stop.
       await this.runService.finishRun(row.run_id, 'completed', {
         finalizedBy: 'control-tick',
-        finalizedReason: waiting > 0 ? 'not_due' : 'drained',
+        finalizedReason: waiting > 0 || legsHeld > 0 ? 'not_due' : 'drained',
         legsNotDue: waiting,
+        ...(legsHeld > 0 ? { legsHeldByOutboundPolicy: legsHeld } : {}),
       });
 
       report.runsFinalized += 1;

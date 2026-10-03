@@ -18,12 +18,13 @@ export type OnboardingStepKey = (typeof ONBOARDING_STEP_KEYS)[number];
 /** Set before OAuth top-level navigation; cleared when onboarding restores the connect step. */
 export const ONBOARDING_OAUTH_RESUME_KEY = 'onboarding-resume';
 
+// No query string. This link once carried `?authuser=3&hl=en`, a developer's
+// Google account index, which sent every visitor to the store as that account
+// slot. The store picks the account and language from the visitor's own session.
 export const CHROME_EXTENSION_URL =
-  'https://chromewebstore.google.com/detail/companion-intelligence/bcocflgkdeimninckpmdifcniajoneih?authuser=3&hl=en';
+  'https://chromewebstore.google.com/detail/companion-intelligence/bcocflgkdeimninckpmdifcniajoneih';
 
 export const FIREFOX_EXTENSION_URL = 'https://addons.mozilla.org/en-US/firefox/addon/companion-intelligence/';
-
-export const CI_DOWNLOAD_URL = 'https://ci.computer/download';
 
 export const CAPTURE_DOWNLOAD_URL = 'https://ci.computer/download#capture';
 

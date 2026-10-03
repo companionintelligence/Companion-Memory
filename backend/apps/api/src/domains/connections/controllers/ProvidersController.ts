@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Get,
   InternalServerErrorException,
@@ -13,13 +14,14 @@ import {
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
+import { isOutboundEnabled } from '@ci/common/outbound';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { BaseOAuth2Client } from '@ci/domains/connections/clients/BaseOAuth2Client';
 
 import { ClientFactory } from '../clients';
 import { SignalClient } from '../clients/SignalClient';
-import { CloudOAuthProxyService } from '../services/CloudOAuthProxyService';
+import { CloudOAuthProxyService, portalOAuthOffMessage } from '../services/CloudOAuthProxyService';
 import { ConnectionService } from '../services/ConnectionService';
 import { ProviderKeyService } from '../services/ProviderKeyService';
 import { ProviderService } from '../services/ProviderService';
@@ -139,6 +141,26 @@ export class ProvidersController {
       if (!providerKeys) {
         this.logger.error('Missing provider keys for local-only provider', { providerId: id });
         throw new InternalServerErrorException('Provider keys not configured for local-only provider');
+      }
+    }
+
+    // The user's Portal sign-in switch. Refused HERE, before a connection row is
+    // created, for a flow that cannot start: `CloudOAuthProxyService` refuses it
+    // too (it is the choke point), but by then this method would already have
+    // written an inactive connection the user never asked to keep, once per
+    // attempt. The question is the same one the code below asks — does this user
+    // have an OAuth app of their own? — so a connect that uses their own
+    // credentials is unaffected.
+    if (!isOutboundEnabled('portal_oauth')) {
+      const ownCredentials = await oauthClient.getClientCredentials({
+        userId: serviceContext.userId,
+        provider,
+      });
+
+      if (!ownCredentials) {
+        const proxyProvider = this.cloudOAuthProxyService.getProviderNameForId(id);
+
+        throw new ConflictException(portalOAuthOffMessage(proxyProvider ?? provider.name ?? 'this provider'));
       }
     }
 

@@ -57,8 +57,18 @@ export abstract class BaseOAuth2Client extends BaseClient {
     return this.scopes;
   }
 
+  /**
+   * The OAuth app THIS USER registered for the provider, or null when they have
+   * none — which is what sends a connect through CI Portal's proxy instead.
+   *
+   * Takes only the two fields it reads, not a whole `Connection`, so a caller
+   * that has not created a connection yet can still ask "would this connect use
+   * Portal?" (`ProvidersController.connect` does, to refuse before it writes
+   * anything when the Portal sign-in switch is off). Every existing caller passes
+   * a full `Connection`, which satisfies this.
+   */
   async getClientCredentials(
-    connection: Connection,
+    connection: Pick<Connection, 'userId' | 'provider'>,
   ): Promise<{ clientId: string; clientSecret: string } | null> {
     return this.providerKeyService
       .findByProviderId({ userId: connection.userId }, connection.provider!.id)

@@ -4,6 +4,7 @@ import { fetchJson } from '@ci/common';
 import { useFormContext } from '@ci/shadcn';
 
 import { useAuth, useCurrentUser } from '@/hooks';
+import { markGettingStartedActive } from '@/lib/gettingStarted';
 
 interface Response {
   onboarded: boolean;
@@ -21,7 +22,8 @@ type ReturnType = [
 
 export function useOnboardService(): ReturnType {
   const [{ authToken }] = useAuth();
-  const { refetch: refetchCurrentUser } = useCurrentUser();
+  const { user, refetch: refetchCurrentUser } = useCurrentUser();
+  const userId = user?.id ?? null;
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
@@ -45,13 +47,19 @@ export function useOnboardService(): ReturnType {
         body: JSON.stringify(form.getValues()),
       });
 
+      // Before the refetch: that flips `onboarded`, which redirects out of the
+      // wizard, and the destination should already know to show the banner.
+      if (userId) {
+        markGettingStartedActive(userId);
+      }
+
       await refetchCurrentUser();
     } catch (err) {
       setError(err);
     } finally {
       setLoading(false);
     }
-  }, [form, authToken, refetchCurrentUser]);
+  }, [form, authToken, refetchCurrentUser, userId]);
 
   return [
     {

@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
+import { isOutboundEnabled } from '@ci/common/outbound';
 import config from '@ci/configuration';
 
 export interface CloudAuthorizeResponse {
@@ -41,6 +42,32 @@ export interface PortalUserApplication {
   url: string;
   deviceName: string;
   deviceSlug: string;
+}
+
+const PROVIDER_LABELS: Record<string, string> = {
+  google: 'Google',
+  microsoft: 'Microsoft',
+  facebook: 'Facebook',
+  spotify: 'Spotify',
+  github: 'GitHub',
+  reddit: 'Reddit',
+  slack: 'Slack',
+};
+
+/**
+ * What a refused Portal sign-in tells the user, in words that name both ways
+ * out: bring your own OAuth app for this provider, or turn the switch back on.
+ * Shared by the service (the choke point) and `ProvidersController` (which
+ * refuses earlier, before it creates a connection row).
+ */
+export function portalOAuthOffMessage(provider: string): string {
+  const label = PROVIDER_LABELS[provider] ?? provider;
+
+  return (
+    `Signing in to ${label} through CI Portal is turned off on this appliance, and you have not saved an ` +
+    `OAuth app of your own for ${label}. Register your own ${label} OAuth app and add its credentials, or ` +
+    `turn Portal sign-in back on under Settings → Privacy → What leaves your appliance.`
+  );
 }
 
 /**
@@ -115,12 +142,37 @@ export class CloudOAuthProxyService {
   /**
    * Initiate an OAuth flow via CI Cloud.
    * Returns the authorization URL to redirect the user to.
+   *
+   * ── The user's switch (`portal_oauth`) ─────────────────────────────────────
+   *
+   * This is the one place a NEW Portal-brokered sign-in leaves the box, and both
+   * controllers that can start one (`ConnectionsController.connect`,
+   * `ProvidersController.connect`) reach it only when the user has no OAuth app
+   * of their own — so refusing here is exactly "a connect that would use the
+   * Portal proxy is refused", while a connect using the user's own saved
+   * credentials never calls this and is untouched. A 409 rather than a 500 or a
+   * silent empty URL: nothing is wrong with the appliance, the user has told it
+   * not to do this, and the message says how to proceed.
+   *
+   * ── What this deliberately does NOT govern ─────────────────────────────────
+   *
+   * {@link refreshAccessToken} and {@link revokeToken} are left alone. A
+   * connection that already lives at Portal holds a proxy refresh token that only
+   * Portal can exchange; refusing to refresh it would break an existing sync
+   * with no visible cause, which is worse than the egress it saves. The user
+   * turning this off means "do not start new sign-ins through Portal", not
+   * "strand the ones I already have" — disconnecting a connection is how those
+   * are ended, and revoke must keep working so that ends cleanly at Portal too.
    */
   async getAuthorizationUrl(
     provider: string,
     callbackUrl: string,
     scopes?: string[],
   ): Promise<CloudAuthorizeResponse> {
+    if (!isOutboundEnabled('portal_oauth')) {
+      throw new ConflictException(portalOAuthOffMessage(provider));
+    }
+
     if (!config.ciPortal.deviceId) {
       this.logger.error('Missing Hub Device ID');
       throw new Error('HUB_DEVICE_ID is not configured');

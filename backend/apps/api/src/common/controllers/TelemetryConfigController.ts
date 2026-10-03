@@ -1,6 +1,17 @@
 import { Controller, Get, HttpCode } from '@nestjs/common';
 
-import { resolveTelemetrySettings } from '@ci/common/telemetry';
+import {
+  isCrashReportsUserEnabled,
+  resolveTelemetrySettings,
+  type TelemetryDisabledReason,
+} from '@ci/common/telemetry';
+
+/**
+ * Why the browser is told not to report. The first three come from the
+ * environment (`resolveTelemetrySettings`); `user-setting` is the person using
+ * the appliance having turned crash reports off from Settings -> Privacy.
+ */
+export type TelemetryConfigDisabledReason = TelemetryDisabledReason | 'user-setting';
 
 /**
  * Runtime error-reporting consent for the web UI.
@@ -16,6 +27,15 @@ import { resolveTelemetrySettings } from '@ci/common/telemetry';
  * errors happen on the login page too. It exposes no secret — a Sentry DSN is a
  * public client credential, and when reporting is off there is nothing to
  * expose at all.
+ *
+ * The user's own switch is read from an in-process flag that the outbound
+ * policy store keeps current (`common/telemetry/runtimeGate.ts`), never from the
+ * database: this route is unauthenticated, so a query per request would let
+ * anyone who can reach the appliance drive load on Postgres. The environment
+ * kill switches are checked first and win — the reason reported is the
+ * operator's when both apply, since that is the one the user cannot undo. The
+ * choice reaches a browser at its next page load, because the SPA asks once,
+ * before it initialises Sentry.
  */
 @Controller('config')
 export class TelemetryConfigController {
@@ -27,7 +47,11 @@ export class TelemetryConfigController {
     const settings = resolveTelemetrySettings(process.env, 'ci-server-web');
 
     if (!settings.enabled) {
-      return { enabled: false as const, reason: settings.disabledReason };
+      return { enabled: false as const, reason: settings.disabledReason as TelemetryConfigDisabledReason };
+    }
+
+    if (!isCrashReportsUserEnabled()) {
+      return { enabled: false as const, reason: 'user-setting' as TelemetryConfigDisabledReason };
     }
 
     return {

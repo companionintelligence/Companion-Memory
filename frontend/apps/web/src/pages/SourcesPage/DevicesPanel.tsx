@@ -9,16 +9,14 @@ import {
 } from '@ci/shadcn/icons';
 
 import { SourceCard, type TrackedObject } from '@/components/connect/SourceCard';
+import {
+  CAPTURE_DOWNLOAD_URL,
+  CHROME_EXTENSION_URL,
+  FIREFOX_EXTENSION_URL,
+} from '@/pages/OnboardingPage/constants';
 
 import { PathHeader } from './PathHeader';
 import { useDevices, type RegisteredDevice } from './useDevices';
-
-export const CHROME_EXTENSION_URL =
-  'https://chromewebstore.google.com/detail/companion-intelligence/bcocflgkdeimninckpmdifcniajoneih?authuser=3&hl=en';
-
-export const FIREFOX_EXTENSION_URL = 'https://addons.mozilla.org/en-US/firefox/addon/companion-intelligence/';
-
-export const CAPTURE_DOWNLOAD_URL = 'https://ci.computer/download#capture';
 
 /** Every browser extension hands over the same three things. */
 export const BROWSER_TRACKS: readonly TrackedObject[] = [

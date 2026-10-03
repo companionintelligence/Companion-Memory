@@ -64,7 +64,7 @@ export class MicrosoftClient extends BaseOAuth2Client {
   }
 
   async getClientCredentials(
-    connection: Connection,
+    connection: Pick<Connection, 'userId' | 'provider'>,
   ): Promise<{ clientId: string; clientSecret: string } | null> {
     const clientIdVariable = 'MICROSOFT_CLIENT_ID';
     const clientSecretVariable = 'MICROSOFT_CLIENT_SECRET';

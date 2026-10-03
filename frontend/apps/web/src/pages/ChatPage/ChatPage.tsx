@@ -8,6 +8,7 @@ import { v7 as uuid7 } from 'uuid';
 
 import { useThreadService } from '@/api';
 import { steerDispatchJob, useDispatchJob } from '@/api/useDispatchJob';
+import { useFeatures } from '@/common/feature';
 import { Chat, type FormData } from '@/components/Chat';
 import { ErrorState } from '@/components/ErrorState';
 import { MemoryHubShell } from '@/components/MemoryHub';
@@ -15,8 +16,9 @@ import { useAuth, useChatRequester, useCounter, useModel } from '@/hooks';
 import { clearAgentChatContext, formatAgentChatDraft, readAgentChatContext } from '@/lib/agentChat';
 
 import { CHAT_BASE, chatThreadPath } from './chatPaths';
+import { ChatNoModelState } from './ChatNoModelState';
 import { ChatSidebar } from './ChatSidebar';
-import { STARTER_PROMPTS } from './starterPrompts';
+import { chatTopicsFor, joinTopics, starterPromptsFor } from './starterPrompts';
 import { type Message } from './types';
 import { useThreadListService } from './useThreadListService';
 
@@ -31,7 +33,9 @@ function ChatPageContent() {
   const { id: initialThreadId } = useParams<{ id?: string }>();
   const [initialMessages, setInitialMessages] = useState<Message[]>([]);
   const [chatDraft, setChatDraft] = useState('');
-  const [{ selectedModel }] = useModel();
+  const [{ selectedModel, loading: modelsLoading, error: modelsError }, { refetch: refetchModels }] =
+    useModel();
+  const { isFeatureEnabled } = useFeatures();
 
   const [
     { threads, loading: threadsLoading, error: threadsError },
@@ -240,10 +244,17 @@ function ChatPageContent() {
 
   const loading = threadsLoading || threadLoading || chatRequestLoading;
   const isSubmitDisabled = selectedModel == null;
-  const inputPlaceholder =
-    resolvedThreadId.current == null
-      ? 'Ask about Memory, Plan, Forecast, Brief…'
-      : 'Continue — Memory, Plan, Forecast, Brief…';
+  // Still fetching is not "no model": the list arrives a beat after the page, and
+  // flashing a setup prompt at someone whose model is about to appear is worse
+  // than the blank it replaces.
+  const hasNoModel = selectedModel == null && !modelsLoading;
+  const topics = joinTopics(chatTopicsFor(isFeatureEnabled), 'or');
+  const inputPlaceholder = hasNoModel
+    ? 'Chat is off until a model is set up — Settings → Model'
+    : resolvedThreadId.current == null
+      ? `Ask about ${topics}…`
+      : `Continue — ${topics}…`;
+  const starterPrompts = starterPromptsFor(isFeatureEnabled);
 
   let emptyState: ReactNode;
 
@@ -287,6 +298,8 @@ function ChatPageContent() {
         </Card.Content>
       </Card>
     );
+  } else if (resolvedThreadId.current == null && hasNoModel) {
+    emptyState = <ChatNoModelState unreachable={modelsError != null} onRetry={refetchModels} />;
   } else if (resolvedThreadId.current == null) {
     emptyState = (
       // The ten starters overflow a phone viewport, so this column scrolls on
@@ -297,12 +310,10 @@ function ChatPageContent() {
           <Send className="relative -left-0.5 top-0.5 h-8 w-8 text-zinc-400" />
         </div>
         <p className="mb-1 text-sm">Start a conversation with your Companion</p>
-        <p className="mb-4 text-xs text-gray-400">
-          Ask about Memory, Plan to-dos, Forecast, or Brief — or attach a file
-        </p>
+        <p className="mb-4 text-xs text-gray-400">Ask about {topics} — or attach a file</p>
 
         <ul aria-label="Suggested asks" className="w-full space-y-1.5 pb-1 text-left">
-          {STARTER_PROMPTS.map((prompt) => (
+          {starterPrompts.map((prompt) => (
             <li key={prompt}>
               <button
                 type="button"

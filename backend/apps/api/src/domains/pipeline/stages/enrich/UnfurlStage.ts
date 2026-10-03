@@ -149,7 +149,20 @@ export class UnfurlStage implements Stage {
         // Not stored, not failed: the first sweep after the key lands resolves it.
         return { outcome: 'skipped', reason: outcome.detail };
       case 'disabled':
+        // The operator's configuration: a property of the deployment, terminal
+        // until the stage version moves, exactly as before.
         return { outcome: 'skipped', reason: outcome.detail };
+      case 'held':
+        // The USER's switch (`link_previews`), which is temporary by definition —
+        // so NOT `skipped`, whose rows only a version bump re-selects. A transient
+        // failure is retried on the ledger's backoff without spending the
+        // quarantine budget, which is what lets previews resume once the switch
+        // goes back on. This is the backstop: `PipelineControlService` does not
+        // start this stage while the switch is off, so it is reached only by a
+        // slice already running when the user flipped it. (`provider_unavailable`
+        // is the reason the ledger already declares transient — see
+        // `TRANSIENT_FAILURE_REASONS`.)
+        return { outcome: 'failed', reason: 'provider_unavailable', detail: { cause: outcome.detail } };
       case 'row':
         break;
     }

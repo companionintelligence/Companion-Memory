@@ -6,14 +6,21 @@
  * Reporting is opt-out — on wherever a DSN is configured, off when the user
  * says so. With no `SENTRY_DSN` this module initialises nothing and
  * the process makes no outbound connection. See `common/telemetry/settings.ts`
- * for the kill switches.
+ * for the kill switches, and `common/telemetry/runtimeGate.ts` for the switch
+ * the user can flip while the appliance is running.
  */
 
 import './bootstrap';
 
 import * as Sentry from '@sentry/nestjs';
 
-import { resolveTelemetrySettings, scrubEvent } from '@ci/common/telemetry';
+import {
+  dropWhenUserOptedOut,
+  gateSentryTransport,
+  isCrashReportsUserEnabled,
+  resolveTelemetrySettings,
+  scrubEvent,
+} from '@ci/common/telemetry';
 
 export const COMPONENT = 'ci-server-api';
 
@@ -69,7 +76,18 @@ if (telemetry.enabled && telemetry.dsn) {
     includeLocalVariables: false,
     integrations: (defaults) =>
       defaults.filter((integration) => !MANUALLY_HANDLED_INTEGRATIONS.has(integration.name)),
-    beforeSend: scrubEvent,
+    // The user's runtime switch (Settings -> Privacy -> "What leaves your
+    // appliance"), on top of the env kill switches that decided whether we got
+    // here at all. `Sentry.init` has run before Nest, so the choice cannot
+    // decide whether to initialise — it decides whether anything is SENT. The
+    // four hooks are the early drop; the transport wrapper is the guarantee for
+    // everything the hooks do not see (sessions, client reports, profiles).
+    // See `common/telemetry/runtimeGate.ts`.
+    beforeSend: (event) => (isCrashReportsUserEnabled() ? scrubEvent(event) : null),
+    beforeSendTransaction: dropWhenUserOptedOut,
+    beforeSendLog: dropWhenUserOptedOut,
+    beforeSendMetric: dropWhenUserOptedOut,
+    transport: (transportOptions) => gateSentryTransport(Sentry.makeNodeTransport(transportOptions)),
   });
 
   Sentry.setTag('component', COMPONENT);
