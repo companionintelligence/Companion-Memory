@@ -680,7 +680,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
   {
     id: 'content-media-mimetype-mismatch',
     severity: 'medium',
-    title: "ci.content typed 'media' whose mimetype is not an image, video or audio type",
+    title: "ci.content typed 'media' whose mimetype is not an image, video, audio or watch-record type",
     scope: 'ci.content',
     remedy:
       "The type discriminator drives rendering: a row typed 'media' gets a player or a thumbnail, so an " +
@@ -688,10 +688,21 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       "('application/vnd.android.package-archive') belong typed 'app', not 'media'. Each mimetype in " +
       'the breakdown is a mapping the pushing parser got wrong — fix it at the source, then re-type ' +
       'the existing rows.',
-    mirrors: null,
+    mirrors: 'src/domains/memory/services/contentFacetsSql.ts MEDIA_KINDS/OTHER_MEDIA_TYPE',
     // NULL mimetype is excluded deliberately: "media with no declared type" is a
     // weaker and much more common smell (most importers never set one), and
     // folding it in here would bury the actual mismatches under it.
+    //
+    // 'application/dash+xml' is excluded for the same reason, not because it is
+    // rare: it is the WATCH_MEDIA_TYPE sentinel netflix.ts, hulu.ts,
+    // disney_plus.ts, youtube.ts and _youtube_activity.ts all write, on purpose,
+    // for a "you watched this" record that never had a downloaded file —
+    // contentFacetsSql.ts's OTHER_MEDIA_TYPE bucket exists for exactly these
+    // rows ("watch and listen records, documents") and the content grid renders
+    // them from the tier-0 embed player, not from mimetype. On a full Drive
+    // corpus this check found 68,533 such YouTube rows alongside 14 real
+    // mismatches (Amazon ebooks/purchases) — the sentinel was burying the
+    // signal 4,895 to 1.
     sql: String.raw`
       WITH bad AS (
         SELECT id, source_system, mimetype, left(external_id, 80) AS external_id
@@ -699,6 +710,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
          WHERE type = 'media'
            AND mimetype IS NOT NULL
            AND mimetype !~* '^(image|video|audio)/'
+           AND mimetype <> 'application/dash+xml'
       )
       SELECT count(*)::bigint AS count,
              ${breakdownBy('mimetype')} AS breakdown,

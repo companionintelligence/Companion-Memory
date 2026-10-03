@@ -51,6 +51,21 @@ describe('doctor check registry', () => {
     expect(findCheck('position-not-a-place-name')?.sql).toContain(String.raw`\.(jpe?g|png|heic`);
   });
 
+  it('content-media-mimetype-mismatch excludes the deliberate watch/listen sentinel, not just NULL', () => {
+    // netflix.ts, hulu.ts, disney_plus.ts, youtube.ts and _youtube_activity.ts
+    // all write 'application/dash+xml' on purpose for a "you watched this"
+    // record that was never downloaded as a file — contentFacetsSql.ts's
+    // OTHER_MEDIA_TYPE bucket exists for exactly these rows. On a full Drive
+    // corpus import this check found 68,533 of them alongside 14 real
+    // mismatches (Amazon ebooks/purchases); without the exclusion the sentinel
+    // buries the signal this check exists to surface.
+    const sql = findCheck('content-media-mimetype-mismatch')?.sql ?? '';
+
+    expect(sql).toContain("mimetype <> 'application/dash+xml'");
+    // The NULL exclusion this one sits beside must still be there too.
+    expect(sql).toContain('mimetype IS NOT NULL');
+  });
+
   it('names the guard or migration each mirrored predicate came from', () => {
     // Every check that copies a predicate from elsewhere must say where from,
     // so the two are maintained together. A null is allowed — the pipeline and
