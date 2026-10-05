@@ -804,13 +804,6 @@ describe('PowerRailToggle', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'expanded');
   });
-
-  // Tailwind 4 puts buttons on the arrow cursor; the rail links show a hand.
-  it('shows the pointer cursor like the rail links', () => {
-    renderToggleAndRail();
-
-    expect(screen.getByRole('button', { name: 'Open menu' })).toHaveClass('cursor-pointer');
-  });
 });
 
 describe('Self user tile', () => {

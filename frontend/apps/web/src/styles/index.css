@@ -142,6 +142,19 @@
     line-height: 1.1;
   }
 
+  /*
+   * Tailwind 4's preflight puts buttons on the arrow cursor (v3 gave them a
+   * hand), so the rail toggle, the rail's section chevrons and the Memory type
+   * chips showed an arrow while the links beside them showed a hand. This is
+   * the restore Tailwind's upgrade guide gives. Disabled controls keep the
+   * arrow, including calendar days that react-day-picker marks aria-disabled.
+   * A `cursor-*` utility on an element still wins, since utilities come after base.
+   */
+  button:not(:disabled):not([aria-disabled="true"]),
+  [role="button"]:not(:disabled):not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
   .text-muted-foreground {
     font-weight: 400;
   }
