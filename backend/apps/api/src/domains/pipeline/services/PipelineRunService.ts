@@ -5,6 +5,11 @@ import { DataSource } from 'typeorm';
 import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { BACKFILL_JOB_PRIORITY, EventListenerRegistry, EventService } from '@ci/domains/events';
+import {
+  PYTHON_FUNCTION_QUEUES,
+  PythonFunctionRunEvent,
+  type PythonFunctionTarget,
+} from '@ci/domains/python-functions';
 
 import { DEAD_LETTER_QUEUE, STAGE_ID_LIST } from '../constants';
 import type { PipelineRunDesiredState } from '../entities/PipelineRunEntity';
@@ -345,6 +350,38 @@ interface StageStateRow {
   status: string;
   count: number | string;
   stale: number | string;
+}
+
+/**
+ * The queue a dead letter is re-emitted onto, or `null` to route it by
+ * listener registration.
+ *
+ * A `python.function.run` goes to its target's queue, whatever the letter
+ * recorded. Its two listeners are not a fan-out. `PythonFunctionService` always
+ * sends to `PYTHON_FUNCTION_QUEUES[target]`, and each listener POSTs to its own
+ * sidecar, which rejects the other sidecar's functions. Routed by registration,
+ * a summary job also reached `py-fn-hbpe`, failed there with "Unknown function
+ * 'actions_generation'" and came back as a new letter on every replay. The
+ * target also beats a recorded queue, so a copy that died on the wrong sidecar
+ * before this fix is replayed where it was meant to go.
+ *
+ * Every other letter goes back to the queue it failed on: the stage queue
+ * `PipelineSliceListener` wrote, or the `output.queue` the reaper copied. Only
+ * a reaped letter that names no queue (pg-boss expired the job itself, or it
+ * failed before failures recorded their queue) still says `dead-letter`. That
+ * queue has no worker, so those are routed by listener registration, which
+ * reaches every queue listening for the event.
+ */
+function replayQueueFor(letter: Pick<DeadLetterRow, 'queue' | 'event_name' | 'payload'>): string | null {
+  if (letter.event_name === PythonFunctionRunEvent) {
+    const target = letter.payload?.target;
+
+    if (typeof target === 'string' && Object.hasOwn(PYTHON_FUNCTION_QUEUES, target)) {
+      return PYTHON_FUNCTION_QUEUES[target as PythonFunctionTarget];
+    }
+  }
+
+  return letter.queue === DEAD_LETTER_QUEUE ? null : letter.queue;
 }
 
 /**
@@ -971,12 +1008,19 @@ export class PipelineRunService {
    *
    * ── Routing ────────────────────────────────────────────────────────────────
    *
-   * A letter written by `PipelineSliceListener` carries the stage queue it died
-   * on, and is re-emitted onto exactly that queue. A letter harvested by
-   * `DeadLetterReaperListener` carries `dead-letter` — pg-boss's parking queue,
-   * which has no worker — so naming it would enqueue the job where nothing will
-   * ever pick it up. Those are routed by listener registration instead, which is
-   * where the job would have gone had it been sent fresh.
+   * A letter is re-emitted onto the queue it failed on, and only that one. A
+   * letter written by `PipelineSliceListener` carries its stage queue. A letter
+   * harvested by `DeadLetterReaperListener` carries the `output.queue` that
+   * `PGBossEventService` writes on every failure. A `python.function.run` goes
+   * to its target's queue.
+   *
+   * A reaped letter that names no queue still carries `dead-letter`, pg-boss's
+   * parking queue, which has no worker, so naming it would enqueue the job where
+   * nothing will ever pick it up. Those are routed by listener registration,
+   * which reaches EVERY queue listening for the event. Until failures recorded
+   * their queue that was the route for every reaped letter, and it re-ran
+   * listeners that had already succeeded: a `file.uploaded` that failed only
+   * its preview went back to all six of its queues. See `replayQueueFor`.
    *
    * Replays ride {@link BACKFILL_JOB_PRIORITY} regardless of what the original
    * job carried: a replay is recovery of something already late, and a
@@ -1180,9 +1224,8 @@ export class PipelineRunService {
       );
     }
 
-    // `dead-letter` is pg-boss's parking queue and has no worker; see the method
-    // comment. `undefined` here means "route by listener registration".
-    const queue = letter.queue === DEAD_LETTER_QUEUE ? null : letter.queue;
+    // `null` means "route by listener registration"; see replayQueueFor.
+    const queue = replayQueueFor(letter);
 
     let jobIds: string[];
 

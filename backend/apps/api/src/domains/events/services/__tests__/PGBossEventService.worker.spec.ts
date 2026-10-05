@@ -496,6 +496,23 @@ describe('PGBossEventService work loop', () => {
       expect(output.stack).toContain('    at ');
     });
 
+    it('names the queue the job failed on, because the dead-letter copy keeps only data and output', async () => {
+      // pg-boss copies `data` and `output` onto `dead-letter` and drops the queue.
+      // DeadLetterReaperListener reads this back, so replay can send the letter
+      // to this queue alone instead of every queue listening for the event.
+      const harness = makeHarness({ queues: ['search-index'] });
+
+      harness.listen('search-index', 'note.created', 'fail');
+      harness.enqueue('search-index', 'note.created', [0]);
+      harness.start('search-index');
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      const output = harness.boss.fail.mock.calls[0][2] as { queue?: string };
+
+      expect(output.queue).toBe('search-index');
+    });
+
     it('keeps working the queue after a job fails', async () => {
       // A failure must not take the loop down with it — before the try/catch the
       // whole worker for that queue would have died on the first bad job.

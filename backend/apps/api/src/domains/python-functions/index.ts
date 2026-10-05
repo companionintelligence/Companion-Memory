@@ -41,5 +41,6 @@ import { PythonFunctionTokenService } from './services/PythonFunctionTokenServic
 export class PythonFunctionsModule {}
 
 export { PythonFunctionService };
+export { PythonFunctionRunEvent } from './events';
 export { PYTHON_FUNCTION_QUEUES, PYTHON_FUNCTIONS } from './types';
 export type { PythonFunctionTarget } from './types';

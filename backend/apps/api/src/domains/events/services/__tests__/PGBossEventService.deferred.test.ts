@@ -73,7 +73,26 @@ describe('PGBossEventService deferred completion', () => {
     expect(boss.complete).toHaveBeenCalledWith('py-fn-summary', 'job-9', { ok: true });
 
     await service.failJob('py-fn-summary', 'job-9', { message: 'runner died' });
-    expect(boss.fail).toHaveBeenCalledWith('py-fn-summary', 'job-9', { message: 'runner died' });
+    expect(boss.fail).toHaveBeenCalledWith('py-fn-summary', 'job-9', {
+      message: 'runner died',
+      queue: 'py-fn-summary',
+    });
+  });
+
+  it('failJob always names its own queue in the output, which is how a dead letter knows where it died', async () => {
+    const boss = { fail: jest.fn().mockResolvedValue(undefined) };
+
+    (service as unknown as { boss: typeof boss }).boss = boss;
+
+    await service.failJob('py-fn-summary', 'job-9');
+    expect(boss.fail).toHaveBeenLastCalledWith('py-fn-summary', 'job-9', { queue: 'py-fn-summary' });
+
+    // The queue the job is actually on wins over anything the caller passed.
+    await service.failJob('py-fn-summary', 'job-9', { message: 'runner died', queue: 'py-fn-hbpe' });
+    expect(boss.fail).toHaveBeenLastCalledWith('py-fn-summary', 'job-9', {
+      message: 'runner died',
+      queue: 'py-fn-summary',
+    });
   });
 
   /**

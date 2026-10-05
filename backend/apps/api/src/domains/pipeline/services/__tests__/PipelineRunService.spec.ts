@@ -771,6 +771,55 @@ describe('PipelineRunService.replayDeadLetter', () => {
     expect(result.queue).toBeNull();
   });
 
+  describe('a python.function.run letter', () => {
+    const pythonPayload = (target: unknown) => ({
+      target,
+      function: 'actions_generation',
+      args: { user_id: USER, lookback_days: 7 },
+      userId: USER,
+    });
+
+    it.each([
+      ['reaped with no queue', DEAD_LETTER_QUEUE],
+      ["recorded on the other sidecar's queue", 'py-fn-hbpe'],
+    ])("goes to its target's queue when %s", async (_label, queue) => {
+      // Its two listeners each POST to their own sidecar, which rejects the
+      // other's functions, so routing by registration sent a summary job to
+      // HBPE as well, where it failed and dead-lettered again.
+      const payload = pythonPayload('summary');
+      const harness = makeHarness(() => [claimRow({ queue, event_name: 'python.function.run', payload })]);
+
+      const result = await harness.service.replayDeadLetter(CTX, LETTER_ID);
+
+      expect(harness.send).toHaveBeenCalledWith('python.function.run', payload, {
+        queue: 'py-fn-summary',
+        priority: BACKFILL_JOB_PRIORITY,
+        singletonKey: `${DEAD_LETTER_REPLAY_KEY_PREFIX}${LETTER_ID}`,
+      });
+      expect(result.queue).toBe('py-fn-summary');
+    });
+
+    it.each([
+      ['an unknown target', 'gpu'],
+      ['a target inherited from Object.prototype', 'toString'],
+      ['a target that is not a string', 1],
+      ['no target', undefined],
+    ])('is routed like any other letter when it has %s', async (_label, target) => {
+      const payload = pythonPayload(target);
+      const harness = makeHarness(() => [
+        claimRow({ queue: DEAD_LETTER_QUEUE, event_name: 'python.function.run', payload }),
+      ]);
+
+      const result = await harness.service.replayDeadLetter(CTX, LETTER_ID);
+
+      expect(harness.send).toHaveBeenCalledWith('python.function.run', payload, {
+        priority: BACKFILL_JOB_PRIORITY,
+        singletonKey: `${DEAD_LETTER_REPLAY_KEY_PREFIX}${LETTER_ID}`,
+      });
+      expect(result.queue).toBeNull();
+    });
+  });
+
   it('claims replayed_at before emitting, and only while it is still NULL', async () => {
     const harness = makeHarness(() => [claimRow()]);
 
@@ -1273,5 +1322,130 @@ describe('PipelineRunService.replayDeadLetters against a de-duplicating queue', 
     expect(result.failed[0].reason).toMatch(/nothing in this process listens/);
     expect(result.failed[0].reason).toMatch(/module is probably not loaded/);
     expect(harness.created).toEqual([]);
+  });
+});
+
+/**
+ * Replay through the real routing in `EventService`.
+ *
+ * `send()` with no queue reaches EVERY queue that listens for the event. The
+ * mock harness above only records the arguments, so it cannot show what that
+ * means for an event with several listeners. This double inherits the real
+ * routing (`getQueuesForEvent` / `getRegisteredQueues`) and records the queue
+ * each job landed on.
+ *
+ * The listeners mirror production: `file.uploaded` has six queues (three are
+ * enough here), and `python.function.run` has one per sidecar.
+ */
+describe('PipelineRunService replay of an event with several listener queues', () => {
+  const FILE_QUEUES = ['file-preview-generation', 'document-parsing', 'search-index'];
+
+  class RecordingEventService extends EventService {
+    readonly landed: string[] = [];
+
+    async send(name: string, _event: unknown, options?: EventSendOptions): Promise<string[]> {
+      const queues = options?.queue
+        ? this.getRegisteredQueues().has(options.queue)
+          ? [options.queue]
+          : []
+        : [...this.getQueuesForEvent(name)];
+
+      this.landed.push(...queues);
+
+      return queues.map((queue) => `job-on-${queue}`);
+    }
+
+    async sendMany(): Promise<void> {}
+
+    async completeJob(): Promise<void> {}
+
+    async failJob(): Promise<boolean> {
+      return false;
+    }
+
+    async getJob(): Promise<null> {
+      return null;
+    }
+  }
+
+  /** Replays one claimed letter and returns the queues its jobs landed on, sorted. */
+  async function replay(letter: Record<string, unknown>): Promise<string[]> {
+    const events = new RecordingEventService();
+    const query = jest.fn(async (raw: string) =>
+      /replayed_at = now\(\)/.test(raw)
+        ? [{ id: LETTER_ID, replayed_at: new Date('2026-10-05T16:35:21Z'), ...letter }]
+        : [],
+    );
+    const logger = {
+      setContext: jest.fn(),
+      log: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      debug: jest.fn(),
+    };
+    const service = new PipelineRunService(
+      { query } as unknown as DataSource,
+      events as unknown as EventService,
+      logger as unknown as LoggerService,
+    );
+
+    await service.replayDeadLetter(CTX, LETTER_ID);
+
+    return [...events.landed].sort();
+  }
+
+  beforeEach(() => {
+    EventListenerRegistry.clear();
+
+    for (const queue of FILE_QUEUES) {
+      EventListenerRegistry.register('file.uploaded', `Listener:${queue}`, 'handle', queue);
+    }
+
+    EventListenerRegistry.register(
+      'python.function.run',
+      'PythonFunctionDispatchListener',
+      'dispatchSummary',
+      'py-fn-summary',
+    );
+    EventListenerRegistry.register(
+      'python.function.run',
+      'PythonFunctionDispatchListener',
+      'dispatchHbpe',
+      'py-fn-hbpe',
+    );
+  });
+
+  afterEach(() => {
+    EventListenerRegistry.clear();
+  });
+
+  it('sends a letter back to the one queue it failed on, not to every listener', async () => {
+    // What the reaper records now that failures name their queue. On
+    // 2026-10-05, 258 `file.uploaded` letters that had failed only their
+    // preview were replayed onto all six queues: 1,290 jobs re-running work
+    // that had already succeeded.
+    await expect(
+      replay({ queue: 'file-preview-generation', event_name: 'file.uploaded', payload: { userId: USER } }),
+    ).resolves.toEqual(['file-preview-generation']);
+  });
+
+  it('still reaches every listener for a reaped letter that names no queue', async () => {
+    // A job pg-boss expired itself, or one that failed before failures named
+    // their queue. There is nothing better to go on.
+    await expect(
+      replay({ queue: DEAD_LETTER_QUEUE, event_name: 'file.uploaded', payload: { userId: USER } }),
+    ).resolves.toEqual([...FILE_QUEUES].sort());
+  });
+
+  it('sends a python.function.run to its target sidecar only', async () => {
+    // Routed by registration, this letter reached both sidecars. The HBPE copy
+    // failed with "Unknown function 'actions_generation'" and dead-lettered again.
+    await expect(
+      replay({
+        queue: DEAD_LETTER_QUEUE,
+        event_name: 'python.function.run',
+        payload: { target: 'summary', function: 'actions_generation', args: { user_id: USER }, userId: USER },
+      }),
+    ).resolves.toEqual(['py-fn-summary']);
   });
 });

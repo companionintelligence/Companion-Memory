@@ -725,6 +725,44 @@ describe('DeadLetterReaperListener', () => {
       expect(letter.error).toContain('at open (fs.js:1:1)');
     });
 
+    it('records the queue the job failed on, read from its failure output', async () => {
+      // pg-boss drops the source queue when it copies a job onto `dead-letter`,
+      // so PGBossEventService names it in `output.queue`. Replay sends the
+      // letter to this queue alone. Recording `dead-letter` here is what sent a
+      // `file.uploaded` that failed only its preview back to all six listeners.
+      const id = await seedDeadLetter({
+        data: { name: 'file.uploaded', fileId: randomUUID() },
+        output: { message: 'vips not found on PATH', queue: 'file-preview-generation' },
+      });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.queue).toBe('file-preview-generation');
+      expect(letter.error).toBe('vips not found on PATH');
+    });
+
+    it.each([
+      ['no output at all', undefined],
+      ['an output with no queue, as every failure had before it was recorded', { message: 'boom' }],
+      ["pg-boss's own expiry output", { value: { message: 'job failed by timeout in active state' } }],
+      ['a blank queue', { message: 'boom', queue: '' }],
+      ['the dead-letter queue itself', { message: 'boom', queue: DEAD_LETTER_QUEUE }],
+      ['a queue that is not a string', { message: 'boom', queue: 42 }],
+      ['an output that is not an object', 'a bare string'],
+    ])(
+      'keeps `dead-letter` for %s, so replay falls back to listener registration',
+      async (_label, output) => {
+        const id = await seedDeadLetter({ data: { name: 'file.uploaded' }, output });
+
+        await listener.reap();
+
+        const [letter] = await lettersFor([id]);
+        expect(letter).toBeDefined();
+        expect(letter.queue).toBe(DEAD_LETTER_QUEUE);
+      },
+    );
+
     it('starts every letter unreplayed', async () => {
       // `replayed_at IS NULL` is the replay queue's partial index and the
       // idempotency flag that makes "replay all" safe to run twice. A letter

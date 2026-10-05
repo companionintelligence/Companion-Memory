@@ -227,8 +227,9 @@ export class PipelineSliceListener {
       // the first attempt's — by the third the upstream dependency may simply
       // be refusing connections, and the recorded cause would be a symptom of
       // the earlier failure rather than the failure. The rows are
-      // distinguishable by `failed_at`; the reaper's terminal row for the same
-      // job carries `queue = 'dead-letter'`.
+      // distinguishable by `failed_at`. The reaper's terminal row for the same
+      // job carries the same stage queue (it reads it from the failure output);
+      // its `id` is pg-boss's dead-letter job id, where these rows get a fresh one.
       //
       // Recorded BEFORE the rethrow so pg-boss's own retry / DLQ handling still
       // runs. This is a durable copy, not a replacement for it.
