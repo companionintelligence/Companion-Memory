@@ -136,9 +136,11 @@ export function PowerRailToggle() {
             // column and shoves the header and page content sideways — which is
             // exactly what a hover-opened drawer must never do. Pinning is the
             // one case where a reflow is intended, and permanent.
+            // Tailwind 4 leaves buttons on the arrow cursor. The rail links
+            // below show a hand, so the control that opens them has to as well.
             className={cn(
               CAPSULE,
-              'hover:bg-white/45 dark:hover:bg-white/20',
+              'cursor-pointer hover:bg-white/45 dark:hover:bg-white/20',
               pinned ? 'max-w-52 gap-2 pr-3' : 'max-w-10 gap-0',
             )}
           >
