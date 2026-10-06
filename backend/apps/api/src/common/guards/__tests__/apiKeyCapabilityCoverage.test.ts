@@ -22,6 +22,7 @@ import { FilesController } from '../../../domains/files/controllers/FilesControl
 import { BulkIngestController } from '../../../domains/ingest/controllers/BulkIngestController';
 import { MaintenanceController } from '../../../domains/maintenance/controllers/MaintenanceController';
 import { McpController } from '../../../domains/mcp/controllers/McpController';
+import { DESTRUCTIVE_MUTATION_PREFIXES } from '../../../domains/mcp/services/GraphQLToolAdapter';
 import { PersonaIntelligenceController } from '../../../domains/persona/controllers/PersonaIntelligenceController';
 import { PrivacyController } from '../../../domains/privacy/controllers/PrivacyController';
 import { PendingActionsController } from '../../../domains/tools/controllers/PendingActionsController';
@@ -46,7 +47,7 @@ const SCOPED_CONTROLLERS = [
   AgentJobsController,
   McpController,
   PersonaIntelligenceController,
-  // `/v1/agent/jobs` — dispatch to an agent harness. Class-level `memory` scope,
+  // `/v1/agent/jobs`, dispatch to an agent harness. Class-level `agent-jobs` scope,
   // per-route capability. It arrived with #2558 and was not added here, which is
   // precisely what the tree scan at the bottom of this file is for: the routes
   // were correctly annotated, so nothing was reachable that should not have
@@ -318,8 +319,8 @@ describe('POST routes that destroy data declare full', () => {
  * resolver method, and that is what the guard reads. So the source says which fields lose data and
  * the metadata says what a key must hold to run them; the two must agree.
  */
-function graphqlLabels(): Array<{ file: string; method: string; removesData: boolean }> {
-  const labels: Array<{ file: string; method: string; removesData: boolean }> = [];
+function graphqlLabels(): Array<{ file: string; method: string; removesData: boolean; partial: boolean }> {
+  const labels: Array<{ file: string; method: string; removesData: boolean; partial: boolean }> = [];
   // Anchored to the start of a line, so the decorator's own doc examples (` * @GraphqlPrivacy`) and
   // error strings that quote it are not mistaken for applications of it.
   const pattern = /^[ \t]*@GraphqlPrivacy\(\{([^}]*)\}\)[\s\S]*?(?:async\s+)?(\w+)\s*\(/gm;
@@ -336,6 +337,8 @@ function graphqlLabels(): Array<{ file: string; method: string; removesData: boo
         file,
         method: match[2] ?? '',
         removesData: /access:\s*'delete'/.test(body) || /destructive:\s*true/.test(body),
+        // A label without both axes leaves the missing one to GraphQLToolAdapter's name rule.
+        partial: !/\baccess:/.test(body) || !/\bdestructive:/.test(body),
       });
     }
   }
@@ -371,6 +374,23 @@ describe('every GraphQL field labelled as losing data requires full on /graphql'
       expect(declared).toBe(removesData ? FULL_CAPABILITY : undefined);
     });
   }
+
+  it('leaves no data-losing field to the MCP name rule, which /graphql does not apply', () => {
+    // GraphQLToolAdapter merges a partial label over what it infers from the field name, so
+    // `@GraphqlPrivacy({ external: true })` on `deleteX` costs `full` over MCP. The decorator reads
+    // only the label, so the same field would cost `write` on /graphql, and the suite above would
+    // agree with the decorator. A partial label on such a name has to say what it does.
+    const inferredDestructive = labels.filter(
+      ({ method, removesData, partial }) =>
+        partial &&
+        !removesData &&
+        DESTRUCTIVE_MUTATION_PREFIXES.some((prefix) => method.toLowerCase().startsWith(prefix)),
+    );
+
+    expect(
+      inferredDestructive.map(({ file, method }) => `${file.slice(SRC_ROOT.length + 1)}: ${method}`),
+    ).toEqual([]);
+  });
 
   it('reads the labels it claims to (the scan is not vacuous)', () => {
     // 38 root fields lose data at the time of writing (deleteNote, mergePeople, untagEntities, ...).
