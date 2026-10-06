@@ -513,7 +513,7 @@ describe('tool markup salvage is limited to markup that opens or closes the repl
     const { prose, toolCalls } = extractEmbeddedToolCalls(content);
 
     expect(toolCalls).toEqual([]);
-    expect(prose).toBe(content);
+    expect(prose).toBe('You have two new emails.\n1. From the bank: \n2. From Jo: lunch on Friday?');
   });
 
   it('does not salvage a bare function opener that runs on to the end of a prose reply', () => {
@@ -551,6 +551,19 @@ describe('tool markup salvage is limited to markup that opens or closes the repl
 
     expect(withTools.message.tool_calls).toHaveLength(1);
     expect(withoutTools.message.tool_calls ?? []).toEqual([]);
+  });
+
+  it('chat() keeps quoted markup out of the reply though it runs nothing', async () => {
+    const quoted = `You have one new email. From the bank: ${call} Reply when you can.`;
+
+    const reply = await driverReplying(quoted).chat({
+      model: 'm',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [tool],
+    });
+
+    expect(reply.message.tool_calls ?? []).toEqual([]);
+    expect(reply.message.content).not.toContain('<tool_call>');
   });
 
   it('chatStream() turns markup into a call only when asked to salvage', async () => {

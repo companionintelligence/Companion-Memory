@@ -252,8 +252,10 @@ export class OpenAiCompatChatDriver {
     // and markup in it is something the model quoted; it is still kept out of the content.
     const offeredTools = Boolean(request.tools && request.tools.length > 0);
     const toolCalls = structured.length > 0 ? structured : offeredTools ? salvaged.toolCalls : [];
+    // Stripped on sight, as `chatStream` does: a quoted block mid-answer is no longer salvaged, so
+    // keying the strip on salvaged calls left it in the reply as text that reads like a call.
     const content =
-      toolCalls.length > 0 || salvaged.toolCalls.length > 0 ? stripToolMarkup(rawContent) : rawContent;
+      toolCalls.length > 0 || hasToolMarkup(rawContent) ? stripToolMarkup(rawContent) : rawContent;
 
     return toChatResponse(request.model, {
       content,
@@ -389,10 +391,7 @@ export class OpenAiCompatChatDriver {
     const emitted =
       structured.length > 0 ? structured : request.salvageTools === true ? salvaged.toolCalls : [];
     const toolCalls = request.discardToolMarkup ? [] : emitted;
-    const prose =
-      emitted.length > 0 || salvaged.toolCalls.length > 0 || /<tool_?call\b|<function=/i.test(rawContent)
-        ? stripToolMarkup(rawContent)
-        : rawContent;
+    const prose = emitted.length > 0 || hasToolMarkup(rawContent) ? stripToolMarkup(rawContent) : rawContent;
 
     if (bufferContent && prose.trim() !== '') {
       yield toChatResponse(request.model, { content: prose, done: false });
@@ -571,6 +570,11 @@ function hoistSystemMessages(messages: ChatCompletionMessageParam[]): ChatComple
   return [{ role: 'system', content: systemParts.join('\n\n') }, ...rest];
 }
 
+/** Whether `content` opens any tool-call markup the salvager reads, finished or not. */
+function hasToolMarkup(content: string): boolean {
+  return /<tool_?call\b|<function=/i.test(content);
+}
+
 /** A `<tool_call>` / `<toolcall>` block, closed or running to the end of the text. */
 const TOOL_CALL_BLOCK = /<tool_?call\b[^>]*>([\s\S]*?)(?:<\/tool_?call>|$)/gi;
 
@@ -664,7 +668,7 @@ function standaloneBlocks(content: string, blocks: RegExpMatchArray[]): Set<numb
  * and never run. Callers salvage only in a round that offered tools.
  */
 export function extractEmbeddedToolCalls(content: string): { prose: string; toolCalls: ToolCall[] } {
-  if (!content || !/<tool_?call\b|<function=/i.test(content)) {
+  if (!content || !hasToolMarkup(content)) {
     return { prose: content, toolCalls: [] };
   }
 
@@ -715,10 +719,6 @@ export function extractEmbeddedToolCalls(content: string): { prose: string; tool
       consumeQwenCoderBlock(block[1], toolCalls);
     }
   });
-
-  if (toolCalls.length === 0) {
-    return { prose: content, toolCalls: [] };
-  }
 
   return { prose: stripToolMarkup(content), toolCalls };
 }
