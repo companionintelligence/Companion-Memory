@@ -2,8 +2,13 @@ import { Body, Controller, Get, HttpCode, Post, Put, Req, UseGuards } from '@nes
 import { z } from 'zod';
 
 import { Context, type RequestContext } from '@ci/common/context';
-import { FULL_CAPABILITY, RequireCapability } from '@ci/common/decorators';
-import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { FULL_CAPABILITY, READ_CAPABILITY, RequireCapability } from '@ci/common/decorators';
+import {
+  ApplianceAdminGuard,
+  type ApiKeyScopedRequest,
+  apiKeyCapabilityOf,
+  JwtOrApiKeyAuthGuard,
+} from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 
@@ -85,15 +90,27 @@ export class BlueBubblesConfigController {
    * access into write access on someone else's data. The same answer decides
    * host, port and `lastError`, which locate the owner's Mac. Everyone else
    * gets {@link BlueBubblesStatusView}.
+   *
+   * So does an administrator's read-only API key. The secret lets its holder
+   * write into the owner's memory, which a read key is not allowed to do. The
+   * settings page signs in with a session and the native apps hold full keys,
+   * so both still get the full settings.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Get('config')
   @HttpCode(200)
-  async getConfig(@Req() request: { user?: { role?: string } }) {
+  async getConfig(
+    @Req()
+    request: Pick<ApiKeyScopedRequest, 'apiKeyScopes' | 'apiKeyCapability'> & {
+      user?: { role?: string };
+    },
+  ) {
     let isAdmin = false;
 
     try {
-      isAdmin = await this.applianceAdminGuard.admits(request.user);
+      isAdmin =
+        apiKeyCapabilityOf(request as ApiKeyScopedRequest) !== READ_CAPABILITY &&
+        (await this.applianceAdminGuard.admits(request.user));
     } catch {
       // The admin probe fails closed: unknown means "not an administrator".
     }

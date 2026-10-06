@@ -158,6 +158,29 @@ describe('BlueBubblesConfigController GET /bluebubbles/config', () => {
     expect(JSON.stringify(view)).not.toContain('bb-password');
   });
 
+  it("gives an administrator's read-only API key the status only", async () => {
+    // The webhook secret writes into the owner's memory; a read key may not.
+    const { controller, configService } = controllerFor(true);
+
+    const view = await controller.getConfig({
+      user: { role: 'admin' },
+      apiKeyScopes: [],
+      apiKeyCapability: 'read',
+    });
+
+    expect(view).toMatchObject({ canEdit: false });
+    expect(JSON.stringify(view)).not.toContain(ROW.webhookSecret);
+    expect(configService.getOrCreate).not.toHaveBeenCalled();
+  });
+
+  it("gives an administrator's write key the full settings", async () => {
+    const { controller } = controllerFor(true);
+
+    await expect(
+      controller.getConfig({ user: { role: 'admin' }, apiKeyScopes: [], apiKeyCapability: 'write' }),
+    ).resolves.toMatchObject({ canEdit: true, webhookPath: `/api/bluebubbles/webhook/${ROW.webhookSecret}` });
+  });
+
   it('rotating answers with the new webhook path', async () => {
     const { controller } = controllerFor(true);
 
