@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { localHubPlugin } from '@ci/common/src/utils/localHub';
+import { SECURE_STORE_KEYS } from '@ci/common/src/utils/nativeBridge';
 import { speechPlugin } from '@ci/common/src/utils/speech';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -583,6 +584,49 @@ describe('the bridge key @ci/common reads matches the registered name', () => {
     const nativeBridge = read(join(PACKAGES, 'common/src/utils/nativeBridge.ts'));
 
     expect(nativeBridge).toContain(`plugins()?.${registeredName('capacitor-local-llm')}`);
+  });
+});
+
+/**
+ * The LocalHub credential store takes writes from anything that reaches the bridge. On
+ * Android that is every frame in the WebView (the app runs Capacitor's legacy bridge for
+ * background location), so `secureSet` accepts only the app's own keys, on both platforms.
+ */
+describe('LocalHub secureSet — only the keys the app itself writes', () => {
+  const hubDir = join(PACKAGES, 'capacitor-local-hub');
+  const kotlin = read(
+    join(hubDir, 'android/src/main/java/com/companionintelligence/localhub/LocalHubPlugin.kt'),
+  );
+  const swift = read(join(hubDir, 'ios/Sources/LocalHubPlugin/LocalHubPlugin.swift'));
+  const quoted = (block: string | undefined) =>
+    [...(block ?? '').matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  const between = (source: string, from: string, to: string) =>
+    source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from)));
+
+  it('Android, iOS and @ci/common list the same keys', () => {
+    const android = quoted(/WRITABLE_SECURE_KEYS = setOf\(([^)]*)\)/.exec(kotlin)?.[1]);
+    const ios = quoted(/writableSecureKeys: Set<String> = \[([^\]]*)\]/.exec(swift)?.[1]);
+
+    expect(android).toEqual([...SECURE_STORE_KEYS].sort());
+    expect(ios).toEqual([...SECURE_STORE_KEYS].sort());
+  });
+
+  it('every credential useAuth stores is on the list, and so is the mirrored origin', () => {
+    const useAuth = read(join(ROOT, 'frontend/apps/web/src/hooks/useAuth.ts'));
+    const stored = [...useAuth.matchAll(/const API_KEY\w*_STORAGE = '([^']+)'/g)].map((m) => m[1]);
+
+    expect(stored.length).toBeGreaterThanOrEqual(3);
+    expect(SECURE_STORE_KEYS).toEqual(expect.arrayContaining([...stored, 'ci.apiBaseUrl']));
+  });
+
+  it('both plugins refuse a key off the list before anything is written', () => {
+    const android = between(kotlin, 'fun secureSet(', 'fun secureRemove(');
+    const ios = between(swift, 'func secureSet(', 'func secureRemove(');
+
+    expect(android.indexOf('!in WRITABLE_SECURE_KEYS')).toBeGreaterThan(-1);
+    expect(android.indexOf('!in WRITABLE_SECURE_KEYS')).toBeLessThan(android.indexOf('credentialStore.set('));
+    expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeGreaterThan(-1);
+    expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeLessThan(ios.indexOf('secureStore.set('));
   });
 });
 

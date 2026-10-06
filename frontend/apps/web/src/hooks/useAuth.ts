@@ -9,6 +9,7 @@ import {
   fetchJson,
   FetchJsonError,
   getApiBaseUrl,
+  getPersistedApiBaseUrl,
   persistApiBaseUrl,
   setApiBaseUrl,
   syncNativeIntentConfig,
@@ -307,6 +308,52 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
   setApiKey(created.key);
 
   return created.key;
+}
+
+/**
+ * Decide what the keystore's copy of the Memory origin may do at launch. Resolves false when
+ * the person declined it and the stored credential was dropped instead.
+ *
+ * The origin the app paired with lives in localStorage, which only the app's own pages can
+ * write; `initApiBaseUrl` has already applied it. The keystore copy is a mirror for native
+ * App Intents (`syncNativeIntentConfig`), and the LocalHub plugin writes it for any caller
+ * that reaches the bridge. On Android's legacy bridge that includes a cross-origin iframe,
+ * and an origin planted there would, on the next launch, be where the device API key went.
+ *
+ * So the keystore never replaces a paired origin: a copy that disagrees is overwritten from
+ * localStorage. It only fills in an origin the app does not have (localStorage lost while
+ * the Keychain survived, as across an iOS reinstall), and only after the person agrees.
+ */
+async function adoptKeystoreOrigin(storedOrigin: string | null): Promise<boolean> {
+  const pairedOrigin = getPersistedApiBaseUrl();
+  const stored = storedOrigin?.replace(/\/+$/, '') || null;
+
+  if (pairedOrigin) {
+    if (stored !== pairedOrigin) {
+      await syncNativeIntentConfig();
+    }
+
+    return true;
+  }
+
+  if (!stored) {
+    return true;
+  }
+
+  if (window.confirm(`Sign back in to your Memory at ${stored}?`)) {
+    persistApiBaseUrl(stored);
+
+    return true;
+  }
+
+  // Declined: drop the credential that came with it, so the app starts at device connect
+  // instead of quietly reusing a key for a server the person did not recognise.
+  await secureStorageRemove('ci.apiBaseUrl');
+  await secureStorageRemove(API_KEY_STORAGE);
+  await secureStorageRemove(API_KEY_ID_STORAGE);
+  await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+
+  return false;
 }
 
 interface OidcNativeExchangeResponse {
@@ -655,8 +702,8 @@ function useAuth(): ReturnValue {
             return;
           }
 
-          if (storedOrigin) {
-            persistApiBaseUrl(storedOrigin);
+          if (!(await adoptKeystoreOrigin(storedOrigin))) {
+            return;
           }
 
           const storedKey = await secureStorageGet(API_KEY_STORAGE);

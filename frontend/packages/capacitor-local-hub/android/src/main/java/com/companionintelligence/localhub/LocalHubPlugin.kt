@@ -139,6 +139,10 @@ class LocalHubPlugin : Plugin() {
     /**
      * Encrypts and commits one value. Rejects if it could not be stored **protected** -- there
      * is no plaintext fallback anywhere below this, which is the whole point of the store.
+     *
+     * Only the keys in [WRITABLE_SECURE_KEYS] are accepted. This app runs Capacitor's legacy
+     * bridge (see `frontend/apps/android/capacitor.config.ts`), which reaches every frame in
+     * the WebView, so the store does not take arbitrary names from whoever calls it.
      */
     @PluginMethod
     fun secureSet(call: PluginCall) {
@@ -146,6 +150,10 @@ class LocalHubPlugin : Plugin() {
         val value = call.getString("value")
         if (key.isNullOrEmpty()) {
             call.reject("A non-empty 'key' is required")
+            return
+        }
+        if (key !in WRITABLE_SECURE_KEYS) {
+            call.reject("'$key' is not a key this store accepts")
             return
         }
         if (value == null) {
@@ -354,6 +362,19 @@ class LocalHubPlugin : Plugin() {
     }
 
     companion object {
+        /**
+         * The credentials the app itself stores: the device API key, its id and capability, and
+         * the paired Memory origin mirrored for native consumers. Kept equal to
+         * `SECURE_STORE_KEYS` in `@ci/common`'s `nativeBridge.ts` and to the iOS plugin's list;
+         * `capacitorPluginContract.test.ts` checks all three.
+         */
+        private val WRITABLE_SECURE_KEYS = setOf(
+            "ci.apiKey",
+            "ci.apiKeyId",
+            "ci.apiKeyCapability",
+            "ci.apiBaseUrl",
+        )
+
         private const val TOKEN_BYTES = 32
         private const val NANOHTTPD_SOCKET_READ_TIMEOUT_MS = 5000
     }

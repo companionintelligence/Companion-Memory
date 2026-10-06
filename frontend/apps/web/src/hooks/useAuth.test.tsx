@@ -501,6 +501,8 @@ describe('useAuth', () => {
     };
 
     setFetch(() => emptyResponse());
+    // Only the keystore has the origin, so restoring it asks first.
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current[0].authenticated).toBe(true));
@@ -516,6 +518,75 @@ describe('useAuth', () => {
     expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
     expect(secureStore.has('ci.apiKey')).toBe(false);
     expect(needsNativeCloudConnect()).toBe(true);
+  });
+
+  describe('native: the Memory origin the app paired with', () => {
+    /** A phone whose credential store (the LocalHub plugin) starts with `entries`. */
+    function nativeWithStore(entries: [string, string][]) {
+      const secureStore = new Map(entries);
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+        Plugins: {
+          LocalHub: {
+            secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: secureStore.get(key) ?? null })),
+            secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+            }),
+            secureRemove: vi.fn(async ({ key }: { key: string }) => {
+              secureStore.delete(key);
+            }),
+          },
+        },
+      };
+
+      return secureStore;
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('keeps the paired origin when the keystore copy disagrees, and repairs the copy', async () => {
+      localStorage.setItem('ci.apiBaseUrl', 'https://paired.example.com');
+      setApiBaseUrl('https://paired.example.com');
+      const secureStore = nativeWithStore([
+        ['ci.apiKey', 'stored-api-key'],
+        // Written through the plugin by something other than the pairing flow.
+        ['ci.apiBaseUrl', 'https://elsewhere.example.net'],
+      ]);
+      const confirm = vi.spyOn(window, 'confirm');
+      setFetch(() => emptyResponse());
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      expect(getApiBaseUrl()).toBe('https://paired.example.com');
+      expect(localStorage.getItem('ci.apiBaseUrl')).toBe('https://paired.example.com');
+      await waitFor(() => expect(secureStore.get('ci.apiBaseUrl')).toBe('https://paired.example.com'));
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it('asks before taking an origin only the keystore has, and drops the credential when declined', async () => {
+      const secureStore = nativeWithStore([
+        ['ci.apiKey', 'stored-api-key'],
+        ['ci.apiKeyId', 'key-id'],
+        ['ci.apiBaseUrl', 'https://unknown.example.net'],
+      ]);
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      setFetch(() => emptyResponse());
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('https://unknown.example.net'));
+      expect(result.current[0].authenticated).toBe(false);
+      expect(getApiBaseUrl()).toBe('');
+      expect(localStorage.getItem('ci.apiBaseUrl')).toBeNull();
+      expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
+      expect(secureStore.has('ci.apiKey')).toBe(false);
+      expect(secureStore.has('ci.apiKeyId')).toBe(false);
+    });
   });
 
   describe('native logout and the Local Hub outbox', () => {

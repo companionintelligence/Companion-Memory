@@ -17,6 +17,7 @@ export {
   buildApiUrl,
   clearPersistedApiBaseUrl,
   getApiBaseUrl,
+  getPersistedApiBaseUrl,
   getWebOrigin,
   initApiBaseUrl,
   isIosPlatform,
@@ -198,6 +199,7 @@ export {
 } from './src/utils/outboxFlush';
 export type { FlushOutboxOptions, FlushOutboxSummary, OutboxQueueState } from './src/utils/outboxFlush';
 export {
+  SECURE_STORE_KEYS,
   addAppStateListener,
   addAppUrlOpenListener,
   addBackButtonListener,

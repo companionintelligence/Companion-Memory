@@ -253,6 +253,23 @@ export function initApiBaseUrl(): void {
 }
 
 /**
+ * The origin the app saved when it was paired, or null when none is saved.
+ *
+ * Unlike {@link getApiBaseUrl} this never answers with the build default. Only the app's
+ * own pages can write it (the WebView's localStorage), which is what makes it the copy to
+ * trust over the keystore mirror `syncNativeIntentConfig` keeps for App Intents.
+ */
+export function getPersistedApiBaseUrl(): string | null {
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+
+    return stored ? normalize(stored) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Persist and apply a new server origin. Used by the native server-settings screen.
  * No-ops storage failures (the in-memory base is still updated for the session).
  */

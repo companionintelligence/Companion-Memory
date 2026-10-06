@@ -344,6 +344,19 @@ async function migrateLegacySecureValue(hub: LocalHubPlugin, key: string): Promi
 }
 
 /**
+ * Every key the app writes to the native credential store: the device API key, its id and
+ * capability, and the paired Memory origin mirrored for native consumers. The LocalHub
+ * plugin's `secureSet` accepts these and nothing else on both platforms, so a new key has to
+ * be added there too (`capacitorPluginContract.test.ts` checks the three lists agree).
+ */
+export const SECURE_STORE_KEYS = [
+  'ci.apiKey',
+  'ci.apiKeyId',
+  'ci.apiKeyCapability',
+  'ci.apiBaseUrl',
+] as const;
+
+/**
  * Read a value from the OS keystore (iOS Keychain / Android Keystore) on native, or
  * `localStorage` on web. Returns null when absent.
  *
