@@ -34,8 +34,10 @@ const HOME_PATH_PATTERNS = [
 // `api[-_ ]?key` (not the literals `apikey|api_key`) so the hyphenated header
 // forms match too — `x-api-key` is CI-Server's primary API-key header, and the
 // SDK ships request headers even with sendDefaultPii disabled.
+// `assertion` covers `x-ci-hub-user-assertion`, the signed Hub identity a Hub that gave this app
+// its own key adds in front of every request.
 const SENSITIVE_KEY_PATTERN =
-  /password|secret|token|authorization|cookie|jwt|api[-_ ]?key|dsn|pepper|private[-_]?key|signature/i;
+  /password|secret|token|authorization|cookie|jwt|api[-_ ]?key|dsn|pepper|private[-_]?key|signature|assertion/i;
 
 // Keys that name a PERSON rather than carrying a credential. No value pattern
 // can ever match these — a username is just a word — so the key is the only

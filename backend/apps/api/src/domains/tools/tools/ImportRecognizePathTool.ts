@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
-import { recognizePathWithinRoots } from '@ci/domains/import';
+import { importRootsCallerFor, recognizePathWithinRoots } from '@ci/domains/import';
 import { UserService } from '@ci/domains/user';
 
 import { BaseTool } from '../core/BaseTool';
@@ -21,7 +21,8 @@ interface RecognizePathInput {
  * directly — which is what makes an agent able to say "that folder looks like a
  * Google Takeout" before anything is imported.
  *
- * Scoped to the configured import roots plus the caller's OWN inbox subtree.
+ * Scoped to the caller's OWN inbox subtree, plus the configured import roots
+ * when the caller is the appliance administrator.
  * An unconstrained absolute path over an API is a filesystem read primitive,
  * and "which of these paths exists?" is information on its own — and on a
  * multi-account appliance, so is another user's dropped archive.
@@ -43,15 +44,17 @@ export class ImportRecognizePathTool extends BaseTool<RecognizePathInput, unknow
     description:
       'Ask every registered importer to inspect a path the appliance can see and report how ' +
       'confident it is that this is its kind of data, highest first. Reads the files but imports ' +
-      'nothing. Only paths under the configured import roots or your own import-inbox folder ' +
-      'may be inspected.',
+      'nothing. Only paths in your own import-inbox folder may be inspected, plus the configured ' +
+      'import roots when you are the appliance administrator.',
     category: 'database',
     parameters: {
       type: 'object',
       properties: {
         path: {
           type: 'string',
-          description: 'Absolute path to a file or directory, within a configured import root.',
+          description:
+            'Absolute path to a file or directory, within your import-inbox folder or (administrator ' +
+            'only) a configured import root.',
         },
       },
       required: ['path'],
@@ -71,8 +74,9 @@ export class ImportRecognizePathTool extends BaseTool<RecognizePathInput, unknow
       throw new Error('path is required');
     }
 
-    // The caller's email scopes which inbox subtree they may read — their own.
-    // No resolvable user means configured roots only, never anyone's inbox.
+    // The caller's account scopes which inbox subtree they may read — their
+    // own — and only the administrator reaches the configured roots. No
+    // resolvable user means neither: no inbox and no configured roots.
     const user = context.userId
       ? await this.users.findById({ userId: context.userId }, context.userId)
       : null;
@@ -80,6 +84,6 @@ export class ImportRecognizePathTool extends BaseTool<RecognizePathInput, unknow
     // An out-of-bounds path comes back as `allowed: false` rather than thrown:
     // an agent can act on "not allowed, upload instead", where a tool error
     // reads as a malfunction.
-    return recognizePathWithinRoots(input.path, user?.email ?? null);
+    return recognizePathWithinRoots(input.path, importRootsCallerFor(user));
   }
 }

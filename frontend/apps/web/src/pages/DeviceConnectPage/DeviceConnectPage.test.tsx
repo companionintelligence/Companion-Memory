@@ -5,6 +5,12 @@ import { DeviceConnectPage } from './DeviceConnectPage';
 
 const navigate = vi.fn();
 
+/** A Portal id_token for client `ci-server` that is still live: the one bearer Memory accepts. */
+const ID_TOKEN = `hdr.${btoa(JSON.stringify({ aud: 'ci-server', exp: Math.floor(Date.now() / 1000) + 3600 }))
+  .replace(/\+/g, '-')
+  .replace(/\//g, '_')
+  .replace(/=+$/, '')}.sig`;
+
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
 
@@ -17,6 +23,7 @@ const h = vi.hoisted(() => ({
   getApiBaseUrl: vi.fn(() => ''),
   signInToPortal: vi.fn(),
   listMemoryServers: vi.fn(),
+  requestApplianceToken: vi.fn(),
   probePortalOrigin: vi.fn(async (): Promise<void> => {}),
   loginWithPortalOidc: vi.fn(),
   resumePendingOidcLogin: vi.fn(
@@ -74,6 +81,7 @@ vi.mock('./portal-client', async (importOriginal) => {
     ...actual,
     signInToPortal: h.signInToPortal,
     listMemoryServers: h.listMemoryServers,
+    requestApplianceToken: h.requestApplianceToken,
     // Answers by default, so the sign-in tests never reach for the network; the
     // unreachable-host tests below make it reject.
     probePortalOrigin: h.probePortalOrigin,
@@ -114,6 +122,7 @@ beforeEach(() => {
   h.getApiBaseUrl.mockReturnValue('');
   h.signInToPortal.mockReset();
   h.listMemoryServers.mockReset();
+  h.requestApplianceToken.mockReset();
   h.probePortalOrigin.mockReset();
   h.probePortalOrigin.mockResolvedValue(undefined);
   h.loginWithPortalOidc.mockReset();
@@ -293,7 +302,7 @@ describe('DeviceConnectPage', () => {
   it('after Portal OIDC, picking a server mints a Memory key and skips /login', async () => {
     h.loginWithPortalOidc.mockResolvedValue({
       accessToken: 'oidc-at',
-      idToken: 'oidc-id',
+      idToken: ID_TOKEN,
       tokenType: 'Bearer',
       expiresIn: 3600,
     });
@@ -313,7 +322,7 @@ describe('DeviceConnectPage', () => {
     fireEvent.click(screen.getByTestId('memory-row-home'));
 
     await waitFor(() => {
-      expect(h.completePortalMemoryConnect).toHaveBeenCalledWith('oidc-id', 'https://memory.example.com');
+      expect(h.completePortalMemoryConnect).toHaveBeenCalledWith(ID_TOKEN, 'https://memory.example.com');
     });
     expect(h.persistApiBaseUrl).toHaveBeenCalledWith('https://memory.example.com');
     rerender(<DeviceConnectPage />);
@@ -321,6 +330,67 @@ describe('DeviceConnectPage', () => {
       expect(navigate).toHaveBeenCalledWith('/', { replace: true });
     });
     expect(navigate).not.toHaveBeenCalledWith('/login', { replace: true });
+  });
+
+  it('asks the Portal for a token addressed to the picked Memory when the Portal lists one', async () => {
+    h.loginWithPortalOidc.mockResolvedValue({
+      accessToken: 'oidc-at',
+      idToken: ID_TOKEN,
+      tokenType: 'Bearer',
+      expiresIn: 3600,
+    });
+    h.listMemoryServers.mockResolvedValue([
+      {
+        id: 'home',
+        name: 'Home',
+        status: 'active',
+        memoryUrl: 'https://memory.example.com/app',
+        resource: 'urn:ci:device:home-device',
+      },
+    ]);
+    h.requestApplianceToken.mockResolvedValue('addressed-token');
+    h.completePortalMemoryConnect.mockResolvedValue(true);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+
+    render(<DeviceConnectPage />);
+    fireEvent.click(screen.getByTestId('oidc-login-btn'));
+    expect(await screen.findByText('Home')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('memory-row-home'));
+
+    await waitFor(() => {
+      expect(h.completePortalMemoryConnect).toHaveBeenCalledWith(
+        'addressed-token',
+        'https://memory.example.com',
+      );
+    });
+    expect(h.requestApplianceToken).toHaveBeenCalledWith(
+      'oidc-at',
+      'urn:ci:device:home-device',
+      expect.any(String),
+    );
+    // The addressed token is the only thing the picked server receives.
+    expect(h.completePortalMemoryConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('never sends the Portal access token to a Memory, even with no id_token to send', async () => {
+    h.loginWithPortalOidc.mockResolvedValue({
+      accessToken: 'oidc-at',
+      idToken: null,
+      tokenType: 'Bearer',
+      expiresIn: 3600,
+    });
+    h.listMemoryServers.mockResolvedValue([
+      { id: 'home', name: 'Home', status: 'active', memoryUrl: 'https://memory.example.com/app' },
+    ]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+
+    render(<DeviceConnectPage />);
+    fireEvent.click(screen.getByTestId('oidc-login-btn'));
+    expect(await screen.findByText('Home')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('memory-row-home'));
+
+    expect(await screen.findByText(/Sign in with your Companion account first/)).toBeInTheDocument();
+    expect(h.completePortalMemoryConnect).not.toHaveBeenCalled();
   });
 
   it('does not surface a leftover GraphQL error while a mint is still in flight', async () => {
@@ -331,7 +401,7 @@ describe('DeviceConnectPage', () => {
     );
     h.resumePendingOidcLogin.mockResolvedValue({
       accessToken: 'oidc-at',
-      idToken: 'oidc-id',
+      idToken: ID_TOKEN,
       tokenType: 'Bearer',
       expiresIn: 3600,
     });
@@ -352,7 +422,7 @@ describe('DeviceConnectPage', () => {
   it('stays on the picker and shows the mint error instead of dumping to /login', async () => {
     h.loginWithPortalOidc.mockResolvedValue({
       accessToken: 'oidc-at',
-      idToken: 'oidc-id',
+      idToken: ID_TOKEN,
       tokenType: 'Bearer',
       expiresIn: 3600,
     });

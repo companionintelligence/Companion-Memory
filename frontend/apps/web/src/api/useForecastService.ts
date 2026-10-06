@@ -22,6 +22,7 @@ const GET_FORECAST = gql(`
       buckets {
         bucketIndex
         startTime
+        predictedL0
         l0Probs { label probability }
         l1Probs { label probability }
         l2Probs { label probability }
@@ -41,6 +42,8 @@ export interface ProbabilityEntry {
 export interface ForecastBucket {
   bucketIndex: number;
   startTime: string;
+  /** Class to render. See ForecastBucketType — not argmax(l0Probs). */
+  predictedL0?: string | null;
   l0Probs: ProbabilityEntry[];
   l1Probs: ProbabilityEntry[];
   l2Probs: ProbabilityEntry[] | null;

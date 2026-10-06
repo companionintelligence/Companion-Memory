@@ -121,6 +121,17 @@ def _event(start_min: float, l0_class: str = "WORK") -> dict:
     }
 
 
+@pytest.fixture(autouse=True)
+def _no_declared_sleep(monkeypatch):
+    """
+    These tests are about which statements serialize_day issues, so keep the
+    declared-sleep prior out of them. Without this the serializer would try to
+    read the self-entity from whatever database the environment points at.
+    tests/test_sleep_fill.py covers the fill itself.
+    """
+    monkeypatch.setattr(ser.PriorCache, "get", lambda self, user_id: None)
+
+
 @pytest.fixture
 def wired(monkeypatch):
     """

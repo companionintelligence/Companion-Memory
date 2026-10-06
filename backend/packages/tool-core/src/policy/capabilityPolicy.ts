@@ -54,6 +54,35 @@ export function capabilityAllows(privacy: GatedPrivacy, capability: ToolCapabili
   return privacy.access === 'read';
 }
 
+const ACCESS_RANK: Record<IntentPrivacy['access'], number> = { read: 0, write: 1, delete: 2 };
+
+const SENSITIVITY_RANK: Record<IntentPrivacy['sensitivity'], number> = { low: 0, personal: 1, sensitive: 2 };
+
+/**
+ * The stricter of two labels, facet by facet: the wider access, the higher sensitivity, and
+ * destructive or external when either says so.
+ *
+ * How a tool's per-call label (`ToolHandle.privacyFor`) meets its declared one. Taking the
+ * stricter of the two rather than trusting the per-call answer means a tool can only ever raise
+ * what its declaration allows. A per-call label that claimed `read` for a declared `delete` is a
+ * bug, and the gate must not be the place it turns into a hole.
+ */
+export function stricterPrivacy(declared: IntentPrivacy, perCall: IntentPrivacy | undefined): IntentPrivacy {
+  if (perCall == null) {
+    return declared;
+  }
+
+  return {
+    access: ACCESS_RANK[perCall.access] > ACCESS_RANK[declared.access] ? perCall.access : declared.access,
+    sensitivity:
+      SENSITIVITY_RANK[perCall.sensitivity] > SENSITIVITY_RANK[declared.sensitivity]
+        ? perCall.sensitivity
+        : declared.sensitivity,
+    destructive: declared.destructive || perCall.destructive,
+    external: declared.external || perCall.external,
+  };
+}
+
 /**
  * The lowest capability that could run this tool — named in a refusal so an operator is told which
  * level to grant, rather than being left to guess between 'write' and 'full'.

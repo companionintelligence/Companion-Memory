@@ -297,6 +297,13 @@ export {
 export type { Content } from './entities/ContentEntity';
 // How a graph write spells `entity_type`; `memory.remember` sends the model's type through these.
 export { canonicalEntityType, isStorableEntityType, sameEntityType } from './graph.types';
+// Property keys the appliance keeps (settings, the self claim, identity lists); `memory.remember`
+// refuses to write or remove them (a new entity may carry the identity lists).
+export {
+  OWNER_MANAGED_PROPERTY_KEYS,
+  isOwnerManagedPropertyKey,
+  isOwnerSettingPropertyKey,
+} from './ownerManagedProperties';
 // Which nodes are a Person, a Place or a Concept, under every spelling `ci.entities` holds them in;
 // `memory.forget` sends each to its own purge.
 export { GRAPH_ENTITY_TYPES, graphEntityKindOf, type GraphEntityKind } from './graph.types';

@@ -23,6 +23,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
+import { assertParentInside } from './containment';
+
 const EOCD_SIGNATURE = 0x06054b50;
 const ZIP64_LOCATOR_SIGNATURE = 0x07064b50;
 const ZIP64_EOCD_SIGNATURE = 0x06064b50;
@@ -320,7 +322,8 @@ function payloadOffset(fd: number, entry: ZipEntry): number | null {
 /** Copy a STORED entry in chunks — constant memory, so entry size is unbounded. */
 function copyStoredEntry(fd: number, from: number, entry: ZipEntry, tempPath: string): boolean {
   const chunk = Buffer.alloc(Math.min(1024 * 1024, Math.max(entry.compressedSize, 1)));
-  const out = fs.openSync(tempPath, 'w');
+  // `wx`: create, and fail if anything is already there. See extractZipEntry.
+  const out = fs.openSync(tempPath, 'wx');
   let crc = 0xffffffff;
 
   try {
@@ -347,6 +350,31 @@ function copyStoredEntry(fd: number, from: number, entry: ZipEntry, tempPath: st
 }
 
 /**
+ * Clear the way for the temp file, or say it cannot be done.
+ *
+ * A regular file there is what an interrupted earlier repair leaves behind and
+ * is ours to remove. Anything else (a link above all, which opening the path
+ * would follow) means the tree is not the one this pass expects, so the entry
+ * is left unrepaired rather than written somewhere else.
+ */
+function clearTempPath(tempPath: string): boolean {
+  let info: fs.Stats;
+  try {
+    info = fs.lstatSync(tempPath);
+  } catch {
+    return true;
+  }
+
+  if (!info.isFile()) {
+    return false;
+  }
+
+  fs.unlinkSync(tempPath);
+
+  return true;
+}
+
+/**
  * Write one entry's contents to `targetPath`, creating parent directories.
  *
  * The payload is written to a sibling temp file and renamed only once its CRC
@@ -354,9 +382,28 @@ function copyStoredEntry(fd: number, from: number, entry: ZipEntry, tempPath: st
  * real path — the mangled copy the system extractor already wrote stays as the
  * better of two bad answers. Returns false (having cleaned up) in that case,
  * and for any entry {@link canExtractZipEntry} rejects.
+ *
+ * Every write stays inside `destDir` by where it REALLY lands, not by how the
+ * path reads. The tree it writes into came out of an archive, and a directory
+ * on the way to `targetPath` can be a link to anywhere: `mkdirSync` with
+ * `recursive` walks through one, and so do the open and the rename. So the
+ * parent is resolved with `assertParentInside` before anything is created, a
+ * link already sitting at the target is refused, and the temp file is created
+ * exclusively (`wx`), which fails on a link instead of following it. A refusal
+ * returns false like any other entry that could not be repaired.
  */
-export function extractZipEntry(fd: number, entry: ZipEntry, targetPath: string): boolean {
+export function extractZipEntry(fd: number, entry: ZipEntry, targetPath: string, destDir: string): boolean {
   if (!canExtractZipEntry(entry)) {
+    return false;
+  }
+
+  try {
+    assertParentInside(destDir, targetPath);
+
+    if (fs.lstatSync(targetPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      return false;
+    }
+  } catch {
     return false;
   }
 
@@ -371,8 +418,20 @@ export function extractZipEntry(fd: number, entry: ZipEntry, targetPath: string)
     return false;
   }
 
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   const tempPath = `${targetPath}.ci-name-repair`;
+
+  try {
+    // Inside the try: a directory the extractor restored read-only, or a full
+    // disk, makes this throw, and that is one entry that cannot be repaired,
+    // not a reason to abandon every entry after it.
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+    if (!clearTempPath(tempPath)) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
 
   try {
     let ok: boolean;
@@ -384,7 +443,7 @@ export function extractZipEntry(fd: number, entry: ZipEntry, targetPath: string)
       const data = zlib.inflateRawSync(compressed);
       ok = data.length === entry.uncompressedSize && crc32(data) === entry.crc32;
       if (ok) {
-        fs.writeFileSync(tempPath, data);
+        fs.writeFileSync(tempPath, data, { flag: 'wx' });
       }
     }
 

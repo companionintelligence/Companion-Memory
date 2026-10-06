@@ -248,9 +248,14 @@ export class OpenAiCompatChatDriver {
       }));
     const rawContent = choice?.message?.content ?? '';
     const salvaged = extractEmbeddedToolCalls(rawContent);
-    const toolCalls = structured.length > 0 ? structured : salvaged.toolCalls;
+    // Markup is a tool call only when tools were offered. Without them the text is an answer,
+    // and markup in it is something the model quoted; it is still kept out of the content.
+    const offeredTools = Boolean(request.tools && request.tools.length > 0);
+    const toolCalls = structured.length > 0 ? structured : offeredTools ? salvaged.toolCalls : [];
+    // Stripped on sight, as `chatStream` does: a quoted block mid-answer is no longer salvaged, so
+    // keying the strip on salvaged calls left it in the reply as text that reads like a call.
     const content =
-      toolCalls.length > 0 || salvaged.toolCalls.length > 0 ? stripToolMarkup(rawContent) : rawContent;
+      toolCalls.length > 0 || hasToolMarkup(rawContent) ? stripToolMarkup(rawContent) : rawContent;
 
     return toChatResponse(request.model, {
       content,
@@ -381,12 +386,12 @@ export class OpenAiCompatChatDriver {
 
     const rawContent = contentChunks.join('');
     const salvaged = extractEmbeddedToolCalls(rawContent);
-    const emitted = structured.length > 0 ? structured : salvaged.toolCalls;
+    // Salvaged markup becomes a call only when the caller asked for salvage, which it does only in
+    // a round that offered tools.
+    const emitted =
+      structured.length > 0 ? structured : request.salvageTools === true ? salvaged.toolCalls : [];
     const toolCalls = request.discardToolMarkup ? [] : emitted;
-    const prose =
-      emitted.length > 0 || salvaged.toolCalls.length > 0 || /<tool_?call\b|<function=/i.test(rawContent)
-        ? stripToolMarkup(rawContent)
-        : rawContent;
+    const prose = emitted.length > 0 || hasToolMarkup(rawContent) ? stripToolMarkup(rawContent) : rawContent;
 
     if (bufferContent && prose.trim() !== '') {
       yield toChatResponse(request.model, { content: prose, done: false });
@@ -565,21 +570,112 @@ function hoistSystemMessages(messages: ChatCompletionMessageParam[]): ChatComple
   return [{ role: 'system', content: systemParts.join('\n\n') }, ...rest];
 }
 
+/** Whether `content` opens any tool-call markup the salvager reads, finished or not. */
+function hasToolMarkup(content: string): boolean {
+  return /<tool_?call\b|<function=/i.test(content);
+}
+
+/** A `<tool_call>` / `<toolcall>` block, closed or running to the end of the text. */
+const TOOL_CALL_BLOCK = /<tool_?call\b[^>]*>([\s\S]*?)(?:<\/tool_?call>|$)/gi;
+
+/** A bare `<function=name>` block, closed or running to the end of the text. */
+const FUNCTION_BLOCK = /<function\s*=\s*([^>\s]+)>([\s\S]*?)(?:<\/function>|$)/gi;
+
+/**
+ * Whether a markup block was finished, rather than opened in passing and run to the end of the
+ * text by the regex. A `<tool_call>` counts as finished when it closes, when only a cut-off
+ * closing tag ends the text (`</toolcall`, which Qwen on vLLM emits), when its function block
+ * closes, or when it is a qwen3_coder name line followed by nothing but a JSON object. A bare
+ * function block counts only when it closes.
+ */
+function isFinishedBlock(block: RegExpMatchArray, wrapped: boolean): boolean {
+  const text = block[0];
+
+  if (!wrapped) {
+    return /<\/function>$/i.test(text);
+  }
+
+  const inner = block[1] ?? '';
+
+  if (/<\/tool_?call\s*>?\s*$/i.test(text) || /<\/function>$/i.test(inner.trim())) {
+    return true;
+  }
+
+  const [name, ...rest] = inner.trim().split('\n');
+
+  if (!name || !/^[A-Za-z_][A-Za-z0-9_.]*$/.test(name.trim())) {
+    return false;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(rest.join('\n'));
+
+    return parsed != null && typeof parsed === 'object' && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The blocks a reply opens or closes with, as opposed to blocks sitting inside its prose.
+ *
+ * A model that calls a tool through text writes the markup as its whole reply, or leads with it,
+ * or ends on it after a line such as "Let me record this." It does not write it in the middle of
+ * an answer. Markup in the middle of an answer is a quote: an email subject or invite title the
+ * model repeated while reporting on it. Running that as a tool call would let whoever wrote the
+ * email choose the call, so only the leading run of blocks and the trailing run count, each
+ * separated from the next by whitespace alone.
+ */
+function standaloneBlocks(content: string, blocks: RegExpMatchArray[]): Set<number> {
+  const blank = (from: number, to: number) => content.slice(from, to).trim() === '';
+  const accepted = new Set<number>();
+
+  let cursor = 0;
+  for (let index = 0; index < blocks.length; index += 1) {
+    const start = blocks[index].index ?? 0;
+
+    if (!blank(cursor, start)) {
+      break;
+    }
+
+    accepted.add(index);
+    cursor = start + blocks[index][0].length;
+  }
+
+  cursor = content.length;
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const start = blocks[index].index ?? 0;
+
+    if (!blank(start + blocks[index][0].length, cursor)) {
+      break;
+    }
+
+    accepted.add(index);
+    cursor = start;
+  }
+
+  return accepted;
+}
+
 /**
  * Lift Qwen/vLLM tool markup out of assistant text. Ollama already returns
  * structured `tool_calls`; vLLM with `--tool-call-parser qwen3_coder` often
  * does not, and the model writes `<toolcall><function=name>…` into content
  * instead. Same loop in OllamaService executes either shape.
+ *
+ * Only finished blocks that open or close the reply become calls (see
+ * {@link standaloneBlocks}); markup anywhere else is stripped from the prose
+ * and never run. Callers salvage only in a round that offered tools.
  */
 export function extractEmbeddedToolCalls(content: string): { prose: string; toolCalls: ToolCall[] } {
-  if (!content || !/<tool_?call\b|<function=/i.test(content)) {
+  if (!content || !hasToolMarkup(content)) {
     return { prose: content, toolCalls: [] };
   }
 
   const toolCalls: ToolCall[] = [];
 
   const consumeFunctions = (block: string) => {
-    const closed = [...block.matchAll(/<function\s*=\s*([^>\s]+)>([\s\S]*?)(?:<\/function>|$)/gi)];
+    const closed = [...block.matchAll(FUNCTION_BLOCK)];
     for (const match of closed) {
       const name = match[1]?.trim();
       if (!name) {
@@ -602,22 +698,27 @@ export function extractEmbeddedToolCalls(content: string): { prose: string; tool
     }
   };
 
-  const blockRe = /<tool_?call\b[^>]*>([\s\S]*?)(?:<\/tool_?call>|$)/gi;
-  const blocks = [...content.matchAll(blockRe)];
-  if (blocks.length > 0) {
-    for (const block of blocks) {
-      consumeFunctions(block[1]);
-      if (toolCalls.length === 0) {
-        consumeQwenCoderBlock(block[1], toolCalls);
-      }
-    }
-  } else {
-    consumeFunctions(content);
-  }
+  const wrapped = [...content.matchAll(TOOL_CALL_BLOCK)];
+  const blocks = wrapped.length > 0 ? wrapped : [...content.matchAll(FUNCTION_BLOCK)];
+  const standalone = standaloneBlocks(content, blocks);
 
-  if (toolCalls.length === 0) {
-    return { prose: content, toolCalls: [] };
-  }
+  blocks.forEach((block, index) => {
+    if (!standalone.has(index) || !isFinishedBlock(block, wrapped.length > 0)) {
+      return;
+    }
+
+    if (wrapped.length === 0) {
+      consumeFunctions(block[0]);
+
+      return;
+    }
+
+    const before = toolCalls.length;
+    consumeFunctions(block[1]);
+    if (toolCalls.length === before) {
+      consumeQwenCoderBlock(block[1], toolCalls);
+    }
+  });
 
   return { prose: stripToolMarkup(content), toolCalls };
 }

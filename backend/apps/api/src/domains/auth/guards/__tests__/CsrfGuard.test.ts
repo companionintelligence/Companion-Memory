@@ -6,7 +6,7 @@ import config from '@ci/configuration';
 
 import { AuthService } from '../../services/AuthService';
 import { type CsrfService, CsrfValidationError } from '../../services/CsrfService';
-import { CsrfGuard } from '../CsrfGuard';
+import { CookieCsrfGuard, CsrfGuard } from '../CsrfGuard';
 
 const CSRF_COOKIE = config.auth.cookies.csrfTokenName;
 const SESSION_COOKIE = config.auth.cookies.sessionTokenName;
@@ -70,6 +70,8 @@ describe('CsrfGuard', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockCsrfService.validateToken.mockImplementation(() => undefined);
+    // clearAllMocks keeps a test's mockReturnValue(true); restore the rejecting default above.
+    mockCsrfService.verifyToken.mockReturnValue(false);
     guard = new CsrfGuard(
       mockCsrfService as unknown as CsrfService,
       authService,
@@ -237,6 +239,60 @@ describe('CsrfGuard', () => {
       expect(() => guard.canActivate(ctxFor({ cookies: {}, headers: {} }))).toThrow(ForbiddenException);
       expect(mockCsrfService.verifyToken).not.toHaveBeenCalled();
       expect(mockCsrfService.validateToken).toHaveBeenCalled();
+    });
+  });
+
+  // Browser-only routes (POST /authenticate/hub-bridge): the cookie-less native shortcut is off,
+  // so a header token on its own is held to the double-submit check and fails it.
+  describe('CookieCsrfGuard', () => {
+    let cookieGuard: CookieCsrfGuard;
+
+    beforeEach(() => {
+      cookieGuard = new CookieCsrfGuard(
+        mockCsrfService as unknown as CsrfService,
+        authService,
+        mockLogger as unknown as LoggerService,
+      );
+    });
+
+    it('refuses a header token with no cookie, even one we minted', () => {
+      mockCsrfService.verifyToken.mockReturnValue(true);
+      mockCsrfService.validateToken.mockImplementation(() => {
+        throw new CsrfValidationError('missing', 'Missing CSRF token');
+      });
+
+      const ctx = ctxFor({
+        cookies: {},
+        headers: { 'x-csrf-token': 'native-token' },
+        path: '/authenticate/hub-bridge',
+      });
+
+      expect(() => cookieGuard.canActivate(ctx)).toThrow(ForbiddenException);
+      expect(mockCsrfService.verifyToken).not.toHaveBeenCalled();
+      expect(mockCsrfService.validateToken).toHaveBeenCalledWith(undefined, 'native-token', null);
+    });
+
+    it('admits the cookie and header pair the web app sends', () => {
+      const ctx = ctxFor({
+        cookies: { [CSRF_COOKIE]: 'pair-token' },
+        headers: { 'x-csrf-token': 'pair-token' },
+        path: '/authenticate/hub-bridge',
+      });
+
+      expect(cookieGuard.canActivate(ctx)).toBe(true);
+      expect(mockCsrfService.validateToken).toHaveBeenCalledWith('pair-token', 'pair-token', null);
+    });
+
+    it('logs its rejections under its own name', () => {
+      expect(mockLogger.setContext).toHaveBeenLastCalledWith('CookieCsrfGuard');
+    });
+
+    it('leaves the plain guard accepting the native shape', () => {
+      mockCsrfService.verifyToken.mockReturnValue(true);
+
+      expect(guard.canActivate(ctxFor({ cookies: {}, headers: { 'x-csrf-token': 'native-token' } }))).toBe(
+        true,
+      );
     });
   });
 });

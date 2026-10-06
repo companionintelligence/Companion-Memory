@@ -127,6 +127,24 @@ function dominantL0(probs: ProbabilityEntry[]): string {
   ).label;
 }
 
+/**
+ * The class to paint a bucket.
+ *
+ * Prefers HBPE's own `predictedL0` over the local argmax. The two differ on
+ * purpose: `l0Probs` is a calibrated posterior, and most of a day carries no
+ * recorded activity, so its argmax answers UNKNOWN nearly everywhere even when
+ * the distribution is exactly right. HBPE picks the label with a prior
+ * correction — floored, so it can only promote a class the model still gives
+ * real probability to — which is a decision the server is better placed to
+ * make than this component, since it is the side that knows the class priors.
+ *
+ * Falls back to the argmax when the field is absent, so an older HBPE (or a
+ * fixture written before it existed) renders exactly as it used to.
+ */
+function displayL0(bucket: ForecastBucket): string {
+  return bucket.predictedL0 ?? dominantL0(bucket.l0Probs);
+}
+
 function topL1(probs: ProbabilityEntry[]): { name: string; prob: number } | null {
   if (!probs.length) {
     return null;
@@ -152,6 +170,10 @@ export function SlotTooltip({
   const fmt = useDateTimeFormat();
   const sorted = [...bucket.l0Probs].sort((a, b) => b.probability - a.probability);
   const top1 = topL1(bucket.l1Probs);
+  // The painted class is prior-corrected, so it is not always the tallest bar.
+  // Without marking it, hovering a bin coloured EXERCISE and reading UNKNOWN
+  // 84% at the top of the list looks like a bug rather than a decision.
+  const shown = displayL0(bucket);
 
   return (
     <div className="w-52 space-y-2 text-left">
@@ -159,10 +181,21 @@ export function SlotTooltip({
         {formatClock(localMin, fmt)} – {formatClock(localMin + minutes, fmt)}
       </p>
 
+      <p className="text-[10px] opacity-60">
+        Showing <span className="font-semibold opacity-100">{shown}</span>
+      </p>
+
       <div className="space-y-1">
         {sorted.map(({ label, probability }) => (
           <div key={label} className="flex items-center gap-2">
-            <span className="w-14 shrink-0 text-right text-[10px] opacity-75">{label}</span>
+            <span
+              className={cn(
+                'w-14 shrink-0 text-right text-[10px]',
+                label === shown ? 'font-semibold opacity-100' : 'opacity-75',
+              )}
+            >
+              {label}
+            </span>
             <div className="flex-1 h-1.5 rounded-full bg-current/20 overflow-hidden">
               <div
                 className="h-full rounded-full"
@@ -172,7 +205,12 @@ export function SlotTooltip({
                 }}
               />
             </div>
-            <span className="w-7 shrink-0 text-[10px] opacity-75 tabular-nums">
+            <span
+              className={cn(
+                'w-7 shrink-0 text-[10px] tabular-nums',
+                label === shown ? 'font-semibold opacity-100' : 'opacity-75',
+              )}
+            >
               {Math.round(probability * 100)}%
             </span>
           </div>
@@ -218,7 +256,7 @@ function ForecastSlot({
 }) {
   const isReady = systemStatus === 'READY';
   const showClasses = isReady || systemStatus.includes(':');
-  const dominant = dominantL0(bucket.l0Probs);
+  const dominant = displayL0(bucket);
 
   const isEmpty = bucket.l0Probs.length === 0;
   const targetOpacity = isEmpty ? 0.08 : Math.max(0.2, Math.min(1, bucket.q50));

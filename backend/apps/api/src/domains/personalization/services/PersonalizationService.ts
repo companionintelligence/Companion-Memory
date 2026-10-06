@@ -72,8 +72,20 @@ export class PersonalizationService {
     this.profileCache.delete(userId);
   }
 
-  async getProfile(userId: string): Promise<PersonalizationProfile> {
-    const cached = this.profileCache.get(userId);
+  /**
+   * The owner's profile, from a 60 second per-instance cache unless `fresh` is set.
+   *
+   * `fresh` is for the tool-approval gate. This service is provided in more than one module, and
+   * the API and worker are separate processes, so `updateTrustMode` clears only its own instance's
+   * cache: a gate reading through another one would keep honouring Hands-off for up to a minute
+   * after the owner turned it down. The gate reads only for sends and deletes, so the extra read is
+   * cheap, and it refreshes this instance's cache on the way.
+   */
+  async getProfile(
+    userId: string,
+    { fresh = false }: { fresh?: boolean } = {},
+  ): Promise<PersonalizationProfile> {
+    const cached = fresh ? undefined : this.profileCache.get(userId);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.profile;
     }

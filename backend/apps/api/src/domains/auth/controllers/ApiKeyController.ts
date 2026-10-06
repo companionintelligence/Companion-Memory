@@ -102,9 +102,11 @@ const SIGN_IN_KEY_NAME = /^Companion mobile · \d{4}-\d{2}-\d{2}$/;
 
 /**
  * Guarded by {@link JwtOrPortalAuthGuard}: a session JWT (settings UI) or a
- * portal OIDC bearer (Companion Capture exchanging its short-lived id_token
- * for a durable key at sign-in) — never an api key, so a leaked key cannot
- * mint successors that outlive its revocation.
+ * Portal bearer that carries the user's authority here (a phone pairing with a
+ * token addressed to this Memory exchanges it for a durable key). Never an api
+ * key, so a leaked key cannot mint successors that outlive its revocation, and
+ * never a capture client's Portal token, which stays confined to the capture
+ * scope instead of becoming a key.
  */
 @Controller('keys')
 export class ApiKeyController {

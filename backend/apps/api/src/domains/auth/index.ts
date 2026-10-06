@@ -39,7 +39,7 @@ import { ConnectCodeEntity } from './entities/ConnectCodeEntity';
 import { SessionEntity } from './entities/SessionEntity';
 import { SignupCodeEntity } from './entities/SignupCodeEntity';
 import { ConnectRequestAuthGuard } from './guards/ConnectRequestAuthGuard';
-import { CsrfGuard } from './guards/CsrfGuard';
+import { CookieCsrfGuard, CsrfGuard } from './guards/CsrfGuard';
 import { ApiKeyService } from './services/ApiKeyService';
 import { ApiKeyStrategy } from './services/ApiKeyStrategy';
 import { AuthService } from './services/AuthService';
@@ -74,6 +74,7 @@ import { SignupCodeService } from './services/SignupCodeService';
     JwtStrategy,
     SignupCodeService,
     CsrfGuard,
+    CookieCsrfGuard,
     CsrfService,
     LoginThrottleService,
     ApiKeyService,

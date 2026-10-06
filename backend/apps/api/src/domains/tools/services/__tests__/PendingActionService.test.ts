@@ -488,3 +488,39 @@ describe('PendingActionService.sweep', () => {
     expect(repository.store.find((r: any) => r.id === 'pa-bad').status).toBe('executed');
   });
 });
+
+/**
+ * PersonalizationService keeps a 60 second profile cache per instance, and it is provided in more
+ * than one module and runs in both the API and the worker. Settings clears only its own instance's
+ * cache, so a gate reading through another one kept honouring Hands-off for up to a minute after
+ * the owner turned it down.
+ */
+describe('PendingActionService.evaluate — the dial is read fresh', () => {
+  it('asks for an uncached profile when it consults the dial', async () => {
+    const personalization = personalizationFor('cautious');
+    const service = new PendingActionService(makeRepository(), personalization, features(true), makeLogger());
+
+    await service.evaluate(FORGET, context());
+
+    expect(personalization.getProfile).toHaveBeenCalledWith('user-1', { fresh: true });
+  });
+
+  it('sees a downgrade at once, with no cache window', async () => {
+    const real = new PersonalizationService(
+      { findById: jest.fn() } as any,
+      { getSelfIdentity: jest.fn(async () => ({ entityId: 'self-1', aliases: [] })) } as any,
+    );
+    let stored = 'hands_off';
+    (real as any).personService.findById = jest.fn(async () => ({
+      properties: { planner: { trust_mode: stored } },
+    }));
+    const service = new PendingActionService(makeRepository(), real, features(true), makeLogger());
+
+    expect((await service.evaluate(FORGET, context())).decision).toBe('execute');
+
+    // Another instance (Settings, or the API while this is the worker) writes the downgrade.
+    stored = 'cautious';
+
+    expect((await service.evaluate(FORGET, context())).decision).toBe('queue');
+  });
+});

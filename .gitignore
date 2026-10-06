@@ -101,3 +101,6 @@ frontend/packages/*/android/build/
 
 # Playwright output for the desktop-appliance suite (playwright.desktop.config.ts)
 test-results-desktop/
+
+# Local HBPE model checkpoints pulled out of the container volume for offline eval
+backend/.cache/

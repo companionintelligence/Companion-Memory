@@ -154,9 +154,9 @@ def test_build_profiles_empty_read_leaves_profiles_alone(monkeypatch):
 def test_build_profiles_prunes_only_vanished_clusters(monkeypatch):
     calls: list = []
     rows = [
-        ("c1", datetime.date(2026, 3, 2), [1]),
-        ("c1", datetime.date(2026, 3, 9), [1]),
-        ("c1", datetime.date(2026, 3, 16), [1]),
+        ("c1", datetime.date(2026, 3, 2), [1], [4]),
+        ("c1", datetime.date(2026, 3, 9), [1], [4]),
+        ("c1", datetime.date(2026, 3, 16), [1], [4]),
     ]
     monkeypatch.setattr(rec, "get_conn", lambda: _FakeConn(rows, calls))
 
@@ -831,3 +831,64 @@ def test_week_forecast_ignores_ended_recurring_series(monkeypatch):
 
     days = rec.week_forecast("user", days=7, start=start)
     assert all(d["clusters"] == [] for d in days)
+
+
+# ── significant_dayparts ───────────────────────────────────────────────────────
+
+
+def test_a_long_block_that_spills_a_few_buckets_counts_only_where_it_lives():
+    """
+    The user's real night window, 02:00-09:00 local in summer, is UTC buckets
+    24-51: 24 buckets in daypart 1 and just 4 past the 12:00 UTC boundary.
+    Touching daypart 2 with 4 of 28 buckets used to credit it with half the
+    cluster's weight, so the calendar showed the user asleep until 2 pm.
+    """
+    assert rec.significant_dayparts([1, 2], [24, 4]) == [1]
+
+
+def test_a_winter_window_with_a_larger_spill_is_still_one_daypart():
+    """07:00-14:00 UTC: 20 buckets in daypart 1, 8 (29%) in daypart 2."""
+    assert rec.significant_dayparts([1, 2], [20, 8]) == [1]
+
+
+def test_a_block_split_evenly_counts_in_both():
+    assert rec.significant_dayparts([0, 1], [12, 12]) == [0, 1]
+
+
+def test_a_single_daypart_is_unchanged():
+    assert rec.significant_dayparts([3], [5]) == [3]
+
+
+def test_the_largest_daypart_always_counts_so_none_is_left_empty():
+    """Three-way split just under the threshold: nothing may come back empty."""
+    got = rec.significant_dayparts([0, 1, 2, 3], [7, 7, 7, 7], min_share=0.30)
+    assert got == [0, 1, 2, 3]
+    assert rec.significant_dayparts([0, 1, 2], [10, 10, 10], min_share=0.5) == [0, 1, 2]
+
+
+def test_a_tie_for_largest_keeps_every_tied_daypart():
+    assert rec.significant_dayparts([1, 2], [10, 10], min_share=0.9) == [1, 2]
+
+
+def test_missing_counts_leave_the_dayparts_as_given():
+    """A legacy or malformed row must not lose its dayparts."""
+    assert rec.significant_dayparts([1, 2], []) == [1, 2]
+    assert rec.significant_dayparts([], []) == []
+
+
+def test_build_profiles_credits_a_spilling_block_to_one_daypart(monkeypatch):
+    """End to end through build_recurrence_profiles: the stored daypart counts
+    must come from the significant dayparts, not every one touched."""
+    calls: list = []
+    rows = [
+        ("c1", datetime.date(2026, 3, 2), [1, 2], [24, 4]),
+        ("c1", datetime.date(2026, 3, 3), [1, 2], [24, 4]),
+        ("c1", datetime.date(2026, 3, 4), [1, 2], [24, 4]),
+    ]
+    monkeypatch.setattr(rec, "get_conn", lambda: _FakeConn(rows, calls))
+    rec.build_recurrence_profiles("user-1234-abcd")
+    upserts = [p for sql, p in calls if "INSERT" in sql.upper() and isinstance(p, dict)]
+    assert upserts, "expected an upsert"
+    # Three occurrences, all in daypart 1 (morning); daypart 2 (afternoon) gets
+    # nothing from the 4-bucket spill.
+    assert list(upserts[0]["daypart"]) == [0, 3, 0, 0]

@@ -91,6 +91,7 @@ vi.mock('@/components/HorizonGrid', () => ({
     timeZone,
     onMoveEvent,
     onSelectSlot,
+    scrollEndInset,
   }: {
     footer?: string;
     colorMode?: string;
@@ -98,6 +99,7 @@ vi.mock('@/components/HorizonGrid', () => ({
     timeZone?: string;
     onMoveEvent: (id: string, at: Date) => void;
     onSelectSlot?: (slot: { instant: Date; allDay: boolean }) => void;
+    scrollEndInset?: boolean;
   }) => (
     <div data-testid="vertical-calendar">
       <button
@@ -116,6 +118,7 @@ vi.mock('@/components/HorizonGrid', () => ({
       <p data-testid="stub-color-mode">{colorMode}</p>
       <p data-testid="stub-occupancy">{occupancy?.length ?? 0}</p>
       <p data-testid="stub-time-zone">{timeZone}</p>
+      <p data-testid="stub-scroll-end-inset">{String(Boolean(scrollEndInset))}</p>
       <p>{footer}</p>
     </div>
   ),
@@ -643,6 +646,18 @@ describe('SchedulePage — week paging', () => {
      * pointed at Monday 2pm, so "New event" or a Possibilities card landed on
      * a day that was no longer on screen.
      */
+    it('pads the day once a time is selected so the last hours clear the add sheet', () => {
+      setViewport(true);
+
+      renderWithProviders(<SchedulePage />);
+
+      expect(screen.getByTestId('stub-scroll-end-inset')).toHaveTextContent('false');
+
+      fireEvent.click(screen.getByText('stub-slot'));
+
+      expect(screen.getByTestId('stub-scroll-end-inset')).toHaveTextContent('true');
+    });
+
     it('drops the slot when a day chip moves the one visible day', () => {
       setViewport(true);
 

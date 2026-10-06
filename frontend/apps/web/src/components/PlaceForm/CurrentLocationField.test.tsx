@@ -78,9 +78,9 @@ describe('CurrentLocationField', () => {
 
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     expect(onChange.mock.calls[0][0]).toMatchObject({
-      name: '66 Mint St',
+      name: '',
       address: '66 Mint St',
-      placeKind: 'address',
+      placeKind: '',
       latitude: '37.7823456',
       longitude: '-122.4076123',
     });

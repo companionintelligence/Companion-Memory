@@ -53,7 +53,10 @@ export function PrivacySection() {
   const [pending, setPending] = useState<OutboundKey | null>(null);
 
   const headers = useCallback(
-    (): Record<string, string> => ({ Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }),
+    (): Record<string, string> => ({
+      Authorization: `Bearer ${authToken}`,
+      'Content-Type': 'application/json',
+    }),
     [authToken],
   );
 

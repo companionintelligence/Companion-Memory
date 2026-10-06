@@ -60,7 +60,7 @@ describe('ConnectSourceStep', () => {
     open.mockRestore();
   });
 
-  it('opens the Chrome Web Store listing without anyone\'s account index attached', () => {
+  it("opens the Chrome Web Store listing without anyone's account index attached", () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     renderStep();
 

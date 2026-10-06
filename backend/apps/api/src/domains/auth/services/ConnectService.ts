@@ -234,12 +234,13 @@ export class ConnectService {
 
   /**
    * Resolve the signed-in user from a CI-Server session cookie, or `null` when
-   * the cookie is missing/invalid or the user no longer exists.
+   * the cookie is missing or invalid, its session has ended, or the user no
+   * longer exists.
    *
-   * Validates the session JWT signature/expiry and confirms the user row still
-   * exists. (Full session-revocation checking is out of scope here — the flow
-   * is a short, top-level, user-initiated navigation, and the minted key is the
-   * durable credential, not this session.)
+   * Goes through the session's row ({@link AuthService.resolveLiveSession}),
+   * not just the cookie's signature. Consent here leads to a key minted for
+   * this account, so a session that was signed out must not grant it, and only
+   * a token that names a user and a live session can say whose account it is.
    */
   async resolveSessionUser(
     sessionToken: string | undefined,
@@ -248,15 +249,13 @@ export class ConnectService {
       return null;
     }
 
-    let userId: string;
+    const session = await this.authService.resolveLiveSession(sessionToken);
 
-    try {
-      userId = this.authService.validateSessionToken(sessionToken).sub;
-    } catch {
+    if (!session) {
       return null;
     }
 
-    const user = await this.userService.findById({ userId: SYSTEM_USER }, userId);
+    const user = await this.userService.findById({ userId: SYSTEM_USER }, session.userId);
 
     if (!user) {
       return null;

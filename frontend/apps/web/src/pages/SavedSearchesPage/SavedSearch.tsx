@@ -2,7 +2,7 @@ import { GlobalUID } from '@ci/common';
 import { IconButton, Tooltip } from '@ci/shadcn';
 import { Pencil, Share2, Trash } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
 import { visualForRawType } from '@/components/entities/entityVisuals';
@@ -45,7 +45,8 @@ function activeFilterDimensions(
 
 interface Props {
   savedSearch: FragmentType<typeof SavedSearchGridItemFragment>;
-  openSavedSearchEditModal: (e: React.MouseEvent) => void;
+  /** When omitted, Edit opens this search on the Memory filters. */
+  openSavedSearchEditModal?: (e: React.MouseEvent) => void;
   openSavedSearchShareModal: (e: React.MouseEvent) => void;
   openSavedSearchDeleteModal: (e: React.MouseEvent) => void;
 }
@@ -85,6 +86,7 @@ export function SavedSearch({
   openSavedSearchDeleteModal,
 }: Props) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const savedSearch = useFragment(SavedSearchGridItemFragment, savedSearchMasked);
   const filterDims = activeFilterDimensions(savedSearch.filters);
   // Sharing (the "make public" control) is gated while the access model is hardened.
@@ -165,7 +167,19 @@ export function SavedSearch({
             e.stopPropagation();
           }}
         >
-          <IconButton onClick={openSavedSearchEditModal} variant="ghost" label={t('SAVED_SEARCH_EDIT')}>
+          <IconButton
+            onClick={(event) => {
+              if (openSavedSearchEditModal) {
+                openSavedSearchEditModal(event);
+
+                return;
+              }
+
+              navigate(`/memory?saved_search=${GlobalUID.parse('saved-search', savedSearch.id)}`);
+            }}
+            variant="ghost"
+            label={t('SAVED_SEARCH_EDIT')}
+          >
             <Pencil className="h-4 w-4" />
           </IconButton>
           {sharingEnabled && (

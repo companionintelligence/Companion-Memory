@@ -197,6 +197,7 @@ export {
   addAppUrlOpenListener,
   addBackButtonListener,
   addBackgroundLocationWatcher,
+  startSignificantLocationUpdates,
   closeBrowser,
   exitApp,
   getCurrentDeviceLocation,

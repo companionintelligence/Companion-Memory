@@ -9,6 +9,10 @@ Token stream layout for a calendar day:
   (L0, L1, L2 token triples for each event in chronological order)
   [EOD] bucket_idx=95, seq_order=N
 
+A day that has any token also gets the user's declared sleep window written as
+SLEEP into whatever buckets are still empty (``tokenizer.sleep_fill``). Events
+and summaries always win over it.
+
 soft_prob is a FLOAT4[] holding the assignment similarity score.  Currently
 1-element; the full distribution over all centroids is deferred to Phase 2
 training pre-processing.
@@ -24,6 +28,7 @@ import psycopg2.extras
 
 from ci.hbpe.buckets import BUCKETS_PER_DAY
 from ci.hbpe.database import get_conn
+from ci.hbpe.tokenizer.sleep_fill import PriorCache, fill_for_day
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +49,11 @@ _INSERT_SQL = """
 
 class TokenSerializer:
     """Serializes a day's token assignments to ci.token_stream."""
+
+    def __init__(self) -> None:
+        # One declared-sleep prior per user, loaded lazily. A serializer lives
+        # for a single run, so this is one query pair per run, not per day.
+        self._sleep_priors = PriorCache()
 
     def serialize_day(
         self, user_id: str, date: str, *, require_complete: bool = False
@@ -87,6 +97,9 @@ class TokenSerializer:
             )
             return 0
 
+        if rows:
+            rows = self._with_declared_sleep(user_id, date, rows)
+
         records = [_SOD, *rows, _EOD] if rows else []
         db_rows = [
             (
@@ -128,6 +141,30 @@ class TokenSerializer:
                 date,
             )
         return len(records)
+
+    def _with_declared_sleep(
+        self, user_id: str, date: str, rows: list[dict]
+    ) -> list[dict]:
+        """
+        *rows* plus the user's declared sleep window, in the buckets they leave
+        empty. See ``tokenizer.sleep_fill`` for why this exists and what it
+        deliberately does not do. Never raises: a day is always written, with
+        or without the prior.
+        """
+        prior = self._sleep_priors.get(user_id)
+        if prior is None:
+            return rows
+        try:
+            added = fill_for_day(rows, prior, date)
+        except Exception as exc:
+            log.warning("Declared-sleep fill skipped for %s (non-fatal): %s", date, exc)
+            return rows
+        if not added:
+            return rows
+        # Stable: the additions sit in buckets no existing record occupies, so
+        # sorting by bucket slots them in without reordering L0/L1/L2 within
+        # a bucket.
+        return sorted([*rows, *added], key=lambda r: r["bucket_idx"])
 
     def serialize_range(
         self,

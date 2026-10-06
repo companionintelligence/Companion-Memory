@@ -24,6 +24,7 @@ import {
   readLocationTrackingMode,
   removeBackgroundLocationWatcher,
   requestNativeLocationAuthorization,
+  startSignificantLocationUpdates,
   requestNotificationPermission,
   writeLocationTrackingMode,
 } from '@ci/common';
@@ -66,11 +67,12 @@ async function ensureIosAlwaysAuthorization(): Promise<boolean> {
  * Location tracking: records `ci.position` fixes from this device.
  *
  * Native (iOS + Android) uses `@capacitor-community/background-geolocation` as the one
- * writer, gated by `mode`: `when_in_use` starts a foreground-only watcher, `always` adds
- * a `backgroundMessage`/`backgroundTitle` so the OS keeps sampling once the app leaves
- * the foreground (a persistent notification on Android, the blue status-bar indicator on
- * iOS). Plain web (no Capacitor) falls back to `navigator.geolocation`, foreground-only,
- * since the plugin doesn't run there.
+ * writer, gated by `mode`: `when_in_use` starts a foreground-only watcher. `always` on
+ * Android adds a `backgroundMessage` so the OS keeps sampling after the app leaves the
+ * foreground (the persistent notification Android requires). `always` on iOS does not:
+ * that flag turns on the solid blue indicator for the whole background session. iOS
+ * instead starts significant-change monitoring, which records a real move and stays
+ * quiet while the phone sits still. Plain web falls back to `navigator.geolocation`.
  *
  * Consent is per-device (localStorage). Settings → Location owns the disclosure.
  */
@@ -192,6 +194,7 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
 
     let cancelled = false;
     let watcherId: string | null = null;
+    let stopSignificant: (() => Promise<void>) | null = null;
 
     const onLocation = (location: Parameters<typeof fixFromBackgroundGeolocationLocation>[0]) => {
       if (cancelled) {
@@ -226,7 +229,10 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
       if (mode === 'always') {
         // Android 13+ requires POST_NOTIFICATIONS before the persistent tracking
         // notification (the OS's price of admission for background sampling) can show.
-        await requestNotificationPermission();
+        // iOS Always does not post that notification.
+        if (!isIosPlatform()) {
+          await requestNotificationPermission();
+        }
 
         if (isIosPlatform()) {
           const granted = await ensureIosAlwaysAuthorization();
@@ -245,7 +251,9 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
 
       const id = await addBackgroundLocationWatcher(
         {
-          background: mode === 'always',
+          // iOS Always stays foreground-only on this plugin. Background samples go
+          // through significant-change monitoring, which does not hold the blue pill.
+          background: mode === 'always' && !isIosPlatform(),
           distanceFilter: mode === 'always' ? BACKGROUND_MIN_DISTANCE_METERS : MIN_DISTANCE_METERS,
           // iOS Always is requested above so the plugin does not skip the second prompt.
           requestPermissions: mode === 'always' ? !isIosPlatform() : true,
@@ -254,10 +262,16 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
         onError,
       );
 
+      if (mode === 'always' && isIosPlatform()) {
+        stopSignificant = await startSignificantLocationUpdates(onLocation, onError);
+      }
+
       if (cancelled) {
         if (id) {
           void removeBackgroundLocationWatcher(id);
         }
+
+        void stopSignificant?.();
 
         return;
       }
@@ -271,6 +285,8 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
       if (watcherId) {
         void removeBackgroundLocationWatcher(watcherId);
       }
+
+      void stopSignificant?.();
 
       samplerRef.current?.reset();
       backgroundSamplerRef.current?.reset();

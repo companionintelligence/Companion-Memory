@@ -206,6 +206,7 @@ describeWithDb(`WriteKnowledgeTool on an imported entity (${availability.target}
       graphEvents,
       new GraphQueryService({} as never, graphUtility),
       logger as never,
+      { getSelfIdentity: async () => null } as never,
     );
   });
 
@@ -308,7 +309,7 @@ describeWithDb(`WriteKnowledgeTool on an imported entity (${availability.target}
           kind: 'entity.update',
           entityId: alexId,
           properties: { occupation: 'dentist' },
-          removeProperties: ['planner'],
+          removeProperties: ['first_name'],
         },
       ],
     });
@@ -332,7 +333,7 @@ describeWithDb(`WriteKnowledgeTool on an imported entity (${availability.target}
       emails: ['alex@example.com'],
       phones: ['+15551230001', '+15551230002', '+15551230003'],
       names: OTHER_WRITERS.names,
-      first_name: 'Alex',
+      planner: OTHER_WRITERS.planner,
       occupation: 'dentist',
     });
   });

@@ -16,7 +16,17 @@ import { FileVariant } from '../types';
 
 import { FileService } from './FileService';
 import { type MediaDimensions, MediaDimensionsService } from './MediaDimensionsService';
+import { frameTimestamps } from './VideoFrameSampleService';
 import { VipsDecodeError, VipsService } from './VipsService';
+
+/**
+ * Where the poster still comes from. Frame zero of a phone `.mov` is a black
+ * lead-in or a frame ffmpeg cannot decode, so the drawer had no thumbnail.
+ * One still, at the midpoint of the clip (or the start when the length is unknown).
+ */
+export function videoPosterTimestamp(durationSeconds: number | null): number {
+  return frameTimestamps(durationSeconds, 1)[0] ?? 0;
+}
 
 const PREVIEW_MAX_DIMENSION = 300;
 const PREVIEW_JPEG_QUALITY = 80;
@@ -141,6 +151,12 @@ export class FilePreviewService {
         contentType: file.contentType,
       });
 
+      // The poster and the playable rendition are separate. A `.mov` ffmpeg
+      // cannot still should still be transcoded, or the drawer has nothing to play.
+      if (file.contentType.startsWith(VIDEO_MIME_PREFIX)) {
+        await this.requestVideoPlayback(context, file.id);
+      }
+
       return { outcome: 'skipped', reason: 'undecodable' };
     }
 
@@ -182,16 +198,12 @@ export class FilePreviewService {
     );
 
     // A video also gets its browser-playable rendition requested here, once
-    // its preview exists: the preview is what the player shows as poster
+    // its preview exists: the preview is what the player shows as a still
     // while the rendition is transcoded (about the clip's length), and the
     // codec check that decides whether one is needed lives in the service.
     // The nightly `enrich.video_playback` sweep is the net under this.
     if (file.contentType.startsWith(VIDEO_MIME_PREFIX)) {
-      await this.eventService.send(
-        VideoPlaybackRequestEvent,
-        { userId: context.userId, fileId: file.id },
-        { queue: VIDEO_PLAYBACK_QUEUE, singletonKey: `video-playback:${file.id}` },
-      );
+      await this.requestVideoPlayback(context, file.id);
     }
 
     this.logger.log('Generated preview', {
@@ -297,15 +309,17 @@ export class FilePreviewService {
       // Probe the source stream's dimensions from the same spooled file, before
       // collapsing it to a single frame.
       const sourceDimensions = await this.mediaDimensionsService.fromVideoFile(tempInput);
+      const atSeconds = await this.posterAt(tempInput);
 
-      // Extract a single frame. Classified the same way the image path is: a
-      // container or codec ffmpeg cannot decode is a FORMAT gap — retrying it
-      // three times and dead-lettering buys nothing — while the spool above and
-      // the read below are IO and stay retryable, so they deliberately sit
-      // outside this catch.
+      // Extract a single frame from inside the clip, not frame zero. Classified
+      // the same way the image path is: a container or codec ffmpeg cannot
+      // decode is a FORMAT gap — retrying it three times and dead-lettering
+      // buys nothing — while the spool above and the read below are IO and stay
+      // retryable, so they deliberately sit outside this catch.
       try {
         await new Promise<void>((resolve, reject) => {
           ffmpeg(tempInput)
+            .seekInput(atSeconds)
             .frames(1)
             .output(tempOutput)
             .on('end', () => resolve())
@@ -368,6 +382,32 @@ export class FilePreviewService {
     } finally {
       await fs.unlink(tempInput).catch(() => {});
       await fs.unlink(tempOutput).catch(() => {});
+    }
+  }
+
+  private async requestVideoPlayback(context: UserServiceContext, fileId: string): Promise<void> {
+    await this.eventService.send(
+      VideoPlaybackRequestEvent,
+      { userId: context.userId, fileId },
+      { queue: VIDEO_PLAYBACK_QUEUE, singletonKey: `video-playback:${fileId}` },
+    );
+  }
+
+  /** Midpoint of the clip. A probe failure falls back to the start, which may still yield a frame. */
+  private async posterAt(path: string): Promise<number> {
+    try {
+      const data = await new Promise<ffmpeg.FfprobeData>((resolve, reject) => {
+        ffmpeg.ffprobe(path, (err, probed) => (err ? reject(err) : resolve(probed)));
+      });
+      const duration = Number(data.format?.duration);
+
+      return videoPosterTimestamp(Number.isFinite(duration) && duration > 0 ? duration : null);
+    } catch (err: unknown) {
+      this.logger.warn('Video probe failed; taking the poster from the start', {
+        error: errorMessage(err),
+      });
+
+      return videoPosterTimestamp(null);
     }
   }
 }

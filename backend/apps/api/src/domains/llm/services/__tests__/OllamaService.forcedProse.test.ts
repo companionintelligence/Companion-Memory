@@ -254,4 +254,27 @@ describe('OllamaService.chatStream forced prose round', () => {
 
     expect(driver.chatStream).toHaveBeenCalledTimes(2);
   });
+
+  it('salvages tool markup only in the round that offered tools', async () => {
+    // The follow-up round offers no tools, so text the model writes there is its answer. When it
+    // quotes an email or invite carrying tool markup, salvaging it would run a call nobody asked
+    // for; the driver is told to strip that markup and emit no calls instead.
+    const { service, driver } = await setup([[toolCallChunk()], [proseChunk('Here is your answer.')]]);
+
+    const stream = await service.chatStream(context, [{ role: 'user', content: 'find it' }], {
+      model: MODEL,
+      enableTools: true,
+    });
+    await drain(stream);
+
+    const [toolRound, followUp] = driver.calls;
+
+    expect(toolRound.tools).toBeDefined();
+    expect(toolRound.salvageTools).toBe(true);
+    expect(toolRound.discardToolMarkup).toBe(false);
+
+    expect(followUp.tools).toBeUndefined();
+    expect(followUp.salvageTools).toBe(false);
+    expect(followUp.discardToolMarkup).toBe(true);
+  });
 });

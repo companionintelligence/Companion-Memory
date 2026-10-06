@@ -19,7 +19,7 @@ import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { UserService } from '@ci/domains/user';
 
-import { CsrfGuard } from '../guards/CsrfGuard';
+import { CookieCsrfGuard, CsrfGuard } from '../guards/CsrfGuard';
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
@@ -92,10 +92,13 @@ export class SessionController {
   /**
    * If Traefik named a Hub person who does not match the Memory cookie, replace
    * the session (and CSRF) so the next refresh/query is already the right user.
+   *
+   * Browser only, so the cookie-and-header CSRF pair is required: the native
+   * app's cookie-less shape is not accepted here.
    */
   @Post('hub-bridge')
   @HttpCode(200)
-  @UseGuards(CsrfGuard)
+  @UseGuards(CookieCsrfGuard)
   async hubBridgeAlign(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     return this.hubBridge.alignSession(req, res);
   }
