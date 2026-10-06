@@ -117,9 +117,9 @@ describe('resolveWithinImportRoots', () => {
     await writeFile(path.join(sibling, 'secret.zip'), 'bytes');
 
     await withRoots([root], async () => {
-      await expect(resolveWithinImportRoots(path.join(sibling, 'secret.zip'), admin())).rejects.toBeInstanceOf(
-        PathOutsideImportRootsError,
-      );
+      await expect(
+        resolveWithinImportRoots(path.join(sibling, 'secret.zip'), admin()),
+      ).rejects.toBeInstanceOf(PathOutsideImportRootsError);
     });
   });
 

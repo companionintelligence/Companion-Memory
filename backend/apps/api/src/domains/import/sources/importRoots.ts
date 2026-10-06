@@ -244,7 +244,10 @@ export interface ImportRootsCaller {
  * is before anyone can authenticate. Only the inbox batch surface may CONSUME
  * an inbox path, and it resolves through {@link resolveWithinUserInbox}.
  */
-export async function resolveWithinImportRoots(requested: string, caller: ImportRootsCaller): Promise<string> {
+export async function resolveWithinImportRoots(
+  requested: string,
+  caller: ImportRootsCaller,
+): Promise<string> {
   const roots = caller.isAdmin ? configuredImportRoots() : [];
 
   if (caller.userId != null) {
