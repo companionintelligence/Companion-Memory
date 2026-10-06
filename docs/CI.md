@@ -35,8 +35,8 @@ that directory to `PATH`.
 > `Resolve VERSION from tag` steps run
 > `tag="${GITHUB_REF#refs/tags/}"; version="${tag#v}"`, so a branch ref leaves
 > `VERSION=refs/heads/main` — slashes and all, not a legal image tag. A
-> `Refuse to publish a non-release ref` guard runs first in **all three** of its
-> jobs (`verify-ci-passed`, `build`, `merge-and-register`), before any checkout,
+> `Refuse to publish a non-release ref` guard runs first in **all four** of its
+> jobs (`verify-ci-passed`, `build`, `push`, `merge-and-register`), before any checkout,
 > testing `GITHUB_REF` against the workflow-level `RELEASE_TAG_RE`. That makes
 > the mistake cheap rather than correct: the run still ends red and no release
 > is produced.

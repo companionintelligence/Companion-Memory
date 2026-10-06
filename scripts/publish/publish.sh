@@ -30,6 +30,11 @@ set -euo pipefail
 #                        Used by the multi-arch publish workflow: each native
 #                        build leg pushes :VERSION-<arch>, and merge-manifests.sh
 #                        combines them into the :VERSION manifest list.
+#   DIGEST_FILE          If set, append "<remote repo> <sha256 digest>" for every
+#                        image pushed, and fail when a push reports no digest.
+#                        merge-manifests.sh reads these (DIGESTS_DIR) so the
+#                        release manifest names exactly what this run pushed,
+#                        not whatever the tag points at by then.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -567,6 +572,21 @@ main() {
       if PUSH_OUTPUT=$(docker image push "${REMOTE}" 2>&1); then
         log "✓"
         PUSH_COUNT=$((PUSH_COUNT + 1))
+
+        if [[ -n "${DIGEST_FILE:-}" ]]; then
+          # `docker push` ends with "<tag>: digest: sha256:<hex> size: <n>".
+          # That is the digest the registry stored for this push, read from
+          # the push itself rather than from a later lookup of the tag.
+          local DIGEST
+          DIGEST=$(printf '%s\n' "${PUSH_OUTPUT}" \
+            | sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' | tail -n 1)
+          if [[ -z "${DIGEST}" ]]; then
+            echo "${PUSH_OUTPUT}" >&2
+            fail "pushed ${REMOTE} but found no digest in the push output"
+          fi
+          echo "${REPO} ${DIGEST}" >> "${DIGEST_FILE}"
+          log "    ${DIGEST}"
+        fi
       else
         log "✗"
         echo "$PUSH_OUTPUT" >&2
