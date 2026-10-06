@@ -32,8 +32,9 @@ import { CreateDeviceDto, UpdateDeviceDto, Device, createDeviceSchema, updateDev
 /**
  * The capture scope reaches the three routes a capture agent uses to keep its own device record:
  * register, list, and the last-seen heartbeat. A capture agent (the browser extension, Companion
- * Capture) holds nothing broader, as an api key or as a Portal token, and these are not reads of
- * anything it did not write.
+ * Capture) holds nothing broader, as an api key or as a Portal token. The list returns every
+ * device record of the account (name, type, platform, last seen), not only the caller's own: the
+ * extension finds its record in it. It holds no captured content.
  */
 @Controller('devices')
 export class DeviceController {

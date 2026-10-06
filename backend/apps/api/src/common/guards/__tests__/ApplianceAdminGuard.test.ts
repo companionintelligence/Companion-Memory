@@ -89,6 +89,24 @@ describe('ApplianceAdminGuard', () => {
     );
   });
 
+  it("refuses a Portal bearer without admin authority here, whatever the owner's role", async () => {
+    // An owner's Portal token from a Portal that predates addressing keeps everything else, but
+    // not the appliance's control plane, the same rule AdminOnlyGuard applies.
+    const { dataSource, queries } = dataSourceAnswering(true);
+    const request = { user: { role: 'admin' }, portalPrincipal: { admin: false } };
+    const context = {
+      switchToHttp: () => ({ getRequest: () => request }),
+    } as unknown as ExecutionContext;
+
+    await expect(new ApplianceAdminGuard(dataSource).canActivate(context)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(queries).toEqual([]);
+
+    request.portalPrincipal.admin = true;
+    await expect(new ApplianceAdminGuard(dataSource).canActivate(context)).resolves.toBe(true);
+  });
+
   it('fails CLOSED when the probe cannot answer', async () => {
     // "I could not find out" must never be read as "there is no admin", which is
     // the one answer that admits everybody. A database that is down is also a

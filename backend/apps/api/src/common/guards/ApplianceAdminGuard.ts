@@ -2,6 +2,8 @@ import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
+import type { PortalPrincipalMarker } from './PortalTokenVerifier';
+
 /**
  * Confines the APPLIANCE-WIDE control plane to an administrator — on any
  * appliance that has one.
@@ -75,6 +77,13 @@ export class ApplianceAdminGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
+
+    // As in AdminOnlyGuard: a Portal bearer that does not carry the user's admin authority here (one
+    // from a Portal that predates addressing, or not addressed to this appliance) is refused,
+    // whatever the user's role.
+    if ((request as PortalPrincipalMarker | undefined)?.portalPrincipal?.admin === false) {
+      throw new ForbiddenException('This action needs a sign-in issued for this Memory');
+    }
 
     if (await this.admits(request?.user as { role?: string } | undefined)) {
       return true;
