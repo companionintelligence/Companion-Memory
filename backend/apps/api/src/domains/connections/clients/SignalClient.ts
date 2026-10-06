@@ -19,7 +19,8 @@ export class SignalClient extends BaseClient {
     return config.signalCli.restUrl.replace(/\/$/, '');
   }
 
-  async resolveAccountFromApiKey(apiKey: string): Promise<string> {
+  /** The numbers the signal-cli REST service holds, as it lists them (E.164, e.g. `+15551234567`). */
+  async listAccounts(apiKey: string): Promise<string[]> {
     const response = await fetch(`${this.restUrl}/v1/accounts`, {
       headers: this.buildHeaders(apiKey),
     });
@@ -29,13 +30,25 @@ export class SignalClient extends BaseClient {
       throw new Error(`Failed to validate Signal API key: ${response.status} ${errorText}`);
     }
 
-    const accounts = (await response.json()) as string[];
+    const accounts = (await response.json()) as unknown;
 
-    if (!Array.isArray(accounts) || accounts.length === 0) {
-      throw new Error('No Signal accounts found for the provided API key');
-    }
+    return Array.isArray(accounts) ? accounts.filter((a): a is string => typeof a === 'string') : [];
+  }
 
-    return accounts[0];
+  /**
+   * The account the caller asked for, as the service spells it, or null when the service does not
+   * hold it.
+   *
+   * Never "the first account it lists". signal-cli can hold several numbers, each somebody's own,
+   * and the appliance-wide service answers whoever calls it: picking one for the caller bound
+   * their connection to a number nobody checked was theirs. Spacing and punctuation in what the
+   * caller typed are ignored; the digits and the leading `+` must match.
+   */
+  async findAccount(apiKey: string, requested: string): Promise<string | null> {
+    const wanted = normalizeNumber(requested);
+    const accounts = await this.listAccounts(apiKey);
+
+    return accounts.find((account) => normalizeNumber(account) === wanted) ?? null;
   }
 
   getAuthorizationUrl(): Promise<string> {
@@ -54,16 +67,16 @@ export class SignalClient extends BaseClient {
     };
   }
 
+  /**
+   * The number this connection was made for. A connection without one is refused rather than
+   * bound to whichever number the service lists first; see {@link findAccount}.
+   */
   getAccountIdentifier(connection: Connection): Promise<string> {
     if (connection.externalId) {
       return Promise.resolve(connection.externalId);
     }
 
-    if (!connection.accessToken) {
-      return Promise.reject(new Error('Signal connection missing API key'));
-    }
-
-    return this.resolveAccountFromApiKey(connection.accessToken);
+    return Promise.reject(new Error('Signal connection has no number; connect Signal again and name it'));
   }
 
   async requestRaw(connection: Connection, endpoint: string, options?: RequestInit): Promise<Response> {
@@ -104,4 +117,9 @@ export class SignalClient extends BaseClient {
 
     return headers;
   }
+}
+
+/** `+1 (555) 123-4567` and `+15551234567` are the same number. */
+function normalizeNumber(value: string): string {
+  return value.replace(/[\s().-]/g, '');
 }
