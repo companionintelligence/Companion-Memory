@@ -120,6 +120,22 @@ describe('HealSelfCollationService', () => {
     expect(personMerge.mergePeople).not.toHaveBeenCalled();
   });
 
+  it('does not take a Person named only by an address for the owner', async () => {
+    // "bennett@elsewhere.example" folds to "bennett elsewhere example", which
+    // contains the owner's name. matchOwner refuses a name that is only an
+    // address, and no name-only fallback may let it back in.
+    const { service, personMerge } = makeService({
+      trustMode: 'hands_off',
+      stubs: [{ entity_id: STUB, name: 'bennett@elsewhere.example', properties: {} }],
+    });
+
+    const result = await service.heal(USER);
+
+    expect(result.examined).toBe(0);
+    expect(result.reviewed).toBe(0);
+    expect(personMerge.mergePeople).not.toHaveBeenCalled();
+  });
+
   it('honours dryRun without calling mergePeople', async () => {
     const { service, personMerge } = makeService({ trustMode: 'hands_off' });
 

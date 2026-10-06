@@ -19,7 +19,13 @@
  * returning a closure is for. A run is hundreds of thousands of records; this
  * must not be per-record work.
  */
-import { isPhoneShaped, normalizeEmail, normalizeName, normalizePhone } from '@ci/domains/graph';
+import {
+  type IdentifierKey,
+  isPhoneShaped,
+  normalizeEmail,
+  normalizeName,
+  normalizePhone,
+} from '@ci/domains/graph';
 
 /** Does this sender display name belong to the appliance owner? */
 export type IsSelf = (name: string) => boolean;
@@ -330,6 +336,28 @@ export function matchOwnerIdentifier(
 }
 
 /**
+ * Is this communication participant the owner?
+ *
+ * The one rule the participant link listener and the stub backfill share. An
+ * email or phone participant is the owner only when the address or number
+ * itself is the owner's ({@link matchOwnerIdentifier}): its display name is
+ * whatever the sender typed, so a stranger writing as `"<owner name>"
+ * <x@elsewhere>` stays an ordinary contact. Only a name-only participant (a
+ * chat display name) is matched by name, through {@link matchOwner}.
+ */
+export function matchParticipantOwner(
+  identity: SelfIdentity,
+  key: IdentifierKey,
+  rawName: string,
+): OwnerMatch | null {
+  if (key.kind === 'name') {
+    return matchOwner(identity, rawName.length > 0 ? rawName : key.valueNormalized);
+  }
+
+  return matchOwnerIdentifier(identity, key.kind, key.valueNormalized);
+}
+
+/**
  * Classify a raw string (email, phone, or display name) as the owner when possible.
  *
  * Prefer exact email / phone over fuzzy name so trust policy can treat account
@@ -343,11 +371,7 @@ export function matchOwnerIdentifier(
  * exact identifier in every trust mode. The name test reads the display name
  * with every address in it removed, so a bare address has no name to test.
  */
-export function matchOwner(
-  identity: SelfIdentity,
-  raw: string,
-  options: { phones?: readonly string[] } = {},
-): OwnerMatch | null {
+export function matchOwner(identity: SelfIdentity, raw: string): OwnerMatch | null {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
     return null;
@@ -361,8 +385,9 @@ export function matchOwner(
 
   const phoneNorm = isPhoneShaped(trimmed) ? normalizePhone(trimmed) : null;
   if (phoneNorm != null) {
-    const ownerPhones = options.phones ?? identity.phones;
-    for (const phone of ownerPhones) {
+    // Always the OWNER's phones. There used to be an override here, and the
+    // self-collation heal passed each candidate's own phones through it.
+    for (const phone of identity.phones) {
       if (normalizePhone(phone) === phoneNorm) {
         return { kind: 'phone', confidence: OWNER_MATCH_CONFIDENCE.phone, raw: trimmed };
       }

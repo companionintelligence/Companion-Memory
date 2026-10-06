@@ -4,6 +4,7 @@ import {
   makeIsSelf,
   matchOwner,
   matchOwnerIdentifier,
+  matchParticipantOwner,
   NOBODY_IS_SELF,
   OWNER_MATCH_CONFIDENCE,
   readSelfIdentity,
@@ -214,6 +215,29 @@ describe('matchOwnerIdentifier', () => {
     expect(matchOwnerIdentifier(id, 'phone', '4155550199')).toBeNull();
     expect(matchOwnerIdentifier(id, 'email', '')).toBeNull();
     expect(matchOwnerIdentifier({ names: [], email: null, phones: [] }, 'email', 'a@b.example')).toBeNull();
+  });
+});
+
+describe('matchParticipantOwner', () => {
+  const id = identity({ phones: ['+1 415-555-0100'] });
+
+  it('matches an email or phone participant on its identifier, never on the name in front of it', () => {
+    const stranger = { kind: 'email' as const, valueNormalized: 'someone@other.example' };
+    const owner = { kind: 'email' as const, valueNormalized: 'liam.broza@example.com' };
+    const ownerPhone = { kind: 'phone' as const, valueNormalized: '4155550100' };
+
+    expect(matchParticipantOwner(id, stranger, '"Liam Broza" <someone@other.example>')).toBeNull();
+    expect(matchParticipantOwner(id, owner, '"Anyone" <liam.broza@example.com>')).toMatchObject({
+      kind: 'email',
+    });
+    expect(matchParticipantOwner(id, ownerPhone, 'Liam Broza')).toMatchObject({ kind: 'phone' });
+  });
+
+  it('matches a name-only participant by name, falling back to its normalized value', () => {
+    const name = { kind: 'name' as const, valueNormalized: 'liam broza' };
+
+    expect(matchParticipantOwner(id, name, 'Liam Broza')).toMatchObject({ kind: 'name' });
+    expect(matchParticipantOwner(id, name, '')).toMatchObject({ kind: 'name' });
   });
 });
 

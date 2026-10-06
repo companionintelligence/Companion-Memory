@@ -13,8 +13,7 @@ import {
   splitPersonName,
 } from '@ci/domains/graph';
 import {
-  matchOwner,
-  matchOwnerIdentifier,
+  matchParticipantOwner,
   readSelfIdentity,
   shouldMapContactToSelf,
   type SelfIdentity,
@@ -403,13 +402,10 @@ export class PersonStubBackfillService {
           }
 
           const matchRaw = seen.rawName.length > 0 ? seen.rawName : seen.key.valueNormalized;
-          // Same rule as CommunicationParticipantLinkListener: an email or
-          // phone participant is the owner only on its own identifier, never on
-          // the display name in front of it.
-          const ownerMatch =
-            seen.key.kind === 'name'
-              ? matchOwner(identity, matchRaw)
-              : matchOwnerIdentifier(identity, seen.key.kind, seen.key.valueNormalized);
+          // Same rule as CommunicationParticipantLinkListener, from the same
+          // function: an email or phone participant is the owner only on its
+          // own identifier, never on the display name in front of it.
+          const ownerMatch = matchParticipantOwner(identity, seen.key, seen.rawName);
           if (selfEntityId != null && shouldMapContactToSelf(ownerMatch, trustMode)) {
             // Fold owner identifiers onto self instead of minting a duplicate stub.
             if (seen.key.kind === 'email' || seen.key.kind === 'phone') {

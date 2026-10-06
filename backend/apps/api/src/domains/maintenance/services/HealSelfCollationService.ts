@@ -7,7 +7,6 @@ import { LoggerService } from '@ci/common/logging';
 import {
   decideSelfCollation,
   isExactOwnerIdentifier,
-  makeIsSelf,
   matchOwner,
   readSelfIdentity,
   type OwnerMatch,
@@ -161,7 +160,6 @@ export class HealSelfCollationService {
         [userId, selfEntityId, Math.max(limit * 20, 500)],
       );
 
-    const isSelfName = makeIsSelf(identity);
     const out: Array<{ entityId: string; match: OwnerMatch }> = [];
 
     for (const row of rows) {
@@ -192,14 +190,10 @@ export class HealSelfCollationService {
         }
       }
 
-      if (best == null && typeof row.name === 'string' && isSelfName(row.name)) {
-        best = matchOwner(identity, row.name) ?? {
-          kind: 'name',
-          confidence: 0.8,
-          raw: row.name,
-        };
-      }
-
+      // No name fallback through `makeIsSelf` here. `row.name` was already
+      // tried above, and the one case where the raw predicate says yes and
+      // `matchOwner` says no is a name that is only an address
+      // ("liam.broza@elsewhere.example"), which `matchOwner` refuses on purpose.
       if (best != null) {
         out.push({ entityId: row.entity_id, match: best });
       }
