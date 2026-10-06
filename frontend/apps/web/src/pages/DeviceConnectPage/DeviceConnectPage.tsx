@@ -21,6 +21,7 @@ import {
   probeMemoryOrigin,
   probePortalOrigin,
   readPersistedPortalUrl,
+  requestApplianceToken,
   type MemoryServerDevice,
   type PortalAuth,
 } from './portal-client';
@@ -304,24 +305,32 @@ export function DeviceConnectPage() {
       const origin = resolveHttpOrigin(device.memoryUrl);
       await probeMemoryOrigin(origin);
 
-      const rawBearers =
-        auth?.kind === 'oauth'
-          ? [auth.idToken, auth.token].filter((value): value is string => Boolean(value))
-          : [];
-      const bearers = selectMemoryPortalBearers(rawBearers);
+      let bearers: string[];
 
-      if (rawBearers.length === 0) {
-        setSignInError('Sign in with your Companion account first, then pick this server again.');
-        setConnectingId(null);
+      if (auth?.kind === 'oauth' && auth.token && device.resource) {
+        // The Portal lists this Memory's resource, so it can address a token to it.
+        // That token works on this Memory only, whoever runs the server it is sent to.
+        bearers = [await requestApplianceToken(auth.token, device.resource, portalUrl)];
+      } else {
+        // An older Portal: the id_token is all there is. Never the access token,
+        // which is a credential for the Portal itself.
+        const rawBearers = auth?.kind === 'oauth' && auth.idToken ? [auth.idToken] : [];
 
-        return;
-      }
+        if (rawBearers.length === 0) {
+          setSignInError('Sign in with your Companion account first, then pick this server again.');
+          setConnectingId(null);
 
-      if (bearers.length === 0) {
-        setSignInError('Your Companion sign-in expired. Sign in again.');
-        setConnectingId(null);
+          return;
+        }
 
-        return;
+        bearers = selectMemoryPortalBearers(rawBearers);
+
+        if (bearers.length === 0) {
+          setSignInError('Your Companion sign-in expired. Sign in again.');
+          setConnectingId(null);
+
+          return;
+        }
       }
 
       // Mint against the picked Memory origin. Apply it in memory first so
