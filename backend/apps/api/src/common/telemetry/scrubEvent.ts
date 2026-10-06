@@ -91,7 +91,19 @@ const URL_VALUED_BREADCRUMB_KEYS = ['url', 'from', 'to'];
  * request it made, which for Google geocoding is the user's address plus the
  * owner's Maps key.
  */
-const URL_VALUED_ATTRIBUTE_KEYS = ['url.full', 'http.url', 'http.target', 'url'];
+const URL_VALUED_ATTRIBUTE_KEYS = [
+  'url.full',
+  'http.url',
+  'http.target',
+  'url',
+  // The server span also copies request headers into `http.request.header.<name>`
+  // attributes, and the SDK's own deny-list lets `Referer` through. The SPA's
+  // same-origin API calls send the page URL there, `?search=` and all.
+  ...URL_VALUED_HEADERS.flatMap((header) => [
+    `http.request.header.${header}`,
+    `http.response.header.${header}`,
+  ]),
+];
 
 /**
  * Attributes dropped outright. The first four are a bare query string or
@@ -166,10 +178,7 @@ function scrubValue(value: unknown, depth = 0): unknown {
   return value;
 }
 
-/**
- * Shared by error and transaction events: the SDK attaches the same request
- * block to both.
- */
+/** The request block the SDK attaches to error and transaction events alike. */
 function scrubRequest(request: RequestData): RequestData {
   // Query strings and bodies routinely carry search terms over the user's own
   // memories; headers carry the session cookie.
@@ -235,6 +244,29 @@ export function scrubBreadcrumb(breadcrumb: Breadcrumb): Breadcrumb {
   }
 
   return breadcrumb;
+}
+
+/**
+ * The fields error and transaction events share. One pass for both, so a rule
+ * added for one kind of event cannot quietly skip the other.
+ */
+function scrubSharedEventFields(event: ErrorEvent | TransactionEvent): void {
+  if (event.extra) {
+    event.extra = scrubValue(event.extra) as Record<string, unknown>;
+  }
+
+  // The hostname is the same account-identifying data we collapse `/Users/<name>`
+  // to `~` to avoid. `includeServerName: false` in instrument.ts stops the SDK
+  // setting it; this is the belt-and-braces half.
+  delete event.server_name;
+
+  if (event.request) {
+    event.request = scrubRequest(event.request);
+  }
+
+  if (event.breadcrumbs) {
+    event.breadcrumbs = event.breadcrumbs.map(scrubBreadcrumb);
+  }
 }
 
 /**
@@ -308,19 +340,7 @@ export function scrubTransaction(event: TransactionEvent): TransactionEvent {
     event.spans = event.spans.map(scrubSpan);
   }
 
-  if (event.extra) {
-    event.extra = scrubValue(event.extra) as Record<string, unknown>;
-  }
-
-  delete event.server_name;
-
-  if (event.request) {
-    event.request = scrubRequest(event.request);
-  }
-
-  if (event.breadcrumbs) {
-    event.breadcrumbs = event.breadcrumbs.map(scrubBreadcrumb);
-  }
+  scrubSharedEventFields(event);
 
   return event;
 }
@@ -388,22 +408,7 @@ export function scrubEvent(event: ErrorEvent): ErrorEvent | null {
     }
   }
 
-  if (event.extra) {
-    event.extra = scrubValue(event.extra) as Record<string, unknown>;
-  }
-
-  // The hostname is the same account-identifying data we collapse `/Users/<name>`
-  // to `~` to avoid. `includeServerName: false` in instrument.ts stops the SDK
-  // setting it; this is the belt-and-braces half.
-  delete event.server_name;
-
-  if (event.request) {
-    event.request = scrubRequest(event.request);
-  }
-
-  if (event.breadcrumbs) {
-    event.breadcrumbs = event.breadcrumbs.map(scrubBreadcrumb);
-  }
+  scrubSharedEventFields(event);
 
   return event;
 }

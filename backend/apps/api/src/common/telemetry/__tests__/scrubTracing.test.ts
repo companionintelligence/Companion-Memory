@@ -82,6 +82,26 @@ describe('scrubSpan (beforeSendSpan)', () => {
     expect(data['http.route']).toBe('/api/graph/search');
   });
 
+  it('strips the query from the Referer the server span copies into its header attributes', () => {
+    // httpServerSpansIntegration records every request header its PII deny-list
+    // lets through, and that list has no entry for Referer.
+    const span = {
+      span_id: 'a2',
+      trace_id: 't1',
+      start_timestamp: 1,
+      op: 'http.server',
+      data: {
+        'http.request.header.referer': 'https://memory.local/memory?search=oncologist',
+        'http.request.header.user_agent': 'Mozilla/5.0',
+      },
+    } as SpanJSON;
+
+    const data = scrubSpan(span).data;
+
+    expect(data['http.request.header.referer']).toBe('https://memory.local/memory');
+    expect(data['http.request.header.user_agent']).toBe('Mozilla/5.0');
+  });
+
   it('filters string values under sensitive keys but keeps numeric counters', () => {
     const span = {
       span_id: 'c1',
