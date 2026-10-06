@@ -111,12 +111,40 @@ export class HubForwardAuthBridgeService {
   ) {
     this.logger.setContext(HubForwardAuthBridgeService.name);
 
+    this.warnAboutPolicy();
+  }
+
+  /** Say at boot when the forward-auth settings leave Hub sign-in unbound, or switched off. */
+  private warnAboutPolicy(): void {
     const cfg = config.auth.hubForwardAuth;
+    if (!cfg.enabled) {
+      return;
+    }
+
     const policy = forwardAuthPolicy(cfg);
-    if (cfg.enabled && !policy.bound && policy.acceptUnbound) {
+    if (!policy.bound) {
       this.logger.warn(
-        'Hub sign-in accepts identity headers that are not bound to this app: the Hub has not provided ' +
-          'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN. Updating the Hub provides both.',
+        policy.acceptUnbound
+          ? 'Hub sign-in accepts identity headers that are not bound to this app: the Hub has not provided ' +
+              'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN. Updating the Hub provides both.'
+          : 'Hub sign-in is off: CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE=true requires the bound assertion, but ' +
+              'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN are not both set.',
+      );
+
+      return;
+    }
+
+    if (policy.acceptUnbound) {
+      this.logger.warn(
+        'CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE=false: Hub sign-in also accepts identity headers that are not ' +
+          'bound to this app.',
+      );
+    }
+
+    if (policy.bound.secret === cfg.secret.trim()) {
+      this.logger.warn(
+        'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET is the Hub-wide CI_HUB_FORWARD_AUTH_SECRET, which an older Hub ' +
+          "also gave other apps: any of them can sign this app's identity assertion.",
       );
     }
   }

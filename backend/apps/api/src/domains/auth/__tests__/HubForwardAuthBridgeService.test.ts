@@ -101,7 +101,7 @@ function makeService() {
     logger as never,
   );
 
-  return { service, userService, authService, csrfService, federatedIdentityService };
+  return { service, userService, authService, csrfService, federatedIdentityService, logger };
 }
 
 /** A request from a browser whose Memory cookie belongs to `sessionUser` (or none). */
@@ -666,6 +666,40 @@ describe('HubForwardAuthBridgeService', () => {
       expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token', expect.anything());
       expect(res.clearCookie).toHaveBeenCalled();
       expect(authService.issueSessionToken).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('startup warnings', () => {
+    it('says Hub sign-in is off when the bound assertion is required but this app has no key', () => {
+      config.auth.hubForwardAuth.requireAudience = 'true';
+      const { logger } = makeService();
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Hub sign-in is off'));
+    });
+
+    it('says when the unbound format is still accepted beside the bound one', () => {
+      config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
+      config.auth.hubForwardAuth.audience = AUDIENCE;
+      config.auth.hubForwardAuth.requireAudience = 'false';
+      const { logger } = makeService();
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('REQUIRE_AUDIENCE=false'));
+    });
+
+    it("says when this app's own key is the Hub-wide secret", () => {
+      config.auth.hubForwardAuth.identitySecret = SECRET;
+      config.auth.hubForwardAuth.audience = AUDIENCE;
+      const { logger } = makeService();
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('is the Hub-wide'));
+    });
+
+    it('says nothing for a Hub that gave this app its own key', () => {
+      config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
+      config.auth.hubForwardAuth.audience = AUDIENCE;
+      const { logger } = makeService();
+
+      expect(logger.warn).not.toHaveBeenCalled();
     });
   });
 
