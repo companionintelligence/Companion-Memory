@@ -109,6 +109,30 @@ describe('buildMemoryTimelineData', () => {
     expect(data.events.find((slide) => slide.unique_id === 'clip')?.media).toBeUndefined();
   });
 
+  it('leaves out a media address that could break out of the markup TimelineJS builds from it', () => {
+    // TimelineJS reads any URL containing `.pdf` as a PDF and writes it into
+    // `<iframe src='…'>` by string concatenation.
+    const { data } = buildMemoryTimelineData(
+      [
+        entity({
+          __typename: 'EventType',
+          id: 'planted',
+          bucketStartTime: now.toISOString(),
+          bucketTimeSource: 'source',
+          title: 'A scan',
+          startTime: now.toISOString(),
+          galleryMediaContentType: 'image/jpeg',
+          galleryPreviewUrl: "https://files.example/scan.pdf'onload='alert(1)",
+          gallerySourceUrl: null,
+        }),
+      ],
+      DEVICE_DATE_TIME_FORMATTER,
+      now,
+    );
+
+    expect(data.events.find((slide) => slide.unique_id === 'planted')?.media).toBeUndefined();
+  });
+
   it('keeps the full range and lands on the first slide when anchored at range-start', () => {
     const flood = Array.from({ length: 80 }, (_, index) =>
       eventAt(`e-${index}`, new Date(2026, 6, 1 + index, 10), `Item ${index}`),

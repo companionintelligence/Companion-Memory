@@ -88,13 +88,28 @@ function rangeHeadline(first: Date, last: Date): string {
   return `${from} – ${to}`;
 }
 
+/**
+ * Characters that can end the attribute or element TimelineJS writes `media.url` into.
+ *
+ * TimelineJS picks a media type by matching the URL against provider patterns, and some of
+ * those types build markup from the raw string: the PDF type (any URL containing `.pdf`)
+ * writes `<iframe src='…'>` by concatenation and assigns it with `innerHTML`. A quote in a
+ * URL that came from a third party (a OneDrive pointer file's `webUrl` is stored as the
+ * file's address) would add attributes such as `onload` to an element in the app's own
+ * document, and the phone apps load that document with no CSP. Signed `/static/` links
+ * never contain these characters, so the photos this view exists to show are unaffected.
+ */
+const MARKUP_BREAKING = /['"<>`\s]/;
+
 function imageMediaUrl(entity: EntityItem): string | undefined {
   const media = getEntityMedia(entity);
   if (media?.kind !== 'image') {
     return undefined;
   }
 
-  return media.thumbUrl ?? media.fullUrl;
+  const url = media.thumbUrl ?? media.fullUrl;
+
+  return url && !MARKUP_BREAKING.test(url) ? url : undefined;
 }
 
 function slideFromEntity(entity: EntityItem, fmt: DateTimeFormatter): DatedSlide | null {
