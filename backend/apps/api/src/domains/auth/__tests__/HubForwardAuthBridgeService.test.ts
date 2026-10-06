@@ -699,6 +699,14 @@ describe('HubForwardAuthBridgeService', () => {
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Hub sign-in is off'));
     });
 
+    it('says Hub sign-in is off, not unbound, when there is no secret of either kind', () => {
+      config.auth.hubForwardAuth.secret = '';
+      const { logger } = makeService();
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no identity header can verify'));
+      expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('accepts identity headers'));
+    });
+
     it('says when the unbound format is still accepted beside the bound one', () => {
       config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
       config.auth.hubForwardAuth.audience = AUDIENCE;

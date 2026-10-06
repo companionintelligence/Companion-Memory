@@ -130,13 +130,22 @@ export class HubForwardAuthBridgeService {
 
     const policy = forwardAuthPolicy(cfg);
     if (!policy.bound) {
-      this.logger.warn(
-        policy.acceptUnbound
-          ? 'Hub sign-in accepts identity headers that are not bound to this app: the Hub has not provided ' +
-              'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN. Updating the Hub provides both.'
-          : 'Hub sign-in is off: CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE=true requires the bound assertion, but ' +
-              'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN are not both set.',
-      );
+      if (!policy.acceptUnbound) {
+        this.logger.warn(
+          'Hub sign-in is off: CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE=true requires the bound assertion, but ' +
+            'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN are not both set.',
+        );
+      } else if (!policy.sharedSecret) {
+        this.logger.warn(
+          'Hub sign-in is off: CI_HUB_FORWARD_AUTH_ENABLED is true, but neither CI_HUB_FORWARD_AUTH_SECRET nor ' +
+            'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET with CI_APP_URN is set, so no identity header can verify.',
+        );
+      } else {
+        this.logger.warn(
+          'Hub sign-in accepts identity headers that are not bound to this app: the Hub has not provided ' +
+            'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN. Updating the Hub provides both.',
+        );
+      }
 
       return;
     }
