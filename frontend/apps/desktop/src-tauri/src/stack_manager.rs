@@ -931,7 +931,7 @@ fn compose_version_error_in(raw: &str) -> Option<String> {
     if (major, minor, patch) < MIN_COMPOSE_VERSION {
         let (need_major, need_minor, need_patch) = MIN_COMPOSE_VERSION;
         return Some(format!(
-            "Docker Compose {version} is too old — Companion Memory needs {need_major}.{need_minor}.{need_patch} or newer. Update Docker Desktop and try again."
+            "Docker Compose {version} is too old. Companion Memory needs {need_major}.{need_minor}.{need_patch} or newer. Update Docker Desktop and try again."
         ));
     }
 
@@ -1801,8 +1801,8 @@ mod tests {
     /// which first shipped in 2.24.4. Below that, compose ignores the tag and
     /// appends the loopback mapping to production's all-interfaces one, and
     /// nothing in the result mentions versions, so this check is the only place
-    /// the real reason gets said — and the boundary has to be exactly right, or
-    /// it either rejects working installs or lets the broken mapping through.
+    /// the real reason gets said. The boundary has to be exactly right, or it
+    /// either rejects working installs or lets the broken mapping through.
     #[test]
     fn compose_older_than_2_24_4_is_refused_and_2_24_4_itself_is_not() {
         assert!(compose_version_error_in("2.23.9").is_some());

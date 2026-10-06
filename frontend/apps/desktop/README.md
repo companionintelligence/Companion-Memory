@@ -211,7 +211,7 @@ This needed two things neither `docker-compose.yml` nor
   `http://127.0.0.1:8642`, and the callback would never arrive. Setting
   `APP_BASE_URL` explicitly skips that derivation.
 
-## A note on the `!reset` compose tag
+## A note on the `!override` compose tag
 
 `docker-compose.desktop.yml` uses the Compose Specification's `!override` tag
 to replace the gateway's `8642:8642` mapping from `docker-compose.production.yml`
