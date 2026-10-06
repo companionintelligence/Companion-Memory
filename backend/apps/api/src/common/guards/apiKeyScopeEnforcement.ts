@@ -140,7 +140,7 @@ export function enforceApiKeyScopes(
  * request decides. A GraphQL mutation or a non-GET HTTP verb changes state, so
  * it needs `write`; a query or a GET needs `read`; an HTTP DELETE removes
  * something, so it needs `full`. `@RequireCapability` on the handler or class
- * overrides this in either direction — up to `full` for an operator action or
+ * overrides this in either direction: up to `full` for an operator action or
  * a POST that destroys, or down to `read` for a POST that only computes
  * (`/llm/generate`, `/import/recognize`, `/model-routing/plan`, MCP) and for
  * `DELETE /mcp`, which ends a protocol session and deletes nothing.
@@ -184,7 +184,7 @@ export function capabilityImpliedByShape(
  * Scopes decide WHICH routes a key may reach; capability decides what it may do when it gets
  * there. Every operation a key can reach is vetted: a route that declares `@RequireCapability`
  * requires that level, and one that declares nothing requires the level its shape implies
- * ({@link capabilityImpliedByShape} — queries and GETs read, mutations and other verbs write,
+ * ({@link capabilityImpliedByShape}: queries and GETs read, mutations and other verbs write,
  * an HTTP DELETE needs full).
  *
  * This used to be opt-in per route, and 334 GraphQL operations plus 74 REST writes declared

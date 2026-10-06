@@ -23,7 +23,7 @@ export const REQUIRE_SCOPES_KEY = 'require_scopes';
  *   Before this existed the only key such an agent could use was an
  *   empty-scope (full-authority) one, which is how a capture agent ended up
  *   holding the chat-agent tier and 403ing on every upload.
- * - `agent-jobs` — `/v1/agent/jobs`, the plane that dispatches a task to the
+ * - `agent-jobs`: `/v1/agent/jobs`, the plane that dispatches a task to the
  *   agent harness and that the harness reports back on. Its own scope because
  *   a job's `ask` is run by the harness with the harness's key (intents, MCP,
  *   `full`): under `memory` it reached every memory-only app (a voice speaker,

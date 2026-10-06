@@ -74,7 +74,7 @@ export function scopesForApp(appUrn: string): string[] {
   switch (appName) {
     case 'ci-openclaw':
     case 'ci-hermes':
-      // Chat-agent tier: the capabilities these agents use — long-term memory
+      // Chat-agent tier: the capabilities these agents use, which are long-term memory
       // (`/memory/*`), the agent intent catalog (`/intents`, `/agent/intents`,
       // `POST /intents/:name/execute`), the MCP endpoint (`/mcp`), and the
       // dispatch plane (`/v1/agent/jobs`, where CI-OpenClaw fetches a job's

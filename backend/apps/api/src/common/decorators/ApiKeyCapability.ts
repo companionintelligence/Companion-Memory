@@ -81,7 +81,7 @@ export const REQUIRE_CAPABILITY_KEY = 'require_capability';
  * directions: `POST /memory/recall` only searches, and a future `GET` that triggers work would read
  * as harmless.
  *
- * An empty-scope (grandfathered full-access) key is subject to this too — "reaches every surface"
+ * An empty-scope (grandfathered full-access) key is subject to this too: "reaches every surface"
  * and "may write on it" are separate grants. A route with no annotation is priced by its shape
  * (`capabilityImpliedByShape`: GET reads, DELETE needs `full`, everything else writes), so the
  * annotation is only needed where the shape gives the wrong answer: a POST that destroys data asks
