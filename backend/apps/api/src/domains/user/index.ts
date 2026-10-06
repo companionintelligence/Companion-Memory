@@ -67,16 +67,6 @@ export { UserEntity };
 
 // Services
 export { UserService, AccountPurgeService };
-export type { AccountAdmission } from './services/UserService';
-
-// Who may create the first account
-export {
-  ApplianceOwnerRequiredError,
-  isDesignatedOwner,
-  ownerClaimTokenConfigured,
-  ownerIsDesignated,
-  type OwnerEvidence,
-} from './applianceOwner';
 
 // The header clients send their IANA zone in; exported so a client-facing
 // surface (CORS `allowedHeaders`, an HTTP client's default headers) names the

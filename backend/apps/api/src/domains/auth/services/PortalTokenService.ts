@@ -140,8 +140,8 @@ class PortalVerifyTimeoutError extends Error {
  * household member with an email-and-password account the owner invited. A
  * Portal identity that is not yet bound here is refused: this path creates no
  * accounts, not even the first one. Account creation belongs to the browser
- * flow (`OidcController`), the Hub bridge and signup, which is where
- * invitations and the owner named at install are checked.
+ * flow (`OidcController`), the Hub bridge and signup: someone setting the
+ * Memory up in person, and where invitations are checked.
  *
  * ## Which Memory a token is for
  *
@@ -567,9 +567,10 @@ export class PortalTokenService implements PortalTokenVerifier {
     // 3. Nobody here has claimed this Portal identity, and a bearer token never
     //    creates an account. It used to on an appliance with none: whoever held
     //    any valid Portal token and reached the box first became its owner and
-    //    administrator. The first account is created by a sign-in in the browser
-    //    or the app (`OidcController`), the Hub (`HubForwardAuthBridgeService`) or
-    //    a signup, where an owner named at install is checked.
+    //    administrator, a token sent to some other Memory included. The first
+    //    account is created by a sign-in in the browser or the app
+    //    (`OidcController`), the Hub (`HubForwardAuthBridgeService`) or a signup:
+    //    by whoever sets this Memory up.
     this.logger.warn(`refusing Portal token for ${issuer}#${sub}: no account here is bound to it`);
 
     return null;

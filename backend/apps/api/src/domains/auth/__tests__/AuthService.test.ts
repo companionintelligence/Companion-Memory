@@ -309,19 +309,6 @@ describe('AuthService — signup intent', () => {
     });
   });
 
-  it('carries designatedOwner through to the confirm step, and only when true', () => {
-    const owner = service.issueSignupIntentToken('owner@example.com', 'Owner', identity, {
-      designatedOwner: true,
-    });
-    const other = service.issueSignupIntentToken('other@example.com', 'Other', identity, {
-      designatedOwner: false,
-    });
-
-    expect(service.verifySignupIntentToken(owner).designatedOwner).toBe(true);
-    expect(jwtService.decode<Record<string, unknown>>(other)).not.toHaveProperty('designatedOwner');
-    expect(service.verifySignupIntentToken(other).designatedOwner).toBeUndefined();
-  });
-
   it('reads an intent minted before the field existed as one that waived nothing', () => {
     const legacy = jwtService.sign(
       { email: 'new@example.com', purpose: 'signup_intent', ...identity },

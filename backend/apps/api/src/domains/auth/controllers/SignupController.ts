@@ -1,14 +1,4 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  ForbiddenException,
-  Get,
-  Post,
-  Req,
-  Res,
-  UseGuards,
-} from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { Request, Response } from 'express';
 import type { EntityManager } from 'typeorm';
 import { z } from 'zod';
@@ -16,13 +6,7 @@ import { z } from 'zod';
 import { SYSTEM_USER } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { ValidationPipe } from '@ci/common/pipes';
-import {
-  ApplianceOwnerRequiredError,
-  isDesignatedOwner,
-  ownerClaimTokenConfigured,
-  type User,
-  UserService,
-} from '@ci/domains/user';
+import { UserService } from '@ci/domains/user';
 
 import { CsrfGuard } from '../guards/CsrfGuard';
 import { AuthService } from '../services/AuthService';
@@ -30,10 +14,6 @@ import { CsrfService } from '../services/CsrfService';
 import { SignupCodeService } from '../services/SignupCodeService';
 import { SignupDto } from '../types';
 import { setCsrfCookie, setSessionCookie } from '../utils/authCookies';
-
-/** What a person who is not the designated owner is told when they try to create the first account. */
-export const OWNER_REQUIRED_MESSAGE =
-  'This Memory has not been set up yet, and only its owner can do that. Sign in with the account that installed it, or enter the setup code you were given.';
 
 const signupSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -65,23 +45,16 @@ export class SignupController {
    * the only window that matters — everyone after the owner still needs a code
    * wherever the flag is on.
    *
-   * Except where the installer set a setup code (`CI_OWNER_CLAIM_TOKEN`): then
-   * the first account is the owner's, and the code field is where they prove it.
-   *
    * This is the answer for the form, which is all it can be: by the time the
    * signup is submitted someone else may have claimed the appliance. `signup`
    * does not act on it — it decides the exemption as it creates the account.
    */
   private async isSignupCodeRequired(): Promise<boolean> {
-    const codesRequired = await this.featureService.isFeatureEnabled('require.signup.codes');
-
-    if (!codesRequired && !ownerClaimTokenConfigured()) {
+    if (!(await this.featureService.isFeatureEnabled('require.signup.codes'))) {
       return false;
     }
 
-    const empty = await this.userService.hasNoUsers();
-
-    return empty ? ownerClaimTokenConfigured() : codesRequired;
+    return !(await this.userService.hasNoUsers());
   }
 
   /**
@@ -102,39 +75,16 @@ export class SignupController {
     @Res({ passthrough: true }) res: Response,
     @Body(new ValidationPipe(signupSchema)) input: SignupDto,
   ) {
-    try {
-      return await this.createAccount(req, res, input);
-    } catch (error) {
-      // An owner is named at install and this person did not show they are it: the
-      // appliance stays empty for them. Decided as the account would have been written.
-      if (error instanceof ApplianceOwnerRequiredError) {
-        throw new ForbiddenException(OWNER_REQUIRED_MESSAGE);
-      }
-
-      throw error;
-    }
-  }
-
-  private async createAccount(req: Request, res: Response, input: SignupDto) {
     const { name, email, password, signup_code } = input;
 
     const codesRequired = await this.featureService.isFeatureEnabled('require.signup.codes');
-    // A password signup has nothing to show but the setup code, typed where the
-    // form asks for a signup code. Without one, an appliance whose owner is named
-    // refuses this as its first account (UserService.insertAccount).
-    const admission = { designatedOwner: isDesignatedOwner({ claimToken: signup_code ?? null }) };
 
     // Where codes are required the first account needs none (see
     // isSignupCodeRequired), so try this as that account first. Whether it IS
     // the first is decided in the step that creates it: asked beforehand, two
     // people signing up to a fresh appliance at once were both exempt.
-    let user: User | null = codesRequired
-      ? await this.userService.createFirstAccount(
-          { userId: SYSTEM_USER },
-          { name, email, password },
-          undefined,
-          admission,
-        )
+    let user = codesRequired
+      ? await this.userService.createFirstAccount({ userId: SYSTEM_USER }, { name, email, password })
       : null;
 
     if (user == null) {
@@ -168,7 +118,6 @@ export class SignupController {
           password,
         },
         codesRequired ? (manager) => this.redeem(signup_code!, manager) : undefined,
-        admission,
       );
     }
 

@@ -25,16 +25,6 @@ function describeSignInError(error: unknown): { message: string; needsInvitation
     };
   }
 
-  // The first account belongs to the owner named at install. Without a Hub, the owner proves it
-  // with the setup code, which travels in the same field as an invitation.
-  if (code === 'appliance_owner_required') {
-    return {
-      message:
-        'This Memory has not been set up yet, and only its owner can do that. If you were given a setup code, enter it below.',
-      needsInvitation: true,
-    };
-  }
-
   return { message: 'Sign in failed. Please try again.', needsInvitation: false };
 }
 

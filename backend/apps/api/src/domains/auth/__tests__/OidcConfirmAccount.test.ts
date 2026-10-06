@@ -13,7 +13,7 @@ import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import { BodyParserMiddleware } from '@ci/common/middleware';
 import config from '@ci/configuration';
-import { ApplianceOwnerRequiredError, UserService } from '@ci/domains/user';
+import { UserService } from '@ci/domains/user';
 
 import { OidcController } from '../controllers/OidcController';
 import { AuthService } from '../services/AuthService';
@@ -348,8 +348,6 @@ describe('OidcController — confirm-account CSRF', () => {
       expect(mockUserService.create).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ email: 'new@example.com', name: 'Test User' }),
-        undefined,
-        { designatedOwner: false },
       );
       // Nothing was waived for being first, so the appliance having an owner by
       // now is no reason to refuse.
@@ -449,7 +447,6 @@ describe('OidcController — confirm-account CSRF', () => {
         expect.anything(),
         expect.objectContaining({ email: 'new@example.com', passwordChosenByUser: false }),
         expect.any(Function),
-        { designatedOwner: false },
       );
       expect(mockUserService.create).not.toHaveBeenCalled();
       expect(mockFederatedIdentityService.bind).toHaveBeenCalledWith(
@@ -469,30 +466,6 @@ describe('OidcController — confirm-account CSRF', () => {
       // The intent is spent: it cannot be replayed once the appliance is someone else's.
       const cleared = parseCookies(res);
       expect(cleared[SIGNUP_INTENT_COOKIE]?.value ?? '').toBe('');
-    });
-
-    it("passes the callback's finding that this is the owner named at install", async () => {
-      mockAuthService.verifySignupIntentToken.mockReturnValue({ ...intent, designatedOwner: true });
-      mockUserService.createFirstAccount.mockResolvedValue(mockUser);
-
-      await validPost();
-
-      expect(mockUserService.createFirstAccount).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        expect.any(Function),
-        { designatedOwner: true },
-      );
-    });
-
-    it('sends someone who is not the owner back to sign-in with the reason, creating nothing', async () => {
-      mockUserService.createFirstAccount.mockRejectedValue(new ApplianceOwnerRequiredError());
-
-      const res = await validPost().expect(303);
-
-      expect(res.headers.location).toBe('/login?error=appliance_owner_required');
-      expect(mockAuthService.issueSessionToken).not.toHaveBeenCalled();
-      expect(parseCookies(res)[SIGNUP_INTENT_COOKIE]?.value ?? '').toBe('');
     });
 
     it('signs in the account this same identity claimed the appliance with from another tab', async () => {

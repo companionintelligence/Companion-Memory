@@ -178,24 +178,6 @@ export const ConfigSchema = z.object({
        */
       captureClients: z.string().default(''),
     }),
-    // Who may create this appliance's FIRST account. All empty (the default, and
-    // every install from before this existed): whoever arrives first, as before.
-    // Set any of them and, while the appliance has no account, only that person
-    // can create one, through any door. CI-Hub sets the identity fields at
-    // install from its owner (the operator who claimed the Hub); an install
-    // without a Hub can set a one-time setup code instead.
-    applianceOwner: z.object({
-      /** The owner's address. Matches a Portal sign-in whose address the Portal verified, or the Hub username. */
-      email: z.string().default(''),
-      /** The owner's Hub stable id: `urn:ci-hub:<directory>` and their Hub `public_id`. */
-      hubIssuer: z.string().default(''),
-      hubSubject: z.string().default(''),
-      /** The owner's Portal identity. The issuer defaults to `auth.portal.issuer`. */
-      portalIssuer: z.string().default(''),
-      portalSubject: z.string().default(''),
-      /** A setup code presented as the signup code (form or OIDC `signup_code`). */
-      claimToken: z.string().default(''),
-    }),
     // Traefik forward-auth identity header signed by CI-Hub. When enabled, the
     // server verifies the HMAC-SHA256 signature on X-CI-Hub-User before trusting
     // it (shared secret provisioned as CI_HUB_FORWARD_AUTH_SECRET on both sides).

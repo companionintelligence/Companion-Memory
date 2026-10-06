@@ -144,7 +144,7 @@ describe('PortalTokenService', () => {
   it('SECURITY: never creates an account, not even the first one on an empty appliance', async () => {
     // A bearer token used to claim an empty appliance: whoever held any valid Portal token and
     // reached the box first became its owner and administrator. The first account belongs to a
-    // sign-in (browser, app, Hub) or a signup, where the owner named at install is checked.
+    // sign-in (browser, app, Hub) or a signup by whoever sets the Memory up.
     mockJwtVerify.mockResolvedValue({
       payload: {
         aud: 'ci-server',
