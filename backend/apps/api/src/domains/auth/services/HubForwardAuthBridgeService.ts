@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
 import { isUniqueViolation } from '@ci/common/constants';
@@ -213,12 +213,37 @@ export class HubForwardAuthBridgeService {
    * Spend the bound assertion this session is about to be minted from, or refuse to mint.
    *
    * Called after the match checks, so a browser that already holds the right session spends
-   * nothing, and before anything is signed out, so a refused request changes nothing. The unbound
+   * nothing, and before anything is signed out, so a refused replay changes nothing. The unbound
    * format has no key to spend (`replayKey` is null) and mints as it always did.
+   *
+   * A ledger with no room left is different: that request may well be the Hub person's own, and
+   * the session this browser holds belongs to someone else (it reached here because it did not
+   * match). Left standing, the SPA would fall back to refreshing it. So it is signed out, as a
+   * refused placement is.
    */
-  private spendForMint(identity: VerifiedHubForwardAuth): void {
-    if (identity.replayKey == null || this.spentAssertions.spend(identity.replayKey, identity.expiresAt)) {
+  private async spendForMint(
+    req: Request,
+    res: Response,
+    identity: VerifiedHubForwardAuth,
+    session: MemorySession | null,
+  ): Promise<void> {
+    if (identity.replayKey == null) {
       return;
+    }
+
+    const outcome = this.spentAssertions.spend(identity.replayKey, identity.expiresAt);
+    if (outcome === 'spent') {
+      return;
+    }
+
+    if (outcome === 'full') {
+      await this.signOut(req, res, session);
+      this.logger.warn(
+        `not signing in Hub user ${identity.username}: too many Hub sign-ins in the last ` +
+          'replay window to remember another',
+      );
+
+      throw new ServiceUnavailableException('Too many Hub sign-ins at once. Try again in a minute.');
     }
 
     this.logger.warn(`refused a second Memory session from one Hub sign-in for ${identity.username}`);
@@ -260,7 +285,7 @@ export class HubForwardAuthBridgeService {
       return { username, replaced: false };
     }
 
-    this.spendForMint(identity);
+    await this.spendForMint(req, res, identity, session);
     await this.invalidate(req, session);
 
     return this.issueSessionFor(req, res, placed.user, username, session);
@@ -279,7 +304,7 @@ export class HubForwardAuthBridgeService {
       return { username, replaced: false };
     }
 
-    this.spendForMint(identity);
+    await this.spendForMint(req, res, identity, session);
 
     // Before the account is found or created, as it always was: if that throws, the
     // previous person's session is already gone.

@@ -1,4 +1,4 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import type { Response } from 'express';
 
 import {
@@ -10,6 +10,7 @@ import {
 import config from '@ci/configuration';
 
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
+import { SpentHubAssertions } from '../utils/spentHubAssertions';
 
 const SECRET = 'bridge-secret';
 const NOW = 1_700_000_000_000;
@@ -644,6 +645,27 @@ describe('HubForwardAuthBridgeService', () => {
       expect(authService.issueSessionToken).not.toHaveBeenCalled();
       expect(res.cookie).not.toHaveBeenCalled();
       expect(res.clearCookie).not.toHaveBeenCalled();
+    });
+
+    it("signs out the other person's session when the ledger has no room left to spend the assertion", async () => {
+      config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
+      config.auth.hubForwardAuth.audience = AUDIENCE;
+      jest.spyOn(SpentHubAssertions.prototype, 'spend').mockReturnValue('full');
+      const { service, federatedIdentityService, userService, authService } = makeService();
+      federatedIdentityService.findUserId.mockResolvedValue('user-b');
+      authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+      userService.findById.mockImplementation(async (_ctx: unknown, id: string) =>
+        id === 'user-b' ? account('user-b', 'hello@lifescope.io') : account('user-a', 'other@lifescope.io'),
+      );
+      const res = response();
+
+      await expect(
+        service.alignSession(requestWith(boundHeaders('hello@lifescope.io')), res),
+      ).rejects.toThrow(ServiceUnavailableException);
+      // Left standing, the SPA would refresh user-a's session under user-b's Hub sign-in.
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-a', 'old-token', expect.anything());
+      expect(res.clearCookie).toHaveBeenCalled();
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
     });
   });
 

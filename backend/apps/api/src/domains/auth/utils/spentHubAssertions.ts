@@ -14,9 +14,16 @@
  * Kept until the assertion stops verifying anyway (`expiresAt`). In-memory and per-process, which
  * is right for the single-instance appliance (same reasoning as the connect nonce cache in
  * `ConnectRequestAuthGuard`); a restart forgets what was spent, bounded by the skew window.
+ *
+ * An expired key is treated as absent wherever it is read, so expired keys are only swept out when
+ * the ledger is full, and only once one of them has expired: spending stays O(1) even while a
+ * flood holds the ledger at its limit.
  */
 export class SpentHubAssertions {
   private readonly spent = new Map<string, number>();
+
+  /** No key in the ledger expires before this, so a sweep earlier than it would find nothing. */
+  private earliestExpiry = Number.POSITIVE_INFINITY;
 
   /**
    * @param maxEntries how many live keys are remembered. Only verified header sets reach here,
@@ -25,27 +32,48 @@ export class SpentHubAssertions {
   constructor(private readonly maxEntries = 10_000) {}
 
   /**
-   * Record `key` as spent until `expiresAt`. False when it already was, or when there is no room
-   * left to remember it: a key that cannot be remembered cannot be refused next time either.
+   * Record `key` as spent until `expiresAt`.
+   *
+   * - `spent`: it was not, and now is.
+   * - `replayed`: it already was, and its header set still verifies.
+   * - `full`: there is no room left to remember it. A key that cannot be remembered cannot be
+   *   refused next time either, so it is not spent, and the caller must not mint from it.
    */
-  spend(key: string, expiresAt: number, now = Date.now()): boolean {
-    this.forgetExpired(now);
+  spend(key: string, expiresAt: number, now = Date.now()): 'spent' | 'replayed' | 'full' {
+    const held = this.spent.get(key);
+    // At `expiresAt` itself the header set still verifies (the skew check is inclusive).
+    if (held !== undefined && held >= now) {
+      return 'replayed';
+    }
 
-    if (this.spent.has(key) || this.spent.size >= this.maxEntries) {
-      return false;
+    if (held === undefined && this.spent.size >= this.maxEntries) {
+      this.forgetExpired(now);
+      if (this.spent.size >= this.maxEntries) {
+        return 'full';
+      }
     }
 
     this.spent.set(key, expiresAt);
+    this.earliestExpiry = Math.min(this.earliestExpiry, expiresAt);
 
-    return true;
+    return 'spent';
   }
 
   /** Drop keys whose header sets no longer verify. Strictly before: at `expiresAt` itself one still does. */
   private forgetExpired(now: number): void {
+    if (this.earliestExpiry >= now) {
+      return;
+    }
+
+    let earliest = Number.POSITIVE_INFINITY;
     for (const [key, expiresAt] of this.spent) {
       if (expiresAt < now) {
         this.spent.delete(key);
+      } else if (expiresAt < earliest) {
+        earliest = expiresAt;
       }
     }
+
+    this.earliestExpiry = earliest;
   }
 }
