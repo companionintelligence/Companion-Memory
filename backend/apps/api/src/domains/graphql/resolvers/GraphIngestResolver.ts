@@ -5,6 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MAX_BULK_INPUT_SIZE } from '@ci/common/pipes';
 import { GraphIngestService } from '@ci/domains/graph';
+import { isOwnerSettingPropertyKey } from '@ci/domains/memory';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { BulkGraphInput } from '../types/BulkGraphInput';
@@ -44,6 +45,23 @@ export class GraphIngestResolver {
           `exceeds the maximum of ${MAX_BULK_INPUT_SIZE} each. ` +
           `Split the payload into batches of at most ${MAX_BULK_INPUT_SIZE}.`,
       );
+    }
+
+    // `planner` holds the owner's settings on their own Person, the autonomy dial among them, and
+    // this mutation can reach that row (sourceSystem `self` is where the self Person is keyed).
+    // `is_self` is the claim `UserContextService` falls back on to find that Person, which is where
+    // the dial is read from. No import carries either, and a re-ingest merges what it is sent, so
+    // an agent calling this over /api/mcp could otherwise switch tool approvals off, or point the
+    // owner's identity at a row it planted. Settings and onboarding are their writers.
+    for (const entity of input.entities ?? []) {
+      const key = Object.keys(entity.properties ?? {}).find(isOwnerSettingPropertyKey);
+
+      if (key) {
+        throw new BadRequestException(
+          `Entity "${entity.key}" carries a "${key}" property. That key holds the owner's settings, ` +
+            'which an import cannot write; change them in Settings.',
+        );
+      }
     }
 
     const result = await this.graphIngestService.ingest(serviceContext, {

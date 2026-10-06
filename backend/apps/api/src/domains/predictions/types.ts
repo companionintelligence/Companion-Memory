@@ -1,6 +1,17 @@
 export interface ForecastBucket {
   bucket_index: number;
   start_time: string;
+  /**
+   * The class to render for this bucket.
+   *
+   * Deliberately not `argmax(l0_probs)`. Most of a day carries no recorded
+   * activity, so the posterior — which stays calibrated — answers UNKNOWN
+   * nearly everywhere even when it is exactly right. HBPE applies a
+   * prior correction to pick the label, with a floor so it can only promote a
+   * class the model still gives real probability to. Optional because an HBPE
+   * older than that change does not send it.
+   */
+  predicted_l0?: string | null;
   l0_probs: Record<string, number>;
   l1_probs: Record<string, number>;
   l2_probs: Record<string, number> | null;

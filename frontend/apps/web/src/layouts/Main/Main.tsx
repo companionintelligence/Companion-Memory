@@ -68,7 +68,7 @@ export function Main() {
             </Suspense>
           </main>
           <MobileNavigation />
-          <Portal id="overlay-modal" className="fixed inset-0 z-50 empty:hidden" />
+          <Portal id="overlay-modal" className="pointer-events-none fixed inset-0 z-50 empty:hidden" />
         </div>
       </PowerRailProvider>
     );
@@ -134,7 +134,7 @@ export function Main() {
             </div>
           </Suspense>
         </div>
-        <Portal id="overlay-modal" className="fixed inset-0 z-50 empty:hidden" />
+        <Portal id="overlay-modal" className="pointer-events-none fixed inset-0 z-50 empty:hidden" />
       </div>
     </PowerRailProvider>
   );

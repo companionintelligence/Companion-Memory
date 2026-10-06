@@ -7,7 +7,13 @@
  * follows via the intent manifest. Anything that needed injection would not be shareable across
  * all three — which is the whole reason this package exists.
  */
-export { capabilityAllows, capabilityRequiredFor, removesData, type GatedPrivacy } from './capabilityPolicy';
+export {
+  capabilityAllows,
+  capabilityRequiredFor,
+  removesData,
+  stricterPrivacy,
+  type GatedPrivacy,
+} from './capabilityPolicy';
 export {
   DISPATCH_TIERS,
   resolveDispatch,

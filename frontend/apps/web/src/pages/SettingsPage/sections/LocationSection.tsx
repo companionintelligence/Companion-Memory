@@ -212,8 +212,9 @@ export function LocationSection() {
             <AlertDialog.Title>Remember places in the background?</AlertDialog.Title>
             <AlertDialog.Description>
               <span className="block">
-                Companion records location even when the app is closed, so memories can get places after you
-                leave. iOS shows the blue location indicator; Android shows a persistent notification.
+                Companion records a place when you move a meaningful distance, including after you leave the
+                app. On iPhone that stays quiet while you are still — no solid blue location indicator.
+                Android shows a persistent notification while Always is on, which the system requires.
               </span>
               <span className="mt-2 block">
                 iOS asks twice: Allow While Using the App, then Always Allow. If the second prompt does not

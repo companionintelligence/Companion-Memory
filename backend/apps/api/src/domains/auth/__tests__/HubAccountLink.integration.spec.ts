@@ -106,6 +106,10 @@ describeWithDatabase(`Hub ↔ Memory account link, against real Postgres (${avai
   beforeAll(async () => {
     config.auth.hubForwardAuth.enabled = true;
     config.auth.hubForwardAuth.secret = SECRET;
+    // The headers below are the unbound format; a .env that gives this app its own key would refuse them.
+    config.auth.hubForwardAuth.identitySecret = '';
+    config.auth.hubForwardAuth.audience = '';
+    config.auth.hubForwardAuth.requireAudience = 'auto';
     config.auth.hubForwardAuth.maxSkewMs = 300_000;
 
     scratch = await ScratchDatabase.create({ createdBy: 'auth/HubAccountLink.integration.spec' });

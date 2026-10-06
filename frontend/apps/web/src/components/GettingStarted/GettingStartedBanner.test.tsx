@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { isGettingStartedActive, markGettingStartedActive } from '@/lib/gettingStarted';
 
-import { GettingStartedBanner } from './GettingStartedBanner';
 import type { MemoryTotals } from './firstSync';
+import { GettingStartedBanner } from './GettingStartedBanner';
 
 const EMPTY: MemoryTotals = {
   communications: 0,
@@ -51,7 +51,9 @@ vi.mock('@ci/shadcn', async (importOriginal) => ({
 }));
 
 vi.mock('@/common/feature', () => ({
-  useFeatures: () => ({ isFeatureEnabled: (flag: string) => (flag === 'import.page' ? h.importsFlag : false) }),
+  useFeatures: () => ({
+    isFeatureEnabled: (flag: string) => (flag === 'import.page' ? h.importsFlag : false),
+  }),
 }));
 
 vi.mock('@/hooks', () => ({
@@ -128,7 +130,10 @@ describe('GettingStartedBanner', () => {
     expect(screen.getByRole('link', { name: 'Set up a model' }).getAttribute('href')).toMatch(
       /\/settings\/model$/,
     );
-    expect(screen.getByRole('link', { name: 'Connect a source' })).toHaveAttribute('href', '/sources/connect');
+    expect(screen.getByRole('link', { name: 'Connect a source' })).toHaveAttribute(
+      'href',
+      '/sources/connect',
+    );
     expect(screen.getByRole('link', { name: 'Import data' })).toHaveAttribute('href', '/sources/import');
   });
 

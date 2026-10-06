@@ -122,7 +122,7 @@ describe('Main: the unsynced-imports notice', () => {
     expectInOrder(screen.getByTestId('top-bar'), screen.getByTestId('contract-strip'), banner, page, overlay);
     // Modals portal into this slot (`fixed inset-0 z-50`), which is later in the
     // tree and so over anything in the flow.
-    expect(overlay).toHaveClass('fixed', 'z-50');
+    expect(overlay).toHaveClass('fixed', 'z-50', 'pointer-events-none');
     // And it is not a toast: no sonner container holds it.
     expect(banner.closest('[data-sonner-toaster]')).toBeNull();
     expect(toast).not.toHaveBeenCalled();

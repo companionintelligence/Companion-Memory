@@ -1,5 +1,6 @@
 import {
   type ExecutionContext,
+  ForbiddenException,
   Inject,
   Injectable,
   InternalServerErrorException,
@@ -11,19 +12,28 @@ import { AuthGuard } from '@nestjs/passport';
 import { ContextService } from '@ci/common/context';
 
 import { extractBearerToken } from './bearerToken';
-import { PORTAL_TOKEN_VERIFIER, type PortalTokenVerifier } from './PortalTokenVerifier';
+import {
+  PORTAL_TOKEN_VERIFIER,
+  type PortalPrincipalMarker,
+  type PortalTokenVerifier,
+} from './PortalTokenVerifier';
 
 /**
  * Accepts a CI-Server session JWT or a portal-issued OIDC bearer — and,
  * deliberately, NOT an api key.
  *
  * This exists for credential-management routes (minting/listing/revoking api
- * keys): portal-authenticated clients like Companion Capture hold only a
- * short-lived portal id_token after sign-in and need to exchange it for a
- * durable api key, but an api key itself must never reach those routes — a
- * leaked key that could mint replacement keys would survive its own
- * revocation. Requiring a JWT/portal principal keeps key management anchored
- * to an interactive sign-in.
+ * keys): a phone pairing with this Memory holds only a short-lived Portal token
+ * after sign-in and exchanges it for a durable api key, but an api key itself
+ * must never reach those routes: a leaked key that could mint replacement keys
+ * would survive its own revocation. Requiring a JWT/portal principal keeps key
+ * management anchored to an interactive sign-in.
+ *
+ * Not every Portal token gets in (`PortalPrincipal.credentialRoutes`). One
+ * addressed to this appliance does, and so does one from a Portal that predates
+ * addressing. A capture client's token (Companion Capture, the browser
+ * extension) and an unaddressed one are refused, so neither becomes a key that
+ * never expires.
  */
 @Injectable()
 export class JwtOrPortalAuthGuard extends AuthGuard('jwt') {
@@ -39,11 +49,22 @@ export class JwtOrPortalAuthGuard extends AuthGuard('jwt') {
       const token = extractBearerToken(request?.headers?.authorization);
 
       if (token) {
-        const user = await this.portalTokenVerifier.verifyAndProvision(token);
+        const principal = await this.portalTokenVerifier.verifyAndProvision(token);
 
-        if (user) {
-          ContextService.set({ userId: user.id });
-          request.user = user;
+        if (principal) {
+          // Minting a key turns an hour-long token into a credential that never expires, and
+          // the MCP routes behind this guard can run commands. Only a token that carries the
+          // user's full authority here may do either. This guard runs no scope enforcement, so a
+          // principal with limits is refused here too rather than let in unconfined.
+          if (!principal.credentialRoutes || principal.limits) {
+            throw new ForbiddenException(
+              'This Companion sign-in cannot manage keys on this Memory. Sign in to this Memory directly, or connect again from an up-to-date app.',
+            );
+          }
+
+          ContextService.set({ userId: principal.user.id });
+          request.user = principal.user;
+          (request as PortalPrincipalMarker).portalPrincipal = { admin: principal.admin };
 
           return true;
         }

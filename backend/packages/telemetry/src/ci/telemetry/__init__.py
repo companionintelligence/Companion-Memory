@@ -52,7 +52,7 @@ _HOME_PATTERNS = [
 ]
 
 _SENSITIVE_KEY = re.compile(
-    r"password|secret|token|authorization|cookie|jwt|api[-_ ]?key|dsn|pepper|private[-_]?key|signature",
+    r"password|secret|token|authorization|cookie|jwt|api[-_ ]?key|dsn|pepper|private[-_]?key|signature|assertion",
     re.IGNORECASE,
 )
 

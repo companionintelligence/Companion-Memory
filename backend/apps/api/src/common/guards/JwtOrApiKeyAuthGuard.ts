@@ -13,7 +13,11 @@ import { ContextService } from '@ci/common/context';
 
 import { enforceApiKeyCapability, enforceApiKeyScopes } from './apiKeyScopeEnforcement';
 import { extractBearerToken } from './bearerToken';
-import { PORTAL_TOKEN_VERIFIER, type PortalTokenVerifier } from './PortalTokenVerifier';
+import {
+  PORTAL_TOKEN_VERIFIER,
+  type PortalPrincipalMarker,
+  type PortalTokenVerifier,
+} from './PortalTokenVerifier';
 
 @Injectable()
 export class JwtOrApiKeyAuthGuard extends AuthGuard(['jwt', 'api-key']) {
@@ -32,14 +36,24 @@ export class JwtOrApiKeyAuthGuard extends AuthGuard(['jwt', 'api-key']) {
       const token = extractBearerToken(request?.headers?.authorization);
 
       if (token) {
-        const user = await this.portalTokenVerifier.verifyAndProvision(token);
+        const principal = await this.portalTokenVerifier.verifyAndProvision(token);
 
-        if (user) {
-          ContextService.set({ userId: user.id });
-          request.user = user;
+        if (principal) {
+          ContextService.set({ userId: principal.user.id });
+          request.user = principal.user;
+          (request as PortalPrincipalMarker).portalPrincipal = { admin: principal.admin };
 
-          // Portal principal carries full user authority and no api-key scopes,
-          // so scope enforcement does not apply to this path.
+          // A Portal bearer that is not the user's full authority (a capture client, or a
+          // token not addressed to this appliance) is confined exactly like an api key
+          // with the same scopes and capability, by the same enforcement.
+          if (principal.limits) {
+            // A copy: the verifier hands every capture principal the same constant array.
+            request.apiKeyScopes = [...principal.limits.scopes];
+            request.apiKeyCapability = principal.limits.capability;
+            enforceApiKeyScopes(this.reflector, context, request);
+            enforceApiKeyCapability(this.reflector, context, request);
+          }
+
           return true;
         }
       }

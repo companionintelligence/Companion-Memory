@@ -207,10 +207,7 @@ class OutboundPolicyStoreImpl {
       return;
     }
 
-    this.logger.warn(
-      'Failed to read ci.outbound_settings',
-      err instanceof Error ? err.stack : message,
-    );
+    this.logger.warn('Failed to read ci.outbound_settings', err instanceof Error ? err.stack : message);
   }
 }
 
@@ -228,7 +225,12 @@ function toRow(row: SettingsRow): OutboundSettingRow | null {
   return {
     key: row.key,
     enabled: typeof row.enabled === 'boolean' ? row.enabled : null,
-    updatedAt: row.updated_at == null ? null : row.updated_at instanceof Date ? row.updated_at : new Date(row.updated_at),
+    updatedAt:
+      row.updated_at == null
+        ? null
+        : row.updated_at instanceof Date
+          ? row.updated_at
+          : new Date(row.updated_at),
     updatedBy: row.updated_by ?? null,
   };
 }

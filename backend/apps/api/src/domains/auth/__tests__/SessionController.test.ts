@@ -16,7 +16,7 @@ import { UserService } from '@ci/domains/user';
 
 import { SessionController } from '../controllers/SessionController';
 import { AuthService } from '../services/AuthService';
-import { CsrfService } from '../services/CsrfService';
+import { CsrfService, CsrfValidationError } from '../services/CsrfService';
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 import { LoginThrottleService } from '../services/LoginThrottleService';
 
@@ -524,6 +524,38 @@ describe('SessionController', () => {
 
       expect(mockCsrfService.ensureToken).toHaveBeenCalledWith(undefined, MOCK_SESSION_ID);
       expect(response.body.csrfToken).toBe(MOCK_CSRF_TOKEN);
+    });
+  });
+
+  describe('POST /authenticate/hub-bridge', () => {
+    it("aligns the session for the web app's cookie and header pair", async () => {
+      mockHubBridge.alignSession.mockResolvedValueOnce({ username: 'owner@example.com', replaced: false });
+
+      const response = await request(app.getHttpServer())
+        .post('/authenticate/hub-bridge')
+        .set('Cookie', [`${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
+        .expect(200);
+
+      expect(response.body).toEqual({ username: 'owner@example.com', replaced: false });
+      expect(mockCsrfService.validateToken).toHaveBeenCalledWith(MOCK_CSRF_TOKEN, MOCK_CSRF_TOKEN, null);
+    });
+
+    it("refuses the native app's cookie-less shape: only the web app calls this route", async () => {
+      // The real CsrfService rejects a missing cookie; the shared mock passes everything by default.
+      mockCsrfService.validateToken.mockImplementation((cookie: unknown) => {
+        if (!cookie) {
+          throw new CsrfValidationError('missing', 'Missing CSRF token');
+        }
+      });
+
+      await request(app.getHttpServer())
+        .post('/authenticate/hub-bridge')
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
+        .expect(403);
+
+      expect(mockCsrfService.verifyToken).not.toHaveBeenCalled();
+      expect(mockHubBridge.alignSession).not.toHaveBeenCalled();
     });
   });
 

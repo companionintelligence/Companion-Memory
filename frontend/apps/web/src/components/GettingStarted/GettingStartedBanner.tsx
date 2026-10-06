@@ -200,7 +200,12 @@ function GettingStartedBannerBody({ onDismiss }: { onDismiss: () => void }) {
             const stepAction = action(step);
 
             return (
-              <li key={step.id} data-step={step.id} data-status={step.status} className="flex items-start gap-3">
+              <li
+                key={step.id}
+                data-step={step.id}
+                data-status={step.status}
+                className="flex items-start gap-3"
+              >
                 <Icon
                   className={`mt-0.5 h-4 w-4 shrink-0 ${className}${spin ? ' animate-spin' : ''}`}
                   strokeWidth={1.5}

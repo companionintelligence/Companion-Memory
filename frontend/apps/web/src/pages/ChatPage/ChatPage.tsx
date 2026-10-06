@@ -25,8 +25,8 @@ import { useAuth, useChatRequester, useCounter, useModel } from '@/hooks';
 import { useLocalLlmPrefs } from '@/hooks/useOnDeviceModel';
 import { clearAgentChatContext, formatAgentChatDraft, readAgentChatContext } from '@/lib/agentChat';
 
-import { CHAT_BASE, chatThreadPath } from './chatPaths';
 import { ChatNoModelState } from './ChatNoModelState';
+import { CHAT_BASE, chatThreadPath } from './chatPaths';
 import { ChatSidebar } from './ChatSidebar';
 import { PhoneChatBar } from './PhoneChatBar';
 import { TOOL_STARTER_PROMPTS, chatTopicsFor, joinTopics, starterPromptsFor } from './starterPrompts';

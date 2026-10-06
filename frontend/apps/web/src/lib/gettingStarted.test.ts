@@ -39,8 +39,12 @@ describe('getting-started marker', () => {
     const start = new Date('2026-09-29T12:00:00Z');
     markGettingStartedActive('u1', start);
 
-    expect(isGettingStartedActive('u1', new Date(start.getTime() + GETTING_STARTED_MAX_AGE_MS - 1))).toBe(true);
-    expect(isGettingStartedActive('u1', new Date(start.getTime() + GETTING_STARTED_MAX_AGE_MS + 1))).toBe(false);
+    expect(isGettingStartedActive('u1', new Date(start.getTime() + GETTING_STARTED_MAX_AGE_MS - 1))).toBe(
+      true,
+    );
+    expect(isGettingStartedActive('u1', new Date(start.getTime() + GETTING_STARTED_MAX_AGE_MS + 1))).toBe(
+      false,
+    );
   });
 
   it('treats corrupt storage as never marked', () => {
