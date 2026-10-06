@@ -43,8 +43,8 @@ fail() {
   exit 1
 }
 
-# The digest publish.sh recorded for <repo> on <arch>, or nothing. The last
-# line wins if a leg was re-run and appended twice.
+# The digest publish.sh recorded for <repo> on <arch>, or nothing. publish.sh
+# appends, so if it ran twice against one file the last line wins.
 recorded_digest() {
   local file="${DIGESTS_DIR}/$2.txt"
   [[ -f "${file}" ]] || return 0
