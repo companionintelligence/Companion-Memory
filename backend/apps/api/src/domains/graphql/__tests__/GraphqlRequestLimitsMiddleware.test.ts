@@ -46,6 +46,18 @@ describe('GraphqlRequestLimitsMiddleware', () => {
     expect(status).toHaveBeenCalledWith(400);
   });
 
+  it('matches the endpoint in any letter case, as express routing does', () => {
+    for (const req of [
+      { originalUrl: '/GraphQL', body: { query: BROAD } },
+      { baseUrl: '/GRAPHQL', originalUrl: '/', url: '/', body: { query: BROAD } },
+    ]) {
+      const { next, status } = run(req);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(400);
+    }
+  });
+
   it('passes an ordinary document through', () => {
     const { next, status } = run({ originalUrl: '/graphql', body: { query: NARROW, variables: {} } });
 

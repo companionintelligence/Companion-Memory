@@ -73,13 +73,17 @@ const SIGNED_PEER_PREFIX = '/agent/v1';
  * Whether `req` is for the single Apollo-mounted POST /graphql endpoint. The
  * Apollo driver mounts it via `app.use('/graphql', …)`, so inside that mount
  * `req.path` is '/' and `req.baseUrl` is '/graphql'; baseUrl/originalUrl are
- * checked as well as the path so the answer holds either way.
+ * checked as well as the path so the answer holds either way. Case-insensitive,
+ * because express routing is: `/GraphQL` reaches Apollo too, and must not
+ * reach it past the limits that key off this answer.
  */
 export function isGraphqlRequest(req: Request): boolean {
-  const routePath = (req.originalUrl || req.url || req.path).split('?')[0];
+  const routePath = (req.originalUrl || req.url || req.path).split('?')[0].toLowerCase();
 
   return (
-    req.baseUrl === GRAPHQL_PATH || routePath === GRAPHQL_PATH || routePath.startsWith(`${GRAPHQL_PATH}/`)
+    (req.baseUrl ?? '').toLowerCase() === GRAPHQL_PATH ||
+    routePath === GRAPHQL_PATH ||
+    routePath.startsWith(`${GRAPHQL_PATH}/`)
   );
 }
 
