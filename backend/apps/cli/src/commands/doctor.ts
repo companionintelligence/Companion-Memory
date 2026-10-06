@@ -1,3 +1,4 @@
+import { ApiError } from '../client';
 import type { DoctorCheckSummary, DoctorFinding, DoctorReport } from '../wire';
 import { CliError, type CliContext } from '../context';
 import { duration, json, table } from '../output';
@@ -63,7 +64,26 @@ export async function doctorCommand(ctx: CliContext, options: DoctorOptions = {}
   }
 
   const timeoutMs = parseTimeout(options.timeout);
-  const report = await ctx.client.runDoctor({ checks: options.check, timeoutMs });
+
+  let report: DoctorReport;
+  try {
+    report = await ctx.client.runDoctor({ checks: options.check, timeoutMs });
+  } catch (err) {
+    // The suite reads every account's data, so the appliance now limits it to
+    // the administrator. On a 403 that is the reason, not a bad key — say so
+    // plainly rather than letting the client's generic "key was rejected" line
+    // send someone to mint a new one that will be refused the same way.
+    if (err instanceof ApiError && err.status === 403) {
+      throw new CliError(
+        `ci doctor reads data across every account, so it is limited to the appliance ` +
+          `administrator. Signed in as a non-admin account, you cannot run it. Ask the ` +
+          `appliance owner to run it, or sign in with the owner account.`,
+        2,
+      );
+    }
+
+    throw err;
+  }
 
   if (options.json) {
     json(ctx.term, report);

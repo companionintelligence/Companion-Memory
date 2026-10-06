@@ -1,3 +1,4 @@
+import { ApiError } from '../client';
 import type { DoctorFinding, DoctorReport } from '../wire';
 import { doctorCommand } from '../commands/doctor';
 import { CliError } from '../context';
@@ -211,6 +212,22 @@ describe('ci doctor', () => {
     await doctorCommand(ctx, { check: ['pipeline-dead-letters'], timeout: '60000' });
 
     expect(seen).toEqual([{ checks: ['pipeline-dead-letters'], timeoutMs: 60_000 }]);
+  });
+
+  it('explains that a non-admin cannot run doctor instead of forwarding the raw 403', async () => {
+    // The suite reads every account's data, so the appliance limits it to the
+    // administrator. A household member should learn that, not be told their
+    // key was rejected and go mint a new one that fails the same way.
+    const ctx = harness({
+      runDoctor: async () => {
+        throw new ApiError(403, 'This action requires an administrator account', '/import/doctor');
+      },
+    });
+
+    await expect(doctorCommand(ctx, {})).rejects.toMatchObject({
+      exitCode: 2,
+      message: expect.stringContaining('administrator'),
+    });
   });
 
   it('refuses a --timeout that is not a positive number of milliseconds', async () => {
