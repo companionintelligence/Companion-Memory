@@ -100,6 +100,18 @@ describe('attachmentDisposition', () => {
     );
   });
 
+  it('cuts a long name on a code point, so an emoji at the cut cannot make signing throw', () => {
+    // 199 units, then a two-unit emoji: a cut at 200 UTF-16 units leaves half of it.
+    const value = attachmentDisposition(`${'a'.repeat(199)}\u{1F600}${'b'.repeat(10)}.eml`);
+
+    expect(value.endsWith(`filename*=UTF-8''${'a'.repeat(199)}%F0%9F%98%80`)).toBe(true);
+  });
+
+  it('turns an unpaired surrogate into U+FFFD instead of throwing', () => {
+    expect(() => attachmentDisposition('a\uD800b.txt')).not.toThrow();
+    expect(attachmentDisposition('a\uD800b.txt')).toContain(`filename*=UTF-8''a%EF%BF%BDb.txt`);
+  });
+
   it('is a bare attachment when the row has no filename', () => {
     expect(attachmentDisposition(null)).toBe('attachment');
     expect(attachmentDisposition('   ')).toBe('attachment');
@@ -170,5 +182,10 @@ describe('gateway /static/ location', () => {
     for (const type of ['text/html', 'image/svg+xml', 'application/octet-stream', 'image/png', 'video/mp4']) {
       expect(exemption.test(query(downloadResponseOverrides(type, null).ResponseContentType))).toBe(false);
     }
+
+    // Only the exact bare value: a longer type that starts the same way is not a PDF.
+    expect(exemption.test(query('application/pdfx'))).toBe(false);
+    expect(exemption.test(query('application/pdf; charset=utf-8'))).toBe(false);
+    expect(exemption.test(`response-content-type=application%2Fpdf`)).toBe(true);
   });
 });

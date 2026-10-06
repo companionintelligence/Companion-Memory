@@ -46,6 +46,9 @@ const DOWNLOAD_TYPE = 'application/octet-stream';
 /** A charset name, and nothing that could carry another parameter or header. */
 const CHARSET_TOKEN = /^[A-Za-z0-9._-]{1,40}$/;
 
+/** A high surrogate with no low one after it, or a low one with no high one before it. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 export interface DownloadResponseOverrides {
   ResponseContentType: string;
   ResponseContentDisposition?: string;
@@ -81,9 +84,15 @@ export function isInlineSafeContentType(contentType: string | null | undefined):
  * The quoted `filename` is an ASCII fallback with quotes, backslashes and
  * control or non-ASCII characters replaced; `filename*` carries the real name
  * (RFC 6266, RFC 5987).
+ *
+ * The name is cut at 200 code points, not UTF-16 units, and any unpaired
+ * surrogate becomes U+FFFD first: `encodeURIComponent` throws on a lone
+ * surrogate, and one throw here fails every file on the page being signed.
  */
 export function attachmentDisposition(filename: string | null | undefined): string {
-  const name = (filename ?? '').trim().slice(0, 200);
+  const name = Array.from((filename ?? '').trim().replace(LONE_SURROGATE, '\uFFFD'))
+    .slice(0, 200)
+    .join('');
 
   if (!name) {
     return 'attachment';
