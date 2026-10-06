@@ -91,8 +91,8 @@ export class ApplianceAdminGuard implements CanActivate {
    *
    * One implementation, on purpose: a page that offered a control the route then
    * refused, or hid one the route would have allowed, would be two rules
-   * drifting. A failed admin probe still throws (`applianceHasAdmin` fails
-   * closed); a caller that would rather read that as "no" must catch it.
+   * drifting. A failed admin probe still throws (`probe` fails closed); a
+   * caller that would rather read that as "no" must catch it.
    */
   async admits(user: { role?: string } | undefined): Promise<boolean> {
     if (user?.role === 'admin') {

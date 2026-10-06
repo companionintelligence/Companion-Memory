@@ -41,7 +41,8 @@ Now the guard refuses when live accounts exist without a live admin, and only th
 appliance's first account ever is promoted. A box that is already in that state (it
 was upgraded with the owner pending purge) has no admin until an operator restores the
 owner inside the grace period, or sets `role = 'admin'` on the account that should hold
-it.
+it. The same goes for a box whose only account was deleted and which gained a new
+account before the purge: that account is not the first row, so it is never promoted.
 
 The deleted account's unused invitations are deleted with it.
 

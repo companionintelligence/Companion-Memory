@@ -295,11 +295,13 @@ export class UserService {
    * claims it again.
    *
    * An appliance whose admin is gone while other accounts remain therefore has no admin until
-   * someone names one. `requestDeletion` refuses to produce that state (the last admin must name a
-   * successor), so it arises only on a box upgraded while already in it, or after an operator
-   * edits `ci.users` by hand. The way out is an operator's: clear the departed owner's
-   * `deleted_at` and `purge_after` inside the grace period, or set `role = 'admin'` on the account
-   * that should hold it (`make dbshell`).
+   * someone names one. `requestDeletion` refuses to produce that state while other live accounts
+   * exist (the last admin must name a successor). It still arises on a box upgraded while already
+   * in it, after an operator edits `ci.users` by hand, and when the only account is deleted and
+   * somebody else's account is created before the purge removes it: that account is not the first
+   * row, so it is not promoted, and nothing promotes it after the purge either. The way out is an
+   * operator's: clear the departed owner's `deleted_at` and `purge_after` inside the grace period,
+   * or set `role = 'admin'` on the account that should hold it (`make dbshell`).
    *
    * The first account's address is also marked proven (`email_proven_at`). Nobody else is on the
    * appliance yet, so it cannot be another person's address planted to receive their Portal or

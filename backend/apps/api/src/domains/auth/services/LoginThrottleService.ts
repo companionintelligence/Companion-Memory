@@ -233,7 +233,7 @@ export class LoginThrottleService {
         }
       }
 
-      return this.saturated(identityKey, sourceKey ?? this.identifySource(ip), now)
+      return this.saturated(identityKey, () => sourceKey ?? this.identifySource(ip), now)
         ? { locked: true, retryAfterSeconds: SATURATED_RETRY_SECONDS }
         : NOT_LOCKED;
     } catch (error) {
@@ -428,7 +428,7 @@ export class LoginThrottleService {
    * Whether this attempt would need a new entry in two stores that are both full of live
    * ones. Expired entries are swept first, so a flood that has ended frees the slots it held.
    */
-  private saturated(identityKey: string, sourceKey: string, now: number): boolean {
+  private saturated(identityKey: string, source: () => string, now: number): boolean {
     if (this.attempts.size < MAX_TRACKED_IDENTITIES || this.attempts.has(identityKey)) {
       return false;
     }
@@ -438,6 +438,9 @@ export class LoginThrottleService {
     if (this.attempts.size < MAX_TRACKED_IDENTITIES) {
       return false;
     }
+
+    // Only now: the address key costs an HMAC, and a store with room never needs it.
+    const sourceKey = source();
 
     this.prune(this.sources, now, sourceKey);
 

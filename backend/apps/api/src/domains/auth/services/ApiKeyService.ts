@@ -56,9 +56,11 @@ export class ApiKeyService {
       capability: data.capability ?? DEFAULT_API_KEY_CAPABILITY,
       expires_at: data.expires_at ? new Date(data.expires_at) : null,
       user_id: context.userId,
-      // Defaults to null — a key created through the REST API is the user's own.
-      // Only the connect flow passes a provenance, and it is never accepted from
-      // request input.
+      // Defaults to null: a key created through the REST API is the user's own.
+      // The connect flow passes 'connect', which is never accepted from request
+      // input. 'sign_in' is (`POST /keys` with `sign_in: true`), because it grants
+      // nothing: it only marks a key that a password change and "Sign out
+      // everywhere" revoke.
       managed_by: managedBy,
     });
 
