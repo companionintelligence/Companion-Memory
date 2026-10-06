@@ -1,3 +1,4 @@
+import { UnauthorizedException } from '@nestjs/common';
 import type { Response } from 'express';
 
 import {
@@ -555,6 +556,94 @@ describe('HubForwardAuthBridgeService', () => {
         username: null,
         accountId: null,
       });
+    });
+  });
+
+  describe('one session per Hub sign-in', () => {
+    it('spends no unbound header set: two tabs an older Hub signed in the same millisecond both sign in', async () => {
+      const { service, userService, authService } = makeService();
+      userService.findByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+      const headers = signedHeaders('hello@lifescope.io');
+
+      await service.alignSession(requestWith(headers, null), response());
+      await expect(service.alignSession(requestWith(headers, null), response())).resolves.toMatchObject({
+        replaced: true,
+      });
+      expect(authService.issueSessionToken).toHaveBeenCalledTimes(2);
+    });
+
+    it('mints once from a bound assertion and refuses the same assertion again', async () => {
+      config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
+      config.auth.hubForwardAuth.audience = AUDIENCE;
+      const { service, federatedIdentityService, userService, authService } = makeService();
+      federatedIdentityService.findUserId.mockResolvedValue('user-a');
+      userService.findById.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+      const headers = boundHeaders('hello@lifescope.io');
+
+      await expect(service.alignSession(requestWith(headers, null), response())).resolves.toMatchObject({
+        replaced: true,
+      });
+      await expect(service.alignSession(requestWith(headers, null), response())).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(authService.issueSessionToken).toHaveBeenCalledTimes(1);
+    });
+
+    it('mints for two requests in the same millisecond: each assertion has its own nonce', async () => {
+      config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
+      config.auth.hubForwardAuth.audience = AUDIENCE;
+      const { service, federatedIdentityService, userService, authService } = makeService();
+      federatedIdentityService.findUserId.mockResolvedValue('user-a');
+      userService.findById.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+
+      await service.alignSession(requestWith(boundHeaders('hello@lifescope.io'), null), response());
+      await service.alignSession(
+        requestWith(boundHeaders('hello@lifescope.io', { nonce: 'Zr4mK8pL2vJ6sD0gU1tY5w' }), null),
+        response(),
+      );
+
+      expect(authService.issueSessionToken).toHaveBeenCalledTimes(2);
+    });
+
+    it('spends nothing while the browser already holds the right session', async () => {
+      config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
+      config.auth.hubForwardAuth.audience = AUDIENCE;
+      const { service, federatedIdentityService, userService, authService } = makeService();
+      federatedIdentityService.findUserId.mockResolvedValue('user-a');
+      authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+      userService.findById.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+      const headers = boundHeaders('hello@lifescope.io');
+
+      // The same header set on an ordinary page load, then on a browser with no session.
+      await expect(service.alignSession(requestWith(headers), response())).resolves.toMatchObject({
+        replaced: false,
+      });
+      await expect(service.alignSession(requestWith(headers, null), response())).resolves.toMatchObject({
+        replaced: true,
+      });
+    });
+
+    it('signs nobody out when it refuses a spent assertion', async () => {
+      config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
+      config.auth.hubForwardAuth.audience = AUDIENCE;
+      const { service, federatedIdentityService, userService, authService } = makeService();
+      federatedIdentityService.findUserId.mockResolvedValue('user-b');
+      userService.findById.mockImplementation(async (_ctx: unknown, id: string) =>
+        id === 'user-b' ? account('user-b', 'hello@lifescope.io') : account('user-a', 'other@lifescope.io'),
+      );
+      const headers = boundHeaders('hello@lifescope.io');
+      await service.alignSession(requestWith(headers, null), response());
+      authService.invalidateSession.mockClear();
+      authService.issueSessionToken.mockClear();
+      // The same assertion again, from a browser signed in as someone else.
+      authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+      const res = response();
+
+      await expect(service.alignSession(requestWith(headers), res)).rejects.toThrow(UnauthorizedException);
+      expect(authService.invalidateSession).not.toHaveBeenCalled();
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
+      expect(res.cookie).not.toHaveBeenCalled();
+      expect(res.clearCookie).not.toHaveBeenCalled();
     });
   });
 

@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
 import { isUniqueViolation } from '@ci/common/constants';
@@ -17,6 +17,7 @@ import config from '@ci/configuration';
 import { type CreateUserDto, type User, UserService } from '@ci/domains/user';
 
 import { clearCsrfCookie, clearSessionCookie, setCsrfCookie, setSessionCookie } from '../utils/authCookies';
+import { SpentHubAssertions } from '../utils/spentHubAssertions';
 
 import { AuthService } from './AuthService';
 import { CsrfService } from './CsrfService';
@@ -90,9 +91,17 @@ function emailsEqual(a: string | null | undefined, b: string | null | undefined)
  * By email alone, as before, for a Hub that sends no stable id. That is still the
  * failure the stable id exists to end, kept only so an older Hub works exactly as
  * it always did. See CI-Engineering/architecture/identity/hub-memory-account-link.md.
+ *
+ * ── One session per Hub sign-in ────────────────────────────────────────────
+ *
+ * Reading the identity is free: every request carries it. Minting a session from a
+ * bound assertion spends it ({@link SpentHubAssertions}), so it opens one session and
+ * no more. Which header sets verify at all is `forwardAuthPolicy`'s call.
  */
 @Injectable()
 export class HubForwardAuthBridgeService {
+  private readonly spentAssertions = new SpentHubAssertions();
+
   constructor(
     private readonly userService: UserService,
     private readonly authService: AuthService,
@@ -200,6 +209,25 @@ export class HubForwardAuthBridgeService {
       : this.alignByEmail(req, res, identity);
   }
 
+  /**
+   * Spend the bound assertion this session is about to be minted from, or refuse to mint.
+   *
+   * Called after the match checks, so a browser that already holds the right session spends
+   * nothing, and before anything is signed out, so a refused request changes nothing. The unbound
+   * format has no key to spend (`replayKey` is null) and mints as it always did.
+   */
+  private spendForMint(identity: VerifiedHubForwardAuth): void {
+    if (identity.replayKey == null || this.spentAssertions.spend(identity.replayKey, identity.expiresAt)) {
+      return;
+    }
+
+    this.logger.warn(`refused a second Memory session from one Hub sign-in for ${identity.username}`);
+
+    throw new UnauthorizedException(
+      'This Hub sign-in has already been used. Reload the page to sign in again.',
+    );
+  }
+
   private async alignByStableId(
     req: Request,
     res: Response,
@@ -232,6 +260,7 @@ export class HubForwardAuthBridgeService {
       return { username, replaced: false };
     }
 
+    this.spendForMint(identity);
     await this.invalidate(req, session);
 
     return this.issueSessionFor(req, res, placed.user, username, session);
@@ -249,6 +278,8 @@ export class HubForwardAuthBridgeService {
     if (session && emailsEqual(session.email, username)) {
       return { username, replaced: false };
     }
+
+    this.spendForMint(identity);
 
     // Before the account is found or created, as it always was: if that throws, the
     // previous person's session is already gone.
