@@ -129,6 +129,64 @@ describe('repairEntryNames', () => {
     expect(filesUnder(dest)).toEqual([]);
   });
 
+  it("removes the archive's own links before it writes", () => {
+    // Staged as Debian `unzip` leaves an archive that pairs a UNIX symlink
+    // entry (name passed through, link restored) with an MS-DOS entry under
+    // the same accented directory (name garbled). Writing `dé/main.js` at its
+    // true name would go through the link.
+    const outside = path.join(work, 'outside');
+    fs.mkdirSync(outside);
+    const archive = archiveOf([
+      { name: 'dé', symlinkTo: outside },
+      { name: 'dé/main.js', contents: 'from the archive' },
+    ]);
+    fs.symlinkSync(outside, path.join(dest, 'dé'));
+    writeMangled(dest, 'd+¬/main.js', 'from the archive');
+
+    const result = repairEntryNames(archive, dest);
+
+    expect(result).toEqual({ repaired: 1, unrepaired: 0, removed: 0 });
+    expect(fs.readdirSync(outside)).toEqual([]);
+    expect(fs.lstatSync(path.join(dest, 'dé')).isDirectory()).toBe(true);
+    expect(fs.readFileSync(path.join(dest, 'dé', 'main.js'), 'utf8')).toBe('from the archive');
+  });
+
+  it('refuses to write through a link the archive does not list', () => {
+    // A link this archive did not carry (an earlier archive's, in the shared
+    // tree `./unpack` expands into) is not this pass's to remove, and it must
+    // not be written through either.
+    const outside = path.join(work, 'outside');
+    fs.mkdirSync(outside);
+    const archive = archiveOf([{ name: 'dé/main.js', contents: 'from the archive' }]);
+    fs.symlinkSync(outside, path.join(dest, 'dé'));
+    writeMangled(dest, 'd+¬/main.js', 'from the archive');
+
+    const result = repairEntryNames(archive, dest);
+
+    expect(result).toEqual({ repaired: 0, unrepaired: 1, removed: 0 });
+    expect(fs.readdirSync(outside)).toEqual([]);
+    expect(fs.lstatSync(path.join(dest, 'dé')).isSymbolicLink()).toBe(true);
+  });
+
+  it('never writes through a link sitting at the temp path', () => {
+    // The temp file is where the payload is written before the rename. A link
+    // there (left by an interrupted run, or planted) would carry that write to
+    // wherever it points, so the entry is refused and the link's target is
+    // untouched. The name is NOT one the archive lists, so the link strip does
+    // not clear it first.
+    const victim = path.join(work, 'victim.txt');
+    fs.writeFileSync(victim, 'original');
+    const archive = archiveOf([{ name: 'café.txt', contents: 'from the archive' }]);
+    fs.symlinkSync(victim, path.join(dest, 'café.txt.ci-name-repair'));
+    writeMangled(dest, 'caf+¬.txt', 'from the archive');
+
+    const result = repairEntryNames(archive, dest);
+
+    expect(result).toEqual({ repaired: 0, unrepaired: 1, removed: 0 });
+    expect(fs.readFileSync(victim, 'utf8')).toBe('original');
+    expect(fs.existsSync(path.join(dest, 'café.txt'))).toBe(false);
+  });
+
   it('keeps the mangled copy when the entry cannot be re-extracted', () => {
     // A corrupt payload must not cost the file: repair fails, and the sweep is
     // abandoned so the badly-named copy stays as the only version there is.
