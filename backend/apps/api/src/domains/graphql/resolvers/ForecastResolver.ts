@@ -1,4 +1,4 @@
-import { UseGuards } from '@nestjs/common';
+import { BadRequestException, UseGuards } from '@nestjs/common';
 import { Args, Int, Mutation, Query, Resolver } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -8,8 +8,10 @@ import { LoggerService } from '@ci/common/logging';
 import { MetricForecastService } from '@ci/domains/daily-metrics';
 import {
   CalibrationService,
+  FORECAST_HORIZONS,
   ForecastHistoryService,
   HbpeService,
+  isForecastHorizon,
   PlaceForecastService,
 } from '@ci/domains/predictions';
 import { PythonFunctionService } from '@ci/domains/python-functions';
@@ -44,8 +46,20 @@ export class ForecastResolver {
   @Query(() => ForecastType, { nullable: true, description: 'Fetch the HBPE day-ahead forecast histogram' })
   async forecast(
     @Context() context: RequestContext,
+    // Still a String on the wire, so the web app's `$horizon: String` keeps
+    // validating; the allowlist below is what limits it.
     @Args('horizon', { type: () => String, nullable: true, defaultValue: '24h' }) horizon: string,
   ): Promise<ForecastType | null> {
+    // Refused up front, outside the catch below that turns every failure into
+    // `null`: a horizon the sidecar does not serve is the caller's mistake and
+    // should read as one. The sidecar takes its user from the URL, so a free
+    // string here used to be able to pick somebody else's forecast.
+    if (!isForecastHorizon(horizon)) {
+      throw new BadRequestException(
+        `Unsupported forecast horizon. Supported: ${FORECAST_HORIZONS.join(', ')}`,
+      );
+    }
+
     if (!(await this.featureService.isFeatureEnabled('hbpe'))) {
       return null;
     }

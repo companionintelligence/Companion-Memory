@@ -18,6 +18,7 @@ export class PredictionsModule {}
 
 export { HbpeService, CalibrationService, ForecastHistoryService, PlaceForecastService };
 export { CALIBRATION_BASIS } from './services/CalibrationService';
+export { FORECAST_HORIZONS, isForecastHorizon, type ForecastHorizon } from './services/HbpeService';
 export type { CalibrationReport, CalibrationScore } from './services/CalibrationService';
 export type { PlaceForecastItem } from './services/PlaceForecastService';
 export type { ForecastHistoryBucket, ForecastHistoryDay } from './services/ForecastHistoryService';
