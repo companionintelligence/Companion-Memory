@@ -7,9 +7,13 @@ import { type ApiKeyScopedRequest, apiKeyCapabilityOf, isScopeLimitedApiKey } fr
 import { LoggerService } from '@ci/common/logging';
 import { isManagedAppPrincipal } from '@ci/domains/auth';
 import {
+  type IntentDefinition,
   type JSONSchema,
+  PendingActionReplayRegistry,
+  PendingActionService,
   type ToolInvocationContext,
   ToolRegistry,
+  type ToolResult,
   capabilityAllows,
   capabilityRequiredFor,
   intentToolName,
@@ -43,6 +47,8 @@ export class McpToolService implements OnModuleInit {
     private readonly toolRegistry: ToolRegistry,
     private readonly executorService: McpExecutorService,
     private readonly logger: LoggerService,
+    private readonly pendingActions: PendingActionService,
+    private readonly replays: PendingActionReplayRegistry,
   ) {
     this.logger.setContext('McpToolService');
   }
@@ -50,6 +56,12 @@ export class McpToolService implements OnModuleInit {
   onModuleInit() {
     this.registerGraphQLTools();
     this.registerNativeTools();
+    this.replays.register({
+      privacyOf: (tool) =>
+        this.tools.get(tool)?.source === 'graphql' ? this.tools.get(tool)?.privacy : undefined,
+      assertMayReplay: (tool, request) => this.assertMayReplayGraphql(tool, request),
+      replay: (tool, input, request) => this.replayGraphql(tool, input, request),
+    });
 
     this.logger.log('MCP tools consolidated', {
       total: this.tools.size,
@@ -170,6 +182,12 @@ export class McpToolService implements OnModuleInit {
         throw new Error(`GraphQL tool not found: ${name}`);
       }
 
+      // The same confirmation gate native intents meet in ToolRegistry.executeTool. Without it,
+      // `memory_forget` over this connection waited for a card while `mutation_deletePerson`,
+      // `mutation_deleteConnection` or `mutation_sendPeerAsk` ran at once. A queued call is parked
+      // on the Approvals page and replayed through `replayGraphql` once the owner confirms it.
+      await this.gateGraphqlCall(tool, args, context.req, capability);
+
       // This plane never touches ToolRegistry — it returns through the GraphQL executor — so it
       // was the one dispatcher that emitted no `tool.invoked` at all and left no ledger row. An
       // MCP client calling `deleteMemory` here was invisible to exactly the surface built to see
@@ -247,6 +265,154 @@ export class McpToolService implements OnModuleInit {
     }
 
     return result.data;
+  }
+
+  /**
+   * Ask the pending-action gate about a GraphQL-plane call, and park it when the gate says so.
+   *
+   * Throws a `TOOL_QUEUED` {@link ToolExecutionError} carrying the `pendingActionId`, the same
+   * shape a queued native intent reaches an MCP client in, and a 403 for a `deny`. Returns when
+   * the call may run. The gate reads the tool's own label (mutations named `delete*`, `merge*` and
+   * the like are destructive, `runAsk` and `sendPeerAsk` external), so a query or an ordinary
+   * mutation is waved through without the trust dial being read.
+   */
+  private async gateGraphqlCall(
+    tool: McpRegisteredTool,
+    args: Record<string, unknown>,
+    req: ApiKeyScopedRequest,
+    capability: ApiKeyCapability,
+  ): Promise<void> {
+    const schema = graphqlGateSchema(tool);
+    const invocationContext = this.graphqlInvocationContext(req, capability);
+    const gate = await this.pendingActions.evaluate(schema, invocationContext);
+
+    if (gate.decision === 'execute') {
+      return;
+    }
+
+    if (gate.decision === 'deny') {
+      await this.recordRefusal(tool, req, capability, gate.explanation);
+
+      throw new ForbiddenException(gate.explanation);
+    }
+
+    if (!invocationContext.userId) {
+      throw new ToolExecutionError(
+        'TOOL_CONFIRMATION_UNAVAILABLE',
+        `${gate.explanation}, but this call has no user to confirm it`,
+      );
+    }
+
+    const action = await this.pendingActions.propose(
+      schema,
+      tool.name,
+      { ...invocationContext, userId: invocationContext.userId },
+      args,
+      gate,
+    );
+
+    throw new ToolExecutionError('TOOL_QUEUED', gate.explanation, {
+      pendingActionId: action.id,
+      reason: gate.reason,
+      expiresAt: action.expiresAt?.toISOString() ?? null,
+    });
+  }
+
+  private graphqlInvocationContext(
+    req: ApiKeyScopedRequest,
+    capability: ApiKeyCapability,
+  ): ToolInvocationContext {
+    const managedApp = isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy });
+
+    return {
+      ...ContextService.getContext(),
+      userId: (req.user as { id?: string } | undefined)?.id,
+      capability,
+      principal: managedApp ? 'managed-app' : 'owner',
+      principalName: managedApp ? (req.apiKeyName ?? null) : null,
+    };
+  }
+
+  /**
+   * The GraphQL plane admits no scope-limited key (see {@link executeTool}), so neither may one
+   * confirm a call that will run on it: the resolvers would refuse the replay after the row had
+   * already been marked approved.
+   */
+  private assertMayReplayGraphql(tool: string, request: import('express').Request | undefined): void {
+    if (!request) {
+      throw new ForbiddenException(`Confirming "${tool}" needs the confirming request, and none was given`);
+    }
+
+    if (isScopeLimitedApiKey(request as ApiKeyScopedRequest)) {
+      throw new ForbiddenException(
+        `"${tool}" runs on the knowledge graph directly, which a scope-limited API key cannot confirm`,
+      );
+    }
+  }
+
+  /**
+   * Run a confirmed GraphQL-plane call as the CONFIRMING request, the way `executeTool` runs one
+   * as the calling request: the resolvers authorize it again from that request. Records the run in
+   * the ledger and never throws.
+   */
+  private async replayGraphql(
+    tool: string,
+    input: unknown,
+    request: import('express').Request,
+  ): Promise<ToolResult> {
+    const registered = this.tools.get(tool);
+    const graphqlTool = this.graphqlAdapter.getTools().find((candidate) => candidate.name === tool);
+    const req = request as ApiKeyScopedRequest;
+    const capability = apiKeyCapabilityOf(req);
+
+    if (!registered || !graphqlTool) {
+      return {
+        success: false,
+        error: { code: 'TOOL_NOT_FOUND', message: `Tool "${tool}" is no longer offered`, retryable: false },
+      };
+    }
+
+    const startedAt = Date.now();
+
+    try {
+      const data = await this.executorService.executeTool(
+        graphqlTool,
+        (input ?? {}) as Record<string, unknown>,
+        { req: request },
+      );
+      const errors = (data as { errors?: Array<{ message?: string }> } | null)?.errors;
+      const result: ToolResult = Array.isArray(errors)
+        ? {
+            success: false,
+            data,
+            error: {
+              code: 'GRAPHQL_ERROR',
+              message: errors.map((error) => error.message).join('; '),
+              retryable: false,
+            },
+          }
+        : { success: true, data };
+
+      await this.recordGraphqlInvocation(registered, req, capability, {
+        outcome: outcomeOf(result),
+        errorCode: result.error?.code,
+        error: result.error?.message,
+        durationMs: Date.now() - startedAt,
+      });
+
+      return result;
+    } catch (error) {
+      const failure = { success: false, error: describeFailure(error) };
+
+      await this.recordGraphqlInvocation(registered, req, capability, {
+        outcome: outcomeOf(failure),
+        errorCode: failure.error.code,
+        error: failure.error.message,
+        durationMs: Date.now() - startedAt,
+      });
+
+      return failure;
+    }
   }
 
   /**
@@ -444,6 +610,23 @@ export class McpToolService implements OnModuleInit {
         return z.unknown();
     }
   }
+}
+
+/**
+ * A GraphQL-plane tool, in the shape the pending-action gate and its queue read: its MCP name as
+ * the intent and tool name, and the privacy label the adapter synthesized for it. The gate reads
+ * only `name` and `privacy`; the rest is filled in because the type asks for it.
+ */
+function graphqlGateSchema(tool: McpRegisteredTool): IntentDefinition {
+  return {
+    name: tool.name,
+    domain: 'mcp',
+    title: tool.name,
+    description: tool.description,
+    parameters: { type: 'object', properties: {} },
+    privacy: tool.privacy,
+    localCapable: false,
+  };
 }
 
 /**

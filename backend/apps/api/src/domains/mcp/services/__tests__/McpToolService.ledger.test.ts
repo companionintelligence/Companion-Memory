@@ -52,7 +52,15 @@ describe('McpToolService — invocation ledger', () => {
     } as unknown as McpExecutorService;
 
     const logger = { setContext: jest.fn(), log: jest.fn(), debug: jest.fn(), error: jest.fn() };
-    const service = new McpToolService(adapter, registry as never, executor, logger as never);
+    const service = new McpToolService(
+      adapter,
+      registry as never,
+      executor,
+      logger as never,
+      // An open gate: these tests are about the ledger, not about confirmation.
+      { evaluate: async () => ({ decision: 'execute', reason: 'allowed', explanation: 'open' }) } as never,
+      { register: () => undefined } as never,
+    );
 
     service.onModuleInit();
 
