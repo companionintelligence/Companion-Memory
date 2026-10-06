@@ -19,6 +19,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ApplianceAdminGuard } from '@ci/common/guards';
 import { ConnectionsModule, ConnectionEntity } from '@ci/domains/connections';
 import { SearchIngressModule } from '@ci/domains/search-ingress';
+import { UserModule } from '@ci/domains/user';
 
 import { ConnectionPrivacyController } from './controllers/ConnectionPrivacyController';
 import { OutboundPolicyController } from './controllers/OutboundPolicyController';
@@ -40,6 +41,8 @@ import { OutboundPolicyService } from './services/OutboundPolicyService';
     // never depends on privacy and there is no module cycle.
     ConnectionsModule,
     SearchIngressModule,
+    // UserService, for the confirmation email `POST /users/me/delete` checks.
+    UserModule,
   ],
   // ApplianceAdminGuard is registered so Nest resolves its DataSource here.
   providers: [DataDeletionService, OutboundPolicyService, ApplianceAdminGuard],

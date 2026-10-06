@@ -441,7 +441,7 @@ third-party API. It **decides**, it does not execute: nothing here runs a model.
 
 | Verb | Path                   | Handler                                               | Purpose                                                                                                                                                                  |
 | ---- | ---------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| POST | `/users/me/delete` | `deleteMe` (`:41`, per-method `JwtOrApiKeyAuthGuard`) | CASA-V8 user-data deletion plus OAuth-token revocation. Distinct from `DELETE /account` — see [`architecture/account-deletion.md`](../architecture/account-deletion.md). |
+| POST | `/users/me/delete` | `deleteMyAccount` (per-method `JwtOrApiKeyAuthGuard`, `full` capability) | CASA-V8 user-data deletion plus OAuth-token revocation, immediate. Body `{ "confirmEmail": "<account email>" }`; installed-app keys are refused. Distinct from `DELETE /account`, see [`architecture/account-deletion.md`](../architecture/account-deletion.md). |
 
 ---
 
