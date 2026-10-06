@@ -97,6 +97,16 @@ export class ConnectionSyncJobEntity {
   @Column({ type: 'timestamptz', nullable: true, name: 'transform_claimed_at' })
   transformClaimedAt!: Date | null;
 
+  /**
+   * True once the sync executor (`SyncOrchestrator.handleSyncJobExecuteEvent`)
+   * has stored a fetch result in `data`. The transform sweep acts only on these
+   * rows: `data` decides what the transforms write and, for Facebook media, what
+   * the server downloads, so a payload anyone else wrote must never reach them.
+   * See migration 20261006070904_connection_sync_jobs_fetched_by_executor.
+   */
+  @Column({ type: 'boolean', name: 'fetched_by_executor', default: false })
+  fetchedByExecutor!: boolean;
+
   @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity;
@@ -123,6 +133,7 @@ export class ConnectionSyncJobEntity {
       updatedAt: entity.updatedAt,
       completedAt: entity.completedAt,
       lastTransformed: entity.lastTransformed,
+      fetchedByExecutor: entity.fetchedByExecutor,
       user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,
       connection: entity.connection ? ConnectionEntity.toEgressType(entity.connection) : undefined,
     };

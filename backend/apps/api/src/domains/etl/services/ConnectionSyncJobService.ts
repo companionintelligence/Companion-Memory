@@ -305,6 +305,16 @@ export class ConnectionSyncJobService {
       updateData.lastTransformed = data.lastTransformed;
     }
 
+    if (data.fetchedByExecutor !== undefined) {
+      // The executor's mark, which the transform sweep trusts `data` on. It runs as the system;
+      // a user-scoped write carrying it is a caller that should not have it.
+      if (context.userId !== SYSTEM_USER) {
+        throw new Error('Only the sync executor marks a sync job as fetched');
+      }
+
+      updateData.fetchedByExecutor = data.fetchedByExecutor;
+    }
+
     const SyncJob = await this.connectionSyncJobRepository.findOne({
       where: {
         id,
@@ -548,6 +558,16 @@ export class ConnectionSyncJobService {
       executable = executable.andWhere('last_transformed >= :lastTransformed', {
         lastTransformed: query.lastTransformed,
       });
+    }
+
+    if (query.fetchedByExecutor === true) {
+      executable = executable.andWhere('fetched_by_executor = true');
+    }
+
+    if (query.connectionActive === true) {
+      executable = executable.andWhere(
+        `EXISTS (SELECT 1 FROM ci.connections c WHERE c.id = "syncJob".connection_id AND c.active)`,
+      );
     }
 
     // Mirrors claimTransform's own condition, staleness window included. The

@@ -268,6 +268,54 @@ describe('ConnectionSyncJobService tenancy scoping (SYSTEM_USER-conditional idio
   });
 });
 
+/**
+ * `fetched_by_executor` is what the transform sweep trusts a job's `data` on, so only the sync
+ * executor (which runs as the system) may set it, and the sweep only selects rows that have it.
+ */
+describe('ConnectionSyncJobService — the executor mark', () => {
+  it('refuses to set it from a user-scoped write, and saves nothing', async () => {
+    const { service, findOne, save } = makeService();
+    (findOne as jest.Mock).mockResolvedValue({ id: 'job-1', userId: USER });
+
+    await expect(service.update(CONTEXT, 'job-1', { fetchedByExecutor: true })).rejects.toThrow(
+      'Only the sync executor marks a sync job as fetched',
+    );
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('sets it for the system context', async () => {
+    const { service, findOne, save } = makeService();
+    (findOne as jest.Mock).mockResolvedValue({ id: 'job-1', userId: USER });
+
+    await service.update(SYSTEM_CONTEXT, 'job-1', { status: 'success', fetchedByExecutor: true });
+
+    const [saved] = save.mock.calls[0] as [{ fetchedByExecutor?: boolean }];
+    expect(saved.fetchedByExecutor).toBe(true);
+  });
+
+  it('search can ask for executor-fetched rows on active connections only', async () => {
+    const { service, queryBuilderCalls } = makeService();
+
+    await service.search(SYSTEM_CONTEXT, { fetchedByExecutor: true, connectionActive: true });
+
+    const fragments = whereFragments(queryBuilderCalls);
+    expect(fragments).toContain('fetched_by_executor = true');
+    expect(fragments).toContain(
+      `EXISTS (SELECT 1 FROM ci.connections c WHERE c.id = "syncJob".connection_id AND c.active)`,
+    );
+  });
+
+  it('search adds neither filter unless asked', async () => {
+    const { service, queryBuilderCalls } = makeService();
+
+    await service.search(SYSTEM_CONTEXT, { status: 'success' });
+
+    const fragments = whereFragments(queryBuilderCalls).join(' ');
+    expect(fragments).not.toContain('fetched_by_executor');
+    expect(fragments).not.toContain('ci.connections');
+  });
+});
+
 describe('ConnectionSyncJobService.markAsCompleted', () => {
   it('stamps completedAt and forwards status/error through update()', async () => {
     const { service, findOne, save } = makeService();

@@ -35,6 +35,8 @@ export interface ConnectionSyncJob {
   readonly user?: User;
   readonly connection?: Connection;
   readonly lastTransformed?: Date | null;
+  /** Whether the sync executor stored a fetch result in `data`. See the entity column. */
+  readonly fetchedByExecutor?: boolean;
 }
 
 export interface CreateConnectionSyncJobDto {
@@ -65,6 +67,11 @@ export interface UpdateConnectionSyncJobDto {
   error?: Record<string, unknown> | undefined;
   completedAt?: Date | undefined;
   lastTransformed?: Date | null | undefined;
+  /**
+   * Set by the sync executor, and only by it, when it stores a fetch result. No client input maps
+   * onto this; it is what the transform sweep trusts `data` on.
+   */
+  fetchedByExecutor?: boolean;
 }
 
 export interface SearchConnectionSyncJobDto {
@@ -85,6 +92,10 @@ export interface SearchConnectionSyncJobDto {
    * tick for the life of the transform.
    */
   transformClaimable?: boolean;
+  /** Only rows the sync executor stored a fetch result in (`fetched_by_executor`). */
+  fetchedByExecutor?: boolean;
+  /** Only rows whose connection is active: signed in, and not paused or removed. */
+  connectionActive?: boolean;
   orderBy?: OrderByFormat;
   /** Row cap, pushed down as a SQL LIMIT. */
   limit?: number;
