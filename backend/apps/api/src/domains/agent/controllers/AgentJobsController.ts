@@ -1,18 +1,31 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import {
-  MEMORY_SCOPE,
+  AGENT_JOBS_SCOPE,
   READ_CAPABILITY,
   RequireCapability,
   RequireScopes,
   WRITE_CAPABILITY,
 } from '@ci/common/decorators';
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { type ApiKeyScopedRequest, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
+import { connectAppNameOf } from '@ci/domains/auth';
 
-import { AgentDispatchService } from '../services/AgentDispatchService';
+import { AgentDispatchService, type JobCaller, OWNER_CALLER } from '../services/AgentDispatchService';
+
+/** Who is asking, for the two harness-side routes. See `assertHarnessCaller`. */
+function jobCallerOf(req: ApiKeyScopedRequest): JobCaller {
+  if (req.apiKeyScopes === undefined) {
+    return OWNER_CALLER;
+  }
+
+  return {
+    kind: 'api-key',
+    connectApp: connectAppNameOf({ managedBy: req.apiKeyManagedBy, name: req.apiKeyName }),
+  };
+}
 
 /**
  * `/v1/agent/jobs` is a raw-uuid plane in both directions: the `taskId` it
@@ -60,9 +73,19 @@ const steerSchema = z.object({
   message: z.string().max(4000).optional(),
 });
 
+/**
+ * The dispatch plane: the owner hands a task to the agent harness (create,
+ * steer, read back), and the harness fetches the packet and reports on it.
+ *
+ * Its own scope, `agent-jobs`, which only the chat-agent connect tier carries.
+ * It used to sit under `memory`, the one scope every memory-only app holds, so
+ * a voice speaker's key could dispatch a job, have the harness run its `ask`
+ * with the harness's wider key, and read the result back. The web and mobile
+ * apps are unaffected: a session and an unscoped key skip scope checks.
+ */
 @Controller('v1/agent/jobs')
 @UseGuards(JwtOrApiKeyAuthGuard)
-@RequireScopes(MEMORY_SCOPE)
+@RequireScopes(AGENT_JOBS_SCOPE)
 export class AgentJobsController {
   constructor(private readonly dispatchService: AgentDispatchService) {}
 
@@ -101,18 +124,19 @@ export class AgentJobsController {
 
   @Get(':id/packet')
   @RequireCapability(READ_CAPABILITY)
-  async packet(@Context() context: RequestContext, @Param('id') id: string) {
-    return this.dispatchService.getPacket(toServiceContext(context), id);
+  async packet(@Context() context: RequestContext, @Req() req: ApiKeyScopedRequest, @Param('id') id: string) {
+    return this.dispatchService.getPacket(toServiceContext(context), id, jobCallerOf(req));
   }
 
   @Post(':id/checkpoint')
   @RequireCapability(WRITE_CAPABILITY)
   async checkpoint(
     @Context() context: RequestContext,
+    @Req() req: ApiKeyScopedRequest,
     @Param('id') id: string,
     @Body(new ValidationPipe(checkpointSchema)) body: z.infer<typeof checkpointSchema>,
   ) {
-    return this.dispatchService.checkpoint(toServiceContext(context), id, body);
+    return this.dispatchService.checkpoint(toServiceContext(context), id, body, jobCallerOf(req));
   }
 
   @Post(':id/steer')

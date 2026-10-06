@@ -140,3 +140,23 @@ export interface ValidatedApiKey {
 export function isManagedAppPrincipal(key: { managedBy?: ApiKeyProvenance | null }): boolean {
   return key.managedBy === CONNECT_PROVENANCE;
 }
+
+/**
+ * The installed app a connect key was minted for (`ci-openclaw` for
+ * `app:ci-openclaw:ci-marketplace`), or `null` for any key the connect flow did
+ * not mint. Provenance decides first, as in {@link isManagedAppPrincipal}; the
+ * name is read only once `managed_by` has vouched for it, so a hand-made key
+ * named `app:ci-openclaw:x` names no app.
+ */
+export function connectAppNameOf(key: {
+  managedBy?: ApiKeyProvenance | null;
+  name?: string | null;
+}): string | null {
+  if (!isManagedAppPrincipal(key) || !key.name?.startsWith(CONNECT_KEY_NAME_PREFIX)) {
+    return null;
+  }
+
+  const appName = key.name.slice(CONNECT_KEY_NAME_PREFIX.length).split(':')[0];
+
+  return appName ? appName : null;
+}

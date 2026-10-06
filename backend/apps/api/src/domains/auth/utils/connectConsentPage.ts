@@ -88,6 +88,7 @@ function capabilityLinesForScopes(scopes: string[]): string[] {
     // Capture routes are POST /v1/* bulk ingest, POST /files/upload and
     // PATCH /files/:id (title/description): writes only, no read route carries it.
     capture: 'Add files and captured activity to your memory, and set file titles and descriptions',
+    'agent-jobs': 'Work on tasks you hand to it and report back on them',
   };
 
   return scopes.map((scope) => KNOWN[scope] ?? `Access "${scope}"`);
