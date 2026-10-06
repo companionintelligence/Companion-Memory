@@ -75,7 +75,7 @@ describeWithDatabase(`inbox tenancy (${importDatabase.target})`, () => {
     await harness.dataSource.query(`DELETE FROM ci.users WHERE id = $1::uuid`, [otherUserId]);
     // A running server scaffolds a REAL inbox folder for every ci.users row;
     // deleting the row leaves it behind (see removeSyntheticUserInbox).
-    await removeSyntheticUserInbox(otherEmail);
+    await removeSyntheticUserInbox(otherUserId, otherEmail);
 
     await teardown();
   });
