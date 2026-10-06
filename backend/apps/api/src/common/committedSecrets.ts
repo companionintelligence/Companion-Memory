@@ -35,7 +35,7 @@ export function enforceNoCommittedSecrets(
   }
 
   const message =
-    `[configuration] ${names.join(', ')} still hold a value committed to the repository ` +
+    `[configuration] ${names.join(', ')} still ${names.length === 1 ? 'holds' : 'hold'} a value committed to the repository ` +
     "(a replace-me- placeholder from .env.default, or the variable's own name). Anyone with the " +
     'repo could sign sessions and tokens or read the object store with it. Set real random values; ' +
     'for a dev .env, `yarn tsx scripts/dev-stack/env-secrets-cli.ts mint .env` replaces the placeholders.';

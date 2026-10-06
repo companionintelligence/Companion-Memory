@@ -46,6 +46,12 @@ describe('enforceNoCommittedSecrets', () => {
     );
   });
 
+  it('names a single variable in the singular', () => {
+    expect(() =>
+      enforceNoCommittedSecrets({ ...MINTED, AUTH_TOKEN_SECRET: 'AUTH_TOKEN_SECRET' }, 'production', jest.fn()),
+    ).toThrow(/^\[configuration\] AUTH_TOKEN_SECRET still holds a value committed/);
+  });
+
   it('only warns in development, so an existing developer .env keeps working', () => {
     const warn = jest.fn();
 
