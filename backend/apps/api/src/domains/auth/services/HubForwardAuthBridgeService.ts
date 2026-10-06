@@ -48,10 +48,7 @@ export interface HubIdentity {
  *   way, and a browser already signed in to that account keeps its session.
  */
 export type HubBridgeRefusal =
-  | 'account_unavailable'
-  | 'account_linked_elsewhere'
-  | 'account_ambiguous'
-  | 'account_unproven';
+  'account_unavailable' | 'account_linked_elsewhere' | 'account_ambiguous' | 'account_unproven';
 
 export interface HubBridgeResult {
   /** Verified Hub username (email), or null when headers are absent/disabled/invalid. */
@@ -453,7 +450,9 @@ export class HubForwardAuthBridgeService {
     }
 
     try {
-      return (await this.authService.sessionEstablishedAt(session.userId, session.token)) ? session.userId : null;
+      return (await this.authService.sessionEstablishedAt(session.userId, session.token))
+        ? session.userId
+        : null;
     } catch {
       return null;
     }

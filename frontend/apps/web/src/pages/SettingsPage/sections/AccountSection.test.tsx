@@ -433,7 +433,9 @@ describe('AccountSection — the last administrator', () => {
     // Nothing to send until someone is named.
     expect(confirmButton()).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText(/person who takes over/i), { target: { value: ' member@example.com ' } });
+    fireEvent.change(screen.getByLabelText(/person who takes over/i), {
+      target: { value: ' member@example.com ' },
+    });
     fireEvent.click(confirmButton());
 
     await waitFor(() => expect(h.logout).toHaveBeenCalled());
@@ -479,7 +481,9 @@ describe('AccountSection — sign out everywhere', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Sign out and delete keys' }));
 
-    expect(await screen.findByText('Signed out everywhere else. 3 API keys were deleted.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Signed out everywhere else. 3 API keys were deleted.'),
+    ).toBeInTheDocument();
     const [, init] = findCall('POST', '/api/account/sign-out-everywhere');
     expect(init.headers).toMatchObject({ Authorization: 'Bearer jwt-abc' });
   });

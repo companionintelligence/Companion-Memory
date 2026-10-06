@@ -127,8 +127,7 @@ export function InvitesSection() {
       <Card.Header>
         <Card.Title>Invitations</Card.Title>
         <Card.Description>
-          Anyone signing in to this Memory after you needs an invitation. Each one works once, and for a
-          week.
+          Anyone signing in to this Memory after you needs an invitation. Each one works once, and for a week.
         </Card.Description>
       </Card.Header>
 

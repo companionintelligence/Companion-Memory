@@ -70,7 +70,9 @@ describe('OidcController — OIDC callback (native deep-link routing)', () => {
 
     await controller.callback('code-x', 'state-x', 'access_denied', nativeReq(), res as never);
 
-    expect(res.redirect).toHaveBeenCalledWith(`companion://oidc/callback?error=access_denied&state=${APP_STATE}`);
+    expect(res.redirect).toHaveBeenCalledWith(
+      `companion://oidc/callback?error=access_denied&state=${APP_STATE}`,
+    );
     // The client marker is always cleared on the return leg.
     expect(res.clearCookie).toHaveBeenCalledWith('oidc_client', expect.any(Object));
   });
@@ -91,7 +93,9 @@ describe('OidcController — OIDC callback (native deep-link routing)', () => {
 
     await controller.callback('', 'state-x', undefined, nativeReq(), res as never);
 
-    expect(res.redirect).toHaveBeenCalledWith(`companion://oidc/callback?error=missing_params&state=${APP_STATE}`);
+    expect(res.redirect).toHaveBeenCalledWith(
+      `companion://oidc/callback?error=missing_params&state=${APP_STATE}`,
+    );
   });
 
   it('deep-links invalid_state when the returned state does not match the cookie', async () => {
@@ -106,7 +110,9 @@ describe('OidcController — OIDC callback (native deep-link routing)', () => {
       res as never,
     );
 
-    expect(res.redirect).toHaveBeenCalledWith(`companion://oidc/callback?error=invalid_state&state=${APP_STATE}`);
+    expect(res.redirect).toHaveBeenCalledWith(
+      `companion://oidc/callback?error=invalid_state&state=${APP_STATE}`,
+    );
   });
 
   it('deep-links missing_pkce when state matches but the PKCE verifier cookie is gone', async () => {
@@ -116,7 +122,9 @@ describe('OidcController — OIDC callback (native deep-link routing)', () => {
     // State matches (so it clears the state cookie and advances) but no oidc_pkce cookie.
     await controller.callback('code-x', 'match', undefined, nativeReq({ oidc_state: 'match' }), res as never);
 
-    expect(res.redirect).toHaveBeenCalledWith(`companion://oidc/callback?error=missing_pkce&state=${APP_STATE}`);
+    expect(res.redirect).toHaveBeenCalledWith(
+      `companion://oidc/callback?error=missing_pkce&state=${APP_STATE}`,
+    );
   });
 
   it("returns the app's state on every exit, so the app can tell its own result from a stray link", async () => {
@@ -130,7 +138,7 @@ describe('OidcController — OIDC callback (native deep-link routing)', () => {
     expect(new URL(target).searchParams.get('state')).toBe(APP_STATE);
   });
 
-  it("refuses a native return whose binding cookies are gone, and clears them", async () => {
+  it('refuses a native return whose binding cookies are gone, and clears them', async () => {
     // Without the challenge there is nothing to bind a one-time code to, so no code is
     // issued, and without the state the app could not recognise the result anyway.
     const { controller, oidcNativeCodeService } = makeController();

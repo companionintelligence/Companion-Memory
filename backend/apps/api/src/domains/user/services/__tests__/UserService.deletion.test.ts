@@ -361,7 +361,14 @@ describe('UserService — account deletion', () => {
         service.handOverAdministration(OWN, 'user-1', { successorEmail: 'Member@Example.com' }),
       ).resolves.toBeUndefined();
 
-      expect(journal).toEqual(['lock', 'read-target', 'count-others', 'find-successor', 'promote-successor', 'commit']);
+      expect(journal).toEqual([
+        'lock',
+        'read-target',
+        'count-others',
+        'find-successor',
+        'promote-successor',
+        'commit',
+      ]);
       expect(queries.find((q) => q.sql.includes("SET role = 'admin'"))?.params).toEqual(['user-2']);
       // The account itself is the route's to delete.
       expect(transactionManager.update).not.toHaveBeenCalled();
@@ -370,7 +377,10 @@ describe('UserService — account deletion', () => {
     });
 
     it('lets a member through without asking', async () => {
-      const { service, journal } = makeService({ target: { id: 'user-1', role: 'user' }, otherAccounts: true });
+      const { service, journal } = makeService({
+        target: { id: 'user-1', role: 'user' },
+        otherAccounts: true,
+      });
 
       await expect(service.handOverAdministration(OWN, 'user-1')).resolves.toBeUndefined();
       expect(journal).not.toContain('count-others');
@@ -379,7 +389,9 @@ describe('UserService — account deletion', () => {
     it('refuses to act for someone else', async () => {
       const { service, userRepository } = makeService({ target: ADMIN });
 
-      await expect(service.handOverAdministration(OWN, 'user-2')).rejects.toBeInstanceOf(UnauthorizedException);
+      await expect(service.handOverAdministration(OWN, 'user-2')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
       expect(userRepository.manager.transaction).not.toHaveBeenCalled();
     });
   });

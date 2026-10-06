@@ -448,7 +448,9 @@ export class OidcController {
 
     // Route a failure to the native deep link (`?error=...`) or the web login page.
     const failRedirect = (reason: string) =>
-      isNative ? res.redirect(toApp({ error: reason })) : res.redirect(`/login?error=${encodeURIComponent(reason)}`);
+      isNative
+        ? res.redirect(toApp({ error: reason }))
+        : res.redirect(`/login?error=${encodeURIComponent(reason)}`);
 
     if (isNative && nativeBinding == null) {
       return failRedirect('missing_pkce');
@@ -710,9 +712,7 @@ export class OidcController {
           // Refused exactly as it would have been had it arrived a moment later.
           this.logger.warn(`OIDC sign-in refused for ${userInfo.email}: the appliance was claimed first`);
 
-          return res.redirect(
-            toApp({ error: codeRequired ? 'signup_code_required' : 'signup_required' }),
-          );
+          return res.redirect(toApp({ error: codeRequired ? 'signup_code_required' : 'signup_required' }));
         }
 
         this.logger.log(

@@ -240,11 +240,16 @@ describe('PortalTokenService', () => {
     expect(federatedIdentityService.listForUser).toHaveBeenCalledWith('u-existing', { oidcOnly: true });
   });
 
-  it("SECURITY: a verified email never adopts an account whose OWN address is unproven", async () => {
+  it('SECURITY: a verified email never adopts an account whose OWN address is unproven', async () => {
     // The address was typed into signup or an email change, possibly by someone else expecting
     // this person's first sign-in. The issuer vouches for its account's address, not this one's.
     mockJwtVerify.mockResolvedValue({
-      payload: { iss: 'https://hub.test', sub: 'friend-sub', email: 'friend@example.com', email_verified: true },
+      payload: {
+        iss: 'https://hub.test',
+        sub: 'friend-sub',
+        email: 'friend@example.com',
+        email_verified: true,
+      },
     });
     userService.findAccountByEmail.mockResolvedValue({ id: 'u-planted' });
     userService.isEmailProven.mockReturnValue(false);

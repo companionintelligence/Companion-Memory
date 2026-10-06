@@ -649,7 +649,9 @@ describeWithDatabase(`first-account gates, against real Postgres (${availability
           `companion://oidc/callback?code=one-time-${owner.id}&state=${APP_STATE}`,
         ]);
         // The same answer an unknown identity gets on a claimed appliance.
-        expect(destinations.filter((url) => url.endsWith(`?error=${refusal}&state=${APP_STATE}`))).toHaveLength(1);
+        expect(
+          destinations.filter((url) => url.endsWith(`?error=${refusal}&state=${APP_STATE}`)),
+        ).toHaveLength(1);
         expect(await accounts()).toEqual([expect.objectContaining({ role: 'admin' })]);
         expect(await bindings()).toEqual([expect.objectContaining({ user_id: owner.id })]);
       },

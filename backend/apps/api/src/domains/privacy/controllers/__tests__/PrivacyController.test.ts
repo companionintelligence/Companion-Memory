@@ -12,7 +12,11 @@ function makeController(result: AccountDeletionResult) {
   const userService = { handOverAdministration };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
-  const controller = new PrivacyController(dataDeletionService as never, userService as never, logger as never);
+  const controller = new PrivacyController(
+    dataDeletionService as never,
+    userService as never,
+    logger as never,
+  );
 
   return { controller, deleteAccount, handOverAdministration };
 }

@@ -737,9 +737,12 @@ describe('useAuth', () => {
   it('iOS: finishes Memory OIDC from getLaunchUrl after a Safari cold start', async () => {
     // What the sign-in button kept before it opened the browser.
     const { appState } = await beginNativeOidcSignIn();
-    const verifier = (JSON.parse(localStorage.getItem('ci.oidc.pendingNativeSignIn')!) as { verifier: string })
-      .verifier;
-    const getLaunchUrl = vi.fn(async () => ({ url: `companion://oidc/callback?code=otc-ios&state=${appState}` }));
+    const verifier = (
+      JSON.parse(localStorage.getItem('ci.oidc.pendingNativeSignIn')!) as { verifier: string }
+    ).verifier;
+    const getLaunchUrl = vi.fn(async () => ({
+      url: `companion://oidc/callback?code=otc-ios&state=${appState}`,
+    }));
     const addListener = vi.fn(async () => ({ remove: async () => undefined }));
     const secureStore = new Map<string, string>();
 
@@ -955,10 +958,14 @@ describe('useAuth', () => {
     }
 
     const exchanged = (fetchMock: ReturnType<typeof setFetch>) =>
-      fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/authenticate/oidc/native/exchange'));
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).endsWith('/api/authenticate/oidc/native/exchange'),
+      );
 
     it('ignores a code with no state: nothing is exchanged and no key is stored', async () => {
-      const { getLaunchUrl, fetchMock, secureStore } = iosLaunchedWith('companion://oidc/callback?code=sent-to-you');
+      const { getLaunchUrl, fetchMock, secureStore } = iosLaunchedWith(
+        'companion://oidc/callback?code=sent-to-you',
+      );
 
       const { result } = renderHook(() => useAuth(), { wrapper });
 
@@ -984,7 +991,9 @@ describe('useAuth', () => {
     });
 
     it('shows no error text from a link it did not ask for', async () => {
-      const { getLaunchUrl } = iosLaunchedWith('companion://oidc/callback?error=Your%20account%20is%20locked');
+      const { getLaunchUrl } = iosLaunchedWith(
+        'companion://oidc/callback?error=Your%20account%20is%20locked',
+      );
 
       const { result } = renderHook(() => useAuth(), { wrapper });
 

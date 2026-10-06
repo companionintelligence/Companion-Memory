@@ -196,7 +196,7 @@ describe('UserService — claiming an unowned appliance', () => {
     expect(user.role).toBe('user');
   });
 
-  it('promotes only the appliance\'s first account ever, never the next one after an owner left', async () => {
+  it("promotes only the appliance's first account ever, never the next one after an owner left", async () => {
     // It used to promote whenever no LIVE admin existed, which is also the state an owner leaves
     // by deleting their account while members keep theirs. A member could then mint an invitation
     // and sign up an account this promoted. "First" is now the question createFirstAccount asks:

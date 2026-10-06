@@ -433,7 +433,11 @@ export class UserService {
    * Idempotent: a second request finds nothing (the first one hid the row) and
    * returns false rather than throwing.
    */
-  async requestDeletion(context: ServiceContext, id: string, options: DeletionOptions = {}): Promise<boolean> {
+  async requestDeletion(
+    context: ServiceContext,
+    id: string,
+    options: DeletionOptions = {},
+  ): Promise<boolean> {
     if (context.userId !== SYSTEM_USER && context.userId !== id) {
       throw new UnauthorizedException();
     }
@@ -483,7 +487,11 @@ export class UserService {
    * admin-less appliance {@link ApplianceAdminGuard} keeps closed until an operator names an
    * administrator, never a promotion.
    */
-  async handOverAdministration(context: ServiceContext, id: string, options: DeletionOptions = {}): Promise<void> {
+  async handOverAdministration(
+    context: ServiceContext,
+    id: string,
+    options: DeletionOptions = {},
+  ): Promise<void> {
     if (context.userId !== SYSTEM_USER && context.userId !== id) {
       throw new UnauthorizedException();
     }
@@ -534,7 +542,11 @@ export class UserService {
    * then empties out and its next first account claims it). Otherwise the request must name a live
    * account other than `id`, by the address it signs in with.
    */
-  private async successorFor(manager: EntityManager, id: string, options: DeletionOptions): Promise<string | null> {
+  private async successorFor(
+    manager: EntityManager,
+    id: string,
+    options: DeletionOptions,
+  ): Promise<string | null> {
     const [others] = await manager.query<Array<{ admins: boolean; accounts: boolean }>>(
       `SELECT EXISTS (
                 SELECT 1 FROM ci.users WHERE role = 'admin' AND deleted_at IS NULL AND id <> $1

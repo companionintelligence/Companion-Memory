@@ -408,7 +408,7 @@ describe('HubForwardAuthBridgeService', () => {
       expect(res.clearCookie).toHaveBeenCalledWith(config.auth.cookies.sessionTokenName, expect.any(Object));
     });
 
-    it("SECURITY: refuses to adopt an account whose address nobody proved, unless this browser is signed in to it", async () => {
+    it('SECURITY: refuses to adopt an account whose address nobody proved, unless this browser is signed in to it', async () => {
       // Someone with an account here typed this person's address into it before they arrived.
       const { service, userService, authService, federatedIdentityService } = makeService();
       userService.findAccountByEmail.mockResolvedValue(unprovenAccount('user-planted', 'hello@lifescope.io'));
@@ -504,7 +504,11 @@ describe('HubForwardAuthBridgeService', () => {
       expect(userService.create).toHaveBeenCalledWith(
         expect.anything(),
         // The address is the Hub-signed username, so the new account's address counts as proven.
-        expect.objectContaining({ email: 'hello@lifescope.io', passwordChosenByUser: false, emailProven: true }),
+        expect.objectContaining({
+          email: 'hello@lifescope.io',
+          passwordChosenByUser: false,
+          emailProven: true,
+        }),
         expect.any(Function),
       );
       expect(federatedIdentityService.bind).toHaveBeenCalledWith(

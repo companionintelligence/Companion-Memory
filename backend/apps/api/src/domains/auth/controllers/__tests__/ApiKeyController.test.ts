@@ -61,7 +61,12 @@ const APP_KEY = {
  */
 const BROAD_APP_KEY = {
   raw: 'd'.repeat(64),
-  validated: { ...APP_KEY.validated, keyId: 'k-importer', scopes: [], name: 'app:ci-import-tools:ci-marketplace' },
+  validated: {
+    ...APP_KEY.validated,
+    keyId: 'k-importer',
+    scopes: [],
+    name: 'app:ci-import-tools:ci-marketplace',
+  },
 };
 
 const AUTH_USER = { id: 'user-1', name: 'Test User' };
@@ -229,7 +234,11 @@ describe('ApiKeyController (real guard + real JwtStrategy)', () => {
 
       const response = await authedMethod('post', '/keys').send({ name: 'My key' }).expect(201);
 
-      expect(mockApiKeyService.create).toHaveBeenCalledWith({ userId: AUTH_USER.id }, { name: 'My key' }, null);
+      expect(mockApiKeyService.create).toHaveBeenCalledWith(
+        { userId: AUTH_USER.id },
+        { name: 'My key' },
+        null,
+      );
       expect(response.body).toEqual({ id: 'k1', name: 'My key', key: 'raw' });
     });
 
@@ -356,7 +365,10 @@ describe('ApiKeyController (real guard + real JwtStrategy)', () => {
     });
 
     it("refuses an installed app's key with no scopes too: provenance, not scope, makes it the Hub's", async () => {
-      await request(app.getHttpServer()).delete('/keys/current').set('x-api-key', BROAD_APP_KEY.raw).expect(403);
+      await request(app.getHttpServer())
+        .delete('/keys/current')
+        .set('x-api-key', BROAD_APP_KEY.raw)
+        .expect(403);
 
       expect(mockApiKeyService.remove).not.toHaveBeenCalled();
     });

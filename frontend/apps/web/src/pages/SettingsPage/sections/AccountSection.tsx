@@ -410,9 +410,9 @@ export function AccountSection() {
               <div className="space-y-1">
                 <h3 className="text-sm font-medium">Sign out everywhere</h3>
                 <p className="text-sm text-muted-foreground">
-                  Signs out every other browser and every phone or desktop app, and deletes the API keys
-                  you made under API keys. Apps connected through your Hub keep working. This browser
-                  stays signed in.
+                  Signs out every other browser and every phone or desktop app, and deletes the API keys you
+                  made under API keys. Apps connected through your Hub keep working. This browser stays signed
+                  in.
                 </p>
               </div>
 
@@ -429,7 +429,12 @@ export function AccountSection() {
                   >
                     {signingOut ? 'Signing out…' : 'Sign out and delete keys'}
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => setConfirmingSignOut(false)} disabled={signingOut}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setConfirmingSignOut(false)}
+                    disabled={signingOut}
+                  >
                     Cancel
                   </Button>
                 </div>

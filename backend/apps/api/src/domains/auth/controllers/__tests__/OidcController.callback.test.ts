@@ -300,7 +300,9 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
 
       expect(oidcNativeCodeService.issue).toHaveBeenCalledWith('user-1', APP_CHALLENGE);
-      expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?code=one-time-code&state=${APP_STATE}`);
+      expect(res.redirect).toHaveBeenCalledWith(
+        `${NATIVE_SCHEME}://oidc/callback?code=one-time-code&state=${APP_STATE}`,
+      );
       // No browser session was minted — the cross-origin native webview cannot
       // read it anyway, and the deep-link code is the credential handoff.
       expect(authService.issueSessionToken).not.toHaveBeenCalled();
@@ -345,7 +347,9 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
 
       await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
 
-      expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=signup_required&state=${APP_STATE}`);
+      expect(res.redirect).toHaveBeenCalledWith(
+        `${NATIVE_SCHEME}://oidc/callback?error=signup_required&state=${APP_STATE}`,
+      );
       expect(authService.issueSignupIntentToken).not.toHaveBeenCalled();
     });
 
@@ -379,7 +383,9 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         expect.objectContaining({ userId: 'user-first', subject: 'portal-sub-1', bindMethod: 'sub' }),
         CLAIM_TRANSACTION,
       );
-      expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?code=one-time-code&state=${APP_STATE}`);
+      expect(res.redirect).toHaveBeenCalledWith(
+        `${NATIVE_SCHEME}://oidc/callback?code=one-time-code&state=${APP_STATE}`,
+      );
     });
 
     // Two first sign-ins on an empty appliance used to both get accounts: each
@@ -406,7 +412,9 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
 
         await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
 
-        expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=${refusal}&state=${APP_STATE}`);
+        expect(res.redirect).toHaveBeenCalledWith(
+          `${NATIVE_SCHEME}://oidc/callback?error=${refusal}&state=${APP_STATE}`,
+        );
         expect(userService.create).not.toHaveBeenCalled();
         expect(oidcNativeCodeService.issue).not.toHaveBeenCalled();
       },
@@ -430,7 +438,9 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
 
       expect(oidcNativeCodeService.issue).toHaveBeenCalledWith('user-first', APP_CHALLENGE);
-      expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?code=one-time-code&state=${APP_STATE}`);
+      expect(res.redirect).toHaveBeenCalledWith(
+        `${NATIVE_SCHEME}://oidc/callback?code=one-time-code&state=${APP_STATE}`,
+      );
     });
 
     it('native: still refuses an unknown user once the appliance has an account', async () => {
@@ -445,7 +455,9 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
 
       expect(userService.create).not.toHaveBeenCalled();
-      expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=signup_required&state=${APP_STATE}`);
+      expect(res.redirect).toHaveBeenCalledWith(
+        `${NATIVE_SCHEME}://oidc/callback?error=signup_required&state=${APP_STATE}`,
+      );
     });
 
     // The desktop is a native client, and an invited person is the ONLY kind
@@ -486,8 +498,12 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       // Redeemed in the transaction creating the account, so a sign-in whose account cannot be
       // created leaves the invitation unspent.
       expect(signupCodeService.consume).toHaveBeenCalledWith('invite-1', accountTransaction);
-      expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?code=one-time-code&state=${APP_STATE}`);
-      expect(res.redirect).not.toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=signup_required&state=${APP_STATE}`);
+      expect(res.redirect).toHaveBeenCalledWith(
+        `${NATIVE_SCHEME}://oidc/callback?code=one-time-code&state=${APP_STATE}`,
+      );
+      expect(res.redirect).not.toHaveBeenCalledWith(
+        `${NATIVE_SCHEME}://oidc/callback?error=signup_required&state=${APP_STATE}`,
+      );
     });
 
     it('lets an invited identity in when the code the owner issued rides along, and redeems it before the confirmation', async () => {
@@ -584,7 +600,9 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         );
 
         // Refused as it would be with a code that was already used when it was checked.
-        expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=${refusal}&state=${APP_STATE}`);
+        expect(res.redirect).toHaveBeenCalledWith(
+          `${NATIVE_SCHEME}://oidc/callback?error=${refusal}&state=${APP_STATE}`,
+        );
         // The losing redemption threw inside the account's transaction, rolling the account back.
         await expect(userService.create.mock.results[0].value).rejects.toThrow('redeemed by another sign-in');
         expect(federatedIdentityService.bind).not.toHaveBeenCalled();
@@ -733,7 +751,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       expect(res.redirect).toHaveBeenCalledWith('/login?error=account_linked_elsewhere');
     });
 
-    it("does not link into an account whose own address is not proven, and sends it to its password", async () => {
+    it('does not link into an account whose own address is not proven, and sends it to its password', async () => {
       // The address was typed into signup or an email change. The Portal vouches for its own
       // account's address, which says nothing about whoever typed this one.
       const { controller, userService, federatedIdentityService, authService } = makeController();

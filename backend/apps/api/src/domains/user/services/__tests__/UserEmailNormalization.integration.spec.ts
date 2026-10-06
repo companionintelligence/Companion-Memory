@@ -3,10 +3,7 @@ import path from 'node:path';
 
 import { isUniqueViolation } from '@ci/common/constants';
 
-import {
-  ScratchDatabase,
-  scratchDatabaseAvailability,
-} from '../../../__tests__/support/scratchDatabase';
+import { ScratchDatabase, scratchDatabaseAvailability } from '../../../__tests__/support/scratchDatabase';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════

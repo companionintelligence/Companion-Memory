@@ -51,7 +51,10 @@ async function openedUrl(opener: typeof openExternalUrl | typeof openAuthSession
 
 /** What `beginNativeOidcSignIn` kept for the deep-link handler. */
 function pendingSignIn(): { state: string; verifier: string } {
-  return JSON.parse(localStorage.getItem('ci.oidc.pendingNativeSignIn')!) as { state: string; verifier: string };
+  return JSON.parse(localStorage.getItem('ci.oidc.pendingNativeSignIn')!) as {
+    state: string;
+    verifier: string;
+  };
 }
 
 /** base64url(SHA-256(verifier)), the S256 challenge the appliance checks the verifier against. */
@@ -102,9 +105,10 @@ describe('OidcButton', () => {
 
     fireEvent.click(screen.getByRole('link', { name: 'Sign in with Companion account' }));
     await waitFor(() => expect(openExternalUrl).toHaveBeenCalledTimes(2));
-    const second = new URL(vi.mocked(openExternalUrl).mock.calls[1][0], window.location.origin).searchParams.get(
-      'app_state',
-    );
+    const second = new URL(
+      vi.mocked(openExternalUrl).mock.calls[1][0],
+      window.location.origin,
+    ).searchParams.get('app_state');
 
     expect(second).not.toBe(first);
     expect(pendingSignIn().state).toBe(second);

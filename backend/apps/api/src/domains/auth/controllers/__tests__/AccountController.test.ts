@@ -128,7 +128,9 @@ describe('AccountController — delete account', () => {
 
     await controller.remove(requestContext(), mockRequest(), { confirmEmail: 'jsmith@example.com' });
 
-    expect(userService.requestDeletion).toHaveBeenCalledWith({ userId: 'u1' }, 'u1', { successorEmail: undefined });
+    expect(userService.requestDeletion).toHaveBeenCalledWith({ userId: 'u1' }, 'u1', {
+      successorEmail: undefined,
+    });
   });
 
   it('passes a named successor through to the deletion', async () => {
@@ -147,17 +149,20 @@ describe('AccountController — delete account', () => {
   it.each([
     ['successor_required', SUCCESSOR_REQUIRED],
     ['successor_not_found', SUCCESSOR_NOT_FOUND],
-  ] as const)('answers a refused last-admin deletion (%s) with a 409 the page can act on', async (reason, message) => {
-    const { controller, userService } = makeController();
-    userService.requestDeletion.mockRejectedValue(new LastAdminDeletionRefused(reason));
+  ] as const)(
+    'answers a refused last-admin deletion (%s) with a 409 the page can act on',
+    async (reason, message) => {
+      const { controller, userService } = makeController();
+      userService.requestDeletion.mockRejectedValue(new LastAdminDeletionRefused(reason));
 
-    const failure = await controller
-      .remove(requestContext(), mockRequest(), { confirmEmail: 'jsmith@example.com' })
-      .catch((error: unknown) => error);
+      const failure = await controller
+        .remove(requestContext(), mockRequest(), { confirmEmail: 'jsmith@example.com' })
+        .catch((error: unknown) => error);
 
-    expect(failure).toBeInstanceOf(ConflictException);
-    expect((failure as ConflictException).getResponse()).toMatchObject({ message });
-  });
+      expect(failure).toBeInstanceOf(ConflictException);
+      expect((failure as ConflictException).getResponse()).toMatchObject({ message });
+    },
+  );
 
   it('lets any other deletion failure through as itself', async () => {
     const { controller, userService } = makeController();
@@ -426,10 +431,11 @@ describe('AccountController — change email', () => {
 
 describe('AccountController — change password', () => {
   it('asks for at least eight characters, the rule signup applies', () => {
-    const argumentsOf = Reflect.getMetadata('__routeArguments__', AccountController, 'changePassword') as Record<
-      string,
-      { pipes?: unknown[] }
-    >;
+    const argumentsOf = Reflect.getMetadata(
+      '__routeArguments__',
+      AccountController,
+      'changePassword',
+    ) as Record<string, { pipes?: unknown[] }>;
     const pipe = Object.values(argumentsOf)
       .flatMap((argument) => argument.pipes ?? [])
       .find((candidate): candidate is ValidationPipe => candidate instanceof ValidationPipe);

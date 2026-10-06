@@ -326,7 +326,7 @@ describeWithDatabase(`Hub ↔ Memory account link, against real Postgres (${avai
       expect((await hubLinks()).map((link) => link.issuer)).toEqual([DIRECTORY, FRESH_DIRECTORY]);
     });
 
-    it("SECURITY: will not adopt an account whose address someone typed in, and creates nothing", async () => {
+    it('SECURITY: will not adopt an account whose address someone typed in, and creates nothing', async () => {
       // The first account is the owner's. The second was signed up, or re-addressed, with the
       // address of a person who has not arrived yet.
       await createAccount('owner@example.com');

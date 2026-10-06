@@ -14,7 +14,14 @@ const EXPIRES = new Date('2026-10-13T08:00:00Z');
 function makeController() {
   const signupCodeService = {
     findUnused: jest.fn().mockResolvedValue([
-      { id: '7', signup_code: 'abc123', used: false, issuedBy: 'owner-1', createdAt: CREATED, expiresAt: EXPIRES },
+      {
+        id: '7',
+        signup_code: 'abc123',
+        used: false,
+        issuedBy: 'owner-1',
+        createdAt: CREATED,
+        expiresAt: EXPIRES,
+      },
     ]),
     create: jest.fn(async (issuedBy: string | null) => ({
       id: '8',
@@ -70,12 +77,15 @@ describe('SignupCodeController', () => {
     await expect(controller.revoke('9')).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it.each(['abc', '0', '-1', '1.5', '1'.repeat(20)])('refuses %p as an id before touching anything', async (id) => {
-    const { controller, signupCodeService } = makeController();
+  it.each(['abc', '0', '-1', '1.5', '1'.repeat(20)])(
+    'refuses %p as an id before touching anything',
+    async (id) => {
+      const { controller, signupCodeService } = makeController();
 
-    await expect(controller.revoke(id)).rejects.toBeInstanceOf(BadRequestException);
-    expect(signupCodeService.revoke).not.toHaveBeenCalled();
-  });
+      await expect(controller.revoke(id)).rejects.toBeInstanceOf(BadRequestException);
+      expect(signupCodeService.revoke).not.toHaveBeenCalled();
+    },
+  );
 });
 
 /**

@@ -194,7 +194,7 @@ describeWithDb(`UserService — claiming an unowned appliance, in Postgres (${av
     expect(racers.map((racer) => racer.role)).toEqual(stored);
   });
 
-  it('marks the first account\'s address proven, and leaves the next one unproven', async () => {
+  it("marks the first account's address proven, and leaves the next one unproven", async () => {
     const owner = await createAccount('owner');
     const member = await createAccount('member');
 
@@ -236,7 +236,9 @@ describeWithDb(`UserService — claiming an unowned appliance, in Postgres (${av
     ).resolves.toBe(true);
 
     expect(await storedRole(member.id)).toBe('admin');
-    const [row] = (await dataSource.query(`SELECT deleted_at FROM ci.users WHERE id = $1`, [owner.id])) as Array<{
+    const [row] = (await dataSource.query(`SELECT deleted_at FROM ci.users WHERE id = $1`, [
+      owner.id,
+    ])) as Array<{
       deleted_at: Date | null;
     }>;
     expect(row.deleted_at).toBeInstanceOf(Date);

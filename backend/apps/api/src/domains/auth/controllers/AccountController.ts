@@ -197,7 +197,9 @@ export class AccountController {
     }
 
     try {
-      await this.userService.requestDeletion(serviceContext, user.id, { successorEmail: input.successorEmail });
+      await this.userService.requestDeletion(serviceContext, user.id, {
+        successorEmail: input.successorEmail,
+      });
     } catch (error) {
       throw error instanceof LastAdminDeletionRefused ? error.toConflict() : error;
     }

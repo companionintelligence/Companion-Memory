@@ -144,17 +144,20 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     ['a challenge that is not S256 base64url', 'too-short', APP_STATE],
     ['a state that is too short', CHALLENGE, 'abc'],
     ['an array instead of a string', [CHALLENGE, CHALLENGE], APP_STATE],
-  ])('refuses a native sign-in with %s, before anything reaches the identity provider', (_label, challenge, state) => {
-    // An app build from before the binding: it is told to update rather than handed a code
-    // that any app could redeem.
-    const { controller } = makeController();
-    const res = makeRes();
+  ])(
+    'refuses a native sign-in with %s, before anything reaches the identity provider',
+    (_label, challenge, state) => {
+      // An app build from before the binding: it is told to update rather than handed a code
+      // that any app could redeem.
+      const { controller } = makeController();
+      const res = makeRes();
 
-    controller.initiate('native', undefined, undefined, challenge, state, makeReq(), res as never);
+      controller.initiate('native', undefined, undefined, challenge, state, makeReq(), res as never);
 
-    expect(res.redirect).toHaveBeenCalledWith('companion://oidc/callback?error=app_update_required');
-    expect(res.cookie).not.toHaveBeenCalled();
-  });
+      expect(res.redirect).toHaveBeenCalledWith('companion://oidc/callback?error=app_update_required');
+      expect(res.cookie).not.toHaveBeenCalled();
+    },
+  );
 
   it('clears an abandoned native attempt when a web sign-in starts', () => {
     const { controller } = makeController();
@@ -173,7 +176,15 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     const { controller } = makeController();
     const res = makeRes();
 
-    controller.initiate(undefined, '/shared/abc123', undefined, undefined, undefined, makeReq(), res as never);
+    controller.initiate(
+      undefined,
+      '/shared/abc123',
+      undefined,
+      undefined,
+      undefined,
+      makeReq(),
+      res as never,
+    );
 
     const redirectCall = cookieCall(res, 'oidc_redirect');
 
@@ -186,7 +197,15 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     const res = makeRes();
 
     // Absolute cross-origin URL: exactly what safeRelativePath exists to reject.
-    controller.initiate(undefined, 'https://evil.example.com/steal', undefined, undefined, undefined, makeReq(), res as never);
+    controller.initiate(
+      undefined,
+      'https://evil.example.com/steal',
+      undefined,
+      undefined,
+      undefined,
+      makeReq(),
+      res as never,
+    );
 
     expect(cookieCall(res, 'oidc_redirect')).toBeUndefined();
     // A plain sign-in with no (valid) destination must not inherit a stale one —
