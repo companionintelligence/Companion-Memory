@@ -185,6 +185,87 @@ describe('buildMemoryTimelineData', () => {
   });
 });
 
+describe('buildMemoryTimelineData: third-party text', () => {
+  const at = new Date(2026, 7, 18, 12);
+  const markup = '<b>x</b><style>body{display:none}</style>';
+  const escaped = '&lt;b&gt;x&lt;/b&gt;&lt;style&gt;body{display:none}&lt;/style&gt;';
+
+  /** Every string the deck hands TimelineJS, which writes them as HTML. */
+  function htmlFields(slide: { text: { headline: string; text: string }; media?: { caption?: string } }) {
+    return [slide.text.headline, slide.text.text, slide.media?.caption ?? ''];
+  }
+
+  it('escapes an email subject, preview and sender before TimelineJS sees them', () => {
+    const { data } = buildMemoryTimelineData(
+      [
+        entity({
+          __typename: 'CommunicationType',
+          id: 'mail',
+          bucketTime: at.toISOString(),
+          subject: `Invoice ${markup}`,
+          preview: `Preview ${markup}`,
+          from: { name: `Sender ${markup}` },
+        }),
+      ],
+      DEVICE_DATE_TIME_FORMATTER,
+      at,
+    );
+
+    const [slide] = data.events;
+    expect(slide.text.headline).toBe(`Invoice ${escaped}`);
+    expect(slide.text.text).toContain(`From Sender ${escaped}`);
+    expect(slide.text.text).toContain(`Preview ${escaped}`);
+    expect(htmlFields(slide).join('')).not.toContain('<');
+  });
+
+  it('escapes a page title and its URL', () => {
+    const { data } = buildMemoryTimelineData(
+      [
+        entity({
+          __typename: 'BrowserActivityType',
+          id: 'page',
+          bucketTime: at.toISOString(),
+          title: `Title ${markup}`,
+          url: 'https://example.com/?q=<i>',
+        }),
+      ],
+      DEVICE_DATE_TIME_FORMATTER,
+      at,
+    );
+
+    expect(data.events[0].text.headline).toBe(`Title ${escaped}`);
+    expect(htmlFields(data.events[0]).join('')).not.toContain('<');
+  });
+
+  it('escapes an event title, place and description, and the image caption', () => {
+    const { data } = buildMemoryTimelineData(
+      [
+        entity({
+          __typename: 'EventType',
+          id: 'invite',
+          bucketStartTime: at.toISOString(),
+          bucketTimeSource: 'source',
+          title: `Party ${markup}`,
+          startTime: at.toISOString(),
+          locationName: `Hall ${markup}`,
+          description: `Bring ${markup}`,
+          galleryMediaContentType: 'image/jpeg',
+          galleryPreviewUrl: '/files/preview.jpg',
+          gallerySourceUrl: '/files/full.jpg',
+        }),
+      ],
+      DEVICE_DATE_TIME_FORMATTER,
+      at,
+    );
+
+    const [slide] = data.events;
+    expect(slide.media?.caption).toContain(escaped);
+    expect(slide.text.text).toContain(`Hall ${escaped}`);
+    expect(slide.text.text).toContain(`Bring ${escaped}`);
+    expect(htmlFields(slide).join('')).not.toContain('<');
+  });
+});
+
 describe('shouldPrefetchBuffer', () => {
   it('prefetches older pages when the focus is near the start of the fetched set', () => {
     expect(

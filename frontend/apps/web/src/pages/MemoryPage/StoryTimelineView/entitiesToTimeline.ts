@@ -1,4 +1,5 @@
 import { axisPadEraFromRange, partsOf } from '@/components/TimelineJs/dates';
+import { escapeHtml, plainSlideText } from '@/components/TimelineJs/escapeHtml';
 import type { TimelineJsData, TimelineSlide } from '@/components/TimelineJs/types';
 import { useFragment as readFragment } from '@/graphql';
 import { HOUR_MINUTE, type DateTimeFormatter } from '@/lib/dateTimeFormat';
@@ -121,7 +122,7 @@ function slideFromEntity(entity: EntityItem, fmt: DateTimeFormatter): DatedSlide
       const image = imageMediaUrl(entity);
       const slide: TimelineSlide = {
         start_date: partsOf(time),
-        text: { headline: headline || 'Untitled', text: bodyBits.join(' · ') },
+        text: plainSlideText(headline || 'Untitled', bodyBits.join(' · ')),
         unique_id: data.id,
         autolink: false,
       };
@@ -131,7 +132,7 @@ function slideFromEntity(entity: EntityItem, fmt: DateTimeFormatter): DatedSlide
       }
 
       if (image) {
-        slide.media = { url: image, caption: headline };
+        slide.media = { url: image, caption: escapeHtml(headline) };
       }
 
       return { time, slide };
@@ -151,7 +152,7 @@ function slideFromEntity(entity: EntityItem, fmt: DateTimeFormatter): DatedSlide
         time,
         slide: {
           start_date: partsOf(time),
-          text: { headline, text: bodyBits.join(' · ') },
+          text: plainSlideText(headline, bodyBits.join(' · ')),
           unique_id: data.id,
           autolink: false,
         },
@@ -165,7 +166,7 @@ function slideFromEntity(entity: EntityItem, fmt: DateTimeFormatter): DatedSlide
       const bodyBits = [fmt.time(time, HOUR_MINUTE), data.url].filter(Boolean);
       const slide: TimelineSlide = {
         start_date: partsOf(time),
-        text: { headline, text: bodyBits.join(' · ') },
+        text: plainSlideText(headline, bodyBits.join(' · ')),
         unique_id: data.id,
         autolink: false,
       };
@@ -300,7 +301,7 @@ export function buildMemoryTimelineData(
       title: {
         unique_id: 'memory-title',
         start_date: partsOf(now),
-        text: { headline: 'Timeline', text: '' },
+        text: plainSlideText('Timeline', ''),
       },
       events: [],
     },
@@ -341,10 +342,10 @@ export function buildMemoryTimelineData(
       title: {
         unique_id: 'memory-title',
         start_date: partsOf(first),
-        text: {
-          headline: rangeHeadline(first, last),
-          text: 'Move along the timeline to walk through these memories.',
-        },
+        text: plainSlideText(
+          rangeHeadline(first, last),
+          'Move along the timeline to walk through these memories.',
+        ),
       },
       events: selected.map((item) => item.slide),
       eras: [axisPadEraFromRange(first, last)],

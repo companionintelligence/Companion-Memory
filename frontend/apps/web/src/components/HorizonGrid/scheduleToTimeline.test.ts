@@ -107,6 +107,20 @@ describe('buildTimelineData', () => {
     expect(data.events[0].text.text).toContain('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
   });
 
+  it('escapes calendar text, which other people write, before TimelineJS reads it as HTML', () => {
+    const monday = new Date(2026, 7, 17);
+    const invite = event('invite', new Date(2026, 7, 17, 10), 'Sync <style>body{display:none}</style>');
+    invite.locationName = 'Room <b>4</b>';
+    invite.description = 'Agenda <img src="https://tracker.example/t.gif">';
+
+    const [slide] = buildTimelineData([invite], monday, DEVICE_DATE_TIME_FORMATTER).data.events;
+
+    expect(slide.text.headline).toBe('Sync &lt;style&gt;body{display:none}&lt;/style&gt;');
+    expect(slide.text.text).toContain('Room &lt;b&gt;4&lt;/b&gt;');
+    expect(slide.text.text).toContain('Agenda &lt;img src="https://tracker.example/t.gif"&gt;');
+    expect(`${slide.text.headline}${slide.text.text}`).not.toContain('<');
+  });
+
   it('caps the deck so TimelineJS does not mount a novel of slides', () => {
     const monday = new Date(2026, 7, 17);
     const flood = Array.from({ length: 40 }, (_, index) =>
