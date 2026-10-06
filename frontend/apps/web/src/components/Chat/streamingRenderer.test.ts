@@ -81,4 +81,61 @@ describe('streamingMarkdownRenderer', () => {
     expect(link).toHaveAttribute('href', 'https://example.com/docs');
     expect(link).not.toHaveAttribute('data-remote-image');
   });
+
+  it.each([
+    ['a script URL', 'javascript:alert%281%29'],
+    ['a script URL in mixed case', 'JaVaScRiPt:void%280%29'],
+    ['a script URL split by a tab, which the URL parser drops', 'java\tscript:void%280%29'],
+    ['a data URL', 'data:text/html;base64,PGI+aGk8L2I+'],
+    ['an Android intent', 'intent://scan/#Intent;scheme=zxing;end'],
+    ["the app's own deep-link scheme", 'companion://oidc/callback?code=x'],
+    ['a protocol-relative path', '//attacker.example/x'],
+    ['a protocol-relative path with a backslash', '/\\attacker.example/x'],
+  ])('streams %s as a link with no target, so it reads as text and goes nowhere', (_label, target) => {
+    const root = stream(`Open [the source](${target}) now.`);
+
+    const link = root.querySelector('a');
+    expect(link).toHaveTextContent('the source');
+    expect(link).not.toHaveAttribute('href');
+    expect(link).not.toHaveAttribute('target');
+  });
+
+  it('keeps a site-relative link in this tab, so it stays a page of the app', () => {
+    const root = stream('[the event](/events/abc)');
+
+    const link = root.querySelector('a');
+    expect(link).toHaveAttribute('href', '/events/abc');
+    expect(link).not.toHaveAttribute('target');
+  });
+
+  it('opens an off-origin link in a new tab with no opener and no referrer', () => {
+    const root = stream('[the docs](https://example.com/docs)');
+
+    const link = root.querySelector('a');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('keeps an absolute link on this origin in this tab', () => {
+    const own = `${window.location.origin}/content/abc`;
+    const root = stream(`[mine](${own})`);
+
+    const link = root.querySelector('a');
+    expect(link).toHaveAttribute('href', own);
+    expect(link).not.toHaveAttribute('target');
+  });
+
+  it('keeps a mailto link', () => {
+    const root = stream('[write](mailto:owner@example.com)');
+
+    expect(root.querySelector('a')).toHaveAttribute('href', 'mailto:owner@example.com');
+  });
+
+  it('still links a bare URL the parser autolinks, off-origin rules included', () => {
+    const root = stream('see https://example.com/a and more');
+
+    const link = root.querySelector('a');
+    expect(link).toHaveAttribute('href', 'https://example.com/a');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
 });

@@ -42,6 +42,11 @@ const URL_IGNORED = /[\t\n\r]/g;
  */
 const SITE_RELATIVE_PATH = /^\/(?![/\\])/;
 
+/** Is this a path on this site, read the way the browser will read it? */
+export function isSiteRelativePath(value: string): boolean {
+  return SITE_RELATIVE_PATH.test(value.replace(URL_IGNORED, ''));
+}
+
 /**
  * Is this image source one the appliance itself serves?
  *
@@ -60,7 +65,7 @@ const SITE_RELATIVE_PATH = /^\/(?![/\\])/;
 export function isOwnOriginImage(src: string): boolean {
   const source = src.replace(URL_IGNORED, '');
 
-  if (SITE_RELATIVE_PATH.test(source)) {
+  if (isSiteRelativePath(source)) {
     return true;
   }
 
