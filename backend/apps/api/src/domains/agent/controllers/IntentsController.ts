@@ -131,7 +131,10 @@ export class IntentsController {
   ): Promise<ToolResult> {
     const toolName = resolveExecuteName(name);
 
-    if (!toolName || !this.registry.hasTool(toolName)) {
+    // Visible to this caller, not merely registered: an intent another account owns (the
+    // `messaging.*` intents belong to the BlueBubbles connector's owner) is unknown here, the same
+    // 404 the manifest routes give, rather than a 200 that confirms it exists.
+    if (!toolName || !this.registry.isToolVisibleTo(toolName, context.userId)) {
       throw new NotFoundException(`Unknown intent: ${name}`);
     }
 

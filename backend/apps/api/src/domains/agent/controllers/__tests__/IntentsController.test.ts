@@ -41,11 +41,11 @@ function stubCatalog(manifest: IntentManifest = MANIFEST): IntentCatalogService 
 }
 
 function stubRegistry(
-  overrides: Partial<Pick<ToolRegistry, 'hasTool' | 'executeTool'>> = {},
+  overrides: Partial<Pick<ToolRegistry, 'isToolVisibleTo' | 'executeTool'>> = {},
 ): ToolRegistry & { executeTool: jest.Mock } {
   const executeTool = jest.fn().mockResolvedValue(OK_RESULT);
   const registry = {
-    hasTool: (name: string) => name === 'people_find',
+    isToolVisibleTo: (name: string) => name === 'people_find',
     executeTool,
     ...overrides,
   } as unknown as ToolRegistry & { executeTool: jest.Mock };
@@ -131,6 +131,17 @@ describe('IntentsController', () => {
       await expect(
         controllerWith(MANIFEST, registry).execute('insights.explain', {}, CONTEXT, REQ),
       ).rejects.toThrow('Unknown intent: insights.explain');
+      expect(registry.executeTool).not.toHaveBeenCalled();
+    });
+
+    it('404s an intent another account owns, asking the registry about this caller', async () => {
+      const isToolVisibleTo = jest.fn(() => false);
+      const registry = stubRegistry({ isToolVisibleTo });
+
+      await expect(
+        controllerWith(MANIFEST, registry).execute('messaging.send', {}, CONTEXT, REQ),
+      ).rejects.toThrow('Unknown intent: messaging.send');
+      expect(isToolVisibleTo).toHaveBeenCalledWith('messaging_send', 'user-1');
       expect(registry.executeTool).not.toHaveBeenCalled();
     });
 
