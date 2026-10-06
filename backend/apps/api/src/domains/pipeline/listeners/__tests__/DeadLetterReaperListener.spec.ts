@@ -669,6 +669,7 @@ describe('DeadLetterReaperListener', () => {
       stage: string | null;
       entity_type: string | null;
       entity_id: string | null;
+      user_id: string | null;
       payload: unknown;
       error: string;
       failed_at: Date;
@@ -794,6 +795,75 @@ describe('DeadLetterReaperListener', () => {
       expect(letter.stage).toBe('enrich.media_dimensions');
       expect(letter.entity_type).toBe('file');
       expect(letter.entity_id).toBe(entityId);
+    });
+
+    // -----------------------------------------------------------------------
+    // Whose letter it is
+    // -----------------------------------------------------------------------
+    //
+    // `user_id` decides who sees and may replay a letter. NULL is the appliance
+    // admin's alone, so a letter that names its user under either key has to
+    // land under that user, and only a payload that names nobody may stay NULL.
+
+    it('files a letter under the userId its payload names', async () => {
+      const userId = randomUUID();
+      const id = await seedDeadLetter({ data: { name: 'file.ingested', userId } });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.user_id).toBe(userId);
+    });
+
+    it('falls back to ownerId, which the graph and chat events use', async () => {
+      // graph.node.upserted carries the node the owner's agent wrote (name,
+      // description, properties). Filed NULL, it used to be listed and
+      // replayable for every account on the appliance.
+      const ownerId = randomUUID();
+      const id = await seedDeadLetter({
+        data: { name: 'graph.node.upserted', ownerId, node: { name: 'Dr. Example', description: 'GP' } },
+      });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.user_id).toBe(ownerId);
+    });
+
+    it('prefers userId when a payload carries both', async () => {
+      const userId = randomUUID();
+      const id = await seedDeadLetter({ data: { name: 'chat.generate', userId, ownerId: randomUUID() } });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.user_id).toBe(userId);
+    });
+
+    it('reaches ownerId past a userId that is not a uuid, without aborting the batch', async () => {
+      const ownerId = randomUUID();
+      const id = await seedDeadLetter({
+        data: { name: 'chat.summarization', userId: 'not-a-uuid', ownerId },
+      });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.user_id).toBe(ownerId);
+    });
+
+    it.each([
+      ['no user key at all', { name: 'content.created', contentId: '00000000-0000-4000-8000-0000000000c1' }],
+      ['an ownerId that is not a uuid', { name: 'graph.node.upserted', ownerId: '../etc' }],
+      ['a payload that is not an object', ['an', 'array']],
+    ])('leaves a letter with %s unattributed', async (_label, data) => {
+      const id = await seedDeadLetter({ data });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter).toBeDefined();
+      expect(letter.user_id).toBeNull();
     });
 
     it('records a job with no pipeline provenance rather than dropping it', async () => {
