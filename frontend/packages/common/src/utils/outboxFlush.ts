@@ -478,6 +478,8 @@ async function flushOne(entry: OutboxItem): Promise<'sent' | 'failed' | 'skipped
     return 'failed';
   }
 
+  const sentUnder = outboxOwnerStamp();
+
   try {
     await fetchJson(path, {
       method: 'POST',
@@ -497,7 +499,12 @@ async function flushOne(entry: OutboxItem): Promise<'sent' | 'failed' | 'skipped
 
   // The rows exist on the appliance now, un-enriched and un-indexed. Record the debt
   // before reporting success, so it survives even if the `/attempt` report below fails.
-  oweIngestFinish(finishStagesFor(full.value.kind));
+  // Only while the session that sent them is still the one signed in: sign-out can land
+  // while this request is in flight, and debt recorded after its reset would be settled
+  // under the next account's key.
+  if (outboxOwnerStamp() === sentUnder) {
+    oweIngestFinish(finishStagesFor(full.value.kind));
+  }
 
   // Only now, with the appliance having accepted it, is the row allowed to disappear.
   const acked = await recordOutboxAttempt(entry.id, { ok: true });

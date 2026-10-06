@@ -833,6 +833,50 @@ describe('sign-out and the outbox', () => {
     await settleIngestFinish({ force: true });
     expect(calls.some((call) => call.url === '/api/v1/ingest/finish')).toBe(false);
   });
+
+  it('a send still in flight when sign-out clears leaves no enrichment owed to the next account', async () => {
+    setNativeWindow();
+    resetIngestFinishState();
+    const { handler } = fakeSidecar([
+      item({ id: 'a', seq: 1, kind: 'positions', owner: outboxOwnerStamp(), payload: { records: [] } }),
+    ]);
+
+    let answer: (response: Response) => void = () => {};
+
+    let sent: () => void = () => {};
+
+    const posted = new Promise<void>((resolve) => {
+      sent = resolve;
+    });
+    // The appliance accepts the row, but only answers once sign-out has run, and refuses
+    // anything that arrives without a key.
+    installFetch(
+      route(handler, (call) => {
+        if (!call.headers['x-api-key']) {
+          return jsonResponse(401, { error: 'unauthorized' });
+        }
+
+        sent();
+
+        return new Promise<Response>((resolve) => {
+          answer = resolve;
+        }) as unknown as Response;
+      }),
+    );
+
+    const drained = flushOutbox();
+    await posted;
+
+    setApiKey(null);
+    await clearOutboxAfterSignOut();
+    answer(jsonResponse(201, {}));
+    await drained;
+
+    setApiKey('next-account-key');
+    const calls = installFetch(route(handler, applianceAccepts));
+    await settleIngestFinish({ force: true });
+    expect(calls.some((call) => call.url === '/api/v1/ingest/finish')).toBe(false);
+  });
 });
 
 describe('isPermanentFlushFailure', () => {
