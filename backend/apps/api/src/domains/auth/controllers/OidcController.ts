@@ -52,6 +52,17 @@ type PortalUserResolution =
   | { kind: 'refused'; reason: 'account_linked_elsewhere' | 'email_unverified' | 'account_exists' }
   | { kind: 'unknown' };
 
+/**
+ * The Portal person an account is created for. `emailVerified` is the Portal's `email_verified`
+ * claim: only an address the Portal verified counts as proven on the new account, because the
+ * proof is what lets a Hub person later be adopted into an account by that address.
+ */
+interface PortalPerson {
+  email: string;
+  name?: string;
+  emailVerified: boolean;
+}
+
 const STATE_COOKIE = 'oidc_state';
 const PKCE_COOKIE = 'oidc_pkce';
 // Carries the "this flow was launched by the native app" signal through the IdP round
@@ -550,12 +561,17 @@ export class OidcController {
       }
 
       const issuer = this.resolveOidcIssuer(userInfo, tokens.id_token);
+      const person: PortalPerson = {
+        email: userInfo.email,
+        name: userInfo.name,
+        emailVerified: userInfo.email_verified === true,
+      };
       // (iss, sub) first; email is only a one-time link for unfederated rows.
       const resolution = await this.resolvePortalUser({
         subject: userInfo.sub,
         issuer,
-        email: userInfo.email,
-        emailVerified: userInfo.email_verified === true,
+        email: person.email,
+        emailVerified: person.emailVerified,
       });
 
       // An address that names an existing account this identity may not have:
@@ -665,7 +681,7 @@ export class OidcController {
         let created: { id: string } | null;
 
         if (invited) {
-          created = await this.createOidcUser(userInfo.email, userInfo.name, invitation);
+          created = await this.createOidcUser(person, invitation);
 
           if (created == null) {
             // Another sign-in redeemed the invitation after it was checked
@@ -685,7 +701,7 @@ export class OidcController {
         } else {
           created = await this.claimApplianceFor(
             { issuer, subject: userInfo.sub, email: userInfo.email },
-            this.oidcAccount(userInfo.email, userInfo.name),
+            this.oidcAccount(person),
           );
         }
 
@@ -713,7 +729,7 @@ export class OidcController {
       // Hub already admitted this person as an org member. Skip the Memory
       // signup-code / confirm-account gates and give them an empty onboarding.
       if (invitedByHub) {
-        const created = await this.createOidcUser(userInfo.email, userInfo.name);
+        const created = await this.createOidcUser(person);
         await this.bindIfPossible(created.id, issuer, userInfo.sub, userInfo.email);
         this.logger.log(`Hub-invited Memory account created for ${userInfo.email}`);
 
@@ -749,7 +765,7 @@ export class OidcController {
           userInfo.email,
           userInfo.name,
           { issuer, subject: userInfo.sub },
-          { firstAccountOnly: codeRequired },
+          { firstAccountOnly: codeRequired, emailVerified: person.emailVerified },
         ),
         {
           httpOnly: true,
@@ -943,8 +959,9 @@ export class OidcController {
         // Random password — the account authenticates via OIDC.
         password: randomBytes(32).toString('hex'),
         passwordChosenByUser: false,
-        // The address came from the Portal identity creating the account.
-        emailProven: true,
+        // The address came from the Portal identity creating the account, and counts as proven
+        // only where the Portal verified it.
+        emailProven: identity.emailVerified === true,
       };
 
       if (identity.firstAccountOnly) {
@@ -1084,23 +1101,21 @@ export class OidcController {
    * @returns the new account; `null`, with nothing created, when another sign-in redeemed
    *   `invitation` first.
    */
-  private createOidcUser(email: string, name?: string): Promise<{ id: string; email: string }>;
+  private createOidcUser(person: PortalPerson): Promise<{ id: string; email: string }>;
 
   private createOidcUser(
-    email: string,
-    name: string | undefined,
+    person: PortalPerson,
     invitation: string | null,
   ): Promise<{ id: string; email: string } | null>;
 
   private async createOidcUser(
-    email: string,
-    name?: string,
+    person: PortalPerson,
     invitation: string | null = null,
   ): Promise<{ id: string; email: string } | null> {
     try {
       return await this.userService.create(
         { userId: SYSTEM_USER },
-        this.oidcAccount(email, name),
+        this.oidcAccount(person),
         invitation == null
           ? undefined
           : async (manager) => {
@@ -1119,7 +1134,7 @@ export class OidcController {
   }
 
   /** The account a native or Hub-invited OIDC sign-in creates. */
-  private oidcAccount(email: string, name?: string): CreateUserDto {
+  private oidcAccount({ email, name, emailVerified }: PortalPerson): CreateUserDto {
     return {
       name: name || email.split('@')[0],
       email,
@@ -1127,8 +1142,10 @@ export class OidcController {
       // Nobody has seen this password. Stamped as chosen, the account is asked
       // for it before every email or password change.
       passwordChosenByUser: false,
-      // The address came from the Portal identity creating the account.
-      emailProven: true,
+      // The address came from the Portal identity creating the account. It counts as proven only
+      // where the Portal verified it: an unverified Portal address is whatever its holder typed,
+      // and a proven one is what a Hub person is later adopted into an account by.
+      emailProven: emailVerified,
     };
   }
 

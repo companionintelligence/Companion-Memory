@@ -329,7 +329,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         'new@example.com',
         'New Person',
         { issuer: expect.any(String), subject: 'portal-sub-1' },
-        { firstAccountOnly: false },
+        { firstAccountOnly: false, emailVerified: false },
       );
       expect(res.cookie).toHaveBeenCalledWith('oidc_signup_intent', 'signup-intent-jwt', expect.any(Object));
       expect(res.redirect).toHaveBeenCalledWith('/api/authenticate/oidc/confirm-account');
@@ -519,7 +519,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         'guest@example.com',
         undefined,
         expect.any(Object),
-        { firstAccountOnly: false },
+        { firstAccountOnly: false, emailVerified: false },
       );
     });
 
@@ -635,7 +635,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         'owner@example.com',
         undefined,
         { issuer: expect.any(String), subject: 'portal-sub-1' },
-        { firstAccountOnly: true },
+        { firstAccountOnly: true, emailVerified: false },
       );
       expect(res.redirect).toHaveBeenCalledWith('/api/authenticate/oidc/confirm-account');
     });
@@ -852,10 +852,12 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
   // goes through create. Both build the account with oidcAccount.
   // ...and its address counts as proven: it came from the Portal identity the account is made for.
   describe('an account the callback creates has no password of its own', () => {
-    const userinfo = () =>
+    const userinfo = (claims: { email_verified?: boolean } = { email_verified: true }) =>
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
-        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'new@example.com' }));
+        .mockResolvedValueOnce(
+          jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'new@example.com', ...claims }),
+        );
 
     it('native, claiming an empty appliance', async () => {
       const mocks = makeController();
@@ -910,6 +912,30 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         expect.anything(),
         expect.objectContaining({ email: 'new@example.com', passwordChosenByUser: false, emailProven: true }),
         alongside,
+      );
+    });
+
+    it('SECURITY: does not count an address the Portal did not verify as proven', async () => {
+      // An unverified Portal address is whatever its holder typed. Stamped proven, it would let the
+      // holder's account receive the first Hub sign-in of whoever really owns the address.
+      const mocks = makeController();
+      userinfo({ email_verified: false });
+      mocks.userService.findAccountByEmail.mockResolvedValue(null);
+      mocks.userService.create.mockResolvedValue({ id: 'user-new', email: 'new@example.com' });
+      mocks.signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
+
+      await mocks.controller.callback(
+        'code-x',
+        'match',
+        undefined,
+        nativeReq({ oidc_signup_code: 'invite-1' }) as never,
+        makeRes() as never,
+      );
+
+      expect(mocks.userService.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ email: 'new@example.com', emailProven: false }),
+        expect.any(Function),
       );
     });
   });
