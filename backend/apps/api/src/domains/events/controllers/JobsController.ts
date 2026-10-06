@@ -87,11 +87,10 @@ type JobControlsBody = z.infer<typeof jobControlsSchema>;
  * could not clear.
  *
  * `UserService.claimApplianceIfUnowned` now promotes the account that claims an
- * unowned appliance, so that objection is gone. {@link ApplianceAdminGuard} is
- * still the right guard here for a different reason: it degrades to admitting
- * everyone on an appliance with no live admin, which for an appliance-wide
- * control plane is the honest answer, where the arbitrary-command-execution
- * routes behind `AdminOnlyGuard` must degrade closed instead.
+ * unowned appliance, so that objection is gone. {@link ApplianceAdminGuard} stays
+ * here: it admits a non-admin only on an appliance with no live account at all,
+ * and refuses everyone else who is not a live admin, including the members an
+ * owner leaves behind (see that guard).
  *
  * What the guards CAN do here, and do, is keep the routes that ACT — `POST
  * jobs/crons/run`, which fires every cron, and `POST jobs/clear-terminal`,
