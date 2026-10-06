@@ -160,6 +160,23 @@ describe('McpToolService — the GraphQL plane meets the pending-action gate', (
     expect(pendingActions.propose).not.toHaveBeenCalled();
   });
 
+  it('records a call whose resolver failed as a failure, though the executor returned it', async () => {
+    const { service, executor, registry } = buildService();
+    const failed = { errors: [{ message: 'Forbidden resource' }], data: null };
+
+    executor.executeTool.mockResolvedValueOnce(failed);
+
+    await expect(service.executeTool('query_people', {}, { req: session() })).resolves.toStrictEqual(failed);
+    expect(registry.recordInvocation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: 'query_people',
+        outcome: 'error',
+        errorCode: 'GRAPHQL_ERROR',
+        error: 'Forbidden resource',
+      }),
+    );
+  });
+
   it('refuses a deny outright and never queues it', async () => {
     const { service, executor, pendingActions } = buildService({
       decision: 'deny',
@@ -222,6 +239,22 @@ describe('McpToolService — the GraphQL plane meets the pending-action gate', (
       );
       expect(registry.recordInvocation).toHaveBeenCalledWith(
         expect.objectContaining({ tool: 'mutation_deletePerson', source: 'graphql', outcome: 'success' }),
+      );
+    });
+
+    it('records the app that asked, not the owner who confirmed', async () => {
+      const { replayer, registry } = buildService();
+
+      await replayer().replay('mutation_deletePerson', { id: 'person-1' }, session(), {
+        principalName: 'ci-openclaw',
+      });
+
+      expect(registry.recordInvocation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          principal: 'managed-app',
+          principalName: 'ci-openclaw',
+          capability: 'full',
+        }),
       );
     });
 

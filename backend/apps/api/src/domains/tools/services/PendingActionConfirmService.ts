@@ -172,7 +172,9 @@ export class PendingActionConfirmService {
   ): Promise<ConfirmOutcome> {
     await this.pending.markApproved(userId, id);
 
-    const result = await replayer.replay(row.tool, row.input, request);
+    const result = await replayer.replay(row.tool, row.input, request, {
+      principalName: row.principalName ?? null,
+    });
     const action = await this.pending.markExecuted(userId, id, result);
 
     this.logger.log(`Executed confirmed pending action ${id}`, {

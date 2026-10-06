@@ -24,8 +24,16 @@ export interface PendingActionReplayer {
    */
   assertMayReplay(tool: string, request: Request | undefined): void;
 
-  /** Run the approved call as the confirming request. Never throws: a failure is a failed result. */
-  replay(tool: string, input: unknown, request: Request): Promise<ToolResult>;
+  /**
+   * Run the approved call as the confirming request. Never throws: a failure is a failed result.
+   * `origin` says who asked for the call, for the ledger: the confirming request is the owner's.
+   */
+  replay(tool: string, input: unknown, request: Request, origin?: PendingActionOrigin): Promise<ToolResult>;
+}
+
+/** Who asked for a pending action, read from its row: the asking app, or `null` for the owner. */
+export interface PendingActionOrigin {
+  principalName: string | null;
 }
 
 /** The replayers other domains have registered, consulted by `PendingActionConfirmService`. */

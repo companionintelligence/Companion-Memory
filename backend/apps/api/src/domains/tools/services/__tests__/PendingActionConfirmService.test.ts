@@ -249,7 +249,9 @@ describe('PendingActionConfirmService.confirm — a GraphQL-plane call', () => {
     const outcome = await service.confirm('user-1', 'pa-1', FULL_CAPABILITY, NOW, request);
 
     expect(outcome.result.success).toBe(true);
-    expect(replayer.replay).toHaveBeenCalledWith('mutation_deletePerson', { id: 'person-1' }, request);
+    expect(replayer.replay).toHaveBeenCalledWith('mutation_deletePerson', { id: 'person-1' }, request, {
+      principalName: null,
+    });
     expect(pending.markApproved).toHaveBeenCalledWith('user-1', 'pa-1');
     expect(pending.markExecuted).toHaveBeenCalledWith('user-1', 'pa-1', {
       success: true,

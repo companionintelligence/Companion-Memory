@@ -241,6 +241,7 @@ export { PendingActionService } from './services/PendingActionService';
 export { PendingActionConfirmService } from './services/PendingActionConfirmService';
 export {
   PendingActionReplayRegistry,
+  type PendingActionOrigin,
   type PendingActionReplayer,
 } from './services/PendingActionReplayRegistry';
 export { PendingActionEntity } from './entities/PendingActionEntity';

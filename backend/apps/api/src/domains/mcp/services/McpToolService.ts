@@ -9,6 +9,7 @@ import { isManagedAppPrincipal } from '@ci/domains/auth';
 import {
   type IntentDefinition,
   type JSONSchema,
+  type PendingActionOrigin,
   PendingActionReplayRegistry,
   PendingActionService,
   type ToolInvocationContext,
@@ -21,7 +22,7 @@ import {
   type ToolInvocationOutcome,
 } from '@ci/domains/tools';
 
-import type { McpRegisteredTool } from '../types';
+import type { McpRegisteredTool, McpToolDefinition } from '../types';
 // A value, not a type — it is constructed below, so it cannot ride the type import.
 import { ToolExecutionError } from '../types';
 
@@ -60,7 +61,7 @@ export class McpToolService implements OnModuleInit {
       privacyOf: (tool) =>
         this.tools.get(tool)?.source === 'graphql' ? this.tools.get(tool)?.privacy : undefined,
       assertMayReplay: (tool, request) => this.assertMayReplayGraphql(tool, request),
-      replay: (tool, input, request) => this.replayGraphql(tool, input, request),
+      replay: (tool, input, request, origin) => this.replayGraphql(tool, input, request, origin),
     });
 
     this.logger.log('MCP tools consolidated', {
@@ -188,33 +189,7 @@ export class McpToolService implements OnModuleInit {
       // on the Approvals page and replayed through `replayGraphql` once the owner confirms it.
       await this.gateGraphqlCall(tool, args, context.req, capability);
 
-      // This plane never touches ToolRegistry — it returns through the GraphQL executor — so it
-      // was the one dispatcher that emitted no `tool.invoked` at all and left no ledger row. An
-      // MCP client calling `deleteMemory` here was invisible to exactly the surface built to see
-      // it. Recorded through the registry so there is still one emit path, not two.
-      const startedAt = Date.now();
-
-      try {
-        const data = await this.executorService.executeTool(graphqlTool, args, context);
-
-        await this.recordGraphqlInvocation(tool, context.req, capability, {
-          outcome: 'success',
-          durationMs: Date.now() - startedAt,
-        });
-
-        return data;
-      } catch (error) {
-        const failure = { success: false, error: describeFailure(error) };
-
-        await this.recordGraphqlInvocation(tool, context.req, capability, {
-          outcome: outcomeOf(failure),
-          errorCode: failure.error.code,
-          error: failure.error.message,
-          durationMs: Date.now() - startedAt,
-        });
-
-        throw error;
-      }
+      return this.runGraphqlTool(tool, graphqlTool, args, context.req, capability);
     }
 
     if (!this.mayRunIntents(context.req)) {
@@ -354,16 +329,20 @@ export class McpToolService implements OnModuleInit {
    * Run a confirmed GraphQL-plane call as the CONFIRMING request, the way `executeTool` runs one
    * as the calling request: the resolvers authorize it again from that request. Records the run in
    * the ledger and never throws.
+   *
+   * The ledger row names the app that asked (`origin`), not the owner who confirmed, the same
+   * split `PendingActionConfirmService` makes for a registry tool: `capability` is whose authority
+   * ran it, `principal` is who asked for it.
    */
   private async replayGraphql(
     tool: string,
     input: unknown,
     request: import('express').Request,
+    origin?: PendingActionOrigin,
   ): Promise<ToolResult> {
     const registered = this.tools.get(tool);
     const graphqlTool = this.graphqlAdapter.getTools().find((candidate) => candidate.name === tool);
     const req = request as ApiKeyScopedRequest;
-    const capability = apiKeyCapabilityOf(req);
 
     if (!registered || !graphqlTool) {
       return {
@@ -372,46 +351,77 @@ export class McpToolService implements OnModuleInit {
       };
     }
 
+    try {
+      const data = await this.runGraphqlTool(
+        registered,
+        graphqlTool,
+        (input ?? {}) as Record<string, unknown>,
+        req,
+        apiKeyCapabilityOf(req),
+        origin,
+      );
+
+      return graphqlResultOf(data);
+    } catch (error) {
+      return { success: false, error: describeFailure(error) };
+    }
+  }
+
+  /**
+   * Run one GraphQL-plane call through the executor and append it to the ledger. Returns what the
+   * executor returned and rethrows what it threw, after recording either.
+   *
+   * This plane never touches ToolRegistry — it returns through the GraphQL executor — so it was
+   * the one dispatcher that emitted no `tool.invoked` at all and left no ledger row. An MCP client
+   * calling `deleteMemory` here was invisible to exactly the surface built to see it. Recorded
+   * through the registry so there is still one emit path, not two. A resolver error does not
+   * throw: the executor hands back `{ errors }`, and the row records it as a failure.
+   */
+  private async runGraphqlTool(
+    tool: McpRegisteredTool,
+    graphqlTool: McpToolDefinition,
+    args: Record<string, unknown>,
+    req: ApiKeyScopedRequest,
+    capability: ApiKeyCapability,
+    origin?: PendingActionOrigin,
+  ): Promise<unknown> {
     const startedAt = Date.now();
 
     try {
-      const data = await this.executorService.executeTool(
-        graphqlTool,
-        (input ?? {}) as Record<string, unknown>,
-        { req: request },
+      const data = await this.executorService.executeTool(graphqlTool, args, { req });
+      const result = graphqlResultOf(data);
+
+      await this.recordGraphqlInvocation(
+        tool,
+        req,
+        capability,
+        {
+          outcome: outcomeOf(result),
+          errorCode: result.error?.code,
+          error: result.error?.message,
+          durationMs: Date.now() - startedAt,
+        },
+        origin,
       );
-      const errors = (data as { errors?: Array<{ message?: string }> } | null)?.errors;
-      const result: ToolResult = Array.isArray(errors)
-        ? {
-            success: false,
-            data,
-            error: {
-              code: 'GRAPHQL_ERROR',
-              message: errors.map((error) => error.message).join('; '),
-              retryable: false,
-            },
-          }
-        : { success: true, data };
 
-      await this.recordGraphqlInvocation(registered, req, capability, {
-        outcome: outcomeOf(result),
-        errorCode: result.error?.code,
-        error: result.error?.message,
-        durationMs: Date.now() - startedAt,
-      });
-
-      return result;
+      return data;
     } catch (error) {
       const failure = { success: false, error: describeFailure(error) };
 
-      await this.recordGraphqlInvocation(registered, req, capability, {
-        outcome: outcomeOf(failure),
-        errorCode: failure.error.code,
-        error: failure.error.message,
-        durationMs: Date.now() - startedAt,
-      });
+      await this.recordGraphqlInvocation(
+        tool,
+        req,
+        capability,
+        {
+          outcome: outcomeOf(failure),
+          errorCode: failure.error.code,
+          error: failure.error.message,
+          durationMs: Date.now() - startedAt,
+        },
+        origin,
+      );
 
-      return failure;
+      throw error;
     }
   }
 
@@ -433,8 +443,9 @@ export class McpToolService implements OnModuleInit {
       error?: string;
       durationMs?: number;
     },
+    origin?: PendingActionOrigin,
   ): Promise<void> {
-    await this.recordMcpInvocation(tool, req, capability, 'graphql', outcome);
+    await this.recordMcpInvocation(tool, req, capability, 'graphql', outcome, origin);
   }
 
   /**
@@ -477,9 +488,14 @@ export class McpToolService implements OnModuleInit {
       error?: string;
       durationMs?: number;
     },
+    // A confirmed replay runs as the owner's request; who ASKED comes from the pending row.
+    origin?: PendingActionOrigin,
   ): Promise<void> {
     const context = ContextService.getContext();
-    const managedApp = isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy });
+    const managedApp = origin
+      ? origin.principalName != null
+      : isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy });
+    const appName = origin ? origin.principalName : req.apiKeyName;
 
     await this.toolRegistry.recordInvocation({
       intent: tool.name,
@@ -492,7 +508,7 @@ export class McpToolService implements OnModuleInit {
       principal: managedApp ? 'managed-app' : 'owner',
       // Only for an app. An owner-originated row recording the owner's own key name here would
       // make the activity page attribute the owner's action to a nonexistent app.
-      principalName: managedApp ? (req.apiKeyName ?? undefined) : undefined,
+      principalName: managedApp ? (appName ?? undefined) : undefined,
       occurredAt: new Date().toISOString(),
       access: tool.privacy.access,
       external: tool.privacy.external,
@@ -610,6 +626,28 @@ export class McpToolService implements OnModuleInit {
         return z.unknown();
     }
   }
+}
+
+/**
+ * What the GraphQL executor handed back, as a {@link ToolResult}. A resolver error does not throw:
+ * the executor returns `{ errors, data }`, which is a failed call however it was delivered.
+ */
+function graphqlResultOf(data: unknown): ToolResult {
+  const errors = (data as { errors?: Array<{ message?: string }> } | null)?.errors;
+
+  if (!Array.isArray(errors)) {
+    return { success: true, data };
+  }
+
+  return {
+    success: false,
+    data,
+    error: {
+      code: 'GRAPHQL_ERROR',
+      message: errors.map((error) => error.message).join('; '),
+      retryable: false,
+    },
+  };
 }
 
 /**
