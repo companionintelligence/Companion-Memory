@@ -151,8 +151,15 @@ working. Resolved once per launch, cheapest option first:
    binding non-loopback additionally disables its own host-header guard. Any
    LAN peer could run inference on your GPU and — more seriously — delete and
    recreate models, which the API's "use whatever model is served" fallback
-   turns into a persistent model-substitution foothold. A single-address bind
-   means the kernel drops anything arriving on the machine's real NICs.
+   turns into a persistent model-substitution foothold.
+
+   A single-address bind does not keep the LAN out by itself: Linux delivers a
+   packet for the bridge gateway address that arrives on a real network
+   interface, and every container on the machine can reach it. So the relay also
+   checks each connection's source address and serves only the subnets of the
+   appliance's own compose networks (`docker network inspect`, filtered on the
+   `com.docker.compose.project` label). Anything else is dropped and logged in
+   `desktop.log`.
 
    > **Under rootless Docker** no bridge gateway is discoverable (the
    > `host-gateway` alias resolves inside RootlessKit's namespace, moby#47684).

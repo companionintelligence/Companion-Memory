@@ -104,7 +104,7 @@ fn describe_compose_line(line: &str) -> Option<String> {
 /// overlay's `ports:` handling for little real benefit.
 pub const GATEWAY_PORT: u16 = 8642;
 
-const PROJECT_NAME: &str = "ci-server-desktop";
+pub(crate) const PROJECT_NAME: &str = "ci-server-desktop";
 
 /// CI-Portal's production origin — the sensible default for "Sign in with
 /// CI-Portal" (see write_env_file). Override with the CI_PORTAL_URL env var
