@@ -1,6 +1,11 @@
 import type { Response } from 'express';
 
-import { signForwardAuthUser, signForwardAuthUserId } from '@ci/common/crypto';
+import {
+  formatForwardAuthAssertion,
+  signForwardAuthAssertion,
+  signForwardAuthUser,
+  signForwardAuthUserId,
+} from '@ci/common/crypto';
 import config from '@ci/configuration';
 
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
@@ -28,6 +33,30 @@ function stableHeaders(username: string, { issuer = DIRECTORY, userId = HUB_ID }
     'x-ci-hub-user-issuer': issuer,
     'x-ci-hub-user-id': userId,
     'x-ci-hub-user-id-signature': signForwardAuthUserId(SECRET, issuer, userId, username, NOW),
+  };
+}
+
+const IDENTITY_SECRET = 'memory-own-secret';
+const AUDIENCE = 'ci-memory:ci-marketplace';
+
+/** What a Hub that gave Memory its own key sends: the stable-id headers plus the bound assertion. */
+function boundHeaders(
+  username: string,
+  { nonce = 'nB7cS0fTq3kz1XyH9wA2eQ', audience = AUDIENCE }: { nonce?: string; audience?: string } = {},
+) {
+  const signature = signForwardAuthAssertion(
+    IDENTITY_SECRET,
+    audience,
+    nonce,
+    NOW,
+    username,
+    DIRECTORY,
+    HUB_ID,
+  );
+
+  return {
+    ...stableHeaders(username),
+    'x-ci-hub-user-assertion': formatForwardAuthAssertion(nonce, signature),
   };
 }
 
@@ -89,25 +118,22 @@ function response() {
 }
 
 describe('HubForwardAuthBridgeService', () => {
-  const previous = {
-    enabled: config.auth.hubForwardAuth.enabled,
-    secret: config.auth.hubForwardAuth.secret,
-    maxSkewMs: config.auth.hubForwardAuth.maxSkewMs,
-  };
+  const previous = { ...config.auth.hubForwardAuth };
 
   beforeEach(() => {
     jest.clearAllMocks();
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
     config.auth.hubForwardAuth.enabled = true;
     config.auth.hubForwardAuth.secret = SECRET;
+    config.auth.hubForwardAuth.identitySecret = '';
+    config.auth.hubForwardAuth.audience = '';
+    config.auth.hubForwardAuth.requireAudience = 'auto';
     config.auth.hubForwardAuth.maxSkewMs = 300_000;
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
-    config.auth.hubForwardAuth.enabled = previous.enabled;
-    config.auth.hubForwardAuth.secret = previous.secret;
-    config.auth.hubForwardAuth.maxSkewMs = previous.maxSkewMs;
+    Object.assign(config.auth.hubForwardAuth, previous);
   });
 
   it('ignores requests when forward-auth is disabled', () => {
@@ -529,6 +555,39 @@ describe('HubForwardAuthBridgeService', () => {
         username: null,
         accountId: null,
       });
+    });
+  });
+
+  describe('a Hub that gave Memory its own key', () => {
+    beforeEach(() => {
+      config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
+      config.auth.hubForwardAuth.audience = AUDIENCE;
+    });
+
+    it('signs in by the bound assertion', () => {
+      const { service } = makeService();
+
+      expect(service.verifyIdentity(requestWith(boundHeaders('hello@lifescope.io'), null))).toEqual({
+        username: 'hello@lifescope.io',
+        stableId: { issuer: DIRECTORY, subject: HUB_ID },
+      });
+    });
+
+    it('trusts no identity from headers without the assertion, though they verify under the shared secret', async () => {
+      const { service, authService } = makeService();
+
+      expect(service.verifyIdentity(requestWith(stableHeaders('hello@lifescope.io'), null))).toBeNull();
+      await expect(
+        service.alignSession(requestWith(stableHeaders('hello@lifescope.io'), null), response()),
+      ).resolves.toEqual({ username: null, replaced: false });
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
+    });
+
+    it('trusts no identity from an assertion signed for another app', () => {
+      const { service } = makeService();
+      const headers = boundHeaders('hello@lifescope.io', { audience: 'importer:ci-marketplace' });
+
+      expect(service.verifyIdentity(requestWith(headers, null))).toBeNull();
     });
   });
 });

@@ -172,7 +172,19 @@ export const ConfigSchema = z.object({
     // security-trust-and-ops.md.
     hubForwardAuth: z.object({
       enabled: z.boolean(),
+      // The Hub-wide secret. Authenticates the Hub connect exchange and the agent
+      // doorbell, and verifies the unbound identity format an older Hub sends.
       secret: z.string(),
+      // This app's own forward-auth key (CI_HUB_FORWARD_AUTH_IDENTITY_SECRET) and
+      // its app URN (CI_APP_URN), both written by a Hub that signs the bound
+      // assertion. Together they switch on audience-bound verification; see
+      // `forwardAuthPolicy` in common/crypto/hub-forward-auth.ts.
+      identitySecret: z.string().default(''),
+      audience: z.string().default(''),
+      // `auto` (default) requires the bound assertion once the Hub has provided
+      // both values above, and accepts the unbound format until then. `true`
+      // always requires it; `false` always accepts the unbound format too.
+      requireAudience: z.enum(['auto', 'true', 'false']).default('auto'),
       maxSkewMs: z.coerce.number().int().positive(),
     }),
     // Brute-force throttle on the local password login. An appliance is a single

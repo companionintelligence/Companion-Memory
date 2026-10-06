@@ -6,14 +6,11 @@ import type { Request, Response } from 'express';
 import { isUniqueViolation } from '@ci/common/constants';
 import { SYSTEM_USER } from '@ci/common/context';
 import {
-  FORWARD_AUTH_SIGNATURE_HEADER,
-  FORWARD_AUTH_TIMESTAMP_HEADER,
-  FORWARD_AUTH_USER_HEADER,
-  FORWARD_AUTH_USER_ID_HEADER,
-  FORWARD_AUTH_USER_ID_SIGNATURE_HEADER,
-  FORWARD_AUTH_USER_ISSUER_HEADER,
   type HubStableId,
-  verifyForwardAuthHeaders,
+  type VerifiedHubForwardAuth,
+  forwardAuthPolicy,
+  readForwardAuthHeaders,
+  verifyHubForwardAuth,
 } from '@ci/common/crypto';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
@@ -71,15 +68,6 @@ interface MemorySession {
 /** First-sight races a placement retries before giving up. One is all a second tab can cause. */
 const MAX_PLACEMENT_ATTEMPTS = 3;
 
-function headerValue(req: Request, name: string): string | null {
-  const raw = req.headers[name];
-  if (Array.isArray(raw)) {
-    return raw[0] ?? null;
-  }
-
-  return raw ?? null;
-}
-
 function emailsEqual(a: string | null | undefined, b: string | null | undefined): boolean {
   return Boolean(a && b && a.trim().toLowerCase() === b.trim().toLowerCase());
 }
@@ -113,29 +101,33 @@ export class HubForwardAuthBridgeService {
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(HubForwardAuthBridgeService.name);
+
+    const cfg = config.auth.hubForwardAuth;
+    const policy = forwardAuthPolicy(cfg);
+    if (cfg.enabled && !policy.bound && policy.acceptUnbound) {
+      this.logger.warn(
+        'Hub sign-in accepts identity headers that are not bound to this app: the Hub has not provided ' +
+          'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN. Updating the Hub provides both.',
+      );
+    }
   }
 
   /** The verified Hub identity on this request, or null when the feature is off or headers do not verify. */
   verifyIdentity(req: Request): HubIdentity | null {
+    const verified = this.verify(req);
+
+    return verified ? { username: verified.username, stableId: verified.stableId } : null;
+  }
+
+  private verify(req: Request): VerifiedHubForwardAuth | null {
     const cfg = config.auth.hubForwardAuth;
-    if (!cfg.enabled || !cfg.secret) {
+    if (!cfg.enabled) {
       return null;
     }
 
-    const result = verifyForwardAuthHeaders(
-      cfg.secret,
-      {
-        user: headerValue(req, FORWARD_AUTH_USER_HEADER),
-        timestamp: headerValue(req, FORWARD_AUTH_TIMESTAMP_HEADER),
-        signature: headerValue(req, FORWARD_AUTH_SIGNATURE_HEADER),
-        issuer: headerValue(req, FORWARD_AUTH_USER_ISSUER_HEADER),
-        userId: headerValue(req, FORWARD_AUTH_USER_ID_HEADER),
-        userIdSignature: headerValue(req, FORWARD_AUTH_USER_ID_SIGNATURE_HEADER),
-      },
-      { maxSkewMs: cfg.maxSkewMs },
-    );
+    const result = verifyHubForwardAuth(forwardAuthPolicy(cfg), readForwardAuthHeaders(req.headers));
 
-    return result.ok ? { username: result.username, stableId: result.stableId } : null;
+    return result.ok ? result : null;
   }
 
   /** Verified `X-CI-Hub-User`, or null when the feature is off or headers do not verify. */
@@ -198,22 +190,23 @@ export class HubForwardAuthBridgeService {
    * Memory user when they have never opened Memory on this box).
    */
   async alignSession(req: Request, res: Response): Promise<HubBridgeResult> {
-    const identity = this.verifyIdentity(req);
+    const identity = this.verify(req);
     if (!identity) {
       return { username: null, replaced: false };
     }
 
     return identity.stableId
-      ? this.alignByStableId(req, res, identity.username, identity.stableId)
-      : this.alignByEmail(req, res, identity.username);
+      ? this.alignByStableId(req, res, identity, identity.stableId)
+      : this.alignByEmail(req, res, identity);
   }
 
   private async alignByStableId(
     req: Request,
     res: Response,
-    username: string,
+    identity: VerifiedHubForwardAuth,
     stableId: HubStableId,
   ): Promise<HubBridgeResult> {
+    const { username } = identity;
     const session = await this.readSession(req);
 
     let placed: { kind: 'account'; user: User } | { kind: 'refused'; reason: HubBridgeRefusal };
@@ -245,7 +238,12 @@ export class HubForwardAuthBridgeService {
   }
 
   /** The bridge as it was before stable ids, for a Hub that sends none: the account is the address. */
-  private async alignByEmail(req: Request, res: Response, username: string): Promise<HubBridgeResult> {
+  private async alignByEmail(
+    req: Request,
+    res: Response,
+    identity: VerifiedHubForwardAuth,
+  ): Promise<HubBridgeResult> {
+    const { username } = identity;
     const session = await this.readSession(req);
 
     if (session && emailsEqual(session.email, username)) {

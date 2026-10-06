@@ -90,7 +90,10 @@
     "hubForwardAuth": {
       "enabled": false,
       "secret": "",
-      "maxSkewMs": 300000
+      "identitySecret": "",
+      "audience": "",
+      "requireAudience": "auto",
+      "maxSkewMs": 30000
     },
     "loginThrottle": {
       "enabled": true,

@@ -58,6 +58,9 @@
         "__format": "boolean"
       },
       "secret": "CI_HUB_FORWARD_AUTH_SECRET",
+      "identitySecret": "CI_HUB_FORWARD_AUTH_IDENTITY_SECRET",
+      "audience": "CI_APP_URN",
+      "requireAudience": "CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE",
       "maxSkewMs": "CI_HUB_FORWARD_AUTH_MAX_SKEW_MS"
     },
     "loginThrottle": {
