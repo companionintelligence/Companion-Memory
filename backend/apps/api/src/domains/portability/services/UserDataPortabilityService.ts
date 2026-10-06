@@ -26,8 +26,10 @@ import type {
 } from '../types';
 import {
   DISCOVER_USER_TABLES_SQL,
+  type DiscoveredUserColumn,
+  EXCLUDED_TABLES,
   USER_DATA_SCHEMAS,
-  isExcluded,
+  groupUserTables,
   qualifiedName,
   quoteIdentifier,
 } from '../userDataTables';
@@ -197,6 +199,13 @@ export class UserDataPortabilityService {
           const table = tableByName.get(record.table);
 
           if (!table) {
+            // An archive written before a table joined EXCLUDED_TABLES still
+            // carries its rows. They are dropped, not restored, and not an
+            // error: refusing would make every older export unimportable.
+            if (EXCLUDED_TABLES.has(record.table)) {
+              return;
+            }
+
             throw new BadRequestException(`Unknown table in archive: ${record.table}`);
           }
 
@@ -362,22 +371,11 @@ export class UserDataPortabilityService {
   }
 
   private async discoverUserTables(): Promise<UserScopedTable[]> {
-    const discovered = (await this.dataSource.query(DISCOVER_USER_TABLES_SQL, [USER_DATA_SCHEMAS])) as Array<{
-      schema: string;
-      table: string;
-      user_column: string;
-      columns?: string[] | null;
-    }>;
+    const discovered = (await this.dataSource.query(DISCOVER_USER_TABLES_SQL, [
+      USER_DATA_SCHEMAS,
+    ])) as DiscoveredUserColumn[];
 
-    return discovered
-      .filter((row) => !isExcluded(row))
-      .map((row) => ({
-        schema: row.schema,
-        table: row.table,
-        userColumn: row.user_column as UserScopedTable['userColumn'],
-        // Fail closed: a row without a column list can accept no imported rows.
-        columns: Array.isArray(row.columns) ? row.columns : [],
-      }));
+    return groupUserTables(discovered);
   }
 
   private async *iterateUserRows(
@@ -566,6 +564,16 @@ export class UserDataPortabilityService {
     keyMap: FileKeyMap,
   ): Record<string, unknown> {
     const normalized: Record<string, unknown> = { ...row, [table.userColumn]: userId };
+
+    // Every other user column too, or the archive decides it. A null stays null:
+    // on these tables the second column is an attribution ("detected owner")
+    // that may be unknown, and the importer is the only account a non-null
+    // value may name.
+    for (const column of table.userColumns) {
+      if (normalized[column] != null) {
+        normalized[column] = userId;
+      }
+    }
 
     // A file row's storage pointer is rewritten alongside its bytes so the two
     // stay consistent — see FileKeyMap for why neither is taken from the archive.
