@@ -180,9 +180,13 @@ export function BlueBubblesSection() {
         { headers: authHeaders },
       );
 
+      // Each answer replaces the other: `isAdmin` is read off `config`, so a status answer after an
+      // earlier full one (the account lost its role) must not leave the old settings on screen.
       if (data?.canEdit === true) {
+        setStatus(null);
         applyConfig(data);
       } else if (data) {
+        setConfig(null);
         setStatus(data);
       }
     } catch (err) {
