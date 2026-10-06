@@ -8,9 +8,10 @@ import os
 import sys
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.testclient import TestClient
 
 from ci.summary import parser as parser_module
@@ -139,6 +140,25 @@ def test_a_child_that_dies_mid_conversion_is_replaced() -> None:
         worker.close()
 
 
+def test_a_cancelled_conversion_never_answers_the_next_document() -> None:
+    worker = ConversionWorker(target=_parser_fakes.echo)
+
+    async def scenario() -> str:
+        # Warm the child first so the cancel lands while it converts.
+        await worker.convert("/tmp/warm.pdf", seconds=30)
+        slow = asyncio.create_task(worker.convert("/tmp/slow.pdf", seconds=30))
+        await asyncio.sleep(0.5)
+        slow.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await slow
+        return await worker.convert("/tmp/next.pdf", seconds=30)
+
+    try:
+        assert asyncio.run(scenario()).startswith("converted /tmp/next.pdf")
+    finally:
+        worker.close()
+
+
 def test_a_conversion_that_runs_out_of_memory_fails_that_document_only() -> None:
     worker = ConversionWorker(target=_parser_fakes.echo)
     try:
@@ -241,13 +261,21 @@ def test_the_child_runs_under_the_address_space_limit_it_is_given(
 # ── the request body limit ───────────────────────────────────
 
 
-def _limited_app(max_bytes: int, reached: list[str]) -> FastAPI:
+def _limited_app(
+    max_bytes: int, reached: list[str], *, http_middleware: bool = False
+) -> FastAPI:
     small = FastAPI()
 
     @small.post("/upload")
     async def upload(file: UploadFile = File(...)) -> dict[str, int]:
         reached.append(file.filename or "")
         return {"size": len(await file.read())}
+
+    if http_middleware:
+        # The shape of the sidecar auth: a BaseHTTPMiddleware inside the limit.
+        @small.middleware("http")
+        async def passthrough(request: Request, call_next: Any) -> Any:
+            return await call_next(request)
 
     small.add_middleware(LimitRequestBody, max_bytes=max_bytes)
     return small
@@ -290,7 +318,8 @@ def test_a_declared_length_over_the_limit_is_answered_without_reading_at_all() -
     assert received == []
 
 
-def test_a_chunked_body_is_cut_off_at_the_limit() -> None:
+@pytest.mark.parametrize("http_middleware", [False, True])
+def test_a_chunked_body_is_cut_off_at_the_limit(http_middleware: bool) -> None:
     reached: list[str] = []
 
     def chunks():
@@ -303,12 +332,15 @@ def test_a_chunked_body_is_cut_off_at_the_limit() -> None:
             yield b"x" * 1_000
         yield b"\r\n--b--\r\n"
 
-    response = TestClient(_limited_app(4_000, reached)).post(
+    app_under_test = _limited_app(4_000, reached, http_middleware=http_middleware)
+    response = TestClient(app_under_test).post(
         "/upload",
         content=chunks(),
         headers={"Content-Type": "multipart/form-data; boundary=b"},
     )
+    # Behind a BaseHTTPMiddleware the app itself answers 400; still a 413 here.
     assert response.status_code == 413
+    assert "byte limit" in response.json()["detail"]
     assert reached == []
 
 

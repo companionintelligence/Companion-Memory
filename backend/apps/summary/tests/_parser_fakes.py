@@ -14,7 +14,7 @@ from multiprocessing.connection import Connection
 
 
 def echo(conn: Connection, _memory_bytes: int) -> None:
-    """Converts every path to a fixed text, crashing on ``crash`` and hanging on ``hang``."""
+    """Converts every path to a fixed text, crashing on ``crash``, hanging on ``hang`` and taking 2 s on ``slow``."""
     while True:
         try:
             path = conn.recv()
@@ -26,6 +26,9 @@ def echo(conn: Connection, _memory_bytes: int) -> None:
 
         if "hang" in path:
             time.sleep(600)
+
+        if "slow" in path:
+            time.sleep(2)
 
         if "memory" in path:
             conn.send(

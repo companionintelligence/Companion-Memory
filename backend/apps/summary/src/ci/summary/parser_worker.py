@@ -132,7 +132,11 @@ def serve(conn: Connection, memory_bytes: int) -> None:
     """Child process: convert each path received on ``conn`` until it closes."""
     import resource
 
-    resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+    # Never above a hard limit the container already set: raising one is an
+    # error, and a child that dies here fails every document as a 422.
+    _, hard = resource.getrlimit(resource.RLIMIT_AS)
+    limit = memory_bytes if hard == resource.RLIM_INFINITY else min(memory_bytes, hard)
+    resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
     markitdown = _new_markitdown()
 
     while True:
@@ -208,19 +212,14 @@ class ConversionWorker:
             child = self._child
             child.conn.send(path)
 
-            # poll() also returns once the child has died and closed its end.
-            if not await asyncio.to_thread(child.conn.poll, seconds):
-                await asyncio.to_thread(self._stop)
-                raise ConversionTimeout(f"conversion took longer than {seconds:.0f}s")
-
             try:
-                reply: tuple[str, str] = await asyncio.to_thread(child.conn.recv)
-                status, payload = reply
-            except (EOFError, OSError):
-                await asyncio.to_thread(self._stop)
-                raise ConversionFailed(
-                    "the parser process exited while converting (out of memory or crashed)"
-                ) from None
+                status, payload = await self._reply(child, seconds)
+            except asyncio.CancelledError:
+                # Cancelled while the child still works on this path. Its answer
+                # would sit in the pipe and be read as the NEXT document's text,
+                # so this child goes, and the next document gets a fresh one.
+                self._stop()
+                raise
 
             if status == "fatal":
                 await asyncio.to_thread(self._stop)
@@ -229,6 +228,22 @@ class ConversionWorker:
                 raise ConversionFailed(payload)
 
             return payload
+
+    async def _reply(self, child: _Child, seconds: float) -> tuple[str, str]:
+        # poll() also returns once the child has died and closed its end.
+        if not await asyncio.to_thread(child.conn.poll, seconds):
+            await asyncio.to_thread(self._stop)
+            raise ConversionTimeout(f"conversion took longer than {seconds:.0f}s")
+
+        try:
+            reply: tuple[str, str] = await asyncio.to_thread(child.conn.recv)
+        except (EOFError, OSError):
+            await asyncio.to_thread(self._stop)
+            raise ConversionFailed(
+                "the parser process exited while converting (out of memory or crashed)"
+            ) from None
+
+        return reply
 
     def close(self) -> None:
         self._stop()

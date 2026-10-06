@@ -78,29 +78,45 @@ class LimitRequestBody:
             and declared.isdigit()
             and int(declared) > self.max_bytes
         ):
-            too_large = _BodyTooLarge()
-            await JSONResponse(status_code=413, content={"detail": too_large.detail})(
-                scope, receive, send
-            )
+            await _too_large_response()(scope, receive, send)
             return
 
         received = 0
+        exceeded = False
+        answered = False
 
         async def counted() -> Message:
-            nonlocal received
+            nonlocal received, exceeded
             message = await receive()
 
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
 
                 if received > self.max_bytes:
-                    # FastAPI re-raises an HTTPException met while reading the
-                    # form, so this reaches the client as the 413 it is.
+                    exceeded = True
                     raise _BodyTooLarge()
 
             return message
 
-        await self.app(scope, counted, send)
+        async def answer(message: Message) -> None:
+            # What the app makes of the exception above depends on what sits
+            # between: behind the sidecar auth (a BaseHTTPMiddleware) anyio
+            # wraps it in an ExceptionGroup and FastAPI answers 400 "error
+            # parsing the body", which the API would retry. The client is owed
+            # the 413, so once the limit is passed the app's answer is replaced.
+            nonlocal answered
+
+            if not exceeded:
+                await send(message)
+            elif message["type"] == "http.response.start" and not answered:
+                answered = True
+                await _too_large_response()(scope, receive, send)
+
+        await self.app(scope, counted, answer)
+
+
+def _too_large_response() -> JSONResponse:
+    return JSONResponse(status_code=413, content={"detail": _BodyTooLarge().detail})
 
 
 # Added after the auth middleware, so it is the outer one: an oversized body is
