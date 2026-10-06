@@ -454,3 +454,68 @@ describe('FileService by-key readers — getFileContent / getFileStream', () => 
     expect(repo.findOne).not.toHaveBeenCalled();
   });
 });
+
+describe('FileService signed links — what the browser is told to do with the bytes', () => {
+  const KEY = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+  async function signedQuery(row: { contentType: string; filename?: string | null }) {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue({
+      id: 'file-1',
+      userId: 'owner-1',
+      bucket: 'ci',
+      key: KEY,
+      filename: null,
+      ...row,
+    });
+    const { service } = makeService(repo);
+
+    const signed = await service.findById(ownerCtx, 'file-1');
+
+    expect(signed?.url).toMatch(new RegExp(`^/[^?]*${KEY}\\?`));
+
+    return new URLSearchParams(signed!.url!.split('?')[1]);
+  }
+
+  it('downloads a stored HTML file instead of rendering it on the app origin', async () => {
+    const query = await signedQuery({ contentType: 'text/html', filename: 'invoice.html' });
+
+    expect(query.get('response-content-type')).toBe('application/octet-stream');
+    expect(query.get('response-content-disposition')).toBe(
+      `attachment; filename="invoice.html"; filename*=UTF-8''invoice.html`,
+    );
+  });
+
+  it('downloads an SVG but keeps its type, so an <img> of it still draws', async () => {
+    const query = await signedQuery({ contentType: 'image/svg+xml', filename: 'logo.svg' });
+
+    expect(query.get('response-content-type')).toBe('image/svg+xml');
+    expect(query.get('response-content-disposition')).toMatch(/^attachment;/);
+  });
+
+  it('still opens photos, video and PDFs inline', async () => {
+    for (const contentType of ['image/jpeg', 'video/mp4', 'audio/mpeg', 'application/pdf']) {
+      const query = await signedQuery({ contentType, filename: 'x' });
+
+      expect(query.get('response-content-type')).toBe(contentType);
+      expect(query.has('response-content-disposition')).toBe(false);
+    }
+  });
+
+  it('signs a PDF with the bare type the gateway matches on to skip its sandbox', async () => {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue({
+      id: 'f',
+      userId: 'owner-1',
+      bucket: 'ci',
+      key: KEY,
+      contentType: 'application/pdf',
+    });
+    const { service } = makeService(repo);
+
+    const signed = await service.findById(ownerCtx, 'f');
+
+    // infrastructure/gateway/nginx.conf, location /static/, matches this exact text.
+    expect(signed?.url).toMatch(/[?&]response-content-type=application%2Fpdf(&|$)/);
+  });
+});
