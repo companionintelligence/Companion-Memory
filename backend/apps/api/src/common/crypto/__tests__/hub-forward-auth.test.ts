@@ -218,7 +218,8 @@ describe('default replay window', () => {
   it('ships as 30 seconds, with audience binding following the Hub', () => {
     // Read rather than import: the api tsconfig has no resolveJsonModule (see PortalTokenService.test.ts).
     const raw = readFileSync(resolvePath(__dirname, '../../../../config/default.json'), 'utf8');
-    const { hubForwardAuth } = (JSON.parse(raw) as { auth: { hubForwardAuth: Record<string, unknown> } }).auth;
+    const { hubForwardAuth } = (JSON.parse(raw) as { auth: { hubForwardAuth: Record<string, unknown> } })
+      .auth;
 
     expect(hubForwardAuth).toMatchObject({ maxSkewMs: 30_000, requireAudience: 'auto' });
   });
@@ -323,6 +324,10 @@ describe('bound assertion', () => {
       `ci-hub-forward-auth/2\n${AUDIENCE}\n${NONCE}\n${NOW}\nalice\n\n`,
     );
     expect(formatForwardAuthAssertion(NONCE, 'ab12')).toBe(`2.${NONCE}.ab12`);
+    // The same vector is pinned in CI-Hub's forward-auth-signing.test.ts.
+    expect(
+      signForwardAuthAssertion(IDENTITY_SECRET, AUDIENCE, NONCE, NOW, 'alice@example.com', ISSUER, USER_ID),
+    ).toBe('b4a88bb12dfc65b4e912d10e6dddfb9d29b866328475403dd27a12fa2d26d806');
   });
 
   it('verifies an assertion for this app, with the stable id it carries', () => {
