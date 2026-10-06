@@ -283,6 +283,10 @@ describe('CsrfGuard', () => {
       expect(mockCsrfService.validateToken).toHaveBeenCalledWith('pair-token', 'pair-token', null);
     });
 
+    it('logs its rejections under its own name', () => {
+      expect(mockLogger.setContext).toHaveBeenLastCalledWith('CookieCsrfGuard');
+    });
+
     it('leaves the plain guard accepting the native shape', () => {
       mockCsrfService.verifyToken.mockReturnValue(true);
 

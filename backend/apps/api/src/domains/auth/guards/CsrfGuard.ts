@@ -20,7 +20,8 @@ export class CsrfGuard implements CanActivate {
     private readonly authService: AuthService,
     private readonly logger: LoggerService,
   ) {
-    this.logger.setContext(CsrfGuard.name);
+    // new.target, so a CookieCsrfGuard rejection is logged under its own name.
+    this.logger.setContext(new.target.name);
   }
 
   canActivate(context: ExecutionContext): boolean {
