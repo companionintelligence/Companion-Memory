@@ -866,6 +866,23 @@ describe('inbox folder migration at boot', () => {
     expect(await readFile(path.join(oldDir, 'old.zip'), 'utf8')).toBe('old');
     await expect(stat(path.join(newDir, 'old.zip'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  it('leaves a plain file at the old name alone and still provisions the id folder', async () => {
+    // Only a directory is an old inbox folder. Moving a file onto the id path
+    // would leave the account a file where its drop folder belongs.
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-migrate-'));
+    const oldPath = path.join(root, 'tester_example.com');
+    await writeFile(oldPath, 'not a folder');
+
+    const { service } = build({ accounts: [{ id: USER_ID, email: USER_EMAIL }] });
+
+    await withInbox(path.join(root, USER_ID), async () => {
+      await service.onModuleInit();
+    });
+
+    expect(await readFile(oldPath, 'utf8')).toBe('not a folder');
+    expect((await stat(path.join(root, USER_ID, 'reddit'))).isDirectory()).toBe(true);
+  });
 });
 
 describe('scan under a recognition time budget', () => {

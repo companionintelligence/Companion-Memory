@@ -291,8 +291,9 @@ export class ImportInboxService implements OnModuleInit {
    *    for an administrator to split by hand — this code will not guess whose
    *    archives those are.
    *
-   * A symlink at the old name is skipped, not followed: the inbox holds only
-   * copies the importer consumes, and a link there is not one of them.
+   * Anything at the old name that is not a real directory is skipped. A
+   * symlink is not followed: the inbox holds only copies the importer
+   * consumes, and a link there is not one of them.
    *
    * Live claims on units inside a moved folder are rewritten to the new path
    * in the same step, so a run that claimed a unit before the upgrade still
@@ -340,8 +341,11 @@ export class ImportInboxService implements OnModuleInit {
         continue;
       }
 
+      // Only a real directory is an old inbox folder. A link is skipped rather
+      // than followed, and a plain file at that name would otherwise be moved
+      // onto the id path, where provisioning the account's folder then fails.
       const oldStat = await lstat(oldDir).catch(() => null);
-      if (oldStat == null || oldStat.isSymbolicLink()) {
+      if (oldStat == null || !oldStat.isDirectory()) {
         continue;
       }
 
