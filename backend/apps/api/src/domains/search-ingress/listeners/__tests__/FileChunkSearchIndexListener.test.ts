@@ -61,9 +61,10 @@ describe('FileChunkSearchIndexListener.indexChunks', () => {
     ]);
     const ack = makeAck();
 
-    await call({ fileId: 'file-1', chunkIds: ['c1', 'c2'] } as never, ack);
+    await call({ fileId: 'file-1', userId: 'user-1', chunkIds: ['c1', 'c2'] } as never, ack);
 
-    expect(chunkService.findByIds).toHaveBeenCalledWith(['c1', 'c2']);
+    // Read as the document's owner the event names, never across every user's chunks.
+    expect(chunkService.findByIds).toHaveBeenCalledWith({ userId: 'user-1' }, ['c1', 'c2']);
     // One batched call over both chunks' content, not one call per chunk.
     expect(embeddingGenerationService.generateEmbeddings).toHaveBeenCalledTimes(1);
     expect(embeddingGenerationService.generateEmbeddings).toHaveBeenCalledWith([

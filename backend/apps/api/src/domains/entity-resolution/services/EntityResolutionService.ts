@@ -120,7 +120,7 @@ export class EntityResolutionService {
       this.contentService.findByIds(context, grouped.get('content') ?? []),
       this.eventService.findByIds(context, grouped.get('event') ?? []),
       this.fileService.findByIds(context, grouped.get('file') ?? []),
-      this.fileChunkService.findByIds(grouped.get('file-chunk') ?? []),
+      this.fileChunkService.findByIds(context, grouped.get('file-chunk') ?? []),
       this.itemService.findByIds(context, grouped.get('item') ?? []),
       this.noteService.findByIds(context, grouped.get('note') ?? []),
       this.personService.findByIds(context, grouped.get('person') ?? []),

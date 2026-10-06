@@ -143,7 +143,13 @@ export class NodeResolver {
       }
 
       case 'file-chunk': {
-        const chunk = await this.fileChunkService.findByIds([id]).then((results) => results[0] ?? null);
+        // Both reads are the caller's: a chunk is its document's parsed text,
+        // so another user's chunk id must resolve to nothing, the same as any
+        // other node type here. The file check is the second line of defence;
+        // a chunk whose file the caller cannot see is not returned either.
+        const chunk = await this.fileChunkService
+          .findByIds(serviceContext, [id])
+          .then((results) => results[0] ?? null);
 
         if (chunk == null) {
           return null;
@@ -151,7 +157,7 @@ export class NodeResolver {
 
         const file = await this.fileService.findById(serviceContext, chunk.fileId);
 
-        return FileChunkType.toType(chunk, file);
+        return file ? FileChunkType.toType(chunk, file) : null;
       }
 
       case 'file': {
