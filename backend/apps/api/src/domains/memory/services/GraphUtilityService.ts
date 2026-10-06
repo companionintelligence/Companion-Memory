@@ -8,6 +8,7 @@ import { LoggerService } from '@ci/common/logging';
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
 import { canonicalEntityType, sameEntityType } from '../graph.types';
+import { OWNER_MANAGED_PROPERTY_KEYS } from '../ownerManagedProperties';
 
 /**
  * GraphUtilityService - Core graph operations service
@@ -104,18 +105,38 @@ function linkedKeyOf(node: GraphNodeEntity): LinkedKey {
  * each `removeProperties` key deleted. With no `properties` at all there is
  * nothing to merge or replace with, so `stored` survives and only the removals
  * apply — `mergeProperties: false` alone never empties a bag.
+ *
+ * `keep` names keys a replace or a removal must leave as they are stored. A
+ * node write passes {@link OWNER_MANAGED_PROPERTY_KEYS}: the only caller that
+ * replaces or removes is `memory.remember`, and a replace there used to drop the
+ * owner's settings and self claim along with everything else without naming
+ * them. Applied here rather than in the tool because this is where the stored
+ * row is read, so a key another writer committed after the tool looked is kept
+ * too. A merge still writes what it is given; the tool refuses these keys
+ * before a write is queued.
  */
-function nextProperties(
+export function nextProperties(
   stored: Record<string, unknown> | null | undefined,
   write: { properties?: Record<string, unknown>; mergeProperties?: boolean; removeProperties?: string[] },
+  keep: readonly string[] = [],
 ): Record<string, unknown> {
-  const next =
-    write.properties && write.mergeProperties === false
-      ? { ...write.properties }
-      : { ...(stored ?? {}), ...(write.properties ?? {}) };
+  const replacing = Boolean(write.properties) && write.mergeProperties === false;
+  const next = replacing ? { ...write.properties } : { ...(stored ?? {}), ...(write.properties ?? {}) };
+
+  if (replacing) {
+    for (const key of keep) {
+      if (stored != null && Object.prototype.hasOwnProperty.call(stored, key)) {
+        next[key] = stored[key];
+      } else {
+        delete next[key];
+      }
+    }
+  }
 
   for (const key of write.removeProperties ?? []) {
-    delete next[key];
+    if (!keep.includes(key)) {
+      delete next[key];
+    }
   }
 
   return next;
@@ -763,7 +784,7 @@ export class GraphUtilityService {
       }
 
       if (payload.properties || payload.removeProperties?.length) {
-        node.properties = nextProperties(node.properties, payload);
+        node.properties = nextProperties(node.properties, payload, OWNER_MANAGED_PROPERTY_KEYS);
       }
 
       node.is_active = true;

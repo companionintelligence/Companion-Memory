@@ -1,7 +1,8 @@
-import { isReference, useMutation, type Reference } from '@apollo/client';
+import { isReference, useApolloClient, useMutation, type Reference } from '@apollo/client';
 import { useToast } from '@ci/shadcn';
 
 import { gql } from '@/graphql';
+import { GET_PLAN_BADGE_COUNT } from '@/layouts/Main/SecondaryNavigation/usePlanBadgeCount';
 
 export const DELETE_TASK = gql(`
   mutation DeleteTask($input: DeleteByIdInput!) {
@@ -21,6 +22,7 @@ export const DELETE_TASK = gql(`
  */
 export function useDeleteTasks() {
   const { toast } = useToast();
+  const client = useApolloClient();
   const [deleteTask, { loading: deleting }] = useMutation(DELETE_TASK, {
     update(cache, { data }) {
       const deletedTaskId = data?.deleteTask?.deletedId;
@@ -66,6 +68,8 @@ export function useDeleteTasks() {
           failed.push(id);
         }
       }
+
+      await client.refetchQueries({ include: [GET_PLAN_BADGE_COUNT] });
 
       if (failed.length > 0) {
         toast.error(

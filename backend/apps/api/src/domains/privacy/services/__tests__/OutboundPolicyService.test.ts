@@ -22,7 +22,12 @@ describe('OutboundPolicyService', () => {
   it('reports every path on by default, in contract order', () => {
     const { paths } = build().service.get();
 
-    expect(paths.map((p) => p.key)).toEqual(['crash_reports', 'place_lookups', 'link_previews', 'portal_oauth']);
+    expect(paths.map((p) => p.key)).toEqual([
+      'crash_reports',
+      'place_lookups',
+      'link_previews',
+      'portal_oauth',
+    ]);
     expect(paths.every((p) => p.enabled && !p.locked)).toBe(true);
   });
 

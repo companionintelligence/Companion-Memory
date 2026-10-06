@@ -1,5 +1,5 @@
 import { Dirent } from 'node:fs';
-import { chmod, lstat, mkdir, readdir } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readdir, realpath, rename } from 'node:fs/promises';
 import path from 'node:path';
 
 import { BadRequestException, Injectable, type OnModuleInit } from '@nestjs/common';
@@ -12,6 +12,7 @@ import { allDataSources, dataSourcesRecognize, type DirEntry } from '../datasour
 import type { ImportRunSource } from '../entities/ImportRunEntity';
 import {
   inboxRoot,
+  legacyEmailInboxFolderName,
   realUserInboxDir,
   resolveWithinUserInbox,
   userInboxDir,
@@ -260,8 +261,11 @@ export class ImportInboxService implements OnModuleInit {
    */
   async onModuleInit(): Promise<void> {
     try {
-      for (const user of await this.users.findAll()) {
-        await this.ensureInboxTree(userInboxDir(user.email));
+      const users = await this.users.findAll();
+      await this.migrateInboxFoldersToUserIds(users);
+
+      for (const user of users) {
+        await this.ensureInboxTree(userInboxDir(user.id));
       }
     } catch (err: unknown) {
       this.logger.warn('Could not prepare the import inbox at boot', {
@@ -271,11 +275,141 @@ export class ImportInboxService implements OnModuleInit {
   }
 
   /**
+   * Move each account's inbox folder from its old email-derived name onto its
+   * account id, once, at boot.
+   *
+   * The folder used to be `sanitizeFilename(email.toLowerCase())`, which is not
+   * unique: `a+b@x.io` and `a_b@x.io` collapse to one name, as do two case
+   * variants of one address. Two accounts could land on one folder, so a
+   * blind rename could hand one account's archives to the other. So:
+   *
+   *  - a legacy name that exactly one live account maps to is renamed onto
+   *    that account's id, but only when the id folder does not already exist
+   *    (a re-run, or an account provisioned fresh under the new scheme, is left
+   *    alone);
+   *  - a legacy name two or more accounts map to is LEFT in place and logged,
+   *    for an administrator to split by hand — this code will not guess whose
+   *    archives those are.
+   *
+   * Anything at the old name that is not a real directory is skipped. A
+   * symlink is not followed: the inbox holds only copies the importer
+   * consumes, and a link there is not one of them.
+   *
+   * Live claims on units inside a moved folder are rewritten to the new path
+   * in the same step, so a run that claimed a unit before the upgrade still
+   * finds it when its unpack stage runs.
+   *
+   * The web and worker processes both boot this service against one shared
+   * mount, so two of them can run this at once. The rename is the arbiter: the
+   * loser finds the old folder gone (ENOENT, or gone by the time it looks at
+   * the new one) and moves on without a warning.
+   */
+  private async migrateInboxFoldersToUserIds(users: readonly { id: string; email: string }[]): Promise<void> {
+    const usersByLegacyName = new Map<string, Array<{ id: string; email: string }>>();
+    for (const user of users) {
+      // An account with no email never had an email-named folder.
+      if (!user.email) {
+        continue;
+      }
+
+      const legacy = legacyEmailInboxFolderName(user.email);
+      const group = usersByLegacyName.get(legacy) ?? [];
+      group.push(user);
+      usersByLegacyName.set(legacy, group);
+    }
+
+    const root = inboxRoot();
+
+    for (const [legacy, group] of usersByLegacyName) {
+      const oldDir = path.join(root, legacy);
+
+      if (group.length > 1) {
+        const stat = await lstat(oldDir).catch(() => null);
+        if (stat != null) {
+          this.logger.warn(
+            'Import inbox folder is shared by more than one account and was left for an administrator to split',
+            { folder: legacy, userIds: group.map((u) => u.id) },
+          );
+        }
+
+        continue;
+      }
+
+      const [user] = group;
+      const newDir = userInboxDir(user.id);
+      if (oldDir === newDir) {
+        continue;
+      }
+
+      // Only a real directory is an old inbox folder. A link is skipped rather
+      // than followed, and a plain file at that name would otherwise be moved
+      // onto the id path, where provisioning the account's folder then fails.
+      const oldStat = await lstat(oldDir).catch(() => null);
+      if (oldStat == null || !oldStat.isDirectory()) {
+        continue;
+      }
+
+      const newExists = await lstat(newDir).then(
+        () => true,
+        () => false,
+      );
+      if (newExists) {
+        // Another process may have moved it between the two lstats.
+        if ((await lstat(oldDir).catch(() => null)) != null) {
+          this.logger.warn(
+            'Both the old and new import inbox folders exist; left the old one for an administrator',
+            {
+              oldFolder: legacy,
+              userId: user.id,
+            },
+          );
+        }
+
+        continue;
+      }
+
+      let fromReal: string;
+      try {
+        // The claims recorded realpaths, so the rewrite needs them too.
+        fromReal = await realpath(oldDir);
+        await rename(oldDir, newDir);
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          this.logger.warn('Could not move an import inbox folder onto the account id', {
+            userId: user.id,
+            error: (err as Error).message,
+          });
+        }
+
+        continue;
+      }
+
+      this.logger.log('Moved import inbox folder onto the account id', { userId: user.id });
+
+      try {
+        const rebased = await this.stagedSources.rebaseInboxClaims(user.id, fromReal, await realpath(newDir));
+        if (rebased > 0) {
+          this.logger.log('Pointed in-flight inbox claims at the moved folder', { userId: user.id, rebased });
+        }
+      } catch (err: unknown) {
+        // The folder moved but its claims did not follow. A run that claimed a
+        // unit before the upgrade and has not unpacked it yet will fail to find
+        // it and release its claim; the unit can be imported again from the new
+        // folder.
+        this.logger.warn('Could not point in-flight inbox claims at the moved folder', {
+          userId: user.id,
+          error: (err as Error).message,
+        });
+      }
+    }
+  }
+
+  /**
    * Create one user's inbox subtree — the onboarding entry point, so a fresh
    * account has its drop folders without waiting for a restart or a scan.
    */
-  async provisionUserInbox(email: string): Promise<void> {
-    await this.ensureInboxTree(userInboxDir(email));
+  async provisionUserInbox(userId: string): Promise<void> {
+    await this.ensureInboxTree(userInboxDir(userId));
   }
 
   /**
@@ -286,14 +420,14 @@ export class ImportInboxService implements OnModuleInit {
    */
   private async userDir(
     ctx: UserServiceContext,
-  ): Promise<{ dir: string; displayDir: string; email: string }> {
+  ): Promise<{ dir: string; displayDir: string; userId: string }> {
     const user = await this.users.findById({ userId: ctx.userId }, ctx.userId);
 
     if (user == null) {
       throw new BadRequestException('No such user');
     }
 
-    return { dir: userInboxDir(user.email), displayDir: userInboxDisplayDir(user.email), email: user.email };
+    return { dir: userInboxDir(user.id), displayDir: userInboxDisplayDir(user.id), userId: user.id };
   }
 
   /**
@@ -310,7 +444,7 @@ export class ImportInboxService implements OnModuleInit {
    * of an unchanged inbox agree.
    */
   async scan(ctx: UserServiceContext): Promise<InboxScan> {
-    const { dir: inboxDir, displayDir, email } = await this.userDir(ctx);
+    const { dir: inboxDir, displayDir, userId } = await this.userDir(ctx);
 
     try {
       // Re-ensured on every scan, not only at boot: a whole-folder unit
@@ -354,7 +488,7 @@ export class ImportInboxService implements OnModuleInit {
     // inbox matches no stored row at all — so every claimed unit reads as
     // free, the scan offers bytes another run already holds, and starting them
     // dies on the staged-source unique violation instead.
-    const claimRoot = await realUserInboxDir(email);
+    const claimRoot = await realUserInboxDir(userId);
     const active = await this.stagedSources.findActiveByPaths(
       units.map((unit) => path.join(claimRoot, unit.path)),
     );
@@ -409,11 +543,11 @@ export class ImportInboxService implements OnModuleInit {
       );
     }
 
-    const { dir: inboxDir, email } = await this.userDir(ctx);
+    const { dir: inboxDir, userId } = await this.userDir(ctx);
     // Resolved once per batch, not per unit. Falls back to the configured path
     // when the directory does not exist yet — every unit then fails its own
     // resolve anyway, and a throw here would take the whole batch with it.
-    const inboxRealDir = await realUserInboxDir(email);
+    const inboxRealDir = await realUserInboxDir(userId);
     const resultByUnit = new Map<string, InboxUnitResult>();
 
     // Two passes so the runs can start SMALLEST FIRST. The stage queue is
@@ -429,7 +563,7 @@ export class ImportInboxService implements OnModuleInit {
 
     for (const unit of requested) {
       try {
-        const resolved = await resolveWithinUserInbox(path.join(inboxDir, unit), email);
+        const resolved = await resolveWithinUserInbox(path.join(inboxDir, unit), userId);
         const info = await lstat(resolved);
 
         if (info.isSymbolicLink()) {

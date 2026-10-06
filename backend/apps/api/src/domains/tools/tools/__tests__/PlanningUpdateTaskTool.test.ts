@@ -158,3 +158,65 @@ describe('PlanningUpdateTaskTool', () => {
     expect(result.error?.message).toBe(`Task ${TASK_ID} not found`);
   });
 });
+
+/**
+ * Nothing keeps a task's old description or notes, so replacing text that is there loses it. That
+ * call is labelled destructive for itself (a write key is refused it, and the autonomy dial asks
+ * before it runs); every other update stays the plain write the tool is declared as.
+ */
+describe('PlanningUpdateTaskTool.privacyFor', () => {
+  const destructive = { access: 'write', sensitivity: 'personal', destructive: true, external: false };
+
+  function toolWith(stored: { description: string | null; notes: string | null } | null) {
+    const findById = jest.fn().mockResolvedValue(stored ? ({ id: TASK_ID, ...stored } as Task) : null);
+    const tool = new PlanningUpdateTaskTool(
+      { update: jest.fn(), findById } as unknown as TaskService,
+      logger(),
+    );
+
+    return { tool, findById };
+  }
+
+  it('marks replacing non-empty notes or a non-empty description destructive', async () => {
+    const { tool, findById } = toolWith({
+      description: 'Call the landlord',
+      notes: 'Asked about the boiler',
+    });
+
+    await expect(tool.privacyFor(CONTEXT, { taskId: TASK_ID, notes: 'done' })).resolves.toStrictEqual(
+      destructive,
+    );
+    await expect(tool.privacyFor(CONTEXT, { taskId: TASK_ID, description: '' })).resolves.toStrictEqual(
+      destructive,
+    );
+    expect(findById).toHaveBeenCalledWith({ userId: CONTEXT.userId }, TASK_ID);
+  });
+
+  it('leaves filling in an empty field, or resending the same text, a plain write', async () => {
+    const { tool } = toolWith({ description: null, notes: 'Asked about the boiler' });
+
+    await expect(
+      tool.privacyFor(CONTEXT, { taskId: TASK_ID, description: 'Call the landlord' }),
+    ).resolves.toBeUndefined();
+    await expect(
+      tool.privacyFor(CONTEXT, { taskId: TASK_ID, notes: 'Asked about the boiler' }),
+    ).resolves.toBeUndefined();
+    await expect(
+      tool.privacyFor(CONTEXT, { taskId: TASK_ID, notes: 'Asked about the boiler\n' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('does not look the task up for an update that touches neither field', async () => {
+    const { tool, findById } = toolWith({ description: 'x', notes: 'y' });
+
+    await expect(tool.privacyFor(CONTEXT, { taskId: TASK_ID, priority: 1 })).resolves.toBeUndefined();
+    expect(findById).not.toHaveBeenCalled();
+  });
+
+  it('leaves a missing task and an invalid input unlabelled, for execute to refuse', async () => {
+    const { tool } = toolWith(null);
+
+    await expect(tool.privacyFor(CONTEXT, { taskId: TASK_ID, notes: 'x' })).resolves.toBeUndefined();
+    await expect(tool.privacyFor(CONTEXT, { taskId: 'nope', notes: 'x' })).resolves.toBeUndefined();
+  });
+});

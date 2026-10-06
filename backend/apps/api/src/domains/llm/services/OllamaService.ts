@@ -881,12 +881,13 @@ export class OllamaService implements OnModuleInit {
     const accumulatedMessages: OllamaMessage[] = [];
     // One tool round, then a prose follow-up. Re-advertising tools after a
     // failed/partial remember made Qwen retry for minutes on a 2-slot vLLM.
-    // XML dumped into content is still salvaged (salvageTools) without another
-    // advertised-tool generate.
+    // Tool XML the model writes into its text is salvaged in the tool round
+    // only (salvageTools); the follow-up's markup is stripped, never run.
     const maxToolRounds = 2;
     let generateRounds = 0;
-    // When the follow-up round ALSO comes back as tool calls (salvage can
-    // produce them even with no tools advertised), the loop used to execute
+    // When the follow-up round ALSO comes back as tool calls (the native
+    // engine parses its tool-call tokens even with no tools advertised), the
+    // loop used to execute
     // those calls and then break at the round cap — ending the whole turn with
     // a role:'tool' row as its last message and no prose anywhere. Measured
     // live: two knowledge_search rounds that both returned [], then silence;
@@ -967,10 +968,16 @@ export class OllamaService implements OnModuleInit {
               tools: iterationWillCallTools ? ollamaTools : undefined,
               signal,
               enableThinking,
-              salvageTools: enableTools && !forcedProseRound,
-              // The forced round's calls are dropped below either way; this
-              // keeps their markup out of the streamed text as well.
-              discardToolMarkup: enableTools && forcedProseRound,
+              // Markup is read as a tool call only in a round that offered
+              // tools. The follow-up round offers none, and text the model
+              // writes there is the answer: when it quotes an email or an
+              // invite that carries tool markup, salvaging it would run a call
+              // nobody asked for, with the owner's authority.
+              salvageTools: iterationWillCallTools,
+              // Every round that offers no tools (the follow-up, the forced
+              // prose round) keeps its markup out of the streamed text and
+              // emits no calls.
+              discardToolMarkup: enableTools && !iterationWillCallTools,
               maxTokens: maxOutputTokens,
             });
 

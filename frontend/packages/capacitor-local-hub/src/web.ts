@@ -71,4 +71,12 @@ export class LocalHubWeb extends WebPlugin implements LocalHubPlugin {
   async requestLocationAuthorization(): Promise<{ status: NativeLocationAuthorization }> {
     return { status: 'unsupported' };
   }
+
+  async startSignificantLocationUpdates(): Promise<void> {
+    // Browsers have no significant-change service. The web watcher uses geolocation.
+  }
+
+  async stopSignificantLocationUpdates(): Promise<void> {
+    // Nothing started on web.
+  }
 }

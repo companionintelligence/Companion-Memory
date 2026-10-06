@@ -91,6 +91,37 @@ function createMock(capture: (input: Record<string, unknown>) => void): MockedRe
 describe('TaskSlateDrawer — Plan backlog', () => {
   afterEach(() => setViewport(false));
 
+  it('opens in the overlay slot on the phone so the navigation drawer cannot cover it', async () => {
+    setViewport(true);
+    const overlay = document.createElement('div');
+    overlay.id = 'overlay-modal';
+    document.body.appendChild(overlay);
+
+    renderWithProviders(
+      <TaskSlateDrawer open onOpenChange={() => {}} slot={SLOT} sections={backlog([task()])} {...NOOP} />,
+    );
+
+    await waitFor(() => {
+      expect(overlay.querySelector('[data-slot="sheet-content"]')).not.toBeNull();
+    });
+
+    overlay.remove();
+  });
+
+  it('contains overscroll on the phone sheet so the day underneath does not move', async () => {
+    setViewport(true);
+
+    renderWithProviders(
+      <TaskSlateDrawer open onOpenChange={() => {}} slot={SLOT} sections={backlog([task()])} {...NOOP} />,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-slot="sheet-content"]')?.className).toContain(
+        'overscroll-contain',
+      );
+    });
+  });
+
   it('stays shut until it is asked for', () => {
     renderWithProviders(
       <TaskSlateDrawer

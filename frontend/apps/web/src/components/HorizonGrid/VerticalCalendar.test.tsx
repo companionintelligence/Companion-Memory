@@ -6,7 +6,7 @@ import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
 import { EVENT_DRAG_TYPE } from '@/lib/scheduleDrag';
 
 import { addDays, startOfLocalDay } from './nowNext';
-import { VerticalCalendar } from './VerticalCalendar';
+import { GRID_HEIGHT_PX, VerticalCalendar } from './VerticalCalendar';
 
 const MONDAY = startOfLocalDay(new Date(2026, 7, 3));
 
@@ -191,6 +191,67 @@ describe('VerticalCalendar', () => {
     expect(screen.queryByRole('button', { name: /^Show / })).not.toBeInTheDocument();
     expect(screen.getByRole('list', { name: /All day on / })).toBeInTheDocument();
     expect(screen.getByRole('listitem', { name: /August/ })).toBeInTheDocument();
+  });
+
+  it('leaves room after the last hour when a bottom sheet covers the grid', () => {
+    render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} scrollEndInset />);
+
+    expect(screen.getByTestId('vertical-calendar-scroll').className).toContain('70vh');
+  });
+});
+
+describe('VerticalCalendar — keeping the scrolled time', () => {
+  it('does not jump back to the morning when the same day is handed in again', () => {
+    const { rerender } = render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} />);
+    const scroller = screen.getByTestId('vertical-calendar-scroll');
+
+    scroller.scrollTop = 900;
+
+    rerender(<VerticalCalendar start={new Date(MONDAY.getTime())} days={1} events={[]} rhythm={[]} />);
+
+    expect(scroller.scrollTop).toBe(900);
+  });
+
+  it('leaves a selected time where it is when that hour is already on screen', () => {
+    const { rerender } = render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} />);
+    const scroller = screen.getByTestId('vertical-calendar-scroll');
+    const sevenPm = (19 / 24) * GRID_HEIGHT_PX;
+
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 800 });
+    scroller.scrollTop = sevenPm - 100;
+
+    rerender(
+      <VerticalCalendar
+        start={MONDAY}
+        days={1}
+        events={[]}
+        rhythm={[]}
+        selectedSlot={{ instant: new Date(2026, 7, 3, 19, 0), allDay: false }}
+      />,
+    );
+
+    expect(scroller.scrollTop).toBe(sevenPm - 100);
+  });
+
+  it('brings a selected time on screen when it is below the pane', () => {
+    const { rerender } = render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} />);
+    const scroller = screen.getByTestId('vertical-calendar-scroll');
+    const sevenPm = (19 / 24) * GRID_HEIGHT_PX;
+
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 });
+    scroller.scrollTop = 0;
+
+    rerender(
+      <VerticalCalendar
+        start={MONDAY}
+        days={1}
+        events={[]}
+        rhythm={[]}
+        selectedSlot={{ instant: new Date(2026, 7, 3, 19, 0), allDay: false }}
+      />,
+    );
+
+    expect(scroller.scrollTop).toBe(Math.max(0, sevenPm - 200 / 3));
   });
 });
 

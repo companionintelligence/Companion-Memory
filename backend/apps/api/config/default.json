@@ -85,12 +85,17 @@
       "jwksUri": "https://hub.ci.computer/api/auth/jwks",
       "audience": "ci-server,ci-hub,ci-import-tools,ci-browser-extension,ci-even,ci-applet",
       "pushRelayUrl": "",
-      "serviceClients": "hbpe-sidecar,summary-sidecar"
+      "serviceClients": "",
+      "applianceAudience": "",
+      "captureClients": "ci-import-tools,ci-browser-extension,ci-even,ci-applet"
     },
     "hubForwardAuth": {
       "enabled": false,
       "secret": "",
-      "maxSkewMs": 300000
+      "identitySecret": "",
+      "audience": "",
+      "requireAudience": "auto",
+      "maxSkewMs": 30000
     },
     "loginThrottle": {
       "enabled": true,

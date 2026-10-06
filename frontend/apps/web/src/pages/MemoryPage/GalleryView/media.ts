@@ -1,4 +1,4 @@
-import { resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
+import { imageNeedsJpegPreview, resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
 
 import { eventDisplayTitle } from '../Components/utils';
 import type { EntityItem } from '../useEntityService';
@@ -98,12 +98,13 @@ export function pickThumbUrl(input: {
   previewUrl: string | null | undefined;
   fullUrl: string;
   sizeBytes: number | null | undefined;
+  contentType?: string | null;
 }): string | null {
   if (input.previewUrl) {
     return input.previewUrl;
   }
 
-  if (input.kind === 'video') {
+  if (input.kind === 'video' || imageNeedsJpegPreview(input.contentType)) {
     return null;
   }
 
@@ -179,6 +180,7 @@ export function getEntityMedia(entity: EntityItem): EntityMedia | null {
           previewUrl: preview,
           fullUrl: full,
           sizeBytes: entity.galleryMediaSize ?? null,
+          contentType: entity.galleryContentType,
         }),
         fullUrl: full,
         ...(kind === 'video' ? { playbackUrl: resolveMediaUrl(entity.galleryPlaybackUrl) } : {}),
@@ -212,6 +214,7 @@ export function getEntityMedia(entity: EntityItem): EntityMedia | null {
           previewUrl: preview,
           fullUrl: full,
           sizeBytes: entity.galleryMediaSize ?? null,
+          contentType,
         }),
         fullUrl: full,
         ...(kind === 'video' ? { playbackUrl: resolveMediaUrl(entity.galleryPlaybackUrl) } : {}),
@@ -282,6 +285,7 @@ export function getEntityMedia(entity: EntityItem): EntityMedia | null {
             previewUrl: preview,
             fullUrl: url,
             sizeBytes: entity.galleryMediaSize ?? null,
+            contentType,
           }),
           fullUrl: url,
           ...(kind === 'video' ? { playbackUrl: resolveMediaUrl(entity.galleryPlaybackUrl) } : {}),

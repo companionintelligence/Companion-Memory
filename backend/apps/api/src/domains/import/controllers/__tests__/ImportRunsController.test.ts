@@ -1,6 +1,11 @@
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 
 import type { RequestContext } from '@ci/common/context';
+import config from '@ci/configuration';
 
 import { ImportRunsController } from '../ImportRunsController';
 
@@ -524,6 +529,49 @@ describe('ImportRunsController.startPush', () => {
 
     expect(await controller.startPush(ctx, undefined)).toEqual({ runs: [] });
   });
+});
+
+/**
+ * `POST /import/recognize` reads the configured import roots only for the
+ * administrator. On a desktop install those roots are a mount of the owner's
+ * Downloads folder; a household member asking about a path there is refused
+ * exactly as an out-of-bounds path is.
+ */
+describe('ImportRunsController.recognize', () => {
+  const roots = config.import.roots as string[];
+
+  async function withRoots<T>(next: string[], run: () => Promise<T>): Promise<T> {
+    const previous = [...roots];
+
+    roots.length = 0;
+    roots.push(...next);
+
+    try {
+      return await run();
+    } finally {
+      roots.length = 0;
+      roots.push(...previous);
+    }
+  }
+
+  it.each([
+    ['admin', true],
+    ['user', false],
+  ] as const)(
+    'a caller with role %s gets allowed=%s for a path under a configured root',
+    async (role, allowed) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'ci-recognize-route-'));
+      const file = path.join(root, 'export.zip');
+      await writeFile(file, 'bytes');
+
+      const { controller, users } = makeController();
+      users.findById.mockResolvedValueOnce({ id: 'user-1', email: 'tester@example.com', role } as never);
+
+      await withRoots([root], async () => {
+        expect((await controller.recognize(ctx, { path: file })).allowed).toBe(allowed);
+      });
+    },
+  );
 });
 
 describe('ImportRunsController authentication', () => {

@@ -21,7 +21,7 @@ import type {
 } from '../types';
 
 import { McpSecretCodec } from './McpSecretCodec';
-import { grandfatherApprovals } from './mcpToolDigest';
+import { grandfatherApprovals, pinApprovedDescriptions } from './mcpToolDigest';
 
 interface LiveConnection {
   client: Client;
@@ -161,6 +161,17 @@ export class McpClientManagerService implements OnModuleDestroy {
     try {
       const discoveredTools = (await live.client.listTools()).tools.map(toDiscoveredTool);
 
+      // Approvals made before descriptions were pinned get the prose of the PREVIOUS connect
+      // pinned now, before this connect's list replaces it, so a description this server changes
+      // from here on is caught instead of inherited. See pinApprovedDescriptions. The approvals are
+      // re-read here rather than taken from the row read before the (slow) connect, so an approval
+      // made meanwhile is not written over; this writes at most once per approval.
+      const latest =
+        config.approvedTools == null ? null : await this.repo.findOne({ where: { id: configId } });
+      const pinned = latest
+        ? pinApprovedDescriptions(latest.approvedTools, config.discoveredTools, discoveredTools)
+        : null;
+
       await this.persist(configId, {
         discoveredTools,
         // One-shot conversion of a pre-approval-gate row (approved_tools IS NULL): grandfather
@@ -176,7 +187,9 @@ export class McpClientManagerService implements OnModuleDestroy {
                 new Date().toISOString(),
               ),
             }
-          : {}),
+          : pinned
+            ? { approvedTools: pinned }
+            : {}),
         connectionStatus: 'connected',
         lastConnectedAt: new Date(),
         lastError: null,
@@ -512,11 +525,17 @@ export class McpClientManagerService implements OnModuleDestroy {
 
 function toDiscoveredTool(tool: {
   name: string;
+  title?: string;
+  annotations?: { title?: string };
   description?: string;
   inputSchema: unknown;
 }): McpDiscoveredTool {
+  const title = typeof tool.title === 'string' ? tool.title : tool.annotations?.title;
+
   return {
     name: tool.name,
+    // Kept so the description digest covers it: the title is prose a server controls too.
+    ...(typeof title === 'string' ? { title } : {}),
     description: tool.description,
     inputSchema: (tool.inputSchema ?? {}) as Record<string, unknown>,
   };

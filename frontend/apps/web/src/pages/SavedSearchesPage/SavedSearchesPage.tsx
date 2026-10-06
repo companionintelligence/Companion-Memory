@@ -10,14 +10,11 @@ import { ErrorState } from '@/components/ErrorState';
 import { SavedSearchIcon } from '@/components/icons';
 import { InfiniteListFooter } from '@/components/InfiniteList';
 import { PageContent } from '@/components/layout';
-import { DropdownProvider } from '@/components/SearchBox/useDropdown';
 import { gql } from '@/graphql';
 import { type FragmentType, useFragment } from '@/graphql/fragment-masking';
 import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
 
-import { CreateSavedSearchModal } from './CreateSavedSearchModal';
 import { DeleteSavedSearchModal } from './DeleteSavedSearchModal';
-import { EditSavedSearchModal } from './EditSavedSearchModal';
 import { SavedSearchGridItemFragment, SavedSearch } from './SavedSearch';
 import { ShareSavedSearchModal } from './ShareSavedSearchModal';
 
@@ -75,15 +72,7 @@ export function SavedSearchesPage() {
   const [starterOpen, setStarterOpen] = useState(false);
 
   const [savedSearchToDelete, setSavedSearchToDelete] = useState<SavedSearchNode | null>(null);
-  const [savedSearchToEdit, setSavedSearchToEdit] = useState<SavedSearchNode | null>(null);
   const [savedSearchToShare, setSavedSearchToShare] = useState<SavedSearchNode | null>(null);
-  const [creating, setCreating] = useState(false);
-
-  const openSavedSearchEditModal = (e: React.MouseEvent, savedSearch: SavedSearchNode) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setSavedSearchToEdit(savedSearch);
-  };
 
   const openSavedSearchShareModal = (e: React.MouseEvent, savedSearch: SavedSearchNode) => {
     e.preventDefault();
@@ -229,9 +218,11 @@ export function SavedSearchesPage() {
               </div>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-2">
-              <Button onClick={() => setCreating(true)}>
-                <Plus className="mr-2 h-4 w-4" />
-                New saved search
+              <Button asChild>
+                <Link to="/memory">
+                  <Plus className="mr-2 h-4 w-4" />
+                  New saved search
+                </Link>
               </Button>
               <Button variant="outline" asChild>
                 <Link to="/memory">
@@ -252,7 +243,6 @@ export function SavedSearchesPage() {
             key={savedSearch.id}
             savedSearch={savedSearch}
             openSavedSearchDeleteModal={(e) => openSavedSearchDeleteModal(e, savedSearch)}
-            openSavedSearchEditModal={(e) => openSavedSearchEditModal(e, savedSearch)}
             openSavedSearchShareModal={(e) => openSavedSearchShareModal(e, savedSearch)}
           />
         ))}
@@ -288,7 +278,6 @@ export function SavedSearchesPage() {
               key={savedSearch.id}
               savedSearch={savedSearch}
               openSavedSearchDeleteModal={(e) => openSavedSearchDeleteModal(e, savedSearch)}
-              openSavedSearchEditModal={(e) => openSavedSearchEditModal(e, savedSearch)}
               openSavedSearchShareModal={(e) => openSavedSearchShareModal(e, savedSearch)}
             />
           ))}
@@ -308,9 +297,11 @@ export function SavedSearchesPage() {
             placeholder="Search your saved searches by name, description or tag..."
             className="w-full sm:max-w-sm"
           />
-          <Button onClick={() => setCreating(true)} className="shrink-0">
-            <Plus className="mr-2 h-4 w-4" />
-            New saved search
+          <Button asChild className="shrink-0">
+            <Link to="/memory">
+              <Plus className="mr-2 h-4 w-4" />
+              New saved search
+            </Link>
           </Button>
         </div>
 
@@ -348,20 +339,8 @@ export function SavedSearchesPage() {
         />
       )}
 
-      {savedSearchToEdit && (
-        <DropdownProvider args={[{ changeSearchParams: false }]}>
-          <EditSavedSearchModal savedSearch={savedSearchToEdit} onClose={() => setSavedSearchToEdit(null)} />
-        </DropdownProvider>
-      )}
-
       {savedSearchToShare && (
         <ShareSavedSearchModal savedSearch={savedSearchToShare} onClose={() => setSavedSearchToShare(null)} />
-      )}
-
-      {creating && (
-        <DropdownProvider args={[{ changeSearchParams: false }]}>
-          <CreateSavedSearchModal onClose={() => setCreating(false)} />
-        </DropdownProvider>
       )}
     </>
   );

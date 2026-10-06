@@ -1,6 +1,6 @@
 import { BadRequestException, Controller, Get, Query, UseGuards } from '@nestjs/common';
 
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 
 import { DOCTOR_CHECKS, DOCTOR_CHECK_IDS, type DoctorCheck } from '../doctor/checks';
 import { ImportDoctorService, type DoctorReport } from '../doctor/ImportDoctorService';
@@ -64,8 +64,16 @@ export class ImportDoctorController {
    * `timeoutMs` overrides the per-statement cap — raise it for a deliberate
    * full audit over a large corpus, where a check that times out at the default
    * would still finish given a minute.
+   *
+   * Administrator-only, the same gate the appliance-wide maintenance sweeps
+   * carry. Each check scans every account and returns a sample row from
+   * whichever one owns the defect, so a household member running this would
+   * read the owner's contact names, event locations and pipeline errors. The
+   * static registry on `/checks` stays open — it names what can be checked and
+   * leaks no data. On an unclaimed appliance the guard admits everyone, which
+   * is the honest answer for a box that has no owner yet.
    */
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)
   @Get()
   async run(@Query('checks') checks?: string, @Query('timeoutMs') timeoutMs?: string): Promise<DoctorReport> {
     const requested = parseCheckIds(checks);

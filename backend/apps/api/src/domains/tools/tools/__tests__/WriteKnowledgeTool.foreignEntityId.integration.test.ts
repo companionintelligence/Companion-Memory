@@ -160,6 +160,7 @@ describeWithDb(`WriteKnowledgeTool on another owner's entity id (${availability.
       graphEvents,
       new GraphQueryService({} as never, graphUtility),
       logger as never,
+      { getSelfIdentity: async () => null } as never,
     );
   });
 
