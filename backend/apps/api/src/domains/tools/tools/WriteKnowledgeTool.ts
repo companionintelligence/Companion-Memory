@@ -9,6 +9,7 @@ import {
   type GraphNodeEntity,
   GraphQueryService,
   isOwnerManagedPropertyKey,
+  isOwnerSettingPropertyKey,
   isStorableEntityType,
   type RelationshipEntity,
   sameEntityType,
@@ -176,14 +177,19 @@ function unstorableEntityTypeMessage(requested: string): string {
  * owner's settings, the self claim and the merged identity lists each have a
  * writer of their own, and a free-form `properties` bag is how the autonomy
  * dial used to be switched off by a model asked to "remember" it.
+ *
+ * A brand-new entity (an `entity.create` without `entityId`) is refused only
+ * the settings and the self claim. Its identity lists overwrite nothing, so
+ * "remember Dana, dana@example.com" still records the address.
  */
-function ownerManagedKeysIn(operation: {
-  properties?: Record<string, unknown>;
-  removeProperties?: string[];
-}): string[] {
+function ownerManagedKeysIn(
+  operation: { properties?: Record<string, unknown>; removeProperties?: string[] },
+  { newEntity = false }: { newEntity?: boolean } = {},
+): string[] {
   const named = [...Object.keys(operation.properties ?? {}), ...(operation.removeProperties ?? [])];
+  const refused = newEntity ? isOwnerSettingPropertyKey : isOwnerManagedPropertyKey;
 
-  return [...new Set(named.filter(isOwnerManagedPropertyKey))];
+  return [...new Set(named.filter(refused))];
 }
 
 function ownerManagedKeysMessage(keys: string[]): string {
@@ -567,7 +573,7 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
       try {
         switch (operation.kind) {
           case 'entity.create': {
-            const ownerManagedCreate = ownerManagedKeysIn(operation);
+            const ownerManagedCreate = ownerManagedKeysIn(operation, { newEntity: !operation.entityId });
             if (ownerManagedCreate.length > 0) {
               results.push({
                 kind: operation.kind,

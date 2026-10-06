@@ -129,6 +129,14 @@ describe('memory.remember refuses the keys the appliance keeps', () => {
       'writes a planner through an id-reuse create',
       { kind: 'entity.create', entityId: ALEX, entityType: 'Person', properties: { planner: {} } },
     ],
+    [
+      'overwrites an identity list through an id-reuse create',
+      { kind: 'entity.create', entityId: ALEX, entityType: 'Person', properties: { emails: [] } },
+    ],
+    [
+      'gives a new entity a planner',
+      { kind: 'entity.create', entityType: 'Person', name: 'Dana', properties: { planner: {} } },
+    ],
   ])('fails an operation that %s, and queues no write', async (_label, operation) => {
     const { tool, upsertNode } = makeTool();
 
@@ -139,6 +147,27 @@ describe('memory.remember refuses the keys the appliance keeps', () => {
     expect(result.data?.results[0]).toMatchObject({ status: 'failed' });
     expect(result.data?.results[0].message).toMatch(/cannot write or remove/);
     expect(upsertNode).not.toHaveBeenCalled();
+  });
+
+  it('lets a new entity carry the identity lists, which overwrite nothing there', async () => {
+    const { tool, upsertNode } = makeTool();
+
+    const result = await tool.execute(OWNER, {
+      operations: [
+        {
+          kind: 'entity.create',
+          entityType: 'Person',
+          name: 'Dana',
+          properties: { emails: ['dana@example.com'], phones: ['5550100'] },
+        },
+      ],
+    });
+
+    expect(result.data?.failures).toBe(0);
+    expect(upsertNode).toHaveBeenCalledTimes(1);
+    expect(upsertNode.mock.calls[0][1]).toMatchObject({
+      properties: { emails: ['dana@example.com'], phones: ['5550100'] },
+    });
   });
 
   it('still runs the other operations in the call', async () => {

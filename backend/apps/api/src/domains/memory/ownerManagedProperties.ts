@@ -16,9 +16,10 @@
  * Exact keys, matched exactly: jsonb keys are case-sensitive, and every reader above reads these
  * spellings.
  */
+export const OWNER_SETTING_PROPERTY_KEYS: readonly string[] = ['planner', 'is_self'];
+
 export const OWNER_MANAGED_PROPERTY_KEYS: readonly string[] = [
-  'planner',
-  'is_self',
+  ...OWNER_SETTING_PROPERTY_KEYS,
   'emails',
   'phones',
   'names',
@@ -27,8 +28,18 @@ export const OWNER_MANAGED_PROPERTY_KEYS: readonly string[] = [
 ];
 
 const OWNER_MANAGED = new Set(OWNER_MANAGED_PROPERTY_KEYS);
+const OWNER_SETTINGS = new Set(OWNER_SETTING_PROPERTY_KEYS);
 
 /** Whether `key` is one of {@link OWNER_MANAGED_PROPERTY_KEYS}. */
 export function isOwnerManagedPropertyKey(key: string): boolean {
   return OWNER_MANAGED.has(key);
+}
+
+/**
+ * Whether `key` is one of {@link OWNER_SETTING_PROPERTY_KEYS}: the owner's settings and the self
+ * claim, which no tool write may carry on any row, a brand-new one included. The identity lists
+ * are only at risk on a row that already holds them.
+ */
+export function isOwnerSettingPropertyKey(key: string): boolean {
+  return OWNER_SETTINGS.has(key);
 }
