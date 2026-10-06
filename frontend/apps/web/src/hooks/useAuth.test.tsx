@@ -219,6 +219,9 @@ describe('useAuth', () => {
     // assertion is the ordering constraint, not a preference.
     const keyCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys'));
     expect(JSON.parse(String(keyCall?.[1]?.body))).toMatchObject({ capability: 'full' });
+    // Tagged as this device's sign-in key, which a password change and "Sign out
+    // everywhere" revoke.
+    expect(JSON.parse(String(keyCall?.[1]?.body))).toMatchObject({ sign_in: true });
 
     // Recorded, so a key minted before this change is distinguishable from one
     // that asked. Absent here would mean "legacy, upgrade at next sign-in".
@@ -895,5 +898,108 @@ describe('useAuth', () => {
     });
 
     await waitFor(() => expect(refreshCalls).toBe(2));
+  });
+
+  it('native logout revokes the device key on the server, while it still knows which server', async () => {
+    const secureStore = new Map<string, string>([
+      ['ci.apiKey', 'stored-api-key'],
+      ['ci.apiBaseUrl', 'https://core7.example.com'],
+    ]);
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      getPlatform: () => 'ios',
+      Plugins: {
+        SecureStoragePlugin: {
+          get: vi.fn(async ({ key }: { key: string }) => {
+            if (!secureStore.has(key)) {
+              throw new Error('not found');
+            }
+
+            return { value: secureStore.get(key) };
+          }),
+          set: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+            secureStore.set(key, value);
+
+            return { value: true };
+          }),
+          remove: vi.fn(async ({ key }: { key: string }) => {
+            secureStore.delete(key);
+
+            return { value: true };
+          }),
+        },
+      },
+    };
+
+    const fetchMock = setFetch(() => emptyResponse(true, 204));
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+    await act(async () => {
+      await result.current[1].logout();
+    });
+
+    const revoke = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys/current'));
+    expect(revoke?.[0]).toBe('https://core7.example.com/api/keys/current');
+    expect(revoke?.[1]?.method).toBe('DELETE');
+    expect(revoke?.[1]?.headers).toMatchObject({ 'x-api-key': 'stored-api-key' });
+    expect(result.current[0].authenticated).toBe(false);
+    expect(secureStore.has('ci.apiKey')).toBe(false);
+  });
+
+  it('still signs out when the server cannot be reached to revoke the key', async () => {
+    const secureStore = new Map<string, string>([['ci.apiKey', 'stored-api-key']]);
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: {
+        SecureStoragePlugin: {
+          get: vi.fn(async ({ key }: { key: string }) => {
+            if (!secureStore.has(key)) {
+              throw new Error('not found');
+            }
+
+            return { value: secureStore.get(key) };
+          }),
+          set: vi.fn(async () => ({ value: true })),
+          remove: vi.fn(async ({ key }: { key: string }) => {
+            secureStore.delete(key);
+
+            return { value: true };
+          }),
+        },
+      },
+    };
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Load failed'))),
+    );
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+    await act(async () => {
+      await result.current[1].logout();
+    });
+
+    expect(result.current[0].authenticated).toBe(false);
+    expect(secureStore.has('ci.apiKey')).toBe(false);
+  });
+
+  it('web logout revokes no key: a browser session holds none', async () => {
+    const fetchMock = setFetch((url) =>
+      url.endsWith('/api/authenticate/refresh') ? jsonResponse({ accessToken: 'live' }) : emptyResponse(),
+    );
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current[0].authToken).toBe('live'));
+
+    await act(async () => {
+      await result.current[1].logout();
+    });
+
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/keys/current'))).toBe(false);
   });
 });

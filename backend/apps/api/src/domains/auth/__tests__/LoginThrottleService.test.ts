@@ -28,7 +28,7 @@ jest.mock('@ci/configuration', () => {
 
 import type { LoggerService } from '@ci/common/logging';
 
-import { LoginThrottleService } from '../services/LoginThrottleService';
+import { LoginThrottleService, throttleSourceOf } from '../services/LoginThrottleService';
 
 const IP = '203.0.113.9';
 const USER = 'owner@example.com';
@@ -36,6 +36,18 @@ const FLOOD_IP = '198.51.100.77';
 
 /** Mirrors MAX_TRACKED_IDENTITIES in the service, which is not exported. */
 const MAX_TRACKED_IDENTITIES = 10_000;
+
+/** Mirrors MAX_TRACKED_SOURCES, ACCOUNT_FREE_FAILURES and GLOBAL_PRESSURE_FAILURES in the service. */
+const MAX_TRACKED_SOURCES = 1_024;
+const ACCOUNT_FREE_FAILURES = 10;
+const GLOBAL_PRESSURE_FAILURES = 100;
+
+const REAL = { accountExists: true };
+
+/** The n-th of many distinct IPv4 client addresses. */
+function address(n: number): string {
+  return `10.${(n >> 16) & 255}.${(n >> 8) & 255}.${n & 255}`;
+}
 
 const mockLogger = {
   setContext: jest.fn(),
@@ -318,5 +330,166 @@ describe('LoginThrottleService', () => {
     expect(service.check(undefined, USER, 0).locked).toBe(true);
     // …and an unknown IP is its own bucket, not everyone's.
     expect(service.check(IP, USER, 0)).toEqual({ locked: false });
+  });
+
+  describe('client addresses', () => {
+    it.each([
+      ['192.0.2.1', '192.0.2.1'],
+      ['::ffff:192.0.2.1', '192.0.2.1'],
+      ['2001:db8:1:2:3:4:5:6', '2001:db8:1:2::/64'],
+      ['2001:0db8:0001:0002::ffff', '2001:db8:1:2::/64'],
+      ['2001:db8::1', '2001:db8:0:0::/64'],
+      ['fe80::1%eth0', 'fe80:0:0:0::/64'],
+      ['::1', '0:0:0:0::/64'],
+      ['64:ff9b::192.0.2.1', '64:ff9b:0:0::/64'],
+      [undefined, 'unknown'],
+    ])('keys %p as %p', (ip, expected) => {
+      expect(throttleSourceOf(ip)).toBe(expected);
+    });
+
+    it('counts every address of one IPv6 /64 against the same budget', () => {
+      // One home or hosting customer gets a whole /64; keyed per address, that was 2^64 budgets.
+      service.recordFailure('2001:db8:1:2::a', USER, 0);
+      service.recordFailure('2001:db8:1:2::b', USER, 0);
+      service.recordFailure('2001:db8:1:2::c', USER, 0);
+
+      expect(service.check('2001:db8:1:2::ffff', USER, 0).locked).toBe(true);
+      expect(service.check('2001:db8:1:3::a', USER, 0)).toEqual({ locked: false });
+    });
+  });
+
+  describe('per-account budget, across every address', () => {
+    function failFromManyAddresses(count: number, now: number, start = 0): void {
+      for (let i = start; i < start + count; i += 1) {
+        service.recordFailure(address(i), USER, now, REAL);
+      }
+    }
+
+    it(`absorbs ${ACCOUNT_FREE_FAILURES} failures from anywhere, then makes the next attempt wait`, () => {
+      // Each address stays under its own (address, username) budget, which is all the throttle
+      // used to count: an attacker with many addresses had unlimited guesses.
+      failFromManyAddresses(ACCOUNT_FREE_FAILURES, 0);
+
+      expect(service.check(address(999), USER, 0)).toEqual({ locked: false });
+
+      failFromManyAddresses(1, 0, ACCOUNT_FREE_FAILURES);
+
+      expect(service.check(address(999), USER, 0)).toEqual({ locked: true, retryAfterSeconds: 1 });
+      // Never a hard lock: once the wait is over, the next attempt goes through.
+      expect(service.check(address(999), USER, 1_000)).toEqual({ locked: false });
+    });
+
+    it('doubles the wait with each further failure, up to three minutes', () => {
+      failFromManyAddresses(ACCOUNT_FREE_FAILURES, 0);
+
+      const waits: number[] = [];
+
+      for (let i = 0; i < 12; i += 1) {
+        failFromManyAddresses(1, 0, 100 + i);
+
+        const status = service.check(address(999), USER, 0);
+
+        waits.push(status.locked ? status.retryAfterSeconds : 0);
+      }
+
+      expect(waits).toEqual([1, 2, 4, 8, 16, 32, 64, 128, 180, 180, 180, 180]);
+    });
+
+    it('drains one failure every three minutes instead of forgetting them all when a window ends', () => {
+      // A window that reset the count would hand a patient attacker a fresh allowance every
+      // fifteen minutes.
+      failFromManyAddresses(ACCOUNT_FREE_FAILURES + 5, 0);
+
+      // Fifteen minutes later five have drained, so the account is back at its allowance and the
+      // next failure is the first one past it.
+      failFromManyAddresses(1, 15 * 60_000, 200);
+
+      expect(service.check(address(999), USER, 15 * 60_000)).toEqual({ locked: true, retryAfterSeconds: 1 });
+    });
+
+    it('gives a made-up name no budget of its own, so a flood of them cannot fill the map', () => {
+      for (let i = 0; i < 50; i += 1) {
+        service.recordFailure(address(i), 'nobody@example.com', 0);
+      }
+
+      expect(service.check(address(999), 'nobody@example.com', 0)).toEqual({ locked: false });
+    });
+
+    it('clears the account budget on the right password', () => {
+      failFromManyAddresses(ACCOUNT_FREE_FAILURES + 1, 0);
+      expect(service.check(address(999), USER, 0).locked).toBe(true);
+
+      service.recordSuccess(address(999), USER);
+
+      expect(service.check(address(999), USER, 0)).toEqual({ locked: false });
+    });
+
+    it('reads the username the way the identity key does, so case and padding share one budget', () => {
+      failFromManyAddresses(ACCOUNT_FREE_FAILURES + 1, 0);
+
+      expect(service.check(address(999), '  OWNER@example.com ', 0).locked).toBe(true);
+    });
+  });
+
+  describe('appliance-wide failure rate', () => {
+    it(`after ${GLOBAL_PRESSURE_FAILURES} failures in a window, every account waits from its first failure`, () => {
+      for (let i = 0; i <= GLOBAL_PRESSURE_FAILURES; i += 1) {
+        service.recordFailure(address(i), `junk-${i}@example.com`, 0);
+      }
+
+      service.recordFailure(address(500), USER, 0, REAL);
+
+      expect(service.check(address(999), USER, 0)).toEqual({ locked: true, retryAfterSeconds: 1 });
+    });
+
+    it('locks nobody out on the global rate alone', () => {
+      for (let i = 0; i <= GLOBAL_PRESSURE_FAILURES * 3; i += 1) {
+        service.recordFailure(address(i), `junk-${i}@example.com`, 0);
+      }
+
+      // An account with no failure of its own is not refused, whatever the flood.
+      expect(service.check(address(9_999), USER, 0)).toEqual({ locked: false });
+    });
+
+    it('lifts once the window has passed', () => {
+      for (let i = 0; i <= GLOBAL_PRESSURE_FAILURES; i += 1) {
+        service.recordFailure(address(i), `junk-${i}@example.com`, 0);
+      }
+
+      service.recordFailure(address(500), USER, 61_000, REAL);
+
+      expect(service.check(address(999), USER, 61_000)).toEqual({ locked: false });
+    });
+  });
+
+  describe('with both tracking maps full', () => {
+    /** Fill the identity map, then the per-address map, with live entries. */
+    function saturate(now: number): void {
+      floodIdentityMap(service, now, 0);
+
+      for (let i = 0; sourceCount(service) < MAX_TRACKED_SOURCES; i += 1) {
+        service.recordFailure(address(i), `src-${i}@example.com`, now);
+      }
+    }
+
+    it('refuses an attempt that would need a new entry in both, instead of letting it through uncounted', () => {
+      // It used to be "untracked": every address arriving after the maps filled guessed freely for
+      // as long as the flood kept them full.
+      saturate(0);
+
+      expect(service.check('192.0.2.200', USER, 1_000)).toEqual({ locked: true, retryAfterSeconds: 60 });
+    });
+
+    it('still serves an address it already has a budget for', () => {
+      saturate(0);
+
+      expect(service.check(address(3), 'someone@example.com', 1_000)).toEqual({ locked: false });
+    });
+
+    it('lets new addresses in again once the flood has expired', () => {
+      saturate(0);
+
+      expect(service.check('192.0.2.200', USER, 61_000)).toEqual({ locked: false });
+    });
   });
 });

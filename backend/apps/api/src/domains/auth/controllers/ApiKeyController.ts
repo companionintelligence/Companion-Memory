@@ -9,6 +9,8 @@ import {
   Param,
   Patch,
   Post,
+  Req,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { z } from 'zod';
@@ -20,12 +22,19 @@ import {
   INTENTS_SCOPE,
   MCP_SCOPE,
   MEMORY_SCOPE,
+  READ_CAPABILITY,
+  RequireCapability,
 } from '@ci/common/decorators';
-import { JwtOrPortalAuthGuard } from '@ci/common/guards';
+import { ApiKeyGuard, type ApiKeyScopedRequest, JwtOrPortalAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 
 import { ApiKeyService } from '../services/ApiKeyService';
-import { CONNECT_KEY_NAME_PREFIX, type CreateApiKeyDto, type UpdateApiKeyDto } from '../types';
+import {
+  CONNECT_KEY_NAME_PREFIX,
+  type CreateApiKeyDto,
+  SIGN_IN_PROVENANCE,
+  type UpdateApiKeyDto,
+} from '../types';
 
 /**
  * `app:` is reserved for connection keys minted by the consent flow
@@ -64,6 +73,11 @@ export const createApiKeySchema = z.object({
   scopes: apiKeyScopes,
   capability: apiKeyCapability,
   expires_at: z.string().datetime().optional(),
+  /**
+   * The phone or desktop app minting the key it will sign in with. Tags it `sign_in`, which a
+   * password change, "Sign out everywhere" and the app's own sign-out revoke.
+   */
+  sign_in: z.boolean().optional(),
 });
 
 // The name here is NOT refined: rejecting `app:` on the request body would also 400 a
@@ -95,7 +109,30 @@ export class ApiKeyController {
   ) {
     const serviceContext = toServiceContext(context);
 
-    return this.apiKeyService.create(serviceContext, input);
+    return this.apiKeyService.create(serviceContext, input, input.sign_in ? SIGN_IN_PROVENANCE : null);
+  }
+
+  /**
+   * Revoke the key this request authenticated with: how the phone and desktop apps sign out.
+   *
+   * They hold nothing but that key, and every other route here takes a session or a Portal bearer
+   * precisely so a key cannot mint or manage keys. Giving a key up is the one thing it may do to
+   * itself, at any capability: it ends its own access and reaches no other credential. A
+   * scope-limited key (an installed app's) is refused by the guard's scope rule, since the Hub
+   * owns those and revokes them when the app is disconnected.
+   *
+   * Declared before `:id` so `current` is never read as a key id.
+   */
+  @UseGuards(ApiKeyGuard)
+  @RequireCapability(READ_CAPABILITY)
+  @Delete('current')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async revokeCurrent(@Context() context: RequestContext, @Req() req: ApiKeyScopedRequest): Promise<void> {
+    if (!req.apiKeyId) {
+      throw new UnauthorizedException();
+    }
+
+    await this.apiKeyService.remove(toServiceContext(context), req.apiKeyId);
   }
 
   @UseGuards(JwtOrPortalAuthGuard)

@@ -463,7 +463,43 @@ describe('AccountSection — the last administrator', () => {
   });
 });
 
+describe('AccountSection — sign out everywhere', () => {
+  it('asks first, then signs out everywhere else and says how many keys went', async () => {
+    fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
+      if (isAccountReadCall(url, init)) {
+        return Promise.resolve({ email: h.email, hasFederatedIdentity: false, hasOwnPassword: true });
+      }
+
+      return Promise.resolve(url === '/api/account/sign-out-everywhere' ? { revokedKeys: 3 } : undefined);
+    });
+    render(<AccountSection />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out everywhere' }));
+    expect(() => findCall('POST', '/api/account/sign-out-everywhere')).toThrow();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out and delete keys' }));
+
+    expect(await screen.findByText('Signed out everywhere else. 3 API keys were deleted.')).toBeInTheDocument();
+    const [, init] = findCall('POST', '/api/account/sign-out-everywhere');
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer jwt-abc' });
+  });
+
+  it('is not offered to the native shell, whose device key the route refuses', () => {
+    h.authToken = null;
+    h.authenticated = true;
+    render(<AccountSection />);
+
+    expect(screen.queryByRole('button', { name: 'Sign out everywhere' })).not.toBeInTheDocument();
+  });
+});
+
 describe('AccountSection — change password', () => {
+  it('asks the browser for at least eight characters, as the server does', async () => {
+    render(<AccountSection />);
+
+    expect(await screen.findByLabelText('New password')).toHaveAttribute('minLength', '8');
+  });
+
   it('submits the new password with the current password, then reports other devices signed out', async () => {
     render(<AccountSection />);
 
@@ -477,7 +513,7 @@ describe('AccountSection — change password', () => {
     fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'new-password-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update password' }));
 
-    await screen.findByText(/other signed-in devices/i);
+    await screen.findByText(/phone and desktop apps you signed in on are signed out/i);
 
     const [url, init] = findCall('PATCH', '/api/account/password');
     expect(url).toBe('/api/account/password');
@@ -539,7 +575,7 @@ describe('AccountSection — change password', () => {
     fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'new-password-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Set password' }));
 
-    await screen.findByText(/other signed-in devices/i);
+    await screen.findByText(/phone and desktop apps you signed in on are signed out/i);
 
     const [, init] = findCall('PATCH', '/api/account/password');
     expect(JSON.parse(init.body!)).toEqual({ newPassword: 'new-password-1' });

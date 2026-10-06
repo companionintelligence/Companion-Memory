@@ -31,6 +31,9 @@ const DEVICE_SIGN_IN_AGAIN_TO_DELETE =
 const SUCCESSOR_REQUIRED = 'SUCCESSOR_REQUIRED';
 const SUCCESSOR_NOT_FOUND = 'SUCCESSOR_NOT_FOUND';
 
+/** The shortest new password the server accepts (`passwordPolicy.ts`). */
+const MIN_PASSWORD_LENGTH = 8;
+
 function messageFrom(error: unknown, fallback: string, signInAgain: string): string {
   if (error instanceof FetchJsonError && error.status === 401 && error.message === 'REAUTH_REQUIRED') {
     // An account with no password of its own proves itself by a recent sign-in
@@ -178,7 +181,9 @@ export function AccountSection() {
         }),
       });
 
-      setPasswordSavedNote('Password updated. Other signed-in devices have been signed out.');
+      setPasswordSavedNote(
+        'Password updated. Your other browsers and the phone and desktop apps you signed in on are signed out. Keys you made under API keys still work.',
+      );
       setNewPassword('');
       setConfirmNewPassword('');
       setPasswordCurrentPassword('');
@@ -231,6 +236,34 @@ export function AccountSection() {
       }
 
       setLoading(false);
+    }
+  };
+
+  const [confirmingSignOut, setConfirmingSignOut] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  const [signOutNote, setSignOutNote] = useState<string | null>(null);
+
+  const handleSignOutEverywhere = async () => {
+    setSigningOut(true);
+    setSignOutError(null);
+    setSignOutNote(null);
+
+    try {
+      const result = await fetchJson<{ revokedKeys: number }>('/api/account/sign-out-everywhere', {
+        method: 'POST',
+        headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+      });
+      const revoked = result?.revokedKeys ?? 0;
+
+      setSignOutNote(
+        `Signed out everywhere else. ${revoked === 1 ? '1 API key was' : `${revoked} API keys were`} deleted.`,
+      );
+      setConfirmingSignOut(false);
+    } catch (err) {
+      setSignOutError(messageFrom(err, 'Could not sign out everywhere. Please try again.', signInAgain));
+    } finally {
+      setSigningOut(false);
     }
   };
 
@@ -338,7 +371,7 @@ export function AccountSection() {
                   <PasswordInput
                     id="newPassword"
                     autoComplete="new-password"
-                    minLength={6}
+                    minLength={MIN_PASSWORD_LENGTH}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     disabled={passwordSaving}
@@ -369,6 +402,42 @@ export function AccountSection() {
                   {passwordSaving ? 'Saving…' : asksCurrentPassword ? 'Update password' : 'Set password'}
                 </Button>
               </form>
+            </Card.Content>
+          </Card>
+
+          <Card className="py-0">
+            <Card.Content className="space-y-4">
+              <div className="space-y-1">
+                <h3 className="text-sm font-medium">Sign out everywhere</h3>
+                <p className="text-sm text-muted-foreground">
+                  Signs out every other browser and every phone or desktop app, and deletes the API keys
+                  you made under API keys. Apps connected through your Hub keep working. This browser
+                  stays signed in.
+                </p>
+              </div>
+
+              {signOutError && <p className="text-sm text-destructive">{signOutError}</p>}
+              {signOutNote && <p className="text-sm text-muted-foreground">{signOutNote}</p>}
+
+              {confirmingSignOut ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => void handleSignOutEverywhere()}
+                    disabled={signingOut}
+                  >
+                    {signingOut ? 'Signing out…' : 'Sign out and delete keys'}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setConfirmingSignOut(false)} disabled={signingOut}>
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <Button size="sm" variant="outline" onClick={() => setConfirmingSignOut(true)}>
+                  Sign out everywhere
+                </Button>
+              )}
             </Card.Content>
           </Card>
         </>

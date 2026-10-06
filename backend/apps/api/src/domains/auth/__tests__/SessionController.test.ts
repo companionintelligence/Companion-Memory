@@ -69,8 +69,19 @@ const mockLogger = {
   error: jest.fn(),
 };
 
+const validatePassword = jest.fn().mockResolvedValue(mockUser);
+
 const mockUserService = {
-  validatePassword: jest.fn().mockResolvedValue(mockUser),
+  validatePassword,
+  // What the login route calls. Delegates to `validatePassword` so each case can keep saying
+  // whether the password was right; the real one also compares unknown addresses against a
+  // dummy hash, which `UserService.deletion.test.ts` pins.
+  authenticatePassword: jest.fn(
+    async (email: string, password: string): Promise<{ user: unknown; accountExists: boolean }> => ({
+      user: await validatePassword(email, password),
+      accountExists: true,
+    }),
+  ),
   findById: jest.fn().mockResolvedValue(mockUser),
 };
 
@@ -213,6 +224,28 @@ describe('SessionController', () => {
         .send({ username: 'bad@example.com', password: 'wrong' })
         .expect(401);
     });
+
+    it.each([true, false])(
+      'tells the throttle whether the address is an account (%p), and the 401 says nothing either way',
+      async (accountExists) => {
+        mockUserService.authenticatePassword.mockResolvedValueOnce({ user: null, accountExists });
+
+        const response = await request(app.getHttpServer())
+          .post('/authenticate')
+          .set('Cookie', [`${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+          .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
+          .send({ username: 'someone@example.com', password: 'wrong' })
+          .expect(401);
+
+        expect(response.body.message).toBe('Invalid credentials');
+        expect(mockLoginThrottle.recordFailure).toHaveBeenCalledWith(
+          expect.anything(),
+          'someone@example.com',
+          undefined,
+          { accountExists },
+        );
+      },
+    );
 
     it('should ROTATE the CSRF token on login (identity boundary), bound to the new session', async () => {
       // Login is one of the few rotation points; the pre-auth token must not

@@ -9,6 +9,7 @@ import {
   HttpCode,
   HttpStatus,
   Patch,
+  Post,
   Req,
   UnauthorizedException,
   UseGuards,
@@ -23,10 +24,12 @@ import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { LastAdminDeletionRefused, type User, UserService } from '@ci/domains/user';
 
+import { ApiKeyService } from '../services/ApiKeyService';
 import { AuthService } from '../services/AuthService';
 import { FederatedIdentityService } from '../services/FederatedIdentityService';
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 import { isManagedAppPrincipal } from '../types';
+import { newPasswordSchema } from '../utils/passwordPolicy';
 
 const deleteAccountSchema = z.object({
   /**
@@ -44,7 +47,7 @@ const deleteAccountSchema = z.object({
 });
 
 // Same rule SignupController applies to a new account's password.
-const NEW_PASSWORD_SCHEMA = z.string().min(6, 'Password must be at least 6 characters');
+const NEW_PASSWORD_SCHEMA = newPasswordSchema;
 
 const changeEmailSchema = z.object({
   newEmail: z.string().email('Invalid email address'),
@@ -104,6 +107,7 @@ export class AccountController {
     private readonly authService: AuthService,
     private readonly federatedIdentityService: FederatedIdentityService,
     private readonly hubBridge: HubForwardAuthBridgeService,
+    private readonly apiKeyService: ApiKeyService,
   ) {}
 
   /** What the account settings UI needs to render itself: address, whether a
@@ -275,6 +279,13 @@ export class AccountController {
    * success every OTHER session for this account is invalidated — the request
    * making the change stays signed in, everywhere else is forced to
    * re-authenticate.
+   *
+   * The phone and desktop apps hold no session: they sign in with an API key
+   * minted at sign-in (`sign_in` provenance). Those keys are revoked too, or
+   * "other devices have been signed out" would be true of browsers only. Keys
+   * the person made in Settings > API keys stay, because a password change is
+   * routine and those keys run their own tools (the importer, scripts); "Sign
+   * out everywhere" is the action that removes them.
    */
   @Patch('password')
   @UseGuards(JwtAuthGuard)
@@ -293,6 +304,32 @@ export class AccountController {
     const currentToken: string | undefined = req.cookies?.[config.auth.cookies.sessionTokenName];
 
     await this.authService.invalidateOtherSessions(user.id, currentToken);
+    await this.apiKeyService.revokeSignInKeys(user.id);
+  }
+
+  /**
+   * Sign this account out of every other browser and app, and revoke every API key it holds
+   * except those CI-Hub minted for installed apps (the Hub revokes those when an app is
+   * disconnected).
+   *
+   * For someone who no longer knows who holds what. A key minted with a borrowed session looks
+   * exactly like one the owner made, so this removes the keys made in Settings too, and says how
+   * many went. The session making the request stays signed in.
+   */
+  @Post('sign-out-everywhere')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async signOutEverywhere(
+    @Context() context: RequestContext,
+    @Req() req: Request,
+  ): Promise<{ revokedKeys: number }> {
+    const serviceContext = toServiceContext(context);
+    const user = await this.requireUser(serviceContext);
+    const currentToken: string | undefined = req.cookies?.[config.auth.cookies.sessionTokenName];
+
+    await this.authService.invalidateOtherSessions(user.id, currentToken);
+
+    return { revokedKeys: await this.apiKeyService.revokeAllExceptConnect(user.id) };
   }
 
   private async requireUser(serviceContext: ReturnType<typeof toServiceContext>): Promise<User> {

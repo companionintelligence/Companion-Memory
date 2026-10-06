@@ -13,6 +13,7 @@ import { ApiKey, ApiKeyEntity } from '../entities/ApiKeyEntity';
 import {
   CONNECT_KEY_NAME_PREFIX,
   CONNECT_PROVENANCE,
+  SIGN_IN_PROVENANCE,
   type ApiKeyProvenance,
   type CreateApiKeyDto,
   type ValidatedApiKey,
@@ -314,6 +315,35 @@ export class ApiKeyService {
     const other = new Set(b);
 
     return a.every((scope) => other.has(scope));
+  }
+
+  /**
+   * Revoke every key the phone and desktop apps minted at sign-in for `userId`: the signed-in
+   * devices a password change signs out. Returns how many went.
+   */
+  async revokeSignInKeys(userId: string): Promise<number> {
+    const result = await this.apiKeyRepository.delete({ user_id: userId, managed_by: SIGN_IN_PROVENANCE });
+
+    return result.affected ?? 0;
+  }
+
+  /**
+   * Revoke every key of `userId` except the ones CI-Hub minted for installed apps: sign-in keys
+   * and the keys the user made in Settings. "Sign out everywhere" is for someone who no longer
+   * knows who holds what, and a key someone made with a borrowed session looks exactly like one
+   * the owner made. Connect keys stay, because the Hub owns their lifecycle and revokes them when
+   * the app is disconnected.
+   */
+  async revokeAllExceptConnect(userId: string): Promise<number> {
+    const result = await this.apiKeyRepository
+      .createQueryBuilder()
+      .delete()
+      .from(ApiKeyEntity)
+      .where('user_id = :userId', { userId })
+      .andWhere('managed_by IS DISTINCT FROM :connect', { connect: CONNECT_PROVENANCE })
+      .execute();
+
+    return result.affected ?? 0;
   }
 
   async remove(context: ServiceContext, keyId: string): Promise<boolean> {

@@ -10,6 +10,7 @@ import {
   persistApiBaseUrl,
   setApiBaseUrl,
   syncNativeIntentConfig,
+  getApiKey,
   getLaunchUrl,
   isIosPlatform,
   isNativePlatform,
@@ -291,6 +292,9 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
     body: JSON.stringify({
       name: `Companion mobile · ${new Date().toISOString().slice(0, 10)}`,
       capability: NATIVE_KEY_CAPABILITY,
+      // A signed-in device, not a key handed to a tool: a password change, "Sign out
+      // everywhere" and this app's own sign-out revoke it.
+      sign_in: true,
     }),
   });
 
@@ -304,6 +308,24 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
   setApiKey(created.key);
 
   return created.key;
+}
+
+/**
+ * Give this device's key up on the server: how the phone and desktop apps sign out. Best
+ * effort and bounded, because signing out must finish whether or not the appliance answers;
+ * a key that could not be revoked here is still listed under Settings > API keys.
+ */
+async function revokeDeviceKey(key: string): Promise<void> {
+  try {
+    await fetchJson('/api/keys/current', {
+      method: 'DELETE',
+      skipApiKey: true,
+      headers: { 'x-api-key': key },
+      timeout: 5_000,
+    });
+  } catch (error) {
+    console.warn('Could not revoke this device key on the server', error);
+  }
 }
 
 interface OidcNativeExchangeResponse {
@@ -521,23 +543,39 @@ function useAuth(): ReturnValue {
   );
 
   const logout = useCallback(async () => {
+    // The key this device signs in with (phone and desktop), read before it is dropped below.
+    const deviceKey = getApiKey();
+
     // Drop the in-memory key before the replica wipe. A late keystore restore
     // must not put the previous box's key back under the next account.
     bumpNativeCredentialEpoch();
 
-    if (isNativePlatform()) {
+    if (isNativePlatform() || isTauriPlatform()) {
       setApiKey(null);
       setNativeApiKey(null);
+    }
+
+    // Revoke it on the server while the app still knows which server that is (the
+    // native branch below forgets the origin). Without this, signing out only forgot
+    // the key on this device and it kept working for whoever else had a copy.
+    if (deviceKey) {
+      await revokeDeviceKey(deviceKey);
     }
 
     // Bounded: a replica that cannot be dropped (worker never came up) must not
     // leave the user stuck signed in. Everything below still runs on timeout.
     await disconnectAndClearPowerSyncForLogout();
 
+    if (isTauriPlatform()) {
+      // The desktop keeps its key in this page's storage; a revoked key left there
+      // would only be read back as a credential that no longer works.
+      await secureStorageRemove(API_KEY_STORAGE);
+      await secureStorageRemove(API_KEY_ID_STORAGE);
+      await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+    }
+
     if (isNativePlatform()) {
-      // No cookie session to revoke. Clear the local credential; the API key stays
-      // valid server-side (the /api/keys revoke endpoint is JWT-only, and we hold no
-      // JWT here) and can be revoked from Settings → API Keys after re-login.
+      // No cookie session to revoke; the key was revoked above. Clear the local copy.
       setApiKey(null);
       await secureStorageRemove(API_KEY_STORAGE);
       await secureStorageRemove(API_KEY_ID_STORAGE);

@@ -47,7 +47,7 @@ export interface ApiKeyScopedRequest extends Request {
    * Provenance from `api_keys.managed_by`, never from the `app:` name prefix,
    * which a user can hand-create.
    */
-  apiKeyManagedBy?: 'connect' | null;
+  apiKeyManagedBy?: 'connect' | 'sign_in' | null;
   /** The key's name (`app:<appUrn>` for connect keys), for LABELLING a card once
    *  {@link ApiKeyScopedRequest.apiKeyManagedBy} has already established trust. */
   apiKeyName?: string | null;
