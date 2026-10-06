@@ -44,7 +44,7 @@ describe('renderConnectConsentPage capability disclosure', () => {
 
   it('names the job grant in words for the chat agents, which are the only apps that get it', () => {
     const html = render(['memory', 'intents', 'mcp', 'agent-jobs']);
-    expect(html).toContain('Work on tasks you hand to it and report back on them');
+    expect(html).toContain('Send tasks to your agent, and work on and report back on them');
     expect(html).not.toContain('Access &quot;agent-jobs&quot;');
   });
 
