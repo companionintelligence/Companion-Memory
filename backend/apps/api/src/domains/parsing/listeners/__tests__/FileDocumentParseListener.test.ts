@@ -1,6 +1,7 @@
 import type { Acknowledgement } from '@ci/domains/events';
 import type { FileUploadedPayload } from '@ci/domains/files/events';
 
+import { UnparseableDocumentError } from '../../services/DocumentExtractor';
 import { type ParsedDocument, ParseStatus } from '../../types';
 import { FileDocumentParseListener } from '../FileDocumentParseListener';
 
@@ -218,5 +219,26 @@ describe('FileDocumentParseListener', () => {
 
     expect(ack.done).not.toHaveBeenCalled();
     expect(ack.fail).toHaveBeenCalledWith(writeError);
+  });
+
+  it('records a file the parser refused and does not retry it', async () => {
+    const { call, parserService, queryCalls } = makeListener();
+    const ack = makeAck();
+
+    parserService.parse.mockRejectedValue(
+      new UnparseableDocumentError(
+        'Parser service returned 413: Refusing to extract: archive inflates 1000x',
+      ),
+    );
+
+    await expect(
+      call({ userId: 'user-1', fileId: 'file-1', thingCapture: false }, ack),
+    ).resolves.toBeUndefined();
+
+    const failedCall = queryCalls.find((params) => params[0] === ParseStatus.FAILED);
+    expect(failedCall?.[1]).toMatch(/archive inflates/);
+    // Done, not failed: pg-boss would otherwise send the same bytes three more times.
+    expect(ack.fail).not.toHaveBeenCalled();
+    expect(ack.done).toHaveBeenCalledTimes(1);
   });
 });

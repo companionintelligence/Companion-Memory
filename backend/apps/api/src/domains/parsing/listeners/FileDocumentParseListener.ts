@@ -12,6 +12,7 @@ import { FileChunkEntity } from '../entities/FileChunkEntity';
 import { DocumentParsedEvent } from '../events';
 import { DocumentChunkerService } from '../services/DocumentChunkerService';
 import { DocumentChunkService } from '../services/DocumentChunkService';
+import { UnparseableDocumentError } from '../services/DocumentExtractor';
 import { DocumentParserService } from '../services/DocumentParserService';
 import { ParseStatus } from '../types';
 
@@ -123,6 +124,13 @@ export class FileDocumentParseListener {
       });
 
       await this.updateParseStatus(file.id, ParseStatus.FAILED, { parseError: message });
+
+      // The parser refused this file (too large, an archive bomb, out of time
+      // or memory). Retrying would send the same bytes back for the same
+      // answer, up to three more times; the failure is recorded on the file.
+      if (err instanceof UnparseableDocumentError) {
+        return;
+      }
 
       // Rethrow so the OnEvent wrapper's ack.fail() fires — swallowing here
       // would ack.done() the job and lose pg-boss retry/dead-letter for what
