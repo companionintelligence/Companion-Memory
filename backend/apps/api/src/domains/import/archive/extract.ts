@@ -139,8 +139,8 @@ function extractionDestDir(archivePath: string): string {
 
 /**
  * Reject an entry name whose resolved path escapes the extraction dir. The
- * shared check in unpack.ts, so both extractors refuse the same names with the
- * same error class.
+ * shared check in containment.ts, so both extractors refuse the same names with
+ * the same error class.
  */
 const assertInside = assertEntryInside;
 

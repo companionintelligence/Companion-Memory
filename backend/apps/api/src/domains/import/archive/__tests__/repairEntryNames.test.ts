@@ -187,6 +187,32 @@ describe('repairEntryNames', () => {
     expect(fs.existsSync(path.join(dest, 'café.txt'))).toBe(false);
   });
 
+  it('counts an entry whose directory cannot be created and still repairs the next one', () => {
+    // `unzip` restores a UNIX directory's mode, so an archive can leave a
+    // read-only folder in the tree. Creating a subfolder under it fails; that
+    // costs the one entry, not every entry after it. Root ignores the mode,
+    // so there is nothing to observe there.
+    if (process.getuid?.() === 0) {
+      return;
+    }
+
+    const locked = path.join(dest, 'locked');
+    fs.mkdirSync(locked);
+    fs.chmodSync(locked, 0o555);
+    const archive = archiveOf([
+      { name: 'locked/sub/dé.json', contents: '{}' },
+      { name: 'café.txt', contents: 'ok' },
+    ]);
+    writeMangled(dest, 'caf+¬.txt', 'ok');
+
+    try {
+      expect(repairEntryNames(archive, dest)).toEqual({ repaired: 1, unrepaired: 1, removed: 0 });
+      expect(fs.readFileSync(path.join(dest, 'café.txt'), 'utf8')).toBe('ok');
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
+  });
+
   it('keeps the mangled copy when the entry cannot be re-extracted', () => {
     // A corrupt payload must not cost the file: repair fails, and the sweep is
     // abandoned so the badly-named copy stays as the only version there is.

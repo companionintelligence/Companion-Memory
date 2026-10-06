@@ -418,10 +418,14 @@ export function extractZipEntry(fd: number, entry: ZipEntry, targetPath: string,
     return false;
   }
 
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   const tempPath = `${targetPath}.ci-name-repair`;
 
   try {
+    // Inside the try: a directory the extractor restored read-only, or a full
+    // disk, makes this throw, and that is one entry that cannot be repaired,
+    // not a reason to abandon every entry after it.
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
     if (!clearTempPath(tempPath)) {
       return false;
     }
