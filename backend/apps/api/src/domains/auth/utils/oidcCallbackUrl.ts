@@ -138,6 +138,7 @@ export function resolveOidcOriginBounce(
   alreadyBounced = false,
   client?: string,
   signupCode?: string,
+  nativeBinding?: { challenge: string; state: string },
 ): string | null {
   // One hop only — never risk a redirect loop on the sign-in path.
   if (alreadyBounced) {
@@ -176,6 +177,13 @@ export function resolveOidcOriginBounce(
   // `companion://oidc/callback`. Web sign-in does not send this flag.
   if (client === 'native') {
     target.searchParams.set('client', 'native');
+
+    // So must the app's PKCE challenge and state: the bounced initiate refuses a native
+    // sign-in without them, and the app drops a callback whose state it did not send.
+    if (nativeBinding) {
+      target.searchParams.set('code_challenge', nativeBinding.challenge);
+      target.searchParams.set('app_state', nativeBinding.state);
+    }
   }
 
   // An invitation must survive the hop for the same reason: the initiate

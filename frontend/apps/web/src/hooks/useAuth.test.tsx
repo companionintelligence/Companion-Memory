@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 
-import { getApiBaseUrl, needsNativeCloudConnect, setApiBaseUrl } from '@ci/common';
+import { beginNativeOidcSignIn, getApiBaseUrl, needsNativeCloudConnect, setApiBaseUrl } from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { jwtDecode } from 'jwt-decode';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
@@ -55,6 +55,7 @@ afterEach(() => {
   document.cookie = 'csrfToken=; expires=Thu, 01 Jan 1970 00:00:00 GMT';
   sessionStorage.clear();
   localStorage.removeItem('ci.apiBaseUrl');
+  localStorage.removeItem('ci.oidc.pendingNativeSignIn');
   setApiBaseUrl('');
   // Drop the native runtime stub so the web-path tests aren't seen as native.
   delete (window as unknown as { Capacitor?: unknown }).Capacitor;
@@ -734,7 +735,11 @@ describe('useAuth', () => {
   });
 
   it('iOS: finishes Memory OIDC from getLaunchUrl after a Safari cold start', async () => {
-    const getLaunchUrl = vi.fn(async () => ({ url: 'companion://oidc/callback?code=otc-ios' }));
+    // What the sign-in button kept before it opened the browser.
+    const { appState } = await beginNativeOidcSignIn();
+    const verifier = (JSON.parse(localStorage.getItem('ci.oidc.pendingNativeSignIn')!) as { verifier: string })
+      .verifier;
+    const getLaunchUrl = vi.fn(async () => ({ url: `companion://oidc/callback?code=otc-ios&state=${appState}` }));
     const addListener = vi.fn(async () => ({ remove: async () => undefined }));
     const secureStore = new Map<string, string>();
 
@@ -778,16 +783,21 @@ describe('useAuth', () => {
     await waitFor(() => expect(result.current[0].authenticated).toBe(true));
     expect(getLaunchUrl).toHaveBeenCalled();
     expect(addListener.mock.invocationCallOrder[0]!).toBeLessThan(getLaunchUrl.mock.invocationCallOrder[0]!);
-    expect(
-      fetchMock.mock.calls.some(([input]) =>
-        String(input).endsWith('/api/authenticate/oidc/native/exchange'),
-      ),
-    ).toBe(true);
+    const exchange = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith('/api/authenticate/oidc/native/exchange'),
+    );
+    // The code alone redeems nothing: the verifier this app kept goes with it.
+    expect(JSON.parse(String(exchange?.[1]?.body))).toEqual({ code: 'otc-ios', code_verifier: verifier });
     expect(secureStore.get('ci.apiKey')).toBe('stored-api-key');
+    // Spent: the same state cannot complete a second sign-in.
+    expect(localStorage.getItem('ci.oidc.pendingNativeSignIn')).toBeNull();
   });
 
   it('iOS: does not replay a consumed Memory OIDC code after remount', async () => {
-    const getLaunchUrl = vi.fn(async () => ({ url: 'companion://oidc/callback?code=otc-replay' }));
+    const { appState } = await beginNativeOidcSignIn();
+    const getLaunchUrl = vi.fn(async () => ({
+      url: `companion://oidc/callback?code=otc-replay&state=${appState}`,
+    }));
     const addListener = vi.fn(async () => ({ remove: async () => undefined }));
     const secureStore = new Map<string, string>();
 
@@ -898,6 +908,116 @@ describe('useAuth', () => {
     });
 
     await waitFor(() => expect(refreshCalls).toBe(2));
+  });
+
+  describe('a sign-in link this app did not start', () => {
+    /** An iOS shell whose cold-start URL is `url`, with an empty keystore. */
+    function iosLaunchedWith(url: string) {
+      const secureStore = new Map<string, string>();
+      const getLaunchUrl = vi.fn(async () => ({ url }));
+
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'ios',
+        Plugins: {
+          App: { getLaunchUrl, addListener: vi.fn(async () => ({ remove: async () => undefined })) },
+          SecureStoragePlugin: {
+            get: vi.fn(async ({ key }: { key: string }) => {
+              if (!secureStore.has(key)) {
+                throw new Error('not found');
+              }
+
+              return { value: secureStore.get(key) };
+            }),
+            set: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+
+              return { value: true };
+            }),
+            remove: vi.fn(async () => ({ value: true })),
+          },
+        },
+      };
+
+      const fetchMock = setFetch((url) => {
+        if (url.endsWith('/api/authenticate/oidc/native/exchange')) {
+          return jsonResponse({ accessToken: 'someone-elses-jwt' });
+        }
+
+        if (url.endsWith('/api/keys')) {
+          return jsonResponse({ id: 'key-x', key: 'someone-elses-key' });
+        }
+
+        return emptyResponse();
+      });
+
+      return { getLaunchUrl, fetchMock, secureStore };
+    }
+
+    const exchanged = (fetchMock: ReturnType<typeof setFetch>) =>
+      fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/authenticate/oidc/native/exchange'));
+
+    it('ignores a code with no state: nothing is exchanged and no key is stored', async () => {
+      const { getLaunchUrl, fetchMock, secureStore } = iosLaunchedWith('companion://oidc/callback?code=sent-to-you');
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(getLaunchUrl).toHaveBeenCalled());
+      await waitFor(() => expect(result.current[0].loading).toBe(false));
+      expect(exchanged(fetchMock)).toBe(false);
+      expect(secureStore.has('ci.apiKey')).toBe(false);
+      expect(result.current[0].authenticated).toBe(false);
+    });
+
+    it('ignores a code whose state is not the one this app sent, and keeps its own sign-in pending', async () => {
+      await beginNativeOidcSignIn();
+      const { getLaunchUrl, fetchMock } = iosLaunchedWith(
+        'companion://oidc/callback?code=sent-to-you&state=someone-elses-state',
+      );
+
+      renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(getLaunchUrl).toHaveBeenCalled());
+      expect(exchanged(fetchMock)).toBe(false);
+      // A stray link must not be able to cancel the sign-in the person is in the middle of.
+      expect(localStorage.getItem('ci.oidc.pendingNativeSignIn')).not.toBeNull();
+    });
+
+    it('shows no error text from a link it did not ask for', async () => {
+      const { getLaunchUrl } = iosLaunchedWith('companion://oidc/callback?error=Your%20account%20is%20locked');
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(getLaunchUrl).toHaveBeenCalled());
+      await waitFor(() => expect(result.current[0].loading).toBe(false));
+      expect(result.current[0].error).toBeNull();
+    });
+
+    it('tells the person an older appliance cannot finish their own sign-in, and still exchanges nothing', async () => {
+      // An appliance from before the state echo answers with no state at all.
+      await beginNativeOidcSignIn();
+      const { getLaunchUrl, fetchMock } = iosLaunchedWith('companion://oidc/callback?code=from-old-server');
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(getLaunchUrl).toHaveBeenCalled());
+      await waitFor(() =>
+        expect((result.current[0].error as Error | null)?.message).toMatch(/This Memory needs an update/),
+      );
+      expect(exchanged(fetchMock)).toBe(false);
+    });
+
+    it("shows the error of this app's own sign-in", async () => {
+      const { appState } = await beginNativeOidcSignIn();
+      const { getLaunchUrl } = iosLaunchedWith(
+        `companion://oidc/callback?error=signup_code_required&state=${appState}`,
+      );
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(getLaunchUrl).toHaveBeenCalled());
+      await waitFor(() => expect(result.current[0].error).toEqual(new Error('signup_code_required')));
+    });
   });
 
   it('native logout revokes the device key on the server, while it still knows which server', async () => {

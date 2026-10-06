@@ -60,8 +60,27 @@ const PKCE_COOKIE = 'oidc_pkce';
 const CLIENT_COOKIE = 'oidc_client';
 const NATIVE_CLIENT = 'native';
 
+/**
+ * The app's half of a native sign-in, carried from initiate to callback like the cookies above.
+ * The app makes a PKCE pair and a state value of its own before it opens the browser: the
+ * challenge is stored with the one-time code, so only the app holding the verifier can redeem
+ * it, and the state comes back on the deep link, so the app can drop any callback for a sign-in
+ * it did not start. Without them the code alone was the credential, and any
+ * `companion://oidc/callback?code=...` link signed the app in, whoever's code it was.
+ */
+const NATIVE_CHALLENGE_COOKIE = 'oidc_native_challenge';
+const NATIVE_STATE_COOKIE = 'oidc_native_state';
+
+/** An S256 code challenge: base64url of a SHA-256 digest, 43 characters. */
+const PKCE_CHALLENGE = /^[A-Za-z0-9_-]{43}$/;
+/** A PKCE code verifier (RFC 7636 section 4.1). */
+const PKCE_VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/;
+/** The app's own state value, echoed back on the deep link. */
+const APP_STATE = /^[A-Za-z0-9_-]{16,128}$/;
+
 const nativeExchangeSchema = z.object({
   code: z.string().min(1),
+  code_verifier: z.string().regex(PKCE_VERIFIER, 'Invalid code_verifier'),
 });
 
 // Carries the post-login destination (e.g. a /shared/<token> deep link) across
@@ -218,6 +237,8 @@ export class OidcController {
     @Query('client') client: string | undefined,
     @Query('redirect') redirectParam: string | undefined,
     @Query('signup_code') signupCodeParam: string | undefined,
+    @Query('code_challenge') codeChallengeParam: unknown,
+    @Query('app_state') appStateParam: unknown,
     @Req() req: Request,
     @Res() res: Response,
   ) {
@@ -236,6 +257,24 @@ export class OidcController {
     // or the /api/connect consent page) so the callback can return there.
     const redirect = safeRelativePath(redirectParam);
 
+    // A native sign-in is bound to the app that starts it, or it does not start. An app build
+    // from before the binding sends neither value; it is told to update rather than handed a
+    // code any app could redeem.
+    const nativeBinding =
+      client === NATIVE_CLIENT &&
+      typeof codeChallengeParam === 'string' &&
+      PKCE_CHALLENGE.test(codeChallengeParam) &&
+      typeof appStateParam === 'string' &&
+      APP_STATE.test(appStateParam)
+        ? { challenge: codeChallengeParam, state: appStateParam }
+        : null;
+
+    if (client === NATIVE_CLIENT && nativeBinding == null) {
+      this.logger.warn('OIDC native initiate refused: no code_challenge/app_state from the app');
+
+      return res.redirect(this.nativeRedirectUrl({ error: 'app_update_required' }));
+    }
+
     // The cookies below are set on the origin the browser used, but redirect_uri
     // is always the public base URL. If those differ, the callback lands on an
     // origin holding neither cookie and sign-in fails with `invalid_state`, so
@@ -248,6 +287,7 @@ export class OidcController {
       req.query[OIDC_ORIGIN_BOUNCE_PARAM] !== undefined,
       client,
       signupCodeParam,
+      nativeBinding ?? undefined,
     );
 
     if (bounceUrl) {
@@ -276,7 +316,7 @@ export class OidcController {
 
     // Remember whether the native app launched this flow, so the callback returns the
     // result via the custom-scheme deep link instead of a browser session cookie.
-    if (client === NATIVE_CLIENT) {
+    if (nativeBinding) {
       res.cookie(CLIENT_COOKIE, NATIVE_CLIENT, {
         httpOnly: true,
         secure: req.secure,
@@ -284,6 +324,23 @@ export class OidcController {
         path: '/',
         maxAge: 10 * 60 * 1000,
       });
+
+      for (const [name, value] of [
+        [NATIVE_CHALLENGE_COOKIE, nativeBinding.challenge],
+        [NATIVE_STATE_COOKIE, nativeBinding.state],
+      ] as const) {
+        res.cookie(name, value, {
+          httpOnly: true,
+          secure: req.secure,
+          sameSite: 'lax',
+          path: '/',
+          maxAge: 10 * 60 * 1000,
+        });
+      }
+    } else {
+      // A web sign-in must not inherit an abandoned native attempt's binding.
+      res.clearCookie(NATIVE_CHALLENGE_COOKIE, { path: '/' });
+      res.clearCookie(NATIVE_STATE_COOKIE, { path: '/' });
     }
 
     // An invitation, carried across the round-trip.
@@ -355,11 +412,34 @@ export class OidcController {
       path: '/',
     });
 
+    // The app's binding, read once and cleared like the other one-shot cookies.
+    const challengeCookie: unknown = req.cookies?.[NATIVE_CHALLENGE_COOKIE];
+    const stateCookie: unknown = req.cookies?.[NATIVE_STATE_COOKIE];
+
+    res.clearCookie(NATIVE_CHALLENGE_COOKIE, { path: '/' });
+    res.clearCookie(NATIVE_STATE_COOKIE, { path: '/' });
+
+    const nativeBinding =
+      isNative &&
+      typeof challengeCookie === 'string' &&
+      PKCE_CHALLENGE.test(challengeCookie) &&
+      typeof stateCookie === 'string' &&
+      APP_STATE.test(stateCookie)
+        ? { challenge: challengeCookie, state: stateCookie }
+        : null;
+
+    // Every native exit carries the app's state back, failures included, so the app can tell its
+    // own sign-in's result from a link somebody else sent it.
+    const toApp = (params: Record<string, string>) =>
+      this.nativeRedirectUrl(nativeBinding ? { ...params, state: nativeBinding.state } : params);
+
     // Route a failure to the native deep link (`?error=...`) or the web login page.
     const failRedirect = (reason: string) =>
-      isNative
-        ? res.redirect(this.nativeRedirectUrl({ error: reason }))
-        : res.redirect(`/login?error=${encodeURIComponent(reason)}`);
+      isNative ? res.redirect(toApp({ error: reason })) : res.redirect(`/login?error=${encodeURIComponent(reason)}`);
+
+    if (isNative && nativeBinding == null) {
+      return failRedirect('missing_pkce');
+    }
 
     if (error) {
       return failRedirect(error);
@@ -491,10 +571,10 @@ export class OidcController {
         // Native: return the credential via the deep link — no browser session cookie
         // can reach the app's cross-origin webview. Mint a short-lived, single-use code
         // and deep-link it back; the app exchanges it for a JWT at /oidc/native/exchange.
-        if (isNative) {
-          const oneTimeCode = this.oidcNativeCodeService.issue(user.id);
+        if (nativeBinding) {
+          const oneTimeCode = this.oidcNativeCodeService.issue(user.id, nativeBinding.challenge);
 
-          return res.redirect(this.nativeRedirectUrl({ code: oneTimeCode }));
+          return res.redirect(toApp({ code: oneTimeCode }));
         }
 
         return this.finishLogin(req, res, user);
@@ -544,7 +624,7 @@ export class OidcController {
         this.logger.warn(`OIDC sign-in rejected for unknown user (signup codes required): ${userInfo.email}`);
 
         return isNative
-          ? res.redirect(this.nativeRedirectUrl({ error: 'signup_code_required' }))
+          ? res.redirect(toApp({ error: 'signup_code_required' }))
           : res.redirect('/login?error=signup_code_required');
       }
 
@@ -574,10 +654,10 @@ export class OidcController {
       // invited person made from the desktop cost the owner an invitation and
       // admitted nobody.
       if (isNative && !unclaimed && !invited) {
-        return res.redirect(this.nativeRedirectUrl({ error: 'signup_required' }));
+        return res.redirect(toApp({ error: 'signup_required' }));
       }
 
-      if (isNative) {
+      if (nativeBinding) {
         // An invitation admits whoever holds it. Without one, the only way in is
         // to be the appliance's first account.
         let created: { id: string } | null;
@@ -593,7 +673,7 @@ export class OidcController {
             );
 
             return res.redirect(
-              this.nativeRedirectUrl({
+              toApp({
                 error: signupCodesRequired ? 'signup_code_required' : 'signup_required',
               }),
             );
@@ -613,7 +693,7 @@ export class OidcController {
           this.logger.warn(`OIDC sign-in refused for ${userInfo.email}: the appliance was claimed first`);
 
           return res.redirect(
-            this.nativeRedirectUrl({ error: codeRequired ? 'signup_code_required' : 'signup_required' }),
+            toApp({ error: codeRequired ? 'signup_code_required' : 'signup_required' }),
           );
         }
 
@@ -623,7 +703,9 @@ export class OidcController {
             : `Unclaimed appliance claimed by first OIDC sign-in: ${userInfo.email}`,
         );
 
-        return res.redirect(this.nativeRedirectUrl({ code: this.oidcNativeCodeService.issue(created.id) }));
+        return res.redirect(
+          toApp({ code: this.oidcNativeCodeService.issue(created.id, nativeBinding.challenge) }),
+        );
       }
 
       // Hub already admitted this person as an org member. Skip the Memory
@@ -689,13 +771,19 @@ export class OidcController {
    * `<scheme>://oidc/callback?code=...` deep link for a real access token (JWT). The app
    * then trades that JWT for a durable API key — the same credential path as password
    * login. The code is single-use and expires after ~2 minutes; redeeming it here
-   * invalidates it, so it is replay-safe. Unauthenticated by design: the one-time code
-   * IS the bearer of proof, and it never grants access beyond a single JWT issuance.
+   * invalidates it, so it is replay-safe.
+   *
+   * Unauthenticated, but not on the code alone: the request must also carry the PKCE
+   * verifier whose challenge the app sent when it started the sign-in. A code that reached
+   * someone else (another app claiming the `companion` scheme, or a link somebody sent) is
+   * useless without it.
    */
   @Post('native/exchange')
   @HttpCode(200)
-  nativeExchange(@Body(new ValidationPipe(nativeExchangeSchema)) input: { code: string }) {
-    const userId = this.oidcNativeCodeService.redeem(input.code);
+  nativeExchange(
+    @Body(new ValidationPipe(nativeExchangeSchema)) input: { code: string; code_verifier: string },
+  ) {
+    const userId = this.oidcNativeCodeService.redeem(input.code, input.code_verifier);
 
     if (!userId) {
       // Generic message — do not distinguish "expired" from "unknown" to a caller.

@@ -16,11 +16,13 @@ import {
   isNativePlatform,
   isTauriPlatform,
   claimNativeOidcCode,
+  hasPendingNativeOidcSignIn,
   parseOidcCallbackUrl,
   secureStorageGet,
   secureStorageRemove,
   secureStorageSet,
   setApiKey,
+  takePendingNativeOidcSignIn,
 } from '@ci/common';
 import { jwtDecode } from 'jwt-decode';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -64,6 +66,10 @@ const API_KEY_CAPABILITY_STORAGE = 'ci.apiKeyCapability';
 const NATIVE_KEY_CAPABILITY = 'full';
 
 const CSRF_COOKIE_NAME = 'csrfToken';
+
+/** Shown when the appliance is too old to bind a native sign-in to this app (see handleUrl). */
+const SERVER_UPDATE_REQUIRED =
+  'This Memory needs an update before the app can sign in with your Companion account. Sign in with your email and password instead.';
 
 // Native clients run in a cross-origin webview and can neither read nor send the
 // SameSite=Strict CSRF cookie, so they capture the token from the
@@ -335,14 +341,15 @@ interface OidcNativeExchangeResponse {
 // Native OIDC return path: exchange the short-lived one-time code carried by the
 // `companion://oidc/callback?code=...` deep link for a real JWT, then trade that JWT
 // for a durable API key — identical to the password path. The one-time code is single
-// use and short-lived; no long-lived secret ever travels in the deep-link URL.
-async function completeOidcNativeSignIn(code: string): Promise<string | null> {
+// use and short-lived, and redeemable only with the PKCE verifier this app kept when it
+// started the sign-in; no long-lived secret ever travels in the deep-link URL.
+async function completeOidcNativeSignIn(code: string, codeVerifier: string): Promise<string | null> {
   const data = await fetchJson<OidcNativeExchangeResponse>('/api/authenticate/oidc/native/exchange', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code, code_verifier: codeVerifier }),
   });
 
   const jwt = data?.accessToken ?? null;
@@ -743,6 +750,28 @@ function useAuth(): ReturnValue {
         return;
       }
 
+      // Only the result of a sign-in THIS app started counts, failures included: the
+      // state on the link must be the one `OidcButton` kept. Any other
+      // `companion://oidc/callback` link (one somebody sent, one another app opened) is
+      // dropped before it can sign the app into anyone's account, replace the key it
+      // holds, or put its own text on the login screen.
+      const pending = takePendingNativeOidcSignIn(params.state);
+
+      if (!pending) {
+        // An appliance from before the state echo answers this app's own sign-in with no
+        // state. Its code is still not redeemed (nothing ties it to this app), but the
+        // person is told why the sign-in did not finish rather than left watching nothing.
+        if (!params.state && hasPendingNativeOidcSignIn()) {
+          setLoginError(new Error(SERVER_UPDATE_REQUIRED));
+
+          return;
+        }
+
+        console.warn('Ignoring a sign-in link this app did not start');
+
+        return;
+      }
+
       if (params.error || !params.code) {
         setLoginError(new Error(params.error || 'oidc_failed'));
 
@@ -758,7 +787,7 @@ function useAuth(): ReturnValue {
 
       void (async () => {
         try {
-          const key = await completeOidcNativeSignIn(code);
+          const key = await completeOidcNativeSignIn(code, pending.verifier);
 
           if (!key) {
             setLoginError(new Error('oidc_exchange_failed'));
