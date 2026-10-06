@@ -87,7 +87,7 @@ describe('GraphQL request limits', () => {
     });
 
     it('accepts every document the web app sends, with headroom', () => {
-      let largest = { tokens: 0, aliases: 0, expandedFields: 0, sameNamePairs: 0 };
+      let largest = { chars: 0, tokens: 0, aliases: 0, expandedFields: 0, sameNamePairs: 0 };
 
       for (const { name, document } of documents) {
         const wire = print(withTypename(document));
@@ -98,6 +98,7 @@ describe('GraphQL request limits', () => {
         const tokens = countTokens(wire);
 
         largest = {
+          chars: Math.max(largest.chars, wire.length),
           tokens: Math.max(largest.tokens, tokens),
           aliases: Math.max(largest.aliases, breadth.aliases),
           expandedFields: Math.max(largest.expandedFields, breadth.expandedFields),
@@ -107,6 +108,7 @@ describe('GraphQL request limits', () => {
 
       // At least twice what the largest shipped document needs on every axis,
       // so ordinary growth of a query does not start failing in production.
+      expect(largest.chars * 2).toBeLessThanOrEqual(GRAPHQL_LIMITS.maxDocumentChars);
       expect(largest.tokens * 2).toBeLessThanOrEqual(GRAPHQL_LIMITS.maxTokens);
       expect(largest.aliases * 2).toBeLessThanOrEqual(GRAPHQL_LIMITS.maxAliases);
       expect(largest.expandedFields * 2).toBeLessThanOrEqual(GRAPHQL_LIMITS.maxExpandedFields);
@@ -140,6 +142,16 @@ describe('GraphQL request limits', () => {
     it('refuses a repeated field with a sub-selection well inside the token limit', () => {
       // ~400 tokens; graphql-js took 60 ms on this shape before the check.
       expect(graphqlSourceViolation(repeated('me { __typename }', 100))).toMatch(/same field too often/);
+    });
+
+    it('refuses a document past the length limit before parsing it', () => {
+      // One token however long, so the token limit never sees it; 40 copies of
+      // a field with the same 240 KB literal took 1.9 s to validate.
+      const long = `{ ${Array.from({ length: 40 }, () => `actions(after: "${'x'.repeat(240_000)}") { totalCount }`).join(' ')} }`;
+
+      expect(graphqlSourceViolation(long)).toMatch(/too long/);
+      expect(elapsedMs(() => graphqlSourceViolation(long))).toBeLessThan(50);
+      expect(graphqlSourceViolation(`{ actions(after: "${'x'.repeat(90_000)}") { totalCount } }`)).toBeNull();
     });
 
     it('refuses repetition spread across fragments', () => {
@@ -239,6 +251,27 @@ describe('GraphQL request limits', () => {
       // Without the check, the same shape inside the token limit took over 4 s.
       // Loose enough that a loaded machine cannot flake it.
       expect(accepted).toBeLessThan(2_000);
+    });
+
+    it('keeps validation cheap when the repeated field carries long literals', () => {
+      // The pair limit counts a literal as one node, so the length limit is what
+      // bounds the printing graphql-js does per pair. The longest literal that
+      // fits alongside as many copies as the pair limit allows:
+      let copies = 2;
+
+      while (graphqlSourceViolation(repeated('actions(after: "x") { totalCount }', copies + 1)) === null) {
+        copies += 1;
+      }
+
+      const literal = 'x'.repeat(Math.floor(GRAPHQL_LIMITS.maxDocumentChars / copies) - 40);
+      const source = repeated(`actions(after: "${literal}") { totalCount }`, copies);
+
+      expect(graphqlSourceViolation(source)).toBeNull();
+
+      const parsed = parse(source);
+
+      // Measured at about 60 ms.
+      expect(elapsedMs(() => validate(schema, parsed, specifiedRules))).toBeLessThan(1_000);
     });
 
     it('measures a maximal document in linear time', () => {

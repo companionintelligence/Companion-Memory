@@ -33,6 +33,7 @@ import {
  * the batch size.
  */
 export interface GraphqlLimits {
+  maxDocumentChars: number;
   maxTokens: number;
   maxAliases: number;
   maxExpandedFields: number;
@@ -41,6 +42,14 @@ export interface GraphqlLimits {
 }
 
 export const GRAPHQL_LIMITS: Readonly<GraphqlLimits> = {
+  /**
+   * Characters of document text, checked before anything parses it. The token
+   * limit does not bound this: one string literal is one token however long it
+   * is, and graphql-js lexes, hashes and prints the text several times over. A
+   * single 9 MB literal held the event loop for about 2 s. Variables are not
+   * counted, so bulk mutations that send their rows as variables are unaffected.
+   */
+  maxDocumentChars: 100_000,
   /**
    * Lexical tokens one document may contain; passed to Apollo as
    * `parseOptions.maxTokens` too, so a larger document fails in the parser.
@@ -239,14 +248,19 @@ export function measureBreadth(
 /**
  * The reason `source` must not reach validation, or null when it may.
  *
- * A document that does not parse is passed through (null): Apollo parses it
- * again with the same `maxTokens` and answers with its usual syntax error, so
- * this check never changes what a malformed or oversized request is told.
+ * A document longer than `maxDocumentChars` is refused before it is parsed.
+ * One that does not parse is passed through (null): Apollo parses it again with
+ * the same `maxTokens` and answers with its usual syntax error, so this check
+ * never changes what a malformed or token-heavy request is told.
  */
 export function graphqlSourceViolation(
   source: string,
   limits: GraphqlLimits = GRAPHQL_LIMITS,
 ): string | null {
+  if (source.length > limits.maxDocumentChars) {
+    return `Query document is too long: ${source.length} characters. Maximum allowed: ${limits.maxDocumentChars}`;
+  }
+
   let document: DocumentNode;
 
   try {
