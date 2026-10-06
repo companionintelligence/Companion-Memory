@@ -226,3 +226,18 @@ def test_the_switch_reads_its_env_var(monkeypatch):
     for off in ("0", "false", "no", ""):
         monkeypatch.setenv("HBPE_ENABLE_ADMIN_ROUTES", off)
         assert Settings().enable_admin_routes is False, off
+
+
+def test_the_switch_ignores_the_unprefixed_name(monkeypatch):
+    # pydantic-settings would also read a field from the env var named after
+    # it. ENABLE_ADMIN_ROUTES, set for anything else in a shared env file,
+    # must neither open these routes nor override the HBPE_ name.
+    from ci.hbpe.config import Settings
+
+    monkeypatch.delenv("HBPE_ENABLE_ADMIN_ROUTES", raising=False)
+    monkeypatch.setenv("ENABLE_ADMIN_ROUTES", "1")
+    assert Settings().enable_admin_routes is False
+
+    monkeypatch.setenv("HBPE_ENABLE_ADMIN_ROUTES", "1")
+    monkeypatch.setenv("ENABLE_ADMIN_ROUTES", "0")
+    assert Settings().enable_admin_routes is True
