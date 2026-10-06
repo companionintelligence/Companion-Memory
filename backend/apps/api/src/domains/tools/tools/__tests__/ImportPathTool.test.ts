@@ -56,7 +56,7 @@ function makeLogger() {
   return { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() };
 }
 
-function build() {
+function build(role: 'admin' | 'user' = 'admin') {
   const calls: string[] = [];
   const sources = {
     registerUpload: jest.fn(async (_ctx: unknown, input: { sourcePath: string }) => {
@@ -80,7 +80,7 @@ function build() {
     }),
   };
   const users = {
-    findById: jest.fn(async () => ({ id: 'user-1', email: 'tester@example.com' })),
+    findById: jest.fn(async () => ({ id: 'user-1', email: 'tester@example.com', role })),
   };
   const tool = new ImportPathTool(sources as never, runs as never, users as never, makeLogger() as never);
 
@@ -142,6 +142,28 @@ describe('ImportPathTool', () => {
       const [staged] = await readdir(path.join(uploadsDir, dropDir));
 
       expect(await readFile(path.join(uploadsDir, dropDir, staged), 'utf8')).toBe('bytes');
+    });
+  });
+
+  it('refuses a non-admin a path under a configured root, so the roots stay operator-only', async () => {
+    // The configured roots are the appliance operator's surface. A household
+    // member importing from them is the leak this closes — the tool threads
+    // the caller's role into the resolver, which hands a non-admin only their
+    // own inbox.
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-pathtool-'));
+    const file = path.join(root, 'export.zip');
+
+    await writeFile(file, 'bytes');
+
+    const { tool, sources } = build('user');
+
+    await withRoots([root], async () => {
+      const result = await tool.execute(ctx, { path: file });
+      const data = result.data as { started: boolean; reason: string };
+
+      expect(data.started).toBe(false);
+      expect(data.reason).toBeTruthy();
+      expect(sources.registerUpload).not.toHaveBeenCalled();
     });
   });
 });

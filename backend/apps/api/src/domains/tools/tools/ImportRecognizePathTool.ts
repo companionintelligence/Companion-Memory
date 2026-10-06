@@ -71,8 +71,9 @@ export class ImportRecognizePathTool extends BaseTool<RecognizePathInput, unknow
       throw new Error('path is required');
     }
 
-    // The caller's email scopes which inbox subtree they may read — their own.
-    // No resolvable user means configured roots only, never anyone's inbox.
+    // The caller's account scopes which inbox subtree they may read — their
+    // own — and only the administrator reaches the configured roots. No
+    // resolvable user means neither: no inbox and no configured roots.
     const user = context.userId
       ? await this.users.findById({ userId: context.userId }, context.userId)
       : null;
@@ -80,6 +81,9 @@ export class ImportRecognizePathTool extends BaseTool<RecognizePathInput, unknow
     // An out-of-bounds path comes back as `allowed: false` rather than thrown:
     // an agent can act on "not allowed, upload instead", where a tool error
     // reads as a malfunction.
-    return recognizePathWithinRoots(input.path, user?.email ?? null);
+    return recognizePathWithinRoots(input.path, {
+      userId: user?.id ?? null,
+      isAdmin: user?.role === 'admin',
+    });
   }
 }

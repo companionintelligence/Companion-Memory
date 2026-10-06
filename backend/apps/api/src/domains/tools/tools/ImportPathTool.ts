@@ -93,13 +93,17 @@ export class ImportPathTool extends BaseTool<ImportPathInput, unknown> {
       throw new Error('path is required');
     }
 
-    // The caller's email scopes which inbox subtree they may read — their own.
+    // The caller's account scopes which inbox subtree they may read — their
+    // own — and only the administrator reaches the configured roots.
     const user = await this.users.findById({ userId: context.userId }, context.userId);
 
     let resolved: string;
 
     try {
-      resolved = await resolveWithinImportRoots(input.path, user?.email ?? null);
+      resolved = await resolveWithinImportRoots(input.path, {
+        userId: user?.id ?? null,
+        isAdmin: user?.role === 'admin',
+      });
     } catch (err) {
       if (err instanceof PathOutsideImportRootsError) {
         return { started: false, reason: err.message };

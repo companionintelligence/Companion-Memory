@@ -258,11 +258,15 @@ export class ImportRunsController {
       throw new BadRequestException('path is required');
     }
 
-    // The caller's email scopes which inbox subtree they may read — their own.
+    // The caller's account scopes which inbox subtree they may read — their
+    // own — and only the administrator reaches the configured roots.
     const userId = requireUserId(context);
     const user = await this.users.findById({ userId }, userId);
 
-    return recognizePathWithinRoots(body.path, user?.email ?? null);
+    return recognizePathWithinRoots(body.path, {
+      userId: user?.id ?? null,
+      isAdmin: user?.role === 'admin',
+    });
   }
 
   /** Start importing a staged upload. */
