@@ -141,6 +141,24 @@ describeWithDb(`BlueBubbles connector owner (${availability.target})`, () => {
     expect(await ownerOfRow()).toBe(owner);
   });
 
+  it("refuses to point the owner's saved password at another server without a new one", async () => {
+    const owner = await newUser('bb-owner-password');
+    const otherAdmin = await newUser('bb-owner-repoint');
+
+    await service.update(SAVE, owner);
+
+    const { password: _kept, ...withoutPassword } = SAVE;
+    await expect(
+      service.update({ ...withoutPassword, host: 'someone-elses-server.example' }, otherAdmin),
+    ).rejects.toThrow('Enter the BlueBubbles server password again to change the server address.');
+
+    // Same server, password omitted: still "keep the stored one".
+    await expect(service.update({ ...withoutPassword, enabled: false }, otherAdmin)).resolves.toMatchObject({
+      host: SAVE.host,
+      password: SAVE.password,
+    });
+  });
+
   it('the next save claims it when the owner account no longer exists', async () => {
     const owner = await newUser('bb-owner-gone');
     const nextAdmin = await newUser('bb-owner-next');

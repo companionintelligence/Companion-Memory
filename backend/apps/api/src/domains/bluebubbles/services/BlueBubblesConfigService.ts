@@ -18,6 +18,25 @@ export interface BlueBubblesConfigUpdate {
 }
 
 /**
+ * Whether `next` points the connector at a different server than `saved`.
+ *
+ * The stored password only ever goes to the server it was saved for: a save or a test that names
+ * another address must carry its own. Otherwise anyone allowed to change the address (any
+ * administrator, not only the connector's owner) could have the appliance hand the owner's
+ * password to a server of their choosing.
+ */
+export function serverAddressChanges(
+  saved: { host: string; port: number; useHttps: boolean },
+  next: { host?: string; port?: number; useHttps?: boolean },
+): boolean {
+  return (
+    (next.host !== undefined && next.host !== saved.host) ||
+    (next.port !== undefined && next.port !== saved.port) ||
+    (next.useHttps !== undefined && next.useHttps !== saved.useHttps)
+  );
+}
+
+/**
  * How long a sync claim survives without a heartbeat before another pass may
  * take it.
  *
@@ -166,6 +185,15 @@ export class BlueBubblesConfigService implements OnModuleInit {
     if (input.enabled && !input.password && existing.password.length === 0) {
       throw new BadRequestException(
         'A BlueBubbles server password is required before the connection can be enabled.',
+      );
+    }
+
+    // The stored password is the owner's credential for their Mac. Keeping it while the address
+    // changes would have the next sync (and the owner's messaging tools) send it to whatever
+    // server the saver named, which is how another administrator could read it.
+    if (!input.password && existing.password.length > 0 && serverAddressChanges(existing, input)) {
+      throw new BadRequestException(
+        'Enter the BlueBubbles server password again to change the server address.',
       );
     }
 

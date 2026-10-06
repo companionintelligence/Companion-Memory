@@ -2,7 +2,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 
 import { BlueBubblesApiClient, type BlueBubblesChat, type BlueBubblesMessage } from '@ci/domains/import';
 
-import { BlueBubblesConfigService } from './BlueBubblesConfigService';
+import { BlueBubblesConfigService, serverAddressChanges } from './BlueBubblesConfigService';
 
 export interface BlueBubblesTestConnectionResult {
   ok: boolean;
@@ -51,11 +51,22 @@ export class BlueBubblesClientService {
     const host = overrides.host ?? config.host;
     const port = overrides.port ?? config.port;
     const useHttps = overrides.useHttps ?? config.useHttps;
-    const password = overrides.password ?? config.password;
 
     if (!host || !port) {
       return { ok: false, error: 'Host and port are required.' };
     }
+
+    // The saved password goes only to the saved server. A test against another address would
+    // otherwise send the owner's credential to whatever host the caller typed.
+    if (
+      overrides.password == null &&
+      config.password.length > 0 &&
+      serverAddressChanges(config, { host, port, useHttps })
+    ) {
+      return { ok: false, error: 'Enter the password to test a different server address.' };
+    }
+
+    const password = overrides.password ?? config.password;
 
     const client = new BlueBubblesApiClient({ host, port, useHttps, password });
     const startedAt = Date.now();
