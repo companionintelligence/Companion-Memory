@@ -20,6 +20,10 @@ import type { UserColumn, UserScopedTable } from './types';
  * - `ci.push_subscriptions`: an outside URL the server posts notifications to,
  *   bound to one browser and this appliance's push keys;
  * - `ci.pending_actions`: queued tool calls that run as the owner on approval;
+ * - `ci.pipeline_dead_letters`: a replay puts the stored event name and payload
+ *   back on the job bus verbatim, and the listeners act for whichever account
+ *   or record the payload names, so an archive could queue work against
+ *   another account's data;
  * - `ci.account_purges`: the record of an account the purge already destroyed.
  */
 export const EXCLUDED_TABLES = new Set([
@@ -35,6 +39,7 @@ export const EXCLUDED_TABLES = new Set([
   'ci.household_tiers',
   'ci.push_subscriptions',
   'ci.pending_actions',
+  'ci.pipeline_dead_letters',
   'ci.account_purges',
 ]);
 

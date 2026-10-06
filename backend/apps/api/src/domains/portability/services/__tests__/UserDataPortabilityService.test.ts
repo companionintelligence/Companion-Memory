@@ -750,6 +750,7 @@ describe('UserDataPortabilityService', () => {
       'household_tiers',
       'push_subscriptions',
       'pending_actions',
+      'pipeline_dead_letters',
       'account_purges',
     ];
     const CALLER = '11111111-1111-4111-8111-111111111111';
