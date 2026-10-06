@@ -4,11 +4,10 @@ import Foundation
 /// One-shot high-accuracy location fetcher for "use my current location" (e.g. adding a
 /// Place). Does not enqueue a tracking outbox record and does not run in the background.
 ///
-/// Continuous background tracking (the old `Mode`/significant-change/home-geofence design
-/// this class used to also own) is now handled entirely by
-/// `@capacitor-community/background-geolocation` on both platforms — see
-/// `useLocationTracking.ts`. Splitting them keeps this class's `CLLocationManager` instance
-/// free of state a continuous watcher would otherwise fight over.
+/// iOS Always background samples live on `SignificantLocationMonitor` (a second
+/// manager). Android background tracking stays on
+/// `@capacitor-community/background-geolocation`. This class only does the one-shot
+/// fix, so `stopUpdatingLocation` cannot tear the background monitor down.
 final class LocationTracker: NSObject, CLLocationManagerDelegate {
     static let shared = LocationTracker()
 

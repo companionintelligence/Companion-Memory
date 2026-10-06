@@ -70,7 +70,9 @@ export interface UnsyncedImportsNotice {
  * long as there is an unsynced import sat over open dialogs, over the first row
  * of every page, and — inert but still painted — over the phone drawer.
  */
-export function useUnsyncedImportsNotice({ suppressed = false }: { suppressed?: boolean } = {}): UnsyncedImportsNotice {
+export function useUnsyncedImportsNotice({
+  suppressed = false,
+}: { suppressed?: boolean } = {}): UnsyncedImportsNotice {
   const api = useImportApi();
   const { toast } = useToast();
   const isVisible = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);

@@ -73,6 +73,7 @@ export {
   removesData,
   resolveDispatch,
   resolveToolGate,
+  stricterPrivacy,
   type DispatchDecision,
   type DispatchOptions,
   type DispatchReason,

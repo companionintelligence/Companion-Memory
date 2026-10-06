@@ -75,10 +75,9 @@ export function emailFromIdToken(idToken: string | null | undefined): string | n
 }
 
 /**
- * Audiences Memory's PortalTokenService accepts today (auth.portal.audience).
- * better-auth access tokens default `aud` to the Portal issuer URL, which is
- * not on that list — those 401 at POST /api/keys. Prefer a token whose aud is
- * a first-party client id (the id_token), and skip expired JWTs.
+ * Client ids Memory's PortalTokenService accepts (auth.portal.audience). The
+ * Portal's OIDC access token is opaque, not a JWT, and is a credential for the
+ * Portal itself: it is never sent to a Memory.
  */
 const MEMORY_PORTAL_AUDIENCES = new Set([
   'ci-server',
@@ -103,20 +102,20 @@ export function isJwtExpired(token: string, nowSeconds = Date.now() / 1000): boo
   return typeof exp === 'number' && exp < nowSeconds - 30;
 }
 
-/** Portal bearers to try against Memory `/api/keys`, id_token first when it is still valid. */
+/**
+ * Portal bearers that may be sent to a Memory's `/api/keys`: unexpired JWTs
+ * whose `aud` names a client Memory accepts. Nothing else, ever. This used to
+ * fall back to every live JWT, and then to whatever was left (the Portal access
+ * token included), handing the picked server credentials it had no use for.
+ */
 export function selectMemoryPortalBearers(tokens: Array<string | null | undefined>): string[] {
   const unique = [...new Set(tokens.filter((value): value is string => Boolean(value)))];
-  const notExpired = unique.filter((token) => !isJwtExpired(token));
-  const liveJwts = notExpired.filter((token) => decodeJwtPayload(token));
-  const preferred = liveJwts.filter((token) =>
-    audienceValues(decodeJwtPayload(token)?.aud).some((aud) => MEMORY_PORTAL_AUDIENCES.has(aud)),
+
+  return unique.filter(
+    (token) =>
+      !isJwtExpired(token) &&
+      audienceValues(decodeJwtPayload(token)?.aud).some((aud) => MEMORY_PORTAL_AUDIENCES.has(aud)),
   );
-
-  if (preferred.length > 0) {
-    return preferred;
-  }
-
-  return liveJwts.length > 0 ? liveJwts : notExpired;
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {

@@ -194,13 +194,20 @@ describe('scrubEvent — leaks confirmed by adversarial review', () => {
 describe('scrubEvent — CI-Hub identity header', () => {
   it('filters x-ci-hub-user, which carries the household username', () => {
     const event = {
-      request: { headers: { 'x-ci-hub-user': 'liam', 'x-ci-hub-user-signature': 'abc' } },
+      request: {
+        headers: {
+          'x-ci-hub-user': 'liam',
+          'x-ci-hub-user-signature': 'abc',
+          'x-ci-hub-user-assertion': '2.nB7cS0fTq3kz1XyH9wA2eQ.abc',
+        },
+      },
     } as unknown as ErrorEvent;
 
     const headers = scrubEvent(event)!.request!.headers!;
 
     expect(headers['x-ci-hub-user']).toBe('[Filtered]');
     expect(headers['x-ci-hub-user-signature']).toBe('[Filtered]');
+    expect(headers['x-ci-hub-user-assertion']).toBe('[Filtered]');
   });
 
   it('strips the query string from a location redirect header', () => {

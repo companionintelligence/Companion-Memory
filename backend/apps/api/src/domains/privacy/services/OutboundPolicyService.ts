@@ -58,7 +58,11 @@ export class OutboundPolicyService implements OnModuleInit, OnModuleDestroy {
    * accepting the write would show a switch that does nothing. Turning it OFF is
    * always allowed, so the choice is waiting if the operator later lifts the lock.
    */
-  async set(key: OutboundPathKey, enabled: boolean, userId: string | undefined): Promise<OutboundSettingsDto> {
+  async set(
+    key: OutboundPathKey,
+    enabled: boolean,
+    userId: string | undefined,
+  ): Promise<OutboundSettingsDto> {
     const lockedReason = outboundLockedReason(key);
 
     if (enabled && lockedReason) {

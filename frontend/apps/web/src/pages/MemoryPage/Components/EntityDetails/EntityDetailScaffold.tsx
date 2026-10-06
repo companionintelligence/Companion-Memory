@@ -12,7 +12,7 @@ import {
 import { useApolloClient } from '@apollo/client';
 import { GlobalUID } from '@ci/common';
 import { Button, Card, IconButton, Label, Sheet, Tooltip, cn, useToast } from '@ci/shadcn';
-import { Download, FileSymlink, ImageOff, Loader2, Pencil, Trash2 } from '@ci/shadcn/icons';
+import { Download, FileSymlink, ImageOff, Loader2, Pencil, Play, Trash2 } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { Link, useInRouterContext } from 'react-router-dom';
 
@@ -346,6 +346,10 @@ export function EntityMedia({
   // otherwise leave a broken-image glyph. Remember which source failed so the
   // block degrades to a link instead; keyed by src so a new entity retries.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  // A phone clip's poster has to be a real image. The video element's poster
+  // stays blank in the webview until the stream decodes, which a `.mov` often
+  // never does. The still stays up until Play.
+  const [playing, setPlaying] = useState(false);
   const shownSrc = isVideo ? src : imageSrc;
   // At most ONE refresh per mount, and only for a failure a fresh link can
   // cure: a network error (MediaError 2 — the object store answered 403 for an
@@ -477,12 +481,22 @@ export function EntityMedia({
           <Download className="size-4" aria-hidden />
         </a>
       )}
-      {isVideo ? (
+      {isVideo && previewSrc && !playing ? (
+        <button type="button" aria-label="Play" onClick={() => setPlaying(true)} className="relative w-full">
+          <img src={previewSrc} alt={alt ?? ''} className="max-h-[max(45vh,16rem)] w-full object-contain" />
+          <span className="absolute inset-0 flex items-center justify-center">
+            <span className="rounded-full bg-black/50 p-3 text-white">
+              <Play className="size-6" aria-hidden />
+            </span>
+          </span>
+        </button>
+      ) : isVideo ? (
         <video
           key={attempt}
           src={shownSrc}
           poster={previewSrc ?? undefined}
           controls
+          autoPlay={playing}
           className="max-h-[max(45vh,16rem)] w-full object-contain"
           onError={(event) => handleError(shownSrc, event.currentTarget.error)}
         />

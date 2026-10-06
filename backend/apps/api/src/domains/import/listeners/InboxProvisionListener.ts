@@ -37,7 +37,7 @@ export class InboxProvisionListener {
         return;
       }
 
-      await this.inbox.provisionUserInbox(user.email);
+      await this.inbox.provisionUserInbox(user.id);
       this.logger.log('Provisioned inbox folders for new user', { userId: payload.userId });
     } catch (err: unknown) {
       this.logger.warn('Could not provision inbox folders for new user', {

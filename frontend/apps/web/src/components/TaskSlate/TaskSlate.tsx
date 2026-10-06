@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { useDeviceLayout } from '@ci/common';
@@ -355,6 +355,11 @@ export function TaskSlateDrawer({
   onCreated,
 }: TaskSlateDrawerProps) {
   const { isMobile } = useDeviceLayout();
+  const [overlayRoot, setOverlayRoot] = useState<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    setOverlayRoot(document.getElementById('overlay-modal'));
+  }, []);
   const fmt = useDateTimeFormat();
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState<EventDraft>(() =>
@@ -440,7 +445,13 @@ export function TaskSlateDrawer({
         overlayClassName="bg-transparent pointer-events-none"
         onPointerDownOutside={(event) => event.preventDefault()}
         onInteractOutside={(event) => event.preventDefault()}
-        className={cn('gap-0 p-0', isMobile ? 'max-h-[70vh] w-full sm:max-w-none' : 'w-[24rem] sm:max-w-md')}
+        container={isMobile ? overlayRoot : undefined}
+        className={cn(
+          'pointer-events-auto gap-0 p-0',
+          isMobile
+            ? 'max-h-[70vh] w-full overscroll-contain pb-[var(--safe-area-bottom)] sm:max-w-none'
+            : 'w-[24rem] sm:max-w-md',
+        )}
       >
         <Sheet.Header className="gap-1 pb-1">
           <Sheet.Title className="text-sm">Add to calendar</Sheet.Title>
@@ -449,7 +460,7 @@ export function TaskSlateDrawer({
           </Sheet.Description>
         </Sheet.Header>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain px-4 pb-4">
           <section
             aria-labelledby="slot-predictions-label"
             className="rounded-lg border border-border bg-muted/30 px-3 py-2.5"

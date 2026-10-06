@@ -175,6 +175,11 @@ describe('EntityMedia video with a playback rendition', () => {
       />,
     );
 
+    expect(screen.getByRole('img', { name: 'clip' })).toHaveAttribute('src', '/static/companion/poster.jpg');
+    expect(container.querySelector('video')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+
     const video = container.querySelector('video');
     expect(video).toHaveAttribute('src', '/static/companion/clip-h264.mp4');
 
@@ -200,6 +205,9 @@ describe('EntityMedia video the browser cannot decode', () => {
         alt="clip"
       />,
     );
+
+    expect(screen.getByRole('img', { name: 'clip' })).toHaveAttribute('src', '/static/companion/poster.jpg');
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
 
     const video = container.querySelector('video');
     expect(video).toHaveAttribute('poster', '/static/companion/poster.jpg');
@@ -229,6 +237,7 @@ describe('EntityMedia video the browser cannot decode', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
     failWith(container.querySelector('video')!, 2);
 
     expect(screen.getByRole('status')).toHaveTextContent("Media couldn't be loaded");
@@ -289,6 +298,7 @@ describe('EntityMedia decode failure', () => {
       </MediaRefreshProvider>,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
     failWith(container.querySelector('video')!, 3);
     await act(async () => {});
 

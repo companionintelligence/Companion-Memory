@@ -80,7 +80,7 @@ const HOME_PATH_PATTERNS = [
 ];
 
 const SENSITIVE_KEY_PATTERN =
-  /password|secret|token|authorization|cookie|jwt|api[-_ ]?key|dsn|pepper|private[-_]?key|signature/i;
+  /password|secret|token|authorization|cookie|jwt|api[-_ ]?key|dsn|pepper|private[-_]?key|signature|assertion/i;
 
 // Keys that name a PERSON rather than carrying a credential. No value pattern
 // can ever match these — a username is just a word — so the key is the only

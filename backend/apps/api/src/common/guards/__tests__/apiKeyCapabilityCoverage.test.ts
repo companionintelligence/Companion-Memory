@@ -8,8 +8,10 @@ import { REQUIRE_CAPABILITY_KEY, REQUIRE_SCOPES_KEY } from '@ci/common/decorator
 import { AgentJobsController } from '../../../domains/agent/controllers/AgentJobsController';
 import { IntentsController } from '../../../domains/agent/controllers/IntentsController';
 import { MemoryController } from '../../../domains/agent/controllers/MemoryController';
+import { DeviceController } from '../../../domains/devices/controllers/DeviceController';
 import { FilesController } from '../../../domains/files/controllers/FilesController';
 import { BulkIngestController } from '../../../domains/ingest/controllers/BulkIngestController';
+import { IngestLifecycleController } from '../../../domains/ingest/controllers/IngestLifecycleController';
 import { McpController } from '../../../domains/mcp/controllers/McpController';
 import { PersonaIntelligenceController } from '../../../domains/persona/controllers/PersonaIntelligenceController';
 import { PendingActionsController } from '../../../domains/tools/controllers/PendingActionsController';
@@ -43,6 +45,10 @@ const SCOPED_CONTROLLERS = [
   // would see these as unscoped and skip the capability assertion entirely.
   FilesController,
   BulkIngestController,
+  // A capture agent's own device record and the bulk-load `finish` step, opened to the capture
+  // scope per route so a capture client's Portal token keeps working once it is confined to it.
+  DeviceController,
+  IngestLifecycleController,
   PendingActionsController,
   // Added by #2558; every route already declared a capability, only this
   // hand-maintained mirror had not caught up.

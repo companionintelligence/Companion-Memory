@@ -130,7 +130,7 @@ way round.
 | Graph entities + the "is this actually a name" guard | `.../import/push/entities.ts`, `.../graph/utils/participantSanity.ts` |
 | Owner/self resolution (message direction) | `.../import/push/self.ts` |
 | Inbox scan/claim | `.../import/services/ImportInboxService.ts` |
-| **Per-user inbox path, roots containment** | `.../import/sources/importRoots.ts` (`userInboxDir`), `.../import/sources/sanitizeFilename.ts` |
+| **Per-user inbox path, roots containment** | `.../import/sources/importRoots.ts` (`userInboxDir`, keyed on the account id; `resolveWithinImportRoots`, configured roots for the administrator only) |
 | Per-service inbox drop folders | `.../import/sources/inboxFolders.ts`, fed by `.../import/sources/guides.ts` |
 | Acquisition (rename, EXDEV copy fallback, crash recovery) | `.../import/sources/localAcquire.ts` |
 | Scratch tree lifecycle | `.../import/services/ImportScratchService.ts` |
@@ -1243,28 +1243,29 @@ in `config/default.json`:
 
 ### 5.3 ⚠️ The inbox is PER USER, and it CONSUMES what it imports
 
-**The layout, since [#2100](https://github.com/companionintelligence/CI-Server/pull/2100)
-(`507c1e2f1`).** `CI_IMPORT_INBOX_DIR` is a root that nothing scans directly.
-Each account owns a subtree named after its email, and units live inside it —
-optionally inside a per-service folder:
+**The layout.** `CI_IMPORT_INBOX_DIR` is a root that nothing scans directly.
+Each account owns a subtree named after its account id (`ci.users.id`), and
+units live inside it, optionally inside a per-service folder:
 
 ```
 $CI_IMPORT_INBOX_DIR/
-└── test_example.com/          ← userInboxDir(user.email)
+└── 0199a1b2-…-7c3d/           ← userInboxDir(user.id)
     ├── amazon/                ← a service folder; the drop DECLARES that source
     │   └── orders.zip         ← the unit
     ├── google-takeout/
     └── some-loose-archive.zip ← also a unit; declares nothing
 ```
 
-The folder name is `sanitizeFilename(email.trim().toLowerCase())`
-(`sources/importRoots.ts` → `sources/sanitizeFilename.ts`): lowercased, then every
-character outside `[A-Za-z0-9._-]` replaced with `_`. So `Test@Example.com`,
-`test@example.com` and `TEST@EXAMPLE.COM` all become **`test_example.com`** — the
-`@` becomes `_`, the dot survives. It is derived from the email because that is
-the one identifier that is both unique and recognizable from the desktop side of
-the mount; without the scoping, any account could import — and thereby consume —
-an archive another account dropped.
+Until the folder was keyed on the id it was `sanitizeFilename(email.trim().toLowerCase())`,
+so `test@example.com` owned `test_example.com`. That name was not unique: `a+b@x.io`
+and `a_b@x.io` both became `a_b_x.io`, as did two case variants of one address, and
+two accounts on one folder could import (and so consume) each other's archives. The
+id cannot collide. On boot, `ImportInboxService.migrateInboxFoldersToUserIds` moves
+each account's old email-named folder onto its id, and rewrites any live claim under
+it, but only when exactly one account maps to the old name and the id folder does
+not exist yet; anything else is left in place and logged. Ask the API for the folder
+rather than computing it: `ci inbox` prints it, and `GET /import/inbox` returns it
+as `inboxDir` (in-container) and `displayDir` (on the host).
 
 > **The trap, and it points at the wrong thing entirely.** Drop a unit in the old
 > flat layout (`$CI_IMPORT_INBOX_DIR/amazon`) and starting it fails with
@@ -1277,8 +1278,8 @@ an archive another account dropped.
 > reads as "you forgot to set `CI_IMPORT_ROOTS`" — which is a different variable
 > for a different purpose (host paths a caller may *name*; the inbox needs none
 > of them). The actual fault is that the path is not under *this caller's*
-> `userInboxDir`. Check the email spelling of the account whose API key you are
-> using before you touch any configuration. This cost real time on the 2026-08-19
+> `userInboxDir`. Check that you dropped into the folder `ci inbox` prints for
+> the account whose API key you are using before you touch any configuration. This cost real time on the 2026-08-19
 > QA pass.
 
 The per-service folders are created for you on every scan
@@ -1301,7 +1302,7 @@ the bytes then live only in the run's scratch tree, which is reclaimed when the 
 finishes. **Never point the inbox at the only copy of a corpus.**
 
 ```bash
-INBOX="$CI_IMPORT_INBOX_DIR/$(printf %s "$EMAIL" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9._-' '_')"
+INBOX="$(curl -fsS -H "x-api-key: $CI_API_KEY" http://localhost:3030/import/inbox | jq -r .inboxDir)"
 mkdir -p "$INBOX"
 cp -Rc /path/to/corpus/* "$INBOX"/           # macOS: -c is an APFS clone — instant, no extra disk
 cp -r --reflink=auto /path/to/corpus/* "$INBOX"/   # Linux equivalent on btrfs/XFS
@@ -1412,7 +1413,10 @@ yarn workspace @ci/cli dev doctor --check comms-missing-thread-id --json
 ```
 
 Under it are two GET routes, so an agent holding an api key and no database
-credentials can do the same:
+credentials can do the same. Running the checks is limited to the appliance
+administrator, because every check reads all accounts and returns a sample row:
+use the owner's key, or a non-admin account gets a 403 (`/checks` only lists the
+registry and stays open to any account):
 
 ```bash
 curl -sH "x-api-key: $CI_API_KEY" http://localhost:3030/import/doctor/checks | jq
@@ -2050,7 +2054,7 @@ If you read nothing else:
   Parse is still serial and still dominates, so parse time is still a sum.
   Queued for an hour is normal; `GET /import/runs/active` tells `waiting` from
   `blocked`.
-- **The inbox is per user** — `<inbox>/<email with @ → _>/<unit>`. The old flat
+- **The inbox is per user**, at `<inbox>/<account id>/<unit>`. The old flat
   layout fails with "outside the configured import roots", which names the wrong
   variable.
 - **A full reset drops the DATABASE**, never a hand-typed schema list; a missed

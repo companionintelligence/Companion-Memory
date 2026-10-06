@@ -103,25 +103,66 @@ _WEEKDAY_IDX = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
 
 # ── Profile building ───────────────────────────────────────────────────────────
 
-# Distinct occurrence days (with their dayparts) per L1 cluster, restricted to
-# clusters that still exist in hbpe.l1_clusters — summary-derived tokens can
-# carry labels that were never promoted to clusters.
+# Distinct occurrence days per L1 cluster, with how many of that day's buckets
+# fall in each daypart. Restricted to clusters that still exist in
+# hbpe.l1_clusters — summary-derived tokens can carry labels that were never
+# promoted to clusters.
+#
+# The per-daypart bucket counts, not just which dayparts were touched, are what
+# let `significant_dayparts` tell a block that lives in a daypart from one that
+# merely spills into it.
 _OCCURRENCES_SQL = """
-    SELECT ts.token_id::uuid AS cluster_id,
-           ts.date,
-           ARRAY_AGG(DISTINCT ts.bucket_idx / %(per_part)s) AS dayparts
-    FROM hbpe.token_stream ts
-    JOIN hbpe.l1_clusters c
-      ON c.cluster_id::text = ts.token_id AND c.user_id = ts.user_id
-    WHERE ts.user_id = %(user_id)s
-      AND ts.level = 'L1'
-      AND ts.date >= (NOW() AT TIME ZONE 'UTC')::date - %(history)s::int
-      -- future-dated rows (bad imports / test data) would make days_since_last
-      -- negative and poison the interval stats
-      AND ts.date <= (NOW() AT TIME ZONE 'UTC')::date
-    GROUP BY ts.token_id, ts.date
-    ORDER BY ts.token_id, ts.date
+    WITH per_part AS (
+        SELECT ts.token_id,
+               ts.date,
+               ts.bucket_idx / %(per_part)s        AS part,
+               COUNT(DISTINCT ts.bucket_idx)       AS n
+        FROM hbpe.token_stream ts
+        JOIN hbpe.l1_clusters c
+          ON c.cluster_id::text = ts.token_id AND c.user_id = ts.user_id
+        WHERE ts.user_id = %(user_id)s
+          AND ts.level = 'L1'
+          AND ts.date >= (NOW() AT TIME ZONE 'UTC')::date - %(history)s::int
+          -- future-dated rows (bad imports / test data) would make
+          -- days_since_last negative and poison the interval stats
+          AND ts.date <= (NOW() AT TIME ZONE 'UTC')::date
+        GROUP BY ts.token_id, ts.date, ts.bucket_idx / %(per_part)s
+    )
+    SELECT token_id::uuid                      AS cluster_id,
+           date,
+           ARRAY_AGG(part ORDER BY part)       AS dayparts,
+           ARRAY_AGG(n    ORDER BY part)       AS bucket_counts
+    FROM per_part
+    GROUP BY token_id, date
+    ORDER BY token_id, date
 """
+
+# An occurrence counts toward a daypart only if it spends at least this share of
+# its buckets there (its largest daypart always counts, so none is left with
+# zero). Without it, touching a daypart with one bucket counts as being in it
+# fully. That is harmless for a 30-minute meeting and wrong for a long block: a
+# 7-hour night window that runs 4 buckets past a daypart boundary was being
+# credited with half its weight on the far side, and the calendar then showed a
+# sleeper asleep until 2 pm.
+MIN_DAYPART_SHARE = 0.30
+
+
+def significant_dayparts(
+    dayparts: list[int],
+    bucket_counts: list[int],
+    min_share: float = MIN_DAYPART_SHARE,
+) -> list[int]:
+    """The dayparts one occurrence genuinely occupies, by share of its buckets."""
+    if not dayparts or len(dayparts) != len(bucket_counts):
+        return list(dayparts or [])
+    total = sum(bucket_counts)
+    biggest = max(bucket_counts)
+    return [
+        part
+        for part, n in zip(dayparts, bucket_counts, strict=True)
+        if n == biggest or n >= min_share * total
+    ]
+
 
 _UPSERT_PROFILE_SQL = """
     INSERT INTO hbpe.recurrence_profiles
@@ -239,10 +280,12 @@ def build_recurrence_profiles(user_id: str, history_days: int = HISTORY_DAYS) ->
 
     # Group by cluster (rows arrive ordered by cluster, date)
     by_cluster: dict[str, tuple[list, list]] = {}
-    for cluster_id, date, dayparts in rows:
+    for cluster_id, date, dayparts, bucket_counts in rows:
         dates, parts = by_cluster.setdefault(str(cluster_id), ([], []))
         dates.append(date)
-        parts.append(list(dayparts or []))
+        parts.append(
+            significant_dayparts(list(dayparts or []), list(bucket_counts or []))
+        )
 
     if not by_cluster:
         # Nothing read → nothing to rebuild from, and nothing to prune against.

@@ -137,7 +137,7 @@ export function NotesPage() {
 
   return (
     <>
-      <PageContent ref={pagination.scrollRef}>
+      <PageContent ref={pagination.scrollRef} className="p-2 gap-2 device:p-3 device:gap-3">
         <MemoryHubShell
           actions={
             isMobile ? undefined : (

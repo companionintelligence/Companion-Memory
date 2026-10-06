@@ -588,6 +588,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                 onSelectDay={handleSelectDay}
                 selectedSlot={slot}
                 onSelectSlot={handleSelectSlot}
+                scrollEndInset={isMobile && slot !== null}
                 onMoveEvent={handleMove}
                 footer={rhythmFooter(
                   generatedAt ?? (hasOccupancySignal ? (occupancy?.generatedAt ?? null) : null),
