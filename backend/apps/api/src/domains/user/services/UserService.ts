@@ -303,6 +303,12 @@ export class UserService {
       throw new UnauthorizedException();
     }
 
+    // No id names no account. TypeORM drops an `undefined` where-value from the SQL, so passing one
+    // through returned the first row of `ci.users` instead of nothing.
+    if (typeof id !== 'string' || id.length === 0) {
+      return null;
+    }
+
     const result = await this.userRepository.findOne({
       where: {
         id,

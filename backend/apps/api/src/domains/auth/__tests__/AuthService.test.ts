@@ -8,7 +8,7 @@ import type { Repository } from 'typeorm';
 import config from '@ci/configuration';
 
 import type { SessionEntity } from '../entities/SessionEntity';
-import { AuthService } from '../services/AuthService';
+import { AuthService, signupIntentSecret } from '../services/AuthService';
 import type { JwtPayload } from '../types';
 
 const SESSION_COOKIE = config.auth.cookies.sessionTokenName;
@@ -312,9 +312,77 @@ describe('AuthService — signup intent', () => {
   it('reads an intent minted before the field existed as one that waived nothing', () => {
     const legacy = jwtService.sign(
       { email: 'new@example.com', purpose: 'signup_intent', ...identity },
-      { secret: REFRESH_SECRET, expiresIn: '10m' },
+      { secret: signupIntentSecret(), expiresIn: '10m' },
     );
 
     expect(service.verifySignupIntentToken(legacy).firstAccountOnly).toBeUndefined();
+  });
+});
+
+/**
+ * A signup intent and a session cookie are different credentials and must never stand in for each
+ * other. An intent has no `sub`; accepted as a session, the connect consent page looked up an
+ * account with no id and got whichever came first.
+ */
+describe('AuthService — intents and sessions do not cross', () => {
+  const sessionRepository = { findOne: jest.fn() };
+  const service = new AuthService(jwtService, sessionRepository as unknown as Repository<SessionEntity>);
+  const intent = () =>
+    service.issueSignupIntentToken('new@example.com', 'New', { issuer: 'https://hub.test', subject: 's-1' });
+  const session = (claims: Record<string, unknown>) =>
+    jwtService.sign(claims, { secret: REFRESH_SECRET, expiresIn: '1h' });
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('signs an intent with a key of its own, so it does not verify as a session', () => {
+    expect(signupIntentSecret()).not.toBe(REFRESH_SECRET);
+    expect(() => service.validateSessionToken(intent())).toThrow();
+    expect(service.resolveCsrfScope(reqWithCookies({ [SESSION_COOKIE]: intent() }))).toBeNull();
+  });
+
+  it('does not take a session cookie as an intent', () => {
+    expect(() => service.verifySignupIntentToken(session({ sub: 'user-1', sid: 'sess-1' }))).toThrow();
+  });
+
+  it.each([
+    ['no sub', { sid: 'sess-1' }],
+    ['a non-string sub', { sub: 42, sid: 'sess-1' }],
+    ['an empty sub', { sub: '', sid: 'sess-1' }],
+    ['a purpose claim', { sub: 'user-1', sid: 'sess-1', purpose: 'signup_intent' }],
+  ])('refuses a token signed with the session secret that carries %s', (_label, claims) => {
+    const token = session(claims);
+
+    expect(() => service.validateSessionToken(token)).toThrow(UnauthorizedException);
+    expect(service.resolveCsrfScope(reqWithCookies({ [SESSION_COOKIE]: token }))).toBeNull();
+  });
+
+  it('accepts a session cookie that names a user', () => {
+    expect(service.validateSessionToken(session({ sub: 'user-1', sid: 'sess-1' })).sub).toBe('user-1');
+  });
+
+  describe('resolveLiveSession', () => {
+    it('returns the session when its row is live and belongs to the user the cookie names', async () => {
+      sessionRepository.findOne.mockResolvedValueOnce({ id: 'sess-1' });
+
+      await expect(service.resolveLiveSession(session({ sub: 'user-1', sid: 'sess-1' }))).resolves.toEqual({
+        userId: 'user-1',
+        sessionId: 'sess-1',
+      });
+      expect(sessionRepository.findOne).toHaveBeenCalledWith({
+        where: expect.objectContaining({ user: { id: 'user-1' } }),
+      });
+    });
+
+    it('returns null for a signed-out session: the cookie verifies, the row is gone', async () => {
+      sessionRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.resolveLiveSession(session({ sub: 'user-1', sid: 'sess-1' }))).resolves.toBeNull();
+    });
+
+    it('returns null without touching the table for an intent or a forged cookie', async () => {
+      await expect(service.resolveLiveSession(intent())).resolves.toBeNull();
+      await expect(service.resolveLiveSession('not-a-jwt')).resolves.toBeNull();
+      expect(sessionRepository.findOne).not.toHaveBeenCalled();
+    });
   });
 });
