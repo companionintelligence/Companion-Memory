@@ -317,8 +317,10 @@ other event.
 
 Instead `DeadLetterReaperListener` **polls** `pgboss.job` every 2 minutes
 (`'40 */2 * * * *'`), copying up to 500 rows into `ci.pipeline_dead_letters`
-keyed on the originating pg-boss job id (natural idempotency key; anti-join plus
-`ON CONFLICT (id) DO NOTHING`). It never completes or deletes the pg-boss row.
+keyed on the pg-boss id of the dead-letter copy, not of the job that failed
+(pg-boss inserts the copy as a new row). That id is the idempotency key for the
+anti-join and the `ON CONFLICT (id) DO NOTHING`. It never completes or deletes
+the pg-boss row.
 The same tick purges up to 500 **replayed** rows older than 30 days.
 **An unreplayed letter has no TTL at any age** — its payload is frequently the
 only surviving copy of a record the source will not re-send.
@@ -327,7 +329,13 @@ Replay sends a letter back to the queue it failed on, read from the `queue`
 that `PGBossEventService` writes into every failure output, and to no other
 queue. Sending it to every listener of the event would re-run the ones that
 had succeeded: a `file.uploaded` that failed only `file-preview-generation`
-would run all six of its listeners again. See "pg-boss drops the originating
+would run all six of its listeners again. Three kinds of letter are routed
+another way. A `python.function.run` goes to its target's queue. A
+`pipeline.slice` or `pipeline.sweep` goes to the queue its stage declares
+today, because every pipeline queue listens for both and refuses a stage that
+rides another. A letter whose queue no longer listens for its event (a release
+moved the listener) goes to every queue that does, since the old queue's worker
+would complete it without running anything. See "pg-boss drops the originating
 queue" under Counting traps for the letters that still fan out.
 
 ### 1.7 Retention — what actually happens to a finished job
@@ -979,8 +987,10 @@ never produce a job.
   its failure paths, and the reaper records that as
   `ci.pipeline_dead_letters.queue`. Rows reaped before that, and jobs pg-boss
   failed itself by expiry (its output carries no queue), still read
-  `queue = 'dead-letter'`. Replay sends those to every queue listening for the
-  event; a `python.function.run` goes to its target's queue instead.
+  `queue = 'dead-letter'`. Replay sends those, and letters whose queue no
+  longer listens for their event, to every queue listening for the event. A
+  `python.function.run` goes to its target's queue instead, and a
+  `pipeline.slice` or `pipeline.sweep` to its stage's queue.
 - **Fetch failures are structurally invisible.** pg-boss's `manager.fetch` wraps
   its query in an **empty catch** and returns `rows || []`. The defensive
   `try/catch` around `boss.fetch()` can essentially never fire, so a database

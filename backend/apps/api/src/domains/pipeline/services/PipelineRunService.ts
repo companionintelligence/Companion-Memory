@@ -13,8 +13,11 @@ import {
 
 import { DEAD_LETTER_QUEUE, STAGE_ID_LIST } from '../constants';
 import type { PipelineRunDesiredState } from '../entities/PipelineRunEntity';
+import { PipelineSliceEvent, PipelineSweepEvent } from '../events';
 import type { StageCoverage } from '../types';
 import { stageVersion } from '../versions';
+
+import { StageRegistry } from './StageRegistry';
 
 // ---------------------------------------------------------------------------
 // Bounds
@@ -365,6 +368,16 @@ interface StageStateRow {
  * target also beats a recorded queue, so a copy that died on the wrong sidecar
  * before this fix is replayed where it was meant to go.
  *
+ * A `pipeline.slice` or `pipeline.sweep` goes to the queue its stage declares
+ * today, for the same reason. All three pipeline queues listen for both events,
+ * and the handler refuses a payload whose stage rides another queue ("Refusing
+ * to process it on the wrong resource pool"). Routed by registration, two of
+ * the three copies failed and wrote new letters. Sent to the queue it failed
+ * on after a release moved its stage, the one copy failed the same way, and
+ * the registration check below cannot see that move because the old queue
+ * still listens for the event. `stageQueue` answers `null` for a stage this
+ * build cannot resolve, and that letter is routed like any other.
+ *
  * Every other letter goes back to the queue it failed on: the stage queue
  * `PipelineSliceListener` wrote, or the `output.queue` the reaper copied. Only
  * a reaped letter that names no queue (pg-boss expired the job itself, or it
@@ -379,12 +392,24 @@ interface StageStateRow {
  * replay that reports success, does nothing, and lets the purge delete the
  * only copy of the payload 30 days on.
  */
-function replayQueueFor(letter: Pick<DeadLetterRow, 'queue' | 'event_name' | 'payload'>): string | null {
+function replayQueueFor(
+  letter: Pick<DeadLetterRow, 'queue' | 'event_name' | 'payload'>,
+  stageQueue: (stageId: string) => string | null,
+): string | null {
   if (letter.event_name === PythonFunctionRunEvent) {
     const target = letter.payload?.target;
 
     if (typeof target === 'string' && Object.hasOwn(PYTHON_FUNCTION_QUEUES, target)) {
       return PYTHON_FUNCTION_QUEUES[target as PythonFunctionTarget];
+    }
+  }
+
+  if (letter.event_name === PipelineSliceEvent || letter.event_name === PipelineSweepEvent) {
+    const stage = letter.payload?.stage;
+    const queue = typeof stage === 'string' ? stageQueue(stage) : null;
+
+    if (queue != null) {
+      return queue;
     }
   }
 
@@ -495,6 +520,7 @@ export class PipelineRunService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly eventService: EventService,
     private readonly logger: LoggerService,
+    private readonly stageRegistry: StageRegistry,
   ) {
     this.logger.setContext(PipelineRunService.name);
   }
@@ -1023,7 +1049,8 @@ export class PipelineRunService {
    * letter written by `PipelineSliceListener` carries its stage queue. A letter
    * harvested by `DeadLetterReaperListener` carries the `output.queue` that
    * `PGBossEventService` writes on every failure. A `python.function.run` goes
-   * to its target's queue.
+   * to its target's queue, and a `pipeline.slice` or `pipeline.sweep` to the
+   * queue its stage declares today.
    *
    * A reaped letter that names no queue still carries `dead-letter`, pg-boss's
    * parking queue, which has no worker, so naming it would enqueue the job where
@@ -1237,7 +1264,7 @@ export class PipelineRunService {
     }
 
     // `null` means "route by listener registration"; see replayQueueFor.
-    const queue = replayQueueFor(letter);
+    const queue = replayQueueFor(letter, (stageId) => this.stageQueueFor(stageId));
 
     let jobIds: string[];
 
@@ -1290,6 +1317,10 @@ export class PipelineRunService {
       letterId,
       eventName,
       queue,
+      // Where the letter says it died. Differs from `queue` when replay picked
+      // another route (a stage's current queue, a Python target, or every
+      // listener), which is the case an operator needs to see in the log.
+      recordedQueue: letter.queue,
       jobIds,
       userId: ctx.userId,
     });
@@ -1375,6 +1406,24 @@ export class PipelineRunService {
         `${rows[0].replayed_at?.toISOString() ?? 'an unknown time'}. ` +
         `replayed_at is what keeps a replay-all from looping; clear it in the database to force another.`,
     );
+  }
+
+  /**
+   * The queue a stage declares in this build, or `null` when the id names no
+   * stage this build can resolve (removed by a release, or declared but not
+   * bound). Replay then falls back to the letter's own routing, where the
+   * worker's "Unknown pipeline stage" error is what the operator should see.
+   */
+  private stageQueueFor(stageId: string): string | null {
+    if (!this.stageRegistry.has(stageId)) {
+      return null;
+    }
+
+    try {
+      return this.stageRegistry.get(stageId).queue;
+    } catch {
+      return null;
+    }
   }
 
   /**

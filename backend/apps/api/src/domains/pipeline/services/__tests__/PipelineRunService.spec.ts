@@ -19,6 +19,7 @@ import {
   MAX_SHARDS_PER_RUN,
   PipelineRunService,
 } from '../PipelineRunService';
+import type { StageRegistry } from '../StageRegistry';
 
 // `isWrite`, not `startsWith('UPDATE')`: the writes are CTE-wrapped so TypeORM
 // returns plain rows instead of `[rows, rowCount]`, which means the outer command
@@ -82,7 +83,28 @@ interface Harness {
   matching(pattern: RegExp): Statement[];
 }
 
-function makeHarness(respond: Responder = () => [], sendResult: string[] = ['job-1']): Harness {
+/**
+ * A `StageRegistry` that knows only the stages named here, each mapped to the
+ * queue it declares. Replay asks it for nothing else.
+ */
+function stageRegistryOf(queues: Record<string, string> = {}): StageRegistry {
+  return {
+    has: (stageId: string) => Object.hasOwn(queues, stageId),
+    get: (stageId: string) => {
+      if (!Object.hasOwn(queues, stageId)) {
+        throw new Error(`Unknown pipeline stage "${stageId}".`);
+      }
+
+      return { id: stageId, queue: queues[stageId] };
+    },
+  } as unknown as StageRegistry;
+}
+
+function makeHarness(
+  respond: Responder = () => [],
+  sendResult: string[] = ['job-1'],
+  stageQueues: Record<string, string> = {},
+): Harness {
   const statements: Statement[] = [];
 
   const query = jest.fn(async (raw: string, params: unknown[] = []) => {
@@ -107,7 +129,12 @@ function makeHarness(respond: Responder = () => [], sendResult: string[] = ['job
   };
 
   return {
-    service: new PipelineRunService(dataSource, eventService, logger as unknown as LoggerService),
+    service: new PipelineRunService(
+      dataSource,
+      eventService,
+      logger as unknown as LoggerService,
+      stageRegistryOf(stageQueues),
+    ),
     statements,
     send,
     logger,
@@ -739,11 +766,22 @@ describe('PipelineRunService.replayDeadLetter', () => {
     ...overrides,
   });
 
-  // As in the running app, the stage queue listens for `pipeline.slice`. Replay
+  // As in the running app, all three pipeline queues listen for `pipeline.slice`
+  // and `pipeline.sweep`, and `enrich.geocode` rides `pipeline-enrich`. Replay
   // only names a recorded queue that listens for the letter's event.
+  // `search-index` is a queue that exists but does not listen for `note.created`.
+  const STAGE_QUEUES = { 'enrich.geocode': 'pipeline-enrich' };
+
   beforeEach(() => {
     EventListenerRegistry.clear();
-    EventListenerRegistry.register('pipeline.slice', 'PipelineSliceListener', 'handleEnrichSlice', 'pipeline-enrich');
+
+    for (const queue of ['pipeline-index', 'pipeline-enrich', 'pipeline-embed']) {
+      EventListenerRegistry.register('pipeline.slice', 'PipelineSliceListener', `slice:${queue}`, queue);
+      EventListenerRegistry.register('pipeline.sweep', 'PipelineDispatchService', `sweep:${queue}`, queue);
+    }
+
+    EventListenerRegistry.register('note.created', 'NoteIndexListener', 'handle', 'notes-index');
+    EventListenerRegistry.register('file.uploaded', 'SearchIndexListener', 'handle', 'search-index');
   });
 
   afterEach(() => {
@@ -771,11 +809,17 @@ describe('PipelineRunService.replayDeadLetter', () => {
     // pg-boss's `dead-letter` queue has no worker. Naming it would enqueue the
     // job where nothing will ever pick it up — a replay that reports success and
     // does nothing.
-    const harness = makeHarness(() => [claimRow({ queue: DEAD_LETTER_QUEUE })]);
+    const harness = makeHarness(() => [
+      claimRow({
+        queue: DEAD_LETTER_QUEUE,
+        event_name: 'note.created',
+        payload: { noteId: 'n-1', userId: USER },
+      }),
+    ]);
 
     const result = await harness.service.replayDeadLetter(CTX, LETTER_ID);
 
-    expect(harness.send).toHaveBeenCalledWith('pipeline.slice', expect.any(Object), {
+    expect(harness.send).toHaveBeenCalledWith('note.created', expect.any(Object), {
       priority: BACKFILL_JOB_PRIORITY,
       singletonKey: `${DEAD_LETTER_REPLAY_KEY_PREFIX}${LETTER_ID}`,
     });
@@ -783,18 +827,78 @@ describe('PipelineRunService.replayDeadLetter', () => {
   });
 
   it('routes by listener registration when the queue it died on no longer listens for the event', async () => {
-    // A release moved the listener after the job died. Sent to the old queue,
-    // the job would be skipped as "no listeners" and completed: a replay that
-    // reports success, runs nothing, and leaves the payload to the purge.
-    const harness = makeHarness(() => [claimRow({ queue: 'pipeline-enrich-retired' })]);
+    // A release moved the listener after the job died. `search-index` still
+    // exists, so send() would enqueue there, and its worker would skip the job
+    // as "no listeners" and complete it: a replay that reports success, runs
+    // nothing, and leaves the payload to the purge.
+    const harness = makeHarness(() => [
+      claimRow({
+        queue: 'search-index',
+        event_name: 'note.created',
+        payload: { noteId: 'n-1', userId: USER },
+      }),
+    ]);
 
     const result = await harness.service.replayDeadLetter(CTX, LETTER_ID);
 
-    expect(harness.send).toHaveBeenCalledWith('pipeline.slice', expect.any(Object), {
+    expect(harness.send).toHaveBeenCalledWith('note.created', expect.any(Object), {
       priority: BACKFILL_JOB_PRIORITY,
       singletonKey: `${DEAD_LETTER_REPLAY_KEY_PREFIX}${LETTER_ID}`,
     });
     expect(result.queue).toBeNull();
+  });
+
+  describe('a pipeline.slice or pipeline.sweep letter', () => {
+    it.each([
+      ['pipeline.slice', 'reaped with no queue', DEAD_LETTER_QUEUE],
+      ['pipeline.slice', 'recorded on a queue its stage has since left', 'pipeline-index'],
+      ['pipeline.sweep', 'reaped with no queue', DEAD_LETTER_QUEUE],
+      ['pipeline.sweep', 'recorded on a queue its stage has since left', 'pipeline-embed'],
+    ])('a %s goes to the queue its stage declares when %s', async (eventName, _label, queue) => {
+      // Every pipeline queue listens for both events, and each refuses a payload
+      // whose stage rides another queue. Routed by registration, two of the
+      // three copies failed and wrote new letters. Sent back to a queue its
+      // stage had left, the one copy failed, and the registration check could
+      // not see why because that queue still listens for the event.
+      const harness = makeHarness(
+        () => [claimRow({ queue, event_name: eventName })],
+        ['job-1'],
+        STAGE_QUEUES,
+      );
+
+      const result = await harness.service.replayDeadLetter(CTX, LETTER_ID);
+
+      expect(harness.send).toHaveBeenCalledWith(eventName, expect.any(Object), {
+        queue: 'pipeline-enrich',
+        priority: BACKFILL_JOB_PRIORITY,
+        singletonKey: `${DEAD_LETTER_REPLAY_KEY_PREFIX}${LETTER_ID}`,
+      });
+      expect(result.queue).toBe('pipeline-enrich');
+      expect(harness.logger.warn).toHaveBeenCalledWith(
+        'Replayed a pipeline dead letter',
+        expect.objectContaining({ queue: 'pipeline-enrich', recordedQueue: queue }),
+      );
+    });
+
+    it('is routed like any other letter when this build does not know its stage', async () => {
+      // A release removed the stage. The worker's "Unknown pipeline stage" is
+      // the error to show, once, on the queue the letter names.
+      const payload = { stage: 'enrich.retired', ids: ['a'], userId: USER };
+      const harness = makeHarness(
+        () => [claimRow({ queue: 'pipeline-index', payload })],
+        ['job-1'],
+        STAGE_QUEUES,
+      );
+
+      const result = await harness.service.replayDeadLetter(CTX, LETTER_ID);
+
+      expect(harness.send).toHaveBeenCalledWith('pipeline.slice', payload, {
+        queue: 'pipeline-index',
+        priority: BACKFILL_JOB_PRIORITY,
+        singletonKey: `${DEAD_LETTER_REPLAY_KEY_PREFIX}${LETTER_ID}`,
+      });
+      expect(result.queue).toBe('pipeline-index');
+    });
   });
 
   describe('a python.function.run letter', () => {
@@ -1282,6 +1386,7 @@ describe('PipelineRunService.replayDeadLetters against a de-duplicating queue', 
         { query } as unknown as DataSource,
         new IndexedQueueEventService(created) as unknown as EventService,
         logger as unknown as LoggerService,
+        stageRegistryOf(),
       ),
       created,
       releases: statements.filter((statement) => /SET replayed_at = NULL/.test(statement.sql)),
@@ -1365,6 +1470,7 @@ describe('PipelineRunService.replayDeadLetters against a de-duplicating queue', 
  */
 describe('PipelineRunService replay of an event with several listener queues', () => {
   const FILE_QUEUES = ['file-preview-generation', 'document-parsing', 'search-index'];
+  const PIPELINE_QUEUES = ['pipeline-index', 'pipeline-enrich', 'pipeline-embed'];
 
   class RecordingEventService extends EventService {
     readonly landed: string[] = [];
@@ -1413,6 +1519,7 @@ describe('PipelineRunService replay of an event with several listener queues', (
       { query } as unknown as DataSource,
       events as unknown as EventService,
       logger as unknown as LoggerService,
+      stageRegistryOf({ 'enrich.geocode': 'pipeline-enrich' }),
     );
 
     await service.replayDeadLetter(CTX, LETTER_ID);
@@ -1425,6 +1532,10 @@ describe('PipelineRunService replay of an event with several listener queues', (
 
     for (const queue of FILE_QUEUES) {
       EventListenerRegistry.register('file.uploaded', `Listener:${queue}`, 'handle', queue);
+    }
+
+    for (const queue of PIPELINE_QUEUES) {
+      EventListenerRegistry.register('pipeline.slice', 'PipelineSliceListener', `slice:${queue}`, queue);
     }
 
     EventListenerRegistry.register(
@@ -1471,6 +1582,21 @@ describe('PipelineRunService replay of an event with several listener queues', (
     await expect(
       replay({ queue: 'notes-index', event_name: 'file.uploaded', payload: { userId: USER } }),
     ).resolves.toEqual([...FILE_QUEUES].sort());
+  });
+
+  it.each([
+    ['reaped with no queue', DEAD_LETTER_QUEUE],
+    ['recorded on a queue its stage has since left', 'pipeline-index'],
+  ])("sends a pipeline.slice %s to its stage's queue only", async (_label, queue) => {
+    // All three pipeline queues listen for `pipeline.slice` and each refuses a
+    // slice whose stage rides another, so any copy off the stage's queue fails.
+    await expect(
+      replay({
+        queue,
+        event_name: 'pipeline.slice',
+        payload: { stage: 'enrich.geocode', entityType: 'event', ids: ['a'], userId: USER },
+      }),
+    ).resolves.toEqual(['pipeline-enrich']);
   });
 
   it('sends a python.function.run to its target sidecar only', async () => {
