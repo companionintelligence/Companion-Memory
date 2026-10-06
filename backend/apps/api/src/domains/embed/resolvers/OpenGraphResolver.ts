@@ -16,10 +16,11 @@ import {
  *
  * The fetch already stops at {@link MAX_HTML_BYTES}; this is the second bound,
  * on the parse, so its cost never depends on what a remote server chose to send.
- * The scans below are linear, so this is about a ceiling, not about speed: a
- * head that has not closed by here is not a page anyone will get a card from.
+ * The scans below are linear, so this is about a ceiling, not about speed. It
+ * equals the fetch cap, so every page that got a card before still gets one: a
+ * head with 150 KB of inline styles or JSON-LD before its og: tags is common.
  */
-export const MAX_HEAD_SCAN_CHARS = 128 * 1024;
+export const MAX_HEAD_SCAN_CHARS = MAX_HTML_BYTES;
 
 /**
  * One `name=value` pair inside a tag.
