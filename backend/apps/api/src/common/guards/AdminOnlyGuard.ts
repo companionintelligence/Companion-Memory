@@ -1,5 +1,7 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 
+import type { PortalPrincipalMarker } from './PortalTokenVerifier';
+
 /**
  * Refuses any request whose authenticated principal is not `role === 'admin'`
  * (`UserEntity.role` — see `domains/user/entities/UserEntity.ts`).
@@ -55,6 +57,12 @@ export class AdminOnlyGuard implements CanActivate {
 
     if (role !== 'admin') {
       throw new ForbiddenException('This action requires an administrator account');
+    }
+
+    // The owner's role says who they are, not that this bearer may act as them here. A Portal
+    // token not addressed to this appliance carries the owner's role too.
+    if ((request as PortalPrincipalMarker | undefined)?.portalPrincipal?.admin === false) {
+      throw new ForbiddenException('This action needs a sign-in issued for this Memory');
     }
 
     return true;

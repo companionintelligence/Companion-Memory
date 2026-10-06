@@ -163,6 +163,19 @@ export const ConfigSchema = z.object({
       // JIT-provisioned as a human login. Replaces the shared HS256 secret the
       // sidecars used to self-sign with. See unified-identity-plan.md · B5.
       serviceClients: z.string().default(''),
+      /**
+       * This appliance's own audience: the value CI-Portal puts in `aud` when it addresses a token
+       * to this box. Empty means "derive it from the Hub device id" (`ciPortal.deviceId`, which the
+       * Hub passes as `HUB_DEVICE_ID`) as `urn:ci:device:<id>`. Only a token addressed to this box
+       * carries the bearer's full authority; see `PortalTokenService`.
+       */
+      applianceAudience: z.string().default(''),
+      /**
+       * Comma-separated client ids that are capture agents (the browser extension, the importer,
+       * Companion Capture, the glasses). Their Portal tokens get the `capture` scope with `write`
+       * capability, enforced exactly as for an api key, wherever they were addressed.
+       */
+      captureClients: z.string().default(''),
     }),
     // Traefik forward-auth identity header signed by CI-Hub. When enabled, the
     // server verifies the HMAC-SHA256 signature on X-CI-Hub-User before trusting

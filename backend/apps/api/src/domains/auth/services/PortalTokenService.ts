@@ -4,11 +4,23 @@ import { Injectable } from '@nestjs/common';
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload } from 'jose';
 
 import { SYSTEM_USER } from '@ci/common/context';
-import type { PortalTokenVerifier } from '@ci/common/guards/PortalTokenVerifier';
+import {
+  CAPTURE_SCOPE,
+  INTENTS_SCOPE,
+  MCP_SCOPE,
+  MEMORY_SCOPE,
+  WRITE_CAPABILITY,
+} from '@ci/common/decorators';
+import type { PortalPrincipal, PortalTokenVerifier } from '@ci/common/guards/PortalTokenVerifier';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { type User, UserService } from '@ci/domains/user';
 
+import {
+  isApplianceAudience,
+  mintedByAddressingPortal,
+  thisApplianceAudience,
+} from '../utils/applianceAudience';
 import {
   parseAllowedServiceClients,
   resolveServiceAccount,
@@ -58,6 +70,65 @@ const PORTAL_JWS_ALGS: ReadonlySet<string> = new Set([
   'PS512',
 ]);
 
+/** The scopes a service token's `scope` claim can grant: the api-key scopes, nothing else. */
+const SERVICE_ACCOUNT_SCOPES: ReadonlySet<string> = new Set([
+  MEMORY_SCOPE,
+  INTENTS_SCOPE,
+  MCP_SCOPE,
+  CAPTURE_SCOPE,
+]);
+
+/** What a capture agent, or a token not addressed to this appliance, may do: record captures. */
+const CAPTURE_ONLY = {
+  limits: { scopes: [CAPTURE_SCOPE], capability: WRITE_CAPABILITY },
+  credentialRoutes: false,
+  admin: false,
+} as const satisfies Omit<PortalPrincipal, 'user'>;
+
+/** The user's full authority, as a session has it. Only for a token addressed to this appliance. */
+const FULL_AUTHORITY = {
+  limits: null,
+  credentialRoutes: true,
+  admin: true,
+} as const satisfies Omit<PortalPrincipal, 'user'>;
+
+/**
+ * A token from a Portal that predates appliance addressing: nothing could have addressed it, so
+ * it keeps what it always had (phone pairing mints its key with one), except the admin routes.
+ */
+const BEFORE_ADDRESSING = {
+  limits: null,
+  credentialRoutes: true,
+  admin: false,
+} as const satisfies Omit<PortalPrincipal, 'user'>;
+
+/** Who a verified token was issued to, and whether it was addressed to this appliance. */
+interface TokenAddress {
+  /** The client the token was issued to: `azp`, else its only accepted `aud` value. */
+  client: string;
+  /** `aud` names this appliance. A token naming only another appliance never gets this far. */
+  toThisAppliance: boolean;
+}
+
+function audienceList(aud: unknown): string[] {
+  if (typeof aud === 'string') {
+    return [aud];
+  }
+
+  return Array.isArray(aud) ? aud.filter((value): value is string => typeof value === 'string') : [];
+}
+
+function parseList(raw: string | undefined | null): string[] {
+  return [
+    ...new Set(
+      (raw ?? '')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
 class PortalVerifyTimeoutError extends Error {
   readonly code = 'ERR_PORTAL_VERIFY_TIMEOUT';
 
@@ -88,15 +159,24 @@ class PortalVerifyTimeoutError extends Error {
  * existed the bearer path created an account for ANY valid Portal token, which
  * on a tunnelled Hub install meant anyone with a Portal login could sign up.
  *
- * ## Service accounts (Portal-brokered service credential — B5)
+ * ## Which Memory a token is for
  *
- * Sidecars (HBPE, Summary) used to self-sign HS256 JWTs with the shared
- * `AUTH_JWT_AUTHTOKENSECRET`; a single leaked symmetric secret meant full user
- * impersonation. They now present a Portal-issued, EdDSA-signed service token
- * whose `client_id`/`act.sub` is one of `auth.portal.serviceClients`. Such tokens
- * are verified against the same Portal JWKS and resolve to the existing user
- * named in `sub` (the on-behalf-of principal) — never JIT-provisioned by email.
- * See CI-Engineering `architecture/identity/unified-identity-plan.md` · B5 / D3.
+ * Every Memory trusts the same Portal and signs its users in as the same client
+ * (`ci-server`), so a token's client id alone does not say which Memory it was
+ * meant for. The Portal can now say: a token addressed to an appliance carries
+ * `urn:ci:device:<device id>` in `aud` (see `utils/applianceAudience.ts`). Only a
+ * token addressed to this appliance carries the user's full authority; one
+ * addressed to another is refused; capture clients and unaddressed tokens get
+ * the capture scope. See {@link PortalTokenService.authorityFor}.
+ *
+ * ## Service accounts
+ *
+ * A token whose `client_id`/`act.sub` is one of `auth.portal.serviceClients`
+ * acts on behalf of the existing user named in `sub`, never JIT-provisioned.
+ * Nothing ships one today: the HBPE and Summary sidecars authenticate with
+ * `SIDECAR_AUTH_SECRET` and per-run tokens, so the list is empty by default. A
+ * service token must be addressed to this appliance and is confined to the
+ * api-key scopes in its `scope` claim.
  *
  * Gated behind `auth.portal.enabled` so it runs alongside the legacy JWT/api-key
  * paths during migration. See unified-identity-pipeline.md.
@@ -122,18 +202,83 @@ export class PortalTokenService implements PortalTokenVerifier {
   }
 
   /**
-   * better-auth's jwt() plugin defaults `aud` to the issuer URL (BASE_URL).
-   * OIDC id_tokens use `aud === client_id`. Accept both so a phone that only
-   * holds the access token is not 401'd while the id_token would have worked.
+   * The client ids whose tokens are accepted at all (`auth.portal.audience`).
+   *
+   * The Portal's own URL used to be added here, for "a phone that only holds the access token".
+   * The Portal's access tokens are opaque and never verify here; the only JWT carrying that
+   * audience is the Portal's own session JWT, which names no client and so has no business on a
+   * Memory. No client sends one.
    */
   private acceptedAudiences(): string[] {
-    const configured = config.auth.portal.audience
-      .split(',')
-      .map((a) => a.trim())
-      .filter(Boolean);
-    const issuer = config.auth.portal.issuer?.trim();
+    return parseList(config.auth.portal.audience);
+  }
 
-    return [...new Set(issuer ? [...configured, issuer] : configured)];
+  /** Clients that are capture agents (`auth.portal.captureClients`): capture scope, write, always. */
+  private captureClients(): string[] {
+    return parseList(config.auth.portal.captureClients);
+  }
+
+  /**
+   * Who a verified token was issued to and whether it is addressed to this appliance, or null when
+   * it must be refused: it names another appliance, or its client cannot be told.
+   *
+   * A token naming an appliance is refused unless one of the appliances it names is this one.
+   * That is the whole point of naming one: a token the Portal issued for a different Memory, or
+   * that a different Memory received during its own sign-in, is not a credential here.
+   */
+  private addressOf(payload: JWTPayload): TokenAddress | null {
+    const audiences = audienceList(payload.aud);
+    const appliances = audiences.filter(isApplianceAudience);
+    const ours = thisApplianceAudience();
+    const toThisAppliance = ours != null && appliances.includes(ours);
+
+    if (appliances.length > 0 && !toThisAppliance) {
+      this.logger.debug('Portal token refused: addressed to a different appliance', {
+        audiences: appliances,
+      });
+
+      return null;
+    }
+
+    const accepted = this.acceptedAudiences();
+    const clients = audiences.filter((aud) => accepted.includes(aud));
+    const client = typeof payload.azp === 'string' ? payload.azp : clients.length === 1 ? clients[0] : null;
+
+    if (!client || !accepted.includes(client)) {
+      this.logger.debug('Portal token refused: no single accepted client', { audiences, azp: payload.azp });
+
+      return null;
+    }
+
+    return { client, toThisAppliance };
+  }
+
+  /**
+   * What a human's verified token may do here.
+   *
+   * | token                                                   | authority                         |
+   * |---------------------------------------------------------|-----------------------------------|
+   * | issued to a capture client                              | capture scope, write              |
+   * | addressed to this appliance                             | full                              |
+   * | not addressed, from a Portal that addresses tokens      | capture scope, write              |
+   * | not addressed, from a Portal from before addressing     | full except `AdminOnlyGuard`      |
+   *
+   * "From a Portal that addresses tokens" is read off the token itself (the
+   * `ci_appliance_binding` claim), not from configuration or discovery. Memory can be upgraded
+   * before the Portal: until the Portal stamps its tokens, phone pairing keeps working as it did,
+   * and an hour after the Portal starts stamping (the life of the last unstamped token) the
+   * unaddressed case is closed on every Memory at once.
+   */
+  private authorityFor(address: TokenAddress, payload: JWTPayload): Omit<PortalPrincipal, 'user'> {
+    if (this.captureClients().includes(address.client)) {
+      return CAPTURE_ONLY;
+    }
+
+    if (address.toThisAppliance) {
+      return FULL_AUTHORITY;
+    }
+
+    return mintedByAddressingPortal(payload) ? CAPTURE_ONLY : BEFORE_ADDRESSING;
   }
 
   private getJwks(): ReturnType<typeof createRemoteJWKSet> {
@@ -252,28 +397,72 @@ export class PortalTokenService implements PortalTokenVerifier {
    * if the token is not a valid portal token (so the caller can fall back to
    * the legacy strategies).
    */
-  async verifyAndProvision(token: string): Promise<User | null> {
+  async verifyAndProvision(token: string): Promise<PortalPrincipal | null> {
     if (!this.enabled) {
       return null;
     }
 
-    // First-party client ids plus the issuer URL (better-auth access tokens).
     const payload = await this.verifyPortalJwt(token, this.acceptedAudiences());
     if (!payload) {
       return null;
     }
 
-    // A Portal-brokered service credential (e.g. HBPE) acts on behalf of an
-    // existing user; resolve it distinctly from a human OIDC login.
+    // A Portal-brokered service credential acts on behalf of an existing user;
+    // resolve it distinctly from a human OIDC login. Checked before the client is
+    // read, because a service token names its service in `azp`/`client_id`.
     const serviceAccount = resolveServiceAccount(
       payload as JWTPayload & ServiceAccountClaims,
       this.serviceClients,
     );
     if (serviceAccount) {
-      return this.resolveServiceAccountUser(serviceAccount.clientId, serviceAccount.onBehalfOfUserId);
+      return this.resolveServiceAccountPrincipal(payload, serviceAccount);
     }
 
-    return this.provisionUser(payload);
+    const address = this.addressOf(payload);
+    if (!address) {
+      return null;
+    }
+
+    const user = await this.provisionUser(payload);
+
+    return user ? { user, ...this.authorityFor(address, payload) } : null;
+  }
+
+  /**
+   * A service token's principal: only when it is addressed to this appliance, and confined to the
+   * api-key scopes its `scope` claim names, at `write`. Its `sub` is taken as a local user id, so a
+   * token for another box (where that id means nothing, or someone else) must never get here; and
+   * a service is never a person signing in, so it never reaches credential or admin routes. A
+   * token naming no scope this server knows grants nothing.
+   */
+  private async resolveServiceAccountPrincipal(
+    payload: JWTPayload,
+    serviceAccount: { clientId: string; onBehalfOfUserId: string; scopes: string[] },
+  ): Promise<PortalPrincipal | null> {
+    const ours = thisApplianceAudience();
+    if (!ours || !audienceList(payload.aud).includes(ours)) {
+      this.logger.warn(
+        `Service account "${serviceAccount.clientId}" token is not addressed to this appliance`,
+      );
+
+      return null;
+    }
+
+    const scopes = serviceAccount.scopes.filter((scope) => SERVICE_ACCOUNT_SCOPES.has(scope));
+    if (scopes.length === 0) {
+      this.logger.warn(`Service account "${serviceAccount.clientId}" token names no api-key scope`);
+
+      return null;
+    }
+
+    const user = await this.resolveServiceAccountUser(
+      serviceAccount.clientId,
+      serviceAccount.onBehalfOfUserId,
+    );
+
+    return user
+      ? { user, limits: { scopes, capability: WRITE_CAPABILITY }, credentialRoutes: false, admin: false }
+      : null;
   }
 
   /**

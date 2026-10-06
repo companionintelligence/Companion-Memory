@@ -558,7 +558,7 @@ describeWithDatabase(`first-account gates, against real Postgres (${availability
         portalTokenService.verifyAndProvision(portalToken('racer-b', 'racer-b@example.invalid')),
       ]);
 
-      const admitted = results.filter((user) => user != null);
+      const admitted = results.flatMap((principal) => (principal ? [principal.user] : []));
       const [owner] = admitted;
 
       expect(race).toEqual(SERIALIZED);
@@ -583,7 +583,7 @@ describeWithDatabase(`first-account gates, against real Postgres (${availability
       expect(settled.map((outcome) => outcome.status)).toEqual(['fulfilled', 'fulfilled', 'fulfilled']);
 
       const ids = settled.map(
-        (outcome) => (outcome as PromiseFulfilledResult<{ id: string } | null>).value?.id,
+        (outcome) => (outcome as PromiseFulfilledResult<{ user: { id: string } } | null>).value?.user.id,
       );
       const [only] = await accounts();
 

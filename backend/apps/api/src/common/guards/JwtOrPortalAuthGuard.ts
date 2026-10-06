@@ -1,5 +1,6 @@
 import {
   type ExecutionContext,
+  ForbiddenException,
   Inject,
   Injectable,
   InternalServerErrorException,
@@ -11,7 +12,11 @@ import { AuthGuard } from '@nestjs/passport';
 import { ContextService } from '@ci/common/context';
 
 import { extractBearerToken } from './bearerToken';
-import { PORTAL_TOKEN_VERIFIER, type PortalTokenVerifier } from './PortalTokenVerifier';
+import {
+  PORTAL_TOKEN_VERIFIER,
+  type PortalPrincipalMarker,
+  type PortalTokenVerifier,
+} from './PortalTokenVerifier';
 
 /**
  * Accepts a CI-Server session JWT or a portal-issued OIDC bearer — and,
@@ -39,11 +44,21 @@ export class JwtOrPortalAuthGuard extends AuthGuard('jwt') {
       const token = extractBearerToken(request?.headers?.authorization);
 
       if (token) {
-        const user = await this.portalTokenVerifier.verifyAndProvision(token);
+        const principal = await this.portalTokenVerifier.verifyAndProvision(token);
 
-        if (user) {
-          ContextService.set({ userId: user.id });
-          request.user = user;
+        if (principal) {
+          // Minting a key turns an hour-long token into a credential that never expires, and
+          // the MCP routes behind this guard can run commands. Only a token that carries the
+          // user's full authority here may do either.
+          if (!principal.credentialRoutes) {
+            throw new ForbiddenException(
+              'This Companion sign-in cannot manage keys on this Memory. Sign in to this Memory directly, or connect again from an up-to-date app.',
+            );
+          }
+
+          ContextService.set({ userId: principal.user.id });
+          request.user = principal.user;
+          (request as PortalPrincipalMarker).portalPrincipal = { admin: principal.admin };
 
           return true;
         }

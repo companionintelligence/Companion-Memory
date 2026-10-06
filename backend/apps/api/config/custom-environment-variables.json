@@ -50,7 +50,9 @@
       "jwksUri": "PORTAL_OIDC_JWKS_URI",
       "audience": "PORTAL_OIDC_AUDIENCE",
       "pushRelayUrl": "PORTAL_PUSH_RELAY_URL",
-      "serviceClients": "PORTAL_OIDC_SERVICE_CLIENTS"
+      "serviceClients": "PORTAL_OIDC_SERVICE_CLIENTS",
+      "applianceAudience": "PORTAL_APPLIANCE_AUDIENCE",
+      "captureClients": "PORTAL_OIDC_CAPTURE_CLIENTS"
     },
     "hubForwardAuth": {
       "enabled": {
