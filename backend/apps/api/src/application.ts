@@ -180,9 +180,10 @@ export class App implements NestModule, OnApplicationBootstrap, OnApplicationShu
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(RequestContextMiddleware).forRoutes('*');
     consumer.apply(BodyParserMiddleware).forRoutes('*');
-    // After the body parser, which is what puts a POST's document on req.body.
-    consumer.apply(GraphqlRequestLimitsMiddleware).forRoutes('*');
     consumer.apply(RequestLoggerMiddleware).forRoutes('*');
+    // After the body parser, which is what puts a POST's document on req.body,
+    // and after the request logger, so a refused document is still logged.
+    consumer.apply(GraphqlRequestLimitsMiddleware).forRoutes('*');
   }
 
   onApplicationBootstrap() {

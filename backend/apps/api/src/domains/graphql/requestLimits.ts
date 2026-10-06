@@ -155,6 +155,8 @@ export function measureBreadth(
   }
 
   let violation: string | null = null;
+  // Fragment definitions some operation's walk spread into; the rest are walked on their own.
+  const expanded = new Set<FragmentDefinitionNode>();
 
   const refuse = (message: string): never => {
     violation = message;
@@ -201,6 +203,7 @@ export function measureBreadth(
 
           if (fragment && !spread.has(name)) {
             spread.add(name);
+            expanded.add(fragment);
             collect(fragment.selectionSet, spread);
           }
         }
@@ -235,6 +238,17 @@ export function measureBreadth(
     // the document, not just the one the request names.
     for (const root of roots) {
       walk([root], 1);
+    }
+
+    // graphql-js also validates every fragment definition's own selection set,
+    // used or not. An unused fragment, or one whose name a later definition
+    // shadows, is never reached from an operation above, so it is measured on
+    // its own here. Without this, `{ __typename } fragment F on Query { …1,000
+    // copies of a field… }` passed the check and held validation for seconds.
+    for (const definition of document.definitions) {
+      if (definition.kind === Kind.FRAGMENT_DEFINITION && !expanded.has(definition)) {
+        walk([definition.selectionSet], 1);
+      }
     }
   } catch (error) {
     if (!(error instanceof BreadthExceeded)) {

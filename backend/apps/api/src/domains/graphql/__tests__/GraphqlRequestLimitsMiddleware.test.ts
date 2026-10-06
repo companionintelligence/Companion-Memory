@@ -34,10 +34,31 @@ describe('GraphqlRequestLimitsMiddleware', () => {
   });
 
   it('checks a GET query string too', () => {
-    const { next, status } = run({ method: 'GET', originalUrl: '/graphql?query=x', query: { query: BROAD } });
+    const search = new URLSearchParams({ query: BROAD }).toString();
+    const { next, status } = run({ method: 'GET', originalUrl: `/graphql?${search}`, query: {} });
 
     expect(next).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(400);
+  });
+
+  it('reads a GET document from the raw URL, as Apollo does, not from the parsed req.query', () => {
+    // node's querystring (Express's req.query) stops after 1,000 parameters;
+    // Apollo's URLSearchParams reads them all.
+    const filler = Array.from({ length: 1_000 }, () => 'a=1').join('&');
+    const search = `${filler}&${new URLSearchParams({ query: BROAD }).toString()}`;
+    const { next, status } = run({ method: 'GET', originalUrl: `/graphql?${search}`, query: { a: '1' } });
+
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(400);
+  });
+
+  it('passes a GET with no document, or an ordinary one, through', () => {
+    for (const originalUrl of ['/graphql', `/graphql?${new URLSearchParams({ query: NARROW }).toString()}`]) {
+      const { next, status } = run({ method: 'GET', originalUrl, query: {} });
+
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(status).not.toHaveBeenCalled();
+    }
   });
 
   it('matches the Apollo mount, where only baseUrl names the endpoint', () => {

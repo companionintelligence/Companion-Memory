@@ -161,6 +161,29 @@ describe('GraphQL request limits', () => {
       expect(graphqlSourceViolation(`{ ${spreads} } ${fragments.join(' ')}`)).toMatch(/same field too often/);
     });
 
+    it('refuses repetition inside a fragment no operation uses', () => {
+      // graphql-js validates every fragment definition, used or not.
+      expect(
+        graphqlSourceViolation(`{ __typename } fragment Unused on Query ${repeated('me { id }', 100)}`),
+      ).toMatch(/same field too often/);
+    });
+
+    it('refuses repetition inside a fragment a later definition of the same name shadows', () => {
+      expect(
+        graphqlSourceViolation(
+          `{ ...X } fragment X on Query ${repeated('me { id }', 100)} fragment X on Query { __typename }`,
+        ),
+      ).toMatch(/same field too often/);
+    });
+
+    it('measures a used fragment once, through the operation that spreads it', () => {
+      const fragment = 'fragment F on Query { me { id } }';
+
+      expect(measureBreadth(parse(`{ ...F } ${fragment}`)).breadth).toEqual(
+        measureBreadth(parse('{ me { id } }')).breadth,
+      );
+    });
+
     it('refuses repetition that only multiplies out across nested levels', () => {
       // Five of each at three levels: 5 + 25 + 125 fields written, but the
       // merged third level holds 125 copies of one name.
