@@ -54,8 +54,9 @@ export class JwtOrPortalAuthGuard extends AuthGuard('jwt') {
         if (principal) {
           // Minting a key turns an hour-long token into a credential that never expires, and
           // the MCP routes behind this guard can run commands. Only a token that carries the
-          // user's full authority here may do either.
-          if (!principal.credentialRoutes) {
+          // user's full authority here may do either. This guard runs no scope enforcement, so a
+          // principal with limits is refused here too rather than let in unconfined.
+          if (!principal.credentialRoutes || principal.limits) {
             throw new ForbiddenException(
               'This Companion sign-in cannot manage keys on this Memory. Sign in to this Memory directly, or connect again from an up-to-date app.',
             );

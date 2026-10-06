@@ -111,9 +111,9 @@ export class UserService {
       throw new Error('Unauthorized');
     }
 
-    // The unlocked answer first. On a claimed appliance — the steady state, and where every Portal
-    // token nobody here has bound ends up — this declines without hashing a password or queueing on
-    // the lock. Only an appliance that looked empty a moment ago pays for the real decision.
+    // The unlocked answer first. On a claimed appliance (the steady state, and where every repeat
+    // first-account sign-in ends up) this declines without hashing a password or queueing on the
+    // lock. Only an appliance that looked empty a moment ago pays for the real decision.
     if (!(await this.hasNoUsers())) {
       return null;
     }

@@ -19,10 +19,10 @@ import type { PortalPrincipalMarker } from './PortalTokenVerifier';
  * only what the auth guard already put on the request.
  *
  * All three principals reaching this guard DO carry `role`: `JwtStrategy` and `ApiKeyStrategy` both
- * return `userService.findById(...)`, and `PortalTokenService.verifyAndProvision` returns a whole
- * `User` too — its interface merely used to say `{ id }` (now widened, and asserted in
- * `__tests__/AdminOnlyGuard.test.ts`). An earlier revision of this comment claimed the portal path
- * was refused here; it is not, and that claim was being cited as a reason not to admin-gate routes.
+ * return `userService.findById(...)`, and the Portal guards put `PortalPrincipal.user`, a whole
+ * `User`, on the request (asserted in `__tests__/AdminOnlyGuard.test.ts`). A Portal principal also
+ * leaves `request.portalPrincipal`, and one whose `admin` is false is refused here whatever its
+ * role: only a token addressed to this appliance acts as its administrator.
  *
  * ═══ ADMIN BOOTSTRAPPING (was: THE REAL CAVEAT) ═══
  *

@@ -210,7 +210,7 @@ export class PortalTokenService implements PortalTokenVerifier {
    * That is the whole point of naming one: a token the Portal issued for a different Memory, or
    * that a different Memory received during its own sign-in, is not a credential here.
    */
-  private addressOf(payload: JWTPayload): TokenAddress | null {
+  private addressOf(payload: JWTPayload, accepted: readonly string[]): TokenAddress | null {
     const audiences = audienceList(payload.aud);
     const appliances = audiences.filter(isApplianceAudience);
     const ours = thisApplianceAudience();
@@ -224,7 +224,6 @@ export class PortalTokenService implements PortalTokenVerifier {
       return null;
     }
 
-    const accepted = this.acceptedAudiences();
     const clients = audiences.filter((aud) => accepted.includes(aud));
     const client = typeof payload.azp === 'string' ? payload.azp : clients.length === 1 ? clients[0] : null;
 
@@ -386,7 +385,8 @@ export class PortalTokenService implements PortalTokenVerifier {
       return null;
     }
 
-    const payload = await this.verifyPortalJwt(token, this.acceptedAudiences());
+    const accepted = this.acceptedAudiences();
+    const payload = await this.verifyPortalJwt(token, accepted);
     if (!payload) {
       return null;
     }
@@ -402,7 +402,7 @@ export class PortalTokenService implements PortalTokenVerifier {
       return this.resolveServiceAccountPrincipal(payload, serviceAccount);
     }
 
-    const address = this.addressOf(payload);
+    const address = this.addressOf(payload, accepted);
     if (!address) {
       return null;
     }

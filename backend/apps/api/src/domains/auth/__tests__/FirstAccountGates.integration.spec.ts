@@ -93,9 +93,13 @@ const INTENT_COOKIE = 'oidc_signup_intent';
 
 const b64url = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
 
-/** A Portal bearer token for `subject`. Only its payload is read (see the `jose` mock). */
+/**
+ * A Portal bearer token for `subject`. Only its payload is read (see the `jose` mock). It names an
+ * accepted client in `aud`, so the service gets past "which client is this for" and the cases below
+ * test what happens to an unbound identity, not a token refused for having no audience.
+ */
 const portalToken = (subject: string, email: string) =>
-  `${b64url({ alg: 'EdDSA', kid: 'k1' })}.${b64url({ iss: ISSUER, sub: subject, email, name: subject })}.sig`;
+  `${b64url({ alg: 'EdDSA', kid: 'k1' })}.${b64url({ iss: ISSUER, aud: 'ci-server', sub: subject, email, name: subject })}.sig`;
 
 /** What the identity provider says about the person behind each authorization code. */
 const identityForCode = new Map<string, { sub: string; iss: string; email: string; name: string }>();

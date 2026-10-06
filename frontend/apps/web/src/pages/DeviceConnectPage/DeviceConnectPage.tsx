@@ -305,27 +305,25 @@ export function DeviceConnectPage() {
       const origin = resolveHttpOrigin(device.memoryUrl);
       await probeMemoryOrigin(origin);
 
-      let bearers: string[];
+      let bearer: string | undefined;
 
       if (auth?.kind === 'oauth' && auth.token && device.resource) {
         // The Portal lists this Memory's resource, so it can address a token to it.
         // That token works on this Memory only, whoever runs the server it is sent to.
-        bearers = [await requestApplianceToken(auth.token, device.resource, portalUrl)];
+        bearer = await requestApplianceToken(auth.token, device.resource, portalUrl);
       } else {
         // An older Portal: the id_token is all there is. Never the access token,
         // which is a credential for the Portal itself.
-        const rawBearers = auth?.kind === 'oauth' && auth.idToken ? [auth.idToken] : [];
-
-        if (rawBearers.length === 0) {
+        if (auth?.kind !== 'oauth' || !auth.idToken) {
           setSignInError('Sign in with your Companion account first, then pick this server again.');
           setConnectingId(null);
 
           return;
         }
 
-        bearers = selectMemoryPortalBearers(rawBearers);
+        [bearer] = selectMemoryPortalBearers([auth.idToken]);
 
-        if (bearers.length === 0) {
+        if (!bearer) {
           setSignInError('Your Companion sign-in expired. Sign in again.');
           setConnectingId(null);
 
@@ -336,24 +334,10 @@ export function DeviceConnectPage() {
       // Mint against the picked Memory origin. Apply it in memory first so
       // CapacitorHttp never sees a relative `/api/graphql`. Persist on success
       // only — a leftover origin with no key used to skip cloud-connect.
-      let lastError: unknown;
-
-      for (const bearer of bearers) {
-        try {
-          await completePortalMemoryConnect(bearer, origin);
-          persistApiBaseUrl(origin);
-          setAwaitingProfile(true);
-          void refetch();
-
-          return;
-        } catch (err) {
-          lastError = err;
-        }
-      }
-
-      throw lastError instanceof Error
-        ? lastError
-        : new Error('Could not sign in to this Memory Server with your Portal account.');
+      await completePortalMemoryConnect(bearer, origin);
+      persistApiBaseUrl(origin);
+      setAwaitingProfile(true);
+      void refetch();
     } catch (err) {
       const unauthorized = /unauthorized/i.test(err instanceof Error ? err.message : '');
 
