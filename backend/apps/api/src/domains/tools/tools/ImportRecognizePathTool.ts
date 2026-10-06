@@ -21,7 +21,8 @@ interface RecognizePathInput {
  * directly — which is what makes an agent able to say "that folder looks like a
  * Google Takeout" before anything is imported.
  *
- * Scoped to the configured import roots plus the caller's OWN inbox subtree.
+ * Scoped to the caller's OWN inbox subtree, plus the configured import roots
+ * when the caller is the appliance administrator.
  * An unconstrained absolute path over an API is a filesystem read primitive,
  * and "which of these paths exists?" is information on its own — and on a
  * multi-account appliance, so is another user's dropped archive.
