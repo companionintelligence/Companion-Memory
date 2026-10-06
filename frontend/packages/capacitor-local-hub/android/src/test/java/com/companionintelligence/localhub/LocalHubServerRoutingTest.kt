@@ -38,8 +38,10 @@ class LocalHubServerRoutingTest {
             Method.GET to "/api/outboxes",
             Method.GET to "/api/outboxfoo",
             // Method/segment mismatches share the same fall-through.
+            // DELETE on the collection itself is a route (sign-out's clear), so PUT stands in
+            // for a mismatch on the collection.
             Method.PUT to "/api/outbox/item-1",
-            Method.DELETE to "/api/outbox",
+            Method.PUT to "/api/outbox",
             Method.POST to "/api/outbox/item-1",
         )
 
