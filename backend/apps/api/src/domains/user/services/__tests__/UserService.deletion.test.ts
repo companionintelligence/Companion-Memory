@@ -266,6 +266,22 @@ describe('UserService — account deletion', () => {
         expect(transactionManager.update).not.toHaveBeenCalled();
       });
 
+      it('refuses an address that matches more than one account rather than guess', async () => {
+        // Only rows that collided by case before addresses were normalized can do this.
+        const { service, transactionManager } = makeService({
+          target: ADMIN,
+          otherAccounts: true,
+          successors: [{ id: 'user-2' }, { id: 'user-3' }],
+        });
+
+        const failure = await service
+          .requestDeletion(OWN, 'user-1', { successorEmail: 'twin@example.com' })
+          .catch((error: unknown) => error);
+
+        expect((failure as LastAdminDeletionRefused).reason).toBe('successor_not_found');
+        expect(transactionManager.update).not.toHaveBeenCalled();
+      });
+
       it('hands the role to the named successor in the same transaction, then leaves', async () => {
         const { service, journal, queries, eventService } = makeService({
           target: ADMIN,

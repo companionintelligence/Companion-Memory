@@ -650,3 +650,46 @@ describe('ApiKeyService tenancy scoping (findAllByUser / findOneByUser / remove)
     });
   });
 });
+
+/**
+ * What a password change and "Sign out everywhere" revoke. A password change takes the keys the
+ * apps minted at sign-in and leaves the ones the person made in Settings; "Sign out everywhere"
+ * takes those too. Neither touches a key CI-Hub minted for an installed app, whose lifecycle is
+ * the Hub's.
+ */
+describe('ApiKeyService — revoking at sign-out', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it("revokes only the user's sign-in keys on a password change", async () => {
+    const repo = makeRepo();
+    repo.delete.mockResolvedValue({ affected: 2 });
+
+    await expect(makeService(repo).revokeSignInKeys('owner-1')).resolves.toBe(2);
+    expect(repo.delete).toHaveBeenCalledWith({ user_id: 'owner-1', managed_by: 'sign_in' });
+  });
+
+  it("revokes every key of the user's except the Hub's on sign-out everywhere", async () => {
+    interface Builder {
+      delete: jest.Mock<Builder>;
+      from: jest.Mock<Builder>;
+      where: jest.Mock<Builder>;
+      andWhere: jest.Mock<Builder>;
+      execute: jest.Mock<Promise<{ affected: number }>>;
+    }
+    const builder: Builder = {
+      delete: jest.fn((): Builder => builder),
+      from: jest.fn((): Builder => builder),
+      where: jest.fn((): Builder => builder),
+      andWhere: jest.fn((): Builder => builder),
+      execute: jest.fn(async () => ({ affected: 5 })),
+    };
+    const repo = { ...makeRepo(), createQueryBuilder: jest.fn(() => builder) };
+
+    await expect(makeService(repo).revokeAllExceptConnect('owner-1')).resolves.toBe(5);
+    expect(builder.where).toHaveBeenCalledWith('user_id = :userId', { userId: 'owner-1' });
+    // IS DISTINCT FROM, not <>: a user's own key has a NULL provenance, which <> would skip.
+    expect(builder.andWhere).toHaveBeenCalledWith('managed_by IS DISTINCT FROM :connect', {
+      connect: 'connect',
+    });
+  });
+});
