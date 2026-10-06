@@ -258,6 +258,7 @@ describeWithDb(`memory.remember entity types in any spelling (${availability.tar
       graphEvents,
       new GraphQueryService({} as never, graphUtility),
       logger as never,
+      { getSelfIdentity: async () => null } as never,
     );
   });
 

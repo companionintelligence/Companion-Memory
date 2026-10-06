@@ -46,6 +46,21 @@ export class GraphIngestResolver {
       );
     }
 
+    // `planner` holds the owner's settings on their own Person, the autonomy dial among them, and
+    // this mutation can reach that row (sourceSystem `self` is where the self Person is keyed).
+    // No import carries settings, and a re-ingest merges what it is sent, so an agent calling this
+    // over /api/mcp could otherwise switch tool approvals off. Settings and onboarding are the
+    // dial's writers.
+    const settingsWrite = input.entities?.find(
+      (entity) => entity.properties && 'planner' in entity.properties,
+    );
+    if (settingsWrite) {
+      throw new BadRequestException(
+        `Entity "${settingsWrite.key}" carries a "planner" property. That key holds the owner's settings, ` +
+          'which an import cannot write; change them in Settings.',
+      );
+    }
+
     const result = await this.graphIngestService.ingest(serviceContext, {
       entities: input.entities,
       relationships: input.relationships ?? [],

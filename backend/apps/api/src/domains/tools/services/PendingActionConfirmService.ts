@@ -73,13 +73,14 @@ export class PendingActionConfirmService {
       throw new ConflictException(`Pending action ${id} has expired`);
     }
 
-    const tool = this.registry.getTool(row.tool);
+    // The label the replay will be judged by, from the stored input: a call that only a per-call
+    // label marks destructive (a `memory.remember` that erases) must not pass this pre-check on
+    // its tool's milder declared label and then fail inside the registry after approval.
+    const privacy = await this.registry.privacyOf(row.tool, { userId, capability }, row.input);
 
-    if (!tool) {
+    if (!privacy) {
       throw new ConflictException(`Intent '${row.intent}' is no longer registered on this appliance`);
     }
-
-    const { privacy } = tool.schema;
 
     if (!capabilityAllows(privacy, capability)) {
       const required = capabilityRequiredFor(privacy);

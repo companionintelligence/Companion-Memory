@@ -364,18 +364,20 @@ describe('GraphEventService → queue → GraphEventListener → GraphUtilitySer
     await producer.upsertNode(OWNER, {
       entityId: PERSON,
       entityType: 'Person',
-      removeProperties: ['planner'],
+      // `planner` is one of the keys the appliance owns, which a removal never touches.
+      removeProperties: ['avatar_url', 'planner'],
     });
     // Another writer lands while the event is still queued.
     nodes.seed({
       ...nodes.get(PERSON)!,
-      properties: { ...nodes.get(PERSON)!.properties, avatar_url: 'a.png' },
+      properties: { ...nodes.get(PERSON)!.properties, avatar_url: 'a.png', nickname: 'Al' },
     });
     await drain();
 
     expect(nodes.get(PERSON)?.properties).toEqual({
       phones: ['+15551230001', '+15551230002'],
-      avatar_url: 'a.png',
+      planner: { trust_mode: 'ask' },
+      nickname: 'Al',
     });
   });
 });

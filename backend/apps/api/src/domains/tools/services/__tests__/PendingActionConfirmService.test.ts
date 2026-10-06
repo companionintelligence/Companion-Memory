@@ -61,7 +61,10 @@ function harness(pendingRow: PendingAction | null = row()) {
   } as any;
 
   const executeTool = jest.fn(async () => ({ success: true, data: { removed: 1 } }));
-  const registry = { getTool: jest.fn(() => ({ schema: FORGET_SCHEMA })), executeTool } as any;
+  const registry = {
+    privacyOf: jest.fn(async (): Promise<IntentDefinition['privacy'] | undefined> => FORGET_SCHEMA.privacy),
+    executeTool,
+  } as any;
 
   return {
     service: new PendingActionConfirmService(pending, registry, makeLogger()),
@@ -175,11 +178,40 @@ describe('PendingActionConfirmService.confirm — the confirming principal is th
 
   it('refuses when the intent is no longer registered on this appliance', async () => {
     const { service, registry, executeTool } = harness();
-    registry.getTool = jest.fn(() => undefined);
+    registry.privacyOf = jest.fn(async () => undefined);
 
     await expect(service.confirm('user-1', 'pa-1', FULL_CAPABILITY, NOW)).rejects.toBeInstanceOf(
       ConflictException,
     );
+    expect(executeTool).not.toHaveBeenCalled();
+  });
+});
+
+describe('PendingActionConfirmService.confirm — the label is the one the stored call earns', () => {
+  it('refuses a write confirmer a call that only its per-call label marks destructive', async () => {
+    const rememberRow = row({
+      intent: 'memory.remember',
+      tool: 'memory_remember',
+      input: { operations: [] },
+    });
+    const { service, registry, pending, executeTool } = harness(rememberRow);
+    registry.privacyOf = jest.fn(async () => ({
+      access: 'write',
+      sensitivity: 'personal',
+      destructive: true,
+      external: false,
+    }));
+
+    await expect(service.confirm('user-1', 'pa-1', WRITE_CAPABILITY, NOW)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+
+    expect(registry.privacyOf).toHaveBeenCalledWith(
+      'memory_remember',
+      { userId: 'user-1', capability: WRITE_CAPABILITY },
+      { operations: [] },
+    );
+    expect(pending.markApproved).not.toHaveBeenCalled();
     expect(executeTool).not.toHaveBeenCalled();
   });
 });
