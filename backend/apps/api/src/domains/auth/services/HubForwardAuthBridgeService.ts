@@ -22,7 +22,6 @@ import {
   ApplianceOwnerRequiredError,
   type CreateUserDto,
   isDesignatedOwner,
-  ownerIsDesignated,
   type User,
   UserService,
 } from '@ci/domains/user';
@@ -507,7 +506,7 @@ export class HubForwardAuthBridgeService {
    * account (`applianceOwner.ts`). The Hub's signature is what vouches for the username and id.
    */
   private admissionFor(person: { username: string; issuer?: string; subject?: string }): AccountAdmission {
-    return { designatedOwner: ownerIsDesignated() && isDesignatedOwner({ hub: person }) };
+    return { designatedOwner: isDesignatedOwner({ hub: person }) };
   }
 
   /** The account the bridge creates for a Hub person: nobody has seen its password, so none is stamped. */

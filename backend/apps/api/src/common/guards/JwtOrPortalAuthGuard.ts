@@ -23,12 +23,17 @@ import {
  * deliberately, NOT an api key.
  *
  * This exists for credential-management routes (minting/listing/revoking api
- * keys): portal-authenticated clients like Companion Capture hold only a
- * short-lived portal id_token after sign-in and need to exchange it for a
- * durable api key, but an api key itself must never reach those routes — a
- * leaked key that could mint replacement keys would survive its own
- * revocation. Requiring a JWT/portal principal keeps key management anchored
- * to an interactive sign-in.
+ * keys): a phone pairing with this Memory holds only a short-lived Portal token
+ * after sign-in and exchanges it for a durable api key, but an api key itself
+ * must never reach those routes: a leaked key that could mint replacement keys
+ * would survive its own revocation. Requiring a JWT/portal principal keeps key
+ * management anchored to an interactive sign-in.
+ *
+ * Not every Portal token gets in (`PortalPrincipal.credentialRoutes`). One
+ * addressed to this appliance does, and so does one from a Portal that predates
+ * addressing. A capture client's token (Companion Capture, the browser
+ * extension) and an unaddressed one are refused, so neither becomes a key that
+ * never expires.
  */
 @Injectable()
 export class JwtOrPortalAuthGuard extends AuthGuard('jwt') {

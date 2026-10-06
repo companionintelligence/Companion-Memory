@@ -47,7 +47,8 @@ export class JwtOrApiKeyAuthGuard extends AuthGuard(['jwt', 'api-key']) {
           // token not addressed to this appliance) is confined exactly like an api key
           // with the same scopes and capability, by the same enforcement.
           if (principal.limits) {
-            request.apiKeyScopes = principal.limits.scopes;
+            // A copy: the verifier hands every capture principal the same constant array.
+            request.apiKeyScopes = [...principal.limits.scopes];
             request.apiKeyCapability = principal.limits.capability;
             enforceApiKeyScopes(this.reflector, context, request);
             enforceApiKeyCapability(this.reflector, context, request);

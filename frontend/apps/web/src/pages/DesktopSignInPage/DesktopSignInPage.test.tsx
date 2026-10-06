@@ -172,6 +172,19 @@ describe('DesktopSignInPage — sign-in leaves the webview', () => {
     expect(new URL(href, window.location.origin).searchParams.get('signup_code')).toBe('ABCD-1234');
   });
 
+  it('says the Memory is waiting for its owner, and takes the setup code in the same field', () => {
+    authError = new Error('appliance_owner_required');
+    renderPage();
+
+    expect(screen.getByRole('alert')).toHaveTextContent('only its owner can do that');
+
+    fireEvent.change(screen.getByLabelText('Invitation'), { target: { value: 'setup-7f3a' } });
+
+    const href =
+      screen.getByRole('link', { name: 'Sign in with Companion account' }).getAttribute('href') ?? '';
+    expect(new URL(href, window.location.origin).searchParams.get('signup_code')).toBe('setup-7f3a');
+  });
+
   it('lets someone who already holds an invitation offer it before being refused', () => {
     renderPage();
 

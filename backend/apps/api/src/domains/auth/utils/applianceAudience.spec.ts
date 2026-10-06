@@ -55,6 +55,12 @@ describe('appliance audience contract', () => {
     expect(thisApplianceAudience()).toBe('urn:ci:device:configured');
   });
 
+  it('reads a PORTAL_APPLIANCE_AUDIENCE set to a bare device id as that device', () => {
+    settings.applianceAudience = ' 3f2b9c1e ';
+
+    expect(thisApplianceAudience()).toBe('urn:ci:device:3f2b9c1e');
+  });
+
   it('has no audience on an install without a Hub', () => {
     expect(thisApplianceAudience()).toBeNull();
 

@@ -20,7 +20,7 @@ import {
   thisApplianceAudience,
 } from '../utils/applianceAudience';
 import {
-  parseAllowedServiceClients,
+  parseAllowedServiceClients as parseClientIds,
   resolveServiceAccount,
   type ServiceAccountClaims,
 } from '../utils/serviceAccountToken';
@@ -116,17 +116,6 @@ function audienceList(aud: unknown): string[] {
   return Array.isArray(aud) ? aud.filter((value): value is string => typeof value === 'string') : [];
 }
 
-function parseList(raw: string | undefined | null): string[] {
-  return [
-    ...new Set(
-      (raw ?? '')
-        .split(',')
-        .map((value) => value.trim())
-        .filter(Boolean),
-    ),
-  ];
-}
-
 class PortalVerifyTimeoutError extends Error {
   readonly code = 'ERR_PORTAL_VERIFY_TIMEOUT';
 
@@ -182,7 +171,7 @@ export class PortalTokenService implements PortalTokenVerifier {
   private jwks?: ReturnType<typeof createRemoteJWKSet>;
 
   // Allow-listed service-account client ids, parsed once from config.
-  private readonly serviceClients = parseAllowedServiceClients(config.auth.portal.serviceClients);
+  private readonly serviceClients = parseClientIds(config.auth.portal.serviceClients);
 
   constructor(
     private readonly userService: UserService,
@@ -205,12 +194,12 @@ export class PortalTokenService implements PortalTokenVerifier {
    * Memory. No client sends one.
    */
   private acceptedAudiences(): string[] {
-    return parseList(config.auth.portal.audience);
+    return parseClientIds(config.auth.portal.audience);
   }
 
   /** Clients that are capture agents (`auth.portal.captureClients`): capture scope, write, always. */
   private captureClients(): string[] {
-    return parseList(config.auth.portal.captureClients);
+    return parseClientIds(config.auth.portal.captureClients);
   }
 
   /**
@@ -256,7 +245,7 @@ export class PortalTokenService implements PortalTokenVerifier {
    * | issued to a capture client                              | capture scope, write              |
    * | addressed to this appliance                             | full                              |
    * | not addressed, from a Portal that addresses tokens      | capture scope, write              |
-   * | not addressed, from a Portal from before addressing     | full except `AdminOnlyGuard`      |
+   * | not addressed, from a Portal from before addressing     | full except the admin guards      |
    *
    * "From a Portal that addresses tokens" is read off the token itself (the
    * `ci_appliance_binding` claim), not from configuration or discovery. Memory can be upgraded

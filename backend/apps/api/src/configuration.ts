@@ -156,12 +156,13 @@ export const ConfigSchema = z.object({
        * are forwarded here. Empty = local notifications only.
        */
       pushRelayUrl: z.string().default(''),
-      // Comma-separated OAuth client ids allow-listed as service accounts (e.g.
-      // "hbpe-sidecar,summary-sidecar"). A Portal-signed token presenting one of
-      // these client ids is treated as a Portal-brokered service credential: it
-      // acts on behalf of the user named in its `sub` claim instead of being
-      // JIT-provisioned as a human login. Replaces the shared HS256 secret the
-      // sidecars used to self-sign with. See unified-identity-plan.md · B5.
+      // Comma-separated OAuth client ids allow-listed as service accounts. A
+      // Portal-signed token presenting one of these client ids is treated as a
+      // Portal-brokered service credential: it acts on behalf of the user named
+      // in its `sub` claim instead of being JIT-provisioned as a human login, and
+      // only when addressed to this appliance, confined to the api-key scopes in
+      // its `scope` claim. Empty by default: the HBPE and Summary sidecars
+      // authenticate with SIDECAR_AUTH_SECRET, and nothing ships a service client.
       serviceClients: z.string().default(''),
       /**
        * This appliance's own audience: the value CI-Portal puts in `aud` when it addresses a token

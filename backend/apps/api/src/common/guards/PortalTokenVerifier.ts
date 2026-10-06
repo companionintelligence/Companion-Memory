@@ -20,7 +20,7 @@ export const PORTAL_TOKEN_VERIFIER = 'PORTAL_TOKEN_VERIFIER';
  *   confined exactly as a key with those scopes would be.
  * - `credentialRoutes` false refuses it at `JwtOrPortalAuthGuard`: no key minting, no MCP server
  *   configuration.
- * - `admin` false refuses it at `AdminOnlyGuard`, whatever the user's role.
+ * - `admin` false refuses it at `AdminOnlyGuard` and `ApplianceAdminGuard`, whatever the user's role.
  */
 export interface PortalPrincipal {
   /**
@@ -34,7 +34,7 @@ export interface PortalPrincipal {
   admin: boolean;
 }
 
-/** What the guards leave on the request for a Portal principal, for `AdminOnlyGuard` to read. */
+/** What the guards leave on the request for a Portal principal, for the admin guards to read. */
 export interface PortalPrincipalMarker {
   portalPrincipal?: { admin: boolean };
 }

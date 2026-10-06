@@ -103,7 +103,13 @@ export class ApplianceAdminGuard implements CanActivate {
    * drifting. A failed admin probe still throws (`applianceHasAdmin` fails
    * closed); a caller that would rather read that as "no" must catch it.
    */
-  async admits(user: { role?: string } | undefined): Promise<boolean> {
+  async admits(user: { role?: string } | undefined, request?: PortalPrincipalMarker): Promise<boolean> {
+    // The same refusal canActivate makes first, so a page asking here is not offered a control
+    // the route would then refuse to this Portal bearer.
+    if (request?.portalPrincipal?.admin === false) {
+      return false;
+    }
+
     if (user?.role === 'admin') {
       return true;
     }

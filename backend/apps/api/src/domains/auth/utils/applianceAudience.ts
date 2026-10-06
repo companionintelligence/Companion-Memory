@@ -35,11 +35,15 @@ export function isApplianceAudience(value: string): boolean {
  * `auth.portal.applianceAudience` (`PORTAL_APPLIANCE_AUDIENCE`) wins when set. Otherwise it is
  * derived from the Hub device id the Hub already passes in (`HUB_DEVICE_ID`). An install without a
  * Hub has neither, so no Portal token is ever addressed to it.
+ *
+ * A configured bare device id is read as that device's audience. Taken as it stands it could
+ * never equal an `aud` value the Portal writes, and every token addressed here would be refused
+ * as addressed elsewhere.
  */
 export function thisApplianceAudience(): string | null {
   const configured = config.auth.portal.applianceAudience?.trim();
   if (configured) {
-    return configured;
+    return isApplianceAudience(configured) ? configured : applianceAudienceFor(configured);
   }
 
   const deviceId = config.ciPortal.deviceId?.trim();

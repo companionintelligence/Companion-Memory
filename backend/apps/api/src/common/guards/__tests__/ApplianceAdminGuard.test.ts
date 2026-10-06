@@ -107,6 +107,15 @@ describe('ApplianceAdminGuard', () => {
     await expect(new ApplianceAdminGuard(dataSource).canActivate(context)).resolves.toBe(true);
   });
 
+  it('answers admits() as canActivate decides for that Portal bearer, so no page offers what the route refuses', async () => {
+    const { dataSource, queries } = dataSourceAnswering(false);
+    const guard = new ApplianceAdminGuard(dataSource);
+
+    await expect(guard.admits({ role: 'admin' }, { portalPrincipal: { admin: false } })).resolves.toBe(false);
+    expect(queries).toEqual([]);
+    await expect(guard.admits({ role: 'admin' }, { portalPrincipal: { admin: true } })).resolves.toBe(true);
+  });
+
   it('fails CLOSED when the probe cannot answer', async () => {
     // "I could not find out" must never be read as "there is no admin", which is
     // the one answer that admits everybody. A database that is down is also a
