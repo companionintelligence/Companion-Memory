@@ -338,7 +338,9 @@ export class OidcController {
         });
       }
     } else {
-      // A web sign-in must not inherit an abandoned native attempt's binding.
+      // A web sign-in must not inherit an abandoned native attempt: not its binding, and not the
+      // flag that would send this browser's result to the app's deep link.
+      res.clearCookie(CLIENT_COOKIE, { path: '/' });
       res.clearCookie(NATIVE_CHALLENGE_COOKIE, { path: '/' });
       res.clearCookie(NATIVE_STATE_COOKIE, { path: '/' });
     }

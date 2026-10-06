@@ -156,7 +156,7 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     expect(res.cookie).not.toHaveBeenCalled();
   });
 
-  it('clears an abandoned native binding when a web sign-in starts', () => {
+  it('clears an abandoned native attempt when a web sign-in starts', () => {
     const { controller } = makeController();
     const res = makeRes();
 
@@ -165,6 +165,8 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     expect(cookieCall(res, 'oidc_native_challenge')).toBeUndefined();
     expect(res.clearCookie).toHaveBeenCalledWith('oidc_native_challenge', { path: '/' });
     expect(res.clearCookie).toHaveBeenCalledWith('oidc_native_state', { path: '/' });
+    // Left set, the callback would send this browser's sign-in to the app's deep link.
+    expect(res.clearCookie).toHaveBeenCalledWith('oidc_client', { path: '/' });
   });
 
   it('stores a safe relative redirect target in the redirect cookie', () => {
