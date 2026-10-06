@@ -540,17 +540,19 @@ describe('SyncOrchestrator.handleSyncJobTransformEvent — claim check and lifec
   });
 
   it('skips a job that is already claimed or transformed — the self-DoS-prevention claim check', async () => {
-    const { orchestrator, connectionSyncJobService, connectionService } = buildOrchestrator({
+    const transformFn = jest.fn().mockResolvedValue(undefined);
+    const { orchestrator, connectionSyncJobService } = buildOrchestrator({
       connectionSyncJobService: {
         findById: jest.fn().mockResolvedValue(makeSyncJob({ lastTransformed: new Date() })),
         claimTransform: jest.fn().mockResolvedValue(false),
       },
+      endpointServiceMap: { getTransformFunction: jest.fn().mockReturnValue(transformFn) },
     });
 
     await orchestrator.handleSyncJobTransformEvent({ connectionSyncJobId: 'job-1' });
 
     expect(connectionSyncJobService.claimTransform).toHaveBeenCalledWith(expect.anything(), 'job-1');
-    expect(connectionService.findById).not.toHaveBeenCalled();
+    expect(transformFn).not.toHaveBeenCalled();
     expect(connectionSyncJobService.update).not.toHaveBeenCalled();
   });
 
@@ -607,6 +609,9 @@ describe('SyncOrchestrator.handleSyncJobTransformEvent — claim check and lifec
     await orchestrator.handleSyncJobTransformEvent({ connectionSyncJobId: 'job-1' });
 
     expect(transformFn).not.toHaveBeenCalled();
+    // Not claimed either: a claim would hold it (and push it to the back of the queue) for an
+    // hour after the connection comes back.
+    expect(connectionSyncJobService.claimTransform).not.toHaveBeenCalled();
     expect(connectionSyncJobService.update).not.toHaveBeenCalled();
   });
 

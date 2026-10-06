@@ -113,15 +113,26 @@ export class SyncNowService {
    * counting it here would turn "Sync now" off for every other connection until then.
    */
   private async userHasActiveSyncPipeline(context: UserServiceContext): Promise<boolean> {
+    // `limit: 1`: only whether any row exists is read, and each row carries its whole `data`
+    // payload, so without it this hydrated every waiting job's fetch result to count them.
     const [pending, inProgress, awaitingTransform] = await Promise.all([
-      this.connectionSyncJobService.search(context, { status: 'pending', orderBy: 'updated_at:DESC' }),
-      this.connectionSyncJobService.search(context, { status: 'in_progress', orderBy: 'updated_at:DESC' }),
+      this.connectionSyncJobService.search(context, {
+        status: 'pending',
+        orderBy: 'updated_at:DESC',
+        limit: 1,
+      }),
+      this.connectionSyncJobService.search(context, {
+        status: 'in_progress',
+        orderBy: 'updated_at:DESC',
+        limit: 1,
+      }),
       this.connectionSyncJobService.search(context, {
         status: 'success',
         lastTransformed: null,
         fetchedByExecutor: true,
         connectionActive: true,
         orderBy: 'updated_at:DESC',
+        limit: 1,
       }),
     ]);
 

@@ -325,6 +325,19 @@ export class ConnectionSyncJobService {
     });
 
     if (SyncJob) {
+      // A fetched payload answers the endpoint it was fetched for, and the transform is chosen by
+      // `endpointName` (and the scheduler reads `type`). Retargeting a job whose data still waits
+      // for its transform would have the client pick which transform reads the provider's answer.
+      if (
+        context.userId !== SYSTEM_USER &&
+        SyncJob.fetchedByExecutor &&
+        SyncJob.lastTransformed == null &&
+        ((updateData.endpointName !== undefined && updateData.endpointName !== SyncJob.endpointName) ||
+          (updateData.type !== undefined && updateData.type !== SyncJob.type))
+      ) {
+        throw new ForbiddenException('A sync job that has fetched data keeps its endpoint and type');
+      }
+
       Object.assign(SyncJob, updateData);
       await this.connectionSyncJobRepository.save(SyncJob);
     } else {

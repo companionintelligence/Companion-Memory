@@ -1,5 +1,3 @@
-import { z } from 'zod';
-
 import type { BaseClient, Connection } from '@ci/domains/connections';
 
 import type { User } from '../user';
@@ -100,35 +98,6 @@ export interface SearchConnectionSyncJobDto {
   /** Row cap, pushed down as a SQL LIMIT. */
   limit?: number;
 }
-
-export const createConnectionSyncJobSchema = z.object({
-  id: z.string().uuid().optional(),
-  userId: z.string().uuid(),
-  connectionId: z.string().uuid(),
-  jobId: z.string().uuid().nullable().optional(),
-  endpointName: z.string(),
-  status: z.enum(['in_progress', 'failed', 'success']).optional(),
-  data: z.record(z.unknown()).optional(),
-  type: z.string(),
-  cursor: z.record(z.unknown()).nullable().optional(),
-  nextCursor: z.record(z.unknown()).nullable().optional(),
-  properties: z.record(z.unknown()).nullable().optional(),
-  error: z.record(z.unknown()).nullable().optional(),
-});
-
-export const updateConnectionSyncJobSchema = z.object({
-  jobId: z.string().uuid().nullable().optional(),
-  endpointName: z.string().optional(),
-  status: z.enum(['in_progress', 'failed', 'success']).optional(),
-  data: z.record(z.unknown()).optional(),
-  type: z.string().optional(),
-  cursor: z.record(z.unknown()).nullable().optional(),
-  nextCursor: z.record(z.unknown()).nullable().optional(),
-  properties: z.record(z.unknown()).nullable().optional(),
-  error: z.record(z.unknown()).nullable().optional(),
-  completedAt: z.string().datetime().nullable().optional(),
-  lastTransformed: z.string().datetime().nullable().optional(),
-});
 
 export interface EndpointServiceMapInterface {
   sync: {

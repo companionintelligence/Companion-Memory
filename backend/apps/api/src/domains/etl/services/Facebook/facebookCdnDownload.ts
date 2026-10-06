@@ -1,6 +1,6 @@
 import { Agent, fetch as undiciFetch } from 'undici';
 
-import { BlockedAddressError, guardedLookup, isBlockedHostname } from '@ci/domains/embed';
+import { BlockedAddressError, guardedLookup, isBlockedHostname, readCapped } from '@ci/domains/embed';
 
 /**
  * Downloading a Facebook photo or video file, with the same rules the link-preview fetcher
@@ -137,7 +137,20 @@ export async function downloadFacebookCdnFile(
         );
       }
 
-      return await readCapped(response, options.maxBytes);
+      let body: Buffer | null;
+
+      try {
+        body = await readCapped(response, options.maxBytes);
+      } catch (error) {
+        // A timeout or a dropped connection mid-body is a failed download like any other.
+        throw new FacebookCdnDownloadError(describeTransportFailure(url, error));
+      }
+
+      if (body == null) {
+        throw new FacebookCdnDownloadError(`file is over the ${options.maxBytes}-byte limit`);
+      }
+
+      return body;
     }
   } finally {
     clearTimeout(timer);
@@ -165,34 +178,4 @@ function describeTransportFailure(url: URL, error: unknown): string {
   }
 
   return cause?.message ?? String(error);
-}
-
-async function readCapped(response: CdnResponse, maxBytes: number): Promise<Buffer> {
-  if (!response.body) {
-    return Buffer.alloc(0);
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-
-  for (;;) {
-    const { done, value } = await reader.read();
-
-    if (done) {
-      break;
-    }
-
-    total += value.byteLength;
-
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => {});
-
-      throw new FacebookCdnDownloadError(`file is over the ${maxBytes}-byte limit`);
-    }
-
-    chunks.push(value);
-  }
-
-  return Buffer.concat(chunks);
 }

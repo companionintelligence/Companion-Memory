@@ -293,6 +293,34 @@ describe('ConnectionSyncJobService — the executor mark', () => {
     expect(saved.fetchedByExecutor).toBe(true);
   });
 
+  it('refuses a user-scoped change of endpoint or type on a fetched job waiting for its transform', async () => {
+    const { service, findOne, save } = makeService();
+    const fetched = {
+      id: 'job-1',
+      userId: USER,
+      endpointName: 'posts',
+      type: 'historical',
+      fetchedByExecutor: true,
+      lastTransformed: null,
+    };
+
+    (findOne as jest.Mock).mockResolvedValue({ ...fetched });
+    await expect(service.update(CONTEXT, 'job-1', { endpointName: 'photos' })).rejects.toThrow(
+      'A sync job that has fetched data keeps its endpoint and type',
+    );
+
+    (findOne as jest.Mock).mockResolvedValue({ ...fetched });
+    await expect(service.update(CONTEXT, 'job-1', { type: 'incremental' })).rejects.toThrow(
+      'A sync job that has fetched data keeps its endpoint and type',
+    );
+    expect(save).not.toHaveBeenCalled();
+
+    // The same values, or other descriptive fields, are still the client's to write.
+    (findOne as jest.Mock).mockResolvedValue({ ...fetched });
+    await service.update(CONTEXT, 'job-1', { endpointName: 'posts', properties: { note: 'x' } });
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
   it('search can ask for executor-fetched rows on active connections only', async () => {
     const { service, queryBuilderCalls } = makeService();
 

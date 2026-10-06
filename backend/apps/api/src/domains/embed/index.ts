@@ -35,6 +35,6 @@ export { UnfurlService } from './services/UnfurlService';
 // The SSRF chokepoint's address rules, for the other places the appliance downloads a URL that
 // came out of synced data (Facebook media). One set of rules, so a range blocked here is blocked
 // there too.
-export { BlockedAddressError, guardedLookup, isBlockedHostname } from './services/UnfurlFetcher';
+export { BlockedAddressError, guardedLookup, isBlockedHostname, readCapped } from './services/UnfurlFetcher';
 export type { ResolveResult } from './services/UnfurlService';
 export type { UnfurlStatus } from './resolvers/types';

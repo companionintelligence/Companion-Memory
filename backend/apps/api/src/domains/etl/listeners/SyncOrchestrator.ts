@@ -667,6 +667,27 @@ export class SyncOrchestrator {
       return;
     }
 
+    // Before the claim, so a job this handler turns away is not left claimed (and pushed to the
+    // back of the queue by the claim's `updated_at`) for the claim's hour-long staleness window.
+    const connection = await this.connectionService.findById({ userId: SYSTEM_USER }, syncJob.connectionId);
+
+    if (!connection) {
+      this.logger.error('Connection not found for transformation', {
+        connectionSyncJobId: payload.connectionSyncJobId,
+      });
+
+      return;
+    }
+
+    if (!connection.active) {
+      this.logger.warn('Not transforming a sync job for a connection that is not active', {
+        connectionSyncJobId: syncJob.id,
+        connectionId: connection.id,
+      });
+
+      return;
+    }
+
     // The self-DoS this prevents: `executeTransformJobs` runs every minute and
     // selects rows with `lastTransformed: null`, which is only written on
     // COMPLETION — and `updated_at` does not move while the transform runs. So
@@ -688,25 +709,6 @@ export class SyncOrchestrator {
     if (!claimed) {
       this.logger.debug('Sync job is already claimed or transformed; skipping duplicate delivery', {
         connectionSyncJobId: syncJob.id,
-      });
-
-      return;
-    }
-
-    const connection = await this.connectionService.findById({ userId: SYSTEM_USER }, syncJob.connectionId);
-
-    if (!connection) {
-      this.logger.error('Connection not found for transformation', {
-        connectionSyncJobId: payload.connectionSyncJobId,
-      });
-
-      return;
-    }
-
-    if (!connection.active) {
-      this.logger.warn('Not transforming a sync job for a connection that is not active', {
-        connectionSyncJobId: syncJob.id,
-        connectionId: connection.id,
       });
 
       return;
