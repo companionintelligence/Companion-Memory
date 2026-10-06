@@ -15,7 +15,8 @@ import { GraphDeltaWriter } from '../GraphDeltaWriter';
 import { PlaceService } from '../PlaceService';
 
 /**
- * `PlaceService.update` (the `updatePlace` mutation) edits places and nothing else, in Postgres.
+ * `PlaceService.update` and `remove` (the `updatePlace` and `deletePlace` mutations) touch places
+ * and nothing else, in Postgres.
  *
  * `PlaceEntity` maps all of `ci.entities`, so an id was the only thing the update matched on. The
  * owner's own Person holds their settings under `properties.planner`, the autonomy dial among them,
@@ -140,5 +141,16 @@ describeWithDb(`PlaceService.update against Postgres (${availability.target})`, 
       properties: { source: 'geocoder', tracked: true },
     });
     expect((await row(remembered)).properties).toEqual({ note: 'corner table' });
+  });
+
+  it('removes a place, and leaves a Person alone when asked to remove it as one', async () => {
+    const dana = await insert('Person', 'Dana', {});
+    const cafe = await insert('Location', 'Chez Panisse', {});
+
+    expect(await places.remove(owner, dana)).toBe(false);
+    expect(await row(dana)).toEqual({ name: 'Dana', properties: {} });
+
+    expect(await places.remove(owner, cafe)).toBe(true);
+    expect(await row(cafe)).toBeUndefined();
   });
 });
