@@ -12,6 +12,7 @@ import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next'
 
 import { PlaceEntity, type Place, type PlaceKind } from '../entities/PlaceEntity';
 import { PlaceCreatedEvent, PlaceUpdatedEvent, PlaceRemovedEvent } from '../events';
+import { GRAPH_ENTITY_TYPES } from '../graph.types';
 import type { CreatePlaceDto, UpdatePlaceDto } from '../types';
 
 import {
@@ -1079,9 +1080,15 @@ export class PlaceService {
   async update(context: ServiceContext, id: string, data: UpdatePlaceDto): Promise<Place | null> {
     const { properties, latitude, longitude, place_kind, parent_place_id, ...rest } = data;
 
+    // Places only. `PlaceEntity` maps the whole of `ci.entities`, so without the type an id of a
+    // Person reached this merge too, and `updatePlace` could rename the owner's own Person or write
+    // its `planner` settings (the autonomy dial among them) through its free-form properties.
+    const placeTypes = In([...GRAPH_ENTITY_TYPES.place]);
+
     const place = await this.placeRepository.findOne({
       where: {
         id: id,
+        entityType: placeTypes,
         ...(context.userId !== SYSTEM_USER && {
           user: {
             id: context.userId,
@@ -1126,6 +1133,7 @@ export class PlaceService {
         result = await this.placeRepository.update(
           {
             id,
+            entityType: placeTypes,
             ...(context.userId !== SYSTEM_USER && {
               user: {
                 id: context.userId,
