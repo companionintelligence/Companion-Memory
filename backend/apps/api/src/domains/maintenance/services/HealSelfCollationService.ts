@@ -92,7 +92,7 @@ export class HealSelfCollationService {
     for (const candidate of candidates) {
       try {
         const { match } = candidate;
-        const decision = decideSelfCollation(trustMode, match.confidence);
+        const decision = decideSelfCollation(trustMode, match);
 
         const blockedPair = blocked.has(pairKey(selfEntityId, candidate.entityId));
         if (blockedPair && !(match.kind === 'email' && isExactOwnerIdentifier(match))) {
@@ -179,7 +179,10 @@ export class HealSelfCollationService {
 
       let best: OwnerMatch | null = null;
       for (const raw of candidates) {
-        const match = matchOwner(identity, raw, { phones });
+        // Against the OWNER's phones. This used to pass the candidate's own
+        // `phones`, so every Person holding a number matched itself as the
+        // owner at phone confidence, and hands_off merged it into self.
+        const match = matchOwner(identity, raw);
         if (match == null) {
           continue;
         }

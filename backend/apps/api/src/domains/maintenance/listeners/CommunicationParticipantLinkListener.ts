@@ -14,7 +14,13 @@ import {
   type IdentifierKey,
   splitPersonName,
 } from '@ci/domains/graph';
-import { matchOwner, readSelfIdentity, shouldMapContactToSelf, type SelfIdentity } from '@ci/domains/import';
+import {
+  matchOwner,
+  matchOwnerIdentifier,
+  readSelfIdentity,
+  shouldMapContactToSelf,
+  type SelfIdentity,
+} from '@ci/domains/import';
 import { CommunicationService } from '@ci/domains/memory';
 import { CommunicationCreatedEvent, type CommunicationCreatedPayload } from '@ci/domains/memory/events';
 import { PersonalizationService } from '@ci/domains/personalization';
@@ -180,7 +186,16 @@ export class CommunicationParticipantLinkListener {
       }
 
       const matchRaw = seen.rawName.length > 0 ? seen.rawName : seen.key.valueNormalized;
-      const ownerMatch = matchOwner(identity, matchRaw);
+      // An email or phone participant is the owner only when the address or
+      // number itself is the owner's. Its display name is whatever the sender
+      // typed, so a stranger writing as "<owner name>" <x@elsewhere> mints an
+      // ordinary contact rather than becoming a verified address of the self
+      // Person. Only a name-only participant (a chat display name) is matched
+      // by name, under the trust mode's rules.
+      const ownerMatch =
+        seen.key.kind === 'name'
+          ? matchOwner(identity, matchRaw)
+          : matchOwnerIdentifier(identity, seen.key.kind, seen.key.valueNormalized);
       if (selfEntityId != null && shouldMapContactToSelf(ownerMatch, trustMode)) {
         if (seen.key.kind === 'email' || seen.key.kind === 'phone') {
           await this.entityIdentifierService.repointToEntity(

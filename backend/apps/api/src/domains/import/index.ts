@@ -328,6 +328,7 @@ export type { StagedPushStatus } from './entities/pushState';
 export {
   makeIsSelf,
   matchOwner,
+  matchOwnerIdentifier,
   isExactOwnerIdentifier,
   shouldMapContactToSelf,
   decideSelfCollation,

@@ -1,7 +1,9 @@
 import {
+  decideSelfCollation,
   isExactOwnerIdentifier,
   makeIsSelf,
   matchOwner,
+  matchOwnerIdentifier,
   NOBODY_IS_SELF,
   OWNER_MATCH_CONFIDENCE,
   readSelfIdentity,
@@ -50,6 +52,17 @@ describe('makeIsSelf', () => {
     const isSelf = makeIsSelf(identity({ names: [] }));
 
     expect(isSelf('Liam Broza')).toBe(true);
+  });
+
+  it('matches the email local part exactly, never by a shared token', () => {
+    // A local part is often a household or role word. Containment against
+    // "bennett family" would claim every "Family" and every "Bennett Smith".
+    const isSelf = makeIsSelf({ names: [], email: 'bennett.family@example.com', phones: [] });
+
+    expect(isSelf('Bennett Family')).toBe(true);
+    expect(isSelf('Family')).toBe(false);
+    expect(isSelf('Bennett Smith')).toBe(false);
+    expect(isSelf('Bennett Familly')).toBe(false);
   });
 
   it('reads the self Person row as well as the account name', () => {
@@ -159,5 +172,61 @@ describe('matchOwner / shouldMapContactToSelf', () => {
     expect(shouldMapContactToSelf(name, 'cautious')).toBe(false);
     expect(shouldMapContactToSelf(name, 'balanced')).toBe(true);
     expect(shouldMapContactToSelf(name, 'hands_off')).toBe(true);
+  });
+});
+
+describe('matchOwner reads each part of a participant only for what it is', () => {
+  const id = identity({ phones: ['+1 415-555-0100'] });
+
+  it("does not take the owner's phone digits out of a display name or a mailbox", () => {
+    expect(matchOwner(id, 'Support 415 555 0100')).toBeNull();
+    expect(matchOwner(id, '"Call 415-555-0100" <promo@other.example>')).toBeNull();
+  });
+
+  it('tests the display name without the address after it', () => {
+    // A name match, not an email one: the address is somebody else's.
+    expect(matchOwner(id, '"Liam Broza" <someone@other.example>')).toMatchObject({ kind: 'name' });
+    // And the address cannot lend its own tokens to a name that does not match.
+    expect(matchOwner(id, '"Support" <liam.broza@other.example>')).toBeNull();
+  });
+
+  it('does not read a bare address as a name', () => {
+    // "liam.broza@other.example" folded to "liam broza other example", which
+    // contained the owner's name.
+    expect(matchOwner(id, 'liam.broza@other.example')).toBeNull();
+  });
+
+  it("still matches the owner's own address behind any display name", () => {
+    expect(matchOwner(id, '"Work" <Liam.Broza@Example.com>')).toMatchObject({ kind: 'email' });
+  });
+});
+
+describe('matchOwnerIdentifier', () => {
+  const id = identity({ phones: ['+1 415-555-0100'] });
+
+  it("matches the owner's own address and number, normalized", () => {
+    expect(matchOwnerIdentifier(id, 'email', 'liam.broza@example.com')).toMatchObject({ kind: 'email' });
+    expect(matchOwnerIdentifier(id, 'phone', '4155550100')).toMatchObject({ kind: 'phone' });
+  });
+
+  it('matches nothing else, whatever name came with it', () => {
+    expect(matchOwnerIdentifier(id, 'email', 'liam.broza@other.example')).toBeNull();
+    expect(matchOwnerIdentifier(id, 'phone', '4155550199')).toBeNull();
+    expect(matchOwnerIdentifier(id, 'email', '')).toBeNull();
+    expect(matchOwnerIdentifier({ names: [], email: null, phones: [] }, 'email', 'a@b.example')).toBeNull();
+  });
+});
+
+describe('decideSelfCollation', () => {
+  it('merges on its own only on an exact identifier, in every trust mode', () => {
+    const email = { kind: 'email' as const, confidence: OWNER_MATCH_CONFIDENCE.email };
+    const phone = { kind: 'phone' as const, confidence: OWNER_MATCH_CONFIDENCE.phone };
+    const name = { kind: 'name' as const, confidence: OWNER_MATCH_CONFIDENCE.nameExact };
+
+    expect(decideSelfCollation('hands_off', email)).toBe('auto');
+    expect(decideSelfCollation('hands_off', phone)).toBe('auto');
+    expect(decideSelfCollation('hands_off', name)).toBe('review');
+    expect(decideSelfCollation('balanced', email)).toBe('review');
+    expect(decideSelfCollation('cautious', email)).toBe('review');
   });
 });

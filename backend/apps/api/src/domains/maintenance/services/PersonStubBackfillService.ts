@@ -12,7 +12,13 @@ import {
   type IdentifierKey,
   splitPersonName,
 } from '@ci/domains/graph';
-import { matchOwner, readSelfIdentity, shouldMapContactToSelf, type SelfIdentity } from '@ci/domains/import';
+import {
+  matchOwner,
+  matchOwnerIdentifier,
+  readSelfIdentity,
+  shouldMapContactToSelf,
+  type SelfIdentity,
+} from '@ci/domains/import';
 import { PersonalizationService, type TrustMode } from '@ci/domains/personalization';
 
 /** Default window width — one TimescaleDB-chunk-friendly slice per pass. */
@@ -397,7 +403,13 @@ export class PersonStubBackfillService {
           }
 
           const matchRaw = seen.rawName.length > 0 ? seen.rawName : seen.key.valueNormalized;
-          const ownerMatch = matchOwner(identity, matchRaw);
+          // Same rule as CommunicationParticipantLinkListener: an email or
+          // phone participant is the owner only on its own identifier, never on
+          // the display name in front of it.
+          const ownerMatch =
+            seen.key.kind === 'name'
+              ? matchOwner(identity, matchRaw)
+              : matchOwnerIdentifier(identity, seen.key.kind, seen.key.valueNormalized);
           if (selfEntityId != null && shouldMapContactToSelf(ownerMatch, trustMode)) {
             // Fold owner identifiers onto self instead of minting a duplicate stub.
             if (seen.key.kind === 'email' || seen.key.kind === 'phone') {
