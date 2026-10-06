@@ -1,4 +1,4 @@
-import { ApiError } from '../client';
+import { ApiError, describeFailureBody } from '../client';
 import type { DoctorFinding, DoctorReport } from '../wire';
 import { doctorCommand } from '../commands/doctor';
 import { CliError } from '../context';
@@ -220,14 +220,43 @@ describe('ci doctor', () => {
     // key was rejected and go mint a new one that fails the same way.
     const ctx = harness({
       runDoctor: async () => {
-        throw new ApiError(403, 'This action requires an administrator account', '/import/doctor');
+        throw new ApiError(
+          403,
+          describeFailureBody(
+            403,
+            JSON.stringify({ message: 'This action requires an administrator account' }),
+            true,
+          ),
+          '/import/doctor',
+        );
       },
     });
 
     await expect(doctorCommand(ctx, {})).rejects.toMatchObject({
       exitCode: 2,
-      message: expect.stringContaining('administrator'),
+      message: expect.stringContaining('limited to the appliance administrator'),
     });
+  });
+
+  it('leaves a 403 that is not the admin gate to the client, whose advice fits it', async () => {
+    // A scope-limited key is refused before the admin gate is asked. A fresh
+    // key is the fix there, and "you are not the administrator" would be wrong.
+    const refusal = new ApiError(
+      403,
+      describeFailureBody(
+        403,
+        JSON.stringify({ message: 'This API key is scope-limited and cannot access this endpoint' }),
+        true,
+      ),
+      '/import/doctor',
+    );
+    const ctx = harness({
+      runDoctor: async () => {
+        throw refusal;
+      },
+    });
+
+    await expect(doctorCommand(ctx, {})).rejects.toBe(refusal);
   });
 
   it('refuses a --timeout that is not a positive number of milliseconds', async () => {

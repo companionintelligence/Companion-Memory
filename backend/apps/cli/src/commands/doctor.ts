@@ -70,10 +70,12 @@ export async function doctorCommand(ctx: CliContext, options: DoctorOptions = {}
     report = await ctx.client.runDoctor({ checks: options.check, timeoutMs });
   } catch (err) {
     // The suite reads every account's data, so the appliance now limits it to
-    // the administrator. On a 403 that is the reason, not a bad key — say so
-    // plainly rather than letting the client's generic "key was rejected" line
-    // send someone to mint a new one that will be refused the same way.
-    if (err instanceof ApiError && err.status === 403) {
+    // the administrator. When the admin gate is what refused, say so plainly
+    // rather than letting the client's generic "key was rejected" line send
+    // someone to mint a new one that will be refused the same way. Any other
+    // 403 (a scope-limited key, say) keeps the client's own message, because
+    // there a fresh key IS the fix.
+    if (err instanceof ApiError && err.status === 403 && /administrator/i.test(err.message)) {
       throw new CliError(
         `ci doctor reads data across every account, so it is limited to the appliance ` +
           `administrator. Signed in as a non-admin account, you cannot run it. Ask the ` +
