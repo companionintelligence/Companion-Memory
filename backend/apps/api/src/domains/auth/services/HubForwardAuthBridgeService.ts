@@ -66,6 +66,13 @@ interface MemorySession {
   email: string | null;
 }
 
+/**
+ * A verified identity and the instant its header set was checked. The ledger judges a spend at
+ * that instant, not after the account lookups: a replay that verified in its last millisecond
+ * must still find its nonce held, however long those lookups take.
+ */
+type VerifiedAt = VerifiedHubForwardAuth & { verifiedAt: number };
+
 /** First-sight races a placement retries before giving up. One is all a second tab can cause. */
 const MAX_PLACEMENT_ATTEMPTS = 3;
 
@@ -156,15 +163,16 @@ export class HubForwardAuthBridgeService {
     return verified ? { username: verified.username, stableId: verified.stableId } : null;
   }
 
-  private verify(req: Request): VerifiedHubForwardAuth | null {
+  private verify(req: Request): VerifiedAt | null {
     const cfg = config.auth.hubForwardAuth;
     if (!cfg.enabled) {
       return null;
     }
 
-    const result = verifyHubForwardAuth(forwardAuthPolicy(cfg), readForwardAuthHeaders(req.headers));
+    const now = Date.now();
+    const result = verifyHubForwardAuth(forwardAuthPolicy(cfg), readForwardAuthHeaders(req.headers), { now });
 
-    return result.ok ? result : null;
+    return result.ok ? { ...result, verifiedAt: now } : null;
   }
 
   /** Verified `X-CI-Hub-User`, or null when the feature is off or headers do not verify. */
@@ -252,14 +260,14 @@ export class HubForwardAuthBridgeService {
   private async spendForMint(
     req: Request,
     res: Response,
-    identity: VerifiedHubForwardAuth,
+    identity: VerifiedAt,
     session: MemorySession | null,
   ): Promise<void> {
     if (identity.replayKey == null) {
       return;
     }
 
-    const outcome = this.spentAssertions.spend(identity.replayKey, identity.expiresAt);
+    const outcome = this.spentAssertions.spend(identity.replayKey, identity.expiresAt, identity.verifiedAt);
     if (outcome === 'spent') {
       return;
     }
@@ -284,7 +292,7 @@ export class HubForwardAuthBridgeService {
   private async alignByStableId(
     req: Request,
     res: Response,
-    identity: VerifiedHubForwardAuth,
+    identity: VerifiedAt,
     stableId: HubStableId,
   ): Promise<HubBridgeResult> {
     const { username } = identity;
@@ -320,11 +328,7 @@ export class HubForwardAuthBridgeService {
   }
 
   /** The bridge as it was before stable ids, for a Hub that sends none: the account is the address. */
-  private async alignByEmail(
-    req: Request,
-    res: Response,
-    identity: VerifiedHubForwardAuth,
-  ): Promise<HubBridgeResult> {
+  private async alignByEmail(req: Request, res: Response, identity: VerifiedAt): Promise<HubBridgeResult> {
     const { username } = identity;
     const session = await this.readSession(req);
 

@@ -38,6 +38,10 @@ export class SpentHubAssertions {
    * - `replayed`: it already was, and its header set still verifies.
    * - `full`: there is no room left to remember it. A key that cannot be remembered cannot be
    *   refused next time either, so it is not spent, and the caller must not mint from it.
+   *
+   * @param now when the header set was verified. Pass that instant rather than the time of the
+   *   call: a replay that verified just before `expiresAt` and reaches here just after it would
+   *   otherwise find its key already forgotten.
    */
   spend(key: string, expiresAt: number, now = Date.now()): 'spent' | 'replayed' | 'full' {
     const held = this.spent.get(key);

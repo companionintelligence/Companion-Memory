@@ -590,6 +590,28 @@ describe('HubForwardAuthBridgeService', () => {
       expect(authService.issueSessionToken).toHaveBeenCalledTimes(1);
     });
 
+    it('refuses a replay that verified in its last millisecond, though the lookups ran past its expiry', async () => {
+      config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
+      config.auth.hubForwardAuth.audience = AUDIENCE;
+      const { service, federatedIdentityService, userService, authService } = makeService();
+      federatedIdentityService.findUserId.mockResolvedValue('user-a');
+      userService.findById.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+      const headers = boundHeaders('hello@lifescope.io');
+      await service.alignSession(requestWith(headers, null), response());
+
+      // The skew check passes at expiresAt itself; the account lookups then take the clock past it.
+      const expiresAt = NOW + config.auth.hubForwardAuth.maxSkewMs;
+      jest
+        .spyOn(Date, 'now')
+        .mockReturnValueOnce(expiresAt)
+        .mockReturnValue(expiresAt + 50);
+
+      await expect(service.alignSession(requestWith(headers, null), response())).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(authService.issueSessionToken).toHaveBeenCalledTimes(1);
+    });
+
     it('mints for two requests in the same millisecond: each assertion has its own nonce', async () => {
       config.auth.hubForwardAuth.identitySecret = IDENTITY_SECRET;
       config.auth.hubForwardAuth.audience = AUDIENCE;
