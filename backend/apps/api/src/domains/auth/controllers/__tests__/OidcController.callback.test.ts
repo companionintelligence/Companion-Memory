@@ -96,7 +96,10 @@ function makeController() {
     listForUser: jest.fn().mockResolvedValue([]),
     bind: jest.fn().mockResolvedValue(undefined),
   };
-  const hubBridge = { verifyUsername: jest.fn().mockReturnValue(null) };
+  const hubBridge = {
+    verifyUsername: jest.fn().mockReturnValue(null),
+    verifyIdentity: jest.fn().mockReturnValue(null),
+  };
   const logger = { setContext: jest.fn(), warn: jest.fn(), error: jest.fn(), log: jest.fn() };
 
   const controller = new OidcController(
@@ -318,7 +321,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         'new@example.com',
         'New Person',
         { issuer: expect.any(String), subject: 'portal-sub-1' },
-        { firstAccountOnly: false },
+        { firstAccountOnly: false, designatedOwner: false },
       );
       expect(res.cookie).toHaveBeenCalledWith('oidc_signup_intent', 'signup-intent-jwt', expect.any(Object));
       expect(res.redirect).toHaveBeenCalledWith('/api/authenticate/oidc/confirm-account');
@@ -362,6 +365,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         expect.anything(),
         expect.objectContaining({ email: 'owner@example.com', name: 'Owner' }),
         expect.any(Function),
+        { designatedOwner: false },
       );
       expect(userService.create).not.toHaveBeenCalled();
       expect(federatedIdentityService.bind).toHaveBeenCalledWith(
@@ -469,6 +473,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         expect.anything(),
         expect.objectContaining({ email: 'guest@example.com', name: 'Guest' }),
         expect.any(Function),
+        { designatedOwner: false },
       );
       // The invitation admits them whether or not they are first.
       expect(userService.createFirstAccount).not.toHaveBeenCalled();
@@ -508,7 +513,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         'guest@example.com',
         undefined,
         expect.any(Object),
-        { firstAccountOnly: false },
+        { firstAccountOnly: false, designatedOwner: false },
       );
     });
 
@@ -624,7 +629,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         'owner@example.com',
         undefined,
         { issuer: expect.any(String), subject: 'portal-sub-1' },
-        { firstAccountOnly: true },
+        { firstAccountOnly: true, designatedOwner: false },
       );
       expect(res.redirect).toHaveBeenCalledWith('/api/authenticate/oidc/confirm-account');
     });
@@ -758,6 +763,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         expect.objectContaining({ email: 'hello@lifescope.io' }),
         // No invitation to redeem alongside it: the Hub is what admits this person.
         undefined,
+        { designatedOwner: false },
       );
       expect(authService.issueSessionToken).toHaveBeenCalledWith('user-hello', expect.any(Object));
       expect(res.redirect).not.toHaveBeenCalledWith('/login?error=signup_code_required');
@@ -788,7 +794,9 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         res as never,
       );
 
-      expect(userService.create).toHaveBeenCalledWith(expect.anything(), expect.anything(), undefined);
+      expect(userService.create).toHaveBeenCalledWith(expect.anything(), expect.anything(), undefined, {
+        designatedOwner: false,
+      });
       expect(signupCodeService.consume).not.toHaveBeenCalled();
     });
   });
@@ -821,6 +829,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         expect.anything(),
         expect.objectContaining({ email: 'new@example.com', passwordChosenByUser: false }),
         expect.any(Function),
+        { designatedOwner: false },
       );
     });
 
@@ -860,7 +869,125 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         expect.anything(),
         expect.objectContaining({ email: 'new@example.com', passwordChosenByUser: false }),
         alongside,
+        { designatedOwner: false },
       );
     });
+  });
+});
+
+/**
+ * An owner named at install (`auth.applianceOwner`) is the only person who may create the first
+ * account. The callback refuses anyone else on an empty appliance before a page or an account is
+ * made for them, and tells `UserService` when the person is the owner.
+ */
+describe('OidcController — callback on an appliance waiting for the owner named at install', () => {
+  const owner = config.auth.applianceOwner;
+  const ISSUER = 'https://hub.ci.computer';
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    Object.assign(owner, { portalSubject: '', hubIssuer: '', hubSubject: '', email: '' });
+  });
+
+  const signsInAs = (sub: string, email = `${sub}@example.com`) =>
+    mockFetch
+      .mockResolvedValueOnce(TOKEN_OK)
+      .mockResolvedValueOnce(jsonResponse(true, 200, { sub, iss: ISSUER, email, email_verified: true }));
+
+  it.each([
+    ['native', nativeReq],
+    ['web', webReq],
+  ])('%s: refuses a stranger on the empty appliance, creating nothing', async (_client, req) => {
+    owner.portalSubject = 'portal-owner';
+    const { controller, userService, authService } = makeController();
+    const res = makeRes();
+    signsInAs('portal-stranger');
+    userService.findByEmail.mockResolvedValue(null);
+    userService.hasNoUsers.mockResolvedValue(true);
+
+    await controller.callback('code-x', 'match', undefined, req(), res as never);
+
+    expect(res.redirect).toHaveBeenCalledWith(expect.stringMatching(/error=appliance_owner_required$/));
+    expect(userService.createFirstAccount).not.toHaveBeenCalled();
+    expect(userService.create).not.toHaveBeenCalled();
+    expect(authService.issueSignupIntentToken).not.toHaveBeenCalled();
+  });
+
+  it("native: lets the owner's Portal identity claim it, and says so to UserService", async () => {
+    owner.portalSubject = 'portal-owner';
+    const { controller, userService } = makeController();
+    const res = makeRes();
+    signsInAs('portal-owner');
+    userService.findByEmail.mockResolvedValue(null);
+    userService.hasNoUsers.mockResolvedValue(true);
+    claimsTheAppliance(userService, { id: 'user-owner' });
+
+    await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
+
+    expect(userService.createFirstAccount).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.any(Function),
+      { designatedOwner: true },
+    );
+    expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?code=one-time-code`);
+  });
+
+  it('web: carries the finding to the confirm step in the signup intent', async () => {
+    owner.portalSubject = 'portal-owner';
+    const { controller, userService, authService } = makeController();
+    const res = makeRes();
+    signsInAs('portal-owner');
+    userService.findByEmail.mockResolvedValue(null);
+    userService.hasNoUsers.mockResolvedValue(true);
+
+    await controller.callback('code-x', 'match', undefined, webReq(), res as never);
+
+    expect(authService.issueSignupIntentToken).toHaveBeenCalledWith(
+      'portal-owner@example.com',
+      undefined,
+      { issuer: ISSUER, subject: 'portal-owner' },
+      expect.objectContaining({ designatedOwner: true }),
+    );
+  });
+
+  it('recognises the Hub owner by the stable id the Hub signed on this request', async () => {
+    owner.hubIssuer = 'urn:ci-hub:0b6f0c55-34b1-4f7e-9c3a-5f2d8a0e1c11';
+    owner.hubSubject = '7c1e2f9a-0d4b-4a8e-b6f1-2e9d3c5a7b80';
+    const { controller, userService, hubBridge } = makeController();
+    const res = makeRes();
+    signsInAs('portal-unlinked');
+    userService.findByEmail.mockResolvedValue(null);
+    userService.hasNoUsers.mockResolvedValue(true);
+    hubBridge.verifyUsername.mockReturnValue('owner@example.com');
+    hubBridge.verifyIdentity.mockReturnValue({
+      username: 'owner@example.com',
+      stableId: { issuer: owner.hubIssuer, subject: owner.hubSubject },
+    });
+    userService.create.mockImplementation(createsAccount({ id: 'user-owner' }));
+
+    await controller.callback('code-x', 'match', undefined, webReq(), res as never);
+
+    expect(userService.create).toHaveBeenCalledWith(expect.anything(), expect.anything(), undefined, {
+      designatedOwner: true,
+    });
+  });
+
+  it('does not ask once the appliance has its first account', async () => {
+    owner.portalSubject = 'portal-owner';
+    const { controller, userService, authService } = makeController();
+    const res = makeRes();
+    signsInAs('portal-member');
+    userService.findByEmail.mockResolvedValue(null);
+    userService.hasNoUsers.mockResolvedValue(false);
+
+    await controller.callback('code-x', 'match', undefined, webReq(), res as never);
+
+    // Codes off: the ordinary first-time flow, exactly as before.
+    expect(res.redirect).toHaveBeenCalledWith('/api/authenticate/oidc/confirm-account');
+    expect(authService.issueSignupIntentToken).toHaveBeenCalled();
   });
 });

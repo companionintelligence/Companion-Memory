@@ -7,7 +7,7 @@ import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import { BodyParserMiddleware } from '@ci/common/middleware';
 import config from '@ci/configuration';
-import { UserService } from '@ci/domains/user';
+import { ApplianceOwnerRequiredError, UserService } from '@ci/domains/user';
 
 import { SignupController } from '../controllers/SignupController';
 import { AuthService } from '../services/AuthService';
@@ -197,7 +197,9 @@ describe('SignupController', () => {
         .send({ ...validPayload, signup_code: 'valid-code' })
         .expect(201);
 
-      expect(mockUserService.create).toHaveBeenCalledWith(expect.anything(), expect.anything(), undefined);
+      expect(mockUserService.create).toHaveBeenCalledWith(expect.anything(), expect.anything(), undefined, {
+        designatedOwner: false,
+      });
       expect(mockSignupCodeService.consume).not.toHaveBeenCalled();
     });
 
@@ -284,6 +286,8 @@ describe('SignupController', () => {
         expect(mockUserService.createFirstAccount).toHaveBeenCalledWith(
           expect.anything(),
           expect.objectContaining({ email: validPayload.email, password: validPayload.password }),
+          undefined,
+          { designatedOwner: false },
         );
         expect(mockUserService.create).not.toHaveBeenCalled();
         expect(mockSignupCodeService.findOne).not.toHaveBeenCalled();
@@ -344,6 +348,59 @@ describe('SignupController', () => {
 
         expect(response.body).toEqual({ codeRequired: false });
       });
+    });
+  });
+
+  /**
+   * An owner named at install (`auth.applianceOwner`) is the only person who may create the first
+   * account. `UserService` makes that decision as it writes the row; the controller's part is to
+   * pass what a password signup can show (the setup code) and to say why it was refused.
+   */
+  describe('an owner named at install', () => {
+    const owner = config.auth.applianceOwner;
+
+    afterEach(() => {
+      Object.assign(owner, { portalSubject: '', claimToken: '' });
+    });
+
+    it('turns the refusal into a 403 that says the box is waiting for its owner', async () => {
+      owner.portalSubject = 'portal-owner';
+      mockUserService.create.mockRejectedValue(new ApplianceOwnerRequiredError());
+
+      const response = await request(app.getHttpServer()).post('/signup').send(validPayload).expect(403);
+
+      expect(response.body.message).toMatch(/only its owner can do that/);
+      expect(mockUserService.create).toHaveBeenCalledWith(expect.anything(), expect.anything(), undefined, {
+        designatedOwner: false,
+      });
+      expect(mockAuthService.issueSessionToken).not.toHaveBeenCalled();
+    });
+
+    it('passes the setup code typed as the signup code as proof of ownership', async () => {
+      owner.claimToken = 'setup-code-7f3a';
+      mockFeatureService.isFeatureEnabled.mockResolvedValue(true);
+      mockUserService.createFirstAccount.mockResolvedValue(mockUser);
+
+      await request(app.getHttpServer())
+        .post('/signup')
+        .send({ ...validPayload, signup_code: 'setup-code-7f3a' })
+        .expect(201);
+
+      expect(mockUserService.createFirstAccount).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        undefined,
+        { designatedOwner: true },
+      );
+    });
+
+    it('asks for the setup code on an empty appliance, even with signup codes off', async () => {
+      owner.claimToken = 'setup-code-7f3a';
+      mockUserService.hasNoUsers.mockResolvedValue(true);
+
+      const response = await request(app.getHttpServer()).get('/signup/requirements').expect(200);
+
+      expect(response.body).toEqual({ codeRequired: true });
     });
   });
 });

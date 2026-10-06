@@ -239,7 +239,7 @@ describeWithDatabase(`first-account gates, against real Postgres (${availability
       { issue: (userId: string) => `one-time-${userId}`, redeem: () => null } as never,
       signupCodeService,
       federatedIdentityService,
-      { verifyUsername: () => null } as never,
+      { verifyUsername: () => null, verifyIdentity: () => null } as never,
       quietLogger() as never,
     );
   });
@@ -547,49 +547,94 @@ describeWithDatabase(`first-account gates, against real Postgres (${availability
     });
   });
 
-  // ── Portal bearer, path 3 ───────────────────────────────────────────────
+  // ── Portal bearer ───────────────────────────────────────────────────────
 
-  describe('a Portal identity nobody here has bound (bearer path 3)', () => {
-    it('admits exactly one of two identities racing to claim an empty appliance', async () => {
-      const race = forceRace(2);
-
+  describe('a Portal identity nobody here has bound (bearer)', () => {
+    it('never claims an empty appliance, however many tokens arrive', async () => {
+      // A bearer token used to create the first account, so whoever held any Portal token and
+      // reached the box first became its owner. It creates nothing now.
       const results = await Promise.all([
         portalTokenService.verifyAndProvision(portalToken('racer-a', 'racer-a@example.invalid')),
         portalTokenService.verifyAndProvision(portalToken('racer-b', 'racer-b@example.invalid')),
       ]);
 
-      const admitted = results.flatMap((principal) => (principal ? [principal.user] : []));
-      const [owner] = admitted;
+      expect(results).toEqual([null, null]);
+      expect(await accounts()).toEqual([]);
+      expect(await bindings()).toEqual([]);
+    });
+  });
 
-      expect(race).toEqual(SERIALIZED);
-      // "On a claimed appliance the answer is no": the loser gets no account and no binding.
-      expect(admitted).toHaveLength(1);
-      expect(owner!.role).toBe('admin');
-      expect(await accounts()).toEqual([expect.objectContaining({ id: owner!.id, role: 'admin' })]);
-      expect(await bindings()).toEqual([expect.objectContaining({ user_id: owner!.id, issuer: ISSUER })]);
+  // ── An owner named at install ───────────────────────────────────────────
+
+  describe('an owner named at install', () => {
+    const owner = config.auth.applianceOwner;
+
+    afterEach(() => {
+      Object.assign(owner, {
+        email: '',
+        hubIssuer: '',
+        hubSubject: '',
+        portalIssuer: '',
+        portalSubject: '',
+        claimToken: '',
+      });
     });
 
-    it("answers every one of a client's first, concurrent requests with the one account they claim", async () => {
-      // A client that has just signed in fires several requests with the same new token. One claims
-      // the appliance; the others must resolve to that account, not fail — they are the same person.
-      const race = forceRace(3);
+    it('keeps the empty appliance for the owner: a stranger signs up, signs in and is refused', async () => {
+      owner.portalSubject = 'the-owner';
 
-      const token = portalToken('burst', 'burst@example.invalid');
-      const settled = await Promise.allSettled(
-        [1, 2, 3].map(() => portalTokenService.verifyAndProvision(token)),
+      await expect(signup('stranger')).rejects.toThrow(/only its owner can do that/);
+      expect(redirectedTo(await oidcCallback('stranger-native', 'native'))).toMatch(
+        /\?error=appliance_owner_required$/,
       );
-
-      expect(race).toEqual(SERIALIZED);
-      expect(settled.map((outcome) => outcome.status)).toEqual(['fulfilled', 'fulfilled', 'fulfilled']);
-
-      const ids = settled.map(
-        (outcome) => (outcome as PromiseFulfilledResult<{ user: { id: string } } | null>).value?.user.id,
+      expect(redirectedTo(await oidcCallback('stranger-web', 'web'))).toMatch(
+        /\?error=appliance_owner_required$/,
       );
-      const [only] = await accounts();
+      expect(await accounts()).toEqual([]);
+    });
 
-      expect(ids).toEqual([only.id, only.id, only.id]);
-      expect(await accounts()).toHaveLength(1);
-      expect(await bindings()).toEqual([expect.objectContaining({ user_id: only.id, subject: 'burst' })]);
+    it("lets the owner's own sign-in claim it, and binds it to them", async () => {
+      owner.portalSubject = 'the-owner';
+
+      expect(redirectedTo(await oidcCallback('the-owner', 'native'))).toMatch(/\?code=one-time-/);
+
+      const [claimed] = await accounts();
+
+      expect(claimed).toEqual(expect.objectContaining({ role: 'admin' }));
+      expect(await bindings()).toEqual([
+        expect.objectContaining({ user_id: claimed.id, subject: 'the-owner' }),
+      ]);
+    });
+
+    it('decides it in the transaction that writes the account, whatever door was used', async () => {
+      // Straight at the service, with no door's say-so: the first account is refused and nothing
+      // is left behind.
+      owner.portalSubject = 'the-owner';
+
+      await expect(createAccount('no-admission')).rejects.toThrow(/owner/);
+      expect(await accounts()).toEqual([]);
+    });
+
+    it('accepts the setup code on a password signup', async () => {
+      owner.claimToken = 'setup-code-7f3a';
+
+      await expect(signup('wrong-code', 'setup-code-0000')).rejects.toThrow(/only its owner can do that/);
+      await signup('installer', 'setup-code-7f3a');
+
+      expect(await accounts()).toEqual([expect.objectContaining({ role: 'admin' })]);
+    });
+
+    it('stops mattering once the appliance has its first account', async () => {
+      owner.portalSubject = 'the-owner';
+      expect(redirectedTo(await oidcCallback('the-owner', 'native'))).toMatch(/\?code=one-time-/);
+
+      // Signup codes off: the second person is admitted as anyone would be on a claimed appliance.
+      await signup('household-member');
+
+      expect(await accounts()).toEqual([
+        expect.objectContaining({ role: 'admin' }),
+        expect.objectContaining({ role: 'user' }),
+      ]);
     });
   });
 

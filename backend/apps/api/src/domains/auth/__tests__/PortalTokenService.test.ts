@@ -141,7 +141,10 @@ describe('PortalTokenService', () => {
     expect(userService.create).not.toHaveBeenCalled();
   });
 
-  it('claims an UNCLAIMED appliance: provisions the first user and binds it on (iss,sub)', async () => {
+  it('SECURITY: never creates an account, not even the first one on an empty appliance', async () => {
+    // A bearer token used to claim an empty appliance: whoever held any valid Portal token and
+    // reached the box first became its owner and administrator. The first account belongs to a
+    // sign-in (browser, app, Hub) or a signup, where the owner named at install is checked.
     mockJwtVerify.mockResolvedValue({
       payload: {
         aud: 'ci-server',
@@ -154,51 +157,10 @@ describe('PortalTokenService', () => {
     userService.findByEmail.mockResolvedValue(null);
     claimsTheAppliance({ id: 'u-new' });
 
-    const principal = await service.verifyAndProvision(TOKEN);
-
-    expect(principal?.user).toEqual({ id: 'u-new' });
-    // In the claiming transaction, so the binding exists exactly when the account does.
-    expect(federatedIdentityService.bind).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 'u-new',
-        issuer: 'https://hub.test',
-        subject: 's1',
-        bindMethod: 'sub',
-      }),
-      CLAIM_TRANSACTION,
-    );
-  });
-
-  it('SECURITY: decides "unclaimed" in the step that creates the account, never before it', async () => {
-    // Asked first and acted on after, two first sign-ins racing on an empty appliance both saw it
-    // empty and both got in. The ordinary create() — which admits unconditionally — must never be
-    // this path's way in, and there is no separate "is it empty?" question to race.
-    mockJwtVerify.mockResolvedValue({
-      payload: { aud: 'ci-server', iss: 'https://hub.test', sub: 's1', email: 'liam@ci.computer' },
-    });
-    claimsTheAppliance({ id: 'u-new' });
-
-    await service.verifyAndProvision(TOKEN);
-
-    expect(userService.createFirstAccount).toHaveBeenCalledTimes(1);
+    expect(await service.verifyAndProvision(TOKEN)).toBeNull();
+    expect(userService.createFirstAccount).not.toHaveBeenCalled();
     expect(userService.create).not.toHaveBeenCalled();
-  });
-
-  it('a sign-in that lost the claim to its OWN identity resolves to the account it claimed', async () => {
-    // A client's first requests arrive together; one claims the appliance, and its account and
-    // binding commit before the others get their answer. Refusing them would sign the owner out
-    // of the box they had just claimed.
-    mockJwtVerify.mockResolvedValue({
-      payload: { aud: 'ci-server', iss: 'https://hub.test', sub: 's1', email: 'liam@ci.computer' },
-    });
-    federatedIdentityService.findUserId
-      .mockResolvedValueOnce(null) // path 1, before the race
-      .mockResolvedValueOnce('u-owner'); // after losing it
-    userService.findById.mockResolvedValue({ id: 'u-owner' });
-
-    expect(await service.verifyAndProvision(TOKEN)).toMatchObject({ user: { id: 'u-owner' } });
     expect(federatedIdentityService.bind).not.toHaveBeenCalled();
-    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('SECURITY: a CLAIMED appliance refuses a Portal identity nobody here has bound', async () => {
@@ -220,7 +182,7 @@ describe('PortalTokenService', () => {
     expect(await service.verifyAndProvision(TOKEN)).toBeNull();
     expect(userService.create).not.toHaveBeenCalled();
     expect(federatedIdentityService.bind).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/already has an owner/));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/no account here is bound/));
   });
 
   it('links a pre-existing account by VERIFIED email exactly once', async () => {
@@ -279,21 +241,6 @@ describe('PortalTokenService', () => {
     expect(await service.verifyAndProvision(TOKEN)).toBeNull();
     expect(userService.create).not.toHaveBeenCalled();
     expect(federatedIdentityService.bind).not.toHaveBeenCalled();
-  });
-
-  it('falls back to a deterministic shadow email when the token has no email', async () => {
-    mockJwtVerify.mockResolvedValue({
-      payload: { aud: 'ci-server', iss: 'https://hub.test', sub: 'sub-xyz' },
-    });
-    claimsTheAppliance({ id: 'u2' });
-
-    await service.verifyAndProvision(TOKEN);
-
-    expect(userService.createFirstAccount).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ email: 'oidc-sub-xyz@portal.local' }),
-      expect.any(Function),
-    );
   });
 
   it('returns null for an invalid token (bad signature / issuer / audience / expiry)', async () => {

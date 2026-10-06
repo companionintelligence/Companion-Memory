@@ -39,6 +39,11 @@ export interface SignupIntent extends Partial<SignupIntentIdentity> {
    * holds an invitation.
    */
   firstAccountOnly?: boolean;
+  /**
+   * The callback found this person to be the owner named at install (`applianceOwner.ts`), so the
+   * confirm step may create the appliance's first account for them. Only ever `true` or absent.
+   */
+  designatedOwner?: boolean;
 }
 
 const SESSION_EXPIRES_IN = parseDuration(config.auth.session.duration) ?? 0;
@@ -189,7 +194,7 @@ export class AuthService {
     email: string,
     name?: string,
     identity?: SignupIntentIdentity,
-    admission?: Pick<SignupIntent, 'firstAccountOnly'>,
+    admission?: Pick<SignupIntent, 'firstAccountOnly' | 'designatedOwner'>,
   ): string {
     return this.jwtService.sign(
       {
@@ -200,6 +205,7 @@ export class AuthService {
         subject: identity?.subject,
         // Only ever `true` or absent, so an intent that waived nothing reads exactly as before.
         firstAccountOnly: admission?.firstAccountOnly === true ? true : undefined,
+        designatedOwner: admission?.designatedOwner === true ? true : undefined,
       },
       { secret: signupIntentSecret(), expiresIn: '10m' },
     );
@@ -213,6 +219,7 @@ export class AuthService {
       issuer?: string;
       subject?: string;
       firstAccountOnly?: boolean;
+      designatedOwner?: boolean;
     }>(token, {
       secret: signupIntentSecret(),
     });
@@ -227,6 +234,7 @@ export class AuthService {
       issuer: payload.issuer,
       subject: payload.subject,
       ...(payload.firstAccountOnly === true ? { firstAccountOnly: true } : {}),
+      ...(payload.designatedOwner === true ? { designatedOwner: true } : {}),
     };
   }
 

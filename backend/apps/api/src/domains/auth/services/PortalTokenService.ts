@@ -1,5 +1,3 @@
-import * as crypto from 'node:crypto';
-
 import { Injectable } from '@nestjs/common';
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload } from 'jose';
 
@@ -150,14 +148,11 @@ class PortalVerifyTimeoutError extends Error {
  *
  * An appliance serves one person, and that person's Portal identity is bound to
  * their local account the first time they sign in. Anyone else on the box is a
- * household member with an email-and-password account the owner invited. So a
- * Portal identity that is not yet bound here is admitted in exactly one case:
- * the appliance has no accounts at all, and this sign-in claims it. On a claimed
- * appliance an unbound Portal identity is refused — there is no invitation
- * mechanism on this path, and account creation belongs to the browser flow
- * (`OidcController`), which is where invitations are checked. Until this rule
- * existed the bearer path created an account for ANY valid Portal token, which
- * on a tunnelled Hub install meant anyone with a Portal login could sign up.
+ * household member with an email-and-password account the owner invited. A
+ * Portal identity that is not yet bound here is refused: this path creates no
+ * accounts, not even the first one. Account creation belongs to the browser
+ * flow (`OidcController`), the Hub bridge and signup, which is where
+ * invitations and the owner named at install are checked.
  *
  * ## Which Memory a token is for
  *
@@ -543,9 +538,6 @@ export class PortalTokenService implements PortalTokenVerifier {
 
     const claimedEmail = typeof payload.email === 'string' ? payload.email : undefined;
     const emailVerified = payload.email_verified === true;
-    // Shadow address keyed on the stable subject when no usable email is present.
-    const email = claimedEmail ?? `oidc-${sub}@portal.local`;
-    const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name : email;
 
     // 2. One-time link: an account that pre-dates the binding table, matched on
     //    a VERIFIED email. Every later request for this (iss,sub) takes path 1.
@@ -583,43 +575,13 @@ export class PortalTokenService implements PortalTokenVerifier {
       }
     }
 
-    // 3. Nobody here has claimed this Portal identity. Only an UNCLAIMED
-    //    appliance admits it — the sign-in becomes the owner (the first account
-    //    is promoted to admin). On a claimed appliance the answer is no: the
-    //    owner already exists, and household members are invited through the
-    //    browser flow as email-and-password accounts.
-    //
-    //    "Unclaimed" is decided by the transaction that creates the account, not
-    //    before it. Asked first and acted on after, two first sign-ins racing on
-    //    an empty appliance both saw it empty and both got in. The binding is
-    //    written in that transaction too, so it exists exactly when the account
-    //    does.
-    const created = await this.userService.createFirstAccount(
-      { userId: SYSTEM_USER },
-      //    Portal-authenticated users have no CI-Server password; set a random one.
-      { name, email, password: crypto.randomBytes(32).toString('hex'), passwordChosenByUser: false },
-      (manager, user) =>
-        this.federatedIdentityService.bind(
-          { userId: user.id, issuer, subject: sub, email: claimedEmail ?? null, bindMethod: 'sub' },
-          manager,
-        ),
-    );
-
-    if (created) {
-      return created;
-    }
-
-    //    Not the first account. It may be THIS identity's, though: a client that
-    //    has just signed in fires its first requests concurrently, one of them
-    //    claims the appliance, and its account and binding commit together before
-    //    the rest get their answer. Path 1 finds them now; refusing would sign the
-    //    owner out of the box they just claimed.
-    const claimedBy = await this.federatedIdentityService.findUserId(issuer, sub);
-    if (claimedBy) {
-      return this.userService.findById({ userId: SYSTEM_USER }, claimedBy);
-    }
-
-    this.logger.warn(`refusing to provision ${issuer}#${sub}: this appliance already has an owner`);
+    // 3. Nobody here has claimed this Portal identity, and a bearer token never
+    //    creates an account. It used to on an appliance with none: whoever held
+    //    any valid Portal token and reached the box first became its owner and
+    //    administrator. The first account is created by a sign-in in the browser
+    //    or the app (`OidcController`), the Hub (`HubForwardAuthBridgeService`) or
+    //    a signup, where an owner named at install is checked.
+    this.logger.warn(`refusing Portal token for ${issuer}#${sub}: no account here is bound to it`);
 
     return null;
   }

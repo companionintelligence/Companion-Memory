@@ -24,7 +24,14 @@ import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
-import { type CreateUserDto, UserService } from '@ci/domains/user';
+import {
+  type AccountAdmission,
+  ApplianceOwnerRequiredError,
+  type CreateUserDto,
+  isDesignatedOwner,
+  ownerIsDesignated,
+  UserService,
+} from '@ci/domains/user';
 
 import { AuthService, type SignupIntent } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
@@ -73,6 +80,11 @@ const SIGNUP_INTENT_COOKIE = 'oidc_signup_intent';
 /** An invite code offered at initiate, held until the callback can check it. */
 const SIGNUP_CODE_COOKIE = 'oidc_signup_code';
 const SIGNUP_INTENT_MAX_AGE = 10 * 60 * 1000;
+/**
+ * The `?error=` key for a sign-in refused because the appliance has no account yet and is waiting
+ * for the owner named at install (`applianceOwner.ts`). The login page explains it.
+ */
+const APPLIANCE_OWNER_REQUIRED = 'appliance_owner_required';
 
 /**
  * Rolls back an account being created for an invitation that another sign-in redeemed first.
@@ -535,6 +547,42 @@ export class OidcController {
 
       res.clearCookie(SIGNUP_CODE_COOKIE, { path: '/' });
 
+      // The owner named at install (applianceOwner.ts), when there is one, is the only person who
+      // may create this appliance's first account, invited or not: an invitation is the owner's to
+      // give, and before the first account nobody can have given one. What this sign-in shows:
+      // its Portal identity, the Hub person the Hub vouched for on this request, and a setup code
+      // offered as the signup code. `UserService` holds the account to the answer as it writes it.
+      const ownerGate = ownerIsDesignated();
+      const hubPerson = ownerGate ? this.hubBridge.verifyIdentity(req) : null;
+      const admission: AccountAdmission = {
+        designatedOwner:
+          ownerGate &&
+          isDesignatedOwner({
+            portal: {
+              issuer,
+              subject: userInfo.sub,
+              email: userInfo.email,
+              emailVerified: userInfo.email_verified === true,
+            },
+            hub: hubPerson
+              ? {
+                  username: hubPerson.username,
+                  issuer: hubPerson.stableId?.issuer,
+                  subject: hubPerson.stableId?.subject,
+                }
+              : null,
+            claimToken: offeredCode,
+          }),
+      };
+
+      if (unclaimed && ownerGate && !admission.designatedOwner) {
+        this.logger.warn(
+          `OIDC sign-in refused for ${userInfo.email}: the appliance is waiting for its owner`,
+        );
+
+        return failRedirect(APPLIANCE_OWNER_REQUIRED);
+      }
+
       const signupCodesRequired = await this.featureService.isFeatureEnabled('require.signup.codes');
       // Whether this person needs an invitation they do not hold. Waived only
       // for the first account; anyone else is refused here.
@@ -583,7 +631,7 @@ export class OidcController {
         let created: { id: string } | null;
 
         if (invited) {
-          created = await this.createOidcUser(userInfo.email, userInfo.name, invitation);
+          created = await this.createOidcUser(userInfo.email, userInfo.name, invitation, admission);
 
           if (created == null) {
             // Another sign-in redeemed the invitation after it was checked
@@ -604,6 +652,7 @@ export class OidcController {
           created = await this.claimApplianceFor(
             { issuer, subject: userInfo.sub, email: userInfo.email },
             this.oidcAccount(userInfo.email, userInfo.name),
+            admission,
           );
         }
 
@@ -629,7 +678,7 @@ export class OidcController {
       // Hub already admitted this person as an org member. Skip the Memory
       // signup-code / confirm-account gates and give them an empty onboarding.
       if (invitedByHub) {
-        const created = await this.createOidcUser(userInfo.email, userInfo.name);
+        const created = await this.createOidcUser(userInfo.email, userInfo.name, null, admission);
         await this.bindIfPossible(created.id, issuer, userInfo.sub, userInfo.email);
         this.logger.log(`Hub-invited Memory account created for ${userInfo.email}`);
 
@@ -665,7 +714,7 @@ export class OidcController {
           userInfo.email,
           userInfo.name,
           { issuer, subject: userInfo.sub },
-          { firstAccountOnly: codeRequired },
+          { firstAccountOnly: codeRequired, designatedOwner: admission.designatedOwner },
         ),
         {
           httpOnly: true,
@@ -678,6 +727,11 @@ export class OidcController {
 
       return res.redirect('/api/authenticate/oidc/confirm-account');
     } catch (err) {
+      // The appliance became empty after `unclaimed` was read, and this person is not its owner.
+      if (err instanceof ApplianceOwnerRequiredError) {
+        return failRedirect(APPLIANCE_OWNER_REQUIRED);
+      }
+
       this.logger.error('OIDC callback error', err instanceof Error ? err.stack : String(err));
 
       return failRedirect('oidc_failed');
@@ -855,37 +909,67 @@ export class OidcController {
         passwordChosenByUser: false,
       };
 
-      if (identity.firstAccountOnly) {
-        // The callback let this person past the signup-code gate only because
-        // the appliance had no accounts, up to the intent's lifetime ago. Still
-        // true, or no account: decided now, atomically with creating it.
-        const claimed = await this.claimApplianceFor(identity, account);
+      const admission: AccountAdmission = { designatedOwner: identity.designatedOwner === true };
+      let created: { id: string } | null;
 
-        if (claimed == null) {
-          this.logger.warn(
-            `confirm-account refused for ${identity.email}: the appliance was claimed after this sign-in began, and signup codes are required`,
-          );
-          res.clearCookie(SIGNUP_INTENT_COOKIE, { path: '/' });
-          res.redirect(HttpStatus.SEE_OTHER, '/login?error=signup_code_required');
-
-          return;
+      try {
+        created = await this.createConfirmedAccount(identity, account, admission);
+      } catch (err) {
+        // The appliance is empty and waiting for the owner named at install, and the callback did
+        // not find this person to be them.
+        if (!(err instanceof ApplianceOwnerRequiredError)) {
+          throw err;
         }
 
-        user = claimed;
-      } else {
-        user = await this.userService.create({ userId: SYSTEM_USER }, account);
+        res.clearCookie(SIGNUP_INTENT_COOKIE, { path: '/' });
+        res.redirect(HttpStatus.SEE_OTHER, `/login?error=${APPLIANCE_OWNER_REQUIRED}`);
 
-        // Bind the new account to the Portal identity that asked for it, so the
-        // bearer path resolves it by (iss, sub) from the first API call on.
-        if (identity.issuer && identity.subject) {
-          await this.bindIfPossible(user.id, identity.issuer, identity.subject, identity.email);
-        }
+        return;
       }
+
+      if (created == null) {
+        this.logger.warn(
+          `confirm-account refused for ${identity.email}: the appliance was claimed after this sign-in began, and signup codes are required`,
+        );
+        res.clearCookie(SIGNUP_INTENT_COOKIE, { path: '/' });
+        res.redirect(HttpStatus.SEE_OTHER, '/login?error=signup_code_required');
+
+        return;
+      }
+
+      user = created;
     }
 
     res.clearCookie(SIGNUP_INTENT_COOKIE, { path: '/' });
 
     await this.finishLogin(req, res, user);
+  }
+
+  /**
+   * The account the confirm step creates, or null when the intent was admitted only as the first
+   * account and the appliance has been claimed since.
+   */
+  private async createConfirmedAccount(
+    identity: SignupIntent,
+    account: CreateUserDto,
+    admission: AccountAdmission,
+  ): Promise<{ id: string } | null> {
+    if (identity.firstAccountOnly) {
+      // The callback let this person past the signup-code gate only because
+      // the appliance had no accounts, up to the intent's lifetime ago. Still
+      // true, or no account: decided now, atomically with creating it.
+      return this.claimApplianceFor(identity, account, admission);
+    }
+
+    const user = await this.userService.create({ userId: SYSTEM_USER }, account, undefined, admission);
+
+    // Bind the new account to the Portal identity that asked for it, so the
+    // bearer path resolves it by (iss, sub) from the first API call on.
+    if (identity.issuer && identity.subject) {
+      await this.bindIfPossible(user.id, identity.issuer, identity.subject, identity.email);
+    }
+
+    return user;
   }
 
   private resolveOidcIssuer(userInfo: { iss?: string }, idToken?: string): string {
@@ -971,18 +1055,25 @@ export class OidcController {
    * @returns the new account; `null`, with nothing created, when another sign-in redeemed
    *   `invitation` first.
    */
-  private createOidcUser(email: string, name?: string): Promise<{ id: string; email: string }>;
+  private createOidcUser(
+    email: string,
+    name: string | undefined,
+    invitation: null,
+    admission: AccountAdmission,
+  ): Promise<{ id: string; email: string }>;
 
   private createOidcUser(
     email: string,
     name: string | undefined,
     invitation: string | null,
+    admission: AccountAdmission,
   ): Promise<{ id: string; email: string } | null>;
 
   private async createOidcUser(
     email: string,
-    name?: string,
-    invitation: string | null = null,
+    name: string | undefined,
+    invitation: string | null,
+    admission: AccountAdmission,
   ): Promise<{ id: string; email: string } | null> {
     try {
       return await this.userService.create(
@@ -995,6 +1086,7 @@ export class OidcController {
                 throw new InvitationRedeemedElsewhere();
               }
             },
+        admission,
       );
     } catch (err) {
       if (err instanceof InvitationRedeemedElsewhere) {
@@ -1032,6 +1124,7 @@ export class OidcController {
   private async claimApplianceFor(
     identity: { issuer?: string; subject?: string; email: string },
     account: CreateUserDto,
+    admission: AccountAdmission,
   ): Promise<{ id: string } | null> {
     const { issuer, subject, email } = identity;
 
@@ -1039,6 +1132,7 @@ export class OidcController {
       { userId: SYSTEM_USER },
       account,
       (manager, user) => this.bindIfPossible(user.id, issuer, subject, email, 'sub', manager),
+      admission,
     );
 
     if (created) {

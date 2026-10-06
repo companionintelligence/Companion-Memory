@@ -8,6 +8,7 @@ import { ServiceContext, SYSTEM_USER } from '@ci/common/context';
 import config from '@ci/configuration';
 import { EventService } from '@ci/domains/events';
 
+import { ApplianceOwnerRequiredError, ownerIsDesignated } from '../applianceOwner';
 import { type User, UserEntity } from '../entities/UserEntity';
 import { UserCreatedEvent, UserUpdatedEvent, UserRemovedEvent } from '../events';
 import { CreateUserDto, UpdateUserDto } from '../types';
@@ -41,6 +42,15 @@ const APPLIANCE_CLAIM_LOCK_KEY = 20260910133657;
  */
 export type WithNewAccount = (manager: EntityManager, user: User) => Promise<unknown>;
 
+/**
+ * What the door creating an account established about the person, for the one decision it matters
+ * to: whether they may create the appliance's FIRST account when an owner is designated
+ * (`applianceOwner.ts`). A door sets `designatedOwner` only after `isDesignatedOwner` said so.
+ */
+export interface AccountAdmission {
+  designatedOwner?: boolean;
+}
+
 @Injectable()
 export class UserService {
   constructor(
@@ -55,12 +65,17 @@ export class UserService {
    *   person it is created for — run in the transaction that inserts the row. If it throws, the
    *   account is rolled back and its error reaches the caller as thrown.
    */
-  async create(context: ServiceContext, data: CreateUserDto, alongside?: WithNewAccount): Promise<User> {
+  async create(
+    context: ServiceContext,
+    data: CreateUserDto,
+    alongside?: WithNewAccount,
+    admission?: AccountAdmission,
+  ): Promise<User> {
     if (context.userId !== SYSTEM_USER) {
       throw new Error('Unauthorized');
     }
 
-    const user = await this.insertAccount(data, { onlyIfFirst: false, alongside });
+    const user = await this.insertAccount(data, { onlyIfFirst: false, alongside, admission });
 
     // Unreachable: only an `onlyIfFirst` insert can decline. Thrown rather than asserted away, so a
     // change that breaks that is a loud failure instead of a `null` typed as a User.
@@ -106,6 +121,7 @@ export class UserService {
     context: ServiceContext,
     data: CreateUserDto,
     alongside?: WithNewAccount,
+    admission?: AccountAdmission,
   ): Promise<User | null> {
     if (context.userId !== SYSTEM_USER) {
       throw new Error('Unauthorized');
@@ -118,7 +134,7 @@ export class UserService {
       return null;
     }
 
-    return this.insertAccount(data, { onlyIfFirst: true, alongside });
+    return this.insertAccount(data, { onlyIfFirst: true, alongside, admission });
   }
 
   /**
@@ -130,11 +146,21 @@ export class UserService {
    * holds only if everybody who inserts waits on the same lock. It costs nothing on a path that runs
    * once per account.
    *
+   * When an owner is designated (`applianceOwner.ts`), the FIRST account is created only for a
+   * caller that established it is the owner's (`admission.designatedOwner`), whichever method it
+   * came through. Decided here, under the lock, for the same reason as "is this the first account":
+   * any earlier answer can be stale by the time the row is written.
+   *
    * @returns `null` only when `onlyIfFirst` and the appliance already has an account.
+   * @throws ApplianceOwnerRequiredError when this would be the first account and is not the owner's.
    */
   private async insertAccount(
     data: CreateUserDto,
-    { onlyIfFirst, alongside }: { onlyIfFirst: boolean; alongside?: WithNewAccount },
+    {
+      onlyIfFirst,
+      alongside,
+      admission,
+    }: { onlyIfFirst: boolean; alongside?: WithNewAccount; admission?: AccountAdmission },
   ): Promise<User | null> {
     const id = data.id ?? uuidv7();
     const { passwordChosenByUser = true, ...columns } = data;
@@ -152,8 +178,15 @@ export class UserService {
     const entity = await this.userRepository.manager.transaction(async (manager) => {
       await manager.query('SELECT pg_advisory_xact_lock($1)', [APPLIANCE_CLAIM_LOCK_KEY]);
 
-      if (onlyIfFirst && (await this.anyAccountExists(manager))) {
+      const ownerGate = ownerIsDesignated();
+      const first = onlyIfFirst || ownerGate ? !(await this.anyAccountExists(manager)) : false;
+
+      if (onlyIfFirst && !first) {
         return null;
+      }
+
+      if (first && ownerGate && admission?.designatedOwner !== true) {
+        throw new ApplianceOwnerRequiredError();
       }
 
       const saved = await manager.save(instance);

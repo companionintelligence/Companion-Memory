@@ -17,7 +17,15 @@ import {
 } from '@ci/common/crypto';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
-import { type CreateUserDto, type User, UserService } from '@ci/domains/user';
+import {
+  type AccountAdmission,
+  ApplianceOwnerRequiredError,
+  type CreateUserDto,
+  isDesignatedOwner,
+  ownerIsDesignated,
+  type User,
+  UserService,
+} from '@ci/domains/user';
 
 import { clearCsrfCookie, clearSessionCookie, setCsrfCookie, setSessionCookie } from '../utils/authCookies';
 
@@ -41,8 +49,11 @@ export interface HubIdentity {
  * - `account_linked_elsewhere`: the account their Hub username names belongs to another person of
  *   the same Hub. Somebody renamed away from this address, and the Hub later gave it to this person.
  * - `account_ambiguous`: no account has exactly this address, and several have it in other cases.
+ * - `appliance_owner_required`: Memory has no account yet, and the Hub named an owner at install who
+ *   is somebody else. The first account is the owner's.
  */
-export type HubBridgeRefusal = 'account_unavailable' | 'account_linked_elsewhere' | 'account_ambiguous';
+export type HubBridgeRefusal =
+  'account_unavailable' | 'account_linked_elsewhere' | 'account_ambiguous' | 'appliance_owner_required';
 
 export interface HubBridgeResult {
   /** Verified Hub username (email), or null when headers are absent/disabled/invalid. */
@@ -256,7 +267,19 @@ export class HubForwardAuthBridgeService {
     // previous person's session is already gone.
     await this.invalidate(req, session);
 
-    const user = await this.ensureUser(username);
+    let user: { id: string; email: string };
+    try {
+      user = await this.ensureUser(username);
+    } catch (error) {
+      if (!(error instanceof ApplianceOwnerRequiredError)) {
+        throw error;
+      }
+
+      await this.signOut(req, res, null);
+      this.logger.warn(`not signing in Hub person ${username}: the appliance is waiting for its owner`);
+
+      return { username, replaced: false, refused: 'appliance_owner_required' };
+    }
 
     return this.issueSessionFor(req, res, user, username, session);
   }
@@ -311,6 +334,7 @@ export class HubForwardAuthBridgeService {
                 { userId: user.id, issuer, subject, email: username, bindMethod: 'sub' },
                 manager,
               ),
+            this.admissionFor({ username, issuer, subject }),
           );
 
           this.logger.log(
@@ -320,6 +344,10 @@ export class HubForwardAuthBridgeService {
           return { kind: 'account', user: created };
         }
       } catch (error) {
+        if (error instanceof ApplianceOwnerRequiredError) {
+          return { kind: 'refused', reason: 'appliance_owner_required' };
+        }
+
         if (!isUniqueViolation(error) || attempt >= MAX_PLACEMENT_ATTEMPTS) {
           throw error;
         }
@@ -462,11 +490,24 @@ export class HubForwardAuthBridgeService {
       return existing;
     }
 
-    const created = await this.userService.create({ userId: SYSTEM_USER }, this.accountFor(email));
+    const created = await this.userService.create(
+      { userId: SYSTEM_USER },
+      this.accountFor(email),
+      undefined,
+      this.admissionFor({ username: email }),
+    );
 
     this.logger.log(`JIT-created Memory user for Hub-invited person ${email}`);
 
     return created;
+  }
+
+  /**
+   * Whether the Hub person is the owner named at install, who alone may create Memory's first
+   * account (`applianceOwner.ts`). The Hub's signature is what vouches for the username and id.
+   */
+  private admissionFor(person: { username: string; issuer?: string; subject?: string }): AccountAdmission {
+    return { designatedOwner: ownerIsDesignated() && isDesignatedOwner({ hub: person }) };
   }
 
   /** The account the bridge creates for a Hub person: nobody has seen its password, so none is stamped. */

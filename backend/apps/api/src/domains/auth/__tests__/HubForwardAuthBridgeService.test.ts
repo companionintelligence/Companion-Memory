@@ -2,6 +2,7 @@ import type { Response } from 'express';
 
 import { signForwardAuthUser, signForwardAuthUserId } from '@ci/common/crypto';
 import config from '@ci/configuration';
+import { ApplianceOwnerRequiredError } from '@ci/domains/user';
 
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 
@@ -224,6 +225,8 @@ describe('HubForwardAuthBridgeService', () => {
       expect(userService.create).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ email: 'hello@lifescope.io', passwordChosenByUser: false }),
+        undefined,
+        { designatedOwner: false },
       );
       expect(authService.issueSessionToken).toHaveBeenCalledWith('user-b', expect.any(Object));
       expect(csrfService.generateToken).toHaveBeenCalledWith('sid-2');
@@ -393,6 +396,7 @@ describe('HubForwardAuthBridgeService', () => {
         expect.anything(),
         expect.objectContaining({ email: 'hello@lifescope.io', passwordChosenByUser: false }),
         expect.any(Function),
+        { designatedOwner: false },
       );
       expect(federatedIdentityService.bind).toHaveBeenCalledWith(
         {
@@ -530,5 +534,84 @@ describe('HubForwardAuthBridgeService', () => {
         accountId: null,
       });
     });
+  });
+});
+
+/**
+ * An owner named at install (`auth.applianceOwner`) is the only person who may create Memory's
+ * first account. The bridge tells `UserService` when the Hub person is that owner, and turns the
+ * refusal for anyone else into a sign-out with a reason rather than a 500.
+ */
+describe('HubForwardAuthBridgeService — the first account belongs to the Hub owner', () => {
+  const owner = config.auth.applianceOwner;
+  const previous = { ...config.auth.hubForwardAuth };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(Date, 'now').mockReturnValue(NOW);
+    Object.assign(config.auth.hubForwardAuth, { enabled: true, secret: SECRET, maxSkewMs: 300_000 });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    Object.assign(config.auth.hubForwardAuth, previous);
+    Object.assign(owner, { hubIssuer: '', hubSubject: '', email: '' });
+  });
+
+  it('tells UserService the Hub owner is the owner', async () => {
+    Object.assign(owner, { hubIssuer: DIRECTORY, hubSubject: HUB_ID });
+    const { service, userService } = makeService();
+    userService.create.mockResolvedValue(account('user-owner', 'owner@lifescope.io'));
+
+    await service.alignSession(requestWith(stableHeaders('owner@lifescope.io'), null), response());
+
+    expect(userService.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.any(Function),
+      { designatedOwner: true },
+    );
+  });
+
+  it('signs out, with a reason, a household member who reaches the empty Memory first', async () => {
+    Object.assign(owner, { hubIssuer: DIRECTORY, hubSubject: HUB_ID });
+    const { service, userService, authService } = makeService();
+    userService.create.mockRejectedValue(new ApplianceOwnerRequiredError());
+    const res = response();
+
+    await expect(
+      service.alignSession(
+        requestWith(stableHeaders('member@lifescope.io', { userId: OTHER_HUB_ID }), null),
+        res,
+      ),
+    ).resolves.toEqual({
+      username: 'member@lifescope.io',
+      replaced: false,
+      refused: 'appliance_owner_required',
+    });
+    expect(userService.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.any(Function),
+      { designatedOwner: false },
+    );
+    expect(authService.issueSessionToken).not.toHaveBeenCalled();
+  });
+
+  it('does the same for a Hub that sends no stable id, going by the owner address', async () => {
+    owner.email = 'owner@lifescope.io';
+    const { service, userService, authService } = makeService();
+    userService.create.mockRejectedValue(new ApplianceOwnerRequiredError());
+    const res = response();
+
+    await expect(
+      service.alignSession(requestWith(signedHeaders('member@lifescope.io'), null), res),
+    ).resolves.toEqual({
+      username: 'member@lifescope.io',
+      replaced: false,
+      refused: 'appliance_owner_required',
+    });
+    expect(authService.issueSessionToken).not.toHaveBeenCalled();
+    expect(res.clearCookie).toHaveBeenCalledWith(config.auth.cookies.sessionTokenName, expect.any(Object));
   });
 });

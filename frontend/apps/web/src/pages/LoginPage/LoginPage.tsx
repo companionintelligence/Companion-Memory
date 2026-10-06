@@ -26,6 +26,8 @@ function oidcErrorMessage(code: string): string {
       return 'An account with this email already exists on this Companion Memory. Sign in with your email and password instead.';
     case 'email_unverified':
       return 'Your Companion account email has not been verified yet. Verify it, then sign in again.';
+    case 'appliance_owner_required':
+      return 'This Companion Memory has not been set up yet, and only its owner can do that. Ask the person who installed it to sign in first.';
     default:
       return 'Sign in failed. Please try again.';
   }

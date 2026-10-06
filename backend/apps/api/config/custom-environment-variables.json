@@ -54,6 +54,14 @@
       "applianceAudience": "PORTAL_APPLIANCE_AUDIENCE",
       "captureClients": "PORTAL_OIDC_CAPTURE_CLIENTS"
     },
+    "applianceOwner": {
+      "email": "CI_OWNER_EMAIL",
+      "hubIssuer": "CI_OWNER_HUB_ISSUER",
+      "hubSubject": "CI_OWNER_HUB_SUBJECT",
+      "portalIssuer": "CI_OWNER_PORTAL_ISSUER",
+      "portalSubject": "CI_OWNER_PORTAL_SUBJECT",
+      "claimToken": "CI_OWNER_CLAIM_TOKEN"
+    },
     "hubForwardAuth": {
       "enabled": {
         "__name": "CI_HUB_FORWARD_AUTH_ENABLED",

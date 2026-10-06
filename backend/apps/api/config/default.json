@@ -89,6 +89,14 @@
       "applianceAudience": "",
       "captureClients": "ci-import-tools,ci-browser-extension,ci-even,ci-applet"
     },
+    "applianceOwner": {
+      "email": "",
+      "hubIssuer": "",
+      "hubSubject": "",
+      "portalIssuer": "",
+      "portalSubject": "",
+      "claimToken": ""
+    },
     "hubForwardAuth": {
       "enabled": false,
       "secret": "",
