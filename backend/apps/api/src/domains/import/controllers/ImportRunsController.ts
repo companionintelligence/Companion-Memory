@@ -35,6 +35,7 @@ import { ImportRetentionService, type DiscardedRun } from '../services/ImportRet
 import { ImportRunService } from '../services/ImportRunService';
 import { ObjectCountService, type ObjectCountEntry } from '../services/ObjectCountService';
 import { isStageStalled } from '../services/stageLiveness';
+import { importRootsCallerFor } from '../sources/importRoots';
 
 /** A run as the progress UI reads it. */
 export interface RunSummary {
@@ -164,7 +165,7 @@ export interface StartPushBody {
 }
 
 export interface RecognizeBody {
-  /** Absolute path on the appliance, within a configured import root. */
+  /** Absolute path on the appliance: the caller's own inbox, or a configured import root (administrator only). */
   path?: string;
 }
 
@@ -245,9 +246,10 @@ export class ImportRunsController {
    * ends up in access logs and proxy history, and the reply is not cacheable
    * anyway — the folder it describes changes.
    *
-   * Confined to `CI_IMPORT_ROOTS`, exactly as the MCP tool is. A path outside
-   * them answers `allowed: false` with the remedy rather than 4xx: "not
-   * permitted, upload instead" is a state the caller renders, not a fault.
+   * Confined to the caller's own inbox, plus `CI_IMPORT_ROOTS` for the
+   * administrator, exactly as the MCP tool is. A path outside them answers
+   * `allowed: false` with the remedy rather than 4xx: "not permitted, upload
+   * instead" is a state the caller renders, not a fault.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Post('recognize')
@@ -263,10 +265,7 @@ export class ImportRunsController {
     const userId = requireUserId(context);
     const user = await this.users.findById({ userId }, userId);
 
-    return recognizePathWithinRoots(body.path, {
-      userId: user?.id ?? null,
-      isAdmin: user?.role === 'admin',
-    });
+    return recognizePathWithinRoots(body.path, importRootsCallerFor(user));
   }
 
   /** Start importing a staged upload. */

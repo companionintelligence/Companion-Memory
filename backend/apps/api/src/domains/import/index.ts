@@ -187,6 +187,7 @@ export { ImportStageEvent } from './events';
 export { ImportStageListener } from './listeners/ImportStageListener';
 export {
   configuredImportRoots,
+  importRootsCallerFor,
   resolveWithinImportRoots,
   uploadsRoot,
   userInboxDisplayDir,

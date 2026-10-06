@@ -226,6 +226,18 @@ export interface ImportRootsCaller {
 }
 
 /**
+ * The {@link ImportRootsCaller} for an account as `UserService.findById`
+ * returned it, or for no account at all. The REST route and both import tools
+ * build their caller here, so the rule for who reaches the configured roots is
+ * written once.
+ */
+export function importRootsCallerFor(
+  user: { id: string; role?: string | null } | null | undefined,
+): ImportRootsCaller {
+  return { userId: user?.id ?? null, isAdmin: user?.role === 'admin' };
+}
+
+/**
  * The read-side resolver the path tools use: the configured roots (ADMIN ONLY)
  * plus the CALLER's OWN inbox subtree.
  *

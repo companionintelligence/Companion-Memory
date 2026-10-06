@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
-import { recognizePathWithinRoots } from '@ci/domains/import';
+import { importRootsCallerFor, recognizePathWithinRoots } from '@ci/domains/import';
 import { UserService } from '@ci/domains/user';
 
 import { BaseTool } from '../core/BaseTool';
@@ -44,15 +44,17 @@ export class ImportRecognizePathTool extends BaseTool<RecognizePathInput, unknow
     description:
       'Ask every registered importer to inspect a path the appliance can see and report how ' +
       'confident it is that this is its kind of data, highest first. Reads the files but imports ' +
-      'nothing. Only paths under the configured import roots or your own import-inbox folder ' +
-      'may be inspected.',
+      'nothing. Only paths in your own import-inbox folder may be inspected, plus the configured ' +
+      'import roots when you are the appliance administrator.',
     category: 'database',
     parameters: {
       type: 'object',
       properties: {
         path: {
           type: 'string',
-          description: 'Absolute path to a file or directory, within a configured import root.',
+          description:
+            'Absolute path to a file or directory, within your import-inbox folder or (administrator ' +
+            'only) a configured import root.',
         },
       },
       required: ['path'],
@@ -82,9 +84,6 @@ export class ImportRecognizePathTool extends BaseTool<RecognizePathInput, unknow
     // An out-of-bounds path comes back as `allowed: false` rather than thrown:
     // an agent can act on "not allowed, upload instead", where a tool error
     // reads as a malfunction.
-    return recognizePathWithinRoots(input.path, {
-      userId: user?.id ?? null,
-      isAdmin: user?.role === 'admin',
-    });
+    return recognizePathWithinRoots(input.path, importRootsCallerFor(user));
   }
 }
