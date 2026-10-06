@@ -79,9 +79,6 @@
     "esbuild": {
       "built": true
     },
-    "fsevents": {
-      "built": true
-    },
     "unrs-resolver": {
       "built": true
     }

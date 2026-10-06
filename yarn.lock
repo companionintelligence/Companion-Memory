@@ -2748,8 +2748,6 @@ __metadata:
       built: true
     esbuild:
       built: true
-    fsevents:
-      built: true
     unrs-resolver:
       built: true
   languageName: unknown
