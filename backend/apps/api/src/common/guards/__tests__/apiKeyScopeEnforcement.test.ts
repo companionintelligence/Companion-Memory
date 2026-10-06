@@ -136,7 +136,9 @@ describe('enforceApiKeyCapability', () => {
       expect(setupCapability(undefined, writeKey, { type: 'http', method: 'DELETE' })).toThrow(
         /is "write".*requires "full"/,
       );
-      expect(setupCapability(undefined, readKey, { type: 'http', method: 'delete' })).toThrow(ForbiddenException);
+      expect(setupCapability(undefined, readKey, { type: 'http', method: 'delete' })).toThrow(
+        ForbiddenException,
+      );
       expect(setupCapability(undefined, fullKey, { type: 'http', method: 'DELETE' })).not.toThrow();
     });
 
@@ -156,7 +158,9 @@ describe('enforceApiKeyCapability', () => {
       expect(
         setupCapability(undefined, { apiKeyScopes: undefined }, { type: 'graphql', operation: 'mutation' }),
       ).not.toThrow();
-      expect(setupCapability(undefined, { apiKeyScopes: undefined }, { type: 'http', method: 'DELETE' })).not.toThrow();
+      expect(
+        setupCapability(undefined, { apiKeyScopes: undefined }, { type: 'http', method: 'DELETE' }),
+      ).not.toThrow();
     });
 
     it('GraphQL: a field declared full (a data-losing @GraphqlPrivacy label) refuses a write key', () => {

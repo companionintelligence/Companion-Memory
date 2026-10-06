@@ -248,7 +248,10 @@ export class OrphanCleanupService {
       const reopened = (await manager.query(REOPEN_INDEX_LEDGER_SQL, [null])) as Array<{ count: number }>;
       const ledgerRowsReopened = Number(reopened[0]?.count ?? 0);
 
-      this.logger.log('Truncated the search index and re-opened its ledger', { truncated, ledgerRowsReopened });
+      this.logger.log('Truncated the search index and re-opened its ledger', {
+        truncated,
+        ledgerRowsReopened,
+      });
 
       return { truncated, ledgerRowsReopened };
     });

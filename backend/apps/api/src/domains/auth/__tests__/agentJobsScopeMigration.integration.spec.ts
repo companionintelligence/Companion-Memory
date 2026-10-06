@@ -46,7 +46,9 @@ function migrationHalf(half: 'up' | 'down'): string {
     throw new Error(`${MIGRATION} has no migrate:up / migrate:down markers.`);
   }
 
-  return half === 'up' ? sql.slice(up + '-- migrate:up'.length, down) : sql.slice(down + '-- migrate:down'.length);
+  return half === 'up'
+    ? sql.slice(up + '-- migrate:up'.length, down)
+    : sql.slice(down + '-- migrate:down'.length);
 }
 
 interface Seed {

@@ -64,7 +64,7 @@ describe('/v1/agent/jobs packet and checkpoint pass who is calling to the servic
     expect(dispatchService.getPacket).toHaveBeenCalledWith({ userId: 'user-1' }, 'job-1', { kind: 'owner' });
   });
 
-  it("the app a connect key was minted for, from provenance and then its name", async () => {
+  it('the app a connect key was minted for, from provenance and then its name', async () => {
     const { controller, dispatchService } = makeController();
 
     await controller.checkpoint(
@@ -73,23 +73,32 @@ describe('/v1/agent/jobs packet and checkpoint pass who is calling to the servic
         apiKeyScopes: ['memory', 'intents', 'mcp', 'agent-jobs'],
         apiKeyManagedBy: 'connect',
         apiKeyName: 'app:ci-openclaw:ci-marketplace',
-      } as ApiKeyScopedRequest,
+      } as unknown as ApiKeyScopedRequest,
       'job-1',
       { status: 'completed' },
     );
 
-    expect(dispatchService.checkpoint).toHaveBeenCalledWith({ userId: 'user-1' }, 'job-1', { status: 'completed' }, {
-      kind: 'api-key',
-      connectApp: 'ci-openclaw',
-    });
+    expect(dispatchService.checkpoint).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      'job-1',
+      { status: 'completed' },
+      {
+        kind: 'api-key',
+        connectApp: 'ci-openclaw',
+      },
+    );
   });
 
-  it("no app at all for a hand-made key, whatever it is named", async () => {
+  it('no app at all for a hand-made key, whatever it is named', async () => {
     const { controller, dispatchService } = makeController();
 
     await controller.packet(
       context,
-      { apiKeyScopes: [], apiKeyManagedBy: null, apiKeyName: 'app:ci-openclaw:ci-marketplace' } as ApiKeyScopedRequest,
+      {
+        apiKeyScopes: [],
+        apiKeyManagedBy: null,
+        apiKeyName: 'app:ci-openclaw:ci-marketplace',
+      } as unknown as ApiKeyScopedRequest,
       'job-1',
     );
 

@@ -120,7 +120,9 @@ describeWithDatabase(
     afterAll(async () => {
       if (dataSource?.isInitialized) {
         await cleanUp();
-        await dataSource.query('DELETE FROM ci.users WHERE id = ANY($1::uuid[])', [[testUserId, otherUserId]]);
+        await dataSource.query('DELETE FROM ci.users WHERE id = ANY($1::uuid[])', [
+          [testUserId, otherUserId],
+        ]);
         await dataSource.destroy();
       }
     });
@@ -268,7 +270,7 @@ describeWithDatabase(
         receiptId,
       ]) as Promise<Array<{ user_id: string; owner_user_id: string | null }>>;
 
-    it("an imported row names only the importer, even when the archive names another account (both paths)", async () => {
+    it('an imported row names only the importer, even when the archive names another account (both paths)', async () => {
       noopServices.userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
 
       // ci.receipts carries user_id AND owner_user_id. Before, only one of the
@@ -281,7 +283,9 @@ describeWithDatabase(
         exportedAt: new Date().toISOString(),
         userId: testUserId,
         profile: null,
-        tables: { 'ci.receipts': [{ receipt_id: viaJson, user_id: otherUserId, owner_user_id: otherUserId }] },
+        tables: {
+          'ci.receipts': [{ receipt_id: viaJson, user_id: otherUserId, owner_user_id: otherUserId }],
+        },
         fileBlobs: [],
       });
 

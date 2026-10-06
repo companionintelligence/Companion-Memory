@@ -91,7 +91,9 @@ describeWithDatabase('ingest reset and index truncate on a scratch database', ()
     // dbmate migrations do not create pg-boss's schema (the queue library does
     // at boot), and the reset deletes from it. The two columns it reads are enough.
     await query(`CREATE SCHEMA IF NOT EXISTS pgboss`);
-    await query(`CREATE TABLE IF NOT EXISTS pgboss.job (name text NOT NULL, state text NOT NULL, data jsonb)`);
+    await query(
+      `CREATE TABLE IF NOT EXISTS pgboss.job (name text NOT NULL, state text NOT NULL, data jsonb)`,
+    );
 
     await query(`INSERT INTO ci.users (id, email) VALUES ($1::uuid, $2), ($3::uuid, $4)`, [
       caller,
@@ -110,7 +112,7 @@ describeWithDatabase('ingest reset and index truncate on a scratch database', ()
     await scratch?.drop();
   });
 
-  it("names the whole foreign-key closure of the ingest tables, no more and no less", async () => {
+  it('names the whole foreign-key closure of the ingest tables, no more and no less', async () => {
     const closure = await query<{ rel: string }>(
       `WITH RECURSIVE t(rel) AS (
          SELECT unnest($1::regclass[])
@@ -131,7 +133,11 @@ describeWithDatabase('ingest reset and index truncate on a scratch database', ()
     const withUserColumn = await query<{ rel: string }>(
       `SELECT table_schema || '.' || table_name AS rel FROM information_schema.columns
         WHERE column_name = 'user_id' AND (table_schema || '.' || table_name) = ANY($1::text[])`,
-      [[...INGEST_RESET_TABLES.ingest, ...INGEST_RESET_TABLES.dependents].map(({ schema, table }) => `${schema}.${table}`)],
+      [
+        [...INGEST_RESET_TABLES.ingest, ...INGEST_RESET_TABLES.dependents].map(
+          ({ schema, table }) => `${schema}.${table}`,
+        ),
+      ],
     );
     const probed = INGEST_RESET_TABLES.probed.map(({ schema, table }) => `${schema}.${table}`);
 
@@ -154,19 +160,24 @@ describeWithDatabase('ingest reset and index truncate on a scratch database', ()
         [`${schema}.${table}`, parent, column],
       );
 
-      expect({ table: `${schema}.${table}`, notNullFk }).toEqual({ table: `${schema}.${table}`, notNullFk: 1 });
+      expect({ table: `${schema}.${table}`, notNullFk }).toEqual({
+        table: `${schema}.${table}`,
+        notNullFk: 1,
+      });
       expect(probed).toContain(parent);
     }
   });
 
-  it("refuses while another account has a file, which the old CASCADE emptied without looking, and loses nothing", async () => {
+  it('refuses while another account has a file, which the old CASCADE emptied without looking, and loses nothing', async () => {
     const callersEvent = await seedEvent(caller);
     const othersFile = await seedFile(other);
 
     await expect(reset.reset({ userId: caller })).rejects.toThrow(/ci\.files/);
 
     expect(await count(`SELECT count(*)::int AS n FROM ci.files WHERE id = $1::uuid`, [othersFile])).toBe(1);
-    expect(await count(`SELECT count(*)::int AS n FROM ci.events WHERE event_id = $1::uuid`, [callersEvent])).toBe(1);
+    expect(
+      await count(`SELECT count(*)::int AS n FROM ci.events WHERE event_id = $1::uuid`, [callersEvent]),
+    ).toBe(1);
 
     await query(`DELETE FROM ci.files WHERE id = $1::uuid`, [othersFile]);
   });
@@ -194,18 +205,27 @@ describeWithDatabase('ingest reset and index truncate on a scratch database', ()
     await query(
       `INSERT INTO pgboss.job (name, state, data) VALUES
          ('search-index', 'created', $1::jsonb), ('search-index', 'created', $2::jsonb)`,
-      [JSON.stringify({ userId: caller, eventId: callersEvent }), JSON.stringify({ userId: other, personId: othersPerson })],
+      [
+        JSON.stringify({ userId: caller, eventId: callersEvent }),
+        JSON.stringify({ userId: other, personId: othersPerson }),
+      ],
     );
 
     const result = await reset.reset({ userId: caller });
 
-    expect(result.truncated).toEqual(expect.arrayContaining(['ci.events', 'ci.files', 'ci_search.embeddings']));
+    expect(result.truncated).toEqual(
+      expect.arrayContaining(['ci.events', 'ci.files', 'ci_search.embeddings']),
+    );
     expect(await count(`SELECT count(*)::int AS n FROM ci.events`)).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM ci.files`)).toBe(0);
 
     // The caller's mirror row went with its event; the other account's did not.
-    expect(await count(`SELECT count(*)::int AS n FROM ci.entities WHERE entity_id = $1::uuid`, [callersEvent])).toBe(0);
-    expect(await count(`SELECT count(*)::int AS n FROM ci.entities WHERE entity_id = $1::uuid`, [othersBaseRow])).toBe(1);
+    expect(
+      await count(`SELECT count(*)::int AS n FROM ci.entities WHERE entity_id = $1::uuid`, [callersEvent]),
+    ).toBe(0);
+    expect(
+      await count(`SELECT count(*)::int AS n FROM ci.entities WHERE entity_id = $1::uuid`, [othersBaseRow]),
+    ).toBe(1);
 
     const versions = await query<{ entity_id: string; stage_version: number }>(
       `SELECT entity_id, stage_version FROM ci.pipeline_state WHERE entity_id = ANY($1::uuid[])`,
@@ -224,7 +244,9 @@ describeWithDatabase('ingest reset and index truncate on a scratch database', ()
     expect(result.searchIndexJobsDeleted).toBe(1);
 
     await query(`DELETE FROM ci.entities WHERE entity_id = $1::uuid`, [othersBaseRow]);
-    await query(`DELETE FROM ci.pipeline_state WHERE entity_id = ANY($1::uuid[])`, [[callersPerson, othersPerson]]);
+    await query(`DELETE FROM ci.pipeline_state WHERE entity_id = ANY($1::uuid[])`, [
+      [callersPerson, othersPerson],
+    ]);
   });
 
   it("truncating the index re-opens every account's index ledger, and nothing else", async () => {

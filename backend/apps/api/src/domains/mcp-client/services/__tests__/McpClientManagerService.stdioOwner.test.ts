@@ -16,7 +16,13 @@ function makeService(config: Record<string, unknown>, ownerRole: string | null) 
     update,
     manager: { query },
   };
-  const logger = { setContext: jest.fn(), debug: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+  const logger = {
+    setContext: jest.fn(),
+    debug: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  };
   const secretCodec = { decryptEntries: jest.fn(() => []), decryptAuth: jest.fn(() => null) };
   const service = new McpClientManagerService(repo as any, secretCodec as any, {} as any, logger as any);
   // Stands in for the spawn: if this is reached, a process would have started.

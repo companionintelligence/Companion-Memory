@@ -135,7 +135,16 @@ describeWithDatabase(`legacy mobile key migration (${availability.target})`, () 
       await runner.query(
         `INSERT INTO ci.api_keys (id, name, prefix, hashed_key, scopes, capability, user_id, managed_by)
          VALUES ($1::uuid, $2, $3, $4, $5::text[], $6, $7::uuid, $8)`,
-        [ids[key], seed.name, `ci_${key.slice(0, 6)}`, `hash-${key}`, seed.scopes, seed.capability, userId, seed.managedBy],
+        [
+          ids[key],
+          seed.name,
+          `ci_${key.slice(0, 6)}`,
+          `hash-${key}`,
+          seed.scopes,
+          seed.capability,
+          userId,
+          seed.managedBy,
+        ],
       );
     }
   });

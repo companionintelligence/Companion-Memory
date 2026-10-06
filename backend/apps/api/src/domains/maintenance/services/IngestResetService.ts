@@ -152,7 +152,10 @@ export class IngestResetService {
 
   async reset(ctx: UserServiceContext): Promise<IngestResetResult> {
     const truncateTargets: TableRef[] = [...INGEST_TABLES, ...DEPENDENT_TABLES];
-    const targets: TableRef[] = [...truncateTargets, ...SEARCH_TABLES.map(({ schema, table }) => ({ schema, table }))];
+    const targets: TableRef[] = [
+      ...truncateTargets,
+      ...SEARCH_TABLES.map(({ schema, table }) => ({ schema, table })),
+    ];
 
     const result = await this.dataSource.transaction(async (manager) => {
       // Lock first, probe second: nothing can write a row into these tables
@@ -166,7 +169,9 @@ export class IngestResetService {
       const countsBefore: Record<string, number> = {};
 
       for (const ref of targets) {
-        const rows = (await manager.query(`SELECT count(*)::bigint AS count FROM ${qualified(ref)}`)) as Array<{
+        const rows = (await manager.query(
+          `SELECT count(*)::bigint AS count FROM ${qualified(ref)}`,
+        )) as Array<{
           count: string;
         }>;
 
@@ -209,7 +214,9 @@ export class IngestResetService {
       // The caller's other rows (notes, people, messages...) lost their index
       // entries with that truncate. Re-open their ledger so the pipeline embeds
       // them again; see REOPEN_INDEX_LEDGER_SQL.
-      const reopened = (await manager.query(REOPEN_INDEX_LEDGER_SQL, [ctx.userId])) as Array<{ count: number }>;
+      const reopened = (await manager.query(REOPEN_INDEX_LEDGER_SQL, [ctx.userId])) as Array<{
+        count: number;
+      }>;
 
       // Drop the caller's not-yet-run index jobs: they reference rows that no
       // longer exist and would drain as pure entity-not-found noise. Another

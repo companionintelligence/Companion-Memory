@@ -96,16 +96,21 @@ describe('IngestResetService', () => {
     await expect(service.reset({ userId: CALLER })).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it.each(['ci.files', 'ci.file_chunks', 'ci.unfurls', 'ci.reminders', 'ci.capture_events', 'ci.event_candidates', 'hbpe.content_context'])(
-    'checks %s, which the truncate empties because it hangs off an ingest table',
-    async (table) => {
-      // These went out with TRUNCATE ... CASCADE for every account and were never probed.
-      const { service, statements } = build([table]);
+  it.each([
+    'ci.files',
+    'ci.file_chunks',
+    'ci.unfurls',
+    'ci.reminders',
+    'ci.capture_events',
+    'ci.event_candidates',
+    'hbpe.content_context',
+  ])('checks %s, which the truncate empties because it hangs off an ingest table', async (table) => {
+    // These went out with TRUNCATE ... CASCADE for every account and were never probed.
+    const { service, statements } = build([table]);
 
-      await expect(service.reset({ userId: CALLER })).rejects.toThrow(table);
-      expect(statements.some(({ sql }) => sql.startsWith('TRUNCATE'))).toBe(false);
-    },
-  );
+    await expect(service.reset({ userId: CALLER })).rejects.toThrow(table);
+    expect(statements.some(({ sql }) => sql.startsWith('TRUNCATE'))).toBe(false);
+  });
 
   it('locks every table it clears, then probes, then truncates, all on the one transaction', async () => {
     const { service, indexOf, statements } = build();
@@ -122,7 +127,12 @@ describe('IngestResetService', () => {
 
     const lockSql = statements[lock].sql;
 
-    for (const table of ['"ci"."events"', '"ci"."files"', '"hbpe"."l1_event_cluster"', '"ci_search"."embeddings"']) {
+    for (const table of [
+      '"ci"."events"',
+      '"ci"."files"',
+      '"hbpe"."l1_event_cluster"',
+      '"ci_search"."embeddings"',
+    ]) {
       expect(lockSql).toContain(table);
     }
 
@@ -134,11 +144,18 @@ describe('IngestResetService', () => {
 
     await service.reset({ userId: CALLER });
 
-    const truncate = statements.find(({ sql }) => sql.startsWith('TRUNCATE') && sql.includes('"ci"."events"'));
+    const truncate = statements.find(
+      ({ sql }) => sql.startsWith('TRUNCATE') && sql.includes('"ci"."events"'),
+    );
 
     expect(truncate?.sql).not.toMatch(/CASCADE/i);
 
-    for (const table of ['"ci"."files"', '"ci"."message_files"', '"ci"."reminders"', '"hbpe"."l2_content_cluster"']) {
+    for (const table of [
+      '"ci"."files"',
+      '"ci"."message_files"',
+      '"ci"."reminders"',
+      '"hbpe"."l2_content_cluster"',
+    ]) {
       expect(truncate?.sql).toContain(table);
     }
   });

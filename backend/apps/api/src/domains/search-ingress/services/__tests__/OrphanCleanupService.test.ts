@@ -265,7 +265,9 @@ describe('OrphanCleanupService.cleanOrphans statement timeout', () => {
 
 describe('OrphanCleanupService.truncateSearchIndex', () => {
   function makeTransactional() {
-    const managerQuery = jest.fn(async (sql: string) => (sql.includes('pipeline_state') ? [{ count: 7 }] : undefined));
+    const managerQuery = jest.fn(async (sql: string, _params?: unknown[]) =>
+      sql.includes('pipeline_state') ? [{ count: 7 }] : undefined,
+    );
     const outsideQuery = jest.fn();
     const transaction = jest.fn(async (body: (manager: unknown) => Promise<unknown>) =>
       body({ query: managerQuery }),
@@ -303,7 +305,7 @@ describe('OrphanCleanupService.truncateSearchIndex', () => {
     const reopen = managerQuery.mock.calls.find(([sql]) => sql.includes('pipeline_state'));
 
     expect(reopen).toBeDefined();
-    expect(flat(reopen?.[0] ?? '')).toContain("SET stage_version = 0");
+    expect(flat(reopen?.[0] ?? '')).toContain('SET stage_version = 0');
     expect(flat(reopen?.[0] ?? '')).toContain("WHERE stage LIKE 'index.%'");
     // NULL: no account filter, because the truncate took every account's index.
     expect(reopen?.[1]).toEqual([null]);

@@ -16,7 +16,6 @@ import {
 import { AgentJobsController } from '../../../domains/agent/controllers/AgentJobsController';
 import { IntentsController } from '../../../domains/agent/controllers/IntentsController';
 import { MemoryController } from '../../../domains/agent/controllers/MemoryController';
-import { AccountController } from '../../../domains/auth/controllers/AccountController';
 import { AccountDataController } from '../../../domains/auth/controllers/AccountDataController';
 import { JobsController } from '../../../domains/events/controllers/JobsController';
 import { FilesController } from '../../../domains/files/controllers/FilesController';

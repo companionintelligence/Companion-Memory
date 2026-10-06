@@ -644,7 +644,9 @@ describe('UserDataPortabilityService', () => {
           userId: CALLER,
           profile: null,
           tables: {
-            'ci.receipts': [{ receipt_id: 'r1', user_id: OTHER, owner_user_id: OTHER, merchant_name: 'Shop' }],
+            'ci.receipts': [
+              { receipt_id: 'r1', user_id: OTHER, owner_user_id: OTHER, merchant_name: 'Shop' },
+            ],
           },
           fileBlobs: [],
         });
@@ -757,9 +759,10 @@ describe('UserDataPortabilityService', () => {
       ...TRUST_TABLES.map((table) => ({
         schema: 'ci',
         table,
-        user_column: table === 'peer_links' || table === 'ask_grants' || table === 'household_tiers'
-          ? 'owner_user_id'
-          : 'user_id',
+        user_column:
+          table === 'peer_links' || table === 'ask_grants' || table === 'household_tiers'
+            ? 'owner_user_id'
+            : 'user_id',
         columns: ['id', 'user_id', 'owner_user_id', 'issuer', 'subject', 'command'],
       })),
     ];
@@ -783,7 +786,10 @@ describe('UserDataPortabilityService', () => {
         userId: CALLER,
         profile: null,
         tables: Object.fromEntries(
-          TRUST_TABLES.map((table) => [`ci.${table}`, [{ id: 'x', user_id: CALLER, issuer: 'https://idp.example.com' }]]),
+          TRUST_TABLES.map((table) => [
+            `ci.${table}`,
+            [{ id: 'x', user_id: CALLER, issuer: 'https://idp.example.com' }],
+          ]),
         ),
         fileBlobs: [],
       });
@@ -802,8 +808,19 @@ describe('UserDataPortabilityService', () => {
       userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
 
       const text = [
-        { type: 'manifest', version: 1, format: 'ndjson', exportedAt: new Date().toISOString(), userId: CALLER, profile: null },
-        { type: 'row', table: 'ci.federated_identities', row: { id: 'x', user_id: CALLER, issuer: 'https://idp.example.com' } },
+        {
+          type: 'manifest',
+          version: 1,
+          format: 'ndjson',
+          exportedAt: new Date().toISOString(),
+          userId: CALLER,
+          profile: null,
+        },
+        {
+          type: 'row',
+          table: 'ci.federated_identities',
+          row: { id: 'x', user_id: CALLER, issuer: 'https://idp.example.com' },
+        },
         { type: 'row', table: 'ci.mcp_server_configs', row: { id: 'y', user_id: CALLER, command: 'true' } },
         { type: 'row', table: 'ci.notes', row: { id: 'n1', user_id: CALLER } },
       ]
@@ -832,7 +849,14 @@ describe('UserDataPortabilityService', () => {
       userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
 
       const text = [
-        { type: 'manifest', version: 1, format: 'ndjson', exportedAt: new Date().toISOString(), userId: CALLER, profile: null },
+        {
+          type: 'manifest',
+          version: 1,
+          format: 'ndjson',
+          exportedAt: new Date().toISOString(),
+          userId: CALLER,
+          profile: null,
+        },
         { type: 'row', table: 'ci.not_a_table', row: { id: 'x' } },
       ]
         .map((line) => JSON.stringify(line))

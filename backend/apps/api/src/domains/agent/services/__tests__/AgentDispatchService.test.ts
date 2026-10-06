@@ -560,10 +560,15 @@ describe('AgentDispatchService: only the harness may fetch a packet or checkpoin
     const { service, messageService, taskService } = setup();
 
     await expect(
-      service.checkpoint(context, 'job-1', { status: 'completed', turns: [{ role: 'assistant', content: 'Done' }] }, {
-        kind: 'api-key',
-        connectApp: 'ci-mentra',
-      }),
+      service.checkpoint(
+        context,
+        'job-1',
+        { status: 'completed', turns: [{ role: 'assistant', content: 'Done' }] },
+        {
+          kind: 'api-key',
+          connectApp: 'ci-mentra',
+        },
+      ),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(messageService.create).not.toHaveBeenCalled();
     expect(taskService.complete).not.toHaveBeenCalled();
