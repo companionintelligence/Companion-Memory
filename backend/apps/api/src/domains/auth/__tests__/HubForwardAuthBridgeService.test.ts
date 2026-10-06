@@ -31,8 +31,14 @@ function stableHeaders(username: string, { issuer = DIRECTORY, userId = HUB_ID }
   };
 }
 
+/** An account whose address is proven: created from a Portal or Hub identity, or there before the rule. */
 function account(id: string, email: string) {
-  return { id, email };
+  return { id, email, emailProvenAt: new Date(NOW - 86_400_000) };
+}
+
+/** An account whose address someone typed into signup or an email change. */
+function unprovenAccount(id: string, email: string) {
+  return { id, email, emailProvenAt: null };
 }
 
 function uniqueViolation(): Error {
@@ -46,9 +52,13 @@ function makeService() {
     findByEmailIgnoringCase: jest.fn().mockResolvedValue([]),
     checkEmailAvailability: jest.fn().mockResolvedValue(false),
     create: jest.fn(),
+    isEmailProven: jest.fn((user: { emailProvenAt?: Date | null }) => user.emailProvenAt != null),
+    markEmailProven: jest.fn().mockResolvedValue(undefined),
   };
   const authService = {
     validateSessionToken: jest.fn(),
+    // The browser's session row is live unless a case says otherwise.
+    sessionEstablishedAt: jest.fn().mockResolvedValue(new Date(NOW - 60_000)),
     invalidateSession: jest.fn().mockResolvedValue(undefined),
     issueSessionToken: jest.fn().mockResolvedValue({ sessionToken: 'new-sess', sessionId: 'sid-2' }),
     issueAccessToken: jest.fn().mockReturnValue('access-hello'),
@@ -357,6 +367,67 @@ describe('HubForwardAuthBridgeService', () => {
       expect(res.clearCookie).toHaveBeenCalledWith(config.auth.cookies.sessionTokenName, expect.any(Object));
     });
 
+    it("SECURITY: refuses to adopt an account whose address nobody proved, unless this browser is signed in to it", async () => {
+      // Someone with an account here typed this person's address into it before they arrived.
+      const { service, userService, authService, federatedIdentityService } = makeService();
+      userService.findByEmail.mockResolvedValue(unprovenAccount('user-planted', 'hello@lifescope.io'));
+      const res = response();
+
+      await expect(
+        service.alignSession(requestWith(stableHeaders('hello@lifescope.io'), null), res),
+      ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false, refused: 'account_unproven' });
+      expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+      expect(userService.create).not.toHaveBeenCalled();
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
+      expect(userService.markEmailProven).not.toHaveBeenCalled();
+    });
+
+    it('adopts an unproven account when this browser is signed in to it, and counts the address as proven', async () => {
+      // The person signed in with the account's own password here, and the Hub calls them by its
+      // address: together that is the explicit link.
+      const { service, userService, authService, federatedIdentityService } = makeService();
+      const own = unprovenAccount('user-a', 'hello@lifescope.io');
+      userService.findByEmail.mockResolvedValue(own);
+      authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+      userService.findById.mockResolvedValue(own);
+
+      await expect(
+        service.alignSession(requestWith(stableHeaders('hello@lifescope.io')), response()),
+      ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false });
+      expect(authService.sessionEstablishedAt).toHaveBeenCalledWith('user-a', 'old-token');
+      expect(federatedIdentityService.bind).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-a', issuer: DIRECTORY, subject: HUB_ID }),
+      );
+      expect(userService.markEmailProven).toHaveBeenCalledWith('user-a');
+    });
+
+    it("SECURITY: does not count a signed-out session's cookie as being signed in to the account", async () => {
+      // Logging out deletes the session row and leaves the cookie's signature valid.
+      const { service, userService, authService, federatedIdentityService } = makeService();
+      const own = unprovenAccount('user-a', 'hello@lifescope.io');
+      userService.findByEmail.mockResolvedValue(own);
+      authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+      authService.sessionEstablishedAt.mockResolvedValue(null);
+      userService.findById.mockResolvedValue(own);
+
+      await expect(
+        service.alignSession(requestWith(stableHeaders('hello@lifescope.io')), response()),
+      ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false, refused: 'account_unproven' });
+      expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+    });
+
+    it("SECURITY: a session in someone else's account does not unlock an unproven one", async () => {
+      const { service, userService, authService, federatedIdentityService } = makeService();
+      userService.findByEmail.mockResolvedValue(unprovenAccount('user-planted', 'hello@lifescope.io'));
+      authService.validateSessionToken.mockReturnValue({ sub: 'user-z' });
+      userService.findById.mockResolvedValue(account('user-z', 'z@lifescope.io'));
+
+      await expect(
+        service.alignSession(requestWith(stableHeaders('hello@lifescope.io')), response()),
+      ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false, refused: 'account_unproven' });
+      expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+    });
+
     it("adopts an account linked only into another Hub's directory (Memory restored onto a fresh Hub)", async () => {
       const { service, userService, federatedIdentityService } = makeService();
       userService.findByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
@@ -391,7 +462,8 @@ describe('HubForwardAuthBridgeService', () => {
       ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: true, accessToken: 'access-hello' });
       expect(userService.create).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ email: 'hello@lifescope.io', passwordChosenByUser: false }),
+        // The address is the Hub-signed username, so the new account's address counts as proven.
+        expect.objectContaining({ email: 'hello@lifescope.io', passwordChosenByUser: false, emailProven: true }),
         expect.any(Function),
       );
       expect(federatedIdentityService.bind).toHaveBeenCalledWith(

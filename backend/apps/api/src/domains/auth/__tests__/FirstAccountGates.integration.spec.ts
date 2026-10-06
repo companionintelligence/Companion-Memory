@@ -718,17 +718,18 @@ describeWithDatabase(`first-account gates, against real Postgres (${availability
       expect((await accounts()).filter((account) => account.deleted_at == null)).toEqual([]);
     });
 
-    it('still lets the next account created re-claim admin', async () => {
-      // The rule claimApplianceIfUnowned and ApplianceAdminGuard share: no LIVE admin means the box
-      // is unowned, so whoever is admitted next — by an invitation, or where signup is open —
-      // becomes its administrator instead of leaving the control plane open to everyone.
+    it('does not let the next account created re-claim admin', async () => {
+      // It used to: no LIVE admin read as "unowned", so whoever was admitted next became admin.
+      // With members still on the box that let a member mint an invitation and sign up their own
+      // administrator. The claim now asks what createFirstAccount asks, so a box whose owner is
+      // awaiting the purge gets no new admin until an operator names one.
       await createAccount('former-owner');
       await softDeleteEveryone();
 
       const heir = await createAccount('heir');
 
-      expect(heir.role).toBe('admin');
-      expect((await accounts()).find((account) => account.id === heir.id)?.role).toBe('admin');
+      expect(heir.role).toBe('user');
+      expect((await accounts()).find((account) => account.id === heir.id)?.role).toBe('user');
     });
   });
 });

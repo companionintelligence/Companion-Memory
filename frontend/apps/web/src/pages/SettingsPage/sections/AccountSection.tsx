@@ -24,6 +24,13 @@ const HUB_SIGN_IN_AGAIN = 'Sign out, then open Memory from your Hub again to mak
 const DEVICE_SIGN_IN_AGAIN_TO_DELETE =
   'This device needs a fresh sign-in to delete the account. Sign out, sign back in, then try again.';
 
+/**
+ * The `message` of a 409 from `DELETE /account` (`AccountController`): the caller is the last
+ * administrator and other people still have accounts, so somebody has to take over first.
+ */
+const SUCCESSOR_REQUIRED = 'SUCCESSOR_REQUIRED';
+const SUCCESSOR_NOT_FOUND = 'SUCCESSOR_NOT_FOUND';
+
 function messageFrom(error: unknown, fallback: string, signInAgain: string): string {
   if (error instanceof FetchJsonError && error.status === 401 && error.message === 'REAUTH_REQUIRED') {
     // An account with no password of its own proves itself by a recent sign-in
@@ -61,11 +68,17 @@ export function AccountSection() {
   const [confirmEmail, setConfirmEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set once the server says this is the last administrator: the dialog then asks who takes over.
+  const [needsSuccessor, setNeedsSuccessor] = useState(false);
+  const [successorEmail, setSuccessorEmail] = useState('');
 
   const email = user?.email ?? '';
   // Mirrors the server's comparison so the button is only live when the request would
   // actually be accepted — the user should never meet the 400.
-  const matches = email.length > 0 && confirmEmail.trim().toLowerCase() === email.trim().toLowerCase();
+  const matches =
+    email.length > 0 &&
+    confirmEmail.trim().toLowerCase() === email.trim().toLowerCase() &&
+    (!needsSuccessor || successorEmail.trim().length > 0);
 
   // Accounts provisioned by Portal/OIDC sign-in or by the Hub forward-auth bridge
   // were given a random 32-byte password the user has never seen — asking for a
@@ -191,18 +204,32 @@ export function AccountSection() {
           // would break the very client this feature exists for.
           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
-        body: JSON.stringify({ confirmEmail: confirmEmail.trim() }),
+        body: JSON.stringify({
+          confirmEmail: confirmEmail.trim(),
+          ...(needsSuccessor ? { successorEmail: successorEmail.trim() } : {}),
+        }),
       });
 
       // The account stops authenticating immediately, so there is nothing left to
       // stay signed in to: drop the local credential and return to a logged-out app.
       await logout();
     } catch (err) {
-      setError(
-        err instanceof FetchJsonError && err.status === 403
-          ? DEVICE_SIGN_IN_AGAIN_TO_DELETE
-          : 'Could not delete the account. Please try again.',
-      );
+      if (err instanceof FetchJsonError && err.status === 409 && err.message === SUCCESSOR_REQUIRED) {
+        // The server deleted nothing. Ask who takes over, then the same button tries again.
+        setNeedsSuccessor(true);
+        setError(
+          'You are the only administrator, and other people have accounts on this Memory. Enter the email address of the person who should take over.',
+        );
+      } else if (err instanceof FetchJsonError && err.status === 409 && err.message === SUCCESSOR_NOT_FOUND) {
+        setError('No other account on this Memory uses that email address.');
+      } else {
+        setError(
+          err instanceof FetchJsonError && err.status === 403
+            ? DEVICE_SIGN_IN_AGAIN_TO_DELETE
+            : 'Could not delete the account. Please try again.',
+        );
+      }
+
       setLoading(false);
     }
   };
@@ -376,6 +403,8 @@ export function AccountSection() {
           if (!next) {
             setConfirmEmail('');
             setError(null);
+            setNeedsSuccessor(false);
+            setSuccessorEmail('');
           }
         }}
       >
@@ -402,6 +431,20 @@ export function AccountSection() {
                 onKeyDown={(e) => e.key === 'Enter' && matches && !loading && handleDelete()}
               />
             </div>
+
+            {needsSuccessor && (
+              <div className="grid gap-2">
+                <Label htmlFor="successorEmail">Email of the person who takes over</Label>
+                <Input
+                  id="successorEmail"
+                  type="email"
+                  autoComplete="off"
+                  value={successorEmail}
+                  onChange={(e) => setSuccessorEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && matches && !loading && handleDelete()}
+                />
+              </div>
+            )}
 
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
           </div>

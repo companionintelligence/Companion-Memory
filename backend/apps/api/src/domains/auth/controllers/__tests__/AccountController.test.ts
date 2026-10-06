@@ -8,9 +8,15 @@ import type { Request } from 'express';
 
 import type { ApiKeyScopedRequest } from '@ci/common/guards';
 import config from '@ci/configuration';
+import { LastAdminDeletionRefused } from '@ci/domains/user';
 
 import { CONNECT_PROVENANCE } from '../../types';
-import { AccountController, EMAIL_MANAGED_BY_HUB } from '../AccountController';
+import {
+  AccountController,
+  EMAIL_MANAGED_BY_HUB,
+  SUCCESSOR_NOT_FOUND,
+  SUCCESSOR_REQUIRED,
+} from '../AccountController';
 
 /**
  * `DELETE /account` is the in-app account deletion both stores require (Apple
@@ -115,7 +121,44 @@ describe('AccountController — delete account', () => {
 
     await controller.remove(requestContext(), mockRequest(), { confirmEmail: 'jsmith@example.com' });
 
-    expect(userService.requestDeletion).toHaveBeenCalledWith({ userId: 'u1' }, 'u1');
+    expect(userService.requestDeletion).toHaveBeenCalledWith({ userId: 'u1' }, 'u1', { successorEmail: undefined });
+  });
+
+  it('passes a named successor through to the deletion', async () => {
+    const { controller, userService } = makeController();
+
+    await controller.remove(requestContext(), mockRequest(), {
+      confirmEmail: 'jsmith@example.com',
+      successorEmail: 'member@example.com',
+    });
+
+    expect(userService.requestDeletion).toHaveBeenCalledWith({ userId: 'u1' }, 'u1', {
+      successorEmail: 'member@example.com',
+    });
+  });
+
+  it.each([
+    ['successor_required', SUCCESSOR_REQUIRED],
+    ['successor_not_found', SUCCESSOR_NOT_FOUND],
+  ] as const)('answers a refused last-admin deletion (%s) with a 409 the page can act on', async (reason, message) => {
+    const { controller, userService } = makeController();
+    userService.requestDeletion.mockRejectedValue(new LastAdminDeletionRefused(reason));
+
+    const failure = await controller
+      .remove(requestContext(), mockRequest(), { confirmEmail: 'jsmith@example.com' })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ConflictException);
+    expect((failure as ConflictException).getResponse()).toMatchObject({ message });
+  });
+
+  it('lets any other deletion failure through as itself', async () => {
+    const { controller, userService } = makeController();
+    userService.requestDeletion.mockRejectedValue(new Error('database down'));
+
+    await expect(
+      controller.remove(requestContext(), mockRequest(), { confirmEmail: 'jsmith@example.com' }),
+    ).rejects.toThrow('database down');
   });
 
   it('accepts a confirmation that differs only by case or surrounding space', async () => {

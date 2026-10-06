@@ -49,7 +49,7 @@ import { renderSignupConfirmPage } from '../utils/signupConfirmPage';
  */
 type PortalUserResolution =
   | { kind: 'user'; user: { id: string } }
-  | { kind: 'refused'; reason: 'account_linked_elsewhere' | 'email_unverified' }
+  | { kind: 'refused'; reason: 'account_linked_elsewhere' | 'email_unverified' | 'account_exists' }
   | { kind: 'unknown' };
 
 const STATE_COOKIE = 'oidc_state';
@@ -853,6 +853,8 @@ export class OidcController {
         // Random password — the account authenticates via OIDC.
         password: randomBytes(32).toString('hex'),
         passwordChosenByUser: false,
+        // The address came from the Portal identity creating the account.
+        emailProven: true,
       };
 
       if (identity.firstAccountOnly) {
@@ -911,8 +913,8 @@ export class OidcController {
 
   /**
    * Resolve a Portal person to a Memory user. `(issuer, subject)` wins;
-   * verified email is only a one-time link for accounts that pre-date the
-   * binding table and are not already federated.
+   * verified email is only a one-time link, into an account that is not
+   * already federated and whose own address is proven.
    */
   private async resolvePortalUser(identity: {
     subject?: string;
@@ -929,9 +931,19 @@ export class OidcController {
       }
     }
 
-    const existing = await this.userService.findByEmail(identity.email);
+    const existing = await this.userService.findAccountByEmail(identity.email);
     if (!existing) {
       return { kind: 'unknown' };
+    }
+
+    // Several accounts share this address once case is ignored: rows that collided before
+    // addresses were stored lower-cased. Linking either would be a guess.
+    if (existing === 'ambiguous') {
+      this.logger.warn(
+        `refusing email link for ${identity.issuer}#${identity.subject ?? '?'}: several accounts match the address`,
+      );
+
+      return { kind: 'refused', reason: 'account_exists' };
     }
 
     // The address names an existing account. Email is not an identity — it is
@@ -955,6 +967,17 @@ export class OidcController {
       );
 
       return { kind: 'refused', reason: 'email_unverified' };
+    }
+
+    // The Portal vouches for ITS account's address, not for this one's. An address typed into
+    // signup or `PATCH /account/email` proves nothing, so linking on it would hand this person's
+    // sign-in to whoever typed it. Such an account keeps its password sign-in.
+    if (!this.userService.isEmailProven(existing)) {
+      this.logger.warn(
+        `refusing email link for ${identity.issuer}#${identity.subject ?? '?'}: the account's address is not proven`,
+      );
+
+      return { kind: 'refused', reason: 'account_exists' };
     }
 
     await this.bindIfPossible(existing.id, identity.issuer, identity.subject, identity.email, 'email_link');
@@ -1014,6 +1037,8 @@ export class OidcController {
       // Nobody has seen this password. Stamped as chosen, the account is asked
       // for it before every email or password change.
       passwordChosenByUser: false,
+      // The address came from the Portal identity creating the account.
+      emailProven: true,
     };
   }
 

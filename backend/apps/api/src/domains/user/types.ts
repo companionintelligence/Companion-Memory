@@ -12,6 +12,13 @@ export interface CreateUserDto {
    */
   passwordChosenByUser?: boolean;
   /**
+   * `true` when the address came from an identity that vouches for it: a Portal sign-in or a
+   * Hub-signed username. Stamps `emailProvenAt`, which the email link and the Hub bridge's
+   * adoption by username require. Default: unproven, which is what an address typed into
+   * signup is.
+   */
+  emailProven?: boolean;
+  /**
    * IANA zone name. Omitted, the column default ('UTC') stands and
    * {@link ClientTimezoneInterceptor} adopts the first client zone it sees —
    * which is what every interactive signup path wants. Set it only where no

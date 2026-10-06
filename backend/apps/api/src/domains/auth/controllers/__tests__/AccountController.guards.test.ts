@@ -204,13 +204,17 @@ describe('AccountController (real guards + real JwtStrategy and ApiKeyStrategy)'
     it('deletes the account for the native app, with the device key it holds (x-api-key)', async () => {
       await deleteAccount().set('x-api-key', KEYS.native.raw).expect(204);
 
-      expect(mockUserService.requestDeletion).toHaveBeenCalledWith({ userId: USER.id }, USER.id);
+      expect(mockUserService.requestDeletion).toHaveBeenCalledWith({ userId: USER.id }, USER.id, {
+        successorEmail: undefined,
+      });
     });
 
     it('deletes the account for a web session (JWT)', async () => {
       await deleteAccount().set('Authorization', `Bearer ${sessionAccessToken()}`).expect(204);
 
-      expect(mockUserService.requestDeletion).toHaveBeenCalledWith({ userId: USER.id }, USER.id);
+      expect(mockUserService.requestDeletion).toHaveBeenCalledWith({ userId: USER.id }, USER.id, {
+        successorEmail: undefined,
+      });
     });
 
     it('401s with no credential', async () => {

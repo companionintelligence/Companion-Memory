@@ -703,12 +703,12 @@ describeWithDatabase(`signup-code redemption, against real Postgres (${availabil
       // Spending it first — as this path did — cost the owner an invitation and admitted nobody.
       await claimedWithCodesRequired();
       const { signup_code: code } = await signupCodeService.create();
-      const findByEmail = userService.findByEmail.bind(userService);
+      const findAccountByEmail = userService.findAccountByEmail.bind(userService);
 
       // Somebody else takes the address between this sign-in's look-up and its INSERT.
       spies.push(
-        jest.spyOn(userService, 'findByEmail').mockImplementationOnce(async (address) => {
-          const existing = await findByEmail(address);
+        jest.spyOn(userService, 'findAccountByEmail').mockImplementationOnce(async (address) => {
+          const existing = await findAccountByEmail(address);
 
           await createAccount('same-address', address);
 

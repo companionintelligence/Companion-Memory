@@ -21,7 +21,7 @@ import { FULL_CAPABILITY, RequireCapability } from '@ci/common/decorators';
 import { type ApiKeyScopedRequest, JwtAuthGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
-import { type User, UserService } from '@ci/domains/user';
+import { LastAdminDeletionRefused, type User, UserService } from '@ci/domains/user';
 
 import { AuthService } from '../services/AuthService';
 import { FederatedIdentityService } from '../services/FederatedIdentityService';
@@ -35,6 +35,12 @@ const deleteAccountSchema = z.object({
    * action, so a stray client call or a mistapped button cannot end an account.
    */
   confirmEmail: z.string().min(1),
+  /**
+   * Who becomes administrator, by the address they sign in with. Required only when this is the
+   * appliance's last live administrator and other people still have accounts; see
+   * `UserService.requestDeletion`.
+   */
+  successorEmail: z.string().trim().min(1).optional(),
 });
 
 // Same rule SignupController applies to a new account's password.
@@ -64,6 +70,15 @@ export const REAUTH_REQUIRED = 'REAUTH_REQUIRED';
 /** Why `PATCH /account/email` refuses a request the Hub signs in as this account — see `changeEmail`. */
 export const EMAIL_MANAGED_BY_HUB =
   'Your Hub signs you in to Memory with this email address, so it cannot be changed here';
+
+/**
+ * The `message` of a 409 from `DELETE /account` when the caller is the last administrator and
+ * other people still have accounts: name a successor (`successorEmail`) and ask again.
+ */
+export const SUCCESSOR_REQUIRED = 'SUCCESSOR_REQUIRED';
+
+/** The `message` of a 409 from `DELETE /account` whose `successorEmail` names no other live account. */
+export const SUCCESSOR_NOT_FOUND = 'SUCCESSOR_NOT_FOUND';
 
 /**
  * Account lifecycle: the counterpart to `SignupController`.
@@ -154,6 +169,10 @@ export class AccountController {
    * (`OidcController`, `PortalTokenService`), so requiring it would make deletion
    * impossible for exactly the users who signed in with CI-Portal. Retyping the email
    * works for every sign-in method.
+   *
+   * The appliance's last administrator cannot leave while other people still have accounts
+   * unless they name who takes over (`successorEmail`): 409 `SUCCESSOR_REQUIRED`, or
+   * `SUCCESSOR_NOT_FOUND` when the address is not another live account here.
    */
   @Delete()
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -162,7 +181,7 @@ export class AccountController {
   async remove(
     @Context() context: RequestContext,
     @Req() req: ApiKeyScopedRequest,
-    @Body(new ValidationPipe(deleteAccountSchema)) input: { confirmEmail: string },
+    @Body(new ValidationPipe(deleteAccountSchema)) input: { confirmEmail: string; successorEmail?: string },
   ): Promise<void> {
     if (isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy })) {
       throw new ForbiddenException(
@@ -179,7 +198,26 @@ export class AccountController {
       throw new BadRequestException('Confirmation email does not match this account');
     }
 
-    await this.userService.requestDeletion(serviceContext, user.id);
+    try {
+      await this.userService.requestDeletion(serviceContext, user.id, { successorEmail: input.successorEmail });
+    } catch (error) {
+      if (!(error instanceof LastAdminDeletionRefused)) {
+        throw error;
+      }
+
+      throw new ConflictException(
+        error.reason === 'successor_required'
+          ? {
+              message: SUCCESSOR_REQUIRED,
+              detail:
+                'You are the only administrator and other people have accounts here. Name the person who takes over.',
+            }
+          : {
+              message: SUCCESSOR_NOT_FOUND,
+              detail: 'No other account on this Memory uses that address.',
+            },
+      );
+    }
   }
 
   /**

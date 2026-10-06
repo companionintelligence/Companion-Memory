@@ -67,7 +67,9 @@ const createsAccount =
 
 function makeController() {
   const userService = {
-    findByEmail: jest.fn(),
+    findAccountByEmail: jest.fn(),
+    // The accounts these cases link into carry a proven address unless a case says otherwise.
+    isEmailProven: jest.fn().mockReturnValue(true),
     findById: jest.fn(),
     create: jest.fn(),
     // Default to an appliance that already has an account: these cases are
@@ -193,7 +195,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
     await controller.callback('code-x', 'match', undefined, webReq(), res as never);
 
     expect(res.redirect).toHaveBeenCalledWith('/login?error=userinfo_failed');
-    expect(userService.findByEmail).not.toHaveBeenCalled();
+    expect(userService.findAccountByEmail).not.toHaveBeenCalled();
   });
 
   it('redirects to /login?error=no_email when userinfo has no email, without looking up any user', async () => {
@@ -206,7 +208,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
     await controller.callback('code-x', 'match', undefined, webReq(), res as never);
 
     expect(res.redirect).toHaveBeenCalledWith('/login?error=no_email');
-    expect(userService.findByEmail).not.toHaveBeenCalled();
+    expect(userService.findAccountByEmail).not.toHaveBeenCalled();
   });
 
   describe('existing user (web)', () => {
@@ -218,7 +220,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         .mockResolvedValueOnce(
           jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'user@example.com', email_verified: true }),
         );
-      userService.findByEmail.mockResolvedValue({ id: 'user-1' });
+      userService.findAccountByEmail.mockResolvedValue({ id: 'user-1' });
 
       await controller.callback(
         'code-x',
@@ -228,7 +230,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         res as never,
       );
 
-      expect(userService.findByEmail).toHaveBeenCalledWith('user@example.com');
+      expect(userService.findAccountByEmail).toHaveBeenCalledWith('user@example.com');
       expect(authService.issueSessionToken).toHaveBeenCalledWith('user-1', expect.any(Object));
       expect(res.cookie).toHaveBeenCalledWith(SESSION_COOKIE_NAME, 'new-session-token', expect.any(Object));
       // Identity boundary: a fresh CSRF token bound to the NEW session, not the pre-auth one.
@@ -246,7 +248,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         .mockResolvedValueOnce(
           jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'user@example.com', email_verified: true }),
         );
-      userService.findByEmail.mockResolvedValue({ id: 'user-1' });
+      userService.findAccountByEmail.mockResolvedValue({ id: 'user-1' });
 
       await controller.callback('code-x', 'match', undefined, webReq(), res as never);
 
@@ -261,7 +263,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         .mockResolvedValueOnce(
           jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'user@example.com', email_verified: true }),
         );
-      userService.findByEmail.mockResolvedValue({ id: 'user-1' });
+      userService.findAccountByEmail.mockResolvedValue({ id: 'user-1' });
 
       await controller.callback(
         'code-x',
@@ -284,7 +286,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         .mockResolvedValueOnce(
           jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'user@example.com', email_verified: true }),
         );
-      userService.findByEmail.mockResolvedValue({ id: 'user-1' });
+      userService.findAccountByEmail.mockResolvedValue({ id: 'user-1' });
 
       await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
 
@@ -306,7 +308,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         .mockResolvedValueOnce(
           jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'new@example.com', name: 'New Person' }),
         );
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
 
       await controller.callback('code-x', 'match', undefined, webReq(), res as never);
 
@@ -330,7 +332,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
         .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'new@example.com' }));
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
 
       await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
 
@@ -349,7 +351,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         .mockResolvedValueOnce(
           jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'owner@example.com', name: 'Owner' }),
         );
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
       userService.hasNoUsers.mockResolvedValue(true);
       claimsTheAppliance(userService, { id: 'user-first' });
       oidcNativeCodeService.issue.mockReturnValue('one-time-code');
@@ -388,7 +390,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
           .mockResolvedValueOnce(
             jsonResponse(true, 200, { sub: 'portal-sub-2', email: 'second@example.com' }),
           );
-        userService.findByEmail.mockResolvedValue(null);
+        userService.findAccountByEmail.mockResolvedValue(null);
         userService.hasNoUsers.mockResolvedValue(true);
         featureService.isFeatureEnabled.mockResolvedValue(codesRequired);
         userService.createFirstAccount.mockResolvedValue(null);
@@ -407,7 +409,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
         .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'owner@example.com' }));
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
       userService.hasNoUsers.mockResolvedValue(true);
       userService.createFirstAccount.mockResolvedValue(null);
       federatedIdentityService.findUserId
@@ -428,7 +430,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
         .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'new@example.com' }));
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
       userService.hasNoUsers.mockResolvedValue(false);
 
       await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
@@ -450,7 +452,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         .mockResolvedValueOnce(
           jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'guest@example.com', name: 'Guest' }),
         );
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
       userService.hasNoUsers.mockResolvedValue(false);
       featureService.isFeatureEnabled.mockResolvedValue(true);
       signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
@@ -485,7 +487,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
         .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'guest@example.com' }));
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
       userService.hasNoUsers.mockResolvedValue(false);
       featureService.isFeatureEnabled.mockResolvedValue(true);
       signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
@@ -520,7 +522,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
         .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'guest@example.com' }));
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
       featureService.isFeatureEnabled.mockResolvedValue(true);
       signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
       signupCodeService.consume.mockResolvedValue(false);
@@ -558,7 +560,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
           .mockResolvedValueOnce(
             jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'guest@example.com' }),
           );
-        userService.findByEmail.mockResolvedValue(null);
+        userService.findAccountByEmail.mockResolvedValue(null);
         featureService.isFeatureEnabled.mockResolvedValue(codes === 'on');
         signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
         signupCodeService.consume.mockResolvedValue(false);
@@ -587,7 +589,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
         .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'guest@example.com' }));
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
       signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
 
       await controller.callback(
@@ -612,7 +614,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
         .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'owner@example.com' }));
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
       userService.hasNoUsers.mockResolvedValue(true);
       featureService.isFeatureEnabled.mockResolvedValue(true);
 
@@ -635,7 +637,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
         .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'guest@example.com' }));
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
       userService.hasNoUsers.mockResolvedValue(false);
       featureService.isFeatureEnabled.mockResolvedValue(true);
       signupCodeService.findOne.mockResolvedValue(null);
@@ -659,7 +661,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
         .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'new@example.com' }));
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
       featureService.isFeatureEnabled.mockResolvedValue(true);
 
       await controller.callback('code-x', 'match', undefined, webReq(), res as never);
@@ -700,7 +702,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         'https://hub.ci.computer',
         'portal-sub-hello',
       );
-      expect(userService.findByEmail).not.toHaveBeenCalled();
+      expect(userService.findAccountByEmail).not.toHaveBeenCalled();
       expect(authService.issueSessionToken).toHaveBeenCalledWith('user-hello', expect.any(Object));
     });
 
@@ -710,7 +712,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
         .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-2', email: 'shared@example.com' }));
-      userService.findByEmail.mockResolvedValue({ id: 'user-1' });
+      userService.findAccountByEmail.mockResolvedValue({ id: 'user-1' });
       federatedIdentityService.listForUser.mockResolvedValue([{ id: 'fed-other' }]);
 
       await controller.callback('code-x', 'match', undefined, webReq(), res as never);
@@ -722,13 +724,51 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       expect(res.redirect).toHaveBeenCalledWith('/login?error=account_linked_elsewhere');
     });
 
+    it("does not link into an account whose own address is not proven, and sends it to its password", async () => {
+      // The address was typed into signup or an email change. The Portal vouches for its own
+      // account's address, which says nothing about whoever typed this one.
+      const { controller, userService, federatedIdentityService, authService } = makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(
+          jsonResponse(true, 200, { sub: 'portal-sub-3', email: 'friend@example.com', email_verified: true }),
+        );
+      userService.findAccountByEmail.mockResolvedValue({ id: 'user-planted' });
+      userService.isEmailProven.mockReturnValue(false);
+
+      await controller.callback('code-x', 'match', undefined, webReq(), res as never);
+
+      expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
+      expect(authService.issueSignupIntentToken).not.toHaveBeenCalled();
+      expect(res.redirect).toHaveBeenCalledWith('/login?error=account_exists');
+    });
+
+    it('does not link when several accounts match the address once case is ignored', async () => {
+      const { controller, userService, federatedIdentityService, authService } = makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(
+          jsonResponse(true, 200, { sub: 'portal-sub-4', email: 'owner@example.com', email_verified: true }),
+        );
+      userService.findAccountByEmail.mockResolvedValue('ambiguous');
+
+      await controller.callback('code-x', 'match', undefined, webReq(), res as never);
+
+      expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
+      expect(res.redirect).toHaveBeenCalledWith('/login?error=account_exists');
+    });
+
     it('does not sign in an existing account when the Portal has not verified the address', async () => {
       const { controller, userService, authService } = makeController();
       const res = makeRes();
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)
         .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'user@example.com' }));
-      userService.findByEmail.mockResolvedValue({ id: 'user-1' });
+      userService.findAccountByEmail.mockResolvedValue({ id: 'user-1' });
 
       await controller.callback('code-x', 'match', undefined, webReq(), res as never);
 
@@ -746,7 +786,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         .mockResolvedValueOnce(
           jsonResponse(true, 200, { sub: 'portal-sub-hello', email: 'hello@lifescope.io', name: 'Hello' }),
         );
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
       featureService.isFeatureEnabled.mockResolvedValue(true);
       hubBridge.verifyUsername.mockReturnValue('hello@lifescope.io');
       userService.create.mockResolvedValue({ id: 'user-hello', email: 'hello@lifescope.io' });
@@ -774,7 +814,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
         .mockResolvedValueOnce(
           jsonResponse(true, 200, { sub: 'portal-sub-hello', email: 'hello@lifescope.io', name: 'Hello' }),
         );
-      userService.findByEmail.mockResolvedValue(null);
+      userService.findAccountByEmail.mockResolvedValue(null);
       featureService.isFeatureEnabled.mockResolvedValue(true);
       hubBridge.verifyUsername.mockReturnValue('hello@lifescope.io');
       signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
@@ -801,6 +841,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
   // One row per door that creates an account, the provisioning path #2743 missed.
   // Claiming an empty appliance goes through createFirstAccount; an invitation
   // goes through create. Both build the account with oidcAccount.
+  // ...and its address counts as proven: it came from the Portal identity the account is made for.
   describe('an account the callback creates has no password of its own', () => {
     const userinfo = () =>
       mockFetch
@@ -810,7 +851,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
     it('native, claiming an empty appliance', async () => {
       const mocks = makeController();
       userinfo();
-      mocks.userService.findByEmail.mockResolvedValue(null);
+      mocks.userService.findAccountByEmail.mockResolvedValue(null);
       mocks.userService.hasNoUsers.mockResolvedValue(true);
       claimsTheAppliance(mocks.userService, { id: 'user-new' });
 
@@ -819,7 +860,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       expect(mocks.userService.create).not.toHaveBeenCalled();
       expect(mocks.userService.createFirstAccount).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ email: 'new@example.com', passwordChosenByUser: false }),
+        expect.objectContaining({ email: 'new@example.com', passwordChosenByUser: false, emailProven: true }),
         expect.any(Function),
       );
     });
@@ -849,7 +890,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
     ])('%s', async (_door, req, admit, alongside) => {
       const mocks = makeController();
       userinfo();
-      mocks.userService.findByEmail.mockResolvedValue(null);
+      mocks.userService.findAccountByEmail.mockResolvedValue(null);
       mocks.userService.create.mockResolvedValue({ id: 'user-new', email: 'new@example.com' });
       admit(mocks);
 
@@ -858,7 +899,7 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       expect(mocks.userService.create).toHaveBeenCalledTimes(1);
       expect(mocks.userService.create).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ email: 'new@example.com', passwordChosenByUser: false }),
+        expect.objectContaining({ email: 'new@example.com', passwordChosenByUser: false, emailProven: true }),
         alongside,
       );
     });

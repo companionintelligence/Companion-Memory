@@ -69,4 +69,41 @@ describe('InvitesSection', () => {
     await waitFor(() => expect(signupCodeCalls('GET')).toHaveLength(2));
     expect(signupCodeCalls('GET')[1]?.[1]?.headers).toMatchObject({ Authorization: 'Bearer jwt-late' });
   });
+
+  it('shows when each invitation expires', async () => {
+    fetchJson.mockImplementation(() =>
+      Promise.resolve([{ id: '7', signup_code: 'ABC-123', expires_at: '2026-10-13T12:00:00Z' }]),
+    );
+    render(<InvitesSection />);
+
+    expect(await screen.findByText(/^Expires /)).toBeInTheDocument();
+  });
+
+  it('withdraws an invitation by its id, then lists again', async () => {
+    let listed = [{ id: '7', signup_code: 'ABC-123' }];
+    fetchJson.mockImplementation((url: string, init?: { method?: string }) => {
+      if (init?.method === 'DELETE') {
+        listed = [];
+
+        return Promise.resolve(undefined);
+      }
+
+      return Promise.resolve(url === '/api/signup-codes' ? listed : undefined);
+    });
+    render(<InvitesSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Withdraw invitation ABC-123' }));
+
+    await waitFor(() => expect(screen.getByText('No unused invitations.')).toBeInTheDocument());
+    const withdraw = (fetchJson.mock.calls as FetchCalls).find(([, init]) => init?.method === 'DELETE');
+    expect(withdraw?.[0]).toBe('/api/signup-codes/7');
+    expect(withdraw?.[1]?.headers).toMatchObject({ Authorization: 'Bearer jwt-abc' });
+  });
+
+  it('offers no withdraw button for an invitation listed without an id (an older server)', async () => {
+    render(<InvitesSection />);
+
+    await screen.findByText('ABC-123');
+    expect(screen.queryByRole('button', { name: /Withdraw/ })).not.toBeInTheDocument();
+  });
 });

@@ -397,6 +397,72 @@ describe('AccountSection — change email', () => {
   });
 });
 
+describe('AccountSection — the last administrator', () => {
+  function refuseUntilSuccessorNamed() {
+    fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
+      if (isAccountReadCall(url, init)) {
+        return Promise.resolve({ email: h.email, hasFederatedIdentity: false, hasOwnPassword: true });
+      }
+
+      if (init?.method === 'DELETE') {
+        const body = JSON.parse(init.body!) as { successorEmail?: string };
+
+        if (!body.successorEmail) {
+          return Promise.reject(new FetchJsonError(409, 'Conflict', 'SUCCESSOR_REQUIRED'));
+        }
+
+        if (body.successorEmail !== 'member@example.com') {
+          return Promise.reject(new FetchJsonError(409, 'Conflict', 'SUCCESSOR_NOT_FOUND'));
+        }
+      }
+
+      return Promise.resolve(undefined);
+    });
+  }
+
+  it('asks who takes over when the server says this is the last administrator, then deletes', async () => {
+    refuseUntilSuccessorNamed();
+    render(<AccountSection />);
+    openDialog();
+
+    fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: 'jsmith@example.com' } });
+    fireEvent.click(confirmButton());
+
+    expect(await screen.findByText(/You are the only administrator/)).toBeInTheDocument();
+    expect(h.logout).not.toHaveBeenCalled();
+    // Nothing to send until someone is named.
+    expect(confirmButton()).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/person who takes over/i), { target: { value: ' member@example.com ' } });
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(h.logout).toHaveBeenCalled());
+    const deletes = (fetchJson.mock.calls as Array<[string, FetchCallInit?]>).filter(
+      ([, init]) => init?.method === 'DELETE',
+    );
+    expect(JSON.parse(deletes.at(-1)![1]!.body!)).toEqual({
+      confirmEmail: 'jsmith@example.com',
+      successorEmail: 'member@example.com',
+    });
+  });
+
+  it('says so when the named successor has no account here, and stays signed in', async () => {
+    refuseUntilSuccessorNamed();
+    render(<AccountSection />);
+    openDialog();
+
+    fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: 'jsmith@example.com' } });
+    fireEvent.click(confirmButton());
+    fireEvent.change(await screen.findByLabelText(/person who takes over/i), {
+      target: { value: 'stranger@example.com' },
+    });
+    fireEvent.click(confirmButton());
+
+    expect(await screen.findByText(/No other account on this Memory uses that email/)).toBeInTheDocument();
+    expect(h.logout).not.toHaveBeenCalled();
+  });
+});
+
 describe('AccountSection — change password', () => {
   it('submits the new password with the current password, then reports other devices signed out', async () => {
     render(<AccountSection />);
