@@ -1,5 +1,5 @@
 import { Dirent } from 'node:fs';
-import { chmod, lstat, mkdir, readdir, rename } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readdir, realpath, rename } from 'node:fs/promises';
 import path from 'node:path';
 
 import { BadRequestException, Injectable, type OnModuleInit } from '@nestjs/common';
@@ -293,10 +293,24 @@ export class ImportInboxService implements OnModuleInit {
    *
    * A symlink at the old name is skipped, not followed: the inbox holds only
    * copies the importer consumes, and a link there is not one of them.
+   *
+   * Live claims on units inside a moved folder are rewritten to the new path
+   * in the same step, so a run that claimed a unit before the upgrade still
+   * finds it when its unpack stage runs.
+   *
+   * The web and worker processes both boot this service against one shared
+   * mount, so two of them can run this at once. The rename is the arbiter: the
+   * loser finds the old folder gone (ENOENT, or gone by the time it looks at
+   * the new one) and moves on without a warning.
    */
   private async migrateInboxFoldersToUserIds(users: readonly { id: string; email: string }[]): Promise<void> {
     const usersByLegacyName = new Map<string, Array<{ id: string; email: string }>>();
     for (const user of users) {
+      // An account with no email never had an email-named folder.
+      if (!user.email) {
+        continue;
+      }
+
       const legacy = legacyEmailInboxFolderName(user.email);
       const group = usersByLegacyName.get(legacy) ?? [];
       group.push(user);
@@ -336,19 +350,49 @@ export class ImportInboxService implements OnModuleInit {
         () => false,
       );
       if (newExists) {
-        this.logger.warn('Both the old and new import inbox folders exist; left the old one for an administrator', {
-          oldFolder: legacy,
-          userId: user.id,
-        });
+        // Another process may have moved it between the two lstats.
+        if ((await lstat(oldDir).catch(() => null)) != null) {
+          this.logger.warn(
+            'Both the old and new import inbox folders exist; left the old one for an administrator',
+            {
+              oldFolder: legacy,
+              userId: user.id,
+            },
+          );
+        }
 
         continue;
       }
 
+      let fromReal: string;
       try {
+        // The claims recorded realpaths, so the rewrite needs them too.
+        fromReal = await realpath(oldDir);
         await rename(oldDir, newDir);
-        this.logger.log('Moved import inbox folder onto the account id', { userId: user.id });
       } catch (err: unknown) {
-        this.logger.warn('Could not move an import inbox folder onto the account id', {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          this.logger.warn('Could not move an import inbox folder onto the account id', {
+            userId: user.id,
+            error: (err as Error).message,
+          });
+        }
+
+        continue;
+      }
+
+      this.logger.log('Moved import inbox folder onto the account id', { userId: user.id });
+
+      try {
+        const rebased = await this.stagedSources.rebaseInboxClaims(user.id, fromReal, await realpath(newDir));
+        if (rebased > 0) {
+          this.logger.log('Pointed in-flight inbox claims at the moved folder', { userId: user.id, rebased });
+        }
+      } catch (err: unknown) {
+        // The folder moved but its claims did not follow. A run that claimed a
+        // unit before the upgrade and has not unpacked it yet will fail to find
+        // it and release its claim; the unit can be imported again from the new
+        // folder.
+        this.logger.warn('Could not point in-flight inbox claims at the moved folder', {
           userId: user.id,
           error: (err as Error).message,
         });

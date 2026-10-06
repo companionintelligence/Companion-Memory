@@ -434,6 +434,41 @@ export class StagedSourceService {
     });
   }
 
+  /**
+   * Point one account's live inbox claims at the folder their inbox moved to.
+   *
+   * A claim records the unit's real path, and the unpack stage moves exactly
+   * that path. When the boot migration renames an account's inbox folder (see
+   * `ImportInboxService.migrateInboxFoldersToUserIds`), a run that claimed a
+   * unit before the upgrade but has not moved it yet would look for it under
+   * the old folder, fail, and leave the unit looking unclaimed in the new one.
+   * `moved` rows are rewritten too so the scan's "already importing" lookup
+   * matches exactly what it did before the move.
+   *
+   * Both arguments are realpaths. Matched with `left(...)` rather than LIKE,
+   * because the old folder names carry `_`, which LIKE reads as a wildcard.
+   *
+   * @returns how many claims were rewritten.
+   */
+  async rebaseInboxClaims(userId: string, fromDir: string, toDir: string): Promise<number> {
+    // CTE-wrapped so the outer command is a SELECT; see the claim UPDATE in
+    // `ImportRunService.startRun` for the driver detail.
+    const rows = await this.sources.query<Array<{ id: string }>>(
+      `WITH rebased AS (
+         UPDATE ci_import.staged_sources
+            SET source_path = $3 || substr(source_path, length($2) + 1), updated_at = now()
+          WHERE user_id = $1::uuid
+            AND origin = 'inbox'
+            AND status IN ('claimed', 'moved')
+            AND left(source_path, length($2) + 1) = $2 || '/'
+        RETURNING id)
+       SELECT id FROM rebased`,
+      [userId, fromDir, toDir],
+    );
+
+    return rows.length;
+  }
+
   /** The unpack stage finished moving the source into scratch. */
   async markMoved(id: string): Promise<void> {
     await this.sources.update({ id, status: 'claimed' }, { status: 'moved' });

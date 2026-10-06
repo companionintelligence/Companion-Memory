@@ -63,23 +63,26 @@ async function writeFilesInBatches(files: readonly string[], batchSize = 128): P
 function build(overrides?: {
   startRun?: jest.Mock;
   findActiveByPaths?: jest.Mock;
+  rebaseInboxClaims?: jest.Mock;
   accounts?: Array<{ id: string; email: string }>;
 }) {
   const startRun = overrides?.startRun ?? jest.fn(async () => ({ run: { id: 'run-1', label: 'x' } }));
   const findActiveByPaths = overrides?.findActiveByPaths ?? jest.fn(async () => []);
+  const rebaseInboxClaims = overrides?.rebaseInboxClaims ?? jest.fn(async () => 0);
   const accounts = overrides?.accounts ?? [{ id: ctx.userId, email: USER_EMAIL }];
   const users = {
     findById: jest.fn(async () => accounts.find((a) => a.id === ctx.userId) ?? accounts[0]),
     findAll: jest.fn(async () => accounts),
   };
+  const logger = stubLogger();
   const service = new ImportInboxService(
     { startRun } as never,
-    { findActiveByPaths } as never,
+    { findActiveByPaths, rebaseInboxClaims } as never,
     users as never,
-    stubLogger(),
+    logger,
   );
 
-  return { service, startRun, findActiveByPaths, users };
+  return { service, startRun, findActiveByPaths, rebaseInboxClaims, users, logger };
 }
 
 /**
@@ -761,6 +764,57 @@ describe('inbox folder migration at boot', () => {
     expect(await readFile(path.join(root, USER_ID, 'reddit', 'export.zip'), 'utf8')).toBe('owner bytes');
     // And the old folder is gone.
     await expect(stat(oldDir)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('points claims made before the move at the new folder', async () => {
+    // A run that claimed `reddit/export.zip` before the upgrade recorded the old
+    // folder's real path. Its unpack stage moves exactly that path, so the
+    // claim has to follow the folder or the run fails to find its unit.
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-migrate-'));
+    const oldDir = path.join(root, 'tester_example.com');
+    await mkdir(path.join(oldDir, 'reddit'), { recursive: true });
+    await writeFile(path.join(oldDir, 'reddit', 'export.zip'), 'owner bytes');
+    const oldReal = await realpath(oldDir);
+
+    const rebaseInboxClaims = jest.fn(async () => 1);
+    const { service } = build({ accounts: [{ id: USER_ID, email: USER_EMAIL }], rebaseInboxClaims });
+
+    await withInbox(path.join(root, USER_ID), async () => {
+      await service.onModuleInit();
+    });
+
+    expect(rebaseInboxClaims).toHaveBeenCalledTimes(1);
+    expect(rebaseInboxClaims).toHaveBeenCalledWith(
+      USER_ID,
+      oldReal,
+      await realpath(path.join(root, USER_ID)),
+    );
+  });
+
+  it('still moves the folder and provisions it when the claim rewrite fails', async () => {
+    // The rewrite is best-effort like the rest of boot provisioning. The
+    // folder has already moved, so the account's inbox must be ready anyway.
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-migrate-'));
+    const oldDir = path.join(root, 'tester_example.com');
+    await mkdir(oldDir, { recursive: true });
+    await writeFile(path.join(oldDir, 'export.zip'), 'owner bytes');
+
+    const rebaseInboxClaims = jest.fn(async () => {
+      throw new Error('database is down');
+    });
+    const { service, logger } = build({ accounts: [{ id: USER_ID, email: USER_EMAIL }], rebaseInboxClaims });
+
+    await withInbox(path.join(root, USER_ID), async () => {
+      await service.onModuleInit();
+    });
+
+    expect(await readFile(path.join(root, USER_ID, 'export.zip'), 'utf8')).toBe('owner bytes');
+    // A service folder exists, so the per-account provisioning still ran.
+    expect((await stat(path.join(root, USER_ID, 'reddit'))).isDirectory()).toBe(true);
+    expect((logger as unknown as { warn: jest.Mock }).warn).toHaveBeenCalledWith(
+      'Could not point in-flight inbox claims at the moved folder',
+      expect.objectContaining({ userId: USER_ID }),
+    );
   });
 
   it('leaves a folder two accounts map to in place, for an administrator to split', async () => {
