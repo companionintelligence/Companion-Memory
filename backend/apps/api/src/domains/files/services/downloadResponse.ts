@@ -77,6 +77,28 @@ export function isInlineSafeContentType(contentType: string | null | undefined):
   );
 }
 
+const MAX_NAME_LENGTH = 200;
+
+/** The longest extension kept whole when a name is shortened, dot included. */
+const MAX_EXTENSION_LENGTH = 16;
+
+function shortenName(name: string): string {
+  const chars = Array.from(name);
+
+  if (chars.length <= MAX_NAME_LENGTH) {
+    return name;
+  }
+
+  const dot = name.lastIndexOf('.');
+  const extension = dot > 0 ? Array.from(name.slice(dot)) : [];
+
+  if (extension.length < 2 || extension.length > MAX_EXTENSION_LENGTH) {
+    return chars.slice(0, MAX_NAME_LENGTH).join('');
+  }
+
+  return chars.slice(0, MAX_NAME_LENGTH - extension.length).join('') + extension.join('');
+}
+
 /**
  * `attachment`, with the stored filename when there is one: without a name the
  * browser saves the object key, a bare UUID with no extension.
@@ -85,14 +107,14 @@ export function isInlineSafeContentType(contentType: string | null | undefined):
  * control or non-ASCII characters replaced; `filename*` carries the real name
  * (RFC 6266, RFC 5987).
  *
- * The name is cut at 200 code points, not UTF-16 units, and any unpaired
- * surrogate becomes U+FFFD first: `encodeURIComponent` throws on a lone
- * surrogate, and one throw here fails every file on the page being signed.
+ * A name longer than 200 code points loses the end of its stem, not its
+ * extension, so the saved file still opens. The cut counts code points, not
+ * UTF-16 units, and any unpaired surrogate becomes U+FFFD first:
+ * `encodeURIComponent` throws on a lone surrogate, and one throw here fails
+ * every file on the page being signed.
  */
 export function attachmentDisposition(filename: string | null | undefined): string {
-  const name = Array.from((filename ?? '').trim().replace(LONE_SURROGATE, '\uFFFD'))
-    .slice(0, 200)
-    .join('');
+  const name = shortenName((filename ?? '').trim().replace(LONE_SURROGATE, '\uFFFD'));
 
   if (!name) {
     return 'attachment';

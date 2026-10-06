@@ -101,10 +101,20 @@ describe('attachmentDisposition', () => {
   });
 
   it('cuts a long name on a code point, so an emoji at the cut cannot make signing throw', () => {
-    // 199 units, then a two-unit emoji: a cut at 200 UTF-16 units leaves half of it.
-    const value = attachmentDisposition(`${'a'.repeat(199)}\u{1F600}${'b'.repeat(10)}.eml`);
+    // The stem keeps 196 code points ahead of `.eml`. Cut as UTF-16 units it
+    // would end on the first half of the emoji.
+    const value = attachmentDisposition(`${'a'.repeat(195)}\u{1F600}${'b'.repeat(10)}.eml`);
 
-    expect(value.endsWith(`filename*=UTF-8''${'a'.repeat(199)}%F0%9F%98%80`)).toBe(true);
+    expect(value.endsWith(`filename*=UTF-8''${'a'.repeat(195)}%F0%9F%98%80.eml`)).toBe(true);
+  });
+
+  it('shortens a long name from the end of its stem and keeps the extension', () => {
+    expect(attachmentDisposition(`${'x'.repeat(230)}.pdf`)).toBe(
+      `attachment; filename="${'x'.repeat(196)}.pdf"; filename*=UTF-8''${'x'.repeat(196)}.pdf`,
+    );
+    // No extension, or one too long to be an extension: a plain cut at 200.
+    expect(attachmentDisposition('y'.repeat(230))).toContain(`filename="${'y'.repeat(200)}"`);
+    expect(attachmentDisposition(`z.${'q'.repeat(230)}`)).toContain(`filename="z.${'q'.repeat(198)}"`);
   });
 
   it('turns an unpaired surrogate into U+FFFD instead of throwing', () => {
