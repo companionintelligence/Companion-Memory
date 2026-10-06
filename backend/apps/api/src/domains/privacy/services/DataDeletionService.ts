@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
@@ -383,6 +383,24 @@ export class DataDeletionService {
    * pointless here — its `refresh_token` is a Portal proxy token the provider
    * has never seen, and the access token dies on its own within the hour.
    *
+   * ── Which credential, on an appliance with more than one account ─────────
+   *
+   * Portal knows this appliance as ONE device, whichever account is signed in,
+   * and keeps one credential per (device, provider, provider account). The
+   * proxy refresh token names this connection's own grant. The provider
+   * account id does not: it names whichever grant this device holds for that
+   * account, and `external_id` is not proof the account is the caller's. So:
+   *
+   * - When another account here has a connection with the same provider and
+   *   `external_id`, the id is never sent. Only the token speaks, and with no
+   *   token there is nothing of this connection's to revoke. Otherwise one
+   *   account's disconnect deleted another account's grant at Portal (and,
+   *   for Google, revoked it upstream).
+   * - Otherwise the token and the id go together, as before. A newer Portal
+   *   matches the token alone when one is sent, so a token that went stale (a
+   *   rotation this appliance failed to save) finds nothing; then the id alone
+   *   is sent once, which is what clears that row.
+   *
    * @returns true only when Portal deleted at least one credential and every
    *   upstream revocation it attempted succeeded — so a provider that never
    *   issues refresh tokens (Facebook) reports false, as before, because there
@@ -391,11 +409,17 @@ export class DataDeletionService {
   private async revokeViaPortal(connection: ConnectionEntity): Promise<boolean> {
     try {
       const provider = this.cloudOAuthProxyService.getProviderNameForId(connection.providerId!)!;
-      const result = await this.cloudOAuthProxyService.revokeToken({
+      const accountId = (await this.accountSharedWithAnotherUser(connection)) ? null : connection.externalId;
+
+      let result = await this.cloudOAuthProxyService.revokeToken({
         proxyRefreshToken: connection.refreshToken,
         provider,
-        userProviderId: connection.externalId,
+        userProviderId: accountId,
       });
+
+      if (result.tokens_deleted === 0 && connection.refreshToken && accountId) {
+        result = await this.cloudOAuthProxyService.revokeToken({ provider, userProviderId: accountId });
+      }
 
       if (result.tokens_deleted > 0 && !result.revocation_ok) {
         this.logger.warn('CI Portal deleted the stored credential but the provider refused revocation', {
@@ -412,6 +436,40 @@ export class DataDeletionService {
       });
 
       return false;
+    }
+  }
+
+  /**
+   * Whether another account on this appliance has a connection to the same
+   * provider account (same provider, same `external_id`). Counts inactive rows
+   * too: a paused connection still holds its grant at Portal.
+   *
+   * A probe that fails reads as "shared". That only costs the id fallback,
+   * while the opposite mistake could delete another account's grant.
+   */
+  private async accountSharedWithAnotherUser(connection: ConnectionEntity): Promise<boolean> {
+    if (connection.externalId == null || connection.externalId === '' || connection.providerId == null) {
+      return false;
+    }
+
+    try {
+      return await this.connectionRepository.exists({
+        where: {
+          providerId: connection.providerId,
+          externalId: connection.externalId,
+          userId: Not(connection.userId),
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        'Could not tell whether another account shares this provider account; revoking by token only',
+        {
+          connectionId: connection.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        },
+      );
+
+      return true;
     }
   }
 
