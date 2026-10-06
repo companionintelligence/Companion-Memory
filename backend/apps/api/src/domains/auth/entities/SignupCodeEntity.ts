@@ -1,8 +1,13 @@
-import { Entity, Column, PrimaryColumn, CreateDateColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
 
 @Entity({ schema: 'ci', name: 'signup_code' })
 export class SignupCodeEntity {
-  @PrimaryColumn()
+  /**
+   * `bigint GENERATED ALWAYS AS IDENTITY`. Declared as generated so `save()` reads it back: as a
+   * plain `@PrimaryColumn` a freshly minted code came back with no id, and `POST /signup-codes`
+   * answered `"id": "undefined"`. A bigint, so it arrives as a string.
+   */
+  @PrimaryGeneratedColumn('identity', { type: 'bigint', generatedIdentity: 'ALWAYS' })
   id!: string;
 
   @Column({ unique: true })

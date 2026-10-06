@@ -1,5 +1,11 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, type INestApplication, NotFoundException } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
 
+import { ApplianceAdminGuard, IdFormatGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+
+import { SignupCodeService } from '../../services/SignupCodeService';
 import { SignupCodeController } from '../SignupCodeController';
 
 const CREATED = new Date('2026-10-06T08:00:00Z');
@@ -69,5 +75,55 @@ describe('SignupCodeController', () => {
 
     await expect(controller.revoke(id)).rejects.toBeInstanceOf(BadRequestException);
     expect(signupCodeService.revoke).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The withdraw route through Nest's router and the global guards the app registers. Calling the
+ * handler directly, as above, cannot see `IdFormatGuard`, which 404s any parameter named `...id`
+ * whose value is not a uuid: with the parameter named `:id`, every withdrawal 404'd.
+ */
+describe('DELETE /signup-codes/:invitation', () => {
+  let app: INestApplication;
+  const revoke = jest.fn();
+
+  beforeAll(async () => {
+    const module = await Test.createTestingModule({
+      controllers: [SignupCodeController],
+      providers: [
+        { provide: SignupCodeService, useValue: { revoke } },
+        { provide: APP_GUARD, useClass: IdFormatGuard },
+      ],
+    })
+      .overrideGuard(JwtOrApiKeyAuthGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(ApplianceAdminGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
+
+    app = module.createNestApplication({ logger: false });
+    await app.init();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(() => {
+    revoke.mockReset();
+  });
+
+  it('reaches the handler with the bigint id of an invitation', async () => {
+    revoke.mockResolvedValue(true);
+
+    await request(app.getHttpServer()).delete('/signup-codes/7').expect(204);
+
+    expect(revoke).toHaveBeenCalledWith('7');
+  });
+
+  it('answers 400, not a router 404, for something that is not an id', async () => {
+    await request(app.getHttpServer()).delete('/signup-codes/abc').expect(400);
+
+    expect(revoke).not.toHaveBeenCalled();
   });
 });

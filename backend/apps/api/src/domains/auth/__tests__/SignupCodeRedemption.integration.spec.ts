@@ -514,6 +514,22 @@ describeWithDatabase(`signup-code redemption, against real Postgres (${availabil
 
   // ── The redemption every door shares ───────────────────────────────────
 
+  describe('SignupCodeService.create and revoke', () => {
+    it('hands back the id the database gave a new code, which withdraws it', async () => {
+      // `id` is a bigint identity. Declared as a plain primary column, `save()` never read it back
+      // and the mint response said `"id": "undefined"`.
+      const created = await signupCodeService.create();
+      const [{ id }] = await dataSource.query<Array<{ id: string }>>(
+        'SELECT id::text AS id FROM ci.signup_code WHERE signup_code = $1',
+        [created.signup_code],
+      );
+
+      expect(created.id).toBe(id);
+      expect(await signupCodeService.revoke(created.id)).toBe(true);
+      expect(await codes()).toEqual([]);
+    });
+  });
+
   describe('SignupCodeService.consume', () => {
     it('redeems a code once: the first call gets it, every later one does not', async () => {
       // Read through a CTE: a bare UPDATE ... RETURNING resolves to the pair [rows, rowCount], whose

@@ -65,10 +65,16 @@ export class SignupCodeController {
     return toResponse(code);
   }
 
-  /** Withdraw an invitation nobody has used yet. */
-  @Delete(':id')
+  /**
+   * Withdraw an invitation nobody has used yet.
+   *
+   * The parameter is not called `id`: the global `IdFormatGuard` 404s any route parameter whose
+   * name ends in `id` unless its value is a uuid, and an invitation's id is a bigint. Named `:id`,
+   * this route answered 404 to every request before reaching the handler.
+   */
+  @Delete(':invitation')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async revoke(@Param('id') id: string): Promise<void> {
+  async revoke(@Param('invitation') id: string): Promise<void> {
     if (!SIGNUP_CODE_ID.test(id)) {
       throw new BadRequestException('Invalid invitation id');
     }
