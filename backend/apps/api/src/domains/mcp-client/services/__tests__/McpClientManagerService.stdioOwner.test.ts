@@ -79,6 +79,24 @@ describe('McpClientManagerService.connect: who may have a stdio server started',
     expect(openConnection).not.toHaveBeenCalled();
   });
 
+  it('retries, rather than throwing, when the owner lookup itself fails', async () => {
+    // The reconnect timer calls connect() with `void`; a rejection there is unhandled and
+    // the process's unhandledRejection handler exits.
+    jest.useFakeTimers();
+    const { service, update, query, openConnection } = makeService(STDIO, 'admin');
+
+    query.mockRejectedValueOnce(new Error('connection terminated'));
+
+    await expect(service.connect('cfg-1')).resolves.toBeUndefined();
+
+    expect(openConnection).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith('cfg-1', {
+      connectionStatus: 'error',
+      lastError: 'connection terminated',
+    });
+    expect((service as any).reconnectTimers.has('cfg-1')).toBe(true);
+  });
+
   it("starts an administrator's stdio server", async () => {
     jest.useFakeTimers();
     const { service, openConnection } = makeService(STDIO, 'admin');

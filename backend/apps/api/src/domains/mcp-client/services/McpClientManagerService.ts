@@ -130,7 +130,22 @@ export class McpClientManagerService implements OnModuleDestroy {
       return;
     }
 
-    if (config.transport === 'stdio' && !(await this.ownerIsAdmin(config.userId))) {
+    let ownerMayRunCommands = true;
+
+    if (config.transport === 'stdio') {
+      try {
+        ownerMayRunCommands = await this.ownerIsAdmin(config.userId);
+      } catch (error) {
+        // The lookup failing is transient, unlike a refusal, so it retries like any other failed
+        // connect. Letting it throw would break this method's never-throws contract: the reconnect
+        // timer and `onConfigChanged` call it with `void`, and an unhandled rejection exits the process.
+        await this.handleConnectFailure(configId, error);
+
+        return;
+      }
+    }
+
+    if (!ownerMayRunCommands) {
       // No retry: this is a decision about the row, not a transient failure.
       this.clearReconnectTimer(configId);
       this.logger.warn('Refusing to start a stdio MCP server whose owner is not an administrator', {
