@@ -224,6 +224,7 @@ describe('isKeyInUrlRequest (ignoreOutgoingRequests)', () => {
     GEOCODE_URL,
     'https://MAPS.googleapis.com/maps/api/geocode/json',
     'https://api.themoviedb.org/3/trending/movie/week?api_key=k',
+    'https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?steamid=1&key=k',
   ])('ignores %s', (url) => {
     expect(isKeyInUrlRequest(url)).toBe(true);
   });
