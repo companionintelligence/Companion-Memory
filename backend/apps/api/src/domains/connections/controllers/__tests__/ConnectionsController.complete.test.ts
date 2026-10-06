@@ -178,6 +178,38 @@ describe('ConnectionsController.completeCallback — CI Portal proxy flow', () =
       );
     });
 
+    it('refuses a second connection to the account CI Portal names, and hands its grant to the first', async () => {
+      const { controller, cloudOAuthProxyService, connectionService } = makeController();
+      cloudOAuthProxyService.refreshAccessToken.mockResolvedValue({
+        access_token: 'portal-access-token',
+        refresh_token: 'rotated-refresh-token',
+        expires_in: 3600,
+        user_provider_id: 'portal-bound-account',
+      });
+      // Nothing under the browser's id; the existing connection is under CI Portal's.
+      connectionService.search.mockImplementation(async (_ctx: unknown, query: { externalId?: string }) =>
+        query.externalId === 'portal-bound-account' ? [{ id: 'conn-existing' }] : [],
+      );
+
+      await expect(
+        controller.completeCallback(
+          ctx,
+          proxyBody({ refreshToken: 'fragment-refresh-token', userProviderId: 'browser-said-this' }),
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(connectionService.update).toHaveBeenCalledWith(
+        expect.anything(),
+        'conn-existing',
+        expect.objectContaining({
+          accessToken: 'portal-access-token',
+          refreshToken: 'rotated-refresh-token',
+        }),
+      );
+      expect(connectionService.remove).toHaveBeenCalledWith(expect.anything(), 'conn-1');
+      expect(storedExternalId(connectionService)).toBeUndefined();
+    });
+
     it("keeps the browser's id when an older CI Portal does not return one", async () => {
       const { controller, cloudOAuthProxyService, connectionService } = makeController();
       cloudOAuthProxyService.refreshAccessToken.mockResolvedValue({

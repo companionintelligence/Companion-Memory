@@ -303,6 +303,25 @@ export class ConnectionsController {
         this.logger.warn('CI Portal bound this grant to a different account than the browser reported', {
           connectionId,
         });
+
+        // The duplicate check above went by the browser's id. The id this connection is stored
+        // under is CI Portal's, so check again by that one, or a second connection to the same
+        // account would be stored next to the first. CI Portal answered for this grant over the
+        // device's own channel, so its tokens can go to the connection that already holds the
+        // account (whose own proxy refresh token CI Portal has just replaced).
+        const [sameAccount] = (
+          await this.connectionService.search(serviceContext, {
+            providerId: connection.providerId,
+            active: true,
+            externalId: grant.accountId,
+          })
+        ).filter((c) => c.id !== connectionId);
+
+        if (sameAccount) {
+          await this.connectionService.update(serviceContext, sameAccount.id, grant.tokens);
+          await this.connectionService.remove(serviceContext, connectionId);
+          throw new ConflictException('A connection to that account already exists');
+        }
       }
 
       await this.update(context, connectionId, {
