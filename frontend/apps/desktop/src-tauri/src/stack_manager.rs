@@ -884,16 +884,21 @@ fn foreign_port_holder_message() -> String {
 }
 
 /// The bundled overlay uses the Compose Specification's `!override` tag (on the
-/// gateway's `ports:`), which needs Compose >= 2.24. Older CLIs fail on it with
-/// a YAML parse error that says nothing about versions, so check up front and
-/// say so plainly.
+/// gateway's `ports:`), which first shipped in Compose 2.24.4 (compose-go
+/// v2.0.0-rc.3). Older CLIs do not reject it: they ignore the tag and append the
+/// overlay's loopback mapping to production's all-interfaces one, so the gateway
+/// either fails to bind or answers on every interface again. Nothing in that
+/// failure mentions versions, so check up front and say so plainly.
 fn compose_version_error() -> Option<String> {
     let output = docker_command().args(["compose", "version", "--short"]).output().ok()?;
     compose_version_error_in(&String::from_utf8_lossy(&output.stdout))
 }
 
+/// The oldest Compose that honours `!override`; see [`compose_version_error`].
+const MIN_COMPOSE_VERSION: (u32, u32, u32) = (2, 24, 4);
+
 /// The version comparison itself, split from the `docker compose version` call
-/// so the boundary (2.23 refused, 2.24 accepted) and the unreadable-output
+/// so the boundary (2.24.3 refused, 2.24.4 accepted) and the unreadable-output
 /// escape hatch can be covered without a Docker daemon.
 fn compose_version_error_in(raw: &str) -> Option<String> {
     let version = raw.trim().trim_start_matches('v');
@@ -907,14 +912,26 @@ fn compose_version_error_in(raw: &str) -> Option<String> {
     // message quoting its own version back at it.
     let major = parts.next().and_then(|p| p.parse::<u32>().ok());
     let minor = parts.next().and_then(|p| p.parse::<u32>().ok()).unwrap_or(0);
+    // Only the leading digits: Docker Desktop reports versions such as
+    // `2.24.6-desktop.1`, and a pre-release such as `2.24.4-rc1` counts as 2.24.4.
+    let patch = parts
+        .next()
+        .map(|p| {
+            p.chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+        })
+        .and_then(|digits| digits.parse::<u32>().ok())
+        .unwrap_or(0);
 
     // Unreadable version — let compose speak for itself. `Some(0)` is kept in this
     // branch because no Compose that can run the bundled overlay reports major 0.
     let major = major.filter(|&major| major > 0 || minor > 0)?;
 
-    if (major, minor) < (2, 24) {
+    if (major, minor, patch) < MIN_COMPOSE_VERSION {
+        let (need_major, need_minor, need_patch) = MIN_COMPOSE_VERSION;
         return Some(format!(
-            "Docker Compose {version} is too old — Companion Memory needs 2.24 or newer. Update Docker Desktop and try again."
+            "Docker Compose {version} is too old — Companion Memory needs {need_major}.{need_minor}.{need_patch} or newer. Update Docker Desktop and try again."
         ));
     }
 
@@ -1780,17 +1797,26 @@ mod tests {
         );
     }
 
-    /// The bundled overlay uses the Compose Specification's `!reset` tag, which
-    /// needs 2.24. Below that, compose fails with a YAML parse error that never
-    /// mentions versions, so this check is the only place the real reason gets
-    /// said — and the boundary has to be exactly right, or it either rejects
-    /// working installs or lets the unreadable error through.
+    /// The bundled overlay uses the Compose Specification's `!override` tag,
+    /// which first shipped in 2.24.4. Below that, compose ignores the tag and
+    /// appends the loopback mapping to production's all-interfaces one, and
+    /// nothing in the result mentions versions, so this check is the only place
+    /// the real reason gets said — and the boundary has to be exactly right, or
+    /// it either rejects working installs or lets the broken mapping through.
     #[test]
-    fn compose_older_than_2_24_is_refused_and_2_24_itself_is_not() {
+    fn compose_older_than_2_24_4_is_refused_and_2_24_4_itself_is_not() {
         assert!(compose_version_error_in("2.23.9").is_some());
-        assert!(compose_version_error_in("2.24.0").is_none());
-        assert!(compose_version_error_in("2.24").is_none());
+        assert!(compose_version_error_in("2.24.0").is_some());
+        assert!(compose_version_error_in("2.24.3").is_some());
+        assert!(compose_version_error_in("2.24").is_some());
+        assert!(compose_version_error_in("2.24.4").is_none());
+        assert!(compose_version_error_in("2.25.0").is_none());
         assert!(compose_version_error_in("1.29.2").is_some());
+
+        // Docker Desktop's own spelling: the patch is read up to its first
+        // non-digit, so a suffix neither hides an old patch nor refuses a new one.
+        assert!(compose_version_error_in("v2.24.6-desktop.1\n").is_none());
+        assert!(compose_version_error_in("v2.24.3-desktop.1\n").is_some());
 
         // The `v` prefix and the trailing newline are what `docker compose
         // version --short` actually emits, in that order.
@@ -1802,9 +1828,9 @@ mod tests {
         assert!(compose_version_error_in("2.9.0").is_some());
         assert!(compose_version_error_in("3.0.0").is_none());
 
-        let message = compose_version_error_in("2.23.9").expect("2.23.9 is too old");
-        assert!(message.contains("2.23.9"), "the user should see their own version: {message}");
-        assert!(message.contains("2.24"), "and what they need: {message}");
+        let message = compose_version_error_in("2.24.3").expect("2.24.3 is too old");
+        assert!(message.contains("2.24.3"), "the user should see their own version: {message}");
+        assert!(message.contains("2.24.4"), "and what they need: {message}");
     }
 
     /// An unparseable version must not become a hard stop. A Compose CLI that
@@ -1835,7 +1861,8 @@ mod tests {
         // A trailing component that does not parse is not the same thing: the
         // major and minor are readable, so the comparison still applies.
         assert!(compose_version_error_in("2.23.0-rc1").is_some());
-        assert!(compose_version_error_in("2.24.0-rc1").is_none());
+        assert!(compose_version_error_in("2.24.4-rc1").is_none());
+        assert!(compose_version_error_in("2.25.x").is_none());
     }
 
     /// desktop.log is append-only for the life of the install, so without the

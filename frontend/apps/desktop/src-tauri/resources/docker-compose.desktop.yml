@@ -23,10 +23,10 @@
 # ("no such device") on every desktop that isn't an AMD ROCm box. Production no
 # longer forces those devices — passthrough moved to the opt-in
 # docker-compose.rocm.yml overlay, which the desktop never layers in — so there
-# is nothing left to reset and the two `!reset` lines are gone. The >= 2.24
-# requirement still holds, enforced by compose_version_error() in
-# src-tauri/src/stack_manager.rs: the gateway's `ports: !override` below needs
-# it. GPU-variant image
+# is nothing left to reset and the two `!reset` lines are gone. The gateway's
+# `ports: !override` below needs Compose >= 2.24.4 (older CLIs ignore the tag
+# and concatenate), enforced by compose_version_error() in
+# src-tauri/src/stack_manager.rs. GPU-variant image
 # selection is out of scope for v1 — this always runs the cpu-capable image
 # with no GPU device passthrough.
 #

@@ -42,7 +42,7 @@ Prerequisites:
 
 - [Rust](https://rustup.rs) (stable)
 - [Docker](https://www.docker.com/products/docker-desktop/) (Compose CLI ≥
-  2.24 — see the note on `!reset` below)
+  2.24.4, see the note on `!override` below)
 - Platform Tauri build dependencies:
   - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
   - **Linux** (Ubuntu/Debian): `build-essential pkg-config curl wget file
@@ -213,14 +213,14 @@ This needed two things neither `docker-compose.yml` nor
 
 ## A note on the `!reset` compose tag
 
-`docker-compose.desktop.yml` uses the Compose Specification's `!reset` tag to
-clear `hbpe-service`'s ROCm device passthrough (`devices`, `group_add`) that
-`docker-compose.production.yml` unconditionally adds — Compose merges
-list-valued keys across `-f` files by *concatenation*, so a plain override
-can't remove them, and without `!reset` the stack would hard-fail
-(`docker compose up`) on any machine that isn't an AMD ROCm box. This needs
-Docker Compose CLI ≥ 2.24. If `docker compose up` fails with a parse error on
-`!reset`, upgrade Docker/Compose.
+`docker-compose.desktop.yml` uses the Compose Specification's `!override` tag
+to replace the gateway's `8642:8642` mapping from `docker-compose.production.yml`
+with `127.0.0.1:8642:8642`, so the appliance answers on this machine only.
+Compose merges list-valued keys across `-f` files by *concatenation*, so a plain
+`ports:` entry would add the loopback mapping beside the all-interfaces one
+instead of replacing it. `!override` first shipped in Docker Compose 2.24.4.
+Older CLIs ignore the tag and concatenate anyway, so the app checks the version
+before it starts the stack and asks you to update Docker/Compose below 2.24.4.
 
 ## Deferred for v1
 
