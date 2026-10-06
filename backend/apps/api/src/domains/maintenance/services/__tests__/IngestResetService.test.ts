@@ -1,9 +1,9 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 
 import { IngestResetService } from '../IngestResetService';
 
 /**
- * The reset TRUNCATES — it cannot take one account's rows and leave another's.
+ * The reset TRUNCATES, so it cannot take one account's rows and leave another's.
  * So the guard is about WHOSE data is in range, and these specs pin it: it runs
  * on the personal appliance it was written for, it refuses where it would take
  * somebody else's rows with it, it checks every table it empties (not just the
@@ -94,6 +94,40 @@ describe('IngestResetService', () => {
     const { service } = build(['ci_search.embeddings']);
 
     await expect(service.reset({ userId: CALLER })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('answers a lock timeout with a 409 that says nothing changed, not a 500', async () => {
+    const { service, manager, statements } = build();
+    const respond = manager.query.getMockImplementation();
+
+    if (!respond) {
+      throw new Error('build() always installs a query implementation');
+    }
+
+    manager.query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.startsWith('LOCK TABLE')) {
+        throw Object.assign(new Error('canceling statement due to lock timeout'), {
+          driverError: { code: '55P03' },
+        });
+      }
+
+      return respond(sql, params);
+    });
+
+    const refusal = service.reset({ userId: CALLER });
+
+    await expect(refusal).rejects.toBeInstanceOf(ConflictException);
+    await expect(refusal).rejects.toThrow(/Nothing was changed/);
+    expect(statements.some(({ sql }) => sql.startsWith('TRUNCATE'))).toBe(false);
+  });
+
+  it('passes any other database error through unchanged', async () => {
+    const { service, manager } = build();
+    const failure = Object.assign(new Error('relation does not exist'), { code: '42P01' });
+
+    manager.query.mockRejectedValueOnce(failure);
+
+    await expect(service.reset({ userId: CALLER })).rejects.toBe(failure);
   });
 
   it.each([

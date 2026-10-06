@@ -30,11 +30,13 @@ and the edge proxy strips a browser's `/api`, but `MaintenanceController` bakes
 at the proxy host would strip the prefix you just typed. Use the API's own
 host:port.
 
-Only an administrator can run it (`ApplianceAdminGuard`), and an api key needs
-`full` capability.
+Only an administrator can run it (`ApplianceAdminGuard`, which lets anyone
+through while the appliance is still unclaimed), and an api key needs `full`
+capability.
 
 In a single transaction it first locks every table it is about to clear (`LOCK
-TABLE ... IN ACCESS EXCLUSIVE MODE`, with a 15 second `lock_timeout`), then runs
+TABLE ... IN ACCESS EXCLUSIVE MODE`, with a 15 second `lock_timeout`; if the
+locks don't come in time the call answers `409` and changes nothing), then runs
 one `EXISTS` probe per user-scoped table (`assertNobodyElsesData` in
 `IngestResetService`). If any of them still holds a row belonging to a
 different account, the call is refused with a `403` naming the tables, because

@@ -1,7 +1,8 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, type EntityManager } from 'typeorm';
 
+import { PgErrorCode } from '@ci/common/constants';
 import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { REOPEN_INDEX_LEDGER_SQL, SEARCH_TABLES } from '@ci/domains/search-ingress';
@@ -17,6 +18,25 @@ const SEARCH_INDEX_QUEUE = 'search-index';
  */
 const LOCK_TIMEOUT = '15s';
 
+/**
+ * Turn the lock timeout into a 409 that says what happened. Left alone it is a
+ * bare QueryFailedError (55P03), which the client sees as a 500 and Sentry
+ * records as a crash, when all it means is "the appliance is busy, nothing was
+ * changed, try again".
+ */
+function lockTimeoutAsConflict(error: unknown): unknown {
+  const { code, driverError } = (error ?? {}) as { code?: unknown; driverError?: { code?: unknown } };
+
+  if (code !== PgErrorCode.LOCK_NOT_AVAILABLE && driverError?.code !== PgErrorCode.LOCK_NOT_AVAILABLE) {
+    return error;
+  }
+
+  return new ConflictException(
+    `The reset could not lock the tables it clears within ${LOCK_TIMEOUT}, because other work is ` +
+      'using them. Nothing was changed. Try again when the appliance is idle.',
+  );
+}
+
 interface TableRef {
   schema: string;
   table: string;
@@ -26,7 +46,7 @@ interface TableRef {
  * Bulk-ingest destination tables cleared by a reset, DEPENDENTS FIRST.
  *
  * They go out in one `TRUNCATE`, which is order-insensitive, so the ordering is
- * documentation rather than mechanism — but it is the ordering a per-table
+ * documentation rather than mechanism. But it is the ordering a per-table
  * delete would need, and getting it wrong here is how someone later splits the
  * statement and discovers the FK graph the hard way. The object plane's edges:
  *
@@ -57,7 +77,7 @@ const INGEST_TABLES: readonly TableRef[] = [
  * Every table with a foreign key into {@link INGEST_TABLES}, followed
  * transitively. Postgres will not truncate a table another table references
  * unless that one is truncated in the same statement, so these are emptied
- * whole by the reset too — they always were, through `CASCADE`, without being
+ * whole by the reset too. They always were, through `CASCADE`, without being
  * named or checked.
  *
  * Naming them is the point. The statement has no `CASCADE` any more, so a
@@ -120,7 +140,7 @@ export interface IngestResetResult {
 /**
  * Full ingest reset: wipe every bulk-ingest destination table and every table
  * that hangs off them by foreign key, the whole `ci_search` index (embeddings,
- * vectors, index_skips — via the shared {@link SEARCH_TABLES} list, so the two
+ * vectors, index_skips, from the shared {@link SEARCH_TABLES} list so the two
  * can't drift), and this caller's not-yet-run `search-index` queue jobs, all
  * in ONE transaction. Leaves the database ready for a clean re-import.
  *
@@ -157,7 +177,7 @@ export class IngestResetService {
       ...SEARCH_TABLES.map(({ schema, table }) => ({ schema, table })),
     ];
 
-    const result = await this.dataSource.transaction(async (manager) => {
+    const resetting = this.dataSource.transaction(async (manager) => {
       // Lock first, probe second: nothing can write a row into these tables
       // between the check and the truncate. TRUNCATE takes the same lock, so
       // this widens nothing; it only moves the lock ahead of the probe.
@@ -241,6 +261,10 @@ export class IngestResetService {
       };
     });
 
+    const result = await resetting.catch((error: unknown) => {
+      throw lockTimeoutAsConflict(error);
+    });
+
     this.logger.warn('Ingest reset executed — all ingested data truncated', {
       userId: ctx.userId,
       countsBefore: result.countsBefore,
@@ -281,7 +305,7 @@ export class IngestResetService {
 
     throw new ForbiddenException(
       `This reset truncates whole tables, and ${occupied.join(', ')} still hold another user's ` +
-        `rows — running it would delete their data too. Remove the other accounts' data ` +
+        `rows, so running it would delete their data too. Remove the other accounts' data ` +
         `first, or perform the reset directly against the database (db/postgres/INGEST_RESET_RUNBOOK.md).`,
     );
   }
