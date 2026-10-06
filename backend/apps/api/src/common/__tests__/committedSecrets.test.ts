@@ -48,7 +48,11 @@ describe('enforceNoCommittedSecrets', () => {
 
   it('names a single variable in the singular', () => {
     expect(() =>
-      enforceNoCommittedSecrets({ ...MINTED, AUTH_TOKEN_SECRET: 'AUTH_TOKEN_SECRET' }, 'production', jest.fn()),
+      enforceNoCommittedSecrets(
+        { ...MINTED, AUTH_TOKEN_SECRET: 'AUTH_TOKEN_SECRET' },
+        'production',
+        jest.fn(),
+      ),
     ).toThrow(/^\[configuration\] AUTH_TOKEN_SECRET still holds a value committed/);
   });
 
