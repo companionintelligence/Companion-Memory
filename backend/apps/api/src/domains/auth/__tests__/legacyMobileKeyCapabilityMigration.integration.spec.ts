@@ -51,7 +51,7 @@ interface Seed {
   name: string;
   scopes: string[];
   capability: 'read' | 'write' | 'full';
-  managedBy: 'connect' | null;
+  managedBy: 'connect' | 'sign_in' | null;
   after: 'read' | 'write' | 'full';
 }
 
@@ -63,6 +63,23 @@ const SEEDS: Record<string, Seed> = {
     capability: 'write',
     managedBy: null,
     after: 'full',
+  },
+  // The same phone once sign-in provenance has tagged its key: the migration
+  // that tags it runs before this one wherever both ship.
+  taggedLegacyPhone: {
+    name: 'Companion mobile · 2026-08-13',
+    scopes: [],
+    capability: 'write',
+    managedBy: 'sign_in',
+    after: 'full',
+  },
+  // A connect key is CI-Hub's, whatever it is called.
+  connectKey: {
+    name: 'Companion mobile · 2026-08-12',
+    scopes: [],
+    capability: 'write',
+    managedBy: 'connect',
+    after: 'write',
   },
   // A phone that signed in after it: already full.
   currentPhone: {

@@ -18,10 +18,15 @@
 -- app never sends any), no connect provenance, and still at `write`. A key the
 -- owner made in Settings would need that exact name to be caught, and a key
 -- the owner deliberately set to `read` is never touched.
+--
+-- Provenance may be NULL or 'sign_in'. A release that records sign-in
+-- provenance tags these same keys 'sign_in' in a migration with an earlier
+-- version than this one, so where both ship it runs first; matching NULL alone
+-- would then raise nothing. Where it has not shipped, no key holds 'sign_in'.
 UPDATE ci.api_keys
    SET capability = 'full',
        updated_at = now()
- WHERE managed_by IS NULL
+ WHERE (managed_by IS NULL OR managed_by = 'sign_in')
    AND cardinality(scopes) = 0
    AND capability = 'write'
    AND name ~ '^Companion mobile · [0-9]{4}-[0-9]{2}-[0-9]{2}$';
