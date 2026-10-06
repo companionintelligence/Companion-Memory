@@ -107,6 +107,10 @@ export class SyncNowService {
   /**
    * True when the user already has sync work in flight or fetched data awaiting transform.
    * Enqueueing more jobs in that state stacks heavy calendar transforms in the API process.
+   *
+   * "Awaiting transform" is what the transform sweep will pick up: rows the executor fetched, on
+   * connections that are active. A paused connection's fetched data waits for it to come back, so
+   * counting it here would turn "Sync now" off for every other connection until then.
    */
   private async userHasActiveSyncPipeline(context: UserServiceContext): Promise<boolean> {
     const [pending, inProgress, awaitingTransform] = await Promise.all([
@@ -115,6 +119,8 @@ export class SyncNowService {
       this.connectionSyncJobService.search(context, {
         status: 'success',
         lastTransformed: null,
+        fetchedByExecutor: true,
+        connectionActive: true,
         orderBy: 'updated_at:DESC',
       }),
     ]);
