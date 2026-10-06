@@ -160,8 +160,10 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
       return undefined;
     }
 
+    // Compared trimmed, as `memory.remember` compares a description: resending the stored text
+    // with a trailing newline loses nothing.
     const replaces = (stored: string | null, next: string | undefined) =>
-      next !== undefined && (stored ?? '').trim() !== '' && next !== stored;
+      next !== undefined && (stored ?? '').trim() !== '' && next.trim() !== (stored ?? '').trim();
 
     return replaces(task.description, parsed.description) || replaces(task.notes, parsed.notes)
       ? { ...this.schema.privacy, destructive: true }

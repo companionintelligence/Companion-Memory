@@ -201,6 +201,9 @@ describe('PlanningUpdateTaskTool.privacyFor', () => {
     await expect(
       tool.privacyFor(CONTEXT, { taskId: TASK_ID, notes: 'Asked about the boiler' }),
     ).resolves.toBeUndefined();
+    await expect(
+      tool.privacyFor(CONTEXT, { taskId: TASK_ID, notes: 'Asked about the boiler\n' }),
+    ).resolves.toBeUndefined();
   });
 
   it('does not look the task up for an update that touches neither field', async () => {
