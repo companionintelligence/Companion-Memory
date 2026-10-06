@@ -334,8 +334,12 @@ services:
   dbproxy:
     image: alpine/socat
     command: TCP-LISTEN:5432,fork,reuseaddr TCP:database:5432
+    # Loopback only. It forwards straight to Postgres, and its one caller,
+    # `make seed-production`, connects to it as localhost (the connection
+    # string dbconnstr prints above). An all-interfaces bind would put the
+    # database on the network for as long as the proxy runs.
     ports:
-      - 5432:5432
+      - 127.0.0.1:5432:5432
     networks:
       - ci
     profiles: [ "tooling" ]
