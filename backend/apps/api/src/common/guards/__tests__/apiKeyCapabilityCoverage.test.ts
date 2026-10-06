@@ -3,7 +3,7 @@ import 'reflect-metadata';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { RequestMethod } from '@nestjs/common';
+import { type ExecutionContext, RequestMethod } from '@nestjs/common';
 
 import {
   type ApiKeyCapability,
@@ -26,6 +26,7 @@ import { PersonaIntelligenceController } from '../../../domains/persona/controll
 import { PrivacyController } from '../../../domains/privacy/controllers/PrivacyController';
 import { PendingActionsController } from '../../../domains/tools/controllers/PendingActionsController';
 import { ApiKeyGuard } from '../ApiKeyGuard';
+import { type ApiKeyScopedRequest, capabilityImpliedByShape } from '../apiKeyScopeEnforcement';
 import { JwtOrApiKeyAuthGuard } from '../JwtOrApiKeyAuthGuard';
 
 /**
@@ -237,6 +238,12 @@ const DELETE_BELOW_FULL: Record<string, string> = {
   'McpController.handleDelete': READ_CAPABILITY,
 };
 
+/** What the guard demands of an undeclared DELETE, asked of the real shape rule rather than restated. */
+const DELETE_SHAPE = capabilityImpliedByShape(
+  { getType: () => 'http' } as unknown as ExecutionContext,
+  { method: 'DELETE' } as ApiKeyScopedRequest,
+);
+
 describe('every DELETE an api key can reach requires full', () => {
   const routes: Array<{ name: string; controller: ControllerClass; method: string }> = [];
 
@@ -259,7 +266,7 @@ describe('every DELETE an api key can reach requires full', () => {
 
   for (const { name, controller, method } of routes) {
     it(`${name} costs ${DELETE_BELOW_FULL[name] ?? FULL_CAPABILITY}`, () => {
-      expect(requiredForApiKey(controller, method, FULL_CAPABILITY)).toBe(
+      expect(requiredForApiKey(controller, method, DELETE_SHAPE)).toBe(
         DELETE_BELOW_FULL[name] ?? FULL_CAPABILITY,
       );
     });
