@@ -174,6 +174,19 @@ describe('IntentsController', () => {
       expect(() => controllerWith().getManifest('LOCAL')).toThrow('Unknown dispatch tier: LOCAL');
     });
 
+    it('names the caller, so an intent owned by one account is listed to that account only', () => {
+      // The `messaging.*` intents belong to whoever the BlueBubbles connector was set up for.
+      const { controller, calls } = controllerSpy();
+
+      controller.getManifest(undefined, { userId: 'user-1' });
+      controller.getIntent('people.find', undefined, { userId: 'user-2' });
+
+      expect(calls).toEqual([
+        { tier: undefined, userId: 'user-1' },
+        { tier: undefined, userId: 'user-2' },
+      ]);
+    });
+
     it('honours the tier on the single-intent route too', () => {
       const { controller, calls } = controllerSpy();
 
