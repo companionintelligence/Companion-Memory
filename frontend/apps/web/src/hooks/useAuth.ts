@@ -316,6 +316,15 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
   return created.key;
 }
 
+/** This device's stored key, or null when there is none or the store cannot be read. */
+async function storedDeviceKey(): Promise<string | null> {
+  try {
+    return await secureStorageGet(API_KEY_STORAGE);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Give this device's key up on the server: how the phone and desktop apps sign out. Best
  * effort and bounded, because signing out must finish whether or not the appliance answers;
@@ -551,7 +560,11 @@ function useAuth(): ReturnValue {
 
   const logout = useCallback(async () => {
     // The key this device signs in with (phone and desktop), read before it is dropped below.
-    const deviceKey = getApiKey();
+    // The stored copy when none is in memory: the desktop never loads its stored key back on
+    // start, and a phone can sign out before the keystore restore lands. Deleting that copy
+    // below without revoking it would leave a working key on the server that no device holds.
+    const deviceKey =
+      getApiKey() ?? (isNativePlatform() || isTauriPlatform() ? await storedDeviceKey() : null);
 
     // Drop the in-memory key before the replica wipe. A late keystore restore
     // must not put the previous box's key back under the next account.

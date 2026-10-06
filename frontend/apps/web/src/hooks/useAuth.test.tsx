@@ -1108,6 +1108,33 @@ describe('useAuth', () => {
     expect(secureStore.has('ci.apiKey')).toBe(false);
   });
 
+  it('desktop logout revokes the stored key even though it was never loaded back into memory', async () => {
+    // The desktop app keeps its key in this page's storage and does not load it on start, so
+    // after a restart only the stored copy knows which key this device holds.
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
+      invoke: vi.fn(async () => null),
+    };
+    localStorage.setItem('ci.apiKey', 'desktop-stored-key');
+    const fetchMock = setFetch(() => emptyResponse(true, 204));
+
+    try {
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+
+      await act(async () => {
+        await result.current[1].logout();
+      });
+
+      const revoke = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys/current'));
+      expect(revoke?.[1]?.method).toBe('DELETE');
+      expect(revoke?.[1]?.headers).toMatchObject({ 'x-api-key': 'desktop-stored-key' });
+      expect(localStorage.getItem('ci.apiKey')).toBeNull();
+    } finally {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      localStorage.removeItem('ci.apiKey');
+    }
+  });
+
   it('web logout revokes no key: a browser session holds none', async () => {
     const fetchMock = setFetch((url) =>
       url.endsWith('/api/authenticate/refresh') ? jsonResponse({ accessToken: 'live' }) : emptyResponse(),
