@@ -739,6 +739,17 @@ describe('PipelineRunService.replayDeadLetter', () => {
     ...overrides,
   });
 
+  // As in the running app, the stage queue listens for `pipeline.slice`. Replay
+  // only names a recorded queue that listens for the letter's event.
+  beforeEach(() => {
+    EventListenerRegistry.clear();
+    EventListenerRegistry.register('pipeline.slice', 'PipelineSliceListener', 'handleEnrichSlice', 'pipeline-enrich');
+  });
+
+  afterEach(() => {
+    EventListenerRegistry.clear();
+  });
+
   it('re-emits the payload verbatim onto the queue the job died on', async () => {
     // Payload fidelity is the entire reason the reaper stores `j.data`
     // untouched. This is the method that cashes it in.
@@ -761,6 +772,21 @@ describe('PipelineRunService.replayDeadLetter', () => {
     // job where nothing will ever pick it up — a replay that reports success and
     // does nothing.
     const harness = makeHarness(() => [claimRow({ queue: DEAD_LETTER_QUEUE })]);
+
+    const result = await harness.service.replayDeadLetter(CTX, LETTER_ID);
+
+    expect(harness.send).toHaveBeenCalledWith('pipeline.slice', expect.any(Object), {
+      priority: BACKFILL_JOB_PRIORITY,
+      singletonKey: `${DEAD_LETTER_REPLAY_KEY_PREFIX}${LETTER_ID}`,
+    });
+    expect(result.queue).toBeNull();
+  });
+
+  it('routes by listener registration when the queue it died on no longer listens for the event', async () => {
+    // A release moved the listener after the job died. Sent to the old queue,
+    // the job would be skipped as "no listeners" and completed: a replay that
+    // reports success, runs nothing, and leaves the payload to the purge.
+    const harness = makeHarness(() => [claimRow({ queue: 'pipeline-enrich-retired' })]);
 
     const result = await harness.service.replayDeadLetter(CTX, LETTER_ID);
 
@@ -1434,6 +1460,16 @@ describe('PipelineRunService replay of an event with several listener queues', (
     // their queue. There is nothing better to go on.
     await expect(
       replay({ queue: DEAD_LETTER_QUEUE, event_name: 'file.uploaded', payload: { userId: USER } }),
+    ).resolves.toEqual([...FILE_QUEUES].sort());
+  });
+
+  it('reaches the current listeners when the queue it died on no longer listens for the event', async () => {
+    // `notes-index` is a real queue, but it listens for note.created only. A
+    // file.uploaded sent there would be skipped as "no listeners" and completed.
+    EventListenerRegistry.register('note.created', 'NoteIndexListener', 'handle', 'notes-index');
+
+    await expect(
+      replay({ queue: 'notes-index', event_name: 'file.uploaded', payload: { userId: USER } }),
     ).resolves.toEqual([...FILE_QUEUES].sort());
   });
 

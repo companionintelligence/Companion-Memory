@@ -324,16 +324,28 @@ SELECT queue, event_name, stage, count(*) AS letters,
  ORDER BY letters DESC;
 ```
 
-Two writers land in this table and `queue` tells them apart:
+Two writers land in this table. Both record the queue the job failed on, so
+`queue` no longer tells them apart; whether `payload` has a `name` key does:
 
-- `queue` = a pipeline queue → written by `PipelineSliceListener` on **every**
-  throw, including the retries. The *first* row for a job usually carries the
+- No `name` key → written by `PipelineSliceListener` on **every** throw,
+  including the retries. It stores the parsed payload, which the bus has
+  already stripped of `name`. The *first* row for a job usually carries the
   informative error; by the third attempt the cause is often just "connection
   refused".
-- `queue = 'dead-letter'` → harvested from `pgboss.job` by
-  `DeadLetterReaperListener` after pg-boss exhausted its 3 retries. `id` is the
-  originating pg-boss job id, so it correlates straight back to `pgboss.job`
-  while that row still exists.
+- `payload ? 'name'` → harvested from `pgboss.job` by `DeadLetterReaperListener`
+  after pg-boss exhausted its 3 retries. It stores pg-boss's `data` verbatim,
+  and `send()` stamps the event name into it. `queue` comes from the failure
+  output, which `PGBossEventService` writes on every failure. It still reads
+  `dead-letter` for letters reaped before that output named the queue, and for
+  jobs pg-boss failed itself by expiry. `id` is pg-boss's id for the
+  dead-letter copy, so it correlates back to `pgboss.job` while that row still
+  exists.
+
+Replay sends a letter back to its `queue`, and only there. A
+`python.function.run` goes to its target's queue (`py-fn-summary` or
+`py-fn-hbpe`). A letter that still reads `dead-letter`, or whose queue no
+longer listens for its event, is sent to every queue that listens for the
+event, which re-runs listeners that had succeeded.
 
 ```sql
 -- Theirs: records refused by validation, with the raw payload.

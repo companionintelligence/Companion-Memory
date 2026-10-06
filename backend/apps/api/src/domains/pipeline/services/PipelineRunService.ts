@@ -371,6 +371,13 @@ interface StageStateRow {
  * failed before failures recorded their queue) still says `dead-letter`. That
  * queue has no worker, so those are routed by listener registration, which
  * reaches every queue listening for the event.
+ *
+ * So is a letter whose queue no longer listens for its event, because a
+ * release moved the listener after the job died. Letters have no TTL, so that
+ * can be weeks later. `send()` would still enqueue onto the old queue, whose
+ * worker finds no handler and completes the job without running anything: a
+ * replay that reports success, does nothing, and lets the purge delete the
+ * only copy of the payload 30 days on.
  */
 function replayQueueFor(letter: Pick<DeadLetterRow, 'queue' | 'event_name' | 'payload'>): string | null {
   if (letter.event_name === PythonFunctionRunEvent) {
@@ -381,7 +388,11 @@ function replayQueueFor(letter: Pick<DeadLetterRow, 'queue' | 'event_name' | 'pa
     }
   }
 
-  return letter.queue === DEAD_LETTER_QUEUE ? null : letter.queue;
+  if (letter.queue === DEAD_LETTER_QUEUE) {
+    return null;
+  }
+
+  return EventListenerRegistry.getQueuesFor(letter.event_name).has(letter.queue) ? letter.queue : null;
 }
 
 /**
@@ -1020,7 +1031,8 @@ export class PipelineRunService {
    * which reaches EVERY queue listening for the event. Until failures recorded
    * their queue that was the route for every reaped letter, and it re-ran
    * listeners that had already succeeded: a `file.uploaded` that failed only
-   * its preview went back to all six of its queues. See `replayQueueFor`.
+   * its preview went back to all six of its queues. A letter whose queue no
+   * longer listens for its event is routed the same way. See `replayQueueFor`.
    *
    * Replays ride {@link BACKFILL_JOB_PRIORITY} regardless of what the original
    * job carried: a replay is recovery of something already late, and a
