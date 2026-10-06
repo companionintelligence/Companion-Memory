@@ -369,14 +369,15 @@ describeWithDb(`GraphUtilityService.createOrUpdateNode (${availability.target})`
       });
     });
 
-    it('replaces the bag when mergeProperties is false', async () => {
+    it('replaces the bag when mergeProperties is false, keeping the keys the appliance owns', async () => {
       await service.createOrUpdateNode(alice, {
         entityId: alicesContact,
         properties: { occupation: 'dentist' },
         mergeProperties: false,
       });
 
-      expect((await stored(alicesContact)).properties).toEqual({ occupation: 'dentist' });
+      // emails, phones and planner are OWNER_MANAGED_PROPERTY_KEYS: a replace never drops them.
+      expect((await stored(alicesContact)).properties).toEqual({ ...IMPORTED_BAG, occupation: 'dentist' });
     });
 
     it('finds it by id after it was forgotten and brings it back, rather than inserting beside it', async () => {

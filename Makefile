@@ -44,8 +44,14 @@ export SETUP_DATABASE_REPO ?= ci/setup-database
 export SUMMARY_REPO ?= ci/summary-service
 export HBPE_REPO ?= ci/hbpe-service
 
-# Seed user UUID (John Smith) — must match backend/apps/api/scripts/seed-database/data/users.ts
-JOHN_SMITH_USER_ID := b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b
+# The seed's target user — must match the SEED_USER_ID default in
+# backend/apps/api/scripts/seed-database/data/users.ts. Override it to point
+# `seed` and `predict` at an existing account instead of John Smith.
+SEED_USER_ID ?= b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b
+# Exported so `make seed SEED_USER_ID=<uuid>` reaches the node process; a
+# variable set on make's command line is not otherwise passed to recipes.
+export SEED_USER_ID
+JOHN_SMITH_USER_ID := $(SEED_USER_ID)
 
 export TAG ?= $(shell git describe --tags --exact-match 2>/dev/null)
 
@@ -1112,8 +1118,8 @@ publish-quiet: ## Publish to CI-Portal store (quiet mode)
 	@scripts/publish/publish.sh -q
 
 .PHONY: seed
-seed: ## Seed database with John Smith user and demo data
-	@printf "$(call task_icon,seed,🌱) Seeding database...\n\n"
+seed: ## Seed database with demo data (SEED_USER_ID=<uuid> to target an existing user)
+	@printf "$(call task_icon,seed,🌱) Seeding database for user $(SEED_USER_ID)...\n\n"
 
 	@cd backend/apps/api && yarn run exec -- scripts/seed-database/main.ts
 

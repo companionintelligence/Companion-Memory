@@ -62,6 +62,16 @@ interface LocalHubPlugin {
   requestLocationAuthorization?(options: {
     always: boolean;
   }): Promise<{ status: NativeLocationAuthorization }>;
+  /**
+   * iOS only. Significant-change monitoring: fires when the phone moves, without the
+   * blue background indicator. `addListener` is the Capacitor bridge, not a custom method.
+   */
+  addListener?(
+    eventName: 'significantLocation' | 'significantLocationError',
+    listener: (event: BackgroundGeolocationLocation & { code?: string }) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
+  startSignificantLocationUpdates?(): Promise<void>;
+  stopSignificantLocationUpdates?(): Promise<void>;
 }
 
 export interface BackgroundGeolocationError {
@@ -617,6 +627,46 @@ export async function addBackgroundLocationWatcher(
       }
     },
   );
+}
+
+/**
+ * iOS Always background samples. Significant-change monitoring fires when the phone
+ * moves a meaningful distance and does not turn on the blue location indicator.
+ * Returns a stop function, or `null` off iOS.
+ *
+ * Android keeps {@link addBackgroundLocationWatcher} with `background: true`: the
+ * system requires that persistent notification for a background location service.
+ */
+export async function startSignificantLocationUpdates(
+  onLocation: (location: BackgroundGeolocationLocation) => void,
+  onError: (error: BackgroundGeolocationError) => void,
+): Promise<(() => Promise<void>) | null> {
+  const hub = plugins()?.LocalHub;
+
+  if (!isIosPlatform() || !hub?.startSignificantLocationUpdates || !hub.addListener) {
+    return null;
+  }
+
+  const locationHandle = await hub.addListener('significantLocation', (event) => {
+    onLocation(event);
+  });
+  const errorHandle = await hub.addListener('significantLocationError', (event) => {
+    onError({ code: event.code ?? 'UNKNOWN', message: 'Significant location updates stopped.' });
+  });
+
+  try {
+    await hub.startSignificantLocationUpdates();
+  } catch (err) {
+    await locationHandle.remove();
+    await errorHandle.remove();
+    throw err;
+  }
+
+  return async () => {
+    await hub.stopSignificantLocationUpdates?.();
+    await locationHandle.remove();
+    await errorHandle.remove();
+  };
 }
 
 /** Stops a watcher started by {@link addBackgroundLocationWatcher}. No-op on web. */

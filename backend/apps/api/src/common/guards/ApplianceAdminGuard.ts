@@ -2,6 +2,8 @@ import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
+import type { PortalPrincipalMarker } from './PortalTokenVerifier';
+
 /**
  * Confines the APPLIANCE-WIDE control plane to an administrator — on any
  * appliance that has one.
@@ -76,6 +78,13 @@ export class ApplianceAdminGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
 
+    // As in AdminOnlyGuard: a Portal bearer that does not carry the user's admin authority here (one
+    // from a Portal that predates addressing, or not addressed to this appliance) is refused,
+    // whatever the user's role.
+    if ((request as PortalPrincipalMarker | undefined)?.portalPrincipal?.admin === false) {
+      throw new ForbiddenException('This action needs a sign-in issued for this Memory');
+    }
+
     if (await this.admits(request?.user as { role?: string } | undefined)) {
       return true;
     }
@@ -94,7 +103,13 @@ export class ApplianceAdminGuard implements CanActivate {
    * drifting. A failed admin probe still throws (`applianceHasAdmin` fails
    * closed); a caller that would rather read that as "no" must catch it.
    */
-  async admits(user: { role?: string } | undefined): Promise<boolean> {
+  async admits(user: { role?: string } | undefined, request?: PortalPrincipalMarker): Promise<boolean> {
+    // The same refusal canActivate makes first, so a page asking here is not offered a control
+    // the route would then refuse to this Portal bearer.
+    if (request?.portalPrincipal?.admin === false) {
+      return false;
+    }
+
     if (user?.role === 'admin') {
       return true;
     }

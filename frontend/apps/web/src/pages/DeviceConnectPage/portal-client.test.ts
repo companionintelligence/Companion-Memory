@@ -7,6 +7,7 @@ import {
   probeMemoryOrigin,
   probePortalOrigin,
   readPersistedPortalUrl,
+  requestApplianceToken,
   signInToPortal,
 } from './portal-client';
 
@@ -62,6 +63,82 @@ describe('device-connect portal-client', () => {
     expect(devices).toEqual([
       { id: 'home', name: 'Home', status: 'active', memoryUrl: 'https://memory.example.com' },
     ]);
+  });
+
+  it("keeps the Memory's resource when the Portal lists one", async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            apps: [
+              {
+                url: 'https://memory.example.com',
+                deviceName: 'Home',
+                deviceSlug: 'home',
+                resource: 'urn:ci:device:home-device',
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+
+    const devices = await listMemoryServers(
+      { token: 'oidc-at', cookie: null, kind: 'oauth' },
+      'https://hub.example.com',
+    );
+
+    expect(devices).toEqual([
+      {
+        id: 'home',
+        name: 'Home',
+        status: 'active',
+        memoryUrl: 'https://memory.example.com',
+        resource: 'urn:ci:device:home-device',
+      },
+    ]);
+  });
+
+  describe('requestApplianceToken', () => {
+    it('posts the resource with the Portal access token and returns the addressed token', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ token: 'addressed', token_type: 'Bearer', expires_in: 900 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        ),
+      );
+
+      await expect(
+        requestApplianceToken('oidc-at', 'urn:ci:device:home-device', 'https://hub.example.com/'),
+      ).resolves.toBe('addressed');
+
+      const [url, init] = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
+      expect(url).toBe('https://hub.example.com/api/users/me/appliance-token');
+      expect(init.method).toBe('POST');
+      expect((init.headers as Record<string, string>).Authorization).toBe('Bearer oidc-at');
+      expect(JSON.parse(String(init.body))).toEqual({ resource: 'urn:ci:device:home-device' });
+    });
+
+    it('asks for a fresh sign-in when the Portal says the access token expired', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 401 })));
+
+      await expect(
+        requestApplianceToken('stale', 'urn:ci:device:x', 'https://hub.example.com'),
+      ).rejects.toThrow(/Sign in again/);
+    });
+
+    it('refuses an answer with no token in it', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+
+      await expect(
+        requestApplianceToken('oidc-at', 'urn:ci:device:x', 'https://hub.example.com'),
+      ).rejects.toThrow(/did not return a sign-in/);
+    });
   });
 
   it('filters session-device lists down to a Memory app URL', async () => {

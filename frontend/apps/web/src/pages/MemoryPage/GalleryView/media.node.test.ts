@@ -76,6 +76,23 @@ describe('getEntityMedia', () => {
       ).toBeNull();
     });
 
+    it('keeps the HEIC original for download and leaves the tile empty until a JPEG preview exists', () => {
+      const media = getEntityMedia(
+        entity({
+          __typename: 'FileType',
+          id: 'f-heic',
+          galleryContentType: 'image/heic',
+          gallerySourceUrl: '/files/IMG_0001.HEIC',
+          galleryFilename: 'IMG_0001.HEIC',
+          galleryMediaSize: 400_000,
+        }),
+      );
+
+      expect(media?.kind).toBe('image');
+      expect(media?.fullUrl).toBe('/static/files/IMG_0001.HEIC');
+      expect(media?.thumbUrl).toBeNull();
+    });
+
     it('returns null when a media file has no URL', () => {
       expect(
         getEntityMedia(entity({ __typename: 'FileType', id: 'f5', galleryContentType: 'image/png' })),
@@ -566,6 +583,27 @@ describe('pickThumbUrl', () => {
         sizeBytes: MAX_UNPREVIEWED_THUMB_BYTES,
       }),
     ).toBe(full);
+  });
+
+  it('never hands a HEIC original to the tile image', () => {
+    expect(
+      pickThumbUrl({
+        kind: 'image',
+        previewUrl: null,
+        fullUrl: '/IMG_0001.HEIC',
+        sizeBytes: 1024,
+        contentType: 'image/heic',
+      }),
+    ).toBeNull();
+    expect(
+      pickThumbUrl({
+        kind: 'image',
+        previewUrl: '/IMG_0001-thumb.jpg',
+        fullUrl: '/IMG_0001.HEIC',
+        sizeBytes: 1024,
+        contentType: 'image/heif',
+      }),
+    ).toBe('/IMG_0001-thumb.jpg');
   });
 
   it('never hands a video source to the tile image', () => {
