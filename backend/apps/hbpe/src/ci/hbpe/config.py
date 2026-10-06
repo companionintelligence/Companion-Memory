@@ -262,6 +262,16 @@ class Settings(BaseSettings):
     sidecar_auth_secret: str = Field(
         default_factory=lambda: os.getenv("SIDECAR_AUTH_SECRET", "")
     )
+    # Serve the operator-only routes, POST /trigger and POST /invalidate/{date}.
+    # Off by default: both act on whatever user_id they are given, and the API
+    # never calls them (it dispatches runs through /functions/run). Turn on for
+    # local debugging with HBPE_ENABLE_ADMIN_ROUTES=1 on this container only.
+    enable_admin_routes: bool = Field(
+        default_factory=lambda: (
+            os.getenv("HBPE_ENABLE_ADMIN_ROUTES", "").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+    )
 
     # ── Function runner (pg-boss dispatch from the NestJS API) ───────────────
     # Worker pool size for /functions/run. Defaults to 1: labeling shares a
