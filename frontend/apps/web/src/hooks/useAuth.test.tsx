@@ -587,6 +587,21 @@ describe('useAuth', () => {
       expect(secureStore.has('ci.apiKey')).toBe(false);
       expect(secureStore.has('ci.apiKeyId')).toBe(false);
     });
+
+    it('does not offer an origin the keystore holds without a key, and drops it', async () => {
+      // What a sign-out leaves when it is cut short after the key went but before the origin.
+      const secureStore = nativeWithStore([['ci.apiBaseUrl', 'https://previous.example.net']]);
+      const confirm = vi.spyOn(window, 'confirm');
+      setFetch(() => emptyResponse());
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(result.current[0].authenticated).toBe(false);
+      expect(localStorage.getItem('ci.apiBaseUrl')).toBeNull();
+      expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
+    });
   });
 
   describe('native logout and the Local Hub outbox', () => {

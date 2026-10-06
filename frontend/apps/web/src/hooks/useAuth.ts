@@ -340,6 +340,15 @@ async function adoptKeystoreOrigin(storedOrigin: string | null): Promise<boolean
     return true;
   }
 
+  // An origin with no key is what a sign-out cut short leaves (the key goes first). There is
+  // nothing to sign back in with, and a saved origin makes iOS skip the device picker, so
+  // the next sign-in would go to this box. Finish the sign-out instead of asking.
+  if (!(await secureStorageGet(API_KEY_STORAGE))) {
+    await secureStorageRemove('ci.apiBaseUrl');
+
+    return true;
+  }
+
   if (window.confirm(`Sign back in to your Memory at ${stored}?`)) {
     persistApiBaseUrl(stored);
 
