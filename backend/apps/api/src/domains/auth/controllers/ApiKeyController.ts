@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -32,6 +33,7 @@ import { ApiKeyService } from '../services/ApiKeyService';
 import {
   CONNECT_KEY_NAME_PREFIX,
   type CreateApiKeyDto,
+  isManagedAppPrincipal,
   SIGN_IN_PROVENANCE,
   type UpdateApiKeyDto,
 } from '../types';
@@ -92,6 +94,13 @@ export const updateApiKeySchema = z.object({
 });
 
 /**
+ * The name the phone and desktop apps give the key they mint at sign-in (`useAuth.ts`), and have
+ * since before `sign_in` existed. App builds from before it send only the name, so the name alone
+ * tags the key too, the same rule migration 20261006065846 applied to the keys already on disk.
+ */
+const SIGN_IN_KEY_NAME = /^Companion mobile · \d{4}-\d{2}-\d{2}$/;
+
+/**
  * Guarded by {@link JwtOrPortalAuthGuard}: a session JWT (settings UI) or a
  * portal OIDC bearer (Companion Capture exchanging its short-lived id_token
  * for a durable key at sign-in) — never an api key, so a leaked key cannot
@@ -109,7 +118,9 @@ export class ApiKeyController {
   ) {
     const serviceContext = toServiceContext(context);
 
-    return this.apiKeyService.create(serviceContext, input, input.sign_in ? SIGN_IN_PROVENANCE : null);
+    const signIn = input.sign_in === true || SIGN_IN_KEY_NAME.test(input.name);
+
+    return this.apiKeyService.create(serviceContext, input, signIn ? SIGN_IN_PROVENANCE : null);
   }
 
   /**
@@ -117,9 +128,10 @@ export class ApiKeyController {
    *
    * They hold nothing but that key, and every other route here takes a session or a Portal bearer
    * precisely so a key cannot mint or manage keys. Giving a key up is the one thing it may do to
-   * itself, at any capability: it ends its own access and reaches no other credential. A
-   * scope-limited key (an installed app's) is refused by the guard's scope rule, since the Hub
-   * owns those and revokes them when the app is disconnected.
+   * itself, at any capability: it ends its own access and reaches no other credential. An
+   * installed app's key is refused: the Hub owns those and revokes them when the app is
+   * disconnected. A scope-limited one never gets here (the guard's scope rule), and an
+   * empty-scope one (the bulk importer's) is refused by its provenance.
    *
    * Declared before `:id` so `current` is never read as a key id.
    */
@@ -130,6 +142,10 @@ export class ApiKeyController {
   async revokeCurrent(@Context() context: RequestContext, @Req() req: ApiKeyScopedRequest): Promise<void> {
     if (!req.apiKeyId) {
       throw new UnauthorizedException();
+    }
+
+    if (isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy })) {
+      throw new ForbiddenException('Your Hub manages this key. Disconnect the app from the Hub instead.');
     }
 
     await this.apiKeyService.remove(toServiceContext(context), req.apiKeyId);
