@@ -152,12 +152,17 @@ def test_schedule_reconciliation_keeps_its_own_narrower_allowlist():
 #
 #   * pipeline/recurrence.py, _UPCOMING_EVENTS_SQL: its own allowlist, pinned
 #     above.
+#   * evaluation/schedule.py applies LIVE_EVENT_SQL like the training readers, even
+#     though it only feeds an offline forecaster: a cancelled meeting is not
+#     scheduled. Asserted below.
+#
 #   * tokenizer/vocab_cleanup.py, _relabel_mapped_off_junk: moves labels that
 #     events already have onto the static clusters. It writes no token and
 #     labels no new event, and the serializer's own predicate decides whether
 #     a moved label is ever published.
 _EVENT_READERS = {
     "data_client.py": 2,
+    "evaluation/schedule.py": 1,
     "pipeline/bootstrap.py": 2,
     "pipeline/recurrence.py": 1,
     "tokenizer/static_labeler.py": 1,
@@ -180,3 +185,15 @@ def test_every_reader_of_ci_events_is_accounted_for():
     )
 
     assert dict(found) == _EVENT_READERS
+
+
+def test_schedule_forecaster_reads_only_live_events():
+    """
+    ``evaluation/schedule.py`` reads the calendar to say what is booked. It is an
+    offline forecaster, not training input, but a cancelled or deleted meeting
+    is not booked, so it takes the same predicate as every other reader.
+    """
+    from ci.hbpe.evaluation import schedule
+
+    flat = " ".join(schedule._EVENTS_SQL.split())
+    assert f"AND e.is_deleted = FALSE AND {LIVE_EVENT_SQL}" in flat

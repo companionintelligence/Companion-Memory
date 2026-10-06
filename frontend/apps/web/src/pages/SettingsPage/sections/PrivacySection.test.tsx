@@ -52,7 +52,10 @@ describe('PrivacySection', () => {
     await waitFor(() =>
       expect(h.fetchJson).toHaveBeenLastCalledWith(
         '/api/privacy/outbound',
-        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ key: 'link_previews', enabled: false }) }),
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify({ key: 'link_previews', enabled: false }),
+        }),
       ),
     );
   });

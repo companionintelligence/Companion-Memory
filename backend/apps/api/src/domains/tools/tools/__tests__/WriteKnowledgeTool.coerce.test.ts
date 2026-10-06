@@ -46,7 +46,12 @@ describe('WriteKnowledgeTool Qwen argument shapes', () => {
       findActiveRelationship: jest.fn(async () => null),
     };
 
-    const tool = new WriteKnowledgeTool(graphEvents as never, graphQuery as never, makeLogger() as never);
+    const tool = new WriteKnowledgeTool(
+      graphEvents as never,
+      graphQuery as never,
+      makeLogger() as never,
+      { getSelfIdentity: async () => null } as never,
+    );
     const result = await tool.execute(
       { userId: 'user-1' },
       {

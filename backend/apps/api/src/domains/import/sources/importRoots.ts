@@ -36,7 +36,7 @@ export function inboxRoot(): string {
 }
 
 /**
- * One user's slice of the inbox: `<inboxRoot>/<folder derived from email>`.
+ * One user's slice of the inbox: `<inboxRoot>/<user id>`.
  *
  * The inbox mount is shared by every account on the appliance, but WHO an
  * import is for is decided by whoever starts the run — so without scoping,
@@ -44,20 +44,32 @@ export function inboxRoot(): string {
  * dropped. Each account therefore gets its own subtree, and the scan and the
  * batch never leave the caller's.
  *
- * Derived from the EMAIL because it is the one identifier that is both unique
- * (DB constraint) and recognizable from the desktop side of the mount — the
- * display name is neither, and two "Kyle"s sharing a folder would recreate
- * the exact cross-account leak this exists to prevent. Lowercased before
- * sanitizing so the folder never depends on how the email was cased at
- * signup; `@` and friends become `_` (e.g. `kyle@lifescope.io` →
- * `kyle_lifescope.io`).
+ * Keyed on the account id, not the email. The email looked unique, but the
+ * folder name was `sanitizeFilename(email.toLowerCase())`, and that is not:
+ * `a+b@x.io` and `a_b@x.io` both land on `a_b_x.io`, as do two case variants
+ * of one address. A member who changed their email to such a variant of the
+ * owner's got the owner's folder, saw their un-imported archives and could
+ * consume them. The id is assigned once at signup, never changes, and is
+ * unique by primary key, so two accounts can never share a folder. It runs
+ * through {@link sanitizeFilename} only as defence against a non-UUID id
+ * carrying a path character — real ids are UUIDs and pass through unchanged.
  */
-export function userInboxDir(email: string): string {
-  return path.join(inboxRoot(), inboxFolderName(email));
+export function userInboxDir(userId: string): string {
+  return path.join(inboxRoot(), inboxFolderName(userId));
 }
 
 /** The folder name one account's inbox subtree gets — see {@link userInboxDir}. */
-export function inboxFolderName(email: string): string {
+export function inboxFolderName(userId: string): string {
+  return sanitizeFilename(userId);
+}
+
+/**
+ * The folder name an account's inbox used BEFORE it was keyed on the id —
+ * `sanitizeFilename(email.toLowerCase())`. Kept for the one-time boot migration
+ * that moves each account's old folder onto its id (see
+ * `ImportInboxService.migrateInboxFoldersToUserIds`); nothing else uses it.
+ */
+export function legacyEmailInboxFolderName(email: string): string {
   return sanitizeFilename(email.trim().toLowerCase());
 }
 
@@ -93,10 +105,10 @@ export function inboxHostRoot(): string | null {
  * platform the API runs on, and a bind-mount source is always written with
  * forward slashes in compose.
  */
-export function userInboxDisplayDir(email: string): string {
+export function userInboxDisplayDir(userId: string): string {
   const host = inboxHostRoot();
 
-  return host == null ? userInboxDir(email) : `${host}/${inboxFolderName(email)}`;
+  return host == null ? userInboxDir(userId) : `${host}/${inboxFolderName(userId)}`;
 }
 
 /**
@@ -117,8 +129,8 @@ export function userInboxDisplayDir(email: string): string {
  * account whose subtree is not provisioned yet), so a caller still gets a
  * usable root instead of an exception from what is only a comparison step.
  */
-export async function realUserInboxDir(email: string): Promise<string> {
-  const dir = userInboxDir(email);
+export async function realUserInboxDir(userId: string): Promise<string> {
+  const dir = userInboxDir(userId);
 
   try {
     return await realpath(dir);
@@ -202,22 +214,56 @@ export async function resolveWithinRoots(requested: string, roots: string[]): Pr
   return resolved;
 }
 
-/**
- * The read-side resolver the path tools use: the operator's roots plus the
- * CALLER's OWN inbox subtree — the same composition upstream made when it
- * appended its data dir to CI_IMPORT_ROOTS so the wizard's dropped files were
- * importable, narrowed to the one slice of the shared mount that is the
- * caller's. Never the whole inbox root: reading is quieter than consuming,
- * but another account's dropped archive is not this caller's to read either.
- * `email: null` means an anonymous or unresolvable caller — configured roots
- * only, no inbox at all. Only the inbox batch surface may CONSUME an inbox
- * path, and it resolves through {@link resolveWithinUserInbox} instead.
- */
-export async function resolveWithinImportRoots(requested: string, email: string | null): Promise<string> {
-  const roots = configuredImportRoots();
+/** Who is asking, so the read-side resolver can decide which roots they reach. */
+export interface ImportRootsCaller {
+  /** The caller's account id, or null for an anonymous/unresolvable caller. */
+  userId: string | null;
+  /**
+   * Whether the caller is the appliance administrator. Only an admin reaches
+   * the configured `CI_IMPORT_ROOTS`; everyone else gets their own inbox only.
+   */
+  isAdmin: boolean;
+}
 
-  if (email != null) {
-    roots.push(userInboxDir(email));
+/**
+ * The {@link ImportRootsCaller} for an account as `UserService.findById`
+ * returned it, or for no account at all. The REST route and both import tools
+ * build their caller here, so the rule for who reaches the configured roots is
+ * written once.
+ */
+export function importRootsCallerFor(
+  user: { id: string; role?: string | null } | null | undefined,
+): ImportRootsCaller {
+  return { userId: user?.id ?? null, isAdmin: user?.role === 'admin' };
+}
+
+/**
+ * The read-side resolver the path tools use: the configured roots (ADMIN ONLY)
+ * plus the CALLER's OWN inbox subtree.
+ *
+ * The configured roots are one shared set for the whole appliance — on a
+ * desktop or `make production` install they default to `/repo`, a mount of the
+ * host owner's `~/Downloads`. Handing them to every signed-in account let a
+ * household member list and import the owner's files. They are the appliance's
+ * operator surface, so only the administrator reaches them now. The per-user
+ * inbox is unchanged and stays available to everyone: it is each caller's own
+ * slice of the shared mount, never another account's and never the whole root.
+ * A non-admin with no inbox (`userId: null`) therefore resolves nothing.
+ *
+ * Admin is read from the caller's role rather than probed here, so this stays
+ * free of a database dependency. On an unclaimed appliance nobody is admin yet,
+ * but the first account is promoted on signup, so the only window with no admin
+ * is before anyone can authenticate. Only the inbox batch surface may CONSUME
+ * an inbox path, and it resolves through {@link resolveWithinUserInbox}.
+ */
+export async function resolveWithinImportRoots(
+  requested: string,
+  caller: ImportRootsCaller,
+): Promise<string> {
+  const roots = caller.isAdmin ? configuredImportRoots() : [];
+
+  if (caller.userId != null) {
+    roots.push(userInboxDir(caller.userId));
   }
 
   return resolveWithinRoots(requested, roots);
@@ -230,8 +276,8 @@ export async function resolveWithinImportRoots(requested: string, email: string 
  * claims inbox units, and neither can another account's subtree, by
  * construction rather than by a check someone could forget.
  */
-export async function resolveWithinUserInbox(requested: string, email: string): Promise<string> {
-  return resolveWithinRoots(requested, [userInboxDir(email)]);
+export async function resolveWithinUserInbox(requested: string, userId: string): Promise<string> {
+  return resolveWithinRoots(requested, [userInboxDir(userId)]);
 }
 
 /**

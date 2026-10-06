@@ -20,8 +20,20 @@ day, and a forecaster can be scored before a line of serving code is written.
 ```bash
 python -m ci.hbpe.evaluation --list-users          # which users have a corpus
 python -m ci.hbpe.evaluation --user <uuid>
+python -m ci.hbpe.evaluation --user <uuid> --dense # score all 96 buckets, not
+                                                   # only the occupied ones
 python -m ci.hbpe.evaluation --user <uuid> --with-hmt --json
 ```
+
+`--use-rhythm` (with `--dense`) fills the onboarding-declared sleep window
+with SLEEP instead of the flat filler — see `rhythm.py`. On the corpus this was
+built against it gave SLEEP 1,968 rows of real support where it had none, and
+cut the meaningless filler from 97.5% of buckets to 70.5%.
+
+`--baselines-only` drops the candidate rows; `--with-schedule` adds the
+calendar reader (read `schedule.py` first, it is near-circular on a
+calendar-derived corpus); `--candidate <name>` chooses which row the D3
+verdict is reported for.
 
 `--list-users` reports days, rows and date range per user, longest history
 first, so picking a UUID does not need a separate psql session.
@@ -68,6 +80,34 @@ here is directly comparable to a number in production.
 metrics and reports `CLEARS` or `BENCHED`. That is the rule that actually
 governs deployment; prefer it to whichever metric happens to flatter a model.
 
+The gate reads Brier with ECE as a constraint. It used to lead on top-1, which
+rewarded majority-class collapse — see `pipeline/serve.py`. Note that a proper
+scoring rule is still not immune to a 97% imbalance: a class-weighted model
+that lifts macro-R from 0.60 to 0.80 is *deliberately* miscalibrated and the
+gate benches it, correctly. Reweighting is a decision-rule change wearing a
+model's clothes; fit unweighted, then choose the operating point separately.
+
+### Occupancy, and why `--dense` changes the question
+
+Without `--dense` only buckets carrying a token are scored. On a corpus at 2.6%
+occupancy that means roughly two buckets a day out of 96, and the question
+being asked is "given that something was recorded here, which class was it?".
+A forecast nobody can act on. `--dense` labels every bucket, filling gaps with
+`--background` (default `UNKNOWN`), so the question becomes "what is happening
+at 15:00 tomorrow?".
+
+Both runs are worth having, because the dominant class flips between them and
+takes the aggregate metrics with it. Sparse is ~41% WORK; densified is ~97%
+filler. Top-1 and Brier are both dominated by whichever class that is, so the
+table leads with **macro-R** — mean per-class recall over classes with support,
+excluding the filler. A forecaster answering the dominant class everywhere
+scores 0.99 top-1 and a near-zero Brier on a densified run, and macro-R 0.000.
+That combination is exactly what B0, B2 and the old smoother post.
+
+`UNKNOWN` as filler is a proxy, not a synonym — it already means "the labeler
+could not tell". After densifying, `UNKNOWN` recall is not interpretable. Every
+other class stays clean.
+
 ### Two traps this harness exposes
 
 **Top-1 is inflated for flat forecasters.** `scoring.argmax_class` breaks ties
@@ -95,6 +135,10 @@ all three columns.
 | `walkforward.py` | the loop, leakage guard, output validation, D3 verdict |
 | `report.py` | text rendering |
 | `hmt.py` | adapter for the deployed transformer (ONNX + DB; imported separately) |
+| `pipeline/shrinkage.py` | recency-weighted hierarchical shrinkage; balanced transitions |
+| `pipeline/supervised.py` | multinomial logistic head over per-bucket features |
+| `schedule.py` | tomorrow's calendar as an input (read its caveat) |
+| `pipeline/rhythm.py` | the onboarding-declared wake/sleep window as a densification prior |
 | `__main__.py` | CLI |
 
 ## Known limitation

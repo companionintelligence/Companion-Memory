@@ -1,25 +1,23 @@
 import { randomBytes } from 'crypto';
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
 import { isUniqueViolation } from '@ci/common/constants';
 import { SYSTEM_USER } from '@ci/common/context';
 import {
-  FORWARD_AUTH_SIGNATURE_HEADER,
-  FORWARD_AUTH_TIMESTAMP_HEADER,
-  FORWARD_AUTH_USER_HEADER,
-  FORWARD_AUTH_USER_ID_HEADER,
-  FORWARD_AUTH_USER_ID_SIGNATURE_HEADER,
-  FORWARD_AUTH_USER_ISSUER_HEADER,
   type HubStableId,
-  verifyForwardAuthHeaders,
+  type VerifiedHubForwardAuth,
+  forwardAuthPolicy,
+  readForwardAuthHeaders,
+  verifyHubForwardAuth,
 } from '@ci/common/crypto';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { type CreateUserDto, type User, UserService } from '@ci/domains/user';
 
 import { clearCsrfCookie, clearSessionCookie, setCsrfCookie, setSessionCookie } from '../utils/authCookies';
+import { SpentHubAssertions } from '../utils/spentHubAssertions';
 
 import { AuthService } from './AuthService';
 import { CsrfService } from './CsrfService';
@@ -68,17 +66,15 @@ interface MemorySession {
   email: string | null;
 }
 
+/**
+ * A verified identity and the instant its header set was checked. The ledger judges a spend at
+ * that instant, not after the account lookups: a replay that verified in its last millisecond
+ * must still find its nonce held, however long those lookups take.
+ */
+type VerifiedAt = VerifiedHubForwardAuth & { verifiedAt: number };
+
 /** First-sight races a placement retries before giving up. One is all a second tab can cause. */
 const MAX_PLACEMENT_ATTEMPTS = 3;
-
-function headerValue(req: Request, name: string): string | null {
-  const raw = req.headers[name];
-  if (Array.isArray(raw)) {
-    return raw[0] ?? null;
-  }
-
-  return raw ?? null;
-}
 
 function emailsEqual(a: string | null | undefined, b: string | null | undefined): boolean {
   return Boolean(a && b && a.trim().toLowerCase() === b.trim().toLowerCase());
@@ -102,9 +98,17 @@ function emailsEqual(a: string | null | undefined, b: string | null | undefined)
  * By email alone, as before, for a Hub that sends no stable id. That is still the
  * failure the stable id exists to end, kept only so an older Hub works exactly as
  * it always did. See CI-Engineering/architecture/identity/hub-memory-account-link.md.
+ *
+ * ── One session per Hub sign-in ────────────────────────────────────────────
+ *
+ * Reading the identity is free: every request carries it. Minting a session from a
+ * bound assertion spends it ({@link SpentHubAssertions}), so it opens one session and
+ * no more. Which header sets verify at all is `forwardAuthPolicy`'s call.
  */
 @Injectable()
 export class HubForwardAuthBridgeService {
+  private readonly spentAssertions = new SpentHubAssertions();
+
   constructor(
     private readonly userService: UserService,
     private readonly authService: AuthService,
@@ -113,29 +117,71 @@ export class HubForwardAuthBridgeService {
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(HubForwardAuthBridgeService.name);
+
+    this.warnAboutPolicy();
+  }
+
+  /** Say at boot when the forward-auth settings leave Hub sign-in unbound, or switched off. */
+  private warnAboutPolicy(): void {
+    const cfg = config.auth.hubForwardAuth;
+    if (!cfg.enabled) {
+      return;
+    }
+
+    const policy = forwardAuthPolicy(cfg);
+    if (!policy.bound) {
+      if (!policy.acceptUnbound) {
+        this.logger.warn(
+          'Hub sign-in is off: CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE=true requires the bound assertion, but ' +
+            'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN are not both set.',
+        );
+      } else if (!policy.sharedSecret) {
+        this.logger.warn(
+          'Hub sign-in is off: CI_HUB_FORWARD_AUTH_ENABLED is true, but neither CI_HUB_FORWARD_AUTH_SECRET nor ' +
+            'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET with CI_APP_URN is set, so no identity header can verify.',
+        );
+      } else {
+        this.logger.warn(
+          'Hub sign-in accepts identity headers that are not bound to this app: the Hub has not provided ' +
+            'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET and CI_APP_URN. Updating the Hub provides both.',
+        );
+      }
+
+      return;
+    }
+
+    if (policy.acceptUnbound) {
+      this.logger.warn(
+        'CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE=false: Hub sign-in also accepts identity headers that are not ' +
+          'bound to this app.',
+      );
+    }
+
+    if (policy.bound.secret === cfg.secret.trim()) {
+      this.logger.warn(
+        'CI_HUB_FORWARD_AUTH_IDENTITY_SECRET is the Hub-wide CI_HUB_FORWARD_AUTH_SECRET, which an older Hub ' +
+          "also gave other apps: any of them can sign this app's identity assertion.",
+      );
+    }
   }
 
   /** The verified Hub identity on this request, or null when the feature is off or headers do not verify. */
   verifyIdentity(req: Request): HubIdentity | null {
+    const verified = this.verify(req);
+
+    return verified ? { username: verified.username, stableId: verified.stableId } : null;
+  }
+
+  private verify(req: Request): VerifiedAt | null {
     const cfg = config.auth.hubForwardAuth;
-    if (!cfg.enabled || !cfg.secret) {
+    if (!cfg.enabled) {
       return null;
     }
 
-    const result = verifyForwardAuthHeaders(
-      cfg.secret,
-      {
-        user: headerValue(req, FORWARD_AUTH_USER_HEADER),
-        timestamp: headerValue(req, FORWARD_AUTH_TIMESTAMP_HEADER),
-        signature: headerValue(req, FORWARD_AUTH_SIGNATURE_HEADER),
-        issuer: headerValue(req, FORWARD_AUTH_USER_ISSUER_HEADER),
-        userId: headerValue(req, FORWARD_AUTH_USER_ID_HEADER),
-        userIdSignature: headerValue(req, FORWARD_AUTH_USER_ID_SIGNATURE_HEADER),
-      },
-      { maxSkewMs: cfg.maxSkewMs },
-    );
+    const now = Date.now();
+    const result = verifyHubForwardAuth(forwardAuthPolicy(cfg), readForwardAuthHeaders(req.headers), { now });
 
-    return result.ok ? { username: result.username, stableId: result.stableId } : null;
+    return result.ok ? { ...result, verifiedAt: now } : null;
   }
 
   /** Verified `X-CI-Hub-User`, or null when the feature is off or headers do not verify. */
@@ -198,22 +244,67 @@ export class HubForwardAuthBridgeService {
    * Memory user when they have never opened Memory on this box).
    */
   async alignSession(req: Request, res: Response): Promise<HubBridgeResult> {
-    const identity = this.verifyIdentity(req);
+    const identity = this.verify(req);
     if (!identity) {
       return { username: null, replaced: false };
     }
 
     return identity.stableId
-      ? this.alignByStableId(req, res, identity.username, identity.stableId)
-      : this.alignByEmail(req, res, identity.username);
+      ? this.alignByStableId(req, res, identity, identity.stableId)
+      : this.alignByEmail(req, res, identity);
+  }
+
+  /**
+   * Spend the bound assertion this session is about to be minted from, or refuse to mint.
+   *
+   * Called after the match checks, so a browser that already holds the right session spends
+   * nothing, and before anything is signed out, so a refused replay changes nothing. The unbound
+   * format has no key to spend (`replayKey` is null) and mints as it always did.
+   *
+   * A ledger with no room left is different: that request may well be the Hub person's own, and
+   * the session this browser holds belongs to someone else (it reached here because it did not
+   * match). Left standing, the SPA would fall back to refreshing it. So it is signed out, as a
+   * refused placement is.
+   */
+  private async spendForMint(
+    req: Request,
+    res: Response,
+    identity: VerifiedAt,
+    session: MemorySession | null,
+  ): Promise<void> {
+    if (identity.replayKey == null) {
+      return;
+    }
+
+    const outcome = this.spentAssertions.spend(identity.replayKey, identity.expiresAt, identity.verifiedAt);
+    if (outcome === 'spent') {
+      return;
+    }
+
+    if (outcome === 'full') {
+      await this.signOut(req, res, session);
+      this.logger.warn(
+        `not signing in Hub user ${identity.username}: too many Hub sign-ins in the last ` +
+          'replay window to remember another',
+      );
+
+      throw new ServiceUnavailableException('Too many Hub sign-ins at once. Try again in a minute.');
+    }
+
+    this.logger.warn(`refused a second Memory session from one Hub sign-in for ${identity.username}`);
+
+    throw new UnauthorizedException(
+      'This Hub sign-in has already been used. Reload the page to sign in again.',
+    );
   }
 
   private async alignByStableId(
     req: Request,
     res: Response,
-    username: string,
+    identity: VerifiedAt,
     stableId: HubStableId,
   ): Promise<HubBridgeResult> {
+    const { username } = identity;
     const session = await this.readSession(req);
 
     let placed: { kind: 'account'; user: User } | { kind: 'refused'; reason: HubBridgeRefusal };
@@ -239,18 +330,22 @@ export class HubForwardAuthBridgeService {
       return { username, replaced: false };
     }
 
+    await this.spendForMint(req, res, identity, session);
     await this.invalidate(req, session);
 
     return this.issueSessionFor(req, res, placed.user, username, session);
   }
 
   /** The bridge as it was before stable ids, for a Hub that sends none: the account is the address. */
-  private async alignByEmail(req: Request, res: Response, username: string): Promise<HubBridgeResult> {
+  private async alignByEmail(req: Request, res: Response, identity: VerifiedAt): Promise<HubBridgeResult> {
+    const { username } = identity;
     const session = await this.readSession(req);
 
     if (session && emailsEqual(session.email, username)) {
       return { username, replaced: false };
     }
+
+    await this.spendForMint(req, res, identity, session);
 
     // Before the account is found or created, as it always was: if that throws, the
     // previous person's session is already gone.

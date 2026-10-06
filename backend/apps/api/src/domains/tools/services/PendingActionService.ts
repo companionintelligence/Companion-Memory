@@ -219,10 +219,15 @@ export class PendingActionService {
     // The dial is consulted ONLY for the intents that could need confirming,
     // and only when there is an owner to consult it for. Every on-appliance
     // read or write skips it entirely, so the gate cannot slow or change them.
-    // The profile read is cached per user inside PersonalizationService.
+    // Read fresh, not through PersonalizationService's 60 second cache: that
+    // cache is per instance and per process, and Settings clears only its own,
+    // so a cached Hands-off would outlive the owner turning it down.
     const trust =
       needsConfirmation(schema) && context.userId && context.principal !== 'managed-app'
-        ? trustForToolCall((await this.personalization.getProfile(context.userId)).trustMode, schema.privacy)
+        ? trustForToolCall(
+            (await this.personalization.getProfile(context.userId, { fresh: true })).trustMode,
+            schema.privacy,
+          )
         : null;
 
     return resolveToolGate(schema, { tier, capability, trust, principal: context.principal });

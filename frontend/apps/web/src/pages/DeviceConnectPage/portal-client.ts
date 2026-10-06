@@ -63,6 +63,11 @@ export interface MemoryServerDevice {
   name: string;
   status: string;
   memoryUrl: string | null;
+  /**
+   * The Memory's resource indicator (`urn:ci:device:<id>`), listed by a Portal
+   * that can address tokens to one Memory. Absent from an older Portal.
+   */
+  resource?: string;
 }
 
 const MEMORY_SLUGS = ['ci-memory', 'companion-memory', 'ci-server'];
@@ -228,7 +233,13 @@ async function listMemoryWithOauthToken(auth: PortalAuth, portal: string): Promi
     }
 
     const body = (await res.json()) as {
-      apps?: Array<{ slug?: string; url?: string; deviceName?: string; deviceSlug?: string }>;
+      apps?: Array<{
+        slug?: string;
+        url?: string;
+        deviceName?: string;
+        deviceSlug?: string;
+        resource?: unknown;
+      }>;
     };
 
     for (const app of body.apps ?? []) {
@@ -244,6 +255,7 @@ async function listMemoryWithOauthToken(auth: PortalAuth, portal: string): Promi
         name: app.deviceName || app.deviceSlug || key,
         status: 'active',
         memoryUrl: app.url ?? null,
+        ...(typeof app.resource === 'string' && app.resource ? { resource: app.resource } : {}),
       });
     }
 
@@ -253,6 +265,41 @@ async function listMemoryWithOauthToken(auth: PortalAuth, portal: string): Promi
   }
 
   return devices;
+}
+
+/**
+ * Ask the Portal for a short-lived token addressed to ONE Memory (`resource`,
+ * from the app list). Only that Memory gives it the account's full authority,
+ * so the server it is sent to cannot reuse it on another. Authenticated with
+ * the Portal OIDC access token, which never leaves for the Memory itself.
+ */
+export async function requestApplianceToken(
+  accessToken: string,
+  resource: string,
+  portalUrl = DEFAULT_PORTAL_URL,
+): Promise<string> {
+  const portal = normalizePortalUrl(portalUrl);
+  const res = await portalFetch(`${portal}/api/users/me/appliance-token`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resource }),
+  });
+
+  if (res.status === 401) {
+    throw new Error('Your Companion sign-in expired. Sign in again.');
+  }
+
+  if (!res.ok) {
+    throw new Error(`Could not get a sign-in for this Memory Server (${res.status}).`);
+  }
+
+  const body = (await res.json()) as { token?: unknown };
+
+  if (typeof body.token !== 'string' || body.token.length === 0) {
+    throw new Error('The Companion server did not return a sign-in for this Memory Server.');
+  }
+
+  return body.token;
 }
 
 /** List Companion Memory appliances the authenticated Portal user owns. */

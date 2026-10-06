@@ -113,6 +113,50 @@ describe('MediaLightbox controls', () => {
     expect(onIndexChange).toHaveBeenLastCalledWith(0);
   });
 
+  it('shows the JPEG preview for a HEIC photo and still downloads the original', () => {
+    renderLightbox({
+      entries: [
+        {
+          entityId: 'heic',
+          kind: 'image',
+          contentType: 'image/heic',
+          thumbUrl: 'https://cdn.example.com/IMG_0001-preview.jpg',
+          fullUrl: 'https://cdn.example.com/IMG_0001.HEIC',
+          title: 'IMG_0001.HEIC',
+        },
+      ],
+      index: 0,
+    });
+
+    expect(screen.getByAltText('IMG_0001.HEIC')).toHaveAttribute(
+      'src',
+      'https://cdn.example.com/IMG_0001-preview.jpg',
+    );
+    expect(screen.getByRole('button', { name: 'Open original' }).closest('a')).toHaveAttribute(
+      'href',
+      'https://cdn.example.com/IMG_0001.HEIC',
+    );
+  });
+
+  it('says the photo could not load when a HEIC has no JPEG preview', () => {
+    renderLightbox({
+      entries: [
+        {
+          entityId: 'heic',
+          kind: 'image',
+          contentType: 'image/heic',
+          thumbUrl: null,
+          fullUrl: 'https://cdn.example.com/IMG_0001.HEIC',
+          title: 'IMG_0001.HEIC',
+        },
+      ],
+      index: 0,
+    });
+
+    expect(screen.getByText("Couldn't load this media.")).toBeInTheDocument();
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  });
+
   it('offers the original as a link that opens outside the viewer', () => {
     renderLightbox();
 

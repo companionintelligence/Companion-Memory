@@ -118,6 +118,15 @@ export interface LocalHubPlugin {
   requestLocationAuthorization(options: {
     always: boolean;
   }): Promise<{ status: NativeLocationAuthorization }>;
+
+  /**
+   * iOS only. Significant-change monitoring for Always tracking: a callback when the
+   * phone moves a meaningful distance, including after the app leaves the foreground.
+   * Does not turn on the blue background location indicator. Android no-ops.
+   */
+  startSignificantLocationUpdates(): Promise<void>;
+
+  stopSignificantLocationUpdates(): Promise<void>;
 }
 
 export type NativeLocationAuthorization =

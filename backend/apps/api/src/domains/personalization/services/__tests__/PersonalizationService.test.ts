@@ -171,3 +171,33 @@ describe('PersonalizationService.decide for planning task kinds', () => {
     expect(PersonalizationService.thresholdForKind(handsOff, 'task_complete')).toBe(0.7);
   });
 });
+
+describe('PersonalizationService.getProfile cache', () => {
+  function serviceReading(trustModes: string[]) {
+    const findById = jest.fn(async () => ({ properties: { planner: { trust_mode: trustModes.shift() } } }));
+    const service = new PersonalizationService(
+      { findById } as never,
+      { getSelfIdentity: jest.fn(async () => ({ entityId: 'self-1', aliases: [] })) } as never,
+    );
+
+    return { service, findById };
+  }
+
+  it('serves a repeat read from its cache', async () => {
+    const { service, findById } = serviceReading(['hands_off', 'cautious']);
+
+    expect((await service.getProfile('user-1')).trustMode).toBe('hands_off');
+    expect((await service.getProfile('user-1')).trustMode).toBe('hands_off');
+    expect(findById).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the stored dial again when asked for a fresh profile, and refreshes the cache', async () => {
+    const { service, findById } = serviceReading(['hands_off', 'cautious']);
+
+    await service.getProfile('user-1');
+
+    expect((await service.getProfile('user-1', { fresh: true })).trustMode).toBe('cautious');
+    expect((await service.getProfile('user-1')).trustMode).toBe('cautious');
+    expect(findById).toHaveBeenCalledTimes(2);
+  });
+});

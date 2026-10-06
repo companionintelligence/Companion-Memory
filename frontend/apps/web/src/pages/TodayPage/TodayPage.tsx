@@ -20,6 +20,9 @@ import { SchedulePage } from '@/pages/SchedulePage';
  * little air above the week range — full `p-6` inset the whole calendar.
  * `device:` (896), not `md:`, matches the chrome switch.
  *
+ * `scroll={false}`: the day grid is the scroller. A scrolling page around it
+ * hides the last hours under the add-to-calendar sheet.
+ *
  * "Calendar" rather than "Schedule": every link to this route already calls
  * it that, and `SchedulePage`'s own standalone title would say otherwise —
  * `embedded` is what keeps it quiet and lets this page's title stand.
@@ -33,7 +36,7 @@ export function TodayPage() {
   const scheduleEnabled = isFeatureEnabled('schedule.page');
 
   return (
-    <PageContent className="p-0 gap-0 device:pt-3">
+    <PageContent scroll={false} className="p-0 gap-0 device:pt-3">
       {scheduleEnabled && <SchedulePage embedded />}
     </PageContent>
   );

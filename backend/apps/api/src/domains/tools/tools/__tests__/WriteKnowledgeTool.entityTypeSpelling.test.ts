@@ -155,6 +155,7 @@ function makePipeline(...seed: GraphNodeEntity[]) {
     new GraphEventService(eventService as never, logger as never),
     graphQuery as never,
     logger as never,
+    { getSelfIdentity: async () => null } as never,
   );
 
   /**
