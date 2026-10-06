@@ -44,7 +44,7 @@ import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { GraphModule } from '@ci/domains/graph';
-import { GraphQLModule } from '@ci/domains/graphql';
+import { GraphQLModule, GraphqlRequestLimitsMiddleware } from '@ci/domains/graphql';
 import { ImportModule } from '@ci/domains/import';
 import { IngestModule } from '@ci/domains/ingest';
 import { IntelligenceModule } from '@ci/domains/intelligence';
@@ -180,6 +180,8 @@ export class App implements NestModule, OnApplicationBootstrap, OnApplicationShu
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(RequestContextMiddleware).forRoutes('*');
     consumer.apply(BodyParserMiddleware).forRoutes('*');
+    // After the body parser, which is what puts a POST's document on req.body.
+    consumer.apply(GraphqlRequestLimitsMiddleware).forRoutes('*');
     consumer.apply(RequestLoggerMiddleware).forRoutes('*');
   }
 

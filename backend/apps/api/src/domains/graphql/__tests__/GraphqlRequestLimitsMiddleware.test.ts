@@ -1,0 +1,68 @@
+import type { NextFunction, Request, Response } from 'express';
+
+import { GraphqlRequestLimitsMiddleware } from '../GraphqlRequestLimitsMiddleware';
+
+const BROAD = `{ ${Array.from({ length: 200 }, () => 'me { id }').join(' ')} }`;
+const NARROW = 'query Me { me { id } }';
+
+function run(req: Partial<Request>): { next: jest.Mock; status: jest.Mock; json: jest.Mock } {
+  const next = jest.fn() as jest.Mock & NextFunction;
+  const json = jest.fn();
+  const status = jest.fn(() => ({ json }));
+  const middleware = new GraphqlRequestLimitsMiddleware();
+
+  middleware.use(
+    { method: 'POST', baseUrl: '', headers: {}, ...req } as Request,
+    { status } as unknown as Response,
+    next,
+  );
+
+  return { next, status, json };
+}
+
+describe('GraphqlRequestLimitsMiddleware', () => {
+  it('answers a too-broad POST document with a 400 before Apollo runs', () => {
+    const { next, status, json } = run({ originalUrl: '/graphql', body: { query: BROAD } });
+
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({
+      errors: [
+        { message: expect.stringMatching(/same field too often/), extensions: { code: 'BAD_REQUEST' } },
+      ],
+    });
+  });
+
+  it('checks a GET query string too', () => {
+    const { next, status } = run({ method: 'GET', originalUrl: '/graphql?query=x', query: { query: BROAD } });
+
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(400);
+  });
+
+  it('matches the Apollo mount, where only baseUrl names the endpoint', () => {
+    const { status } = run({ baseUrl: '/graphql', originalUrl: '/', url: '/', body: { query: BROAD } });
+
+    expect(status).toHaveBeenCalledWith(400);
+  });
+
+  it('passes an ordinary document through', () => {
+    const { next, status } = run({ originalUrl: '/graphql', body: { query: NARROW, variables: {} } });
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(status).not.toHaveBeenCalled();
+  });
+
+  it('leaves other routes, persisted-query hashes and batches alone', () => {
+    for (const req of [
+      { originalUrl: '/v1/events', body: { query: BROAD } },
+      { originalUrl: '/graphql', body: { extensions: { persistedQuery: { sha256Hash: 'abc' } } } },
+      { originalUrl: '/graphql', body: [{ query: BROAD }] },
+    ]) {
+      const { next, status } = run(req);
+
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(status).not.toHaveBeenCalled();
+    }
+  });
+});
