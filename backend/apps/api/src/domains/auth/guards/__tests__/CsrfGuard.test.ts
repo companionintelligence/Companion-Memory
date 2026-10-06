@@ -70,6 +70,8 @@ describe('CsrfGuard', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockCsrfService.validateToken.mockImplementation(() => undefined);
+    // clearAllMocks keeps a test's mockReturnValue(true); restore the rejecting default above.
+    mockCsrfService.verifyToken.mockReturnValue(false);
     guard = new CsrfGuard(
       mockCsrfService as unknown as CsrfService,
       authService,
