@@ -1,4 +1,4 @@
-import { BadRequestException, UseGuards } from '@nestjs/common';
+import { UseGuards } from '@nestjs/common';
 import { Args, Int, Mutation, Query, Resolver } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -7,11 +7,10 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { MetricForecastService } from '@ci/domains/daily-metrics';
 import {
+  assertForecastHorizon,
   CalibrationService,
-  FORECAST_HORIZONS,
   ForecastHistoryService,
   HbpeService,
-  isForecastHorizon,
   PlaceForecastService,
 } from '@ci/domains/predictions';
 import { PythonFunctionService } from '@ci/domains/python-functions';
@@ -54,11 +53,7 @@ export class ForecastResolver {
     // `null`: a horizon the sidecar does not serve is the caller's mistake and
     // should read as one. The sidecar takes its user from the URL, so a free
     // string here used to be able to pick somebody else's forecast.
-    if (!isForecastHorizon(horizon)) {
-      throw new BadRequestException(
-        `Unsupported forecast horizon. Supported: ${FORECAST_HORIZONS.join(', ')}`,
-      );
-    }
+    assertForecastHorizon(horizon);
 
     if (!(await this.featureService.isFeatureEnabled('hbpe'))) {
       return null;

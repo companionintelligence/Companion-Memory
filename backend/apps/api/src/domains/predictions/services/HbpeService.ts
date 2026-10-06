@@ -26,6 +26,13 @@ export function isForecastHorizon(value: unknown): value is ForecastHorizon {
   return typeof value === 'string' && (FORECAST_HORIZONS as readonly string[]).includes(value);
 }
 
+/** @throws BadRequestException for a horizon the sidecar does not serve. */
+export function assertForecastHorizon(value: unknown): asserts value is ForecastHorizon {
+  if (!isForecastHorizon(value)) {
+    throw new BadRequestException(`Unsupported forecast horizon. Supported: ${FORECAST_HORIZONS.join(', ')}`);
+  }
+}
+
 /**
  * A sidecar path with its query string built by `URLSearchParams`, never by
  * interpolation.
@@ -62,11 +69,7 @@ export class HbpeService {
    *   here as well as at the GraphQL edge, so a new caller cannot skip it.
    */
   async getForecast(context: UserServiceContext, horizon: string = '24h'): Promise<ForecastResponse> {
-    if (!isForecastHorizon(horizon)) {
-      throw new BadRequestException(
-        `Unsupported forecast horizon. Supported: ${FORECAST_HORIZONS.join(', ')}`,
-      );
-    }
+    assertForecastHorizon(horizon);
 
     return this.get<ForecastResponse>(sidecarPath('/histogram', context, { horizon }));
   }
