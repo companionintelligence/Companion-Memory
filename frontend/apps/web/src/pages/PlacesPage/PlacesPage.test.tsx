@@ -536,6 +536,9 @@ describe('PlacesPage', () => {
       expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
 
       fireEvent.change(nameInput, { target: { value: 'Home' } });
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+      fireEvent.change(screen.getByRole('combobox', { name: 'Kind' }), { target: { value: 'home' } });
       expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
     });
 
@@ -606,7 +609,7 @@ describe('PlacesPage', () => {
       });
 
       expect(
-        await screen.findByText(/^GPS on 172 days \(12 nights\) near 35\.6600, 139\.7500 · looks like/),
+        await screen.findByText(/^GPS on 172 days \(12 nights\) near 35\.6600, 139\.7500$/),
       ).toBeInTheDocument();
       expect(screen.queryByText(/0 events/)).not.toBeInTheDocument();
 
@@ -671,6 +674,7 @@ describe('PlacesPage', () => {
 
       expect(await screen.findByDisplayValue('Corner Cafe')).toBeInTheDocument();
 
+      fireEvent.change(screen.getByRole('combobox', { name: 'Kind' }), { target: { value: 'other' } });
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
       expect(await screen.findByText('locationId already claimed')).toBeInTheDocument();

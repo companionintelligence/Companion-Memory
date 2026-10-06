@@ -236,9 +236,28 @@ describe('selectMemoryPortalBearers', () => {
     expect(selectMemoryPortalBearers([idToken, accessToken])).toEqual([idToken]);
   });
 
-  it('drops expired JWTs and keeps opaque tokens for the mint attempt', () => {
+  it('drops expired JWTs and never sends an opaque token instead', () => {
+    // The opaque one is the Portal access token: a credential for the Portal, not for a Memory.
     const expired = tokenWithPayload({ aud: 'ci-server', exp: Math.floor(Date.now() / 1000) - 120 });
 
-    expect(selectMemoryPortalBearers([expired, 'opaque-at'])).toEqual(['opaque-at']);
+    expect(selectMemoryPortalBearers([expired, 'opaque-at'])).toEqual([]);
+  });
+
+  it('never falls back to a live JWT whose aud Memory does not accept', () => {
+    const portalSession = tokenWithPayload({
+      aud: 'https://hub.ci.computer',
+      exp: Math.floor(Date.now() / 1000) + 600,
+    });
+
+    expect(selectMemoryPortalBearers([portalSession])).toEqual([]);
+  });
+
+  it('accepts an id_token whose aud lists a Memory client among others', () => {
+    const addressed = tokenWithPayload({
+      aud: ['ci-server', 'urn:ci:device:abc'],
+      exp: Math.floor(Date.now() / 1000) + 600,
+    });
+
+    expect(selectMemoryPortalBearers([addressed])).toEqual([addressed]);
   });
 });

@@ -37,16 +37,9 @@ import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import AdmZip from 'adm-zip';
 
+import { assertEntryInside, assertParentInside, stripListedSymlinks } from './containment';
 import { systemExtract } from './systemExtract';
-import {
-  assertEntryInside,
-  assertParentInside,
-  CorruptArchiveError,
-  diagnoseArchive,
-  freeBytesAt,
-  InsufficientDiskError,
-  stripListedSymlinks,
-} from './unpack';
+import { CorruptArchiveError, diagnoseArchive, freeBytesAt, InsufficientDiskError } from './unpack';
 
 export interface ExtractLimits {
   /** Max number of entries in the archive (default 100k). */
@@ -146,8 +139,8 @@ function extractionDestDir(archivePath: string): string {
 
 /**
  * Reject an entry name whose resolved path escapes the extraction dir. The
- * shared check in unpack.ts, so both extractors refuse the same names with the
- * same error class.
+ * shared check in containment.ts, so both extractors refuse the same names with
+ * the same error class.
  */
 const assertInside = assertEntryInside;
 

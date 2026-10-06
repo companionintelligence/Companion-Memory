@@ -6,9 +6,9 @@ import type { ExecutionContext } from '@nestjs/common';
 
 import { AdminOnlyGuard } from '../AdminOnlyGuard';
 
-function contextFor(user: unknown): ExecutionContext {
+function contextFor(user: unknown, extra: Record<string, unknown> = {}): ExecutionContext {
   return {
-    switchToHttp: () => ({ getRequest: () => ({ user }) }),
+    switchToHttp: () => ({ getRequest: () => ({ user, ...extra }) }),
   } as unknown as ExecutionContext;
 }
 
@@ -21,6 +21,16 @@ describe('AdminOnlyGuard', () => {
 
   it.each([['user'], ['readonly'], ['api_only']])('refuses role %s', (role) => {
     expect(() => guard.canActivate(contextFor({ id: 'u1', role }))).toThrow(ForbiddenException);
+  });
+
+  it("refuses the owner's role when it arrived on a Portal token that may not act as admin here", () => {
+    // A token not addressed to this appliance names the owner too, and carries their role.
+    const owner = { id: 'u1', role: 'admin' };
+
+    expect(() => guard.canActivate(contextFor(owner, { portalPrincipal: { admin: false } }))).toThrow(
+      ForbiddenException,
+    );
+    expect(guard.canActivate(contextFor(owner, { portalPrincipal: { admin: true } }))).toBe(true);
   });
 
   it('fails closed on a principal with no role at all', () => {
@@ -79,9 +89,10 @@ describe('the preconditions for gating a route behind AdminOnlyGuard', () => {
     // The claim this pins is the one that was wrong. PortalTokenService has
     // always returned a whole `User`; the INTERFACE said `{ id: string }`,
     // which read as "portal principals cannot be admins".
-    expect(src('common/guards/PortalTokenVerifier.ts')).toMatch(
-      /verifyAndProvision\(token: string\): Promise<\{ id: string; role\?: string \} \| null>;/,
-    );
+    const verifier = src('common/guards/PortalTokenVerifier.ts');
+
+    expect(verifier).toMatch(/verifyAndProvision\(token: string\): Promise<PortalPrincipal \| null>;/);
+    expect(verifier).toMatch(/user: \{ id: string; role\?: string \};/);
   });
 
   it('has an admin to require, because application code promotes the first account', () => {

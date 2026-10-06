@@ -5,9 +5,9 @@ import { openCount, type SectionedTask } from '@/pages/PlanPage/taskSections';
 // Matches usePlanTasks' own cap (first: 200) — the badge should not claim
 // more accuracy than the Plan page itself already has (see G5 in the audit:
 // Possibilities silently truncates past 200).
-const PLAN_BADGE_TASK_LIMIT = 200;
+export const PLAN_BADGE_TASK_LIMIT = 200;
 
-const GET_PLAN_BADGE_COUNT = gql`
+export const GET_PLAN_BADGE_COUNT = gql`
   query GetPlanBadgeCount($first: Int) {
     tasks(first: $first) {
       edges {

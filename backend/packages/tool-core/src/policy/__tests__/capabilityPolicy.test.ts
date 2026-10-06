@@ -1,6 +1,6 @@
 import type { ToolCapability } from '../../capability';
 import type { IntentPrivacy } from '../../core/types';
-import { capabilityAllows, capabilityRequiredFor, removesData } from '../capabilityPolicy';
+import { capabilityAllows, capabilityRequiredFor, removesData, stricterPrivacy } from '../capabilityPolicy';
 
 function privacy(overrides: Partial<IntentPrivacy> = {}): IntentPrivacy {
   return { access: 'read', sensitivity: 'personal', destructive: false, external: false, ...overrides };
@@ -111,5 +111,31 @@ describe('capabilityRequiredFor', () => {
         expect(capabilityAllows(label, capability)).toBe(rank[capability] >= rank[required]);
       }
     }
+  });
+});
+
+describe('stricterPrivacy', () => {
+  it('keeps the declared label when the call has nothing to add', () => {
+    const declared = privacy({ access: 'write' });
+
+    expect(stricterPrivacy(declared, undefined)).toBe(declared);
+  });
+
+  it('takes the wider access, the higher sensitivity, and either flag', () => {
+    expect(
+      stricterPrivacy(
+        privacy({ access: 'write', sensitivity: 'sensitive', external: true }),
+        privacy({ access: 'delete', sensitivity: 'low', destructive: true }),
+      ),
+    ).toStrictEqual({ access: 'delete', sensitivity: 'sensitive', destructive: true, external: true });
+  });
+
+  it('never lets a per-call label loosen the declared one', () => {
+    expect(
+      stricterPrivacy(
+        privacy({ access: 'delete', sensitivity: 'sensitive', destructive: true, external: true }),
+        privacy({ access: 'read', sensitivity: 'low' }),
+      ),
+    ).toStrictEqual({ access: 'delete', sensitivity: 'sensitive', destructive: true, external: true });
   });
 });

@@ -1,4 +1,5 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import type { Request } from 'express';
 
 import type { ApiKeyCapability } from '@ci/common/decorators';
 import { LoggerService } from '@ci/common/logging';
@@ -8,6 +9,7 @@ import type { PendingAction } from '../entities/PendingActionEntity';
 import { capabilityAllows, capabilityRequiredFor } from '../policy';
 import { ToolRegistry } from '../registry/ToolRegistry';
 
+import { PendingActionReplayRegistry, type PendingActionReplayer } from './PendingActionReplayRegistry';
 import { PendingActionService } from './PendingActionService';
 
 export interface ConfirmOutcome {
@@ -44,6 +46,7 @@ export class PendingActionConfirmService {
     private readonly pending: PendingActionService,
     private readonly registry: ToolRegistry,
     private readonly logger: LoggerService,
+    private readonly replays: PendingActionReplayRegistry,
   ) {
     this.logger.setContext(PendingActionConfirmService.name);
   }
@@ -53,6 +56,9 @@ export class PendingActionConfirmService {
     id: string,
     capability: ApiKeyCapability,
     now: Date = new Date(),
+    // The confirming HTTP request. Only a row from the GraphQL plane of `/api/mcp` needs it: that
+    // plane runs as a request, so its replay does too (see PendingActionReplayRegistry).
+    request?: Request,
   ): Promise<ConfirmOutcome> {
     const row = await this.pending.findForUser(userId, id);
 
@@ -73,13 +79,16 @@ export class PendingActionConfirmService {
       throw new ConflictException(`Pending action ${id} has expired`);
     }
 
-    const tool = this.registry.getTool(row.tool);
+    // The label the replay will be judged by, from the stored input: a call that only a per-call
+    // label marks destructive (a `memory.remember` that erases) must not pass this pre-check on
+    // its tool's milder declared label and then fail inside the registry after approval.
+    const registered = await this.registry.privacyOf(row.tool, { userId, capability }, row.input);
+    const replayed = registered ? undefined : this.replays.find(row.tool);
+    const privacy = registered ?? replayed?.privacy;
 
-    if (!tool) {
+    if (!privacy) {
       throw new ConflictException(`Intent '${row.intent}' is no longer registered on this appliance`);
     }
-
-    const { privacy } = tool.schema;
 
     if (!capabilityAllows(privacy, capability)) {
       const required = capabilityRequiredFor(privacy);
@@ -95,6 +104,14 @@ export class PendingActionConfirmService {
       throw new ForbiddenException(
         `Confirming '${row.intent}' requires "${required}" access, but this caller is "${capability}"`,
       );
+    }
+
+    if (replayed) {
+      // Before the row moves: a request that cannot run this plane is refused with the row still
+      // `proposed`, the same as a capability refusal above.
+      replayed.replayer.assertMayReplay(row.tool, request);
+
+      return this.replay(userId, id, row, replayed.replayer, request as Request, capability);
     }
 
     await this.pending.markApproved(userId, id);
@@ -127,6 +144,37 @@ export class PendingActionConfirmService {
       row.input,
     );
 
+    const action = await this.pending.markExecuted(userId, id, result);
+
+    this.logger.log(`Executed confirmed pending action ${id}`, {
+      intent: row.intent,
+      userId,
+      confirmingCapability: capability,
+      proposingCapability: row.actor,
+      success: result.success,
+    });
+
+    return { action, result };
+  }
+
+  /**
+   * Approve and run a row whose tool lives outside the registry. The capability check above has
+   * already run against the CONFIRMING principal, exactly as for a registry tool, and the replayer
+   * runs the call as the confirming request, so its own authorization applies again underneath.
+   */
+  private async replay(
+    userId: string,
+    id: string,
+    row: PendingAction,
+    replayer: PendingActionReplayer,
+    request: Request,
+    capability: ApiKeyCapability,
+  ): Promise<ConfirmOutcome> {
+    await this.pending.markApproved(userId, id);
+
+    const result = await replayer.replay(row.tool, row.input, request, {
+      principalName: row.principalName ?? null,
+    });
     const action = await this.pending.markExecuted(userId, id, result);
 
     this.logger.log(`Executed confirmed pending action ${id}`, {

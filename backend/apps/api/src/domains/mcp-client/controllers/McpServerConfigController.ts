@@ -67,7 +67,15 @@ const updateMcpServerConfigSchema = mcpDraftSchema.partial().extend({
 const approveMcpToolsSchema = z
   .object({
     approveAll: z.boolean().optional(),
-    tools: z.array(z.object({ name: z.string().min(1), schemaDigest: z.string().min(1) })).optional(),
+    tools: z
+      .array(
+        z.object({
+          name: z.string().min(1),
+          schemaDigest: z.string().min(1),
+          descriptionDigest: z.string().min(1).optional(),
+        }),
+      )
+      .optional(),
     revoke: z.array(z.string().min(1)).optional(),
   })
   .refine(

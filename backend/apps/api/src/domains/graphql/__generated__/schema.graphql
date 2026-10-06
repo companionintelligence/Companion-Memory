@@ -1439,6 +1439,11 @@ type ForecastBucketType {
   l0Probs: [ProbabilityEntryType!]!
   l1Probs: [ProbabilityEntryType!]!
   l2Probs: [ProbabilityEntryType!]
+
+  """
+  Class to render for this bucket. Not argmax(l0Probs): the posterior is calibrated and answers UNKNOWN for most of a day, so HBPE prior-corrects the label. Null from an HBPE that predates the field.
+  """
+  predictedL0: String
   q10: Float!
   q50: Float!
   q90: Float!

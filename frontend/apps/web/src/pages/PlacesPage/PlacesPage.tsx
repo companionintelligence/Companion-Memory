@@ -148,15 +148,18 @@ function PlaceRow({ place, onOpen }: { place: PlaceNode; onOpen: () => void }) {
         <MapPin className="h-5 w-5 shrink-0 text-muted-foreground" />
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate font-medium">{place.name || 'Unnamed place'}</span>
-            {place.placeKind && (
-              <Badge variant="secondary">{PLACE_KIND_LABELS[place.placeKind] ?? place.placeKind}</Badge>
-            )}
-          </div>
+          <div className="truncate font-medium">{place.name || 'Unnamed place'}</div>
 
           <div className="truncate text-sm text-muted-foreground">
-            {[place.parent?.name, place.description].filter(Boolean).join(' · ') || '—'}
+            {[
+              place.placeKind && place.placeKind !== 'address'
+                ? (PLACE_KIND_LABELS[place.placeKind] ?? place.placeKind)
+                : null,
+              place.parent?.name,
+              place.description,
+            ]
+              .filter(Boolean)
+              .join(' · ') || '—'}
           </div>
         </div>
 
@@ -304,22 +307,26 @@ function KnownPlaceCandidateRow({
   onLocate: (candidate: KnownPlaceCandidate) => void;
   onSave: (candidate: KnownPlaceCandidate, draft: KnownPlaceCandidateDraft) => void;
 }) {
+  const { isMobile } = useDeviceLayout();
   const unnamed = candidate.label.trim().toLowerCase() === UNNAMED_CANDIDATE_LABEL;
   const [label, setLabel] = useState(unnamed ? '' : candidate.label);
-  const [kind, setKind] = useState<KnownPlaceKind>(
-    isKnownPlaceKind(candidate.kind) ? candidate.kind : 'other',
+  // "other" is the cluster default, not a choice. Home and work are evidence.
+  const [kind, setKind] = useState<KnownPlaceKind | ''>(
+    candidate.kind !== 'other' && isKnownPlaceKind(candidate.kind) ? candidate.kind : '',
   );
   const trimmed = label.trim();
   const inputId = `known-place-${candidate.locationId ?? `${candidate.lat},${candidate.lng}`}`;
+  const evidence = `${candidateEvidence(candidate)}${
+    unnamed ? ` near ${candidate.lat.toFixed(4)}, ${candidate.lng.toFixed(4)}` : ''
+  }`;
 
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
       <div className="min-w-0 flex-1">
-        <label htmlFor={inputId} className="text-sm text-muted-foreground">
-          {candidateEvidence(candidate)}
-          {unnamed ? ` near ${candidate.lat.toFixed(4)}, ${candidate.lng.toFixed(4)}` : ''} · looks like{' '}
-          <span className="capitalize">{candidate.kind}</span>
+        <label htmlFor={inputId} className="text-sm font-medium">
+          Name
         </label>
+        <p className="truncate text-sm text-muted-foreground">{evidence}</p>
         <Input
           id={inputId}
           value={label}
@@ -328,19 +335,40 @@ function KnownPlaceCandidateRow({
           disabled={saving}
         />
       </div>
-      <select
-        aria-label="Kind"
-        value={kind}
-        onChange={(event) => setKind(event.target.value as KnownPlaceKind)}
-        disabled={saving}
-        className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground"
-      >
-        {KNOWN_PLACE_KINDS.map((option) => (
-          <option key={option} value={option}>
-            {KNOWN_PLACE_KIND_LABELS[option]}
-          </option>
-        ))}
-      </select>
+      {isMobile ? (
+        <fieldset className="min-w-0">
+          <legend className="text-sm font-medium">Kind</legend>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {KNOWN_PLACE_KINDS.map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={kind === option}
+                disabled={saving}
+                onClick={() => setKind(option)}
+                className="h-11 rounded-md border border-input px-3 text-sm aria-pressed:bg-accent"
+              >
+                {KNOWN_PLACE_KIND_LABELS[option]}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+      ) : (
+        <select
+          aria-label="Kind"
+          value={kind}
+          onChange={(event) => setKind(event.target.value as KnownPlaceKind)}
+          disabled={saving}
+          className="h-11 rounded-md border border-input bg-background px-2 text-sm text-foreground"
+        >
+          <option value="">Kind</option>
+          {KNOWN_PLACE_KINDS.map((option) => (
+            <option key={option} value={option}>
+              {KNOWN_PLACE_KIND_LABELS[option]}
+            </option>
+          ))}
+        </select>
+      )}
       <Button
         size="sm"
         variant={located ? 'secondary' : 'ghost'}
@@ -354,8 +382,14 @@ function KnownPlaceCandidateRow({
       <Button
         size="sm"
         variant="outline"
-        disabled={saving || trimmed === ''}
-        onClick={() => onSave(candidate, { label: trimmed, kind })}
+        disabled={saving || trimmed === '' || kind === ''}
+        onClick={() => {
+          if (kind === '') {
+            return;
+          }
+
+          onSave(candidate, { label: trimmed, kind });
+        }}
       >
         Save
       </Button>

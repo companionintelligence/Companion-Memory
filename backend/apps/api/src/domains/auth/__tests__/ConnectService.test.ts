@@ -30,7 +30,7 @@ import {
  * scoped/expiring key minting, and app-scoped revoke).
  */
 function makeDeps() {
-  const authService = { validateSessionToken: jest.fn() };
+  const authService = { resolveLiveSession: jest.fn() };
   const userService = { findById: jest.fn() };
   const apiKeyService = {
     createOrRotate: jest.fn(),
@@ -62,30 +62,33 @@ describe('ConnectService.resolveSessionUser', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('returns null when no session cookie is present', async () => {
-    const { service } = makeDeps();
+    const { service, authService } = makeDeps();
     expect(await service.resolveSessionUser(undefined)).toBeNull();
+    expect(authService.resolveLiveSession).not.toHaveBeenCalled();
   });
 
-  it('resolves the user when the session token is valid and the user exists', async () => {
+  it('resolves the user when the cookie names a live session and the user exists', async () => {
     const { service, authService, userService } = makeDeps();
-    authService.validateSessionToken.mockReturnValue({ sub: 'user-1' });
+    authService.resolveLiveSession.mockResolvedValue({ userId: 'user-1', sessionId: 'sess-1' });
     userService.findById.mockResolvedValue({ id: 'user-1', email: 'owner@example.com' });
 
     expect(await service.resolveSessionUser('tok')).toEqual({ userId: 'user-1', email: 'owner@example.com' });
+    expect(authService.resolveLiveSession).toHaveBeenCalledWith('tok');
+    expect(userService.findById).toHaveBeenCalledWith(expect.anything(), 'user-1');
   });
 
-  it('returns null when the session token fails verification', async () => {
-    const { service, authService } = makeDeps();
-    authService.validateSessionToken.mockImplementation(() => {
-      throw new Error('bad token');
-    });
+  it('returns null and looks nobody up when the cookie names no live session', async () => {
+    // A forged or expired cookie, a signup intent, or a session that was signed out.
+    const { service, authService, userService } = makeDeps();
+    authService.resolveLiveSession.mockResolvedValue(null);
 
     expect(await service.resolveSessionUser('tok')).toBeNull();
+    expect(userService.findById).not.toHaveBeenCalled();
   });
 
-  it('returns null when the token is valid but the user no longer exists', async () => {
+  it('returns null when the session is live but the user no longer exists', async () => {
     const { service, authService, userService } = makeDeps();
-    authService.validateSessionToken.mockReturnValue({ sub: 'ghost' });
+    authService.resolveLiveSession.mockResolvedValue({ userId: 'ghost', sessionId: 'sess-1' });
     userService.findById.mockResolvedValue(null);
 
     expect(await service.resolveSessionUser('tok')).toBeNull();

@@ -1,19 +1,23 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
+import type { RequestContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import {
   canonicalEntityType,
   GraphEventService,
   type GraphNodeEntity,
   GraphQueryService,
+  isOwnerManagedPropertyKey,
+  isOwnerSettingPropertyKey,
   isStorableEntityType,
   type RelationshipEntity,
   sameEntityType,
+  UserContextService,
 } from '@ci/domains/memory';
 
 import { BaseTool } from '../core/BaseTool';
-import type { IntentDefinition, ToolExecutionContext } from '../core/types';
+import type { IntentDefinition, IntentPrivacy, ToolExecutionContext } from '../core/types';
 
 import { booleanish } from './booleanish';
 import { coerceWriteKnowledgeInput } from './writeKnowledgeCoerce';
@@ -168,6 +172,49 @@ function unstorableEntityTypeMessage(requested: string): string {
 }
 
 /**
+ * The owner-managed property keys (`OWNER_MANAGED_PROPERTY_KEYS`) an entity
+ * write names, as a set or as a removal. The tool refuses such a write: the
+ * owner's settings, the self claim and the merged identity lists each have a
+ * writer of their own, and a free-form `properties` bag is how the autonomy
+ * dial used to be switched off by a model asked to "remember" it.
+ *
+ * A brand-new entity (an `entity.create` without `entityId`) is refused only
+ * the settings and the self claim. Its identity lists overwrite nothing, so
+ * "remember Dana, dana@example.com" still records the address.
+ */
+function ownerManagedKeysIn(
+  operation: { properties?: Record<string, unknown>; removeProperties?: string[] },
+  { newEntity = false }: { newEntity?: boolean } = {},
+): string[] {
+  const named = [...Object.keys(operation.properties ?? {}), ...(operation.removeProperties ?? [])];
+  const refused = newEntity ? isOwnerSettingPropertyKey : isOwnerManagedPropertyKey;
+
+  return [...new Set(named.filter(refused))];
+}
+
+function ownerManagedKeysMessage(keys: string[]): string {
+  const list = keys.map((key) => `"${key}"`).join(', ');
+
+  return (
+    `memory.remember cannot write or remove ${list}: Companion Memory keeps ${keys.length === 1 ? 'that key' : 'those keys'} ` +
+    'itself (settings such as the autonomy dial, the account-holder flag, and contact identifiers that ' +
+    'imports and merges maintain). Change settings in Settings, and store other facts under another key.'
+  );
+}
+
+/** Whether `next` would overwrite a non-empty stored value with a different one. */
+function overwritesText(stored: string | null | undefined, next: string | undefined): boolean {
+  return next !== undefined && (stored ?? '').trim() !== '' && next.trim() !== (stored ?? '').trim();
+}
+
+/** A Person row that claims to be the account holder, the way `UserContextService` falls back to one. */
+function claimsSelf(node: Pick<GraphNodeEntity, 'properties'>): boolean {
+  const flag = (node.properties as Record<string, unknown> | null | undefined)?.is_self;
+
+  return flag === true || flag === 'true';
+}
+
+/**
  * Whether an id-reuse write describes the edge its id names. A bidirectional
  * edge matches in either orientation — unless the write asks for a one-way edge,
  * which the stored one reversed is not (see GraphUtilityService.findActiveRelationship).
@@ -257,9 +304,12 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
     name: 'memory.remember',
     domain: 'memory',
     title: 'Remember a fact',
+    // The label of its mildest use, adding a fact. A call that replaces or erases stored data, or
+    // writes to the owner's own entity, is labelled destructive by `privacyFor` below, and the
+    // registry judges it by that instead.
     privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
-    // A local write is the offline-first case: record it on-device now, let sync carry it up. It is
-    // not destructive, so nothing is lost if the appliance later reconciles it.
+    // A local write is the offline-first case: record it on-device now, let sync carry it up. An
+    // additive write is not destructive, so nothing is lost if the appliance later reconciles it.
     localCapable: true,
     produces: ['concept', 'person'],
     phrases: ['Remember that $fact', 'Note that $fact'],
@@ -341,6 +391,7 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
     private readonly graphEvents: GraphEventService,
     private readonly graphQuery: GraphQueryService,
     protected readonly logger: LoggerService,
+    private readonly userContext: UserContextService,
   ) {
     super();
     this.logger.setContext(WriteKnowledgeTool.name);
@@ -348,6 +399,138 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
 
   protected validateInput(input: unknown): WriteKnowledgeInput {
     return WriteKnowledgeInputSchema.parse(coerceWriteKnowledgeInput(input));
+  }
+
+  /**
+   * Destructive for a call that can lose what is stored, so a write key is refused it and the
+   * autonomy dial asks before it runs (see `ToolHandle.privacyFor`). That is a call that:
+   *
+   * - replaces a property bag (`mergeProperties: false` with `properties`) or removes keys, on an
+   *   entity or a relationship;
+   * - overwrites an existing entity's non-empty name or description with a different one, or
+   *   changes its type, through `entity.update` or an id-reuse `entity.create`;
+   * - retypes a relationship;
+   * - writes to the owner's own Person at all. That row also holds the owner's settings, so a
+   *   model told to "remember" something about it asks first.
+   *
+   * Adding a fact, merging new keys, and setting a property that was not there stay plain writes.
+   * Overwriting a single property value through a merge does too: it is how "Alex moved to Leeds"
+   * is recorded, and asking every time would make the tool unusable. A dry run writes nothing.
+   *
+   * Reads happen here, before the write is queued, so a row another writer changes in between can
+   * be judged on what it was. The keys the appliance owns are protected at write time regardless
+   * (`GraphUtilityService.nextProperties`), which is what this check cannot be.
+   */
+  async privacyFor(context: RequestContext, input: unknown): Promise<IntentPrivacy | undefined> {
+    let parsed: WriteKnowledgeInput;
+
+    try {
+      parsed = this.validateInput(input);
+    } catch {
+      // `execute` refuses the same input before it touches anything.
+      return undefined;
+    }
+
+    if (parsed.dryRun || !context.userId) {
+      return undefined;
+    }
+
+    return (await this.losesStoredData(context.userId, parsed.operations))
+      ? { ...this.schema.privacy, destructive: true }
+      : undefined;
+  }
+
+  private async losesStoredData(
+    ownerId: string,
+    operations: WriteKnowledgeInput['operations'],
+  ): Promise<boolean> {
+    let selfEntityId: string | null | undefined;
+    const isSelf = async (node: GraphNodeEntity): Promise<boolean> => {
+      if (claimsSelf(node)) {
+        return true;
+      }
+
+      if (selfEntityId === undefined) {
+        selfEntityId = (await this.userContext.getSelfIdentity(ownerId))?.entityId ?? null;
+      }
+
+      return node.entity_id === selfEntityId;
+    };
+
+    for (const operation of operations) {
+      switch (operation.kind) {
+        case 'entity.create': {
+          if (!operation.entityId) {
+            break;
+          }
+
+          const existing = await this.graphQuery.getNode(ownerId, operation.entityId);
+
+          if (
+            existing &&
+            ((await isSelf(existing)) ||
+              overwritesText(existing.name, operation.name) ||
+              overwritesText(existing.description, operation.description))
+          ) {
+            return true;
+          }
+
+          break;
+        }
+
+        case 'entity.update': {
+          if (
+            operation.removeProperties?.length ||
+            (operation.mergeProperties === false && operation.properties)
+          ) {
+            return true;
+          }
+
+          const existing = await this.graphQuery.getNode(ownerId, operation.entityId);
+
+          if (
+            existing &&
+            ((await isSelf(existing)) ||
+              overwritesText(existing.name, operation.name) ||
+              overwritesText(existing.description, operation.description) ||
+              (operation.entityType !== undefined &&
+                !sameEntityType(existing.entity_type, operation.entityType)))
+          ) {
+            return true;
+          }
+
+          break;
+        }
+
+        case 'relationship.update': {
+          if (
+            operation.removeProperties?.length ||
+            (operation.mergeProperties === false && operation.properties)
+          ) {
+            return true;
+          }
+
+          if (operation.relationshipType !== undefined) {
+            const [edge] = await this.graphQuery.getRelationships(ownerId, {
+              relationshipIds: [operation.relationshipId],
+            });
+            const requested =
+              storedRelationshipType(operation.relationshipType) ?? operation.relationshipType;
+
+            if (edge && !sameGraphType(edge.relationship_type, requested)) {
+              return true;
+            }
+          }
+
+          break;
+        }
+
+        case 'relationship.create':
+          break;
+      }
+    }
+
+    return false;
   }
 
   protected async executeInternal(
@@ -390,6 +573,18 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
       try {
         switch (operation.kind) {
           case 'entity.create': {
+            const ownerManagedCreate = ownerManagedKeysIn(operation, { newEntity: !operation.entityId });
+            if (ownerManagedCreate.length > 0) {
+              results.push({
+                kind: operation.kind,
+                status: 'failed',
+                message: ownerManagedKeysMessage(ownerManagedCreate),
+                entityId: operation.entityId,
+              });
+              failures += 1;
+              break;
+            }
+
             const existing = operation.entityId
               ? await this.graphQuery.getNode(ownerId, operation.entityId, { includeInactive: true })
               : null;
@@ -544,6 +739,18 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
           }
 
           case 'entity.update': {
+            const ownerManagedUpdate = ownerManagedKeysIn(operation);
+            if (ownerManagedUpdate.length > 0) {
+              results.push({
+                kind: operation.kind,
+                status: 'failed',
+                message: ownerManagedKeysMessage(ownerManagedUpdate),
+                entityId: operation.entityId,
+              });
+              failures += 1;
+              break;
+            }
+
             const existing = await this.graphQuery.getNode(ownerId, operation.entityId);
             if (!existing) {
               results.push({

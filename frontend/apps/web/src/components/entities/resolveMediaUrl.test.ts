@@ -92,6 +92,33 @@ describe('resolveFileTileUrl', () => {
     ).toBe('/static/u/shot.png');
   });
 
+  it('does not point an <img> at a HEIC original when the JPEG preview is missing', () => {
+    expect(
+      resolveFileTileUrl({
+        contentType: 'image/heic',
+        previewUrl: null,
+        sourceUrl: '/u/IMG_0001.heic',
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveFileTileUrl({
+        contentType: 'image/heif-sequence',
+        previewUrl: null,
+        sourceUrl: '/u/burst.heif',
+      }),
+    ).toBeUndefined();
+  });
+
+  it('uses the JPEG preview for a HEIC photo', () => {
+    expect(
+      resolveFileTileUrl({
+        contentType: 'image/heic',
+        previewUrl: '/u/IMG_0001-preview.jpg',
+        sourceUrl: '/u/IMG_0001.heic',
+      }),
+    ).toBe('/static/u/IMG_0001-preview.jpg');
+  });
+
   it('gives a preview-less video NO thumbnail rather than pointing an <img> at the .mp4', () => {
     // The old fallback handed the tile the video file itself, which an <img>
     // cannot decode: a full download followed by a broken-image glyph.
