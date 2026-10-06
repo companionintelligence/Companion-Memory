@@ -111,9 +111,10 @@ turn "import" into a filesystem read primitive.
 **The CLI gets no exemption.** It authenticates with an ordinary api key and has
 exactly the authority any other API client has. Concretely:
 
-- `recognize <path>` asks about the **appliance's** disk and stays inside
-  `CI_IMPORT_ROOTS` (plus the caller's own inbox subtree). A path outside them is
-  refused with the remedy, not with a stack trace.
+- `recognize <path>` asks about the **appliance's** disk and stays inside the
+  caller's own inbox subtree, plus `CI_IMPORT_ROOTS` when the key belongs to the
+  appliance administrator. A household member's key never reaches the configured
+  roots. A path outside them is refused with the remedy, not with a stack trace.
 - `import <file>` **uploads the bytes** — the same multipart route the browser
   uses — so it needs no configured root at all and works for any file this
   machine can read. That is the answer for most people, and it is strictly safer
@@ -225,9 +226,11 @@ asked for. That case gets its own line naming the units. Both lines are silent
 when nothing was truncated.
 
 The inbox is namespaced per user: `CI_IMPORT_INBOX_DIR` is a root, and each
-account owns one subtree under it, named by lowercasing the account's email and
-replacing every character outside `[A-Za-z0-9._-]` with `_`. So
-`test@example.com` reads and writes `<root>/test_example.com/` and nothing else.
+account owns one subtree under it, named after its account id
+(`<root>/<account id>/`), and reads and writes nothing else. Older versions named
+the folder after the email, which two addresses could share; the first boot
+after upgrading moves each account's old folder onto its id. Don't build the
+path yourself: `ci inbox` prints it.
 The folder the command **prints** is that subtree as the host sees it when the
 appliance runs in a container with `CI_IMPORT_INBOX_HOST_DIR` set (the scan's
 `displayDir`); without it, the API's own path (`inboxDir`).
@@ -300,6 +303,11 @@ via `GET /import/doctor` (and `GET /import/doctor/checks` for `--list`). Every
 other command answers "did the import run"; this is the only one that answers
 "did it write the right rows" — the distinction that matters, because every
 defect the 2026-08 QA pass found sat behind a push stage reporting 100%.
+
+Running the checks takes the appliance administrator's key. Every check scans
+all accounts and returns a sample row from whichever one owns the defect, so a
+household member's key gets a 403, which the command reports as admin-only and
+exits **2**. `--list` only reads the registry and works with any key.
 
 Each check is a regression detector for a defect that really shipped. Where a
 check copies a live predicate, its `mirrors` field names the twin — nowadays a

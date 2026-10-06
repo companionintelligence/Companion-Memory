@@ -49,7 +49,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Companion connects to your Companion appliance on your local network, so your notes, photos and events stay on hardware you control.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Companion records your location in the background, including while your phone is locked, so your memory can attach where you were to notes, photos and events, even after you leave the app. Locations are sent only to your own Companion server. iOS shows a blue status bar indicator whenever this is active.</string>
+	<string>Companion records your location when you move a meaningful distance, including while your phone is locked, so your memory can attach where you were to notes, photos and events after you leave the app. It does not keep a blue location indicator up while you stay put. Locations are sent only to your own Companion server.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Companion records where you are while you use it, so your memory can place your notes, photos and events on a map. Locations are sent only to your own Companion server.</string>
 	<key>NSMicrophoneUsageDescription</key>

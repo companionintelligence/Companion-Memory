@@ -1,6 +1,10 @@
 import path from 'node:path';
 
-import { PathOutsideImportRootsError, resolveWithinImportRoots } from '../sources/importRoots';
+import {
+  type ImportRootsCaller,
+  PathOutsideImportRootsError,
+  resolveWithinImportRoots,
+} from '../sources/importRoots';
 
 import { dataSourcesRecognize, type DirEntry } from './registry';
 
@@ -39,11 +43,11 @@ export interface PathRecognition {
  * the parse stage reports afterwards. Here the files are already on a disk the
  * appliance can see, so the question can be answered directly.
  *
- * Scoped to {@link resolveWithinImportRoots} — the configured roots plus the
- * CALLER's own inbox subtree (`email`), never anyone else's. An unconstrained
- * absolute path reachable over the API is a filesystem read primitive, and
- * "does this path exist?" is information on its own — which is why an
- * out-of-bounds path and an absent one produce the same answer.
+ * Scoped to {@link resolveWithinImportRoots} — the caller's own inbox subtree,
+ * plus the configured roots when the caller is the administrator, never anyone
+ * else's. An unconstrained absolute path reachable over the API is a filesystem
+ * read primitive, and "does this path exist?" is information on its own — which
+ * is why an out-of-bounds path and an absent one produce the same answer.
  *
  * Lives here, beside the registry, rather than in either caller: the MCP tool
  * and the REST endpoint are two doors onto one question, and a second copy of
@@ -52,12 +56,12 @@ export interface PathRecognition {
  */
 export async function recognizePathWithinRoots(
   requested: string,
-  email: string | null,
+  caller: ImportRootsCaller,
 ): Promise<PathRecognition> {
   let resolved: string;
 
   try {
-    resolved = await resolveWithinImportRoots(requested, email);
+    resolved = await resolveWithinImportRoots(requested, caller);
   } catch (err) {
     if (err instanceof PathOutsideImportRootsError) {
       return { allowed: false, reason: err.message, recognized: [] };

@@ -54,6 +54,8 @@ describe('McpToolService — a queued action keeps its identity', () => {
       registry as never,
       {} as unknown as McpExecutorService,
       logger as never,
+      { evaluate: async () => ({ decision: 'execute', reason: 'allowed', explanation: 'open' }) } as never,
+      { register: () => undefined } as never,
     );
 
     service.onModuleInit();

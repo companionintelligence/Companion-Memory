@@ -35,11 +35,13 @@ export class OutboundPolicyController {
   @UseGuards(JwtOrApiKeyAuthGuard)
   @RequireCapability(READ_CAPABILITY)
   @Get()
-  async get(@Req() request: { user?: { role?: string } }): Promise<OutboundSettingsDto & { canEdit: boolean }> {
+  async get(
+    @Req() request: { user?: { role?: string }; portalPrincipal?: { admin: boolean } },
+  ): Promise<OutboundSettingsDto & { canEdit: boolean }> {
     let canEdit = false;
 
     try {
-      canEdit = await this.applianceAdminGuard.admits(request.user);
+      canEdit = await this.applianceAdminGuard.admits(request.user, request);
     } catch {
       // The admin probe fails closed: unknown means "no".
     }

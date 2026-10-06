@@ -40,6 +40,22 @@ export function isSameOriginUrl(url: string): boolean {
 }
 
 /**
+ * HEIC/HEIF is what the iPhone camera writes. WKWebView and most desktop
+ * browsers cannot decode those bytes in an `<img>`, so the JPEG preview is
+ * the picture. Falling back to the original shows a broken tile.
+ */
+export function imageNeedsJpegPreview(contentType?: string | null): boolean {
+  const type = (contentType ?? '').split(';')[0].trim().toLowerCase();
+
+  return (
+    type === 'image/heic' ||
+    type === 'image/heif' ||
+    type.startsWith('image/heic-') ||
+    type.startsWith('image/heif-')
+  );
+}
+
+/**
  * Tile/row thumbnail for a FileType: prefer the derived preview, then the
  * original source for images — so a Capture screenshot renders before
  * preview generation finishes.
@@ -61,7 +77,7 @@ export function resolveFileTileUrl(opts: {
     return preview;
   }
 
-  if ((opts.contentType ?? '').startsWith('image/')) {
+  if ((opts.contentType ?? '').startsWith('image/') && !imageNeedsJpegPreview(opts.contentType)) {
     return resolveMediaUrl(opts.sourceUrl);
   }
 

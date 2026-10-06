@@ -52,6 +52,7 @@ import { ToolInvokedListener } from './listeners/ToolInvokedListener';
 import { NativeToolProvider } from './providers/NativeToolProvider';
 import { ToolRegistry } from './registry/ToolRegistry';
 import { PendingActionConfirmService } from './services/PendingActionConfirmService';
+import { PendingActionReplayRegistry } from './services/PendingActionReplayRegistry';
 import { PendingActionService } from './services/PendingActionService';
 import { ToolInvocationLedgerService } from './services/ToolInvocationLedgerService';
 import { ToolsRegistrationService } from './services/ToolsRegistrationService';
@@ -188,6 +189,8 @@ const nativeToolInstances = [
     ToolRegistry,
     PendingActionService,
     PendingActionConfirmService,
+    // Where the MCP domain registers how a confirmed GraphQL-plane call is replayed; see the class.
+    PendingActionReplayRegistry,
     // Registered as a provider so its @Cron method is discovered by the
     // scheduler; nothing injects it, so it is deliberately NOT exported.
     PendingActionExpiryCron,
@@ -222,7 +225,13 @@ const nativeToolInstances = [
     // Read API over the tool catalog (manifest), consumed by the agent REST controller + MCP.
     IntentCatalogService,
   ],
-  exports: [ToolRegistry, IntentCatalogService, PendingActionService, PendingActionConfirmService],
+  exports: [
+    ToolRegistry,
+    IntentCatalogService,
+    PendingActionService,
+    PendingActionConfirmService,
+    PendingActionReplayRegistry,
+  ],
 })
 export class ToolsModule {}
 
@@ -230,6 +239,11 @@ export class ToolsModule {}
 export { ToolRegistry, outcomeOf } from './registry/ToolRegistry';
 export { PendingActionService } from './services/PendingActionService';
 export { PendingActionConfirmService } from './services/PendingActionConfirmService';
+export {
+  PendingActionReplayRegistry,
+  type PendingActionOrigin,
+  type PendingActionReplayer,
+} from './services/PendingActionReplayRegistry';
 export { PendingActionEntity } from './entities/PendingActionEntity';
 export type { PendingAction } from './entities/PendingActionEntity';
 export {

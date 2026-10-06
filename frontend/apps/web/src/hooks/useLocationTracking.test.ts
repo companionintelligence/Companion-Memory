@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   createLocationSampler: vi.fn(),
   addBackgroundLocationWatcher: vi.fn(),
   removeBackgroundLocationWatcher: vi.fn(),
+  startSignificantLocationUpdates: vi.fn(),
   addAppStateListener: vi.fn(),
   requestNotificationPermission: vi.fn(),
   getNativeLocationAuthorization: vi.fn(),
@@ -51,6 +52,7 @@ vi.mock('@ci/common', async (importOriginal) => ({
   isIosPlatform: h.isIosPlatform,
   addBackgroundLocationWatcher: h.addBackgroundLocationWatcher,
   removeBackgroundLocationWatcher: h.removeBackgroundLocationWatcher,
+  startSignificantLocationUpdates: h.startSignificantLocationUpdates,
   addAppStateListener: h.addAppStateListener,
   requestNotificationPermission: h.requestNotificationPermission,
   getNativeLocationAuthorization: h.getNativeLocationAuthorization,
@@ -136,6 +138,8 @@ beforeEach(() => {
   h.addBackgroundLocationWatcher.mockResolvedValue('watcher-1');
   h.removeBackgroundLocationWatcher.mockReset();
   h.removeBackgroundLocationWatcher.mockResolvedValue(undefined);
+  h.startSignificantLocationUpdates.mockReset();
+  h.startSignificantLocationUpdates.mockResolvedValue(async () => {});
   h.addAppStateListener.mockReset();
   h.addAppStateListener.mockResolvedValue(() => {});
   h.requestNotificationPermission.mockReset();
@@ -422,6 +426,7 @@ describe('useLocationTracking — native watcher is the only writer', () => {
       ),
     );
     expect(h.requestNotificationPermission).toHaveBeenCalled();
+    expect(h.startSignificantLocationUpdates).not.toHaveBeenCalled();
   });
 
   it('on iOS asks When In Use then Always before starting the background watcher', async () => {
@@ -438,14 +443,49 @@ describe('useLocationTracking — native watcher is the only writer', () => {
 
     await waitFor(() =>
       expect(h.addBackgroundLocationWatcher).toHaveBeenLastCalledWith(
-        expect.objectContaining({ background: true, requestPermissions: false }),
+        expect.objectContaining({ background: false, requestPermissions: false }),
         expect.any(Function),
         expect.any(Function),
       ),
     );
+    expect(h.startSignificantLocationUpdates).toHaveBeenCalled();
+    expect(h.requestNotificationPermission).not.toHaveBeenCalled();
     expect(h.requestNativeLocationAuthorization).toHaveBeenNthCalledWith(1, { always: false });
     expect(h.requestNativeLocationAuthorization).toHaveBeenNthCalledWith(2, { always: true });
     expect(result.current.needsSettingsUpgrade).toBe(false);
+  });
+
+  it('on iOS records a significant move and stops monitoring when Always turns off', async () => {
+    localStorage.setItem(STORAGE_KEY, 'true');
+    h.authenticated = true;
+    h.isNativePlatform.mockReturnValue(true);
+    h.isIosPlatform.mockReturnValue(true);
+    h.getNativeLocationAuthorization.mockResolvedValue('always');
+
+    const stop = vi.fn(async () => {});
+    let deliver: ((location: ReturnType<typeof fakeBackgroundLocation>) => void) | undefined;
+
+    h.startSignificantLocationUpdates.mockImplementation(async (onLocation) => {
+      deliver = onLocation;
+
+      return stop;
+    });
+
+    const { result } = renderHook(() => useLocationTracking());
+
+    act(() => result.current.setMode('always'));
+
+    await waitFor(() => expect(h.startSignificantLocationUpdates).toHaveBeenCalled());
+
+    await act(async () => {
+      deliver?.(fakeBackgroundLocation());
+    });
+
+    expect(h.captureLocationFix).toHaveBeenCalled();
+
+    act(() => result.current.setMode('off'));
+
+    await waitFor(() => expect(stop).toHaveBeenCalled());
   });
 
   it('on iOS shows Open Settings when Always is requested but the OS stays on When In Use', async () => {

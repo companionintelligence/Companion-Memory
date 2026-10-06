@@ -50,6 +50,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { ApplianceAdminGuard } from '@ci/common/guards';
 import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
@@ -113,6 +114,9 @@ import { UnpackStage } from './stages/UnpackStage';
     UserModule,
   ],
   providers: [
+    // Registered so Nest can resolve its DataSource for the admin gate on
+    // GET /import/doctor (see ImportDoctorController).
+    ApplianceAdminGuard,
     DataSourceCatalogService,
     ImportDoctorService,
     ImportInboxService,
@@ -183,11 +187,13 @@ export { ImportStageEvent } from './events';
 export { ImportStageListener } from './listeners/ImportStageListener';
 export {
   configuredImportRoots,
+  importRootsCallerFor,
   resolveWithinImportRoots,
   uploadsRoot,
   userInboxDisplayDir,
   PathOutsideImportRootsError,
 } from './sources/importRoots';
+export type { ImportRootsCaller } from './sources/importRoots';
 // Re-exported for the import tools, which live in the tools domain (that is
 // where the native provider is assembled) and must reach this domain through
 // its barrel rather than into its internals.

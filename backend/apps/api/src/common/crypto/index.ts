@@ -1,6 +1,8 @@
 export { encrypt, decrypt, isEncrypted } from './field-encryption';
 export {
   DEFAULT_FORWARD_AUTH_MAX_SKEW_MS,
+  FORWARD_AUTH_ASSERTION_HEADER,
+  FORWARD_AUTH_ASSERTION_VERSION,
   FORWARD_AUTH_SIGNATURE_HEADER,
   FORWARD_AUTH_TIMESTAMP_HEADER,
   FORWARD_AUTH_USER_HEADER,
@@ -8,14 +10,29 @@ export {
   FORWARD_AUTH_USER_ID_SIGNATURE_HEADER,
   FORWARD_AUTH_USER_ISSUER_HEADER,
   HUB_ISSUER_PREFIX,
+  buildForwardAuthAssertionMessage,
   buildForwardAuthMessage,
   buildForwardAuthUserIdMessage,
+  formatForwardAuthAssertion,
+  forwardAuthPolicy,
   isHubIssuer,
+  readForwardAuthHeaders,
+  signForwardAuthAssertion,
   signForwardAuthUser,
   signForwardAuthUserId,
   verifyForwardAuthHeaders,
+  verifyHubForwardAuth,
 } from './hub-forward-auth';
-export type { ForwardAuthHeaders, ForwardAuthVerifyResult, HubStableId } from './hub-forward-auth';
+export type {
+  ForwardAuthHeaders,
+  ForwardAuthPolicy,
+  ForwardAuthVerifyResult,
+  HubForwardAuthFailure,
+  HubForwardAuthResult,
+  HubStableId,
+  RequireAudienceSetting,
+  VerifiedHubForwardAuth,
+} from './hub-forward-auth';
 export {
   CONNECT_NONCE_HEADER,
   CONNECT_SIGNATURE_HEADER,

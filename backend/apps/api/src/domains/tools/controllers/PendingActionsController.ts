@@ -102,7 +102,7 @@ export class PendingActionsController {
 
     refuseManagedApp(req, 'approve');
 
-    return this.confirmations.confirm(userId, id, apiKeyCapabilityOf(req));
+    return this.confirmations.confirm(userId, id, apiKeyCapabilityOf(req), new Date(), req);
   }
 
   /** Refuse it. Terminal; the intent never runs. */

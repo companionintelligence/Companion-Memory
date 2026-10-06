@@ -34,7 +34,9 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getCurrentLocation", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getLocationAuthorization", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "requestLocationAuthorization", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "requestLocationAuthorization", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "startSignificantLocationUpdates", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopSignificantLocationUpdates", returnType: CAPPluginReturnPromise)
     ]
 
     private let server = LocalHubServer()
@@ -224,8 +226,9 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// One-shot high-accuracy fix for "use my location" (e.g. adding a Place). Does not
-    /// touch the tracking outbox -- continuous background tracking is owned entirely by
-    /// `@capacitor-community/background-geolocation` now, not this plugin.
+    /// touch the tracking outbox. Android background tracking stays on
+    /// `@capacitor-community/background-geolocation`. iOS Always uses
+    /// `startSignificantLocationUpdates` so a move still records without the blue pill.
     @objc func getCurrentLocation(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             LocationTracker.shared.requestCurrentFix(
@@ -265,6 +268,33 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
             LocationTracker.shared.requestAuthorization(always: always) { status in
                 call.resolve(["status": status])
             }
+        }
+    }
+
+    /// iOS Always. Samples when the phone moves a meaningful distance. Does not start
+    /// the standard location service, so the blue background indicator stays off while idle.
+    @objc func startSignificantLocationUpdates(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            let monitor = SignificantLocationMonitor.shared
+            monitor.onUpdate = { [weak self] payload in
+                DispatchQueue.main.async {
+                    self?.notifyListeners("significantLocation", data: payload)
+                }
+            }
+            monitor.onDenied = { [weak self] in
+                DispatchQueue.main.async {
+                    self?.notifyListeners("significantLocationError", data: ["code": "NOT_AUTHORIZED"])
+                }
+            }
+            monitor.start()
+            call.resolve()
+        }
+    }
+
+    @objc func stopSignificantLocationUpdates(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            SignificantLocationMonitor.shared.stop()
+            call.resolve()
         }
     }
 }

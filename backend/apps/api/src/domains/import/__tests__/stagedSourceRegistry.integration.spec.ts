@@ -45,6 +45,7 @@ describeWithDatabase(`the staged source registry (${availability.target})`, () =
 
   const userId = randomUUID();
   const created: string[] = [];
+  const inboxUsers: string[] = [];
 
   beforeAll(async () => {
     const connection = resolveConnection(IMPORT_DATABASE_ENV);
@@ -87,6 +88,12 @@ describeWithDatabase(`the staged source registry (${availability.target})`, () =
           [userId, dropId],
         );
       }
+
+      // Inbox claims carry no drop id; the rebase test inserts them under
+      // users nothing else in this spec uses.
+      await dataSource.query(`DELETE FROM ci_import.staged_sources WHERE user_id = ANY($1::uuid[])`, [
+        inboxUsers,
+      ]);
 
       await dataSource.destroy();
     }
@@ -156,5 +163,55 @@ describeWithDatabase(`the staged source registry (${availability.target})`, () =
         { dropId: first.dropId!, sourcePath: '/nonexistent/uploads/dup/x.zip', sizeBytes: 1 },
       ),
     ).rejects.toMatchObject({ driverError: { code: '23505' } });
+  });
+
+  it("moves one account's live inbox claims onto its new folder and nothing else", async () => {
+    // The boot migration renames `<inbox>/a_b_example.com` to `<inbox>/<id>`.
+    // Only that account's live inbox claims under that exact folder follow it.
+    // `_` is a LIKE wildcard, so `aXb_example.com` is here to prove the match
+    // is literal, and `a_b_example.com.old` that it stops at a path segment.
+    const owner = randomUUID();
+    const other = randomUUID();
+    inboxUsers.push(owner, other);
+
+    const base = `/nonexistent/${randomUUID()}/inbox`;
+    const fromDir = `${base}/a_b_example.com`;
+    const toDir = `${base}/${owner}`;
+
+    const insert = async (user: string, sourcePath: string, status: string) => {
+      const [row] = await dataSource.query<Array<{ id: string }>>(
+        `INSERT INTO ci_import.staged_sources (user_id, origin, source_path, kind, status)
+         VALUES ($1::uuid, 'inbox', $2, 'file', $3)
+         RETURNING id`,
+        [user, sourcePath, status],
+      );
+
+      return row.id;
+    };
+
+    const claimed = await insert(owner, `${fromDir}/reddit/export.zip`, 'claimed');
+    const moved = await insert(owner, `${fromDir}/takeout.zip`, 'moved');
+    const released = await insert(owner, `${fromDir}/released.zip`, 'released');
+    const wildcard = await insert(owner, `${base}/aXb_example.com/z.zip`, 'claimed');
+    const sibling = await insert(owner, `${fromDir}.old/w.zip`, 'claimed');
+    const someoneElse = await insert(other, `${fromDir}/theirs.zip`, 'claimed');
+
+    expect(await service.rebaseInboxClaims(owner, fromDir, toDir)).toBe(2);
+
+    const paths = new Map(
+      (
+        await dataSource.query<Array<{ id: string; source_path: string }>>(
+          `SELECT id, source_path FROM ci_import.staged_sources WHERE user_id = ANY($1::uuid[])`,
+          [[owner, other]],
+        )
+      ).map((row) => [row.id, row.source_path]),
+    );
+
+    expect(paths.get(claimed)).toBe(`${toDir}/reddit/export.zip`);
+    expect(paths.get(moved)).toBe(`${toDir}/takeout.zip`);
+    expect(paths.get(released)).toBe(`${fromDir}/released.zip`);
+    expect(paths.get(wildcard)).toBe(`${base}/aXb_example.com/z.zip`);
+    expect(paths.get(sibling)).toBe(`${fromDir}.old/w.zip`);
+    expect(paths.get(someoneElse)).toBe(`${fromDir}/theirs.zip`);
   });
 });

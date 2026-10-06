@@ -179,7 +179,12 @@ function makeGraph(seedNodes: FakeNode[] = [], seedRelationships: FakeRelationsh
 }
 
 function makeTool(graph: ReturnType<typeof makeGraph>) {
-  return new WriteKnowledgeTool(graph.graphEvents as never, graph.graphQuery as never, makeLogger() as never);
+  return new WriteKnowledgeTool(
+    graph.graphEvents as never,
+    graph.graphQuery as never,
+    makeLogger() as never,
+    { getSelfIdentity: async () => null } as never,
+  );
 }
 
 const OWNER = { userId: 'user-1' };

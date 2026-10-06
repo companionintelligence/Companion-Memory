@@ -28,7 +28,7 @@ export function Note({ note: noteMasked, onDelete }: Props) {
 
   return (
     <Link to={`/notes/${GlobalUID.parse('note', note.id)}`} key={note.id}>
-      <div className="h-full w-full flex flex-col border border-border bg-card text-card-foreground shadow-md rounded-lg cursor-pointer select-none p-3 gap-3 hover:shadow-lg transition-shadow duration-75">
+      <div className="h-full w-full flex flex-col border border-border bg-card text-card-foreground shadow-md rounded-lg cursor-pointer select-none p-2 gap-2 hover:shadow-lg transition-shadow duration-75">
         <div className="flex items-center gap-2">
           <div className="text-md font-semibold truncate">{note.title ?? 'Untitled Note'}</div>
         </div>

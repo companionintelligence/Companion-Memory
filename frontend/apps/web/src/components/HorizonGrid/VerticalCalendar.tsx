@@ -949,6 +949,11 @@ interface VerticalCalendarProps {
   timeZone?: string;
   footer?: ReactNode;
   className?: string;
+  /**
+   * Room after the last hour, matching the phone add-to-calendar sheet
+   * (`max-h-[70vh]`). Without it the evening sits under the sheet.
+   */
+  scrollEndInset?: boolean;
 }
 
 /**
@@ -977,6 +982,7 @@ export function VerticalCalendar({
   timeZone,
   footer,
   className,
+  scrollEndInset = false,
 }: VerticalCalendarProps) {
   const fmt = useDateTimeFormat();
   const zone = timeZone ?? detectBrowserTimeZone();
@@ -984,6 +990,7 @@ export function VerticalCalendar({
   const today = startOfLocalDay(now, zone);
   const nowPct = (zonedMinutesOfDay(now, zone) / MINUTES_PER_DAY) * 100;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrolledDayKey = useRef<string | null>(null);
 
   const rhythmByDate = useMemo(() => new Map(rhythm.map((day) => [day.date, day])), [rhythm]);
   const lookup = useCallback((utcDate: string) => rhythmByDate.get(utcDate), [rhythmByDate]);
@@ -1028,12 +1035,46 @@ export function VerticalCalendar({
       return;
     }
 
+    // A slot tap replaces `start` with a new Date for the same day. That used
+    // to run this effect and yank the viewport back to now.
+    const dayKey = dayStarts.map((day) => day.getTime()).join(',');
+
+    if (scrolledDayKey.current === dayKey) {
+      return;
+    }
+
+    scrolledDayKey.current = dayKey;
+
     const clock = new Date();
     const lookingAtToday = dayStarts.some((day) => sameLocalDay(day, clock, zone));
     const minutes = lookingAtToday ? zonedMinutesOfDay(clock, zone) : 7 * 60;
     const y = (minutes / MINUTES_PER_DAY) * GRID_HEIGHT_PX - pane.clientHeight / 3;
     pane.scrollTop = Math.max(0, y);
   }, [dayStarts, zone]);
+
+  const selectedMinute = selectedSlot && !selectedSlot.allDay ? selectedSlot.instant.getTime() : null;
+
+  useEffect(() => {
+    if (selectedMinute === null) {
+      return;
+    }
+
+    const pane = scrollRef.current;
+
+    if (!pane || pane.clientHeight === 0) {
+      return;
+    }
+
+    const y = (zonedMinutesOfDay(new Date(selectedMinute), zone) / MINUTES_PER_DAY) * GRID_HEIGHT_PX;
+    const viewTop = pane.scrollTop;
+    const viewBottom = viewTop + pane.clientHeight;
+
+    if (y >= viewTop && y <= viewBottom) {
+      return;
+    }
+
+    pane.scrollTop = Math.max(0, y - pane.clientHeight / 3);
+  }, [selectedMinute, zone]);
 
   const handleMoveEvent = useCallback(
     (eventId: string, startTime: Date) => {
@@ -1148,7 +1189,14 @@ export function VerticalCalendar({
         })}
       </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" data-testid="vertical-calendar-scroll">
+      <div
+        ref={scrollRef}
+        className={cn(
+          'min-h-0 flex-1 overflow-auto',
+          scrollEndInset && 'pb-[calc(70vh+env(safe-area-inset-bottom,0px))]',
+        )}
+        data-testid="vertical-calendar-scroll"
+      >
         <div className="flex min-w-0">
           {/* Hours the days read against. Predicted colour lives in each
               column, behind committed time, so the axis stays a clock. */}

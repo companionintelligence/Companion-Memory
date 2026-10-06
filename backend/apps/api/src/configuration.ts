@@ -156,13 +156,27 @@ export const ConfigSchema = z.object({
        * are forwarded here. Empty = local notifications only.
        */
       pushRelayUrl: z.string().default(''),
-      // Comma-separated OAuth client ids allow-listed as service accounts (e.g.
-      // "hbpe-sidecar,summary-sidecar"). A Portal-signed token presenting one of
-      // these client ids is treated as a Portal-brokered service credential: it
-      // acts on behalf of the user named in its `sub` claim instead of being
-      // JIT-provisioned as a human login. Replaces the shared HS256 secret the
-      // sidecars used to self-sign with. See unified-identity-plan.md · B5.
+      // Comma-separated OAuth client ids allow-listed as service accounts. A
+      // Portal-signed token presenting one of these client ids is treated as a
+      // Portal-brokered service credential: it acts on behalf of the user named
+      // in its `sub` claim instead of being JIT-provisioned as a human login, and
+      // only when addressed to this appliance, confined to the api-key scopes in
+      // its `scope` claim. Empty by default: the HBPE and Summary sidecars
+      // authenticate with SIDECAR_AUTH_SECRET, and nothing ships a service client.
       serviceClients: z.string().default(''),
+      /**
+       * This appliance's own audience: the value CI-Portal puts in `aud` when it addresses a token
+       * to this box. Empty means "derive it from the Hub device id" (`ciPortal.deviceId`, which the
+       * Hub passes as `HUB_DEVICE_ID`) as `urn:ci:device:<id>`. Only a token addressed to this box
+       * carries the bearer's full authority; see `PortalTokenService`.
+       */
+      applianceAudience: z.string().default(''),
+      /**
+       * Comma-separated client ids that are capture agents (the browser extension, the importer,
+       * Companion Capture, the glasses). Their Portal tokens get the `capture` scope with `write`
+       * capability, enforced exactly as for an api key, wherever they were addressed.
+       */
+      captureClients: z.string().default(''),
     }),
     // Traefik forward-auth identity header signed by CI-Hub. When enabled, the
     // server verifies the HMAC-SHA256 signature on X-CI-Hub-User before trusting
@@ -172,7 +186,19 @@ export const ConfigSchema = z.object({
     // security-trust-and-ops.md.
     hubForwardAuth: z.object({
       enabled: z.boolean(),
+      // The Hub-wide secret. Authenticates the Hub connect exchange and the agent
+      // doorbell, and verifies the unbound identity format an older Hub sends.
       secret: z.string(),
+      // This app's own forward-auth key (CI_HUB_FORWARD_AUTH_IDENTITY_SECRET) and
+      // its app URN (CI_APP_URN), both written by a Hub that signs the bound
+      // assertion. Together they switch on audience-bound verification; see
+      // `forwardAuthPolicy` in common/crypto/hub-forward-auth.ts.
+      identitySecret: z.string().default(''),
+      audience: z.string().default(''),
+      // `auto` (default) requires the bound assertion once the Hub has provided
+      // both values above, and accepts the unbound format until then. `true`
+      // always requires it; `false` always accepts the unbound format too.
+      requireAudience: z.enum(['auto', 'true', 'false']).default('auto'),
       maxSkewMs: z.coerce.number().int().positive(),
     }),
     // Brute-force throttle on the local password login. An appliance is a single

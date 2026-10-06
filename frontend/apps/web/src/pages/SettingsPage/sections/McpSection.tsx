@@ -49,18 +49,25 @@ interface McpTool {
  * deliberately NOT recomputed here — a second canonicalisation implementation in the browser would
  * silently disagree with the backend's on key order and turn every reconnect into false drift.
  */
-type McpToolApprovalState = 'approved' | 'new' | 'schema_changed' | 'unavailable' | 'legacy';
+type McpToolApprovalState =
+  'approved' | 'new' | 'schema_changed' | 'description_changed' | 'unavailable' | 'legacy';
 
 interface McpToolApproval {
   name: string;
   schemaDigest: string | null;
+  /** Absent from a server that predates description pinning. */
+  descriptionDigest?: string | null;
   state: McpToolApprovalState;
   approvedAt: string | null;
   approvedDigest: string | null;
 }
 
 /** States that mean the tool is NOT currently reachable by chat and wants a human decision. */
-const PENDING_APPROVAL_STATES = new Set<McpToolApprovalState>(['new', 'schema_changed']);
+const PENDING_APPROVAL_STATES = new Set<McpToolApprovalState>([
+  'new',
+  'schema_changed',
+  'description_changed',
+]);
 
 function approvalBadge(state: McpToolApprovalState) {
   switch (state) {
@@ -80,6 +87,12 @@ function approvalBadge(state: McpToolApprovalState) {
       return (
         <Badge variant="outline" className="text-[10px] text-amber-700 dark:text-amber-400">
           Schema changed
+        </Badge>
+      );
+    case 'description_changed':
+      return (
+        <Badge variant="outline" className="text-[10px] text-amber-700 dark:text-amber-400">
+          Description changed
         </Badge>
       );
     case 'unavailable':
@@ -804,16 +817,19 @@ export function McpSection() {
   };
 
   /**
-   * Approving is the grant — adding the server never was. `tools[]` carries back the exact digest
-   * this list was rendered from, and the server rejects it if the schema moved in between, so a
-   * tool cannot be approved on the strength of a description the user is no longer looking at.
+   * Approving is the grant — adding the server never was. `tools[]` carries back the exact digests
+   * this list was rendered from, and the server rejects it if the schema or the description moved
+   * in between, so a tool cannot be approved on the strength of a description the user is no
+   * longer looking at.
    *
    * `approveAll` is the one-click path for a legitimately-updated upstream server. Without it a
    * strict pin is the kind of thing people switch off wholesale after the second false alarm.
    */
   const handleApproveTools = async (
     server: McpServerConfig,
-    body: { approveAll: true } | { tools: Array<{ name: string; schemaDigest: string }> },
+    body:
+      | { approveAll: true }
+      | { tools: Array<{ name: string; schemaDigest: string; descriptionDigest?: string }> },
   ) => {
     try {
       setApprovingId(server.id);
@@ -1251,6 +1267,11 @@ export function McpSection() {
                                                   {
                                                     name: approval.name,
                                                     schemaDigest: approval.schemaDigest!,
+                                                    // The prose shown here is pinned too; the
+                                                    // server refuses the approval if it moved.
+                                                    ...(approval.descriptionDigest
+                                                      ? { descriptionDigest: approval.descriptionDigest }
+                                                      : {}),
                                                   },
                                                 ],
                                               })

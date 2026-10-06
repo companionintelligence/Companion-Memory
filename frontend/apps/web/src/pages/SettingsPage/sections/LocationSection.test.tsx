@@ -82,7 +82,7 @@ describe('LocationSection', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Always' }));
 
     expect(screen.getByText(/Remember places in the background/)).toBeInTheDocument();
-    expect(screen.getByText(/blue location indicator/)).toBeInTheDocument();
+    expect(screen.getByText(/no solid blue location indicator/)).toBeInTheDocument();
     expect(screen.getByText(/iOS asks twice/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Agree' }));
