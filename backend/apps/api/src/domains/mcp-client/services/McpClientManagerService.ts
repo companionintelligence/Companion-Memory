@@ -168,7 +168,9 @@ export class McpClientManagerService implements OnModuleDestroy {
       // made meanwhile is not written over; this writes at most once per approval.
       const latest =
         config.approvedTools == null ? null : await this.repo.findOne({ where: { id: configId } });
-      const pinned = latest ? pinApprovedDescriptions(latest.approvedTools, config.discoveredTools) : null;
+      const pinned = latest
+        ? pinApprovedDescriptions(latest.approvedTools, config.discoveredTools, discoveredTools)
+        : null;
 
       await this.persist(configId, {
         discoveredTools,

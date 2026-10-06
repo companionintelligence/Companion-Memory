@@ -83,6 +83,16 @@ describe('McpClientManagerService.connect pins the descriptions of older approva
     expect(isToolApproved(before, row.approvedTools)).toBe(true);
   });
 
+  it('keeps a titled tool approved, though rows stored before the upgrade carry no title', async () => {
+    const titled: McpDiscoveredTool = { ...before, title: 'Read file' };
+    const { service, row } = connectWith([titled], [legacyApproval]);
+
+    await service.connect('cfg-1');
+
+    expect(row.discoveredTools).toStrictEqual([titled]);
+    expect(isToolApproved(titled, row.approvedTools)).toBe(true);
+  });
+
   it('leaves approvals alone once every one of them is pinned', async () => {
     const pinned = { ...legacyApproval, descriptionDigest: computeDescriptionDigest(before) };
     const { service, update } = connectWith([before], [pinned]);

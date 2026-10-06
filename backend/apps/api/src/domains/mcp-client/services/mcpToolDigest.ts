@@ -240,16 +240,23 @@ export function grandfatherApprovals(
  * `description_changed` on the first boot after this shipped and withhold every tool until someone
  * re-approved it; with it, existing approvals keep working, and a description that changes after
  * the upgrade is caught.
+ *
+ * `currentlyDiscovered` is this connect's list, read for one thing only: the title. Rows stored
+ * before descriptions were pinned never kept one, so a previous tool without a title takes the
+ * title this connect reports. Pinned without it, every titled tool would read as
+ * `description_changed` on that same connect, which is the failure this function exists to avoid.
  */
 export function pinApprovedDescriptions(
   approved: McpApprovedTool[] | null | undefined,
   previouslyDiscovered: McpDiscoveredTool[] | null | undefined,
+  currentlyDiscovered?: McpDiscoveredTool[] | null,
 ): McpApprovedTool[] | null {
   if (approved == null || !approved.some((entry) => entry.descriptionDigest == null)) {
     return null;
   }
 
   const discoveredByName = new Map((previouslyDiscovered ?? []).map((tool) => [tool.name, tool]));
+  const currentTitles = new Map((currentlyDiscovered ?? []).map((tool) => [tool.name, tool.title]));
   let changed = false;
 
   const next = approved.map((entry) => {
@@ -261,7 +268,9 @@ export function pinApprovedDescriptions(
 
     changed = true;
 
-    return { ...entry, descriptionDigest: computeDescriptionDigest(tool) };
+    const title = tool.title ?? currentTitles.get(entry.name);
+
+    return { ...entry, descriptionDigest: computeDescriptionDigest({ ...tool, title }) };
   });
 
   return changed ? next : null;
