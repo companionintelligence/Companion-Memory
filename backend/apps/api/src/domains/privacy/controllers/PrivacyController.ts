@@ -5,6 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
+import { LastAdminDeletionRefused, UserService } from '@ci/domains/user';
 
 import { DataDeletionService } from '../services/DataDeletionService';
 
@@ -17,6 +18,12 @@ const deleteAccountSchema = z.object({
   confirm: z.literal(true, {
     errorMap: () => ({ message: 'Account deletion requires "confirm": true' }),
   }),
+  /**
+   * Who becomes administrator, by the address they sign in with. Required only when the caller is
+   * the appliance's last live administrator and other people still have accounts, exactly as on
+   * `DELETE /account`.
+   */
+  successorEmail: z.string().trim().min(1).optional(),
 });
 
 /**
@@ -36,6 +43,7 @@ const deleteAccountSchema = z.object({
 export class PrivacyController {
   constructor(
     private readonly dataDeletionService: DataDeletionService,
+    private readonly userService: UserService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(PrivacyController.name);
@@ -46,12 +54,20 @@ export class PrivacyController {
   @HttpCode(200)
   async deleteMyAccount(
     @Context() context: RequestContext,
-    @Body(new ValidationPipe(deleteAccountSchema)) _body: { confirm: true },
+    @Body(new ValidationPipe(deleteAccountSchema)) body: { confirm: true; successorEmail?: string },
   ) {
-    // The ValidationPipe enforces confirm:true; the value isn't otherwise used.
-    void _body;
-
     const serviceContext = toServiceContext(context);
+
+    // Before anything is purged: the appliance's last administrator does not leave the other
+    // people on it without one, whichever route deletes the account (`DELETE /account` applies
+    // the same rule). 409 `SUCCESSOR_REQUIRED` or `SUCCESSOR_NOT_FOUND`, and nothing deleted.
+    try {
+      await this.userService.handOverAdministration(serviceContext, serviceContext.userId, {
+        successorEmail: body.successorEmail,
+      });
+    } catch (error) {
+      throw error instanceof LastAdminDeletionRefused ? error.toConflict() : error;
+    }
 
     const result = await this.dataDeletionService.deleteAccount(serviceContext);
 

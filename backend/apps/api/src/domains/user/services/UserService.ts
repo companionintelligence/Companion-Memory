@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import bcrypt from 'bcrypt';
 import { EntityManager, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
@@ -70,7 +70,32 @@ export class LastAdminDeletionRefused extends Error {
     );
     this.name = 'LastAdminDeletionRefused';
   }
+
+  /** The 409 every account-deletion route answers with. The web app reads its `message`. */
+  toConflict(): ConflictException {
+    return new ConflictException(
+      this.reason === 'successor_required'
+        ? {
+            message: SUCCESSOR_REQUIRED,
+            detail:
+              'You are the only administrator and other people have accounts here. Name the person who takes over.',
+          }
+        : {
+            message: SUCCESSOR_NOT_FOUND,
+            detail: 'No other account on this Memory uses that address.',
+          },
+    );
+  }
 }
+
+/**
+ * The `message` of a 409 from an account deletion when the caller is the last administrator and
+ * other people still have accounts: name a successor (`successorEmail`) and ask again.
+ */
+export const SUCCESSOR_REQUIRED = 'SUCCESSOR_REQUIRED';
+
+/** The `message` of a 409 from an account deletion whose `successorEmail` names no other live account. */
+export const SUCCESSOR_NOT_FOUND = 'SUCCESSOR_NOT_FOUND';
 
 /** A lookup by address that matched more than one account once case is ignored. */
 type Ambiguous = 'ambiguous';
@@ -414,21 +439,10 @@ export class UserService {
     const purgeAfter = new Date(Date.now() + purgeGraceDays() * 24 * 60 * 60 * 1000);
 
     const outcome = await this.userRepository.manager.transaction(async (manager) => {
-      await manager.query('SELECT pg_advisory_xact_lock($1)', [APPLIANCE_CLAIM_LOCK_KEY]);
+      const handedOver = await this.lockAndHandOver(manager, id, options);
 
-      const [target] = await manager.query<Array<{ id: string; role: string }>>(
-        `SELECT id, role FROM ci.users WHERE id = $1 AND deleted_at IS NULL`,
-        [id],
-      );
-
-      if (!target) {
+      if (!handedOver) {
         return null;
-      }
-
-      const successorId = target.role === 'admin' ? await this.successorFor(manager, id, options) : null;
-
-      if (successorId) {
-        await manager.query(`UPDATE ci.users SET role = 'admin' WHERE id = $1`, [successorId]);
       }
 
       // One write, not `softDelete()` then `update()`: the access gate (`deletedAt`) and
@@ -437,7 +451,7 @@ export class UserService {
 
       await manager.query(`DELETE FROM ci.signup_code WHERE issued_by = $1 AND used = false`, [id]);
 
-      return { successorId };
+      return handedOver;
     });
 
     if (outcome == null) {
@@ -453,6 +467,62 @@ export class UserService {
     });
 
     return true;
+  }
+
+  /**
+   * The last-administrator rule of {@link requestDeletion}, for a deletion that does not go through
+   * it: the privacy route's immediate hard delete (`POST /users/me/delete`). When `id` is the last
+   * live administrator and other live accounts remain, `options.successorEmail` must name one of
+   * them, and that account becomes administrator now. Otherwise this throws
+   * {@link LastAdminDeletionRefused} and writes nothing.
+   *
+   * The hard delete that follows runs outside this lock, so an administrator leaving this way at
+   * the same moment as the only other one leaves can still empty the role. The cost is the
+   * admin-less appliance {@link ApplianceAdminGuard} keeps closed until an operator names an
+   * administrator, never a promotion.
+   */
+  async handOverAdministration(context: ServiceContext, id: string, options: DeletionOptions = {}): Promise<void> {
+    if (context.userId !== SYSTEM_USER && context.userId !== id) {
+      throw new UnauthorizedException();
+    }
+
+    const handedOver = await this.userRepository.manager.transaction((manager) =>
+      this.lockAndHandOver(manager, id, options),
+    );
+
+    if (handedOver?.successorId) {
+      await this.eventService.send(UserUpdatedEvent, { userId: handedOver.successorId });
+    }
+  }
+
+  /**
+   * Under the lock every account creation takes: find live account `id` (null when there is none)
+   * and, when it is the last live administrator, promote the successor {@link successorFor} names.
+   * Throws {@link LastAdminDeletionRefused} before writing anything.
+   */
+  private async lockAndHandOver(
+    manager: EntityManager,
+    id: string,
+    options: DeletionOptions,
+  ): Promise<{ successorId: string | null } | null> {
+    await manager.query('SELECT pg_advisory_xact_lock($1)', [APPLIANCE_CLAIM_LOCK_KEY]);
+
+    const [target] = await manager.query<Array<{ id: string; role: string }>>(
+      `SELECT id, role FROM ci.users WHERE id = $1 AND deleted_at IS NULL`,
+      [id],
+    );
+
+    if (!target) {
+      return null;
+    }
+
+    const successorId = target.role === 'admin' ? await this.successorFor(manager, id, options) : null;
+
+    if (successorId) {
+      await manager.query(`UPDATE ci.users SET role = 'admin' WHERE id = $1`, [successorId]);
+    }
+
+    return { successorId };
   }
 
   /**

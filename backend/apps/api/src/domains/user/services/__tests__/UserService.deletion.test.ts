@@ -334,6 +334,57 @@ describe('UserService — account deletion', () => {
   });
 
   /**
+   * The same rule for the privacy route's immediate hard delete (`POST /users/me/delete`), which
+   * does not go through `requestDeletion`. It only hands the role over; the route deletes.
+   */
+  describe('handOverAdministration', () => {
+    const ADMIN = { id: 'user-1', role: 'admin' };
+
+    it('refuses the last administrator while others have accounts and nobody is named', async () => {
+      const { service, journal, eventService } = makeService({ target: ADMIN, otherAccounts: true });
+
+      const failure = await service.handOverAdministration(OWN, 'user-1').catch((error: unknown) => error);
+
+      expect((failure as LastAdminDeletionRefused).reason).toBe('successor_required');
+      expect(journal).toEqual(['lock', 'read-target', 'count-others']);
+      expect(eventService.send).not.toHaveBeenCalled();
+    });
+
+    it('promotes the named successor under the lock, and touches nothing else', async () => {
+      const { service, journal, queries, transactionManager, eventService } = makeService({
+        target: ADMIN,
+        otherAccounts: true,
+        successors: [{ id: 'user-2' }],
+      });
+
+      await expect(
+        service.handOverAdministration(OWN, 'user-1', { successorEmail: 'Member@Example.com' }),
+      ).resolves.toBeUndefined();
+
+      expect(journal).toEqual(['lock', 'read-target', 'count-others', 'find-successor', 'promote-successor', 'commit']);
+      expect(queries.find((q) => q.sql.includes("SET role = 'admin'"))?.params).toEqual(['user-2']);
+      // The account itself is the route's to delete.
+      expect(transactionManager.update).not.toHaveBeenCalled();
+      expect(eventService.send).toHaveBeenCalledWith(UserUpdatedEvent, { userId: 'user-2' });
+      expect(eventService.send).not.toHaveBeenCalledWith(UserRemovedEvent, expect.anything());
+    });
+
+    it('lets a member through without asking', async () => {
+      const { service, journal } = makeService({ target: { id: 'user-1', role: 'user' }, otherAccounts: true });
+
+      await expect(service.handOverAdministration(OWN, 'user-1')).resolves.toBeUndefined();
+      expect(journal).not.toContain('count-others');
+    });
+
+    it('refuses to act for someone else', async () => {
+      const { service, userRepository } = makeService({ target: ADMIN });
+
+      await expect(service.handOverAdministration(OWN, 'user-2')).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(userRepository.manager.transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
    * `remove()` is the FK-unsafe hard delete — not the account-deletion path, and
    * currently called by nothing. It is still worth pinning because the background purge
    * job will be written against it, and it shipped with a missing `await` that made its

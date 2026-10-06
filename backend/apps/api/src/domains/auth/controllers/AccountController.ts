@@ -74,14 +74,8 @@ export const REAUTH_REQUIRED = 'REAUTH_REQUIRED';
 export const EMAIL_MANAGED_BY_HUB =
   'Your Hub signs you in to Memory with this email address, so it cannot be changed here';
 
-/**
- * The `message` of a 409 from `DELETE /account` when the caller is the last administrator and
- * other people still have accounts: name a successor (`successorEmail`) and ask again.
- */
-export const SUCCESSOR_REQUIRED = 'SUCCESSOR_REQUIRED';
-
-/** The `message` of a 409 from `DELETE /account` whose `successorEmail` names no other live account. */
-export const SUCCESSOR_NOT_FOUND = 'SUCCESSOR_NOT_FOUND';
+/** The `message` values of a 409 from `DELETE /account`; see `LastAdminDeletionRefused`. */
+export { SUCCESSOR_NOT_FOUND, SUCCESSOR_REQUIRED } from '@ci/domains/user';
 
 /**
  * Account lifecycle: the counterpart to `SignupController`.
@@ -205,22 +199,7 @@ export class AccountController {
     try {
       await this.userService.requestDeletion(serviceContext, user.id, { successorEmail: input.successorEmail });
     } catch (error) {
-      if (!(error instanceof LastAdminDeletionRefused)) {
-        throw error;
-      }
-
-      throw new ConflictException(
-        error.reason === 'successor_required'
-          ? {
-              message: SUCCESSOR_REQUIRED,
-              detail:
-                'You are the only administrator and other people have accounts here. Name the person who takes over.',
-            }
-          : {
-              message: SUCCESSOR_NOT_FOUND,
-              detail: 'No other account on this Memory uses that address.',
-            },
-      );
+      throw error instanceof LastAdminDeletionRefused ? error.toConflict() : error;
     }
   }
 
