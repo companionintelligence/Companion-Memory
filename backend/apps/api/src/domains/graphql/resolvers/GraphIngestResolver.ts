@@ -5,6 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MAX_BULK_INPUT_SIZE } from '@ci/common/pipes';
 import { GraphIngestService } from '@ci/domains/graph';
+import { isOwnerSettingPropertyKey } from '@ci/domains/memory';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { BulkGraphInput } from '../types/BulkGraphInput';
@@ -48,17 +49,19 @@ export class GraphIngestResolver {
 
     // `planner` holds the owner's settings on their own Person, the autonomy dial among them, and
     // this mutation can reach that row (sourceSystem `self` is where the self Person is keyed).
-    // No import carries settings, and a re-ingest merges what it is sent, so an agent calling this
-    // over /api/mcp could otherwise switch tool approvals off. Settings and onboarding are the
-    // dial's writers.
-    const settingsWrite = input.entities?.find(
-      (entity) => entity.properties && 'planner' in entity.properties,
-    );
-    if (settingsWrite) {
-      throw new BadRequestException(
-        `Entity "${settingsWrite.key}" carries a "planner" property. That key holds the owner's settings, ` +
-          'which an import cannot write; change them in Settings.',
-      );
+    // `is_self` is the claim `UserContextService` falls back on to find that Person, which is where
+    // the dial is read from. No import carries either, and a re-ingest merges what it is sent, so
+    // an agent calling this over /api/mcp could otherwise switch tool approvals off, or point the
+    // owner's identity at a row it planted. Settings and onboarding are their writers.
+    for (const entity of input.entities ?? []) {
+      const key = Object.keys(entity.properties ?? {}).find(isOwnerSettingPropertyKey);
+
+      if (key) {
+        throw new BadRequestException(
+          `Entity "${entity.key}" carries a "${key}" property. That key holds the owner's settings, ` +
+            'which an import cannot write; change them in Settings.',
+        );
+      }
     }
 
     const result = await this.graphIngestService.ingest(serviceContext, {

@@ -45,6 +45,29 @@ describe('GraphIngestResolver.bulkIngestGraph and the owner settings', () => {
     expect(ingest).not.toHaveBeenCalled();
   });
 
+  it('refuses an entity that claims to be the account holder', async () => {
+    const { resolver: subject, ingest } = resolver();
+
+    await expect(
+      subject.bulkIngestGraph(
+        context as never,
+        {
+          entities: [
+            {
+              key: 'agent:person:planted',
+              entityType: 'Person',
+              sourceSystem: 'agent',
+              properties: { is_self: true },
+            },
+          ],
+          relationships: [],
+        } as never,
+      ),
+    ).rejects.toThrow(/"is_self"/);
+
+    expect(ingest).not.toHaveBeenCalled();
+  });
+
   it('ingests ordinary entities as before', async () => {
     const { resolver: subject, ingest } = resolver();
 
