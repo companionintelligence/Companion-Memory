@@ -44,6 +44,38 @@ export interface SignupIntent extends Partial<SignupIntentIdentity> {
 const SESSION_EXPIRES_IN = parseDuration(config.auth.session.duration) ?? 0;
 const REFRESH_GRACE_PERIOD = parseDuration(config.auth.session.refreshGracePeriod) ?? 0;
 
+/**
+ * The key signup-intent tokens are signed with: derived from the session secret, never equal to it.
+ *
+ * An intent used to be signed with the session secret itself, so it verified wherever a session
+ * cookie does. It carries no `sub`, and the connect consent page read that missing `sub` straight
+ * into a user lookup, which then matched whichever account came first. With a key of its own an
+ * intent cannot verify as a session anywhere, and a session cookie cannot pass as an intent.
+ *
+ * Derived rather than configured, so no install needs a new secret. Changing it only voids intents
+ * minted before the change, which live ten minutes and end in "sign in again".
+ */
+export function signupIntentSecret(): string {
+  return createHmac('sha256', config.auth.jwt.refreshTokenSecret).update('ci:signup-intent:v1').digest('hex');
+}
+
+/**
+ * Whether verified claims are a session's: a non-empty string `sub` and no `purpose`.
+ *
+ * The signature only says this server minted the token. Every other token signed with the session
+ * secret (today, none; before {@link signupIntentSecret}, the signup intent) names its purpose, and
+ * a session is the one kind that names a user.
+ */
+function isSessionClaims(payload: unknown): payload is JwtPayload {
+  if (payload == null || typeof payload !== 'object') {
+    return false;
+  }
+
+  const { sub, purpose } = payload as { sub?: unknown; purpose?: unknown };
+
+  return typeof sub === 'string' && sub.length > 0 && purpose === undefined;
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -85,10 +117,63 @@ export class AuthService {
     return { sessionToken: token, sessionId };
   }
 
+  /**
+   * Verify a session cookie's signature and expiry and that it names a user. Throws otherwise.
+   *
+   * This does not consult `ci.sessions`, so a cookie from a session that was signed out still
+   * passes until it expires. Where that matters, use {@link resolveLiveSession}.
+   */
   validateSessionToken(token: string): JwtPayload {
-    return this.jwtService.verify(token, {
+    const payload: unknown = this.jwtService.verify(token, {
       secret: config.auth.jwt.refreshTokenSecret,
     });
+
+    if (!isSessionClaims(payload)) {
+      throw new UnauthorizedException('Not a session token');
+    }
+
+    return payload;
+  }
+
+  /**
+   * The live session behind a session cookie, or null.
+   *
+   * Live means the cookie verifies ({@link validateSessionToken}) AND its row in `ci.sessions` still
+   * exists, has not expired and belongs to the user the cookie names. So signing out, or a password
+   * change that signs other devices out, ends the session here too. The row is matched on the
+   * token's hash, or on the previous hash inside the rotation grace window, the same two matches the
+   * refresh path accepts. Unlike refresh, the client address and user agent are not compared: this
+   * answers "is this person signed in", not "may this cookie be rotated".
+   */
+  async resolveLiveSession(token: string): Promise<{ userId: string; sessionId: string } | null> {
+    let userId: string;
+
+    try {
+      userId = this.validateSessionToken(token).sub;
+    } catch {
+      return null;
+    }
+
+    const now = new Date();
+    const hashedToken = this.digest(token);
+    const user = { id: userId };
+
+    const session =
+      (await this.sessionRepository.findOne({
+        where: { token: hashedToken, expires_at: MoreThan(now), user },
+      })) ??
+      (REFRESH_GRACE_PERIOD > 0
+        ? await this.sessionRepository.findOne({
+            where: {
+              previous_token: hashedToken,
+              rotated_at: MoreThan(new Date(now.getTime() - REFRESH_GRACE_PERIOD)),
+              expires_at: MoreThan(now),
+              user,
+            },
+          })
+        : null);
+
+    return session ? { userId, sessionId: session.id } : null;
   }
 
   /**
@@ -96,7 +181,9 @@ export class AuthService {
    * OIDC callback and the "create your account?" confirmation step. It proves
    * the email/name came from a successful Portal sign-in (not client-supplied),
    * so the confirm endpoint can create the account without re-trusting inputs.
-   * The `purpose` claim prevents it being accepted anywhere a session token is.
+   *
+   * Signed with {@link signupIntentSecret}, not the session secret, so it can
+   * never verify as a session. The `purpose` claim stays as a second check.
    */
   issueSignupIntentToken(
     email: string,
@@ -114,7 +201,7 @@ export class AuthService {
         // Only ever `true` or absent, so an intent that waived nothing reads exactly as before.
         firstAccountOnly: admission?.firstAccountOnly === true ? true : undefined,
       },
-      { secret: config.auth.jwt.refreshTokenSecret, expiresIn: '10m' },
+      { secret: signupIntentSecret(), expiresIn: '10m' },
     );
   }
 
@@ -127,7 +214,7 @@ export class AuthService {
       subject?: string;
       firstAccountOnly?: boolean;
     }>(token, {
-      secret: config.auth.jwt.refreshTokenSecret,
+      secret: signupIntentSecret(),
     });
 
     if (payload.purpose !== 'signup_intent' || !payload.email) {
@@ -319,12 +406,12 @@ export class AuthService {
     }
 
     try {
-      const payload = this.jwtService.verify<JwtPayload>(token, {
+      const payload: unknown = this.jwtService.verify(token, {
         secret: config.auth.jwt.refreshTokenSecret,
         ignoreExpiration: true,
       });
 
-      return payload.sid ?? null;
+      return isSessionClaims(payload) ? (payload.sid ?? null) : null;
     } catch {
       return null;
     }

@@ -108,7 +108,9 @@ describe('GraphUtilityService.createOrUpdateNode — updating an existing row', 
   });
 
   it('replaces the bag when mergeProperties is false and properties are sent', async () => {
-    const { service, nodes } = setup({ nodes: [storedNode()] });
+    const { service, nodes } = setup({
+      nodes: [storedNode({ properties: { occupation: 'nurse', city: 'Leeds' } })],
+    });
 
     await service.createOrUpdateNode(OWNER, {
       entityId: NODE,
@@ -117,6 +119,44 @@ describe('GraphUtilityService.createOrUpdateNode — updating an existing row', 
     });
 
     expect(nodes.get(NODE)?.properties).toEqual({ occupation: 'dentist' });
+  });
+
+  it('keeps the keys the appliance owns through a replace, and does not let one bring them in', async () => {
+    const kept = setup({
+      nodes: [
+        storedNode({
+          properties: {
+            emails: ['alex@example.com'],
+            planner: { trust_mode: 'cautious' },
+            is_self: true,
+            city: 'Leeds',
+          },
+        }),
+      ],
+    });
+
+    await kept.service.createOrUpdateNode(OWNER, {
+      entityId: NODE,
+      properties: { occupation: 'dentist', planner: { trust_mode: 'hands_off' } },
+      mergeProperties: false,
+    });
+
+    expect(kept.nodes.get(NODE)?.properties).toEqual({
+      occupation: 'dentist',
+      emails: ['alex@example.com'],
+      planner: { trust_mode: 'cautious' },
+      is_self: true,
+    });
+
+    const absent = setup({ nodes: [storedNode({ properties: { city: 'Leeds' } })] });
+
+    await absent.service.createOrUpdateNode(OWNER, {
+      entityId: NODE,
+      properties: { occupation: 'dentist', is_self: 'true', phones: ['5550100'] },
+      mergeProperties: false,
+    });
+
+    expect(absent.nodes.get(NODE)?.properties).toEqual({ occupation: 'dentist' });
   });
 
   it('never empties the bag on mergeProperties: false alone — there is nothing to replace it with', async () => {
@@ -128,20 +168,49 @@ describe('GraphUtilityService.createOrUpdateNode — updating an existing row', 
   });
 
   it('deletes removeProperties keys after merging, and on their own', async () => {
-    const merged = setup({ nodes: [storedNode()] });
+    const withCity = () =>
+      storedNode({ properties: { emails: ['alex@example.com'], city: 'Leeds', team: 'blue' } });
+
+    const merged = setup({ nodes: [withCity()] });
     await merged.service.createOrUpdateNode(OWNER, {
       entityId: NODE,
       properties: { occupation: 'dentist' },
-      removeProperties: ['planner'],
+      removeProperties: ['city'],
     });
     expect(merged.nodes.get(NODE)?.properties).toEqual({
       emails: ['alex@example.com'],
+      team: 'blue',
       occupation: 'dentist',
     });
 
-    const removalOnly = setup({ nodes: [storedNode()] });
-    await removalOnly.service.createOrUpdateNode(OWNER, { entityId: NODE, removeProperties: ['emails'] });
-    expect(removalOnly.nodes.get(NODE)?.properties).toEqual({ planner: { trust_mode: 'ask' } });
+    const removalOnly = setup({ nodes: [withCity()] });
+    await removalOnly.service.createOrUpdateNode(OWNER, { entityId: NODE, removeProperties: ['team'] });
+    expect(removalOnly.nodes.get(NODE)?.properties).toEqual({ emails: ['alex@example.com'], city: 'Leeds' });
+  });
+
+  it('never removes a key the appliance owns', async () => {
+    const { service, nodes } = setup({ nodes: [storedNode()] });
+
+    await service.createOrUpdateNode(OWNER, {
+      entityId: NODE,
+      removeProperties: ['planner', 'emails', 'is_self'],
+    });
+
+    expect(nodes.get(NODE)?.properties).toEqual(storedNode().properties);
+  });
+
+  it('still merges whatever a writer sends, owner-managed keys included', async () => {
+    const { service, nodes } = setup({ nodes: [storedNode()] });
+
+    await service.createOrUpdateNode(OWNER, {
+      entityId: NODE,
+      properties: { planner: { trust_mode: 'cautious' } },
+    });
+
+    expect(nodes.get(NODE)?.properties).toEqual({
+      emails: ['alex@example.com'],
+      planner: { trust_mode: 'cautious' },
+    });
   });
 
   it('reports the write as an update of the same row', async () => {

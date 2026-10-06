@@ -50,7 +50,9 @@
       "jwksUri": "PORTAL_OIDC_JWKS_URI",
       "audience": "PORTAL_OIDC_AUDIENCE",
       "pushRelayUrl": "PORTAL_PUSH_RELAY_URL",
-      "serviceClients": "PORTAL_OIDC_SERVICE_CLIENTS"
+      "serviceClients": "PORTAL_OIDC_SERVICE_CLIENTS",
+      "applianceAudience": "PORTAL_APPLIANCE_AUDIENCE",
+      "captureClients": "PORTAL_OIDC_CAPTURE_CLIENTS"
     },
     "hubForwardAuth": {
       "enabled": {
@@ -58,6 +60,9 @@
         "__format": "boolean"
       },
       "secret": "CI_HUB_FORWARD_AUTH_SECRET",
+      "identitySecret": "CI_HUB_FORWARD_AUTH_IDENTITY_SECRET",
+      "audience": "CI_APP_URN",
+      "requireAudience": "CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE",
       "maxSkewMs": "CI_HUB_FORWARD_AUTH_MAX_SKEW_MS"
     },
     "loginThrottle": {

@@ -12,6 +12,7 @@ import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next'
 
 import { PlaceEntity, type Place, type PlaceKind } from '../entities/PlaceEntity';
 import { PlaceCreatedEvent, PlaceUpdatedEvent, PlaceRemovedEvent } from '../events';
+import { GRAPH_ENTITY_TYPES } from '../graph.types';
 import type { CreatePlaceDto, UpdatePlaceDto } from '../types';
 
 import {
@@ -26,6 +27,14 @@ import {
 import { EVENT_HAPPENED_SQL } from './eventHappened';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
 import { type PurgedPlaces, purgePlaceAggregates } from './placePurge';
+
+/**
+ * The row types a place is stored under. `PlaceEntity` maps the whole of `ci.entities`, so a lookup
+ * by id alone also finds a Person or a Concept; `update` and `remove` match on these too. Without it,
+ * an id of the owner's own Person let `updatePlace` merge into that Person's properties, where the
+ * owner's settings live under `planner` (the autonomy dial among them).
+ */
+const PLACE_ENTITY_TYPES = In([...GRAPH_ENTITY_TYPES.place]);
 
 /** One Google-style address component ({long_name, short_name, types[]}). */
 interface AddressComponent {
@@ -1079,9 +1088,12 @@ export class PlaceService {
   async update(context: ServiceContext, id: string, data: UpdatePlaceDto): Promise<Place | null> {
     const { properties, latitude, longitude, place_kind, parent_place_id, ...rest } = data;
 
+    // Places only (see PLACE_ENTITY_TYPES): without the type, `updatePlace` could rename the
+    // owner's own Person or write its `planner` settings through its free-form properties.
     const place = await this.placeRepository.findOne({
       where: {
         id: id,
+        entityType: PLACE_ENTITY_TYPES,
         ...(context.userId !== SYSTEM_USER && {
           user: {
             id: context.userId,
@@ -1126,6 +1138,7 @@ export class PlaceService {
         result = await this.placeRepository.update(
           {
             id,
+            entityType: PLACE_ENTITY_TYPES,
             ...(context.userId !== SYSTEM_USER && {
               user: {
                 id: context.userId,
@@ -1164,9 +1177,11 @@ export class PlaceService {
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {
+    // Places only (see PLACE_ENTITY_TYPES), so `deletePlace` cannot delete a Person or a Concept.
     const place = await this.placeRepository.findOne({
       where: {
         id: id,
+        entityType: PLACE_ENTITY_TYPES,
         ...(context.userId !== SYSTEM_USER && {
           user: {
             id: context.userId,
@@ -1195,6 +1210,7 @@ export class PlaceService {
 
     await this.placeRepository.delete({
       id,
+      entityType: PLACE_ENTITY_TYPES,
       ...(context.userId !== SYSTEM_USER && {
         user: {
           id: context.userId,

@@ -193,6 +193,7 @@ function makePipeline(seed: { nodes?: GraphNodeEntity[]; edges?: RelationshipEnt
     new GraphEventService(eventService as never, logger as never),
     graphQuery as never,
     logger as never,
+    { getSelfIdentity: async () => null } as never,
   );
 
   /** Execute and let every queued write land. */
@@ -471,7 +472,7 @@ describe('memory.remember — entity.update', () => {
           kind: 'entity.update',
           entityId: PERSON,
           properties: { occupation: 'dentist' },
-          removeProperties: ['names'],
+          removeProperties: ['last_name'],
         },
       ],
     });
@@ -484,7 +485,7 @@ describe('memory.remember — entity.update', () => {
       avatar_url: 'alex.png',
       occupation: 'dentist',
     };
-    delete expected.names;
+    delete expected.last_name;
     expect(graph.nodes.get(PERSON)?.properties).toEqual(expected);
   });
 
@@ -495,7 +496,10 @@ describe('memory.remember — entity.update', () => {
         { kind: 'entity.update', entityId: PERSON, mergeProperties: false, properties: { only: 'this' } },
       ],
     });
-    expect(replaced.nodes.get(PERSON)?.properties).toEqual({ only: 'this' });
+    // The merged identity lists survive the replace: imports and merges keep them, and dropping
+    // them would lose the numbers a merge brought in (OWNER_MANAGED_PROPERTY_KEYS).
+    const { emails, phones, names } = importedPerson().properties as Record<string, unknown>;
+    expect(replaced.nodes.get(PERSON)?.properties).toEqual({ only: 'this', emails, phones, names });
 
     // mergeProperties: false alone used to empty the bag: the tool replaced it
     // with the `{}` it defaulted the missing properties to.

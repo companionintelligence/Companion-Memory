@@ -4,6 +4,8 @@ import type { ToolHandle } from '../core/ToolHandle';
 import {
   canonicalizeExecutableToolName,
   intentToolName,
+  type IntentDefinition,
+  type IntentPrivacy,
   type ToolInvocationContext,
   type ToolResult,
   type ToolSchema,
@@ -14,7 +16,7 @@ import {
   type ToolInvokedPayload,
 } from '../events';
 import type { ToolCoreLogger } from '../logging';
-import { capabilityAllows, capabilityRequiredFor } from '../policy';
+import { capabilityAllows, capabilityRequiredFor, stricterPrivacy } from '../policy';
 import type { ToolGateRuling } from '../policy/toolGate';
 import type { ProviderHealthStatus, ToolProvider } from '../providers/ToolProvider';
 
@@ -384,7 +386,18 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
       };
     }
 
-    const { privacy } = tool.schema;
+    // Coerced once, here, so the per-call label is computed over exactly what the tool will run on.
+    const coerced = coerceArgumentsToSchema(input, tool.schema.parameters);
+
+    // The label THIS call earns, never weaker than the declared one. Everything below (the
+    // capability check, the gate, the queued row and the ledger) reads it, so a call that erases
+    // data is judged as one even when its tool is declared by its mildest use. A caller the
+    // declared label already refuses is refused on it, without asking the tool anything.
+    const privacy = capabilityAllows(tool.schema.privacy, context.capability)
+      ? await this.privacyOfCall(tool, context, coerced)
+      : tool.schema.privacy;
+    const schema: IntentDefinition =
+      privacy === tool.schema.privacy ? tool.schema : { ...tool.schema, privacy };
 
     if (!capabilityAllows(privacy, context.capability)) {
       const required = capabilityRequiredFor(privacy);
@@ -412,7 +425,7 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
       // operator, for whom a denied call is the single most interesting row in the ledger, can now
       // see it after the log line has scrolled away.
       await this.recordInvocation({
-        ...this.invocationFacts(toolName, tool, context),
+        ...this.invocationFacts(toolName, tool, context, schema),
         outcome: 'refused',
         errorCode: 'TOOL_FORBIDDEN',
         error: message,
@@ -432,10 +445,10 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
 
     // The dispatch gate. Reached only by a caller the capability check already cleared, so
     // everything below decides WHETHER TO ASK, never whether the caller is allowed.
-    const gate = await this.pendingActions.evaluate(tool.schema, context);
+    const gate = await this.pendingActions.evaluate(schema, context);
 
     if (gate.decision !== 'execute') {
-      return this.refuseOrQueue(toolName, tool, context, input, gate);
+      return this.refuseOrQueue(toolName, tool, schema, context, input, gate);
     }
 
     if (privacy.external) {
@@ -461,10 +474,10 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
     // Typed to the schema the model was shown, before the tool's own validation sees it: every
     // transport reaches this line, so a `"15"` for an integer is fixed once here rather than in
     // each markup salvager and engine parser. See coerceArgumentsToSchema.
-    const result = await tool.execute(context, coerceArgumentsToSchema(input, tool.schema.parameters));
+    const result = await tool.execute(context, coerced);
 
     await this.recordInvocation({
-      ...this.invocationFacts(toolName, tool, context),
+      ...this.invocationFacts(toolName, tool, context, schema),
       outcome: outcomeOf(result),
       errorCode: result.error?.code,
       error: result.error?.message,
@@ -472,6 +485,60 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
     });
 
     return result;
+  }
+
+  /**
+   * The label a call to `name` with `input` would be judged by: the stricter of the tool's
+   * declared label and its own per-call answer ({@link ToolHandle.privacyFor}). `undefined` for a
+   * tool this caller cannot see.
+   *
+   * Public for the confirm path, which re-checks the CONFIRMING principal's capability before it
+   * marks a row approved and must judge the stored input the way {@link executeTool} will.
+   */
+  async privacyOf(
+    name: string,
+    context: ToolInvocationContext,
+    input: unknown,
+  ): Promise<IntentPrivacy | undefined> {
+    const resolved = this.resolveRegisteredTool(name);
+
+    if (!resolved || !this.isVisibleTo(resolved.tool.schema, context.userId)) {
+      return undefined;
+    }
+
+    const { tool } = resolved;
+
+    return this.privacyOfCall(tool, context, coerceArgumentsToSchema(input, tool.schema.parameters));
+  }
+
+  /**
+   * {@link privacyOf} for a resolved tool and an already-coerced input.
+   *
+   * A per-call answer that throws (a lookup the tool needed failed) is read as destructive rather
+   * than as the declared label: the failure must cost a confirmation, never skip one.
+   */
+  private async privacyOfCall(
+    tool: TTool,
+    context: ToolInvocationContext,
+    input: unknown,
+  ): Promise<IntentPrivacy> {
+    const declared = tool.schema.privacy;
+
+    if (!tool.privacyFor) {
+      return declared;
+    }
+
+    try {
+      return stricterPrivacy(declared, await tool.privacyFor(context, input));
+    } catch (error) {
+      this.logger.warn(`Could not label this call to ${tool.schema.name}; treating it as destructive`, {
+        intent: tool.schema.name,
+        userId: context.userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      return { ...declared, destructive: true };
+    }
   }
 
   /**
@@ -488,6 +555,7 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
   private async refuseOrQueue(
     toolName: string,
     tool: TTool,
+    schema: IntentDefinition,
     context: ToolInvocationContext,
     input: unknown,
     gate: ToolGateRuling,
@@ -527,7 +595,7 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
     }
 
     const action = await this.pendingActions.propose(
-      tool.schema,
+      schema,
       toolName,
       { ...context, userId: context.userId },
       input,
@@ -564,9 +632,10 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
     toolName: string,
     tool: TTool,
     context: ToolInvocationContext,
+    // The schema carrying the label this call was judged by, so the ledger row says what the
+    // call could do rather than what its tool is declared to do at its mildest.
+    schema: IntentDefinition = tool.schema,
   ): Omit<ToolInvokedPayload, 'outcome'> {
-    const { schema } = tool;
-
     return {
       intent: schema.name,
       tool: toolName,

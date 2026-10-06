@@ -93,9 +93,13 @@ const INTENT_COOKIE = 'oidc_signup_intent';
 
 const b64url = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
 
-/** A Portal bearer token for `subject`. Only its payload is read (see the `jose` mock). */
+/**
+ * A Portal bearer token for `subject`. Only its payload is read (see the `jose` mock). It names an
+ * accepted client in `aud`, so the service gets past "which client is this for" and the cases below
+ * test what happens to an unbound identity, not a token refused for having no audience.
+ */
 const portalToken = (subject: string, email: string) =>
-  `${b64url({ alg: 'EdDSA', kid: 'k1' })}.${b64url({ iss: ISSUER, sub: subject, email, name: subject })}.sig`;
+  `${b64url({ alg: 'EdDSA', kid: 'k1' })}.${b64url({ iss: ISSUER, aud: 'ci-server', sub: subject, email, name: subject })}.sig`;
 
 /** What the identity provider says about the person behind each authorization code. */
 const identityForCode = new Map<string, { sub: string; iss: string; email: string; name: string }>();
@@ -547,49 +551,20 @@ describeWithDatabase(`first-account gates, against real Postgres (${availability
     });
   });
 
-  // ── Portal bearer, path 3 ───────────────────────────────────────────────
+  // ── Portal bearer ───────────────────────────────────────────────────────
 
-  describe('a Portal identity nobody here has bound (bearer path 3)', () => {
-    it('admits exactly one of two identities racing to claim an empty appliance', async () => {
-      const race = forceRace(2);
-
+  describe('a Portal identity nobody here has bound (bearer)', () => {
+    it('never claims an empty appliance, however many tokens arrive', async () => {
+      // A bearer token used to create the first account, so whoever held any Portal token and
+      // reached the box first became its owner. It creates nothing now.
       const results = await Promise.all([
         portalTokenService.verifyAndProvision(portalToken('racer-a', 'racer-a@example.invalid')),
         portalTokenService.verifyAndProvision(portalToken('racer-b', 'racer-b@example.invalid')),
       ]);
 
-      const admitted = results.filter((user) => user != null);
-      const [owner] = admitted;
-
-      expect(race).toEqual(SERIALIZED);
-      // "On a claimed appliance the answer is no": the loser gets no account and no binding.
-      expect(admitted).toHaveLength(1);
-      expect(owner!.role).toBe('admin');
-      expect(await accounts()).toEqual([expect.objectContaining({ id: owner!.id, role: 'admin' })]);
-      expect(await bindings()).toEqual([expect.objectContaining({ user_id: owner!.id, issuer: ISSUER })]);
-    });
-
-    it("answers every one of a client's first, concurrent requests with the one account they claim", async () => {
-      // A client that has just signed in fires several requests with the same new token. One claims
-      // the appliance; the others must resolve to that account, not fail — they are the same person.
-      const race = forceRace(3);
-
-      const token = portalToken('burst', 'burst@example.invalid');
-      const settled = await Promise.allSettled(
-        [1, 2, 3].map(() => portalTokenService.verifyAndProvision(token)),
-      );
-
-      expect(race).toEqual(SERIALIZED);
-      expect(settled.map((outcome) => outcome.status)).toEqual(['fulfilled', 'fulfilled', 'fulfilled']);
-
-      const ids = settled.map(
-        (outcome) => (outcome as PromiseFulfilledResult<{ id: string } | null>).value?.id,
-      );
-      const [only] = await accounts();
-
-      expect(ids).toEqual([only.id, only.id, only.id]);
-      expect(await accounts()).toHaveLength(1);
-      expect(await bindings()).toEqual([expect.objectContaining({ user_id: only.id, subject: 'burst' })]);
+      expect(results).toEqual([null, null]);
+      expect(await accounts()).toEqual([]);
+      expect(await bindings()).toEqual([]);
     });
   });
 
