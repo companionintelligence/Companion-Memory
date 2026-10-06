@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 
-import { getApiBaseUrl, needsNativeCloudConnect, setApiBaseUrl } from '@ci/common';
+import { getApiBaseUrl, getApiKey, needsNativeCloudConnect, setApiBaseUrl } from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { jwtDecode } from 'jwt-decode';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
@@ -516,6 +516,119 @@ describe('useAuth', () => {
     expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
     expect(secureStore.has('ci.apiKey')).toBe(false);
     expect(needsNativeCloudConnect()).toBe(true);
+  });
+
+  describe('native logout and the Local Hub outbox', () => {
+    const HUB = 'http://127.0.0.1:4100';
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('uploads what this account queued while its key is still active, then deletes the rest', async () => {
+      localStorage.setItem('ci.apiBaseUrl', 'https://core7.example.com');
+      setApiBaseUrl('https://core7.example.com');
+      const secureStore = new Map([
+        ['ci.apiKey', 'outgoing-key'],
+        ['ci.apiBaseUrl', 'https://core7.example.com'],
+      ]);
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+        Plugins: {
+          LocalHub: {
+            start: vi.fn(async () => ({ baseUrl: HUB, token: 'hub-token' })),
+            secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: secureStore.get(key) ?? null })),
+            secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+            }),
+            secureRemove: vi.fn(async ({ key }: { key: string }) => {
+              secureStore.delete(key);
+            }),
+          },
+        },
+      };
+
+      // One note queued offline, stamped for nobody in particular (an older build).
+      let queued = true;
+      const seen: { url: string; method: string; apiKey: string | null; keyAfterwards: string | null }[] = [];
+      setFetch((url, init) => {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        seen.push({
+          url,
+          method: (init?.method ?? 'GET').toUpperCase(),
+          apiKey: headers['x-api-key'] ?? null,
+          keyAfterwards: 'not checked',
+        });
+        const path = url.startsWith(HUB) ? url.slice(HUB.length) : url;
+
+        if (path === '/api/outbox?status=pending') {
+          return jsonResponse({
+            items: queued
+              ? [
+                  {
+                    id: 'n1',
+                    kind: 'note',
+                    capturedAt: '2026-10-01T00:00:00Z',
+                    seq: 1,
+                    status: 'pending',
+                    attempts: 0,
+                    lastError: null,
+                    owner: null,
+                  },
+                ]
+              : [],
+            counts: { pending: queued ? 1 : 0, needsAttention: 0, total: queued ? 1 : 0 },
+            capacity: { max: 5000, used: 0, warnAt: 4000 },
+          });
+        }
+
+        if (path === '/api/outbox/n1') {
+          return jsonResponse({
+            id: 'n1',
+            kind: 'note',
+            capturedAt: '2026-10-01T00:00:00Z',
+            seq: 1,
+            status: 'pending',
+            attempts: 0,
+            lastError: null,
+            owner: null,
+            payload: { records: [] },
+          });
+        }
+
+        if (path === '/api/outbox/n1/attempt') {
+          queued = false;
+
+          return emptyResponse(true, 204);
+        }
+
+        if (path === '/api/outbox' && init?.method === 'DELETE') {
+          seen[seen.length - 1].keyAfterwards = getApiKey();
+
+          return jsonResponse({ deleted: 0 });
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      await act(async () => {
+        await result.current[1].logout();
+      });
+
+      const upload = seen.find((call) => call.url === 'https://core7.example.com/api/v1/notes');
+      const clear = seen.find((call) => call.url === `${HUB}/api/outbox` && call.method === 'DELETE');
+
+      expect(upload?.apiKey).toBe('outgoing-key');
+      expect(clear).toBeDefined();
+      // The clear runs once the key is gone, so nothing queued afterwards survives either.
+      expect(clear?.keyAfterwards).toBeNull();
+      expect(seen.indexOf(upload!)).toBeLessThan(seen.indexOf(clear!));
+      expect(result.current[0].authenticated).toBe(false);
+    });
   });
 
   it('still logs out when dropping the local PowerSync replica fails', async () => {

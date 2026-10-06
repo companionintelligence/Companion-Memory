@@ -586,6 +586,51 @@ describe('the bridge key @ci/common reads matches the registered name', () => {
   });
 });
 
+/**
+ * The outbox `owner` stamp and the sign-out clear exist on both platforms: the web flusher
+ * depends on the sidecar storing and returning `owner`, and sign-out on `DELETE /api/outbox`.
+ * Neither native half can be built or run here, so the source is what is checked.
+ */
+describe('LocalHub outbox — owner stamp and sign-out clear on both platforms', () => {
+  const hubDir = join(PACKAGES, 'capacitor-local-hub');
+  const androidDir = join(hubDir, 'android/src/main/java/com/companionintelligence/localhub');
+  const iosDir = join(hubDir, 'ios/Sources/LocalHubPlugin');
+
+  it('Android adds the column for new and upgraded databases, and keeps the plaintext import on v1 columns', () => {
+    const store = read(join(androidDir, 'OutboxStore.kt'));
+
+    expect(store).toMatch(/\$COLUMN_LAST_ERROR TEXT,\s*\$COLUMN_OWNER TEXT/);
+    expect(store).toContain('ALTER TABLE $TABLE_NAME ADD COLUMN $COLUMN_OWNER TEXT');
+    expect(store).toContain('DATABASE_VERSION = 2');
+    expect(between(store, 'MIGRATION_COLUMNS = arrayOf(', ')')).not.toContain('COLUMN_OWNER');
+  });
+
+  it('iOS adds the column for new tables and for ones created before it', () => {
+    const store = read(join(iosDir, 'OutboxStore.swift'));
+
+    expect(store).toMatch(/last_error TEXT,\s*owner TEXT/);
+    expect(store).toContain('ALTER TABLE outbox ADD COLUMN owner TEXT;');
+  });
+
+  it('both servers take owner on enqueue, return it on items, and clear the collection on DELETE', () => {
+    const android = read(join(androidDir, 'LocalHubServer.kt'));
+    const ios = read(join(iosDir, 'LocalHubServer.swift'));
+
+    expect(android).toContain('outbox.enqueue(kind, payload.toString(), capturedAt, idempotencyKey, owner)');
+    expect(android).toContain('.put("owner", item.owner ?: JSONObject.NULL)');
+    expect(android).toContain('segments.isEmpty() && method == Method.DELETE -> handleClear()');
+    expect(ios).toMatch(/idempotencyKey: idempotencyKey,\s*owner: owner/);
+    expect(ios).toContain('"owner": item.owner ?? NSNull()');
+    expect(ios).toMatch(/case \("DELETE", 0\):[\s\S]{0,120}store\.deleteAll\(\)/);
+  });
+
+  function between(source: string, from: string, to: string): string {
+    const start = source.indexOf(from);
+
+    return source.slice(start, source.indexOf(to, start + from.length));
+  }
+});
+
 describe('LocalHubWeb — the fallback that runs in a browser tab and the Tauri window', () => {
   const hub = new LocalHubWeb();
 

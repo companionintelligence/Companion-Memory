@@ -12,6 +12,7 @@
  * | ------------------------------ | ------------------------------------------------------ |
  * | `POST   /api/outbox`           | enqueue one item; 201 with `{id,status,capturedAt,seq}` |
  * | `GET    /api/outbox`           | list oldest-first, plus `counts` and `capacity`         |
+ * | `DELETE /api/outbox`           | drop every item (sign-out); 200 with `{deleted}`        |
  * | `GET    /api/outbox/{id}`      | one item, including its `payload`                       |
  * | `DELETE /api/outbox/{id}`      | drop one item (flushed, or user-discarded); 204         |
  * | `POST   /api/outbox/{id}/attempt` | record a flush outcome                              |
@@ -39,6 +40,8 @@
  * `capacity` block on {@link listOutbox} can warn before hitting that wall.
  */
 
+import { getApiKey } from './apiAuth';
+import { getApiBaseUrl } from './apiBase';
 import { FetchJsonError, fetchJson } from './fetchJson';
 import { localHubHeaders, localHubSession } from './localHub';
 
@@ -85,6 +88,11 @@ export interface OutboxItem {
    * which can be large.
    */
   payload?: Record<string, unknown>;
+  /**
+   * The {@link outboxOwnerStamp} the item was queued under. `null` (or absent, from a
+   * sidecar that predates the column) for a row queued before stamping existed.
+   */
+  owner?: string | null;
 }
 
 /** Counts across the whole queue, regardless of the `status` filter used. */
@@ -130,6 +138,11 @@ export interface OutboxEnqueueInput {
    * the caller may retry the enqueue itself, or the retry will queue a duplicate capture.
    */
   idempotencyKey?: string;
+  /**
+   * Which account and server the capture belongs to. Defaults to the signed-in session's
+   * {@link outboxOwnerStamp}; there is rarely a reason to pass it.
+   */
+  owner?: string;
 }
 
 /** Outcome reported back to the sidecar after a flush attempt. */
@@ -239,6 +252,56 @@ function requireBody<T>(result: OutboxResult<T | undefined>, what: string): Outb
   return { ok: true, value: result.value };
 }
 
+/**
+ * 53-bit string fingerprint (cyrb53). For telling two credentials apart, not for hiding
+ * one: the stamp sits in the app's own encrypted outbox, inside the app that holds the key
+ * itself, and is never sent anywhere.
+ */
+function fingerprint(value: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+
+    h1 = Math.imul(h1 ^ code, 2654435761);
+    h2 = Math.imul(h2 ^ code, 1597334677);
+  }
+
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, '0');
+}
+
+/**
+ * Who a queued capture belongs to: the appliance origin plus a fingerprint of the API key
+ * the app is signed in with, or `null` when nothing is signed in.
+ *
+ * The queue outlives the session. Without a stamp, a fix or note queued under one account
+ * drained under whichever key and server were current when the connection came back: the
+ * next person to sign in on a shared phone, or a different Memory the phone was re-paired
+ * to. The flusher sends a row only when its stamp matches this value at send time.
+ *
+ * The key, not a user id, because the key is what `fetchJson` sends. Re-pairing mints a
+ * new key, and rows from the old pairing then stay put instead of following the new one.
+ * Synchronous on purpose, so the flusher can check it with nothing awaited between the
+ * check and the request.
+ */
+export function outboxOwnerStamp(): string | null {
+  const apiKey = getApiKey();
+
+  if (!apiKey) {
+    return null;
+  }
+
+  const origin = getApiBaseUrl();
+
+  return `${origin || 'same-origin'} ${fingerprint(`${origin}\n${apiKey}`)}`;
+}
+
 /** UUID for the default idempotency key, with a fallback for runtimes without WebCrypto. */
 function newIdempotencyKey(): string {
   const webCrypto = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
@@ -260,11 +323,23 @@ function newIdempotencyKey(): string {
  * a duplicate.
  */
 export async function enqueueOutboxItem(input: OutboxEnqueueInput): Promise<OutboxResult<OutboxEnqueueAck>> {
+  const owner = input.owner ?? outboxOwnerStamp();
+
+  if (!owner) {
+    // A capture with no account to file it under is not queued: it would drain into
+    // whoever signs in next. Web callers still hear `unavailable` first, because that is
+    // what tells them to post directly instead.
+    return (await localHubSession())
+      ? failure('error', 'Nobody is signed in, so there is no account to queue this for. Nothing was queued.')
+      : UNAVAILABLE;
+  }
+
   const body = {
     kind: input.kind,
     payload: input.payload,
     capturedAt: input.capturedAt ?? new Date().toISOString(),
     idempotencyKey: input.idempotencyKey ?? newIdempotencyKey(),
+    owner,
   };
 
   return requireBody(await callOutbox<OutboxEnqueueAck>(OUTBOX_PATH, { method: 'POST', body }), 'enqueue');
@@ -319,6 +394,17 @@ export async function recordOutboxAttempt(
 
   // Success reports answer 204 (the row is gone); failure reports answer 200 with the row.
   return { ok: true, value: result.value ?? null };
+}
+
+/**
+ * Drop every queued item, whatever its status or owner. Only sign-out calls this, after its
+ * last drain: what is still queued then belongs to the account that is leaving the device.
+ * Resolves with how many rows went.
+ */
+export async function clearOutbox(): Promise<OutboxResult<number>> {
+  const result = await callOutbox<{ deleted?: number }>(OUTBOX_PATH, { method: 'DELETE' });
+
+  return result.ok ? { ok: true, value: result.value?.deleted ?? 0 } : result;
 }
 
 /** Move a `needs_attention` item back to `pending` and reset its attempt counter. */

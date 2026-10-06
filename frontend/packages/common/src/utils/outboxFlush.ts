@@ -19,7 +19,11 @@
  * 2. **Serialized.** Exactly one drain runs at a time, process-wide. Two concurrent drains
  *    would flush the same rows twice.
  * 3. **Nothing is lost.** A failed flush reports the failure and stops there; only the
- *    sidecar removes rows, and only on a reported success or an explicit user discard.
+ *    sidecar removes rows, and only on a reported success, an explicit user discard, or
+ *    sign-out (see {@link clearOutboxAfterSignOut}).
+ * 4. **Nothing changes hands.** A row goes out only under the session it was queued for
+ *    (`owner`, see `outboxOwnerStamp`). One stamped for another account or server is left
+ *    where it is, untouched, rather than sent with the key that happens to be active.
  *
  * Delivery is therefore **at-least-once**, deliberately. If the appliance accepts a payload
  * but the follow-up `/attempt` report never lands (the sidecar died in that window), the row
@@ -35,8 +39,10 @@ import { createHookContext } from './createHookContext';
 import { FetchJsonError, fetchJson } from './fetchJson';
 import { addAppStateListener } from './nativeBridge';
 import {
+  clearOutbox,
   getOutboxItem,
   listOutbox,
+  outboxOwnerStamp,
   recordOutboxAttempt,
   type OutboxCapacity,
   type OutboxItem,
@@ -282,9 +288,10 @@ export async function settleIngestFinish(options: { force?: boolean } = {}): Pro
 /**
  * Drop the owed stages and the debounce clock.
  *
- * Called on sign-out — enrichment debt belongs to the account that incurred it, and firing
- * it against the next session would run a maintenance sweep for the wrong user. Tests use
- * it to isolate, for the same reason.
+ * Called on sign-out (`useAuth`'s logout, through {@link clearOutboxAfterSignOut} on the
+ * phone apps) — enrichment debt belongs to the account that incurred it, and firing it
+ * against the next session would run a maintenance sweep for the wrong user. Tests use it
+ * to isolate, for the same reason.
  */
 export function resetIngestFinishState(): void {
   owedFinishStages.clear();
@@ -326,6 +333,8 @@ export interface FlushOutboxOptions {
 export interface FlushOutboxSummary {
   /** Items the drain actually tried to POST onward. */
   attempted: number;
+  /** Items left alone because they were queued for another account or server, or nobody is signed in. */
+  skipped: number;
   /** Flushed and removed from the queue. */
   succeeded: number;
   /** Reported as failed (still queued, possibly now `needs_attention`). */
@@ -338,6 +347,7 @@ export interface FlushOutboxSummary {
 
 const EMPTY_SUMMARY: FlushOutboxSummary = {
   attempted: 0,
+  skipped: 0,
   succeeded: 0,
   failed: 0,
   unavailable: false,
@@ -386,9 +396,22 @@ async function drain(options: FlushOutboxOptions): Promise<FlushOutboxSummary> {
       break;
     }
 
+    // Checked on the list row first, so a row that is not ours never has its payload read.
+    if (!sendableNow(entry.owner)) {
+      summary.skipped += 1;
+      continue;
+    }
+
+    const outcome = await flushOne(entry);
+
+    if (outcome === 'skipped') {
+      summary.skipped += 1;
+      continue;
+    }
+
     summary.attempted += 1;
 
-    if (await flushOne(entry)) {
+    if (outcome === 'sent') {
       summary.succeeded += 1;
     } else {
       summary.failed += 1;
@@ -404,8 +427,27 @@ async function drain(options: FlushOutboxOptions): Promise<FlushOutboxSummary> {
   return summary;
 }
 
-/** Flush a single item and report the outcome. Resolves true only on a reported success. */
-async function flushOne(entry: OutboxItem): Promise<boolean> {
+/**
+ * Whether a row stamped `owner` may go out under the session that is signed in right now.
+ *
+ * Nothing goes out with nobody signed in. A row with no stamp was queued by a build that
+ * predates stamping; it drains under the current session, as every row did before.
+ */
+function sendableNow(owner: string | null | undefined): boolean {
+  const current = outboxOwnerStamp();
+
+  if (!current) {
+    return false;
+  }
+
+  return owner == null || owner === current;
+}
+
+/**
+ * Flush a single item. `sent` only on a reported success; `skipped` when the row turned out
+ * not to belong to the current session, in which case nothing was sent or recorded.
+ */
+async function flushOne(entry: OutboxItem): Promise<'sent' | 'failed' | 'skipped'> {
   // List responses omit payloads (they can be large), so fetch the full row now.
   const full = await getOutboxItem(entry.id);
 
@@ -414,10 +456,17 @@ async function flushOne(entry: OutboxItem): Promise<boolean> {
     // five attempts on a read we never got to use would push it toward `needs_attention`
     // for a reason that has nothing to do with the appliance. `not_found` in particular is
     // benign — the row was flushed or discarded between the list and here.
-    return false;
+    return 'failed';
   }
 
   const path = outboxEndpointFor(full.value.kind);
+
+  // Again here, with nothing awaited between this check and the request: the session can
+  // change while the row is read (sign-out, a re-pair), and fetchJson takes the key and the
+  // origin at the moment it is called.
+  if (!sendableNow(full.value.owner)) {
+    return 'skipped';
+  }
 
   if (!path) {
     await recordOutboxAttempt(entry.id, {
@@ -426,7 +475,7 @@ async function flushOne(entry: OutboxItem): Promise<boolean> {
       permanent: true,
     });
 
-    return false;
+    return 'failed';
   }
 
   try {
@@ -443,7 +492,7 @@ async function flushOne(entry: OutboxItem): Promise<boolean> {
       permanent: isPermanentFlushFailure(err),
     });
 
-    return false;
+    return 'failed';
   }
 
   // The rows exist on the appliance now, un-enriched and un-indexed. Record the debt
@@ -453,7 +502,57 @@ async function flushOne(entry: OutboxItem): Promise<boolean> {
   // Only now, with the appliance having accepted it, is the row allowed to disappear.
   const acked = await recordOutboxAttempt(entry.id, { ok: true });
 
-  return acked.ok;
+  return acked.ok ? 'sent' : 'failed';
+}
+
+/** How long sign-out waits on its last drain before it signs out anyway. */
+export const SIGN_OUT_DRAIN_TIMEOUT_MS = 5_000;
+
+/**
+ * Sign-out, step one, while the outgoing account's key is still the active one: one last
+ * bounded drain of what that account queued, then the enrichment it owes.
+ *
+ * Bounded because sign-out must not hang on an unreachable appliance. Whatever has not gone
+ * by the deadline is dropped by {@link clearOutboxAfterSignOut}; the drain itself is
+ * aborted between items, and any item still in flight was already sent with this
+ * account's key, to this account's server.
+ */
+export async function drainOutboxBeforeSignOut(timeoutMs = SIGN_OUT_DRAIN_TIMEOUT_MS): Promise<void> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve();
+    }, timeoutMs);
+  });
+
+  const work = (async () => {
+    const summary = await flushOutbox({ signal: controller.signal });
+
+    if (!summary.unavailable && !controller.signal.aborted) {
+      await settleIngestFinish({ force: true });
+    }
+  })().catch(() => {
+    // Best effort: sign-out goes ahead either way.
+  });
+
+  try {
+    await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Sign-out, step two, after the key is dropped: delete every queued row and forget the
+ * enrichment debt. Rows still here belong to the account that just left, and the next
+ * person to sign in on this phone must not inherit them.
+ */
+export async function clearOutboxAfterSignOut(): Promise<void> {
+  resetIngestFinishState();
+  await clearOutbox();
 }
 
 /** Queue depth as the UI sees it. All zeros with `available: false` when there is no sidecar. */

@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   addAppUrlOpenListener,
+  clearOutboxAfterSignOut,
   clearPersistedApiBaseUrl,
   createHookContext,
+  drainOutboxBeforeSignOut,
   fetchJson,
   FetchJsonError,
   getApiBaseUrl,
@@ -16,6 +18,7 @@ import {
   isTauriPlatform,
   claimNativeOidcCode,
   parseOidcCallbackUrl,
+  resetIngestFinishState,
   secureStorageGet,
   secureStorageRemove,
   secureStorageSet,
@@ -526,6 +529,10 @@ function useAuth(): ReturnValue {
     bumpNativeCredentialEpoch();
 
     if (isNativePlatform()) {
+      // One last, bounded upload of what this account queued while offline,
+      // while its key is still the one requests carry. Whatever is left is
+      // deleted below, once the key is gone.
+      await drainOutboxBeforeSignOut();
       setApiKey(null);
       setNativeApiKey(null);
     }
@@ -547,6 +554,10 @@ function useAuth(): ReturnValue {
       // the new account's Memory servers. Drop the pairing with the key.
       clearPersistedApiBaseUrl();
       await syncNativeIntentConfig();
+      // The Local Hub outbox outlives the session. Rows still queued belong to
+      // the account that just left, and would otherwise upload into whichever
+      // account signs in next on this phone.
+      await clearOutboxAfterSignOut();
       setNativeApiKey(null);
       setAccessToken(null);
       setLoginLoading(false);
@@ -565,6 +576,8 @@ function useAuth(): ReturnValue {
       console.error('Logout failed on server:', error);
     }
 
+    // Enrichment this account still owes must not be requested under the next one.
+    resetIngestFinishState();
     setAccessToken(null);
     setLoginLoading(false);
     setLoginError(null);

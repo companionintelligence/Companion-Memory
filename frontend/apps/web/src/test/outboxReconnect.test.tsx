@@ -61,6 +61,8 @@ function installNativeShell() {
     }),
   };
 
+  // Signed in: the outbox queues and drains only under an account.
+  setApiKey('device-key');
   (window as unknown as { Capacitor?: unknown }).Capacitor = {
     isNativePlatform: () => true,
     Plugins: {

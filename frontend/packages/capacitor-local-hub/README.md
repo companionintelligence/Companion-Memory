@@ -115,6 +115,7 @@ All routes require `Authorization: Bearer <token>` except the `OPTIONS` prefligh
 | --- | --- | --- |
 | `POST` | `/api/outbox` | Enqueue one item. `201`, or `507` when full. |
 | `GET` | `/api/outbox` | List items oldest-first. Optional `?status=pending\|needs_attention\|all` (default `all`). |
+| `DELETE` | `/api/outbox` | Remove every item. Sign-out only. `200 {"deleted": n}`. |
 | `GET` | `/api/outbox/{id}` | One item **including** `payload`. `404` if unknown. |
 | `DELETE` | `/api/outbox/{id}` | Remove one item (successful flush, or deliberate user discard). `204` / `404`. |
 | `POST` | `/api/outbox/{id}/attempt` | Record a flush outcome. `204` on success, `200` with the updated item on failure, `404` if unknown. |
@@ -128,7 +129,8 @@ All routes require `Authorization: Bearer <token>` except the `OPTIONS` prefligh
   "kind": "note",                          // opaque to the sidecar ("note" | "capture" | …)
   "payload": { "text": "…" },              // opaque JSON object the flusher POSTs onward
   "capturedAt": "2026-08-13T10:00:00.000Z",// ISO-8601, CLIENT time at capture
-  "idempotencyKey": "01J…"                 // client-generated ULID/UUID
+  "idempotencyKey": "01J…",                // client-generated ULID/UUID
+  "owner": "https://memory.example.com 1a2b…" // optional; opaque account + server stamp
 }
 // 201
 { "id": "…", "status": "pending", "capturedAt": "2026-08-13T10:00:00.000Z", "seq": 1 }
@@ -142,8 +144,14 @@ All routes require `Authorization: Bearer <token>` except the `OPTIONS` prefligh
   differing `payload` on a replay is ignored -- first write wins. Answering `201` on a
   replay is deliberate: the caller retried because it never saw the first response, so it
   should not have to special-case the second one.
-- Missing/blank `kind`, `capturedAt`, or `idempotencyKey`, or a `payload` that isn't a JSON
-  object, are rejected `400 {"error":"invalid_request","detail":"…"}`.
+- `owner` names the account and Memory server the capture belongs to. The sidecar stores it
+  and hands it back on every item; it never interprets it. The web flusher sends a row only
+  under the session it was stamped for, so a capture queued by one person cannot upload
+  into the next account signed in on the same phone. A row from a client that sent no
+  `owner` (or from before the column existed) reads back as `"owner": null`.
+- Missing/blank `kind`, `capturedAt`, or `idempotencyKey`, a `payload` that isn't a JSON
+  object, or an `owner` that is present but not a non-empty string, are rejected
+  `400 {"error":"invalid_request","detail":"…"}`.
 - `507 {"error":"outbox_full","detail":"…"}` when the queue is at its cap (below).
 
 **List** — `GET /api/outbox`
@@ -152,7 +160,7 @@ All routes require `Authorization: Bearer <token>` except the `OPTIONS` prefligh
 {
   "items": [
     { "id": "…", "kind": "note", "capturedAt": "…", "seq": 1,
-      "status": "pending", "attempts": 0, "lastError": null }
+      "status": "pending", "attempts": 0, "lastError": null, "owner": "…" }
   ],
   "counts":   { "pending": 1, "needsAttention": 0, "total": 1 },
   "capacity": { "max": 5000, "used": 1, "warnAt": 4000 }
@@ -166,7 +174,8 @@ All routes require `Authorization: Bearer <token>` except the `OPTIONS` prefligh
 - **List responses deliberately omit `payload`** -- payloads can be large (media, long
   notes) and a queue-depth poll shouldn't stream them. Use `GET /api/outbox/{id}` for the
   full item.
-- `lastError` is always present, `null` when there has been no failure.
+- `lastError` is always present, `null` when there has been no failure. `owner` is always
+  present too, `null` on a row queued without one.
 
 **Attempt** — `POST /api/outbox/{id}/attempt`
 
@@ -292,8 +301,10 @@ out of `start()`. The failure mode is a visible, retryable error — never a que
 mysteriously empty. These rows have never reached any server; losing them would be precisely
 what the outbox exists to prevent.
 
-This is a file-level cutover, not a `SQLiteOpenHelper` version step, so `DATABASE_VERSION`
-stays at `1` and `onUpgrade` still throws. (`SECURITY_ARCHITECTURE.md` §2.1 suggested bumping
+This is a file-level cutover, not a `SQLiteOpenHelper` version step. `DATABASE_VERSION` went
+to `2` later, for the `owner` column alone: `onUpgrade` adds it to an existing table
+(`NULL` on every row already queued) and still throws for any other step. The plaintext
+import copies the v1 columns by name, so a predecessor file without `owner` still imports. (`SECURITY_ARCHITECTURE.md` §2.1 suggested bumping
 it; against a brand-new file that would be a no-op, since `onCreate` runs and `onUpgrade` never
 fires. The guard against destructive upgrades is worth more than the version number.)
 

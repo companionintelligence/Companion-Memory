@@ -327,6 +327,10 @@ final class LocalHubServer {
                 return try handleEnqueue(request, store: store)
             case ("GET", 0):
                 return try handleList(request, store: store)
+            case ("DELETE", 0):
+                // Sign-out's clear: every row goes, and the count says how many.
+                let deleted = try store.deleteAll()
+                return Self.jsonResponse(["deleted": deleted], statusCode: 200)
             case ("GET", 1):
                 return try handleGetOne(id: segments[0], store: store)
             case ("DELETE", 1):
@@ -371,12 +375,24 @@ final class LocalHubServer {
         guard let idempotencyKey = Self.nonEmptyString(body["idempotencyKey"]) else {
             return Self.badRequest("\"idempotencyKey\" must be a non-empty string.")
         }
+        // Optional and opaque: the account and server the capture belongs to, which the
+        // flusher checks before sending it anywhere. Absent or null is fine (an older client);
+        // present but not a non-empty string is a malformed request.
+        let owner: String?
+        if body["owner"] == nil || body["owner"] is NSNull {
+            owner = nil
+        } else if let stamped = Self.nonEmptyString(body["owner"]) {
+            owner = stamped
+        } else {
+            return Self.badRequest("\"owner\" must be a non-empty string when present.")
+        }
 
         let outcome = try store.enqueue(
             kind: kind,
             payloadJSON: payloadJSON,
             capturedAt: capturedAt,
-            idempotencyKey: idempotencyKey
+            idempotencyKey: idempotencyKey,
+            owner: owner
         )
 
         switch outcome {
@@ -513,7 +529,9 @@ final class LocalHubServer {
             "attempts": item.attempts,
             // The contract says lastError is `string | null` -- always present. NSNull is
             // what JSONSerialization turns into a JSON null.
-            "lastError": item.lastError ?? NSNull()
+            "lastError": item.lastError ?? NSNull(),
+            // Same rule as lastError: always present, null on rows queued before stamping.
+            "owner": item.owner ?? NSNull()
         ]
         if includePayload {
             // Re-parsed rather than string-spliced so the payload nests as real JSON. It

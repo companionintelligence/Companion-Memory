@@ -46,8 +46,9 @@ function fakeStorage() {
   };
 }
 
-/** Native shell with the LocalHub plugin present. */
+/** Native shell with the LocalHub plugin present, signed in (the outbox queues only under an account). */
 function setNativeWindow() {
+  setApiKey('device-key');
   (globalThis as GlobalWithWindow).window = {
     Capacitor: {
       isNativePlatform: () => true,
@@ -451,6 +452,7 @@ describe('remembered-note registry', () => {
   });
 
   it('survives an unusable localStorage without throwing inside a save path', async () => {
+    setApiKey('device-key');
     (globalThis as GlobalWithWindow).window = {
       Capacitor: {
         isNativePlatform: () => true,
