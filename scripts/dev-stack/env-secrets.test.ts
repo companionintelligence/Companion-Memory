@@ -5,7 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { base64url, mintPlaceholderSecrets, PLACEHOLDER_PREFIX, placeholderKeys } from './env-secrets';
+import {
+  base64url,
+  mintPlaceholderSecrets,
+  PLACEHOLDER_PREFIX,
+  placeholderKeys,
+  unsetSecretKeys,
+} from './env-secrets';
 
 const ROOT = process.cwd();
 const TEMPLATE = fs.readFileSync(path.join(ROOT, '.env.default'), 'utf8');
@@ -136,6 +142,57 @@ test('placeholderKeys reads quoted and bare values and skips commented-out lines
   assert.deepEqual(placeholderKeys(text), ['AUTH_TOKEN_SECRET', 'AUTH_DEFAULT_USER_PASSWORD']);
 });
 
+test('every line shape dotenv loads is found and minted in place', () => {
+  // dotenv, which `make dev` loads .env with, reads all of these as a
+  // placeholder. Each one used to pass `make tunnel`'s check untouched.
+  const text = [
+    'export AUTH_TOKEN_SECRET=replace-me-a',
+    "AUTH_REFRESH_TOKEN_SECRET='replace-me-b'",
+    'AUTH_SESSION_PEPPER = replace-me-c',
+    'AUTH_CSRF_TOKEN_SECRET="replace-me-d" # rotated by hand',
+    'OBJECT_STORE_USERNAME=replace-me-e\r',
+  ].join('\n');
+
+  assert.deepEqual(placeholderKeys(text), [
+    'AUTH_TOKEN_SECRET',
+    'AUTH_REFRESH_TOKEN_SECRET',
+    'AUTH_SESSION_PEPPER',
+    'AUTH_CSRF_TOKEN_SECRET',
+    'OBJECT_STORE_USERNAME',
+  ]);
+
+  const { text: minted } = mintPlaceholderSecrets(text, (length) => 'f'.repeat(length));
+  const fresh = 'f'.repeat(32);
+
+  // Only the value changes: the export, the quotes, the spacing, the comment
+  // and the line ending all stay.
+  assert.deepEqual(minted.split('\n'), [
+    `export AUTH_TOKEN_SECRET=${fresh}`,
+    `AUTH_REFRESH_TOKEN_SECRET='${fresh}'`,
+    `AUTH_SESSION_PEPPER = ${fresh}`,
+    `AUTH_CSRF_TOKEN_SECRET="${fresh}" # rotated by hand`,
+    `OBJECT_STORE_USERNAME=${fresh}\r`,
+  ]);
+  assert.deepEqual(placeholderKeys(minted), []);
+});
+
+test('unsetSecretKeys names a secret the API would replace with its own variable name', () => {
+  const real = mintPlaceholderSecrets(TEMPLATE).text;
+
+  assert.deepEqual(unsetSecretKeys(real), []);
+
+  const withoutToken = real
+    .split('\n')
+    .filter((line) => !line.startsWith('AUTH_TOKEN_SECRET='))
+    .join('\n');
+
+  assert.deepEqual(unsetSecretKeys(withoutToken), ['AUTH_TOKEN_SECRET']);
+  assert.deepEqual(unsetSecretKeys(`${real}\nAUTH_CSRF_TOKEN_SECRET=AUTH_CSRF_TOKEN_SECRET\n`), [
+    'AUTH_CSRF_TOKEN_SECRET',
+  ]);
+  assert.deepEqual(unsetSecretKeys(`${real}\nOBJECT_STORE_PASSWORD=\n`), ['OBJECT_STORE_PASSWORD']);
+});
+
 /** Run the CLI the way the Makefile does, against a scratch file. */
 function cli(command: string, file: string): { status: number | null; stderr: string } {
   const res = spawnSync(process.execPath, ['--import', 'tsx', CLI, command, file], {
@@ -165,6 +222,19 @@ test('check (what `make tunnel` runs first) refuses placeholders and a missing .
   assert.equal(cli('mint', file).status, 0);
   assert.deepEqual(placeholderKeys(fs.readFileSync(file, 'utf8')), []);
   assert.equal(cli('check', file).status, 0);
+
+  // A minted .env that leaves a secret out falls back to the committed name.
+  const minted = fs.readFileSync(file, 'utf8');
+  fs.writeFileSync(
+    file,
+    minted
+      .split('\n')
+      .filter((line) => !line.startsWith('AUTH_SESSION_PEPPER='))
+      .join('\n'),
+  );
+  const unset = cli('check', file);
+  assert.equal(unset.status, 1);
+  assert.match(unset.stderr, /does not set AUTH_SESSION_PEPPER/);
 });
 
 /**

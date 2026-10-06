@@ -11,7 +11,8 @@
  * Two jobs, run through ./env-secrets-cli.ts:
  *
  *   - `make init` mints fresh random values into the `.env` it has just copied.
- *   - `make tunnel` refuses to start while `.env` still holds a placeholder.
+ *   - `make tunnel` refuses to start while `.env` still holds a placeholder, or
+ *     leaves out a secret whose fallback is its own variable name.
  *
  * Only values that are still placeholders are ever replaced, so a `.env` a stack
  * already runs on keeps every value its volumes were set up with. The database
@@ -26,10 +27,57 @@ import crypto from 'node:crypto';
 export const PLACEHOLDER_PREFIX = 'replace-me-';
 
 /**
- * A `KEY=value` or `KEY="value"` line, the two shapes `.env.default` uses.
- * Groups: key, the quote (empty when unquoted), the value.
+ * An assignment line in any shape dotenv (what `make dev` loads `.env` with)
+ * accepts: an optional `export `, spaces around `=`, single, double or no
+ * quotes, and a trailing `# comment`. `.env.default` itself only uses `KEY=value`
+ * and `KEY="value"`, but a hand-edited `.env` may use any of them, and a line
+ * this did not recognise was a placeholder `make tunnel` let through.
+ *
+ * Groups: what comes before the key, the key, the `=` with its spacing, the
+ * quote (empty when unquoted), the value, and what follows the value.
  */
-const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=("?)(.*)\2\s*$/;
+const ASSIGNMENT = /^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)(["']?)(.*?)\4(\s*(?:#.*)?)$/;
+
+interface Assignment {
+  before: string;
+  key: string;
+  equals: string;
+  quote: string;
+  value: string;
+  after: string;
+}
+
+function parseAssignment(line: string): Assignment | null {
+  const match = ASSIGNMENT.exec(line);
+
+  if (!match) {
+    return null;
+  }
+
+  const [, before, key, equals, quote, value, after] = match;
+
+  return { before, key, equals, quote, value, after };
+}
+
+/** The line with its value replaced, everything around the value kept. */
+function withValue({ before, key, equals, quote, after }: Assignment, value: string): string {
+  return `${before}${key}${equals}${quote}${value}${quote}${after}`;
+}
+
+/**
+ * The secrets whose `config/default.json` fallback, when the variable is unset,
+ * is the variable's own name (`"authTokenSecret": "AUTH_TOKEN_SECRET"`). A `.env`
+ * that leaves one out runs on a value as public as any placeholder, and the API
+ * only warns about it outside production.
+ */
+export const NAME_FALLBACK_SECRETS = [
+  'AUTH_TOKEN_SECRET',
+  'AUTH_REFRESH_TOKEN_SECRET',
+  'AUTH_SESSION_PEPPER',
+  'AUTH_CSRF_TOKEN_SECRET',
+  'OBJECT_STORE_USERNAME',
+  'OBJECT_STORE_PASSWORD',
+];
 
 /**
  * PS_JWT_SECRET_B64URL is not a secret of its own: it is base64url(POWERSYNC_JWT_SECRET),
@@ -79,36 +127,35 @@ export function mintPlaceholderSecrets(
   const replaced = new Map<string, { from: string; to: string }>();
 
   const lines = text.split('\n').map((line) => {
-    const match = ASSIGNMENT.exec(line);
+    const assignment = parseAssignment(line);
 
-    if (!match || !match[3].startsWith(PLACEHOLDER_PREFIX)) {
+    if (!assignment || !assignment.value.startsWith(PLACEHOLDER_PREFIX)) {
       return line;
     }
 
-    const [, key, quote, placeholder] = match;
-    const fresh = random(mintedLength(placeholder));
+    const fresh = random(mintedLength(assignment.value));
 
-    replaced.set(key, { from: placeholder, to: fresh });
-    minted.push(key);
+    replaced.set(assignment.key, { from: assignment.value, to: fresh });
+    minted.push(assignment.key);
 
-    return `${key}=${quote}${fresh}${quote}`;
+    return withValue(assignment, fresh);
   });
 
   const powersync = replaced.get('POWERSYNC_JWT_SECRET');
 
   const out = lines.map((line) => {
-    const match = ASSIGNMENT.exec(line);
+    const assignment = parseAssignment(line);
 
     if (
       !powersync ||
-      !match ||
-      match[1] !== DERIVED_FROM_POWERSYNC_SECRET ||
-      match[3] !== base64url(powersync.from)
+      !assignment ||
+      assignment.key !== DERIVED_FROM_POWERSYNC_SECRET ||
+      assignment.value !== base64url(powersync.from)
     ) {
       return line;
     }
 
-    return `${match[1]}=${match[2]}${base64url(powersync.to)}${match[2]}`;
+    return withValue(assignment, base64url(powersync.to));
   });
 
   return { text: out.join('\n'), minted };
@@ -117,8 +164,29 @@ export function mintPlaceholderSecrets(
 /** The keys in a dotenv file's text whose value is still a committed placeholder. */
 export function placeholderKeys(text: string): string[] {
   return text.split('\n').flatMap((line) => {
-    const match = ASSIGNMENT.exec(line);
+    const assignment = parseAssignment(line);
 
-    return match && match[3].startsWith(PLACEHOLDER_PREFIX) ? [match[1]] : [];
+    return assignment?.value.startsWith(PLACEHOLDER_PREFIX) ? [assignment.key] : [];
+  });
+}
+
+/**
+ * The `NAME_FALLBACK_SECRETS` a dotenv file's text leaves unset, empty, or set
+ * to the variable's own name, so the API falls back to (or is handed) the name
+ * itself. dotenv keeps the last of two assignments to one key, and so does this.
+ */
+export function unsetSecretKeys(text: string): string[] {
+  const values = new Map(
+    text.split('\n').flatMap((line) => {
+      const assignment = parseAssignment(line);
+
+      return assignment ? [[assignment.key, assignment.value] as const] : [];
+    }),
+  );
+
+  return NAME_FALLBACK_SECRETS.filter((key) => {
+    const value = values.get(key);
+
+    return !value || value === key;
   });
 }

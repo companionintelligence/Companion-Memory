@@ -9,12 +9,13 @@
  *     you can recreate.
  *
  *   yarn tsx scripts/dev-stack/env-secrets-cli.ts check [file]
- *     Exit 1, naming the keys, while <file> still holds a placeholder or does not
+ *     Exit 1, naming the keys, while <file> still holds a placeholder, leaves out
+ *     a secret the API would replace with its own variable name, or does not
  *     exist. `make tunnel` runs it before publishing the stack.
  */
 import fs from 'node:fs';
 
-import { mintPlaceholderSecrets, placeholderKeys } from './env-secrets';
+import { mintPlaceholderSecrets, placeholderKeys, unsetSecretKeys } from './env-secrets';
 import { fail, ok } from './log';
 
 function mint(file: string): number {
@@ -47,20 +48,28 @@ function check(file: string): number {
     return 1;
   }
 
-  const keys = placeholderKeys(fs.readFileSync(file, 'utf8'));
+  const text = fs.readFileSync(file, 'utf8');
+  const keys = placeholderKeys(text);
+  const unset = unsetSecretKeys(text);
 
-  if (keys.length === 0) {
-    return 0;
+  if (keys.length > 0) {
+    fail(
+      `${file} still holds the replace-me- placeholders committed in .env.default for ${keys.join(', ')}. ` +
+        'Anyone who can read the repo could sign in to or read from a stack published with them. ' +
+        `Replace them with \`yarn tsx scripts/dev-stack/env-secrets-cli.ts mint ${file}\`, then restart ` +
+        'the stack (that signs everyone out of it and changes its object-store keys).',
+    );
   }
 
-  fail(
-    `${file} still holds the replace-me- placeholders committed in .env.default for ${keys.join(', ')}. ` +
-      'Anyone who can read the repo could sign in to or read from a stack published with them. ' +
-      `Replace them with \`yarn tsx scripts/dev-stack/env-secrets-cli.ts mint ${file}\`, then restart ` +
-      'the stack (that signs everyone out of it and changes its object-store keys).',
-  );
+  if (unset.length > 0) {
+    fail(
+      `${file} does not set ${unset.join(', ')}, so the API uses each variable's own name, ` +
+        'committed in backend/apps/api/config/default.json, as its value. Copy those lines from ' +
+        `.env.default, run \`yarn tsx scripts/dev-stack/env-secrets-cli.ts mint ${file}\`, then restart the stack.`,
+    );
+  }
 
-  return 1;
+  return keys.length > 0 || unset.length > 0 ? 1 : 0;
 }
 
 const [command, file = '.env'] = process.argv.slice(2);

@@ -59,7 +59,8 @@ export function buildOvermindEnv(
     // 404 that reads like "not signed in"), no GraphQL, and an OAuth link that
     // lands on a blank page.
     //
-    // 127.0.0.1, not `localhost`: the API binds IPv4 (`0.0.0.0`), while
+    // 127.0.0.1, not `localhost`: the API binds IPv4 (API_LISTEN_HOST above,
+    // `127.0.0.1` or `0.0.0.0` unless DEV_LISTEN_HOST names another), while
     // `localhost` resolves to ::1 first on a dual-stack host. curl falls back
     // to IPv4; Node's proxy agent reports the AggregateError instead.
     API_PROXY_TARGET: `http://127.0.0.1:${ports.apiPort}`,
