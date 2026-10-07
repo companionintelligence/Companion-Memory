@@ -273,6 +273,9 @@ export class PipelineSliceListener {
           // Null: a slice covers many entities, and attributing the failure to
           // one of them would be a guess. The ids are in `payload`.
           entityId: null,
+          // A slice is always one user's (the schema requires the uuid), and
+          // without it the letter would be shown to every account on the box.
+          userId: payload.userId,
           payload: { ...payload },
           error: `${error.message}${error.stack != null ? `\n${error.stack}` : ''}`,
         });

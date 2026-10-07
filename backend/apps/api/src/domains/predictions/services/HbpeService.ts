@@ -1,4 +1,9 @@
-import { Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -9,6 +14,48 @@ import type { DueResponse, ForecastResponse, ForageTrialResponse, WeekForecastRe
 
 type ForageLakeSpec = Record<string, unknown>;
 
+/**
+ * The day-ahead horizons the sidecar's `/histogram` serves. One today; the MCP
+ * forecast tool and the GraphQL `forecast` query both check against this list.
+ */
+export const FORECAST_HORIZONS = ['24h'] as const;
+
+export type ForecastHorizon = (typeof FORECAST_HORIZONS)[number];
+
+export function isForecastHorizon(value: unknown): value is ForecastHorizon {
+  return typeof value === 'string' && (FORECAST_HORIZONS as readonly string[]).includes(value);
+}
+
+/** @throws BadRequestException for a horizon the sidecar does not serve. */
+export function assertForecastHorizon(value: unknown): asserts value is ForecastHorizon {
+  if (!isForecastHorizon(value)) {
+    throw new BadRequestException(`Unsupported forecast horizon. Supported: ${FORECAST_HORIZONS.join(', ')}`);
+  }
+}
+
+/**
+ * A sidecar path with its query string built by `URLSearchParams`, never by
+ * interpolation.
+ *
+ * The sidecar takes the user from `user_id` in the query and trusts it: the
+ * shared bearer is its only check. So nothing a caller supplies may be able to
+ * add a parameter or end the query early. A raw `&user_id=...` or `#` inside an
+ * interpolated value did both, and `forecast(horizon:)` could read another
+ * account's forecast that way. `URLSearchParams` encodes `&`, `=` and `#`, and
+ * the caller's own `user_id` is always set here, from the service context.
+ */
+function sidecarPath(
+  route: string,
+  context: UserServiceContext,
+  params: Record<string, string> = {},
+): string {
+  const query = new URLSearchParams(params);
+
+  query.set('user_id', context.userId);
+
+  return `${route}?${query.toString()}`;
+}
+
 @Injectable()
 export class HbpeService {
   private readonly baseUrl = config.services.hbpe.host;
@@ -17,8 +64,14 @@ export class HbpeService {
     this.logger.setContext('HbpeService');
   }
 
-  async getForecast(context: UserServiceContext, horizon = '24h'): Promise<ForecastResponse> {
-    return this.get<ForecastResponse>(`/histogram?horizon=${horizon}&user_id=${context.userId}`);
+  /**
+   * @throws BadRequestException for a horizon the sidecar does not serve. Checked
+   *   here as well as at the GraphQL edge, so a new caller cannot skip it.
+   */
+  async getForecast(context: UserServiceContext, horizon: string = '24h'): Promise<ForecastResponse> {
+    assertForecastHorizon(horizon);
+
+    return this.get<ForecastResponse>(sidecarPath('/histogram', context, { horizon }));
   }
 
   /**
@@ -31,24 +84,23 @@ export class HbpeService {
     includeToday: boolean = false,
     timezone?: string,
   ): Promise<WeekForecastResponse> {
-    const todayParam = includeToday ? '&include_today=true' : '';
-    const tzParam = timezone ? `&timezone=${encodeURIComponent(timezone)}` : '';
-
     return this.get<WeekForecastResponse>(
-      `/forecast?horizon=7d&user_id=${context.userId}${todayParam}${tzParam}`,
+      sidecarPath('/forecast', context, {
+        horizon: '7d',
+        ...(includeToday ? { include_today: 'true' } : {}),
+        ...(timezone ? { timezone } : {}),
+      }),
     );
   }
 
   async getDueList(context: UserServiceContext): Promise<DueResponse> {
-    return this.get<DueResponse>(`/forecast/due?user_id=${context.userId}`);
+    return this.get<DueResponse>(sidecarPath('/forecast/due', context));
   }
 
   async getForage(context: UserServiceContext, autoload = true): Promise<ForageTrialResponse | null> {
-    const flag = autoload ? 'true' : 'false';
-
     try {
       return await this.request<ForageTrialResponse>(
-        `/forage?user_id=${context.userId}&autoload=${flag}`,
+        sidecarPath('/forage', context, { autoload: autoload ? 'true' : 'false' }),
         { method: 'GET' },
         { allowNotFound: true },
       );
@@ -61,7 +113,7 @@ export class HbpeService {
 
   async askForage(context: UserServiceContext, spec: ForageLakeSpec): Promise<ForageTrialResponse> {
     return this.request<ForageTrialResponse>(
-      `/forage/ask?user_id=${context.userId}`,
+      sidecarPath('/forage/ask', context),
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -73,7 +125,7 @@ export class HbpeService {
 
   async ingestForage(context: UserServiceContext, items: unknown[]): Promise<ForageTrialResponse> {
     return this.request<ForageTrialResponse>(
-      `/forage/ingest?user_id=${context.userId}`,
+      sidecarPath('/forage/ingest', context),
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -84,18 +136,18 @@ export class HbpeService {
   }
 
   async forageSample(context: UserServiceContext): Promise<ForageTrialResponse> {
-    return this.request<ForageTrialResponse>(`/forage/sample?user_id=${context.userId}`, { method: 'POST' });
+    return this.request<ForageTrialResponse>(sidecarPath('/forage/sample', context), { method: 'POST' });
   }
 
   async foragePin(context: UserServiceContext, branch: string): Promise<ForageTrialResponse> {
     return this.request<ForageTrialResponse>(
-      `/forage/pin/${encodeURIComponent(branch)}?user_id=${context.userId}`,
+      sidecarPath(`/forage/pin/${encodeURIComponent(branch)}`, context),
       { method: 'POST' },
     );
   }
 
   async forageReset(context: UserServiceContext): Promise<ForageTrialResponse> {
-    return this.request<ForageTrialResponse>(`/forage/ask?user_id=${context.userId}`, { method: 'POST' });
+    return this.request<ForageTrialResponse>(sidecarPath('/forage/ask', context), { method: 'POST' });
   }
 
   private async get<T>(path: string): Promise<T> {

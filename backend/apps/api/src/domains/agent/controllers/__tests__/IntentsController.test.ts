@@ -41,11 +41,11 @@ function stubCatalog(manifest: IntentManifest = MANIFEST): IntentCatalogService 
 }
 
 function stubRegistry(
-  overrides: Partial<Pick<ToolRegistry, 'hasTool' | 'executeTool'>> = {},
+  overrides: Partial<Pick<ToolRegistry, 'isToolVisibleTo' | 'executeTool'>> = {},
 ): ToolRegistry & { executeTool: jest.Mock } {
   const executeTool = jest.fn().mockResolvedValue(OK_RESULT);
   const registry = {
-    hasTool: (name: string) => name === 'people_find',
+    isToolVisibleTo: (name: string) => name === 'people_find',
     executeTool,
     ...overrides,
   } as unknown as ToolRegistry & { executeTool: jest.Mock };
@@ -134,6 +134,17 @@ describe('IntentsController', () => {
       expect(registry.executeTool).not.toHaveBeenCalled();
     });
 
+    it('404s an intent another account owns, asking the registry about this caller', async () => {
+      const isToolVisibleTo = jest.fn(() => false);
+      const registry = stubRegistry({ isToolVisibleTo });
+
+      await expect(
+        controllerWith(MANIFEST, registry).execute('messaging.send', {}, CONTEXT, REQ),
+      ).rejects.toThrow('Unknown intent: messaging.send');
+      expect(isToolVisibleTo).toHaveBeenCalledWith('messaging_send', 'user-1');
+      expect(registry.executeTool).not.toHaveBeenCalled();
+    });
+
     it('returns a failed ToolResult as HTTP 200 payload', async () => {
       const failed: ToolResult = {
         success: false,
@@ -172,6 +183,19 @@ describe('IntentsController', () => {
       // far worse, run everything.
       expect(() => controllerWith().getManifest('locale')).toThrow('Unknown dispatch tier: locale');
       expect(() => controllerWith().getManifest('LOCAL')).toThrow('Unknown dispatch tier: LOCAL');
+    });
+
+    it('names the caller, so an intent owned by one account is listed to that account only', () => {
+      // The `messaging.*` intents belong to whoever the BlueBubbles connector was set up for.
+      const { controller, calls } = controllerSpy();
+
+      controller.getManifest(undefined, { userId: 'user-1' });
+      controller.getIntent('people.find', undefined, { userId: 'user-2' });
+
+      expect(calls).toEqual([
+        { tier: undefined, userId: 'user-1' },
+        { tier: undefined, userId: 'user-2' },
+      ]);
     });
 
     it('honours the tier on the single-intent route too', () => {

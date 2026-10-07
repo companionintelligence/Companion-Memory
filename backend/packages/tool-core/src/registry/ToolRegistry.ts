@@ -256,18 +256,11 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
    * list.
    */
   getOutboundCatalogTools(context?: ToolRequestContext): ToolSchema[] {
-    const schemas = Array.from(this.tools.entries())
-      .filter(([toolName]) => {
-        const providerName = this.toolToProvider.get(toolName);
-        const provider = providerName ? this.providers.get(providerName) : undefined;
-
-        return provider?.includeInOutboundCatalog !== false;
-      })
-      .map(([, tool]) => tool.schema)
+    const schemas = this.outboundCatalogSchemas()
       // A user-owned tool is never part of the appliance's public manifest, whatever its
-      // provider's flag says. Today the two rules agree (the only owning provider is also the
-      // only one opted out of the catalog), and this is the one that stays true if a future
-      // provider sets ownership without opting out.
+      // provider's flag says: with no caller it is nobody's, and with a caller it is listed only
+      // to its owner. The `messaging.*` intents are the case where the two rules part: they are
+      // native tools (in the catalog) owned by whoever the BlueBubbles connector belongs to.
       .filter((schema) => this.isVisibleTo(schema, context?.userId));
 
     this.logger.debug(`Retrieved ${schemas.length} outbound-catalog tools`, {
@@ -276,6 +269,43 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
     });
 
     return schemas;
+  }
+
+  /**
+   * The outbound catalog BEFORE the per-account ownership filter.
+   *
+   * For a transport that builds its tool list once, before any caller exists, and filters each
+   * request itself with {@link isToolVisibleTo}. MCP is that transport: its map is built at boot,
+   * and an owned tool there would otherwise be missing for its own owner as well. Never hand this
+   * list to a caller as it is.
+   */
+  getOutboundCatalogToolsForEveryOwner(): ToolSchema[] {
+    return this.outboundCatalogSchemas();
+  }
+
+  /** Every registered tool whose provider takes part in the outbound catalog. */
+  private outboundCatalogSchemas(): ToolSchema[] {
+    return Array.from(this.tools.entries())
+      .filter(([toolName]) => {
+        const providerName = this.toolToProvider.get(toolName);
+        const provider = providerName ? this.providers.get(providerName) : undefined;
+
+        return provider?.includeInOutboundCatalog !== false;
+      })
+      .map(([, tool]) => tool.schema);
+  }
+
+  /**
+   * Whether `userId` may see (and so run) the tool `name` resolves to: the rule
+   * {@link getAvailableTools} filters with and {@link executeTool} refuses on, asked about one
+   * tool. False for a name that resolves to nothing.
+   *
+   * Reads the schema now, not at registration: a tool may decide its owner at runtime.
+   */
+  isToolVisibleTo(name: string, userId: string | undefined): boolean {
+    const resolved = this.resolveRegisteredTool(name);
+
+    return resolved != null && this.isVisibleTo(resolved.tool.schema, userId);
   }
 
   /**

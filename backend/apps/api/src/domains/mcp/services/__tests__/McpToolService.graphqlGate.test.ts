@@ -48,6 +48,9 @@ describe('McpToolService — the GraphQL plane meets the pending-action gate', (
     const registry = {
       getAgentFacingTools: () => [nativeIntent],
       getOutboundCatalogTools: () => [nativeIntent],
+      // One shared intent, so the boot-time map and the per-request ownership view agree.
+      getOutboundCatalogToolsForEveryOwner: () => [nativeIntent],
+      isToolVisibleTo: () => true,
       getRegisteredToolNames: () => [nativeIntent.name],
       executeTool: jest.fn().mockResolvedValue({ success: true, data: {} }),
       recordInvocation: jest.fn().mockResolvedValue(undefined),

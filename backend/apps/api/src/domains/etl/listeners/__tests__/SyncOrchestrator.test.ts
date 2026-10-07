@@ -40,6 +40,8 @@ function makeSyncJob(overrides: Partial<ConnectionSyncJob> = {}): ConnectionSync
     cursor: {},
     nextCursor: {},
     lastTransformed: null,
+    // A row the sync executor fetched, which is the only kind the transform takes.
+    fetchedByExecutor: true,
     updatedAt: new Date(),
     completedAt: null,
     ...overrides,
@@ -387,7 +389,13 @@ describe('SyncOrchestrator.handleSyncJobExecuteEvent — claim check and lifecyc
     expect(connectionSyncJobService.update).toHaveBeenCalledWith(
       expect.anything(),
       'job-1',
-      expect.objectContaining({ data: { messages: 3 }, nextCursor: { page: 2 }, status: 'success' }),
+      expect.objectContaining({
+        data: { messages: 3 },
+        nextCursor: { page: 2 },
+        status: 'success',
+        // The executor's mark: the only rows the transform sweep trusts.
+        fetchedByExecutor: true,
+      }),
     );
 
     const syncStateUpdateCall = connectionService.update.mock.calls.find((call: unknown[]) =>
@@ -485,6 +493,10 @@ describe('SyncOrchestrator.executeTransformJobs', () => {
       status: 'success',
       lastTransformed: null,
       transformClaimable: true,
+      // Only payloads the executor fetched, on connections that are active. A client used to be
+      // able to write a "successful" job whose data the transforms then acted on.
+      fetchedByExecutor: true,
+      connectionActive: true,
       // Oldest first. The sweep is one two-slot queue for the whole box while
       // every connection completes up to two sync jobs a minute, so
       // newest-first left anything that once fell behind untransformed forever.
@@ -528,17 +540,19 @@ describe('SyncOrchestrator.handleSyncJobTransformEvent — claim check and lifec
   });
 
   it('skips a job that is already claimed or transformed — the self-DoS-prevention claim check', async () => {
-    const { orchestrator, connectionSyncJobService, connectionService } = buildOrchestrator({
+    const transformFn = jest.fn().mockResolvedValue(undefined);
+    const { orchestrator, connectionSyncJobService } = buildOrchestrator({
       connectionSyncJobService: {
         findById: jest.fn().mockResolvedValue(makeSyncJob({ lastTransformed: new Date() })),
         claimTransform: jest.fn().mockResolvedValue(false),
       },
+      endpointServiceMap: { getTransformFunction: jest.fn().mockReturnValue(transformFn) },
     });
 
     await orchestrator.handleSyncJobTransformEvent({ connectionSyncJobId: 'job-1' });
 
     expect(connectionSyncJobService.claimTransform).toHaveBeenCalledWith(expect.anything(), 'job-1');
-    expect(connectionService.findById).not.toHaveBeenCalled();
+    expect(transformFn).not.toHaveBeenCalled();
     expect(connectionSyncJobService.update).not.toHaveBeenCalled();
   });
 
@@ -560,6 +574,44 @@ describe('SyncOrchestrator.handleSyncJobTransformEvent — claim check and lifec
     await orchestrator.handleSyncJobTransformEvent({ connectionSyncJobId: 'job-1' });
 
     expect(logger.error).toHaveBeenCalled();
+    expect(connectionSyncJobService.update).not.toHaveBeenCalled();
+  });
+
+  it('does not transform, or even claim, a job the sync executor did not fetch', async () => {
+    const transformFn = jest.fn().mockResolvedValue(undefined);
+    const { orchestrator, connectionSyncJobService, logger } = buildOrchestrator({
+      connectionSyncJobService: {
+        findById: jest.fn().mockResolvedValue(makeSyncJob({ status: 'success', fetchedByExecutor: false })),
+      },
+      endpointServiceMap: { getTransformFunction: jest.fn().mockReturnValue(transformFn) },
+    });
+
+    await orchestrator.handleSyncJobTransformEvent({ connectionSyncJobId: 'job-1' });
+
+    expect(transformFn).not.toHaveBeenCalled();
+    expect(connectionSyncJobService.claimTransform).not.toHaveBeenCalled();
+    expect(connectionSyncJobService.update).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Not transforming a sync job the sync executor did not fetch',
+      expect.anything(),
+    );
+  });
+
+  it('does not transform a job whose connection is not active, and leaves it for later', async () => {
+    // A connection that never finished signing in, or one the user paused. Not marked
+    // transformed: if the connection comes back, its data still gets transformed.
+    const transformFn = jest.fn().mockResolvedValue(undefined);
+    const { orchestrator, connectionSyncJobService } = buildOrchestrator({
+      connectionService: { findById: jest.fn().mockResolvedValue(makeConnection({ active: false })) },
+      endpointServiceMap: { getTransformFunction: jest.fn().mockReturnValue(transformFn) },
+    });
+
+    await orchestrator.handleSyncJobTransformEvent({ connectionSyncJobId: 'job-1' });
+
+    expect(transformFn).not.toHaveBeenCalled();
+    // Not claimed either: a claim would hold it (and push it to the back of the queue) for an
+    // hour after the connection comes back.
+    expect(connectionSyncJobService.claimTransform).not.toHaveBeenCalled();
     expect(connectionSyncJobService.update).not.toHaveBeenCalled();
   });
 

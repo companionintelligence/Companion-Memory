@@ -47,6 +47,7 @@ function config(overrides: Partial<BlueBubblesConfigEntity> = {}): BlueBubblesCo
     syncHeartbeatAt: null,
     connectionStatus: 'unknown',
     lastError: null,
+    ownerUserId: USER_ID,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -132,8 +133,9 @@ function harness(options: { stored?: BlueBubblesConfigEntity; claim?: boolean } 
     query: jest.fn().mockResolvedValue([{ max: NEWEST_STAGED }]),
   } as unknown as DataSource & { query: jest.Mock };
 
+  // The connector's recorded owner is live; `findById` is how the sync confirms that.
   const userService = {
-    findAllOnboarded: jest.fn().mockResolvedValue([{ id: USER_ID }]),
+    findById: jest.fn(async (_ctx: unknown, id: string) => (id === USER_ID ? { id } : null)),
   } as unknown as jest.Mocked<UserService> & { [key: string]: jest.Mock };
 
   const logger = {
@@ -159,6 +161,7 @@ function harness(options: { stored?: BlueBubblesConfigEntity; claim?: boolean } 
     service,
     calls,
     configService,
+    userService,
     importRunService,
     mediaStage,
     pushStage,
@@ -438,5 +441,43 @@ describe('BlueBubblesSyncService.ingestWebhookMessage', () => {
     await jest.advanceTimersByTimeAsync(60_000);
 
     expect(importRunService.createInProcessRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Whose memory the messages go into. This used to be "the first onboarded account", read on every
+ * pass, which is not necessarily the person whose Mac it is. It is now the connector's recorded
+ * owner, the same account the `messaging.*` tools serve.
+ */
+describe('BlueBubblesSyncService attribution', () => {
+  const OTHER_USER = '33333333-3333-4333-8333-333333333333';
+
+  it("files the pass under the connector's recorded owner", async () => {
+    stubImport();
+
+    const { service, importRunService, userService } = harness({ stored: config({ ownerUserId: USER_ID }) });
+
+    await service.runSync();
+
+    expect(userService.findById).toHaveBeenCalledWith(expect.anything(), USER_ID);
+    expect(importRunService.createInProcessRun).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID }),
+    );
+  });
+
+  it.each([
+    ['has no recorded owner', null],
+    ["owner's account no longer exists", OTHER_USER],
+  ])('ingests nothing when the connector %s', async (_label, ownerUserId) => {
+    stubImport();
+
+    const { service, importRunService, logger } = harness({ stored: config({ ownerUserId }) });
+
+    await service.runSync();
+
+    expect(importRunService.createInProcessRun).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'BlueBubbles ingest skipped: the connector has no live owner to attribute messages to',
+    );
   });
 });

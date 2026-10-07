@@ -175,6 +175,13 @@ export interface IntentDefinition {
    * a tool built from one user's config is listed to — and executable by — every other account on
    * the appliance. `getAvailableTools` hides an owned tool from anyone but its owner, and
    * `executeTool` refuses it, so ownership is enforced rather than merely advertised.
+   *
+   * The owner may also be decided at runtime. The `messaging.*` intents are native tools, but
+   * they act on the one BlueBubbles connector, which belongs to whichever account an
+   * administrator connected it for; they expose `schema` as a getter that reads that owner on
+   * every access. So the registry reads this field when it decides, never once at registration,
+   * and anything that snapshots schemas (MCP's tool map) has to ask
+   * `ToolRegistryCore.isToolVisibleTo` per request.
    */
   ownerUserId?: string;
   /** Entity types this tool reads. */

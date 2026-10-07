@@ -305,6 +305,16 @@ export class ConnectionSyncJobService {
       updateData.lastTransformed = data.lastTransformed;
     }
 
+    if (data.fetchedByExecutor !== undefined) {
+      // The executor's mark, which the transform sweep trusts `data` on. It runs as the system;
+      // a user-scoped write carrying it is a caller that should not have it.
+      if (context.userId !== SYSTEM_USER) {
+        throw new Error('Only the sync executor marks a sync job as fetched');
+      }
+
+      updateData.fetchedByExecutor = data.fetchedByExecutor;
+    }
+
     const SyncJob = await this.connectionSyncJobRepository.findOne({
       where: {
         id,
@@ -315,6 +325,19 @@ export class ConnectionSyncJobService {
     });
 
     if (SyncJob) {
+      // A fetched payload answers the endpoint it was fetched for, and the transform is chosen by
+      // `endpointName` (and the scheduler reads `type`). Retargeting a job whose data still waits
+      // for its transform would have the client pick which transform reads the provider's answer.
+      if (
+        context.userId !== SYSTEM_USER &&
+        SyncJob.fetchedByExecutor &&
+        SyncJob.lastTransformed == null &&
+        ((updateData.endpointName !== undefined && updateData.endpointName !== SyncJob.endpointName) ||
+          (updateData.type !== undefined && updateData.type !== SyncJob.type))
+      ) {
+        throw new ForbiddenException('A sync job that has fetched data keeps its endpoint and type');
+      }
+
       Object.assign(SyncJob, updateData);
       await this.connectionSyncJobRepository.save(SyncJob);
     } else {
@@ -548,6 +571,16 @@ export class ConnectionSyncJobService {
       executable = executable.andWhere('last_transformed >= :lastTransformed', {
         lastTransformed: query.lastTransformed,
       });
+    }
+
+    if (query.fetchedByExecutor === true) {
+      executable = executable.andWhere('fetched_by_executor = true');
+    }
+
+    if (query.connectionActive === true) {
+      executable = executable.andWhere(
+        `EXISTS (SELECT 1 FROM ci.connections c WHERE c.id = "syncJob".connection_id AND c.active)`,
+      );
     }
 
     // Mirrors claimTransform's own condition, staleness window included. The

@@ -32,7 +32,7 @@ export interface MessagingSendOutput {
  */
 @Injectable()
 export class MessagingSendTool extends BaseTool<MessagingSendInput, MessagingSendOutput> {
-  readonly schema: IntentDefinition = {
+  private static readonly BASE_SCHEMA: IntentDefinition = {
     name: 'messaging.send',
     domain: 'messaging',
     title: 'Send a message',
@@ -54,6 +54,15 @@ export class MessagingSendTool extends BaseTool<MessagingSendInput, MessagingSen
     },
   };
 
+  /**
+   * Owned by the BlueBubbles connector's owner, read fresh on every access: the registry hides
+   * this tool from every other account and refuses to run it for them. See
+   * `BlueBubblesClientService.toolOwnerUserId`.
+   */
+  get schema(): IntentDefinition {
+    return { ...MessagingSendTool.BASE_SCHEMA, ownerUserId: this.client.toolOwnerUserId() };
+  }
+
   constructor(
     private readonly client: BlueBubblesClientService,
     protected readonly logger: LoggerService,
@@ -67,10 +76,10 @@ export class MessagingSendTool extends BaseTool<MessagingSendInput, MessagingSen
   }
 
   protected async executeInternal(
-    _context: ToolExecutionContext,
+    context: ToolExecutionContext,
     input: MessagingSendInput,
   ): Promise<MessagingSendOutput> {
-    const sent = await this.client.sendText(input.chatGuid, input.message);
+    const sent = await this.client.sendText(context.userId, input.chatGuid, input.message);
 
     return { sent: true, guid: sent.guid };
   }
