@@ -14,6 +14,11 @@ export interface CloudTokenResponse {
   expires_in: number;
   token_type: string;
   refresh_token: string;
+  /**
+   * The provider account id CI Portal stored this grant under. Returned by CI Portal
+   * versions that carry it; absent from older ones, which callers must tolerate.
+   */
+  user_provider_id?: string;
 }
 
 /** Outcome of `POST /api/oauth/token/revoke` on CI Portal. */

@@ -31,7 +31,7 @@ import type { McpToolDefinition } from '../types';
  * labelled `destructive` so the enforcing dispatcher confirms/audits before running them, matching
  * the treatment of the native `memory.forget` intent.
  */
-const DESTRUCTIVE_MUTATION_PREFIXES = ['delete', 'remove', 'destroy', 'purge', 'drop'] as const;
+export const DESTRUCTIVE_MUTATION_PREFIXES = ['delete', 'remove', 'destroy', 'purge', 'drop'] as const;
 
 /**
  * Every mutation field name on `mutationType` that carries no explicit `@GraphqlPrivacy`

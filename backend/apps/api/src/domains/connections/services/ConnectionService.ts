@@ -149,6 +149,25 @@ export class ConnectionService {
     return this.findById(context, id);
   }
 
+  /**
+   * Whether an account other than `userId` has a connection (active or not) to the provider
+   * account `externalId` on `providerId`.
+   *
+   * For connectors where the provider account is a shared resource of the appliance rather than
+   * something each user signs in to: one signal-cli service can hold several numbers, and each
+   * number's messages belong to one person. Not scoped to the caller on purpose; it answers a
+   * yes/no about other accounts and returns nothing of theirs.
+   */
+  async externalAccountHeldByAnotherUser(
+    userId: string,
+    providerId: string,
+    externalId: string,
+  ): Promise<boolean> {
+    return this.connectionRepository.exists({
+      where: { providerId, externalId, userId: Not(userId) },
+    });
+  }
+
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     const result = await this.connectionRepository.update(
       {

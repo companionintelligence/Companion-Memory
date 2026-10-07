@@ -1,15 +1,18 @@
-import { ConflictException } from '@nestjs/common';
+import 'reflect-metadata';
 
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+
+import { FULL_CAPABILITY, REQUIRE_CAPABILITY_KEY } from '@ci/common/decorators';
 import { LastAdminDeletionRefused, SUCCESSOR_NOT_FOUND, SUCCESSOR_REQUIRED } from '@ci/domains/user';
 
 import type { AccountDeletionResult } from '../../services/DataDeletionService';
 import { PrivacyController } from '../PrivacyController';
 
-function makeController(result: AccountDeletionResult) {
+function makeController(result: AccountDeletionResult, email = 'owner@example.com') {
   const deleteAccount = jest.fn(async () => result);
   const dataDeletionService = { deleteAccount };
   const handOverAdministration = jest.fn(async () => undefined);
-  const userService = { handOverAdministration };
+  const userService = { findById: jest.fn(async () => ({ id: 'user-1', email })), handOverAdministration };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
   const controller = new PrivacyController(
@@ -33,13 +36,17 @@ const RESULT: AccountDeletionResult = {
   auditId: 'audit-1',
 };
 
+const OWNER_REQUEST = {} as never;
+
 describe('PrivacyController.deleteMyAccount', () => {
   it('deletes the AUTHENTICATED user (context userId), never a body/param id', async () => {
     const { controller, deleteAccount } = makeController(RESULT);
 
     // The context carries the authenticated user id (set by the auth guard).
     const context = { userId: 'user-1' } as never;
-    const response = await controller.deleteMyAccount(context, { confirm: true });
+    const response = await controller.deleteMyAccount(context, OWNER_REQUEST, {
+      confirmEmail: 'owner@example.com',
+    });
 
     // Delegated with the caller's own context — owner-scoped by construction.
     expect(deleteAccount).toHaveBeenCalledWith({ userId: 'user-1' });
@@ -58,8 +65,8 @@ describe('PrivacyController.deleteMyAccount', () => {
   it('hands administration over before it deletes anything, with the successor the caller named', async () => {
     const { controller, deleteAccount, handOverAdministration } = makeController(RESULT);
 
-    await controller.deleteMyAccount({ userId: 'user-1' } as never, {
-      confirm: true,
+    await controller.deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, {
+      confirmEmail: 'owner@example.com',
       successorEmail: 'member@example.com',
     });
 
@@ -81,7 +88,7 @@ describe('PrivacyController.deleteMyAccount', () => {
       handOverAdministration.mockRejectedValue(new LastAdminDeletionRefused(reason));
 
       const failure = await controller
-        .deleteMyAccount({ userId: 'user-1' } as never, { confirm: true })
+        .deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, { confirmEmail: 'owner@example.com' })
         .catch((error: unknown) => error);
 
       expect(failure).toBeInstanceOf(ConflictException);
@@ -89,4 +96,44 @@ describe('PrivacyController.deleteMyAccount', () => {
       expect(deleteAccount).not.toHaveBeenCalled();
     },
   );
+
+  it('accepts the email retyped with different case and surrounding spaces', async () => {
+    const { controller, deleteAccount } = makeController(RESULT);
+
+    await controller.deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, {
+      confirmEmail: '  Owner@Example.COM ',
+    });
+
+    expect(deleteAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses when the confirmation email is not the account email, and deletes nothing', async () => {
+    const { controller, deleteAccount } = makeController(RESULT);
+
+    await expect(
+      controller.deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, {
+        confirmEmail: 'someone-else@example.com',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it("refuses an installed app's key even when it holds full, and deletes nothing", async () => {
+    const { controller, deleteAccount } = makeController(RESULT);
+
+    await expect(
+      controller.deleteMyAccount(
+        { userId: 'user-1' } as never,
+        { apiKeyScopes: [], apiKeyCapability: 'full', apiKeyManagedBy: 'connect' } as never,
+        { confirmEmail: 'owner@example.com' },
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('requires full from an api key, not the write a POST gets by shape', () => {
+    expect(Reflect.getMetadata(REQUIRE_CAPABILITY_KEY, PrivacyController.prototype.deleteMyAccount)).toBe(
+      FULL_CAPABILITY,
+    );
+  });
 });

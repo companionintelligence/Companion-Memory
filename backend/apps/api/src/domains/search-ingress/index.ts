@@ -93,7 +93,11 @@ import { VectorService } from './services/VectorService';
 export class SearchIngressModule {}
 
 export { EmbeddingEntity, IndexSkipEntity, VectorEntity };
-export { OrphanCleanupService, SEARCH_TABLES } from './services/OrphanCleanupService';
+export {
+  OrphanCleanupService,
+  REOPEN_INDEX_LEDGER_SQL,
+  SEARCH_TABLES,
+} from './services/OrphanCleanupService';
 export type {
   OrphanCleanupOptions,
   OrphanCleanupResult,

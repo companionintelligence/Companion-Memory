@@ -38,11 +38,17 @@ export class IntentCatalogService {
    *
    * `capability` narrows the ruling to a specific principal's authority; omitted, `resolveDispatch`
    * assumes full — the device owner acting as themselves, which is the on-device tier's normal case.
+   *
+   * `userId` is the caller. An intent that belongs to one account (the `messaging.*` intents
+   * belong to whoever the BlueBubbles connector was set up for) is listed to that account only;
+   * omitted, owned intents are left out, the same as for any caller who does not own them.
    */
-  getManifest(options: { tier?: DispatchTier; capability?: ApiKeyCapability } = {}): IntentManifest {
-    const { tier, capability } = options;
+  getManifest(
+    options: { tier?: DispatchTier; capability?: ApiKeyCapability; userId?: string } = {},
+  ): IntentManifest {
+    const { tier, capability, userId } = options;
 
-    const intents: ManifestIntent[] = this.tools.getOutboundCatalogTools().map((schema) => ({
+    const intents: ManifestIntent[] = this.tools.getOutboundCatalogTools({ userId }).map((schema) => ({
       name: schema.name,
       tool: intentToolName(schema.name),
       domain: schema.domain,

@@ -4,6 +4,16 @@ import type { QueueOptions } from '@ci/domains/events';
 export const OPENCLAW_APP_URN = 'ci-openclaw:ci-marketplace';
 
 /**
+ * The installed app that works a job, per `ci.agent_jobs.harness_id`. Only that
+ * app's connect key may fetch a job's packet or checkpoint it: those two routes
+ * ARE the harness, and a checkpoint writes turns stamped `openclaw` and can
+ * complete the owner's task.
+ */
+export const HARNESS_CONNECT_APP: Readonly<Record<string, string>> = {
+  openclaw: OPENCLAW_APP_URN.split(':')[0],
+};
+
+/**
  * Per-user chat-turn distillation. One queue, one event
  * (`AgentTurnFragmentsEvent`), one producer (`TurnFragmentCron`).
  *

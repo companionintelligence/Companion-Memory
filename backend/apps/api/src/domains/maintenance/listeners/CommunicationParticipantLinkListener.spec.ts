@@ -101,7 +101,15 @@ function makeIngestService(
   };
 }
 
-function makeDataSource() {
+/** The owner as `readSelfIdentity` and `resolveSelfEntityId` would read them. */
+interface OwnerFixture {
+  selfEntityId: string;
+  name: string;
+  email: string;
+  phones: string[];
+}
+
+function makeDataSource(owner?: OwnerFixture) {
   const calls: Array<{ sql: string; params: unknown[] }> = [];
   // Statement order across the write's transaction, including the re-open.
   const order: string[] = [];
@@ -110,6 +118,17 @@ function makeDataSource() {
 
     if (sql.includes('UPDATE ci.communications')) {
       order.push('update');
+    }
+
+    if (owner != null && sql.includes('SELECT entity_id FROM ci.users')) {
+      return [{ entity_id: owner.selfEntityId }];
+    }
+
+    if (owner != null && sql.includes('UNION ALL')) {
+      return [
+        { name: owner.name, email: owner.email, phones_json: null },
+        { name: owner.name, email: null, phones_json: owner.phones },
+      ];
     }
 
     return [];
@@ -146,11 +165,12 @@ function makeListener(
   initialIndex: Record<string, string>,
   ingestAssigns: Record<string, string> = {},
   forgotten: string[] = [],
+  options: { owner?: OwnerFixture; trustMode?: 'cautious' | 'balanced' | 'hands_off' } = {},
 ) {
   const communicationService = makeCommunicationService(comm);
   const identifierService = makeIdentifierService(initialIndex, forgotten);
   const graphIngestService = makeIngestService(identifierService.indexedByComposite, ingestAssigns);
-  const ds = makeDataSource();
+  const ds = makeDataSource(options.owner);
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
   const { reopener, moduleRef } = makeReopener(ds.order);
 
@@ -158,7 +178,7 @@ function makeListener(
     communicationService as never,
     identifierService as never,
     graphIngestService as never,
-    { getTrustMode: jest.fn(async () => 'balanced') } as never,
+    { getTrustMode: jest.fn(async () => options.trustMode ?? 'balanced') } as never,
     ds.dataSource as never,
     logger as never,
     moduleRef as never,
@@ -605,6 +625,134 @@ describe('CommunicationParticipantLinkListener.handleCreated', () => {
         'email:b@example.com',
         'email:c@example.com',
       ]);
+    });
+  });
+  describe('binding a participant to the owner', () => {
+    // Invented throughout. The owner's self Person carries this name, the
+    // account email and one phone.
+    const OWNER: OwnerFixture = {
+      selfEntityId: '00000000-0000-0000-0000-0000000000f1',
+      name: 'Avery Quinn',
+      email: 'avery@owner.example',
+      phones: ['+1 415-555-0100'],
+    };
+
+    const fromOnly = (from: string): FakeCommunication => ({
+      id: COMM_ID,
+      time: COMM_TIME,
+      userId: USER,
+      fromEntityId: null,
+      toEntityIds: null,
+      participantsMetadata: { from },
+    });
+
+    /** The stub Persons the listener asked the graph to mint, by identifier. */
+    function mintedIdentifiers(graphIngestService: ReturnType<typeof makeListener>['graphIngestService']) {
+      return graphIngestService.ingest.mock.calls.flatMap(([, input]) =>
+        input.entities.map((entity) => entity.properties),
+      );
+    }
+
+    it.each(['cautious', 'balanced', 'hands_off'] as const)(
+      "does not file a stranger's address as the owner's because the display name is the owner's (%s)",
+      async (trustMode) => {
+        const { listener, identifierService, graphIngestService } = makeListener(
+          fromOnly('"Avery Quinn" <someone@other.example>'),
+          {},
+          {},
+          [],
+          { owner: OWNER, trustMode },
+        );
+
+        await listener.handleCreated({ communicationId: COMM_ID });
+
+        expect(identifierService.repointToEntity).not.toHaveBeenCalled();
+        expect(identifierService.claimForSelf).not.toHaveBeenCalled();
+        expect(mintedIdentifiers(graphIngestService)).toEqual([
+          expect.objectContaining({ emails: ['someone@other.example'] }),
+        ]);
+      },
+    );
+
+    it("does not read the owner's phone digits out of a display name", async () => {
+      // An address whose display name carries the owner's number, and a chat
+      // display name that does. Neither is the owner's phone.
+      const { listener, identifierService, graphIngestService } = makeListener(
+        {
+          ...fromOnly('"Call 415 555 0100 today" <promo@other.example>'),
+          participantsMetadata: {
+            from: '"Call 415 555 0100 today" <promo@other.example>',
+            to: ['Support 415 555 0100'],
+          },
+        },
+        {},
+        {},
+        [],
+        { owner: OWNER, trustMode: 'cautious' },
+      );
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(identifierService.repointToEntity).not.toHaveBeenCalled();
+      expect(identifierService.claimForSelf).not.toHaveBeenCalled();
+      expect(mintedIdentifiers(graphIngestService)).toEqual([
+        expect.objectContaining({ emails: ['promo@other.example'] }),
+        expect.objectContaining({ names: ['support 415 555 0100'] }),
+      ]);
+    });
+
+    it("files the owner's own address as the owner's, whatever display name is in front of it", async () => {
+      const { listener, identifierService, graphIngestService } = makeListener(
+        fromOnly('"Work" <Avery@Owner.example>'),
+        {},
+        {},
+        [],
+        { owner: OWNER, trustMode: 'cautious' },
+      );
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(identifierService.repointToEntity).toHaveBeenCalledWith(
+        USER,
+        OWNER.selfEntityId,
+        'email',
+        '"Work" <Avery@Owner.example>',
+        'self_collation',
+      );
+      expect(graphIngestService.ingest).not.toHaveBeenCalled();
+    });
+
+    it("files the owner's own number as the owner's", async () => {
+      const { listener, identifierService } = makeListener(fromOnly('(415) 555-0100'), {}, {}, [], {
+        owner: OWNER,
+        trustMode: 'cautious',
+      });
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(identifierService.repointToEntity).toHaveBeenCalledWith(
+        USER,
+        OWNER.selfEntityId,
+        'phone',
+        '(415) 555-0100',
+        'self_collation',
+      );
+    });
+
+    it('still matches a chat display name to the owner by name outside cautious mode', async () => {
+      // Messenger and WhatsApp give a display name and nothing else, so the
+      // name is the only evidence there is. Unchanged.
+      const { listener, identifierService } = makeListener(fromOnly('Avery Quinn'), {}, {}, [], {
+        owner: OWNER,
+        trustMode: 'balanced',
+      });
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(identifierService.claimForSelf).toHaveBeenCalledWith(USER, OWNER.selfEntityId, {
+        names: ['Avery Quinn'],
+      });
+      expect(identifierService.repointToEntity).not.toHaveBeenCalled();
     });
   });
 });

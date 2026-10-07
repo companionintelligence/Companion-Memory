@@ -380,6 +380,18 @@ describe('PipelineSliceListener', () => {
       expect(String(letters[0].error)).toContain('ollama unreachable');
     });
 
+    it("files the dead letter under the slice's user", async () => {
+      // Without the owner the letter is NULL-user, which the Jobs page shows to
+      // the appliance admin, not to the person whose entities failed. Before,
+      // NULL was shown to every account, so another member could read it.
+      const h = makeListener();
+      h.stage.run.mockRejectedValueOnce(new Error('ollama unreachable'));
+
+      await h.handle(payloadFor()).catch(() => undefined);
+
+      expect(h.deadLetters()[0]).toEqual(expect.objectContaining({ userId: USER }));
+    });
+
     it('propagates the error so pg-boss retry and dead-lettering still apply', async () => {
       const h = makeListener();
       h.stage.run.mockRejectedValueOnce(new Error('ollama unreachable'));

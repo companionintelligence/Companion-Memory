@@ -6,6 +6,7 @@ export {
   INTENTS_SCOPE,
   MCP_SCOPE,
   CAPTURE_SCOPE,
+  AGENT_JOBS_SCOPE,
 } from './RequireScopes';
 export {
   API_KEY_CAPABILITIES,

@@ -256,7 +256,7 @@ export interface DeadLetterBulkReplayResult {
 }
 
 /** Which letters {@link PipelineRunService.replayDeadLetters} should claim. */
-export interface BulkReplayDeadLettersInput {
+export interface BulkReplayDeadLettersInput extends DeadLetterScope {
   /** Explicit letters. Deduplicated before the claim. */
   ids?: string[];
 
@@ -278,8 +278,23 @@ export interface ListRunsOptions {
   activeOnly?: boolean;
 }
 
+/**
+ * Whose letters a dead-letter read or replay may reach, beyond the caller's own.
+ *
+ * A letter with a NULL `user_id` names no user in its payload: maintenance
+ * sweeps, telemetry, an id-only event such as `content.created`, a payload too
+ * malformed to read. Those are the appliance's failures, not any one member's,
+ * and the payload is still somebody's data. So they are the appliance admin's
+ * to see and replay, and the controller decides that with the same rule the
+ * Jobs controls use (`ApplianceAdminGuard.admits`). Absent means no: a caller
+ * that forgets to ask gets only its own letters.
+ */
+export interface DeadLetterScope {
+  includeUnattributed?: boolean;
+}
+
 /** Options for {@link PipelineRunService.listDeadLetters}. */
-export interface ListDeadLettersOptions {
+export interface ListDeadLettersOptions extends DeadLetterScope {
   queue?: string;
   stage?: string;
   /** `true` → only replayed, `false` → only un-replayed, absent → both. */
@@ -956,11 +971,16 @@ export class PipelineRunService {
    * time and make the page stable when a batch of letters shares a timestamp.
    *
    * Scoping: a letter attributable to ANOTHER user is excluded, because the
-   * payload is that user's record verbatim. Letters with a NULL `user_id` ARE
-   * included: NULL means "not attributable to a user" (maintenance sweeps,
-   * telemetry, a payload too malformed to read a user out of), and those are
-   * frequently the most important rows in the table. Hiding them would make the
-   * appliance's own failures invisible on the one screen built to show failures.
+   * payload is that user's record verbatim. Letters with a NULL `user_id` are
+   * included only when `includeUnattributed` says so, which the controller sets
+   * for the appliance admin alone. NULL means "not attributable to a user"
+   * (maintenance sweeps, telemetry, an id-only event, a payload too malformed to
+   * read a user out of), and those are frequently the most important rows in
+   * the table, so the admin's Jobs page keeps them. They used to be shown to
+   * every account, which was safe only while NULL really meant "nobody's": the
+   * writers left slice letters and `ownerId`-keyed events NULL as well, so a
+   * household member could read, and replay, another member's payloads. See
+   * {@link DeadLetterScope}.
    */
   async listDeadLetters(
     ctx: UserServiceContext,
@@ -982,7 +1002,7 @@ export class PipelineRunService {
               d.failed_at,
               d.replayed_at
          FROM ci.pipeline_dead_letters d
-        WHERE (d.user_id = $1::uuid OR d.user_id IS NULL)
+        WHERE (d.user_id = $1::uuid OR ($7::boolean AND d.user_id IS NULL))
           AND ($2::text IS NULL OR d.queue = $2::text)
           AND ($3::text IS NULL OR d.stage = $3::text)
           AND ($4::boolean IS NULL
@@ -990,7 +1010,15 @@ export class PipelineRunService {
                OR (NOT $4::boolean AND d.replayed_at IS NULL))
         ORDER BY d.failed_at DESC, d.id DESC
         LIMIT $5 OFFSET $6`,
-      [ctx.userId, options.queue ?? null, options.stage ?? null, options.replayed ?? null, limit, offset],
+      [
+        ctx.userId,
+        options.queue ?? null,
+        options.stage ?? null,
+        options.replayed ?? null,
+        limit,
+        offset,
+        options.includeUnattributed === true,
+      ],
     );
 
     return rows.map((row) => ({
@@ -1066,7 +1094,12 @@ export class PipelineRunService {
    * replay-all at interactive priority would push every live request behind a
    * backlog of failures.
    */
-  async replayDeadLetter(ctx: UserServiceContext, letterId: string): Promise<DeadLetterReplayResult> {
+  async replayDeadLetter(
+    ctx: UserServiceContext,
+    letterId: string,
+    scope: DeadLetterScope = {},
+  ): Promise<DeadLetterReplayResult> {
+    const includeUnattributed = scope.includeUnattributed === true;
     const claimed = await this.dataSource.query<DeadLetterRow[]>(
       // CTE-wrapped so the OUTER command is a SELECT. TypeORM's Postgres driver
       // special-cases UPDATE/DELETE and resolves \`[rows, rowCount]\`, so a bare
@@ -1080,15 +1113,15 @@ export class PipelineRunService {
          UPDATE ci.pipeline_dead_letters
             SET replayed_at = now()
           WHERE id = $2::uuid
-            AND (user_id = $1::uuid OR user_id IS NULL)
+            AND (user_id = $1::uuid OR ($3::boolean AND user_id IS NULL))
             AND replayed_at IS NULL
       RETURNING id, queue, event_name, payload, replayed_at)
        SELECT id, queue, event_name, payload, replayed_at FROM claimed`,
-      [ctx.userId, letterId],
+      [ctx.userId, letterId, includeUnattributed],
     );
 
     if (claimed.length === 0) {
-      await this.explainUnclaimableLetter(ctx, letterId);
+      await this.explainUnclaimableLetter(ctx, letterId, includeUnattributed);
     }
 
     return this.emitClaimedLetter(ctx, claimed[0]);
@@ -1165,7 +1198,7 @@ export class PipelineRunService {
       `WITH candidates AS (
          SELECT id
            FROM ci.pipeline_dead_letters
-          WHERE (user_id = $1::uuid OR user_id IS NULL)
+          WHERE (user_id = $1::uuid OR ($6::boolean AND user_id IS NULL))
             AND replayed_at IS NULL
             AND ($2::uuid[] IS NULL OR id = ANY($2::uuid[]))
             AND ($3::text IS NULL OR event_name = $3::text)
@@ -1181,7 +1214,14 @@ export class PipelineRunService {
             AND d.replayed_at IS NULL
       RETURNING d.id, d.queue, d.event_name, d.payload, d.replayed_at)
        SELECT id, queue, event_name, payload, replayed_at FROM claimed`,
-      [ctx.userId, ids, input.eventName ?? null, input.failedAfter ?? null, limit],
+      [
+        ctx.userId,
+        ids,
+        input.eventName ?? null,
+        input.failedAfter ?? null,
+        limit,
+        input.includeUnattributed === true,
+      ],
     );
 
     const replayed: DeadLetterReplayResult[] = [];
@@ -1388,13 +1428,19 @@ export class PipelineRunService {
    * Split from the caller so the happy path issues exactly one statement: this
    * extra read only happens when the claim already failed.
    */
-  private async explainUnclaimableLetter(ctx: UserServiceContext, letterId: string): Promise<never> {
+  private async explainUnclaimableLetter(
+    ctx: UserServiceContext,
+    letterId: string,
+    includeUnattributed: boolean,
+  ): Promise<never> {
+    // The same scope as the claim, so a letter the caller may not see is a 404
+    // here, never a 409 that confirms it exists.
     const rows = await this.dataSource.query<Array<{ replayed_at: Date | null }>>(
       `SELECT d.replayed_at
          FROM ci.pipeline_dead_letters d
         WHERE d.id = $2::uuid
-          AND (d.user_id = $1::uuid OR d.user_id IS NULL)`,
-      [ctx.userId, letterId],
+          AND (d.user_id = $1::uuid OR ($3::boolean AND d.user_id IS NULL))`,
+      [ctx.userId, letterId, includeUnattributed],
     );
 
     if (rows.length === 0) {

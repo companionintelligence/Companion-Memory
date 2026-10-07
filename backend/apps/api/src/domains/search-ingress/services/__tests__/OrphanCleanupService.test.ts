@@ -264,16 +264,51 @@ describe('OrphanCleanupService.cleanOrphans statement timeout', () => {
 });
 
 describe('OrphanCleanupService.truncateSearchIndex', () => {
-  it('truncates every ci_search index table', async () => {
-    const query = jest.fn().mockResolvedValue(undefined);
-    const { service } = makeService(query);
+  function makeTransactional() {
+    const managerQuery = jest.fn(async (sql: string, _params?: unknown[]) =>
+      sql.includes('pipeline_state') ? [{ count: 7 }] : undefined,
+    );
+    const outsideQuery = jest.fn();
+    const transaction = jest.fn(async (body: (manager: unknown) => Promise<unknown>) =>
+      body({ query: managerQuery }),
+    );
+    const dataSource = { query: outsideQuery, transaction } as unknown as DataSource;
+
+    return {
+      service: new OrphanCleanupService(dataSource, makeLogger() as never),
+      managerQuery,
+      outsideQuery,
+      transaction,
+    };
+  }
+
+  it('truncates every ci_search index table inside one transaction', async () => {
+    const { service, managerQuery, outsideQuery, transaction } = makeTransactional();
 
     const result = await service.truncateSearchIndex();
 
-    expect(query).toHaveBeenCalledTimes(3);
-    expect(flat(query.mock.calls[0][0])).toBe('TRUNCATE TABLE "ci_search"."embeddings"');
-    expect(flat(query.mock.calls[1][0])).toBe('TRUNCATE TABLE "ci_search"."vectors"');
-    expect(flat(query.mock.calls[2][0])).toBe('TRUNCATE TABLE "ci_search"."index_skips"');
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(outsideQuery).not.toHaveBeenCalled();
+    expect(flat(managerQuery.mock.calls[0][0])).toBe('TRUNCATE TABLE "ci_search"."embeddings"');
+    expect(flat(managerQuery.mock.calls[1][0])).toBe('TRUNCATE TABLE "ci_search"."vectors"');
+    expect(flat(managerQuery.mock.calls[2][0])).toBe('TRUNCATE TABLE "ci_search"."index_skips"');
     expect(result.truncated).toEqual(['ci_search.embeddings', 'ci_search.vectors', 'ci_search.index_skips']);
+  });
+
+  it("re-opens every account's index ledger rows in the same transaction, so the pipeline re-embeds", async () => {
+    // Without it the ledger still says `done` for everything that was just dropped, and
+    // both the pipeline sweep and the backfill skip a row whose ledger says done.
+    const { service, managerQuery } = makeTransactional();
+
+    const result = await service.truncateSearchIndex();
+
+    const reopen = managerQuery.mock.calls.find(([sql]) => sql.includes('pipeline_state'));
+
+    expect(reopen).toBeDefined();
+    expect(flat(reopen?.[0] ?? '')).toContain('SET stage_version = 0');
+    expect(flat(reopen?.[0] ?? '')).toContain("WHERE stage LIKE 'index.%'");
+    // NULL: no account filter, because the truncate took every account's index.
+    expect(reopen?.[1]).toEqual([null]);
+    expect(result.ledgerRowsReopened).toBe(7);
   });
 });

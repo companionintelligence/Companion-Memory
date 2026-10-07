@@ -19,7 +19,13 @@
  * returning a closure is for. A run is hundreds of thousands of records; this
  * must not be per-record work.
  */
-import { normalizeEmail, normalizeName, normalizePhone } from '@ci/domains/graph';
+import {
+  type IdentifierKey,
+  isPhoneShaped,
+  normalizeEmail,
+  normalizeName,
+  normalizePhone,
+} from '@ci/domains/graph';
 
 /** Does this sender display name belong to the appliance owner? */
 export type IsSelf = (name: string) => boolean;
@@ -60,7 +66,10 @@ export const NOBODY_IS_SELF: IsSelf = () => false;
 export interface SelfIdentity {
   /** `ci.users.name`, plus the name on the owner's own `is_self` Person row. */
   names: string[];
-  /** `ci.users.email` — matched on its local part ("liam.broza" → "liam broza"). */
+  /**
+   * `ci.users.email`. Matched as an address exactly, and its local part
+   * ("liam.broza" → "liam broza") as a display name, exactly too.
+   */
   email: string | null;
   /** Phones on the self Person (`properties.phones` / `.phone`), for exact owner match. */
   phones: string[];
@@ -200,6 +209,13 @@ function containsAll(sub: string[], sup: string[]): boolean {
 interface SelfTarget {
   readonly full: string;
   readonly tokens: string[];
+  /**
+   * Only an exact folded match counts. Set for the email local part: it is a
+   * name in disguise on most accounts, but it is also routinely a word like
+   * "family", "home" or "info", and containment or edit distance against it
+   * would claim anyone whose display name shares one token with it.
+   */
+  readonly exactOnly: boolean;
 }
 
 /**
@@ -212,7 +228,8 @@ interface SelfTarget {
  *
  * A name matches on any of three grounds, in ascending cost: exact folded
  * equality, token containment either way ("Liam" vs "Liam Broza", "Liam A
- * Broza" vs "Liam Broza"), or ≥{@link SIMILARITY_FLOOR} edit similarity.
+ * Broza" vs "Liam Broza"), or ≥{@link SIMILARITY_FLOOR} edit similarity. The
+ * account email's local part matches on the first ground only.
  *
  * FAIL SAFE: with nothing to compare against this returns
  * {@link NOBODY_IS_SELF} rather than a predicate that matches everything or
@@ -221,21 +238,23 @@ interface SelfTarget {
 export function makeIsSelf(identity: SelfIdentity): IsSelf {
   const targets: SelfTarget[] = [];
 
-  const add = (raw: string | null | undefined): void => {
+  const add = (raw: string | null | undefined, exactOnly: boolean): void => {
     const full = raw ? fold(raw) : '';
 
     if (full && !targets.some((target) => target.full === full)) {
-      targets.push({ full, tokens: full.split(' ') });
+      targets.push({ full, tokens: full.split(' '), exactOnly });
     }
   };
 
   for (const name of identity.names) {
-    add(name);
+    add(name, false);
   }
 
   // The email local part is a name in disguise on most accounts, and on an
-  // account created without a display name it is the only signal left.
-  add(identity.email ? identity.email.split('@')[0].replace(/[._+-]/g, ' ') : null);
+  // account created without a display name it is the only signal left. Exact
+  // only: see SelfTarget.exactOnly. Added after the names, so a local part that
+  // folds to the same string as a name keeps that name's looser matching.
+  add(identity.email ? identity.email.split('@')[0].replace(/[._+-]/g, ' ') : null, true);
 
   if (targets.length === 0) {
     return NOBODY_IS_SELF;
@@ -257,9 +276,10 @@ export function makeIsSelf(identity: SelfIdentity): IsSelf {
       targets.some(
         (target) =>
           target.full === candidate ||
-          containsAll(tokens, target.tokens) ||
-          containsAll(target.tokens, tokens) ||
-          similarity(candidate, target.full) >= SIMILARITY_FLOOR,
+          (!target.exactOnly &&
+            (containsAll(tokens, target.tokens) ||
+              containsAll(target.tokens, tokens) ||
+              similarity(candidate, target.full) >= SIMILARITY_FLOOR)),
       );
 
     decided.set(name, verdict);
@@ -269,17 +289,89 @@ export function makeIsSelf(identity: SelfIdentity): IsSelf {
 }
 
 /**
+ * The display-name part of a participant string, or `null` when it has none.
+ *
+ * A mailbox header is `"Display Name" <addr@host>`; the address is not part of
+ * the name, and folding it in ("liam broza x evil example") let a stranger's
+ * address join the tokens a name test reads. So every address-shaped token,
+ * bracketed or bare, is removed first, and a string that was only an address
+ * has no name left.
+ */
+function displayNameOf(trimmed: string): string | null {
+  const name = trimmed.replace(/\S+@\S+/g, ' ').trim();
+
+  return name.length > 0 ? name : null;
+}
+
+/**
+ * Is this email address or phone number itself the owner's?
+ *
+ * The only test that may bind an email or phone participant to the self
+ * Person: the identifier has to BE one of the owner's, compared in the
+ * normalized form `classifyParticipant` produced. A display name that merely
+ * looks like the owner's says nothing about whose mailbox or number it came
+ * from, so it is never consulted here; that is {@link matchOwner}'s name test,
+ * and it belongs to name-only participants.
+ */
+export function matchOwnerIdentifier(
+  identity: SelfIdentity,
+  kind: 'email' | 'phone',
+  valueNormalized: string,
+): OwnerMatch | null {
+  if (valueNormalized.length === 0) {
+    return null;
+  }
+
+  if (kind === 'email') {
+    const ownerEmail = identity.email ? normalizeEmail(identity.email) : null;
+
+    return ownerEmail != null && ownerEmail === valueNormalized
+      ? { kind: 'email', confidence: OWNER_MATCH_CONFIDENCE.email, raw: valueNormalized }
+      : null;
+  }
+
+  return identity.phones.some((phone) => normalizePhone(phone) === valueNormalized)
+    ? { kind: 'phone', confidence: OWNER_MATCH_CONFIDENCE.phone, raw: valueNormalized }
+    : null;
+}
+
+/**
+ * Is this communication participant the owner?
+ *
+ * The one rule the participant link listener and the stub backfill share. An
+ * email or phone participant is the owner only when the address or number
+ * itself is the owner's ({@link matchOwnerIdentifier}): its display name is
+ * whatever the sender typed, so a stranger writing as `"<owner name>"
+ * <x@elsewhere>` stays an ordinary contact. Only a name-only participant (a
+ * chat display name) is matched by name, through {@link matchOwner}.
+ */
+export function matchParticipantOwner(
+  identity: SelfIdentity,
+  key: IdentifierKey,
+  rawName: string,
+): OwnerMatch | null {
+  if (key.kind === 'name') {
+    return matchOwner(identity, rawName.length > 0 ? rawName : key.valueNormalized);
+  }
+
+  return matchOwnerIdentifier(identity, key.kind, key.valueNormalized);
+}
+
+/**
  * Classify a raw string (email, phone, or display name) as the owner when possible.
  *
  * Prefer exact email / phone over fuzzy name so trust policy can treat account
  * email as authoritative while keeping name matches review-gated under
  * cautious/balanced.
+ *
+ * Each test reads only the part of the string it is about. The phone test runs
+ * only on a string that is a phone number end to end ({@link isPhoneShaped}):
+ * every digit in "Support 415 555 0100" used to be read as a number, and a
+ * display name carrying the owner's digits matched as the owner's phone, an
+ * exact identifier in every trust mode. The name test reads the display name
+ * with every address in it removed, so a bare address has no name to test.
  */
-export function matchOwner(
-  identity: SelfIdentity,
-  raw: string,
-  options: { phones?: readonly string[] } = {},
-): OwnerMatch | null {
+export function matchOwner(identity: SelfIdentity, raw: string): OwnerMatch | null {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
     return null;
@@ -291,22 +383,24 @@ export function matchOwner(
     return { kind: 'email', confidence: OWNER_MATCH_CONFIDENCE.email, raw: trimmed };
   }
 
-  const phoneNorm = normalizePhone(trimmed);
+  const phoneNorm = isPhoneShaped(trimmed) ? normalizePhone(trimmed) : null;
   if (phoneNorm != null) {
-    const ownerPhones = options.phones ?? identity.phones;
-    for (const phone of ownerPhones) {
+    // Always the OWNER's phones. There used to be an override here, and the
+    // self-collation heal passed each candidate's own phones through it.
+    for (const phone of identity.phones) {
       if (normalizePhone(phone) === phoneNorm) {
         return { kind: 'phone', confidence: OWNER_MATCH_CONFIDENCE.phone, raw: trimmed };
       }
     }
   }
 
+  const name = displayNameOf(trimmed);
   const isSelf = makeIsSelf(identity);
-  if (!isSelf(trimmed)) {
+  if (name == null || !isSelf(name)) {
     return null;
   }
 
-  const folded = fold(trimmed);
+  const folded = fold(name);
   const exactTargets = new Set<string>();
   for (const name of identity.names) {
     const f = fold(name);
@@ -330,7 +424,7 @@ export function matchOwner(
 }
 
 /** True when this match is exact account email or phone — safe to redirect in all trust modes. */
-export function isExactOwnerIdentifier(match: OwnerMatch): boolean {
+export function isExactOwnerIdentifier(match: Pick<OwnerMatch, 'kind'>): boolean {
   return match.kind === 'email' || match.kind === 'phone';
 }
 
@@ -361,11 +455,17 @@ export function shouldMapContactToSelf(
  * Trust dial for folding owner stubs into self (mirrors `person_self_merge` /
  * graph_entity decide rules without importing PersonalizationService — that
  * barrel closes a maintenance ↔ llm ↔ tools ↔ import cycle).
+ *
+ * `auto` needs an exact identifier, in every trust mode: a merge into self
+ * moves every email and phone the stub holds onto the owner, and a name is not
+ * evidence that those are the owner's. A name match is at most `review`.
  */
 export function decideSelfCollation(
   trustMode: 'cautious' | 'balanced' | 'hands_off',
-  confidence: number,
+  match: Pick<OwnerMatch, 'kind' | 'confidence'>,
 ): 'auto' | 'review' | 'skip' {
+  const { confidence } = match;
+
   if (confidence < 0.7) {
     return 'review';
   }
@@ -375,7 +475,7 @@ export function decideSelfCollation(
   }
 
   if (trustMode === 'hands_off') {
-    return confidence >= 0.7 ? 'auto' : 'review';
+    return isExactOwnerIdentifier(match) ? 'auto' : 'review';
   }
 
   // balanced — never silent-merge owner stubs; People UI is the review surface.

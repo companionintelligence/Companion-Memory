@@ -28,7 +28,7 @@ import { MaintenanceOrchestratorService } from '../services/MaintenanceOrchestra
  * `strength: 0.7`.
  *
  * The per-CANDIDATE judgement for the self-collation leg stays inside
- * `HealSelfCollationService` (`decideSelfCollation(trustMode, match.confidence)`);
+ * `HealSelfCollationService` (`decideSelfCollation(trustMode, match)`);
  * this gate answers the coarser question the schedule raises, which is whether
  * an unattended pass may apply that leg's merges AT ALL.
  */

@@ -33,6 +33,8 @@ export class UpdateConnectionInput {
   @Field(() => [String], { nullable: true })
   activeEndpoints!: string[];
 
-  @Field(() => String, { nullable: true })
-  externalId!: string | null;
+  // No `externalId`. It names the provider account a connection belongs to, and the appliance
+  // sends it to CI Portal to address a stored grant when a connection is disconnected. Every
+  // account on the appliance shares one CI Portal device, so a client that could set it could
+  // point its own disconnect at another account's grant. Only the sign-in completion writes it.
 }

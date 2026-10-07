@@ -181,7 +181,12 @@ const PHONE_SHAPE_REGEX = /^[+()\-.\s\d]+$/;
  */
 const PHONE_MIN_DIGITS = 7;
 
-function isPhoneShaped(trimmed: string): boolean {
+/**
+ * Exported for the owner match in `import/push/self.ts`, which must test a
+ * string as a phone number only when it IS one. Any digits inside a display
+ * name or a mailbox are not a number the owner can be matched on.
+ */
+export function isPhoneShaped(trimmed: string): boolean {
   if (!PHONE_SHAPE_REGEX.test(trimmed)) {
     return false;
   }

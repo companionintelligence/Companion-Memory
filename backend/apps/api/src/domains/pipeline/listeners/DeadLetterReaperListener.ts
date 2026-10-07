@@ -233,11 +233,27 @@ export class DeadLetterReaperListener {
               -- that finds this row matters more than a strict parse, and one
               -- malformed payload must not abort the batch. NULL here means
               -- "not attributable to a user", which is legitimate for
-              -- maintenance and telemetry jobs.
-              CASE
-                WHEN j.data->>'userId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-                THEN (j.data->>'userId')::uuid
-              END,
+              -- maintenance and telemetry jobs, and such a letter is shown to
+              -- the appliance admin only.
+              --
+              -- ownerId is the fallback because the graph and chat events
+              -- (graph.node.upserted, graph.relationship.upserted, chat.generate,
+              -- chat.summarization) name their user that way. Reading userId
+              -- alone filed those as NULL, and a NULL letter used to be listed
+              -- and replayable for every account on the appliance. Each key is
+              -- cast only when it is a uuid on its own, so a malformed userId
+              -- still falls through to a good ownerId. The backfill in
+              -- 20261006065131 applies the same rule to existing rows.
+              COALESCE(
+                CASE
+                  WHEN j.data->>'userId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                  THEN (j.data->>'userId')::uuid
+                END,
+                CASE
+                  WHEN j.data->>'ownerId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                  THEN (j.data->>'ownerId')::uuid
+                END
+              ),
               COALESCE(j.data, '{}'::jsonb),
               COALESCE(
                 NULLIF(j.output->>'message', '') || COALESCE(E'\\n' || (j.output->>'stack'), ''),
