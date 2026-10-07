@@ -212,7 +212,12 @@ describe('ApiKeysSection capability picker', () => {
     // Same reason as the scope checkboxes: an aria-label naming the radio would suppress the
     // description, leaving "Full access" with no statement of what it permits.
     expect(screen.getByRole('radio', { name: 'Read, write & delete' })).toHaveAccessibleDescription(
-      'Also delete memories and other stored data. Deletions cannot be undone.',
+      'Also delete memories and other stored data, merge people and make edits that remove data. Deletions cannot be undone.',
+    );
+    // Editing a person's contacts or renaming a tag can drop data and needs delete; saying "update
+    // existing ones" here promised edits a write key is refused.
+    expect(screen.getByRole('radio', { name: 'Read & write' })).toHaveAccessibleDescription(
+      'Also record new memories and make most edits. An edit that can remove something, such as changing a person’s contact details or renaming a tag, needs “Read, write & delete”.',
     );
   });
 
