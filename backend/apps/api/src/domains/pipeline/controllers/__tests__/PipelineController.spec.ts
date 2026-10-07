@@ -11,7 +11,7 @@ import {
   REQUIRE_SCOPES_KEY,
   WRITE_CAPABILITY,
 } from '@ci/common/decorators';
-import { IdFormatGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { ApplianceAdminGuard, IdFormatGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 
 import { type DeadLetterBulkReplayResult, PipelineRunService } from '../../services/PipelineRunService';
 import { PipelineStateService, type ReleaseQuarantinedInput } from '../../services/PipelineStateService';
@@ -129,20 +129,35 @@ function makeStateService() {
   };
 }
 
+/**
+ * The admin question, doubled. The rule itself (`role === 'admin'`, or an
+ * appliance with no admin yet) is `ApplianceAdminGuard`'s and has its own
+ * tests; this file owns only what the controller does with the answer.
+ */
+function makeAdminGuard() {
+  return { admits: jest.fn(async (_user: { role?: string } | undefined): Promise<boolean> => false) };
+}
+
 describe('PipelineController', () => {
   let app: INestApplication;
   let service: ReturnType<typeof makeService>;
   let stateService: ReturnType<typeof makeStateService>;
+  let adminGuard: ReturnType<typeof makeAdminGuard>;
+  /** What the auth guard would have put on `request.user` for this test's caller. */
+  let caller: { id: string; role: string };
 
   beforeEach(async () => {
     service = makeService();
     stateService = makeStateService();
+    adminGuard = makeAdminGuard();
+    caller = { id: USER, role: 'user' };
 
     const module = await Test.createTestingModule({
       controllers: [PipelineController],
       providers: [
         { provide: PipelineRunService, useValue: service },
         { provide: PipelineStateService, useValue: stateService },
+        { provide: ApplianceAdminGuard, useValue: adminGuard },
         { provide: APP_GUARD, useClass: IdFormatGuard },
       ],
     })
@@ -155,7 +170,8 @@ describe('PipelineController', () => {
     // Stands in for RequestContextMiddleware: `@Context()` reads the request
     // context out of AsyncLocalStorage, and `toServiceContext` 401s without a
     // userId in it.
-    app.use((_req: Request, _res: Response, next: NextFunction) => {
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      (req as Request & { user?: unknown }).user = caller;
       ContextService.run({ traceId: 'test-trace', userId: USER }, () => next());
     });
 
@@ -305,7 +321,14 @@ describe('PipelineController', () => {
 
       expect(service.listDeadLetters).toHaveBeenCalledWith(
         { userId: USER },
-        { queue: 'pipeline-embed', stage: 'index.embed', replayed: false, limit: 10, offset: undefined },
+        {
+          queue: 'pipeline-embed',
+          stage: 'index.embed',
+          replayed: false,
+          limit: 10,
+          offset: undefined,
+          includeUnattributed: false,
+        },
       );
     });
 
@@ -314,7 +337,14 @@ describe('PipelineController', () => {
 
       expect(service.listDeadLetters).toHaveBeenCalledWith(
         { userId: USER },
-        { queue: undefined, stage: undefined, replayed: undefined, limit: undefined, offset: undefined },
+        {
+          queue: undefined,
+          stage: undefined,
+          replayed: undefined,
+          limit: undefined,
+          offset: undefined,
+          includeUnattributed: false,
+        },
       );
     });
 
@@ -322,6 +352,37 @@ describe('PipelineController', () => {
       // Small on purpose: every row carries its payload verbatim and its full
       // error with stack.
       await request(app.getHttpServer()).get('/pipeline/dead-letters?limit=201').expect(400);
+    });
+
+    it("asks about the caller's own account whether letters that name no user join the list", async () => {
+      await request(app.getHttpServer()).get('/pipeline/dead-letters').expect(200);
+
+      expect(adminGuard.admits).toHaveBeenCalledWith(caller);
+    });
+
+    it('lists the letters that name no user for the appliance admin', async () => {
+      caller = { id: USER, role: 'admin' };
+      adminGuard.admits.mockResolvedValueOnce(true);
+
+      await request(app.getHttpServer()).get('/pipeline/dead-letters').expect(200);
+
+      expect(service.listDeadLetters).toHaveBeenCalledWith(
+        { userId: USER },
+        expect.objectContaining({ includeUnattributed: true }),
+      );
+    });
+
+    it('keeps them out when the admin probe cannot answer', async () => {
+      // Fails closed: an unanswerable probe must not be read as "this caller may
+      // see every account's unattributed payloads".
+      adminGuard.admits.mockRejectedValueOnce(new Error('connection refused'));
+
+      await request(app.getHttpServer()).get('/pipeline/dead-letters').expect(200);
+
+      expect(service.listDeadLetters).toHaveBeenCalledWith(
+        { userId: USER },
+        expect.objectContaining({ includeUnattributed: false }),
+      );
     });
   });
 
@@ -337,7 +398,20 @@ describe('PipelineController', () => {
         queue: 'pipeline-enrich',
         jobIds: ['job-1'],
       });
-      expect(service.replayDeadLetter).toHaveBeenCalledWith({ userId: USER }, LETTER_ID);
+      expect(service.replayDeadLetter).toHaveBeenCalledWith({ userId: USER }, LETTER_ID, {
+        includeUnattributed: false,
+      });
+    });
+
+    it('lets the appliance admin replay a letter that names no user, and nobody else', async () => {
+      adminGuard.admits.mockResolvedValueOnce(true);
+
+      await request(app.getHttpServer()).post(`/pipeline/dead-letters/${LETTER_ID}/replay`).expect(200);
+
+      expect(service.replayDeadLetter).toHaveBeenLastCalledWith({ userId: USER }, LETTER_ID, {
+        includeUnattributed: true,
+      });
+      expect(adminGuard.admits).toHaveBeenCalledWith(caller);
     });
 
     it('409s a letter that was already replayed', async () => {
@@ -364,7 +438,13 @@ describe('PipelineController', () => {
 
       expect(service.replayDeadLetters).toHaveBeenCalledWith(
         { userId: USER },
-        { ids: [LETTER_ID, LETTER_2], eventName: undefined, failedAfter: undefined, limit: undefined },
+        {
+          ids: [LETTER_ID, LETTER_2],
+          eventName: undefined,
+          failedAfter: undefined,
+          limit: undefined,
+          includeUnattributed: false,
+        },
       );
       expect(response.body.replayed).toHaveLength(1);
     });
@@ -382,8 +462,24 @@ describe('PipelineController', () => {
           eventName: 'infer.question.answer',
           failedAfter: new Date('2026-08-18T00:00:00.000Z'),
           limit: 25,
+          includeUnattributed: false,
         },
       );
+    });
+
+    it('widens the claim to letters that name no user for the appliance admin only', async () => {
+      adminGuard.admits.mockResolvedValueOnce(true);
+
+      await request(app.getHttpServer())
+        .post('/pipeline/dead-letters/replay')
+        .send({ eventName: 'content.created' })
+        .expect(200);
+
+      expect(service.replayDeadLetters).toHaveBeenCalledWith(
+        { userId: USER },
+        expect.objectContaining({ eventName: 'content.created', includeUnattributed: true }),
+      );
+      expect(adminGuard.admits).toHaveBeenCalledWith(caller);
     });
 
     it('400s an empty selector rather than replaying everything', async () => {

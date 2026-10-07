@@ -103,7 +103,6 @@ describeWithDb(`createConnectionSyncJob ownership (${availability.target})`, () 
     connectionId: GlobalUID.encode('connection', alicesConnection),
     endpointName: 'messages',
     type: 'incremental',
-    status: 'pending',
     ...overrides,
   });
 
@@ -217,9 +216,9 @@ describeWithDb(`createConnectionSyncJob ownership (${availability.target})`, () 
   it("refuses an id another user's job holds, and leaves that job where it was", async () => {
     const before = await jobsTouching(bob, bobsConnection);
 
-    await expect(
-      resolver.createConnectionSyncJob(asAlice(), aliceInput({ id: bobsJob, status: 'success' })),
-    ).rejects.toThrow(`is not owned by ${alice}`);
+    await expect(resolver.createConnectionSyncJob(asAlice(), aliceInput({ id: bobsJob }))).rejects.toThrow(
+      `is not owned by ${alice}`,
+    );
 
     expect(await jobsTouching(bob, bobsConnection)).toEqual(before);
   });

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, type OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -15,6 +15,25 @@ export interface BlueBubblesConfigUpdate {
   password?: string;
   hasPrivateApi: boolean;
   enabled: boolean;
+}
+
+/**
+ * Whether `next` points the connector at a different server than `saved`.
+ *
+ * The stored password only ever goes to the server it was saved for: a save or a test that names
+ * another address must carry its own. Otherwise anyone allowed to change the address (any
+ * administrator, not only the connector's owner) could have the appliance hand the owner's
+ * password to a server of their choosing.
+ */
+export function serverAddressChanges(
+  saved: { host: string; port: number; useHttps: boolean },
+  next: { host?: string; port?: number; useHttps?: boolean },
+): boolean {
+  return (
+    (next.host !== undefined && next.host !== saved.host) ||
+    (next.port !== undefined && next.port !== saved.port) ||
+    (next.useHttps !== undefined && next.useHttps !== saved.useHttps)
+  );
 }
 
 /**
@@ -45,11 +64,53 @@ export const SYNC_HEARTBEAT_MS = 30_000;
  * 404'd forever.
  */
 @Injectable()
-export class BlueBubblesConfigService {
+export class BlueBubblesConfigService implements OnModuleInit {
+  /**
+   * The connector's owner as of the last time this process read the row, or
+   * `undefined` before the first read. See {@link lastKnownOwnerUserId}.
+   */
+  private knownOwnerUserId: string | null | undefined = undefined;
+
   constructor(
     @InjectRepository(BlueBubblesConfigEntity)
     private readonly repo: Repository<BlueBubblesConfigEntity>,
   ) {}
+
+  /**
+   * Read the row once at boot so {@link lastKnownOwnerUserId} has an answer
+   * before the first tool list is built. Best-effort: a database that is not up
+   * yet leaves the answer unknown, which hides the messaging tools from
+   * everyone until the next read rather than showing them to anyone.
+   */
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.find();
+    } catch {
+      // Unknown stays unknown; the next read of the row fills it in.
+    }
+  }
+
+  /**
+   * The connector's owner as this process last saw it, without a query.
+   *
+   * For the `messaging.*` tools' schemas, which the tool registry reads
+   * synchronously to decide who may see and run them. Every read of the row in
+   * this process refreshes it (the settings page, a save, each sync tick,
+   * each messaging call), so it lags a change made in ANOTHER process by at
+   * most one cron tick. The lag can only hide a tool or show it to the previous
+   * owner; it cannot run one for the wrong account, because
+   * `BlueBubblesClientService` checks the owner against the database on every
+   * call.
+   */
+  lastKnownOwnerUserId(): string | null {
+    return this.knownOwnerUserId ?? null;
+  }
+
+  private remember<T extends BlueBubblesConfigEntity | null>(row: T): T {
+    this.knownOwnerUserId = row?.ownerUserId ?? null;
+
+    return row;
+  }
 
   /**
    * The config row if one exists — never minting it.
@@ -62,7 +123,7 @@ export class BlueBubblesConfigService {
   async find(): Promise<BlueBubblesConfigEntity | null> {
     const [existing] = await this.repo.find({ order: { createdAt: 'ASC' }, take: 1 });
 
-    return existing ?? null;
+    return this.remember(existing ?? null);
   }
 
   /**
@@ -101,7 +162,18 @@ export class BlueBubblesConfigService {
     return created;
   }
 
-  async update(input: BlueBubblesConfigUpdate): Promise<BlueBubblesConfigEntity> {
+  /**
+   * Save the connection settings.
+   *
+   * `actorUserId` is the administrator saving them. They become the
+   * connector's owner when it has none, or when its owner's account no longer
+   * exists (soft-deleted, or removed outright and nulled by the foreign key).
+   * Otherwise the owner stays as it is: another administrator adjusting the
+   * settings, or toggling the connector off, does not take over somebody
+   * else's messages. The claim is decided inside the UPDATE so two saves
+   * racing on an unowned row cannot both win.
+   */
+  async update(input: BlueBubblesConfigUpdate, actorUserId: string): Promise<BlueBubblesConfigEntity> {
     const existing = await this.getOrCreate();
 
     // Refused rather than saved. `enabled` with no password stored is a
@@ -116,12 +188,29 @@ export class BlueBubblesConfigService {
       );
     }
 
+    // The stored password is the owner's credential for their Mac. Keeping it while the address
+    // changes would have the next sync (and the owner's messaging tools) send it to whatever
+    // server the saver named, which is how another administrator could read it.
+    if (!input.password && existing.password.length > 0 && serverAddressChanges(existing, input)) {
+      throw new BadRequestException(
+        'Enter the BlueBubbles server password again to change the server address.',
+      );
+    }
+
     await this.repo.manager.query(
-      `UPDATE ci.bluebubbles_config
+      `UPDATE ci.bluebubbles_config c
           SET host = $2, port = $3, use_https = $4,
               password = COALESCE($5, password),
-              has_private_api = $6, enabled = $7, updated_at = now()
-        WHERE id = $1`,
+              has_private_api = $6, enabled = $7,
+              owner_user_id = CASE
+                WHEN c.owner_user_id IS NULL
+                  OR NOT EXISTS (SELECT 1 FROM ci.users u
+                                  WHERE u.id = c.owner_user_id AND u.deleted_at IS NULL)
+                THEN $8::uuid
+                ELSE c.owner_user_id
+              END,
+              updated_at = now()
+        WHERE c.id = $1`,
       [
         existing.id,
         input.host,
@@ -130,10 +219,32 @@ export class BlueBubblesConfigService {
         input.password ?? null,
         input.hasPrivateApi,
         input.enabled,
+        actorUserId,
       ],
     );
 
-    return this.repo.findOneOrFail({ where: { id: existing.id } });
+    return this.remember(await this.repo.findOneOrFail({ where: { id: existing.id } }));
+  }
+
+  /**
+   * Replace the webhook secret, which is the only credential on
+   * `POST /api/bluebubbles/webhook/:secret`.
+   *
+   * An administrator action, never automatic: the moment this runs, the URL
+   * pasted into BlueBubbles Server stops working until someone pastes the new
+   * one, and until then live messages only arrive on the ten-minute backstop
+   * poll. That trade is the owner's to make, for instance after the old URL was
+   * shown to somebody who should not have it.
+   */
+  async rotateWebhookSecret(): Promise<BlueBubblesConfigEntity> {
+    const existing = await this.getOrCreate();
+
+    await this.repo.manager.query(
+      `UPDATE ci.bluebubbles_config SET webhook_secret = $2, updated_at = now() WHERE id = $1`,
+      [existing.id, crypto.randomBytes(32).toString('hex')],
+    );
+
+    return this.remember(await this.repo.findOneOrFail({ where: { id: existing.id } }));
   }
 
   async recordConnectionResult(

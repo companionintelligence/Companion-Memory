@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Headers,
   HttpCode,
@@ -11,12 +12,12 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import type { Request, Response } from 'express';
+import type { Response } from 'express';
 import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
-import { BodyLimit } from '@ci/common/decorators';
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { BodyLimit, FULL_CAPABILITY, RequireCapability } from '@ci/common/decorators';
+import { type ApiKeyScopedRequest, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import {
   PORTABILITY_NDJSON_CONTENT_TYPE,
@@ -25,6 +26,8 @@ import {
   type UserDataArchive,
 } from '@ci/domains/portability';
 import { UserService } from '@ci/domains/user';
+
+import { isManagedAppPrincipal } from '../types';
 
 const importArchiveSchema = z.object({
   confirmEmail: z.string().min(1),
@@ -45,12 +48,25 @@ const importArchiveSchema = z.object({
   }),
 });
 
+/** Replacing the whole account is the owner's act, never a connected app's. */
+function refuseInstalledApp(req: ApiKeyScopedRequest): void {
+  if (isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy })) {
+    throw new ForbiddenException("An installed app cannot replace this account's data");
+  }
+}
+
 /**
  * Export / import the authenticated user's Memory data as a portable archive.
  *
  * Large accounts use NDJSON streaming (`application/x-ndjson`) so neither side
  * has to buffer the full archive in memory. Small legacy JSON import remains
  * available for older export files.
+ *
+ * Both import routes need `full` from an api key and refuse an installed app's
+ * key outright. An import first DELETES every row the account owns in every
+ * table it restores, so an archive with empty tables empties the account: that
+ * is the destructive tier, not the `write` a POST gets by shape. Export is a GET
+ * and stays at `read`.
  */
 @Controller('account')
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -67,12 +83,15 @@ export class AccountDataController {
   }
 
   @Post('import/stream')
+  @RequireCapability(FULL_CAPABILITY)
   @HttpCode(HttpStatus.OK)
   async importStream(
     @Context() context: RequestContext,
-    @Req() req: Request,
+    @Req() req: ApiKeyScopedRequest,
     @Headers('x-confirm-email') confirmEmailHeader?: string,
   ) {
+    refuseInstalledApp(req);
+
     if (!isPortabilityNdjsonImport(req)) {
       throw new BadRequestException(`Expected Content-Type: ${PORTABILITY_NDJSON_CONTENT_TYPE}`);
     }
@@ -89,13 +108,17 @@ export class AccountDataController {
   }
 
   @Post('import')
+  @RequireCapability(FULL_CAPABILITY)
   @BodyLimit('500mb')
   @HttpCode(HttpStatus.OK)
   async importLegacy(
     @Context() context: RequestContext,
+    @Req() req: ApiKeyScopedRequest,
     @Body(new ValidationPipe(importArchiveSchema))
     body: z.infer<typeof importArchiveSchema>,
   ) {
+    refuseInstalledApp(req);
+
     const serviceContext = toServiceContext(context);
     const user = await this.userService.findById(serviceContext, serviceContext.userId);
 

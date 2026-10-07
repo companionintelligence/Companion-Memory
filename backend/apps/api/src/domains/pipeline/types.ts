@@ -567,6 +567,14 @@ export interface DeadLetterInput {
   entityType?: string | null;
   entityId?: string | null;
 
+  /**
+   * The user the failed job worked for. Written to `user_id`, which is what
+   * scopes the letter to that user on the Jobs page and in replay, and what
+   * export and erasure find it by. Leave it out only for work no user owns: a
+   * NULL letter is shown to the appliance admin alone.
+   */
+  userId?: string | null;
+
   /** The payload VERBATIM. Never trimmed — it is routinely the only surviving copy. */
   payload: Record<string, unknown>;
 

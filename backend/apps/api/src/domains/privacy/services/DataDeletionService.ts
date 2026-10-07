@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
@@ -383,6 +383,29 @@ export class DataDeletionService {
    * pointless here — its `refresh_token` is a Portal proxy token the provider
    * has never seen, and the access token dies on its own within the hour.
    *
+   * ── Which credential, on an appliance with more than one account ─────────
+   *
+   * Portal knows this appliance as ONE device, whichever account is signed in,
+   * and keeps one credential per (device, provider, provider account). The
+   * proxy refresh token names this connection's own grant. The provider
+   * account id does not: it names whichever grant this device holds for that
+   * account, and `external_id` is not proof the account is the caller's. So:
+   *
+   * - When another account here has any connection to the same provider, the
+   *   id is never sent. Only the token speaks, and with no token there is
+   *   nothing of this connection's to revoke. Otherwise one account's
+   *   disconnect deleted another account's grant at Portal (and, for Google,
+   *   revoked it upstream). Matching on `external_id` would not be enough:
+   *   for a grant Portal stored no refresh token for, the id came from the
+   *   browser, and the other account's row may hold the id in another form
+   *   or not at all (proxied connections made before the id was recorded).
+   * - Otherwise the token and the id go together, as before. A newer Portal
+   *   matches the token alone when one is sent, so a token that went stale (a
+   *   rotation this appliance failed to save) finds nothing; then the id alone
+   *   is sent once, which is what clears that row. With no other account on
+   *   this provider, any row Portal holds for the id is this account's own or
+   *   an orphan.
+   *
    * @returns true only when Portal deleted at least one credential and every
    *   upstream revocation it attempted succeeded — so a provider that never
    *   issues refresh tokens (Facebook) reports false, as before, because there
@@ -391,11 +414,17 @@ export class DataDeletionService {
   private async revokeViaPortal(connection: ConnectionEntity): Promise<boolean> {
     try {
       const provider = this.cloudOAuthProxyService.getProviderNameForId(connection.providerId!)!;
-      const result = await this.cloudOAuthProxyService.revokeToken({
+      const accountId = (await this.providerUsedByAnotherUser(connection)) ? null : connection.externalId;
+
+      let result = await this.cloudOAuthProxyService.revokeToken({
         proxyRefreshToken: connection.refreshToken,
         provider,
-        userProviderId: connection.externalId,
+        userProviderId: accountId,
       });
+
+      if (result.tokens_deleted === 0 && connection.refreshToken && accountId) {
+        result = await this.cloudOAuthProxyService.revokeToken({ provider, userProviderId: accountId });
+      }
 
       if (result.tokens_deleted > 0 && !result.revocation_ok) {
         this.logger.warn('CI Portal deleted the stored credential but the provider refused revocation', {
@@ -412,6 +441,42 @@ export class DataDeletionService {
       });
 
       return false;
+    }
+  }
+
+  /**
+   * Whether another account on this appliance has a connection (active or
+   * not) to the same provider. Inactive rows count: a paused connection still
+   * holds its grant at Portal.
+   *
+   * Deliberately not narrowed to the same `external_id`: that id is not proof
+   * of whose grant Portal holds (see {@link revokeViaPortal}). The cost is the
+   * stale-token fallback on an appliance where two accounts use one provider:
+   * Portal's row stays, and the grant stays live until it is revoked at the
+   * provider.
+   *
+   * A probe that fails reads as "used". That only costs the id fallback,
+   * while the opposite mistake could delete another account's grant.
+   */
+  private async providerUsedByAnotherUser(connection: ConnectionEntity): Promise<boolean> {
+    if (connection.externalId == null || connection.externalId === '' || connection.providerId == null) {
+      return false;
+    }
+
+    try {
+      return await this.connectionRepository.exists({
+        where: {
+          providerId: connection.providerId,
+          userId: Not(connection.userId),
+        },
+      });
+    } catch (error) {
+      this.logger.warn('Could not tell whether another account uses this provider; revoking by token only', {
+        connectionId: connection.id,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+
+      return true;
     }
   }
 

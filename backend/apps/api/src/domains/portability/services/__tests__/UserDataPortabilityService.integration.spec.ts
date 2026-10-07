@@ -53,6 +53,8 @@ describeWithDatabase(
     let service: UserDataPortabilityService;
 
     const testUserId = randomUUID();
+    // A second account on the same box, for the cross-account cases below.
+    const otherUserId = randomUUID();
     const noopServices = {
       fileService: { getFileContent: jest.fn(), putObject: jest.fn() },
       userService: { findById: jest.fn() },
@@ -100,19 +102,33 @@ describeWithDatabase(
 
       // A disposable user, invented for this file alone: `ci.notes.user_id`
       // has an FK into `ci.users`, so the seeded rows below need a real parent.
-      await dataSource.query('INSERT INTO ci.users (id) VALUES ($1::uuid)', [testUserId]);
+      await dataSource.query('INSERT INTO ci.users (id) VALUES ($1::uuid), ($2::uuid)', [
+        testUserId,
+        otherUserId,
+      ]);
     });
+
+    const cleanUp = async (): Promise<void> => {
+      const users = [testUserId, otherUserId];
+
+      await dataSource.query('DELETE FROM ci.notes WHERE user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.receipts WHERE user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.federated_identities WHERE user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.mcp_server_configs WHERE user_id = ANY($1::uuid[])', [users]);
+    };
 
     afterAll(async () => {
       if (dataSource?.isInitialized) {
-        await dataSource.query('DELETE FROM ci.notes WHERE user_id = $1::uuid', [testUserId]);
-        await dataSource.query('DELETE FROM ci.users WHERE id = $1::uuid', [testUserId]);
+        await cleanUp();
+        await dataSource.query('DELETE FROM ci.users WHERE id = ANY($1::uuid[])', [
+          [testUserId, otherUserId],
+        ]);
         await dataSource.destroy();
       }
     });
 
     afterEach(async () => {
-      await dataSource.query('DELETE FROM ci.notes WHERE user_id = $1::uuid', [testUserId]);
+      await cleanUp();
     });
 
     it('commits: delete-then-restore leaves exactly the archived rows behind, nothing stale', async () => {
@@ -226,6 +242,169 @@ describeWithDatabase(
 
       const rows = await notesFor();
       expect(rows).toEqual([{ id: freshId, title: 'from-ndjson-stream' }]);
+    });
+
+    const streamOf = (records: unknown[]): never => {
+      const text = `${records.map((line) => JSON.stringify(line)).join('\n')}\n`;
+
+      return {
+        setEncoding: () => undefined,
+
+        [Symbol.asyncIterator]: async function* () {
+          yield text;
+        },
+      } as never;
+    };
+
+    const manifest = () => ({
+      type: 'manifest',
+      version: 1,
+      format: 'ndjson',
+      exportedAt: new Date().toISOString(),
+      userId: testUserId,
+      profile: null,
+    });
+
+    const receiptOwners = async (receiptId: string) =>
+      dataSource.query('SELECT user_id, owner_user_id FROM ci.receipts WHERE receipt_id = $1::uuid', [
+        receiptId,
+      ]) as Promise<Array<{ user_id: string; owner_user_id: string | null }>>;
+
+    it('an imported row names only the importer, even when the archive names another account (both paths)', async () => {
+      noopServices.userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+
+      // ci.receipts carries user_id AND owner_user_id. Before, only one of the
+      // two was set to the importer and the other came from the archive, so
+      // the row could land in otherUserId's account.
+      const viaJson = randomUUID();
+
+      await service.importArchive({ userId: testUserId } as never, {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: testUserId,
+        profile: null,
+        tables: {
+          'ci.receipts': [{ receipt_id: viaJson, user_id: otherUserId, owner_user_id: otherUserId }],
+        },
+        fileBlobs: [],
+      });
+
+      expect(await receiptOwners(viaJson)).toEqual([{ user_id: testUserId, owner_user_id: testUserId }]);
+
+      const viaStream = randomUUID();
+
+      await service.importNdjsonStream(
+        { userId: testUserId } as never,
+        streamOf([
+          manifest(),
+          {
+            type: 'row',
+            table: 'ci.receipts',
+            row: { receipt_id: viaStream, user_id: otherUserId, owner_user_id: otherUserId },
+          },
+        ]),
+        'jane@example.com',
+      );
+
+      expect(await receiptOwners(viaStream)).toEqual([{ user_id: testUserId, owner_user_id: testUserId }]);
+    });
+
+    it("leaves another account's row alone when only its detected owner names the importer", async () => {
+      // user_id says whose row it is; owner_user_id is an attribution. The
+      // pre-import delete used to run once per column and took this row too.
+      const theirs = randomUUID();
+
+      await dataSource.query(
+        'INSERT INTO ci.receipts (receipt_id, user_id, owner_user_id) VALUES ($1::uuid, $2::uuid, $3::uuid)',
+        [theirs, otherUserId, testUserId],
+      );
+
+      await service.importArchive({ userId: testUserId } as never, {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: testUserId,
+        profile: null,
+        tables: {},
+        fileBlobs: [],
+      });
+
+      expect(await receiptOwners(theirs)).toEqual([{ user_id: otherUserId, owner_user_id: testUserId }]);
+
+      noopServices.userService.findById = jest.fn().mockResolvedValue(null);
+      const archive = await service.exportArchive({ userId: testUserId } as never);
+
+      expect(archive.tables['ci.receipts']).toEqual([]);
+    });
+
+    it('does not restore a sign-in link or an MCP server, and an older archive carrying them still imports', async () => {
+      noopServices.userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+
+      const noteId = randomUUID();
+
+      await service.importNdjsonStream(
+        { userId: testUserId } as never,
+        streamOf([
+          manifest(),
+          {
+            type: 'row',
+            table: 'ci.federated_identities',
+            row: { user_id: testUserId, issuer: 'https://idp.example.com', subject: `sub-${noteId}` },
+          },
+          {
+            type: 'row',
+            table: 'ci.mcp_server_configs',
+            row: {
+              id: randomUUID(),
+              user_id: testUserId,
+              name: 'Archived server',
+              slug: `archived-${noteId.slice(0, 8)}`,
+              transport: 'stdio',
+              command: 'true',
+              enabled: true,
+            },
+          },
+          { type: 'row', table: 'ci.notes', row: { id: noteId, title: 'kept', user_id: testUserId } },
+        ]),
+        'jane@example.com',
+      );
+
+      const [identities] = await dataSource.query(
+        'SELECT count(*)::int AS n FROM ci.federated_identities WHERE user_id = $1::uuid',
+        [testUserId],
+      );
+      const [servers] = await dataSource.query(
+        'SELECT count(*)::int AS n FROM ci.mcp_server_configs WHERE user_id = $1::uuid',
+        [testUserId],
+      );
+
+      expect(identities.n).toBe(0);
+      expect(servers.n).toBe(0);
+      expect(await notesFor()).toEqual([{ id: noteId, title: 'kept' }]);
+    });
+
+    it('keeps the sign-in links the account already has across an import', async () => {
+      // Excluded tables are neither deleted nor restored: an import must not
+      // sign the owner out of CI-Portal either.
+      await dataSource.query(
+        'INSERT INTO ci.federated_identities (user_id, issuer, subject) VALUES ($1::uuid, $2, $3)',
+        [testUserId, 'https://idp.example.com', `kept-${testUserId}`],
+      );
+
+      await service.importArchive({ userId: testUserId } as never, {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: testUserId,
+        profile: null,
+        tables: {},
+        fileBlobs: [],
+      });
+
+      const [identities] = await dataSource.query(
+        'SELECT count(*)::int AS n FROM ci.federated_identities WHERE user_id = $1::uuid',
+        [testUserId],
+      );
+
+      expect(identities.n).toBe(1);
     });
   },
 );

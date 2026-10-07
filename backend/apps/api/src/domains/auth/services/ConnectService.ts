@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { SYSTEM_USER } from '@ci/common/context';
 import {
+  AGENT_JOBS_SCOPE,
   CAPTURE_SCOPE,
   FULL_CAPABILITY,
   INTENTS_SCOPE,
@@ -73,15 +74,21 @@ export function scopesForApp(appUrn: string): string[] {
   switch (appName) {
     case 'ci-openclaw':
     case 'ci-hermes':
-      // Chat-agent tier: the three capabilities these agents use — long-term
-      // memory (`/memory/*`, and `/v1/agent/jobs` dispatch), the agent intent
-      // catalog (`/intents`, `/agent/intents`, `POST /intents/:name/execute`),
-      // and the MCP endpoint (`/mcp`). Deliberately confined OFF the raw data
+      // Chat-agent tier: the capabilities these agents use, which are long-term memory
+      // (`/memory/*`), the agent intent catalog (`/intents`, `/agent/intents`,
+      // `POST /intents/:name/execute`), the MCP endpoint (`/mcp`), and the
+      // dispatch plane (`/v1/agent/jobs`, where CI-OpenClaw fetches a job's
+      // packet and checkpoints it). Deliberately confined OFF the raw data
       // plane (GraphQL, `/files`, `/v1` bulk ingest, `/maintenance`) — that
       // confinement is the whole point of scoping these apps. Kept as a single
       // tier (rather than per-agent) so it can't break whichever of intents/mcp
       // each agent actually exercises.
-      return [...DEFAULT_CONNECT_SCOPES];
+      //
+      // `agent-jobs` is added HERE and not to DEFAULT_CONNECT_SCOPES, which the
+      // default branch below also returns: an app nobody reviewed must not be
+      // able to hand the harness a task. Keys minted before the scope existed
+      // got it from migration 20261006071435, not from a rotation.
+      return [...DEFAULT_CONNECT_SCOPES, AGENT_JOBS_SCOPE];
     case 'ci-web-xr-scan':
     case 'ci-capture':
       // Capture tier: write observations in, read nothing back. Companion Scan
@@ -104,6 +111,8 @@ export function scopesForApp(appUrn: string): string[] {
     //  - ci-ha-voice (CI-Home-Assistant-Voice-PE) grounds each spoken answer in
     //    `/memory/context` + `/memory/recall` and saves the exchange with
     //    `/memory/turn`. It runs no tools and reads no raw data.
+    //  None of them reaches `/v1/agent/jobs`, which used to sit under `memory`
+    //  and now has its own scope (see AGENT_JOBS_SCOPE).
     case 'ci-glasses-bridge':
     case 'ci-mentra':
     case 'ci-ha-voice':

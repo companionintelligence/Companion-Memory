@@ -57,13 +57,18 @@ export function ProviderConnectDialog({
   });
 
   const provider = data?.provider;
-  const [{ authorizationUrl, loading: connectLoading, error, apiKey, setApiKey }, { connect }] =
-    useConnectService();
+  const [
+    { authorizationUrl, loading: connectLoading, error, apiKey, setApiKey, account, setAccount },
+    { connect },
+  ] = useConnectService();
 
   const isOpenId = provider?.authType === 'openid';
   const isApiKey = provider?.authType === 'api_key';
   const requiresApiKey = isOpenId || isApiKey;
-  const isConnectDisabled = requiresApiKey && (apiKey == null || apiKey.length === 0);
+  // An api_key provider (Signal) serves several accounts, so the number to connect is named too.
+  const isConnectDisabled =
+    (requiresApiKey && (apiKey == null || apiKey.length === 0)) ||
+    (isApiKey && (account == null || account.trim().length === 0));
 
   const handleConnect = useCallback(() => {
     if (!provider || !rawProviderId) {
@@ -98,11 +103,15 @@ export function ProviderConnectDialog({
       return;
     }
 
-    toast.error('Error connecting to API');
+    // The server's own reason, as ProviderPage shows it: "Only an administrator can connect
+    // Signal", "The Signal service does not hold that number" and the like are the answer.
+    const message = error instanceof Error && error.message ? error.message : 'Please try again.';
+
+    toast.error(`Could not connect to ${provider?.name ?? 'this service'}. ${message}`);
     if (resumeOnboarding) {
       localStorage.removeItem(ONBOARDING_OAUTH_RESUME_KEY);
     }
-  }, [error, resumeOnboarding, toast]);
+  }, [error, provider?.name, resumeOnboarding, toast]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -160,6 +169,24 @@ export function ProviderConnectDialog({
                     value={apiKey ?? ''}
                     onChange={(e) => setApiKey(e.target.value)}
                   />
+                </div>
+              )}
+
+              {isApiKey && (
+                <div className="space-y-2">
+                  <Label htmlFor="provider-account">{`Your ${provider.name} number`}</Label>
+                  <Input
+                    id="provider-account"
+                    type="tel"
+                    autoComplete="off"
+                    placeholder="+15551234567"
+                    value={account ?? ''}
+                    onChange={(e) => setAccount(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    The number registered with the service. Only an administrator can connect it, and each
+                    number can belong to one account.
+                  </p>
                 </div>
               )}
 

@@ -3,13 +3,13 @@ import { z } from 'zod';
 
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { HbpeService, type ForecastResponse } from '@ci/domains/predictions';
+import { FORECAST_HORIZONS, HbpeService, type ForecastResponse } from '@ci/domains/predictions';
 
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
 const ForecastReadInputSchema = z.object({
-  horizon: z.enum(['24h']).optional().default('24h'),
+  horizon: z.enum(FORECAST_HORIZONS).optional().default('24h'),
 });
 
 export type ForecastReadInput = z.infer<typeof ForecastReadInputSchema>;
@@ -99,7 +99,7 @@ export class ForecastReadTool extends BaseTool<ForecastReadInput, ForecastReadOu
       properties: {
         horizon: {
           type: 'string',
-          enum: ['24h'],
+          enum: [...FORECAST_HORIZONS],
           default: '24h',
           description: "Forecast horizon; only '24h' (96 × 15-minute buckets) is supported.",
         },

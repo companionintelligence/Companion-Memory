@@ -15,6 +15,7 @@ import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import {
+  AGENT_JOBS_SCOPE,
   API_KEY_CAPABILITIES,
   CAPTURE_SCOPE,
   INTENTS_SCOPE,
@@ -50,7 +51,9 @@ const apiKeyName = z
  * that authenticates fine and is then refused everywhere — a silent, hard-to-diagnose dead key.
  * An empty array keeps its grandfathered meaning: full user authority.
  */
-const apiKeyScopes = z.array(z.enum([MEMORY_SCOPE, INTENTS_SCOPE, MCP_SCOPE, CAPTURE_SCOPE])).optional();
+const apiKeyScopes = z
+  .array(z.enum([MEMORY_SCOPE, INTENTS_SCOPE, MCP_SCOPE, CAPTURE_SCOPE, AGENT_JOBS_SCOPE]))
+  .optional();
 
 /**
  * What the key may DO on the surfaces its scopes reach. Optional on both create and update so a

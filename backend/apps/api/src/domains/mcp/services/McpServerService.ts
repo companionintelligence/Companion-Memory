@@ -78,7 +78,12 @@ export class McpServerService {
             {
               uri: uri.href,
               mimeType: 'application/json',
-              text: JSON.stringify(this.intentCatalog.getManifest(), null, 2),
+              // Per caller: an intent owned by one account is listed to that account only.
+              text: JSON.stringify(
+                this.intentCatalog.getManifest({ userId: (req.user as { id?: string } | undefined)?.id }),
+                null,
+                2,
+              ),
             },
           ],
         }),

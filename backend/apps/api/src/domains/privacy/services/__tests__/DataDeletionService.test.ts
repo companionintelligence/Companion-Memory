@@ -194,6 +194,17 @@ function makeService(opts: {
         .filter((x) => x.userId === where.userId)
         .map((c) => ({ ...c, provider: { id: c.providerId } })),
     ),
+    // `userId: Not(<caller>)`: another account's connection to the same provider. Matches only on
+    // the keys the service asks about, so a narrower query would show up as a different answer.
+    exists: jest.fn(
+      async ({ where }: { where: { providerId: string; externalId?: string; userId: { value: string } } }) =>
+        opts.connections.some(
+          (x) =>
+            x.providerId === where.providerId &&
+            (!('externalId' in where) || x.externalId === where.externalId) &&
+            x.userId !== where.userId.value,
+        ),
+    ),
   };
 
   const savedAudits: Array<Record<string, unknown>> = [];
@@ -585,6 +596,129 @@ describe('DataDeletionService.revokeConnectionGrant via CI Portal', () => {
     expect(store['ci.connections']).toEqual([]);
     expect(store['ci.communications']).toEqual([]);
     expect(savedAudits[0]).toMatchObject({ scope: 'connection', tokenRevoked: false });
+  });
+
+  /**
+   * Every account on the appliance shares one CI Portal device, and Portal keeps one credential
+   * per (device, provider, provider account). The account id names whichever grant the device
+   * holds for that account, not this connection's: sent alongside the token, it let one
+   * account's disconnect delete another account's grant.
+   */
+  describe('when another account here has a connection to the same provider', () => {
+    const members = {
+      id: 'conn-member',
+      userId: 'member-1',
+      providerId: 'google-provider-id',
+      accessToken: 'member-access',
+      refreshToken: 'member-proxy-token',
+      // Claims the owner's Google account id.
+      externalId: 'google-user-123',
+    };
+    const owners = { ...proxied, id: 'conn-owner', userId: 'owner-1', refreshToken: 'owner-proxy-token' };
+
+    it('revokes by its own proxy token only, never by the shared account id', async () => {
+      const revoke = jest.fn(async () => ({ success: true, tokens_deleted: 0, revocation_ok: true }));
+      const { service } = makeService({
+        connections: [members, owners],
+        store: { 'ci.connections': [{ user: 'member-1', connection: 'conn-member' }] },
+        portal: { configured: true, providerName: 'google', revoke },
+        providerKey: null,
+      });
+
+      await service.disconnectConnection({ userId: 'member-1' }, 'conn-member');
+
+      // Once, token only. Not retried by id when the token matched nothing, either.
+      expect(revoke).toHaveBeenCalledTimes(1);
+      expect(revoke).toHaveBeenCalledWith({
+        proxyRefreshToken: 'member-proxy-token',
+        provider: 'google',
+        userProviderId: null,
+      });
+    });
+
+    it('sends nothing Portal could match on when it holds no proxy token of its own', async () => {
+      const revoke = jest.fn(async () => ({ success: true, tokens_deleted: 0, revocation_ok: true }));
+      const { service } = makeService({
+        connections: [{ ...members, refreshToken: null }, owners],
+        store: { 'ci.connections': [{ user: 'member-1', connection: 'conn-member' }] },
+        portal: { configured: true, providerName: 'google', revoke },
+        providerKey: null,
+      });
+
+      await service.disconnectConnection({ userId: 'member-1' }, 'conn-member');
+
+      expect(revoke).not.toHaveBeenCalledWith(expect.objectContaining({ userProviderId: 'google-user-123' }));
+    });
+
+    it('never sends the id while another account uses the provider, whatever id that account recorded', async () => {
+      // The owner connected before the appliance recorded provider ids (or under another form of
+      // it), and the member's id came from the browser on a completion with no refresh token.
+      const revoke = jest.fn(async () => ({ success: true, tokens_deleted: 0, revocation_ok: true }));
+
+      for (const ownerExternalId of [null, 'octocat']) {
+        revoke.mockClear();
+
+        const { service } = makeService({
+          connections: [members, { ...owners, externalId: ownerExternalId }],
+          store: { 'ci.connections': [{ user: 'member-1', connection: 'conn-member' }] },
+          portal: { configured: true, providerName: 'google', revoke },
+          providerKey: null,
+        });
+
+        await service.disconnectConnection({ userId: 'member-1' }, 'conn-member');
+
+        expect(revoke).toHaveBeenCalledTimes(1);
+        expect(revoke).toHaveBeenCalledWith({
+          proxyRefreshToken: 'member-proxy-token',
+          provider: 'google',
+          userProviderId: null,
+        });
+      }
+    });
+
+    it('revokes by token only when the check for another account fails', async () => {
+      const revoke = jest.fn(async () => ({ success: true, tokens_deleted: 1, revocation_ok: true }));
+      const { service, connectionRepository } = makeService({
+        connections: [members],
+        store: { 'ci.connections': [{ user: 'member-1', connection: 'conn-member' }] },
+        portal: { configured: true, providerName: 'google', revoke },
+        providerKey: null,
+      });
+      connectionRepository.exists.mockRejectedValueOnce(new Error('connection reset'));
+
+      await service.disconnectConnection({ userId: 'member-1' }, 'conn-member');
+
+      expect(revoke).toHaveBeenCalledWith(expect.objectContaining({ userProviderId: null }));
+    });
+  });
+
+  it('retries by account id alone when its proxy token matched nothing and no other account uses the provider', async () => {
+    // A newer Portal matches the token alone when one is sent, so a token that went stale (a
+    // rotation this appliance failed to save) finds nothing. The id alone then clears the row.
+    const revoke = jest
+      .fn()
+      .mockResolvedValueOnce({ success: true, tokens_deleted: 0, revocation_ok: true })
+      .mockResolvedValueOnce({ success: true, tokens_deleted: 1, revocation_ok: true });
+    const { service } = makeService({
+      connections: [proxied],
+      store: { 'ci.connections': [{ user: 'user-1', connection: 'conn-1' }] },
+      portal: { configured: true, providerName: 'google', revoke },
+      providerKey: null,
+    });
+
+    const result = await service.disconnectConnection({ userId: 'user-1' }, 'conn-1');
+
+    expect(revoke.mock.calls).toEqual([
+      [
+        {
+          proxyRefreshToken: 'portal-proxy-refresh-token',
+          provider: 'google',
+          userProviderId: 'google-user-123',
+        },
+      ],
+      [{ provider: 'google', userProviderId: 'google-user-123' }],
+    ]);
+    expect(result.tokenRevoked).toBe(true);
   });
 
   it('goes through Portal for every proxied connection during account deletion', async () => {

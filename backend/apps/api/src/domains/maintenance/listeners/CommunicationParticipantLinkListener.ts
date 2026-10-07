@@ -14,7 +14,12 @@ import {
   type IdentifierKey,
   splitPersonName,
 } from '@ci/domains/graph';
-import { matchOwner, readSelfIdentity, shouldMapContactToSelf, type SelfIdentity } from '@ci/domains/import';
+import {
+  matchParticipantOwner,
+  readSelfIdentity,
+  shouldMapContactToSelf,
+  type SelfIdentity,
+} from '@ci/domains/import';
 import { CommunicationService } from '@ci/domains/memory';
 import { CommunicationCreatedEvent, type CommunicationCreatedPayload } from '@ci/domains/memory/events';
 import { PersonalizationService } from '@ci/domains/personalization';
@@ -180,7 +185,10 @@ export class CommunicationParticipantLinkListener {
       }
 
       const matchRaw = seen.rawName.length > 0 ? seen.rawName : seen.key.valueNormalized;
-      const ownerMatch = matchOwner(identity, matchRaw);
+      // An email or phone participant is the owner only on its own address or
+      // number, never on the display name in front of it; see
+      // matchParticipantOwner.
+      const ownerMatch = matchParticipantOwner(identity, seen.key, seen.rawName);
       if (selfEntityId != null && shouldMapContactToSelf(ownerMatch, trustMode)) {
         if (seen.key.kind === 'email' || seen.key.kind === 'phone') {
           await this.entityIdentifierService.repointToEntity(

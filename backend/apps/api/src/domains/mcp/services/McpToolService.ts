@@ -102,16 +102,23 @@ export class McpToolService implements OnModuleInit {
     // "sees every surface" and "may delete on it" are separate grants, and the importer key that
     // holds no scopes is exactly the credential that should be able to write without deleting.
     const capability = apiKeyCapabilityOf(req);
+    const userId = (req.user as { id?: string } | undefined)?.id;
+    // A native tool can belong to one account (the `messaging.*` intents belong to whoever the
+    // BlueBubbles connector was set up for). The map below was built at boot with every owner's
+    // tools in it, so ownership is decided here, per caller, by the same rule the registry
+    // refuses execution on.
+    const visible = (tool: McpRegisteredTool) =>
+      tool.source !== 'native' || this.toolRegistry.isToolVisibleTo(tool.name, userId);
     const withinCapability = (tool: McpRegisteredTool) => capabilityAllows(tool.privacy, capability);
 
     if (!isScopeLimitedApiKey(req)) {
-      return this.getTools().filter(withinCapability);
+      return this.getTools().filter((tool) => visible(tool) && withinCapability(tool));
     }
 
     const mayRunIntents = this.mayRunIntents(req);
 
     return this.getTools().filter(
-      (tool) => tool.source !== 'graphql' && mayRunIntents && withinCapability(tool),
+      (tool) => tool.source !== 'graphql' && mayRunIntents && visible(tool) && withinCapability(tool),
     );
   }
 
@@ -533,11 +540,14 @@ export class McpToolService implements OnModuleInit {
 
   private registerNativeTools() {
     // Every registered tool is a curated intent; advertise them all to MCP clients under their
-    // executable (underscored) names. `getOutboundCatalogTools` (rather than the agent-facing
-    // full list) excludes tools sourced from a user's own external MCP servers — re-publishing
-    // those here would let a client reach back through CI-Server's own MCP server to that same
-    // external server, a recursive re-exposure this endpoint does not exist to provide.
-    const schemas = this.toolRegistry.getOutboundCatalogTools();
+    // executable (underscored) names. The outbound catalog (rather than the agent-facing full
+    // list) excludes tools sourced from a user's own external MCP servers — re-publishing those
+    // here would let a client reach back through CI-Server's own MCP server to that same external
+    // server, a recursive re-exposure this endpoint does not exist to provide.
+    //
+    // `ForEveryOwner`: this runs at boot, with no caller, and a tool owned by one account must
+    // still be in the map for that account. `getToolsForRequest` applies ownership per request.
+    const schemas = this.toolRegistry.getOutboundCatalogToolsForEveryOwner();
 
     for (const schema of schemas) {
       // schema.name is the dotted intent id; expose/execute by the MCP-safe executable name.

@@ -284,12 +284,13 @@ export class UserService {
    * no-op; `findAll()` includes those rows and is the wrong list to fan out on.
    */
   async findAllOnboarded(): Promise<User[]> {
-    // Ordered, because one caller reads position rather than the whole list:
-    // `BlueBubblesSyncService` attributes an appliance-wide connector's corpus
-    // to the FIRST onboarded account. Postgres row order is unspecified without
-    // an ORDER BY, so on a two-account appliance consecutive syncs could file
-    // the same messages under different users. Oldest-first is also the only
-    // stable meaning "first account" can have.
+    // Ordered, oldest first. `BlueBubblesSyncService` used to attribute the
+    // appliance-wide connector's corpus to the FIRST row here, and without an
+    // ORDER BY consecutive syncs on a two-account appliance could file the same
+    // messages under different users. It now reads the connector's recorded
+    // owner instead, which migration 20261006065617 backfilled with this same
+    // first row. Oldest-first is also the only stable meaning "first account"
+    // can have.
     const result = await this.userRepository.find({
       where: { onboarded: true },
       order: { createdAt: 'ASC' },

@@ -1,9 +1,9 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 
 import {
@@ -180,6 +180,11 @@ export type PipelineQuarantineReleaseResponse = ReleaseQuarantinedResult;
  * Every route is user-scoped in the service, by `user_id` in SQL rather than by
  * filtering after the fact. These tables hold verbatim payloads.
  *
+ * The one widening is a dead letter that names no user (`user_id` NULL): it is
+ * listed and replayable for the appliance admin only, by the rule
+ * {@link ApplianceAdminGuard} applies to the Jobs controls. See
+ * `unattributedScope` below.
+ *
  * Public URLs stay `/api/pipeline/...`. The gateway rewrites `/api/(.*)` to
  * `/$1` before Nest, so this controller is `pipeline`, matching `JobsController`.
  */
@@ -193,7 +198,28 @@ export class PipelineController {
     // quarantine release is a ledger write. Routing it through the run service
     // would put a second writer one delegation away from that invariant.
     private readonly pipelineStateService: PipelineStateService,
+    // Asked, not applied: every caller may list and replay their OWN letters,
+    // so the guard only decides whether NULL-user letters join them.
+    private readonly applianceAdminGuard: ApplianceAdminGuard,
   ) {}
+
+  /**
+   * Whether this caller also sees the dead letters that name no user.
+   *
+   * The appliance admin's call, by the same rule as the Jobs controls
+   * (`ApplianceAdminGuard.admits`): an admin, or anyone on an appliance that has
+   * no admin yet. A household member and a non-admin's API key see only their
+   * own letters. The admin probe fails closed; a probe that cannot answer reads
+   * as "no", which costs the admin a page of system failures until it can,
+   * rather than showing every account somebody's payload.
+   */
+  private async unattributedScope(request: { user?: { role?: string } }): Promise<boolean> {
+    try {
+      return await this.applianceAdminGuard.admits(request.user);
+    } catch {
+      return false;
+    }
+  }
 
   /**
    * Per-stage ledger coverage: `done` / `skipped` / `failed` / `pending`
@@ -300,6 +326,7 @@ export class PipelineController {
   @RequireCapability(READ_CAPABILITY)
   async listDeadLetters(
     @Context() context: RequestContext,
+    @Req() request: { user?: { role?: string } },
     @Query(new ValidationPipe(deadLettersQuerySchema)) query: DeadLettersQuery,
   ): Promise<PipelineDeadLettersResponse> {
     const deadLetters = await this.pipelineRunService.listDeadLetters(toServiceContext(context), {
@@ -308,6 +335,7 @@ export class PipelineController {
       replayed: query.replayed,
       limit: query.limit,
       offset: query.offset,
+      includeUnattributed: await this.unattributedScope(request),
     });
 
     return { deadLetters };
@@ -334,8 +362,9 @@ export class PipelineController {
   @Post('dead-letters/replay')
   @HttpCode(200)
   @RequireCapability(WRITE_CAPABILITY)
-  replayDeadLetters(
+  async replayDeadLetters(
     @Context() context: RequestContext,
+    @Req() request: { user?: { role?: string } },
     @Body(new ValidationPipe(replayDeadLettersSchema)) body: ReplayDeadLettersBody,
   ): Promise<PipelineDeadLettersReplayResponse> {
     return this.pipelineRunService.replayDeadLetters(toServiceContext(context), {
@@ -343,6 +372,7 @@ export class PipelineController {
       eventName: body.eventName,
       failedAfter: body.failedAfter,
       limit: body.limit,
+      includeUnattributed: await this.unattributedScope(request),
     });
   }
 
@@ -359,11 +389,14 @@ export class PipelineController {
   @Post('dead-letters/:id/replay')
   @HttpCode(200)
   @RequireCapability(WRITE_CAPABILITY)
-  replayDeadLetter(
+  async replayDeadLetter(
     @Context() context: RequestContext,
+    @Req() request: { user?: { role?: string } },
     @Param('id') letterId: string,
   ): Promise<DeadLetterReplayResult> {
-    return this.pipelineRunService.replayDeadLetter(toServiceContext(context), letterId);
+    return this.pipelineRunService.replayDeadLetter(toServiceContext(context), letterId, {
+      includeUnattributed: await this.unattributedScope(request),
+    });
   }
 
   /**
