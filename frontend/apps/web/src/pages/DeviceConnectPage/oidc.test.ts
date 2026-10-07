@@ -2,11 +2,15 @@ import { AuthSessionCancelledError } from '@ci/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  bearerAddressedTo,
   emailFromIdToken,
+  hasPendingPortalOidc,
   loginWithPortalOidc,
   OIDC_CLIENT_ID,
   OIDC_REDIRECT_URI,
   OidcCancelledError,
+  type PairingTarget,
+  PortalInvalidTargetError,
   resumePendingOidcLogin,
   selectMemoryPortalBearers,
 } from './oidc';
@@ -44,6 +48,26 @@ function openedAuthorizeUrl(): URL {
 function tokenResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
+
+/** The Memory the person picked, as `/api/users/me/apps` listed it. */
+const HOME: PairingTarget = {
+  id: 'home',
+  name: 'Home',
+  status: 'active',
+  memoryUrl: 'https://memory.example.com/app',
+  resource: 'urn:ci:device:home-device',
+};
+
+function exchangeBody(call = 0): URLSearchParams {
+  const init = vi.mocked(fetch).mock.calls[call]?.[1] as RequestInit | undefined;
+
+  return new URLSearchParams(String(init?.body));
+}
+
+const INVALID_TARGET = {
+  error: 'invalid_target',
+  error_description: 'The resource is not a device this account can reach',
+};
 
 beforeEach(() => {
   openAuthSession.mockReset();
@@ -98,8 +122,78 @@ describe('loginWithPortalOidc', () => {
     expect(body.get('grant_type')).toBe('authorization_code');
     expect(body.get('code')).toBe('auth-code-1');
     expect(body.get('code_verifier')).toMatch(/^[A-Za-z0-9_-]{20,}$/);
+    // The first sign-in picks no Memory, so it asks for no resource.
+    expect(body.has('resource')).toBe(false);
+    expect(authorizeUrl.searchParams.has('resource')).toBe(false);
     expect(unlisten).toHaveBeenCalled();
     expect(closeBrowser).toHaveBeenCalled();
+  });
+
+  it("sends the picked Memory's resource at the code exchange of a pairing sign-in, and nowhere else", async () => {
+    const promise = loginWithPortalOidc(undefined, { pairWith: HOME });
+    const authorizeUrl = await fireCallback('pairing-code');
+
+    await expect(promise).resolves.toMatchObject({ idToken: 'IT' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const body = exchangeBody();
+    expect(body.get('resource')).toBe('urn:ci:device:home-device');
+    expect(body.get('grant_type')).toBe('authorization_code');
+    expect(body.get('client_id')).toBe(OIDC_CLIENT_ID);
+    expect(body.get('redirect_uri')).toBe(OIDC_REDIRECT_URI);
+    expect(body.get('code')).toBe('pairing-code');
+    // The Portal ignores `resource` at /authorize, so it is never put there.
+    expect(authorizeUrl.searchParams.has('resource')).toBe(false);
+    expect(authorizeUrl.toString()).not.toContain('home-device');
+    expect(hasPendingPortalOidc()).toBe(false);
+  });
+
+  it('turns invalid_target into a plain message and drops the pairing sign-in', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => tokenResponse(INVALID_TARGET, 400)),
+    );
+
+    const promise = loginWithPortalOidc(undefined, { pairWith: HOME });
+    await fireCallback('pairing-code');
+
+    await expect(promise).rejects.toBeInstanceOf(PortalInvalidTargetError);
+    await expect(promise).rejects.toThrow(
+      "This Memory Server isn't one your Companion account can connect to.",
+    );
+    // Nothing is left for a later resume to retry behind the error the person already saw.
+    expect(hasPendingPortalOidc()).toBe(false);
+  });
+
+  it('keeps a failed first sign-in pending, as before', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => tokenResponse({ error: 'server_error' }, 500)),
+    );
+
+    const promise = loginWithPortalOidc();
+    await fireCallback('code');
+
+    await expect(promise).rejects.toThrow('server_error');
+    expect(hasPendingPortalOidc()).toBe(true);
+  });
+
+  it('drops a pairing sign-in whose sheet could not open', async () => {
+    openAuthSession.mockRejectedValue(new Error('Could not open the sign-in sheet.'));
+
+    await expect(loginWithPortalOidc(undefined, { pairWith: HOME })).rejects.toThrow(
+      'Could not open the sign-in sheet.',
+    );
+    expect(hasPendingPortalOidc()).toBe(false);
+  });
+
+  it('drops a cancelled pairing sign-in', async () => {
+    openAuthSession.mockRejectedValue(new AuthSessionCancelledError());
+
+    await expect(loginWithPortalOidc(undefined, { pairWith: HOME })).rejects.toBeInstanceOf(
+      OidcCancelledError,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    expect(hasPendingPortalOidc()).toBe(false);
   });
 
   it('ignores a callback whose state does not match', async () => {
@@ -184,15 +278,115 @@ describe('resumePendingOidcLogin', () => {
     const state = authorizeUrl.searchParams.get('state') ?? '';
 
     getLaunchUrl.mockResolvedValue(`${OIDC_REDIRECT_URI}?code=cold-code&state=${state}`);
-    await expect(resumePendingOidcLogin()).resolves.toMatchObject({ accessToken: 'AT' });
+    await expect(resumePendingOidcLogin()).resolves.toEqual({
+      tokens: { accessToken: 'AT', idToken: 'IT', tokenType: 'Bearer', expiresIn: 3600 },
+      pairWith: null,
+    });
 
-    const tokenInit = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit | undefined;
-    const body = new URLSearchParams(String(tokenInit?.body));
+    const body = exchangeBody();
     expect(body.get('code')).toBe('cold-code');
     expect(body.get('code_verifier')).toMatch(/^[A-Za-z0-9_-]{20,}$/);
+    expect(body.has('resource')).toBe(false);
 
     controller.abort();
     await expect(first).rejects.toBeInstanceOf(OidcCancelledError);
+  });
+
+  it('finishes a pairing sign-in with its resource and hands back the Memory that was picked', async () => {
+    const controller = new AbortController();
+    const live = loginWithPortalOidc(undefined, { signal: controller.signal, pairWith: HOME });
+    await vi.waitFor(() => expect(openAuthSession).toHaveBeenCalled());
+    const state = openedAuthorizeUrl().searchParams.get('state') ?? '';
+
+    // iOS relaunched the app from the callback: the live sign-in above is gone, only storage is left.
+    getLaunchUrl.mockResolvedValue(`${OIDC_REDIRECT_URI}?code=cold-code&state=${state}`);
+    await expect(resumePendingOidcLogin()).resolves.toEqual({
+      tokens: { accessToken: 'AT', idToken: 'IT', tokenType: 'Bearer', expiresIn: 3600 },
+      pairWith: HOME,
+    });
+
+    const body = exchangeBody();
+    expect(body.get('code')).toBe('cold-code');
+    expect(body.get('resource')).toBe('urn:ci:device:home-device');
+    expect(hasPendingPortalOidc()).toBe(false);
+
+    controller.abort();
+    await expect(live).rejects.toBeInstanceOf(OidcCancelledError);
+  });
+
+  it('drops a resumed pairing sign-in the Portal answers with invalid_target', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => tokenResponse(INVALID_TARGET, 400)),
+    );
+    const controller = new AbortController();
+    const live = loginWithPortalOidc(undefined, { signal: controller.signal, pairWith: HOME });
+    await vi.waitFor(() => expect(openAuthSession).toHaveBeenCalled());
+    const state = openedAuthorizeUrl().searchParams.get('state') ?? '';
+
+    getLaunchUrl.mockResolvedValue(`${OIDC_REDIRECT_URI}?code=cold-code&state=${state}`);
+    await expect(resumePendingOidcLogin()).rejects.toBeInstanceOf(PortalInvalidTargetError);
+    expect(hasPendingPortalOidc()).toBe(false);
+
+    controller.abort();
+    await expect(live).rejects.toBeInstanceOf(OidcCancelledError);
+  });
+
+  it('refuses a stored pairing sign-in whose Memory cannot be read back', async () => {
+    localStorage.setItem(
+      'ci-memory.oidc.pending',
+      JSON.stringify({
+        verifier: 'v'.repeat(43),
+        state: 'stored-state',
+        portal: DEFAULT_PORTAL_URL,
+        startedAt: Date.now(),
+        pairWith: { id: 'home', name: 'Home', status: 'active', memoryUrl: 'https://memory.example.com' },
+      }),
+    );
+    getLaunchUrl.mockResolvedValue(`${OIDC_REDIRECT_URI}?code=cold-code&state=stored-state`);
+
+    // Exchanged without its resource it would come back unaddressed, so it is not exchanged at all.
+    await expect(resumePendingOidcLogin()).resolves.toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('bearerAddressedTo', () => {
+  function tokenWithPayload(payload: unknown): string {
+    const json = btoa(JSON.stringify(payload)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+    return `hdr.${json}.sig`;
+  }
+
+  const live = Math.floor(Date.now() / 1000) + 600;
+
+  it('returns the id_token the Portal addressed to the picked Memory', () => {
+    const addressed = tokenWithPayload({ aud: ['ci-server', HOME.resource], azp: 'ci-server', exp: live });
+
+    expect(bearerAddressedTo(addressed, HOME.resource)).toBe(addressed);
+  });
+
+  it('refuses an id_token addressed to nobody or to another Memory', () => {
+    expect(bearerAddressedTo(tokenWithPayload({ aud: 'ci-server', exp: live }), HOME.resource)).toBeNull();
+    expect(
+      bearerAddressedTo(
+        tokenWithPayload({ aud: ['ci-server', 'urn:ci:device:other-device'], exp: live }),
+        HOME.resource,
+      ),
+    ).toBeNull();
+  });
+
+  it('refuses an expired one, one for a client Memory does not accept, and none at all', () => {
+    expect(
+      bearerAddressedTo(
+        tokenWithPayload({ aud: ['ci-server', HOME.resource], exp: Math.floor(Date.now() / 1000) - 120 }),
+        HOME.resource,
+      ),
+    ).toBeNull();
+    expect(
+      bearerAddressedTo(tokenWithPayload({ aud: ['ci-hub-web', HOME.resource], exp: live }), HOME.resource),
+    ).toBeNull();
+    expect(bearerAddressedTo(null, HOME.resource)).toBeNull();
   });
 });
 

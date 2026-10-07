@@ -9,11 +9,15 @@ import { useAuth, useCurrentUser } from '@/hooks';
 import { BrainMark, CONNECT_MARK_SIZE, Reveal, SplashShell } from '@/pages/SplashPage/SplashChrome';
 
 import {
+  bearerAddressedTo,
   emailFromIdToken,
   loginWithPortalOidc,
   OidcCancelledError,
+  PortalInvalidTargetError,
   resumePendingOidcLogin,
   selectMemoryPortalBearers,
+  type OidcTokens,
+  type PairingTarget,
 } from './oidc';
 import {
   DEFAULT_PORTAL_URL,
@@ -21,7 +25,6 @@ import {
   probeMemoryOrigin,
   probePortalOrigin,
   readPersistedPortalUrl,
-  requestApplianceToken,
   type MemoryServerDevice,
   type PortalAuth,
 } from './portal-client';
@@ -40,6 +43,27 @@ function portalUnreachableMessage(portalUrl: string): string {
   return portalUrl === DEFAULT_PORTAL_URL
     ? `Could not reach the Companion server (${portalUrl}). Check your connection and try again.`
     : `Could not reach the Companion server at ${portalUrl}. Check the Companion URL under Advanced.`;
+}
+
+/** Shown while the Portal sign-in sheet is open, with a way out of it. */
+function SignInPendingHint({ onCancel }: { onCancel: () => void }) {
+  return (
+    <div className="flex flex-col items-center gap-2 text-center text-xs text-muted-foreground">
+      <span>
+        Finish signing in in {isIosPlatform() ? 'Safari' : 'your browser'}, then return to this app.
+      </span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className={TOUCH}
+        onClick={onCancel}
+        data-testid="cancel-oidc-btn"
+      >
+        Cancel
+      </Button>
+    </div>
+  );
 }
 
 function writePortalAuth(auth: PortalAuth): void {
@@ -97,7 +121,9 @@ function readStoredPortalAuth(): PortalAuth | null {
 /**
  * Native-only Hub-style picker: Portal OIDC in the *system* browser (Safari /
  * `companion://auth/callback`), list `ci-memory` apps, persist that origin, then
- * mint a Memory key from the Companion token. A Memory URL or email/password
+ * mint a Memory key from the Companion token. When the Portal lists the picked
+ * Memory's `resource`, that token comes from a second, quick sign-in whose
+ * id_token the Portal addresses to that Memory. A Memory URL or email/password
  * cannot cloud-connect a new phone — those live under Advanced as Hub URL /
  * offline unlock. Named `/device-connect` because `/connect` already means Sources.
  */
@@ -118,10 +144,19 @@ export function DeviceConnectPage() {
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [signInError, setSignInError] = useState<string | null>(null);
   const [awaitingProfile, setAwaitingProfile] = useState(false);
+  // A pairing sign-in that iOS finished by relaunching the app, waiting for
+  // this render's handleConnect to send its token.
+  const [resumedPairing, setResumedPairing] = useState<{
+    device: PairingTarget;
+    tokens: OidcTokens;
+  } | null>(null);
   const accountEmail = emailFromIdToken(auth?.idToken);
   // `me` can already be sitting on Unauthorized from the previous box's key.
   // That object must not be reported as the result of this tap.
   const profileErrorBeforeConnect = useRef<unknown>(null);
+  // Set while handleConnect runs. Its sign-in and the resume below can both
+  // exchange the same callback on a warm return, and only one may pair.
+  const connectInFlight = useRef(false);
 
   useEffect(() => {
     if (!initializing && authenticated && user) {
@@ -165,7 +200,26 @@ export function DeviceConnectPage() {
       inFlight = true;
 
       try {
-        const tokens = await resumePendingOidcLogin();
+        const resumed = await resumePendingOidcLogin();
+
+        if (resumed?.pairWith) {
+          // The pairing sign-in for the Memory the person picked. Finish pairing
+          // with it rather than showing the list again, unless handleConnect is
+          // still running: then its own sign-in got the same callback and pairs.
+          if (cancelled || connectInFlight.current) {
+            return;
+          }
+
+          const stored = readStoredPortalAuth();
+          setAuth(stored);
+          setDevices([resumed.pairWith]);
+          setStep('pick');
+          setResumedPairing({ device: resumed.pairWith, tokens: resumed.tokens });
+
+          return;
+        }
+
+        const tokens = resumed?.tokens ?? null;
         const stored = tokens ? null : readStoredPortalAuth();
 
         if (cancelled || (!tokens && !stored)) {
@@ -292,7 +346,19 @@ export function DeviceConnectPage() {
     }
   };
 
-  const handleConnect = async (device: MemoryServerDevice) => {
+  /** The second sign-in, for one Memory. Its sheet gets the same hint and Cancel as Log in. */
+  const signInForMemory = async (target: PairingTarget): Promise<OidcTokens> => {
+    const controller = new AbortController();
+    setOidcController(controller);
+
+    try {
+      return await loginWithPortalOidc(portalUrl, { signal: controller.signal, pairWith: target });
+    } finally {
+      setOidcController(null);
+    }
+  };
+
+  const handleConnect = async (device: MemoryServerDevice, resumedTokens?: OidcTokens) => {
     if (!device.memoryUrl) {
       return;
     }
@@ -300,17 +366,30 @@ export function DeviceConnectPage() {
     setConnectingId(device.id);
     setSignInError(null);
     profileErrorBeforeConnect.current = userError;
+    connectInFlight.current = true;
 
     try {
       const origin = resolveHttpOrigin(device.memoryUrl);
       await probeMemoryOrigin(origin);
 
-      let bearer: string | undefined;
+      let bearer: string | null | undefined;
 
-      if (auth?.kind === 'oauth' && auth.token && device.resource) {
-        // The Portal lists this Memory's resource, so it can address a token to it.
-        // That token works on this Memory only, whoever runs the server it is sent to.
-        bearer = await requestApplianceToken(auth.token, device.resource, portalUrl);
+      if (device.resource) {
+        // The Portal lists this Memory's resource, so a sign-in that asks for it
+        // gets an id_token addressed to this Memory. That token works here only,
+        // whoever runs the server it is sent to. A sign-in iOS finished by
+        // relaunching the app arrives as `resumedTokens`.
+        const tokens =
+          resumedTokens ??
+          (await signInForMemory({ ...device, memoryUrl: device.memoryUrl, resource: device.resource }));
+        bearer = bearerAddressedTo(tokens.idToken, device.resource);
+
+        if (!bearer) {
+          setSignInError('The Companion server did not return a sign-in for this Memory Server.');
+          setConnectingId(null);
+
+          return;
+        }
       } else {
         // An older Portal: the id_token is all there is. Never the access token,
         // which is a credential for the Portal itself.
@@ -339,6 +418,19 @@ export function DeviceConnectPage() {
       setAwaitingProfile(true);
       void refetch();
     } catch (err) {
+      setConnectingId(null);
+
+      // A closed sign-in sheet leaves the list as it was, like a cancelled Log in.
+      if (err instanceof OidcCancelledError) {
+        return;
+      }
+
+      if (err instanceof PortalInvalidTargetError) {
+        setSignInError(err.message);
+
+        return;
+      }
+
       const unauthorized = /unauthorized/i.test(err instanceof Error ? err.message : '');
 
       setSignInError(
@@ -350,10 +442,20 @@ export function DeviceConnectPage() {
               ? 'This Memory Server is online, but it did not accept your Companion account. Sign in again.'
               : `Could not sign in to ${device.memoryUrl}. ${err instanceof Error ? err.message : ''}`.trim(),
       );
-
-      setConnectingId(null);
+    } finally {
+      connectInFlight.current = false;
     }
   };
+
+  useEffect(() => {
+    if (!resumedPairing) {
+      return;
+    }
+
+    setResumedPairing(null);
+    void handleConnect(resumedPairing.device, resumedPairing.tokens);
+    // handleConnect is rebuilt every render; this runs once per resumed pairing.
+  }, [resumedPairing]);
 
   if (step === 'sign-in') {
     return (
@@ -390,21 +492,7 @@ export function DeviceConnectPage() {
             ) : null}
 
             {oidcController ? (
-              <div className="flex flex-col items-center gap-2 text-center text-xs text-muted-foreground">
-                <span>
-                  Finish signing in in {isIosPlatform() ? 'Safari' : 'your browser'}, then return to this app.
-                </span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className={TOUCH}
-                  onClick={() => oidcController.abort()}
-                  data-testid="cancel-oidc-btn"
-                >
-                  Cancel
-                </Button>
-              </div>
+              <SignInPendingHint onCancel={() => oidcController.abort()} />
             ) : (
               <button
                 type="button"
@@ -485,6 +573,7 @@ export function DeviceConnectPage() {
                     {signInError}
                   </p>
                 ) : null}
+                {oidcController ? <SignInPendingHint onCancel={() => oidcController.abort()} /> : null}
                 <div className="mt-2 flex items-center justify-between">
                   <Button
                     variant="ghost"
