@@ -298,7 +298,15 @@ describe('McpToolService native tools owned by one account', () => {
     };
     const adapter = { getTools: () => [], getSchemaSDL: () => '' } as unknown as GraphQLToolAdapter;
     const logger = { setContext: jest.fn(), log: jest.fn(), debug: jest.fn(), error: jest.fn() };
-    const service = new McpToolService(adapter, registry as never, {} as McpExecutorService, logger as never);
+    const service = new McpToolService(
+      adapter,
+      registry as never,
+      {} as McpExecutorService,
+      logger as never,
+      // An open gate: these tests are about which owner sees a tool, not about confirmation.
+      { evaluate: async () => ({ decision: 'execute', reason: 'allowed', explanation: 'open' }) } as never,
+      { register: () => undefined } as never,
+    );
 
     service.onModuleInit();
 
