@@ -322,11 +322,16 @@ jobs:
           corepack prepare --activate
           yarn --version
 
-      - name: Install jq
+      # zstd packs and unpacks the image artifact. The x64 runner image ships
+      # it; ubuntu-24.04-arm does not list it.
+      - name: Install jq and zstd
         run: |
-          if ! command -v jq >/dev/null 2>&1; then
+          missing=()
+          command -v jq >/dev/null 2>&1 || missing+=(jq)
+          command -v zstd >/dev/null 2>&1 || missing+=(zstd)
+          if [ "${#missing[@]}" -gt 0 ]; then
             sudo apt-get update
-            sudo apt-get install -y jq
+            sudo apt-get install -y "${missing[@]}"
           fi
 
       # `make publish-build` runs `init`, which since the uv adoption ends in
@@ -359,6 +364,10 @@ jobs:
               || { echo "::error::${image}:latest was not built"; exit 1; }
             refs+=("${image}:latest")
           done
+          # The export needs about 3 GB beside the images, on a runner the
+          # build only just fits. The build cache is not needed any more.
+          docker builder prune -af || true
+          df -h "${RUNNER_TEMP}"
           docker save "${refs[@]}" | zstd -T0 -3 -q -o "${RUNNER_TEMP}/images-${{ matrix.arch }}.tar.zst"
           ls -lh "${RUNNER_TEMP}/images-${{ matrix.arch }}.tar.zst"
 
@@ -371,6 +380,8 @@ jobs:
           compression-level: 0
           retention-days: 1
           if-no-files-found: error
+          # A re-run uploads under the same name, which v4 refuses otherwise.
+          overwrite: true
 
   # ── Per-architecture push ──────────────────────────────────────────
   #
@@ -441,11 +452,16 @@ jobs:
           docker system prune -af --volumes || true
           df -h /
 
-      - name: Install jq
+      # zstd packs and unpacks the image artifact. The x64 runner image ships
+      # it; ubuntu-24.04-arm does not list it.
+      - name: Install jq and zstd
         run: |
-          if ! command -v jq >/dev/null 2>&1; then
+          missing=()
+          command -v jq >/dev/null 2>&1 || missing+=(jq)
+          command -v zstd >/dev/null 2>&1 || missing+=(zstd)
+          if [ "${#missing[@]}" -gt 0 ]; then
             sudo apt-get update
-            sudo apt-get install -y jq
+            sudo apt-get install -y "${missing[@]}"
           fi
 
       - name: Download ${{ matrix.arch }} images
@@ -481,6 +497,7 @@ jobs:
           path: ${{ runner.temp }}/digests/${{ matrix.arch }}.txt
           retention-days: 1
           if-no-files-found: error
+          overwrite: true
 
   # ── Manifest merge + Portal registration ───────────────────────────
   merge-and-register:

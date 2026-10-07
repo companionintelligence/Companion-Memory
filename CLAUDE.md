@@ -134,9 +134,9 @@ gh api repos/companionintelligence/CI-Server/branches/main/protection --jq '.req
 **`publish.yml` must be dispatched on a release TAG, never on `main`.** Its
 `Resolve VERSION from tag` steps do `tag="${GITHUB_REF#refs/tags/}"`, so on a
 branch ref `VERSION` becomes the literal `refs/heads/main` — not a legal image
-tag. The `Refuse to publish a non-release ref` guard — first step of **all three**
-of its jobs (`verify-ci-passed`, `build`, `merge-and-register`; this said "both"
-when there were two), before any checkout, matching `GITHUB_REF`
+tag. The `Refuse to publish a non-release ref` guard — first step of **all four**
+of its jobs (`verify-ci-passed`, `build`, `push`, `merge-and-register`; this said
+"three" before `push` split out of `build`), before any checkout, matching `GITHUB_REF`
 against the workflow-level `RELEASE_TAG_RE` — now rejects that in seconds
 instead of after the two `timeout-minutes: 150` matrix legs (`ubuntu-latest`,
 `ubuntu-24.04-arm`) have built everything. The mistake is cheap now, not
