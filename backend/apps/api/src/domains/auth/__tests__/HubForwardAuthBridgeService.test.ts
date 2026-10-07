@@ -680,7 +680,7 @@ describe('HubForwardAuthBridgeService', () => {
   describe('one session per Hub sign-in', () => {
     it('spends no unbound header set: two tabs an older Hub signed in the same millisecond both sign in', async () => {
       const { service, userService, authService } = makeService();
-      userService.findByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+      userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
       const headers = signedHeaders('hello@lifescope.io');
 
       await service.alignSession(requestWith(headers, null), response());
