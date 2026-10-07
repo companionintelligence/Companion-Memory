@@ -1,15 +1,32 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
-import { type ServiceContext } from '@ci/common/context';
+import { type ServiceContext, SYSTEM_USER } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { keysetSeek } from '@ci/common/persistence';
 import { type EntityIdentifier, type IndexableEntity } from '@ci/domains/search-next';
 
 import { FileChunkEntity, type FileChunk } from '../entities/FileChunkEntity';
 import { type CreateChunkDto } from '../types';
+
+/**
+ * The `where` fragment that keeps a chunk read inside the caller's own files.
+ *
+ * `SYSTEM_USER` reads across owners, as every other `findByIds` in the memory
+ * services allows. Anything else must name a user: a context whose `userId` is
+ * empty returns `null`, and the caller answers "nothing" rather than build a
+ * `find({ where })` whose `userId: undefined` TypeORM would silently drop,
+ * which is the read that must never cross owners.
+ */
+function chunkOwnerScope(context: ServiceContext): { userId?: string } | null {
+  if (context.userId === SYSTEM_USER) {
+    return {};
+  }
+
+  return typeof context.userId === 'string' && context.userId.length > 0 ? { userId: context.userId } : null;
+}
 
 @Injectable()
 export class DocumentChunkService {
@@ -52,9 +69,21 @@ export class DocumentChunkService {
     await this.chunkRepository.delete({ fileId });
   }
 
-  async findByFileId(fileId: string): Promise<FileChunk[]> {
+  /**
+   * Every chunk of one file, in reading order, for the caller's own file only.
+   *
+   * A file id that is not the caller's reads as a file with nothing parsed.
+   * See {@link chunkOwnerScope} for the system exemption.
+   */
+  async findByFileId(context: ServiceContext, fileId: string): Promise<FileChunk[]> {
+    const scope = chunkOwnerScope(context);
+
+    if (scope == null || !fileId) {
+      return [];
+    }
+
     return this.chunkRepository.find({
-      where: { fileId },
+      where: { fileId, ...scope },
       order: { chunkIndex: 'ASC' },
     });
   }
@@ -62,8 +91,7 @@ export class DocumentChunkService {
   /**
    * The first `limit` chunks of one file, in reading order, for a prompt.
    *
-   * Scoped to the caller, which {@link findByFileId} is not: that one is a purge helper and takes
-   * the file id on the caller's word. Here the chunk row names its owner and the query names the
+   * Scoped to the caller: the chunk row names its owner and the query names the
    * caller, so a file id that is not theirs reads as a file with nothing parsed. The condition is a
    * bound parameter rather than a `find({ where })` object on purpose: an object whose `userId` is
    * undefined silently loses that condition, and this is the read that must never cross owners.
@@ -89,13 +117,23 @@ export class DocumentChunkService {
     return rows.map((row) => ({ chunkIndex: row.chunkIndex, content: row.content }));
   }
 
-  async findByIds(ids: string[]): Promise<FileChunk[]> {
-    if (ids.length === 0) {
+  /**
+   * Chunks by id, in reading order, limited to the caller's own.
+   *
+   * An id that belongs to another user is left out, exactly as if it did not
+   * exist. A chunk carries its document's parsed text, and `node(id)` and search
+   * hydration both resolve ids through here, so this is where the owner check
+   * has to live. See {@link chunkOwnerScope} for the system exemption.
+   */
+  async findByIds(context: ServiceContext, ids: string[]): Promise<FileChunk[]> {
+    const scope = chunkOwnerScope(context);
+
+    if (ids.length === 0 || scope == null) {
       return [];
     }
 
     return this.chunkRepository.find({
-      where: ids.map((id) => ({ id })),
+      where: { id: In(ids), ...scope },
       order: { chunkIndex: 'ASC' },
     });
   }

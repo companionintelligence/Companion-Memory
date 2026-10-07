@@ -711,17 +711,31 @@ describe('PipelineRunService.listDeadLetters', () => {
     expect(select.params[2]).toBe('index.embed');
   });
 
-  it('includes letters with no attributable user and excludes other users', async () => {
-    // NULL user_id means "not attributable" — maintenance sweeps, telemetry, a
-    // payload too malformed to read a user out of. Those are frequently the most
-    // important rows in the table, and hiding them would make the appliance's
-    // own failures invisible on the one screen built to show failures.
+  it("lists only the caller's own letters unless told otherwise", async () => {
+    // A letter that names no user is the appliance's failure, not this member's,
+    // and its payload is still somebody's data. Absent means no: a caller that
+    // forgets to ask must not see them.
+    const harness = makeHarness(() => []);
+
+    await harness.service.listDeadLetters(CTX);
+
+    expect(harness.statements[0].sql).toContain(
+      '(d.user_id = $1::uuid OR ($7::boolean AND d.user_id IS NULL))',
+    );
+    expect(harness.statements[0].params[0]).toBe(USER);
+    expect(harness.statements[0].params[6]).toBe(false);
+  });
+
+  it('adds the letters that name no user when the caller is the appliance admin', async () => {
+    // NULL user_id means "not attributable": maintenance sweeps, telemetry, an
+    // id-only event. Those are frequently the most important rows in the table,
+    // and the admin's Jobs page keeps them.
     const harness = makeHarness(() => [letterRow({ user_id: null })]);
 
-    const letters = await harness.service.listDeadLetters(CTX);
+    const letters = await harness.service.listDeadLetters(CTX, { includeUnattributed: true });
 
     expect(letters[0].userId).toBeNull();
-    expect(harness.statements[0].sql).toContain('(d.user_id = $1::uuid OR d.user_id IS NULL)');
+    expect(harness.statements[0].params[6]).toBe(true);
   });
 
   it('treats an absent `replayed` filter as "both"', async () => {
@@ -959,7 +973,39 @@ describe('PipelineRunService.replayDeadLetter', () => {
 
     expect(claim.sql).toContain('SET replayed_at = now()');
     expect(claim.sql).toContain('replayed_at IS NULL');
-    expect(claim.params).toEqual([USER, LETTER_ID]);
+    expect(claim.params).toEqual([USER, LETTER_ID, false]);
+  });
+
+  it("claims only the caller's own letter unless the caller is the appliance admin", async () => {
+    const member = makeHarness(() => [claimRow()]);
+
+    await member.service.replayDeadLetter(CTX, LETTER_ID);
+
+    const [memberClaim] = member.matching(/UPDATE ci\.pipeline_dead_letters/);
+
+    expect(memberClaim.sql).toContain('(user_id = $1::uuid OR ($3::boolean AND user_id IS NULL))');
+    expect(memberClaim.params[2]).toBe(false);
+
+    const admin = makeHarness(() => [claimRow()]);
+
+    await admin.service.replayDeadLetter(CTX, LETTER_ID, { includeUnattributed: true });
+
+    const [adminClaim] = admin.matching(/UPDATE ci\.pipeline_dead_letters/);
+
+    expect(adminClaim.params[2]).toBe(true);
+  });
+
+  it('404s, never 409s, a letter the caller may not see', async () => {
+    // The explanation read uses the claim's own scope. A 409 "already replayed"
+    // for somebody else's letter would confirm it exists.
+    const harness = makeHarness(() => []);
+
+    await expect(harness.service.replayDeadLetter(CTX, LETTER_ID)).rejects.toBeInstanceOf(NotFoundException);
+
+    const [explain] = harness.matching(/^SELECT d\.replayed_at/);
+
+    expect(explain.sql).toContain('(d.user_id = $1::uuid OR ($3::boolean AND d.user_id IS NULL))');
+    expect(explain.params).toEqual([USER, LETTER_ID, false]);
   });
 
   it('409s a letter that was already replayed, and emits nothing', async () => {
@@ -1114,7 +1160,8 @@ describe('PipelineRunService.replayDeadLetters (bulk)', () => {
     // The LIMIT bind is the last parameter of the claim statement.
     const claim = harness.matching(/UPDATE ci\.pipeline_dead_letters/)[0];
 
-    expect(claim.params[claim.params.length - 1]).toBe(ids.length);
+    // $5 is the batch ceiling; $6 says whether NULL-user letters are in scope.
+    expect(claim.params[4]).toBe(ids.length);
     expect(result.limit).toBe(ids.length);
     expect(result.notAttempted).toEqual([]);
     expect(result.skipped).toHaveLength(ids.length);
@@ -1165,16 +1212,24 @@ describe('PipelineRunService.replayDeadLetters (bulk)', () => {
       'infer.question.answer',
       failedAfter,
       DEFAULT_DEAD_LETTER_PAGE,
+      false,
     ]);
   });
 
-  it('scopes to the caller, including the NULL-user letters the list shows', async () => {
+  it('scopes to the caller, and to the letters that name no user only for the admin', async () => {
     const harness = makeHarness(() => []);
 
     await harness.service.replayDeadLetters(CTX, { eventName: 'file.uploaded' });
 
-    expect(harness.statements[0].sql).toContain('user_id = $1::uuid OR user_id IS NULL');
+    expect(harness.statements[0].sql).toContain('(user_id = $1::uuid OR ($6::boolean AND user_id IS NULL))');
     expect(harness.statements[0].params[0]).toBe(USER);
+    expect(harness.statements[0].params[5]).toBe(false);
+
+    const admin = makeHarness(() => []);
+
+    await admin.service.replayDeadLetters(CTX, { eventName: 'file.uploaded', includeUnattributed: true });
+
+    expect(admin.statements[0].params[5]).toBe(true);
   });
 
   it('clamps the batch ceiling, because every claimed letter re-emits a verbatim payload', async () => {
