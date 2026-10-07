@@ -41,7 +41,8 @@ import { OutboundPolicyService } from './services/OutboundPolicyService';
     // never depends on privacy and there is no module cycle.
     ConnectionsModule,
     SearchIngressModule,
-    // UserService, for the confirmation email `POST /users/me/delete` checks.
+    // UserService, for the confirmation email `POST /users/me/delete` checks, and so that route
+    // can hand administration over before it deletes the appliance's last administrator.
     UserModule,
   ],
   // ApplianceAdminGuard is registered so Nest resolves its DataSource here.

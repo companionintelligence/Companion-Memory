@@ -243,6 +243,10 @@ const DELETE_BELOW_FULL: Record<string, string> = {
   // The MCP streamable-HTTP transport sends DELETE to end its session. It removes nothing, and every
   // MCP client a `read` key drives sends it on close, so it stays at the class-level `read`.
   'McpController.handleDelete': READ_CAPABILITY,
+  // `DELETE /keys/current` revokes the key that sent it and nothing else: how the phone and desktop
+  // apps sign out. Ending its own access reaches no data and no other credential, so a key of any
+  // level may do it.
+  'ApiKeyController.revokeCurrent': READ_CAPABILITY,
 };
 
 /** What the guard demands of an undeclared DELETE, asked of the real shape rule rather than restated. */

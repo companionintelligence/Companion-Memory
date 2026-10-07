@@ -10,16 +10,19 @@ import {
   persistApiBaseUrl,
   setApiBaseUrl,
   syncNativeIntentConfig,
+  getApiKey,
   getLaunchUrl,
   isIosPlatform,
   isNativePlatform,
   isTauriPlatform,
   claimNativeOidcCode,
+  hasPendingNativeOidcSignIn,
   parseOidcCallbackUrl,
   secureStorageGet,
   secureStorageRemove,
   secureStorageSet,
   setApiKey,
+  takePendingNativeOidcSignIn,
 } from '@ci/common';
 import { jwtDecode } from 'jwt-decode';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -63,6 +66,10 @@ const API_KEY_CAPABILITY_STORAGE = 'ci.apiKeyCapability';
 const NATIVE_KEY_CAPABILITY = 'full';
 
 const CSRF_COOKIE_NAME = 'csrfToken';
+
+/** Shown when the appliance is too old to bind a native sign-in to this app (see handleUrl). */
+const SERVER_UPDATE_REQUIRED =
+  'This Memory needs an update before the app can sign in with your Companion account. Sign in with your email and password instead.';
 
 // Native clients run in a cross-origin webview and can neither read nor send the
 // SameSite=Strict CSRF cookie, so they capture the token from the
@@ -291,6 +298,9 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
     body: JSON.stringify({
       name: `Companion mobile · ${new Date().toISOString().slice(0, 10)}`,
       capability: NATIVE_KEY_CAPABILITY,
+      // A signed-in device, not a key handed to a tool: a password change, "Sign out
+      // everywhere" and this app's own sign-out revoke it.
+      sign_in: true,
     }),
   });
 
@@ -306,6 +316,33 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
   return created.key;
 }
 
+/** This device's stored key, or null when there is none or the store cannot be read. */
+async function storedDeviceKey(): Promise<string | null> {
+  try {
+    return await secureStorageGet(API_KEY_STORAGE);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Give this device's key up on the server: how the phone and desktop apps sign out. Best
+ * effort and bounded, because signing out must finish whether or not the appliance answers;
+ * a key that could not be revoked here is still listed under Settings > API keys.
+ */
+async function revokeDeviceKey(key: string): Promise<void> {
+  try {
+    await fetchJson('/api/keys/current', {
+      method: 'DELETE',
+      skipApiKey: true,
+      headers: { 'x-api-key': key },
+      timeout: 5_000,
+    });
+  } catch (error) {
+    console.warn('Could not revoke this device key on the server', error);
+  }
+}
+
 interface OidcNativeExchangeResponse {
   accessToken: string;
 }
@@ -313,14 +350,15 @@ interface OidcNativeExchangeResponse {
 // Native OIDC return path: exchange the short-lived one-time code carried by the
 // `companion://oidc/callback?code=...` deep link for a real JWT, then trade that JWT
 // for a durable API key — identical to the password path. The one-time code is single
-// use and short-lived; no long-lived secret ever travels in the deep-link URL.
-async function completeOidcNativeSignIn(code: string): Promise<string | null> {
+// use and short-lived, and redeemable only with the PKCE verifier this app kept when it
+// started the sign-in; no long-lived secret ever travels in the deep-link URL.
+async function completeOidcNativeSignIn(code: string, codeVerifier: string): Promise<string | null> {
   const data = await fetchJson<OidcNativeExchangeResponse>('/api/authenticate/oidc/native/exchange', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code, code_verifier: codeVerifier }),
   });
 
   const jwt = data?.accessToken ?? null;
@@ -521,23 +559,43 @@ function useAuth(): ReturnValue {
   );
 
   const logout = useCallback(async () => {
+    // The key this device signs in with (phone and desktop), read before it is dropped below.
+    // The stored copy when none is in memory: the desktop never loads its stored key back on
+    // start, and a phone can sign out before the keystore restore lands. Deleting that copy
+    // below without revoking it would leave a working key on the server that no device holds.
+    const deviceKey =
+      getApiKey() ?? (isNativePlatform() || isTauriPlatform() ? await storedDeviceKey() : null);
+
     // Drop the in-memory key before the replica wipe. A late keystore restore
     // must not put the previous box's key back under the next account.
     bumpNativeCredentialEpoch();
 
-    if (isNativePlatform()) {
+    if (isNativePlatform() || isTauriPlatform()) {
       setApiKey(null);
       setNativeApiKey(null);
+    }
+
+    // Revoke it on the server while the app still knows which server that is (the
+    // native branch below forgets the origin). Without this, signing out only forgot
+    // the key on this device and it kept working for whoever else had a copy.
+    if (deviceKey) {
+      await revokeDeviceKey(deviceKey);
     }
 
     // Bounded: a replica that cannot be dropped (worker never came up) must not
     // leave the user stuck signed in. Everything below still runs on timeout.
     await disconnectAndClearPowerSyncForLogout();
 
+    if (isTauriPlatform()) {
+      // The desktop keeps its key in this page's storage; a revoked key left there
+      // would only be read back as a credential that no longer works.
+      await secureStorageRemove(API_KEY_STORAGE);
+      await secureStorageRemove(API_KEY_ID_STORAGE);
+      await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+    }
+
     if (isNativePlatform()) {
-      // No cookie session to revoke. Clear the local credential; the API key stays
-      // valid server-side (the /api/keys revoke endpoint is JWT-only, and we hold no
-      // JWT here) and can be revoked from Settings → API Keys after re-login.
+      // No cookie session to revoke; the key was revoked above. Clear the local copy.
       setApiKey(null);
       await secureStorageRemove(API_KEY_STORAGE);
       await secureStorageRemove(API_KEY_ID_STORAGE);
@@ -705,6 +763,28 @@ function useAuth(): ReturnValue {
         return;
       }
 
+      // Only the result of a sign-in THIS app started counts, failures included: the
+      // state on the link must be the one `OidcButton` kept. Any other
+      // `companion://oidc/callback` link (one somebody sent, one another app opened) is
+      // dropped before it can sign the app into anyone's account, replace the key it
+      // holds, or put its own text on the login screen.
+      const pending = takePendingNativeOidcSignIn(params.state);
+
+      if (!pending) {
+        // An appliance from before the state echo answers this app's own sign-in with no
+        // state. Its code is still not redeemed (nothing ties it to this app), but the
+        // person is told why the sign-in did not finish rather than left watching nothing.
+        if (!params.state && hasPendingNativeOidcSignIn()) {
+          setLoginError(new Error(SERVER_UPDATE_REQUIRED));
+
+          return;
+        }
+
+        console.warn('Ignoring a sign-in link this app did not start');
+
+        return;
+      }
+
       if (params.error || !params.code) {
         setLoginError(new Error(params.error || 'oidc_failed'));
 
@@ -720,7 +800,7 @@ function useAuth(): ReturnValue {
 
       void (async () => {
         try {
-          const key = await completeOidcNativeSignIn(code);
+          const key = await completeOidcNativeSignIn(code, pending.verifier);
 
           if (!key) {
             setLoginError(new Error('oidc_exchange_failed'));

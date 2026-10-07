@@ -1,8 +1,9 @@
 import 'reflect-metadata';
 
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 
 import { FULL_CAPABILITY, REQUIRE_CAPABILITY_KEY } from '@ci/common/decorators';
+import { LastAdminDeletionRefused, SUCCESSOR_NOT_FOUND, SUCCESSOR_REQUIRED } from '@ci/domains/user';
 
 import type { AccountDeletionResult } from '../../services/DataDeletionService';
 import { PrivacyController } from '../PrivacyController';
@@ -10,7 +11,8 @@ import { PrivacyController } from '../PrivacyController';
 function makeController(result: AccountDeletionResult, email = 'owner@example.com') {
   const deleteAccount = jest.fn(async () => result);
   const dataDeletionService = { deleteAccount };
-  const userService = { findById: jest.fn(async () => ({ id: 'user-1', email })) };
+  const handOverAdministration = jest.fn(async () => undefined);
+  const userService = { findById: jest.fn(async () => ({ id: 'user-1', email })), handOverAdministration };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
   const controller = new PrivacyController(
@@ -19,7 +21,7 @@ function makeController(result: AccountDeletionResult, email = 'owner@example.co
     logger as never,
   );
 
-  return { controller, deleteAccount };
+  return { controller, deleteAccount, handOverAdministration };
 }
 
 const RESULT: AccountDeletionResult = {
@@ -59,6 +61,41 @@ describe('PrivacyController.deleteMyAccount', () => {
       auditId: 'audit-1',
     });
   });
+
+  it('hands administration over before it deletes anything, with the successor the caller named', async () => {
+    const { controller, deleteAccount, handOverAdministration } = makeController(RESULT);
+
+    await controller.deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, {
+      confirmEmail: 'owner@example.com',
+      successorEmail: 'member@example.com',
+    });
+
+    expect(handOverAdministration).toHaveBeenCalledWith({ userId: 'user-1' }, 'user-1', {
+      successorEmail: 'member@example.com',
+    });
+    expect(handOverAdministration.mock.invocationCallOrder[0]).toBeLessThan(
+      deleteAccount.mock.invocationCallOrder[0],
+    );
+  });
+
+  it.each([
+    ['successor_required', SUCCESSOR_REQUIRED],
+    ['successor_not_found', SUCCESSOR_NOT_FOUND],
+  ] as const)(
+    'answers 409 %s and deletes nothing when the last administrator names nobody who can take over',
+    async (reason, message) => {
+      const { controller, deleteAccount, handOverAdministration } = makeController(RESULT);
+      handOverAdministration.mockRejectedValue(new LastAdminDeletionRefused(reason));
+
+      const failure = await controller
+        .deleteMyAccount({ userId: 'user-1' } as never, OWNER_REQUEST, { confirmEmail: 'owner@example.com' })
+        .catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(ConflictException);
+      expect((failure as ConflictException).getResponse()).toMatchObject({ message });
+      expect(deleteAccount).not.toHaveBeenCalled();
+    },
+  );
 
   it('accepts the email retyped with different case and surrounding spaces', async () => {
     const { controller, deleteAccount } = makeController(RESULT);

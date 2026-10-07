@@ -16,7 +16,7 @@ import { type ApiKeyScopedRequest, JwtOrApiKeyAuthGuard } from '@ci/common/guard
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import { isManagedAppPrincipal } from '@ci/domains/auth';
-import { UserService } from '@ci/domains/user';
+import { LastAdminDeletionRefused, UserService } from '@ci/domains/user';
 
 import { DataDeletionService } from '../services/DataDeletionService';
 
@@ -28,6 +28,12 @@ import { DataDeletionService } from '../services/DataDeletionService';
  */
 const deleteAccountSchema = z.object({
   confirmEmail: z.string().min(1, 'Account deletion requires the account email in "confirmEmail"'),
+  /**
+   * Who becomes administrator, by the address they sign in with. Required only when the caller is
+   * the appliance's last live administrator and other people still have accounts, exactly as on
+   * `DELETE /account`.
+   */
+  successorEmail: z.string().trim().min(1).optional(),
 });
 
 /**
@@ -78,7 +84,7 @@ export class PrivacyController {
   async deleteMyAccount(
     @Context() context: RequestContext,
     @Req() req: ApiKeyScopedRequest,
-    @Body(new ValidationPipe(deleteAccountSchema)) body: { confirmEmail: string },
+    @Body(new ValidationPipe(deleteAccountSchema)) body: { confirmEmail: string; successorEmail?: string },
   ) {
     if (isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy })) {
       throw new ForbiddenException(
@@ -95,6 +101,17 @@ export class PrivacyController {
 
     if (body.confirmEmail.trim().toLowerCase() !== user.email.trim().toLowerCase()) {
       throw new BadRequestException('Confirmation email does not match this account');
+    }
+
+    // Before anything is purged: the appliance's last administrator does not leave the other
+    // people on it without one, whichever route deletes the account (`DELETE /account` applies
+    // the same rule). 409 `SUCCESSOR_REQUIRED` or `SUCCESSOR_NOT_FOUND`, and nothing deleted.
+    try {
+      await this.userService.handOverAdministration(serviceContext, serviceContext.userId, {
+        successorEmail: body.successorEmail,
+      });
+    } catch (error) {
+      throw error instanceof LastAdminDeletionRefused ? error.toConflict() : error;
     }
 
     const result = await this.dataDeletionService.deleteAccount(serviceContext);

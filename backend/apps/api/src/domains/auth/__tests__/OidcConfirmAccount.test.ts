@@ -364,6 +364,34 @@ describe('OidcController — confirm-account CSRF', () => {
       expect(res.headers.location).not.toMatch(/^\/login\?error=/);
     });
 
+    it('marks the address proven only when the intent says the Portal verified it', async () => {
+      mockUserService.findByEmail.mockResolvedValue(null);
+
+      await validPost();
+
+      // The intent above carries no `emailVerified`: an address nobody verified proves nothing.
+      expect(mockUserService.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ email: 'new@example.com', emailProven: false }),
+      );
+
+      mockUserService.create.mockClear();
+      mockAuthService.verifySignupIntentToken.mockReturnValue({
+        email: 'new@example.com',
+        name: 'Test User',
+        issuer: 'https://hub.test',
+        subject: 'portal-sub-1',
+        emailVerified: true,
+      });
+
+      await validPost();
+
+      expect(mockUserService.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ email: 'new@example.com', emailProven: true }),
+      );
+    });
+
     it("SECURITY: refuses when an account for the address already exists and is not this identity's", async () => {
       // The callback already refused this sign-in (password account, or one
       // bound to a different Portal identity). This step used to do

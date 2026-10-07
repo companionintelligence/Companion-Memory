@@ -39,6 +39,12 @@ export interface SignupIntent extends Partial<SignupIntentIdentity> {
    * holds an invitation.
    */
   firstAccountOnly?: boolean;
+  /**
+   * The Portal asserted `email_verified` for this address. The account the
+   * confirm step creates counts its address as proven only then. Absent when the
+   * Portal did not verify it.
+   */
+  emailVerified?: boolean;
 }
 
 const SESSION_EXPIRES_IN = parseDuration(config.auth.session.duration) ?? 0;
@@ -189,7 +195,7 @@ export class AuthService {
     email: string,
     name?: string,
     identity?: SignupIntentIdentity,
-    admission?: Pick<SignupIntent, 'firstAccountOnly'>,
+    admission?: Pick<SignupIntent, 'firstAccountOnly' | 'emailVerified'>,
   ): string {
     return this.jwtService.sign(
       {
@@ -200,6 +206,7 @@ export class AuthService {
         subject: identity?.subject,
         // Only ever `true` or absent, so an intent that waived nothing reads exactly as before.
         firstAccountOnly: admission?.firstAccountOnly === true ? true : undefined,
+        emailVerified: admission?.emailVerified === true ? true : undefined,
       },
       { secret: signupIntentSecret(), expiresIn: '10m' },
     );
@@ -213,6 +220,7 @@ export class AuthService {
       issuer?: string;
       subject?: string;
       firstAccountOnly?: boolean;
+      emailVerified?: boolean;
     }>(token, {
       secret: signupIntentSecret(),
     });
@@ -227,6 +235,7 @@ export class AuthService {
       issuer: payload.issuer,
       subject: payload.subject,
       ...(payload.firstAccountOnly === true ? { firstAccountOnly: true } : {}),
+      ...(payload.emailVerified === true ? { emailVerified: true } : {}),
     };
   }
 

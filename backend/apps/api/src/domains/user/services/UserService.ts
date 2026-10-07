@@ -1,13 +1,16 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { randomBytes } from 'crypto';
+
+import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import bcrypt from 'bcrypt';
-import { EntityManager, QueryDeepPartialEntity, Repository } from 'typeorm';
+import { EntityManager, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { ServiceContext, SYSTEM_USER } from '@ci/common/context';
 import config from '@ci/configuration';
 import { EventService } from '@ci/domains/events';
 
+import { normalizeEmail } from '../email';
 import { type User, UserEntity } from '../entities/UserEntity';
 import { UserCreatedEvent, UserUpdatedEvent, UserRemovedEvent } from '../events';
 import { CreateUserDto, UpdateUserDto } from '../types';
@@ -40,6 +43,62 @@ const APPLIANCE_CLAIM_LOCK_KEY = 20260910133657;
  * Write through `manager`; anything written another way is outside the transaction.
  */
 export type WithNewAccount = (manager: EntityManager, user: User) => Promise<unknown>;
+
+/** What a deletion request may carry besides the account it ends. */
+export interface DeletionOptions {
+  /**
+   * The address of a live account to make administrator in the same transaction. Required when
+   * the account being deleted is the appliance's last live administrator and other live accounts
+   * remain; ignored otherwise.
+   */
+  successorEmail?: string;
+}
+
+/**
+ * Why {@link UserService.requestDeletion} refused to delete the appliance's last live
+ * administrator. Nothing was written.
+ *
+ * - `successor_required`: other live accounts remain, and the request named nobody to take over.
+ * - `successor_not_found`: the named address is not another live account on this appliance.
+ */
+export class LastAdminDeletionRefused extends Error {
+  constructor(readonly reason: 'successor_required' | 'successor_not_found') {
+    super(
+      reason === 'successor_required'
+        ? 'The last administrator cannot be deleted while other accounts remain'
+        : 'The named successor is not another live account on this appliance',
+    );
+    this.name = 'LastAdminDeletionRefused';
+  }
+
+  /** The 409 every account-deletion route answers with. The web app reads its `message`. */
+  toConflict(): ConflictException {
+    return new ConflictException(
+      this.reason === 'successor_required'
+        ? {
+            message: SUCCESSOR_REQUIRED,
+            detail:
+              'You are the only administrator and other people have accounts here. Name the person who takes over.',
+          }
+        : {
+            message: SUCCESSOR_NOT_FOUND,
+            detail: 'No other account on this Memory uses that address.',
+          },
+    );
+  }
+}
+
+/**
+ * The `message` of a 409 from an account deletion when the caller is the last administrator and
+ * other people still have accounts: name a successor (`successorEmail`) and ask again.
+ */
+export const SUCCESSOR_REQUIRED = 'SUCCESSOR_REQUIRED';
+
+/** The `message` of a 409 from an account deletion whose `successorEmail` names no other live account. */
+export const SUCCESSOR_NOT_FOUND = 'SUCCESSOR_NOT_FOUND';
+
+/** A lookup by address that matched more than one account once case is ignored. */
+type Ambiguous = 'ambiguous';
 
 @Injectable()
 export class UserService {
@@ -94,9 +153,8 @@ export class UserService {
    * answers, and deliberately NOT the one the admin claim asks. An account awaiting its purge still
    * means someone claimed this box, and its data is still on disk; reopening uninvited signup while
    * it is there would be a way back in. Once the purge removes the last row the appliance is as
-   * empty as a fresh install, and is claimable again. The admin claim is different on purpose: it
-   * ignores deleted accounts, so an owner who deleted theirs is replaced as admin by the next account
-   * created — through a door that still requires an invitation.
+   * empty as a fresh install, and is claimable again. The admin claim asks the same question, so
+   * an owner who deleted their account is never replaced as admin by whoever is created next.
    *
    * @param alongside the caller's record of the claim — a federated binding — written in the same
    *   transaction. It then exists exactly when the account does, and a racer that lost finds both
@@ -137,7 +195,7 @@ export class UserService {
     { onlyIfFirst, alongside }: { onlyIfFirst: boolean; alongside?: WithNewAccount },
   ): Promise<User | null> {
     const id = data.id ?? uuidv7();
-    const { passwordChosenByUser = true, ...columns } = data;
+    const { passwordChosenByUser = true, emailProven = false, ...columns } = data;
     // Before the transaction opens: bcrypt is the slow part, and nobody queued on the lock should
     // wait for it as well.
     const hashedPassword = await bcrypt.hash(data.password, config.auth.local.saltRounds);
@@ -145,8 +203,11 @@ export class UserService {
     const instance = this.userRepository.create({
       ...columns,
       id,
+      // One spelling per address, whichever door the account came through.
+      email: normalizeEmail(columns.email),
       password: hashedPassword,
       passwordSetAt: passwordChosenByUser ? new Date() : null,
+      emailProvenAt: emailProven ? new Date() : null,
     });
 
     const entity = await this.userRepository.manager.transaction(async (manager) => {
@@ -158,8 +219,12 @@ export class UserService {
 
       const saved = await manager.save(instance);
 
-      // Before the event, so nothing observing UserCreated can read a half-claimed appliance.
-      saved.role = (await this.claimApplianceIfUnowned(manager, saved.id)) ? 'admin' : saved.role;
+      // Before the event, so nothing observing UserCreated can read a half-claimed appliance. The
+      // returned account says what the row now says: admin, with its address proven.
+      if (await this.claimApplianceIfUnowned(manager, saved.id)) {
+        saved.role = 'admin';
+        saved.emailProvenAt ??= new Date();
+      }
 
       await alongside?.(manager, UserEntity.toEgressType(saved));
 
@@ -217,27 +282,31 @@ export class UserService {
    * only stable meaning 'first account' can have". Promoting the first account is not a new
    * concept — it is the one already written down, finally applied.
    *
-   * ── Why this TIGHTENS the appliance rather than loosening it ───────────────
+   * ── The first account EVER, not "whoever comes after the owner" ───────────
    *
-   * The instinct is that granting admin can only widen access. Here it does the opposite on net,
-   * because {@link ApplianceAdminGuard} — which gates the `/jobs` appliance-wide controls and
-   * `/signup-codes` minting — admits EVERY signed-in user when no admin exists, that being the
-   * only honest thing it could do while the role was ungrantable. So on a fresh appliance today:
-   * those routes are open to anyone with an account, and `AdminOnlyGuard`'s are open to nobody.
-   * After this, the first surface narrows from everyone to one person and the second widens from
-   * nobody to that same person. One hole closes; one route becomes usable by its intended reader.
+   * This used to promote any account created while no LIVE admin existed. That is also the state
+   * an owner leaves behind by deleting their account while members keep theirs, and in that state
+   * {@link ApplianceAdminGuard} admitted every member, including to `POST /signup-codes`. A member
+   * could mint an invitation, sign up a second account and have it promoted here.
    *
-   * ── The unowned test, and why it matches the guard's exactly ───────────────
+   * So the test is now the one {@link createFirstAccount} asks: no OTHER row in `ci.users`, live
+   * or soft-deleted. An account awaiting its purge still means this box was claimed. Once the
+   * purge removes the last row the appliance is as empty as a fresh install, and its next account
+   * claims it again.
    *
-   * "No LIVE admin" (`deleted_at IS NULL`), which is character-for-character the question
-   * `ApplianceAdminGuard.applianceHasAdmin()` asks. They must agree: an appliance the guard treats
-   * as unclaimed — and therefore opens to everybody — has to be one this is willing to claim, or
-   * the permissive branch becomes permanent instead of transitional. A consequence worth stating
-   * plainly: if the sole owner deletes their account, the next account created claims the box.
-   * That is deliberate and is strictly better than the alternative, which is an appliance whose
-   * control plane stays open to everyone forever. It is also narrower than it sounds: the doors
-   * that need no invitation still count that deleted account (see {@link createFirstAccount}), so
-   * "the next account" is one somebody let in.
+   * An appliance whose admin is gone while other accounts remain therefore has no admin until
+   * someone names one. `requestDeletion` refuses to produce that state while other live accounts
+   * exist (the last admin must name a successor). It still arises on a box upgraded while already
+   * in it, after an operator edits `ci.users` by hand, and when the only account is deleted and
+   * somebody else's account is created before the purge removes it: that account is not the first
+   * row, so it is not promoted, and nothing promotes it after the purge either. The way out is an
+   * operator's: clear the departed owner's `deleted_at` and `purge_after` inside the grace period,
+   * or set `role = 'admin'` on the account that should hold it (`make dbshell`).
+   *
+   * The first account's address is also marked proven (`email_proven_at`). Nobody else is on the
+   * appliance yet, so it cannot be another person's address planted to receive their Portal or
+   * Hub sign-in, which is the case the proof exists for. The owner who signed up with a password
+   * keeps their Portal sign-in.
    *
    * Runs in {@link insertAccount}'s transaction, under its advisory lock, because the decision reads
    * a table it is about to write. Two signups racing on a fresh appliance would otherwise both
@@ -257,10 +326,11 @@ export class UserService {
     const promoted = await manager.query<Array<{ id: string }>>(
       `WITH promoted AS (
          UPDATE ci.users
-            SET role = 'admin'
+            SET role = 'admin',
+                email_proven_at = COALESCE(email_proven_at, now())
           WHERE id = $1
             AND NOT EXISTS (
-              SELECT 1 FROM ci.users WHERE role = 'admin' AND deleted_at IS NULL
+              SELECT 1 FROM ci.users WHERE id <> $1
             )
         RETURNING id)
        SELECT id FROM promoted`,
@@ -324,7 +394,12 @@ export class UserService {
       throw new UnauthorizedException();
     }
 
-    await this.userRepository.update(id, data as QueryDeepPartialEntity<UserEntity>);
+    // An address arriving here is held to the same rules as `changeEmail`: one spelling, and no
+    // longer proven.
+    const patch =
+      data.email === undefined ? data : { ...data, email: normalizeEmail(data.email), emailProvenAt: null };
+
+    await this.userRepository.update(id, patch as QueryDeepPartialEntity<UserEntity>);
 
     await this.eventService.send(UserUpdatedEvent, {
       userId: id,
@@ -345,31 +420,171 @@ export class UserService {
    * here would raise a foreign-key violation anyway (eighteen constraints reference
    * users(id) with no ON DELETE action; see the migration).
    *
+   * ── The last administrator ─────────────────────────────────────────────────
+   *
+   * Refused, with {@link LastAdminDeletionRefused}, when this is the appliance's last live
+   * administrator and other live accounts remain, unless `options.successorEmail` names one of
+   * them. That account is promoted in the same transaction. Deleting the owner used to leave the
+   * members on a box with no live admin, where {@link ApplianceAdminGuard} admitted all of them
+   * and any of them could mint the invitation that made the next admin. The decision takes the
+   * lock every account creation takes, so two admins deleting at once cannot each count the other
+   * as the one who stays, and no account can be created between the count and the write.
+   *
+   * ── Invitations ────────────────────────────────────────────────────────────
+   *
+   * The account's unused invitations are deleted in the same transaction: an invitation is the
+   * issuer's decision to let someone in, and an issuer who has left can no longer stand behind it.
+   * Raw SQL against `ci.signup_code` because that table belongs to the auth domain, which depends
+   * on this one and not the other way round.
+   *
    * Idempotent: a second request finds nothing (the first one hid the row) and
    * returns false rather than throwing.
    */
-  async requestDeletion(context: ServiceContext, id: string): Promise<boolean> {
+  async requestDeletion(
+    context: ServiceContext,
+    id: string,
+    options: DeletionOptions = {},
+  ): Promise<boolean> {
     if (context.userId !== SYSTEM_USER && context.userId !== id) {
       throw new UnauthorizedException();
     }
 
-    const existing = await this.findById(context, id);
+    const purgeAfter = new Date(Date.now() + purgeGraceDays() * 24 * 60 * 60 * 1000);
 
-    if (!existing) {
+    const outcome = await this.userRepository.manager.transaction(async (manager) => {
+      const handedOver = await this.lockAndHandOver(manager, id, options);
+
+      if (!handedOver) {
+        return null;
+      }
+
+      // One write, not `softDelete()` then `update()`: the access gate (`deletedAt`) and
+      // the promise about when the data goes (`purgeAfter`) must never exist apart.
+      await manager.update(UserEntity, id, { deletedAt: new Date(), purgeAfter });
+
+      await manager.query(`DELETE FROM ci.signup_code WHERE issued_by = $1 AND used = false`, [id]);
+
+      return handedOver;
+    });
+
+    if (outcome == null) {
       return false;
     }
 
-    const purgeAfter = new Date(Date.now() + purgeGraceDays() * 24 * 60 * 60 * 1000);
-
-    // One write, not `softDelete()` then `update()`: the access gate (`deletedAt`) and
-    // the promise about when the data goes (`purgeAfter`) must never exist apart.
-    await this.userRepository.update(id, { deletedAt: new Date(), purgeAfter });
+    if (outcome.successorId) {
+      await this.eventService.send(UserUpdatedEvent, { userId: outcome.successorId });
+    }
 
     await this.eventService.send(UserRemovedEvent, {
       userId: id,
     });
 
     return true;
+  }
+
+  /**
+   * The last-administrator rule of {@link requestDeletion}, for a deletion that does not go through
+   * it: the privacy route's immediate hard delete (`POST /users/me/delete`). When `id` is the last
+   * live administrator and other live accounts remain, `options.successorEmail` must name one of
+   * them, and that account becomes administrator now. Otherwise this throws
+   * {@link LastAdminDeletionRefused} and writes nothing.
+   *
+   * The hard delete that follows runs outside this lock, so an administrator leaving this way at
+   * the same moment as the only other one leaves can still empty the role. The cost is the
+   * admin-less appliance {@link ApplianceAdminGuard} keeps closed until an operator names an
+   * administrator, never a promotion.
+   */
+  async handOverAdministration(
+    context: ServiceContext,
+    id: string,
+    options: DeletionOptions = {},
+  ): Promise<void> {
+    if (context.userId !== SYSTEM_USER && context.userId !== id) {
+      throw new UnauthorizedException();
+    }
+
+    const handedOver = await this.userRepository.manager.transaction((manager) =>
+      this.lockAndHandOver(manager, id, options),
+    );
+
+    if (handedOver?.successorId) {
+      await this.eventService.send(UserUpdatedEvent, { userId: handedOver.successorId });
+    }
+  }
+
+  /**
+   * Under the lock every account creation takes: find live account `id` (null when there is none)
+   * and, when it is the last live administrator, promote the successor {@link successorFor} names.
+   * Throws {@link LastAdminDeletionRefused} before writing anything.
+   */
+  private async lockAndHandOver(
+    manager: EntityManager,
+    id: string,
+    options: DeletionOptions,
+  ): Promise<{ successorId: string | null } | null> {
+    await manager.query('SELECT pg_advisory_xact_lock($1)', [APPLIANCE_CLAIM_LOCK_KEY]);
+
+    const [target] = await manager.query<Array<{ id: string; role: string }>>(
+      `SELECT id, role FROM ci.users WHERE id = $1 AND deleted_at IS NULL`,
+      [id],
+    );
+
+    if (!target) {
+      return null;
+    }
+
+    const successorId = target.role === 'admin' ? await this.successorFor(manager, id, options) : null;
+
+    if (successorId) {
+      await manager.query(`UPDATE ci.users SET role = 'admin' WHERE id = $1`, [successorId]);
+    }
+
+    return { successorId };
+  }
+
+  /**
+   * The account that becomes administrator when admin `id` leaves, or null when none has to.
+   *
+   * None has to when another live admin stays, or when nobody else is left at all (the appliance
+   * then empties out and its next first account claims it). Otherwise the request must name a live
+   * account other than `id`, by the address it signs in with.
+   */
+  private async successorFor(
+    manager: EntityManager,
+    id: string,
+    options: DeletionOptions,
+  ): Promise<string | null> {
+    const [others] = await manager.query<Array<{ admins: boolean; accounts: boolean }>>(
+      `SELECT EXISTS (
+                SELECT 1 FROM ci.users WHERE role = 'admin' AND deleted_at IS NULL AND id <> $1
+              ) AS admins,
+              EXISTS (
+                SELECT 1 FROM ci.users WHERE deleted_at IS NULL AND id <> $1
+              ) AS accounts`,
+      [id],
+    );
+
+    if (others?.admins === true || others?.accounts === false) {
+      return null;
+    }
+
+    if (!options.successorEmail?.trim()) {
+      throw new LastAdminDeletionRefused('successor_required');
+    }
+
+    const candidates = await manager.query<Array<{ id: string }>>(
+      `SELECT id FROM ci.users
+        WHERE deleted_at IS NULL
+          AND id <> $1
+          AND lower(email) = $2`,
+      [id, normalizeEmail(options.successorEmail)],
+    );
+
+    if (candidates.length !== 1) {
+      throw new LastAdminDeletionRefused('successor_not_found');
+    }
+
+    return candidates[0].id;
   }
 
   /**
@@ -404,37 +619,58 @@ export class UserService {
     return true;
   }
 
+  /**
+   * The account a password login names, and whether the password is its own.
+   *
+   * `accountExists` is reported separately so the login throttle can keep a per-account budget for
+   * names that are accounts without one for every made-up name. An address that matches no account
+   * still pays for a bcrypt comparison, against a hash of the same cost, so the response time does
+   * not say whether the account exists and a flood of made-up names costs what real guesses do.
+   */
+  async authenticatePassword(
+    email: string,
+    password: string,
+  ): Promise<{ user: User | null; accountExists: boolean }> {
+    const found = await this.findEntityByEmail(email);
+
+    if (found == null || found === 'ambiguous') {
+      await bcrypt.compare(password, await this.dummyPasswordHash());
+
+      return { user: null, accountExists: found === 'ambiguous' };
+    }
+
+    const validCredentials = await bcrypt.compare(password, found.password);
+
+    return { user: validCredentials ? UserEntity.toEgressType(found) : null, accountExists: true };
+  }
+
   async validatePassword(email: string, password: string): Promise<User | null> {
-    const result = await this.userRepository.findOne({
-      where: {
-        email,
-      },
-    });
+    return (await this.authenticatePassword(email, password)).user;
+  }
 
-    if (result == null) {
-      return null;
-    }
+  /** A hash nobody's password matches, at the configured cost; computed once per process. */
+  private dummyHash: Promise<string> | null = null;
 
-    const validCredentials = await bcrypt.compare(password, result.password);
+  private dummyPasswordHash(): Promise<string> {
+    this.dummyHash ??= bcrypt.hash(randomBytes(32).toString('hex'), config.auth.local.saltRounds);
 
-    if (!validCredentials) {
-      return null;
-    }
-
-    return UserEntity.toEgressType(result);
+    return this.dummyHash;
   }
 
   /**
    * Change the authenticated user's own email. Callers must have already
    * verified `checkEmailAvailability` and, for non-federated accounts,
    * re-authenticated with the current password — this method just writes.
+   * The address is stored normalized and unproven.
    */
   async changeEmail(context: ServiceContext, id: string, newEmail: string): Promise<User | null> {
     if (context.userId !== SYSTEM_USER && context.userId !== id) {
       throw new UnauthorizedException();
     }
 
-    await this.userRepository.update(id, { email: newEmail });
+    // Nothing showed the new address is this person's, so it stops counting as proven: the
+    // Portal email link and the Hub bridge will not link anyone into this account by it.
+    await this.userRepository.update(id, { email: normalizeEmail(newEmail), emailProvenAt: null });
 
     await this.eventService.send(UserUpdatedEvent, {
       userId: id,
@@ -467,7 +703,9 @@ export class UserService {
   async checkEmailAvailability(email: string): Promise<boolean> {
     const result = await this.userRepository.findOne({
       where: {
-        email,
+        // Whatever its case: `users_email_lower_uniq` would refuse the INSERT for any spelling of
+        // an address that is already here.
+        email: Raw((column) => `LOWER(${column}) = :email`, { email: normalizeEmail(email) }),
       },
       // Must see soft-deleted rows. They keep their address — ci.users.email is UNIQUE
       // across them — so an INSERT would still collide. Reading through the default
@@ -498,23 +736,75 @@ export class UserService {
     return !(await this.anyAccountExists(this.userRepository.manager));
   }
 
+  /**
+   * The live account an address names, or null when none does or more than one might.
+   * See {@link findAccountByEmail}, which tells those last two apart.
+   */
   async findByEmail(email: string): Promise<User | null> {
-    const result = await this.userRepository.findOne({
+    const found = await this.findAccountByEmail(email);
+
+    return found === 'ambiguous' ? null : found;
+  }
+
+  /**
+   * The live account an address names: the exact address, else the only account whose address
+   * matches it once case is ignored. `'ambiguous'` when several do, which since addresses are
+   * stored lower-cased happens only for rows that already collided by case before that rule (see
+   * migration 20261006065832). Each of those still signs in with its exact address.
+   */
+  async findAccountByEmail(email: string): Promise<User | Ambiguous | null> {
+    const found = await this.findEntityByEmail(email);
+
+    return found == null || found === 'ambiguous' ? found : UserEntity.toEgressType(found);
+  }
+
+  private async findEntityByEmail(email: string): Promise<UserEntity | Ambiguous | null> {
+    const exact = await this.userRepository.findOne({
       where: {
-        email,
+        email: email.trim(),
       },
     });
 
-    return result ? UserEntity.toEgressType(result) : null;
+    if (exact) {
+      return exact;
+    }
+
+    const folded = await this.userRepository.find({
+      where: { email: Raw((column) => `LOWER(${column}) = :email`, { email: normalizeEmail(email) }) },
+      order: { createdAt: 'ASC' },
+      take: 2,
+    });
+
+    if (folded.length > 1) {
+      return 'ambiguous';
+    }
+
+    return folded[0] ?? null;
+  }
+
+  /**
+   * Whether `user`'s address is proven to be theirs: the bar the Portal email link and the Hub
+   * bridge's adoption by username hold an account to before trusting its address.
+   */
+  isEmailProven(user: Pick<User, 'emailProvenAt'>): boolean {
+    return user.emailProvenAt != null;
+  }
+
+  /**
+   * Record that `id`'s current address is proven to be its holder's: the Hub vouched for it as
+   * the person's username while they were signed in to this very account.
+   */
+  async markEmailProven(id: string): Promise<void> {
+    await this.userRepository.update(id, { emailProvenAt: new Date() });
   }
 
   /**
    * Every live account whose address equals `email` once both are case-folded.
    *
-   * `email` is `TEXT UNIQUE` and {@link findByEmail} compares it exactly, while the Hub lower-cases
-   * every username it signs (CI-Hub migration 0062 folded the old ones in place). An account signed
-   * up as `Owner@Example.com` is the same person the Hub calls `owner@example.com`, and an exact
-   * lookup misses them. Soft-deleted rows are left out, as everywhere else on this repository.
+   * Addresses are stored lower-cased now, and the Hub lower-cases every username it signs (CI-Hub
+   * migration 0062 folded the old ones in place). Rows that collided by case before addresses were
+   * normalized keep their original spelling, so this can still return more than one. Soft-deleted
+   * rows are left out, as everywhere else on this repository.
    */
   async findByEmailIgnoringCase(email: string): Promise<User[]> {
     const results = await this.userRepository

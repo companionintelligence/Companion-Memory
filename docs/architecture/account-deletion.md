@@ -27,6 +27,25 @@ The grace period is also the only undo. Within it an operator can clear `deleted
 and `purge_after` and the account is whole again; after it, nothing brings the data
 back.
 
+## The last administrator
+
+`requestDeletion` refuses to delete the appliance's last live administrator while other
+live accounts remain, unless the request names one of them (`successorEmail`). That
+account becomes administrator in the same transaction. The settings page asks for the
+address when the server answers 409 `SUCCESSOR_REQUIRED`.
+
+Before this rule, deleting the owner left the members on a box with no live admin.
+`ApplianceAdminGuard` admitted every one of them in that state, and the next account
+created was promoted, so a member could mint an invitation and sign up their own admin.
+Now the guard refuses when live accounts exist without a live admin, and only the
+appliance's first account ever is promoted. A box that is already in that state (it
+was upgraded with the owner pending purge) has no admin until an operator restores the
+owner inside the grace period, or sets `role = 'admin'` on the account that should hold
+it. The same goes for a box whose only account was deleted and which gained a new
+account before the purge: that account is not the first row, so it is never promoted.
+
+The deleted account's unused invitations are deleted with it.
+
 ## Why not `ON DELETE CASCADE`
 
 The obvious implementation is a migration rewriting every foreign key to

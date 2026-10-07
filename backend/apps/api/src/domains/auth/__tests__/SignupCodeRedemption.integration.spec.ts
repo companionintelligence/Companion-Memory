@@ -74,6 +74,11 @@ if (!availability.available) {
 }
 
 // Replaying every migration takes a while; the cases themselves are quick.
+
+/** The app's half of a native sign-in: an S256 challenge and a state value of its own. */
+const APP_CHALLENGE = 'c'.repeat(43);
+const APP_STATE = 's'.repeat(32);
+
 jest.setTimeout(180_000);
 
 const ISSUER = 'https://portal.signup-code.test';
@@ -469,6 +474,9 @@ describeWithDatabase(`signup-code redemption, against real Postgres (${availabil
 
     if (client === 'native') {
       cookies.oidc_client = 'native';
+      // The app's binding, parked by `initiate` (see OidcController.initiate.test.ts).
+      cookies.oidc_native_challenge = APP_CHALLENGE;
+      cookies.oidc_native_state = APP_STATE;
     }
 
     // Parked by `initiate`, from an invite link.
@@ -505,6 +513,22 @@ describeWithDatabase(`signup-code redemption, against real Postgres (${availabil
   };
 
   // ── The redemption every door shares ───────────────────────────────────
+
+  describe('SignupCodeService.create and revoke', () => {
+    it('hands back the id the database gave a new code, which withdraws it', async () => {
+      // `id` is a bigint identity. Declared as a plain primary column, `save()` never read it back
+      // and the mint response said `"id": "undefined"`.
+      const created = await signupCodeService.create();
+      const [{ id }] = await dataSource.query<Array<{ id: string }>>(
+        'SELECT id::text AS id FROM ci.signup_code WHERE signup_code = $1',
+        [created.signup_code],
+      );
+
+      expect(created.id).toBe(id);
+      expect(await signupCodeService.revoke(created.id)).toBe(true);
+      expect(await codes()).toEqual([]);
+    });
+  });
 
   describe('SignupCodeService.consume', () => {
     it('redeems a code once: the first call gets it, every later one does not', async () => {
@@ -666,10 +690,12 @@ describeWithDatabase(`signup-code redemption, against real Postgres (${availabil
 
       expect(race).toEqual(SERIALIZED);
       expect(destinations.filter((url) => url.includes('?code='))).toEqual([
-        `companion://oidc/callback?code=one-time-${invited.id}`,
+        `companion://oidc/callback?code=one-time-${invited.id}&state=${APP_STATE}`,
       ]);
       // What a sign-in presenting a used code is told.
-      expect(destinations.filter((url) => url.endsWith('?error=signup_code_required'))).toHaveLength(1);
+      expect(
+        destinations.filter((url) => url.endsWith(`?error=signup_code_required&state=${APP_STATE}`)),
+      ).toHaveLength(1);
       expect(await admitted(owner)).toHaveLength(1);
       expect(await codes()).toEqual([{ signup_code: code, used: true }]);
     });
@@ -703,12 +729,12 @@ describeWithDatabase(`signup-code redemption, against real Postgres (${availabil
       // Spending it first — as this path did — cost the owner an invitation and admitted nobody.
       await claimedWithCodesRequired();
       const { signup_code: code } = await signupCodeService.create();
-      const findByEmail = userService.findByEmail.bind(userService);
+      const findAccountByEmail = userService.findAccountByEmail.bind(userService);
 
       // Somebody else takes the address between this sign-in's look-up and its INSERT.
       spies.push(
-        jest.spyOn(userService, 'findByEmail').mockImplementationOnce(async (address) => {
-          const existing = await findByEmail(address);
+        jest.spyOn(userService, 'findAccountByEmail').mockImplementationOnce(async (address) => {
+          const existing = await findAccountByEmail(address);
 
           await createAccount('same-address', address);
 
@@ -718,7 +744,7 @@ describeWithDatabase(`signup-code redemption, against real Postgres (${availabil
 
       const res = await oidcCallback('native-late', 'native', { signupCode: code });
 
-      expect(redirectedTo(res)).toBe('companion://oidc/callback?error=oidc_failed');
+      expect(redirectedTo(res)).toBe(`companion://oidc/callback?error=oidc_failed&state=${APP_STATE}`);
       expect(await codes()).toEqual([{ signup_code: code, used: false }]);
     });
 

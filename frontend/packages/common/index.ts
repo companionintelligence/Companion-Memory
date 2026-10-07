@@ -237,8 +237,11 @@ export {
   OIDC_NATIVE_CALLBACK_URL,
   OIDC_NATIVE_CLIENT_FLAG,
   OIDC_NATIVE_SCHEME,
+  beginNativeOidcSignIn,
   claimNativeOidcCode,
+  hasPendingNativeOidcSignIn,
   parseOidcCallbackUrl,
+  takePendingNativeOidcSignIn,
 } from './src/utils/oidcNative';
 export type { OidcCallbackParams } from './src/utils/oidcNative';
 export {

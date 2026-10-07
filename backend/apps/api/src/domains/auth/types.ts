@@ -57,10 +57,12 @@ export interface IssuedSession {
 /**
  * Who owns an api key's lifecycle. `null` = user-created (theirs to rename and
  * re-scope); `'connect'` = minted by the Companion Memory consent flow, so CI-Hub
- * rotates and revokes it. Recorded explicitly — the `app:` name prefix is
- * user-settable and so is not proof of provenance.
+ * rotates and revokes it; `'sign_in'` = minted by the phone or desktop app when
+ * someone signs in, so it is a signed-in device and goes when they sign out,
+ * change their password or sign out everywhere. Recorded explicitly — the `app:`
+ * name prefix is user-settable and so is not proof of provenance.
  */
-export type ApiKeyProvenance = 'connect';
+export type ApiKeyProvenance = 'connect' | 'sign_in';
 
 /**
  * The one `ApiKeyProvenance` value, in one place. Mint (ConnectService), lifecycle
@@ -72,17 +74,33 @@ export type ApiKeyProvenance = 'connect';
 export const CONNECT_PROVENANCE: ApiKeyProvenance = 'connect';
 
 /**
+ * A key the phone or desktop app minted for itself at sign-in (`POST /keys` with
+ * `sign_in: true`). Accepted from the request because it grants nothing: it only
+ * marks the key as one a password change and "Sign out everywhere" revoke.
+ */
+export const SIGN_IN_PROVENANCE: ApiKeyProvenance = 'sign_in';
+
+/**
  * Name prefix of every connect key (`app:<appName>:<store>`). Reserved from
  * user-created names so the two namespaces stay visually distinct — provenance
  * itself is carried by {@link CONNECT_PROVENANCE}, never by this string.
  */
 export const CONNECT_KEY_NAME_PREFIX = 'app:';
 
+/**
+ * The name the phone and desktop apps give the key they mint for themselves at sign-in
+ * (`useAuth.ts`), unchanged since the apps first minted keys. App builds before v2026.9.14 send
+ * nothing else with it, and builds before {@link SIGN_IN_PROVENANCE} existed send no `sign_in`.
+ */
+export const PHONE_KEY_NAME = /^Companion mobile · \d{4}-\d{2}-\d{2}$/;
+
 export interface CreateApiKeyDto {
   name: string;
   scopes?: string[];
   capability?: ApiKeyCapability;
   expires_at?: string;
+  /** The app is minting its own sign-in key; see {@link SIGN_IN_PROVENANCE}. */
+  sign_in?: boolean;
 }
 
 export interface UpdateApiKeyDto {

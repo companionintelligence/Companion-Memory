@@ -208,6 +208,16 @@ describe('SignupController', () => {
         .expect(400);
     });
 
+    it('asks for at least eight characters: seven are refused, and say why', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/signup')
+        .send({ name: 'User', email: 'test@example.com', password: 'seven77' })
+        .expect(400);
+
+      expect(JSON.stringify(response.body)).toContain('Password must be at least 8 characters');
+      expect(mockUserService.create).not.toHaveBeenCalled();
+    });
+
     it('does not ask whether this is the first account when signup codes are off', async () => {
       // There is no exemption to decide, so an ordinary create — which admits the second person
       // as readily as the first — is the whole of it.

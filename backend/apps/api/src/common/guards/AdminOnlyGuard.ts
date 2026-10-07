@@ -44,10 +44,11 @@ import type { PortalPrincipalMarker } from './PortalTokenVerifier';
  * exemption and `UserService.findAllOnboarded` already assumed.
  *
  * So a route may now be gated here without stranding new installs. `/jobs`' appliance-wide
- * controls still use {@link ApplianceAdminGuard} rather than this guard, and deliberately: that
- * one degrades to admitting everyone on an appliance with no live admin, which is the honest
- * answer for a control plane, whereas these routes fail closed because stdio transport is
- * arbitrary local command execution and "unclaimed" is not a reason to hand that out.
+ * controls still use {@link ApplianceAdminGuard}, which differs only on an appliance with no live
+ * account at all (it admits there). It used to admit everyone whenever no live admin existed,
+ * which let a member reach admin once the owner deleted their account; it no longer does. These
+ * routes fail closed in every case, because stdio transport is arbitrary local command execution
+ * and "unclaimed" is not a reason to hand that out.
  */
 @Injectable()
 export class AdminOnlyGuard implements CanActivate {

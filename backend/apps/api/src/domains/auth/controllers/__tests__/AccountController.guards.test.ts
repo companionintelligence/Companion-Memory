@@ -116,6 +116,8 @@ const mockHubBridge = {
 
 const mockApiKeyService = {
   validateKey: jest.fn(),
+  revokeSignInKeys: jest.fn(),
+  revokeAllExceptConnect: jest.fn(),
 };
 
 // Enabled, as `auth.portal.enabled` is by default, and verifying nothing: a request
@@ -204,13 +206,17 @@ describe('AccountController (real guards + real JwtStrategy and ApiKeyStrategy)'
     it('deletes the account for the native app, with the device key it holds (x-api-key)', async () => {
       await deleteAccount().set('x-api-key', KEYS.native.raw).expect(204);
 
-      expect(mockUserService.requestDeletion).toHaveBeenCalledWith({ userId: USER.id }, USER.id);
+      expect(mockUserService.requestDeletion).toHaveBeenCalledWith({ userId: USER.id }, USER.id, {
+        successorEmail: undefined,
+      });
     });
 
     it('deletes the account for a web session (JWT)', async () => {
       await deleteAccount().set('Authorization', `Bearer ${sessionAccessToken()}`).expect(204);
 
-      expect(mockUserService.requestDeletion).toHaveBeenCalledWith({ userId: USER.id }, USER.id);
+      expect(mockUserService.requestDeletion).toHaveBeenCalledWith({ userId: USER.id }, USER.id, {
+        successorEmail: undefined,
+      });
     });
 
     it('401s with no credential', async () => {
@@ -232,8 +238,10 @@ describe('AccountController (real guards + real JwtStrategy and ApiKeyStrategy)'
   });
 
   describe('the credential routes stay session-only (#2743)', () => {
-    const routes: Array<{ method: 'get' | 'patch'; path: string; body?: object }> = [
+    const routes: Array<{ method: 'get' | 'patch' | 'post'; path: string; body?: object }> = [
       { method: 'get', path: '/account' },
+      // A key must not be able to revoke every other credential, its owner's sessions included.
+      { method: 'post', path: '/account/sign-out-everywhere' },
       {
         method: 'patch',
         path: '/account/email',
@@ -255,6 +263,7 @@ describe('AccountController (real guards + real JwtStrategy and ApiKeyStrategy)'
 
         expect(mockUserService.changeEmail).not.toHaveBeenCalled();
         expect(mockUserService.changePassword).not.toHaveBeenCalled();
+        expect(mockApiKeyService.revokeAllExceptConnect).not.toHaveBeenCalled();
       },
     );
 
