@@ -6,13 +6,19 @@ import { IsNull, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
-import { DEFAULT_API_KEY_CAPABILITY, coerceApiKeyCapability } from '@ci/common/decorators';
+import {
+  type ApiKeyCapability,
+  DEFAULT_API_KEY_CAPABILITY,
+  FULL_CAPABILITY,
+  coerceApiKeyCapability,
+} from '@ci/common/decorators';
 import { LoggerService } from '@ci/common/logging';
 
 import { ApiKey, ApiKeyEntity } from '../entities/ApiKeyEntity';
 import {
   CONNECT_KEY_NAME_PREFIX,
   CONNECT_PROVENANCE,
+  PHONE_KEY_NAME,
   type ApiKeyProvenance,
   type CreateApiKeyDto,
   type ValidatedApiKey,
@@ -24,6 +30,23 @@ const API_KEY_BYTE_LENGTH = 32;
 const API_KEY_HEX_LENGTH = API_KEY_BYTE_LENGTH * 2;
 const API_KEY_HEX_REGEX = /^[0-9a-f]+$/;
 const PREFIX_LENGTH = 5;
+
+/**
+ * The level for a key whose request names none. A key nobody expressed an opinion about gets what
+ * every key could always do: everything except destroying data.
+ *
+ * The phone's own key is the exception. App builds before v2026.9.14 (#2661) mint it with a name
+ * and nothing else, and every later build asks for `full`, because the app deletes notes, merges
+ * people and renames tags. So an old build signing in gets what the app means instead of a key
+ * that 403s those. That widens nothing: only a session or a Portal bearer carrying the user's full
+ * authority reaches `POST /keys`, and either could ask for `full` outright. Settings always sends a
+ * capability, so a key made there never lands here.
+ */
+function defaultCapabilityFor(data: CreateApiKeyDto): ApiKeyCapability {
+  const unscoped = (data.scopes ?? []).length === 0;
+
+  return unscoped && PHONE_KEY_NAME.test(data.name) ? FULL_CAPABILITY : DEFAULT_API_KEY_CAPABILITY;
+}
 
 @Injectable()
 export class ApiKeyService {
@@ -50,9 +73,7 @@ export class ApiKeyService {
       prefix,
       hashed_key: hashedKey,
       scopes: data.scopes ?? [],
-      // A key nobody expressed an opinion about gets what every key could always do: everything
-      // except destroying data.
-      capability: data.capability ?? DEFAULT_API_KEY_CAPABILITY,
+      capability: data.capability ?? defaultCapabilityFor(data),
       expires_at: data.expires_at ? new Date(data.expires_at) : null,
       user_id: context.userId,
       // Defaults to null — a key created through the REST API is the user's own.

@@ -78,6 +78,12 @@ export const CONNECT_PROVENANCE: ApiKeyProvenance = 'connect';
  */
 export const CONNECT_KEY_NAME_PREFIX = 'app:';
 
+/**
+ * The name the phone app gives the key it mints for itself at sign-in (`useAuth.ts`), unchanged
+ * since the app first minted keys. App builds before v2026.9.14 send nothing else with it.
+ */
+export const PHONE_KEY_NAME = /^Companion mobile · \d{4}-\d{2}-\d{2}$/;
+
 export interface CreateApiKeyDto {
   name: string;
   scopes?: string[];

@@ -130,6 +130,50 @@ describe('ApiKeyService.createOrRotate', () => {
   });
 });
 
+/**
+ * App builds before v2026.9.14 mint the phone's key with a name and nothing else, and the app has
+ * asked for `full` since. A `write` key from an old build answers every delete, Edit Person and tag
+ * rename with a 403, so that one request shape gets `full`. Anything that names a level keeps it.
+ */
+describe('ApiKeyService.create capability default', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const capabilityFor = async (data: {
+    name: string;
+    scopes?: string[];
+    capability?: 'read' | 'write' | 'full';
+  }) => {
+    const repo = makeRepo();
+
+    await makeService(repo).create(ownerCtx, data);
+
+    return (repo.create.mock.calls[0]![0] as { capability: string }).capability;
+  };
+
+  it("gives an old app build's phone key full, as the app asks for since v2026.9.14", async () => {
+    await expect(capabilityFor({ name: 'Companion mobile · 2026-09-02' })).resolves.toBe('full');
+  });
+
+  it('keeps the level a request names, even on the phone key name', async () => {
+    await expect(capabilityFor({ name: 'Companion mobile · 2026-09-02', capability: 'write' })).resolves.toBe(
+      'write',
+    );
+    await expect(capabilityFor({ name: 'Companion mobile · 2026-09-02', capability: 'read' })).resolves.toBe(
+      'read',
+    );
+  });
+
+  it('defaults to write for a scoped key or any other name', async () => {
+    await expect(capabilityFor({ name: 'Companion mobile · 2026-09-02', scopes: ['memory'] })).resolves.toBe(
+      'write',
+    );
+    await expect(capabilityFor({ name: 'my agent' })).resolves.toBe('write');
+    await expect(capabilityFor({ name: 'Companion mobile' })).resolves.toBe('write');
+    await expect(capabilityFor({ name: 'Companion mobile · 2026-09-02 (old)' })).resolves.toBe('write');
+    await expect(capabilityFor({ name: 'companion mobile · 2026-09-02' })).resolves.toBe('write');
+  });
+});
+
 describe('ApiKeyService.removeByName', () => {
   beforeEach(() => jest.clearAllMocks());
 
