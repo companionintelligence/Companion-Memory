@@ -13,11 +13,11 @@ import {
   emailFromIdToken,
   loginWithPortalOidc,
   OidcCancelledError,
-  PortalInvalidTargetError,
   resumePendingOidcLogin,
   selectMemoryPortalBearers,
   type OidcTokens,
   type PairingTarget,
+  type ResumedOidcLogin,
 } from './oidc';
 import {
   DEFAULT_PORTAL_URL,
@@ -122,8 +122,8 @@ function readStoredPortalAuth(): PortalAuth | null {
  * Native-only Hub-style picker: Portal OIDC in the *system* browser (Safari /
  * `companion://auth/callback`), list `ci-memory` apps, persist that origin, then
  * mint a Memory key from the Companion token. When the Portal lists the picked
- * Memory's `resource`, that token comes from a second, quick sign-in whose
- * id_token the Portal addresses to that Memory. A Memory URL or email/password
+ * Memory's `resource`, that token comes from a second sign-in whose id_token
+ * the Portal addresses to that Memory. A Memory URL or email/password
  * cannot cloud-connect a new phone — those live under Advanced as Hub URL /
  * offline unlock. Named `/device-connect` because `/connect` already means Sources.
  */
@@ -200,7 +200,23 @@ export function DeviceConnectPage() {
       inFlight = true;
 
       try {
-        const resumed = await resumePendingOidcLogin();
+        let resumed: ResumedOidcLogin | null = null;
+        // Why a resumed sign-in failed. A pairing sign-in leaves the first one stored,
+        // so the person sees this over that sign-in's list and picks again, rather
+        // than being sent back to Log in.
+        let resumeError: string | null = null;
+
+        try {
+          resumed = await resumePendingOidcLogin();
+        } catch (err) {
+          // While handleConnect runs, its own sign-in got the same callback and says what went wrong.
+          if (cancelled || connectInFlight.current || err instanceof OidcCancelledError) {
+            return;
+          }
+
+          const message = err instanceof Error ? err.message : 'Sign-in failed';
+          resumeError = /invalid.?code|invalid_grant/i.test(message) ? null : message;
+        }
 
         if (resumed?.pairWith) {
           // The pairing sign-in for the Memory the person picked. Finish pairing
@@ -222,7 +238,15 @@ export function DeviceConnectPage() {
         const tokens = resumed?.tokens ?? null;
         const stored = tokens ? null : readStoredPortalAuth();
 
-        if (cancelled || (!tokens && !stored)) {
+        if (cancelled) {
+          return;
+        }
+
+        if (!tokens && !stored) {
+          if (resumeError) {
+            setSignInError(resumeError);
+          }
+
           return;
         }
 
@@ -246,6 +270,10 @@ export function DeviceConnectPage() {
 
         setDevices(servers);
         setStep('pick');
+
+        if (resumeError) {
+          setSignInError(resumeError);
+        }
       } catch (err) {
         if (!cancelled && !(err instanceof OidcCancelledError)) {
           const message = err instanceof Error ? err.message : 'Sign-in failed';
@@ -352,7 +380,14 @@ export function DeviceConnectPage() {
     setOidcController(controller);
 
     try {
-      return await loginWithPortalOidc(portalUrl, { signal: controller.signal, pairWith: target });
+      const tokens = await loginWithPortalOidc(portalUrl, { signal: controller.signal, pairWith: target });
+
+      // Cancel stays on screen until the code exchange answers. Tapped by then, it still means stop.
+      if (controller.signal.aborted) {
+        throw new OidcCancelledError();
+      }
+
+      return tokens;
     } finally {
       setOidcController(null);
     }
@@ -379,9 +414,24 @@ export function DeviceConnectPage() {
         // gets an id_token addressed to this Memory. That token works here only,
         // whoever runs the server it is sent to. A sign-in iOS finished by
         // relaunching the app arrives as `resumedTokens`.
-        const tokens =
-          resumedTokens ??
-          (await signInForMemory({ ...device, memoryUrl: device.memoryUrl, resource: device.resource }));
+        let tokens: OidcTokens;
+
+        try {
+          tokens =
+            resumedTokens ??
+            (await signInForMemory({ ...device, memoryUrl: device.memoryUrl, resource: device.resource }));
+        } catch (err) {
+          setConnectingId(null);
+
+          // A closed sign-in sheet leaves the list as it was, like a cancelled Log in. Anything
+          // else came from the Companion server, not this Memory, so its own words are shown.
+          if (!(err instanceof OidcCancelledError)) {
+            setSignInError(err instanceof Error ? err.message : 'Sign-in failed');
+          }
+
+          return;
+        }
+
         bearer = bearerAddressedTo(tokens.idToken, device.resource);
 
         if (!bearer) {
@@ -419,17 +469,6 @@ export function DeviceConnectPage() {
       void refetch();
     } catch (err) {
       setConnectingId(null);
-
-      // A closed sign-in sheet leaves the list as it was, like a cancelled Log in.
-      if (err instanceof OidcCancelledError) {
-        return;
-      }
-
-      if (err instanceof PortalInvalidTargetError) {
-        setSignInError(err.message);
-
-        return;
-      }
 
       const unauthorized = /unauthorized/i.test(err instanceof Error ? err.message : '');
 
@@ -601,11 +640,14 @@ export function DeviceConnectPage() {
                     Refresh
                   </LoadingButton>
                 </div>
+                {/* Leaving mid-connect would orphan a sign-in that still pairs when its callback lands. */}
                 <Button
                   type="button"
                   variant="ghost"
                   className={TOUCH}
                   onClick={() => navigate('/device-connect/advanced')}
+                  disabled={connectingId !== null}
+                  data-testid="picker-advanced-btn"
                 >
                   Advanced
                 </Button>

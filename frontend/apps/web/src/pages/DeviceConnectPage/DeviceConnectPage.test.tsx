@@ -426,6 +426,56 @@ describe('DeviceConnectPage', () => {
       expect(screen.getByTestId('memory-row-home')).toBeEnabled();
     });
 
+    it("shows the Companion server's own words when the second sign-in fails there, not a Memory error", async () => {
+      await signInAndList();
+      h.loginWithPortalOidc.mockRejectedValueOnce(new Error('unauthorized_client'));
+
+      fireEvent.click(screen.getByTestId('memory-row-home'));
+
+      expect((await screen.findByTestId('connect-signin-error')).textContent).toBe('unauthorized_client');
+      expect(h.completePortalMemoryConnect).not.toHaveBeenCalled();
+      expect(screen.getByTestId('memory-row-home')).toBeEnabled();
+    });
+
+    it('does not pair when Cancel is tapped while the code exchange is still answering', async () => {
+      await signInAndList();
+      let finishExchange: (tokens: OidcTokens) => void = () => {};
+
+      // The callback has arrived and the exchange is running, so the sign-in no longer listens for abort.
+      h.loginWithPortalOidc.mockImplementationOnce(
+        () =>
+          new Promise<OidcTokens>((resolve) => {
+            finishExchange = resolve;
+          }),
+      );
+
+      fireEvent.click(screen.getByTestId('memory-row-home'));
+      fireEvent.click(await screen.findByTestId('cancel-oidc-btn'));
+      finishExchange(PAIRING_SIGN_IN);
+
+      await waitFor(() => expect(screen.getByTestId('memory-row-home')).toBeEnabled());
+      expect(screen.queryByTestId('connect-signin-error')).not.toBeInTheDocument();
+      expect(h.completePortalMemoryConnect).not.toHaveBeenCalled();
+    });
+
+    it('goes back to the stored list with the error when a relaunched pairing sign-in fails', async () => {
+      localStorage.setItem(
+        'ci.deviceConnect.portalAuth',
+        JSON.stringify({ token: 'oidc-at', idToken: ID_TOKEN, cookie: null, kind: 'oauth' }),
+      );
+      h.resumePendingOidcLogin.mockRejectedValueOnce(new PortalInvalidTargetError());
+      h.listMemoryServers.mockResolvedValue([HOME]);
+
+      render(<DeviceConnectPage />);
+
+      expect((await screen.findByTestId('connect-signin-error')).textContent).toBe(
+        "This Memory Server isn't one your Companion account can connect to.",
+      );
+      expect(screen.getByTestId('memory-row-home')).toBeEnabled();
+      expect(screen.queryByTestId('oidc-login-btn')).not.toBeInTheDocument();
+      expect(h.completePortalMemoryConnect).not.toHaveBeenCalled();
+    });
+
     it('stays on the list without an error when the sign-in sheet is closed', async () => {
       await signInAndList();
       h.loginWithPortalOidc.mockRejectedValueOnce(new OidcCancelledError());
@@ -449,12 +499,16 @@ describe('DeviceConnectPage', () => {
 
       fireEvent.click(screen.getByTestId('memory-row-home'));
       expect(await screen.findByText(/Finish signing in in your browser/)).toBeInTheDocument();
+      // Back and Advanced would leave this sign-in running with no page to finish it.
+      expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+      expect(screen.getByTestId('picker-advanced-btn')).toBeDisabled();
 
       fireEvent.click(screen.getByTestId('cancel-oidc-btn'));
 
       await waitFor(() => expect(screen.getByTestId('memory-row-home')).toBeEnabled());
       expect(screen.queryByText(/Finish signing in/)).not.toBeInTheDocument();
       expect(screen.queryByTestId('connect-signin-error')).not.toBeInTheDocument();
+      expect(screen.getByTestId('picker-advanced-btn')).toBeEnabled();
       expect(h.completePortalMemoryConnect).not.toHaveBeenCalled();
     });
 

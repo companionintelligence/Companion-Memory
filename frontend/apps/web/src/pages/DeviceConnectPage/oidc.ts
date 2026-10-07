@@ -8,10 +8,12 @@
  *   3. Portal redirects to companion://auth/callback?code=…&state=… (deep link)
  *   4. exchange the code at {portal}/api/auth/oauth2/token (with the PKCE verifier)
  *
- * Pairing with a Memory the Portal lists a `resource` for takes a second, quick
- * run of the same flow once the person has picked it (the Portal's browser
- * session is usually still there). Its code exchange adds that `resource`, and
- * the id_token comes back addressed to that one Memory: `aud` is
+ * Pairing with a Memory the Portal lists a `resource` for takes a second run of
+ * the same flow once the person has picked it. On Android the Auth Tab shares
+ * Chrome's Portal session, so that is usually a quick hop. The iOS sheet is
+ * ephemeral (`prefersEphemeralWebBrowserSession` in LocalHubPlugin.swift), so
+ * there the person signs in again. The second sign-in's code exchange adds that
+ * `resource`, and the id_token comes back addressed to that one Memory: `aud` is
  * `["ci-server", "urn:ci:device:<device id>"]`. The first sign-in never sends a
  * resource, and nothing is added to the authorize URL.
  *
