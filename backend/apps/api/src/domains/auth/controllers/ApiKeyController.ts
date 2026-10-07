@@ -35,6 +35,7 @@ import {
   CONNECT_KEY_NAME_PREFIX,
   type CreateApiKeyDto,
   isManagedAppPrincipal,
+  PHONE_KEY_NAME,
   SIGN_IN_PROVENANCE,
   type UpdateApiKeyDto,
 } from '../types';
@@ -97,13 +98,6 @@ export const updateApiKeySchema = z.object({
 });
 
 /**
- * The name the phone and desktop apps give the key they mint at sign-in (`useAuth.ts`), and have
- * since before `sign_in` existed. App builds from before it send only the name, so the name alone
- * tags the key too, the same rule migration 20261006065846 applied to the keys already on disk.
- */
-const SIGN_IN_KEY_NAME = /^Companion mobile · \d{4}-\d{2}-\d{2}$/;
-
-/**
  * Guarded by {@link JwtOrPortalAuthGuard}: a session JWT (settings UI) or a
  * Portal bearer that carries the user's authority here (a phone pairing with a
  * token addressed to this Memory exchanges it for a durable key). Never an api
@@ -123,7 +117,9 @@ export class ApiKeyController {
   ) {
     const serviceContext = toServiceContext(context);
 
-    const signIn = input.sign_in === true || SIGN_IN_KEY_NAME.test(input.name);
+    // App builds from before `sign_in` existed send only the key's name, so the name alone tags it
+    // too: the same rule migration 20261006065846 applied to the keys already on disk.
+    const signIn = input.sign_in === true || PHONE_KEY_NAME.test(input.name);
 
     return this.apiKeyService.create(serviceContext, input, signIn ? SIGN_IN_PROVENANCE : null);
   }
