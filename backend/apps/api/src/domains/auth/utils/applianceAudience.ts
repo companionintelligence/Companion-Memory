@@ -17,9 +17,9 @@ import config from '@ci/configuration';
  *   by adding `resource=urn:ci:device:<device id>` (the value `GET /api/users/me/apps` lists for
  *   the Memory it picked). The Portal honours it only for client `ci-server` with the on-device
  *   redirect `companion://auth/callback`, and only for a person in an organization that device is
- *   registered to. Anything else is 400 `invalid_target`. No refresh grant returns an id_token, so
- *   a code exchange is the only way to get one. The phone side is in
- *   `frontend/apps/web/src/pages/DeviceConnectPage/oidc.ts`.
+ *   registered to. A resource it won't honour is 400 `invalid_target` (an unknown or spent code is
+ *   still `invalid_grant`). No refresh grant returns an id_token, so a code exchange is the only way
+ *   to get one. The phone side is in `frontend/apps/web/src/pages/DeviceConnectPage/oidc.ts`.
  */
 export const APPLIANCE_AUDIENCE_PREFIX = 'urn:ci:device:';
 
