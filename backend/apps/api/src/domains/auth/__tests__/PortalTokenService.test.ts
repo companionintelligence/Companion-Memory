@@ -393,9 +393,25 @@ describe('PortalTokenService', () => {
       expect(await service.verifyAndProvision(TOKEN)).toBeNull();
     });
 
-    it('confines an unaddressed token from a Portal that addresses tokens to the capture scope', async () => {
-      // e.g. the id_token a different Memory received when its owner signed in there.
+    it('refuses a stamped ci-server token addressed to no appliance, without looking anyone up', async () => {
+      // The id_token a Memory receives when someone signs in to it with Companion. Sent on to this
+      // Memory, it is no credential: not for keys, not for capture, not for anything.
+      signedInAs({ aud: 'ci-server', azp: 'ci-server', ci_appliance_binding: 1 });
+
+      expect(await service.verifyAndProvision(TOKEN)).toBeNull();
+      expect(federatedIdentityService.findUserId).not.toHaveBeenCalled();
+      expect(userService.findAccountByEmail).not.toHaveBeenCalled();
+    });
+
+    it('refuses it the same way when only aud names the client', async () => {
       signedInAs({ aud: 'ci-server', ci_appliance_binding: 1 });
+
+      expect(await service.verifyAndProvision(TOKEN)).toBeNull();
+    });
+
+    it("confines another client's stamped token addressed to no appliance to the capture scope", async () => {
+      portalConfig.audience = 'ci-server,ci-hub,ci-import-tools,ci-even';
+      signedInAs({ aud: 'ci-hub', azp: 'ci-hub', ci_appliance_binding: 1 });
 
       expect(await service.verifyAndProvision(TOKEN)).toEqual(CAPTURE);
     });
