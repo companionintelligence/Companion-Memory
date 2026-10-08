@@ -3,8 +3,9 @@ import type { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import type { CommunicationEntity } from '@ci/domains/memory';
 import type { PersonalizationService } from '@ci/domains/personalization';
 
+import { SCAN_PAGE_SIZE, scanOperatingPoints } from '../../engine/scanBatchPolicy';
 import { SCAN_DEDUP_LIMIT } from '../../engine/taskTitleSimilarity';
-import { InboxScanService, LOOKBACK_MS, SCAN_TIMEOUT_MS } from '../InboxScanService';
+import { InboxScanService, SCAN_TIMEOUT_MS } from '../InboxScanService';
 import type { PlannedBlockService } from '../PlannedBlockService';
 import type { PlanningTimeService } from '../PlanningTimeService';
 import { ProposedTaskReconcileService } from '../ProposedTaskReconcileService';
@@ -57,9 +58,40 @@ function makeCommunicationRepository(rows: CommunicationEntity[], anchor?: Date 
 
 function makeOllamaService(items: Array<Record<string, unknown>>) {
   return {
-    chat: jest.fn(async () => ({
-      message: { role: 'assistant', content: JSON.stringify({ items }) },
-    })),
+    chat: jest.fn(async (_ctx: unknown, messages: Array<{ content?: string }>) => {
+      const prompt = messages?.[0]?.content ?? '';
+
+      if (prompt.includes('Classify each numbered source.')) {
+        const indexes = [...prompt.matchAll(/^\[(\d+)\]/gm)].map((match) => Number(match[1]));
+        const unique = [...new Set(indexes)];
+        const addressed = items.some((item) => item.sourceIndex != null);
+        const decisions = unique.map((sourceIndex) => {
+          const chosen = addressed
+            ? items.filter((item) => item.sourceIndex === sourceIndex)
+            : sourceIndex === unique[0]
+              ? items.slice(0, 1)
+              : [];
+
+          if (chosen.length === 0) {
+            return { sourceIndex, action: 'skip' };
+          }
+
+          const first = chosen[0]!;
+
+          return {
+            sourceIndex,
+            action: 'candidate',
+            title: first.title,
+            detail: first.detail,
+            confidence: first.confidence,
+          };
+        });
+
+        return { message: { role: 'assistant', content: JSON.stringify({ decisions }) } };
+      }
+
+      return { message: { role: 'assistant', content: JSON.stringify({ items }) } };
+    }),
   } as unknown as OllamaService;
 }
 
@@ -89,9 +121,9 @@ describe('InboxScanService per-item error isolation', () => {
     // propagate out of runForUser() and force pg-boss to redeliver (and
     // re-walk) the whole job.
     const items = [
-      { title: 'Pay the invoice', confidence: 0.9 },
-      { title: 'Explodes', confidence: 0.9 },
-      { title: 'Reply to Sam', confidence: 0.9 },
+      { title: 'Pay the invoice', confidence: 0.9, sourceIndex: 1 },
+      { title: 'Explodes', confidence: 0.9, sourceIndex: 2 },
+      { title: 'Reply to Sam', confidence: 0.9, sourceIndex: 3 },
     ];
 
     const created = new Set<string>();
@@ -122,7 +154,11 @@ describe('InboxScanService per-item error isolation', () => {
     const proposedReconcile = makeProposedReconcile();
 
     const service = new InboxScanService(
-      makeCommunicationRepository([makeMessage()]) as never,
+      makeCommunicationRepository([
+        makeMessage({ id: 'comm-1' }),
+        makeMessage({ id: 'comm-2', subject: 'Question from Sam' }),
+        makeMessage({ id: 'comm-3', subject: 'The other note' }),
+      ]) as never,
       taskService,
       makeOllamaService(items),
       personalizationService,
@@ -294,25 +330,7 @@ describe('InboxScanService stale sweep vs the reconcile service cap window', () 
 });
 
 describe('InboxScanService scan window and LLM budget', () => {
-  it('keeps the window 30 days wide', () => {
-    // This is the WIDTH, and it was never the bug — widening it from 3 days to
-    // 30 was the previous attempt at the dead-scan fix and the 30-day window
-    // was also empty on the live appliance. Position is the fix (see the next
-    // test); 30 days just keeps this a "recent inbox" triage rather than a
-    // full-history scan, which is extract_graph's job.
-    expect(LOOKBACK_MS).toBe(30 * 24 * 60 * 60 * 1000);
-  });
-
-  it('anchors `since` to the newest message in the corpus, not to the wall clock', async () => {
-    // THE regression test for the dead scan. On the live appliance the newest
-    // inbound message is 2026-06-16 and the exact predicate this service issued
-    // (`time >= now() - 30d`) returned 0 rows, so ~48 runs a day short-circuited
-    // before the model was ever called.
-    //
-    // Note this also fails the tempting `GREATEST(now() - LOOKBACK,
-    // max(time) - LOOKBACK)` formulation, which is algebraically
-    // `GREATEST(now(), max(time)) - LOOKBACK` and therefore just `now() -
-    // LOOKBACK` for any historical import — a "fix" that changes nothing.
+  it('reads a page much larger than the old 30-message cap, with no 30-day cutoff', async () => {
     const corpusNewest = new Date('2026-06-16T18:24:00.000Z');
     const repository = makeCommunicationRepository([makeMessage({ time: corpusNewest })]);
 
@@ -333,13 +351,9 @@ describe('InboxScanService scan window and LLM budget', () => {
 
     await service.runForUser(USER_ID);
 
-    const sinceCall = repository.qb.andWhere.mock.calls.find((call) => call[0] === 'comm.time >= :since');
-    expect(sinceCall).toBeDefined();
-    const since = (sinceCall![1] as { since: Date }).since;
-
-    expect(since.getTime()).toBe(corpusNewest.getTime() - LOOKBACK_MS);
-    // And emphatically not the old behaviour.
-    expect(Math.abs(since.getTime() - (Date.now() - LOOKBACK_MS))).toBeGreaterThan(24 * 60 * 60 * 1000);
+    expect(repository.qb.andWhere.mock.calls.some((call) => call[0] === 'comm.time >= :since')).toBe(false);
+    expect(repository.qb.limit).toHaveBeenCalledWith(SCAN_PAGE_SIZE);
+    expect(SCAN_PAGE_SIZE).toBeGreaterThan(30);
   });
 
   it('caps the anchor at now() so a future-dated row cannot drag the window forward', async () => {
@@ -442,9 +456,13 @@ describe('InboxScanService scan window and LLM budget', () => {
 
     expect(options.maxOutputTokens).toBeGreaterThan(0);
     expect(options.keepAlive).toBe('1h');
-    // The grammar the schema compiles to is what actually stops the model.
-    expect(options.format?.properties.items.maxItems).toBe(12);
-    expect(options.format?.properties.items.items.properties.title).toEqual(
+    const decisions = (
+      options.format as {
+        properties?: { decisions?: { maxItems?: number; items?: { properties?: { title?: unknown } } } };
+      }
+    )?.properties?.decisions;
+    expect(decisions?.maxItems).toBeGreaterThan(0);
+    expect(decisions?.items?.properties?.title).toEqual(
       expect.objectContaining({ maxLength: expect.any(Number) }),
     );
   });
@@ -478,7 +496,7 @@ describe('InboxScanService scan window and LLM budget', () => {
 
     expect(proposedReconcile.reconcileStaleProposed).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
-      'Inbox scan hit its output cap; raise SCAN_MAX_OUTPUT_TOKENS',
+      'Inbox scan generation hit its output cap; shrinking the batch',
       expect.anything(),
     );
   });
@@ -536,9 +554,9 @@ describe('InboxScanService idempotency over an unchanging corpus', () => {
     }
   });
 
-  it('asks once more after a claim shrinks the candidate set, then stops', async () => {
-    // Model claims message 1 on run 1 -> `fresh` shrinks -> a new fingerprint
-    // earns exactly one more ask -> run 3 sees a stable set and skips.
+  it('does not ask again after one message is claimed and the other is skipped', async () => {
+    // Message 1 becomes a task. Message 2 is an explicit skip, so it is
+    // remembered with the claim and the next runs have nothing left to ask.
     const ollamaService = makeOllamaService([{ title: 'Pay the invoice', confidence: 0.9, sourceIndex: 1 }]);
     const tasks: Array<Record<string, unknown>> = [];
 
@@ -564,12 +582,13 @@ describe('InboxScanService idempotency over an unchanging corpus', () => {
 
     await service.runForUser(USER_ID);
     expect(tasks[0]?.metadata).toEqual(expect.objectContaining({ sourceCommunicationId: 'comm-1' }));
+    const asked = (ollamaService.chat as jest.Mock).mock.calls.length;
+    expect(asked).toBeGreaterThan(0);
 
     await service.runForUser(USER_ID);
     await service.runForUser(USER_ID);
 
-    expect(ollamaService.chat).toHaveBeenCalledTimes(2);
-    // One card total, not one per run.
+    expect(ollamaService.chat).toHaveBeenCalledTimes(asked);
     expect(tasks).toHaveLength(1);
   });
 
@@ -798,7 +817,7 @@ describe('InboxScanService idempotency over an unchanging corpus', () => {
     // produced once.
     await service.runForUser(USER_ID);
 
-    expect(ollamaService.chat).toHaveBeenCalledTimes(2);
+    expect(ollamaService.chat).toHaveBeenCalledTimes(4);
     expect(create).toHaveBeenCalledTimes(1);
   });
 
@@ -830,7 +849,7 @@ describe('InboxScanService idempotency over an unchanging corpus', () => {
     await service.runForUser(USER_ID);
     await service.runForUser(USER_ID);
 
-    expect(ollamaService.chat).toHaveBeenCalledTimes(1);
+    expect(ollamaService.chat).toHaveBeenCalledTimes(2);
     expect(create).not.toHaveBeenCalled();
   });
 });
@@ -1012,5 +1031,192 @@ describe('InboxScanService duplicate suppression', () => {
 
     expect(create).toHaveBeenCalledTimes(1);
     expect(result.proposed).toBe(1);
+  });
+});
+
+describe('InboxScanService batch policy', () => {
+  it('does not create a task whose title is the message header', async () => {
+    const create = jest.fn();
+    const service = new InboxScanService(
+      makeCommunicationRepository([
+        makeMessage({
+          communicationType: 'email',
+          time: new Date('2026-09-24T23:04:29.000Z'),
+          subject: 'New sign-in detected on your Vercel account',
+        }),
+      ]) as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create,
+      } as unknown as TaskService,
+      makeOllamaService([
+        {
+          title: 'email 2026-09-24T23:04:29.000Z',
+          detail: 'Subject: New sign-in detected',
+          confidence: 0.9,
+          sourceIndex: 1,
+        },
+      ]),
+      { decideAction: jest.fn(async () => 'auto') } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('does not place a calendar block when the model omits confidence', async () => {
+    const tryPlaceAfterOpen = jest.fn();
+    const create = jest.fn(async (_ctx: unknown, dto: { status?: string; title: string }) => ({
+      id: 'task-1',
+      ...dto,
+    }));
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage()]) as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create,
+      } as unknown as TaskService,
+      makeOllamaService([{ title: 'Reply to Sam about lunch', sourceIndex: 1 }]),
+      {
+        decideAction: jest.fn(async (_userId: string, input: { confidence: number }) =>
+          input.confidence < 0.55 ? 'review' : 'auto',
+        ),
+      } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    const result = await service.runForUser(USER_ID);
+
+    expect(result.proposed).toBe(1);
+    expect(result.created).toBe(0);
+    expect(tryPlaceAfterOpen).not.toHaveBeenCalled();
+  });
+
+  it('asks again for a later batch when more than 30 messages are waiting', async () => {
+    const rows = Array.from({ length: 31 }, (_, index) =>
+      makeMessage({
+        id: `comm-${index}`,
+        subject: `Note ${index}`,
+        preview: 'short',
+        time: new Date(Date.UTC(2026, 0, 1, 0, index)),
+      }),
+    );
+    const ollamaService = makeOllamaService([]);
+    const service = new InboxScanService(
+      makeCommunicationRepository(rows) as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+
+    expect((ollamaService.chat as jest.Mock).mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('splits a truncated batch instead of asking the same prompt again', async () => {
+    scanOperatingPoints.clear();
+    let calls = 0;
+    const ollamaService = {
+      chat: jest.fn(async (_ctx: unknown, messages: Array<{ content?: string }>) => {
+        calls += 1;
+        const prompt = messages?.[0]?.content ?? '';
+        const indexes = [...prompt.matchAll(/^\[(\d+)\]/gm)].map((match) => Number(match[1]));
+
+        if (calls === 1) {
+          return { done_reason: 'length', message: { role: 'assistant', content: '{"decisions":[' } };
+        }
+
+        return {
+          message: {
+            role: 'assistant',
+            content: JSON.stringify({
+              decisions: indexes.map((sourceIndex) => ({ sourceIndex, action: 'skip' })),
+            }),
+          },
+        };
+      }),
+    } as unknown as OllamaService;
+    const service = new InboxScanService(
+      makeCommunicationRepository([
+        makeMessage({ id: 'comm-1', subject: 'One' }),
+        makeMessage({ id: 'comm-2', subject: 'Two' }),
+      ]) as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+
+    expect(calls).toBeGreaterThan(1);
+    const first = (ollamaService.chat as jest.Mock).mock.calls[0][1][0].content as string;
+    const second = (ollamaService.chat as jest.Mock).mock.calls[1][1][0].content as string;
+    expect(second.length).toBeLessThan(first.length);
+  });
+
+  it('archives an open scan task whose title is a message header', async () => {
+    const update = jest.fn(async () => ({ status: 'archived' }));
+    const service = new InboxScanService(
+      makeCommunicationRepository([]) as never,
+      {
+        findAll: jest.fn(async () => [
+          {
+            id: 'echo',
+            title: 'email 2026-09-24T23:04:29.000Z',
+            status: 'open',
+            sourceKind: 'inbox',
+            metadata: { generator: 'planning.inbox_scan' },
+          },
+          {
+            id: 'mine',
+            title: 'Reply to Sam',
+            status: 'open',
+            sourceKind: 'manual',
+            metadata: {},
+          },
+        ]),
+        update,
+        declineProposed: jest.fn(),
+      } as unknown as TaskService,
+      makeOllamaService([]),
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), 'echo', {
+      status: 'archived',
+    });
+    expect(update).not.toHaveBeenCalledWith(expect.anything(), 'mine', expect.anything());
   });
 });
