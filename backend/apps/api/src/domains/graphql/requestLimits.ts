@@ -36,6 +36,7 @@ export interface GraphqlLimits {
   maxDocumentChars: number;
   maxTokens: number;
   maxAliases: number;
+  maxFragments: number;
   maxExpandedFields: number;
   maxSameNamePairs: number;
   maxMergedDepth: number;
@@ -57,6 +58,15 @@ export const GRAPHQL_LIMITS: Readonly<GraphqlLimits> = {
   maxTokens: 5_000,
   /** Aliased fields one document may write. Each alias is a separate resolver call. */
   maxAliases: 200,
+  /**
+   * Fragment definitions one document may carry. `OverlappingFieldsCanBeMerged`
+   * also compares every pair of fragments spread into a selection set, whether
+   * or not they share a field name, so none of the field counts below see that
+   * work: 500 one-field fragments spread side by side passed them and took
+   * about 400 ms to validate. At this limit the worst shape measured takes
+   * 100 to 160 ms. The web app's largest document defines 35.
+   */
+  maxFragments: 80,
   /** Field selections once every fragment spread is expanded where it is used. */
   maxExpandedFields: 2_500,
   /**
@@ -119,13 +129,22 @@ export function measureBreadth(
   const fragments = new Map<string, FragmentDefinitionNode>();
   const breadth: GraphqlBreadth = { aliases: 0, expandedFields: 0, sameNamePairs: 0 };
   const roots: SelectionSetNode[] = [];
+  let fragmentCount = 0;
 
   for (const definition of document.definitions) {
     if (definition.kind === Kind.FRAGMENT_DEFINITION) {
+      fragmentCount += 1;
       fragments.set(definition.name.value, definition);
     } else if (definition.kind === Kind.OPERATION_DEFINITION) {
       roots.push(definition.selectionSet);
     }
+  }
+
+  if (fragmentCount > limits.maxFragments) {
+    return {
+      breadth,
+      violation: `Query defines too many fragments: ${fragmentCount}. Maximum allowed: ${limits.maxFragments}`,
+    };
   }
 
   // Written aliases, counted once each where they appear in the text.

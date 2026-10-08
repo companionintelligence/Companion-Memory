@@ -87,7 +87,7 @@ describe('GraphQL request limits', () => {
     });
 
     it('accepts every document the web app sends, with headroom', () => {
-      let largest = { chars: 0, tokens: 0, aliases: 0, expandedFields: 0, sameNamePairs: 0 };
+      let largest = { chars: 0, tokens: 0, aliases: 0, fragments: 0, expandedFields: 0, sameNamePairs: 0 };
 
       for (const { name, document } of documents) {
         const wire = print(withTypename(document));
@@ -101,6 +101,10 @@ describe('GraphQL request limits', () => {
           chars: Math.max(largest.chars, wire.length),
           tokens: Math.max(largest.tokens, tokens),
           aliases: Math.max(largest.aliases, breadth.aliases),
+          fragments: Math.max(
+            largest.fragments,
+            document.definitions.filter((definition) => definition.kind === Kind.FRAGMENT_DEFINITION).length,
+          ),
           expandedFields: Math.max(largest.expandedFields, breadth.expandedFields),
           sameNamePairs: Math.max(largest.sameNamePairs, breadth.sameNamePairs),
         };
@@ -111,6 +115,7 @@ describe('GraphQL request limits', () => {
       expect(largest.chars * 2).toBeLessThanOrEqual(GRAPHQL_LIMITS.maxDocumentChars);
       expect(largest.tokens * 2).toBeLessThanOrEqual(GRAPHQL_LIMITS.maxTokens);
       expect(largest.aliases * 2).toBeLessThanOrEqual(GRAPHQL_LIMITS.maxAliases);
+      expect(largest.fragments * 2).toBeLessThanOrEqual(GRAPHQL_LIMITS.maxFragments);
       expect(largest.expandedFields * 2).toBeLessThanOrEqual(GRAPHQL_LIMITS.maxExpandedFields);
       expect(largest.sameNamePairs * 2).toBeLessThanOrEqual(GRAPHQL_LIMITS.maxSameNamePairs);
     });
@@ -245,6 +250,17 @@ describe('GraphQL request limits', () => {
       expect(graphqlSourceViolation(`{ ${aliased} }`)).toMatch(/too many aliases/);
     });
 
+    it('refuses too many fragments, which validation compares pair by pair', () => {
+      const count = GRAPHQL_LIMITS.maxFragments + 1;
+      const spreads = Array.from({ length: count }, (_, i) => `...F${i}`).join(' ');
+      const fragments = Array.from(
+        { length: count },
+        (_, i) => `fragment F${i} on Query { f${i}: __typename }`,
+      );
+
+      expect(graphqlSourceViolation(`{ ${spreads} } ${fragments.join(' ')}`)).toMatch(/too many fragments/);
+    });
+
     it('leaves a document past the token limit, or one that does not parse, to Apollo', () => {
       // Apollo parses with the same maxTokens and answers with its own syntax
       // error, so the check must not pre-empt that message.
@@ -294,6 +310,26 @@ describe('GraphQL request limits', () => {
       const parsed = parse(source);
 
       // Measured at about 60 ms.
+      expect(elapsedMs(() => validate(schema, parsed, specifiedRules))).toBeLessThan(1_000);
+    });
+
+    it('keeps validation cheap when every accepted fragment is spread side by side', () => {
+      // Distinct field names, so no same-name pair is counted: the cost is the
+      // pairwise fragment comparison alone. 500 of these took about 400 ms.
+      const count = GRAPHQL_LIMITS.maxFragments;
+      const spreads = Array.from({ length: count }, (_, i) => `...F${i}`).join(' ');
+      const fragments = Array.from(
+        { length: count },
+        (_, i) =>
+          `fragment F${i} on Query { ${Array.from({ length: 30 }, (_, j) => `f${i}x${j}`).join(' ')} ...F${(i + 1) % count} }`,
+      );
+      const source = `{ ${spreads} } ${fragments.join(' ')}`;
+
+      expect(graphqlSourceViolation(source)).toBeNull();
+
+      const parsed = parse(source);
+
+      // Measured at 100 to 160 ms, the same order as the web app's own `Search`.
       expect(elapsedMs(() => validate(schema, parsed, specifiedRules))).toBeLessThan(1_000);
     });
 
