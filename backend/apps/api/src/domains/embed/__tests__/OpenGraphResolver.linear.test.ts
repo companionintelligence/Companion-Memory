@@ -196,4 +196,13 @@ describe('parseHead', () => {
 
     expect(parseHead(html, 'https://example.com/').meta.has('og:title')).toBe(false);
   });
+
+  it('reads a numeric reference past U+10FFFF as U+FFFD instead of throwing', () => {
+    const html =
+      '<head><meta property="og:title" content="A&#99999999;B&#x110000;C&#x41;"><title>&#9999999999;</title></head>';
+    const head = parseHead(html, 'https://example.com/');
+
+    expect(head.meta.get('og:title')).toBe('A�B�CA');
+    expect(head.title).toBe('�');
+  });
 });

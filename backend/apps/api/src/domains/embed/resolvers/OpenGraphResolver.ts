@@ -101,6 +101,17 @@ function firstTitle(html: string): string | undefined {
   return end ? html.slice(textStart, end.index) : undefined;
 }
 
+/**
+ * The character a numeric reference names. `String.fromCodePoint` throws a
+ * RangeError past U+10FFFF, so one `&#99999999;` in a remote page's og:title
+ * used to fail the whole unfurl; HTML reads such a reference as U+FFFD.
+ */
+function fromCodePoint(codePoint: number): string {
+  return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+    ? String.fromCodePoint(codePoint)
+    : '�';
+}
+
 function decode(s: string): string {
   return s
     .replace(/&amp;/g, '&')
@@ -109,8 +120,8 @@ function decode(s: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&nbsp;/g, ' ')
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16)));
+    .replace(/&#(\d+);/g, (_, n) => fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => fromCodePoint(Number.parseInt(n, 16)));
 }
 
 function attrs(tag: string): Record<string, string> {
