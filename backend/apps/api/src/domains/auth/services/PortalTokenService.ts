@@ -537,8 +537,19 @@ export class PortalTokenService implements PortalTokenVerifier {
     //    also adopt the account — which is exactly the email-is-not-an-identity
     //    takeover this binding exists to prevent, merely requiring the attacker
     //    to control a verified address at any trusted issuer.
+    //
+    //    And only into an account whose OWN address is proven. The issuer vouches
+    //    for its account's address, not for this one's: signup and
+    //    `PATCH /account/email` store whatever they are given, so an unproven
+    //    address could be a future member's, planted to receive their sign-in.
     if (claimedEmail && emailVerified) {
-      const existing = await this.userService.findByEmail(claimedEmail);
+      const existing = await this.userService.findAccountByEmail(claimedEmail);
+      if (existing === 'ambiguous') {
+        this.logger.warn(`refusing email link for ${issuer}#${sub}: several accounts match the address`);
+
+        return null;
+      }
+
       if (existing) {
         // OIDC identities only: a Hub person's own binding is not another identity's claim.
         const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id, {
@@ -548,6 +559,12 @@ export class PortalTokenService implements PortalTokenVerifier {
           this.logger.warn(
             `refusing email link for ${issuer}#${sub}: user already bound to another identity`,
           );
+
+          return null;
+        }
+
+        if (!this.userService.isEmailProven(existing)) {
+          this.logger.warn(`refusing email link for ${issuer}#${sub}: the account's address is not proven`);
 
           return null;
         }

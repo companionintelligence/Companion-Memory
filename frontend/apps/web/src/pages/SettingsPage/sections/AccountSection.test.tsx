@@ -397,7 +397,113 @@ describe('AccountSection — change email', () => {
   });
 });
 
+describe('AccountSection — the last administrator', () => {
+  function refuseUntilSuccessorNamed() {
+    fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
+      if (isAccountReadCall(url, init)) {
+        return Promise.resolve({ email: h.email, hasFederatedIdentity: false, hasOwnPassword: true });
+      }
+
+      if (init?.method === 'DELETE') {
+        const body = JSON.parse(init.body!) as { successorEmail?: string };
+
+        if (!body.successorEmail) {
+          return Promise.reject(new FetchJsonError(409, 'Conflict', 'SUCCESSOR_REQUIRED'));
+        }
+
+        if (body.successorEmail !== 'member@example.com') {
+          return Promise.reject(new FetchJsonError(409, 'Conflict', 'SUCCESSOR_NOT_FOUND'));
+        }
+      }
+
+      return Promise.resolve(undefined);
+    });
+  }
+
+  it('asks who takes over when the server says this is the last administrator, then deletes', async () => {
+    refuseUntilSuccessorNamed();
+    render(<AccountSection />);
+    openDialog();
+
+    fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: 'jsmith@example.com' } });
+    fireEvent.click(confirmButton());
+
+    expect(await screen.findByText(/You are the only administrator/)).toBeInTheDocument();
+    expect(h.logout).not.toHaveBeenCalled();
+    // Nothing to send until someone is named.
+    expect(confirmButton()).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/person who takes over/i), {
+      target: { value: ' member@example.com ' },
+    });
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(h.logout).toHaveBeenCalled());
+    const deletes = (fetchJson.mock.calls as Array<[string, FetchCallInit?]>).filter(
+      ([, init]) => init?.method === 'DELETE',
+    );
+    expect(JSON.parse(deletes.at(-1)![1]!.body!)).toEqual({
+      confirmEmail: 'jsmith@example.com',
+      successorEmail: 'member@example.com',
+    });
+  });
+
+  it('says so when the named successor has no account here, and stays signed in', async () => {
+    refuseUntilSuccessorNamed();
+    render(<AccountSection />);
+    openDialog();
+
+    fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: 'jsmith@example.com' } });
+    fireEvent.click(confirmButton());
+    fireEvent.change(await screen.findByLabelText(/person who takes over/i), {
+      target: { value: 'stranger@example.com' },
+    });
+    fireEvent.click(confirmButton());
+
+    expect(await screen.findByText(/No other account on this Memory uses that email/)).toBeInTheDocument();
+    expect(h.logout).not.toHaveBeenCalled();
+  });
+});
+
+describe('AccountSection — sign out everywhere', () => {
+  it('asks first, then signs out everywhere else and says how many keys went', async () => {
+    fetchJson.mockImplementation((url: string, init?: FetchCallInit) => {
+      if (isAccountReadCall(url, init)) {
+        return Promise.resolve({ email: h.email, hasFederatedIdentity: false, hasOwnPassword: true });
+      }
+
+      return Promise.resolve(url === '/api/account/sign-out-everywhere' ? { revokedKeys: 3 } : undefined);
+    });
+    render(<AccountSection />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out everywhere' }));
+    expect(() => findCall('POST', '/api/account/sign-out-everywhere')).toThrow();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out and delete keys' }));
+
+    expect(
+      await screen.findByText('Signed out everywhere else. 3 API keys were deleted.'),
+    ).toBeInTheDocument();
+    const [, init] = findCall('POST', '/api/account/sign-out-everywhere');
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer jwt-abc' });
+  });
+
+  it('is not offered to the native shell, whose device key the route refuses', () => {
+    h.authToken = null;
+    h.authenticated = true;
+    render(<AccountSection />);
+
+    expect(screen.queryByRole('button', { name: 'Sign out everywhere' })).not.toBeInTheDocument();
+  });
+});
+
 describe('AccountSection — change password', () => {
+  it('asks the browser for at least eight characters, as the server does', async () => {
+    render(<AccountSection />);
+
+    expect(await screen.findByLabelText('New password')).toHaveAttribute('minLength', '8');
+  });
+
   it('submits the new password with the current password, then reports other devices signed out', async () => {
     render(<AccountSection />);
 
@@ -411,7 +517,7 @@ describe('AccountSection — change password', () => {
     fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'new-password-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update password' }));
 
-    await screen.findByText(/other signed-in devices/i);
+    await screen.findByText(/phone and desktop apps you signed in on are signed out/i);
 
     const [url, init] = findCall('PATCH', '/api/account/password');
     expect(url).toBe('/api/account/password');
@@ -473,7 +579,7 @@ describe('AccountSection — change password', () => {
     fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'new-password-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Set password' }));
 
-    await screen.findByText(/other signed-in devices/i);
+    await screen.findByText(/phone and desktop apps you signed in on are signed out/i);
 
     const [, init] = findCall('PATCH', '/api/account/password');
     expect(JSON.parse(init.body!)).toEqual({ newPassword: 'new-password-1' });

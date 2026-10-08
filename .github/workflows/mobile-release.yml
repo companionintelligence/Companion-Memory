@@ -594,7 +594,7 @@ jobs:
           java-version: '21'
       - name: Android SDK
         if: steps.secrets.outputs.present == 'true'
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
         with:
           # v3 defaults `packages` to `tools platform-tools`, and Google has
           # REMOVED the obsolete `tools` package from the SDK repository, so the
@@ -697,7 +697,7 @@ jobs:
       #      declaration checks at all.
       - name: Validate against Play (draft, no rollout)
         if: steps.secrets.outputs.present == 'true' && needs.version.outputs.dry_run == 'true'
-        uses: r0adkll/upload-google-play@v1
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.ci.memory
@@ -707,7 +707,7 @@ jobs:
 
       - name: Upload to Play (internal track)
         if: steps.secrets.outputs.present == 'true' && needs.version.outputs.dry_run != 'true'
-        uses: r0adkll/upload-google-play@v1
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.ci.memory

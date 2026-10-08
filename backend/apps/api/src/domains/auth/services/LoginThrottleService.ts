@@ -1,4 +1,5 @@
 import { createHmac } from 'crypto';
+import { isIPv4, isIPv6 } from 'net';
 
 import { Injectable } from '@nestjs/common';
 
@@ -21,6 +22,47 @@ const MAX_TRACKED_IDENTITIES = 10_000;
  */
 const MAX_TRACKED_SOURCES = 1_024;
 
+/**
+ * Ceiling on per-account budgets. Only usernames that name an account get one,
+ * so a flood of made-up names cannot fill this map; the bound is for safety.
+ */
+const MAX_TRACKED_ACCOUNTS = 1_024;
+
+/**
+ * Failures one account absorbs, from every address together, before each further
+ * attempt on it has to wait. Generous enough that a household's typos never meet it.
+ */
+const ACCOUNT_FREE_FAILURES = 10;
+
+/**
+ * How fast an account's failure count drains: one failure forgiven per interval.
+ * A count, not a window, so pausing until a window rolls over does not hand an
+ * attacker a fresh allowance; it buys back one failure per interval, which is
+ * also the sustained rate the delay below settles at.
+ */
+const ACCOUNT_LEAK_MS = 3 * 60 * 1000;
+
+/** Longest wait between attempts on one account. Equal to the leak interval, see above. */
+const ACCOUNT_MAX_DELAY_SECONDS = 180;
+
+/**
+ * Failures across the whole appliance, inside one `windowSeconds`, past which it
+ * is treated as under attack: every account then waits from its first failure
+ * instead of after {@link ACCOUNT_FREE_FAILURES}. An honest appliance sees a few
+ * a day. Nobody is refused outright on account of the global rate, so a flood
+ * cannot lock the owner out of every account at once; it only takes away the
+ * free allowance.
+ */
+const GLOBAL_PRESSURE_FAILURES = 100;
+
+/**
+ * Retry-After for an attempt refused because both tracking maps are full of live
+ * entries and it would need a new one in each. Admitting it uncounted, as this
+ * used to, gave every address that arrived after the maps filled unlimited
+ * guesses for as long as the flood kept them full.
+ */
+const SATURATED_RETRY_SECONDS = 60;
+
 type Attempt = {
   /** Failures counted so far inside the current window. */
   failures: number;
@@ -28,6 +70,15 @@ type Attempt = {
   windowEndsAt: number;
   /** ms epoch until which attempts are refused outright; 0 while under budget. */
   lockedUntil: number;
+};
+
+type AccountBudget = {
+  /** Failures not yet drained, as of `updatedAt`. */
+  level: number;
+  /** ms epoch `level` was last written. */
+  updatedAt: number;
+  /** ms epoch before which the next attempt on this account is refused. */
+  nextAllowedAt: number;
 };
 
 /** What one counted failure did: `untracked` means the store was full. */
@@ -38,6 +89,58 @@ export type ThrottleStatus = { locked: false } | { locked: true; retryAfterSecon
 const NOT_LOCKED: ThrottleStatus = { locked: false };
 
 /**
+ * The part of a client address the throttle keys on. IPv4 addresses (including
+ * IPv4-mapped IPv6 ones) as they are; IPv6 addresses by their /64, the smallest
+ * block a home or hosting customer is handed. Keying each IPv6 address on its own
+ * gave anyone with one such block 2^64 fresh budgets.
+ */
+export function throttleSourceOf(ip: string | undefined): string {
+  if (!ip) {
+    return 'unknown';
+  }
+
+  const address = ip.trim().split('%')[0];
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(address);
+
+  if (mapped && isIPv4(mapped[1])) {
+    return mapped[1];
+  }
+
+  if (!isIPv6(address)) {
+    return address;
+  }
+
+  const groups = expandIPv6(address);
+
+  return groups ? `${groups.slice(0, 4).join(':')}::/64` : address;
+}
+
+/** The eight 16-bit groups of a valid IPv6 address, lower-case hex without leading zeros. */
+function expandIPv6(address: string): string[] | null {
+  let text = address.toLowerCase();
+  const dotted = /(\d{1,3}(?:\.\d{1,3}){3})$/.exec(text);
+
+  if (dotted) {
+    const [a, b, c, d] = dotted[1].split('.').map(Number);
+
+    text = `${text.slice(0, -dotted[1].length)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+
+  const halves = text.split('::');
+
+  if (halves.length > 2) {
+    return null;
+  }
+
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  const groups = [...head, ...Array<string>(Math.max(fill, 0)).fill('0'), ...tail];
+
+  return groups.length === 8 ? groups.map((group) => parseInt(group, 16).toString(16)) : null;
+}
+
+/**
  * Failed-password throttle for the local login route.
  *
  * The appliance is one account behind one password on a box its owner may have
@@ -45,11 +148,22 @@ const NOT_LOCKED: ThrottleStatus = { locked: false };
  * internet-exposable), and nothing else on the login path limited guesses — so
  * unlimited attempts against that single password *was* the attack.
  *
- * Shape of the budget: `maxAttempts` failures per (client IP, username) inside
- * `windowSeconds`, then attempts are refused for `lockoutSeconds`. Keying on the
- * pair rather than on the username alone means one attacker cannot lock the
- * owner out from a different address, and keying on it rather than on the IP
- * alone means a shared NAT does not pool everyone's mistakes together.
+ * Three budgets, each catching what the others cannot:
+ *
+ * - Per (client address, username): `maxAttempts` failures inside
+ *   `windowSeconds`, then refused for `lockoutSeconds`. Keying on the pair
+ *   rather than on the username alone means one attacker cannot lock the owner
+ *   out from a different address, and keying on it rather than on the IP alone
+ *   means a shared NAT does not pool everyone's mistakes together. IPv6
+ *   addresses count by /64 ({@link throttleSourceOf}).
+ * - Per account, from every address together: after
+ *   {@link ACCOUNT_FREE_FAILURES} failures, each further attempt has to wait,
+ *   twice as long each time up to {@link ACCOUNT_MAX_DELAY_SECONDS}. Never a
+ *   hard lock: the right password still works once the wait is over, so an
+ *   attacker can slow the owner down but not shut them out. This is what stops
+ *   an attacker with many addresses, which the first budget alone did not.
+ * - Appliance-wide: past {@link GLOBAL_PRESSURE_FAILURES} failures in a window
+ *   the free allowance above drops to nothing.
  *
  * State is in-memory and therefore per-process, which is correct for the
  * single-instance appliance deployment (same reasoning as
@@ -70,13 +184,22 @@ export class LoginThrottleService {
    */
   private readonly sources = new Map<string, Attempt>();
 
+  /** Per-account budgets, across every address. Only real accounts get one. */
+  private readonly accounts = new Map<string, AccountBudget>();
+
+  /** When the current appliance-wide window ends. */
+  private globalWindowEndsAt = 0;
+
+  /** Failures across the appliance in the current window. */
+  private globalFailures = 0;
+
   constructor(private readonly logger: LoggerService) {
     this.logger.setContext(LoginThrottleService.name);
   }
 
   /**
-   * Whether this identity is currently locked out. `now` is injectable so tests
-   * can drive the clock rather than sleep.
+   * Whether this identity may try now. `now` is injectable so tests can drive
+   * the clock rather than sleep.
    */
   check(ip: string | undefined, username: string, now: number = Date.now()): ThrottleStatus {
     try {
@@ -84,18 +207,35 @@ export class LoginThrottleService {
         return NOT_LOCKED;
       }
 
-      // Read-only: the read path deliberately never sweeps, so `check` can never
-      // change what a later `recordFailure` counts.
-      const identity = this.statusOf(this.attempts.get(this.identify(ip, username)), now);
+      const identityKey = this.identify(ip, username);
+      const identity = this.statusOf(this.attempts.get(identityKey), now);
 
-      if (identity.locked || this.sources.size === 0) {
+      if (identity.locked) {
         return identity;
       }
 
+      const account = this.accountStatus(this.accounts.get(this.identifyAccount(username)), now);
+
+      if (account.locked) {
+        return account;
+      }
+
       // A lockout this address earned while the identity map was full still
-      // applies — see `recordFailure`. The size check above keeps normal
-      // operation, where that map is empty, one HMAC per attempt as before.
-      return this.statusOf(this.sources.get(this.identifySource(ip)), now);
+      // applies — see `recordFailure`. The size check keeps normal operation,
+      // where that map is empty, free of the extra HMAC.
+      const sourceKey = this.sources.size === 0 ? null : this.identifySource(ip);
+
+      if (sourceKey != null) {
+        const source = this.statusOf(this.sources.get(sourceKey), now);
+
+        if (source.locked) {
+          return source;
+        }
+      }
+
+      return this.saturated(identityKey, () => sourceKey ?? this.identifySource(ip), now)
+        ? { locked: true, retryAfterSeconds: SATURATED_RETRY_SECONDS }
+        : NOT_LOCKED;
     } catch (error) {
       this.logger.error(`Login throttle check failed, allowing the attempt: ${String(error)}`);
 
@@ -103,14 +243,27 @@ export class LoginThrottleService {
     }
   }
 
-  /** Count one failed password attempt against this identity. */
-  recordFailure(ip: string | undefined, username: string, now: number = Date.now()): void {
+  /**
+   * Count one failed password attempt against this identity.
+   *
+   * @param accountExists whether `username` names an account. Only those get a per-account
+   *   budget: a made-up name has nothing to protect, and tracking every one would let a flood of
+   *   them fill the map.
+   */
+  recordFailure(
+    ip: string | undefined,
+    username: string,
+    now: number = Date.now(),
+    { accountExists = false }: { accountExists?: boolean } = {},
+  ): void {
     try {
       const { enabled, maxAttempts, lockoutSeconds } = config.auth.loginThrottle;
 
       if (!enabled) {
         return;
       }
+
+      this.countGlobal(now);
 
       const key = this.identify(ip, username);
 
@@ -142,6 +295,10 @@ export class LoginThrottleService {
           `Login throttle engaged for ${lockoutSeconds}s after ${maxAttempts} failed attempts (ip=${ip ?? 'unknown'})`,
         );
       }
+
+      if (accountExists) {
+        this.countAccountFailure(username, now);
+      }
     } catch (error) {
       this.logger.error(`Login throttle failed to record a failure: ${String(error)}`);
     }
@@ -154,6 +311,8 @@ export class LoginThrottleService {
       // The address bucket goes too: a correct password is proof this client is
       // not the flood that bucket exists to charge.
       this.sources.delete(this.identifySource(ip));
+      // And the account's: whoever knows the password is the person it protects.
+      this.accounts.delete(this.identifyAccount(username));
     } catch (error) {
       this.logger.error(`Login throttle failed to clear a counter: ${String(error)}`);
     }
@@ -169,7 +328,7 @@ export class LoginThrottleService {
    * live counters is one the attacker aims — flood until the counter that
    * matters is the one thrown away, and the lockout never arrives. Declining to
    * track a brand-new identity is the only bound that cannot be pointed at an
-   * existing counter.
+   * existing counter; {@link check} refuses the attempt that would need it.
    */
   private countFailure(store: Map<string, Attempt>, key: string, ceiling: number, now: number): CountOutcome {
     const { maxAttempts, windowSeconds, lockoutSeconds } = config.auth.loginThrottle;
@@ -205,6 +364,89 @@ export class LoginThrottleService {
     return 'counted';
   }
 
+  /** Charge one failure to the account `username` names, and set how long its next attempt waits. */
+  private countAccountFailure(username: string, now: number): void {
+    const key = this.identifyAccount(username);
+
+    this.pruneAccounts(now, key);
+
+    const entry = this.accounts.get(key);
+
+    if (entry == null && this.accounts.size >= MAX_TRACKED_ACCOUNTS) {
+      return;
+    }
+
+    const level = this.drained(entry, now) + 1;
+    const free = this.underPressure(now) ? 0 : ACCOUNT_FREE_FAILURES;
+    const excess = Math.ceil(level - free);
+    const delaySeconds = excess > 0 ? Math.min(2 ** (excess - 1), ACCOUNT_MAX_DELAY_SECONDS) : 0;
+
+    this.accounts.set(key, { level, updatedAt: now, nextAllowedAt: now + delaySeconds * 1000 });
+
+    if (excess === 1) {
+      this.logger.warn('Login throttle is spacing out attempts on an account after repeated failures');
+    }
+  }
+
+  /** An account budget's failure count at `now`, after draining. */
+  private drained(entry: AccountBudget | undefined, now: number): number {
+    if (entry == null) {
+      return 0;
+    }
+
+    return Math.max(0, entry.level - (now - entry.updatedAt) / ACCOUNT_LEAK_MS);
+  }
+
+  private accountStatus(entry: AccountBudget | undefined, now: number): ThrottleStatus {
+    if (entry == null || entry.nextAllowedAt <= now) {
+      return NOT_LOCKED;
+    }
+
+    return { locked: true, retryAfterSeconds: Math.max(1, Math.ceil((entry.nextAllowedAt - now) / 1000)) };
+  }
+
+  private countGlobal(now: number): void {
+    if (now >= this.globalWindowEndsAt) {
+      this.globalWindowEndsAt = now + config.auth.loginThrottle.windowSeconds * 1000;
+      this.globalFailures = 0;
+    }
+
+    this.globalFailures += 1;
+
+    if (this.globalFailures === GLOBAL_PRESSURE_FAILURES) {
+      this.logger.warn(
+        `Login throttle: ${GLOBAL_PRESSURE_FAILURES} failed logins this window; every account now waits from its first failure`,
+      );
+    }
+  }
+
+  private underPressure(now: number): boolean {
+    return now < this.globalWindowEndsAt && this.globalFailures > GLOBAL_PRESSURE_FAILURES;
+  }
+
+  /**
+   * Whether this attempt would need a new entry in two stores that are both full of live
+   * ones. Expired entries are swept first, so a flood that has ended frees the slots it held.
+   */
+  private saturated(identityKey: string, source: () => string, now: number): boolean {
+    if (this.attempts.size < MAX_TRACKED_IDENTITIES || this.attempts.has(identityKey)) {
+      return false;
+    }
+
+    this.prune(this.attempts, now, identityKey);
+
+    if (this.attempts.size < MAX_TRACKED_IDENTITIES) {
+      return false;
+    }
+
+    // Only now: the address key costs an HMAC, and a store with room never needs it.
+    const sourceKey = source();
+
+    this.prune(this.sources, now, sourceKey);
+
+    return this.sources.size >= MAX_TRACKED_SOURCES && !this.sources.has(sourceKey);
+  }
+
   /** Lockout status an entry reports at `now`. */
   private statusOf(entry: Attempt | undefined, now: number): ThrottleStatus {
     if (entry == null || entry.lockedUntil <= now) {
@@ -220,11 +462,11 @@ export class LoginThrottleService {
   }
 
   /**
-   * Key an attempt by client IP + username. The IP comes from the caller (which
-   * reads it through `AuthService.getSessionMetadata`, i.e. Express's `req.ip`
-   * under the app's configured proxy trust) — deliberately NOT from a raw
-   * X-Forwarded-For read here, which an attacker could vary per request to get
-   * a fresh budget every guess.
+   * Key an attempt by client address + username. The IP comes from the caller
+   * (which reads it through `AuthService.getSessionMetadata`, i.e. Express's
+   * `req.ip` under the app's configured proxy trust) — deliberately NOT from a
+   * raw X-Forwarded-For read here, which an attacker could vary per request to
+   * get a fresh budget every guess.
    *
    * Peppered rather than stored raw: this is the same treatment sessions give
    * `ip`/`user_agent`, and the username field of a failed login is exactly where
@@ -232,20 +474,27 @@ export class LoginThrottleService {
    */
   private identify(ip: string | undefined, username: string): string {
     return createHmac('sha256', config.auth.session.fieldPepper)
-      .update(`${ip ?? 'unknown'} ${username.trim().toLowerCase()}`)
+      .update(`${throttleSourceOf(ip)} ${username.trim().toLowerCase()}`)
       .digest('hex');
   }
 
   /** Address-only key for the saturation buckets; peppered for the same reason. */
   private identifySource(ip: string | undefined): string {
     return createHmac('sha256', config.auth.session.fieldPepper)
-      .update(`source ${ip ?? 'unknown'}`)
+      .update(`source ${throttleSourceOf(ip)}`)
+      .digest('hex');
+  }
+
+  /** Username-only key for the per-account budgets; peppered for the same reason. */
+  private identifyAccount(username: string): string {
+    return createHmac('sha256', config.auth.session.fieldPepper)
+      .update(`account ${username.trim().toLowerCase()}`)
       .digest('hex');
   }
 
   /**
    * Drop entries whose window *and* lockout have both elapsed. Entries are swept
-   * lazily on the only path that grows a store, and `exempt` — the identity the
+   * lazily on the paths that grow a store, and `exempt` — the identity the
    * caller is about to count — is never swept, so a sweep can never be the reason
    * a counter reads as absent (the caller overwrites that entry immediately).
    *
@@ -257,6 +506,15 @@ export class LoginThrottleService {
     for (const [key, entry] of store) {
       if (key !== exempt && now >= entry.windowEndsAt && now >= entry.lockedUntil) {
         store.delete(key);
+      }
+    }
+  }
+
+  /** Drop account budgets that have drained to nothing and impose no wait. */
+  private pruneAccounts(now: number, exempt: string): void {
+    for (const [key, entry] of this.accounts) {
+      if (key !== exempt && now >= entry.nextAllowedAt && this.drained(entry, now) === 0) {
+        this.accounts.delete(key);
       }
     }
   }

@@ -15,6 +15,9 @@ type ReturnType = [
     error: unknown | null;
     apiKey: string | null;
     setApiKey: (apiKey: string) => void;
+    /** The account to connect, for a provider whose key serves several (Signal: the number). */
+    account: string | null;
+    setAccount: (account: string) => void;
   },
   {
     connect: (providerId: string, endpoints: string[]) => Promise<void>;
@@ -28,6 +31,7 @@ export function useConnectService(): ReturnType {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<unknown | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [account, setAccount] = useState<string | null>(null);
 
   const connect = useCallback(
     async (providerId: string, endpoints: string[]) => {
@@ -42,7 +46,11 @@ export function useConnectService(): ReturnType {
             Authorization: `Bearer ${authToken}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ endpoints: endpoints || [], apiKey: apiKey || undefined }),
+          body: JSON.stringify({
+            endpoints: endpoints || [],
+            apiKey: apiKey || undefined,
+            account: account?.trim() || undefined,
+          }),
         });
 
         setAuthorizationUrl(response?.authorizationUrl ?? null);
@@ -52,7 +60,7 @@ export function useConnectService(): ReturnType {
         setLoading(false);
       }
     },
-    [authToken, apiKey],
+    [authToken, apiKey, account],
   );
 
   return [
@@ -62,6 +70,8 @@ export function useConnectService(): ReturnType {
       error,
       apiKey,
       setApiKey,
+      account,
+      setAccount,
     },
     {
       connect,

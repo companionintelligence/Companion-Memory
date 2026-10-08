@@ -82,4 +82,11 @@ export type { PurgePlan, PurgeStep } from './purge/types';
 export type { User, OnboardingProgress, TimeFormat, UserRole } from './entities/UserEntity';
 export { TIME_FORMATS } from './entities/UserEntity';
 export type { CreateUserDto, UpdateUserDto } from './types';
+export { normalizeEmail } from './email';
+export {
+  LastAdminDeletionRefused,
+  SUCCESSOR_NOT_FOUND,
+  SUCCESSOR_REQUIRED,
+  type DeletionOptions,
+} from './services/UserService';
 export { UserCreatedEvent, type UserCreatedPayload } from './events';

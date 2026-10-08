@@ -64,7 +64,40 @@ export interface OrphanCleanupOptions {
 
 export interface TruncateSearchIndexResult {
   truncated: string[];
+  /** `ci.pipeline_state` rows of the index stages re-opened so the pipeline re-embeds them. */
+  ledgerRowsReopened: number;
 }
+
+/**
+ * Re-open the index stages' decided ledger rows: `stage_version` back to 0 on
+ * every `done` / `skipped` row of an `index.*` stage (`index.embed*`,
+ * `index.vector*`), the same move as `PipelineStateService.reopen`. `$1` is a
+ * user id, or NULL for every account.
+ *
+ * Needed by anything that empties `ci_search` without emptying the sources.
+ * The ledger is how the pipeline decides what is left to index, and both it
+ * and `SearchIndexBackfillService` skip an entity whose ledger row says the
+ * stage is done. Truncate the index and leave the ledger, and those entities
+ * stay unsearchable however many backfills run. A re-opened row satisfies the
+ * sweep's `stage_version < current` arm, so the next index sweep embeds it
+ * again. `running` rows are live claims and `failed` rows have their own
+ * retry gate, so both are left alone.
+ *
+ * Wrapped in a CTE so the driver returns rows rather than `[rows, count]`
+ * (see `PipelineStateService.reopen`).
+ */
+export const REOPEN_INDEX_LEDGER_SQL = `
+  WITH reopened AS (
+    UPDATE ci.pipeline_state
+       SET stage_version = 0,
+           updated_at    = now()
+     WHERE stage LIKE 'index.%'
+       AND status IN ('done', 'skipped')
+       AND stage_version > 0
+       AND ($1::uuid IS NULL OR user_id = $1::uuid)
+    RETURNING 1
+  )
+  SELECT count(*)::int AS count FROM reopened`;
 
 const DEFAULT_BATCH_SIZE = 5000;
 
@@ -201,16 +234,27 @@ export class OrphanCleanupService {
    * fully-orphaned index behind.
    */
   async truncateSearchIndex(): Promise<TruncateSearchIndexResult> {
-    const truncated: string[] = [];
+    // One transaction: the index and the ledger that says what is in it move
+    // together, or not at all. See REOPEN_INDEX_LEDGER_SQL for why the ledger
+    // has to move.
+    return this.dataSource.transaction(async (manager) => {
+      const truncated: string[] = [];
 
-    for (const { schema, table } of SEARCH_TABLES) {
-      const qualified = `"${schema}"."${table}"`;
-      await this.dataSource.query(`TRUNCATE TABLE ${qualified}`);
-      truncated.push(`${schema}.${table}`);
-      this.logger.log('Truncated search index table', { table: `${schema}.${table}` });
-    }
+      for (const { schema, table } of SEARCH_TABLES) {
+        await manager.query(`TRUNCATE TABLE "${schema}"."${table}"`);
+        truncated.push(`${schema}.${table}`);
+      }
 
-    return { truncated };
+      const reopened = (await manager.query(REOPEN_INDEX_LEDGER_SQL, [null])) as Array<{ count: number }>;
+      const ledgerRowsReopened = Number(reopened[0]?.count ?? 0);
+
+      this.logger.log('Truncated the search index and re-opened its ledger', {
+        truncated,
+        ledgerRowsReopened,
+      });
+
+      return { truncated, ledgerRowsReopened };
+    });
   }
 
   /**

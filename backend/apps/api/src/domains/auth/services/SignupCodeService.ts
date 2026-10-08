@@ -2,9 +2,15 @@ import * as crypto from 'node:crypto';
 
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository } from 'typeorm';
+import { EntityManager, MoreThan, Repository } from 'typeorm';
 
 import { type SignupCode, SignupCodeEntity } from '../entities/SignupCodeEntity';
+
+/**
+ * How long an invitation nobody used keeps working. Long enough to reach someone over a weekend,
+ * short enough that a code forgotten in a chat log stops being a way in.
+ */
+export const SIGNUP_CODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class SignupCodeService {
@@ -13,21 +19,40 @@ export class SignupCodeService {
     private readonly signupCodeRepository: Repository<SignupCodeEntity>,
   ) {}
 
-  async create(): Promise<SignupCode> {
+  /**
+   * Mint an invitation.
+   *
+   * @param issuedBy the account issuing it, whose deletion takes its unused codes with it; null for
+   *   an operator's code (`make signup`), which no account stands behind.
+   */
+  async create(issuedBy: string | null = null): Promise<SignupCode> {
     const signupCode = this.signupCodeRepository.create({
       signup_code: crypto.randomBytes(6).toString('hex'),
+      issuedBy,
+      expiresAt: new Date(Date.now() + SIGNUP_CODE_TTL_MS),
     });
 
     return await this.signupCodeRepository.save(signupCode);
   }
 
-  /** Unused codes, newest first — what the owner sees after minting one. */
+  /** Codes that still admit someone (unused and unexpired), newest first. */
   async findUnused(): Promise<SignupCode[]> {
     return this.signupCodeRepository.find({
-      where: { used: false },
+      where: { used: false, expiresAt: MoreThan(new Date()) },
       order: { createdAt: 'DESC' },
       take: 20,
     });
+  }
+
+  /**
+   * Withdraw an invitation nobody has used yet. Returns false for an id that names no such code,
+   * including one already used: a used code admitted its person, and deleting it would only erase
+   * the record of that.
+   */
+  async revoke(id: string): Promise<boolean> {
+    const result = await this.signupCodeRepository.delete({ id, used: false });
+
+    return (result.affected ?? 0) > 0;
   }
 
   /**
@@ -43,6 +68,7 @@ export class SignupCodeService {
       where: {
         signup_code,
         used: false,
+        expiresAt: MoreThan(new Date()),
       },
     });
 
@@ -62,7 +88,7 @@ export class SignupCodeService {
    *   admits, so the code is spent exactly when that account exists: an account that fails to be
    *   created rolls its redemption back with it, and the invitation is still there for another try.
    * @returns whether THIS call redeemed it. `false` for a code that does not exist, was already
-   *   used, or was redeemed by a concurrent request first.
+   *   used, has expired, or was redeemed by a concurrent request first.
    */
   async consume(
     signup_code: string,
@@ -78,6 +104,7 @@ export class SignupCodeService {
             SET used = true
           WHERE signup_code = $1
             AND used = false
+            AND expires_at > now()
         RETURNING id)
        SELECT id FROM redeemed`,
       [signup_code],

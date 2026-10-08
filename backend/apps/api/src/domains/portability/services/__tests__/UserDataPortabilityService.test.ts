@@ -599,4 +599,279 @@ describe('UserDataPortabilityService', () => {
       expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
     });
   });
+
+  describe('tables with both user_id and owner_user_id', () => {
+    const CALLER = '11111111-1111-4111-8111-111111111111';
+    const OTHER = '22222222-2222-4222-8222-222222222222';
+
+    // What the catalog returns for ci.receipts: one row per user column. In
+    // catalog order owner_user_id can come either side of user_id, so both
+    // orders are exercised.
+    const receiptsDiscovery = (order: Array<'user_id' | 'owner_user_id'>) =>
+      order.map((column) => ({
+        schema: 'ci',
+        table: 'receipts',
+        user_column: column,
+        columns: ['receipt_id', 'user_id', 'owner_user_id', 'merchant_name'],
+      }));
+
+    const insertsInto = (table: string) =>
+      (queryRunner.query as jest.Mock).mock.calls.filter(
+        ([sql]: [string]) => sql.startsWith('INSERT') && sql.includes(`"${table}"`),
+      );
+
+    const insertedRow = (call: [string, unknown[]]) => {
+      const columns = [...call[0].matchAll(/"([^"]+)"/g)].map((match) => match[1]).slice(2);
+
+      return Object.fromEntries(columns.map((column, index) => [column, call[1][index]]));
+    };
+
+    beforeEach(() => {
+      queryRunner.query = jest.fn().mockResolvedValue(undefined) as unknown as QueryRunner['query'];
+      userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+    });
+
+    for (const order of [
+      ['user_id', 'owner_user_id'],
+      ['owner_user_id', 'user_id'],
+    ] as Array<Array<'user_id' | 'owner_user_id'>>) {
+      it(`JSON import: names only the importer, and inserts the row once (catalog order ${order.join(', ')})`, async () => {
+        dataSource.query = jest.fn().mockResolvedValue(receiptsDiscovery(order));
+
+        await service.importArchive({ userId: CALLER } as never, {
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          userId: CALLER,
+          profile: null,
+          tables: {
+            'ci.receipts': [
+              { receipt_id: 'r1', user_id: OTHER, owner_user_id: OTHER, merchant_name: 'Shop' },
+            ],
+          },
+          fileBlobs: [],
+        });
+
+        const inserts = insertsInto('receipts');
+
+        expect(inserts).toHaveLength(1);
+        expect(insertedRow(inserts[0])).toMatchObject({ user_id: CALLER, owner_user_id: CALLER });
+      });
+
+      it(`stream import: names only the importer (catalog order ${order.join(', ')})`, async () => {
+        dataSource.query = jest.fn().mockResolvedValue(receiptsDiscovery(order));
+
+        const text = [
+          {
+            type: 'manifest',
+            version: 1,
+            format: 'ndjson',
+            exportedAt: new Date().toISOString(),
+            userId: CALLER,
+            profile: null,
+          },
+          {
+            type: 'row',
+            table: 'ci.receipts',
+            row: { receipt_id: 'r1', user_id: OTHER, owner_user_id: OTHER, merchant_name: 'Shop' },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join('\n');
+        const req = {
+          setEncoding: () => undefined,
+          [Symbol.asyncIterator]: async function* () {
+            yield `${text}\n`;
+          },
+        } as unknown as Request;
+
+        await service.importNdjsonStream({ userId: CALLER } as never, req, 'jane@example.com');
+
+        const inserts = insertsInto('receipts');
+
+        expect(inserts).toHaveLength(1);
+        expect(insertedRow(inserts[0])).toMatchObject({ user_id: CALLER, owner_user_id: CALLER });
+      });
+    }
+
+    it('keeps an unknown (null) detected owner null rather than claiming it', async () => {
+      dataSource.query = jest.fn().mockResolvedValue(receiptsDiscovery(['user_id', 'owner_user_id']));
+
+      await service.importArchive({ userId: CALLER } as never, {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: CALLER,
+        profile: null,
+        tables: { 'ci.receipts': [{ receipt_id: 'r1', user_id: CALLER, owner_user_id: null }] },
+        fileBlobs: [],
+      });
+
+      expect(insertedRow(insertsInto('receipts')[0])).toMatchObject({ user_id: CALLER, owner_user_id: null });
+    });
+
+    it("deletes and exports by user_id only, never reaching a row whose user_id is another account's", async () => {
+      dataSource.query = jest.fn().mockResolvedValue(receiptsDiscovery(['owner_user_id', 'user_id']));
+
+      await service.importArchive({ userId: CALLER } as never, {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: CALLER,
+        profile: null,
+        tables: {},
+        fileBlobs: [],
+      });
+
+      const deletes = (queryRunner.query as jest.Mock).mock.calls
+        .map(([sql]: [string]) => sql)
+        .filter((sql: string) => sql.startsWith('DELETE') && sql.includes('"receipts"'));
+
+      expect(deletes).toEqual([expect.stringContaining('WHERE user_id = $1')]);
+
+      dataSource.query = jest
+        .fn()
+        .mockResolvedValueOnce(receiptsDiscovery(['owner_user_id', 'user_id']))
+        .mockResolvedValue([]);
+      userService.findById = jest.fn().mockResolvedValue(null);
+      await service.exportArchive({ userId: CALLER } as never);
+
+      const selects = (dataSource.query as jest.Mock).mock.calls
+        .map(([sql]: [string]) => sql)
+        .filter((sql: string) => sql.includes('"receipts"'));
+
+      expect(selects).toEqual([expect.stringContaining('WHERE user_id = $1')]);
+    });
+  });
+
+  describe('grant and trust tables never travel in an archive', () => {
+    const TRUST_TABLES = [
+      'federated_identities',
+      'mcp_server_configs',
+      'peer_links',
+      'ask_grants',
+      'household_tiers',
+      'push_subscriptions',
+      'pending_actions',
+      'pipeline_dead_letters',
+      'account_purges',
+    ];
+    const CALLER = '11111111-1111-4111-8111-111111111111';
+
+    const discovery = [
+      { schema: 'ci', table: 'notes', user_column: 'user_id', columns: ['id', 'user_id'] },
+      ...TRUST_TABLES.map((table) => ({
+        schema: 'ci',
+        table,
+        user_column:
+          table === 'peer_links' || table === 'ask_grants' || table === 'household_tiers'
+            ? 'owner_user_id'
+            : 'user_id',
+        columns: ['id', 'user_id', 'owner_user_id', 'issuer', 'subject', 'command'],
+      })),
+    ];
+
+    it('export leaves them out', async () => {
+      dataSource.query = jest.fn().mockResolvedValueOnce(discovery).mockResolvedValue([]);
+      userService.findById = jest.fn().mockResolvedValue(null);
+
+      const archive = await service.exportArchive({ userId: CALLER } as never);
+
+      expect(Object.keys(archive.tables)).toEqual(['ci.notes']);
+    });
+
+    it('the JSON import neither deletes nor restores them, so an older archive still imports', async () => {
+      dataSource.query = jest.fn().mockResolvedValue(discovery);
+      queryRunner.query = jest.fn().mockResolvedValue(undefined) as unknown as QueryRunner['query'];
+
+      await service.importArchive({ userId: CALLER } as never, {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: CALLER,
+        profile: null,
+        tables: Object.fromEntries(
+          TRUST_TABLES.map((table) => [
+            `ci.${table}`,
+            [{ id: 'x', user_id: CALLER, issuer: 'https://idp.example.com' }],
+          ]),
+        ),
+        fileBlobs: [],
+      });
+
+      const touched = (queryRunner.query as jest.Mock).mock.calls
+        .map(([sql]: [string]) => sql)
+        .filter((sql: string) => TRUST_TABLES.some((table) => sql.includes(`"${table}"`)));
+
+      expect(touched).toEqual([]);
+      expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('the stream import drops their rows from an older archive instead of failing on them', async () => {
+      dataSource.query = jest.fn().mockResolvedValue(discovery);
+      queryRunner.query = jest.fn().mockResolvedValue(undefined) as unknown as QueryRunner['query'];
+      userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+
+      const text = [
+        {
+          type: 'manifest',
+          version: 1,
+          format: 'ndjson',
+          exportedAt: new Date().toISOString(),
+          userId: CALLER,
+          profile: null,
+        },
+        {
+          type: 'row',
+          table: 'ci.federated_identities',
+          row: { id: 'x', user_id: CALLER, issuer: 'https://idp.example.com' },
+        },
+        { type: 'row', table: 'ci.mcp_server_configs', row: { id: 'y', user_id: CALLER, command: 'true' } },
+        { type: 'row', table: 'ci.notes', row: { id: 'n1', user_id: CALLER } },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join('\n');
+      const req = {
+        setEncoding: () => undefined,
+        [Symbol.asyncIterator]: async function* () {
+          yield `${text}\n`;
+        },
+      } as unknown as Request;
+
+      const result = await service.importNdjsonStream({ userId: CALLER } as never, req, 'jane@example.com');
+
+      const touched = (queryRunner.query as jest.Mock).mock.calls
+        .map(([sql]: [string]) => sql)
+        .filter((sql: string) => TRUST_TABLES.some((table) => sql.includes(`"${table}"`)));
+
+      expect(touched).toEqual([]);
+      expect(result.rowsImported).toBe(1);
+    });
+
+    it('a table nobody knows about still fails the stream import', async () => {
+      dataSource.query = jest.fn().mockResolvedValue(discovery);
+      queryRunner.query = jest.fn().mockResolvedValue(undefined) as unknown as QueryRunner['query'];
+      userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+
+      const text = [
+        {
+          type: 'manifest',
+          version: 1,
+          format: 'ndjson',
+          exportedAt: new Date().toISOString(),
+          userId: CALLER,
+          profile: null,
+        },
+        { type: 'row', table: 'ci.not_a_table', row: { id: 'x' } },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join('\n');
+      const req = {
+        setEncoding: () => undefined,
+        [Symbol.asyncIterator]: async function* () {
+          yield `${text}\n`;
+        },
+      } as unknown as Request;
+
+      await expect(
+        service.importNdjsonStream({ userId: CALLER } as never, req, 'jane@example.com'),
+      ).rejects.toThrow('Unknown table in archive: ci.not_a_table');
+    });
+  });
 });

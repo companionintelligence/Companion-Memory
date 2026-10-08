@@ -16,6 +16,12 @@ set -euo pipefail
 #   VERSION              Version tag to merge                    (required)
 #   ARCHES               Space-separated arch suffixes           (default: "amd64 arm64")
 #   PUSH_LATEST          Also point :latest at this version      (default: false)
+#   DIGESTS_DIR          Directory of <arch>.txt files from publish.sh's
+#                        DIGEST_FILE ("<remote repo> <sha256 digest>" per line).
+#                        When set, each image is merged from those digests, and
+#                        a missing or malformed one stops the run before
+#                        anything is written. When unset, the per-arch tags
+#                        are used as before.
 #   REGISTRY_USERNAME    Registry login username                 (required, unless GITHUB_TOKEN is set)
 #   REGISTRY_PASSWORD    Registry login password                 (required, unless GITHUB_TOKEN is set)
 #   GITHUB_TOKEN         Token used as registry password fallback (e.g. inside GitHub Actions)
@@ -30,11 +36,37 @@ REGISTRY="${REGISTRY:?REGISTRY is required}"
 VERSION="${VERSION:?VERSION is required}"
 ARCHES="${ARCHES:-amd64 arm64}"
 PUSH_LATEST="${PUSH_LATEST:-false}"
+DIGESTS_DIR="${DIGESTS_DIR:-}"
 
 fail() {
   echo "  ✗ $*" >&2
   exit 1
 }
+
+# The digest publish.sh recorded for <repo> on <arch>, or nothing. publish.sh
+# appends, so if it ran twice against one file the last line wins.
+recorded_digest() {
+  local file="${DIGESTS_DIR}/$2.txt"
+  [[ -f "${file}" ]] || return 0
+  awk -v repo="$1" '$1 == repo { digest = $2 } END { if (digest != "") print digest }' "${file}"
+}
+
+# With digests, every image needs one for every arch before anything is
+# written, so a leg that pushed nothing cannot leave a half-merged release.
+if [[ -n "${DIGESTS_DIR}" ]]; then
+  [[ -d "${DIGESTS_DIR}" ]] || fail "DIGESTS_DIR=${DIGESTS_DIR} is not a directory"
+
+  MISSING=0
+  for REPO in "${IMAGE_REMOTE[@]}"; do
+    for ARCH in ${ARCHES}; do
+      if [[ ! "$(recorded_digest "${REPO}" "${ARCH}")" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo "  ✗ no recorded linux/${ARCH} digest for ${REPO} in ${DIGESTS_DIR}/${ARCH}.txt" >&2
+        MISSING=$((MISSING + 1))
+      fi
+    done
+  done
+  [[ ${MISSING} -eq 0 ]] || fail "${MISSING} digest(s) missing, nothing was merged"
+fi
 
 # ── Registry login (same credential fallback as publish.sh) ────────────
 if [[ -n "${REGISTRY_USERNAME:-}" && -n "${REGISTRY_PASSWORD:-}" ]]; then
@@ -59,9 +91,18 @@ FAILED=0
 for REPO in "${IMAGE_REMOTE[@]}"; do
   TARGET="${REGISTRY}/${REPO}:${VERSION}"
 
+  echo ""
+  echo "➤ ${TARGET}"
+
+  # By digest when the push job recorded them: a tag can be moved by anyone
+  # holding a write token between the push and this merge, a digest cannot.
   SOURCES=()
   for ARCH in ${ARCHES}; do
-    SOURCES+=("${TARGET}-${ARCH}")
+    if [[ -n "${DIGESTS_DIR}" ]]; then
+      SOURCES+=("${REGISTRY}/${REPO}@$(recorded_digest "${REPO}" "${ARCH}")")
+    else
+      SOURCES+=("${TARGET}-${ARCH}")
+    fi
   done
 
   # Alias tags share the version's sources, so one imagetools call writes them
@@ -75,8 +116,6 @@ for REPO in "${IMAGE_REMOTE[@]}"; do
     VERIFY+=("${REGISTRY}/${REPO}:latest")
   fi
 
-  echo ""
-  echo "➤ ${TARGET}"
   if ! docker buildx imagetools create "${TAGS[@]}" "${SOURCES[@]}"; then
     echo "  ✗ manifest create failed" >&2
     FAILED=$((FAILED + 1))

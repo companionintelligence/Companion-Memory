@@ -57,6 +57,32 @@
     "ws": "^8.21.0",
     "@yarnpkg/sdks/@yarnpkg/core": "4.9.1"
   },
+  "dependenciesMeta": {
+    "@apollo/protobufjs": {
+      "built": true
+    },
+    "@journeyapps/wa-sqlite": {
+      "built": true
+    },
+    "@parcel/watcher": {
+      "built": true
+    },
+    "@swc/core": {
+      "built": true
+    },
+    "bcrypt": {
+      "built": true
+    },
+    "better-sqlite3": {
+      "built": true
+    },
+    "esbuild": {
+      "built": true
+    },
+    "unrs-resolver": {
+      "built": true
+    }
+  },
   "devDependencies": {
     "@companionintelligence/config": "^1.0.0",
     "@eslint/js": "^9.27.0",

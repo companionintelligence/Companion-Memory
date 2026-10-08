@@ -106,5 +106,5 @@ export { ApiKeyService };
 // irreversible) and the approval controller (which refuses to take the owner's
 // answer from one). Exported from the barrel because `no-cross-domain-internals`
 // forbids reaching into `auth/types` from another domain.
-export { isManagedAppPrincipal, CONNECT_PROVENANCE } from './types';
+export { connectAppNameOf, isManagedAppPrincipal, CONNECT_PROVENANCE } from './types';
 export type { ApiKeyProvenance, ValidatedApiKey } from './types';

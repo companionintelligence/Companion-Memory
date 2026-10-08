@@ -22,6 +22,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { ApplianceAdminGuard } from '@ci/common/guards';
 import { EventsModule } from '@ci/domains/events';
 
 import {
@@ -66,6 +67,9 @@ import { ProviderService } from './services/ProviderService';
     SignalClient,
     SlackClient,
     SteamClient,
+    // Registered so Nest resolves its DataSource here: connecting Signal asks it whether the
+    // caller is an administrator (the route serves every provider, so it cannot be a guard).
+    ApplianceAdminGuard,
   ],
   controllers: [ConnectionsController, ProvidersController],
   exports: [

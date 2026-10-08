@@ -220,11 +220,19 @@ jobs:
   #
   # Each leg builds every companion/* image natively (no QEMU — the HBPE
   # image compiles llama-cpp-python from source, which is intractable under
-  # emulation) and pushes it as :<version>-<arch>. The merge job below
-  # combines the two into the :<version> manifest list that the store's
+  # emulation), smoke-tests it, and hands the images to the `push` job as an
+  # artifact. `push` publishes them as :<version>-<arch>, and the merge job
+  # below combines the two into the :<version> manifest list that the store's
   # docker-compose.json references.
+  #
+  # This job holds NO registry write token, on purpose. `make publish-build`
+  # runs `init`: a whole-monorepo `yarn install` (every allowlisted install
+  # script in the dependency tree) and `uv sync`. Code that runs there must not
+  # be able to push a companion/* tag, so the token is read-only, it is never
+  # in this job's environment, and the checkout does not leave it in
+  # .git/config.
   build:
-    name: Build & push (${{ matrix.arch }})
+    name: Build & smoke-test (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     # Blocking: no images are built until every REQUIRED gate workflow has a
@@ -241,14 +249,8 @@ jobs:
             runner: ubuntu-24.04-arm
     permissions:
       contents: read
-      packages: write
-
-    env:
-      REGISTRY: ${{ vars.REGISTRY || 'ghcr.io/companionintelligence' }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Required for yarn install in `make publish` → init: @companionintelligence/tokens
-      # lives on npm.pkg.github.com (.yarnrc.yml maps the scope to NODE_AUTH_TOKEN).
-      NODE_AUTH_TOKEN: ${{ secrets.GHPR_READ_TOKEN || secrets.GITHUB_TOKEN }}
+      # Read, for the GITHUB_TOKEN fallback of NODE_AUTH_TOKEN below.
+      packages: read
 
     steps:
       # FIRST step, before the checkout, and cheap on purpose. "Resolve VERSION
@@ -272,6 +274,9 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          # Nothing in this job talks to the repository after the checkout,
+          # so the token is not left in .git/config for install scripts.
+          persist-credentials: false
 
       - name: Free disk space on runner
         run: |
@@ -317,36 +322,188 @@ jobs:
           corepack prepare --activate
           yarn --version
 
-      - name: Install jq
+      # zstd packs and unpacks the image artifact. The x64 runner image ships
+      # it; ubuntu-24.04-arm does not list it.
+      - name: Install jq and zstd
         run: |
-          if ! command -v jq >/dev/null 2>&1; then
+          missing=()
+          command -v jq >/dev/null 2>&1 || missing+=(jq)
+          command -v zstd >/dev/null 2>&1 || missing+=(zstd)
+          if [ "${#missing[@]}" -gt 0 ]; then
             sudo apt-get update
-            sudo apt-get install -y jq
+            sudo apt-get install -y "${missing[@]}"
           fi
 
-      # `make publish` runs `init`, which since the uv adoption ends in
+      # `make publish-build` runs `init`, which since the uv adoption ends in
       # `uv sync --all-packages` — without uv on PATH the target dies with
       # `make: uv: No such file or directory` (exit 127) before a single image
       # is built. Same step ci.yml's `python` job uses; the version comes from
       # `required-version` in pyproject.toml, so this stays pinned with everything else.
       - name: Install uv
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
 
-      - name: Build and push ${{ matrix.arch }} images
+      - name: Build and smoke-test ${{ matrix.arch }} images
         env:
+          # Only `yarn install` needs it: @companionintelligence/tokens lives on
+          # npm.pkg.github.com (.yarnrc.yml maps the scope to NODE_AUTH_TOKEN).
+          # Read-only either way, and scoped to this step.
+          NODE_AUTH_TOKEN: ${{ secrets.GHPR_READ_TOKEN || secrets.GITHUB_TOKEN }}
+        run: make publish-build
+
+      # Every image publish.sh would push, as one zstd-compressed `docker save`.
+      # A missing image fails here rather than as a missing arch in the merge.
+      - name: Export ${{ matrix.arch }} images
+        run: |
+          set -euo pipefail
+          source scripts/publish/images.sh
+          refs=()
+          for image in "${IMAGE_LOCAL[@]}"; do
+            docker image inspect "${image}:latest" >/dev/null \
+              || { echo "::error::${image}:latest was not built"; exit 1; }
+            refs+=("${image}:latest")
+          done
+          # The export needs about 3 GB beside the images, on a runner the
+          # build only just fits. The build cache is not needed any more.
+          docker builder prune -af || true
+          df -h "${RUNNER_TEMP}"
+          docker save "${refs[@]}" | zstd -T0 -3 -q -o "${RUNNER_TEMP}/images-${{ matrix.arch }}.tar.zst"
+          ls -lh "${RUNNER_TEMP}/images-${{ matrix.arch }}.tar.zst"
+
+      - name: Upload ${{ matrix.arch }} images
+        uses: actions/upload-artifact@v4
+        with:
+          name: images-${{ matrix.arch }}
+          path: ${{ runner.temp }}/images-${{ matrix.arch }}.tar.zst
+          # Already zstd-compressed; a second pass only costs time.
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+          # A re-run uploads under the same name, which v4 refuses otherwise.
+          overwrite: true
+
+  # ── Per-architecture push ──────────────────────────────────────────
+  #
+  # The only job besides the merge that holds `packages: write`, and it runs
+  # no dependency code: it loads the images the build leg saved and runs
+  # scripts/publish/publish.sh, which tags and pushes them. It records the
+  # digest of every push so the merge job can name exactly these images.
+  push:
+    name: Push (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    needs: build
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      REGISTRY: ${{ vars.REGISTRY || 'ghcr.io/companionintelligence' }}
+
+    steps:
+      # Same guard as every other job here.
+      - name: Refuse to publish a non-release ref
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if [[ "${GITHUB_REF}" != refs/tags/* || ! "${tag}" =~ ${RELEASE_TAG_RE} ]]; then
+            echo "::error::${GITHUB_REF} is not a release tag. Dispatch this workflow on a tag matching ${RELEASE_TAG_RE} (e.g. v2026.7.27) — VERSION is parsed from the ref."
+            exit 1
+          fi
+          echo "Release tag ${tag} accepted."
+
+      # For scripts/publish/ only. No history, no tags, no stored token.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve VERSION from tag
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          version="${tag#v}"
+          echo "Resolved VERSION=${version} from tag ${tag}"
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+
+      # `docker load` needs room for every image uncompressed, about three
+      # times the artifact, on a runner that starts with ~14 GB free. Same
+      # cleanup as the build leg.
+      - name: Free disk space on runner
+        run: |
+          df -h /
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            "$AGENT_TOOLSDIRECTORY" || true
+          docker system prune -af --volumes || true
+          df -h /
+
+      # zstd packs and unpacks the image artifact. The x64 runner image ships
+      # it; ubuntu-24.04-arm does not list it.
+      - name: Install jq and zstd
+        run: |
+          missing=()
+          command -v jq >/dev/null 2>&1 || missing+=(jq)
+          command -v zstd >/dev/null 2>&1 || missing+=(zstd)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            sudo apt-get update
+            sudo apt-get install -y "${missing[@]}"
+          fi
+
+      - name: Download ${{ matrix.arch }} images
+        uses: actions/download-artifact@v4
+        with:
+          name: images-${{ matrix.arch }}
+          path: ${{ runner.temp }}/images
+
+      - name: Load ${{ matrix.arch }} images
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/images/images-${{ matrix.arch }}.tar.zst"
+          zstd -dc "${archive}" | docker load
+          rm -f "${archive}"
+
+      - name: Push ${{ matrix.arch }} images
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Images only on this leg: the Portal ingest → publish registration
           # happens once, in the merge job, after the manifest lists exist.
           SKIP_PORTAL: 'true'
           TAG_SUFFIX: '-${{ matrix.arch }}'
-        run: make publish
+          DIGEST_FILE: ${{ runner.temp }}/digests/${{ matrix.arch }}.txt
+        run: |
+          mkdir -p "$(dirname "${DIGEST_FILE}")"
+          scripts/publish/publish.sh
+          cat "${DIGEST_FILE}"
+
+      - name: Upload ${{ matrix.arch }} digests
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/${{ matrix.arch }}.txt
+          retention-days: 1
+          if-no-files-found: error
+          overwrite: true
 
   # ── Manifest merge + Portal registration ───────────────────────────
   merge-and-register:
     name: Merge manifests & publish to CI-Portal
     runs-on: ubuntu-latest
-    needs: build
+    needs: push
     # Deliberately NOT given a shared concurrency group to serialize releases.
     # A group holds only one pending entry: a third release arriving would
     # cancel the queued second one, and a cancelled merge leaves a tag with
@@ -391,7 +548,7 @@ jobs:
           echo "VERSION=${version}" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Install jq
         run: |
@@ -437,7 +594,19 @@ jobs:
             echo "::notice::${tag} is not the newest release tag (newest: ${newest}) — leaving :latest alone"
           fi
 
-      - name: Merge per-arch tags into multi-arch manifest lists
+      - name: Download the per-arch digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digests-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      # From the digests the push legs recorded, not the :<version>-<arch>
+      # tags: whatever those tags point at by now is not necessarily what
+      # this run pushed.
+      - name: Merge per-arch images into multi-arch manifest lists
+        env:
+          DIGESTS_DIR: ${{ runner.temp }}/digests
         run: scripts/publish/merge-manifests.sh
 
       - name: Register with CI-Portal (ingest → publish)

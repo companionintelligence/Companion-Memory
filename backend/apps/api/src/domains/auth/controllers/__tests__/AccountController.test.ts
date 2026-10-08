@@ -7,10 +7,17 @@ import {
 import type { Request } from 'express';
 
 import type { ApiKeyScopedRequest } from '@ci/common/guards';
+import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
+import { LastAdminDeletionRefused } from '@ci/domains/user';
 
 import { CONNECT_PROVENANCE } from '../../types';
-import { AccountController, EMAIL_MANAGED_BY_HUB } from '../AccountController';
+import {
+  AccountController,
+  EMAIL_MANAGED_BY_HUB,
+  SUCCESSOR_NOT_FOUND,
+  SUCCESSOR_REQUIRED,
+} from '../AccountController';
 
 /**
  * `DELETE /account` is the in-app account deletion both stores require (Apple
@@ -74,14 +81,20 @@ function makeController(
     namesAccount: jest.fn().mockReturnValue(hubNamesAccount),
   };
 
+  const apiKeyService = {
+    revokeSignInKeys: jest.fn().mockResolvedValue(2),
+    revokeAllExceptConnect: jest.fn().mockResolvedValue(5),
+  };
+
   const controller = new AccountController(
     userService as never,
     authService as never,
     federatedIdentityService as never,
     hubBridge as never,
+    apiKeyService as never,
   );
 
-  return { controller, userService, authService, federatedIdentityService, hubBridge };
+  return { controller, userService, authService, federatedIdentityService, hubBridge, apiKeyService };
 }
 
 /** An OIDC-provisioned account: a random password it has never seen, unless it has since set one. */
@@ -115,7 +128,49 @@ describe('AccountController — delete account', () => {
 
     await controller.remove(requestContext(), mockRequest(), { confirmEmail: 'jsmith@example.com' });
 
-    expect(userService.requestDeletion).toHaveBeenCalledWith({ userId: 'u1' }, 'u1');
+    expect(userService.requestDeletion).toHaveBeenCalledWith({ userId: 'u1' }, 'u1', {
+      successorEmail: undefined,
+    });
+  });
+
+  it('passes a named successor through to the deletion', async () => {
+    const { controller, userService } = makeController();
+
+    await controller.remove(requestContext(), mockRequest(), {
+      confirmEmail: 'jsmith@example.com',
+      successorEmail: 'member@example.com',
+    });
+
+    expect(userService.requestDeletion).toHaveBeenCalledWith({ userId: 'u1' }, 'u1', {
+      successorEmail: 'member@example.com',
+    });
+  });
+
+  it.each([
+    ['successor_required', SUCCESSOR_REQUIRED],
+    ['successor_not_found', SUCCESSOR_NOT_FOUND],
+  ] as const)(
+    'answers a refused last-admin deletion (%s) with a 409 the page can act on',
+    async (reason, message) => {
+      const { controller, userService } = makeController();
+      userService.requestDeletion.mockRejectedValue(new LastAdminDeletionRefused(reason));
+
+      const failure = await controller
+        .remove(requestContext(), mockRequest(), { confirmEmail: 'jsmith@example.com' })
+        .catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(ConflictException);
+      expect((failure as ConflictException).getResponse()).toMatchObject({ message });
+    },
+  );
+
+  it('lets any other deletion failure through as itself', async () => {
+    const { controller, userService } = makeController();
+    userService.requestDeletion.mockRejectedValue(new Error('database down'));
+
+    await expect(
+      controller.remove(requestContext(), mockRequest(), { confirmEmail: 'jsmith@example.com' }),
+    ).rejects.toThrow('database down');
   });
 
   it('accepts a confirmation that differs only by case or surrounding space', async () => {
@@ -375,6 +430,20 @@ describe('AccountController — change email', () => {
 });
 
 describe('AccountController — change password', () => {
+  it('asks for at least eight characters, the rule signup applies', () => {
+    const argumentsOf = Reflect.getMetadata(
+      '__routeArguments__',
+      AccountController,
+      'changePassword',
+    ) as Record<string, { pipes?: unknown[] }>;
+    const pipe = Object.values(argumentsOf)
+      .flatMap((argument) => argument.pipes ?? [])
+      .find((candidate): candidate is ValidationPipe => candidate instanceof ValidationPipe);
+
+    expect(() => pipe!.transform({ newPassword: 'seven77' })).toThrow();
+    expect(pipe!.transform({ newPassword: 'eight888' })).toEqual({ newPassword: 'eight888' });
+  });
+
   it('changes the password and invalidates every OTHER session', async () => {
     const { controller, userService, authService } = makeController();
 
@@ -385,6 +454,33 @@ describe('AccountController — change password', () => {
 
     expect(userService.changePassword).toHaveBeenCalledWith({ userId: 'u1' }, 'u1', 'new-password-1');
     expect(authService.invalidateOtherSessions).toHaveBeenCalledWith('u1', 'current-session-token');
+  });
+
+  it('signs out the phone and desktop apps too, by revoking the keys they minted at sign-in', async () => {
+    // They hold no session, so invalidating sessions alone left every one of them signed in
+    // while the page said "other devices have been signed out".
+    const { controller, apiKeyService } = makeController();
+
+    await controller.changePassword(requestContext(), mockRequest('current-session-token'), {
+      newPassword: 'new-password-1',
+      currentPassword: 'correct-password',
+    });
+
+    expect(apiKeyService.revokeSignInKeys).toHaveBeenCalledWith('u1');
+    // Keys made in Settings run the person's own tools; a routine password change leaves them.
+    expect(apiKeyService.revokeAllExceptConnect).not.toHaveBeenCalled();
+  });
+
+  it('revokes no keys when the password change is refused', async () => {
+    const { controller, apiKeyService } = makeController(undefined, { validPassword: false });
+
+    await expect(
+      controller.changePassword(requestContext(), mockRequest(), {
+        newPassword: 'new-password-1',
+        currentPassword: 'wrong',
+      }),
+    ).rejects.toThrow(UnauthorizedException);
+    expect(apiKeyService.revokeSignInKeys).not.toHaveBeenCalled();
   });
 
   it('rejects with no current password on a non-federated account', async () => {
@@ -492,5 +588,28 @@ describe('AccountController — change password', () => {
       controller.changePassword(requestContext(), mockRequest(), { newPassword: 'new-password-2' }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(userService.changePassword).not.toHaveBeenCalled();
+  });
+});
+
+describe('AccountController — sign out everywhere', () => {
+  it('ends every other session and revokes every key except the Hub-managed ones', async () => {
+    const { controller, authService, apiKeyService } = makeController();
+
+    await expect(
+      controller.signOutEverywhere(requestContext(), mockRequest('current-session-token')),
+    ).resolves.toEqual({ revokedKeys: 5 });
+
+    expect(authService.invalidateOtherSessions).toHaveBeenCalledWith('u1', 'current-session-token');
+    expect(apiKeyService.revokeAllExceptConnect).toHaveBeenCalledWith('u1');
+  });
+
+  it('does nothing for an account that no longer resolves', async () => {
+    const { controller, authService, apiKeyService } = makeController(null);
+
+    await expect(controller.signOutEverywhere(requestContext(), mockRequest())).rejects.toThrow(
+      UnauthorizedException,
+    );
+    expect(authService.invalidateOtherSessions).not.toHaveBeenCalled();
+    expect(apiKeyService.revokeAllExceptConnect).not.toHaveBeenCalled();
   });
 });

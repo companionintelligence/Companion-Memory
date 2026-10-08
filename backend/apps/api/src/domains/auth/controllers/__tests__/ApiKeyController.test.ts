@@ -10,7 +10,9 @@ import config from '@ci/configuration';
 import { UserService } from '@ci/domains/user';
 
 import { ApiKeyService } from '../../services/ApiKeyService';
+import { ApiKeyStrategy } from '../../services/ApiKeyStrategy';
 import { JwtStrategy } from '../../services/JwtStrategy';
+import { SIGN_IN_PROVENANCE, type ValidatedApiKey } from '../../types';
 import { ApiKeyController } from '../ApiKeyController';
 
 const mockApiKeyService = {
@@ -19,6 +21,52 @@ const mockApiKeyService = {
   findOneByUser: jest.fn(),
   update: jest.fn(),
   remove: jest.fn(),
+  validateKey: jest.fn(),
+};
+
+/** The key the phone app signs in with, as `ApiKeyService.validateKey` reports it. */
+const DEVICE_KEY = {
+  raw: 'a'.repeat(64),
+  validated: {
+    keyId: 'k-device',
+    userId: 'user-1',
+    scopes: [],
+    capability: 'full',
+    managedBy: SIGN_IN_PROVENANCE,
+    name: 'Companion mobile · 2026-10-06',
+  } satisfies ValidatedApiKey,
+};
+
+/** A read-only key: giving itself up is still within its reach. */
+const READ_KEY = {
+  raw: 'b'.repeat(64),
+  validated: { ...DEVICE_KEY.validated, keyId: 'k-read', capability: 'read', managedBy: null, name: 'dash' },
+};
+
+/** An installed app's key: scope-limited, and the Hub's to revoke. */
+const APP_KEY = {
+  raw: 'c'.repeat(64),
+  validated: {
+    ...DEVICE_KEY.validated,
+    keyId: 'k-app',
+    scopes: ['memory'],
+    managedBy: 'connect',
+    name: 'app:ci-hermes:ci-marketplace',
+  } satisfies ValidatedApiKey,
+};
+
+/**
+ * A broad-access app's key (the bulk importer's): no scopes, so the scope rule lets it through,
+ * but it is still the Hub's to revoke.
+ */
+const BROAD_APP_KEY = {
+  raw: 'd'.repeat(64),
+  validated: {
+    ...APP_KEY.validated,
+    keyId: 'k-importer',
+    scopes: [],
+    name: 'app:ci-import-tools:ci-marketplace',
+  },
 };
 
 const AUTH_USER = { id: 'user-1', name: 'Test User' };
@@ -46,6 +94,8 @@ const mockPortalTokenVerifier = {
     // JwtOrPortalAuthGuard's `AuthGuard('jwt')` base delegates to — the actual
     // production authentication path, not a stand-in.
     JwtStrategy,
+    // ...and the real 'api-key' strategy, which only `DELETE /keys/current` accepts.
+    ApiKeyStrategy,
   ],
 })
 class TestModule implements NestModule {
@@ -184,7 +234,11 @@ describe('ApiKeyController (real guard + real JwtStrategy)', () => {
 
       const response = await authedMethod('post', '/keys').send({ name: 'My key' }).expect(201);
 
-      expect(mockApiKeyService.create).toHaveBeenCalledWith({ userId: AUTH_USER.id }, { name: 'My key' });
+      expect(mockApiKeyService.create).toHaveBeenCalledWith(
+        { userId: AUTH_USER.id },
+        { name: 'My key' },
+        null,
+      );
       expect(response.body).toEqual({ id: 'k1', name: 'My key', key: 'raw' });
     });
 
@@ -231,6 +285,101 @@ describe('ApiKeyController (real guard + real JwtStrategy)', () => {
 
       await authedMethod('delete', '/keys/key-1').expect(204);
       expect(mockApiKeyService.remove).toHaveBeenCalledWith({ userId: AUTH_USER.id }, 'key-1');
+    });
+  });
+
+  describe('a sign-in key and the self-revoke route', () => {
+    beforeEach(() => {
+      mockApiKeyService.validateKey.mockImplementation(
+        async (raw: string) =>
+          [DEVICE_KEY, READ_KEY, APP_KEY, BROAD_APP_KEY].find((key) => key.raw === raw)?.validated ?? null,
+      );
+      mockApiKeyService.remove.mockResolvedValue(true);
+    });
+
+    it('tags a key the app mints at sign-in, so a password change can revoke it', async () => {
+      mockApiKeyService.create.mockResolvedValue({ id: 'k2', name: 'Companion mobile', key: 'raw' });
+
+      await request(app.getHttpServer())
+        .post('/keys')
+        .set('Authorization', `Bearer ${sessionAccessToken(AUTH_USER.id)}`)
+        .send({ name: 'Companion mobile · 2026-10-06', capability: 'full', sign_in: true })
+        .expect(201);
+
+      expect(mockApiKeyService.create).toHaveBeenCalledWith(
+        { userId: AUTH_USER.id },
+        expect.objectContaining({ name: 'Companion mobile · 2026-10-06' }),
+        SIGN_IN_PROVENANCE,
+      );
+    });
+
+    it('tags a key an app build from before `sign_in` mints, by the name every build gives it', async () => {
+      mockApiKeyService.create.mockResolvedValue({ id: 'k3', name: 'Companion mobile', key: 'raw' });
+
+      await request(app.getHttpServer())
+        .post('/keys')
+        .set('Authorization', `Bearer ${sessionAccessToken(AUTH_USER.id)}`)
+        .send({ name: 'Companion mobile · 2026-09-30', capability: 'full' })
+        .expect(201);
+
+      expect(mockApiKeyService.create).toHaveBeenCalledWith(
+        { userId: AUTH_USER.id },
+        expect.objectContaining({ name: 'Companion mobile · 2026-09-30' }),
+        SIGN_IN_PROVENANCE,
+      );
+    });
+
+    it('leaves a key someone names in Settings untagged', async () => {
+      mockApiKeyService.create.mockResolvedValue({ id: 'k4', name: 'Companion mobile backup', key: 'raw' });
+
+      await request(app.getHttpServer())
+        .post('/keys')
+        .set('Authorization', `Bearer ${sessionAccessToken(AUTH_USER.id)}`)
+        .send({ name: 'Companion mobile backup', capability: 'write' })
+        .expect(201);
+
+      expect(mockApiKeyService.create).toHaveBeenCalledWith(
+        { userId: AUTH_USER.id },
+        expect.objectContaining({ name: 'Companion mobile backup' }),
+        null,
+      );
+    });
+
+    it('lets a key revoke itself, and only itself', async () => {
+      await request(app.getHttpServer()).delete('/keys/current').set('x-api-key', DEVICE_KEY.raw).expect(204);
+
+      expect(mockApiKeyService.remove).toHaveBeenCalledTimes(1);
+      expect(mockApiKeyService.remove).toHaveBeenCalledWith({ userId: 'user-1' }, 'k-device');
+    });
+
+    it('lets a read-only key give itself up too', async () => {
+      await request(app.getHttpServer()).delete('/keys/current').set('x-api-key', READ_KEY.raw).expect(204);
+
+      expect(mockApiKeyService.remove).toHaveBeenCalledWith({ userId: 'user-1' }, 'k-read');
+    });
+
+    it("refuses an installed app's scope-limited key: the Hub revokes those", async () => {
+      await request(app.getHttpServer()).delete('/keys/current').set('x-api-key', APP_KEY.raw).expect(403);
+
+      expect(mockApiKeyService.remove).not.toHaveBeenCalled();
+    });
+
+    it("refuses an installed app's key with no scopes too: provenance, not scope, makes it the Hub's", async () => {
+      await request(app.getHttpServer())
+        .delete('/keys/current')
+        .set('x-api-key', BROAD_APP_KEY.raw)
+        .expect(403);
+
+      expect(mockApiKeyService.remove).not.toHaveBeenCalled();
+    });
+
+    it('takes no session: there is no "current key" behind a JWT', async () => {
+      await request(app.getHttpServer())
+        .delete('/keys/current')
+        .set('Authorization', `Bearer ${sessionAccessToken(AUTH_USER.id)}`)
+        .expect(401);
+
+      expect(mockApiKeyService.remove).not.toHaveBeenCalled();
     });
   });
 });

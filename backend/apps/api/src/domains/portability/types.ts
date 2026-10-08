@@ -31,10 +31,24 @@ export interface FileBlobSnapshot {
   contentBase64: string;
 }
 
+/** The columns that say which account a row belongs to. */
+export type UserColumn = 'user_id' | 'owner_user_id';
+
 export interface UserScopedTable {
   schema: string;
   table: string;
-  userColumn: 'user_id' | 'owner_user_id';
+  /**
+   * The column that says whose row this is: `user_id` when the table has it,
+   * else `owner_user_id`. Export, the pre-import delete and the import's owner
+   * stamp all go through this one.
+   */
+  userColumn: UserColumn;
+  /**
+   * Every user column the table has (one or both of `user_id`,
+   * `owner_user_id`). The import sets each of them to the importer on every
+   * row, so no column an archive supplies can name another account.
+   */
+  userColumns: readonly UserColumn[];
   /**
    * Every column the table has, from the catalog. An archive row may only name
    * columns in this list — the import refuses anything else before it reaches

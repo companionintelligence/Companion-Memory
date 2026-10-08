@@ -60,11 +60,7 @@ export class ConnectionSyncJobResolver {
       connectionId,
       jobId: input.jobId,
       endpointName: input.endpointName,
-      status: input.status,
-      data: input.data,
       type: input.type,
-      cursor: input.cursor,
-      nextCursor: input.nextCursor,
       properties: input.properties,
       error: input.error,
     });
@@ -82,8 +78,8 @@ export class ConnectionSyncJobResolver {
   }
 
   @Mutation(() => UpdateConnectionSyncJobPayload)
-  // Patches only this job's own status/cursor/data fields; the row stays
-  // intact throughout.
+  // Patches only this job's own descriptive fields; status, data and cursors
+  // are the sync executor's. The row stays intact throughout.
   @GraphqlPrivacy({ destructive: false })
   async updateConnectionSyncJob(
     @Context() context: RequestContext,
@@ -96,11 +92,7 @@ export class ConnectionSyncJobResolver {
     const entity = await this.connectionSyncJobService.update(serviceContext, id, {
       jobId: input.jobId,
       endpointName: input.endpointName,
-      status: input.status,
-      data: input.data,
       type: input.type,
-      cursor: input.cursor,
-      nextCursor: input.nextCursor,
       properties: input.properties,
       error: input.error,
       completedAt: input.completedAt,

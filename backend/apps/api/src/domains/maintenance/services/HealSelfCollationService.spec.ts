@@ -88,6 +88,54 @@ describe('HealSelfCollationService', () => {
     expect(personMerge.mergePeople).not.toHaveBeenCalled();
   });
 
+  it('does not take a Person for the owner because it holds a phone number', async () => {
+    // Each candidate's phones used to be passed in as the OWNER's phones, so a
+    // Person with any number matched itself at phone confidence and hands_off
+    // merged it into self every night.
+    const { service, personMerge } = makeService({
+      trustMode: 'hands_off',
+      stubs: [{ entity_id: STUB, name: 'Dana Example', properties: { phones: ['4155550199'] } }],
+    });
+
+    const result = await service.heal(USER);
+
+    expect(result.examined).toBe(0);
+    expect(result.merged).toBe(0);
+    expect(personMerge.mergePeople).not.toHaveBeenCalled();
+  });
+
+  it('leaves a name-only match for review even under hands_off', async () => {
+    // A merge into self moves every address the stub holds onto the owner.
+    // Sharing the owner's name is not evidence those addresses are theirs.
+    const { service, personMerge } = makeService({
+      trustMode: 'hands_off',
+      stubs: [{ entity_id: STUB, name: 'Bennett', properties: { emails: ['bennett@other.example'] } }],
+    });
+
+    const result = await service.heal(USER);
+
+    expect(result.examined).toBe(1);
+    expect(result.merged).toBe(0);
+    expect(result.reviewed).toBe(1);
+    expect(personMerge.mergePeople).not.toHaveBeenCalled();
+  });
+
+  it('does not take a Person named only by an address for the owner', async () => {
+    // "bennett@elsewhere.example" folds to "bennett elsewhere example", which
+    // contains the owner's name. matchOwner refuses a name that is only an
+    // address, and no name-only fallback may let it back in.
+    const { service, personMerge } = makeService({
+      trustMode: 'hands_off',
+      stubs: [{ entity_id: STUB, name: 'bennett@elsewhere.example', properties: {} }],
+    });
+
+    const result = await service.heal(USER);
+
+    expect(result.examined).toBe(0);
+    expect(result.reviewed).toBe(0);
+    expect(personMerge.mergePeople).not.toHaveBeenCalled();
+  });
+
   it('honours dryRun without calling mergePeople', async () => {
     const { service, personMerge } = makeService({ trustMode: 'hands_off' });
 
