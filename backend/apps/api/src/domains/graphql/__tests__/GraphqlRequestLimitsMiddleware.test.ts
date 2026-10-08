@@ -79,6 +79,30 @@ describe('GraphqlRequestLimitsMiddleware', () => {
     }
   });
 
+  it('matches an absolute-form request, which express routes by its parsed path', () => {
+    // `POST http://host/graphql HTTP/1.1` reaches Apollo, and its originalUrl
+    // starts with the scheme; only req.path names the endpoint.
+    for (const req of [
+      {
+        originalUrl: 'http://api:3030/graphql',
+        url: 'http://api:3030/graphql',
+        path: '/graphql',
+        body: { query: BROAD },
+      },
+      {
+        method: 'GET',
+        originalUrl: `http://api:3030/GraphQL?${new URLSearchParams({ query: BROAD }).toString()}`,
+        path: '/GraphQL',
+        query: {},
+      },
+    ]) {
+      const { next, status } = run(req);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(400);
+    }
+  });
+
   it('passes an ordinary document through', () => {
     const { next, status } = run({ originalUrl: '/graphql', body: { query: NARROW, variables: {} } });
 

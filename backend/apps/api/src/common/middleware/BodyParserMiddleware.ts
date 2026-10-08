@@ -76,14 +76,19 @@ const SIGNED_PEER_PREFIX = '/agent/v1';
  * checked as well as the path so the answer holds either way. Case-insensitive,
  * because express routing is: `/GraphQL` reaches Apollo too, and must not
  * reach it past the limits that key off this answer.
+ *
+ * `req.path` is read as well as the raw URL because express routes an
+ * absolute-form request (`POST http://host/graphql HTTP/1.1`, which node
+ * accepts from any client that reaches the API without the gateway) by its
+ * parsed pathname: Apollo answers it, while its `originalUrl` starts `http:`.
  */
 export function isGraphqlRequest(req: Request): boolean {
   const routePath = (req.originalUrl || req.url || req.path).split('?')[0].toLowerCase();
+  const parsedPath = `${req.baseUrl ?? ''}${req.path ?? ''}`.toLowerCase();
 
   return (
     (req.baseUrl ?? '').toLowerCase() === GRAPHQL_PATH ||
-    routePath === GRAPHQL_PATH ||
-    routePath.startsWith(`${GRAPHQL_PATH}/`)
+    [routePath, parsedPath].some((path) => path === GRAPHQL_PATH || path.startsWith(`${GRAPHQL_PATH}/`))
   );
 }
 
