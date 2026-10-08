@@ -290,6 +290,15 @@ function forgetPick(): void {
   }
 }
 
+/**
+ * Take a resumed pick out of storage as its pairing starts again. Spending the code records it
+ * once more, so a pairing that fails before that (the Memory doesn't answer) isn't retried on
+ * every return to the app.
+ */
+export function dropPendingPick(): void {
+  forgetPick();
+}
+
 /** Drop the sign-in in progress (Back, or a code that can't be spent any more). */
 export async function forgetPortalSignIn(): Promise<void> {
   await clearPendingOidc();
@@ -687,11 +696,10 @@ export async function exchangePortalSignIn(signIn: PortalSignIn, pick?: PairingT
 /**
  * Pick up a sign-in after iOS relaunched the app, from the
  * `companion://auth/callback` it launched with (Safari → "Open with Companion")
- * or from what was persisted before it was killed. Nothing is exchanged here:
- * the caller lists by code, or finishes the pick that was in progress. A pick
- * is handed over, not kept: spending the code records it again, so a pairing
- * that fails before then isn't retried on every return to the app. Returns
- * `null` when there is nothing to resume.
+ * or from what was persisted before it was killed. Nothing is exchanged or
+ * changed here: the caller lists by code, or finishes the pick that was in
+ * progress (see {@link dropPendingPick}). Returns `null` when there is nothing
+ * to resume.
  */
 export async function resumePendingOidcLogin(): Promise<ResumedOidcLogin | null> {
   const pending = readPendingOidc();
@@ -718,10 +726,6 @@ export async function resumePendingOidcLogin(): Promise<ResumedOidcLogin | null>
   }
 
   void closeBrowser();
-
-  if (pending.pick) {
-    forgetPick();
-  }
 
   return {
     signIn: { portal: pending.portal, code: parsed.code, verifier: pending.verifier },

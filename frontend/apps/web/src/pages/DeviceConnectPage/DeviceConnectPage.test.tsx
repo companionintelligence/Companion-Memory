@@ -88,6 +88,7 @@ const h = vi.hoisted(() => ({
   signInWithPortalOidc: vi.fn(),
   exchangePortalSignIn: vi.fn(),
   forgetPortalSignIn: vi.fn(async (): Promise<void> => {}),
+  dropPendingPick: vi.fn(),
   resumePendingOidcLogin: vi.fn(async (): Promise<import('./oidc').ResumedOidcLogin | null> => null),
   completePortalMemoryConnect: vi.fn(async () => false),
   completeMemoryPasswordConnect: vi.fn(async () => false),
@@ -151,6 +152,7 @@ vi.mock('./oidc', async (importOriginal) => {
     signInWithPortalOidc: h.signInWithPortalOidc,
     exchangePortalSignIn: h.exchangePortalSignIn,
     forgetPortalSignIn: h.forgetPortalSignIn,
+    dropPendingPick: h.dropPendingPick,
     resumePendingOidcLogin: h.resumePendingOidcLogin,
   };
 });
@@ -186,6 +188,7 @@ beforeEach(() => {
   h.exchangePortalSignIn.mockReset();
   h.forgetPortalSignIn.mockReset();
   h.forgetPortalSignIn.mockResolvedValue(undefined);
+  h.dropPendingPick.mockReset();
   h.resumePendingOidcLogin.mockReset();
   h.resumePendingOidcLogin.mockResolvedValue(null);
   h.completePortalMemoryConnect.mockReset();
@@ -749,10 +752,32 @@ describe('DeviceConnectPage', () => {
         );
       });
       expect(h.exchangePortalSignIn).toHaveBeenCalledWith(HELD, HOME);
+      // Taken out of storage as the pairing starts again: the exchange records it once more.
+      expect(h.dropPendingPick).toHaveBeenCalledTimes(1);
       // Straight to that Memory: no list to pick from again, and no new sign-in.
       expect(screen.getByText('Connecting…')).toBeInTheDocument();
       expect(h.listMemoryServersByCode).not.toHaveBeenCalled();
       expect(h.signInWithPortalOidc).not.toHaveBeenCalled();
+    });
+
+    it('leaves the pick in storage when the page goes away before acting on it', async () => {
+      let finishResume: (resumed: { signIn: PortalSignIn; pick: PairingTarget }) => void = () => {};
+
+      h.resumePendingOidcLogin.mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishResume = resolve;
+        }),
+      );
+
+      const { unmount } = render(<DeviceConnectPage />);
+      await waitFor(() => expect(h.resumePendingOidcLogin).toHaveBeenCalledTimes(1));
+      unmount();
+      finishResume({ signIn: HELD, pick: HOME });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // The next mount still finds it and finishes the pairing.
+      expect(h.dropPendingPick).not.toHaveBeenCalled();
+      expect(h.exchangePortalSignIn).not.toHaveBeenCalled();
     });
 
     it('says the sign-in expired when a relaunch finds a code the Portal no longer takes', async () => {

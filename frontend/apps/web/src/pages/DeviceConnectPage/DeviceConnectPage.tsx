@@ -10,6 +10,7 @@ import { BrainMark, CONNECT_MARK_SIZE, Reveal, SplashShell } from '@/pages/Splas
 
 import {
   bearerAddressedTo,
+  dropPendingPick,
   emailFromIdToken,
   exchangePortalSignIn,
   forgetPortalSignIn,
@@ -199,8 +200,7 @@ export function DeviceConnectPage() {
     let cancelled = false;
     let inFlight = false;
     const finish = async () => {
-      // While handleConnect runs it owns the sign-in. A resume now would also hand its recorded
-      // pick over, and a relaunch after that could no longer finish the pairing.
+      // While handleConnect runs it owns the sign-in, and a resume would only race it.
       if (cancelled || inFlight || connectInFlight.current) {
         return;
       }
@@ -218,6 +218,7 @@ export function DeviceConnectPage() {
 
         if (resumed?.pick) {
           // Pair with the Memory that was picked, rather than showing the list again.
+          dropPendingPick();
           setAuth(null);
           setSignIn(resumed.signIn);
           setDevices([resumed.pick]);

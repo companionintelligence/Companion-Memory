@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   bearerAddressedTo,
+  dropPendingPick,
   emailFromIdToken,
   exchangePortalSignIn,
   forgetPortalSignIn,
@@ -248,7 +249,11 @@ describe('exchangePortalSignIn', () => {
     void exchangePortalSignIn(signIn, HOME);
 
     await expect(resumePendingOidcLogin()).resolves.toEqual({ signIn, pick: HOME });
-    // Handed over: a pairing that then fails before the exchange isn't retried on the next return.
+    // Reading it changes nothing: a resume abandoned before it acts leaves the pick for the next one.
+    await expect(resumePendingOidcLogin()).resolves.toEqual({ signIn, pick: HOME });
+
+    // Taken out when the page starts that pairing again; the sign-in itself stays.
+    dropPendingPick();
     await expect(resumePendingOidcLogin()).resolves.toEqual({ signIn, pick: null });
   });
 
