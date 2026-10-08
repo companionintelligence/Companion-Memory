@@ -47,6 +47,13 @@ make dev      # terminal 1 — brings up the stack + Caddy
 make tunnel   # terminal 2 — starts cloudflared; Ctrl-C to stop
 ```
 
+`make tunnel` refuses to start while `.env` still holds any of the `replace-me-`
+placeholders committed in `.env.default`, which a `.env` from an older `make init`
+does. Anyone who has read the repo could sign in to, or read files from, a stack
+published with them. Replace them with
+`yarn tsx scripts/dev-stack/env-secrets-cli.ts mint .env` and restart `make dev`
+(that signs everyone out of the stack and changes its object-store keys).
+
 Then open `https://dev.companionintelligence.com`. Stopping `make tunnel`
 (Ctrl-C) takes the preview offline immediately; the CNAME remains but resolves to
 nothing usable until the tunnel runs again.

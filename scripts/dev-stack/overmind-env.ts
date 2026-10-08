@@ -8,14 +8,36 @@
  */
 import type { StackPorts } from './ports';
 
+/**
+ * The address the host-run API listens on. DEV_LISTEN_HOST (from .env or the
+ * shell) wins; it is the same switch Vite reads, for testing from a phone on the
+ * LAN or over the tailnet.
+ *
+ * Otherwise loopback, except on Linux. The HBPE and Summary containers call the
+ * API back at `host.docker.internal` (docker-compose.local.yml), and on native
+ * Linux Docker that name is the docker bridge gateway, not this machine's
+ * loopback, so an API on 127.0.0.1 would never see those callbacks. Docker
+ * Desktop on macOS forwards it to the host's loopback, so there loopback is
+ * enough. The API used to listen on 0.0.0.0 everywhere.
+ */
+export function apiListenHost(base: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+  if (base.DEV_LISTEN_HOST) {
+    return base.DEV_LISTEN_HOST;
+  }
+
+  return platform === 'linux' ? '0.0.0.0' : '127.0.0.1';
+}
+
 export function buildOvermindEnv(
   base: NodeJS.ProcessEnv,
   ports: StackPorts,
-  { host, socket }: { host: string; socket: string },
+  { host, socket, platform = process.platform }: { host: string; socket: string; platform?: NodeJS.Platform },
 ): NodeJS.ProcessEnv {
   return {
     ...base,
     PORT: String(ports.apiPort),
+    // Mapped to the API's `host` by config/custom-environment-variables.json.
+    API_LISTEN_HOST: apiListenHost(base, platform),
     API_PORT: String(ports.apiPort),
     WEB_PORT: String(ports.webPort),
     DATABASE_PORT: String(ports.dbPort),
@@ -37,7 +59,8 @@ export function buildOvermindEnv(
     // 404 that reads like "not signed in"), no GraphQL, and an OAuth link that
     // lands on a blank page.
     //
-    // 127.0.0.1, not `localhost`: the API binds IPv4 (`0.0.0.0`), while
+    // 127.0.0.1, not `localhost`: the API binds IPv4 (API_LISTEN_HOST above,
+    // `127.0.0.1` or `0.0.0.0` unless DEV_LISTEN_HOST names another), while
     // `localhost` resolves to ::1 first on a dual-stack host. curl falls back
     // to IPv4; Node's proxy agent reports the AggregateError instead.
     API_PROXY_TARGET: `http://127.0.0.1:${ports.apiPort}`,

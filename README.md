@@ -469,8 +469,11 @@ Then open `https://<project>.localhost` (e.g. **https://ci-server.localhost**) a
 
 ```
 Username: jsmith@example.com
-Password: replace-me-pw-000000
+Password: the AUTH_DEFAULT_USER_PASSWORD value in your .env
 ```
+
+`make init` generates that password, along with the other secrets, when it creates
+`.env`. A `.env` from before that change still holds `replace-me-pw-000000`.
 
 With the stack up and seeded, this is also the state from which to capture UI
 screenshots for the docs — see the [screenshot capture guide](docs/screenshots.md)

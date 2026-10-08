@@ -459,10 +459,11 @@ fn get_gateway_url_command() -> String {
     format!("http://127.0.0.1:{}", stack_manager::GATEWAY_PORT)
 }
 
-/// Ready means healthy AND running this build's images. Health alone passes
-/// on the first poll after an upgrade, because Quit leaves the previous
-/// release's containers running — see stack_manager::gateway_runs_image_tag
-/// for what redirecting into that stack did to the webview.
+/// Ready means healthy AND our own gateway container running this build's
+/// images with the port published. Health alone passes on the first poll after
+/// an upgrade, because Quit leaves the previous release's containers running,
+/// and it passes for any other program that answers on 127.0.0.1:8642. See
+/// stack_manager::gateway_runs_image_tag for both.
 #[tauri::command]
 async fn check_stack_status_command(bundled: tauri::State<'_, BundledImageTag>) -> Result<bool, String> {
     if !stack_manager::is_healthy().await {
@@ -470,13 +471,18 @@ async fn check_stack_status_command(bundled: tauri::State<'_, BundledImageTag>) 
     }
 
     let image_tag = bundled.0.clone();
-    if image_tag.is_empty() {
-        return Ok(true);
-    }
 
-    tokio::task::spawn_blocking(move || stack_manager::gateway_runs_image_tag(&image_tag))
-        .await
-        .map_err(|e| format!("readiness check panicked: {e}"))
+    tokio::task::spawn_blocking(move || {
+        // An unknown bundled tag skips the tag comparison, never the check that
+        // the container answering is ours.
+        if image_tag.is_empty() {
+            stack_manager::gateway_serves_port()
+        } else {
+            stack_manager::gateway_runs_image_tag(&image_tag)
+        }
+    })
+    .await
+    .map_err(|e| format!("readiness check panicked: {e}"))
 }
 
 /// Kick off a start and return immediately.
