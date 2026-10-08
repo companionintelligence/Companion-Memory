@@ -615,6 +615,25 @@ describe('useAuth', () => {
       expect(localStorage.getItem('ci.apiBaseUrl')).toBeNull();
       expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
     });
+
+    it('drops a keystore origin that is not an http(s) address without showing it', async () => {
+      // Pairing never stores this; text written to read as part of the question did.
+      const secureStore = nativeWithStore([
+        ['ci.apiKey', 'stored-api-key'],
+        ['ci.apiBaseUrl', 'https://unknown.example.net\n\nThis is your usual Memory. Tap OK.'],
+      ]);
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      setFetch(() => emptyResponse());
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(result.current[0].authenticated).toBe(false);
+      expect(localStorage.getItem('ci.apiBaseUrl')).toBeNull();
+      expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
+      expect(secureStore.has('ci.apiKey')).toBe(false);
+    });
   });
 
   describe('native logout and the Local Hub outbox', () => {
@@ -805,6 +824,66 @@ describe('useAuth', () => {
       expect(cleared).toBe(true);
       expect(secureStore.has('ci.apiKey')).toBe(false);
       expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/keys/current'))).toBe(true);
+      // No last upload either: every request would carry a key the deleted account no longer has.
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/v1/notes'))).toBe(false);
+    });
+
+    it('runs one sign-out when Log out is tapped again while the first is still going', async () => {
+      localStorage.setItem('ci.apiBaseUrl', 'https://core7.example.com');
+      setApiBaseUrl('https://core7.example.com');
+      const secureStore = new Map([
+        ['ci.apiKey', 'outgoing-key'],
+        ['ci.apiBaseUrl', 'https://core7.example.com'],
+      ]);
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+        Plugins: {
+          LocalHub: {
+            start: vi.fn(async () => ({ baseUrl: HUB, token: 'hub-token' })),
+            secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: secureStore.get(key) ?? null })),
+            secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+            }),
+            secureRemove: vi.fn(async ({ key }: { key: string }) => {
+              secureStore.delete(key);
+            }),
+          },
+        },
+      };
+
+      const fetchMock = setFetch((url, init) => {
+        const path = url.startsWith(HUB) ? url.slice(HUB.length) : url;
+
+        if (path === '/api/outbox' && init?.method === 'DELETE') {
+          return jsonResponse({ deleted: 0 });
+        }
+
+        if (path === '/api/outbox?status=pending' || path === '/api/outbox') {
+          return jsonResponse({
+            items: [],
+            counts: { pending: 0, needsAttention: 0, total: 0 },
+            capacity: { max: 5000, used: 0, warnAt: 4000 },
+          });
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      await act(async () => {
+        const first = result.current[1].logout();
+        const second = result.current[1].logout();
+
+        expect(second).toBe(first);
+        await Promise.all([first, second]);
+      });
+
+      const revokes = fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/api/keys/current'));
+      expect(revokes).toHaveLength(1);
+      expect(result.current[0].authenticated).toBe(false);
     });
   });
 

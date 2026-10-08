@@ -45,6 +45,15 @@ const API_KEY_ID_STORAGE = 'ci.apiKeyId';
 // What the stored key was minted with. Absent on a key issued before the app
 // started asking, which is exactly the signal `storedApiKeyCapability` reports.
 const API_KEY_CAPABILITY_STORAGE = 'ci.apiKeyCapability';
+// The paired Memory origin, mirrored into the keystore for native consumers.
+const API_BASE_URL_STORAGE = 'ci.apiBaseUrl';
+
+/** Forget this device's stored key, its id and its capability. */
+async function removeStoredDeviceKey(): Promise<void> {
+  await secureStorageRemove(API_KEY_STORAGE);
+  await secureStorageRemove(API_KEY_ID_STORAGE);
+  await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+}
 
 /**
  * The authority this device asks for, and why it is the widest one.
@@ -355,12 +364,15 @@ async function adoptKeystoreOrigin(storedOrigin: string | null): Promise<boolean
   // nothing to sign back in with, and a saved origin makes iOS skip the device picker, so
   // the next sign-in would go to this box. Finish the sign-out instead of asking.
   if (!(await secureStorageGet(API_KEY_STORAGE))) {
-    await secureStorageRemove('ci.apiBaseUrl');
+    await secureStorageRemove(API_BASE_URL_STORAGE);
 
     return true;
   }
 
-  if (window.confirm(`Sign back in to your Memory at ${stored}?`)) {
+  // Pairing only ever stores an http(s) address. Anything else (another scheme, or text with
+  // line breaks written to read as part of the question) came from somewhere else, so it is
+  // dropped like a declined one rather than shown in the prompt.
+  if (isHttpAddress(stored) && window.confirm(`Sign back in to your Memory at ${stored}?`)) {
     persistApiBaseUrl(stored);
 
     return true;
@@ -368,12 +380,25 @@ async function adoptKeystoreOrigin(storedOrigin: string | null): Promise<boolean
 
   // Declined: drop the credential that came with it, so the app starts at device connect
   // instead of quietly reusing a key for a server the person did not recognise.
-  await secureStorageRemove('ci.apiBaseUrl');
-  await secureStorageRemove(API_KEY_STORAGE);
-  await secureStorageRemove(API_KEY_ID_STORAGE);
-  await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+  await secureStorageRemove(API_BASE_URL_STORAGE);
+  await removeStoredDeviceKey();
 
   return false;
+}
+
+/** An http(s) URL with no whitespace anywhere in it. */
+function isHttpAddress(value: string): boolean {
+  if (/\s/.test(value)) {
+    return false;
+  }
+
+  try {
+    const { protocol } = new URL(value);
+
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 /** This device's stored key, or null when there is none or the store cannot be read. */
@@ -681,17 +706,13 @@ function useAuth(): ReturnValue {
     if (isTauriPlatform()) {
       // The desktop keeps its key in this page's storage; a revoked key left there
       // would only be read back as a credential that no longer works.
-      await secureStorageRemove(API_KEY_STORAGE);
-      await secureStorageRemove(API_KEY_ID_STORAGE);
-      await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+      await removeStoredDeviceKey();
     }
 
     if (isNativePlatform()) {
       // No cookie session to revoke; the key was revoked above. Clear the local copy.
       setApiKey(null);
-      await secureStorageRemove(API_KEY_STORAGE);
-      await secureStorageRemove(API_KEY_ID_STORAGE);
-      await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+      await removeStoredDeviceKey();
       // A saved public origin makes iOS skip the device picker, so the next
       // Companion login would still talk to the previous box and never list
       // the new account's Memory servers. Drop the pairing with the key.
@@ -731,26 +752,45 @@ function useAuth(): ReturnValue {
     navigate('/');
   }, [navigate]);
 
+  // The logout already under way. On a phone it can spend up to SIGN_OUT_DRAIN_TIMEOUT_MS on
+  // its last upload with nothing on screen, and a second tap on Log out in that time must
+  // not start a second drain, or a second sign-out alongside the first.
+  const logoutInFlight = useRef<Promise<void> | null>(null);
+
   const logout = useCallback(
-    async ({ discardUnsentCaptures = false }: LogoutOptions = {}) => {
-      if (isNativePlatform()) {
-        // One last, bounded upload of what this account queued while offline, while its
-        // key is still the one requests carry.
-        await drainOutboxBeforeSignOut();
-
-        // Signing out deletes whatever is still queued. When some of it is this account's,
-        // ask first, and touch nothing until the answer: Cancel keeps the session and the
-        // queue, so the captures can still upload once the phone is back online.
-        const unsentCaptures = discardUnsentCaptures ? 0 : await countUnsentBeforeSignOut();
-
-        if (unsentCaptures > 0) {
-          setSignOutPrompt({ open: true, unsentCaptures });
-
-          return;
-        }
+    (options: LogoutOptions = {}) => {
+      if (logoutInFlight.current) {
+        return logoutInFlight.current;
       }
 
-      await signOut();
+      const run = (async () => {
+        // Discarding: the captures can never upload (the account is gone), so there is
+        // nothing to upload first and nothing to ask about.
+        if (isNativePlatform() && !options.discardUnsentCaptures) {
+          // One last, bounded upload of what this account queued while offline, while its
+          // key is still the one requests carry.
+          await drainOutboxBeforeSignOut();
+
+          // Signing out deletes whatever is still queued. When some of it is this account's,
+          // ask first, and touch nothing until the answer: Cancel keeps the session and the
+          // queue, so the captures can still upload once the phone is back online.
+          const unsentCaptures = await countUnsentBeforeSignOut();
+
+          if (unsentCaptures > 0) {
+            setSignOutPrompt({ open: true, unsentCaptures });
+
+            return;
+          }
+        }
+
+        await signOut();
+      })().finally(() => {
+        logoutInFlight.current = null;
+      });
+
+      logoutInFlight.current = run;
+
+      return run;
     },
     [signOut],
   );
