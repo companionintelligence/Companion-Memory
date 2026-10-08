@@ -1,4 +1,9 @@
-import { extractReceiptFields, RECEIPT_SCAN_CHARS, receiptSignals } from '../receipt_detect';
+import {
+  extractReceiptFields,
+  RECEIPT_SCAN_CHARS,
+  receiptHeaderSignal,
+  receiptSignals,
+} from '../receipt_detect';
 
 /**
  * The three body patterns as they stood before they were made linear, kept as
@@ -212,5 +217,15 @@ describe('receipt body patterns', () => {
       total: 9.99,
       currency: 'USD',
     });
+  });
+
+  it('read only the start of a very long From or Subject header', () => {
+    // RECEIPT_SENDER_LOCAL_RE rescans to the next `@` from every `<shop`: 0.7 s
+    // on 40,000 characters of this before the header was capped.
+    const from = '<shop'.repeat(40_000);
+
+    expect(elapsedMs(() => receiptHeaderSignal({ From: from, Subject: 'hi' }))).toBeLessThan(500);
+    expect(elapsedMs(() => receiptSignals({ From: from }, 'hi', 'Total: $9.99'))).toBeLessThan(500);
+    expect(receiptSignals({ From: 'Orders <orders@shop.example>' }, 'hi').sender).toBe(true);
   });
 });

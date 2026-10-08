@@ -104,6 +104,19 @@ function scannedBody(bodyText: string | undefined): string {
 }
 
 /**
+ * How much of the Subject and From headers the receipt checks read. They are
+ * third-party text too, and `RECEIPT_SENDER_LOCAL_RE` is not linear: each
+ * `<shop` opening scans to the next `@` or space, so a From header of 40,000
+ * characters of `<shop` repeated took 0.7 s and doubling it quadruples that. A
+ * real From or Subject header is a few hundred characters.
+ */
+export const RECEIPT_HEADER_SCAN_CHARS = 4 * 1024;
+
+function scannedHeader(value: string): string {
+  return value.length > RECEIPT_HEADER_SCAN_CHARS ? value.slice(0, RECEIPT_HEADER_SCAN_CHARS) : value;
+}
+
+/**
  * A money amount: a symbol-prefixed or code-suffixed decimal.
  *
  * The code-suffixed half used to be `\b\d[\d,]*\.\d{2}…`, which could start at
@@ -162,13 +175,13 @@ export function receiptHeaderSignal(
   headers: Record<string, string> | undefined,
   subject?: string,
 ): ReceiptHeaderSignal {
-  const subj = subject ?? header(headers, 'Subject');
+  const subj = scannedHeader(subject ?? header(headers, 'Subject'));
 
   if (STRONG_SUBJECT_RE.test(subj)) {
     return 'strong';
   }
 
-  const from = header(headers, 'From');
+  const from = scannedHeader(header(headers, 'From'));
   const senderSignal = RECEIPT_SENDER_LOCAL_RE.test(from) || RECEIPT_SENDER_DOMAIN_RE.test(from);
 
   if (WEAK_SUBJECT_RE.test(subj) || senderSignal) {
@@ -184,8 +197,8 @@ export function receiptSignals(
   subject?: string,
   bodyText?: string,
 ): ReceiptSignals {
-  const subj = subject ?? header(headers, 'Subject');
-  const from = header(headers, 'From');
+  const subj = scannedHeader(subject ?? header(headers, 'Subject'));
+  const from = scannedHeader(header(headers, 'From'));
   const body = scannedBody(bodyText);
 
   return {
