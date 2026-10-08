@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_PORTAL_URL,
   listMemoryServers,
+  listMemoryServersByCode,
   persistPortalUrl,
+  PortalSignInExpiredError,
   probeMemoryOrigin,
   probePortalOrigin,
   readPersistedPortalUrl,
@@ -98,6 +100,77 @@ describe('device-connect portal-client', () => {
         resource: 'urn:ci:device:home-device',
       },
     ]);
+  });
+
+  describe('listMemoryServersByCode (the list before the code is spent)', () => {
+    const SIGN_IN = { code: 'auth-code-1', verifier: 'v'.repeat(43) };
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    const HOME_APP = {
+      slug: 'ci-memory',
+      url: 'https://memory.example.com',
+      deviceName: 'Home',
+      deviceSlug: 'home',
+      resource: 'urn:ci:device:home-device',
+    };
+
+    it('posts the code and its verifier, and lists what the Portal answers', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ apps: [HOME_APP] })));
+
+      await expect(listMemoryServersByCode(SIGN_IN, 'https://hub.example.com/')).resolves.toEqual([
+        {
+          id: 'home',
+          name: 'Home',
+          status: 'active',
+          memoryUrl: 'https://memory.example.com',
+          resource: 'urn:ci:device:home-device',
+        },
+      ]);
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://hub.example.com/api/users/me/apps/by-code?slug=ci-memory');
+      expect(init.method).toBe('POST');
+      expect(init.headers).toMatchObject({ 'Content-Type': 'application/json' });
+      expect(JSON.parse(String(init.body))).toEqual({ code: 'auth-code-1', code_verifier: SIGN_IN.verifier });
+      // The code is the credential here: no Portal token travels with it.
+      expect((init.headers as Record<string, string>).Authorization).toBeUndefined();
+    });
+
+    it('tries the next Memory slug when one lists nothing, as the token list does', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockResolvedValueOnce(json({ apps: [] }))
+          .mockResolvedValueOnce(json({ apps: [HOME_APP] })),
+      );
+
+      await expect(listMemoryServersByCode(SIGN_IN, 'https://hub.example.com')).resolves.toHaveLength(1);
+      expect(String(vi.mocked(fetch).mock.calls[1]?.[0])).toContain('slug=companion-memory');
+    });
+
+    it('answers null for an older Portal, which has no such route', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ error: 'not_found' }, 404)));
+
+      await expect(listMemoryServersByCode(SIGN_IN, 'https://hub.example.com')).resolves.toBeNull();
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('says the sign-in expired when the Portal no longer takes the code', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ error: 'invalid_grant' }, 400)));
+
+      await expect(listMemoryServersByCode(SIGN_IN, 'https://hub.example.com')).rejects.toBeInstanceOf(
+        PortalSignInExpiredError,
+      );
+    });
+
+    it('reports any other failure with its status', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ error: 'server_error' }, 500)));
+
+      await expect(listMemoryServersByCode(SIGN_IN, 'https://hub.example.com')).rejects.toThrow(
+        'Could not load your Memory Servers (500).',
+      );
+    });
   });
 
   it('filters session-device lists down to a Memory app URL', async () => {

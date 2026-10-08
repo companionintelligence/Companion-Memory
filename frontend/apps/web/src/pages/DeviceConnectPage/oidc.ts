@@ -8,14 +8,14 @@
  *   3. Portal redirects to companion://auth/callback?code=…&state=… (deep link)
  *   4. exchange the code at {portal}/api/auth/oauth2/token (with the PKCE verifier)
  *
- * Pairing with a Memory the Portal lists a `resource` for takes a second run of
- * the same flow once the person has picked it. On Android the Auth Tab shares
- * Chrome's Portal session, so that is usually a quick hop. The iOS sheet is
- * ephemeral (`prefersEphemeralWebBrowserSession` in LocalHubPlugin.swift), so
- * there the person signs in again. The second sign-in's code exchange adds that
- * `resource`, and the id_token comes back addressed to that one Memory: `aud` is
- * `["ci-server", "urn:ci:device:<device id>"]`. The first sign-in never sends a
- * resource, and nothing is added to the authorize URL.
+ * Step 4 waits for the pick. {@link signInWithPortalOidc} stops at the code, and
+ * the phone lists the person's Memories with that unspent code
+ * (`listMemoryServersByCode`). Once a Memory is picked,
+ * {@link exchangePortalSignIn} spends the code with that Memory's `resource`,
+ * and the id_token comes back addressed to that one Memory: `aud` is
+ * `["ci-server", "urn:ci:device:<device id>"]`. So one sign-in opens only the
+ * Memory picked with it. Nothing is added to the authorize URL. An older Portal,
+ * which can't list by code, gets the code exchanged at once, with no resource.
  *
  * `companion://oidc/callback` is a different path — that is CI-Server's own
  * "Sign in with CI Portal" after an origin is already chosen. Do not mix them.
@@ -32,7 +32,7 @@ import {
   openAuthSession,
 } from '@ci/common';
 
-import { DEFAULT_PORTAL_URL, type MemoryServerDevice } from './portal-client';
+import { DEFAULT_PORTAL_URL, type MemoryServerDevice, PortalSignInExpiredError } from './portal-client';
 
 export const OIDC_CLIENT_ID = 'ci-server';
 export const OIDC_REDIRECT_URI = 'companion://auth/callback';
@@ -51,16 +51,24 @@ export interface OidcTokens {
 /** A Memory from the Portal's list that the Portal can address a sign-in to. */
 export type PairingTarget = MemoryServerDevice & { memoryUrl: string; resource: string };
 
-/** What {@link resumePendingOidcLogin} finished, and for which Memory when it was a pairing sign-in. */
+/** A finished Portal sign-in whose code is not spent yet. */
+export interface PortalSignIn {
+  portal: string;
+  code: string;
+  verifier: string;
+}
+
+/** A sign-in {@link resumePendingOidcLogin} found, and the Memory picked with it, if any. */
 export interface ResumedOidcLogin {
-  tokens: OidcTokens;
-  /** The Memory the person picked before the pairing sign-in, or null after the first sign-in. */
-  pairWith: PairingTarget | null;
+  signIn: PortalSignIn;
+  /** The Memory the person had picked when the app was killed, or null when none was picked yet. */
+  pick: PairingTarget | null;
 }
 
 /**
- * The Portal refused the `resource` a pairing sign-in asked for (`invalid_target`): the Memory is
- * not registered to an organization this Companion account belongs to, or no longer is.
+ * The Portal refused the `resource` the pick's exchange asked for (`invalid_target`): the Memory
+ * is not registered to an organization this Companion account belongs to, or no longer is. The
+ * code is not spent, so another Memory can still be picked with it.
  */
 export class PortalInvalidTargetError extends Error {
   constructor() {
@@ -127,9 +135,9 @@ function audienceValues(aud: JwtClaims['aud']): string[] {
 }
 
 /**
- * The id_token from a pairing sign-in, when it is one a Memory accepts and the Portal addressed it
- * to `resource` as asked. Null otherwise: a token the Portal did not address is never sent in its
- * place.
+ * The id_token from the pick's exchange, when it is one a Memory accepts and the Portal addressed
+ * it to `resource` as asked. Null otherwise: a token the Portal did not address is never sent in
+ * its place.
  */
 export function bearerAddressedTo(idToken: string | null | undefined, resource: string): string | null {
   const [bearer] = selectMemoryPortalBearers([idToken]);
@@ -186,13 +194,17 @@ function normalizePortalUrl(url: string): string {
   return url.trim().replace(/\/+$/, '') || DEFAULT_PORTAL_URL;
 }
 
+/**
+ * The sign-in in progress, kept until its code is spent or dropped: it is what a relaunch
+ * resumes from. The code itself rides in the persisted callback URL.
+ */
 interface PendingOidc {
   verifier: string;
   state: string;
   portal: string;
   startedAt: number;
-  /** Set for a pairing sign-in: its exchange sends this Memory's `resource`. */
-  pairWith?: PairingTarget;
+  /** The Memory being paired, recorded just before the code is spent on it. */
+  pick?: PairingTarget;
 }
 
 function nonEmptyString(value: unknown): value is string {
@@ -243,8 +255,8 @@ function readPendingOidc(): PendingOidc | null {
       return null;
     }
 
-    // A pairing sign-in whose Memory cannot be read back would be exchanged without its resource.
-    if (parsed.pairWith !== undefined && !isPairingTarget(parsed.pairWith)) {
+    // A pick that cannot be read back would be exchanged without its resource.
+    if (parsed.pick !== undefined && !isPairingTarget(parsed.pick)) {
       return null;
     }
 
@@ -258,6 +270,29 @@ function readPendingOidc(): PendingOidc | null {
   } catch {
     return null;
   }
+}
+
+/** Record the Memory about to be paired, so a relaunch in the middle finishes that pairing. */
+function rememberPick(pick: PairingTarget): void {
+  const pending = readPendingOidc();
+
+  if (pending) {
+    persistPendingOidc({ ...pending, pick });
+  }
+}
+
+function forgetPick(): void {
+  const pending = readPendingOidc();
+
+  if (pending?.pick) {
+    const { pick: _dropped, ...rest } = pending;
+    persistPendingOidc(rest);
+  }
+}
+
+/** Drop the sign-in in progress (Back, or a code that can't be spent any more). */
+export async function forgetPortalSignIn(): Promise<void> {
+  await clearPendingOidc();
 }
 
 async function clearPendingOidc(): Promise<void> {
@@ -493,8 +528,15 @@ async function exchangeCodeOnce(
       parsed = undefined;
     }
 
-    if (parsed && typeof parsed === 'object' && (parsed as { error?: unknown }).error === 'invalid_target') {
+    const code = parsed && typeof parsed === 'object' ? (parsed as { error?: unknown }).error : undefined;
+
+    if (code === 'invalid_target') {
       throw new PortalInvalidTargetError();
+    }
+
+    // An unknown, expired or spent code, or one that doesn't match this sign-in.
+    if (code === 'invalid_grant') {
+      throw new PortalSignInExpiredError();
     }
 
     throw new Error(portalTokenErrorMessage(res.status, parsed));
@@ -537,21 +579,16 @@ async function exchangeCode(
 }
 
 /**
- * Run the full OIDC PKCE login against the Portal. On iOS the Portal page is an
- * in-app Safari sheet. On Android it is a Chrome Auth Tab. Resolves once the
- * user finishes and the `companion://auth/callback` deep link is captured and
- * exchanged for tokens.
- *
- * With `pairWith` this is the pairing sign-in for that Memory: the exchange
- * sends its `resource`, and the pending state keeps the Memory so a sign-in
- * finished by an iOS relaunch still pairs with it. A pairing sign-in that fails
- * drops its pending state, so a later resume can't pair behind an error the
- * person has already seen.
+ * Run the OIDC PKCE sign-in against the Portal, up to the code. On iOS the
+ * Portal page is an in-app Safari sheet. On Android it is a Chrome Auth Tab.
+ * Resolves once the user finishes and the `companion://auth/callback` deep link
+ * is captured. The code is not exchanged here: see {@link exchangePortalSignIn}.
+ * The sign-in stays persisted until then, so a relaunch can pick it up.
  */
-export async function loginWithPortalOidc(
+export async function signInWithPortalOidc(
   portalUrl = DEFAULT_PORTAL_URL,
-  options: { signal?: AbortSignal; pairWith?: PairingTarget } = {},
-): Promise<OidcTokens> {
+  options: { signal?: AbortSignal } = {},
+): Promise<PortalSignIn> {
   const portal = normalizePortalUrl(portalUrl);
   const codeVerifier = randomString();
   const codeChallenge = await sha256Challenge(codeVerifier);
@@ -568,13 +605,7 @@ export async function loginWithPortalOidc(
 
   await clearPendingOidc();
   exchangeByCode.clear();
-  persistPendingOidc({
-    verifier: codeVerifier,
-    state,
-    portal,
-    startedAt: Date.now(),
-    ...(options.pairWith ? { pairWith: options.pairWith } : {}),
-  });
+  persistPendingOidc({ verifier: codeVerifier, state, portal, startedAt: Date.now() });
 
   // `addEventListener` does not fire for a signal that is already aborted, and
   // opening the sheet after the caller has given up is pointless.
@@ -603,21 +634,15 @@ export async function loginWithPortalOidc(
       throw new OidcCancelledError();
     }
 
-    if (options.pairWith) {
-      await clearPendingOidc();
-    }
-
     throw err;
   }
 
   try {
     const { code } = await callback;
-    const tokens = await exchangeCode(portal, code, codeVerifier, options.pairWith?.resource);
-    await clearPendingOidc();
 
-    return tokens;
+    return { portal, code, verifier: codeVerifier };
   } catch (err) {
-    if (err instanceof OidcCancelledError || options.pairWith) {
+    if (err instanceof OidcCancelledError) {
       await clearPendingOidc();
     }
 
@@ -628,11 +653,45 @@ export async function loginWithPortalOidc(
 }
 
 /**
- * Finish an OIDC login after iOS relaunched the app from
- * `companion://auth/callback` (Safari → "Open with Companion").
- * Returns `null` when there is nothing to resume. A pairing sign-in is
- * exchanged with its Memory's `resource` and comes back with that Memory, so
- * the caller can finish pairing instead of showing the list again.
+ * Spend a sign-in's code. With `pick` the exchange names that Memory's
+ * `resource`, and the id_token that comes back is addressed to it alone; the
+ * pick is recorded first, so a relaunch in the middle finishes this pairing.
+ * Without `pick` (an older Portal) nothing extra is sent.
+ *
+ * A spent code leaves nothing to resume, so the sign-in is dropped. So it is
+ * when the Portal answers `invalid_grant`. Any other failure leaves the code as
+ * it was (`invalid_target` is answered before the code is spent) but forgets
+ * the pick, so a later resume can't pair behind an error the person has seen.
+ */
+export async function exchangePortalSignIn(signIn: PortalSignIn, pick?: PairingTarget): Promise<OidcTokens> {
+  if (pick) {
+    rememberPick(pick);
+  }
+
+  try {
+    const tokens = await exchangeCode(signIn.portal, signIn.code, signIn.verifier, pick?.resource);
+    await clearPendingOidc();
+
+    return tokens;
+  } catch (err) {
+    if (err instanceof PortalSignInExpiredError) {
+      await clearPendingOidc();
+    } else if (pick) {
+      forgetPick();
+    }
+
+    throw err;
+  }
+}
+
+/**
+ * Pick up a sign-in after iOS relaunched the app, from the
+ * `companion://auth/callback` it launched with (Safari → "Open with Companion")
+ * or from what was persisted before it was killed. Nothing is exchanged here:
+ * the caller lists by code, or finishes the pick that was in progress. A pick
+ * is handed over, not kept: spending the code records it again, so a pairing
+ * that fails before then isn't retried on every return to the app. Returns
+ * `null` when there is nothing to resume.
  */
 export async function resumePendingOidcLogin(): Promise<ResumedOidcLogin | null> {
   const pending = readPendingOidc();
@@ -658,21 +717,14 @@ export async function resumePendingOidcLogin(): Promise<ResumedOidcLogin | null>
     throw parsed.error;
   }
 
-  const pairWith = pending.pairWith ?? null;
-  let tokens: OidcTokens;
-
-  try {
-    tokens = await exchangeCode(pending.portal, parsed.code, pending.verifier, pairWith?.resource);
-  } catch (err) {
-    if (pairWith) {
-      await clearPendingOidc();
-    }
-
-    throw err;
-  }
-
-  await clearPendingOidc();
   void closeBrowser();
 
-  return { tokens, pairWith };
+  if (pending.pick) {
+    forgetPick();
+  }
+
+  return {
+    signIn: { portal: pending.portal, code: parsed.code, verifier: pending.verifier },
+    pick: pending.pick ?? null,
+  };
 }

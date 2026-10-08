@@ -65,11 +65,19 @@ export interface MemoryServerDevice {
   memoryUrl: string | null;
   /**
    * The Memory's resource indicator (`urn:ci:device:<id>`), listed by a Portal
-   * that can address tokens to one Memory. Pairing sends it at the code exchange
-   * of a second sign-in, and the id_token that comes back works on this Memory
-   * only. Absent from an older Portal.
+   * that can address tokens to one Memory. Pairing sends it when it spends the
+   * sign-in's code, and the id_token that comes back works on this Memory only.
+   * Absent from an older Portal.
    */
   resource?: string;
+}
+
+/** The Portal no longer takes the sign-in's code: unknown, expired (10 minutes) or already spent. */
+export class PortalSignInExpiredError extends Error {
+  constructor() {
+    super('Your Companion sign-in expired. Sign in again.');
+    this.name = 'PortalSignInExpiredError';
+  }
 }
 
 const MEMORY_SLUGS = ['ci-memory', 'companion-memory', 'ci-server'];
@@ -214,35 +222,26 @@ export async function signInToPortal(
   return { token, cookie, kind: 'session' };
 }
 
-async function listMemoryWithOauthToken(auth: PortalAuth, portal: string): Promise<MemoryServerDevice[]> {
-  const headers: Record<string, string> = {};
+interface MyAppsBody {
+  apps?: Array<{
+    slug?: string;
+    url?: string;
+    deviceName?: string;
+    deviceSlug?: string;
+    resource?: unknown;
+  }>;
+}
 
-  if (auth.token) {
-    headers.Authorization = `Bearer ${auth.token}`;
-  }
-
+/**
+ * Walk the Memory slugs until one lists something, turning each app into a
+ * picker row. `fetchSlug` answers one slug's `{ apps }`.
+ */
+async function listBySlug(fetchSlug: (slug: string) => Promise<MyAppsBody>): Promise<MemoryServerDevice[]> {
   const seen = new Set<string>();
   const devices: MemoryServerDevice[] = [];
 
   for (const slug of MEMORY_SLUGS) {
-    const res = await portalFetch(`${portal}/api/users/me/apps?slug=${encodeURIComponent(slug)}`, {
-      method: 'GET',
-      headers,
-    });
-
-    if (!res.ok) {
-      throw new Error(`Could not load your Memory Servers (${res.status}).`);
-    }
-
-    const body = (await res.json()) as {
-      apps?: Array<{
-        slug?: string;
-        url?: string;
-        deviceName?: string;
-        deviceSlug?: string;
-        resource?: unknown;
-      }>;
-    };
+    const body = await fetchSlug(slug);
 
     for (const app of body.apps ?? []) {
       const key = app.url || app.deviceSlug || app.deviceName;
@@ -267,6 +266,88 @@ async function listMemoryWithOauthToken(auth: PortalAuth, portal: string): Promi
   }
 
   return devices;
+}
+
+async function listMemoryWithOauthToken(auth: PortalAuth, portal: string): Promise<MemoryServerDevice[]> {
+  const headers: Record<string, string> = {};
+
+  if (auth.token) {
+    headers.Authorization = `Bearer ${auth.token}`;
+  }
+
+  return listBySlug(async (slug) => {
+    const res = await portalFetch(`${portal}/api/users/me/apps?slug=${encodeURIComponent(slug)}`, {
+      method: 'GET',
+      headers,
+    });
+
+    if (!res.ok) {
+      throw new Error(`Could not load your Memory Servers (${res.status}).`);
+    }
+
+    return (await res.json()) as MyAppsBody;
+  });
+}
+
+/** An older Portal has no by-code route. */
+class ByCodeUnsupported extends Error {}
+
+/**
+ * List the person's Memories with a sign-in's code before it is spent
+ * (`POST /api/users/me/apps/by-code`). The Portal checks the code and its PKCE
+ * verifier and leaves the code exchangeable, so the phone holds no Portal token
+ * while the person picks. Returns null from an older Portal, which answers 404;
+ * throws {@link PortalSignInExpiredError} when the Portal no longer takes the code.
+ */
+export async function listMemoryServersByCode(
+  signIn: { code: string; verifier: string },
+  portalUrl = DEFAULT_PORTAL_URL,
+): Promise<MemoryServerDevice[] | null> {
+  const portal = normalizePortalUrl(portalUrl);
+
+  try {
+    return await listBySlug(async (slug) => {
+      const res = await portalFetch(`${portal}/api/users/me/apps/by-code?slug=${encodeURIComponent(slug)}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // As at the token endpoint: speak as the Portal itself, so origin checks and bot rules
+          // don't read a native POST as cross-site.
+          Origin: portal,
+          Referer: `${portal}/`,
+        },
+        body: JSON.stringify({ code: signIn.code, code_verifier: signIn.verifier }),
+      });
+
+      if (res.status === 404) {
+        throw new ByCodeUnsupported();
+      }
+
+      if (!res.ok) {
+        let error: unknown;
+
+        try {
+          error = ((await res.json()) as { error?: unknown }).error;
+        } catch {
+          error = undefined;
+        }
+
+        if (error === 'invalid_grant') {
+          throw new PortalSignInExpiredError();
+        }
+
+        throw new Error(`Could not load your Memory Servers (${res.status}).`);
+      }
+
+      return (await res.json()) as MyAppsBody;
+    });
+  } catch (err) {
+    if (err instanceof ByCodeUnsupported) {
+      return null;
+    }
+
+    throw err;
+  }
 }
 
 /** List Companion Memory appliances the authenticated Portal user owns. */
