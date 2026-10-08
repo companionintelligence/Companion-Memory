@@ -274,7 +274,9 @@ For a sideload build, use `./gradlew assembleDebug` — it needs no keystore.
 
 ## On-device live reload
 
-Run the web dev server (`yarn workspace @ci/fe-web dev`, bound to `0.0.0.0`), then:
+Run the web dev server on every interface
+(`DEV_LISTEN_HOST=0.0.0.0 yarn workspace @ci/fe-web dev`; without the variable it
+listens on `127.0.0.1` only and the device cannot reach it), then:
 
 ```bash
 CAP_SERVER_URL=http://<lan-or-tailscale-ip>:5173 yarn run   # = cap run android

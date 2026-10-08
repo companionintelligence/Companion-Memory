@@ -1,5 +1,6 @@
 {
   "role": "CI_ROLE",
+  "host": "API_LISTEN_HOST",
   "hostname": "APP_PUBLIC_HOSTNAME",
   "port": {
     "__name": "PORT",

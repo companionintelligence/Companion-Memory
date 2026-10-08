@@ -210,6 +210,39 @@ test('ensureServer: a PUT that landed but was reset, then 409s when retried, is 
   ]);
 });
 
+test('ensureServer: the shared server it creates listens on loopback only', async (t) => {
+  // Every route on it matches a `<key>.localhost` host, which only this machine
+  // resolves. On `:443` it answered the network, and a request naming one of
+  // those hosts reached the stack, its `/static` object-store route included,
+  // from any machine.
+  let created: { listen?: unknown } | undefined;
+
+  const server = http.createServer((req, res) => {
+    let body = '';
+
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      if (req.method === 'PUT') {
+        created = JSON.parse(body);
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(req.method === 'GET' ? 'null' : '');
+    });
+  });
+
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+
+  await new CaddyClient({ host: '127.0.0.1', port: (server.address() as AddressInfo).port }).ensureServer();
+
+  assert.deepEqual(created?.listen, ['127.0.0.1:443']);
+});
+
 test('ensureServer: any other refusal of its PUT still throws', async (t) => {
   const admin = await fakeAdmin(t, ({ method }) =>
     method === 'GET' ? ok(null) : { status: 400, body: { error: 'loading config: listen tcp :443: bind' } },

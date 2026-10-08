@@ -104,7 +104,7 @@ fn describe_compose_line(line: &str) -> Option<String> {
 /// overlay's `ports:` handling for little real benefit.
 pub const GATEWAY_PORT: u16 = 8642;
 
-const PROJECT_NAME: &str = "ci-server-desktop";
+pub(crate) const PROJECT_NAME: &str = "ci-server-desktop";
 
 /// CI-Portal's production origin — the sensible default for "Sign in with
 /// CI-Portal" (see write_env_file). Override with the CI_PORTAL_URL env var
@@ -590,10 +590,17 @@ fn start_stack_inner(paths: &StackPaths, progress: Option<&ProgressHandle>) -> R
     // The app's OWN gateway holds this port whenever the stack is already up,
     // and treating that as a foreign conflict made the error unrecoverable:
     // every Retry hit the same check and refused before compose could run. A
-    // port held by our own healthy stack is the normal case, not a problem.
-    if !is_stack_healthy_blocking() {
-        crate::port_check::preflight_port(GATEWAY_PORT)?;
-    }
+    // port held by our own running gateway is the normal case, not a problem.
+    //
+    // "Something answers on the port" is not that, though. This used to skip
+    // the check on any TCP connect, so a port another program had taken was
+    // never reported: compose then failed to start the gateway, left it
+    // created, and readiness navigated the window into the other program's
+    // page. Now the skip needs this project's gateway container running with
+    // the port published.
+    gateway_port_preflight(gateway_port_answers(), gateway_serves_port, || {
+        crate::port_check::preflight_port(GATEWAY_PORT)
+    })?;
 
     if !is_docker_installed() {
         return Err("Docker is not installed.".to_string());
@@ -836,9 +843,10 @@ fn describe_compose_failure(transcript: &[String]) -> String {
     }
 }
 
-/// Whether the gateway is already answering — used to tell "our own stack holds
-/// the port" apart from "something else does".
-fn is_stack_healthy_blocking() -> bool {
+/// Whether anything at all accepts a connection on the gateway port. It says
+/// nothing about what: pair it with [`gateway_serves_port`] before treating
+/// the answer as this app's own stack.
+fn gateway_port_answers() -> bool {
     std::net::TcpStream::connect_timeout(
         &format!("127.0.0.1:{GATEWAY_PORT}").parse().expect("valid loopback address"),
         Duration::from_millis(400),
@@ -846,16 +854,51 @@ fn is_stack_healthy_blocking() -> bool {
     .is_ok()
 }
 
-/// The bundled overlay uses the Compose Specification's `!reset` tag, which
-/// needs Compose >= 2.24. Older CLIs fail on it with a YAML parse error that
-/// says nothing about versions, so check up front and say so plainly.
+/// The start preflight's ruling on the gateway port, split from the probes
+/// that feed it so it is testable without Docker or a real listener. A port
+/// that answers is fine only when this project's gateway container is the one
+/// holding it; a port that does not answer must still be free to bind.
+fn gateway_port_preflight(
+    port_answers: bool,
+    gateway_serves_port: impl FnOnce() -> bool,
+    port_is_free: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if !port_answers {
+        return port_is_free();
+    }
+
+    if gateway_serves_port() {
+        Ok(())
+    } else {
+        Err(foreign_port_holder_message())
+    }
+}
+
+/// What the splash says when the gateway port is taken and this project's
+/// gateway container is not the one holding it.
+fn foreign_port_holder_message() -> String {
+    format!(
+        "Port {GATEWAY_PORT} is already in use, and not by this app's own stack. \
+         Quit whatever is using it and try again."
+    )
+}
+
+/// The bundled overlay uses the Compose Specification's `!override` tag (on the
+/// gateway's `ports:`), which first shipped in Compose 2.24.4 (compose-go
+/// v2.0.0-rc.3). Older CLIs do not reject it: they ignore the tag and append the
+/// overlay's loopback mapping to production's all-interfaces one, so the gateway
+/// either fails to bind or answers on every interface again. Nothing in that
+/// failure mentions versions, so check up front and say so plainly.
 fn compose_version_error() -> Option<String> {
     let output = docker_command().args(["compose", "version", "--short"]).output().ok()?;
     compose_version_error_in(&String::from_utf8_lossy(&output.stdout))
 }
 
+/// The oldest Compose that honours `!override`; see [`compose_version_error`].
+const MIN_COMPOSE_VERSION: (u32, u32, u32) = (2, 24, 4);
+
 /// The version comparison itself, split from the `docker compose version` call
-/// so the boundary (2.23 refused, 2.24 accepted) and the unreadable-output
+/// so the boundary (2.24.3 refused, 2.24.4 accepted) and the unreadable-output
 /// escape hatch can be covered without a Docker daemon.
 fn compose_version_error_in(raw: &str) -> Option<String> {
     let version = raw.trim().trim_start_matches('v');
@@ -869,14 +912,26 @@ fn compose_version_error_in(raw: &str) -> Option<String> {
     // message quoting its own version back at it.
     let major = parts.next().and_then(|p| p.parse::<u32>().ok());
     let minor = parts.next().and_then(|p| p.parse::<u32>().ok()).unwrap_or(0);
+    // Only the leading digits: Docker Desktop reports versions such as
+    // `2.24.6-desktop.1`, and a pre-release such as `2.24.4-rc1` counts as 2.24.4.
+    let patch = parts
+        .next()
+        .map(|p| {
+            p.chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+        })
+        .and_then(|digits| digits.parse::<u32>().ok())
+        .unwrap_or(0);
 
     // Unreadable version — let compose speak for itself. `Some(0)` is kept in this
     // branch because no Compose that can run the bundled overlay reports major 0.
     let major = major.filter(|&major| major > 0 || minor > 0)?;
 
-    if (major, minor) < (2, 24) {
+    if (major, minor, patch) < MIN_COMPOSE_VERSION {
+        let (need_major, need_minor, need_patch) = MIN_COMPOSE_VERSION;
         return Some(format!(
-            "Docker Compose {version} is too old — Companion Memory needs 2.24 or newer. Update Docker Desktop and try again."
+            "Docker Compose {version} is too old. Companion Memory needs {need_major}.{need_minor}.{need_patch} or newer. Update Docker Desktop and try again."
         ));
     }
 
@@ -936,6 +991,93 @@ pub fn image_tag_of(image_ref: &str) -> Option<&str> {
     last_segment.split_once(':').map(|(_, tag)| tag).filter(|tag| !tag.is_empty())
 }
 
+/// What `docker inspect` says about this project's gateway container: the
+/// facts readiness and the start preflight rest on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GatewayContainer {
+    /// `Config.Image`, the reference the container was created from.
+    image: String,
+    /// `State.Running`.
+    running: bool,
+    /// The container's own port bindings hold GATEWAY_PORT on the host. A
+    /// container compose created but could not start, because something else
+    /// had the port, has none.
+    publishes_gateway_port: bool,
+}
+
+impl GatewayContainer {
+    /// Running and holding the port itself, so what answers on
+    /// 127.0.0.1:GATEWAY_PORT is this container and not another program.
+    fn serves_gateway_port(&self) -> bool {
+        self.running && self.publishes_gateway_port
+    }
+
+    /// Serving the port, and created from this build's image tag.
+    fn serves_image_tag(&self, image_tag: &str) -> bool {
+        self.serves_gateway_port() && image_tag_of(&self.image) == Some(image_tag)
+    }
+}
+
+/// Reads a [`GatewayContainer`] out of `docker inspect`'s JSON, an array with
+/// one object per name asked about. Split from the command so the decision is
+/// testable without a Docker daemon.
+fn parse_gateway_inspect(inspect_json: &str) -> Option<GatewayContainer> {
+    let parsed: serde_json::Value = serde_json::from_str(inspect_json).ok()?;
+    let container = parsed.get(0)?;
+
+    let image = container.pointer("/Config/Image")?.as_str()?.to_string();
+    let running = container
+        .pointer("/State/Running")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let gateway_port = GATEWAY_PORT.to_string();
+    let publishes_gateway_port = container
+        .pointer("/NetworkSettings/Ports")
+        .and_then(|ports| ports.get(format!("{GATEWAY_PORT}/tcp")))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|bindings| {
+            bindings.iter().any(|binding| {
+                binding.get("HostPort").and_then(serde_json::Value::as_str)
+                    == Some(gateway_port.as_str())
+            })
+        });
+
+    Some(GatewayContainer {
+        image,
+        running,
+        publishes_gateway_port,
+    })
+}
+
+/// This project's gateway container, or None when it does not exist or Docker
+/// cannot be asked.
+fn inspect_gateway() -> Option<GatewayContainer> {
+    let output = docker_command()
+        .args([
+            "inspect",
+            "--type",
+            "container",
+            &format!("{PROJECT_NAME}-gateway-1"),
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_gateway_inspect(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Is this project's gateway container running and holding the gateway port?
+///
+/// The health probe cannot tell: any program listening on 127.0.0.1:8642 can
+/// answer `/api/health`. Only the container's own state and port bindings tie
+/// the socket to it.
+pub fn gateway_serves_port() -> bool {
+    inspect_gateway().is_some_and(|gateway| gateway.serves_gateway_port())
+}
+
 /// Is the gateway container that answers on the port running THIS build's
 /// images?
 ///
@@ -948,18 +1090,14 @@ pub fn image_tag_of(image_ref: &str) -> Option<&str> {
 /// was pinned to a frontend the API no longer matched. Gating on the gateway
 /// (the last service compose recreates, since it depends on `api`) means the
 /// page the shell navigates to is the one it shipped with.
+///
+/// The image alone is not enough either: `docker inspect` reports it for a
+/// container that was created and never started, which is the state compose
+/// leaves the gateway in when another program already holds the port. So the
+/// container must also be running with the port published, see
+/// [`gateway_serves_port`].
 pub fn gateway_runs_image_tag(image_tag: &str) -> bool {
-    let output = docker_command()
-        .args(["inspect", "--format", "{{.Config.Image}}", &format!("{PROJECT_NAME}-gateway-1")])
-        .output();
-
-    match output {
-        Ok(out) if out.status.success() => {
-            let image_ref = String::from_utf8_lossy(&out.stdout);
-            image_tag_of(image_ref.trim()) == Some(image_tag)
-        }
-        _ => false,
-    }
+    inspect_gateway().is_some_and(|gateway| gateway.serves_image_tag(image_tag))
 }
 
 pub async fn is_healthy() -> bool {
@@ -1424,6 +1562,77 @@ mod tests {
         drop(in_flight);
     }
 
+    /// Readiness needs the gateway container running AND holding 8642 itself.
+    /// `docker inspect` reports `Config.Image` for a container compose created
+    /// but could not start, which is the state another program holding the
+    /// port leaves it in, so the image alone proved nothing.
+    #[test]
+    fn a_gateway_counts_only_when_it_runs_and_holds_the_port_itself() {
+        let inspect = |running: bool, ports: &str| {
+            format!(
+                r#"[{{"Config":{{"Image":"ghcr.io/companionintelligence/companion/gateway:2026.9.10"}},"State":{{"Running":{running}}},"NetworkSettings":{{"Ports":{ports}}}}}]"#
+            )
+        };
+        let serves = |running: bool, ports: &str| {
+            parse_gateway_inspect(&inspect(running, ports))
+                .expect("parses")
+                .serves_gateway_port()
+        };
+        let published = r#"{"8642/tcp":[{"HostIp":"127.0.0.1","HostPort":"8642"}]}"#;
+        let elsewhere = r#"{"8642/tcp":[{"HostIp":"127.0.0.1","HostPort":"18642"}]}"#;
+
+        let up = parse_gateway_inspect(&inspect(true, published)).expect("parses");
+        assert!(up.image.ends_with("/gateway:2026.9.10"));
+        assert!(up.serves_gateway_port());
+        assert!(up.serves_image_tag("2026.9.10"));
+        assert!(
+            !up.serves_image_tag("2026.9.6"),
+            "another release's gateway is not ready"
+        );
+
+        // The right image is not enough on its own.
+        let created = parse_gateway_inspect(&inspect(false, published)).expect("parses");
+        assert!(!created.serves_image_tag("2026.9.10"));
+
+        // Created and never started: what compose leaves behind when the
+        // port was already taken.
+        assert!(!serves(false, r#"{"8642/tcp":null}"#));
+        assert!(!serves(false, published));
+
+        // Running, but the port is not its own.
+        assert!(!serves(true, "{}"));
+        assert!(!serves(true, elsewhere));
+
+        // No such container, or output that is not inspect's.
+        assert_eq!(parse_gateway_inspect("[]"), None);
+        assert_eq!(parse_gateway_inspect("Error: No such object"), None);
+    }
+
+    /// The preflight used to skip its port check whenever anything accepted a
+    /// connection on 8642, so a port another program held was never reported.
+    #[test]
+    fn a_port_held_by_anything_but_our_gateway_fails_the_preflight() {
+        let free = || Ok(());
+
+        // Our own running gateway holds it: the normal case on a relaunch.
+        assert_eq!(gateway_port_preflight(true, || true, free), Ok(()));
+
+        // Something answers, and it is not our gateway.
+        let err = gateway_port_preflight(true, || false, free).unwrap_err();
+        assert!(
+            err.contains("8642") && err.contains("not by this app"),
+            "{err}"
+        );
+
+        // Nothing answers: binding the port decides, and Docker is not asked.
+        assert_eq!(
+            gateway_port_preflight(false, || unreachable!(), free),
+            Ok(())
+        );
+        let taken = || Err("Port 8642 is already in use".to_string());
+        assert!(gateway_port_preflight(false, || true, taken).is_err());
+    }
+
     /// Readiness compares the gateway's running image tag with the bundled
     /// one, and an image reference's tag is not simply "after the colon".
     #[test]
@@ -1588,17 +1797,26 @@ mod tests {
         );
     }
 
-    /// The bundled overlay uses the Compose Specification's `!reset` tag, which
-    /// needs 2.24. Below that, compose fails with a YAML parse error that never
-    /// mentions versions, so this check is the only place the real reason gets
-    /// said — and the boundary has to be exactly right, or it either rejects
-    /// working installs or lets the unreadable error through.
+    /// The bundled overlay uses the Compose Specification's `!override` tag,
+    /// which first shipped in 2.24.4. Below that, compose ignores the tag and
+    /// appends the loopback mapping to production's all-interfaces one, and
+    /// nothing in the result mentions versions, so this check is the only place
+    /// the real reason gets said. The boundary has to be exactly right, or it
+    /// either rejects working installs or lets the broken mapping through.
     #[test]
-    fn compose_older_than_2_24_is_refused_and_2_24_itself_is_not() {
+    fn compose_older_than_2_24_4_is_refused_and_2_24_4_itself_is_not() {
         assert!(compose_version_error_in("2.23.9").is_some());
-        assert!(compose_version_error_in("2.24.0").is_none());
-        assert!(compose_version_error_in("2.24").is_none());
+        assert!(compose_version_error_in("2.24.0").is_some());
+        assert!(compose_version_error_in("2.24.3").is_some());
+        assert!(compose_version_error_in("2.24").is_some());
+        assert!(compose_version_error_in("2.24.4").is_none());
+        assert!(compose_version_error_in("2.25.0").is_none());
         assert!(compose_version_error_in("1.29.2").is_some());
+
+        // Docker Desktop's own spelling: the patch is read up to its first
+        // non-digit, so a suffix neither hides an old patch nor refuses a new one.
+        assert!(compose_version_error_in("v2.24.6-desktop.1\n").is_none());
+        assert!(compose_version_error_in("v2.24.3-desktop.1\n").is_some());
 
         // The `v` prefix and the trailing newline are what `docker compose
         // version --short` actually emits, in that order.
@@ -1610,9 +1828,9 @@ mod tests {
         assert!(compose_version_error_in("2.9.0").is_some());
         assert!(compose_version_error_in("3.0.0").is_none());
 
-        let message = compose_version_error_in("2.23.9").expect("2.23.9 is too old");
-        assert!(message.contains("2.23.9"), "the user should see their own version: {message}");
-        assert!(message.contains("2.24"), "and what they need: {message}");
+        let message = compose_version_error_in("2.24.3").expect("2.24.3 is too old");
+        assert!(message.contains("2.24.3"), "the user should see their own version: {message}");
+        assert!(message.contains("2.24.4"), "and what they need: {message}");
     }
 
     /// An unparseable version must not become a hard stop. A Compose CLI that
@@ -1643,7 +1861,8 @@ mod tests {
         // A trailing component that does not parse is not the same thing: the
         // major and minor are readable, so the comparison still applies.
         assert!(compose_version_error_in("2.23.0-rc1").is_some());
-        assert!(compose_version_error_in("2.24.0-rc1").is_none());
+        assert!(compose_version_error_in("2.24.4-rc1").is_none());
+        assert!(compose_version_error_in("2.25.x").is_none());
     }
 
     /// desktop.log is append-only for the life of the install, so without the

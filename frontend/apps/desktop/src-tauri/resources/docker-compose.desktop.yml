@@ -23,10 +23,10 @@
 # ("no such device") on every desktop that isn't an AMD ROCm box. Production no
 # longer forces those devices — passthrough moved to the opt-in
 # docker-compose.rocm.yml overlay, which the desktop never layers in — so there
-# is nothing left to reset and the two `!reset` lines are gone. NOTE the
-# >= 2.24 requirement is still enforced by compose_version_error() in
-# src-tauri/src/stack_manager.rs; nothing in this file needs it any more, but
-# that gate is a separate call and is not touched here. GPU-variant image
+# is nothing left to reset and the two `!reset` lines are gone. The gateway's
+# `ports: !override` below needs Compose >= 2.24.4 (older CLIs ignore the tag
+# and concatenate), enforced by compose_version_error() in
+# src-tauri/src/stack_manager.rs. GPU-variant image
 # selection is out of scope for v1 — this always runs the cpu-capable image
 # with no GPU device passthrough.
 #
@@ -63,6 +63,21 @@ services:
     image: ghcr.io/companionintelligence/companion/database:${CI_SERVER_IMAGE_TAG}
   gateway:
     image: ghcr.io/companionintelligence/companion/gateway:${CI_SERVER_IMAGE_TAG}
+    # Loopback only. docker-compose.production.yml publishes `8642:8642` with
+    # no host address, which Docker binds on every interface (and on Linux its
+    # own iptables rules skip ufw), so anyone on the same Wi-Fi could reach the
+    # sign-in and sign-up pages, and before the owner's first sign-in could
+    # claim the appliance. The shell only ever talks to 127.0.0.1:8642
+    # (APP_BASE_URL, the health probe, the webview), and nothing pairs with a
+    # desktop appliance over the LAN, so nothing needs the wider bind.
+    #
+    # `!override`, not a plain `ports:`: compose merges list-valued keys across
+    # -f files by concatenation, so a plain entry here would ADD a loopback
+    # mapping beside production's all-interfaces one instead of replacing it.
+    # scripts/dev-stack/composeExposure.test.ts renders the three files and
+    # checks the result.
+    ports: !override
+      - 127.0.0.1:8642:8642
   object-store:
     image: ghcr.io/companionintelligence/companion/object-store:${CI_SERVER_IMAGE_TAG}
   summary-service:

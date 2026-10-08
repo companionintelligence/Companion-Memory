@@ -285,7 +285,6 @@ generate_compose() {
       "image": "${reg}/companion/api:${ver}",
       "restart": "unless-stopped",
       "environment": [
-        { "key": "ENABLE_REQUIRE_SIGNUP_CODES", "value": "false" },
         { "key": "LLM_ENDPOINT_CONFIG_PATH", "value": "/app-data/data/llm-endpoint.json" },
         { "key": "CI_ROLE", "value": "web" },
         { "key": "CI_IMPORT_UPLOADS_DIR", "value": "/app-data/data/import-work/uploads" },
@@ -442,6 +441,34 @@ generate_compose() {
 COMPOSE_EOF
 }
 
+# ── Check the generated bundle ─────────────────────────────────────────
+#
+# Settings a store bundle must never carry, checked on what generate_compose
+# actually emitted rather than on its source text.
+#
+# ENABLE_REQUIRE_SIGNUP_CODES: a store install keeps the server default, where
+# every account after the first needs an invite code. The bundle used to set it
+# to "false", a workaround from before the first account on an empty appliance
+# was exempt (#2594). It meant anyone who could reach an exposed install could
+# register, and the next signup after the owner's account was deleted became
+# the administrator. CI-Marketplace dropped the same line in 992f29ad. Any
+# value is refused, not just "false": the default is the only correct setting
+# here, and a later "true" would only hide a future flip back.
+check_bundle() {
+  local compose="$1"
+  local hits
+
+  # Every string in the document, keys included, so the variable is found
+  # whether it is written as {"key": ...}, "NAME=value" or an object key.
+  hits=$(jq '[(.. | strings), (paths | .[] | strings)]
+    | map(select(. == "ENABLE_REQUIRE_SIGNUP_CODES" or startswith("ENABLE_REQUIRE_SIGNUP_CODES=")))
+    | length' "$compose") || fail "could not read ${compose} as JSON"
+
+  if [[ "$hits" != "0" ]]; then
+    fail "the generated bundle sets ENABLE_REQUIRE_SIGNUP_CODES; store installs must keep the server default (signup codes required)"
+  fi
+}
+
 # ── Main ───────────────────────────────────────────────────────────────
 
 main() {
@@ -479,6 +506,7 @@ main() {
 
   # Generate docker-compose.json
   generate_compose "$REGISTRY" "$VERSION" > "${BUNDLE_DIR}/docker-compose.json"
+  check_bundle "${BUNDLE_DIR}/docker-compose.json"
 
   log "  config.json version: $(jq -r .version "$CONFIG")"
   log "  docker-compose.json: $(jq '.services | length' "${BUNDLE_DIR}/docker-compose.json") services"
