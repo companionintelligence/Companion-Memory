@@ -32,6 +32,7 @@ import { FederatedIdentityService } from '../services/FederatedIdentityService';
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 import { OidcNativeCodeService } from '../services/OidcNativeCodeService';
 import { SignupCodeService } from '../services/SignupCodeService';
+import { MEMORY_SIGN_IN_CLIENT } from '../utils/applianceAudience';
 import { ensureCsrfCookie, setCsrfCookie, setSessionCookie } from '../utils/authCookies';
 import {
   OIDC_ORIGIN_BOUNCE_PARAM,
@@ -391,7 +392,7 @@ export class OidcController {
 
     const authorizeUrl = new URL('/api/auth/oauth2/authorize', issuerUrl);
 
-    authorizeUrl.searchParams.set('client_id', 'ci-server');
+    authorizeUrl.searchParams.set('client_id', MEMORY_SIGN_IN_CLIENT);
     authorizeUrl.searchParams.set('redirect_uri', callbackUrl);
     authorizeUrl.searchParams.set('response_type', 'code');
     authorizeUrl.searchParams.set('scope', 'openid email profile');
@@ -513,7 +514,7 @@ export class OidcController {
           grant_type: 'authorization_code',
           code,
           redirect_uri: callbackUrl,
-          client_id: 'ci-server',
+          client_id: MEMORY_SIGN_IN_CLIENT,
           code_verifier: codeVerifier,
         }),
         dispatcher: fetchDispatcher,

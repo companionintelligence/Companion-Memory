@@ -44,7 +44,9 @@ export interface PortalTokenVerifier {
   readonly enabled: boolean;
   /**
    * Verify a portal-issued Bearer token and return the user it resolves to with the authority it
-   * carries here, or null if it is not a valid portal token for this appliance.
+   * carries here, or null if it is not a valid portal token for this appliance. Throws
+   * `UnauthorizedException` for a Portal-signed token this appliance refuses outright (another
+   * Memory's own sign-in token), so the caller is told why rather than falling back.
    */
   verifyAndProvision(token: string): Promise<PortalPrincipal | null>;
   /**

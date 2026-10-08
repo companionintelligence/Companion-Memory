@@ -154,6 +154,21 @@ describe('JwtOrPortalAuthGuard.canActivate — portal short-circuit vs. JWT fall
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it('passes a refusal from the verifier on as it is, without falling back', async () => {
+    // Another Memory's sign-in token, or an older phone app's: the verifier says why it is refused,
+    // and that is what the app shows.
+    const spy = spyOnMixinCanActivate().mockResolvedValue(true);
+    const refusal = new UnauthorizedException('This Companion sign-in was not issued for this Memory.');
+    const guard = new JwtOrPortalAuthGuard(
+      makePortal({ enabled: true, verifyAndProvision: jest.fn().mockRejectedValue(refusal) }),
+    );
+    const req: Record<string, unknown> = { headers: { authorization: 'Bearer other-memory-token' } };
+
+    await expect(guard.canActivate(httpContext(req))).rejects.toBe(refusal);
+    expect(req.user).toBeUndefined();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('falls through to the JWT strategy when portal auth is disabled', async () => {
     const spy = spyOnMixinCanActivate().mockResolvedValue(true);
     const portal = makePortal({ enabled: false });

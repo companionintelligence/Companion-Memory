@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload } from 'jose';
 
 import { SYSTEM_USER } from '@ci/common/context';
@@ -68,6 +68,14 @@ const PORTAL_JWS_ALGS: ReadonlySet<string> = new Set([
   'PS384',
   'PS512',
 ]);
+
+/**
+ * What a refused Memory sign-in token is answered with. A phone app from before addressed pairing
+ * sends exactly such a token to `POST /api/keys`, and shows this text as it stands; it reads a
+ * message containing "unauthorized" as "sign in again", which would only repeat the refusal.
+ */
+export const MEMORY_SIGN_IN_REFUSED_MESSAGE =
+  'This Companion sign-in was not issued for this Memory. Sign in to this Memory directly, or connect again from an up-to-date app.';
 
 /** The scopes a service token's `scope` claim can grant: the api-key scopes, nothing else. */
 const SERVICE_ACCOUNT_SCOPES: ReadonlySet<string> = new Set([
@@ -400,7 +408,10 @@ export class PortalTokenService implements PortalTokenVerifier {
   /**
    * Verify a portal token and return the corresponding CI-Server user, or null
    * if the token is not a valid portal token (so the caller can fall back to
-   * the legacy strategies).
+   * the legacy strategies). A token the Portal did sign but that this Memory
+   * refuses outright (a `ci-server` token addressed to no appliance, see
+   * {@link PortalTokenService.authorityFor}) throws `UnauthorizedException`
+   * instead, saying what to do: no other credential in the request is tried.
    */
   async verifyAndProvision(token: string): Promise<PortalPrincipal | null> {
     if (!this.enabled) {
@@ -432,7 +443,7 @@ export class PortalTokenService implements PortalTokenVerifier {
     // Decided before anyone is looked up: a token that may do nothing here resolves no account.
     const authority = this.authorityFor(address, payload);
     if (!authority) {
-      return null;
+      throw new UnauthorizedException(MEMORY_SIGN_IN_REFUSED_MESSAGE);
     }
 
     const user = await this.provisionUser(payload);
