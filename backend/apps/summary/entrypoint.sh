@@ -107,5 +107,19 @@ shutdown() {
 # Trap SIGTERM and SIGINT
 trap shutdown SIGTERM SIGINT
 
-# Wait for all processes
-wait $API_PID $PARSER_PID
+# Wait for EITHER service to exit, then take the container down with it.
+#
+# `wait $API_PID $PARSER_PID` waited for both, so when one died (the parser
+# OOM-killed by a document, say) the container stayed up with half its
+# services, and its healthcheck could still pass. Every later parse then failed
+# until someone restarted summary-service by hand. Exiting non-zero here hands
+# the restart to Docker's restart policy.
+status=0
+wait -n "$API_PID" "$PARSER_PID" || status=$?
+echo "A CI-Summary service exited (status $status); stopping the container so it restarts" >&2
+kill "$API_PID" "$PARSER_PID" 2>/dev/null || true
+wait "$API_PID" "$PARSER_PID" 2>/dev/null || true
+if [ "$status" -eq 0 ]; then
+  status=1
+fi
+exit "$status"

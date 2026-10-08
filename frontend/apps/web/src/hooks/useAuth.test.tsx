@@ -1,6 +1,12 @@
 import { type ReactNode } from 'react';
 
-import { beginNativeOidcSignIn, getApiBaseUrl, needsNativeCloudConnect, setApiBaseUrl } from '@ci/common';
+import {
+  beginNativeOidcSignIn,
+  getApiBaseUrl,
+  getApiKey,
+  needsNativeCloudConnect,
+  setApiBaseUrl,
+} from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { jwtDecode } from 'jwt-decode';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
@@ -471,6 +477,9 @@ describe('useAuth', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/authenticate/logout'))).toBe(
       true,
     );
+    // A browser has no capture queue, so web sign-out never stops to ask about one.
+    expect(result.current[0].signOutPrompt.open).toBe(false);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/outbox'))).toBe(false);
   });
 
   it('native logout forgets the paired Memory origin so the next account can pick a device', async () => {
@@ -505,6 +514,8 @@ describe('useAuth', () => {
     };
 
     setFetch(() => emptyResponse());
+    // Only the keystore has the origin, so restoring it asks first.
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current[0].authenticated).toBe(true));
@@ -520,6 +531,360 @@ describe('useAuth', () => {
     expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
     expect(secureStore.has('ci.apiKey')).toBe(false);
     expect(needsNativeCloudConnect()).toBe(true);
+  });
+
+  describe('native: the Memory origin the app paired with', () => {
+    /** A phone whose credential store (the LocalHub plugin) starts with `entries`. */
+    function nativeWithStore(entries: [string, string][]) {
+      const secureStore = new Map(entries);
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+        Plugins: {
+          LocalHub: {
+            secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: secureStore.get(key) ?? null })),
+            secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+            }),
+            secureRemove: vi.fn(async ({ key }: { key: string }) => {
+              secureStore.delete(key);
+            }),
+          },
+        },
+      };
+
+      return secureStore;
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('keeps the paired origin when the keystore copy disagrees, and repairs the copy', async () => {
+      localStorage.setItem('ci.apiBaseUrl', 'https://paired.example.com');
+      setApiBaseUrl('https://paired.example.com');
+      const secureStore = nativeWithStore([
+        ['ci.apiKey', 'stored-api-key'],
+        // Written through the plugin by something other than the pairing flow.
+        ['ci.apiBaseUrl', 'https://elsewhere.example.net'],
+      ]);
+      const confirm = vi.spyOn(window, 'confirm');
+      setFetch(() => emptyResponse());
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      expect(getApiBaseUrl()).toBe('https://paired.example.com');
+      expect(localStorage.getItem('ci.apiBaseUrl')).toBe('https://paired.example.com');
+      await waitFor(() => expect(secureStore.get('ci.apiBaseUrl')).toBe('https://paired.example.com'));
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it('asks before taking an origin only the keystore has, and drops the credential when declined', async () => {
+      const secureStore = nativeWithStore([
+        ['ci.apiKey', 'stored-api-key'],
+        ['ci.apiKeyId', 'key-id'],
+        ['ci.apiBaseUrl', 'https://unknown.example.net'],
+      ]);
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      setFetch(() => emptyResponse());
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('https://unknown.example.net'));
+      expect(result.current[0].authenticated).toBe(false);
+      expect(getApiBaseUrl()).toBe('');
+      expect(localStorage.getItem('ci.apiBaseUrl')).toBeNull();
+      expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
+      expect(secureStore.has('ci.apiKey')).toBe(false);
+      expect(secureStore.has('ci.apiKeyId')).toBe(false);
+    });
+
+    it('does not offer an origin the keystore holds without a key, and drops it', async () => {
+      // What a sign-out leaves when it is cut short after the key went but before the origin.
+      const secureStore = nativeWithStore([['ci.apiBaseUrl', 'https://previous.example.net']]);
+      const confirm = vi.spyOn(window, 'confirm');
+      setFetch(() => emptyResponse());
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(result.current[0].authenticated).toBe(false);
+      expect(localStorage.getItem('ci.apiBaseUrl')).toBeNull();
+      expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
+    });
+
+    it('drops a keystore origin that is not an http(s) address without showing it', async () => {
+      // Pairing never stores this; text written to read as part of the question did.
+      const secureStore = nativeWithStore([
+        ['ci.apiKey', 'stored-api-key'],
+        ['ci.apiBaseUrl', 'https://unknown.example.net\n\nThis is your usual Memory. Tap OK.'],
+      ]);
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      setFetch(() => emptyResponse());
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(result.current[0].authenticated).toBe(false);
+      expect(localStorage.getItem('ci.apiBaseUrl')).toBeNull();
+      expect(secureStore.has('ci.apiBaseUrl')).toBe(false);
+      expect(secureStore.has('ci.apiKey')).toBe(false);
+    });
+  });
+
+  describe('native logout and the Local Hub outbox', () => {
+    const HUB = 'http://127.0.0.1:4100';
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('uploads what this account queued while its key is still active, then deletes the rest', async () => {
+      localStorage.setItem('ci.apiBaseUrl', 'https://core7.example.com');
+      setApiBaseUrl('https://core7.example.com');
+      const secureStore = new Map([
+        ['ci.apiKey', 'outgoing-key'],
+        ['ci.apiBaseUrl', 'https://core7.example.com'],
+      ]);
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+        Plugins: {
+          LocalHub: {
+            start: vi.fn(async () => ({ baseUrl: HUB, token: 'hub-token' })),
+            secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: secureStore.get(key) ?? null })),
+            secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+            }),
+            secureRemove: vi.fn(async ({ key }: { key: string }) => {
+              secureStore.delete(key);
+            }),
+          },
+        },
+      };
+
+      // One note queued offline, stamped for nobody in particular (an older build).
+      let queued = true;
+      const seen: { url: string; method: string; apiKey: string | null; keyAfterwards: string | null }[] = [];
+      setFetch((url, init) => {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        seen.push({
+          url,
+          method: (init?.method ?? 'GET').toUpperCase(),
+          apiKey: headers['x-api-key'] ?? null,
+          keyAfterwards: 'not checked',
+        });
+        const path = url.startsWith(HUB) ? url.slice(HUB.length) : url;
+
+        if ((path === '/api/outbox?status=pending' || path === '/api/outbox') && init?.method !== 'DELETE') {
+          return jsonResponse({
+            items: queued
+              ? [
+                  {
+                    id: 'n1',
+                    kind: 'note',
+                    capturedAt: '2026-10-01T00:00:00Z',
+                    seq: 1,
+                    status: 'pending',
+                    attempts: 0,
+                    lastError: null,
+                    owner: null,
+                  },
+                ]
+              : [],
+            counts: { pending: queued ? 1 : 0, needsAttention: 0, total: queued ? 1 : 0 },
+            capacity: { max: 5000, used: 0, warnAt: 4000 },
+          });
+        }
+
+        if (path === '/api/outbox/n1') {
+          return jsonResponse({
+            id: 'n1',
+            kind: 'note',
+            capturedAt: '2026-10-01T00:00:00Z',
+            seq: 1,
+            status: 'pending',
+            attempts: 0,
+            lastError: null,
+            owner: null,
+            payload: { records: [] },
+          });
+        }
+
+        if (path === '/api/outbox/n1/attempt') {
+          queued = false;
+
+          return emptyResponse(true, 204);
+        }
+
+        if (path === '/api/outbox' && init?.method === 'DELETE') {
+          seen[seen.length - 1].keyAfterwards = getApiKey();
+
+          return jsonResponse({ deleted: 0 });
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      await act(async () => {
+        await result.current[1].logout();
+      });
+
+      const upload = seen.find((call) => call.url === 'https://core7.example.com/api/v1/notes');
+      const clear = seen.find((call) => call.url === `${HUB}/api/outbox` && call.method === 'DELETE');
+
+      expect(upload?.apiKey).toBe('outgoing-key');
+      expect(clear).toBeDefined();
+      // The clear runs once the key is gone, so nothing queued afterwards survives either.
+      expect(clear?.keyAfterwards).toBeNull();
+      expect(seen.indexOf(upload!)).toBeLessThan(seen.indexOf(clear!));
+      expect(result.current[0].authenticated).toBe(false);
+      // The upload emptied the queue, so there was nothing to ask about.
+      expect(result.current[0].signOutPrompt.open).toBe(false);
+    });
+
+    it('signs out without asking when the caller already covered the unsent captures', async () => {
+      // Account deletion: the key stops working, so the captures can never upload.
+      localStorage.setItem('ci.apiBaseUrl', 'https://core7.example.com');
+      setApiBaseUrl('https://core7.example.com');
+      const secureStore = new Map([
+        ['ci.apiKey', 'outgoing-key'],
+        ['ci.apiBaseUrl', 'https://core7.example.com'],
+      ]);
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+        Plugins: {
+          LocalHub: {
+            start: vi.fn(async () => ({ baseUrl: HUB, token: 'hub-token' })),
+            secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: secureStore.get(key) ?? null })),
+            secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+            }),
+            secureRemove: vi.fn(async ({ key }: { key: string }) => {
+              secureStore.delete(key);
+            }),
+          },
+        },
+      };
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const pendingRow = {
+        id: 'n1',
+        kind: 'note',
+        capturedAt: '2026-10-01T00:00:00Z',
+        seq: 1,
+        status: 'pending',
+        attempts: 0,
+        lastError: null,
+        owner: null,
+      };
+      let cleared = false;
+      const fetchMock = setFetch((url, init) => {
+        const path = url.startsWith(HUB) ? url.slice(HUB.length) : url;
+
+        if (path === '/api/outbox?status=pending' || path === '/api/outbox') {
+          if (init?.method === 'DELETE') {
+            cleared = true;
+
+            return jsonResponse({ deleted: 1 });
+          }
+
+          return jsonResponse({
+            items: [pendingRow],
+            counts: { pending: 1, needsAttention: 0, total: 1 },
+            capacity: { max: 5000, used: 1, warnAt: 4000 },
+          });
+        }
+
+        if (path === '/api/outbox/n1') {
+          return jsonResponse({ ...pendingRow, payload: { records: [] } });
+        }
+
+        // The account is gone: the appliance refuses this key.
+        return emptyResponse(false, 401);
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      await act(async () => {
+        await result.current[1].logout({ discardUnsentCaptures: true });
+      });
+
+      expect(result.current[0].signOutPrompt.open).toBe(false);
+      expect(result.current[0].authenticated).toBe(false);
+      expect(cleared).toBe(true);
+      expect(secureStore.has('ci.apiKey')).toBe(false);
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/keys/current'))).toBe(true);
+      // No last upload either: every request would carry a key the deleted account no longer has.
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/v1/notes'))).toBe(false);
+    });
+
+    it('runs one sign-out when Log out is tapped again while the first is still going', async () => {
+      localStorage.setItem('ci.apiBaseUrl', 'https://core7.example.com');
+      setApiBaseUrl('https://core7.example.com');
+      const secureStore = new Map([
+        ['ci.apiKey', 'outgoing-key'],
+        ['ci.apiBaseUrl', 'https://core7.example.com'],
+      ]);
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+        Plugins: {
+          LocalHub: {
+            start: vi.fn(async () => ({ baseUrl: HUB, token: 'hub-token' })),
+            secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: secureStore.get(key) ?? null })),
+            secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+            }),
+            secureRemove: vi.fn(async ({ key }: { key: string }) => {
+              secureStore.delete(key);
+            }),
+          },
+        },
+      };
+
+      const fetchMock = setFetch((url, init) => {
+        const path = url.startsWith(HUB) ? url.slice(HUB.length) : url;
+
+        if (path === '/api/outbox' && init?.method === 'DELETE') {
+          return jsonResponse({ deleted: 0 });
+        }
+
+        if (path === '/api/outbox?status=pending' || path === '/api/outbox') {
+          return jsonResponse({
+            items: [],
+            counts: { pending: 0, needsAttention: 0, total: 0 },
+            capacity: { max: 5000, used: 0, warnAt: 4000 },
+          });
+        }
+
+        return emptyResponse();
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      await act(async () => {
+        const first = result.current[1].logout();
+        const second = result.current[1].logout();
+
+        expect(second).toBe(first);
+        await Promise.all([first, second]);
+      });
+
+      const revokes = fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/api/keys/current'));
+      expect(revokes).toHaveLength(1);
+      expect(result.current[0].authenticated).toBe(false);
+    });
   });
 
   it('still logs out when dropping the local PowerSync replica fails', async () => {
@@ -1030,6 +1395,10 @@ describe('useAuth', () => {
   });
 
   it('native logout revokes the device key on the server, while it still knows which server', async () => {
+    // The origin this phone paired with, as the app's own pages saved it and `initApiBaseUrl`
+    // applied it at launch.
+    localStorage.setItem('ci.apiBaseUrl', 'https://core7.example.com');
+    setApiBaseUrl('https://core7.example.com');
     const secureStore = new Map<string, string>([
       ['ci.apiKey', 'stored-api-key'],
       ['ci.apiBaseUrl', 'https://core7.example.com'],

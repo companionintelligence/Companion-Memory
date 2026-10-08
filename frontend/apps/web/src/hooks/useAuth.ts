@@ -2,11 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   addAppUrlOpenListener,
+  clearOutboxAfterSignOut,
   clearPersistedApiBaseUrl,
+  countUnsentBeforeSignOut,
   createHookContext,
+  drainOutboxBeforeSignOut,
   fetchJson,
   FetchJsonError,
   getApiBaseUrl,
+  getPersistedApiBaseUrl,
   persistApiBaseUrl,
   setApiBaseUrl,
   syncNativeIntentConfig,
@@ -18,6 +22,7 @@ import {
   claimNativeOidcCode,
   hasPendingNativeOidcSignIn,
   parseOidcCallbackUrl,
+  resetIngestFinishState,
   secureStorageGet,
   secureStorageRemove,
   secureStorageSet,
@@ -40,6 +45,15 @@ const API_KEY_ID_STORAGE = 'ci.apiKeyId';
 // What the stored key was minted with. Absent on a key issued before the app
 // started asking, which is exactly the signal `storedApiKeyCapability` reports.
 const API_KEY_CAPABILITY_STORAGE = 'ci.apiKeyCapability';
+// The paired Memory origin, mirrored into the keystore for native consumers.
+const API_BASE_URL_STORAGE = 'ci.apiBaseUrl';
+
+/** Forget this device's stored key, its id and its capability. */
+async function removeStoredDeviceKey(): Promise<void> {
+  await secureStorageRemove(API_KEY_STORAGE);
+  await secureStorageRemove(API_KEY_ID_STORAGE);
+  await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+}
 
 /**
  * The authority this device asks for, and why it is the widest one.
@@ -316,6 +330,77 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
   return created.key;
 }
 
+/**
+ * Decide what the keystore's copy of the Memory origin may do at launch. Resolves false when
+ * the person declined it and the stored credential was dropped instead.
+ *
+ * The origin the app paired with lives in localStorage, which only the app's own pages can
+ * write; `initApiBaseUrl` has already applied it. The keystore copy is a mirror for native
+ * App Intents (`syncNativeIntentConfig`), and the LocalHub plugin writes it for any caller
+ * that reaches the bridge. On Android's legacy bridge that includes a cross-origin iframe,
+ * and an origin planted there would, on the next launch, be where the device API key went.
+ *
+ * So the keystore never replaces a paired origin: a copy that disagrees is overwritten from
+ * localStorage. It only fills in an origin the app does not have (localStorage lost while
+ * the Keychain survived, as across an iOS reinstall), and only after the person agrees.
+ */
+async function adoptKeystoreOrigin(storedOrigin: string | null): Promise<boolean> {
+  const pairedOrigin = getPersistedApiBaseUrl();
+  const stored = storedOrigin?.replace(/\/+$/, '') || null;
+
+  if (pairedOrigin) {
+    if (stored !== pairedOrigin) {
+      await syncNativeIntentConfig();
+    }
+
+    return true;
+  }
+
+  if (!stored) {
+    return true;
+  }
+
+  // An origin with no key is what a sign-out cut short leaves (the key goes first). There is
+  // nothing to sign back in with, and a saved origin makes iOS skip the device picker, so
+  // the next sign-in would go to this box. Finish the sign-out instead of asking.
+  if (!(await secureStorageGet(API_KEY_STORAGE))) {
+    await secureStorageRemove(API_BASE_URL_STORAGE);
+
+    return true;
+  }
+
+  // Pairing only ever stores an http(s) address. Anything else (another scheme, or text with
+  // line breaks written to read as part of the question) came from somewhere else, so it is
+  // dropped like a declined one rather than shown in the prompt.
+  if (isHttpAddress(stored) && window.confirm(`Sign back in to your Memory at ${stored}?`)) {
+    persistApiBaseUrl(stored);
+
+    return true;
+  }
+
+  // Declined: drop the credential that came with it, so the app starts at device connect
+  // instead of quietly reusing a key for a server the person did not recognise.
+  await secureStorageRemove(API_BASE_URL_STORAGE);
+  await removeStoredDeviceKey();
+
+  return false;
+}
+
+/** An http(s) URL with no whitespace anywhere in it. */
+function isHttpAddress(value: string): boolean {
+  if (/\s/.test(value)) {
+    return false;
+  }
+
+  try {
+    const { protocol } = new URL(value);
+
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 /** This device's stored key, or null when there is none or the store cannot be read. */
 async function storedDeviceKey(): Promise<string | null> {
   try {
@@ -370,6 +455,22 @@ async function completeOidcNativeSignIn(code: string, codeVerifier: string): Pro
   return mintAndStoreApiKey(jwt);
 }
 
+/** What a caller of `logout` can ask for. */
+export interface LogoutOptions {
+  /**
+   * Sign out without asking about captures that never uploaded, and delete them. Only for a
+   * caller whose own confirmation already covered them: account deletion, after which the
+   * key no longer works and the captures could never upload anyway.
+   */
+  discardUnsentCaptures?: boolean;
+}
+
+export interface SignOutPrompt {
+  open: boolean;
+  /** Queued captures of this account that signing out would delete. */
+  unsentCaptures: number;
+}
+
 type ReturnValue = [
   {
     expired: boolean;
@@ -394,10 +495,24 @@ type ReturnValue = [
      */
     initializing: boolean;
     error: unknown | null;
+    /**
+     * The question a phone sign-out asks when captures are still queued after its last
+     * upload try (`UnsentCapturesSignOutDialog` shows it). `unsentCaptures` keeps its value
+     * after the answer, so the closing dialog does not change its text.
+     */
+    signOutPrompt: SignOutPrompt;
   },
   {
     login: (username: string, password: string) => Promise<void>;
-    logout: () => void;
+    /**
+     * Sign out. On a phone with captures that never reached this account, it asks first:
+     * `signOutPrompt` opens, and nothing is signed out or deleted until `confirmSignOut`.
+     */
+    logout: (options?: LogoutOptions) => Promise<void>;
+    /** "Sign out" on the `signOutPrompt` question: delete the unsent captures and sign out. */
+    confirmSignOut: () => Promise<void>;
+    /** "Cancel" on the `signOutPrompt` question: stay signed in, with the queue as it is. */
+    cancelSignOut: () => void;
     signup: (name: string, email: string, password: string, signup_code?: string) => Promise<void>;
     /**
      * After Portal cloud-connect: trade a portal OIDC bearer for a Memory API
@@ -435,6 +550,7 @@ function useAuth(): ReturnValue {
   // Native-only: present once the keystore API key is loaded/minted. Drives the
   // authenticated state on native, where there is no JWT in `accessToken`.
   const [nativeApiKey, setNativeApiKey] = useState<string | null>(null);
+  const [signOutPrompt, setSignOutPrompt] = useState<SignOutPrompt>({ open: false, unsentCaptures: 0 });
 
   const decoded = useMemo(() => (accessToken ? jwtDecode<JwtPayload>(accessToken) : null), [accessToken]);
   const isExpired = useCallback(() => (decoded ? Date.now() >= decoded.exp * 1000 : true), [decoded]);
@@ -558,7 +674,8 @@ function useAuth(): ReturnValue {
     [],
   );
 
-  const logout = useCallback(async () => {
+  // The sign-out itself, once there is nothing left to ask. `logout` decides whether to ask.
+  const signOut = useCallback(async () => {
     // The key this device signs in with (phone and desktop), read before it is dropped below.
     // The stored copy when none is in memory: the desktop never loads its stored key back on
     // start, and a phone can sign out before the keystore restore lands. Deleting that copy
@@ -589,22 +706,23 @@ function useAuth(): ReturnValue {
     if (isTauriPlatform()) {
       // The desktop keeps its key in this page's storage; a revoked key left there
       // would only be read back as a credential that no longer works.
-      await secureStorageRemove(API_KEY_STORAGE);
-      await secureStorageRemove(API_KEY_ID_STORAGE);
-      await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+      await removeStoredDeviceKey();
     }
 
     if (isNativePlatform()) {
       // No cookie session to revoke; the key was revoked above. Clear the local copy.
       setApiKey(null);
-      await secureStorageRemove(API_KEY_STORAGE);
-      await secureStorageRemove(API_KEY_ID_STORAGE);
-      await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
+      await removeStoredDeviceKey();
       // A saved public origin makes iOS skip the device picker, so the next
       // Companion login would still talk to the previous box and never list
       // the new account's Memory servers. Drop the pairing with the key.
       clearPersistedApiBaseUrl();
       await syncNativeIntentConfig();
+      // The Local Hub outbox outlives the session. Rows still queued belong to
+      // the account that just left (`logout` asked before deleting its unsent
+      // ones), and would otherwise upload into whichever account signs in next
+      // on this phone.
+      await clearOutboxAfterSignOut();
       setNativeApiKey(null);
       setAccessToken(null);
       setLoginLoading(false);
@@ -623,6 +741,8 @@ function useAuth(): ReturnValue {
       console.error('Logout failed on server:', error);
     }
 
+    // Enrichment this account still owes must not be requested under the next one.
+    resetIngestFinishState();
     setAccessToken(null);
     setLoginLoading(false);
     setLoginError(null);
@@ -631,6 +751,58 @@ function useAuth(): ReturnValue {
 
     navigate('/');
   }, [navigate]);
+
+  // The logout already under way. On a phone it can spend up to SIGN_OUT_DRAIN_TIMEOUT_MS on
+  // its last upload with nothing on screen, and a second tap on Log out in that time must
+  // not start a second drain, or a second sign-out alongside the first.
+  const logoutInFlight = useRef<Promise<void> | null>(null);
+
+  const logout = useCallback(
+    (options: LogoutOptions = {}) => {
+      if (logoutInFlight.current) {
+        return logoutInFlight.current;
+      }
+
+      const run = (async () => {
+        // Discarding: the captures can never upload (the account is gone), so there is
+        // nothing to upload first and nothing to ask about.
+        if (isNativePlatform() && !options.discardUnsentCaptures) {
+          // One last, bounded upload of what this account queued while offline, while its
+          // key is still the one requests carry.
+          await drainOutboxBeforeSignOut();
+
+          // Signing out deletes whatever is still queued. When some of it is this account's,
+          // ask first, and touch nothing until the answer: Cancel keeps the session and the
+          // queue, so the captures can still upload once the phone is back online.
+          const unsentCaptures = await countUnsentBeforeSignOut();
+
+          if (unsentCaptures > 0) {
+            setSignOutPrompt({ open: true, unsentCaptures });
+
+            return;
+          }
+        }
+
+        await signOut();
+      })().finally(() => {
+        logoutInFlight.current = null;
+      });
+
+      logoutInFlight.current = run;
+
+      return run;
+    },
+    [signOut],
+  );
+
+  const confirmSignOut = useCallback(async () => {
+    setSignOutPrompt((prompt) => ({ ...prompt, open: false }));
+    await signOut();
+  }, [signOut]);
+
+  const cancelSignOut = useCallback(() => {
+    setSignOutPrompt((prompt) => ({ ...prompt, open: false }));
+  }, []);
 
   const signup = useCallback(
     async (name: string, email: string, password: string, signup_code?: string) => {
@@ -700,8 +872,8 @@ function useAuth(): ReturnValue {
             return;
           }
 
-          if (storedOrigin) {
-            persistApiBaseUrl(storedOrigin);
+          if (!(await adoptKeystoreOrigin(storedOrigin))) {
+            return;
           }
 
           const storedKey = await secureStorageGet(API_KEY_STORAGE);
@@ -908,10 +1080,13 @@ function useAuth(): ReturnValue {
       loading: loginLoading || initializing,
       initializing,
       error: loginError ?? refreshError,
+      signOutPrompt,
     },
     {
       login,
       logout,
+      confirmSignOut,
+      cancelSignOut,
       signup,
       completePortalMemoryConnect,
       completeMemoryPasswordConnect,

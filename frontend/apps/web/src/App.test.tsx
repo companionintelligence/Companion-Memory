@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
     enabled: boolean;
     off?: string[];
   },
+  signOutPrompt: { open: false, unsentCaptures: 0 },
 }));
 
 vi.mock('@/common/feature', () => ({
@@ -41,8 +42,9 @@ vi.mock('@/hooks/useAuth', () => ({
       loading: false,
       initializing: false,
       error: null,
+      signOutPrompt: h.signOutPrompt,
     },
-    { login: vi.fn(), logout: vi.fn(), signup: vi.fn() },
+    { login: vi.fn(), logout: vi.fn(), confirmSignOut: vi.fn(), cancelSignOut: vi.fn(), signup: vi.fn() },
   ],
 }));
 
@@ -123,6 +125,19 @@ function notFound() {
 
 beforeEach(() => {
   h.features = { loading: true, enabled: false };
+  h.signOutPrompt = { open: false, unsentCaptures: 0 };
+});
+
+describe('signing out with captures that have not uploaded', () => {
+  // The question belongs to sign-out, not to one page: every Log out reaches it.
+  it('asks on whatever page the sign-out started from', async () => {
+    h.features = { loading: false, enabled: true };
+    h.signOutPrompt = { open: true, unsentCaptures: 2 };
+
+    renderAt('/self');
+
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent("2 captures haven't uploaded yet");
+  });
 });
 
 describe('App routing', () => {

@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -45,6 +45,7 @@ import { EventEntity, Event, type RecurrenceDefinition } from '../entities/Event
 import { PlaceEntity } from '../entities/PlaceEntity';
 import { ledgerPlatform } from '../identity';
 import { expandAll } from '../recurrence/expandAll';
+import { recurrenceRuleRejection } from '../recurrence/parseRecurrence';
 import { dropExistingOverrides, resolveExpansionZone } from '../recurrence/queries';
 import type { OccurrenceSpec } from '../recurrence/types';
 import { CreateEventDto, UpdateEventDto, SearchEventDto, type SourceAssertedField } from '../types';
@@ -313,6 +314,47 @@ function isSourceOwned(sourceId: string | null | undefined, sourceType: string |
  * the event happens, so a re-delivery carrying one moves nothing.
  */
 const INGEST_TIME_SOURCE = 'ingest';
+
+const recurrenceLogger = new Logger('CalendarEventService');
+
+/**
+ * `item` without a recurrence rule this appliance refuses to expand.
+ *
+ * Every create funnels through here: GraphQL `createEvent(s)`, Google Calendar
+ * sync (which stores `recurrence` verbatim in `metadata.recurrenceRule`), the
+ * .ics import lane, bulk ingest. A rule rrule would walk forever, or one outside
+ * RFC 5545's ranges, is dropped and the event kept: it then shows once, as its
+ * master row, which is what read-time expansion would have fallen back to
+ * anyway. Dropping rather than refusing keeps one bad rule from failing a whole
+ * sync or import batch. See recurrence/ruleChecks.ts.
+ */
+function withoutRefusedRecurrence(item: CreateEventDto): CreateEventDto {
+  const ruleReason = recurrenceRuleRejection(item.metadata?.recurrenceRule);
+  const patternReason = recurrenceRuleRejection(item.recurrence_pattern?.rrule);
+
+  if (!ruleReason && !patternReason) {
+    return item;
+  }
+
+  recurrenceLogger.warn(
+    `Stored an event from ${item.source_system ?? 'an unnamed source'} without its recurrence rule ` +
+      `(${ruleReason ?? patternReason}); it will show once instead of repeating`,
+  );
+
+  const next: CreateEventDto = { ...item };
+
+  if (ruleReason && item.metadata) {
+    const { recurrenceRule: _refused, ...metadata } = item.metadata;
+    next.metadata = metadata;
+  }
+
+  if (patternReason && item.recurrence_pattern) {
+    const { rrule: _refused, ...pattern } = item.recurrence_pattern;
+    next.recurrence_pattern = pattern;
+  }
+
+  return next;
+}
 
 /** The metadata keys a series' recurrence is read from (parseRecurrence.ts), and the only ones the refresh rewrites. */
 const RECURRENCE_METADATA_KEYS = ['recurrenceRule', 'recurrenceTimeZone'] as const;
@@ -1506,10 +1548,10 @@ export class CalendarEventService {
 
   async create(context: UserServiceContext, data: CreateEventDto | CreateEventDto[]): Promise<Event[]> {
     if (!Array.isArray(data)) {
-      return [await this.createOne(context, data)];
+      return [await this.createOne(context, withoutRefusedRecurrence(data))];
     }
 
-    return this.createManyBatched(context, data);
+    return this.createManyBatched(context, data.map(withoutRefusedRecurrence));
   }
 
   /**
@@ -1523,7 +1565,7 @@ export class CalendarEventService {
     context: UserServiceContext,
     data: CreateEventDto[],
   ): Promise<Array<BulkInsertResult<Event>>> {
-    return this.createManyBatchedDetailed(context, data);
+    return this.createManyBatchedDetailed(context, data.map(withoutRefusedRecurrence));
   }
 
   /**
@@ -2222,6 +2264,50 @@ export class CalendarEventService {
   }
 
   /**
+   * Why `data` must not be stored as an edit of event `id`, or null.
+   *
+   * A rule this appliance refuses is still accepted when the patch only hands
+   * back the rule the row already stores. `metadata` is replaced whole, so a
+   * caller changing one key sends the rest back as it read it
+   * (GeocodeBatchListener's `location_source`), and a row stored before the
+   * write check could otherwise never be patched again. Read time refuses that
+   * stored rule on its own (parseRecurrence), so passing it through adds nothing
+   * to expand. The row is read only when a refused rule is present, and only
+   * the caller's own, as {@link findById} scopes it.
+   */
+  private async refusedRecurrenceEdit(
+    context: ServiceContext,
+    id: string,
+    data: UpdateEventDto,
+  ): Promise<string | null> {
+    const metadataRule = data.metadata?.recurrenceRule;
+    const patternRule = data.recurrence_pattern?.rrule;
+    const metadataReason = recurrenceRuleRejection(metadataRule);
+    const patternReason = recurrenceRuleRejection(patternRule);
+
+    if (!metadataReason && !patternReason) {
+      return null;
+    }
+
+    const stored = await this.eventRepository.findOne({
+      where: { id, ...(context.userId !== SYSTEM_USER && { user: { id: context.userId } }) },
+      select: { id: true, metadata: true, recurrencePattern: true },
+    });
+    const unchanged = (sent: unknown, kept: unknown): boolean =>
+      stored != null && JSON.stringify(sent) === JSON.stringify(kept);
+
+    if (metadataReason && !unchanged(metadataRule, stored?.metadata?.recurrenceRule)) {
+      return metadataReason;
+    }
+
+    if (patternReason && !unchanged(patternRule, stored?.recurrencePattern?.rrule)) {
+      return patternReason;
+    }
+
+    return null;
+  }
+
+  /**
    * Patch an event. A patch that moves its start or end, or calls it off or
    * reinstates it, also takes back what the pipeline decided about the old time
    * or about whether it happened, in the same transaction
@@ -2229,6 +2315,14 @@ export class CalendarEventService {
    * event it returns is the row as it stands after that.
    */
   async update(context: ServiceContext, id: string, data: UpdateEventDto): Promise<Event | null> {
+    // An edit is one person's request, not a batch, so a rule that would hang
+    // the calendar is refused outright rather than dropped as on create.
+    const recurrenceReason = await this.refusedRecurrenceEdit(context, id, data);
+
+    if (recurrenceReason) {
+      throw new BadRequestException(`Unsupported recurrence rule: ${recurrenceReason}`);
+    }
+
     const updateData: Partial<EventEntity> = {};
 
     // title/description are base-row data (ci.entities); patched separately

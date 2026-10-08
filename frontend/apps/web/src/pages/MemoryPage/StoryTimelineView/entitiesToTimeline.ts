@@ -1,4 +1,7 @@
+import { buildApiUrl } from '@ci/common';
+
 import { axisPadEraFromRange, partsOf } from '@/components/TimelineJs/dates';
+import { escapeHtml, plainSlideText } from '@/components/TimelineJs/escapeHtml';
 import type { TimelineJsData, TimelineSlide } from '@/components/TimelineJs/types';
 import { useFragment as readFragment } from '@/graphql';
 import { HOUR_MINUTE, type DateTimeFormatter } from '@/lib/dateTimeFormat';
@@ -87,13 +90,47 @@ function rangeHeadline(first: Date, last: Date): string {
   return `${from} – ${to}`;
 }
 
+/**
+ * Characters that can end the attribute or element TimelineJS writes `media.url` into.
+ *
+ * TimelineJS picks a media type by matching the URL against provider patterns, and some of
+ * those types build markup from the raw string: the PDF type (any URL containing `.pdf`)
+ * writes `<iframe src='…'>` by concatenation and assigns it with `innerHTML`. A quote in a
+ * URL that came from a third party (a OneDrive pointer file's `webUrl` is stored as the
+ * file's address) would add attributes such as `onload` to an element in the app's own
+ * document, and the phone apps load that document with no CSP. Signed `/static/` links
+ * never contain these characters, so the photos this view exists to show are unaffected.
+ */
+const MARKUP_BREAKING = /['"<>`\s]/;
+
+/**
+ * Only the appliance's own `/static/` links go to TimelineJS as media, and only ones signed
+ * to show inline.
+ *
+ * Quotes are not the only way a third-party address gets in. Several TimelineJS types load
+ * from wherever the URL points: the Wikipedia type matches any URL with `wikipedia.org` in
+ * it, takes everything before that as the host, and appends a JSONP `<script>` from there
+ * to the document (`https://host.example/x.wikipedia.org/wiki/a.png` loads script from
+ * `host.example`). Others mount YouTube, Spotify or SoundCloud players, which the phone apps
+ * keep off the native bridge. A few of those patterns match anywhere in the string
+ * (`spotify`, `iframe`, `.pdf`), and a link signed as a download carries the file's name in
+ * its `response-content-disposition`, so a picture named `spotify.svg` would still pick the
+ * Spotify type. Everything in an inline link's path and query is written by the appliance
+ * (a UUID key and the signature), so TimelineJS treats it as a plain image.
+ */
+function isApplianceImageUrl(url: string): boolean {
+  return url.startsWith(buildApiUrl('/static/')) && !/[?&]response-content-disposition=/i.test(url);
+}
+
 function imageMediaUrl(entity: EntityItem): string | undefined {
   const media = getEntityMedia(entity);
   if (media?.kind !== 'image') {
     return undefined;
   }
 
-  return media.thumbUrl ?? media.fullUrl;
+  const url = media.thumbUrl ?? media.fullUrl;
+
+  return url && isApplianceImageUrl(url) && !MARKUP_BREAKING.test(url) ? url : undefined;
 }
 
 function slideFromEntity(entity: EntityItem, fmt: DateTimeFormatter): DatedSlide | null {
@@ -121,7 +158,7 @@ function slideFromEntity(entity: EntityItem, fmt: DateTimeFormatter): DatedSlide
       const image = imageMediaUrl(entity);
       const slide: TimelineSlide = {
         start_date: partsOf(time),
-        text: { headline: headline || 'Untitled', text: bodyBits.join(' · ') },
+        text: plainSlideText(headline || 'Untitled', bodyBits.join(' · ')),
         unique_id: data.id,
         autolink: false,
       };
@@ -131,7 +168,7 @@ function slideFromEntity(entity: EntityItem, fmt: DateTimeFormatter): DatedSlide
       }
 
       if (image) {
-        slide.media = { url: image, caption: headline };
+        slide.media = { url: image, caption: escapeHtml(headline) };
       }
 
       return { time, slide };
@@ -151,7 +188,7 @@ function slideFromEntity(entity: EntityItem, fmt: DateTimeFormatter): DatedSlide
         time,
         slide: {
           start_date: partsOf(time),
-          text: { headline, text: bodyBits.join(' · ') },
+          text: plainSlideText(headline, bodyBits.join(' · ')),
           unique_id: data.id,
           autolink: false,
         },
@@ -165,7 +202,7 @@ function slideFromEntity(entity: EntityItem, fmt: DateTimeFormatter): DatedSlide
       const bodyBits = [fmt.time(time, HOUR_MINUTE), data.url].filter(Boolean);
       const slide: TimelineSlide = {
         start_date: partsOf(time),
-        text: { headline, text: bodyBits.join(' · ') },
+        text: plainSlideText(headline, bodyBits.join(' · ')),
         unique_id: data.id,
         autolink: false,
       };
@@ -300,7 +337,7 @@ export function buildMemoryTimelineData(
       title: {
         unique_id: 'memory-title',
         start_date: partsOf(now),
-        text: { headline: 'Timeline', text: '' },
+        text: plainSlideText('Timeline', ''),
       },
       events: [],
     },
@@ -341,10 +378,10 @@ export function buildMemoryTimelineData(
       title: {
         unique_id: 'memory-title',
         start_date: partsOf(first),
-        text: {
-          headline: rangeHeadline(first, last),
-          text: 'Move along the timeline to walk through these memories.',
-        },
+        text: plainSlideText(
+          rangeHeadline(first, last),
+          'Move along the timeline to walk through these memories.',
+        ),
       },
       events: selected.map((item) => item.slide),
       eras: [axisPadEraFromRange(first, last)],

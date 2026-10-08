@@ -2,6 +2,7 @@ import { isValidTimezone, wallClockInTZ, wallClockToUTC, type WallClock } from '
 
 import { FEDERATED_SYSTEMS } from '../identity/registry';
 
+import { checkRecurrenceRule, hourlyRuleCanAdvance } from './ruleChecks';
 import type { ExpansionDiagnostic, RecurrenceSpec } from './types';
 
 const DAY_MS = 86_400_000;
@@ -114,6 +115,54 @@ export function seriesRuleOf(row: RecurringSeriesRow): SeriesRuleLines | null {
   }
 
   return rrule ? { rrule, exdate, rdate } : null;
+}
+
+/** Every RRULE value in a stored rule field, in either spelling {@link seriesRuleOf} reads. */
+function ruleValuesOf(value: unknown): string[] {
+  const rules: string[] = [];
+
+  for (const raw of asLines(value)) {
+    const line = raw.trim();
+    const property = propertyOf(line);
+
+    if (property === 'RRULE') {
+      rules.push(valueOf(line));
+    } else if (property !== 'EXDATE' && property !== 'RDATE' && /(^|;)FREQ=/i.test(line)) {
+      rules.push(line);
+    }
+  }
+
+  return rules;
+}
+
+/**
+ * Why a series' rule text must not be stored, or null when it may be: the
+ * write-side twin of the checks {@link parseRecurrence} makes before expanding.
+ *
+ * `value` is `metadata.recurrenceRule` or `recurrence_pattern.rrule` as a
+ * producer hands it over (a string, or Google's array of RRULE/EXDATE/RDATE
+ * lines). Every RRULE in it must pass {@link checkRecurrenceRule}, and an hourly
+ * one with `BYHOUR` must reach one of its hours from ANY start hour, because the
+ * zone it is expanded in, and so its start hour, can change after it is stored.
+ */
+export function recurrenceRuleRejection(value: unknown): string | null {
+  for (const rule of ruleValuesOf(value)) {
+    const check = checkRecurrenceRule(rule);
+
+    if (!check.ok) {
+      return check.reason;
+    }
+
+    if (
+      check.freq === 'HOURLY' &&
+      check.byhour &&
+      !hourlyRuleCanAdvance(check.interval, check.byhour, null)
+    ) {
+      return 'BYHOUR is not reachable from every start hour at this INTERVAL';
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -262,6 +311,10 @@ export interface ParseRecurrenceOptions {
  *  3. **Sub-daily frequency.** `SECONDLY`/`MINUTELY` are legal RFC 5545 and
  *     produce up to 86,400 occurrences per day; nothing this appliance ingests
  *     writes one, and the cap would be hit by a single series.
+ *
+ * And one refusal that prevents a hang rather than a double-booking: a rule
+ * outside RFC 5545's ranges, or one rrule would walk forever without producing
+ * a date (ruleChecks.ts).
  */
 export function parseRecurrence(
   row: RecurringSeriesRow,
@@ -295,6 +348,17 @@ export function parseRecurrence(
     return null;
   }
 
+  // Out-of-range parts, a zero or negative INTERVAL, and anything rrule would
+  // walk without ever producing a date: see ruleChecks.ts. Checked again here,
+  // not only on write, because rows stored before the write check exist.
+  const check = checkRecurrenceRule(lines.rrule);
+
+  if (!check.ok) {
+    diagnose({ kind: 'unparseable', seriesId: row.id, reason: check.reason });
+
+    return null;
+  }
+
   // All-day series are pinned to UTC, not to the owner's zone, because that is
   // how they are STORED: `TransformGoogleCalendar` runs Google's bare
   // `start.date` through `new Date('2026-09-08')`, i.e. UTC midnight for
@@ -312,6 +376,24 @@ export function parseRecurrence(
         ? [patternZone, 'pattern']
         : [opts.fallbackTimeZone, opts.fallbackTimeZoneSource ?? 'user'];
 
+  const startWall = wallClockInTZ(row.startTime, timeZone);
+
+  // An hourly rule steps from DTSTART's hour in THIS zone, so whether its
+  // BYHOUR is ever reached is only known now. Unreachable, rrule never returns.
+  if (
+    check.freq === 'HOURLY' &&
+    check.byhour &&
+    !hourlyRuleCanAdvance(check.interval, check.byhour, startWall.hour)
+  ) {
+    diagnose({
+      kind: 'unparseable',
+      seriesId: row.id,
+      reason: 'BYHOUR is never reached from this start hour',
+    });
+
+    return null;
+  }
+
   const spanMs = row.endTime ? row.endTime.getTime() - row.startTime.getTime() : null;
   // A span of whole days is re-derived from the local calendar each occurrence
   // instead of being added as milliseconds: a local day is 23 or 25 hours twice
@@ -321,7 +403,7 @@ export function parseRecurrence(
     spanMs !== null && spanMs >= DAY_MS && spanMs % DAY_MS === 0 ? Math.round(spanMs / DAY_MS) : null;
 
   return {
-    dtstartFloating: floatingDateOf(wallClockInTZ(row.startTime, timeZone)),
+    dtstartFloating: floatingDateOf(startWall),
     durationMs: wholeLocalDays === null ? spanMs : null,
     wholeLocalDays,
     timeZone,

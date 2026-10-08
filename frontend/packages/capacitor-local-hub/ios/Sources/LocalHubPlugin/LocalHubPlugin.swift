@@ -45,6 +45,17 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     /// never reachable from JS -- nothing in the WebView has any business holding it.
     private let secureStore = CompanionSecureStore.credentials()
 
+    /// The credentials the app itself stores: the device API key, its id and capability, and
+    /// the paired Memory origin mirrored for App Intents. Kept equal to `SECURE_STORE_KEYS` in
+    /// `@ci/common`'s `nativeBridge.ts` and to the Android plugin's list;
+    /// `capacitorPluginContract.test.ts` checks all three.
+    private static let writableSecureKeys: Set<String> = [
+        "ci.apiKey",
+        "ci.apiKeyId",
+        "ci.apiKeyCapability",
+        "ci.apiBaseUrl"
+    ]
+
     /// Kept alive until the sheet finishes. UIKit drops an `ASWebAuthenticationSession`
     /// that nothing retains, and the completion handler never runs.
     private var authSession: ASWebAuthenticationSession?
@@ -114,10 +125,15 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// Stores one value with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, rejecting if
-    /// the Keychain would not take it. There is no weaker fallback below this.
+    /// the Keychain would not take it. There is no weaker fallback below this. Only the keys
+    /// in `writableSecureKeys` are accepted, the same rule as on Android.
     @objc func secureSet(_ call: CAPPluginCall) {
         guard let key = call.getString("key"), !key.isEmpty else {
             call.reject("A non-empty 'key' is required")
+            return
+        }
+        guard Self.writableSecureKeys.contains(key) else {
+            call.reject("'\(key)' is not a key this store accepts")
             return
         }
         guard let value = call.getString("value") else {

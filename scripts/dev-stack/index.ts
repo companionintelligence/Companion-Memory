@@ -150,11 +150,12 @@ function buildRoute(key: string, p: { apiPort: number; webPort: number; objPort:
   // over XHR. Without them the script is refused, loadGoogleMaps()'s rejection is
   // swallowed, and the map quietly degrades to dashed straight-line polylines.
   // img-src is already `*`, so Maps' imagery needs no entry of its own.
-  // Copy 4 of 4 of this policy — the other three are the http{} block and the
-  // /static/ and /assets/ locations in infrastructure/gateway/nginx.conf. They
-  // already drift (this one carries 'unsafe-inline' and the ws:// dev origins);
-  // change all four together anyway or a fix that works in `make dev` silently
-  // does nothing in the gateway-served and desktop builds.
+  // Copy 3 of 3 of this policy. The other two are the http{} block and the
+  // /assets/ location in infrastructure/gateway/nginx.conf. They already drift
+  // (this one carries 'unsafe-inline' and the ws:// dev origins); change all
+  // three together anyway or a fix that works in `make dev` silently does
+  // nothing in the gateway-served and desktop builds. The gateway's /static/
+  // location sends a sandboxed policy of its own that this dev route does not.
   const csp =
     "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://maps.googleapis.com " +
     "https://maps.gstatic.com; style-src 'self' 'unsafe-inline' " +

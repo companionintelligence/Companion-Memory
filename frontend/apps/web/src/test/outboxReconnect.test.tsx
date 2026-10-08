@@ -19,6 +19,7 @@ import { ConnectionModeProvider } from '@ci/common/src/utils/connectionMode';
 import { enqueueOutboxItem, type OutboxItem } from '@ci/common/src/utils/outbox';
 import {
   OutboxQueueProvider,
+  clearOutboxAfterSignOut,
   resetIngestFinishState,
   useOutboxQueue,
 } from '@ci/common/src/utils/outboxFlush';
@@ -61,6 +62,8 @@ function installNativeShell() {
     }),
   };
 
+  // Signed in: the outbox queues and drains only under an account.
+  setApiKey('device-key');
   (window as unknown as { Capacitor?: unknown }).Capacitor = {
     isNativePlatform: () => true,
     Plugins: {
@@ -137,6 +140,14 @@ function fakeSidecar() {
         },
         capacity: { max: 5000, used: all.length, warnAt: 4000 },
       });
+    }
+
+    if (call.method === 'DELETE' && !id) {
+      const deleted = store.size;
+
+      store.clear();
+
+      return jsonResponse(200, { deleted });
     }
 
     if (call.method === 'POST' && !id) {
@@ -303,5 +314,26 @@ describe('outbox drains on reconnect', () => {
     await shell.foreground();
 
     await waitFor(() => expect(store.size).toBe(0));
+  });
+});
+
+describe('queue counts after the sign-out clear', () => {
+  it("stops showing the departed account's captures once sign-out deletes them", async () => {
+    installNativeShell();
+    const { store, handler } = fakeSidecar();
+    installFetch(handler);
+    // Queued for another account, so no drain sends it and only the clear removes it.
+    store.set('row-1', item({ id: 'row-1', seq: 1, owner: 'https://elsewhere.example 0000' }));
+
+    const view = mount();
+
+    await waitFor(() => expect(view.getByTestId('pending').textContent).toBe('1'));
+
+    await act(async () => {
+      await clearOutboxAfterSignOut();
+    });
+
+    expect(store.size).toBe(0);
+    await waitFor(() => expect(view.getByTestId('pending').textContent).toBe('0'));
   });
 });

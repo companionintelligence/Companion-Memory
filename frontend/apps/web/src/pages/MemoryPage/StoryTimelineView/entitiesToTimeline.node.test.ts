@@ -109,6 +109,95 @@ describe('buildMemoryTimelineData', () => {
     expect(data.events.find((slide) => slide.unique_id === 'clip')?.media).toBeUndefined();
   });
 
+  it('leaves out a media address that could break out of the markup TimelineJS builds from it', () => {
+    // TimelineJS reads any URL containing `.pdf` as a PDF and writes it into
+    // `<iframe src='…'>` by string concatenation.
+    const { data } = buildMemoryTimelineData(
+      [
+        entity({
+          __typename: 'EventType',
+          id: 'planted',
+          bucketStartTime: now.toISOString(),
+          bucketTimeSource: 'source',
+          title: 'A scan',
+          startTime: now.toISOString(),
+          galleryMediaContentType: 'image/jpeg',
+          galleryPreviewUrl: "https://files.example/scan.pdf'onload='alert(1)",
+          gallerySourceUrl: null,
+        }),
+      ],
+      DEVICE_DATE_TIME_FORMATTER,
+      now,
+    );
+
+    expect(data.events.find((slide) => slide.unique_id === 'planted')?.media).toBeUndefined();
+  });
+
+  it('leaves out a third-party media address even with no quote in it', () => {
+    // TimelineJS's Wikipedia type takes the host from anything before `.wikipedia` and
+    // appends a JSONP <script> from it to the document.
+    const { data } = buildMemoryTimelineData(
+      [
+        entity({
+          __typename: 'EventType',
+          id: 'remote',
+          bucketStartTime: now.toISOString(),
+          bucketTimeSource: 'source',
+          title: 'A picture',
+          startTime: now.toISOString(),
+          galleryMediaContentType: 'image/jpeg',
+          galleryPreviewUrl: 'https://files.example/x.wikipedia.org/wiki/a.png',
+          gallerySourceUrl: null,
+        }),
+      ],
+      DEVICE_DATE_TIME_FORMATTER,
+      now,
+    );
+
+    const slide = data.events.find((event) => event.unique_id === 'remote');
+    expect(slide).toBeDefined();
+    expect(slide?.media).toBeUndefined();
+  });
+
+  it("leaves out a link signed as a download, whose query carries the file's name", () => {
+    // TimelineJS matches `spotify` anywhere in the address, query included.
+    const download =
+      '/ci-files/0b3f7c1e-0d2a-4c55-9a43-6a2d5f0e9c11?response-content-disposition=attachment%3B%20filename%3D%22spotify.svg%22&response-content-type=image%2Fsvg%2Bxml&X-Amz-Signature=abc';
+    const inline =
+      '/ci-files/6f1c2d3e-4b5a-4c69-8d7e-9f0a1b2c3d4e?response-content-type=image%2Fjpeg&X-Amz-Signature=def';
+    const { data } = buildMemoryTimelineData(
+      [
+        entity({
+          __typename: 'EventType',
+          id: 'svg',
+          bucketStartTime: now.toISOString(),
+          bucketTimeSource: 'source',
+          title: 'A drawing',
+          startTime: now.toISOString(),
+          galleryMediaContentType: 'image/svg+xml',
+          galleryPreviewUrl: download,
+          gallerySourceUrl: null,
+        }),
+        entity({
+          __typename: 'EventType',
+          id: 'photo',
+          bucketStartTime: new Date(now.getTime() - 60_000).toISOString(),
+          bucketTimeSource: 'source',
+          title: 'A photo',
+          startTime: new Date(now.getTime() - 60_000).toISOString(),
+          galleryMediaContentType: 'image/jpeg',
+          galleryPreviewUrl: inline,
+          gallerySourceUrl: null,
+        }),
+      ],
+      DEVICE_DATE_TIME_FORMATTER,
+      now,
+    );
+
+    expect(data.events.find((event) => event.unique_id === 'svg')?.media).toBeUndefined();
+    expect(data.events.find((event) => event.unique_id === 'photo')?.media?.url).toBe(`/static${inline}`);
+  });
+
   it('keeps the full range and lands on the first slide when anchored at range-start', () => {
     const flood = Array.from({ length: 80 }, (_, index) =>
       eventAt(`e-${index}`, new Date(2026, 6, 1 + index, 10), `Item ${index}`),
@@ -182,6 +271,87 @@ describe('buildMemoryTimelineData', () => {
       expect.stringMatching(/^3:43\sPM/),
       expect.stringMatching(/^3:43\sPM/),
     ]);
+  });
+});
+
+describe('buildMemoryTimelineData: third-party text', () => {
+  const at = new Date(2026, 7, 18, 12);
+  const markup = '<b>x</b><style>body{display:none}</style>';
+  const escaped = '&lt;b&gt;x&lt;/b&gt;&lt;style&gt;body{display:none}&lt;/style&gt;';
+
+  /** Every string the deck hands TimelineJS, which writes them as HTML. */
+  function htmlFields(slide: { text: { headline: string; text: string }; media?: { caption?: string } }) {
+    return [slide.text.headline, slide.text.text, slide.media?.caption ?? ''];
+  }
+
+  it('escapes an email subject, preview and sender before TimelineJS sees them', () => {
+    const { data } = buildMemoryTimelineData(
+      [
+        entity({
+          __typename: 'CommunicationType',
+          id: 'mail',
+          bucketTime: at.toISOString(),
+          subject: `Invoice ${markup}`,
+          preview: `Preview ${markup}`,
+          from: { name: `Sender ${markup}` },
+        }),
+      ],
+      DEVICE_DATE_TIME_FORMATTER,
+      at,
+    );
+
+    const [slide] = data.events;
+    expect(slide.text.headline).toBe(`Invoice ${escaped}`);
+    expect(slide.text.text).toContain(`From Sender ${escaped}`);
+    expect(slide.text.text).toContain(`Preview ${escaped}`);
+    expect(htmlFields(slide).join('')).not.toContain('<');
+  });
+
+  it('escapes a page title and its URL', () => {
+    const { data } = buildMemoryTimelineData(
+      [
+        entity({
+          __typename: 'BrowserActivityType',
+          id: 'page',
+          bucketTime: at.toISOString(),
+          title: `Title ${markup}`,
+          url: 'https://example.com/?q=<i>',
+        }),
+      ],
+      DEVICE_DATE_TIME_FORMATTER,
+      at,
+    );
+
+    expect(data.events[0].text.headline).toBe(`Title ${escaped}`);
+    expect(htmlFields(data.events[0]).join('')).not.toContain('<');
+  });
+
+  it('escapes an event title, place and description, and the image caption', () => {
+    const { data } = buildMemoryTimelineData(
+      [
+        entity({
+          __typename: 'EventType',
+          id: 'invite',
+          bucketStartTime: at.toISOString(),
+          bucketTimeSource: 'source',
+          title: `Party ${markup}`,
+          startTime: at.toISOString(),
+          locationName: `Hall ${markup}`,
+          description: `Bring ${markup}`,
+          galleryMediaContentType: 'image/jpeg',
+          galleryPreviewUrl: '/files/preview.jpg',
+          gallerySourceUrl: '/files/full.jpg',
+        }),
+      ],
+      DEVICE_DATE_TIME_FORMATTER,
+      at,
+    );
+
+    const [slide] = data.events;
+    expect(slide.media?.caption).toContain(escaped);
+    expect(slide.text.text).toContain(`Hall ${escaped}`);
+    expect(slide.text.text).toContain(`Bring ${escaped}`);
+    expect(htmlFields(slide).join('')).not.toContain('<');
   });
 });
 

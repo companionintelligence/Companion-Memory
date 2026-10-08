@@ -18,6 +18,10 @@ struct OutboxItem {
     let lastError: String?
     /// Raw JSON text exactly as it was enqueued, or `nil` on projections that omit it.
     let payload: String?
+    /// Opaque stamp naming the account and server the capture was taken for, set by the web
+    /// layer at enqueue. `nil` on rows written before the column existed. The flusher compares
+    /// it with the session it is about to send under; the store only keeps and returns it.
+    let owner: String?
 }
 
 /// Aggregate counts backing the `counts` block of `GET /api/outbox`.
@@ -247,12 +251,30 @@ final class OutboxStore {
                 idempotency_key TEXT NOT NULL UNIQUE,
                 status TEXT NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
-                last_error TEXT
+                last_error TEXT,
+                owner TEXT
             );
             """)
         // The flusher's hot query is "oldest pending item(s) first"; this index serves both
         // that and the status-filtered list without a sort step.
         try execute("CREATE INDEX IF NOT EXISTS outbox_status_seq ON outbox (status, seq);")
+        // A table created before `owner` existed keeps its rows and gains the column, NULL on
+        // every existing row, which the flusher reads as "queued before stamping existed".
+        if try !hasColumn("owner") {
+            try execute("ALTER TABLE outbox ADD COLUMN owner TEXT;")
+        }
+    }
+
+    private func hasColumn(_ name: String) throws -> Bool {
+        let statement = try prepare("PRAGMA table_info(outbox);")
+        defer { sqlite3_finalize(statement) }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            // Column 1 of table_info is the column name.
+            if text(statement, 1) == name {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - Public API
@@ -267,7 +289,8 @@ final class OutboxStore {
         kind: String,
         payloadJSON: String,
         capturedAt: String,
-        idempotencyKey: String
+        idempotencyKey: String,
+        owner: String? = nil
     ) throws -> EnqueueOutcome {
         // Explicit closure result types throughout this file: multi-statement closures only
         // infer their return type on newer Swift compilers, and this code cannot be compiled
@@ -287,8 +310,8 @@ final class OutboxStore {
                 }
 
                 let statement = try prepare("""
-                    INSERT INTO outbox (id, kind, payload, captured_at, idempotency_key, status, attempts)
-                    VALUES (?, ?, ?, ?, ?, ?, 0);
+                    INSERT INTO outbox (id, kind, payload, captured_at, idempotency_key, status, attempts, owner)
+                    VALUES (?, ?, ?, ?, ?, ?, 0, ?);
                     """)
                 defer { sqlite3_finalize(statement) }
 
@@ -299,6 +322,11 @@ final class OutboxStore {
                 bindText(statement, 4, capturedAt)
                 bindText(statement, 5, idempotencyKey)
                 bindText(statement, 6, Self.statusPending)
+                if let owner = owner {
+                    bindText(statement, 7, owner)
+                } else {
+                    sqlite3_bind_null(statement, 7)
+                }
                 guard sqlite3_step(statement) == SQLITE_DONE else {
                     throw OutboxStoreError.sqlFailed(lastErrorMessage())
                 }
@@ -355,6 +383,20 @@ final class OutboxStore {
                 throw OutboxStoreError.sqlFailed(lastErrorMessage())
             }
             return sqlite3_changes(database) > 0
+        }
+    }
+
+    /// Removes every item, whatever its status. Sign-out calls this once its last drain is
+    /// done: what is still queued then belongs to the account leaving the device. `seq` keeps
+    /// counting from where it was (AUTOINCREMENT). Returns how many rows went.
+    func deleteAll() throws -> Int {
+        try queue.sync { () -> Int in
+            let statement = try prepare("DELETE FROM outbox;")
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw OutboxStoreError.sqlFailed(lastErrorMessage())
+            }
+            return Int(sqlite3_changes(database))
         }
     }
 
@@ -425,8 +467,8 @@ final class OutboxStore {
 
     // MARK: - SQLite plumbing
 
-    private static let listColumns = "seq, id, kind, captured_at, status, attempts, last_error"
-    private static let fullColumns = "seq, id, kind, captured_at, status, attempts, last_error, payload"
+    private static let listColumns = "seq, id, kind, captured_at, status, attempts, last_error, owner"
+    private static let fullColumns = "seq, id, kind, captured_at, status, attempts, last_error, owner, payload"
 
     /// BEGIN IMMEDIATE (not DEFERRED) so the write lock is taken up front rather than on the
     /// first write, which is what keeps a read-then-write body from failing with SQLITE_BUSY
@@ -485,7 +527,8 @@ final class OutboxStore {
             status: text(statement, 4) ?? "",
             attempts: Int(sqlite3_column_int64(statement, 5)),
             lastError: text(statement, 6),
-            payload: includePayload ? text(statement, 7) : nil
+            payload: includePayload ? text(statement, 8) : nil,
+            owner: text(statement, 7)
         )
     }
 

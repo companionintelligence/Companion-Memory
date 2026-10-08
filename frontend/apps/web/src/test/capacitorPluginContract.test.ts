@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { localHubPlugin } from '@ci/common/src/utils/localHub';
+import { SECURE_STORE_KEYS } from '@ci/common/src/utils/nativeBridge';
 import { speechPlugin } from '@ci/common/src/utils/speech';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -600,6 +601,107 @@ describe('the bridge key @ci/common reads matches the registered name', () => {
 
     expect(nativeBridge).toContain(`plugins()?.${registeredName('capacitor-local-llm')}`);
   });
+});
+
+/**
+ * The LocalHub credential store takes writes from anything that reaches the bridge. On
+ * Android that is every frame in the WebView (the app runs Capacitor's legacy bridge for
+ * background location), so `secureSet` accepts only the app's own keys, on both platforms.
+ */
+describe('LocalHub secureSet — only the keys the app itself writes', () => {
+  const hubDir = join(PACKAGES, 'capacitor-local-hub');
+  const kotlin = read(
+    join(hubDir, 'android/src/main/java/com/companionintelligence/localhub/LocalHubPlugin.kt'),
+  );
+  const swift = read(join(hubDir, 'ios/Sources/LocalHubPlugin/LocalHubPlugin.swift'));
+  const quoted = (block: string | undefined) =>
+    [...(block ?? '').matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  const between = (source: string, from: string, to: string) =>
+    source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from)));
+
+  it('Android, iOS and @ci/common list the same keys', () => {
+    const android = quoted(/WRITABLE_SECURE_KEYS = setOf\(([^)]*)\)/.exec(kotlin)?.[1]);
+    const ios = quoted(/writableSecureKeys: Set<String> = \[([^\]]*)\]/.exec(swift)?.[1]);
+
+    expect(android).toEqual([...SECURE_STORE_KEYS].sort());
+    expect(ios).toEqual([...SECURE_STORE_KEYS].sort());
+  });
+
+  it('every credential useAuth stores is on the list, and so is the mirrored origin', () => {
+    const useAuth = read(join(ROOT, 'frontend/apps/web/src/hooks/useAuth.ts'));
+    const stored = [...useAuth.matchAll(/const API_KEY\w*_STORAGE = '([^']+)'/g)].map((m) => m[1]);
+
+    expect(stored.length).toBeGreaterThanOrEqual(3);
+    expect(SECURE_STORE_KEYS).toEqual(expect.arrayContaining([...stored, 'ci.apiBaseUrl']));
+  });
+
+  it('both plugins refuse a key off the list before anything is written', () => {
+    const android = between(kotlin, 'fun secureSet(', 'fun secureRemove(');
+    const ios = between(swift, 'func secureSet(', 'func secureRemove(');
+
+    expect(android.indexOf('!in WRITABLE_SECURE_KEYS')).toBeGreaterThan(-1);
+    expect(android.indexOf('!in WRITABLE_SECURE_KEYS')).toBeLessThan(android.indexOf('credentialStore.set('));
+    expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeGreaterThan(-1);
+    expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeLessThan(ios.indexOf('secureStore.set('));
+  });
+});
+
+/**
+ * The outbox `owner` stamp and the sign-out clear exist on both platforms: the web flusher
+ * depends on the sidecar storing and returning `owner`, and sign-out on `DELETE /api/outbox`.
+ * Neither native half can be built or run here, so the source is what is checked.
+ */
+describe('LocalHub outbox — owner stamp and sign-out clear on both platforms', () => {
+  const hubDir = join(PACKAGES, 'capacitor-local-hub');
+  const androidDir = join(hubDir, 'android/src/main/java/com/companionintelligence/localhub');
+  const iosDir = join(hubDir, 'ios/Sources/LocalHubPlugin');
+
+  it('Android adds the column for new and upgraded databases, and keeps the plaintext import on v1 columns', () => {
+    const store = read(join(androidDir, 'OutboxStore.kt'));
+
+    expect(store).toMatch(/\$COLUMN_LAST_ERROR TEXT,\s*\$COLUMN_OWNER TEXT/);
+    expect(store).toContain('ALTER TABLE $TABLE_NAME ADD COLUMN $COLUMN_OWNER TEXT');
+    expect(store).toContain('DATABASE_VERSION = 2');
+    expect(between(store, 'MIGRATION_COLUMNS = arrayOf(', ')')).not.toContain('COLUMN_OWNER');
+  });
+
+  it('iOS adds the column for new tables and for ones created before it', () => {
+    const store = read(join(iosDir, 'OutboxStore.swift'));
+
+    expect(store).toMatch(/last_error TEXT,\s*owner TEXT/);
+    expect(store).toContain('ALTER TABLE outbox ADD COLUMN owner TEXT;');
+  });
+
+  it('both servers take owner on enqueue, return it on items, and clear the collection on DELETE', () => {
+    const android = read(join(androidDir, 'LocalHubServer.kt'));
+    const ios = read(join(iosDir, 'LocalHubServer.swift'));
+
+    expect(android).toContain('outbox.enqueue(kind, payload.toString(), capturedAt, idempotencyKey, owner)');
+    expect(android).toContain('.put("owner", item.owner ?: JSONObject.NULL)');
+    expect(android).toContain('segments.isEmpty() && method == Method.DELETE -> handleClear()');
+    expect(ios).toMatch(/idempotencyKey: idempotencyKey,\s*owner: owner/);
+    expect(ios).toContain('"owner": item.owner ?? NSNull()');
+    expect(ios).toMatch(/case \("DELETE", 0\):[\s\S]{0,120}store\.deleteAll\(\)/);
+  });
+
+  it('Android opens a link marked external without the sign-in Auth Tab', () => {
+    // Provider pages from the gallery are not a sign-in. In the Auth Tab, any `companion://`
+    // they navigated to would come back to the app as a sign-in result.
+    const plugin = between(
+      read(join(androidDir, 'LocalHubPlugin.kt')),
+      'fun openUrl(',
+      'fun startAuthSession(',
+    );
+
+    expect(plugin).toContain('val external = call.getBoolean("external", false) == true');
+    expect(plugin).toContain('if (external || !AuthTabSession.launch(uri)) {');
+  });
+
+  function between(source: string, from: string, to: string): string {
+    const start = source.indexOf(from);
+
+    return source.slice(start, source.indexOf(to, start + from.length));
+  }
 });
 
 describe('LocalHubWeb — the fallback that runs in a browser tab and the Tauri window', () => {

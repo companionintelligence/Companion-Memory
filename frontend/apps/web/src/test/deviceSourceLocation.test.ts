@@ -55,8 +55,9 @@ function urlOf(input: RequestInfo): string {
   return typeof input === 'string' ? input : (input as Request).url;
 }
 
-/** Native shell with the LocalHub sidecar present. */
+/** Native shell with the LocalHub sidecar present, signed in (the outbox queues only under an account). */
 function setNativeWindow(): void {
+  setApiKey('device-key');
   setWindow({
     Capacitor: {
       isNativePlatform: () => true,

@@ -30,6 +30,8 @@ import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next'
 import { SignedFile, FileEntity } from '../entities/FileEntity';
 import { FileVariant, type CreateFileDto, type UpdateFileDto, type UploadFileDto } from '../types';
 
+import { downloadResponseOverrides } from './downloadResponse';
+
 const BUCKET_REGION = config.staticfiles.bucket ?? 'us-east-1';
 const SIGNATURE_URL = config.staticfiles.auth.signatureUrl ?? config.staticfiles.storageUrl;
 
@@ -859,10 +861,12 @@ export class FileService implements OnModuleInit {
       };
     }
 
+    // Never the stored type verbatim: an uploader picks it, and these links open
+    // on the app's own origin. See downloadResponse.ts.
     const command = new GetObjectCommand({
       Bucket: bucket,
       Key: key,
-      ResponseContentType: file.contentType,
+      ...downloadResponseOverrides(file.contentType, file.filename),
     });
 
     const url = await getSignedUrl(this.signatureS3, command, {

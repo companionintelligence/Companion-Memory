@@ -6,6 +6,7 @@ import {
   startOfLocalDay,
   TIMELINE_AXIS_PAD_DAYS,
 } from '@/components/TimelineJs/dates';
+import { plainSlideText } from '@/components/TimelineJs/escapeHtml';
 import type { TimelineEra, TimelineJsData, TimelineSlide } from '@/components/TimelineJs/types';
 import { HOUR_MINUTE, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { detectBrowserTimeZone } from '@/lib/timezone';
@@ -92,10 +93,7 @@ function toSlide(event: ScheduleEvent, fmt: DateTimeFormatter): TimelineSlide {
 
   const slide: TimelineSlide = {
     start_date: partsOf(start),
-    text: {
-      headline: event.title || 'Untitled',
-      text: bodyBits.join(' · '),
-    },
+    text: plainSlideText(event.title || 'Untitled', bodyBits.join(' · ')),
     unique_id: event.id,
     autolink: false,
   };
@@ -238,10 +236,7 @@ export function buildTimelineData(
       title: {
         unique_id: 'focus-title',
         start_date: partsOf(day),
-        text: {
-          headline: label,
-          text: 'Use the timeline to move forward or back through your schedule.',
-        },
+        text: plainSlideText(label, 'Use the timeline to move forward or back through your schedule.'),
       },
       events: selected.events.map((event) => toSlide(event, fmt)),
       eras: [axisPadEra(selected.events, day)],
