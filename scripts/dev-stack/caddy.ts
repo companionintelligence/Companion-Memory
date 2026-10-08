@@ -53,6 +53,17 @@ class CaddyAdminError extends Error {
 const isAlreadyExists = (err: unknown): boolean =>
   err instanceof CaddyAdminError && err.status === 409 && /already exists/.test(err.body);
 
+/**
+ * Where the shared stack server listens: loopback only. Every route on it is
+ * matched on a `<key>.localhost` host, which only this machine resolves, and
+ * `make tunnel` reaches it as https://localhost:443. Listening on `:443` instead
+ * answered the whole network, and a request that names one of those hosts in its
+ * Host header reaches the stack (and its `/static` object-store route) from any
+ * machine. A server created by an older checkout keeps its `:443` until the last
+ * stack on it goes down and it is removed.
+ */
+export const CADDY_LISTEN = '127.0.0.1:443';
+
 export type CaddyRoute = {
   '@id'?: string;
   [key: string]: unknown;
@@ -303,7 +314,7 @@ export class CaddyClient {
 
     try {
       await this.send('PUT', `/config/apps/http/servers/${this.serverName}`, {
-        listen: [':443'],
+        listen: [CADDY_LISTEN],
         routes: [],
         tls_connection_policies: [{}],
       });

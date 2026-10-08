@@ -176,7 +176,7 @@ The 11 remaining failures were NOT triaged into real-versus-environmental and th
 
 **Authentication in the suite.** Specs that run signed in import `test` from `tests/e2e/fixtures/authenticated.ts`, which signs in inside each test's own context. Do not reintroduce a shared `storageState` file: sessions are bound to `ip + user_agent` **and** rotate on the `/api/authenticate/refresh` the app makes on load, honouring the old token for only `auth.session.refreshGracePeriod` (**30s**). A shared file goes stale partway through a serial suite and every later spec fails on a page assertion while the real cause is an unseen 401. Specs that must start signed *out* (`auth`, `onboarding`) keep importing `@playwright/test`.
 
-> `.env.default` ships `AUTH_DEFAULT_USER_PASSWORD="replace-me-pw-000000"` and the seed uses the same value, so the placeholder is the working password locally. Change both together or neither.
+> `.env.default` ships `AUTH_DEFAULT_USER_PASSWORD="replace-me-pw-000000"`, and `e2e.yml` copies that file as is and sets the same value, so in CI the placeholder is the working password. Change both together or neither. Locally, `make init` writes a generated password into a new `.env`; the seed and the suite both read it from there.
 
 ### 3.5 What automation does not cover
 

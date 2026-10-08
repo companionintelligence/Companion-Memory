@@ -5,6 +5,7 @@ import path from 'node:path';
 import config from 'config';
 import { z } from 'zod';
 
+import { enforceNoCommittedSecrets } from './common/committedSecrets';
 import { isDeclaredEmbedModel } from './common/embeddings/embedModelIdentity';
 import { resolveLlmUrlForRuntime } from './domains/llm/services/llmEndpointShared';
 
@@ -1726,6 +1727,24 @@ if (/^0{64}$/i.test(parsed.auth.encryption.fieldKey)) {
 
   console.warn(msg);
 }
+
+// Secrets that still hold a value committed to this repository: a replace-me-
+// placeholder from .env.default, or the variable's own name that default.json
+// falls back to. Refused in production mode, a warning in development (where
+// existing .env files carry them). See common/committedSecrets.ts.
+enforceNoCommittedSecrets(
+  {
+    AUTH_TOKEN_SECRET: parsed.auth.jwt.authTokenSecret,
+    AUTH_REFRESH_TOKEN_SECRET: parsed.auth.jwt.refreshTokenSecret,
+    AUTH_SESSION_PEPPER: parsed.auth.session.fieldPepper,
+    AUTH_CSRF_TOKEN_SECRET: parsed.auth.csrf.secret,
+    OBJECT_STORE_USERNAME: parsed.staticfiles.auth.accessKeyId,
+    OBJECT_STORE_PASSWORD: parsed.staticfiles.auth.secretAccessKey,
+    SIDECAR_AUTH_SECRET: parsed.services.sidecarAuthSecret,
+    POWERSYNC_JWT_SECRET: parsed.powersync.jwtSecret,
+  },
+  process.env.NODE_ENV,
+);
 
 // The sidecars refuse every request without this bearer, so an API that lacks it
 // is one whose imports never summarise and whose forecasts never train — and a

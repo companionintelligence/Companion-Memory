@@ -413,6 +413,10 @@ oauth-down: ## Release the canonical OAuth host claim
 
 .PHONY: tunnel
 tunnel: ## Expose this running stack at https://dev.companionintelligence.com via Cloudflare Tunnel (see infrastructure/cloudflare/README.md)
+	@# Refuse while .env holds the replace-me- placeholders from .env.default: a
+	@# stack signing tokens and running its object store with committed values is
+	@# open to anyone who has read the repo once it is on the internet.
+	@yarn tsx scripts/dev-stack/env-secrets-cli.ts check .env
 	@command -v cloudflared >/dev/null 2>&1 || { printf "$(RED)cloudflared not found — run: brew install cloudflared$(RESET)\n"; exit 1; }
 	@test -f infrastructure/cloudflare/config.yml || { printf "$(RED)Missing infrastructure/cloudflare/config.yml — copy infrastructure/cloudflare/config.example.yml and fill it in (see README.md)$(RESET)\n"; exit 1; }
 	@printf "$(YELLOW)Exposing https://dev.companionintelligence.com publicly — confirm Cloudflare Access is enabled. Ctrl-C to stop.$(RESET)\n"
@@ -629,9 +633,18 @@ init: ## Initialize repository after checkout
 	@# that diff is the whole point.
 	@uv sync --all-packages --locked
 
+	@# A fresh .env gets its own random secrets, not the committed replace-me-
+	@# placeholders: anyone with the repo can read those, and a dev stack is not
+	@# always reachable from this machine alone (`make tunnel` publishes it).
+	@# Only placeholders are replaced, and only here, on a file this run has just
+	@# created, so an existing .env keeps the values its volumes were set up with.
+	@# The database passwords and the field-encryption key are not placeholders
+	@# and stay as committed (see scripts/dev-stack/env-secrets.ts). If a mint
+	@# fails, the half-made .env is removed so the next run tries again.
 	@if [ ! -f .env ]; then \
-		printf "Copying dotenv template file... "; \
-		cp -v .env.default .env; \
+		printf "Creating .env from the dotenv template, with generated secrets...\n"; \
+		cp .env.default .env && \
+		yarn tsx scripts/dev-stack/env-secrets-cli.ts mint .env || { rm -f .env; exit 1; }; \
 		printf "\n"; \
 	fi
 

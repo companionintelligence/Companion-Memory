@@ -46,3 +46,19 @@ test('a STATIC_PROXY_TARGET left in .env or the shell cannot point vite at anoth
 
   assert.equal(env.STATIC_PROXY_TARGET, 'http://127.0.0.1:58800');
 });
+
+test('the api listens on loopback unless DEV_LISTEN_HOST opens it up', () => {
+  const on = (platform: NodeJS.Platform, base: NodeJS.ProcessEnv = {}) =>
+    buildOvermindEnv(base, SOLO, { ...STACK, platform }).API_LISTEN_HOST;
+
+  assert.equal(on('darwin'), '127.0.0.1');
+  // Native Linux Docker reaches the host through the bridge gateway, so the
+  // sidecars' callbacks need more than loopback there.
+  assert.equal(on('linux'), '0.0.0.0');
+
+  assert.equal(on('darwin', { DEV_LISTEN_HOST: '0.0.0.0' }), '0.0.0.0');
+  assert.equal(on('linux', { DEV_LISTEN_HOST: '127.0.0.1' }), '127.0.0.1');
+
+  // An API_LISTEN_HOST left in .env does not override the choice.
+  assert.equal(on('darwin', { API_LISTEN_HOST: '0.0.0.0' }), '127.0.0.1');
+});

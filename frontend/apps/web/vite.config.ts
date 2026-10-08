@@ -170,7 +170,14 @@ export default defineConfig({
     },
   },
   server: {
-    host: '0.0.0.0',
+    // Loopback unless DEV_LISTEN_HOST says otherwise. This was `0.0.0.0`, which
+    // put the dev server, and through its `/api` and `/static` proxies the API
+    // and the object store, on the network of whoever ran it. Set
+    // DEV_LISTEN_HOST=0.0.0.0 in .env to test from a phone on the LAN or over the
+    // tailnet, which is what the `.ts.net` allowedHosts entry and the capacitor
+    // CORS origins below are for. `make dev` passes the same variable to the API
+    // (scripts/dev-stack/overmind-env.ts).
+    host: process.env.DEV_LISTEN_HOST || '127.0.0.1',
     // When WEB_PORT is set, bind exactly that port and fail rather than
     // drifting to the next free one, which is Vite's default. A reverse proxy
     // in front routes to this exact port, so a silent fallback would leave it

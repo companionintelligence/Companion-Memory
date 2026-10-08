@@ -453,7 +453,7 @@ their grace period — an authority `write` ("mutating, but nothing that deletes
 does not describe. It previously carried no auth guard at all, gated instead on
 `request.socket.remoteAddress` being loopback; that is the immediate peer rather
 than the client, and both proxies this repo ships (the `make dev` Caddy route,
-and the Vite dev server's `/api` proxy, which binds `0.0.0.0`) dial the API on
+and the Vite dev server's `/api` proxy, which then bound `0.0.0.0`) dial the API on
 localhost, so any caller on the network satisfied it. An operator inside the
 container now needs a session or a full-capability API key like anyone else.
 
