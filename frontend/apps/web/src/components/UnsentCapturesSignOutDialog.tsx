@@ -5,7 +5,9 @@ import { useAuth } from '@/hooks';
 /**
  * The question a phone sign-out asks when captures it could not upload are still queued:
  * signing out deletes them. Nothing is signed out or deleted until "Sign out"; "Cancel"
- * keeps the session and the queue as they are.
+ * keeps the session and the queue as they are. The copy promises only that: a capture
+ * waiting for the connection uploads once it is back, but one the Memory refused stays in
+ * "needs attention" until someone retries it.
  *
  * Mounted once, inside `AuthProvider`, because `useAuth`'s logout raises the question for
  * every way out (Log out in the Self menu, Log out on the phone's Settings page), and the
@@ -32,8 +34,8 @@ export function UnsentCapturesSignOutDialog() {
           </AlertDialog.Title>
           <AlertDialog.Description>
             {one
-              ? "Sign out and delete it? Cancel keeps it, so it can upload when you're back online."
-              : "Sign out and delete them? Cancel keeps them, so they can upload when you're back online."}
+              ? 'Sign out and delete it? To keep it, cancel and stay signed in.'
+              : 'Sign out and delete them? To keep them, cancel and stay signed in.'}
           </AlertDialog.Description>
         </AlertDialog.Header>
         <AlertDialog.Footer>

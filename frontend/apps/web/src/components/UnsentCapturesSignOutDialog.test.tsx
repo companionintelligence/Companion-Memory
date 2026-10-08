@@ -209,9 +209,7 @@ describe('signing out of the phone app with captures that have not uploaded', ()
 
     expect(within(dialog).getByText("3 captures haven't uploaded yet")).toBeInTheDocument();
     expect(
-      within(dialog).getByText(
-        "Sign out and delete them? Cancel keeps them, so they can upload when you're back online.",
-      ),
+      within(dialog).getByText('Sign out and delete them? To keep them, cancel and stay signed in.'),
     ).toBeInTheDocument();
     expect(screen.getByText('signed in')).toBeInTheDocument();
     expect(cleared(calls)).toBe(false);
@@ -258,9 +256,7 @@ describe('signing out of the phone app with captures that have not uploaded', ()
 
     expect(within(dialog).getByText("1 capture hasn't uploaded yet")).toBeInTheDocument();
     expect(
-      within(dialog).getByText(
-        "Sign out and delete it? Cancel keeps it, so it can upload when you're back online.",
-      ),
+      within(dialog).getByText('Sign out and delete it? To keep it, cancel and stay signed in.'),
     ).toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out' }));
