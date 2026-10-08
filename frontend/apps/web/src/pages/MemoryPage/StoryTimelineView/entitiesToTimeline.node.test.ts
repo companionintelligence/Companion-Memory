@@ -133,6 +133,71 @@ describe('buildMemoryTimelineData', () => {
     expect(data.events.find((slide) => slide.unique_id === 'planted')?.media).toBeUndefined();
   });
 
+  it('leaves out a third-party media address even with no quote in it', () => {
+    // TimelineJS's Wikipedia type takes the host from anything before `.wikipedia` and
+    // appends a JSONP <script> from it to the document.
+    const { data } = buildMemoryTimelineData(
+      [
+        entity({
+          __typename: 'EventType',
+          id: 'remote',
+          bucketStartTime: now.toISOString(),
+          bucketTimeSource: 'source',
+          title: 'A picture',
+          startTime: now.toISOString(),
+          galleryMediaContentType: 'image/jpeg',
+          galleryPreviewUrl: 'https://files.example/x.wikipedia.org/wiki/a.png',
+          gallerySourceUrl: null,
+        }),
+      ],
+      DEVICE_DATE_TIME_FORMATTER,
+      now,
+    );
+
+    const slide = data.events.find((event) => event.unique_id === 'remote');
+    expect(slide).toBeDefined();
+    expect(slide?.media).toBeUndefined();
+  });
+
+  it("leaves out a link signed as a download, whose query carries the file's name", () => {
+    // TimelineJS matches `spotify` anywhere in the address, query included.
+    const download =
+      '/ci-files/0b3f7c1e-0d2a-4c55-9a43-6a2d5f0e9c11?response-content-disposition=attachment%3B%20filename%3D%22spotify.svg%22&response-content-type=image%2Fsvg%2Bxml&X-Amz-Signature=abc';
+    const inline =
+      '/ci-files/6f1c2d3e-4b5a-4c69-8d7e-9f0a1b2c3d4e?response-content-type=image%2Fjpeg&X-Amz-Signature=def';
+    const { data } = buildMemoryTimelineData(
+      [
+        entity({
+          __typename: 'EventType',
+          id: 'svg',
+          bucketStartTime: now.toISOString(),
+          bucketTimeSource: 'source',
+          title: 'A drawing',
+          startTime: now.toISOString(),
+          galleryMediaContentType: 'image/svg+xml',
+          galleryPreviewUrl: download,
+          gallerySourceUrl: null,
+        }),
+        entity({
+          __typename: 'EventType',
+          id: 'photo',
+          bucketStartTime: new Date(now.getTime() - 60_000).toISOString(),
+          bucketTimeSource: 'source',
+          title: 'A photo',
+          startTime: new Date(now.getTime() - 60_000).toISOString(),
+          galleryMediaContentType: 'image/jpeg',
+          galleryPreviewUrl: inline,
+          gallerySourceUrl: null,
+        }),
+      ],
+      DEVICE_DATE_TIME_FORMATTER,
+      now,
+    );
+
+    expect(data.events.find((event) => event.unique_id === 'svg')?.media).toBeUndefined();
+    expect(data.events.find((event) => event.unique_id === 'photo')?.media?.url).toBe(`/static${inline}`);
+  });
+
   it('keeps the full range and lands on the first slide when anchored at range-start', () => {
     const flood = Array.from({ length: 80 }, (_, index) =>
       eventAt(`e-${index}`, new Date(2026, 6, 1 + index, 10), `Item ${index}`),

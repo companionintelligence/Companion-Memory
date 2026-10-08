@@ -1,3 +1,5 @@
+import { buildApiUrl } from '@ci/common';
+
 import { axisPadEraFromRange, partsOf } from '@/components/TimelineJs/dates';
 import { escapeHtml, plainSlideText } from '@/components/TimelineJs/escapeHtml';
 import type { TimelineJsData, TimelineSlide } from '@/components/TimelineJs/types';
@@ -101,6 +103,25 @@ function rangeHeadline(first: Date, last: Date): string {
  */
 const MARKUP_BREAKING = /['"<>`\s]/;
 
+/**
+ * Only the appliance's own `/static/` links go to TimelineJS as media, and only ones signed
+ * to show inline.
+ *
+ * Quotes are not the only way a third-party address gets in. Several TimelineJS types load
+ * from wherever the URL points: the Wikipedia type matches any URL with `wikipedia.org` in
+ * it, takes everything before that as the host, and appends a JSONP `<script>` from there
+ * to the document (`https://host.example/x.wikipedia.org/wiki/a.png` loads script from
+ * `host.example`). Others mount YouTube, Spotify or SoundCloud players, which the phone apps
+ * keep off the native bridge. A few of those patterns match anywhere in the string
+ * (`spotify`, `iframe`, `.pdf`), and a link signed as a download carries the file's name in
+ * its `response-content-disposition`, so a picture named `spotify.svg` would still pick the
+ * Spotify type. Everything in an inline link's path and query is written by the appliance
+ * (a UUID key and the signature), so TimelineJS treats it as a plain image.
+ */
+function isApplianceImageUrl(url: string): boolean {
+  return url.startsWith(buildApiUrl('/static/')) && !/[?&]response-content-disposition=/i.test(url);
+}
+
 function imageMediaUrl(entity: EntityItem): string | undefined {
   const media = getEntityMedia(entity);
   if (media?.kind !== 'image') {
@@ -109,7 +130,7 @@ function imageMediaUrl(entity: EntityItem): string | undefined {
 
   const url = media.thumbUrl ?? media.fullUrl;
 
-  return url && !MARKUP_BREAKING.test(url) ? url : undefined;
+  return url && isApplianceImageUrl(url) && !MARKUP_BREAKING.test(url) ? url : undefined;
 }
 
 function slideFromEntity(entity: EntityItem, fmt: DateTimeFormatter): DatedSlide | null {
