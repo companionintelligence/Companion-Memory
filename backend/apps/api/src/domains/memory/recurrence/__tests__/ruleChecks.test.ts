@@ -38,6 +38,19 @@ const REAL_RULES = [
   'FREQ=MINUTELY;INTERVAL=15',
 ];
 
+/**
+ * RFC 5545 says a rule MUST NOT carry both, but calendars write them, and rrule
+ * ends the series at whichever comes first. Both spellings of the order, and
+ * both an UNTIL that ends first and a COUNT that does.
+ */
+const UNTIL_AND_COUNT = [
+  'FREQ=DAILY;UNTIL=20261231;COUNT=3',
+  'FREQ=DAILY;COUNT=3;UNTIL=20261231',
+  'FREQ=WEEKLY;BYDAY=MO;UNTIL=20261020T160000Z;COUNT=10',
+  'FREQ=WEEKLY;BYDAY=MO;COUNT=10;UNTIL=20261020T160000Z',
+  'FREQ=HOURLY;INTERVAL=3;BYHOUR=9,10,11;COUNT=5;UNTIL=20261001T000000',
+];
+
 describe('checkRecurrenceRule', () => {
   it('accepts the rules real calendars write', () => {
     for (const rule of REAL_RULES) {
@@ -68,9 +81,13 @@ describe('checkRecurrenceRule', () => {
     ['FREQ=YEARLY;BYDAY=54MO', /BYDAY/],
     ['FREQ=WEEKLY;BYDAY=XX', /BYDAY/],
     ['FREQ=WEEKLY;WKST=XX', /WKST/],
-    ['FREQ=DAILY;COUNT=3;UNTIL=20261231', /UNTIL and COUNT/],
     ['FREQ=DAILY;COUNT=0', /COUNT/],
     ['FREQ=DAILY;UNTIL=tomorrow', /UNTIL/],
+    // With both present, each is still checked on its own.
+    ['FREQ=DAILY;COUNT=0;UNTIL=20261231', /COUNT "0"/],
+    ['FREQ=DAILY;UNTIL=20261231;COUNT=-3', /COUNT "-3"/],
+    ['FREQ=DAILY;COUNT=3;UNTIL=tomorrow', /UNTIL "tomorrow"/],
+    ['FREQ=DAILY;UNTIL=20261231;COUNT=3;UNTIL=20271231', /UNTIL appears more than once/],
     ['FREQ=DAILY;FREQ=WEEKLY', /more than once/],
     ['FREQ=DAILY;BYEASTER=0', /unsupported rule part BYEASTER/],
     ['FREQ=DAILY;TZID=Europe/Berlin', /unsupported rule part TZID/],
@@ -84,6 +101,10 @@ describe('checkRecurrenceRule', () => {
 
     expect(check.ok).toBe(false);
     expect(check.ok ? '' : check.reason).toMatch(reason);
+  });
+
+  it.each(UNTIL_AND_COUNT)('accepts UNTIL with COUNT: %s', (rule) => {
+    expect(checkRecurrenceRule(rule)).toEqual(expect.objectContaining({ ok: true }));
   });
 });
 
@@ -119,6 +140,8 @@ describe('recurrenceRuleRejection (the write-side check)', () => {
       ]),
     ).toBeNull();
     expect(recurrenceRuleRejection('FREQ=DAILY;COUNT=3')).toBeNull();
+    expect(recurrenceRuleRejection(UNTIL_AND_COUNT)).toBeNull();
+    expect(recurrenceRuleRejection(UNTIL_AND_COUNT.map((rule) => `RRULE:${rule}`))).toBeNull();
     expect(recurrenceRuleRejection(undefined)).toBeNull();
     expect(recurrenceRuleRejection({ not: 'a rule' })).toBeNull();
   });
@@ -173,8 +196,8 @@ describe('parseRecurrence refuses what rrule would never return from', () => {
     expect(fine).toEqual([]);
   });
 
-  it('still parses every rule real calendars write', () => {
-    for (const rule of REAL_RULES.filter((r) => !/MINUTELY/.test(r))) {
+  it('still parses every rule real calendars write, UNTIL with COUNT included', () => {
+    for (const rule of [...REAL_RULES.filter((r) => !/MINUTELY/.test(r)), ...UNTIL_AND_COUNT]) {
       const diagnostics: ExpansionDiagnostic[] = [];
 
       expect({ rule, spec: parseRecurrence(row(rule), opts(diagnostics)) !== null, diagnostics }).toEqual({

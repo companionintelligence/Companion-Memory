@@ -143,6 +143,13 @@ describe('expandSeries — the period budget never cuts an ordinary series short
     // One date every four years from a daily walk: the sparsest shape the
     // window bound has to get right.
     'FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29',
+    // UNTIL with COUNT. Across the starts below each one ends on COUNT for
+    // some and on UNTIL for others, and the leap-day one's third and last
+    // date is 29 February 2028, inside a window, from the 2020 start.
+    'FREQ=DAILY;UNTIL=20261115;COUNT=4000',
+    'FREQ=WEEKLY;BYDAY=TU,TH;COUNT=600;UNTIL=20280301T000000',
+    'FREQ=MONTHLY;BYMONTHDAY=31;UNTIL=20280215T000000;COUNT=40',
+    'FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29;COUNT=3;UNTIL=20400101',
   ];
   const starts = [
     floating(2015, 3, 4),
@@ -201,5 +208,108 @@ describe('expandSeries — the period budget never cuts an ordinary series short
 
   it('keeps the period ceiling at the iteration ceiling', () => {
     expect(DEFAULT_LIMITS.maxPeriods).toBe(DEFAULT_LIMITS.maxIterations);
+  });
+});
+
+describe('expandSeries — UNTIL with COUNT ends at whichever comes first', () => {
+  // A Monday 09:00 standup in Los Angeles from 28 September 2026. Its Mondays
+  // are 16:00Z until the clocks change on 1 November.
+  const MONDAYS = [
+    '2026-09-28T16:00:00.000Z',
+    '2026-10-05T16:00:00.000Z',
+    '2026-10-12T16:00:00.000Z',
+    '2026-10-19T16:00:00.000Z',
+  ];
+
+  it.each([
+    ['UNTIL ends it, written first', 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20261019T235959;COUNT=10', MONDAYS],
+    ['UNTIL ends it, written last', 'FREQ=WEEKLY;BYDAY=MO;COUNT=10;UNTIL=20261019T235959', MONDAYS],
+    [
+      'COUNT ends it, written first',
+      'FREQ=WEEKLY;BYDAY=MO;COUNT=3;UNTIL=20261231T235959',
+      MONDAYS.slice(0, 3),
+    ],
+    [
+      'COUNT ends it, written last',
+      'FREQ=WEEKLY;BYDAY=MO;UNTIL=20261231T235959;COUNT=3',
+      MONDAYS.slice(0, 3),
+    ],
+  ])('%s, exactly as rrule does unbudgeted', (_label, rule, expected) => {
+    const s = spec(floating(2026, 9, 28), rule);
+    const result = expandSeries(s, AUTUMN);
+
+    expect(result.starts.map((d) => d.toISOString())).toEqual(expected);
+    expect(result.starts.map((d) => d.getTime())).toEqual(referenceStarts(s, AUTUMN));
+    expect(result.truncated).toBe(false);
+  });
+
+  it('counts the dates before the window toward COUNT', () => {
+    // Ten Mondays from 7 September: the last two are 2 and 9 November (17:00Z
+    // once the clocks have changed), so a November window holds only those
+    // two, however far UNTIL reaches.
+    const s = spec(floating(2026, 9, 7), 'FREQ=WEEKLY;BYDAY=MO;COUNT=10;UNTIL=20271231T235959');
+    const november = { from: new Date('2026-11-01T00:00:00Z'), to: new Date('2026-12-01T00:00:00Z') };
+
+    expect(expandSeries(s, november).starts.map((d) => d.toISOString())).toEqual([
+      '2026-11-02T17:00:00.000Z',
+      '2026-11-09T17:00:00.000Z',
+    ]);
+    expect(expandSeries(s, november).starts.map((d) => d.getTime())).toEqual(referenceStarts(s, november));
+  });
+
+  it('stops a rule that never produces a date at the window, whatever UNTIL and COUNT say', () => {
+    // Neither part is ever consulted: rrule checks both only on a date it
+    // produces, and this rule produces none. Unbounded, it walks to year 9999.
+    let result: ReturnType<typeof expandSeries> | undefined;
+    const ms = elapsedMs(() => {
+      result = expandSeries(
+        spec(floating(2026, 1, 1), 'FREQ=DAILY;BYMONTH=1;BYYEARDAY=200;COUNT=5;UNTIL=99991231'),
+        AUTUMN,
+      );
+    });
+
+    expect(result).toEqual({ starts: [], truncated: false, limit: undefined });
+    expect(ms).toBeLessThan(2_000);
+  });
+
+  it('holds such a rule to the default period ceiling when the window is out of reach', () => {
+    // From 1700 the window is about 119,000 daily periods away, past the
+    // 50,000-period ceiling, so the ceiling stops it and says so.
+    let result: ReturnType<typeof expandSeries> | undefined;
+    const ms = elapsedMs(() => {
+      result = expandSeries(
+        spec(floating(1700, 1, 1), 'FREQ=DAILY;BYMONTH=1;BYYEARDAY=200;UNTIL=99991231;COUNT=999999999'),
+        AUTUMN,
+      );
+    });
+
+    expect(DEFAULT_LIMITS.maxPeriods).toBe(50_000);
+    expect(result).toEqual({ starts: [], truncated: true, limit: 'maxPeriods' });
+    expect(ms).toBeLessThan(5_000);
+  });
+
+  it('holds a rule that produces a date every period to the iteration ceiling', () => {
+    // The largest COUNT the rule check accepts and the last UNTIL rrule
+    // parses: neither ends this walk before 50,000 dates do.
+    let result: ReturnType<typeof expandSeries> | undefined;
+    const ms = elapsedMs(() => {
+      result = expandSeries(spec(floating(1700, 1, 1), 'FREQ=DAILY;COUNT=999999999;UNTIL=99991231'), AUTUMN);
+    });
+
+    expect(result).toEqual({ starts: [], truncated: true, limit: 'maxIterations' });
+    expect(ms).toBeLessThan(5_000);
+  });
+
+  it('refuses an hourly BYHOUR the start hour never reaches, UNTIL and COUNT or not', () => {
+    const ms = elapsedMs(() => {
+      expect(
+        expandSeries(
+          spec(floating(2026, 9, 1), 'FREQ=HOURLY;INTERVAL=24;BYHOUR=5;COUNT=3;UNTIL=20261231'),
+          AUTUMN,
+        ),
+      ).toEqual({ starts: [], truncated: true, limit: 'maxPeriods' });
+    });
+
+    expect(ms).toBeLessThan(1_000);
   });
 });

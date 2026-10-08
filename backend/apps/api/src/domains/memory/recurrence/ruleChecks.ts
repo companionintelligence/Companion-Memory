@@ -15,9 +15,11 @@
  *    at year 9999, after seconds; `expandSeries` bounds that walk.
  *
  * Everything here is RFC 5545 section 3.3.10 plus the two loop guards, read off
- * the rule text before rrule ever sees it. Rule parts rrule accepts but RFC 5545
- * does not (`BYEASTER`, and `DTSTART`/`TZID` inside the rule) are refused: they
- * change how the walk runs, and no source this appliance syncs writes them.
+ * the rule text before rrule ever sees it, with one rule relaxed: `UNTIL` and
+ * `COUNT` may appear together (see {@link checkRecurrenceRule}). Rule parts rrule
+ * accepts but RFC 5545 does not (`BYEASTER`, and `DTSTART`/`TZID` inside the
+ * rule) are refused: they change how the walk runs, and no source this appliance
+ * syncs writes them.
  */
 
 /** The largest `INTERVAL` accepted. Larger steps are harmless to the walk but meaningless on a calendar. */
@@ -112,10 +114,11 @@ export function checkRecurrenceRule(ruleText: string): RuleCheck {
     return { ok: false, reason: freq ? `unknown FREQ ${freq}` : 'no FREQ' };
   }
 
-  if (seen.has('UNTIL') && seen.has('COUNT')) {
-    return { ok: false, reason: 'UNTIL and COUNT together' };
-  }
-
+  // RFC 5545 forbids UNTIL and COUNT in one rule, but calendars do write both,
+  // and rrule ends such a series at whichever comes first. It checks both on
+  // each date it produces, in the same loop as either one alone, so the pair
+  // adds no walk of its own: expandSeries' window and period bounds still stop
+  // it. Each part is still checked on its own below.
   const until = seen.get('UNTIL');
 
   if (until !== undefined && !/^\d{8}(T\d{6}Z?)?$/i.test(until)) {

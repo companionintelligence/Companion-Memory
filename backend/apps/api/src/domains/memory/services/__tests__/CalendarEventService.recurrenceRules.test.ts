@@ -118,6 +118,58 @@ describe('CalendarEventService — recurrence rules on write', () => {
     expect(backwards.recurrencePattern).toEqual({ note: 'kept' });
   });
 
+  it('stores a rule with both UNTIL and COUNT as written, in either order', async () => {
+    const untilFirst = ['RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20261020T160000Z;COUNT=10'];
+    const countFirst = 'FREQ=WEEKLY;BYDAY=MO;COUNT=3;UNTIL=20261231T235959Z';
+
+    await service.create(ctx, [
+      dto({ metadata: { recurrenceRule: untilFirst, recurrenceTimeZone: 'America/Los_Angeles' } }),
+      dto({ recurrence_pattern: { rrule: countFirst } }),
+    ]);
+    const [ruleInMetadata, ruleInPattern] = insertedRows();
+
+    expect(ruleInMetadata.metadata).toEqual({
+      recurrenceRule: untilFirst,
+      recurrenceTimeZone: 'America/Los_Angeles',
+    });
+    expect(ruleInPattern.recurrencePattern).toEqual({ rrule: countFirst });
+  });
+
+  it('lets an edit store a rule with both UNTIL and COUNT', async () => {
+    const aggregate = (service as unknown as { aggregate: { applyUpdate: () => Promise<unknown> } })
+      .aggregate;
+    const applyUpdate = jest.spyOn(aggregate, 'applyUpdate').mockResolvedValue(null);
+    const rule = ['RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=3;UNTIL=20261231T235959Z'];
+
+    await expect(
+      service.update(ctx, '0198f0a0-0000-7000-8000-000000000001', { metadata: { recurrenceRule: rule } }),
+    ).resolves.toBeNull();
+    await expect(
+      service.update(ctx, '0198f0a0-0000-7000-8000-000000000001', {
+        recurrence_pattern: { rrule: 'FREQ=DAILY;UNTIL=20261231;COUNT=3' },
+      }),
+    ).resolves.toBeNull();
+
+    expect(applyUpdate).toHaveBeenNthCalledWith(
+      1,
+      ctx,
+      '0198f0a0-0000-7000-8000-000000000001',
+      expect.objectContaining({ detail: expect.objectContaining({ metadata: { recurrenceRule: rule } }) }),
+      expect.anything(),
+    );
+    expect(applyUpdate).toHaveBeenNthCalledWith(
+      2,
+      ctx,
+      '0198f0a0-0000-7000-8000-000000000001',
+      expect.objectContaining({
+        detail: expect.objectContaining({
+          recurrencePattern: { rrule: 'FREQ=DAILY;UNTIL=20261231;COUNT=3' },
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
   it('refuses an edit that would store such a rule, before touching the row', async () => {
     const findOne = jest.fn();
     repo.findOne = findOne;
@@ -132,6 +184,12 @@ describe('CalendarEventService — recurrence rules on write', () => {
         recurrence_pattern: { rrule: 'FREQ=DAILY;BYMONTH=13' },
       }),
     ).rejects.toThrow(/Unsupported recurrence rule: BYMONTH/);
+    // Both parts present no longer excuses either one being malformed.
+    await expect(
+      service.update(ctx, '0198f0a0-0000-7000-8000-000000000001', {
+        recurrence_pattern: { rrule: 'FREQ=DAILY;UNTIL=20261231;COUNT=0' },
+      }),
+    ).rejects.toThrow('Unsupported recurrence rule: COUNT "0" is not a positive integer');
     expect(findOne).not.toHaveBeenCalled();
   });
 });
