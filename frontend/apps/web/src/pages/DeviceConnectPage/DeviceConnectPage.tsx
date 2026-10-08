@@ -141,6 +141,19 @@ export function DeviceConnectPage() {
   // Set while handleConnect runs. A resume on a warm return finds the same sign-in and pick, and
   // only one of the two may pair.
   const connectInFlight = useRef(false);
+  // Counts handleConnect runs. A resume that began before the latest one read storage from before
+  // that pick: whatever it found, the pick owns the sign-in now.
+  const connectRuns = useRef(0);
+
+  /** The sign-in can't open anything any more: back to Log in, saying why. */
+  const signInAgain = (message: string) => {
+    void forgetPortalSignIn();
+    setSignIn(null);
+    setAuth(null);
+    setDevices([]);
+    setStep('sign-in');
+    setSignInError(message);
+  };
 
   useEffect(() => {
     if (!initializing && authenticated && user) {
@@ -161,14 +174,22 @@ export function DeviceConnectPage() {
       return;
     }
 
-    setSignInError(
+    const message =
       userError instanceof Error
         ? userError.message
-        : 'Signed in but could not load your profile from this Memory Server.',
-    );
+        : 'Signed in but could not load your profile from this Memory Server.';
+
     setConnectingId(null);
     setAwaitingProfile(false);
-  }, [authenticated, awaitingProfile, connectingId, initializing, user, userError, userLoading]);
+
+    // An older Portal's id_token can be sent again. A code spent on the pick can't: like every
+    // other failure after the spend, this one needs a new sign-in.
+    if (auth) {
+      setSignInError(message);
+    } else {
+      signInAgain(message);
+    }
+  }, [auth, authenticated, awaitingProfile, connectingId, initializing, user, userError, userLoading]);
 
   // Safari → "Open with Companion" often cold-starts the app. PKCE state lives in
   // localStorage; Capacitor stashed the callback URL. Pick the sign-in up on mount
@@ -178,17 +199,20 @@ export function DeviceConnectPage() {
     let cancelled = false;
     let inFlight = false;
     const finish = async () => {
-      if (cancelled || inFlight) {
+      // While handleConnect runs it owns the sign-in. A resume now would also hand its recorded
+      // pick over, and a relaunch after that could no longer finish the pairing.
+      if (cancelled || inFlight || connectInFlight.current) {
         return;
       }
 
       inFlight = true;
+      const runsAtStart = connectRuns.current;
+      const pickStartedSince = () => connectRuns.current !== runsAtStart;
 
       try {
         const resumed = await resumePendingOidcLogin();
 
-        // While handleConnect runs, it is already spending this sign-in.
-        if (cancelled || (resumed && connectInFlight.current)) {
+        if (cancelled || pickStartedSince()) {
           return;
         }
 
@@ -231,19 +255,24 @@ export function DeviceConnectPage() {
         setDevices(servers);
         setStep('pick');
       } catch (err) {
-        if (!cancelled && !(err instanceof OidcCancelledError)) {
-          if (err instanceof PortalSignInExpiredError) {
-            void forgetPortalSignIn();
-          }
-
-          const message = err instanceof Error ? err.message : 'Sign-in failed';
-
-          if (/invalid.?code|invalid_grant/i.test(message)) {
-            return;
-          }
-
-          setSignInError(message);
+        // A pick that started meanwhile owns the sign-in and reports its own outcome.
+        if (cancelled || err instanceof OidcCancelledError || pickStartedSince()) {
+          return;
         }
+
+        if (err instanceof PortalSignInExpiredError) {
+          signInAgain(err.message);
+
+          return;
+        }
+
+        const message = err instanceof Error ? err.message : 'Sign-in failed';
+
+        if (/invalid.?code|invalid_grant/i.test(message)) {
+          return;
+        }
+
+        setSignInError(message);
       } finally {
         inFlight = false;
 
@@ -268,10 +297,10 @@ export function DeviceConnectPage() {
     };
   }, [portalUrl]);
 
-  const loadDevices = async (portalAuth: PortalAuth) => {
+  const loadDevices = async (portalAuth: PortalAuth, portal = portalUrl) => {
     writePortalAuth(portalAuth);
     setAuth(portalAuth);
-    const servers = await listMemoryServers(portalAuth, portalUrl);
+    const servers = await listMemoryServers(portalAuth, portal);
     setDevices(servers);
     setStep('pick');
   };
@@ -280,20 +309,29 @@ export function DeviceConnectPage() {
    * List the Memories for a sign-in whose code is not spent yet. A Portal that lists by code keeps
    * the code for the pick, and nothing is stored but the sign-in itself. An older Portal answers
    * 404, so the code is exchanged now and the list comes with the access token, as before.
+   *
+   * Always at the Portal that issued the code (`held.portal`), never the Companion URL as it reads
+   * now: Advanced can change that while the sign-in is held, and the code with its verifier is
+   * enough to redeem it.
    */
   async function listForSignIn(held: PortalSignIn, isCancelled: () => boolean = () => false): Promise<void> {
-    const servers = await listMemoryServersByCode(held, portalUrl);
+    const servers = await listMemoryServersByCode(held, held.portal);
 
     if (servers === null) {
       const tokens = await exchangePortalSignIn(held);
+      const portalAuth: PortalAuth = {
+        token: tokens.accessToken,
+        idToken: tokens.idToken,
+        cookie: null,
+        kind: 'oauth',
+      };
 
-      if (!isCancelled()) {
-        await loadDevices({
-          token: tokens.accessToken,
-          idToken: tokens.idToken,
-          cookie: null,
-          kind: 'oauth',
-        });
+      if (isCancelled()) {
+        // The code is spent and the sign-in dropped: keep the tokens, so the next mount lists
+        // with them instead of asking for a new sign-in.
+        writePortalAuth(portalAuth);
+      } else {
+        await loadDevices(portalAuth, held.portal);
       }
 
       return;
@@ -308,16 +346,6 @@ export function DeviceConnectPage() {
     setDevices(servers);
     setStep('pick');
   }
-
-  /** The sign-in can't open anything any more: back to Log in, saying why. */
-  const signInAgain = (message: string) => {
-    void forgetPortalSignIn();
-    setSignIn(null);
-    setAuth(null);
-    setDevices([]);
-    setStep('sign-in');
-    setSignInError(message);
-  };
 
   const handleOidcLogin = async () => {
     // The picker restores whatever Portal token is still in this tab. Drop it
@@ -371,7 +399,7 @@ export function DeviceConnectPage() {
     try {
       if (signIn) {
         // Listed by the same unspent code, which the Portal still takes until it expires.
-        const servers = await listMemoryServersByCode(signIn, portalUrl);
+        const servers = await listMemoryServersByCode(signIn, signIn.portal);
 
         if (servers === null) {
           throw new Error('Could not refresh Memory Servers.');
@@ -403,6 +431,7 @@ export function DeviceConnectPage() {
     setSignInError(null);
     profileErrorBeforeConnect.current = userError;
     connectInFlight.current = true;
+    connectRuns.current += 1;
     // Once the code is spent, a failure needs a new sign-in: this one can open nothing else.
     let spent = false;
 
@@ -447,7 +476,7 @@ export function DeviceConnectPage() {
             err instanceof Error &&
             (err.name === 'TimeoutError' || /load failed|failed to fetch|network/i.test(text));
 
-          setSignInError(unreachable ? portalUnreachableMessage(portalUrl) : text || 'Sign-in failed');
+          setSignInError(unreachable ? portalUnreachableMessage(held.portal) : text || 'Sign-in failed');
 
           return;
         }
@@ -620,10 +649,12 @@ export function DeviceConnectPage() {
                     const active = reachable && device.status === 'active';
 
                     return (
+                      // Not while a list is in flight: one that lands after the pick spent the code
+                      // would answer invalid_grant, or hand the spent sign-in back.
                       <button
                         key={device.id}
                         type="button"
-                        disabled={connectingId !== null || !reachable}
+                        disabled={busy || connectingId !== null || !reachable}
                         onClick={() => void handleConnect(device)}
                         data-testid={`memory-row-${device.id}`}
                         className="border-input flex min-h-[56px] items-center justify-between gap-3 rounded-md border p-4 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"

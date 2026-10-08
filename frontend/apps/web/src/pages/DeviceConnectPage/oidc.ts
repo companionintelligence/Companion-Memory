@@ -528,14 +528,14 @@ async function exchangeCodeOnce(
       parsed = undefined;
     }
 
-    const code = parsed && typeof parsed === 'object' ? (parsed as { error?: unknown }).error : undefined;
+    const error = parsed && typeof parsed === 'object' ? (parsed as { error?: unknown }).error : undefined;
 
-    if (code === 'invalid_target') {
+    if (error === 'invalid_target') {
       throw new PortalInvalidTargetError();
     }
 
     // An unknown, expired or spent code, or one that doesn't match this sign-in.
-    if (code === 'invalid_grant') {
+    if (error === 'invalid_grant') {
       throw new PortalSignInExpiredError();
     }
 
