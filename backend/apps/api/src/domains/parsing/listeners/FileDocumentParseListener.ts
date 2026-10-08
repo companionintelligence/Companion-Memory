@@ -12,7 +12,7 @@ import { FileChunkEntity } from '../entities/FileChunkEntity';
 import { DocumentParsedEvent } from '../events';
 import { DocumentChunkerService } from '../services/DocumentChunkerService';
 import { DocumentChunkService } from '../services/DocumentChunkService';
-import { UnparseableDocumentError } from '../services/DocumentExtractor';
+import { MAX_PARSE_BYTES, UnparseableDocumentError } from '../services/DocumentExtractor';
 import { DocumentParserService } from '../services/DocumentParserService';
 import { ParseStatus } from '../types';
 
@@ -70,6 +70,20 @@ export class FileDocumentParseListener {
       });
 
       await this.updateParseStatus(file.id, ParseStatus.SKIPPED);
+
+      return;
+    }
+
+    // `size` is a bigint column, so it can arrive as a string.
+    const size = file.size == null ? null : Number(file.size);
+
+    if (size !== null && size > MAX_PARSE_BYTES) {
+      // getFileContent holds the whole object in memory, and the parser would
+      // refuse it anyway: answer now, without downloading gigabytes to do it.
+      const parseError = `File is ${size} bytes; the parser reads at most ${MAX_PARSE_BYTES}`;
+
+      this.logger.log('File too large to parse, skipping', { fileId: file.id, bytes: size });
+      await this.updateParseStatus(file.id, ParseStatus.FAILED, { parseError });
 
       return;
     }
