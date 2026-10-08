@@ -217,7 +217,9 @@ export function AccountSection() {
 
       // The account stops authenticating immediately, so there is nothing left to
       // stay signed in to: drop the local credential and return to a logged-out app.
-      await logout();
+      // Without asking about captures still queued on a phone: they can no longer
+      // upload, and the deletion just confirmed covers them.
+      await logout({ discardUnsentCaptures: true });
     } catch (err) {
       if (err instanceof FetchJsonError && err.status === 409 && err.message === SUCCESSOR_REQUIRED) {
         // The server deleted nothing. Ask who takes over, then the same button tries again.

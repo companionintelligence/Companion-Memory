@@ -4,6 +4,7 @@ import {
   addAppUrlOpenListener,
   clearOutboxAfterSignOut,
   clearPersistedApiBaseUrl,
+  countUnsentBeforeSignOut,
   createHookContext,
   drainOutboxBeforeSignOut,
   fetchJson,
@@ -429,6 +430,22 @@ async function completeOidcNativeSignIn(code: string, codeVerifier: string): Pro
   return mintAndStoreApiKey(jwt);
 }
 
+/** What a caller of `logout` can ask for. */
+export interface LogoutOptions {
+  /**
+   * Sign out without asking about captures that never uploaded, and delete them. Only for a
+   * caller whose own confirmation already covered them: account deletion, after which the
+   * key no longer works and the captures could never upload anyway.
+   */
+  discardUnsentCaptures?: boolean;
+}
+
+export interface SignOutPrompt {
+  open: boolean;
+  /** Queued captures of this account that signing out would delete. */
+  unsentCaptures: number;
+}
+
 type ReturnValue = [
   {
     expired: boolean;
@@ -453,10 +470,24 @@ type ReturnValue = [
      */
     initializing: boolean;
     error: unknown | null;
+    /**
+     * The question a phone sign-out asks when captures are still queued after its last
+     * upload try (`UnsentCapturesSignOutDialog` shows it). `unsentCaptures` keeps its value
+     * after the answer, so the closing dialog does not change its text.
+     */
+    signOutPrompt: SignOutPrompt;
   },
   {
     login: (username: string, password: string) => Promise<void>;
-    logout: () => void;
+    /**
+     * Sign out. On a phone with captures that never reached this account, it asks first:
+     * `signOutPrompt` opens, and nothing is signed out or deleted until `confirmSignOut`.
+     */
+    logout: (options?: LogoutOptions) => Promise<void>;
+    /** "Sign out" on the `signOutPrompt` question: delete the unsent captures and sign out. */
+    confirmSignOut: () => Promise<void>;
+    /** "Cancel" on the `signOutPrompt` question: stay signed in, with the queue as it is. */
+    cancelSignOut: () => void;
     signup: (name: string, email: string, password: string, signup_code?: string) => Promise<void>;
     /**
      * After Portal cloud-connect: trade a portal OIDC bearer for a Memory API
@@ -494,6 +525,7 @@ function useAuth(): ReturnValue {
   // Native-only: present once the keystore API key is loaded/minted. Drives the
   // authenticated state on native, where there is no JWT in `accessToken`.
   const [nativeApiKey, setNativeApiKey] = useState<string | null>(null);
+  const [signOutPrompt, setSignOutPrompt] = useState<SignOutPrompt>({ open: false, unsentCaptures: 0 });
 
   const decoded = useMemo(() => (accessToken ? jwtDecode<JwtPayload>(accessToken) : null), [accessToken]);
   const isExpired = useCallback(() => (decoded ? Date.now() >= decoded.exp * 1000 : true), [decoded]);
@@ -617,7 +649,8 @@ function useAuth(): ReturnValue {
     [],
   );
 
-  const logout = useCallback(async () => {
+  // The sign-out itself, once there is nothing left to ask. `logout` decides whether to ask.
+  const signOut = useCallback(async () => {
     // The key this device signs in with (phone and desktop), read before it is dropped below.
     // The stored copy when none is in memory: the desktop never loads its stored key back on
     // start, and a phone can sign out before the keystore restore lands. Deleting that copy
@@ -628,13 +661,6 @@ function useAuth(): ReturnValue {
     // Drop the in-memory key before the replica wipe. A late keystore restore
     // must not put the previous box's key back under the next account.
     bumpNativeCredentialEpoch();
-
-    if (isNativePlatform()) {
-      // One last, bounded upload of what this account queued while offline,
-      // while its key is still the one requests carry. Whatever is left is
-      // deleted below, once the key is gone.
-      await drainOutboxBeforeSignOut();
-    }
 
     if (isNativePlatform() || isTauriPlatform()) {
       setApiKey(null);
@@ -672,8 +698,9 @@ function useAuth(): ReturnValue {
       clearPersistedApiBaseUrl();
       await syncNativeIntentConfig();
       // The Local Hub outbox outlives the session. Rows still queued belong to
-      // the account that just left, and would otherwise upload into whichever
-      // account signs in next on this phone.
+      // the account that just left (`logout` asked before deleting its unsent
+      // ones), and would otherwise upload into whichever account signs in next
+      // on this phone.
       await clearOutboxAfterSignOut();
       setNativeApiKey(null);
       setAccessToken(null);
@@ -703,6 +730,39 @@ function useAuth(): ReturnValue {
 
     navigate('/');
   }, [navigate]);
+
+  const logout = useCallback(
+    async ({ discardUnsentCaptures = false }: LogoutOptions = {}) => {
+      if (isNativePlatform()) {
+        // One last, bounded upload of what this account queued while offline, while its
+        // key is still the one requests carry.
+        await drainOutboxBeforeSignOut();
+
+        // Signing out deletes whatever is still queued. When some of it is this account's,
+        // ask first, and touch nothing until the answer: Cancel keeps the session and the
+        // queue, so the captures can still upload once the phone is back online.
+        const unsentCaptures = discardUnsentCaptures ? 0 : await countUnsentBeforeSignOut();
+
+        if (unsentCaptures > 0) {
+          setSignOutPrompt({ open: true, unsentCaptures });
+
+          return;
+        }
+      }
+
+      await signOut();
+    },
+    [signOut],
+  );
+
+  const confirmSignOut = useCallback(async () => {
+    setSignOutPrompt((prompt) => ({ ...prompt, open: false }));
+    await signOut();
+  }, [signOut]);
+
+  const cancelSignOut = useCallback(() => {
+    setSignOutPrompt((prompt) => ({ ...prompt, open: false }));
+  }, []);
 
   const signup = useCallback(
     async (name: string, email: string, password: string, signup_code?: string) => {
@@ -980,10 +1040,13 @@ function useAuth(): ReturnValue {
       loading: loginLoading || initializing,
       initializing,
       error: loginError ?? refreshError,
+      signOutPrompt,
     },
     {
       login,
       logout,
+      confirmSignOut,
+      cancelSignOut,
       signup,
       completePortalMemoryConnect,
       completeMemoryPasswordConnect,

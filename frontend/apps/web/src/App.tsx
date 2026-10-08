@@ -28,6 +28,7 @@ import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { RedirectKnownUser } from '@/components/RedirectKnownUser';
 import { RequireOnboarded } from '@/components/RequireOnboarded';
 import { ThemeProvider, BackgroundProvider } from '@/components/ThemePicker';
+import { UnsentCapturesSignOutDialog } from '@/components/UnsentCapturesSignOutDialog';
 import {
   AuthProvider,
   CaptureModalProvider,
@@ -187,6 +188,9 @@ function Providers({ children }: { children: ReactNode }) {
                   resolved connection mode rather than a timer of its own. */}
               <OutboxQueueProvider args={[]}>
                 <AuthProvider args={[]}>
+                  {/* The phone's sign-out asks here when captures have not uploaded, whichever
+                      Log out started it. */}
+                  <UnsentCapturesSignOutDialog />
                   <FeaturesProvider args={[]}>
                     <ModelProvider args={[]}>
                       <CaptureModalProvider args={[]}>

@@ -186,6 +186,7 @@ export {
   OutboxQueueProvider,
   SIGN_OUT_DRAIN_TIMEOUT_MS,
   clearOutboxAfterSignOut,
+  countUnsentBeforeSignOut,
   drainOutboxBeforeSignOut,
   finishStagesFor,
   flushOutbox,

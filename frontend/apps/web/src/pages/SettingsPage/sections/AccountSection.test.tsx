@@ -184,6 +184,9 @@ describe('AccountSection — delete', () => {
 
     const [, init] = findCall('DELETE');
     expect(init.headers).not.toHaveProperty('Authorization');
+    // The deleted account's key no longer works, so captures still queued on the phone
+    // could never upload: sign-out does not stop to ask about them.
+    expect(h.logout).toHaveBeenCalledWith({ discardUnsentCaptures: true });
   });
 
   it('surfaces an error and stays signed in when the request fails', async () => {

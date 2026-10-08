@@ -477,6 +477,9 @@ describe('useAuth', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/authenticate/logout'))).toBe(
       true,
     );
+    // A browser has no capture queue, so web sign-out never stops to ask about one.
+    expect(result.current[0].signOutPrompt.open).toBe(false);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/outbox'))).toBe(false);
   });
 
   it('native logout forgets the paired Memory origin so the next account can pick a device', async () => {
@@ -658,7 +661,7 @@ describe('useAuth', () => {
         });
         const path = url.startsWith(HUB) ? url.slice(HUB.length) : url;
 
-        if (path === '/api/outbox?status=pending') {
+        if ((path === '/api/outbox?status=pending' || path === '/api/outbox') && init?.method !== 'DELETE') {
           return jsonResponse({
             items: queued
               ? [
@@ -724,6 +727,84 @@ describe('useAuth', () => {
       expect(clear?.keyAfterwards).toBeNull();
       expect(seen.indexOf(upload!)).toBeLessThan(seen.indexOf(clear!));
       expect(result.current[0].authenticated).toBe(false);
+      // The upload emptied the queue, so there was nothing to ask about.
+      expect(result.current[0].signOutPrompt.open).toBe(false);
+    });
+
+    it('signs out without asking when the caller already covered the unsent captures', async () => {
+      // Account deletion: the key stops working, so the captures can never upload.
+      localStorage.setItem('ci.apiBaseUrl', 'https://core7.example.com');
+      setApiBaseUrl('https://core7.example.com');
+      const secureStore = new Map([
+        ['ci.apiKey', 'outgoing-key'],
+        ['ci.apiBaseUrl', 'https://core7.example.com'],
+      ]);
+      (window as unknown as { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+        Plugins: {
+          LocalHub: {
+            start: vi.fn(async () => ({ baseUrl: HUB, token: 'hub-token' })),
+            secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: secureStore.get(key) ?? null })),
+            secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+              secureStore.set(key, value);
+            }),
+            secureRemove: vi.fn(async ({ key }: { key: string }) => {
+              secureStore.delete(key);
+            }),
+          },
+        },
+      };
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const pendingRow = {
+        id: 'n1',
+        kind: 'note',
+        capturedAt: '2026-10-01T00:00:00Z',
+        seq: 1,
+        status: 'pending',
+        attempts: 0,
+        lastError: null,
+        owner: null,
+      };
+      let cleared = false;
+      const fetchMock = setFetch((url, init) => {
+        const path = url.startsWith(HUB) ? url.slice(HUB.length) : url;
+
+        if (path === '/api/outbox?status=pending' || path === '/api/outbox') {
+          if (init?.method === 'DELETE') {
+            cleared = true;
+
+            return jsonResponse({ deleted: 1 });
+          }
+
+          return jsonResponse({
+            items: [pendingRow],
+            counts: { pending: 1, needsAttention: 0, total: 1 },
+            capacity: { max: 5000, used: 1, warnAt: 4000 },
+          });
+        }
+
+        if (path === '/api/outbox/n1') {
+          return jsonResponse({ ...pendingRow, payload: { records: [] } });
+        }
+
+        // The account is gone: the appliance refuses this key.
+        return emptyResponse(false, 401);
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+
+      await act(async () => {
+        await result.current[1].logout({ discardUnsentCaptures: true });
+      });
+
+      expect(result.current[0].signOutPrompt.open).toBe(false);
+      expect(result.current[0].authenticated).toBe(false);
+      expect(cleared).toBe(true);
+      expect(secureStore.has('ci.apiKey')).toBe(false);
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/keys/current'))).toBe(true);
     });
   });
 

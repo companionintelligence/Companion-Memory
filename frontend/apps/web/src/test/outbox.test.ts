@@ -14,6 +14,7 @@ import {
 } from '@ci/common/src/utils/outbox';
 import {
   clearOutboxAfterSignOut,
+  countUnsentBeforeSignOut,
   drainOutboxBeforeSignOut,
   flushOutbox,
   isPermanentFlushFailure,
@@ -792,6 +793,62 @@ describe('sign-out and the outbox', () => {
     expect(onward.map((call) => call.url)).toEqual(['/api/v1/positions', '/api/v1/ingest/finish']);
     expect(onward.every((call) => call.headers['x-api-key'] === DEVICE_KEY)).toBe(true);
     expect(store.size).toBe(0);
+  });
+
+  it('spends no attempt on a send that failed only because the appliance was out of reach', async () => {
+    setNativeWindow();
+    const { handler, store } = fakeSidecar([
+      item({ id: 'offline', seq: 1, owner: outboxOwnerStamp() }),
+      item({ id: 'refused', seq: 2, owner: outboxOwnerStamp() }),
+    ]);
+    const calls = installFetch(
+      route(handler, (call) => {
+        if (call.body?.note === 'refused') {
+          return jsonResponse(400, { message: 'Bad Request' });
+        }
+
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+
+    await drainOutboxBeforeSignOut();
+
+    // Both were tried. The offline one is left exactly as it was, so a sign-out the person
+    // then cancels costs it nothing; a refusal that will never pass is still recorded.
+    expect(calls.filter((call) => call.url === '/api/position')).toHaveLength(2);
+    expect(store.get('offline')).toMatchObject({ status: 'pending', attempts: 0, lastError: null });
+    expect(store.get('refused')).toMatchObject({ status: 'needs_attention', attempts: 1 });
+  });
+
+  it("counts every row of this session's that has not uploaded, and none of another's", async () => {
+    setNativeWindow();
+    const mine = outboxOwnerStamp();
+    const { handler } = fakeSidecar([
+      item({ id: 'waiting', seq: 1, owner: mine }),
+      item({ id: 'parked', seq: 2, owner: mine, status: 'needs_attention', attempts: 5 }),
+      item({ id: 'older-build', seq: 3, owner: null }),
+      item({ id: 'other-account', seq: 4, owner: 'https://memory.example.com 00000000000000' }),
+    ]);
+    installFetch(handler);
+
+    await expect(countUnsentBeforeSignOut()).resolves.toBe(3);
+
+    // With nobody signed in there is no session to send them, so there is nothing to warn of.
+    setApiKey(null);
+    await expect(countUnsentBeforeSignOut()).resolves.toBe(0);
+  });
+
+  it('counts nothing where there is no queue to read', async () => {
+    setWindow({});
+    setApiKey(DEVICE_KEY);
+    const calls = installFetch(() => jsonResponse(500));
+
+    await expect(countUnsentBeforeSignOut()).resolves.toBe(0);
+    expect(calls).toHaveLength(0);
+
+    // A sidecar that does not answer is not a reason to hold sign-out either.
+    setNativeWindow();
+    await expect(countUnsentBeforeSignOut()).resolves.toBe(0);
   });
 
   it('gives up on the drain at the deadline instead of holding sign-out open', async () => {
