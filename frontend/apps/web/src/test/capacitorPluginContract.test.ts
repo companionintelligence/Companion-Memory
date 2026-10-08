@@ -684,6 +684,19 @@ describe('LocalHub outbox — owner stamp and sign-out clear on both platforms',
     expect(ios).toMatch(/case \("DELETE", 0\):[\s\S]{0,120}store\.deleteAll\(\)/);
   });
 
+  it('Android opens a link marked external without the sign-in Auth Tab', () => {
+    // Provider pages from the gallery are not a sign-in. In the Auth Tab, any `companion://`
+    // they navigated to would come back to the app as a sign-in result.
+    const plugin = between(
+      read(join(androidDir, 'LocalHubPlugin.kt')),
+      'fun openUrl(',
+      'fun startAuthSession(',
+    );
+
+    expect(plugin).toContain('val external = call.getBoolean("external", false) == true');
+    expect(plugin).toContain('if (external || !AuthTabSession.launch(uri)) {');
+  });
+
   function between(source: string, from: string, to: string): string {
     const start = source.indexOf(from);
 

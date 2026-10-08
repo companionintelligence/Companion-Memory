@@ -218,6 +218,7 @@ export {
   isDeviceLocationError,
   openAuthSession,
   openExternalUrl,
+  openLinkOutsideApp,
   openNativeAppSettings,
   openNativeLocationSettings,
   removeBackgroundLocationWatcher,

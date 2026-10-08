@@ -1,4 +1,4 @@
-import { isNativePlatform, openExternalUrl } from '@ci/common';
+import { isNativePlatform, openLinkOutsideApp } from '@ci/common';
 import { ExternalLink } from '@ci/shadcn/icons';
 
 import type { EmbedPlayer as EmbedPlayerModel } from './media';
@@ -19,13 +19,14 @@ export function embedsOpenExternally(): boolean {
 }
 
 /**
- * Open a provider's player in the system browser: the content's own page when it
- * is a plain http(s) address, otherwise the server-built player URL.
+ * Open a provider's player outside the app (the browser, or the provider's own app): the
+ * content's own page when it is a plain http(s) address, otherwise the server-built player
+ * URL. Not through the sign-in Auth Tab on Android; see {@link openLinkOutsideApp}.
  */
 export function openEmbedExternally(player: EmbedPlayerModel, pageUrl?: string | null): void {
   const target = pageUrl && /^https?:\/\//i.test(pageUrl) ? pageUrl : player.playerUrl;
 
-  void openExternalUrl(target).catch(() => {
+  void openLinkOutsideApp(target).catch(() => {
     // Nothing to fall back to inside the app; the tap simply does nothing.
   });
 }

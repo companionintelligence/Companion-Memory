@@ -41,7 +41,7 @@ describe('RichMediaCard', () => {
     );
   });
 
-  it('hands play to the system browser in the phone apps and mounts no frame', () => {
+  it('hands play to whatever opens the link outside the phone apps, and mounts no frame', () => {
     const openUrl = vi.fn(async () => {});
     (window as unknown as CapacitorWindow).Capacitor = {
       isNativePlatform: () => true,
@@ -54,7 +54,7 @@ describe('RichMediaCard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Play on Spotify/ }));
 
-    expect(openUrl).toHaveBeenCalledWith({ url: 'https://open.spotify.com/track/xyz' });
+    expect(openUrl).toHaveBeenCalledWith({ url: 'https://open.spotify.com/track/xyz', external: true });
     expect(container.querySelector('iframe')).toBeNull();
   });
 });

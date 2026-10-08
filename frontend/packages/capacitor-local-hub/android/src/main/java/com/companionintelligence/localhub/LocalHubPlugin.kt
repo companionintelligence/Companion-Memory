@@ -193,6 +193,11 @@ class LocalHubPlugin : Plugin() {
      * system browser when the activity never registered a launcher or nothing
      * can handle the Auth Tab intent. `companion://` still comes back through
      * `appUrlOpen` on both paths.
+     *
+     * With `external: true` the URL is not a sign-in (a provider's page from the
+     * gallery, say) and goes straight to whichever app handles it. The Auth Tab
+     * would hand any `companion://` address that page navigated to back to the
+     * app as a sign-in result.
      */
     @PluginMethod
     fun openUrl(call: PluginCall) {
@@ -203,6 +208,7 @@ class LocalHubPlugin : Plugin() {
             call.reject("A valid http(s) url is required")
             return
         }
+        val external = call.getBoolean("external", false) == true
         val host = activity
         if (host == null) {
             call.reject("Could not open the sign-in sheet.")
@@ -210,7 +216,7 @@ class LocalHubPlugin : Plugin() {
         }
         host.runOnUiThread {
             try {
-                if (!AuthTabSession.launch(uri)) {
+                if (external || !AuthTabSession.launch(uri)) {
                     openInSystemBrowser(host, uri)
                 }
                 call.resolve()

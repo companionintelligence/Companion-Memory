@@ -13,7 +13,7 @@ const player = {
 
 type CapacitorWindow = { Capacitor?: unknown };
 
-/** The phone apps: Capacitor present, with LocalHub's system-browser opener. */
+/** The phone apps: Capacitor present, with LocalHub's opener. */
 function enterPhoneApp() {
   const openUrl = vi.fn(async () => {});
 
@@ -45,13 +45,13 @@ describe('EmbedPlayer', () => {
     expect(screen.getByRole('button', { name: /Open in YouTube/ })).toBeInTheDocument();
   });
 
-  it('opens the content page in the system browser instead', () => {
+  it('opens the content page outside the app instead, not through the sign-in tab', () => {
     const openUrl = enterPhoneApp();
 
     render(<EmbedPlayer player={player} title="A video" pageUrl="https://www.youtube.com/watch?v=abc123" />);
     fireEvent.click(screen.getByRole('button', { name: /Open in YouTube/ }));
 
-    expect(openUrl).toHaveBeenCalledWith({ url: 'https://www.youtube.com/watch?v=abc123' });
+    expect(openUrl).toHaveBeenCalledWith({ url: 'https://www.youtube.com/watch?v=abc123', external: true });
   });
 
   it('falls back to the server-built player URL when the page is not a plain web address', () => {
@@ -60,6 +60,6 @@ describe('EmbedPlayer', () => {
     render(<EmbedPlayer player={player} title="A video" pageUrl="intent://watch/abc123#Intent;end" />);
     fireEvent.click(screen.getByRole('button', { name: /Open in YouTube/ }));
 
-    expect(openUrl).toHaveBeenCalledWith({ url: player.playerUrl });
+    expect(openUrl).toHaveBeenCalledWith({ url: player.playerUrl, external: true });
   });
 });

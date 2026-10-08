@@ -46,7 +46,8 @@ interface LocalHubPlugin {
   secureGet(options: { key: string }): Promise<{ value: string | null }>;
   secureSet(options: { key: string; value: string }): Promise<void>;
   secureRemove(options: { key: string }): Promise<void>;
-  openUrl(options: { url: string }): Promise<void>;
+  /** `external`: not a sign-in, so Android skips the Auth Tab (see the plugin's definitions). */
+  openUrl(options: { url: string; external?: boolean }): Promise<void>;
   /**
    * iOS only. In-app Safari authentication sheet. Resolves when the sheet
    * finishes and rejects with `code: 'CANCELLED'` if the user dismisses it.
@@ -549,6 +550,29 @@ export async function openExternalUrl(url: string): Promise<void> {
   if (typeof window !== 'undefined') {
     window.location.assign(url);
   }
+}
+
+/**
+ * Open a link that is not a sign-in outside the app: a provider's page, say. On Android it
+ * goes to whichever app handles it (the browser, or the provider's own app) rather than the
+ * sign-in Auth Tab, which hands any `companion://` address the page navigates to back to
+ * the app as a sign-in result. iOS opens Safari either way. Elsewhere this is
+ * {@link openExternalUrl}.
+ */
+export async function openLinkOutsideApp(url: string): Promise<void> {
+  if (isNativePlatform()) {
+    const hub = resolveLocalHub();
+
+    if (!hub?.openUrl) {
+      throw new Error('Could not open the link outside the app.');
+    }
+
+    await hub.openUrl({ url, external: true });
+
+    return;
+  }
+
+  await openExternalUrl(url);
 }
 
 /** User dismissed the in-app sign-in sheet. Callers should stay quiet. */

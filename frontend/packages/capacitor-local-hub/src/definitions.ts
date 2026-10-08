@@ -89,8 +89,13 @@ export interface LocalHubPlugin {
    * Android presents Chrome Auth Tab and replays `companion://` into `appUrlOpen`.
    * Portal sign-in on Android lands here. iOS opens Safari; Portal sign-in there
    * uses {@link startAuthSession} instead.
+   *
+   * `external: true` is for links that are not a sign-in. Android then hands the URL to
+   * whichever app handles it (the browser, or the provider's own app) instead of the Auth
+   * Tab, which would report any `companion://` the page navigates to as a sign-in result.
+   * iOS ignores it: Safari is already outside the app.
    */
-  openUrl(options: { url: string }): Promise<void>;
+  openUrl(options: { url: string; external?: boolean }): Promise<void>;
 
   /**
    * iOS only. Presents an in-app Safari authentication sheet and resolves when it

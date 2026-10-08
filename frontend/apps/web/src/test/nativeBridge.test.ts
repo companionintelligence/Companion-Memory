@@ -8,6 +8,7 @@ import {
   hideSplashScreen,
   openAuthSession,
   openExternalUrl,
+  openLinkOutsideApp,
   closeBrowser,
   getLaunchUrl as readLaunchUrl,
   requestNotificationPermission,
@@ -135,6 +136,23 @@ describe('nativeBridge — native uses the Capacitor plugins', () => {
     await openExternalUrl('https://idp.example.com/auth');
 
     expect(hubOpenUrl).toHaveBeenCalledWith({ url: 'https://idp.example.com/auth' });
+    expect(browserOpen).not.toHaveBeenCalled();
+  });
+
+  it('openLinkOutsideApp marks the link external, so Android skips the sign-in Auth Tab', async () => {
+    const hubOpenUrl = vi.fn(async () => {});
+    const { win, browserOpen } = fakeNativeWindow();
+    (win as { Capacitor: { Plugins: Record<string, unknown> } }).Capacitor.Plugins.LocalHub = {
+      openUrl: hubOpenUrl,
+    };
+    setWindow(win);
+
+    await openLinkOutsideApp('https://www.youtube.com/watch?v=abc123');
+
+    expect(hubOpenUrl).toHaveBeenCalledWith({
+      url: 'https://www.youtube.com/watch?v=abc123',
+      external: true,
+    });
     expect(browserOpen).not.toHaveBeenCalled();
   });
 
