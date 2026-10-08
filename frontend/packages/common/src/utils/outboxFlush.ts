@@ -443,8 +443,11 @@ async function drain(options: FlushOutboxOptions): Promise<FlushOutboxSummary> {
  * predates stamping; it drains under the current session, as every row did before.
  */
 function sendableNow(owner: string | null | undefined): boolean {
-  const current = outboxOwnerStamp();
+  return sendableUnder(owner, outboxOwnerStamp());
+}
 
+/** {@link sendableNow} against a stamp the caller already has. */
+function sendableUnder(owner: string | null | undefined, current: string | null): boolean {
   if (!current) {
     return false;
   }
@@ -587,18 +590,38 @@ export async function drainOutboxBeforeSignOut(timeoutMs = SIGN_OUT_DRAIN_TIMEOU
 export async function countUnsentBeforeSignOut(): Promise<number> {
   const listing = await listOutbox('all');
 
-  return listing.ok ? listing.value.items.filter((entry) => sendableNow(entry.owner)).length : 0;
+  if (!listing.ok) {
+    return 0;
+  }
+
+  const current = outboxOwnerStamp();
+
+  return listing.value.items.filter((entry) => sendableUnder(entry.owner, current)).length;
 }
+
+/**
+ * Called when rows leave the queue other than through a drain, so a mounted
+ * {@link OutboxQueueProvider} re-reads its counts instead of showing the old ones.
+ */
+const queueClearedListeners = new Set<() => void>();
 
 /**
  * Sign-out, step three, after the key is dropped: delete every queued row and forget the
  * enrichment debt. Rows still here belong to the account that just left (the person has
  * agreed to lose this account's unsent ones), and the next person to sign in on this
  * phone must not inherit them.
+ *
+ * The queue provider sits above the auth provider and refreshes only on a mode change, a
+ * drain or a resume. Without the notice below, the next account's screen kept showing the
+ * departed account's pending count until one of those happened.
  */
 export async function clearOutboxAfterSignOut(): Promise<void> {
   resetIngestFinishState();
   await clearOutbox();
+
+  for (const listener of queueClearedListeners) {
+    listener();
+  }
 }
 
 /** Queue depth as the UI sees it. All zeros with `available: false` when there is no sidecar. */
@@ -674,6 +697,14 @@ function useOutboxQueueState(): OutboxQueueState {
   useEffect(() => {
     refresh();
   }, [refresh, mode]);
+
+  useEffect(() => {
+    queueClearedListeners.add(refresh);
+
+    return () => {
+      queueClearedListeners.delete(refresh);
+    };
+  }, [refresh]);
 
   useEffect(() => {
     if (mode !== 'connected') {
