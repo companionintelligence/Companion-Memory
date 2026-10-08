@@ -1,6 +1,10 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import type { Acknowledgement } from '@ci/domains/events';
 import type { FileUploadedPayload } from '@ci/domains/files/events';
 
+import { MAX_PARSE_BYTES, UnparseableDocumentError } from '../../services/DocumentExtractor';
 import { type ParsedDocument, ParseStatus } from '../../types';
 import { FileDocumentParseListener } from '../FileDocumentParseListener';
 
@@ -218,5 +222,61 @@ describe('FileDocumentParseListener', () => {
 
     expect(ack.done).not.toHaveBeenCalled();
     expect(ack.fail).toHaveBeenCalledWith(writeError);
+  });
+
+  it('records a file the parser refused and does not retry it', async () => {
+    const { call, parserService, queryCalls } = makeListener();
+    const ack = makeAck();
+
+    parserService.parse.mockRejectedValue(
+      new UnparseableDocumentError(
+        'Parser service returned 413: Refusing to extract: archive inflates 1000x',
+      ),
+    );
+
+    await expect(
+      call({ userId: 'user-1', fileId: 'file-1', thingCapture: false }, ack),
+    ).resolves.toBeUndefined();
+
+    const failedCall = queryCalls.find((params) => params[0] === ParseStatus.FAILED);
+    expect(failedCall?.[1]).toMatch(/archive inflates/);
+    // Done, not failed: pg-boss would otherwise send the same bytes three more times.
+    expect(ack.fail).not.toHaveBeenCalled();
+    expect(ack.done).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a file over the parser limit without downloading it', async () => {
+    // A bigint column, so the size arrives as a string.
+    const { call, fileService, parserService, queryCalls } = makeListener({
+      size: String(MAX_PARSE_BYTES + 1),
+    });
+    const ack = makeAck();
+
+    await expect(
+      call({ userId: 'user-1', fileId: 'file-1', thingCapture: false }, ack),
+    ).resolves.toBeUndefined();
+
+    expect(fileService.getFileContent).not.toHaveBeenCalled();
+    expect(parserService.parse).not.toHaveBeenCalled();
+    expect(queryCalls.find((params) => params[0] === ParseStatus.FAILED)?.[1]).toMatch(/at most/);
+    expect(ack.fail).not.toHaveBeenCalled();
+  });
+
+  it('still parses a file at the parser limit', async () => {
+    const { call, fileService } = makeListener({ size: MAX_PARSE_BYTES });
+
+    await call({ userId: 'user-1', fileId: 'file-1', thingCapture: false }, makeAck());
+
+    expect(fileService.getFileContent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the limit equal to the parser sidecar's own", () => {
+    const worker = readFileSync(
+      path.resolve(__dirname, '../../../../../../summary/src/ci/summary/parser_worker.py'),
+      'utf8',
+    );
+    const factors = /^MAX_UPLOAD_BYTES = ([\d* ]+)$/m.exec(worker)?.[1].split('*').map(Number);
+
+    expect(factors?.reduce((product, factor) => product * factor, 1)).toBe(MAX_PARSE_BYTES);
   });
 });

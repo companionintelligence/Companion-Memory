@@ -173,8 +173,10 @@ services:
       # answers 200 even when the LLM endpoint is unreachable (it reports
       # `status: degraded` in the body) — a missing model is a degraded
       # service, not a dead container, and only the container's liveness is
-      # this probe's business.
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=5)"]
+      # this probe's business. Both ports: the document parser on 8002 lives
+      # in the same container, and a probe of 8001 alone called it healthy
+      # with the parser gone (entrypoint.sh now also exits when either dies).
+      test: ["CMD", "python", "-c", "import urllib.request; [urllib.request.urlopen(f'http://localhost:{port}/health', timeout=4) for port in (8001, 8002)]"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -70,6 +70,29 @@ const NDJSON_CONTENT_TYPE = 'application/x-ndjson';
 const SIGNED_PEER_PREFIX = '/agent/v1';
 
 /**
+ * Whether `req` is for the single Apollo-mounted POST /graphql endpoint. The
+ * Apollo driver mounts it via `app.use('/graphql', …)`, so inside that mount
+ * `req.path` is '/' and `req.baseUrl` is '/graphql'; baseUrl/originalUrl are
+ * checked as well as the path so the answer holds either way. Case-insensitive,
+ * because express routing is: `/GraphQL` reaches Apollo too, and must not
+ * reach it past the limits that key off this answer.
+ *
+ * `req.path` is read as well as the raw URL because express routes an
+ * absolute-form request (`POST http://host/graphql HTTP/1.1`, which node
+ * accepts from any client that reaches the API without the gateway) by its
+ * parsed pathname: Apollo answers it, while its `originalUrl` starts `http:`.
+ */
+export function isGraphqlRequest(req: Request): boolean {
+  const routePath = (req.originalUrl || req.url || req.path).split('?')[0].toLowerCase();
+  const parsedPath = `${req.baseUrl ?? ''}${req.path ?? ''}`.toLowerCase();
+
+  return (
+    (req.baseUrl ?? '').toLowerCase() === GRAPHQL_PATH ||
+    [routePath, parsedPath].some((path) => path === GRAPHQL_PATH || path.startsWith(`${GRAPHQL_PATH}/`))
+  );
+}
+
+/**
  * Middleware that dynamically applies JSON body size limits based on route metadata.
  * Uses the @BodyLimit decorator to determine the appropriate limit for each route.
  * Falls back to a default of 100kb if no limit is specified.
@@ -88,13 +111,8 @@ export class BodyParserMiddleware implements NestMiddleware {
 
     // The /graphql endpoint is a single Apollo-mounted POST route (no Nest route
     // metadata), so it needs an explicit limit here rather than via @BodyLimit.
-    // The Apollo driver mounts /graphql via `app.use('/graphql', …)`, so when this
-    // middleware runs inside that mount `req.path` is '/' and `req.baseUrl` is
-    // '/graphql'. Check baseUrl/originalUrl (not just req.path) so the limit
-    // actually applies to the GraphQL route.
     const routePath = (req.originalUrl || req.url || req.path).split('?')[0];
-    const isGraphql =
-      req.baseUrl === GRAPHQL_PATH || routePath === GRAPHQL_PATH || routePath.startsWith(`${GRAPHQL_PATH}/`);
+    const isGraphql = isGraphqlRequest(req);
     const isBulkIngest = routePath === BULK_INGEST_PREFIX || routePath.startsWith(`${BULK_INGEST_PREFIX}/`);
     const isPortabilityImport = routePath === PORTABILITY_IMPORT_PATH;
 
