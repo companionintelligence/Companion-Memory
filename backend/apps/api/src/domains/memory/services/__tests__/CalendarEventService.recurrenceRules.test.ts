@@ -170,9 +170,12 @@ describe('CalendarEventService — recurrence rules on write', () => {
     );
   });
 
-  it('refuses an edit that would store such a rule, before touching the row', async () => {
-    const findOne = jest.fn();
+  it('refuses an edit that would store such a rule, before writing the row', async () => {
+    const findOne = jest.fn(async () => ({ id: 'stored', metadata: {}, recurrencePattern: null }));
     repo.findOne = findOne;
+    const aggregate = (service as unknown as { aggregate: { applyUpdate: () => Promise<unknown> } })
+      .aggregate;
+    const applyUpdate = jest.spyOn(aggregate, 'applyUpdate').mockResolvedValue(null);
 
     await expect(
       service.update(ctx, '0198f0a0-0000-7000-8000-000000000001', {
@@ -190,6 +193,34 @@ describe('CalendarEventService — recurrence rules on write', () => {
         recurrence_pattern: { rrule: 'FREQ=DAILY;UNTIL=20261231;COUNT=0' },
       }),
     ).rejects.toThrow('Unsupported recurrence rule: COUNT "0" is not a positive integer');
-    expect(findOne).not.toHaveBeenCalled();
+    expect(applyUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets an edit hand back a refused rule the row already stores', async () => {
+    // GeocodeBatchListener patches `metadata` with the row's own metadata plus
+    // one key; a rule stored before the write check must not block that.
+    const stored = ['RRULE:FREQ=HOURLY;INTERVAL=24;BYHOUR=5'];
+    repo.findOne = jest.fn(async () => ({
+      id: 'stored',
+      metadata: { recurrenceRule: stored },
+      recurrencePattern: null,
+    }));
+    const aggregate = (service as unknown as { aggregate: { applyUpdate: () => Promise<unknown> } })
+      .aggregate;
+    const applyUpdate = jest.spyOn(aggregate, 'applyUpdate').mockResolvedValue(null);
+
+    await expect(
+      service.update(ctx, '0198f0a0-0000-7000-8000-000000000001', {
+        metadata: { recurrenceRule: [...stored], location_source: 'approximate' },
+      }),
+    ).resolves.toBeNull();
+    expect(applyUpdate).toHaveBeenCalledTimes(1);
+
+    await expect(
+      service.update(ctx, '0198f0a0-0000-7000-8000-000000000001', {
+        metadata: { recurrenceRule: ['RRULE:FREQ=HOURLY;INTERVAL=24;BYHOUR=6'] },
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(applyUpdate).toHaveBeenCalledTimes(1);
   });
 });

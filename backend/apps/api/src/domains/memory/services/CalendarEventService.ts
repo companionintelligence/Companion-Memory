@@ -2264,6 +2264,50 @@ export class CalendarEventService {
   }
 
   /**
+   * Why `data` must not be stored as an edit of event `id`, or null.
+   *
+   * A rule this appliance refuses is still accepted when the patch only hands
+   * back the rule the row already stores. `metadata` is replaced whole, so a
+   * caller changing one key sends the rest back as it read it
+   * (GeocodeBatchListener's `location_source`), and a row stored before the
+   * write check could otherwise never be patched again. Read time refuses that
+   * stored rule on its own (parseRecurrence), so passing it through adds nothing
+   * to expand. The row is read only when a refused rule is present, and only
+   * the caller's own, as {@link findById} scopes it.
+   */
+  private async refusedRecurrenceEdit(
+    context: ServiceContext,
+    id: string,
+    data: UpdateEventDto,
+  ): Promise<string | null> {
+    const metadataRule = data.metadata?.recurrenceRule;
+    const patternRule = data.recurrence_pattern?.rrule;
+    const metadataReason = recurrenceRuleRejection(metadataRule);
+    const patternReason = recurrenceRuleRejection(patternRule);
+
+    if (!metadataReason && !patternReason) {
+      return null;
+    }
+
+    const stored = await this.eventRepository.findOne({
+      where: { id, ...(context.userId !== SYSTEM_USER && { user: { id: context.userId } }) },
+      select: { id: true, metadata: true, recurrencePattern: true },
+    });
+    const unchanged = (sent: unknown, kept: unknown): boolean =>
+      stored != null && JSON.stringify(sent) === JSON.stringify(kept);
+
+    if (metadataReason && !unchanged(metadataRule, stored?.metadata?.recurrenceRule)) {
+      return metadataReason;
+    }
+
+    if (patternReason && !unchanged(patternRule, stored?.recurrencePattern?.rrule)) {
+      return patternReason;
+    }
+
+    return null;
+  }
+
+  /**
    * Patch an event. A patch that moves its start or end, or calls it off or
    * reinstates it, also takes back what the pipeline decided about the old time
    * or about whether it happened, in the same transaction
@@ -2273,9 +2317,7 @@ export class CalendarEventService {
   async update(context: ServiceContext, id: string, data: UpdateEventDto): Promise<Event | null> {
     // An edit is one person's request, not a batch, so a rule that would hang
     // the calendar is refused outright rather than dropped as on create.
-    const recurrenceReason =
-      recurrenceRuleRejection(data.metadata?.recurrenceRule) ??
-      recurrenceRuleRejection(data.recurrence_pattern?.rrule);
+    const recurrenceReason = await this.refusedRecurrenceEdit(context, id, data);
 
     if (recurrenceReason) {
       throw new BadRequestException(`Unsupported recurrence rule: ${recurrenceReason}`);
