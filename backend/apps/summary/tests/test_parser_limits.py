@@ -246,11 +246,14 @@ def test_the_narrowed_converters_never_open_a_zip(tmp_path: Path) -> None:
 def test_the_child_runs_under_the_address_space_limit_it_is_given(
     tmp_path: Path,
 ) -> None:
-    # MarkItDown alone maps about 1.4 GB, so a 512 MB cap cannot even load it:
-    # the conversion must fail rather than run unbounded.
+    # A 64 MB cap is too small to load MarkItDown at all, so the conversion must
+    # fail rather than run unbounded. Not 512 MB: what MarkItDown maps grows by
+    # about 40 MB per CPU (815 MB on 2 CPUs, 1.4 GB on 16), and on the 4-vCPU
+    # CI runner it loads and converts under 512 MB. Caps from 256 MB up pass or
+    # fail by core count, and near the line the child can hang to the timeout.
     path = tmp_path / "doc.docx"
     path.write_bytes(_docx_bytes())
-    worker = ConversionWorker(memory_bytes=512 * 1024 * 1024)
+    worker = ConversionWorker(memory_bytes=64 * 1024 * 1024)
     try:
         with pytest.raises(ConversionFailed):
             asyncio.run(worker.convert(str(path), seconds=60))
