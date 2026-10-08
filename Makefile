@@ -1094,7 +1094,19 @@ smoke-stack: ## Boot the built production images and prove the gateway serves th
 	@printf "\nProduction stack boots, serves the web app, and keeps a worker alive. ✅\n\n"
 
 .PHONY: publish
-publish: init ## Publish CI-Server images and metadata to the CI-Portal store
+publish: publish-build ## Publish CI-Server images and metadata to the CI-Portal store
+	@printf "$(call task_icon,publish,📦) Publishing to CI-Portal registry...\n\n"
+
+	@scripts/publish/publish.sh
+
+	@printf "\n"
+
+# Everything `publish` does before it pushes. publish.yml's build job runs this
+# on its own, with a read-only token, and hands the images to a separate push
+# job: `init` runs every allowed dependency install script and `uv sync`, and
+# none of that code should share a job with the registry write token.
+.PHONY: publish-build
+publish-build: init ## Build and smoke-test the production images without pushing them
 	@$(MAKE) build ENV=production GPU=$(GPU)
 
 	@$(MAKE) smoke-api
@@ -1106,12 +1118,6 @@ publish: init ## Publish CI-Server images and metadata to the CI-Portal store
 	@# gateway image with an empty web root stops the release here rather than
 	@# at a user's first launch.
 	@$(MAKE) smoke-stack
-
-	@printf "$(call task_icon,publish,📦) Publishing to CI-Portal registry...\n\n"
-
-	@scripts/publish/publish.sh
-
-	@printf "\n"
 
 .PHONY: publish-quiet
 publish-quiet: ## Publish to CI-Portal store (quiet mode)

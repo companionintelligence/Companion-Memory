@@ -196,10 +196,11 @@ describe('UserService — claiming an unowned appliance', () => {
     expect(user.role).toBe('user');
   });
 
-  it('asks the same "unowned" question ApplianceAdminGuard asks', async () => {
-    // These two must agree. The guard admits EVERY signed-in user on an appliance with no live
-    // admin; if this promotion applied a different test, that permissive branch could become the
-    // steady state on a box this code considered already claimed.
+  it("promotes only the appliance's first account ever, never the next one after an owner left", async () => {
+    // It used to promote whenever no LIVE admin existed, which is also the state an owner leaves
+    // by deleting their account while members keep theirs. A member could then mint an invitation
+    // and sign up an account this promoted. "First" is now the question createFirstAccount asks:
+    // no OTHER row at all, soft-deleted ones included.
     const { service, queries } = makeService();
 
     await service.create(SYSTEM, NEW_USER);
@@ -207,8 +208,54 @@ describe('UserService — claiming an unowned appliance', () => {
     const update = queries.find((q) => q.sql.includes("SET role = 'admin'"));
 
     expect(update).toBeDefined();
-    expect(update!.sql).toMatch(/NOT EXISTS/);
-    expect(update!.sql).toMatch(/role = 'admin' AND deleted_at IS NULL/);
+    expect(update!.sql).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM ci\.users WHERE id <> \$1\s*\)/);
+    expect(update!.sql).not.toMatch(/deleted_at/);
+  });
+
+  it("marks the first account's address proven, keeping any earlier stamp", async () => {
+    // Nobody else is on the appliance yet, so its address cannot be someone else's planted to
+    // receive their Portal or Hub sign-in; an owner who signed up with a password keeps the link.
+    const { service, queries } = makeService();
+
+    const owner = await service.create(SYSTEM, NEW_USER);
+
+    const update = queries.find((q) => q.sql.includes("SET role = 'admin'"));
+
+    expect(update!.sql).toMatch(/email_proven_at = COALESCE\(email_proven_at, now\(\)\)/);
+    // ...and the account handed back says so, as it says `admin`.
+    expect(owner.emailProvenAt).toBeInstanceOf(Date);
+
+    const member = await makeService({ promotedRows: [] }).service.create(SYSTEM, NEW_USER);
+
+    expect(member.emailProvenAt).toBeNull();
+  });
+
+  it('stores the address trimmed and lower-cased', async () => {
+    const { service, transactionManager } = makeService();
+
+    await service.create(SYSTEM, { ...NEW_USER, email: '  JSmith@Example.COM ' });
+
+    expect(transactionManager.save).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'jsmith@example.com' }),
+    );
+  });
+
+  it('leaves an address typed into signup unproven, and proves one a federated identity vouched for', async () => {
+    const typed = makeService();
+
+    await typed.service.create(SYSTEM, NEW_USER);
+
+    expect(typed.transactionManager.save).toHaveBeenCalledWith(
+      expect.objectContaining({ emailProvenAt: null }),
+    );
+
+    const vouched = makeService();
+
+    await vouched.service.create(SYSTEM, { ...NEW_USER, emailProven: true });
+
+    expect(vouched.transactionManager.save).toHaveBeenCalledWith(
+      expect.objectContaining({ emailProvenAt: expect.any(Date) }),
+    );
   });
 
   it('writes the account and settles its role in one transaction, under the lock', async () => {

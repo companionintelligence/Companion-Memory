@@ -70,12 +70,15 @@ jobs:
           fetch-tags: true
 
       - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # A master commit with the toolchain named explicitly; see the same step
+        # in desktop-release.yml for why not a commit on the `stable` branch.
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Rust build cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: frontend/apps/desktop/src-tauri -> target
 
@@ -93,10 +96,22 @@ jobs:
         with:
           node-version: '22'
 
+      # The same locked Tauri CLI desktop-release.yml builds with, so the
+      # green run that release gate looks for was produced by the same CLI
+      # version rather than whatever npm had newest that day.
+      - name: Install the locked Tauri CLI
+        working-directory: frontend/apps/desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          yarn install --immutable
+          yarn tauri --version
+
       # Only syncs the bundled compose resources (a resolved image tag, plus
       # verbatim copies of the root compose files at that same release) — no
-      # yarn install/web build needed, since the bootstrap page is static,
-      # unlike mobile-build.yml's real SPA build.
+      # web build needed, since the bootstrap page is static, unlike
+      # mobile-build.yml's real SPA build.
       - name: Sync compose resources
         working-directory: frontend/apps/desktop
         run: node scripts/sync-compose-resources.cjs
@@ -160,7 +175,7 @@ jobs:
           if [ "${{ runner.os }}" = "Linux" ]; then
             BUNDLE_FLAGS="-b deb,rpm,appimage"
           fi
-          npx --yes @tauri-apps/cli@2 build \
+          yarn tauri build \
             --target ${{ matrix.target }} \
             -c '{"bundle":{"createUpdaterArtifacts":false}}' \
             $BUNDLE_FLAGS

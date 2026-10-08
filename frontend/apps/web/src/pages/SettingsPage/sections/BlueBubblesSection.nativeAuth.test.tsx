@@ -24,6 +24,7 @@ interface Call {
 const calls: Call[] = [];
 
 const config = {
+  canEdit: true,
   host: 'mac.local',
   port: 1234,
   useHttps: false,

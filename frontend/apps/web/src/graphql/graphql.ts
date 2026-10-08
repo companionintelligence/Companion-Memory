@@ -779,15 +779,11 @@ export type CreateConnectionPayload = {
 
 export type CreateConnectionSyncJobInput = {
   connectionId: Scalars['ID']['input'];
-  cursor?: InputMaybe<Scalars['JSON']['input']>;
-  data?: InputMaybe<Scalars['JSON']['input']>;
   endpointName: Scalars['String']['input'];
   error?: InputMaybe<Scalars['JSON']['input']>;
   id?: InputMaybe<Scalars['ID']['input']>;
   jobId?: InputMaybe<Scalars['ID']['input']>;
-  nextCursor?: InputMaybe<Scalars['JSON']['input']>;
   properties?: InputMaybe<Scalars['JSON']['input']>;
-  status?: InputMaybe<Scalars['String']['input']>;
   type: Scalars['String']['input'];
   userId: Scalars['ID']['input'];
 };
@@ -4877,7 +4873,6 @@ export type UpdateConnectionInput = {
   accessToken?: InputMaybe<Scalars['String']['input']>;
   active?: InputMaybe<Scalars['Boolean']['input']>;
   activeEndpoints?: InputMaybe<Array<Scalars['String']['input']>>;
-  externalId?: InputMaybe<Scalars['String']['input']>;
   id: Scalars['ID']['input'];
   name?: InputMaybe<Scalars['String']['input']>;
   needsReauth?: InputMaybe<Scalars['Boolean']['input']>;
@@ -4895,15 +4890,11 @@ export type UpdateConnectionPayload = {
 
 export type UpdateConnectionSyncJobInput = {
   completedAt?: InputMaybe<Scalars['DateTime']['input']>;
-  cursor?: InputMaybe<Scalars['JSON']['input']>;
-  data?: InputMaybe<Scalars['JSON']['input']>;
   endpointName?: InputMaybe<Scalars['String']['input']>;
   error?: InputMaybe<Scalars['JSON']['input']>;
   id: Scalars['ID']['input'];
   jobId?: InputMaybe<Scalars['ID']['input']>;
-  nextCursor?: InputMaybe<Scalars['JSON']['input']>;
   properties?: InputMaybe<Scalars['JSON']['input']>;
-  status?: InputMaybe<Scalars['String']['input']>;
   type?: InputMaybe<Scalars['String']['input']>;
 };
 

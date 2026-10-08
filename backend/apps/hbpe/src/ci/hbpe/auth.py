@@ -17,6 +17,16 @@ package serves (the main API, the standalone forage app).
 ``require_uuid`` is the other half: caller-supplied ids that become filesystem
 paths (``user_id`` → per-user checkpoint directory, forage trial files) must be
 UUIDs, so ``../`` can never reach the path builders.
+
+The bearer says a request came from something holding the shared secret. It
+does not say WHICH user that something may act for: every user-scoped route
+takes the user from a ``user_id`` query parameter. So the middleware also holds
+that parameter to one shape on every route. It may appear at most once, because
+Starlette answers ``query_params["user_id"]`` with the LAST copy and a URL built
+by careless interpolation upstream could then name two users and be read as the
+wrong one. And it must be a UUID, so no route can be handed anything else. A
+per-user proof that another sidecar holding the same secret could not forge
+needs a key those sidecars do not have; it is not attempted here.
 """
 
 from __future__ import annotations
@@ -61,7 +71,31 @@ def install_sidecar_auth(app: FastAPI) -> None:
                 status_code=401, content={"detail": "sidecar credential required"}
             )
 
+        problem = user_id_problem(request.query_params.getlist("user_id"))
+        if problem is not None:
+            return JSONResponse(status_code=400, content={"detail": problem})
+
         return await call_next(request)
+
+
+def user_id_problem(values: list[str]) -> str | None:
+    """Why these ``user_id`` query values are refused, or ``None`` when they are fine.
+
+    Absent is fine here; each route decides whether it needs a user.
+    """
+    if len(values) > 1:
+        return "user_id must appear at most once"
+    if values and not _is_uuid(values[0]):
+        return "user_id must be a UUID"
+    return None
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
 
 
 def require_uuid(value: str, *, field: str = "user_id") -> str:
@@ -70,3 +104,22 @@ def require_uuid(value: str, *, field: str = "user_id") -> str:
         return str(uuid.UUID(str(value)))
     except (ValueError, AttributeError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=f"{field} must be a UUID") from exc
+
+
+def require_user_id(user_id: str | None) -> str:
+    """The route's user: 401 when absent, 400 when not a UUID, else its canonical form."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="user_id is required")
+    return require_uuid(user_id)
+
+
+def require_admin_routes() -> None:
+    """Refuse an operator-only route unless ``HBPE_ENABLE_ADMIN_ROUTES`` turned it on.
+
+    ``/trigger`` and ``/invalidate/{date}`` act on any ``user_id`` and nothing in
+    the API calls them: the API starts runs through ``/functions/run``. Off,
+    they answer 404 as if they did not exist, so the shared bearer alone no
+    longer reaches them. Read at request time, like the secret above.
+    """
+    if not settings.enable_admin_routes:
+        raise HTTPException(status_code=404, detail="Not Found")

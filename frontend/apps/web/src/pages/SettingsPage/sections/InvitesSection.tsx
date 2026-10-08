@@ -7,8 +7,26 @@ import { Copy } from '@ci/shadcn/icons';
 import { useAuth } from '@/hooks';
 
 interface SignupCode {
+  /** Absent from a server older than invitation expiry; withdrawing needs it. */
+  id?: string;
   signup_code: string;
   created_at?: string;
+  expires_at?: string;
+}
+
+/** "Expires 13 Oct", in the reader's own calendar. */
+function expiryLabel(expiresAt: string | undefined): string | null {
+  if (!expiresAt) {
+    return null;
+  }
+
+  const date = new Date(expiresAt);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return `Expires ${date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
 }
 
 function messageFrom(error: unknown, fallback: string): string {
@@ -27,7 +45,8 @@ function messageFrom(error: unknown, fallback: string): string {
  *
  * A code is a way into someone's memory, so it is issued deliberately by a
  * person rather than minted automatically, single-use, and burned the moment it
- * admits someone.
+ * admits someone. It also stops working after a week, can be withdrawn before
+ * anyone uses it, and dies with the account that issued it.
  */
 export function InvitesSection() {
   const [{ authToken }] = useAuth();
@@ -77,6 +96,23 @@ export function InvitesSection() {
     }
   };
 
+  const revoke = async (id: string) => {
+    setBusy(true);
+
+    try {
+      await fetchJson(`/api/signup-codes/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      await load();
+      setError(null);
+    } catch (err) {
+      setError(messageFrom(err, 'Could not withdraw the invitation.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const copy = async (code: string) => {
     try {
       await navigator.clipboard.writeText(code);
@@ -91,7 +127,7 @@ export function InvitesSection() {
       <Card.Header>
         <Card.Title>Invitations</Card.Title>
         <Card.Description>
-          Anyone signing in to this Memory after you needs an invitation. Each one works once.
+          Anyone signing in to this Memory after you needs an invitation. Each one works once, and for a week.
         </Card.Description>
       </Card.Header>
 
@@ -103,12 +139,30 @@ export function InvitesSection() {
         ) : (
           <ul className="flex flex-col gap-2">
             {codes.map((code) => (
-              <li key={code.signup_code} className="flex items-center justify-between gap-3">
-                <code className="rounded bg-muted px-2 py-1 font-mono text-sm">{code.signup_code}</code>
-                <Button variant="ghost" size="sm" onClick={() => void copy(code.signup_code)}>
-                  <Copy className="mr-1.5 size-3.5" />
-                  {copied === code.signup_code ? 'Copied' : 'Copy'}
-                </Button>
+              <li key={code.signup_code} className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <code className="rounded bg-muted px-2 py-1 font-mono text-sm">{code.signup_code}</code>
+                  {expiryLabel(code.expires_at) && (
+                    <span className="text-xs text-muted-foreground">{expiryLabel(code.expires_at)}</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="sm" onClick={() => void copy(code.signup_code)}>
+                    <Copy className="mr-1.5 size-3.5" />
+                    {copied === code.signup_code ? 'Copied' : 'Copy'}
+                  </Button>
+                  {code.id && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void revoke(code.id!)}
+                      disabled={busy}
+                      aria-label={`Withdraw invitation ${code.signup_code}`}
+                    >
+                      Withdraw
+                    </Button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

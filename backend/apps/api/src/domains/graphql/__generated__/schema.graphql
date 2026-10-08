@@ -722,15 +722,11 @@ type CreateConnectionPayload {
 
 input CreateConnectionSyncJobInput {
   connectionId: ID!
-  cursor: JSON
-  data: JSON
   endpointName: String!
   error: JSON
   id: ID
   jobId: ID
-  nextCursor: JSON
   properties: JSON
-  status: String
   type: String!
   userId: ID!
 }
@@ -3831,7 +3827,6 @@ input UpdateConnectionInput {
   accessToken: String
   active: Boolean
   activeEndpoints: [String!]
-  externalId: String
   id: ID!
   name: String
   needsReauth: Boolean
@@ -3848,15 +3843,11 @@ type UpdateConnectionPayload {
 
 input UpdateConnectionSyncJobInput {
   completedAt: DateTime
-  cursor: JSON
-  data: JSON
   endpointName: String
   error: JSON
   id: ID!
   jobId: ID
-  nextCursor: JSON
   properties: JSON
-  status: String
   type: String
 }
 

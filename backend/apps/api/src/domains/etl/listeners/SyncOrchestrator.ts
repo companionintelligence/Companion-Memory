@@ -551,6 +551,9 @@ export class SyncOrchestrator {
         error: undefined,
         status: 'success',
         completedAt,
+        // What the transform sweep trusts `data` on: this row's payload is the provider's
+        // answer to a fetch this executor made, not something a client wrote.
+        fetchedByExecutor: true,
       });
 
       // Stamp the connection itself, not just the job row.
@@ -604,6 +607,12 @@ export class SyncOrchestrator {
         // spends both of its two slots re-sending the same long transform
         // every minute until it finishes, starving the queue behind it.
         transformClaimable: true,
+        // Only payloads this executor fetched, and only for connections that are active. A
+        // job's `data` decides what the transforms write and, for Facebook media, what the
+        // server downloads; a row a client wrote, or one on a connection that never finished
+        // signing in, is not provider data. A paused connection's jobs wait until it is back.
+        fetchedByExecutor: true,
+        connectionActive: true,
         // Oldest first, and this is not a style choice. This sweep is one
         // queue for the whole appliance — two slots a minute across EVERY
         // connection — and the sync executor completes up to two jobs a
@@ -648,6 +657,37 @@ export class SyncOrchestrator {
       return;
     }
 
+    // The sweep already selects only these; checked again here because this handler acts on
+    // whatever id its event names, and `data` is only provider data when the executor wrote it.
+    if (syncJob.fetchedByExecutor !== true) {
+      this.logger.warn('Not transforming a sync job the sync executor did not fetch', {
+        connectionSyncJobId: syncJob.id,
+      });
+
+      return;
+    }
+
+    // Before the claim, so a job this handler turns away is not left claimed (and pushed to the
+    // back of the queue by the claim's `updated_at`) for the claim's hour-long staleness window.
+    const connection = await this.connectionService.findById({ userId: SYSTEM_USER }, syncJob.connectionId);
+
+    if (!connection) {
+      this.logger.error('Connection not found for transformation', {
+        connectionSyncJobId: payload.connectionSyncJobId,
+      });
+
+      return;
+    }
+
+    if (!connection.active) {
+      this.logger.warn('Not transforming a sync job for a connection that is not active', {
+        connectionSyncJobId: syncJob.id,
+        connectionId: connection.id,
+      });
+
+      return;
+    }
+
     // The self-DoS this prevents: `executeTransformJobs` runs every minute and
     // selects rows with `lastTransformed: null`, which is only written on
     // COMPLETION — and `updated_at` does not move while the transform runs. So
@@ -669,16 +709,6 @@ export class SyncOrchestrator {
     if (!claimed) {
       this.logger.debug('Sync job is already claimed or transformed; skipping duplicate delivery', {
         connectionSyncJobId: syncJob.id,
-      });
-
-      return;
-    }
-
-    const connection = await this.connectionService.findById({ userId: SYSTEM_USER }, syncJob.connectionId);
-
-    if (!connection) {
-      this.logger.error('Connection not found for transformation', {
-        connectionSyncJobId: payload.connectionSyncJobId,
       });
 
       return;

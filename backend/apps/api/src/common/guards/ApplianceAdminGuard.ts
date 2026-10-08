@@ -31,39 +31,39 @@ import type { PortalPrincipalMarker } from './PortalTokenVerifier';
  * the Jobs page's switches away from every fresh install, permanently, because
  * nothing in application code ever wrote `role = 'admin'` — the only path being
  * migration 20260825233952, which promotes the earliest EXISTING user and so
- * matched nothing on an empty `ci.users`.
+ * matched nothing on an empty `ci.users`. `UserService.claimApplianceIfUnowned`
+ * and migration 20260910133657 fixed that, so every appliance with an account
+ * has an admin from its first account onward.
  *
- * **That is fixed** (`UserService.claimApplianceIfUnowned` promotes the account
- * that claims an unowned appliance; migration 20260910133657 heals the installs
- * the original backfill could not reach), so the original objection no longer
- * holds. This guard stays anyway, and the difference from `AdminOnlyGuard` is
- * now a deliberate choice about failure mode rather than a workaround:
+ * The one difference left is the appliance with NO live account at all, which
+ * this guard still treats as unclaimed and admits. No signed-in person can be
+ * standing on such a box, so in practice the two guards now agree.
  *
- * It asks **is there an admin to require?** If yes, require one. If no, the
- * appliance is unclaimed and the request is admitted. For an appliance-wide
- * control plane that is the honest answer — an unclaimed box's job controls
- * should not be inert — whereas `AdminOnlyGuard` fails closed because the
- * routes behind it hand out arbitrary local command execution, where
- * "unclaimed" is not a reason to grant anything.
+ * ── Live accounts but no live admin: refused ───────────────────────────────
  *
- * With bootstrapping in place the permissive branch is now transitional rather
- * than the steady state: a fresh appliance has an admin from its first account
- * onward, so the branch only fires in the window before anyone can authenticate
- * at all, or if an owner later deletes their account (and the next account
- * created re-claims the box, by the same rule).
+ * This guard used to admit everyone whenever no LIVE admin existed. That state
+ * is not only "nobody has claimed the box yet": it is also what an owner leaves
+ * behind by deleting their account while household members still have theirs
+ * (`deleted_at` hides the owner's row, and its role with it). Every member then
+ * passed this guard, and `POST /signup-codes` sits behind it, so a member could
+ * mint an invitation and sign up a second account. The claim then promoted any
+ * account created on an admin-less box, so that account became admin, which
+ * reaches the MCP stdio transport and with it local command execution.
+ *
+ * Three rules close that, and this guard is the last of them:
+ *
+ * - `UserService.requestDeletion` refuses to delete the last live admin while
+ *   other live accounts exist, unless the request names a successor.
+ * - `UserService.claimApplianceIfUnowned` promotes only the appliance's first
+ *   account ever, never "the next account after the owner left".
+ * - Here, an appliance that has live accounts and no live admin is not
+ *   unclaimed. It is an appliance whose admin is gone, and nobody on it is
+ *   admitted until an operator names a new one (see `UserService`).
  *
  * ── What this is NOT ───────────────────────────────────────────────────────
  *
  * It was never a substitute for admin bootstrapping, and it did not close that
- * gap — a first-run promotion in application code did, and as this file
- * predicted, that turned this into a plain admin gate with no change to the
- * code below.
- *
- * It is still deliberately NOT applied to `AdminOnlyGuard`'s routes. Widening
- * that guard the same way would LOOSEN the MCP server-config routes on any
- * appliance that has lost its admin, handing arbitrary local command execution
- * to whoever is signed in. Tightening one surface must not silently open
- * another.
+ * gap — a first-run promotion in application code did.
  *
  * Must run after an auth guard that populates `request.user` — combine as
  * `@UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)`. Like its sibling it
@@ -100,8 +100,8 @@ export class ApplianceAdminGuard implements CanActivate {
    *
    * One implementation, on purpose: a page that offered a control the route then
    * refused, or hid one the route would have allowed, would be two rules
-   * drifting. A failed admin probe still throws (`applianceHasAdmin` fails
-   * closed); a caller that would rather read that as "no" must catch it.
+   * drifting. A failed admin probe still throws (`probe` fails closed); a
+   * caller that would rather read that as "no" must catch it.
    */
   async admits(user: { role?: string } | undefined, request?: PortalPrincipalMarker): Promise<boolean> {
     // The same refusal canActivate makes first, so a page asking here is not offered a control
@@ -114,14 +114,17 @@ export class ApplianceAdminGuard implements CanActivate {
       return true;
     }
 
-    // Unclaimed appliance — nobody can be an admin here, so requiring one would
-    // gate the control plane on a role that cannot be granted. Deliberately
-    // permissive, and only in that one case.
-    return !(await this.applianceHasAdmin());
+    // Unclaimed appliance: no live account at all, so nobody can be an admin
+    // yet and requiring one would gate the control plane on a role nobody can
+    // hold. Live accounts with no live admin among them is NOT that: it is an
+    // appliance whose admin is gone, and it stays closed.
+    const { liveAdmin, liveAccounts } = await this.probe();
+
+    return !liveAdmin && !liveAccounts;
   }
 
   /**
-   * Whether any admin account exists.
+   * Whether a live admin exists, and whether any live account does.
    *
    * Not cached, on purpose. Every route behind this guard is an operator action
    * — clear terminal jobs, fire a cron, change a queue's mode — so this runs at
@@ -129,18 +132,21 @@ export class ApplianceAdminGuard implements CanActivate {
    * buy nothing measurable and would make a freshly promoted admin wait, or a
    * revoked one keep access, for reasons no operator could see.
    *
-   * Fails CLOSED: a probe that cannot answer must not be read as "no admin
-   * exists", which is the one answer that admits everybody.
+   * Fails CLOSED: a probe that cannot answer must not be read as "nobody is
+   * here", which is the one answer that admits everybody.
    */
-  private async applianceHasAdmin(): Promise<boolean> {
+  private async probe(): Promise<{ liveAdmin: boolean; liveAccounts: boolean }> {
     try {
-      const [row] = await this.dataSource.query<Array<{ present: boolean }>>(
+      const [row] = await this.dataSource.query<Array<{ admin: boolean; accounts: boolean }>>(
         `SELECT EXISTS (
                   SELECT 1 FROM ci.users WHERE role = 'admin' AND deleted_at IS NULL
-                ) AS present`,
+                ) AS admin,
+                EXISTS (
+                  SELECT 1 FROM ci.users WHERE deleted_at IS NULL
+                ) AS accounts`,
       );
 
-      return row?.present === true;
+      return { liveAdmin: row?.admin === true, liveAccounts: row?.accounts !== false };
     } catch {
       throw new ForbiddenException('This action requires an administrator account');
     }

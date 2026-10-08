@@ -50,10 +50,17 @@ export interface UpdateConnectionDto {
 
 export interface connectProviderDto {
   apiKey?: string;
+  account?: string;
   endpoints: string[];
 }
 
 export const connectProviderSchema = z.object({
   endpoints: z.array(z.string()),
   apiKey: z.string().optional(),
+  /**
+   * For an `api_key` provider that serves several accounts (Signal: the signal-cli REST service
+   * can hold more than one number), the account to connect. Required there; the server checks it
+   * against the accounts the service lists rather than picking one.
+   */
+  account: z.string().trim().min(1).max(64).optional(),
 });

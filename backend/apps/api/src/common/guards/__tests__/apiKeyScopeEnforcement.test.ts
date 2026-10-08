@@ -104,6 +104,7 @@ describe('enforceApiKeyCapability', () => {
   describe('a route that declares nothing requires what its shape implies', () => {
     const readKey = { apiKeyScopes: [], apiKeyCapability: 'read' as const };
     const writeKey = { apiKeyScopes: [], apiKeyCapability: 'write' as const };
+    const fullKey = { apiKeyScopes: [], apiKeyCapability: 'full' as const };
 
     it('GraphQL: a query is a read, a mutation is a write', () => {
       expect(setupCapability(undefined, readKey, { type: 'graphql', operation: 'query' })).not.toThrow();
@@ -118,15 +119,32 @@ describe('enforceApiKeyCapability', () => {
       );
     });
 
-    it('REST: GET/HEAD/OPTIONS are reads, every other verb is a write', () => {
+    it('REST: GET/HEAD/OPTIONS are reads, POST/PATCH/PUT are writes', () => {
       for (const method of ['GET', 'HEAD', 'OPTIONS']) {
         expect(setupCapability(undefined, readKey, { type: 'http', method })).not.toThrow();
       }
 
-      for (const method of ['POST', 'PATCH', 'PUT', 'DELETE']) {
+      for (const method of ['POST', 'PATCH', 'PUT']) {
         expect(setupCapability(undefined, readKey, { type: 'http', method })).toThrow(ForbiddenException);
         expect(setupCapability(undefined, writeKey, { type: 'http', method })).not.toThrow();
       }
+    });
+
+    it('REST: an undeclared DELETE needs full, because write is "nothing that deletes"', () => {
+      // The hole this closes: DELETE /connections/:id, /threads/:id, /import/runs/:runId and five
+      // more declared nothing, so the default "Read & write" key could run them all.
+      expect(setupCapability(undefined, writeKey, { type: 'http', method: 'DELETE' })).toThrow(
+        /is "write".*requires "full"/,
+      );
+      expect(setupCapability(undefined, readKey, { type: 'http', method: 'delete' })).toThrow(
+        ForbiddenException,
+      );
+      expect(setupCapability(undefined, fullKey, { type: 'http', method: 'DELETE' })).not.toThrow();
+    });
+
+    it('REST: a DELETE that declares a lower level keeps it (MCP session teardown)', () => {
+      // `DELETE /mcp` ends a protocol session and deletes nothing; McpController declares `read`.
+      expect(setupCapability('read', readKey, { type: 'http', method: 'DELETE' })).not.toThrow();
     });
 
     it('a declared level overrides the shape in either direction', () => {
@@ -140,6 +158,17 @@ describe('enforceApiKeyCapability', () => {
       expect(
         setupCapability(undefined, { apiKeyScopes: undefined }, { type: 'graphql', operation: 'mutation' }),
       ).not.toThrow();
+      expect(
+        setupCapability(undefined, { apiKeyScopes: undefined }, { type: 'http', method: 'DELETE' }),
+      ).not.toThrow();
+    });
+
+    it('GraphQL: a field declared full (a data-losing @GraphqlPrivacy label) refuses a write key', () => {
+      // The label reaches the guard as a declaration; see GraphqlPrivacy.ts.
+      expect(setupCapability('full', writeKey, { type: 'graphql', operation: 'mutation' })).toThrow(
+        /is "write".*requires "full"/,
+      );
+      expect(setupCapability('full', fullKey, { type: 'graphql', operation: 'mutation' })).not.toThrow();
     });
   });
 

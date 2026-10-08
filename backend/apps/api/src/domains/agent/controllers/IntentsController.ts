@@ -69,8 +69,9 @@ export class IntentsController {
    */
   @Get()
   @RequireCapability(READ_CAPABILITY)
-  getManifest(@Query('tier') tier?: string): IntentManifest {
-    return this.catalog.getManifest({ tier: parseTier(tier) });
+  getManifest(@Query('tier') tier?: string, @Context() context?: RequestContext): IntentManifest {
+    // The caller decides which owned intents are listed; see IntentCatalogService.getManifest.
+    return this.catalog.getManifest({ tier: parseTier(tier), userId: context?.userId });
   }
 
   /** The standardized schema-domain vocabulary. */
@@ -90,8 +91,12 @@ export class IntentsController {
   /** A single intent by its dotted name, e.g. `memory.recall`. Honours `?tier=` as above. */
   @Get(':name')
   @RequireCapability(READ_CAPABILITY)
-  getIntent(@Param('name') name: string, @Query('tier') tier?: string): ManifestIntent {
-    const manifest = this.catalog.getManifest({ tier: parseTier(tier) });
+  getIntent(
+    @Param('name') name: string,
+    @Query('tier') tier?: string,
+    @Context() context?: RequestContext,
+  ): ManifestIntent {
+    const manifest = this.catalog.getManifest({ tier: parseTier(tier), userId: context?.userId });
     const intent = manifest.intents.find((i) => i.name === name);
 
     if (!intent) {
@@ -126,7 +131,10 @@ export class IntentsController {
   ): Promise<ToolResult> {
     const toolName = resolveExecuteName(name);
 
-    if (!toolName || !this.registry.hasTool(toolName)) {
+    // Visible to this caller, not merely registered: an intent another account owns (the
+    // `messaging.*` intents belong to the BlueBubbles connector's owner) is unknown here, the same
+    // 404 the manifest routes give, rather than a 200 that confirms it exists.
+    if (!toolName || !this.registry.isToolVisibleTo(toolName, context.userId)) {
       throw new NotFoundException(`Unknown intent: ${name}`);
     }
 

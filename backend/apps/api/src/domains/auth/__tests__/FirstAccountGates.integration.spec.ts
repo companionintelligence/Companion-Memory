@@ -84,6 +84,11 @@ if (!availability.available) {
 }
 
 // Replaying every migration takes a while; the cases themselves are quick.
+
+/** The app's half of a native sign-in: an S256 challenge and a state value of its own. */
+const APP_CHALLENGE = 'c'.repeat(43);
+const APP_STATE = 's'.repeat(32);
+
 jest.setTimeout(180_000);
 
 const ISSUER = 'https://portal.first-account.test';
@@ -441,6 +446,9 @@ describeWithDatabase(`first-account gates, against real Postgres (${availability
 
     if (client === 'native') {
       cookies.oidc_client = 'native';
+      // The app's binding, parked by `initiate` (see OidcController.initiate.test.ts).
+      cookies.oidc_native_challenge = APP_CHALLENGE;
+      cookies.oidc_native_state = APP_STATE;
     }
 
     await oidcController.callback(
@@ -613,10 +621,12 @@ describeWithDatabase(`first-account gates, against real Postgres (${availability
 
         expect(race).toEqual(SERIALIZED);
         expect(destinations.filter((url) => url.includes('?code='))).toEqual([
-          `companion://oidc/callback?code=one-time-${owner.id}`,
+          `companion://oidc/callback?code=one-time-${owner.id}&state=${APP_STATE}`,
         ]);
         // The same answer an unknown identity gets on a claimed appliance.
-        expect(destinations.filter((url) => url.endsWith(`?error=${refusal}`))).toHaveLength(1);
+        expect(
+          destinations.filter((url) => url.endsWith(`?error=${refusal}&state=${APP_STATE}`)),
+        ).toHaveLength(1);
         expect(await accounts()).toEqual([expect.objectContaining({ role: 'admin' })]);
         expect(await bindings()).toEqual([expect.objectContaining({ user_id: owner.id })]);
       },
@@ -688,22 +698,23 @@ describeWithDatabase(`first-account gates, against real Postgres (${availability
       ).toBeNull();
       await expect(signup('stranger')).rejects.toThrow('Must provide a valid signup code');
       expect(redirectedTo(await oidcCallback('stranger-native', 'native'))).toMatch(
-        /\?error=signup_code_required$/,
+        /\?error=signup_code_required&state=s+$/,
       );
       expect((await accounts()).filter((account) => account.deleted_at == null)).toEqual([]);
     });
 
-    it('still lets the next account created re-claim admin', async () => {
-      // The rule claimApplianceIfUnowned and ApplianceAdminGuard share: no LIVE admin means the box
-      // is unowned, so whoever is admitted next — by an invitation, or where signup is open —
-      // becomes its administrator instead of leaving the control plane open to everyone.
+    it('does not let the next account created re-claim admin', async () => {
+      // It used to: no LIVE admin read as "unowned", so whoever was admitted next became admin.
+      // With members still on the box that let a member mint an invitation and sign up their own
+      // administrator. The claim now asks what createFirstAccount asks, so a box whose owner is
+      // awaiting the purge gets no new admin until an operator names one.
       await createAccount('former-owner');
       await softDeleteEveryone();
 
       const heir = await createAccount('heir');
 
-      expect(heir.role).toBe('admin');
-      expect((await accounts()).find((account) => account.id === heir.id)?.role).toBe('admin');
+      expect(heir.role).toBe('user');
+      expect((await accounts()).find((account) => account.id === heir.id)?.role).toBe('user');
     });
   });
 });

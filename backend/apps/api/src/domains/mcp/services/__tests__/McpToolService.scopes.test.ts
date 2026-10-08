@@ -59,6 +59,8 @@ describe('McpToolService — scope-limited callers', () => {
       // tools); both native intents here belong to the always-included `native` provider, so the
       // fixture is the same list either way.
       getOutboundCatalogTools: () => [nativeIntent, nativeWriteIntent],
+      getOutboundCatalogToolsForEveryOwner: () => [nativeIntent, nativeWriteIntent],
+      isToolVisibleTo: () => true,
       getRegisteredToolNames: () => [nativeIntent.name, nativeWriteIntent.name],
       executeTool: jest.fn().mockResolvedValue({ success: true, data: { ok: true } }),
       // The GraphQL branch now records its own tool.invoked through the registry (it never
@@ -258,6 +260,87 @@ describe('McpToolService — scope-limited callers', () => {
       );
       expect(executor.executeTool).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * A native tool can belong to one account: the `messaging.*` intents belong to whoever the
+ * BlueBubbles connector was set up for. MCP builds its tool map once at boot, so it has to keep
+ * those tools in the map (their owner needs them) and decide per request who sees them, by the
+ * registry's own rule.
+ */
+describe('McpToolService native tools owned by one account', () => {
+  const owned = {
+    name: 'messaging.listChats',
+    description: 'List chats',
+    parameters: { type: 'object' as const, properties: {} },
+    privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: true },
+    ownerUserId: 'owner-1',
+  };
+  const shared = {
+    name: 'memory.search',
+    description: 'Search memory',
+    parameters: { type: 'object' as const, properties: {} },
+    privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
+  };
+
+  function buildService() {
+    const registry = {
+      // What a context-free catalog read returns: owned tools are nobody's.
+      getOutboundCatalogTools: () => [shared],
+      getOutboundCatalogToolsForEveryOwner: () => [shared, owned],
+      getRegisteredToolNames: () => [shared.name, owned.name],
+      isToolVisibleTo: jest.fn(
+        (name: string, userId?: string) => name !== 'messaging_listChats' || userId === 'owner-1',
+      ),
+      executeTool: jest.fn(),
+      recordInvocation: jest.fn(),
+    };
+    const adapter = { getTools: () => [], getSchemaSDL: () => '' } as unknown as GraphQLToolAdapter;
+    const logger = { setContext: jest.fn(), log: jest.fn(), debug: jest.fn(), error: jest.fn() };
+    const service = new McpToolService(
+      adapter,
+      registry as never,
+      {} as McpExecutorService,
+      logger as never,
+      // An open gate: these tests are about which owner sees a tool, not about confirmation.
+      { evaluate: async () => ({ decision: 'execute', reason: 'allowed', explanation: 'open' }) } as never,
+      { register: () => undefined } as never,
+    );
+
+    service.onModuleInit();
+
+    return { service, registry };
+  }
+
+  const as = (userId: string, scopes?: string[]) =>
+    ({
+      user: { id: userId },
+      apiKeyScopes: scopes,
+      apiKeyCapability: 'full',
+    }) as unknown as ApiKeyScopedRequest;
+
+  it("lists the owner's tool to the owner", () => {
+    const { service } = buildService();
+
+    expect(service.getToolsForRequest(as('owner-1')).map((tool) => tool.name)).toEqual([
+      'memory_search',
+      'messaging_listChats',
+    ]);
+    expect(service.getToolsForRequest(as('owner-1', ['intents', 'mcp'])).map((tool) => tool.name)).toEqual([
+      'memory_search',
+      'messaging_listChats',
+    ]);
+  });
+
+  it('hides it from every other account, session or key', () => {
+    const { service, registry } = buildService();
+
+    expect(service.getToolsForRequest(as('member-1')).map((tool) => tool.name)).toEqual(['memory_search']);
+    expect(service.getToolsForRequest(as('member-1', ['intents', 'mcp'])).map((tool) => tool.name)).toEqual([
+      'memory_search',
+    ]);
+    expect(registry.isToolVisibleTo).toHaveBeenCalledWith('messaging_listChats', 'member-1');
   });
 });
 

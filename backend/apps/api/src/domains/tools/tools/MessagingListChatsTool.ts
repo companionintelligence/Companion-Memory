@@ -35,7 +35,7 @@ const GROUP_CHAT_STYLE = 43;
  */
 @Injectable()
 export class MessagingListChatsTool extends BaseTool<MessagingListChatsInput, MessagingListChatsOutput> {
-  readonly schema: IntentDefinition = {
+  private static readonly BASE_SCHEMA: IntentDefinition = {
     name: 'messaging.listChats',
     domain: 'messaging',
     title: 'List message chats',
@@ -59,6 +59,15 @@ export class MessagingListChatsTool extends BaseTool<MessagingListChatsInput, Me
     },
   };
 
+  /**
+   * Owned by the BlueBubbles connector's owner, read fresh on every access: the registry hides
+   * this tool from every other account and refuses to run it for them. See
+   * `BlueBubblesClientService.toolOwnerUserId`.
+   */
+  get schema(): IntentDefinition {
+    return { ...MessagingListChatsTool.BASE_SCHEMA, ownerUserId: this.client.toolOwnerUserId() };
+  }
+
   constructor(
     private readonly client: BlueBubblesClientService,
     protected readonly logger: LoggerService,
@@ -72,10 +81,10 @@ export class MessagingListChatsTool extends BaseTool<MessagingListChatsInput, Me
   }
 
   protected async executeInternal(
-    _context: ToolExecutionContext,
+    context: ToolExecutionContext,
     input: MessagingListChatsInput,
   ): Promise<MessagingListChatsOutput> {
-    const chats = await this.client.listChats(input.maxResults ?? 25);
+    const chats = await this.client.listChats(context.userId, input.maxResults ?? 25);
 
     return {
       chats: chats.map((chat) => ({

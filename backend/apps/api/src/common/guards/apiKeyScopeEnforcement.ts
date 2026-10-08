@@ -47,7 +47,7 @@ export interface ApiKeyScopedRequest extends Request {
    * Provenance from `api_keys.managed_by`, never from the `app:` name prefix,
    * which a user can hand-create.
    */
-  apiKeyManagedBy?: 'connect' | null;
+  apiKeyManagedBy?: 'connect' | 'sign_in' | null;
   /** The key's name (`app:<appUrn>` for connect keys), for LABELLING a card once
    *  {@link ApiKeyScopedRequest.apiKeyManagedBy} has already established trust. */
   apiKeyName?: string | null;
@@ -138,12 +138,24 @@ export function enforceApiKeyScopes(
 /**
  * What an operation requires when its route declares nothing: the shape of the
  * request decides. A GraphQL mutation or a non-GET HTTP verb changes state, so
- * it needs `write`; a query or a GET needs `read`. `@RequireCapability` on the
- * handler or class overrides this in either direction — up to `full` for the
- * three operator actions, or down to `read` for a POST that only computes
- * (`/llm/generate`, `/import/recognize`, `/model-routing/plan`, MCP).
+ * it needs `write`; a query or a GET needs `read`; an HTTP DELETE removes
+ * something, so it needs `full`. `@RequireCapability` on the handler or class
+ * overrides this in either direction: up to `full` for an operator action or
+ * a POST that destroys, or down to `read` for a POST that only computes
+ * (`/llm/generate`, `/import/recognize`, `/model-routing/plan`, MCP) and for
+ * `DELETE /mcp`, which ends a protocol session and deletes nothing.
  *
- * HEAD and OPTIONS are reads; everything else that is not GET is a write.
+ * DELETE is priced at `full` because that is what the levels promise: `write`
+ * is "nothing that deletes" (see {@link ApiKeyCapability}), and MCP already
+ * refuses a `write` key every tool labelled destructive. Before this, every
+ * undeclared `@Delete` route (connections, chat threads, import runs and
+ * uploads, questions, answers, positions, devices) ran for a `write` key.
+ *
+ * GraphQL is priced per field rather than per verb: a resolver whose
+ * `@GraphqlPrivacy` label loses data also declares `full` (the decorator
+ * writes both), so it arrives here as a declaration, not a shape.
+ *
+ * HEAD and OPTIONS are reads; every other verb that is not GET or DELETE is a write.
  */
 export function capabilityImpliedByShape(
   context: ExecutionContext,
@@ -158,7 +170,11 @@ export function capabilityImpliedByShape(
 
   const method = (request.method ?? '').toUpperCase();
 
-  return method === 'GET' || method === 'HEAD' || method === 'OPTIONS' ? READ_CAPABILITY : WRITE_CAPABILITY;
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
+    return READ_CAPABILITY;
+  }
+
+  return method === 'DELETE' ? FULL_CAPABILITY : WRITE_CAPABILITY;
 }
 
 /**
@@ -168,7 +184,8 @@ export function capabilityImpliedByShape(
  * Scopes decide WHICH routes a key may reach; capability decides what it may do when it gets
  * there. Every operation a key can reach is vetted: a route that declares `@RequireCapability`
  * requires that level, and one that declares nothing requires the level its shape implies
- * ({@link capabilityImpliedByShape} — mutations and non-GET verbs write, queries and GETs read).
+ * ({@link capabilityImpliedByShape}: queries and GETs read, mutations and other verbs write,
+ * an HTTP DELETE needs full).
  *
  * This used to be opt-in per route, and 334 GraphQL operations plus 74 REST writes declared
  * nothing, so a key issued as "read-only" could run every mutation. The shape rule closes all of

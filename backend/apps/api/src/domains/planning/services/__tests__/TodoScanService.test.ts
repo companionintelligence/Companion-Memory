@@ -27,9 +27,40 @@ function makeDataSource() {
 
 function makeOllamaService(items: Array<Record<string, unknown>>) {
   return {
-    chat: jest.fn(async () => ({
-      message: { role: 'assistant', content: JSON.stringify({ items }) },
-    })),
+    chat: jest.fn(async (_ctx: unknown, messages: Array<{ content?: string }>) => {
+      const prompt = messages?.[0]?.content ?? '';
+
+      if (prompt.includes('Classify each numbered source.')) {
+        const indexes = [...prompt.matchAll(/^\[(\d+)\]/gm)].map((match) => Number(match[1]));
+        const unique = [...new Set(indexes)];
+        const addressed = items.some((item) => item.sourceIndex != null);
+        const decisions = unique.map((sourceIndex) => {
+          const chosen = addressed
+            ? items.filter((item) => item.sourceIndex === sourceIndex)
+            : sourceIndex === unique[0]
+              ? items.slice(0, 1)
+              : [];
+
+          if (chosen.length === 0) {
+            return { sourceIndex, action: 'skip' };
+          }
+
+          const first = chosen[0]!;
+
+          return {
+            sourceIndex,
+            action: 'candidate',
+            title: first.title,
+            detail: first.detail,
+            confidence: first.confidence,
+          };
+        });
+
+        return { message: { role: 'assistant', content: JSON.stringify({ decisions }) } };
+      }
+
+      return { message: { role: 'assistant', content: JSON.stringify({ items }) } };
+    }),
   } as unknown as OllamaService;
 }
 
@@ -61,9 +92,9 @@ describe('TodoScanService per-item error isolation', () => {
     // out of runForUser() and pg-boss would redeliver the WHOLE job — including
     // re-walking the already-applied first item.
     const items = [
-      { title: 'Call the vet', confidence: 0.9 },
-      { title: 'Explodes', confidence: 0.9 },
-      { title: 'Pay the invoice', confidence: 0.9 },
+      { title: 'Call the vet', confidence: 0.9, sourceIndex: 1 },
+      { title: 'Explodes', confidence: 0.9, sourceIndex: 2 },
+      { title: 'Pay the invoice', confidence: 0.9, sourceIndex: 3 },
     ];
 
     const created = new Set<string>();
@@ -93,13 +124,29 @@ describe('TodoScanService per-item error isolation', () => {
     const logger = makeLogger();
     const proposedReconcile = makeProposedReconcile();
 
+    const hitIds = [
+      '11111111-1111-7111-8111-111111111111',
+      '22222222-2222-7222-8222-222222222222',
+      '33333333-3333-7333-8333-333333333333',
+    ];
     const service = new TodoScanService(
       taskService,
-      makeSearchService(),
+      {
+        search: jest.fn(async () => hitIds.map((id) => ({ id, type: 'communication' }))),
+      } as unknown as SearchService,
       makeOllamaService(items),
       personalizationService,
       plannedBlockService,
-      makeDataSource() as never,
+      {
+        query: jest.fn(async () =>
+          hitIds.map((id, index) => ({
+            id,
+            entity_type: 'communication',
+            name: `Reminder ${index + 1}`,
+            snippet: 'Call the vet about Mochi.',
+          })),
+        ),
+      } as never,
       proposedReconcile,
       logger,
     );

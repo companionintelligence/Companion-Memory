@@ -1048,14 +1048,15 @@ export class PipelineStateService {
   async recordDeadLetter(input: DeadLetterInput): Promise<void> {
     await this.dataSource.query(
       `INSERT INTO ci.pipeline_dead_letters
-              (queue, event_name, stage, entity_type, entity_id, payload, error)
-       VALUES ($1, $2, $3, $4, $5::uuid, $6::jsonb, $7)`,
+              (queue, event_name, stage, entity_type, entity_id, user_id, payload, error)
+       VALUES ($1, $2, $3, $4, $5::uuid, $6::uuid, $7::jsonb, $8)`,
       [
         input.queue,
         input.eventName,
         input.stage ?? null,
         input.entityType ?? null,
         input.entityId ?? null,
+        input.userId ?? null,
         JSON.stringify(input.payload ?? {}),
         input.error,
       ],

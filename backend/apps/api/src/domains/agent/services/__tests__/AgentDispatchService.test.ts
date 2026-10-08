@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 
 import { TASK_STATUSES } from '@ci/domains/planning';
 
@@ -475,6 +475,117 @@ describe('AgentDispatchService terminal-state guard', () => {
   it('still serves the packet for a running job', async () => {
     const { service } = setup({ status: 'running' });
 
+    await expect(service.getPacket(context, 'job-1')).resolves.toBeDefined();
+  });
+});
+
+describe('AgentDispatchService: only the harness may fetch a packet or checkpoint', () => {
+  const context = { userId: 'user-1' } as never;
+
+  function setup() {
+    const job = {
+      id: 'job-1',
+      userId: 'user-1',
+      taskId: 'task-1',
+      threadId: 'thread-1',
+      harnessId: 'openclaw' as const,
+      packetMode: 'both' as const,
+      packet: { source: { title: 'Book the dentist' }, ask: 'Book it' },
+      status: 'running' as AgentJobStatus,
+      failStep: null as string | null,
+      failCount: 0,
+      result: null,
+      eventJobId: 'pg-job-1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      completedAt: null as Date | null,
+    };
+    const jobRepository = {
+      findOne: jest.fn(async () => job),
+      find: jest.fn(async () => []),
+      update: jest.fn(async (_where: unknown, patch: Partial<typeof job>) => {
+        Object.assign(job, patch);
+      }),
+    };
+    const task = { id: 'task-1', status: 'delegated', completedAt: null as Date | null };
+    const taskService = {
+      findById: jest.fn(async () => task),
+      update: jest.fn(async () => task),
+      complete: jest.fn(async () => {
+        task.status = 'done';
+
+        return task;
+      }),
+    };
+    const messageService = { create: jest.fn() };
+    const eventService = { send: jest.fn(), completeJob: jest.fn() };
+    const service = new AgentDispatchService(
+      jobRepository as never,
+      { create: jest.fn() } as never,
+      messageService as never,
+      taskService as never,
+      eventService as never,
+      { wakeOpenClaw: jest.fn() } as never,
+      { setContext: jest.fn(), debug: jest.fn(), warn: jest.fn() } as never,
+    );
+
+    return { job, task, service, messageService, taskService };
+  }
+
+  const openclawKey = { kind: 'api-key' as const, connectApp: 'ci-openclaw' };
+
+  it("serves the packet to the OpenClaw app's key", async () => {
+    const { service } = setup();
+
+    await expect(service.getPacket(context, 'job-1', openclawKey)).resolves.toMatchObject({ ask: 'Book it' });
+  });
+
+  it("refuses another installed app's key, e.g. a memory-only voice speaker", async () => {
+    const { service } = setup();
+
+    await expect(
+      service.getPacket(context, 'job-1', { kind: 'api-key', connectApp: 'ci-ha-voice' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('refuses a key the connect flow did not mint, even one the owner made', async () => {
+    const { service } = setup();
+
+    await expect(
+      service.getPacket(context, 'job-1', { kind: 'api-key', connectApp: null }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("refuses a checkpoint from another app's key, and neither writes a turn nor completes the task", async () => {
+    const { service, messageService, taskService } = setup();
+
+    await expect(
+      service.checkpoint(
+        context,
+        'job-1',
+        { status: 'completed', turns: [{ role: 'assistant', content: 'Done' }] },
+        {
+          kind: 'api-key',
+          connectApp: 'ci-mentra',
+        },
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(messageService.create).not.toHaveBeenCalled();
+    expect(taskService.complete).not.toHaveBeenCalled();
+  });
+
+  it("accepts the OpenClaw app's checkpoint", async () => {
+    const { service, taskService } = setup();
+
+    await service.checkpoint(context, 'job-1', { status: 'completed' }, openclawKey);
+
+    expect(taskService.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the owner signed in, and the stale-job sweep, act without a key', async () => {
+    const { service } = setup();
+
+    await expect(service.getPacket(context, 'job-1', { kind: 'owner' })).resolves.toBeDefined();
     await expect(service.getPacket(context, 'job-1')).resolves.toBeDefined();
   });
 });

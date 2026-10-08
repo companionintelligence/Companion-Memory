@@ -38,7 +38,7 @@ export class MessagingListMessagesTool extends BaseTool<
   MessagingListMessagesInput,
   MessagingListMessagesOutput
 > {
-  readonly schema: IntentDefinition = {
+  private static readonly BASE_SCHEMA: IntentDefinition = {
     name: 'messaging.listMessages',
     domain: 'messaging',
     title: 'List messages in a chat',
@@ -65,6 +65,15 @@ export class MessagingListMessagesTool extends BaseTool<
     },
   };
 
+  /**
+   * Owned by the BlueBubbles connector's owner, read fresh on every access: the registry hides
+   * this tool from every other account and refuses to run it for them. See
+   * `BlueBubblesClientService.toolOwnerUserId`.
+   */
+  get schema(): IntentDefinition {
+    return { ...MessagingListMessagesTool.BASE_SCHEMA, ownerUserId: this.client.toolOwnerUserId() };
+  }
+
   constructor(
     private readonly client: BlueBubblesClientService,
     protected readonly logger: LoggerService,
@@ -78,10 +87,10 @@ export class MessagingListMessagesTool extends BaseTool<
   }
 
   protected async executeInternal(
-    _context: ToolExecutionContext,
+    context: ToolExecutionContext,
     input: MessagingListMessagesInput,
   ): Promise<MessagingListMessagesOutput> {
-    const messages = await this.client.listMessages(input.chatGuid, input.maxResults ?? 25);
+    const messages = await this.client.listMessages(context.userId, input.chatGuid, input.maxResults ?? 25);
 
     return {
       messages: messages.map((message) => ({

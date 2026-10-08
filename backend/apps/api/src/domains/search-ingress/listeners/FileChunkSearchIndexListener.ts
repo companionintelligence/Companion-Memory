@@ -27,7 +27,10 @@ export class FileChunkSearchIndexListener {
       chunkCount: payload.chunkIds.length,
     });
 
-    const chunks = await this.chunkService.findByIds(payload.chunkIds);
+    // As the document's owner, whom the parse listener names: the chunks were
+    // written under that user, so this reads exactly the set it was sent, and
+    // an event naming somebody else's chunk ids indexes nothing.
+    const chunks = await this.chunkService.findByIds({ userId: payload.userId }, payload.chunkIds);
 
     if (chunks.length === 0) {
       this.logger.log('Document chunks indexed', { fileId: payload.fileId, indexed: 0 });

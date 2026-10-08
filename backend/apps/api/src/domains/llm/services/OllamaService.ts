@@ -18,7 +18,7 @@ import {
   unguardToolResult,
 } from '@ci/common/prompt/untrustedBlock';
 import config, { UTILITY_MODEL_EXPLICITLY_CONFIGURED } from '@ci/configuration';
-import { ModelTierRouter, type RoutingDecision } from '@ci/domains/model-routing';
+import { ModelTierRouter, TIER_PROFILES, type RoutingDecision } from '@ci/domains/model-routing';
 import {
   ToolRegistry,
   capabilityAllows,
@@ -1330,6 +1330,37 @@ export class OllamaService implements OnModuleInit {
   }
 
   /**
+   * The window and parameter size the next utility call will actually use.
+   * `CI_LLM_NUM_CTX` wins, then the utility plan's `numCtx`, then the chat
+   * context plan, then the on-device tier profile. Never throws.
+   */
+  async resolveUtilityScanProfile(): Promise<{
+    model: string;
+    contextTokens: number;
+    parameterBillions: number | null;
+  }> {
+    const selection = await this.resolveUtilityModel();
+    const contextTokens =
+      selection.numCtx ??
+      (await this.defaultContextTokens(selection.model)) ??
+      TIER_PROFILES.on_device.maxContextTokens;
+    let parameterBillions: number | null = null;
+
+    try {
+      if (!this.llmEndpointService.usesOpenAiDriver()) {
+        const response = (await this.ollama.show({ model: selection.model })) as {
+          details?: { parameter_size?: string };
+        };
+        parameterBillions = parameterBillionsFrom(response.details?.parameter_size);
+      }
+    } catch {
+      parameterBillions = null;
+    }
+
+    return { model: selection.model, contextTokens, parameterBillions };
+  }
+
+  /**
    * The chat model's context window as the machine can carry it: on Ollama from
    * {@link ResidencyPlannerService.resolveChatContextTokens}, on an
    * OpenAI-compatible backend from what its `/v1/models` row reports. The chat
@@ -1949,6 +1980,26 @@ export class OllamaService implements OnModuleInit {
       return [];
     }
   }
+}
+
+function parameterBillionsFrom(raw: string | undefined): number | null {
+  if (raw == null) {
+    return null;
+  }
+
+  const match = raw.trim().match(/^(\d+(?:\.\d+)?)\s*([bBmM])?/);
+
+  if (!match) {
+    return null;
+  }
+
+  const value = Number(match[1]);
+
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  return match[2]?.toLowerCase() === 'm' ? value / 1_000 : value;
 }
 
 /**

@@ -39,8 +39,27 @@ export class UserEntity {
   @Column()
   name!: string;
 
+  /**
+   * Stored trimmed and lower-cased (`normalizeEmail`), and unique whatever its case through
+   * `users_email_lower_uniq`. Rows that already collided by case when that index was built keep
+   * their exact address and are left out of it; see migration 20261006065832.
+   */
   @Column({ unique: true })
   email!: string;
+
+  /**
+   * When this account's address was last shown to belong to whoever holds the account, or null
+   * when nothing ever showed it. Set when the account was created from a Portal or Hub identity,
+   * on the appliance's first account, and for every account that existed when the column was
+   * added. Cleared by every address change.
+   *
+   * The Portal email link and the Hub bridge's adoption by username trust an account's address
+   * to say whose account it is, and both require this. Signup and `PATCH /account/email` store
+   * any address they are given, so without it an account could carry a future member's address
+   * and receive that person's first Portal or Hub sign-in.
+   */
+  @Column({ type: 'timestamptz', name: 'email_proven_at', nullable: true })
+  emailProvenAt?: Date | null;
 
   @Column()
   password!: string;
@@ -126,6 +145,7 @@ export class UserEntity {
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
       passwordSetAt: entity.passwordSetAt ?? null,
+      emailProvenAt: entity.emailProvenAt ?? null,
     };
   }
 }
