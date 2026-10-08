@@ -11,7 +11,7 @@ import {
 } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { type User, UserEntity } from '../../entities/UserEntity';
-import { UserService } from '../UserService';
+import { LastAdminDeletionRefused, UserService } from '../UserService';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -110,17 +110,18 @@ describeWithDb(`UserService — claiming an unowned appliance, in Postgres (${av
   });
 
   beforeEach(async () => {
-    // What makes an appliance "owned", to the claim and to ApplianceAdminGuard alike. If something
-    // else owns this one, no assertion below can mean anything.
-    const admins = (await dataSource.query(
-      `SELECT email FROM ci.users WHERE role = 'admin' AND deleted_at IS NULL ORDER BY created_at`,
+    // What makes an appliance claimed: any row in ci.users, live or awaiting its purge. The claim
+    // promotes only the first account ever, so if anything is already here no assertion below can
+    // mean anything.
+    const existing = (await dataSource.query(
+      `SELECT email FROM ci.users ORDER BY created_at LIMIT 5`,
     )) as Array<{ email: string }>;
 
-    if (admins.length > 0) {
+    if (existing.length > 0) {
       throw new Error(
-        `REFUSING TO RUN: ${availability.target} already has a live admin ` +
-          `(${admins.map((admin) => admin.email).join(', ')}). The claim under test is appliance-wide, so ` +
-          `this suite needs an unowned appliance, and it will not demote or delete an admin it did not ` +
+        `REFUSING TO RUN: ${availability.target} already has accounts ` +
+          `(${existing.map((row) => row.email).join(', ')}). The claim under test is appliance-wide, so ` +
+          `this suite needs an appliance nobody has claimed, and it will not delete accounts it did not ` +
           `create. Point ${OPT_IN_VARIABLE} at a freshly migrated database of its own.`,
       );
     }
@@ -191,5 +192,76 @@ describeWithDb(`UserService — claiming an unowned appliance, in Postgres (${av
 
     expect(racers.map((racer) => racer.role).sort()).toEqual(['admin', 'user']);
     expect(racers.map((racer) => racer.role)).toEqual(stored);
+  });
+
+  it("marks the first account's address proven, and leaves the next one unproven", async () => {
+    const owner = await createAccount('owner');
+    const member = await createAccount('member');
+
+    expect(owner.emailProvenAt).toBeInstanceOf(Date);
+    expect(member.emailProvenAt).toBeNull();
+  });
+
+  it('does not promote the next account after the owner left while a member stayed', async () => {
+    // Deleting the owner used to leave no LIVE admin, and the next account created was promoted.
+    // With a member still on the box, that member could mint the invitation for it.
+    const owner = await createAccount('owner');
+    await createAccount('member');
+    await dataSource.query(`UPDATE ci.users SET deleted_at = now() WHERE id = $1`, [owner.id]);
+
+    const next = await createAccount('next');
+
+    expect(next.role).toBe('user');
+    expect(await storedRole(next.id)).toBe('user');
+  });
+
+  it('does not promote anyone while the only account is awaiting its purge', async () => {
+    const owner = await createAccount('owner');
+    await dataSource.query(`UPDATE ci.users SET deleted_at = now() WHERE id = $1`, [owner.id]);
+
+    const next = await createAccount('next');
+
+    expect(next.role).toBe('user');
+  });
+
+  it('refuses to delete the last admin while a member stays, and hands the role to a named successor', async () => {
+    const owner = await createAccount('owner');
+    const member = await createAccount('member');
+
+    await expect(service.requestDeletion(SYSTEM, owner.id)).rejects.toBeInstanceOf(LastAdminDeletionRefused);
+    expect(await storedRole(owner.id)).toBe('admin');
+
+    await expect(
+      service.requestDeletion(SYSTEM, owner.id, { successorEmail: member.email.toUpperCase() }),
+    ).resolves.toBe(true);
+
+    expect(await storedRole(member.id)).toBe('admin');
+    const [row] = (await dataSource.query(`SELECT deleted_at FROM ci.users WHERE id = $1`, [
+      owner.id,
+    ])) as Array<{
+      deleted_at: Date | null;
+    }>;
+    expect(row.deleted_at).toBeInstanceOf(Date);
+  });
+
+  it('never leaves members without an admin when two admins leave at once', async () => {
+    // Each would otherwise count the other as the admin who stays. The deletion takes the lock
+    // every account creation takes, so the second one to get it sees the truth.
+    const first = await createAccount('first admin');
+    const second = await createAccount('second admin');
+    await createAccount('member');
+    await dataSource.query(`UPDATE ci.users SET role = 'admin' WHERE id = $1`, [second.id]);
+
+    const outcomes = await Promise.allSettled([
+      service.requestDeletion(SYSTEM, first.id),
+      service.requestDeletion(SYSTEM, second.id),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    const admins = (await dataSource.query(
+      `SELECT id FROM ci.users WHERE role = 'admin' AND deleted_at IS NULL`,
+    )) as Array<{ id: string }>;
+    expect(admins).toHaveLength(1);
   });
 });

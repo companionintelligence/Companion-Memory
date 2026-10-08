@@ -69,6 +69,13 @@ const updateConnectionSchema = z.object({
 
 type ProxyCompletion = Extract<CompleteConnectionDto, { flow: 'proxy' }>;
 
+/** What CI Portal hands back for a proxied grant. */
+interface PortalGrant {
+  tokens: TokenExchange;
+  /** The provider account CI Portal stored the grant under, when it says. */
+  accountId: string | null;
+}
+
 /**
  * How long completing a proxied connection waits on CI Portal's token refresh. CI Portal
  * waits on the provider's token endpoint in turn and neither request times out on its
@@ -290,13 +297,44 @@ export class ConnectionsController {
         throw new ConflictException('A connection to that account already exists');
       }
 
-      const tokens = await this.proxyTokens(body);
+      const grant = await this.proxyGrant(body);
+
+      if (grant.accountId != null && grant.accountId !== body.userProviderId) {
+        this.logger.warn('CI Portal bound this grant to a different account than the browser reported', {
+          connectionId,
+        });
+
+        // The duplicate check above went by the browser's id. The id this connection is stored
+        // under is CI Portal's, so check again by that one, or a second connection to the same
+        // account would be stored next to the first. CI Portal answered for this grant over the
+        // device's own channel, so its tokens can go to the connection that already holds the
+        // account (whose own proxy refresh token CI Portal has just replaced).
+        const [sameAccount] = (
+          await this.connectionService.search(serviceContext, {
+            providerId: connection.providerId,
+            active: true,
+            externalId: grant.accountId,
+          })
+        ).filter((c) => c.id !== connectionId);
+
+        if (sameAccount) {
+          await this.connectionService.update(serviceContext, sameAccount.id, grant.tokens);
+          await this.connectionService.remove(serviceContext, connectionId);
+          throw new ConflictException('A connection to that account already exists');
+        }
+      }
 
       await this.update(context, connectionId, {
-        ...tokens,
+        ...grant.tokens,
         active: true,
         needsReauth: false,
-        externalId: body.userProviderId,
+        // The account CI Portal holds this grant under, read over the device's own channel. On
+        // disconnect this id can address a credential at CI Portal, and every account on this
+        // appliance shares the device, so it must not be whatever the browser said. The
+        // browser's `userProviderId` is used only when there is nothing better: an older CI
+        // Portal that does not return the id, or an access-token-only grant (Facebook), for
+        // which CI Portal stores nothing.
+        externalId: grant.accountId ?? body.userProviderId,
       });
 
       const stored = await this.connectionService.findById(serviceContext, connectionId);
@@ -475,7 +513,8 @@ export class ConnectionsController {
   }
 
   /**
-   * The tokens a proxied connection is stored with.
+   * The tokens a proxied connection is stored with, and the provider account CI Portal says the
+   * grant belongs to (null when it did not say).
    *
    * ⚠ NOT THE ACCESS TOKEN THE BROWSER CARRIED, whenever there is a better one
    * (CI-Server#2676). CI Portal returns the provider's access token through the
@@ -488,13 +527,20 @@ export class ConnectionsController {
    * carries none, Facebook's for instance — arrives with only the access token,
    * and that remains the only token there is.
    */
-  private async proxyTokens(body: ProxyCompletion): Promise<TokenExchange> {
+  private async proxyGrant(body: ProxyCompletion): Promise<PortalGrant> {
     if (body.refreshToken) {
       return this.refreshThroughPortal(body.state, body.refreshToken);
     }
 
     if (body.accessToken) {
-      return { accessToken: body.accessToken, refreshToken: null, tokenExpiry: expiryAfter(body.expiresIn) };
+      return {
+        tokens: {
+          accessToken: body.accessToken,
+          refreshToken: null,
+          tokenExpiry: expiryAfter(body.expiresIn),
+        },
+        accountId: null,
+      };
     }
 
     // `completeCallback` refuses this before anything is looked up; kept so a
@@ -509,11 +555,11 @@ export class ConnectionsController {
    * is spent by this call, so the rotated one CI Portal returns is what must be
    * stored; keeping the spent one would leave a connection that can never
    * refresh. If CI Portal returns none, none is stored.
+   *
+   * `accountId` is the `user_provider_id` CI Portal stored the grant under, which
+   * newer CI Portals return with every refresh. Null from one that does not.
    */
-  private async refreshThroughPortal(
-    connectionId: string,
-    proxyRefreshToken: string,
-  ): Promise<TokenExchange> {
+  private async refreshThroughPortal(connectionId: string, proxyRefreshToken: string): Promise<PortalGrant> {
     const refreshed = await this.cloudOAuthProxyService
       .refreshAccessToken(proxyRefreshToken, { signal: AbortSignal.timeout(PORTAL_REFRESH_TIMEOUT_MS) })
       .catch((error: unknown) => {
@@ -536,12 +582,18 @@ export class ConnectionsController {
     }
 
     return {
-      accessToken: refreshed.access_token,
-      refreshToken:
-        typeof refreshed.refresh_token === 'string' && refreshed.refresh_token !== ''
-          ? refreshed.refresh_token
+      tokens: {
+        accessToken: refreshed.access_token,
+        refreshToken:
+          typeof refreshed.refresh_token === 'string' && refreshed.refresh_token !== ''
+            ? refreshed.refresh_token
+            : null,
+        tokenExpiry: expiryAfter(refreshed.expires_in),
+      },
+      accountId:
+        typeof refreshed.user_provider_id === 'string' && refreshed.user_provider_id !== ''
+          ? refreshed.user_provider_id
           : null,
-      tokenExpiry: expiryAfter(refreshed.expires_in),
     };
   }
 
@@ -575,7 +627,7 @@ export class ConnectionsController {
     }
 
     try {
-      const tokens = await this.refreshThroughPortal(existing.id, body.refreshToken);
+      const { tokens } = await this.refreshThroughPortal(existing.id, body.refreshToken);
       const client = this.clientFactory.getClientByProviderId(pending.provider?.id);
       const accountId = await client?.getAccountIdentifier({ ...existing, accessToken: tokens.accessToken });
 

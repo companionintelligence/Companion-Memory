@@ -471,6 +471,109 @@ describe('PersonStubBackfillService.backfill', () => {
     expect(payload.entities[0].properties).toMatchObject({ emails: ['friend@example.com'] });
   });
 
+  describe('binding a participant to the owner', () => {
+    // Invented throughout: the owner's name, account email and phone.
+    const SELF = '00000000-0000-0000-0000-0000000000f1';
+
+    function makeOwnerService(rows: FakeRow[], trustMode: 'cautious' | 'balanced' | 'hands_off') {
+      let selectServed = false;
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('SELECT entity_id FROM ci.users')) {
+          return [{ entity_id: SELF }];
+        }
+
+        if (sql.includes('FROM ci.users u') || sql.includes('is_self')) {
+          return [
+            { name: 'Avery Quinn', email: 'avery@owner.example', phones_json: null },
+            { name: 'Avery Quinn', email: null, phones_json: ['+1 415-555-0100'] },
+          ];
+        }
+
+        if (sql.includes('FROM ci.communications')) {
+          if (!selectServed) {
+            selectServed = true;
+
+            return rows;
+          }
+
+          return [];
+        }
+
+        return [];
+      });
+
+      const ids = makeIdentifierService({});
+      const ingest = makeIngestService();
+      const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+      const service = new PersonStubBackfillService(
+        { query } as never,
+        ingest as never,
+        ids as never,
+        { getTrustMode: jest.fn(async () => trustMode) } as never,
+        logger as never,
+      );
+
+      return { service, ids, ingest };
+    }
+
+    const row = (participants: Record<string, unknown>): FakeRow => ({
+      id: 'row-1',
+      time: new Date('2026-01-07T00:00:00.000Z'),
+      participants_metadata: participants,
+    });
+
+    it.each(['cautious', 'balanced', 'hands_off'] as const)(
+      "mints a contact for a stranger writing under the owner's name instead of filing the address as the owner's (%s)",
+      async (trustMode) => {
+        const { service, ids, ingest } = makeOwnerService(
+          [row({ from: '"Avery Quinn" <someone@other.example>' })],
+          trustMode,
+        );
+
+        await service.backfill(USER, { startTime: START, endTime: END });
+
+        expect(ids.repointToEntity).not.toHaveBeenCalled();
+        expect(ids.claimForSelf).not.toHaveBeenCalled();
+        const [, payload] = ingest.ingest.mock.calls[0];
+        expect(payload.entities.map((entity) => entity.properties)).toEqual([
+          expect.objectContaining({ emails: ['someone@other.example'] }),
+        ]);
+      },
+    );
+
+    it("does not read the owner's phone digits out of a display name", async () => {
+      const { service, ids, ingest } = makeOwnerService(
+        [row({ from: '"Call 415 555 0100 today" <promo@other.example>', to: ['Support 415 555 0100'] })],
+        'cautious',
+      );
+
+      await service.backfill(USER, { startTime: START, endTime: END });
+
+      expect(ids.repointToEntity).not.toHaveBeenCalled();
+      expect(ids.claimForSelf).not.toHaveBeenCalled();
+      const [, payload] = ingest.ingest.mock.calls[0];
+      expect(payload.entities.map((entity) => entity.properties)).toEqual([
+        expect.objectContaining({ emails: ['promo@other.example'] }),
+        expect.objectContaining({ names: ['support 415 555 0100'] }),
+      ]);
+    });
+
+    it("still files the owner's own number as the owner's", async () => {
+      const { service, ids, ingest } = makeOwnerService([row({ from: '+1 (415) 555-0100' })], 'cautious');
+
+      await service.backfill(USER, { startTime: START, endTime: END });
+
+      expect(ids.repointToEntity).toHaveBeenCalledWith(
+        USER,
+        SELF,
+        'phone',
+        '+1 (415) 555-0100',
+        'self_collation',
+      );
+      expect(ingest.ingest).not.toHaveBeenCalled();
+    });
+  });
+
   describe('a person the owner asked memory.forget to erase', () => {
     const FORGOTTEN = 'email:dana@example.com';
 

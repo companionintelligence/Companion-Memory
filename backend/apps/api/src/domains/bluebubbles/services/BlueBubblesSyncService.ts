@@ -4,6 +4,7 @@ import { Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
+import { SYSTEM_USER } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import {
   BlueBubblesApiClient,
@@ -406,10 +407,12 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
       populate: (writer: StagedWriter, scratchDir: string) => Promise<void>;
     },
   ): Promise<void> {
-    const userId = await this.resolveOwnerUserId();
+    const userId = await this.resolveOwnerUserId(config);
 
     if (!userId) {
-      this.logger.warn('BlueBubbles ingest skipped: no onboarded user to attribute messages to');
+      this.logger.warn(
+        'BlueBubbles ingest skipped: the connector has no live owner to attribute messages to',
+      );
 
       return;
     }
@@ -694,23 +697,27 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
   }
 
   /**
-   * The user newly-pulled BlueBubbles messages are attributed to.
+   * The user newly-pulled BlueBubbles messages are attributed to: the
+   * connector's recorded owner (`ci.bluebubbles_config.owner_user_id`), the same
+   * account the `messaging.*` tools serve.
    *
-   * BlueBubbles config is appliance-wide (no `user_id` column — see
-   * `BlueBubblesConfigEntity`), so unlike a per-user connection sync there is
-   * no owning user recorded anywhere to read. The first onboarded account is
-   * the right answer on the personal, single-tenant appliance this feature is
-   * built for; a multi-user appliance wanting per-user attribution is a
-   * follow-up, not a gap this sync silently mishandles (it simply no-ops
-   * without a user to attribute to).
+   * This used to be "the first onboarded account", read fresh on every pass,
+   * which drifted from the person whose Mac it is as soon as that was anyone
+   * else, and could move if the first account was deleted. The owner is
+   * recorded when an administrator saves the connection, and existing installs
+   * were backfilled with exactly that first-onboarded account, so nothing
+   * already synced changes hands.
    *
-   * "First" means oldest, and `findAllOnboarded` now orders by `created_at` to
-   * make that true. Without an ORDER BY the row order is whatever Postgres
-   * happens to return, so on a two-account appliance consecutive syncs could
-   * file the same corpus under different users.
+   * A deleted owner reads as none: the pass no-ops (with a warning) rather than
+   * filing messages into an account nobody can sign in to, until an
+   * administrator saves the connection again and claims it.
    */
-  private async resolveOwnerUserId(): Promise<string | null> {
-    const [owner] = await this.userService.findAllOnboarded();
+  private async resolveOwnerUserId(config: BlueBubblesConfigEntity): Promise<string | null> {
+    if (!config.ownerUserId) {
+      return null;
+    }
+
+    const owner = await this.userService.findById({ userId: SYSTEM_USER }, config.ownerUserId);
 
     return owner?.id ?? null;
   }

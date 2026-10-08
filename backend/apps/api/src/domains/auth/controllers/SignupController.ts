@@ -14,11 +14,12 @@ import { CsrfService } from '../services/CsrfService';
 import { SignupCodeService } from '../services/SignupCodeService';
 import { SignupDto } from '../types';
 import { setCsrfCookie, setSessionCookie } from '../utils/authCookies';
+import { newPasswordSchema } from '../utils/passwordPolicy';
 
 const signupSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   email: z.string().email('Invalid email address'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  password: newPasswordSchema,
   signup_code: z.string().optional(),
 });
 

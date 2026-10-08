@@ -44,9 +44,23 @@ function makeRes() {
   };
 }
 
-// A request carrying the native client marker plus whatever state/pkce cookies the case needs.
+/** The app's half of the sign-in, parked by initiate: an S256 challenge and its own state. */
+const APP_CHALLENGE = 'c'.repeat(43);
+const APP_STATE = 's'.repeat(32);
+
+// A request carrying the native client marker and the app's binding, plus whatever
+// state/pkce cookies the case needs.
 function nativeReq(cookies: Record<string, string> = {}) {
-  return { cookies: { oidc_client: 'native', ...cookies }, secure: false, headers: {} } as never;
+  return {
+    cookies: {
+      oidc_client: 'native',
+      oidc_native_challenge: APP_CHALLENGE,
+      oidc_native_state: APP_STATE,
+      ...cookies,
+    },
+    secure: false,
+    headers: {},
+  } as never;
 }
 
 describe('OidcController — OIDC callback (native deep-link routing)', () => {
@@ -56,7 +70,9 @@ describe('OidcController — OIDC callback (native deep-link routing)', () => {
 
     await controller.callback('code-x', 'state-x', 'access_denied', nativeReq(), res as never);
 
-    expect(res.redirect).toHaveBeenCalledWith('companion://oidc/callback?error=access_denied');
+    expect(res.redirect).toHaveBeenCalledWith(
+      `companion://oidc/callback?error=access_denied&state=${APP_STATE}`,
+    );
     // The client marker is always cleared on the return leg.
     expect(res.clearCookie).toHaveBeenCalledWith('oidc_client', expect.any(Object));
   });
@@ -77,7 +93,9 @@ describe('OidcController — OIDC callback (native deep-link routing)', () => {
 
     await controller.callback('', 'state-x', undefined, nativeReq(), res as never);
 
-    expect(res.redirect).toHaveBeenCalledWith('companion://oidc/callback?error=missing_params');
+    expect(res.redirect).toHaveBeenCalledWith(
+      `companion://oidc/callback?error=missing_params&state=${APP_STATE}`,
+    );
   });
 
   it('deep-links invalid_state when the returned state does not match the cookie', async () => {
@@ -92,7 +110,9 @@ describe('OidcController — OIDC callback (native deep-link routing)', () => {
       res as never,
     );
 
-    expect(res.redirect).toHaveBeenCalledWith('companion://oidc/callback?error=invalid_state');
+    expect(res.redirect).toHaveBeenCalledWith(
+      `companion://oidc/callback?error=invalid_state&state=${APP_STATE}`,
+    );
   });
 
   it('deep-links missing_pkce when state matches but the PKCE verifier cookie is gone', async () => {
@@ -102,6 +122,38 @@ describe('OidcController — OIDC callback (native deep-link routing)', () => {
     // State matches (so it clears the state cookie and advances) but no oidc_pkce cookie.
     await controller.callback('code-x', 'match', undefined, nativeReq({ oidc_state: 'match' }), res as never);
 
+    expect(res.redirect).toHaveBeenCalledWith(
+      `companion://oidc/callback?error=missing_pkce&state=${APP_STATE}`,
+    );
+  });
+
+  it("returns the app's state on every exit, so the app can tell its own result from a stray link", async () => {
+    const { controller } = makeController();
+    const res = makeRes();
+
+    await controller.callback('code-x', 'state-x', 'access_denied', nativeReq(), res as never);
+
+    const [target] = res.redirect.mock.calls[0] as [string];
+
+    expect(new URL(target).searchParams.get('state')).toBe(APP_STATE);
+  });
+
+  it('refuses a native return whose binding cookies are gone, and clears them', async () => {
+    // Without the challenge there is nothing to bind a one-time code to, so no code is
+    // issued, and without the state the app could not recognise the result anyway.
+    const { controller, oidcNativeCodeService } = makeController();
+    const res = makeRes();
+    const req = {
+      cookies: { oidc_client: 'native', oidc_state: 'good', oidc_pkce: 'verifier' },
+      secure: false,
+      headers: {},
+    } as never;
+
+    await controller.callback('code-x', 'good', undefined, req, res as never);
+
     expect(res.redirect).toHaveBeenCalledWith('companion://oidc/callback?error=missing_pkce');
+    expect(oidcNativeCodeService.issue).not.toHaveBeenCalled();
+    expect(res.clearCookie).toHaveBeenCalledWith('oidc_native_challenge', { path: '/' });
+    expect(res.clearCookie).toHaveBeenCalledWith('oidc_native_state', { path: '/' });
   });
 });

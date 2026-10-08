@@ -104,7 +104,8 @@ const CAPABILITY_OPTIONS = [
   {
     value: API_KEY_CAPABILITY_WRITE,
     label: 'Read & write',
-    description: 'Also record new memories and update existing ones.',
+    description:
+      'Also record new memories and make most edits. An edit that can remove something, such as changing a person’s contact details or renaming a tag, needs “Read, write & delete”.',
   },
   {
     value: API_KEY_CAPABILITY_FULL,
@@ -115,7 +116,8 @@ const CAPABILITY_OPTIONS = [
     // CI-Hub uses this same wording for the same stored value, so a user who grants an agent access
     // to both appliances meets one vocabulary rather than two dialects.
     label: 'Read, write & delete',
-    description: 'Also delete memories and other stored data. Deletions cannot be undone.',
+    description:
+      'Also delete memories and other stored data, merge people and make edits that remove data. Deletions cannot be undone.',
   },
 ] as const;
 
@@ -840,8 +842,8 @@ export function ApiKeysSection() {
                 </Dialog.Title>
                 <Dialog.Description>
                   {editCapability === API_KEY_CAPABILITY_FULL
-                    ? 'Anything holding this key will be able to delete memories and other stored data. Deletions cannot be undone.'
-                    : 'Anything holding this key will be able to record new memories and update existing ones. It will still be refused deletions.'}
+                    ? 'Anything holding this key will be able to delete memories and other stored data, merge people and make edits that remove data. Deletions cannot be undone.'
+                    : 'Anything holding this key will be able to record new memories and make most edits. It will still be refused deletions, merges and edits that remove data.'}
                 </Dialog.Description>
               </Dialog.Header>
               <Dialog.Footer>

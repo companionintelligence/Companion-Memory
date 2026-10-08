@@ -159,9 +159,12 @@ on:
         default: ''
         required: false
 
+# Read-only by default. Only `release` writes (it creates the tag and the
+# GitHub Release), so only `release` gets `contents: write`. The platform jobs
+# run the Tauri CLI, cargo build scripts and third-party actions; none of them
+# needs to push to the repository.
 permissions:
-  contents: write
-  packages: read
+  contents: read
 
 concurrency:
   group: desktop-release
@@ -193,8 +196,7 @@ jobs:
       # `gh run list` reads the Actions API; without actions:read the default
       # GITHUB_TOKEN gets a 403 here and the gate fails closed on every run.
       # Job-level permissions REPLACE the workflow-level block wholesale, so
-      # `contents: read` has to be restated even though the file grants
-      # `contents: write` — this job needs no write and no checkout.
+      # `contents: read` has to be restated next to it.
       actions: read
     steps:
       - name: Check for a successful desktop-build.yml run at ${{ github.sha }}
@@ -372,8 +374,12 @@ jobs:
 
       - name: Rust toolchain
         if: steps.secrets.outputs.present == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        # Pinned to a master commit with the toolchain named explicitly: the
+        # `stable` branch is regenerated from master, so a commit on it can
+        # stop being reachable.
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
+          toolchain: stable
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Node.js
@@ -381,6 +387,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      # The Tauri CLI comes from frontend/apps/desktop/yarn.lock, the version
+      # someone reviewed, not from whatever `npx @tauri-apps/cli@2` found newest
+      # on npm at build time. This job has the Developer ID identity unlocked
+      # while the CLI runs, so the CLI must not change underneath it.
+      - name: Install the locked Tauri CLI
+        if: steps.secrets.outputs.present == 'true'
+        working-directory: frontend/apps/desktop
+        run: |
+          set -euo pipefail
+          corepack enable
+          yarn install --immutable
+          yarn tauri --version
 
       # CI_SERVER_IMAGE_TAG is the tag of the SERVER images the bundled compose
       # file pulls at first launch — it is NOT the desktop app's marketing
@@ -487,7 +506,7 @@ jobs:
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          npx --yes @tauri-apps/cli@2 build \
+          yarn tauri build \
             --target universal-apple-darwin \
             -c '{"bundle":{"createUpdaterArtifacts":false}}'
 
@@ -561,8 +580,9 @@ jobs:
 
       - name: Rust toolchain
         if: steps.secrets.outputs.present == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
+          toolchain: stable
           targets: x86_64-pc-windows-msvc
 
       - name: Node.js
@@ -570,6 +590,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      # See the macOS job: the locked CLI, because this job can mint the
+      # production OIDC token that Azure Artifact Signing trusts.
+      - name: Install the locked Tauri CLI
+        if: steps.secrets.outputs.present == 'true'
+        working-directory: frontend/apps/desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          yarn install --immutable
+          yarn tauri --version
 
       # Deliberately NOT the desktop marketing version, and deliberately NOT
       # resolved here — see the long comment on the macOS job's copy of this
@@ -623,11 +655,11 @@ jobs:
         # signing secrets), which is why this was never seen.
         shell: bash
         run: |
-          npx --yes @tauri-apps/cli@2 build --target x86_64-pc-windows-msvc -c '{"bundle":{"createUpdaterArtifacts":false}}'
+          yarn tauri build --target x86_64-pc-windows-msvc -c '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Azure login for Artifact Signing
         if: steps.secrets.outputs.present == 'true'
-        uses: azure/login@v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -635,7 +667,7 @@ jobs:
 
       - name: Sign artifacts
         if: steps.secrets.outputs.present == 'true'
-        uses: azure/artifact-signing-action@v2
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
@@ -678,8 +710,9 @@ jobs:
           fetch-tags: true
 
       - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
+          toolchain: stable
           targets: x86_64-unknown-linux-gnu
 
       - name: Linux build dependencies
@@ -694,6 +727,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      # See the macOS job: the CLI comes from the desktop lockfile.
+      - name: Install the locked Tauri CLI
+        working-directory: frontend/apps/desktop
+        run: |
+          set -euo pipefail
+          corepack enable
+          yarn install --immutable
+          yarn tauri --version
 
       # Deliberately NOT the desktop marketing version, and deliberately NOT
       # resolved here — see the long comment on the macOS job's copy of this
@@ -750,7 +792,7 @@ jobs:
       - name: Build
         working-directory: frontend/apps/desktop
         run: |
-          npx --yes @tauri-apps/cli@2 build --target x86_64-unknown-linux-gnu \
+          yarn tauri build --target x86_64-unknown-linux-gnu \
             -c '{"bundle":{"createUpdaterArtifacts":false}}' -b deb,rpm
 
       - name: Upload Linux artifact
@@ -797,6 +839,10 @@ jobs:
       && needs.macos.result != 'failure'
       && needs.windows.result != 'failure'
     runs-on: ubuntu-latest
+    # The only job that writes: softprops/action-gh-release creates the
+    # desktop-v* tag and the Release.
+    permissions:
+      contents: write
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -856,7 +902,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: desktop-v${{ needs.version.outputs.name }}
           name: Desktop ${{ needs.version.outputs.name }} (${{ steps.platforms.outputs.names }})

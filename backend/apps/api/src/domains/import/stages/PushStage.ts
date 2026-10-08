@@ -2130,10 +2130,8 @@ export class PushStage implements ImportStageRunner {
       }
     }
 
-    const ownerPhones = identity.phones;
-
     for (const candidate of candidates) {
-      const match = matchOwner(identity, candidate, { phones: ownerPhones });
+      const match = matchOwner(identity, candidate);
       if (shouldMapContactToSelf(match, trustMode)) {
         return true;
       }

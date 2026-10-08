@@ -66,7 +66,7 @@ jobs:
           distribution: temurin
           java-version: '21'
       - name: Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
         with:
           # v3 defaults `packages` to `tools platform-tools`, and Google has
           # REMOVED the obsolete `tools` package from the SDK repository, so the

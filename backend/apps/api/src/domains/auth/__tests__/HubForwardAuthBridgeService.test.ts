@@ -62,8 +62,14 @@ function boundHeaders(
   };
 }
 
+/** An account whose address is proven: created from a Portal or Hub identity, or there before the rule. */
 function account(id: string, email: string) {
-  return { id, email };
+  return { id, email, emailProvenAt: new Date(NOW - 86_400_000) };
+}
+
+/** An account whose address someone typed into signup or an email change. */
+function unprovenAccount(id: string, email: string) {
+  return { id, email, emailProvenAt: null };
 }
 
 function uniqueViolation(): Error {
@@ -73,13 +79,16 @@ function uniqueViolation(): Error {
 function makeService() {
   const userService = {
     findById: jest.fn().mockResolvedValue(null),
-    findByEmail: jest.fn().mockResolvedValue(null),
-    findByEmailIgnoringCase: jest.fn().mockResolvedValue([]),
+    findAccountByEmail: jest.fn().mockResolvedValue(null),
     checkEmailAvailability: jest.fn().mockResolvedValue(false),
     create: jest.fn(),
+    isEmailProven: jest.fn((user: { emailProvenAt?: Date | null }) => user.emailProvenAt != null),
+    markEmailProven: jest.fn().mockResolvedValue(undefined),
   };
   const authService = {
     validateSessionToken: jest.fn(),
+    // The browser's session row is live unless a case says otherwise.
+    sessionEstablishedAt: jest.fn().mockResolvedValue(new Date(NOW - 60_000)),
     invalidateSession: jest.fn().mockResolvedValue(undefined),
     issueSessionToken: jest.fn().mockResolvedValue({ sessionToken: 'new-sess', sessionId: 'sid-2' }),
     issueAccessToken: jest.fn().mockReturnValue('access-hello'),
@@ -260,6 +269,51 @@ describe('HubForwardAuthBridgeService', () => {
       expect(federatedIdentityService.bind).not.toHaveBeenCalled();
     });
 
+    it('signs a fresh browser in to the proven account the address names', async () => {
+      const { service, userService, authService } = makeService();
+      userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+
+      await expect(
+        service.alignSession(requestWith(signedHeaders('hello@lifescope.io'), null), response()),
+      ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: true, accessToken: 'access-hello' });
+      expect(authService.issueSessionToken).toHaveBeenCalledWith('user-a', expect.any(Object));
+      expect(userService.create).not.toHaveBeenCalled();
+    });
+
+    it("SECURITY: refuses an account whose address nobody proved, and signs this browser's session out", async () => {
+      // A member typed this person's address into their own account before the person arrived.
+      // Without a stable id the address is the whole link, so adopting it would hand the member
+      // every one of this person's sign-ins.
+      const { service, userService, authService } = makeService();
+      userService.findAccountByEmail.mockResolvedValue(unprovenAccount('user-planted', 'hello@lifescope.io'));
+      authService.validateSessionToken.mockReturnValue({ sub: 'user-z' });
+      userService.findById.mockResolvedValue(account('user-z', 'z@lifescope.io'));
+      const res = response();
+
+      await expect(
+        service.alignSession(requestWith(signedHeaders('hello@lifescope.io')), res),
+      ).resolves.toEqual({
+        username: 'hello@lifescope.io',
+        replaced: false,
+        refused: 'account_unproven',
+      });
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
+      expect(userService.create).not.toHaveBeenCalled();
+      expect(authService.invalidateSession).toHaveBeenCalledWith('user-z', 'old-token', expect.any(Object));
+      expect(res.clearCookie).toHaveBeenCalledWith(config.auth.cookies.sessionTokenName, expect.any(Object));
+    });
+
+    it('refuses to choose between several accounts that match the address once case is ignored', async () => {
+      const { service, userService, authService } = makeService();
+      userService.findAccountByEmail.mockResolvedValue('ambiguous');
+
+      await expect(
+        service.alignSession(requestWith(signedHeaders('hello@lifescope.io'), null), response()),
+      ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false, refused: 'account_ambiguous' });
+      expect(userService.create).not.toHaveBeenCalled();
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
+    });
+
     it('signs the previous person out before finding the account, as it always has', async () => {
       const { service, userService, authService } = makeService();
       authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
@@ -281,7 +335,7 @@ describe('HubForwardAuthBridgeService', () => {
       federatedIdentityService.findUserId.mockResolvedValue('user-a');
       authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
       userService.findById.mockResolvedValue(account('user-a', 'old@lifescope.io'));
-      userService.findByEmail.mockResolvedValue(account('user-dup', 'new@lifescope.io'));
+      userService.findAccountByEmail.mockResolvedValue(account('user-dup', 'new@lifescope.io'));
 
       await expect(
         service.alignSession(requestWith(stableHeaders('new@lifescope.io')), response()),
@@ -316,7 +370,7 @@ describe('HubForwardAuthBridgeService', () => {
 
     it('links an unlinked person, once, to the account their Hub username names', async () => {
       const { service, userService, federatedIdentityService, authService } = makeService();
-      userService.findByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+      userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
 
       await expect(
         service.alignSession(requestWith(stableHeaders('hello@lifescope.io'), null), response()),
@@ -335,11 +389,11 @@ describe('HubForwardAuthBridgeService', () => {
 
     it('adopts the only case-insensitive match when no account has the exact address', async () => {
       const { service, userService, federatedIdentityService } = makeService();
-      userService.findByEmailIgnoringCase.mockResolvedValue([account('user-a', 'Hello@LifeScope.io')]);
+      userService.findAccountByEmail.mockResolvedValue(account('user-a', 'Hello@LifeScope.io'));
 
       await service.alignSession(requestWith(stableHeaders('hello@lifescope.io'), null), response());
 
-      expect(userService.findByEmailIgnoringCase).toHaveBeenCalledWith('hello@lifescope.io');
+      expect(userService.findAccountByEmail).toHaveBeenCalledWith('hello@lifescope.io');
       expect(federatedIdentityService.bind).toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'user-a' }),
       );
@@ -348,10 +402,7 @@ describe('HubForwardAuthBridgeService', () => {
 
     it('refuses to choose between several case-insensitive matches', async () => {
       const { service, userService, federatedIdentityService } = makeService();
-      userService.findByEmailIgnoringCase.mockResolvedValue([
-        account('user-a', 'Hello@LifeScope.io'),
-        account('user-b', 'HELLO@lifescope.io'),
-      ]);
+      userService.findAccountByEmail.mockResolvedValue('ambiguous');
 
       await expect(
         service.alignSession(requestWith(stableHeaders('hello@lifescope.io'), null), response()),
@@ -363,7 +414,7 @@ describe('HubForwardAuthBridgeService', () => {
     it("SECURITY: refuses an account another person of this Hub holds, and signs this browser's session out", async () => {
       // A renamed away from x@; the Hub later gave x@ to B. B's username names A's account.
       const { service, userService, authService, federatedIdentityService } = makeService();
-      userService.findByEmail.mockResolvedValue(account('user-a', 'x@lifescope.io'));
+      userService.findAccountByEmail.mockResolvedValue(account('user-a', 'x@lifescope.io'));
       federatedIdentityService.findForUserFromIssuer.mockResolvedValue({
         userId: 'user-a',
         issuer: DIRECTORY,
@@ -385,9 +436,70 @@ describe('HubForwardAuthBridgeService', () => {
       expect(res.clearCookie).toHaveBeenCalledWith(config.auth.cookies.sessionTokenName, expect.any(Object));
     });
 
+    it('SECURITY: refuses to adopt an account whose address nobody proved, unless this browser is signed in to it', async () => {
+      // Someone with an account here typed this person's address into it before they arrived.
+      const { service, userService, authService, federatedIdentityService } = makeService();
+      userService.findAccountByEmail.mockResolvedValue(unprovenAccount('user-planted', 'hello@lifescope.io'));
+      const res = response();
+
+      await expect(
+        service.alignSession(requestWith(stableHeaders('hello@lifescope.io'), null), res),
+      ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false, refused: 'account_unproven' });
+      expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+      expect(userService.create).not.toHaveBeenCalled();
+      expect(authService.issueSessionToken).not.toHaveBeenCalled();
+      expect(userService.markEmailProven).not.toHaveBeenCalled();
+    });
+
+    it('adopts an unproven account when this browser is signed in to it, and counts the address as proven', async () => {
+      // The person signed in with the account's own password here, and the Hub calls them by its
+      // address: together that is the explicit link.
+      const { service, userService, authService, federatedIdentityService } = makeService();
+      const own = unprovenAccount('user-a', 'hello@lifescope.io');
+      userService.findAccountByEmail.mockResolvedValue(own);
+      authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+      userService.findById.mockResolvedValue(own);
+
+      await expect(
+        service.alignSession(requestWith(stableHeaders('hello@lifescope.io')), response()),
+      ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false });
+      expect(authService.sessionEstablishedAt).toHaveBeenCalledWith('user-a', 'old-token');
+      expect(federatedIdentityService.bind).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-a', issuer: DIRECTORY, subject: HUB_ID }),
+      );
+      expect(userService.markEmailProven).toHaveBeenCalledWith('user-a');
+    });
+
+    it("SECURITY: does not count a signed-out session's cookie as being signed in to the account", async () => {
+      // Logging out deletes the session row and leaves the cookie's signature valid.
+      const { service, userService, authService, federatedIdentityService } = makeService();
+      const own = unprovenAccount('user-a', 'hello@lifescope.io');
+      userService.findAccountByEmail.mockResolvedValue(own);
+      authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
+      authService.sessionEstablishedAt.mockResolvedValue(null);
+      userService.findById.mockResolvedValue(own);
+
+      await expect(
+        service.alignSession(requestWith(stableHeaders('hello@lifescope.io')), response()),
+      ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false, refused: 'account_unproven' });
+      expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+    });
+
+    it("SECURITY: a session in someone else's account does not unlock an unproven one", async () => {
+      const { service, userService, authService, federatedIdentityService } = makeService();
+      userService.findAccountByEmail.mockResolvedValue(unprovenAccount('user-planted', 'hello@lifescope.io'));
+      authService.validateSessionToken.mockReturnValue({ sub: 'user-z' });
+      userService.findById.mockResolvedValue(account('user-z', 'z@lifescope.io'));
+
+      await expect(
+        service.alignSession(requestWith(stableHeaders('hello@lifescope.io')), response()),
+      ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false, refused: 'account_unproven' });
+      expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+    });
+
     it("adopts an account linked only into another Hub's directory (Memory restored onto a fresh Hub)", async () => {
       const { service, userService, federatedIdentityService } = makeService();
-      userService.findByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+      userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
       federatedIdentityService.findForUserFromIssuer.mockImplementation(
         async (_userId: string, issuer: string) =>
           issuer === OTHER_DIRECTORY
@@ -419,7 +531,12 @@ describe('HubForwardAuthBridgeService', () => {
       ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: true, accessToken: 'access-hello' });
       expect(userService.create).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ email: 'hello@lifescope.io', passwordChosenByUser: false }),
+        // The address is the Hub-signed username, so the new account's address counts as proven.
+        expect.objectContaining({
+          email: 'hello@lifescope.io',
+          passwordChosenByUser: false,
+          emailProven: true,
+        }),
         expect.any(Function),
       );
       expect(federatedIdentityService.bind).toHaveBeenCalledWith(
@@ -451,7 +568,7 @@ describe('HubForwardAuthBridgeService', () => {
       await expect(
         service.alignSession(requestWith(stableHeaders('hello@lifescope.io'), null), response()),
       ).resolves.toEqual({ username: 'hello@lifescope.io', replaced: false, refused: 'account_unavailable' });
-      expect(userService.findByEmail).not.toHaveBeenCalled();
+      expect(userService.findAccountByEmail).not.toHaveBeenCalled();
       expect(userService.create).not.toHaveBeenCalled();
     });
 
@@ -470,7 +587,7 @@ describe('HubForwardAuthBridgeService', () => {
 
     it('follows a racer that linked the person to another account first', async () => {
       const { service, userService, federatedIdentityService, authService } = makeService();
-      userService.findByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+      userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
       federatedIdentityService.bind.mockResolvedValueOnce({
         userId: 'user-raced',
         issuer: DIRECTORY,
@@ -488,7 +605,7 @@ describe('HubForwardAuthBridgeService', () => {
       const { service, userService, authService } = makeService();
       authService.validateSessionToken.mockReturnValue({ sub: 'user-z' });
       userService.findById.mockResolvedValue(account('user-z', 'z@lifescope.io'));
-      userService.findByEmail.mockRejectedValue(new Error('db down'));
+      userService.findAccountByEmail.mockRejectedValue(new Error('db down'));
       const res = response();
 
       await expect(
@@ -528,7 +645,7 @@ describe('HubForwardAuthBridgeService', () => {
 
     it('reports the account first sight would adopt, without linking it', async () => {
       const { service, userService, federatedIdentityService } = makeService();
-      userService.findByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+      userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
 
       await expect(
         service.describeIdentity(requestWith(stableHeaders('hello@lifescope.io'), null)),
@@ -563,7 +680,7 @@ describe('HubForwardAuthBridgeService', () => {
   describe('one session per Hub sign-in', () => {
     it('spends no unbound header set: two tabs an older Hub signed in the same millisecond both sign in', async () => {
       const { service, userService, authService } = makeService();
-      userService.findByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
+      userService.findAccountByEmail.mockResolvedValue(account('user-a', 'hello@lifescope.io'));
       const headers = signedHeaders('hello@lifescope.io');
 
       await service.alignSession(requestWith(headers, null), response());

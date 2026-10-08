@@ -79,13 +79,18 @@ export function ProviderPage() {
 
   const provider = data?.provider;
 
-  const [{ authorizationUrl, loading: connectLoading, error, apiKey, setApiKey }, { connect }] =
-    useConnectService();
+  const [
+    { authorizationUrl, loading: connectLoading, error, apiKey, setApiKey, account, setAccount },
+    { connect },
+  ] = useConnectService();
 
   const isOpenId = provider?.authType === 'openid';
   const isApiKey = provider?.authType === 'api_key';
   const requiresApiKey = isOpenId || isApiKey;
-  const isConnectDisabled = requiresApiKey && (apiKey == null || apiKey.length === 0);
+  // An api_key provider (Signal) serves several accounts, so the number to connect is named too.
+  const isConnectDisabled =
+    (requiresApiKey && (apiKey == null || apiKey.length === 0)) ||
+    (isApiKey && (account == null || account.trim().length === 0));
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -279,6 +284,24 @@ export function ProviderPage() {
                           value={apiKey ?? ''}
                           onChange={(e) => setApiKey(e.target.value)}
                         />
+                      </div>
+                    )}
+
+                    {isApiKey && (
+                      <div className="mt-4 space-y-2">
+                        <Label htmlFor="provider-account">{`Your ${provider.name} number`}</Label>
+                        <Input
+                          id="provider-account"
+                          type="tel"
+                          autoComplete="off"
+                          placeholder="+15551234567"
+                          value={account ?? ''}
+                          onChange={(e) => setAccount(e.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          The number registered with the service. Only an administrator can connect it, and
+                          each number can belong to one account.
+                        </p>
                       </div>
                     )}
                   </div>

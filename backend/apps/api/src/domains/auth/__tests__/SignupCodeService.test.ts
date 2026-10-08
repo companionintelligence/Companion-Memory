@@ -1,4 +1,6 @@
-import { SignupCodeService } from '../services/SignupCodeService';
+import { FindOperator } from 'typeorm';
+
+import { SIGNUP_CODE_TTL_MS, SignupCodeService } from '../services/SignupCodeService';
 
 /**
  * The command TypeORM's Postgres driver keys the shape of a `query()` result on: the OUTER one. A
@@ -96,7 +98,7 @@ describe('SignupCodeService.consume', () => {
     const [{ sql, params }] = transaction.statements;
 
     expect(sql).toMatch(
-      /UPDATE ci\.signup_code\s+SET used = true\s+WHERE signup_code = \$1\s+AND used = false/,
+      /UPDATE ci\.signup_code\s+SET used = true\s+WHERE signup_code = \$1\s+AND used = false\s+AND expires_at > now\(\)/,
     );
     expect(params).toEqual(['abc123']);
     // A SELECT on the outside, so the result is the rows and not the driver's pair.
@@ -118,6 +120,80 @@ describe('SignupCodeService.consume', () => {
 
     expect(await service.consume('abc123')).toBe(true);
     expect(connection.query).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** A repository that records what each call asked for. */
+function makeRepositoryService() {
+  const repository = {
+    create: jest.fn((data: object) => data),
+    save: jest.fn(async (entity: object) => ({ id: '7', createdAt: new Date(), ...entity })),
+    find: jest.fn().mockResolvedValue([]),
+    findOne: jest.fn().mockResolvedValue(null),
+    delete: jest.fn().mockResolvedValue({ affected: 1 }),
+  };
+
+  return { service: new SignupCodeService(repository as never), repository };
+}
+
+/** Whether `value` is TypeORM's `MoreThan(<a date within a second of now>)`. */
+function isLaterThanNow(value: unknown): boolean {
+  return (
+    value instanceof FindOperator &&
+    value.type === 'moreThan' &&
+    value.value instanceof Date &&
+    Math.abs(value.value.getTime() - Date.now()) < 1_000
+  );
+}
+
+describe('SignupCodeService — issuer, expiry and revocation', () => {
+  it('records who issued a code and when it stops working', async () => {
+    const { service, repository } = makeRepositoryService();
+    const before = Date.now();
+
+    await service.create('owner-1');
+
+    const [created] = repository.create.mock.calls[0] as [{ issuedBy: string; expiresAt: Date }];
+    expect(created.issuedBy).toBe('owner-1');
+    expect(Math.abs(created.expiresAt.getTime() - (before + SIGNUP_CODE_TTL_MS))).toBeLessThan(1_000);
+  });
+
+  it("records no issuer for an operator's code", async () => {
+    const { service, repository } = makeRepositoryService();
+
+    await service.create();
+
+    expect(repository.create.mock.calls[0][0]).toMatchObject({ issuedBy: null });
+  });
+
+  it('finds a code only while it is unused AND unexpired', async () => {
+    const { service, repository } = makeRepositoryService();
+
+    await service.findOne('abc123');
+
+    const { where } = repository.findOne.mock.calls[0][0] as { where: Record<string, unknown> };
+    expect(where).toMatchObject({ signup_code: 'abc123', used: false });
+    expect(isLaterThanNow(where.expiresAt)).toBe(true);
+  });
+
+  it('lists only codes that still admit someone', async () => {
+    const { service, repository } = makeRepositoryService();
+
+    await service.findUnused();
+
+    const { where } = repository.find.mock.calls[0][0] as { where: Record<string, unknown> };
+    expect(where.used).toBe(false);
+    expect(isLaterThanNow(where.expiresAt)).toBe(true);
+  });
+
+  it('revokes only a code nobody has used, and says whether it did', async () => {
+    const { service, repository } = makeRepositoryService();
+
+    await expect(service.revoke('7')).resolves.toBe(true);
+    expect(repository.delete).toHaveBeenCalledWith({ id: '7', used: false });
+
+    repository.delete.mockResolvedValue({ affected: 0 });
+    await expect(service.revoke('8')).resolves.toBe(false);
   });
 });
 

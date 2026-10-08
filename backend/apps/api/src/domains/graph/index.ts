@@ -144,6 +144,7 @@ export {
   PHONE_EXTENSION_PATTERN,
   classifyParticipant,
   hasPhoneExtension,
+  isPhoneShaped,
   normalizeEmail,
   normalizeIdentifier,
   normalizeName,

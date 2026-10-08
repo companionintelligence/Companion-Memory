@@ -38,6 +38,7 @@ import { Module, type Provider } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EmbeddingModule } from '@ci/common/embeddings';
+import { ApplianceAdminGuard } from '@ci/common/guards';
 import { EmbedModule } from '@ci/domains/embed';
 import { EventsModule } from '@ci/domains/events';
 import { FileEntity, FilesModule } from '@ci/domains/files';
@@ -290,6 +291,10 @@ const stageProviders: Provider[] = [
     IntelligenceModule,
   ],
   providers: [
+    // Asked by PipelineController whether a caller also sees the dead letters
+    // that name no user. Registered so Nest resolves its DataSource here, as the
+    // events and privacy modules do for their own copies.
+    ApplianceAdminGuard,
     PipelineStateService,
     StageRegistry,
     PipelineDispatchService,

@@ -88,6 +88,9 @@ function capabilityLinesForScopes(scopes: string[]): string[] {
     // Capture routes are POST /v1/* bulk ingest, POST /files/upload and
     // PATCH /files/:id (title/description): writes only, no read route carries it.
     capture: 'Add files and captured activity to your memory, and set file titles and descriptions',
+    // Every route under /v1/agent/jobs: create, steer and read a job, and (for the app that works
+    // it) fetch its packet and report on it. ci-hermes holds the scope but only uses the first half.
+    'agent-jobs': 'Send tasks to your agent, and work on and report back on them',
   };
 
   return scopes.map((scope) => KNOWN[scope] ?? `Access "${scope}"`);

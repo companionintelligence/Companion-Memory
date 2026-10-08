@@ -133,10 +133,16 @@ export class SessionController {
       );
     }
 
-    const user = await this.userService.validatePassword(input.username, input.password);
+    // An unknown address costs a bcrypt comparison too (`authenticatePassword`), so the 401
+    // takes as long either way. `accountExists` only decides whether the failure also counts
+    // against that account's own budget; the response never says.
+    const { user, accountExists } = await this.userService.authenticatePassword(
+      input.username,
+      input.password,
+    );
 
     if (user == null) {
-      this.loginThrottle.recordFailure(metadata.ip, input.username);
+      this.loginThrottle.recordFailure(metadata.ip, input.username, undefined, { accountExists });
 
       throw new UnauthorizedException('Invalid credentials');
     }

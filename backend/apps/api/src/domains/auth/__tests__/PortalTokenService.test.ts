@@ -63,7 +63,8 @@ const CLAIM_TRANSACTION = { transaction: 'first-account' };
 
 describe('PortalTokenService', () => {
   let userService: {
-    findByEmail: jest.Mock;
+    findAccountByEmail: jest.Mock;
+    isEmailProven: jest.Mock;
     create: jest.Mock;
     createFirstAccount: jest.Mock;
     findById: jest.Mock;
@@ -80,7 +81,9 @@ describe('PortalTokenService', () => {
     // A claimed appliance is the steady state (createFirstAccount declines);
     // tests that exercise the first-sign-in claim use `claimsTheAppliance`.
     userService = {
-      findByEmail: jest.fn(),
+      findAccountByEmail: jest.fn(),
+      // The accounts these cases link into carry a proven address unless a case says otherwise.
+      isEmailProven: jest.fn().mockReturnValue(true),
       create: jest.fn(),
       createFirstAccount: jest.fn().mockResolvedValue(null),
       findById: jest.fn(),
@@ -137,7 +140,7 @@ describe('PortalTokenService', () => {
 
     expect(await service.verifyAndProvision(TOKEN)).toMatchObject({ user: { id: 'u-bound' } });
     expect(federatedIdentityService.findUserId).toHaveBeenCalledWith('https://hub.test', 's1');
-    expect(userService.findByEmail).not.toHaveBeenCalled();
+    expect(userService.findAccountByEmail).not.toHaveBeenCalled();
     expect(userService.create).not.toHaveBeenCalled();
   });
 
@@ -154,7 +157,7 @@ describe('PortalTokenService', () => {
         name: 'Liam',
       },
     });
-    userService.findByEmail.mockResolvedValue(null);
+    userService.findAccountByEmail.mockResolvedValue(null);
     claimsTheAppliance({ id: 'u-new' });
 
     expect(await service.verifyAndProvision(TOKEN)).toBeNull();
@@ -176,7 +179,7 @@ describe('PortalTokenService', () => {
         name: 'S',
       },
     });
-    userService.findByEmail.mockResolvedValue(null);
+    userService.findAccountByEmail.mockResolvedValue(null);
     userService.createFirstAccount.mockResolvedValue(null);
 
     expect(await service.verifyAndProvision(TOKEN)).toBeNull();
@@ -195,7 +198,7 @@ describe('PortalTokenService', () => {
         email_verified: true,
       },
     });
-    userService.findByEmail.mockResolvedValue({ id: 'u-existing' });
+    userService.findAccountByEmail.mockResolvedValue({ id: 'u-existing' });
 
     expect(await service.verifyAndProvision(TOKEN)).toMatchObject({ user: { id: 'u-existing' } });
     expect(userService.create).not.toHaveBeenCalled();
@@ -217,7 +220,7 @@ describe('PortalTokenService', () => {
         email_verified: true,
       },
     });
-    userService.findByEmail.mockResolvedValue({ id: 'u-existing' });
+    userService.findAccountByEmail.mockResolvedValue({ id: 'u-existing' });
     federatedIdentityService.listForUser.mockResolvedValue([
       { id: 'fed-1', userId: 'u-existing', issuer: 'https://hub.test', subject: 'first-sub' },
     ]);
@@ -228,6 +231,36 @@ describe('PortalTokenService', () => {
     expect(federatedIdentityService.listForUser).toHaveBeenCalledWith('u-existing', { oidcOnly: true });
   });
 
+  it('SECURITY: a verified email never adopts an account whose OWN address is unproven', async () => {
+    // The address was typed into signup or an email change, possibly by someone else expecting
+    // this person's first sign-in. The issuer vouches for its account's address, not this one's.
+    mockJwtVerify.mockResolvedValue({
+      payload: {
+        iss: 'https://hub.test',
+        sub: 'friend-sub',
+        email: 'friend@example.com',
+        email_verified: true,
+      },
+    });
+    userService.findAccountByEmail.mockResolvedValue({ id: 'u-planted' });
+    userService.isEmailProven.mockReturnValue(false);
+
+    expect(await service.verifyAndProvision(TOKEN)).toBeNull();
+    expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+    expect(userService.createFirstAccount).not.toHaveBeenCalled();
+  });
+
+  it('SECURITY: a verified email adopts nothing when several accounts match it once case is ignored', async () => {
+    mockJwtVerify.mockResolvedValue({
+      payload: { iss: 'https://hub.test', sub: 's9', email: 'owner@example.com', email_verified: true },
+    });
+    userService.findAccountByEmail.mockResolvedValue('ambiguous');
+
+    expect(await service.verifyAndProvision(TOKEN)).toBeNull();
+    expect(federatedIdentityService.bind).not.toHaveBeenCalled();
+    expect(userService.createFirstAccount).not.toHaveBeenCalled();
+  });
+
   it('SECURITY: an unverified email never adopts an existing account', async () => {
     // The takeover shape: an attacker controls an unverified address at a
     // trusted issuer that collides with a local user. It must not inherit the
@@ -236,7 +269,7 @@ describe('PortalTokenService', () => {
     mockJwtVerify.mockResolvedValue({
       payload: { aud: 'ci-server', iss: 'https://hub.test', sub: 'attacker-sub', email: 'liam@ci.computer' },
     });
-    userService.findByEmail.mockResolvedValue({ id: 'u-victim' });
+    userService.findAccountByEmail.mockResolvedValue({ id: 'u-victim' });
 
     expect(await service.verifyAndProvision(TOKEN)).toBeNull();
     expect(userService.create).not.toHaveBeenCalled();

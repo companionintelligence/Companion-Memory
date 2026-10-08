@@ -85,6 +85,11 @@ interface PluginUnderTest {
    * returned an empty list.
    */
   anchorMethod: string;
+  /**
+   * Declared methods with no Android half on purpose. Each needs a JS wrapper that never
+   * calls it off iOS, or the call rejects on Android as unimplemented.
+   */
+  iosOnly?: readonly string[];
 }
 
 const PLUGINS: PluginUnderTest[] = [
@@ -94,6 +99,10 @@ const PLUGINS: PluginUnderTest[] = [
     androidPlugin: 'android/src/main/java/com/companionintelligence/localhub/LocalHubPlugin.kt',
     iosPlugin: 'ios/Sources/LocalHubPlugin/LocalHubPlugin.swift',
     anchorMethod: 'secureGet',
+    // Significant-change monitoring. `startSignificantLocationUpdates` in
+    // @ci/common's nativeBridge returns before touching the plugin off iOS; Android
+    // keeps its background watcher instead.
+    iosOnly: ['startSignificantLocationUpdates', 'stopSignificantLocationUpdates'],
   },
   {
     pkg: 'capacitor-local-llm',
@@ -239,13 +248,20 @@ describe.each(PLUGINS)('$pkg — every declared method exists natively', (plugin
 
   it('Android exposes every method as an @PluginMethod', () => {
     const exposed = kotlinPluginMethods(read(join(PACKAGES, plugin.pkg, plugin.androidPlugin)));
+    const iosOnly = plugin.iosOnly ?? [];
     const required = declared.filter(
-      (m) => !BRIDGE_PROVIDED.includes(m) && !ANDROID_BASE_PROVIDED.includes(m),
+      (m) => !BRIDGE_PROVIDED.includes(m) && !ANDROID_BASE_PROVIDED.includes(m) && !iosOnly.includes(m),
     );
 
     // Same anchor, for the Kotlin parser this time.
     expect(exposed).toContain(plugin.anchorMethod);
     expect(required.filter((m) => !exposed.includes(m))).toEqual([]);
+
+    // A stale iOS-only entry (renamed, or given an Android half since) must not hide a method.
+    for (const method of iosOnly) {
+      expect(declared).toContain(method);
+      expect(exposed).not.toContain(method);
+    }
   });
 
   it('iOS lists every method in pluginMethods', () => {

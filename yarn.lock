@@ -2733,6 +2733,23 @@ __metadata:
     typescript-eslint: "npm:^8.32.1"
     vite: "npm:^6.4.3"
     yaml: "npm:^2.8.1"
+  dependenciesMeta:
+    "@apollo/protobufjs":
+      built: true
+    "@journeyapps/wa-sqlite":
+      built: true
+    "@parcel/watcher":
+      built: true
+    "@swc/core":
+      built: true
+    bcrypt:
+      built: true
+    better-sqlite3:
+      built: true
+    esbuild:
+      built: true
+    unrs-resolver:
+      built: true
   languageName: unknown
   linkType: soft
 

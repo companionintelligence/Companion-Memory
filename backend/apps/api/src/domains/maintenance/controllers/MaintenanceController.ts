@@ -1320,7 +1320,10 @@ export class MaintenanceController {
    */
   // Appliance-wide (it walks every user's index rows), so it is the administrator's call,
   // not any signed-in household member's. See ApplianceAdminGuard for the unclaimed-box rule.
+  // `full`, not the class-level `write`: it deletes index rows, and `write` is "nothing that
+  // deletes".
   @UseGuards(ApplianceAdminGuard)
+  @RequireCapability(FULL_CAPABILITY)
   @Post('search-index/cleanup-orphans')
   async cleanupSearchOrphans(
     @Body(new ValidationPipe(cleanupOrphansSchema)) body: CleanupOrphansRequest,
@@ -1337,8 +1340,10 @@ export class MaintenanceController {
    * tables wholesale. A data reset that clears `ci.*` must also do this (or it
    * re-orphans the entire index). Destructive — requires `{ "confirm": true }`.
    */
-  // Wipes BOTH search tables for EVERY user. Administrator only.
+  // Wipes BOTH search tables for EVERY user. Administrator only, and `full` from an api key:
+  // the class-level `write` let an admin's default key wipe the whole index.
   @UseGuards(ApplianceAdminGuard)
+  @RequireCapability(FULL_CAPABILITY)
   @Post('search-index/truncate')
   async truncateSearchIndex(
     @Body(new ValidationPipe(truncateSearchIndexSchema)) body: { confirm: true },
@@ -1609,17 +1614,23 @@ export class MaintenanceController {
    * table. The importer's own watermark (`ci_server.last_push`) must be reset
    * separately; see db/postgres/INGEST_RESET_RUNBOOK.md.
    *
-   * It truncates, so it cannot take one user's rows and leave another's — and
-   * this route is behind ordinary user auth, not an admin role, because the
-   * appliance has none. The service therefore REFUSES when any of those tables
-   * still holds another account's data; the confirm literal proves the caller
-   * meant it, not that they were entitled to everyone else's memory.
+   * It truncates, so it cannot take one user's rows and leave another's. The
+   * service therefore REFUSES when any table it would clear still holds another
+   * account's data, checked inside the reset's own transaction; the confirm
+   * literal proves the caller meant it, not that they were entitled to
+   * everyone else's memory. The caller's uploaded files, document chunks, chat
+   * attachments, reminders, capture log and planning candidates go with it,
+   * because they hang off the cleared rows (see IngestResetService).
    */
   // `full`, not the class-level `write`: this one TRUNCATES. `capabilityAllows`
   // refuses anything that removes data below `full`, which is the same line
   // `memory.forget` sits behind — a read-only key being able to truncate its
   // own ingested data was the sharpest instance of the gap #1780 describes.
   // The confirm literal proves intent; it was never an authorization check.
+  //
+  // Administrator only. The appliance has an admin role now, and a wipe of
+  // whole tables is the operator's call, not any household member's.
+  @UseGuards(ApplianceAdminGuard)
   @Post('ingest/reset')
   @RequireCapability(FULL_CAPABILITY)
   async resetIngest(

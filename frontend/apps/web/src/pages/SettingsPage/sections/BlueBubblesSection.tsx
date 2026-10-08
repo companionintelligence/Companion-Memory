@@ -10,13 +10,20 @@ import {
   Clock,
   MessageSquare,
   Pencil,
+  RefreshCw,
 } from '@ci/shadcn/icons';
 
-import { useCurrentUser, useSessionAuth } from '@/hooks';
+import { useSessionAuth } from '@/hooks';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
+/**
+ * What an administrator gets back. Everyone else gets {@link BlueBubblesStatusResponse}: the host,
+ * the error text and the webhook URL (whose secret lets anyone post messages into the owner's
+ * memory) are the administrator's to see.
+ */
 interface BlueBubblesConfigResponse {
+  canEdit: true;
   host: string;
   port: number;
   useHttps: boolean;
@@ -33,6 +40,15 @@ interface BlueBubblesConfigResponse {
   webhookPath: string;
   connectionStatus: 'connected' | 'error' | 'unknown';
   lastError: string | null;
+  lastSyncCursor: string | null;
+  lastWebhookReceivedAt: string | null;
+}
+
+/** The status-only answer `GET /api/bluebubbles/config` gives an account that is not an administrator. */
+interface BlueBubblesStatusResponse {
+  canEdit: false;
+  enabled: boolean;
+  connectionStatus: 'connected' | 'error' | 'unknown';
   lastSyncCursor: string | null;
   lastWebhookReceivedAt: string | null;
 }
@@ -97,11 +113,12 @@ export function BlueBubblesSection() {
   const fmt = useDateTimeFormat();
   // The BlueBubbles connection is one configuration for the whole appliance, and "test
   // connection" makes the appliance dial an arbitrary host. Both are administrator actions on
-  // the server (ApplianceAdminGuard); reading the current settings is not.
-  const { user: currentUser } = useCurrentUser();
-  const isAdmin = currentUser?.isAdmin ?? false;
-
+  // the server (ApplianceAdminGuard). The server also decides who sees the settings at all: an
+  // account it does not treat as an administrator gets a status-only answer, so the form and the
+  // webhook URL are never in this page's hands to show.
+  const [status, setStatus] = useState<BlueBubblesStatusResponse | null>(null);
   const [config, setConfig] = useState<BlueBubblesConfigResponse | null>(null);
+  const isAdmin = config != null;
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -129,6 +146,8 @@ export function BlueBubblesSection() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   const [webhookCopied, setWebhookCopied] = useState(false);
+  const [rotating, setRotating] = useState(false);
+  const [rotateError, setRotateError] = useState<string | null>(null);
 
   const testResultRef = useRevealWhenSet(testResult);
   const syncMessageRef = useRevealWhenSet(syncMessage);
@@ -156,12 +175,19 @@ export function BlueBubblesSection() {
     setLoadError(null);
 
     try {
-      const data = await fetchJson<BlueBubblesConfigResponse>('/api/bluebubbles/config', {
-        headers: authHeaders,
-      });
+      const data = await fetchJson<BlueBubblesConfigResponse | BlueBubblesStatusResponse>(
+        '/api/bluebubbles/config',
+        { headers: authHeaders },
+      );
 
-      if (data) {
+      // Each answer replaces the other: `isAdmin` is read off `config`, so a status answer after an
+      // earlier full one (the account lost its role) must not leave the old settings on screen.
+      if (data?.canEdit === true) {
+        setStatus(null);
         applyConfig(data);
+      } else if (data) {
+        setConfig(null);
+        setStatus(data);
       }
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Could not load BlueBubbles settings.');
@@ -267,6 +293,39 @@ export function BlueBubblesSection() {
   // `capacitor://localhost`, which BlueBubbles Server could never call.
   const webhookUrl = config?.webhookPath ? `${getWebOrigin()}${config.webhookPath}` : null;
 
+  /**
+   * Issue a new webhook secret. The old URL stops working the moment this succeeds, so it asks
+   * first, and it only swaps the URL into the page: unsaved edits in the form above stay as they are.
+   */
+  const handleRotateWebhook = async () => {
+    const confirmed = window.confirm(
+      'Make a new webhook URL? The current one stops working right away. Until you paste the new ' +
+        'URL into BlueBubbles Server, new messages only arrive on the ten-minute backstop poll.',
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setRotating(true);
+    setRotateError(null);
+
+    try {
+      const data = await fetchJson<BlueBubblesConfigResponse>('/api/bluebubbles/rotate-webhook-secret', {
+        method: 'POST',
+        headers: authHeaders,
+      });
+
+      if (data?.webhookPath) {
+        setConfig((previous) => (previous ? { ...previous, webhookPath: data.webhookPath } : previous));
+      }
+    } catch (err) {
+      setRotateError(err instanceof Error ? err.message : 'Could not make a new webhook URL.');
+    } finally {
+      setRotating(false);
+    }
+  };
+
   const handleCopyWebhookUrl = async () => {
     if (!webhookUrl) {
       return;
@@ -278,7 +337,7 @@ export function BlueBubblesSection() {
   };
 
   const statusIcon = () => {
-    switch (config?.connectionStatus) {
+    switch ((config ?? status)?.connectionStatus) {
       case 'connected':
         return <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-500 flex-shrink-0" />;
       case 'error':
@@ -288,15 +347,62 @@ export function BlueBubblesSection() {
     }
   };
 
+  const heading = (
+    <div className="mb-6">
+      <h2 className="text-xl font-semibold">BlueBubbles</h2>
+      <p className="text-sm text-muted-foreground mt-1">
+        Connect a BlueBubbles server to bring iMessage/SMS history in, keep it in sync, and let the assistant
+        send and read messages on your behalf.
+      </p>
+    </div>
+  );
+
+  // Not an administrator: the server sent on/off and activity times only. The connection belongs
+  // to the account an administrator set it up for, and only that account's assistant can read or
+  // send messages through it.
+  if (!loading && !isAdmin) {
+    return (
+      <>
+        {heading}
+        <Card className="mb-6">
+          <Card.Content className="space-y-3 pt-6">
+            <h3 className="text-base font-semibold text-foreground">Connection</h3>
+            <p className="text-sm text-muted-foreground leading-snug">
+              An administrator of this Companion sets up BlueBubbles, for their own Mac. The assistant&apos;s
+              messaging tools work only for the account it was set up for.
+            </p>
+            {loadError ? <p className="text-sm text-destructive">{loadError}</p> : null}
+          </Card.Content>
+        </Card>
+
+        {status ? (
+          <Card>
+            <Card.Content className="space-y-3 pt-6">
+              <h3 className="text-base font-semibold text-foreground">Status</h3>
+              <div className="flex items-center gap-2 text-sm">
+                {statusIcon()}
+                <span className="capitalize">{status.enabled ? status.connectionStatus : 'off'}</span>
+              </div>
+              <dl className="grid gap-1 text-sm text-muted-foreground">
+                <div className="flex justify-between gap-4">
+                  <dt>Last sync</dt>
+                  <dd>{formatTimestamp(status.lastSyncCursor, fmt)}</dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt>Last webhook received</dt>
+                  <dd>{formatTimestamp(status.lastWebhookReceivedAt, fmt)}</dd>
+                </div>
+              </dl>
+            </Card.Content>
+          </Card>
+        ) : null}
+      </>
+    );
+  }
+
   return (
     <>
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold">BlueBubbles</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Connect a BlueBubbles server to bring iMessage/SMS history in, keep it in sync, and let the
-          assistant send and read messages on your behalf.
-        </p>
-      </div>
+      {heading}
 
       <Card className="mb-6">
         <Card.Content className="space-y-5 pt-6">
@@ -420,35 +526,27 @@ export function BlueBubblesSection() {
               <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
                 <Button
                   type="button"
-                  disabled={!dirty || saving || !hostValid || !portValid || !isAdmin}
+                  disabled={!dirty || saving || !hostValid || !portValid}
                   onClick={() => void handleSave()}
-                  title={isAdmin ? undefined : 'Only an administrator can change this.'}
                 >
                   {saving ? 'Saving…' : 'Save'}
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={testing || !hostValid || !portValid || !isAdmin}
+                  disabled={testing || !hostValid || !portValid}
                   onClick={() => void handleTestConnection()}
-                  title={isAdmin ? undefined : 'Only an administrator can test the connection.'}
                 >
                   {testing ? 'Testing…' : 'Test connection'}
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={syncing || !config?.enabled || !isAdmin}
+                  disabled={syncing || !config?.enabled}
                   onClick={() => void handleSyncNow()}
-                  title={isAdmin ? undefined : 'Only an administrator can start a sync.'}
                 >
                   {syncing ? 'Starting…' : 'Sync now'}
                 </Button>
-                {!isAdmin && (
-                  <span className="text-muted-foreground text-sm">
-                    Changing these settings is reserved for an administrator of this Companion.
-                  </span>
-                )}
                 {saved && <span className="text-sm text-teal-700 dark:text-teal-300">Saved</span>}
               </div>
 
@@ -510,6 +608,22 @@ export function BlueBubblesSection() {
               be able to reach this address; if you are viewing this over a different hostname than the Mac
               would use, substitute that one.
             </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={rotating}
+                onClick={() => void handleRotateWebhook()}
+              >
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                {rotating ? 'Making a new URL…' : 'Make a new URL'}
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                Do this if the URL was shown to someone who should not have it.
+              </span>
+            </div>
+            {rotateError ? <p className="text-sm text-destructive">{rotateError}</p> : null}
           </Card.Content>
         </Card>
       ) : null}
