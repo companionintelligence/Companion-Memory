@@ -21,4 +21,12 @@ ext {
     androidxTestRunnerVersion = '1.6.1'
     androidxEspressoCoreVersion = '3.6.1'
     cordovaAndroidVersion = '10.1.1'
+    // CameraX for @capacitor-mlkit/barcode-scanning, which falls back to 1.1.0 when these
+    // are unset. 1.1.0's libimage_processing_util_jni.so is 4 KB aligned, and Play refuses
+    // an update whose 64-bit native libraries don't support 16 KB memory pages. CameraX
+    // ships 16 KB aligned libraries from 1.4.2.
+    androidxCameraCamera2Version = '1.5.3'
+    androidxCameraCoreVersion = '1.5.3'
+    androidxCameraLifecycleVersion = '1.5.3'
+    androidxCameraViewVersion = '1.5.3'
 }
