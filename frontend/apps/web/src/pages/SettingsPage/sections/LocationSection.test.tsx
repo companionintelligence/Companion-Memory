@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   setMode: vi.fn(),
   needsSettingsUpgrade: false,
   isNativePlatform: vi.fn(() => false),
+  isIosPlatform: vi.fn(() => false),
   fetchJson: vi.fn(),
   openNativeLocationSettings: vi.fn(),
 }));
@@ -25,6 +26,7 @@ vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
   fetchJson: h.fetchJson,
   isNativePlatform: h.isNativePlatform,
+  isIosPlatform: h.isIosPlatform,
   openNativeLocationSettings: h.openNativeLocationSettings,
 }));
 
@@ -34,6 +36,8 @@ beforeEach(() => {
   h.setMode.mockReset();
   h.isNativePlatform.mockReset();
   h.isNativePlatform.mockReturnValue(false);
+  h.isIosPlatform.mockReset();
+  h.isIosPlatform.mockReturnValue(false);
   h.fetchJson.mockReset();
   h.fetchJson.mockResolvedValue({ total: 0, byProvider: {}, lastFixAt: null });
   h.openNativeLocationSettings.mockReset();
@@ -74,8 +78,9 @@ describe('LocationSection', () => {
     expect(h.setMode).toHaveBeenCalledWith('when_in_use');
   });
 
-  it('shows the Always disclosure on native and requires Agree', async () => {
+  it('shows the Always disclosure on iPhone and requires Agree', async () => {
     h.isNativePlatform.mockReturnValue(true);
+    h.isIosPlatform.mockReturnValue(true);
     render(<LocationSection />);
     await waitFor(() => expect(h.fetchJson).toHaveBeenCalled());
 
@@ -84,7 +89,36 @@ describe('LocationSection', () => {
     expect(screen.getByText(/Remember places in the background/)).toBeInTheDocument();
     expect(screen.getByText(/no solid blue location indicator/)).toBeInTheDocument();
     expect(screen.getByText(/iOS asks twice/)).toBeInTheDocument();
+    expect(h.setMode).not.toHaveBeenCalled();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Agree' }));
+
+    expect(h.setMode).toHaveBeenCalledWith('always');
+  });
+
+  it('shows Android the disclosure Play asks for, without the iPhone steps, and requires Agree', async () => {
+    h.isNativePlatform.mockReturnValue(true);
+    render(<LocationSection />);
+    await waitFor(() => expect(h.fetchJson).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Always' }));
+
+    const dialog = screen.getByRole('alertdialog');
+
+    expect(dialog).toHaveTextContent(/Remember places in the background/);
+    expect(dialog).toHaveTextContent(
+      'Companion collects location data to place your notes, photos and events on your map, even when the app is closed or not in use.',
+    );
+    expect(dialog).toHaveTextContent(/Android shows a notification that Companion is using your location/);
+    expect(dialog).toHaveTextContent(/never used for ads/);
+    expect(dialog).not.toHaveTextContent(/iPhone|iOS/);
+    expect(h.setMode).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(h.setMode).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Always' }));
     fireEvent.click(screen.getByRole('button', { name: 'Agree' }));
 
     expect(h.setMode).toHaveBeenCalledWith('always');

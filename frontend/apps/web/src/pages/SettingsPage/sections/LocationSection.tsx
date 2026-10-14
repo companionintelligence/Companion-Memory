@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import {
   fetchJson,
+  isIosPlatform,
   isNativePlatform,
   openNativeLocationSettings,
   type LocationTrackingMode,
@@ -46,6 +47,7 @@ export function LocationSection() {
   const [stats, setStats] = useState<PositionStats | null>(null);
   const [pendingMode, setPendingMode] = useState<Exclude<LocationTrackingMode, 'off'> | null>(null);
   const showAlways = isNativePlatform();
+  const ios = isIosPlatform();
 
   const refreshStats = useCallback(async () => {
     if (!authenticated) {
@@ -210,18 +212,37 @@ export function LocationSection() {
         <AlertDialog.Content>
           <AlertDialog.Header className="text-left">
             <AlertDialog.Title>Remember places in the background?</AlertDialog.Title>
-            <AlertDialog.Description>
-              <span className="block">
-                Companion records a place when you move a meaningful distance, including after you leave the
-                app. On iPhone that stays quiet while you are still — no solid blue location indicator.
-                Android shows a persistent notification while Always is on, which the system requires.
-              </span>
-              <span className="mt-2 block">
-                iOS asks twice: Allow While Using the App, then Always Allow. If the second prompt does not
-                appear, use Open Settings and set Location to Always. Locations go only to your Companion
-                server, never ads. You can stay on While Using and keep using Companion.
-              </span>
-            </AlertDialog.Description>
+            {ios ? (
+              <AlertDialog.Description>
+                <span className="block">
+                  Companion records a place when you move a meaningful distance, including after you leave the
+                  app. On iPhone that stays quiet while you are still — no solid blue location indicator.
+                  Android shows a persistent notification while Always is on, which the system requires.
+                </span>
+                <span className="mt-2 block">
+                  iOS asks twice: Allow While Using the App, then Always Allow. If the second prompt does not
+                  appear, use Open Settings and set Location to Always. Locations go only to your Companion
+                  server, never ads. You can stay on While Using and keep using Companion.
+                </span>
+              </AlertDialog.Description>
+            ) : (
+              // Play reviews this as the background-location disclosure. It has to name location data
+              // and the feature it serves, then say collection goes on when the app is closed or not in use.
+              <AlertDialog.Description>
+                <span className="block">
+                  Companion collects location data to place your notes, photos and events on your map, even
+                  when the app is closed or not in use.
+                </span>
+                <span className="mt-2 block">
+                  While this is on, Android shows a notification that Companion is using your location.
+                  Android then asks for notification and location access if you haven&apos;t allowed them yet.
+                </span>
+                <span className="mt-2 block">
+                  Locations go only to your Companion server and are never used for ads. You can stay on While
+                  using and keep using Companion.
+                </span>
+              </AlertDialog.Description>
+            )}
           </AlertDialog.Header>
           <AlertDialog.Footer>
             <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
