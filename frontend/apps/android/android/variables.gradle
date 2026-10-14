@@ -1,5 +1,6 @@
 ext {
-    minSdkVersion = 23
+    // 24, not 23: Play's automatic protection refuses an App Bundle whose minSdk is below 24.
+    minSdkVersion = 24
     // Play has required target API 36 of every new upload since 31 Aug 2026.
     // Capacitor 7's documented matrix is still 7.x → 35, but @capacitor/android
     // reads compileSdk/targetSdk from this file, so raising them here is what

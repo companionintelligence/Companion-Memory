@@ -449,7 +449,7 @@ photo input on Gemma 4, whether the tool-result budget leaves a small model room
 Agent Skills, Mobile Actions (FunctionGemma), audio input, the benchmark screen, importing a model file,
 and NPU backends.
 
-- minSdk stays 23; the plugin itself gates on `Build.VERSION.SDK_INT >= 31`
+- minSdk stays 24 (Play's automatic protection needs at least 24); the plugin itself gates on `Build.VERSION.SDK_INT >= 31`
   (LiteRT-LM's AAR requires Android 12), so older devices keep the rest of the app.
 - The package declares itself **Android-only** — it has no `ios/` folder and does not
   appear in the iOS Podfile. iOS ships its own in-app Swift implementation of the same
