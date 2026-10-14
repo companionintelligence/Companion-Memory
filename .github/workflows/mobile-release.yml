@@ -655,12 +655,10 @@ jobs:
 
       # The dry-run counterpart of the iOS `altool --validate-app`. Without it a dry run
       # never talks to Google at all, so the FIRST contact with Play is a real release
-      # (`dry_run=false`) — and frontend/apps/android/DELIVERY.md (§1c, the "Play
-      # background-location declaration + demo video" item — cited by name, not line
-      # number, because that file grows) says that release is a hard rejection until
-      # the background-location declaration and the foreground-service `location` type
-      # declaration are both filed and approved, "before this build goes to any Play track,
-      # including internal testing". Better to learn that on a rehearsal.
+      # (`dry_run=false`). frontend/apps/android/DELIVERY.md (§1c, the "Play
+      # foreground-service `location` declaration" item, cited by name and not by line
+      # number because that file grows) says to file that declaration "before a build goes
+      # to any Play track, including internal testing". Better to learn that on a rehearsal.
       # r0adkll/upload-google-play@v1 has no dry-run input. Its real inputs are
       # serviceAccountJson, serviceAccountJsonPlainText, packageName, releaseFile,
       # releaseFiles, releaseName, track, tracks, inAppUpdatePriority, userFraction,

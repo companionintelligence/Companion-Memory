@@ -61,18 +61,23 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
-      Location — foreground + background. Both COARSE and FINE are declared because
-      the runtime prompt for FINE offers the user a "coarse only" choice; without
-      COARSE declared, that choice yields no permission at all rather than a
-      degraded one.
+      Location. Both COARSE and FINE are declared because the runtime prompt for
+      FINE offers the user a "coarse only" choice; without COARSE declared, that
+      choice yields no permission at all rather than a degraded one.
 
-      ACCESS_BACKGROUND_LOCATION powers the "Always" mode (@capacitor-community/
-      background-geolocation), which now ships on Android as well as iOS. Per
-      DEVICE_DATA_COMPLIANCE.md §3.4/§7, this is no longer deferrable to a later
-      phase: it requires Play's background-location declaration form + demo video,
-      AND a foreground-service `location` type declaration with its own
-      description/video, BEFORE this build can go to any Play track (including
-      internal testing). Do not upload to Play until both are filed.
+      The "Always" mode (@capacitor-community/background-geolocation) keeps
+      sampling after the app leaves the screen through the plugin's foreground
+      service of type `location`, which shows the "Recording location"
+      notification. The person starts that service from inside the app, so
+      Android counts it as while-in-use access. FOREGROUND_SERVICE_LOCATION lets
+      it start on Android 14+, and Play needs a foreground-service `location`
+      declaration with its own video for it (DEVICE_DATA_COMPLIANCE.md §3.4).
+
+      ACCESS_BACKGROUND_LOCATION is deliberately NOT declared. Nothing requests it
+      at runtime, and declaring it alone makes Play review the app as accessing
+      location in the background: a declaration form, a demo video and a judgement
+      on whether the feature is core to the app. AndroidManifestContractTest fails
+      if it comes back.
 
       What location commits us to (§8): an in-app prominent-disclosure screen
       shown immediately before each runtime prompt — not in the store listing, not
@@ -82,7 +87,6 @@
     -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <!-- Location hardware is optional: the app is fully usable with tracking off. -->
