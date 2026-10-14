@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { isIosPlatform, persistApiBaseUrl, resolveHttpOrigin } from '@ci/common';
+import { isIosPlatform, LoadingPage, persistApiBaseUrl, resolveHttpOrigin } from '@ci/common';
 import { Button, Card, LoadingButton } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
@@ -191,6 +191,33 @@ export function DeviceConnectPage() {
       signInAgain(message);
     }
   }, [auth, authenticated, awaitingProfile, connectingId, initializing, user, userError, userLoading]);
+
+  // Storing the new key flips `authenticated`, and PowerSyncBoundary (App.tsx) then mounts
+  // the sync provider above every route. React remounts the whole tree, this page included,
+  // so a pairing that has just finished comes back here with a fresh `step` of 'sign-in'
+  // while `me` is still loading. That wait used to show Log in for about a second. A pick
+  // running in this instance keeps its own "Connecting…" row instead.
+  const mountedMidSignIn = useRef(authenticated && !user && userLoading);
+  const profileErrorAtMount = useRef(userError);
+  const finishingSignIn = authenticated && !user && userLoading && connectingId == null && !awaitingProfile;
+
+  // The remount also dropped the instance that would have said why `me` failed. A failure
+  // that was already there before the remount is the previous key's, not this sign-in's.
+  useEffect(() => {
+    if (!mountedMidSignIn.current || userLoading || user || connectingId != null || awaitingProfile) {
+      return;
+    }
+
+    mountedMidSignIn.current = false;
+
+    if (userError != null && userError !== profileErrorAtMount.current) {
+      setSignInError(
+        userError instanceof Error
+          ? userError.message
+          : 'Signed in but could not load your profile from this Memory Server.',
+      );
+    }
+  }, [awaitingProfile, connectingId, user, userError, userLoading]);
 
   // Safari → "Open with Companion" often cold-starts the app. PKCE state lives in
   // localStorage; Capacitor stashed the callback URL. Pick the sign-in up on mount
@@ -551,6 +578,10 @@ export function DeviceConnectPage() {
     void handleConnect(resumedPick.device, resumedPick.signIn);
     // handleConnect is rebuilt every render; this runs once per resumed pick.
   }, [resumedPick]);
+
+  if (finishingSignIn) {
+    return <LoadingPage message="Finishing sign-in…" />;
+  }
 
   if (step === 'sign-in') {
     return (

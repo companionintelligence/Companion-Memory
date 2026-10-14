@@ -95,6 +95,7 @@ const h = vi.hoisted(() => ({
   authenticated: false,
   profileUser: undefined as { id: string; onboarded: boolean } | null | undefined,
   profileError: null as Error | null,
+  profileLoading: false,
 }));
 
 // Spread the real module rather than allow-listing exports: this page also reaches
@@ -124,7 +125,7 @@ vi.mock('@/hooks', () => ({
   useCurrentUser: () => ({
     user:
       h.profileUser !== undefined ? h.profileUser : h.authenticated ? { id: 'u1', onboarded: true } : null,
-    loading: false,
+    loading: h.profileLoading,
     error: h.profileError,
     refetch: vi.fn(async () => ({})),
   }),
@@ -198,6 +199,7 @@ beforeEach(() => {
   h.authenticated = false;
   h.profileUser = undefined;
   h.profileError = null;
+  h.profileLoading = false;
   sessionStorage.clear();
   localStorage.removeItem('ci.deviceConnect.portalUrl');
   localStorage.removeItem('ci.deviceConnect.portalAuth');
@@ -863,6 +865,58 @@ describe('DeviceConnectPage', () => {
 
       expect(await screen.findByText('Connecting…')).toBeInTheDocument();
       expect(screen.queryByText(/Native HTTP needs an absolute/i)).not.toBeInTheDocument();
+    });
+  });
+
+  // Storing the new key remounts every route (PowerSyncBoundary in App.tsx), so a finished
+  // pairing lands on a fresh instance of this page while `me` is still loading.
+  describe('mounting with a new key while the profile loads', () => {
+    it('shows Finishing sign-in instead of Log in, then goes home once the profile lands', () => {
+      h.authenticated = true;
+      h.profileUser = null;
+      h.profileLoading = true;
+      const view = render(<DeviceConnectPage />);
+
+      expect(screen.getByText('Finishing sign-in…')).toBeInTheDocument();
+      expect(screen.queryByTestId('oidc-login-btn')).not.toBeInTheDocument();
+      expect(navigate).not.toHaveBeenCalled();
+
+      h.profileUser = { id: 'u1', onboarded: true };
+      h.profileLoading = false;
+      view.rerender(<DeviceConnectPage />);
+
+      expect(navigate).toHaveBeenCalledWith('/', { replace: true });
+    });
+
+    it('says why and offers Log in when the profile then fails', async () => {
+      h.authenticated = true;
+      h.profileUser = null;
+      h.profileLoading = true;
+      const view = render(<DeviceConnectPage />);
+
+      h.profileLoading = false;
+      h.profileError = new Error('Could not load your profile.');
+      view.rerender(<DeviceConnectPage />);
+
+      expect((await screen.findByTestId('connect-signin-error')).textContent).toBe(
+        'Could not load your profile.',
+      );
+      expect(screen.getByTestId('oidc-login-btn')).toBeInTheDocument();
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('does not report a profile error that was already there before it mounted', () => {
+      h.authenticated = true;
+      h.profileUser = null;
+      h.profileLoading = true;
+      h.profileError = new Error('Unauthorized');
+      const view = render(<DeviceConnectPage />);
+
+      h.profileLoading = false;
+      view.rerender(<DeviceConnectPage />);
+
+      expect(screen.getByTestId('oidc-login-btn')).toBeInTheDocument();
+      expect(screen.queryByTestId('connect-signin-error')).not.toBeInTheDocument();
     });
   });
 });
