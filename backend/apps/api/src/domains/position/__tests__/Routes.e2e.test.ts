@@ -32,9 +32,9 @@ const positionService = {
 class PositionRoutesTestModule {}
 
 /**
- * Asserted at the HTTP layer: which handler a path reaches. `range` and `geofence`
- * were declared after `:id`, so Express handed them to `findById` and the id guard
- * answered 404 for every caller.
+ * These assert which handler a path reaches, at the HTTP layer. `range` and
+ * `geofence` were declared after `:id`, so Express handed them to `findById` and
+ * the id guard answered 404 for every caller.
  */
 describe('Position routes', () => {
   let app: INestApplication;
@@ -110,11 +110,19 @@ describe('Position routes', () => {
     expect(positionService.findById).toHaveBeenCalledTimes(1);
   });
 
-  describe('DELETE /position/:id', () => {
-    beforeEach(() => {
-      positionService.findById.mockResolvedValue({ id: POSITION_ID });
-    });
+  it('answers 400, not 500, for a polygon point JSON.parse reads as Infinity', async () => {
+    const coordinates =
+      '[{"longitude":1e999,"latitude":0},{"longitude":1,"latitude":0},{"longitude":1,"latitude":1}]';
 
+    await request(app.getHttpServer())
+      .get('/position/geofence')
+      .query({ type: 'polygon', coordinates })
+      .expect(400);
+
+    expect(positionService.findByGeofence).not.toHaveBeenCalled();
+  });
+
+  describe('DELETE /position/:id', () => {
     it('answers 204 once the row is removed', async () => {
       positionService.remove.mockResolvedValue(true);
 

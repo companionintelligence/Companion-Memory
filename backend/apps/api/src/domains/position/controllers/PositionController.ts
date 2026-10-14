@@ -147,18 +147,13 @@ export class PositionController {
   async remove(@Context() context: RequestContext, @Param('id') positionId: string): Promise<void> {
     const serviceContext = toServiceContext(context);
 
-    const question = await this.positionService.findById(serviceContext, positionId);
-
-    if (!question) {
-      throw new NotFoundException('Position not found');
-    }
-
-    // Awaited: the 204 must mean the row is gone. Unawaited, a failed delete still
-    // answered 204, and the check below tested a Promise, which is always truthy.
+    // Awaited so that a 204 means the row is gone. Unawaited, a failed delete
+    // still answered 204, and the check below tested a Promise, which is always
+    // truthy. remove() does its own lookup and answers false when nothing matched.
     const removed = await this.positionService.remove(serviceContext, positionId);
 
     if (!removed) {
-      throw new NotFoundException();
+      throw new NotFoundException('Position not found');
     }
   }
 
@@ -239,7 +234,7 @@ export class PositionController {
     const lat = parseFloat(centerLat);
     const radiusMeters = parseFloat(radius);
 
-    if (isNaN(lon) || isNaN(lat) || isNaN(radiusMeters)) {
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || !Number.isFinite(radiusMeters)) {
       throw new BadRequestException('Invalid numeric values for radius geofence');
     }
 
@@ -276,10 +271,10 @@ export class PositionController {
       (coord) =>
         typeof coord === 'object' &&
         coord !== null &&
-        typeof coord.longitude === 'number' &&
-        typeof coord.latitude === 'number' &&
-        !isNaN(coord.longitude) &&
-        !isNaN(coord.latitude),
+        // isFinite, not !isNaN: JSON.parse turns 1e999 into Infinity, which
+        // would reach ST_GeogFromText as "Infinity" and answer 500.
+        Number.isFinite(coord.longitude) &&
+        Number.isFinite(coord.latitude),
     );
 
     if (!validCoords) {

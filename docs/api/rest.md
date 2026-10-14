@@ -155,27 +155,22 @@ curl -sS http://ci-server.localhost/v1/files \
 
 ### `PositionController` — `position` · `domains/position/controllers/PositionController.ts:36`
 
-| Verb   | Path                 | Auth                            | Purpose                                                                                                                                                                                                                              |
-| ------ | -------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| POST   | `/position`          | `JwtOrApiKeyAuthGuard` (`:40`)  | Bulk-create positions; body must be a **non-empty array** of `CreatePositionDto`. Dup time+user → 409 (`:53-58`).                                                                                                                    |
-| GET    | `/position/stats`    | `JwtOrApiKeyAuthGuard` (`:66`)  | Aggregate counts for the location settings UI (`:67-72`).                                                                                                                                                                            |
-| GET    | `/position/range`    | `JwtOrApiKeyAuthGuard` (`:125`) | Positions within `?start=&end=` (ISO 8601, both required) (`:126-137`). **Unreachable — 404s today, see note below.**                                                                                                                |
-| GET    | `/position/geofence` | `JwtOrApiKeyAuthGuard` (`:139`) | Positions inside a geofence. `?type=radius\|polygon`; radius needs `centerLon,centerLat,radius`; polygon needs `coordinates` (JSON array ≥3 pts); optional `start`/`end` (`:140-157`). **Unreachable — 404s today, see note below.** |
-| GET    | `/position/:id`      | `JwtOrApiKeyAuthGuard` (`:74`)  | Fetch by id; 404 if missing.                                                                                                                                                                                                         |
-| PATCH  | `/position/:id`      | `JwtOrApiKeyAuthGuard` (`:88`)  | Update; `ValidationPipe(updatePositionSchema)`; 404 if missing.                                                                                                                                                                      |
-| DELETE | `/position/:id`      | `JwtOrApiKeyAuthGuard` (`:106`) | Delete; **204 No Content** (`:108`).                                                                                                                                                                                                 |
+| Verb   | Path                 | Auth                            | Purpose                                                                                                                                                                                            |
+| ------ | -------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/position`          | `JwtOrApiKeyAuthGuard` (`:40`)  | Bulk-create positions; body must be a **non-empty array** of `CreatePositionDto`. Dup time+user answers 409 (`:53-58`).                                                                            |
+| GET    | `/position/stats`    | `JwtOrApiKeyAuthGuard` (`:70`)  | Aggregate counts for the location settings UI (`:71-76`).                                                                                                                                          |
+| GET    | `/position/range`    | `JwtOrApiKeyAuthGuard` (`:78`)  | Positions within `?start=&end=` (ISO 8601, both required), newest first (`:79-90`).                                                                                                                |
+| GET    | `/position/geofence` | `JwtOrApiKeyAuthGuard` (`:92`)  | Positions inside a geofence. `?type=radius\|polygon`; radius needs `centerLon,centerLat,radius`; polygon needs `coordinates` (JSON array of 3 or more points); optional `start`/`end` (`:93-110`). |
+| GET    | `/position/:id`      | `JwtOrApiKeyAuthGuard` (`:112`) | Fetch by id; 404 if missing.                                                                                                                                                                       |
+| PATCH  | `/position/:id`      | `JwtOrApiKeyAuthGuard` (`:126`) | Update; `ValidationPipe(updatePositionSchema)`; 404 if missing.                                                                                                                                    |
+| DELETE | `/position/:id`      | `JwtOrApiKeyAuthGuard` (`:144`) | Delete; **204 No Content** once the row is gone (`:146`), 404 if nothing matched, 500 if the delete throws.                                                                                        |
 
-> ⚠️ **Route-ordering bug — `range` and `geofence` are shadowed.** Nest/Express matches in
-> **declaration order**, not static-segment-first. `@Get(':id')` is declared at `:75`, while
-> `@Get('range')` is at `:126` and `@Get('geofence')` at `:140`, so both static paths are
-> captured by the param route. The global `IdFormatGuard` (`common/guards/IdFormatGuard.ts:20-22`,
-> registered as `APP_GUARD` at `application.ts:153-156`) then rejects any `*id` param that is not a
-> UUID, so `GET /position/range` and `GET /position/geofence` return **404** and their handlers
-> never run. `stats` is the one that works, precisely because it is declared _before_ `:id` (`:67`);
-> its own comment (`:63-64`) says that placement is why. Nothing in the repo calls the two shadowed
-> routes — the only `position` read the web app makes is `/api/position/stats`
-> (`frontend/apps/web/src/pages/SettingsPage/sections/LocationSection.tsx:48`). Fixing it means
-> moving the two `@Get` declarations above `@Get(':id')`.
+> **Route order matters here.** Nest/Express matches in **declaration order**, not static segment
+> first, and the global `IdFormatGuard` (`common/guards/IdFormatGuard.ts`, registered as
+> `APP_GUARD` in `application.ts`) answers 404 for any `*id` param that is not a UUID. So `stats`,
+> `range` and `geofence` must stay declared above `@Get(':id')`. Until #3040, `range` and
+> `geofence` sat below it and 404'd for every caller. `position/__tests__/Routes.e2e.test.ts`
+> covers the order.
 
 ---
 

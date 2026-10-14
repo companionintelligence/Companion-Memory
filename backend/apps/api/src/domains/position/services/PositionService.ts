@@ -481,9 +481,11 @@ export class PositionService {
       const firstCoord = polygonGeofence.coordinates[0];
       const polygonWKT = `POLYGON((${coordinatesStr}, ${firstCoord.longitude} ${firstCoord.latitude}))`;
 
-      whereClause += ` AND ST_Within(
-        location::geography,
-        ST_GeogFromText($${paramIndex})::geography
+      // ST_Within has no geography overload, so it raised "function
+      // st_within(geography, geography) does not exist". ST_Covers does.
+      whereClause += ` AND ST_Covers(
+        ST_GeogFromText($${paramIndex}),
+        location::geography
       )`;
       params.push(`SRID=4326;${polygonWKT}`);
       paramIndex += 1;
@@ -500,8 +502,13 @@ export class PositionService {
       params.push(endDate.toISOString());
     }
 
+    // A raw query hands geography back as hex EWKB, which parseLocation can't
+    // read, so the location also comes back as GeoJSON.
     const rawResults = await this.positionRepository.query(
-      `SELECT * FROM ci.position WHERE ${whereClause} ORDER BY time DESC`,
+      `SELECT *, ST_AsGeoJSON(location)::json AS location_geojson
+         FROM ci.position
+        WHERE ${whereClause}
+        ORDER BY time DESC`,
       params,
     );
 
@@ -893,10 +900,11 @@ export class PositionService {
   private mapRawResultsToPositions(rawResults: Array<Record<string, unknown>>): Position[] {
     return rawResults.map((row) => {
       const entity = new PositionEntity();
+      entity.id = row.id as string;
       entity.time = new Date(row.time as string);
       entity.userId = row.user_id as string;
       entity.deviceId = row.device_id as string | null;
-      entity.location = this.parseLocation(row.location);
+      entity.location = this.parseLocation(row.location_geojson ?? row.location);
       entity.altitudeMeters = row.altitude_meters as number | null;
       entity.accuracyMeters = row.accuracy_meters as number | null;
       entity.hdop = row.hdop as number | null;
