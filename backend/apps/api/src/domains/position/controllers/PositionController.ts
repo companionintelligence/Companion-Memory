@@ -60,8 +60,12 @@ export class PositionController {
   }
 
   /**
-   * Aggregate counts for the location settings UI. Declared BEFORE the ':id'
-   * route so the static segment isn't captured by the param route.
+   * Aggregate counts for the location settings UI.
+   *
+   * `stats`, `range` and `geofence` are declared BEFORE the ':id' route.
+   * Express matches in declaration order, so a static segment declared after
+   * ':id' is captured by it, and the global IdFormatGuard then answers 404
+   * because 'range' is not a UUID.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Get('stats')
@@ -69,6 +73,40 @@ export class PositionController {
     const serviceContext = toServiceContext(context);
 
     return this.positionService.getStats(serviceContext);
+  }
+
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Get('range')
+  async findByDateRange(
+    @Context() context: RequestContext,
+    @Query('start') start: string,
+    @Query('end') end: string,
+  ): Promise<Position[]> {
+    const serviceContext = toServiceContext(context);
+
+    const { startDate, endDate } = this.parseAndValidateDateRange(start, end);
+
+    return this.positionService.findByDateRange(serviceContext, startDate, endDate);
+  }
+
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Get('geofence')
+  async findByGeofence(
+    @Context() context: RequestContext,
+    @Query('type') type: 'radius' | 'polygon',
+    @Query('centerLon') centerLon?: string,
+    @Query('centerLat') centerLat?: string,
+    @Query('radius') radius?: string,
+    @Query('coordinates') coordinates?: string,
+    @Query('start') start?: string,
+    @Query('end') end?: string,
+  ): Promise<Position[]> {
+    const serviceContext = toServiceContext(context);
+
+    const geofence = this.parseGeofence(type, centerLon, centerLat, radius, coordinates);
+    const { startDate, endDate } = this.parseOptionalDateRange(start, end);
+
+    return this.positionService.findByGeofence(serviceContext, geofence, startDate, endDate);
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -115,45 +153,13 @@ export class PositionController {
       throw new NotFoundException('Position not found');
     }
 
-    const removal = this.positionService.remove(serviceContext, positionId);
+    // Awaited: the 204 must mean the row is gone. Unawaited, a failed delete still
+    // answered 204, and the check below tested a Promise, which is always truthy.
+    const removed = await this.positionService.remove(serviceContext, positionId);
 
-    if (!removal) {
+    if (!removed) {
       throw new NotFoundException();
     }
-  }
-
-  @UseGuards(JwtOrApiKeyAuthGuard)
-  @Get('range')
-  async findByDateRange(
-    @Context() context: RequestContext,
-    @Query('start') start: string,
-    @Query('end') end: string,
-  ): Promise<Position[]> {
-    const serviceContext = toServiceContext(context);
-
-    const { startDate, endDate } = this.parseAndValidateDateRange(start, end);
-
-    return this.positionService.findByDateRange(serviceContext, startDate, endDate);
-  }
-
-  @UseGuards(JwtOrApiKeyAuthGuard)
-  @Get('geofence')
-  async findByGeofence(
-    @Context() context: RequestContext,
-    @Query('type') type: 'radius' | 'polygon',
-    @Query('centerLon') centerLon?: string,
-    @Query('centerLat') centerLat?: string,
-    @Query('radius') radius?: string,
-    @Query('coordinates') coordinates?: string,
-    @Query('start') start?: string,
-    @Query('end') end?: string,
-  ): Promise<Position[]> {
-    const serviceContext = toServiceContext(context);
-
-    const geofence = this.parseGeofence(type, centerLon, centerLat, radius, coordinates);
-    const { startDate, endDate } = this.parseOptionalDateRange(start, end);
-
-    return this.positionService.findByGeofence(serviceContext, geofence, startDate, endDate);
   }
 
   private validateContentArray(content?: CreatePositionDto[]): void {
