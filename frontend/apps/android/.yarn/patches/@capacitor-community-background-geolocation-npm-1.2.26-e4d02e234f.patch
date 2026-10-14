@@ -1,0 +1,24 @@
+diff --git a/android/src/main/java/com/equimaps/capacitor_background_geolocation/BackgroundGeolocationService.java b/android/src/main/java/com/equimaps/capacitor_background_geolocation/BackgroundGeolocationService.java
+index fafbb8694160595444073a8c6cec111b60b3fce0..57d321e7a6e99ee1636c175d509792c92827cc51 100644
+--- a/android/src/main/java/com/equimaps/capacitor_background_geolocation/BackgroundGeolocationService.java
++++ b/android/src/main/java/com/equimaps/capacitor_background_geolocation/BackgroundGeolocationService.java
+@@ -166,6 +166,19 @@ public class BackgroundGeolocationService extends Service {
+                         null
+                 );
+             }
++
++            // addWatcher's startForeground fails when it runs before the location permission
++            // is granted: Android 14+ refuses a location-typed foreground service without it.
++            // Without this, a background watcher added on a first-time prompt never shows its
++            // notification and stops receiving locations once the app leaves the screen.
++            Notification backgroundNotification = getNotification();
++            if (backgroundNotification != null) {
++                try {
++                    startForeground(NOTIFICATION_ID, backgroundNotification);
++                } catch (Exception exception) {
++                    Logger.error("Failed to foreground service", exception);
++                }
++            }
+         }
+ 
+         void stopService() {
