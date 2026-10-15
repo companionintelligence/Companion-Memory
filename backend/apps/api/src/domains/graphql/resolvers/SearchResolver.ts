@@ -8,7 +8,13 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { SHARE_DISCLOSURE, SharedSearchConsentService, applySearchCeiling } from '@ci/domains/asks';
 import { BrowserActivityEntity, BrowserActivityService } from '@ci/domains/browser-activity';
 import { EntityResolutionService, type ResolvedEntity } from '@ci/domains/entity-resolution';
-import { FileService, SavedSearchService, resolveSavedSearchDateRange } from '@ci/domains/files';
+import {
+  type FileKind,
+  FileService,
+  SavedSearchService,
+  normalizeFileKinds,
+  resolveSavedSearchDateRange,
+} from '@ci/domains/files';
 import { AnswerService } from '@ci/domains/intelligence';
 import {
   CommunicationService,
@@ -556,6 +562,7 @@ export class SearchResolver {
         hasLocation: filters.hasLocation,
         semantic: filters.semantic,
         direction: filters.direction,
+        fileKinds: filters.fileKinds,
         // Viewer paging carries over only when the ceiling permits it; sort
         // prefers the viewer's choice, falling back to the owner's saved sort.
         sortBy: input.sortBy ?? filters.sortBy,
@@ -623,6 +630,7 @@ export class SearchResolver {
     // Sent / received: a dimension only messages carry, so like the Where
     // family it pins the browse — to communications (see browseWants).
     const direction = messageDirection(input.direction);
+    const fileKinds = normalizeFileKinds(input.fileKinds);
 
     // No filter signal at all -> fall back to recent timed entities (preserves prior behavior).
     const noInputs =
@@ -632,7 +640,8 @@ export class SearchResolver {
       !hasDate &&
       eventFilter == null &&
       connectors == null &&
-      direction == null;
+      direction == null &&
+      fileKinds == null;
 
     // Build a candidate identifier set from the strongest available signal, then AND the
     // remaining filter dimensions on as post-filters so all filters combine (LifeScope parity).
@@ -689,6 +698,7 @@ export class SearchResolver {
         eventFilter,
         connectors,
         direction,
+        fileKinds,
       };
 
       // Without a decodable id the cursor can only bound the walk by its time, inclusively. That
@@ -733,6 +743,17 @@ export class SearchResolver {
     // events *and* communications (PEOPLE_LINKED_TYPES), each matched by its
     // own service. Every other kind drops out — it has no link to a person and
     // no direction, so it could never match.
+    // Kind filter for candidates the index produced: the timed browse applied
+    // it in SQL; a query or a tag hands back files of every kind.
+    if (fileKinds != null && candidateSource !== 'timed') {
+      const fileIds = identifiers
+        .filter((identifier) => identifier.type === 'file')
+        .map((identifier) => identifier.id);
+      const kept = await this.fileService.filterIdsByKind(serviceContext, fileIds, fileKinds);
+
+      identifiers = identifiers.filter((identifier) => identifier.type !== 'file' || kept.has(identifier.id));
+    }
+
     if ((eventFilter != null || direction != null) && candidateSource !== 'timed') {
       const pinnedToEvents = eventFilter != null && isPlaceScoped(eventFilter);
       const pinnedToMessages = direction != null;
@@ -956,6 +977,7 @@ export class SearchResolver {
       eventFilter,
       connectors,
       direction,
+      fileKinds,
       order = 'DESC',
       limit = 25,
     }: {
@@ -975,6 +997,8 @@ export class SearchResolver {
       connectors?: string[];
       /** Sent / received — communications only, see browseWants. */
       direction?: string;
+      /** Which kinds of file — files only, see fileKinds.ts. */
+      fileKinds?: readonly FileKind[];
       /**
        * Which way every table is read, and the cursor walked: each type's rows ORDERED, and SEEKED
        * past (afterTime, afterId), in this direction, so the window a type contributes starts at the
@@ -1062,9 +1086,11 @@ export class SearchResolver {
       endTime?: Date;
       afterTime?: Date;
       afterId?: string;
+      kinds?: readonly FileKind[];
     } = {
       limit,
       order,
+      ...(fileKinds ? { kinds: fileKinds } : {}),
     };
 
     const fileChunkOptions: {
@@ -1218,6 +1244,7 @@ export class SearchResolver {
       eventFilter,
       connectors,
       direction,
+      fileKinds,
     }: {
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
@@ -1228,6 +1255,7 @@ export class SearchResolver {
       eventFilter?: EventFilter;
       connectors?: string[];
       direction?: string;
+      fileKinds?: readonly FileKind[];
     },
   ): Promise<number> {
     const wants = (type: IndexableEntity) =>
@@ -1261,7 +1289,12 @@ export class SearchResolver {
             ...(direction ? { direction } : {}),
           })
         : 0,
-      wants('file') ? this.fileService.countEntitiesForFiles(context, dateOptions) : 0,
+      wants('file')
+        ? this.fileService.countEntitiesForFiles(context, {
+            ...dateOptions,
+            ...(fileKinds ? { kinds: fileKinds } : {}),
+          })
+        : 0,
       wants('file-chunk') ? this.fileChunkService.countEntitiesForFileChunks(context, dateOptions) : 0,
       wants('note') ? this.noteService.countEntitiesForNotes(context, dateOptions) : 0,
       wants('content')

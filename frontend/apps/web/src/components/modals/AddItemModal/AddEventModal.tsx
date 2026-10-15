@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react';
 import { useMutation } from '@apollo/client';
 import { Button } from '@ci/shadcn';
 
+import { usePlaceLookup } from '@/api/usePlaceLookup';
 import {
   EVENT_DRAFT_PROBLEM_MESSAGES,
   EventForm,
@@ -41,6 +42,7 @@ export function AddEventModal({ open, onClose, onCreated }: Props) {
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const [createEvent, { loading }] = useMutation(CREATE_EVENT);
+  const lookupPlace = usePlaceLookup();
 
   const reset = () => {
     // A fresh draft, not the one this modal opened with: emptyEventDraft dates
@@ -92,7 +94,13 @@ export function AddEventModal({ open, onClose, onCreated }: Props) {
 
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-col gap-4">
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-            <EventForm value={draft} onChange={setDraft} problem={problem} disabled={loading} />
+            <EventForm
+              value={draft}
+              onChange={setDraft}
+              problem={problem}
+              disabled={loading}
+              lookupPlace={lookupPlace}
+            />
           </div>
 
           {/* The form scrolls inside the modal while Add sits in a fixed footer, so

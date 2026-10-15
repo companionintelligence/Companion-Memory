@@ -1493,6 +1493,15 @@ type ForecastType {
   systemStatus: String!
 }
 
+type GeocodeResultType {
+  cached: Boolean!
+  confidence: Float
+  latitude: Float
+  longitude: Float
+  normalizedAddress: String
+  status: String!
+}
+
 enum GrantMode {
   auto
   block
@@ -2947,6 +2956,7 @@ type Query {
 
   """Past forecast-vs-actual buckets from hbpe.prediction_log"""
   forecastHistory(days: Int = 5): [ForecastHistoryDayType!]!
+  geocode(query: String!): GeocodeResultType!
   geocodingConfigured: Boolean!
 
   """
@@ -3359,6 +3369,7 @@ input SavedSearchFiltersInput {
   direction: String
   endTime: String
   eventTypes: [String!]
+  fileKinds: [String!]
   hasLocation: Boolean
   people: [String!]
   places: [String!]
@@ -3366,6 +3377,7 @@ input SavedSearchFiltersInput {
   sortBy: String
   sortOrder: String
   startTime: String
+  view: String
 }
 
 type SavedSearchFiltersType {
@@ -3374,6 +3386,7 @@ type SavedSearchFiltersType {
   direction: String
   endTime: String
   eventTypes: [String!]
+  fileKinds: [String!]
   hasLocation: Boolean
   people: [String!]
   places: [String!]
@@ -3381,6 +3394,7 @@ type SavedSearchFiltersType {
   sortBy: String
   sortOrder: String
   startTime: String
+  view: String
 }
 
 type SavedSearchType implements Node {
@@ -3447,6 +3461,7 @@ input SearchInput {
   endTime: String
   eventTypes: [String!]
   excludeTypes: [String!]
+  fileKinds: [String!]
   first: Int
   hasLocation: Boolean
   includeFiles: Boolean

@@ -48,6 +48,7 @@ import { GraphQLModule, GraphqlRequestLimitsMiddleware } from '@ci/domains/graph
 import { ImportModule } from '@ci/domains/import';
 import { IngestModule } from '@ci/domains/ingest';
 import { IntelligenceModule } from '@ci/domains/intelligence';
+import { LiveChangesModule } from '@ci/domains/live-changes';
 import { LLMModule } from '@ci/domains/llm';
 import { MaintenanceModule } from '@ci/domains/maintenance';
 import { McpModule } from '@ci/domains/mcp';
@@ -105,6 +106,7 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     FeatureModule,
     LoggingModule,
     HbpeNotifyModule,
+    LiveChangesModule,
     EventEmitterModule.forRoot(),
     NestCronModule.forRoot(),
     ActivityModule,

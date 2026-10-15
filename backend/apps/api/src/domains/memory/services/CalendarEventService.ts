@@ -31,6 +31,7 @@ import {
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { FileRemovedEvent } from '@ci/domains/files/events';
+import { LiveChangesService } from '@ci/domains/live-changes';
 import {
   ContentRemovedEvent,
   EventCreatedEvent,
@@ -617,6 +618,11 @@ export class CalendarEventService {
      * bytes and has no store is refused before it changes anything.
      */
     @Optional() @Inject(STORED_OBJECTS) private readonly storedObjects?: StoredObjects,
+    /**
+     * Tells the user's other open calendars to re-read. Optional for hand-built
+     * suites, and LAST so the suites that construct this positionally keep working.
+     */
+    @Optional() private readonly liveChanges?: LiveChangesService,
   ) {
     this.aggregate = new CtiAggregate({
       detailRepository: this.eventRepository,
@@ -986,6 +992,7 @@ export class CalendarEventService {
       eventId: eventResult.id,
     });
     await this.hbpeNotify?.notifyEvents(eventResult.userId, eventResult.startTime);
+    await this.liveChanges?.publish(eventResult.userId, 'calendar');
 
     return EventEntity.toEgressType(eventResult, {
       name: item.title,
@@ -1406,6 +1413,7 @@ export class CalendarEventService {
           reloaded.userId,
           outcome.movedFrom ? [outcome.movedFrom, reloaded.startTime] : reloaded.startTime,
         );
+        await this.liveChanges?.publish(reloaded.userId, 'calendar');
       }
     }
 
@@ -1842,6 +1850,8 @@ export class CalendarEventService {
       context.userId,
       results.map(({ entity }) => entity.startTime),
     );
+    // One hint per bulk call, not per row, for the same reason as above.
+    await this.liveChanges?.publish(context.userId, 'calendar');
 
     return results.map(({ entity, inserted }) => ({
       entity: EventEntity.toEgressType(entity, bases.get(entity.id)),
@@ -2136,6 +2146,7 @@ export class CalendarEventService {
     // Both days, as in update(): the move empties a slot on the old day and
     // fills one on the new, and HBPE re-serializes only the days it is told.
     await this.hbpeNotify?.notifyEvents(event.userId, [previousStart, event.startTime]);
+    await this.liveChanges?.publish(event.userId, 'calendar');
 
     return this.findById(context, id);
   }
@@ -2574,6 +2585,7 @@ export class CalendarEventService {
     // is the only way HBPE learns which day it was. The service sends one
     // notification per distinct UTC day, so an unmoved event costs one.
     await this.hbpeNotify?.notifyEvents(updated.userId, [previousStart, updated.startTime]);
+    await this.liveChanges?.publish(updated.userId, 'calendar');
 
     // The transaction already reloaded the detail row; one base fetch
     // completes the egress composition.
@@ -2626,6 +2638,7 @@ export class CalendarEventService {
     });
     if (removedAt) {
       await this.hbpeNotify?.notifyEvents(removedAt.userId, [removedAt.time]);
+      await this.liveChanges?.publish(removedAt.userId, 'calendar');
     }
 
     return true;
@@ -2669,6 +2682,7 @@ export class CalendarEventService {
       eventId: id,
     });
     await this.hbpeNotify?.notifyEvents(restored.userId, restored.startTime);
+    await this.liveChanges?.publish(restored.userId, 'calendar');
 
     return this.composeOne(restored);
   }
@@ -2748,6 +2762,7 @@ export class CalendarEventService {
         context.userId,
         purged.events.map((event) => event.startTime),
       );
+      await this.liveChanges?.publish(context.userId, 'calendar');
     }
 
     return {

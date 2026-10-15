@@ -5,6 +5,7 @@ import { useDeviceLayout } from '@ci/common';
 import { Button, cn, IconButton, Sheet, Tabs, Tooltip } from '@ci/shadcn';
 import { Plus, X } from '@ci/shadcn/icons';
 
+import { usePlaceLookup } from '@/api/usePlaceLookup';
 import {
   EVENT_DRAFT_PROBLEM_MESSAGES,
   EventForm,
@@ -368,6 +369,7 @@ export function TaskSlateDrawer({
   const [problem, setProblem] = useState<EventDraftProblem | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [createEvent, { loading: creating }] = useMutation(CREATE_EVENT);
+  const lookupPlace = usePlaceLookup();
   const actionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -498,7 +500,13 @@ export function TaskSlateDrawer({
 
           {composing ? (
             <form onSubmit={handleSubmit} className="flex min-h-0 flex-col gap-4">
-              <EventForm value={draft} onChange={setDraft} problem={problem} disabled={creating} />
+              <EventForm
+                value={draft}
+                onChange={setDraft}
+                problem={problem}
+                disabled={creating}
+                lookupPlace={lookupPlace}
+              />
               {/* The form scrolls and Add is its last line, so the line EventForm
                   writes beside the offending field is screens above the finger
                   that just pressed Add — which then looked dead. Say it here too,

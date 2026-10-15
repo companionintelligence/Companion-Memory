@@ -6,6 +6,7 @@ import { MoreThan } from 'typeorm';
 import { SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
+import { LiveChangesService } from '@ci/domains/live-changes';
 import { CalendarEventService, EventEntity } from '@ci/domains/memory';
 
 import { TaskEntity } from '../../entities/TaskEntity';
@@ -88,11 +89,13 @@ describe('TaskService', () => {
     create: jest.Mock;
     save: jest.Mock;
     findOne: jest.Mock;
+    update: jest.Mock;
     createQueryBuilder: jest.Mock;
   };
   /** `ci.events` rows for planned blocks — the delete path reads and tombstones these. */
   let blockRepo: { find: jest.Mock };
   let calendarEvents: { remove: jest.Mock };
+  let liveChanges: { publish: jest.Mock };
 
   async function setup(rows: TaskEntity[] = [], blocks: Array<{ id: string }> = []) {
     qb = makeQueryBuilder(rows);
@@ -110,6 +113,7 @@ describe('TaskService', () => {
       create: jest.fn((data: unknown) => data),
       save: jest.fn(async (entity: unknown) => entity),
       findOne: jest.fn(async () => null),
+      update: jest.fn(async () => ({ affected: 0 })),
       createQueryBuilder: jest.fn(() => ({
         where: jest.fn().mockReturnThis(),
         andWhere: jest.fn().mockReturnThis(),
@@ -120,6 +124,7 @@ describe('TaskService', () => {
 
     blockRepo = { find: jest.fn(async () => blocks) };
     calendarEvents = { remove: jest.fn(async () => true) };
+    liveChanges = { publish: jest.fn(async () => undefined) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -129,6 +134,7 @@ describe('TaskService', () => {
         { provide: getRepositoryToken(EventEntity), useValue: blockRepo },
         { provide: EventService, useValue: signalling },
         { provide: CalendarEventService, useValue: calendarEvents },
+        { provide: LiveChangesService, useValue: liveChanges },
         { provide: LoggerService, useValue: { setContext: jest.fn(), warn: jest.fn(), log: jest.fn() } },
       ],
     }).compile();
@@ -399,6 +405,26 @@ describe('TaskService', () => {
       expect(result?.status).toBe('open');
     });
 
+    it('settles open suggestions when the update closes the task', async () => {
+      await setup([makeTask()]);
+
+      await service.update(ALICE, 'task-1', { status: 'archived' });
+
+      expect(pendingRepo.update).toHaveBeenCalledWith(
+        { taskId: 'task-1', userId: ALICE.userId, status: 'pending' },
+        { status: 'declined', resolvedAt: expect.any(Date) },
+      );
+    });
+
+    it('leaves open suggestions alone when the update does not close the task', async () => {
+      await setup([makeTask()]);
+
+      await service.update(ALICE, 'task-1', { title: 'Renamed', status: 'open' });
+      await service.update(ALICE, 'task-1', { priority: 1 });
+
+      expect(pendingRepo.update).not.toHaveBeenCalled();
+    });
+
     it('still clears a field when the caller sends an explicit null', async () => {
       await setup([makeTask({ description: 'old description' })]);
 
@@ -444,6 +470,30 @@ describe('TaskService', () => {
 
       expect(await service.complete(BOB, 'task-1')).toBeNull();
       expect(signalling.send).not.toHaveBeenCalled();
+      expect(pendingRepo.update).not.toHaveBeenCalled();
+    });
+
+    it("tells the owner's other sessions the task changed", async () => {
+      await setup([makeTask()]);
+
+      await service.complete(ALICE, 'task-1');
+
+      expect(liveChanges.publish).toHaveBeenCalledWith(ALICE.userId, 'tasks');
+    });
+
+    it('settles every suggestion still open for the task, and only the pending ones', async () => {
+      await setup([makeTask()]);
+
+      await service.complete(ALICE, 'task-1');
+
+      // A finished task with a live `schedule` suggestion rendered as a
+      // Proposed card that could never be placed (`PlannedBlockService`
+      // refuses done tasks). The row has to be settled in the same write.
+      expect(pendingRepo.update).toHaveBeenCalledTimes(1);
+      expect(pendingRepo.update).toHaveBeenCalledWith(
+        { taskId: 'task-1', userId: ALICE.userId, status: 'pending' },
+        { status: 'declined', resolvedAt: expect.any(Date) },
+      );
     });
   });
 
@@ -492,6 +542,17 @@ describe('TaskService', () => {
       expect(await service.acceptProposed(ALICE, 'task-1')).toBeNull();
       expect(repository.save).not.toHaveBeenCalled();
       expect(signalling.send).not.toHaveBeenCalled();
+    });
+
+    it('settles open suggestions when a proposal is archived', async () => {
+      await setup([makeTask({ status: 'proposed' })]);
+
+      await service.declineProposed(ALICE, 'task-1');
+
+      expect(pendingRepo.update).toHaveBeenCalledWith(
+        { taskId: 'task-1', userId: ALICE.userId, status: 'pending' },
+        { status: 'declined', resolvedAt: expect.any(Date) },
+      );
     });
 
     it('archives a declined proposal', async () => {

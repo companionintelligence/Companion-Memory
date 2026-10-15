@@ -319,20 +319,22 @@ describe('SavedSearchService.ensureDefaults', () => {
       userId: 'owner-1',
     });
     expect(rows.some((row) => row.name === 'All my stuff')).toBe(true);
-    expect(rows.some((row) => row.name === 'Yoga for the Power Mad')).toBe(true);
+    expect(rows.some((row) => row.name === 'Recent Images')).toBe(true);
+    // The product-session joke searches were dropped on 2026-10-15.
+    expect(rows.some((row) => row.name === 'Yoga for the Power Mad')).toBe(false);
     expect(rows.some((row) => row.name === 'Shopping List')).toBe(true);
   });
 
-  it('extracts hashtags from a seed query into tags', async () => {
+  it('extracts hashtags from a query into tags', async () => {
+    // Used to lean on the "MicroFlesh Diet" seed, whose query was two
+    // hashtags; that seed is gone, and the rule is the service's, not a seed's.
     const repo = makeRepo();
-    repo.count.mockResolvedValue(0);
     const { service } = makeService(repo);
 
-    await service.ensureDefaults(ownerCtx);
+    await service.create(ownerCtx, { name: 'Branded meat', query: '#NotBeyondMeat #PossibleBurger' });
 
-    const rows = repo.save.mock.calls[0][0] as unknown as Array<{ name: string; tags: string[] }>;
-    const diet = rows.find((row) => row.name === 'MicroFlesh Diet');
-    expect(diet?.tags).toEqual(expect.arrayContaining(['NotBeyondMeat', 'PossibleBurger']));
+    const row = repo.create.mock.calls[0][0] as { tags: string[] };
+    expect(row.tags).toEqual(expect.arrayContaining(['NotBeyondMeat', 'PossibleBurger']));
   });
 
   // Every seeded row must be flaggable as a starter, so the frontend can put

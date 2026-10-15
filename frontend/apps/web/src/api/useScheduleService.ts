@@ -2,11 +2,21 @@ import { useCallback, useMemo } from 'react';
 
 import { gql, NetworkStatus, useQuery } from '@apollo/client';
 
+import { useLiveChanges } from '@/hooks/useLiveChanges';
+import { useRefetchOnReturn } from '@/hooks/useRefetchOnReturn';
+
 import type { ProbabilityEntry } from './useForecastService';
 
 // Committed time changes when a connector syncs, not second-to-second; the
 // rhythm layer only moves on the nightly pipeline. Hourly is plenty.
-const REFRESH_INTERVAL_MS = 60 * 60_000;
+/**
+ * The fallback for a live stream that is down, not the primary path: the
+ * server's change stream (`useLiveChanges`) refetches on a write, and
+ * `useRefetchOnReturn` on coming back to the tab. Hidden tabs skip the poll.
+ * Used to be an hour, which with no stream meant another device's edit sat
+ * unseen until a reload.
+ */
+const REFRESH_INTERVAL_MS = 30_000;
 
 /**
  * The key HorizonGrid looks the rhythm lane up by.
@@ -153,6 +163,7 @@ export function useScheduleService(from: Date, to: Date): ScheduleResult {
   const { data, loading, error, refetch, networkStatus } = useQuery<QueryData>(GET_SCHEDULE, {
     variables: { from: from.toISOString(), to: to.toISOString() },
     pollInterval: REFRESH_INTERVAL_MS,
+    skipPollAttempt: () => typeof document !== 'undefined' && document.hidden,
     fetchPolicy: 'cache-and-network',
     notifyOnNetworkStatusChange: true,
     // The two layers resolve independently, so a forecast that THROWS must not
@@ -195,6 +206,11 @@ export function useScheduleService(from: Date, to: Date): ScheduleResult {
   const reload = useCallback(() => {
     void refetch();
   }, [refetch]);
+
+  // A planned block is an event, so the task rail's own topic is not needed
+  // here: placing a task writes a calendar row and that announces itself.
+  useLiveChanges(['calendar'], reload);
+  useRefetchOnReturn(reload);
 
   const fetching =
     networkStatus === NetworkStatus.setVariables || (networkStatus === NetworkStatus.loading && data == null);

@@ -42,3 +42,13 @@ describe('buildSavedSearchFilters', () => {
     expect(filters?.hasLocation).toBeUndefined();
   });
 });
+
+describe('buildSavedSearchFilters — the view', () => {
+  it('keeps the view the search was built in, so a Where search saved from the map reopens there', () => {
+    expect(buildSavedSearchFilters(new URLSearchParams('view=map&places=paris'))).toMatchObject({
+      view: 'map',
+      places: ['paris'],
+    });
+    expect(buildSavedSearchFilters(new URLSearchParams('places=paris'))?.view).toBeUndefined();
+  });
+});

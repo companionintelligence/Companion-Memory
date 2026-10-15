@@ -144,7 +144,8 @@ export default defineConfig({
               // measured live against /api/llm/generate. Requests matching no
               // rule are not intercepted at all, which is exactly what a
               // long-lived stream needs.
-              urlPattern: /\/api\/(?!authenticate\/oidc|llm\/generate|llm\/threads\/[^/]+\/stream|mcp\b)/,
+              urlPattern:
+                /\/api\/(?!authenticate\/oidc|llm\/generate|llm\/threads\/[^/]+\/stream|live\/changes|mcp\b)/,
               handler: 'NetworkOnly',
               options: {
                 backgroundSync: {

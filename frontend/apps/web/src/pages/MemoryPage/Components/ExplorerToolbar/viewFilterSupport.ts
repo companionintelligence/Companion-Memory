@@ -41,6 +41,7 @@ export type FilterDimension =
   | 'semantic'
   | 'bbox'
   | 'direction'
+  | 'fileKinds'
   | 'sort';
 
 /**
@@ -86,6 +87,7 @@ const DIMENSION_PARAMS: Record<FilterDimension, string[]> = {
   semantic: ['semantic'],
   bbox: ['bbox'],
   direction: ['direction'],
+  fileKinds: ['fileKinds'],
   sort: ['sortBy', 'sortOrder'],
 };
 

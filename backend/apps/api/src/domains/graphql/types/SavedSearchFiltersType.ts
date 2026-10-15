@@ -46,6 +46,14 @@ export class SavedSearchFiltersType implements SavedSearchFilters {
   @Field(() => String, { nullable: true })
   direction?: string;
 
+  /** Narrow files to these kinds (`image`, `video`, `audio`, `document`). */
+  @Field(() => [String], { nullable: true })
+  fileKinds?: string[];
+
+  /** The explorer view the search opens in; the map for a Where search. */
+  @Field(() => String, { nullable: true })
+  view?: string;
+
   static toType(filters: SavedSearchFilters | null | undefined): SavedSearchFiltersType | null {
     if (filters == null) {
       return null;
@@ -64,6 +72,8 @@ export class SavedSearchFiltersType implements SavedSearchFilters {
       hasLocation: filters.hasLocation,
       semantic: filters.semantic,
       direction: filters.direction,
+      fileKinds: filters.fileKinds,
+      view: filters.view,
     };
   }
 }
@@ -105,4 +115,12 @@ export class SavedSearchFiltersInput implements SavedSearchFilters {
 
   @Field(() => String, { nullable: true })
   direction?: string;
+
+  /** Narrow files to these kinds (`image`, `video`, `audio`, `document`). */
+  @Field(() => [String], { nullable: true })
+  fileKinds?: string[];
+
+  /** The explorer view the search opens in; the map for a Where search. */
+  @Field(() => String, { nullable: true })
+  view?: string;
 }

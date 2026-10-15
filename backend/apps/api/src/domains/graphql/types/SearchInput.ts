@@ -35,6 +35,12 @@ export class SearchInput {
   @Field(() => Boolean, { nullable: true })
   includeFiles?: boolean;
 
+  // "Which kind of file" — narrows file results to these kinds (`image`,
+  // `video`, `audio`, `document`), read off the file's content type. Only
+  // affects entities of type `file`; a kind nobody recognises is ignored.
+  @Field(() => [String], { nullable: true })
+  fileKinds?: string[];
+
   @Field(() => [String], { nullable: true })
   tags?: string[];
 

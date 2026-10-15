@@ -14,6 +14,7 @@ import {
   SlidersHorizontal,
   Users,
   type LucideIcon,
+  Image as ImageIcon,
 } from '@ci/shadcn/icons';
 import { useLocation, useSearchParams } from 'react-router-dom';
 
@@ -26,6 +27,7 @@ import {
   type MessageDirection,
 } from '@/components/SearchBox/DirectionToggle';
 import { EntityTypeFilter } from '@/components/SearchBox/EntityTypeFilter';
+import { FileKindFilter } from '@/components/SearchBox/FileKindFilter';
 import { EntityNameFilter } from '@/components/SearchBox/NameFilter';
 import { SEARCH_PANEL_LAYER_PROPS } from '@/components/SearchBox/SearchBox';
 import { AVAILABLE_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
@@ -350,6 +352,12 @@ function FiltersSheet({ filterCount, onClearFilters }: { filterCount: number; on
               modal
               renderTrigger={(values) => (
                 <FilterRow icon={Database} label="How" {...listSummary(values, 'All sources')} />
+              )}
+            />
+            <FileKindFilter
+              modal
+              renderTrigger={(values) => (
+                <FilterRow icon={ImageIcon} label="Kind" {...listSummary(values, 'All kinds')} />
               )}
             />
             {showEventDimensions && (

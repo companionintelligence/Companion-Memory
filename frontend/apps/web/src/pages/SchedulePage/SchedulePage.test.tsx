@@ -104,6 +104,7 @@ vi.mock('@/components/HorizonGrid', () => ({
     timeZone,
     onMoveEvent,
     onSelectSlot,
+    onSelectDay,
     liftSelectedHour,
   }: {
     footer?: string;
@@ -112,9 +113,13 @@ vi.mock('@/components/HorizonGrid', () => ({
     timeZone?: string;
     onMoveEvent: (id: string, at: Date) => void;
     onSelectSlot?: (slot: { instant: Date; allDay: boolean }) => void;
+    onSelectDay?: (day: Date) => void;
     liftSelectedHour?: boolean;
   }) => (
     <div data-testid="vertical-calendar">
+      <button type="button" onClick={() => onSelectDay?.(new Date(2026, 7, 6))}>
+        stub-select-day
+      </button>
       <button
         type="button"
         onClick={() => onSelectSlot?.({ instant: new Date(2026, 7, 6, 16, 15), allDay: false })}
@@ -825,7 +830,7 @@ describe('SchedulePage — colour mode only once colour means something', () => 
 
     renderWithProviders(<SchedulePage />);
 
-    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: /^Colour by/ })).not.toBeInTheDocument();
     expect(screen.queryByText('Activity')).not.toBeInTheDocument();
     expect(screen.queryByText('Source')).not.toBeInTheDocument();
   });
@@ -835,7 +840,7 @@ describe('SchedulePage — colour mode only once colour means something', () => 
 
     renderWithProviders(<SchedulePage />);
 
-    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: /^Colour by/ })).not.toBeInTheDocument();
   });
 
   it('offers the toggle, with a key, once there is more than one', () => {
@@ -843,7 +848,7 @@ describe('SchedulePage — colour mode only once colour means something', () => 
 
     renderWithProviders(<SchedulePage />);
 
-    expect(screen.getByRole('radiogroup')).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: /^Colour by/ })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Activity' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText('work')).toBeInTheDocument();
     expect(screen.getByText('exercise')).toBeInTheDocument();
@@ -908,7 +913,7 @@ describe('SchedulePage — colour mode only once colour means something', () => 
 
     renderWithProviders(<SchedulePage />);
 
-    expect(screen.getByRole('radiogroup')).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: /^Colour by/ })).toBeInTheDocument();
   });
 });
 
@@ -1033,5 +1038,85 @@ describe('SchedulePage — the week is drawn in the profile zone', () => {
       Intl.DateTimeFormat().resolvedOptions().timeZone,
     );
     expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
+  });
+});
+
+describe('SchedulePage — timescales', () => {
+  beforeEach(() => {
+    localStorage.removeItem('ci.schedule.view');
+  });
+
+  it('starts on a week and offers Day / Week / Month / Year', () => {
+    renderWithProviders(<SchedulePage />);
+
+    const views = screen.getByRole('radiogroup', { name: 'View' });
+    expect(within(views).getByRole('radio', { name: 'Week' })).toBeChecked();
+    expect(
+      within(views)
+        .getAllByRole('radio')
+        .map((radio) => radio.textContent),
+    ).toEqual(['Day', 'Week', 'Month', 'Year']);
+  });
+
+  it('switches the surface and the arrows with the view, and remembers the choice', () => {
+    renderWithProviders(<SchedulePage />);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Month' }));
+    expect(screen.getByRole('grid')).toBeInTheDocument();
+    expect(screen.queryByTestId('vertical-calendar')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Next month')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toMatch(/^[A-Z][a-z]+ \d{4}$/);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
+    expect(screen.getAllByRole('region')).toHaveLength(12);
+    expect(screen.getByLabelText('Next year')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toMatch(/^\d{4}$/);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Day' }));
+    expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
+    expect(screen.getByLabelText('Next day')).toBeInTheDocument();
+
+    expect(localStorage.getItem('ci.schedule.view')).toBe('day');
+  });
+
+  it('opens a day from the year, then the month from nowhere, via the keyboard', () => {
+    renderWithProviders(<SchedulePage />);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
+    const today = new Date();
+    const label = today.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+    fireEvent.click(screen.getByRole('button', { name: `Open ${label}` }));
+
+    expect(screen.getByRole('radio', { name: 'Day' })).toBeChecked();
+    expect(screen.queryByRole('button', { name: 'Back to today' })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'm' });
+    expect(screen.getByRole('radio', { name: 'Month' })).toBeChecked();
+
+    fireEvent.click(screen.getByLabelText('Next month'));
+    expect(screen.getByRole('button', { name: 'Back to today' })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 't' });
+    expect(screen.queryByRole('button', { name: 'Back to today' })).not.toBeInTheDocument();
+  });
+
+  it("opens a day from the week's header", () => {
+    renderWithProviders(<SchedulePage />);
+    expect(screen.getByRole('radio', { name: 'Week' })).toBeChecked();
+
+    fireEvent.click(screen.getByText('stub-select-day'));
+
+    expect(screen.getByRole('radio', { name: 'Day' })).toBeChecked();
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toMatch(/August 6, 2026/);
+  });
+
+  it('ignores the shortcuts while typing', () => {
+    renderWithProviders(<SchedulePage />);
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+
+    fireEvent.keyDown(input, { key: 'y' });
+
+    expect(screen.getByRole('radio', { name: 'Week' })).toBeChecked();
+    input.remove();
   });
 });

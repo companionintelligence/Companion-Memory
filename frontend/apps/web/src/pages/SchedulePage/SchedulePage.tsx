@@ -10,7 +10,19 @@ import { useRescheduleEvent } from '@/api/useRescheduleEvent';
 import { type RhythmDay, type ScheduleEvent, useScheduleService } from '@/api/useScheduleService';
 import { useFeatures } from '@/common/feature';
 import { VerticalCalendar } from '@/components/HorizonGrid';
-import { addDays, startOfLocalDay } from '@/components/HorizonGrid/nowNext';
+import {
+  CALENDAR_VIEWS,
+  DAYS_IN_WEEK,
+  type CalendarView,
+  calendarWindow,
+  formatWindowTitle,
+  isCalendarView,
+  startOfLocalWeek,
+  stepAnchor,
+  weekStartsOn,
+} from '@/components/HorizonGrid/calendarWindow';
+import { MonthGrid } from '@/components/HorizonGrid/MonthGrid';
+import { sameLocalDay, startOfLocalDay } from '@/components/HorizonGrid/nowNext';
 import {
   type CalendarSlot,
   RHYTHM_NOISE_FLOOR,
@@ -19,6 +31,7 @@ import {
   slotForecastLine,
 } from '@/components/HorizonGrid/scheduleGeometry';
 import { TodayNowNext, WeekDayChips } from '@/components/HorizonGrid/TodayNowNext';
+import { YearGrid } from '@/components/HorizonGrid/YearGrid';
 import { resolveTimeZone } from '@/components/HorizonGrid/zonedClock';
 import { PageContent } from '@/components/layout';
 import { TaskSlateDrawer } from '@/components/TaskSlate';
@@ -37,8 +50,53 @@ import {
 } from '@/lib/activityPalette';
 import { usePlanTasks } from '@/pages/PlanPage/usePlanTasks';
 
-const DAYS_IN_VIEW = 7;
 const NO_OCCUPANCY: ForecastBucket[] = [];
+
+/** Per-viewer convenience: the timescale last chosen. Never state that must persist. */
+const VIEW_STORAGE_KEY = 'ci.schedule.view';
+
+function readStoredView(): CalendarView | null {
+  try {
+    const stored = localStorage.getItem(VIEW_STORAGE_KEY);
+
+    return isCalendarView(stored) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeView(view: CalendarView): void {
+  try {
+    localStorage.setItem(VIEW_STORAGE_KEY, view);
+  } catch {
+    // Private window or blocked storage: the choice just does not survive a reload.
+  }
+}
+
+const NAV_LABEL_KEYS = {
+  day: { previous: 'SCHEDULE_PREVIOUS_DAY', next: 'SCHEDULE_NEXT_DAY' },
+  week: { previous: 'SCHEDULE_PREVIOUS_WEEK', next: 'SCHEDULE_NEXT_WEEK' },
+  month: { previous: 'SCHEDULE_PREVIOUS_MONTH', next: 'SCHEDULE_NEXT_MONTH' },
+  year: { previous: 'SCHEDULE_PREVIOUS_YEAR', next: 'SCHEDULE_NEXT_YEAR' },
+} as const;
+
+const VIEW_LABEL_KEYS = {
+  day: 'SCHEDULE_VIEW_DAY',
+  week: 'SCHEDULE_VIEW_WEEK',
+  month: 'SCHEDULE_VIEW_MONTH',
+  year: 'SCHEDULE_VIEW_YEAR',
+} as const;
+
+/** Google Calendar's keys: D, W, M, Y pick the view, T goes to today. */
+const VIEW_SHORTCUTS: Record<string, CalendarView> = { d: 'day', w: 'week', m: 'month', y: 'year' };
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+}
 
 /**
  * Chips minted by the planner, which own a task the calendar must keep in step.
@@ -47,12 +105,6 @@ const NO_OCCUPANCY: ForecastBucket[] = [];
 const PLANNED_BLOCK = 'planned_block';
 
 /** "Aug 3 – Aug 9" — the window, stated plainly. */
-function formatRange(start: Date, end: Date, zone: string): string {
-  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', timeZone: zone };
-
-  return `${start.toLocaleDateString([], opts)} – ${addDays(end, -1, zone).toLocaleDateString([], opts)}`;
-}
-
 /**
  * What the grid's footer is allowed to claim about the rhythm layer.
  *
@@ -239,28 +291,44 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
    * fallback, never a second source of truth. See `HorizonGrid/zonedClock`.
    */
   const timeZone = resolveTimeZone(user?.timezone);
-  const [weekOffset, setWeekOffset] = useState(0);
+  /**
+   * The timescale and the date it is centred on. The view is remembered per
+   * browser; the anchor starts on today and moves by one unit of the view.
+   * The phone starts on a day, where a week is seven thin lanes.
+   */
+  const [chosenView, setChosenView] = useState<CalendarView | null>(readStoredView);
+  // Derived, not initialised: the device layout settles after the first
+  // render, and a default captured before that would leave the phone on a week.
+  const view = chosenView ?? (isMobile ? 'day' : 'week');
+  const [anchor, setAnchor] = useState(() => startOfLocalDay(new Date(), timeZone));
   const [colorMode, setColorMode] = useState<ColorMode>('type');
   const [slot, setSlot] = useState<CalendarSlot | null>(null);
+  const firstDay = useMemo(() => weekStartsOn(), []);
 
   usePageTitle(embedded ? null : 'Schedule - Companion Memory');
 
-  const { start, end } = useMemo(() => {
-    const from = addDays(startOfLocalDay(new Date(), timeZone), weekOffset * DAYS_IN_VIEW, timeZone);
+  const setView = useCallback((next: CalendarView) => {
+    setChosenView(next);
+    storeView(next);
+  }, []);
 
-    return { start: from, end: addDays(from, DAYS_IN_VIEW, timeZone) };
-  }, [timeZone, weekOffset]);
+  const window = useMemo(
+    () => calendarWindow(view, anchor, timeZone, firstDay),
+    [view, anchor, timeZone, firstDay],
+  );
+  const { start, end } = window.fetch;
+  const atToday = sameLocalDay(anchor, new Date(), timeZone);
 
-  const [selectedDay, setSelectedDay] = useState(start);
+  const [selectedDay, setSelectedDay] = useState(anchor);
 
   // ═══ WHAT THIS USED TO DO ═══
   // Move the selected day and leave `slot` alone, so paging a week with the
   // drawer open kept composing against the day that had just scrolled off
   // screen: "New event" → Add, or a Possibilities card, landed on last week.
   useEffect(() => {
-    setSelectedDay(start);
+    setSelectedDay(view === 'day' ? anchor : window.span.start);
     setSlot(null);
-  }, [start]);
+  }, [view, anchor, window]);
 
   const { events, rhythm, generatedAt, rhythmCoversWindow, loading, fetching, error, refetch } =
     useScheduleService(start, end);
@@ -327,13 +395,29 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
    */
   const handleSelectDay = useCallback(
     (day: Date) => {
+      // A day named in the week's header is a way into that day, as in Google
+      // Calendar — not a column to highlight. The effect above then moves the
+      // selection and clears the slot.
+      if (view === 'week') {
+        setAnchor(startOfLocalDay(day, timeZone));
+        setView('day');
+
+        return;
+      }
+
       setSelectedDay(day);
+
+      // On a day view the selected day IS the window, so the chips and the
+      // header page the anchor too; the effect above then clears the slot.
+      if (view === 'day') {
+        setAnchor(startOfLocalDay(day, timeZone));
+      }
 
       if (isMobile) {
         setSlot(null);
       }
     },
-    [isMobile],
+    [isMobile, setView, timeZone, view],
   );
 
   const handlePlace = useCallback(
@@ -404,15 +488,61 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
     [dismissProposed, run],
   );
 
-  const goBack = useCallback(() => setWeekOffset((offset) => offset - 1), []);
-  const goForward = useCallback(() => setWeekOffset((offset) => offset + 1), []);
-  const goToday = useCallback(() => setWeekOffset(0), []);
+  const goBack = useCallback(
+    () => setAnchor((current) => stepAnchor(view, current, -1, timeZone)),
+    [timeZone, view],
+  );
+  const goForward = useCallback(
+    () => setAnchor((current) => stepAnchor(view, current, 1, timeZone)),
+    [timeZone, view],
+  );
+  const goToday = useCallback(() => setAnchor(startOfLocalDay(new Date(), timeZone)), [timeZone]);
+
+  /** A day picked out of a month or a year: show it on its own. */
+  const openDay = useCallback(
+    (day: Date) => {
+      setAnchor(startOfLocalDay(day, timeZone));
+      setView('day');
+    },
+    [setView, timeZone],
+  );
+
+  const openMonth = useCallback(
+    (month: Date) => {
+      setAnchor(startOfLocalDay(month, timeZone));
+      setView('month');
+    },
+    [setView, timeZone],
+  );
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey || isTypingTarget(event.target)) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+
+      if (key === 't') {
+        goToday();
+      } else if (VIEW_SHORTCUTS[key]) {
+        setView(VIEW_SHORTCUTS[key]);
+      }
+    };
+
+    document.addEventListener('keydown', onKey);
+
+    return () => document.removeEventListener('keydown', onKey);
+  }, [goToday, setView]);
 
   // `errorPolicy: 'all'` means an error and usable data can arrive together, so
   // the surface is gated on whether anything resolved rather than on `error`.
+  // A month or a year is a surface in its own right: an empty one is still a
+  // calendar to move around in, not the "connect something" welcome.
   const hasAnything = events.length > 0 || rhythm.length > 0 || backlogCount > 0;
-  const isTrulyEmpty = !loading && !fetching && !hasAnything && !error && !planError && weekOffset === 0;
-  const showScheduleSurface = weekOffset !== 0 || hasAnything || planError || fetching;
+  const overview = view === 'month' || view === 'year';
+  const isTrulyEmpty = !loading && !fetching && !hasAnything && !error && !planError && atToday && !overview;
+  const showScheduleSurface = !atToday || overview || hasAnything || planError || fetching;
 
   // Embedded, the host (Calendar) supplies the frame and is otherwise empty —
   // this is the whole page now, not one block in a taller scrolling column —
@@ -426,7 +556,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   //
   // `PageContent` is a stable module-level reference and `'div'` is a string,
   // so `Frame` keeps the same element type across renders — no remounting, and
-  // `weekOffset` / `selectedDay` survive the host re-rendering.
+  // `anchor` / `selectedDay` survive the host re-rendering.
   const Frame: ElementType = embedded ? 'div' : PageContent;
 
   // Shown only once hue has more than one thing to say — see `colorSaysSomething`.
@@ -434,6 +564,12 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
     () => colorSaysSomething(events, rhythm, occupancyBuckets),
     [events, rhythm, occupancyBuckets],
   );
+
+  const segmentClass = (active: boolean) =>
+    cn(
+      'rounded-[4px] px-2 py-0.5 text-[11px] leading-none transition-colors',
+      active ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground',
+    );
 
   const colorModeToggle = (
     <div
@@ -453,12 +589,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
           role="radio"
           aria-checked={colorMode === mode}
           onClick={() => setColorMode(mode)}
-          className={cn(
-            'rounded-[4px] px-2 py-0.5 text-[11px] leading-none transition-colors',
-            colorMode === mode
-              ? 'bg-accent text-accent-foreground'
-              : 'text-muted-foreground hover:text-foreground',
-          )}
+          className={segmentClass(colorMode === mode)}
         >
           {COLOR_MODE_LABEL[mode]}
         </button>
@@ -466,43 +597,141 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
     </div>
   );
 
-  // Hue answers one question at a time; this picks which one. Committed time
-  // and rhythm stay told apart by their lanes and by fill weight, so colour is
-  // free to carry category instead of certainty — but only while the week holds
-  // more than one category to tell apart.
-  const colorChrome = colorKey ? (
-    <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-      <ScheduleLegend mode={colorMode} events={events} rhythm={rhythm} occupancy={occupancyBuckets} />
-      {colorModeToggle}
-    </div>
-  ) : null;
-
-  // Week chrome: range, legend, activity/source. Lives under the TimelineJS
-  // today strip and immediately above the week so it sits next to schedule /
-  // rhythm instead of floating above the zoomable story.
-  const weekChrome = (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-      <div className="flex items-center gap-0.5">
-        <IconButton variant="ghost" label={t('SCHEDULE_PREVIOUS_WEEK')} onClick={goBack}>
-          <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
-        </IconButton>
-        <h2 className="min-w-[9rem] text-center text-base font-semibold leading-none text-foreground tabular-nums">
-          {formatRange(start, end, timeZone)}
-        </h2>
-        <IconButton variant="ghost" label={t('SCHEDULE_NEXT_WEEK')} onClick={goForward}>
-          <ChevronRight className="h-4 w-4" strokeWidth={1.5} />
-        </IconButton>
-      </div>
-
-      {weekOffset !== 0 && (
-        <Button variant="ghost" size="sm" onClick={goToday} className="h-7 text-xs">
-          Back to today
-        </Button>
-      )}
-
-      {colorChrome && <div className="ml-auto">{colorChrome}</div>}
+  // Day / Week / Month / Year, the way Google Calendar offers them. On the
+  // phone it is a row of its own, each segment a thumb-sized share of it.
+  const viewToggle = (
+    <div
+      role="radiogroup"
+      aria-label={t('SCHEDULE_VIEW')}
+      className={cn('flex shrink-0 items-center rounded-md border border-border p-0.5', isMobile && 'w-full')}
+    >
+      {CALENDAR_VIEWS.map((candidate) => (
+        <button
+          key={candidate}
+          type="button"
+          role="radio"
+          aria-checked={view === candidate}
+          onClick={() => setView(candidate)}
+          className={cn(
+            segmentClass(view === candidate),
+            isMobile && 'min-h-8 flex-1 text-xs',
+            // The accent is a whisper of a tint; across a full-width row on a
+            // phone the chosen segment vanished into it. A firmer wash here.
+            isMobile && view === candidate && 'bg-primary/15',
+          )}
+        >
+          {t(VIEW_LABEL_KEYS[candidate])}
+        </button>
+      ))}
     </div>
   );
+
+  // Hue answers one question at a time; this picks which one. Committed time
+  // and rhythm stay told apart by their lanes and by fill weight, so colour is
+  // free to carry category instead of certainty — but only while the window
+  // holds more than one category to tell apart. The year draws no events, so
+  // it has nothing for a key to explain.
+  const colorChrome =
+    colorKey && view !== 'year' ? (
+      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+        <ScheduleLegend mode={colorMode} events={events} rhythm={rhythm} occupancy={occupancyBuckets} />
+        {colorModeToggle}
+      </div>
+    ) : null;
+
+  // Chrome: arrows and the window's name, today, the timescale, then legend
+  // and activity/source. Lives immediately above the surface so it sits next
+  // to schedule / rhythm instead of floating above the zoomable story.
+  //
+  // Two rows on the phone, by design rather than by wrapping: arrows, the
+  // window's name and "Back to today" share the first, and the name gives way
+  // (truncates) before anything is pushed down; the timescale is the second.
+  // Letting one flex row wrap put the toggle on a line of its own only
+  // sometimes — whenever the name was long, and always with "Back to today".
+  const chrome = (
+    <div className={cn('flex gap-x-3 gap-y-1.5', isMobile ? 'flex-col' : 'flex-wrap items-center')}>
+      <div className={cn('flex items-center gap-0.5', isMobile && 'min-w-0')}>
+        <IconButton variant="ghost" label={t(NAV_LABEL_KEYS[view].previous)} onClick={goBack}>
+          <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
+        </IconButton>
+        <h2
+          className={cn(
+            'text-center font-semibold leading-none text-foreground tabular-nums',
+            isMobile ? 'min-w-0 flex-1 truncate text-sm' : 'min-w-[9rem] text-base',
+          )}
+        >
+          {formatWindowTitle(view, window, timeZone)}
+        </h2>
+        <IconButton variant="ghost" label={t(NAV_LABEL_KEYS[view].next)} onClick={goForward}>
+          <ChevronRight className="h-4 w-4" strokeWidth={1.5} />
+        </IconButton>
+
+        {!atToday && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={goToday}
+            className={cn('shrink-0 text-xs', isMobile ? 'ml-1 h-8 px-2' : 'ml-2 h-7')}
+          >
+            Back to today
+          </Button>
+        )}
+      </div>
+
+      {viewToggle}
+
+      {colorChrome && !isMobile && <div className="ml-auto">{colorChrome}</div>}
+    </div>
+  );
+
+  const surface =
+    view === 'month' ? (
+      <MonthGrid
+        className="min-h-0 flex-1"
+        window={window}
+        events={events}
+        colorMode={colorMode}
+        timeZone={timeZone}
+        selectedDay={selectedDay}
+        onSelectSlot={handleSelectSlot}
+        onOpenDay={openDay}
+      />
+    ) : view === 'year' ? (
+      <YearGrid
+        className="min-h-0 flex-1"
+        window={window}
+        firstDay={firstDay}
+        timeZone={timeZone}
+        selectedDay={selectedDay}
+        onOpenDay={openDay}
+        onOpenMonth={openMonth}
+      />
+    ) : (
+      <VerticalCalendar
+        className="min-h-0 flex-1"
+        start={view === 'day' ? anchor : window.span.start}
+        days={view === 'day' ? 1 : DAYS_IN_WEEK}
+        events={events}
+        rhythm={rhythm}
+        occupancy={occupancyBuckets}
+        colorMode={colorMode}
+        pipelineRunning={pipelineRunning}
+        timeZone={timeZone}
+        selectedDay={selectedDay}
+        onSelectDay={handleSelectDay}
+        selectedSlot={slot}
+        onSelectSlot={handleSelectSlot}
+        liftSelectedHour={isMobile && view === 'day' && slot !== null}
+        onMoveEvent={handleMove}
+        footer={rhythmFooter(
+          generatedAt ?? (hasOccupancySignal ? (occupancy?.generatedAt ?? null) : null),
+          rhythmCoversWindow || hasOccupancySignal,
+          hbpeEnabled,
+          pipelineRunning,
+          hasRhythmSignal,
+        )}
+      />
+    );
 
   return (
     <>
@@ -512,14 +741,14 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
         {error && !loading && (
           <p role="alert" className="text-sm text-muted-foreground">
             {hasAnything
-              ? 'Part of this week could not be loaded — what is shown may be incomplete.'
+              ? 'Part of this view could not be loaded — what is shown may be incomplete.'
               : 'Could not load the schedule. Try again shortly.'}
           </p>
         )}
 
         {isTrulyEmpty && (
           <>
-            {weekChrome}
+            {chrome}
             <EmptyState
               icon={<CalendarRange size={48} strokeWidth={1} />}
               message="Nothing here yet. Connect a calendar and your week will start to fill in."
@@ -529,72 +758,29 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
 
         {showScheduleSurface && (
           <>
-            {/* One schedule, one geometry. Week chrome, then the week — where
+            {/* One schedule, one geometry. Chrome, then the window — where
                 what a day usually holds rides in beside the hours rather than
                 as a second tab of the same seven days. */}
             <div className="flex min-h-0 flex-1 flex-col gap-3">
-              {isMobile ? (
+              {chrome}
+
+              {isMobile && view === 'day' && (
                 <div className="flex flex-col gap-2">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <div className="flex items-center gap-0.5">
-                      <IconButton variant="ghost" label={t('SCHEDULE_PREVIOUS_WEEK')} onClick={goBack}>
-                        <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
-                      </IconButton>
-                      <h2 className="min-w-[8rem] text-center text-sm font-semibold text-foreground tabular-nums">
-                        {formatRange(start, end, timeZone)}
-                      </h2>
-                      <IconButton variant="ghost" label={t('SCHEDULE_NEXT_WEEK')} onClick={goForward}>
-                        <ChevronRight className="h-4 w-4" strokeWidth={1.5} />
-                      </IconButton>
-                    </div>
-
-                    {weekOffset !== 0 && (
-                      <Button variant="ghost" size="sm" onClick={goToday} className="h-8 text-xs">
-                        Back to today
-                      </Button>
-                    )}
-                  </div>
-
                   <WeekDayChips
-                    start={start}
-                    days={DAYS_IN_VIEW}
+                    start={startOfLocalWeek(anchor, timeZone, firstDay)}
+                    days={DAYS_IN_WEEK}
                     selectedDay={selectedDay}
                     onSelectDay={handleSelectDay}
                     timeZone={timeZone}
                   />
-
                   {colorChrome}
+                  <TodayNowNext events={events} day={selectedDay} timeZone={timeZone} />
                 </div>
-              ) : (
-                weekChrome
               )}
 
-              {isMobile && <TodayNowNext events={events} day={selectedDay} timeZone={timeZone} />}
+              {isMobile && view !== 'day' && colorChrome}
 
-              <VerticalCalendar
-                className="min-h-0 flex-1"
-                start={isMobile ? selectedDay : start}
-                days={isMobile ? 1 : DAYS_IN_VIEW}
-                events={events}
-                rhythm={rhythm}
-                occupancy={occupancyBuckets}
-                colorMode={colorMode}
-                pipelineRunning={pipelineRunning}
-                timeZone={timeZone}
-                selectedDay={selectedDay}
-                onSelectDay={handleSelectDay}
-                selectedSlot={slot}
-                onSelectSlot={handleSelectSlot}
-                liftSelectedHour={isMobile && slot !== null}
-                onMoveEvent={handleMove}
-                footer={rhythmFooter(
-                  generatedAt ?? (hasOccupancySignal ? (occupancy?.generatedAt ?? null) : null),
-                  rhythmCoversWindow || hasOccupancySignal,
-                  hbpeEnabled,
-                  pipelineRunning,
-                  hasRhythmSignal,
-                )}
-              />
+              {surface}
 
               <TaskSlateDrawer
                 open={slot !== null}

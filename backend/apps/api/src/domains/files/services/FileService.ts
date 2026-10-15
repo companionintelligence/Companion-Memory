@@ -28,6 +28,7 @@ import { FileUpdatedEvent, FileUploadedEvent } from '@ci/domains/files/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { SignedFile, FileEntity } from '../entities/FileEntity';
+import { type FileKind, fileKindsPredicate } from '../fileKinds';
 import { FileVariant, type CreateFileDto, type UpdateFileDto, type UploadFileDto } from '../types';
 
 import { downloadResponseOverrides } from './downloadResponse';
@@ -435,6 +436,8 @@ export class FileService implements OnModuleInit {
       afterTime?: Date;
       afterId?: string;
       order?: 'ASC' | 'DESC';
+      /** Only these kinds of file (see `fileKinds.ts`); absent means every kind. */
+      kinds?: readonly FileKind[];
     } = {},
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     let query = this.fileRepository
@@ -442,6 +445,11 @@ export class FileService implements OnModuleInit {
       .select('file.id', 'id')
       .where('file.user_id = :userId', { userId: context.userId })
       .andWhere('file.variant = :variant', { variant: FileVariant.ORIGINAL });
+
+    if (options.kinds && options.kinds.length > 0) {
+      const kinds = fileKindsPredicate('file.content_type', options.kinds);
+      query = query.andWhere(kinds.sql, kinds.params);
+    }
 
     if (options.startTime) {
       query = query.andWhere('file.updated_at >= :startTime', { startTime: options.startTime });
@@ -479,12 +487,17 @@ export class FileService implements OnModuleInit {
    */
   async countEntitiesForFiles(
     context: ServiceContext,
-    options: { startTime?: Date; endTime?: Date },
+    options: { startTime?: Date; endTime?: Date; kinds?: readonly FileKind[] },
   ): Promise<number> {
     let query = this.fileRepository
       .createQueryBuilder('file')
       .where('file.user_id = :userId', { userId: context.userId })
       .andWhere('file.variant = :variant', { variant: FileVariant.ORIGINAL });
+
+    if (options.kinds && options.kinds.length > 0) {
+      const kinds = fileKindsPredicate('file.content_type', options.kinds);
+      query = query.andWhere(kinds.sql, kinds.params);
+    }
 
     if (options.startTime) {
       query = query.andWhere('file.updated_at >= :startTime', { startTime: options.startTime });
@@ -495,6 +508,34 @@ export class FileService implements OnModuleInit {
     }
 
     return query.getCount();
+  }
+
+  /**
+   * Of `ids`, the files that are one of `kinds`. For the search paths whose
+   * candidates come from the index (a query, a tag) rather than from the
+   * timed browse above, so the kinds filter holds there too.
+   */
+  async filterIdsByKind(
+    context: ServiceContext,
+    ids: readonly string[],
+    kinds: readonly FileKind[],
+  ): Promise<Set<string>> {
+    if (ids.length === 0 || kinds.length === 0) {
+      return new Set(ids);
+    }
+
+    const predicate = fileKindsPredicate('file.content_type', kinds);
+    const rows = await this.fileRepository
+      .createQueryBuilder('file')
+      .select('file.id', 'id')
+      .where('file.id IN (:...ids)', { ids: [...ids] })
+      .andWhere(context.userId === SYSTEM_USER ? '1 = 1' : 'file.user_id = :userId', {
+        userId: context.userId,
+      })
+      .andWhere(predicate.sql, predicate.params)
+      .getRawMany<{ id: string }>();
+
+    return new Set(rows.map((row) => row.id));
   }
 
   async findByHash(context: UserServiceContext, fileHash: string): Promise<SignedFile | null> {

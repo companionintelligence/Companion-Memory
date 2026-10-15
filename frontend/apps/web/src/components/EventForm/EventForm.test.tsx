@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import { emptyEventDraft, type EventDraft } from './eventDraft';
 import { EventForm } from './EventForm';
@@ -25,14 +25,12 @@ describe('EventForm — native date and time controls on a touch device', () => 
   it('gives the Starts and Ends dates and both clocks a plain box', () => {
     renderForm();
 
-    expect(screen.getByLabelText('Starts')).toHaveAttribute('type', 'date');
-    expect(screen.getByLabelText('Starts')).toHaveClass(PLAIN_BOX_ON_TOUCH);
-    expect(screen.getByLabelText('Ends')).toHaveAttribute('type', 'date');
-    expect(screen.getByLabelText('Ends')).toHaveClass(PLAIN_BOX_ON_TOUCH);
+    expect(screen.getByLabelText('Starts at')).toHaveAttribute('type', 'date');
+    expect(screen.getByLabelText('Starts at')).toHaveClass(PLAIN_BOX_ON_TOUCH);
+    expect(screen.getByLabelText('Ends at')).toHaveAttribute('type', 'date');
+    expect(screen.getByLabelText('Ends at')).toHaveClass(PLAIN_BOX_ON_TOUCH);
 
-    const clocks = screen.getAllByLabelText('At');
-
-    expect(clocks).toHaveLength(2);
+    const clocks = [screen.getByLabelText('Start time'), screen.getByLabelText('End time')];
 
     for (const clock of clocks) {
       expect(clock).toHaveAttribute('type', 'time');
@@ -43,9 +41,10 @@ describe('EventForm — native date and time controls on a touch device', () => 
   it('keeps the dates plain when all-day takes the clocks away', () => {
     renderForm({ isAllDay: true });
 
-    expect(screen.queryAllByLabelText('At')).toHaveLength(0);
-    expect(screen.getByLabelText('Starts')).toHaveClass(PLAIN_BOX_ON_TOUCH);
-    expect(screen.getByLabelText('Ends')).toHaveClass(PLAIN_BOX_ON_TOUCH);
+    expect(screen.queryByLabelText('Start time')).toBeNull();
+    expect(screen.queryByLabelText('End time')).toBeNull();
+    expect(screen.getByLabelText('Starts at')).toHaveClass(PLAIN_BOX_ON_TOUCH);
+    expect(screen.getByLabelText('Ends at')).toHaveClass(PLAIN_BOX_ON_TOUCH);
   });
 
   // The fix is for the native pickers only: a text, number or textarea field
@@ -56,5 +55,61 @@ describe('EventForm — native date and time controls on a touch device', () => 
     for (const label of ['Title', 'Kind', 'Category', 'Place', 'Latitude', 'Longitude', 'Description']) {
       expect(screen.getByLabelText(label)).not.toHaveClass(PLAIN_BOX_ON_TOUCH);
     }
+  });
+});
+
+describe('EventForm — looking a place up', () => {
+  it('shows no Look up without a lookup to call', () => {
+    renderForm({ locationName: 'Ferry Building' });
+
+    expect(screen.queryByRole('button', { name: /Look up/ })).not.toBeInTheDocument();
+  });
+
+  it('fills both coordinates from the match and names it, once there is a name to look up', async () => {
+    const onChange = vi.fn();
+    const lookupPlace = vi
+      .fn()
+      .mockResolvedValue({
+        status: 'ok',
+        latitude: 37.7955,
+        longitude: -122.3937,
+        address: '1 Ferry Building, San Francisco',
+      });
+    const { rerender } = render(
+      <EventForm value={emptyEventDraft()} onChange={onChange} lookupPlace={lookupPlace} />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Look up' })).toBeDisabled();
+
+    const draft = { ...emptyEventDraft(), locationName: 'Ferry Building' };
+    rerender(<EventForm value={draft} onChange={onChange} lookupPlace={lookupPlace} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/Matched 1 Ferry Building/));
+    expect(lookupPlace).toHaveBeenCalledWith('Ferry Building');
+    expect(onChange).toHaveBeenCalledWith({ ...draft, latitude: '37.7955', longitude: '-122.3937' });
+  });
+
+  it('says when nothing matched, when lookups are not set up, and when the lookup itself failed', async () => {
+    const draft = { ...emptyEventDraft(), locationName: 'Nowhere' };
+    const lookupPlace = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 'none' })
+      .mockResolvedValueOnce({ status: 'unconfigured' })
+      .mockResolvedValueOnce({ status: 'error' });
+    const onChange = vi.fn();
+    render(<EventForm value={draft} onChange={onChange} lookupPlace={lookupPlace} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/No match/));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent(/isn't set up on this appliance/),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/Could not look that up/));
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

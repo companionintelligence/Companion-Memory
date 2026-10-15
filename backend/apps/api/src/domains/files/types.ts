@@ -94,6 +94,10 @@ export interface SavedSearchFilters {
   semantic?: boolean;
   /** Message direction to keep (`inbound` received, `outbound` sent); pins the browse to communications. */
   direction?: string;
+  /** Narrow files to these kinds (`image`, `video`, `audio`, `document`); other types are untouched. */
+  fileKinds?: string[];
+  /** The explorer view to open in (`list`, `gallery`, `map`, `graph`, `timeline`). Presentation, not a predicate. */
+  view?: string;
 }
 
 export interface CreateSavedSearchDto {

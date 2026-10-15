@@ -2,6 +2,9 @@ import { useQuery } from '@apollo/client';
 import { renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { useLiveChanges } from '@/hooks/useLiveChanges';
+import { useRefetchOnReturn } from '@/hooks/useRefetchOnReturn';
+
 import { type RhythmDay, useScheduleService } from './useScheduleService';
 
 // Mock Apollo's useQuery rather than standing up MockedProvider: everything
@@ -12,7 +15,12 @@ vi.mock('@apollo/client', async (orig) => ({
   useQuery: vi.fn(),
 }));
 
+vi.mock('@/hooks/useLiveChanges', () => ({ useLiveChanges: vi.fn() }));
+vi.mock('@/hooks/useRefetchOnReturn', () => ({ useRefetchOnReturn: vi.fn() }));
+
 const mockedUseQuery = vi.mocked(useQuery);
+const mockedUseLiveChanges = vi.mocked(useLiveChanges);
+const mockedUseRefetchOnReturn = vi.mocked(useRefetchOnReturn);
 
 const GENERATED_AT = '2026-08-05T03:00:00.000Z';
 
@@ -33,7 +41,12 @@ function setResult(data: QueryShape | undefined, error?: Error) {
 }
 
 function lastOptions() {
-  return mockedUseQuery.mock.calls.at(-1)?.[1] as { errorPolicy?: string; variables: Record<string, string> };
+  return mockedUseQuery.mock.calls.at(-1)?.[1] as {
+    errorPolicy?: string;
+    variables: Record<string, string>;
+    pollInterval?: number;
+    skipPollAttempt?: () => boolean;
+  };
 }
 
 /** The UTC date key HorizonGrid looks the rhythm lane up by. */
@@ -208,5 +221,35 @@ describe('useScheduleService — refetch identity', () => {
     rerender();
 
     expect(result.current.refetch).toBe(first);
+  });
+});
+
+describe('useScheduleService — staying current', () => {
+  it('polls every half minute as the fallback, skipping the poll while the tab is hidden', () => {
+    setResult({ eventsInRange: [] });
+    renderHook(() => useScheduleService(new Date('2026-08-03T00:00:00Z'), new Date('2026-08-10T00:00:00Z')));
+
+    const options = lastOptions();
+    expect(options.pollInterval).toBe(30_000);
+
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    expect(options.skipPollAttempt?.()).toBe(true);
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    expect(options.skipPollAttempt?.()).toBe(false);
+  });
+
+  it('refetches on a calendar change from the server and on return to the tab', () => {
+    setResult({ eventsInRange: [] });
+    renderHook(() => useScheduleService(new Date('2026-08-03T00:00:00Z'), new Date('2026-08-10T00:00:00Z')));
+
+    expect(mockedUseLiveChanges).toHaveBeenCalledWith(['calendar'], expect.any(Function));
+    const [, onChange] = mockedUseLiveChanges.mock.calls.at(-1)!;
+    const [onReturn] = mockedUseRefetchOnReturn.mock.calls.at(-1)!;
+    refetch.mockClear();
+
+    onChange();
+    onReturn();
+
+    expect(refetch).toHaveBeenCalledTimes(2);
   });
 });

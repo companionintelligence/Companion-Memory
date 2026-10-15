@@ -24,6 +24,7 @@ import {
   Tag,
   Users,
   X,
+  Image as ImageIcon,
 } from '@ci/shadcn/icons';
 import { useLocation, useSearchParams } from 'react-router-dom';
 
@@ -33,6 +34,7 @@ import { ActivityFilter } from '@/components/SearchBox/ActivityFilter';
 import { ConnectorFilter } from '@/components/SearchBox/ConnectorFilter';
 import { MESSAGE_DIRECTION_LABELS, readMessageDirection } from '@/components/SearchBox/DirectionToggle';
 import { EntityTypeFilter } from '@/components/SearchBox/EntityTypeFilter';
+import { FileKindFilter } from '@/components/SearchBox/FileKindFilter';
 import {
   FILTER_DRAG_TYPE,
   isFilterDrag,
@@ -50,6 +52,7 @@ import { filterValueLabel, sourceFilterLabel } from '@/lib/sourceNames';
 import { CREATE_SAVED_SEARCH } from '../../../SavedSearchesPage/CreateSavedSearchModal';
 import type { SavedSearchGridItemFragment } from '../../../SavedSearchesPage/SavedSearch';
 import { ShareSavedSearchModal } from '../../../SavedSearchesPage/ShareSavedSearchModal';
+import { fileKindLabel } from '../../fileKinds';
 import { buildSavedSearchFilters } from '../../savedSearchFilters';
 
 import {
@@ -378,6 +381,7 @@ function FilterDropArea() {
   const selectedTypes = narrowedEntityTypes(searchParams);
   const sources = readCsvParam(searchParams, 'connectors');
   const activities = readCsvParam(searchParams, 'eventTypes');
+  const fileKinds = readCsvParam(searchParams, 'fileKinds');
   const dateFrom = searchParams.get('from') ?? '';
   const dateTo = searchParams.get('to') ?? '';
   const whenPreset = searchParams.get('when');
@@ -642,6 +646,18 @@ function FilterDropArea() {
                   removeLabel={`Remove activity ${filterValueLabel(name)}`}
                   inactiveReason={reasonFor('eventTypes')}
                   onRemove={() => removeCsvValue('eventTypes', name)}
+                />
+              ))}
+              {/* Which kind of file — set by a saved search (Recent Images) rather
+                  than a picker, but a chip all the same so it can be seen and removed. */}
+              {fileKinds.map((name) => (
+                <FilterChip
+                  key={`file-kind:${name}`}
+                  icon={ImageIcon}
+                  label={fileKindLabel(name)}
+                  removeLabel={`Remove file kind ${fileKindLabel(name)}`}
+                  inactiveReason={reasonFor('fileKinds')}
+                  onRemove={() => removeCsvValue('fileKinds', name)}
                 />
               ))}
               {direction != null && (
@@ -1389,6 +1405,7 @@ function FilterControlsRow({
       <DateControl modal={modal} />
 
       <ConnectorFilter modal={modal} label="How" />
+      <FileKindFilter modal={modal} label="Kind" />
       {showEventDimensions && <ActivityFilter modal={modal} label="Activity" />}
       {showWho && <EntityNameFilter kind="person" modal={modal} />}
       {showEventDimensions && <EntityNameFilter kind="place" modal={modal} />}

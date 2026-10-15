@@ -164,12 +164,16 @@ export function localDateOf(instant: Date, timeZone?: string): string {
  * lexicographically, which is correct for a zero-padded ISO date.
  */
 export function sectionFor(task: SectionedTask, today: string, timeZone?: string): Placement {
-  if (task.status === 'proposed' || task.hasPendingChange) {
-    return { column: 'proposed', lane: 'inbox' };
-  }
-
+  // Closed wins over a pending change. A suggestion filed while the task was
+  // open and never settled when the task finished (the server now settles
+  // them, but older rows exist) used to resurrect a done task as a Proposed
+  // card that the calendar drawer offered and the scheduler then refused.
   if (statusKind(task.status) === 'closed') {
     return { column: 'done', lane: 'inbox' };
+  }
+
+  if (task.status === 'proposed' || task.hasPendingChange) {
+    return { column: 'proposed', lane: 'inbox' };
   }
 
   /**
@@ -373,5 +377,5 @@ export function childrenOf<T extends SectionedTask>(tasks: readonly T[], parentI
  * still work the user is waiting on.
  */
 export function openCount(tasks: readonly SectionedTask[]): number {
-  return tasks.filter((task) => statusKind(task.status) !== 'closed' || task.hasPendingChange).length;
+  return tasks.filter((task) => statusKind(task.status) !== 'closed').length;
 }

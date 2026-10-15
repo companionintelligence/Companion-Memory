@@ -91,6 +91,15 @@ export function Main() {
           it there: the background is `fixed` at z-index 0, and a positioned
           sibling later in the DOM would otherwise paint over the whole app. */}
       {glowEnabled ? <AnimatedBackground /> : null}
+      {/* Outside the `relative z-10` shell below, on purpose. That shell is a
+          stacking context, so a toaster inside it — whatever its own z-index —
+          could never paint above anything portaled to <body>. The slot drawer
+          on the calendar is one of those (Radix Sheet, fixed, z-50), and the
+          "Could not put that on the calendar" toast sat behind it, bottom-right
+          under the panel, invisible: the desktop looked like a refused
+          placement did nothing. Same shape as the phone layout above, whose
+          toaster is a sibling of its column for a related reason (inert). */}
+      <Toaster theme={themeState.mode} />
       <div className="relative z-10 grid h-lvh min-h-0 grid-cols-[auto_1fr] grid-rows-[auto_1fr]">
         {/* Left-aligned so the mark stays put when the rail widens. Centering
             it here walks the logo to the middle of the expanded column. */}
@@ -118,7 +127,6 @@ export function Main() {
           <GettingStartedBanner />
           <UnsyncedImportsBanner suppressed={gettingStartedActive} />
           <Suspense fallback={<LoadingPage />}>
-            <Toaster theme={themeState.mode} />
             <div className="flex flex-row h-full min-h-0">
               <Portal id="tertiary-navigation" className="h-full" />
               {/* `tabIndex={-1}` so the skip link actually moves focus here

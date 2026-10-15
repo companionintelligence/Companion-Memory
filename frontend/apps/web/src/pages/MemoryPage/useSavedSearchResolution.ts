@@ -37,6 +37,8 @@ export const GET_SAVED_SEARCH = gql(`
         hasLocation
         semantic
         direction
+        fileKinds
+        view
       }
     }
   }
@@ -77,6 +79,7 @@ export function applySavedSearchToParams(
     'hasLocation',
     'semantic',
     'direction',
+    'fileKinds',
   ]) {
     next.delete(key);
   }
@@ -116,6 +119,7 @@ export function applySavedSearchToParams(
 
     setCsv('eventTypes', filters.eventTypes);
     setCsv('connectors', filters.connectors);
+    setCsv('fileKinds', filters.fileKinds);
     setCsv('people', filters.people);
     setCsv('places', filters.places);
 
@@ -156,6 +160,12 @@ export function applySavedSearchToParams(
 
     if (filters.direction) {
       next.set('direction', filters.direction);
+    }
+
+    // A saved view wins over whatever view the page was on; a search saved
+    // without one keeps the current view, so old searches stay as they were.
+    if (filters.view) {
+      next.set('view', filters.view);
     }
   }
 

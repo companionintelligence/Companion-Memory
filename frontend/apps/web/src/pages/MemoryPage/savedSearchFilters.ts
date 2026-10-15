@@ -19,6 +19,8 @@ export interface SavedSearchFiltersInput {
   hasLocation?: boolean;
   semantic?: boolean;
   direction?: string;
+  fileKinds?: string[];
+  view?: string;
 }
 
 /**
@@ -50,6 +52,11 @@ export function buildSavedSearchFilters(params: URLSearchParams): SavedSearchFil
     hasLocation: params.get('hasLocation') === '1' ? true : undefined,
     semantic: params.get('semantic') === '1' ? true : undefined,
     direction: readMessageDirection(params.get('direction')) ?? undefined,
+    fileKinds: csv('fileKinds'),
+    // The view is part of the search as the person built it: a Where search
+    // saved from the map comes back on the map. The list is the default, so it
+    // is not worth remembering and does not make an otherwise empty search one.
+    view: params.get('view') && params.get('view') !== 'list' ? params.get('view')! : undefined,
   };
 
   return Object.values(filters).some((value) => value !== undefined) ? filters : undefined;
