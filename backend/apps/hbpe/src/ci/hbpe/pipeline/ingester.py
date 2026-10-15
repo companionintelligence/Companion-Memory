@@ -393,7 +393,9 @@ class EventIngester:
                 from ci.hbpe.tokenizer.serializer import TokenSerializer
 
                 ser = TokenSerializer()
-                n = ser.serialize_day(user_id, d)
+                # serialize_day takes the day as "YYYY-MM-DD"; the summary read
+                # parses it with date.fromisoformat, which rejects a date.
+                n = ser.serialize_day(user_id, d.isoformat())
                 log.info(
                     "Re-serialised %d tokens for user=%s date=%s", n, user_id[:8], d
                 )
