@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   UNDATED_ENTITY_TYPES,
+  addEntityFilter,
   countActiveFilters,
   eventsInPlay,
   explorerSearchTypeFilters,
@@ -9,7 +10,10 @@ import {
   hasWhenFilter,
   narrowedEntityTypes,
   peopleInPlay,
+  readListParam,
+  removeEntityFilter,
   resolveExplorerTypes,
+  writeListParam,
 } from './filterParams';
 
 describe('explorerSearchTypeFilters', () => {
@@ -277,5 +281,72 @@ describe('countActiveFilters', () => {
   it('counts the From / To toggle as one filter', () => {
     expect(countActiveFilters(new URLSearchParams('direction=inbound'))).toBe(1);
     expect(countActiveFilters(new URLSearchParams('direction=inbound&people=Ada'))).toBe(2);
+  });
+
+  it('counts each Who / Where / tag value once, commas included', () => {
+    const params = new URLSearchParams();
+    params.append('places', '4000 Ontario Center, Ontario, CA, 91764');
+    params.append('places', 'Paris');
+    params.append('tags', 'travel');
+    params.set('connectors', 'gmail,facebook');
+
+    expect(countActiveFilters(params)).toBe(5);
+  });
+});
+
+describe('the Who / Where / tag list params', () => {
+  // A place is often a full street address, so a comma inside a value is
+  // ordinary: each value is its own occurrence of the param, never a CSV cell.
+  const address = '4000 Ontario Center, Ontario, CA, 91764';
+
+  it('accepts a street address with commas as one Where filter', () => {
+    const params = new URLSearchParams('view=map');
+
+    expect(addEntityFilter(params, 'place', address)).toBeNull();
+    expect(params.getAll('places')).toEqual([address]);
+    expect(readListParam(params, 'places')).toEqual([address]);
+  });
+
+  it('keeps one occurrence of the param per value', () => {
+    const params = new URLSearchParams();
+
+    addEntityFilter(params, 'place', address);
+    addEntityFilter(params, 'place', 'Paris');
+    addEntityFilter(params, 'person', 'Lovelace, Ada');
+    addEntityFilter(params, 'tag', 'Work, urgent');
+
+    expect(params.getAll('places')).toEqual([address, 'Paris']);
+    expect(params.getAll('people')).toEqual(['Lovelace, Ada']);
+    // Tag labels are canonically lowercase.
+    expect(params.getAll('tags')).toEqual(['work, urgent']);
+    expect(params.toString()).toContain('places=4000+Ontario+Center%2C+Ontario%2C+CA%2C+91764&places=Paris');
+  });
+
+  it('refuses a duplicate, case-insensitively, and removes one value without touching the rest', () => {
+    const params = new URLSearchParams();
+
+    addEntityFilter(params, 'place', address);
+    expect(addEntityFilter(params, 'place', address.toUpperCase())).toBe(
+      `${address.toUpperCase()} is already selected.`,
+    );
+
+    addEntityFilter(params, 'place', 'Paris');
+    removeEntityFilter(params, 'place', address.toLowerCase());
+
+    expect(params.getAll('places')).toEqual(['Paris']);
+
+    removeEntityFilter(params, 'place', 'Paris');
+    expect(params.has('places')).toBe(false);
+  });
+
+  it('writes a list as repeated params and drops the key for an empty one', () => {
+    const params = new URLSearchParams('places=stale&view=map');
+
+    writeListParam(params, 'places', [' Paris ', '', address]);
+    expect(params.getAll('places')).toEqual(['Paris', address]);
+
+    writeListParam(params, 'places', []);
+    expect(params.has('places')).toBe(false);
+    expect(params.get('view')).toBe('map');
   });
 });

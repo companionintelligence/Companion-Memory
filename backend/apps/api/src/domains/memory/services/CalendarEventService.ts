@@ -104,12 +104,19 @@ interface Options {
   connectors?: string[];
   /** "Who": person name patterns matched (ILIKE) against linked Person entities. */
   people?: string[];
-  /** "Where": place name patterns matched (ILIKE) against the linked Location entity / location_name. */
+  /**
+   * "Where" (by name): place name patterns matched (ILIKE) against the linked
+   * Location entity / location_name. ORed with `areas`: an event matches by
+   * name OR by falling inside a rectangle, never both at once.
+   */
   places?: string[];
   /** "Where": when true, only events with geographic coordinates are returned. */
   hasLocation?: boolean;
-  /** "Where" (viewport): bounding box [minLon, minLat, maxLon, maxLat] (EPSG:4326). */
-  bbox?: number[];
+  /**
+   * "Where" (map areas): bounding boxes, each [minLon, minLat, maxLon, maxLat]
+   * (EPSG:4326), ORed — an event matches inside any of them, or by `places`.
+   */
+  areas?: number[][];
   /**
    * Restrict to this explicit set of event ids, ANDed with every other filter.
    * The map's pin read uses it to intersect a text-query / tag candidate set
@@ -590,6 +597,14 @@ interface LockedEventRow {
  * transaction; reads compose the egress {@link Event} from the pair with one
  * batched base-row fetch.
  */
+/** The entries of `areas` that are usable map areas: exactly four finite numbers each. */
+function validAreas(areas: number[][] | undefined): [number, number, number, number][] {
+  return (areas ?? []).filter(
+    (area): area is [number, number, number, number] =>
+      Array.isArray(area) && area.length === 4 && area.every((value) => Number.isFinite(value)),
+  );
+}
+
 @Injectable()
 export class CalendarEventService {
   private readonly aggregate: CtiAggregate<EventEntity, EventBaseEntity>;
@@ -2888,11 +2903,8 @@ export class CalendarEventService {
     // itself being genuinely located and appearing correctly in the explorer
     // (which resolves the same fallback client-side — see
     // MapView.getEntityCoordinates).
-    const needsLocationCoordinate =
-      options.hasLocation === true ||
-      (options.bbox != null &&
-        options.bbox.length === 4 &&
-        options.bbox.every((value) => Number.isFinite(value)));
+    const areas = validAreas(options.areas);
+    const needsLocationCoordinate = options.hasLocation === true || areas.length > 0;
 
     if (needsLocationCoordinate) {
       query = query.leftJoin(
@@ -2909,20 +2921,36 @@ export class CalendarEventService {
       );
     }
 
-    // "Where" (viewport): the event's coordinates fall inside the bounding box
-    // [minLon, minLat, maxLon, maxLat] (EPSG:4326). The geography column is cast
-    // to geometry so the planar ST_MakeEnvelope / ST_Within pair applies (and the
-    // functional GIST index on the cast can serve it). NULL coordinates are
-    // excluded by ST_Within, so this also implies located-only. Ignored unless
-    // exactly four finite numbers are supplied.
-    if (options.bbox && options.bbox.length === 4 && options.bbox.every((value) => Number.isFinite(value))) {
-      const [minLon, minLat, maxLon, maxLat] = options.bbox;
+    // "Where" (map areas): the event's coordinates fall inside ANY of the
+    // bounding boxes, each [minLon, minLat, maxLon, maxLat] (EPSG:4326) — a trip
+    // to London and Paris is two rectangles ORed, not one box over the Channel.
+    // The geography column is cast to geometry so the planar ST_MakeEnvelope /
+    // ST_Within pair applies (and the functional GIST index on the cast can
+    // serve it). NULL coordinates are excluded by ST_Within. An entry that is
+    // not four finite numbers is dropped. Applied below, ORed with the place
+    // names: the Where popover offers both, and "100 Duranzo Aisle + Map
+    // Areas (2)" means at that address OR inside a rectangle, so an event with
+    // only a named place still matches.
+    const whereClauses: string[] = [];
+    const whereParams: Record<string, unknown> = {};
 
-      query = query.andWhere(
-        'ST_Within(COALESCE(event.location_coordinates, location_entity.location_point)::geometry, ' +
-          'ST_MakeEnvelope(:minLon, :minLat, :maxLon, :maxLat, 4326))',
-        { minLon, minLat, maxLon, maxLat },
-      );
+    if (areas.length > 0) {
+      const clauses: string[] = [];
+
+      areas.forEach(([minLon, minLat, maxLon, maxLat], index) => {
+        clauses.push(
+          'ST_Within(COALESCE(event.location_coordinates, location_entity.location_point)::geometry, ' +
+            `ST_MakeEnvelope(:minLon${index}, :minLat${index}, :maxLon${index}, :maxLat${index}, 4326))`,
+        );
+        Object.assign(whereParams, {
+          [`minLon${index}`]: minLon,
+          [`minLat${index}`]: minLat,
+          [`maxLon${index}`]: maxLon,
+          [`maxLat${index}`]: maxLat,
+        });
+      });
+
+      whereClauses.push(`(${clauses.join(' OR ')})`);
     }
 
     // "Who": the event's participants/organizer resolve to a Person entity whose
@@ -2946,15 +2974,24 @@ export class CalendarEventService {
     // "Where" (by place): the event's Location entity (or denormalised
     // location_name) matches any of the given place patterns.
     if (options.places && options.places.length > 0) {
-      query = query.andWhere(
-        `(
+      whereClauses.push(`(
           event.location_entity_id IN (
             SELECT entity_id FROM ci.entities
             WHERE owner_user_id = :userId AND entity_type = 'Location' AND name ILIKE ANY(:placePatterns)
           )
           OR event.location_name ILIKE ANY(:placePatterns)
-        )`,
-        { userId: context.userId, placePatterns: options.places.map((name) => `%${name}%`) },
+        )`);
+      Object.assign(whereParams, {
+        userId: context.userId,
+        placePatterns: options.places.map((name) => `%${name}%`),
+      });
+    }
+
+    // One Where predicate: by name OR inside an area. Alone, each reads as before.
+    if (whereClauses.length > 0) {
+      query = query.andWhere(
+        whereClauses.length === 1 ? whereClauses[0] : `(${whereClauses.join(' OR ')})`,
+        whereParams,
       );
     }
 

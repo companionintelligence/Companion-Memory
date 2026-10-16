@@ -44,10 +44,11 @@ const explorerTypesParam = z
           .filter(Boolean),
   );
 
-// CSV of values for the LifeScope event-scoped dimensions (connectors / who /
-// where / how). Absent => undefined (dimension off); present => the trimmed,
-// non-empty values. Unlike `tags`, these are additive predicates, so an empty
-// list means "no constraint", not "match nothing".
+// CSV of values for the backend-vocabulary dimensions (connectors / how).
+// Absent => undefined (dimension off); present => the trimmed, non-empty
+// values. Unlike `tags`, these are additive predicates, so an empty list means
+// "no constraint", not "match nothing". Their values are the server's own
+// names, which never carry a comma.
 const csvListParam = z
   .string()
   .optional()
@@ -60,9 +61,24 @@ const csvListParam = z
           .filter(Boolean),
   );
 
-// `tags` is a comma-separated list of tag labels. Presence of the key (even
-// when empty) marks the filter as active, mirroring the explorer's "filter
-// active = present, even if empty" param contract.
+// One value per occurrence of the key (`?places=a&places=b`) for the free-text
+// dimensions (who / where / tags), as the explorer URL carries them: a place
+// is often a full street address ("4000 Ontario Center, Ontario, CA"), so a
+// comma inside a value is ordinary and nothing splits on it. Express hands a
+// repeated key over as an array and a single one as a string. Absent =>
+// undefined (dimension off); present => the trimmed, non-empty values.
+const listParam = z
+  .union([z.string(), z.array(z.string())])
+  .optional()
+  .transform((value) =>
+    value === undefined
+      ? undefined
+      : (Array.isArray(value) ? value : [value]).map((entry) => entry.trim()).filter(Boolean),
+  );
+
+// `tags` is a list of tag labels, one per occurrence of the key. Presence of
+// the key (even when empty) marks the filter as active, mirroring the
+// explorer's "filter active = present, even if empty" param contract.
 //
 // The remaining params mirror the explorer's Search dimensions so the graph
 // reflects the same filtered subset as List/Gallery/Map: `connectors` (data
@@ -71,10 +87,10 @@ const csvListParam = z
 // through the event timeline — exactly as the Search path treats them.
 const graphDataSchema = z.object({
   includeTypes: explorerTypesParam,
-  tags: z.string().optional(),
+  tags: listParam,
   connectors: csvListParam,
-  people: csvListParam,
-  places: csvListParam,
+  people: listParam,
+  places: listParam,
   eventTypes: csvListParam,
   hasLocation: z
     .string()
@@ -110,10 +126,10 @@ const graphSearchSchema = z.object({
   query: z.string().min(1),
   limit: z.coerce.number().int().positive().max(GRAPH_SEARCH_LIMIT).optional(),
   includeTypes: explorerTypesParam,
-  tags: z.string().optional(),
+  tags: listParam,
   connectors: csvListParam,
-  people: csvListParam,
-  places: csvListParam,
+  people: listParam,
+  places: listParam,
   eventTypes: csvListParam,
   hasLocation: z
     .string()
@@ -293,16 +309,11 @@ export class GraphController {
   private async resolveTagMatch(
     ctx: RequestContext,
     ownerId: string,
-    tagsParam: string | undefined,
+    labels: string[] | undefined,
   ): Promise<FilterMatch> {
-    if (tagsParam === undefined) {
+    if (labels === undefined) {
       return { active: false, entityIds: [] };
     }
-
-    const labels = tagsParam
-      .split(',')
-      .map((label) => label.trim())
-      .filter((label) => label.length > 0);
 
     if (labels.length === 0) {
       return { active: true, entityIds: [] };

@@ -9,11 +9,13 @@ import { excludedEntityTypesFor } from '@/components/SearchBox/useDropdown';
 import { gql } from '@/graphql';
 import type { GetSavedSearchQuery } from '@/graphql/graphql';
 
+import { AREAS_PARAM, asAreas, formatAreas, LEGACY_BBOX_PARAM } from './bbox';
 import {
   isRollingDatePreset,
   resolveDatePreset,
   type DatePreset,
 } from './Components/ExplorerToolbar/datePresets';
+import { LOADED_SEARCH_PARAM } from './Components/ExplorerToolbar/filterParams';
 
 export const GET_SAVED_SEARCH = gql(`
   query GetSavedSearch($id: ID!) {
@@ -39,6 +41,8 @@ export const GET_SAVED_SEARCH = gql(`
         direction
         fileKinds
         view
+        areas
+        bbox
       }
     }
   }
@@ -53,6 +57,13 @@ type ResolvedSavedSearch = NonNullable<GetSavedSearchQuery['savedSearch']>;
  * so both the `?saved_search=` deep-link resolver below and an in-page picker
  * (which needs to apply a search without a fresh mount to re-run that
  * resolver) can share one definition of what "load this search" means.
+ *
+ * The result also carries `?loaded_search=<id>` (see `LOADED_SEARCH_PARAM`):
+ * the one-shot `?saved_search=` trigger is consumed here, but the explorer
+ * still has to know which search it is showing so Save can offer to update
+ * it. The two are different params on purpose — the trigger re-applies the
+ * definition on every mount, which would wipe the person's edits each time
+ * they came back to the page; the marker only remembers.
  */
 export function applySavedSearchToParams(
   params: URLSearchParams,
@@ -80,9 +91,14 @@ export function applySavedSearchToParams(
     'semantic',
     'direction',
     'fileKinds',
+    AREAS_PARAM,
+    LEGACY_BBOX_PARAM,
+    LOADED_SEARCH_PARAM,
   ]) {
     next.delete(key);
   }
+
+  next.set(LOADED_SEARCH_PARAM, GlobalUID.parse('saved-search', savedSearch.id));
 
   if (query?.trim()) {
     next.set('search', query.trim());
@@ -103,9 +119,15 @@ export function applySavedSearchToParams(
 
   //Updating included entities is handled in SearchBox.tsx
 
-  if (tags?.length && tags.length > 0) {
-    next.set('tags', tags.join(','));
-  }
+  // The free-text lists go back one value per param occurrence, the way the
+  // pickers write them, so a saved street address survives the round trip.
+  const setList = (param: string, value?: readonly string[] | null) => {
+    for (const entry of value ?? []) {
+      next.append(param, entry);
+    }
+  };
+
+  setList('tags', tags);
 
   // Secondary dimensions (who / where / when / how / sort / semantic). The
   // `filters` keys mirror the explorer URL params 1:1 except for the date
@@ -120,8 +142,8 @@ export function applySavedSearchToParams(
     setCsv('eventTypes', filters.eventTypes);
     setCsv('connectors', filters.connectors);
     setCsv('fileKinds', filters.fileKinds);
-    setCsv('people', filters.people);
-    setCsv('places', filters.places);
+    setList('people', filters.people);
+    setList('places', filters.places);
 
     if (isRollingDatePreset(filters.datePreset)) {
       next.set('when', filters.datePreset);
@@ -150,6 +172,14 @@ export function applySavedSearchToParams(
       next.set('sortOrder', filters.sortOrder);
     }
 
+    // The saved rectangles go back into ?areas, the param the map's drawing
+    // tools write, so the map draws them and fits to them on load. A row from
+    // before the list existed carries one `bbox`; it becomes a one-entry list.
+    const areas = asAreas(filters.areas) ?? asAreas(filters.bbox ? [filters.bbox] : null);
+
+    // Only the row's own flag: the rectangles are ORed with the Where names
+    // on the server, so a search drawn with one is not located-only, and
+    // forcing the flag would drop its named-place matches without coordinates.
     if (filters.hasLocation) {
       next.set('hasLocation', '1');
     }
@@ -166,6 +196,10 @@ export function applySavedSearchToParams(
     // without one keeps the current view, so old searches stay as they were.
     if (filters.view) {
       next.set('view', filters.view);
+    }
+
+    if (areas) {
+      next.set(AREAS_PARAM, formatAreas(areas));
     }
   }
 

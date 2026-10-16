@@ -24,9 +24,26 @@ export interface DefaultSavedSearchSeed {
 
 const LAST_WEEK: SavedSearchFilters = { datePreset: 'last-week' };
 const LAST_MONTH: SavedSearchFilters = { datePreset: 'last-month' };
-// A Where search (`places` / `hasLocation`) opens on the map: `view: 'map'`.
+// A Where search (`places` / `hasLocation` / `areas`) opens on the map: `view: 'map'`.
 // That is where a place filter means something to look at; the list is a
 // column of rows that happen to share a location name.
+
+/**
+ * Starter map areas as `[minLon, minLat, maxLon, maxLat]`. A region is a
+ * rectangle, not a name: `places: ['New Zealand']` only matched events whose
+ * place NAME contained the words, so an evening in "Queenstown" was never a
+ * New Zealand trip. Deliberately generous — a starter should over-include
+ * the coast and the islands rather than clip them.
+ */
+const AREA = {
+  newZealand: [165.5, -47.5, 179.5, -33.5],
+  japan: [122.5, 24, 146.5, 46],
+  hawaii: [-161, 18.5, -154.5, 22.5],
+  asia: [26, -11, 180, 82],
+  africa: [-18, -35, 52, 38],
+  europe: [-25, 34, 45, 72],
+  americas: [-170, -56, -30, 72],
+} satisfies Record<string, [number, number, number, number]>;
 
 function seed(
   name: string,
@@ -155,7 +172,7 @@ const LIBRARY: Array<DefaultSavedSearchSeed & { name: string }> = [
   named('Sent Messages', { query: 'sent', entityTypes: ['communication'] }),
   named('Data To Erase', { query: 'delete' }),
   named('New Glasses', { query: 'glasses' }),
-  named('Asia Manufacturing', { query: 'manufacturing', filters: { places: ['Asia'], view: 'map' } }),
+  named('Asia Manufacturing', { query: 'manufacturing', filters: { areas: [AREA.asia], view: 'map' } }),
   named('Work Presentations', { query: 'presentation', entityTypes: ['file'] }),
   named('University Alumni', { query: 'alumni' }),
   named('Calls from Today', {
@@ -201,7 +218,7 @@ const LIBRARY: Array<DefaultSavedSearchSeed & { name: string }> = [
   named('Peace', { query: 'peace' }),
   named('Fishing Trips', { query: 'fishing', filters: { hasLocation: true, view: 'map' } }),
   named('Rainforests', { query: 'rainforest' }),
-  named('New Zealand Trip', { query: undefined, filters: { places: ['New Zealand'], view: 'map' } }),
+  named('New Zealand Trip', { query: undefined, filters: { areas: [AREA.newZealand], view: 'map' } }),
   named('Camping Spots', { query: 'camping', entityTypes: ['place'] }),
   named('Meditations', { query: 'meditation' }),
   named('Best Drinking Spots', { query: 'bar', entityTypes: ['place'] }),
@@ -209,8 +226,8 @@ const LIBRARY: Array<DefaultSavedSearchSeed & { name: string }> = [
   named('Magic Spells', { query: 'spell' }),
   named('Vue.js Notes', { query: 'vue', entityTypes: ['note'] }),
   named('Volleyball', { query: 'volleyball' }),
-  named('Hawaiian Volcano', { query: 'volcano', filters: { places: ['Hawaii'], view: 'map' } }),
-  named('Japan Trip', { query: undefined, filters: { places: ['Japan'], view: 'map' } }),
+  named('Hawaiian Volcano', { query: 'volcano', filters: { areas: [AREA.hawaii], view: 'map' } }),
+  named('Japan Trip', { query: undefined, filters: { areas: [AREA.japan], view: 'map' } }),
   named('Chemistry Notes', { query: 'chemistry', entityTypes: ['note'] }),
   named('Gay Pride Parade', { query: 'pride' }),
   named('Anonymous', { query: 'anonymous' }),
@@ -256,10 +273,10 @@ const LIBRARY: Array<DefaultSavedSearchSeed & { name: string }> = [
   named('Boat Trips', { query: 'boat' }),
   named('DnD Spells', { query: 'dnd spell' }),
   named('DnD Campaigns', { query: 'dnd' }),
-  named('Asia', { query: undefined, filters: { places: ['Asia'], view: 'map' } }),
-  named('Africa', { query: undefined, filters: { places: ['Africa'], view: 'map' } }),
-  named('Europe', { query: undefined, filters: { places: ['Europe'], view: 'map' } }),
-  named('Americas', { query: undefined, filters: { places: ['America'], view: 'map' } }),
+  named('Asia', { query: undefined, filters: { areas: [AREA.asia], view: 'map' } }),
+  named('Africa', { query: undefined, filters: { areas: [AREA.africa], view: 'map' } }),
+  named('Europe', { query: undefined, filters: { areas: [AREA.europe], view: 'map' } }),
+  named('Americas', { query: undefined, filters: { areas: [AREA.americas], view: 'map' } }),
   named('Gas Bills', { query: 'gas bill' }),
   named('Cleanups', { query: 'cleanup' }),
   named('Car Accidents', { query: 'accident' }),

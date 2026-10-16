@@ -112,6 +112,13 @@ export class SearchInput {
   @Field(() => [Float], { nullable: true })
   bbox?: number[];
 
+  /**
+   * "Where" (drawn areas) — several bounding boxes, each [minLon, minLat, maxLon, maxLat],
+   * ORed: an event matches inside any of them. `bbox` is read as one more area.
+   */
+  @Field(() => [[Float]], { nullable: true })
+  areas?: number[][];
+
   /** Force conceptual (embedding) ranking for the free-text query instead of the auto heuristic. */
   @Field(() => Boolean, { nullable: true })
   semantic?: boolean;

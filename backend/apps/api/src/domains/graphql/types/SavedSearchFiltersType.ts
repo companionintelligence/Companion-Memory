@@ -1,4 +1,4 @@
-import { Field, InputType, ObjectType } from '@nestjs/graphql';
+import { Field, Float, InputType, ObjectType } from '@nestjs/graphql';
 
 import type { SavedSearchFilters } from '@ci/domains/files';
 
@@ -54,6 +54,14 @@ export class SavedSearchFiltersType implements SavedSearchFilters {
   @Field(() => String, { nullable: true })
   view?: string;
 
+  /** The map areas the search is confined to, each `[minLon, minLat, maxLon, maxLat]`, ORed. */
+  @Field(() => [[Float]], { nullable: true })
+  areas?: number[][];
+
+  /** Legacy single area; read as a one-entry `areas`, never written by current clients. */
+  @Field(() => [Float], { nullable: true })
+  bbox?: number[];
+
   static toType(filters: SavedSearchFilters | null | undefined): SavedSearchFiltersType | null {
     if (filters == null) {
       return null;
@@ -74,6 +82,8 @@ export class SavedSearchFiltersType implements SavedSearchFilters {
       direction: filters.direction,
       fileKinds: filters.fileKinds,
       view: filters.view,
+      areas: filters.areas,
+      bbox: filters.bbox,
     };
   }
 }
@@ -123,4 +133,12 @@ export class SavedSearchFiltersInput implements SavedSearchFilters {
   /** The explorer view the search opens in; the map for a Where search. */
   @Field(() => String, { nullable: true })
   view?: string;
+
+  /** The map areas the search is confined to, each `[minLon, minLat, maxLon, maxLat]`, ORed. */
+  @Field(() => [[Float]], { nullable: true })
+  areas?: number[][];
+
+  /** Legacy single area; read as a one-entry `areas`, never written by current clients. */
+  @Field(() => [Float], { nullable: true })
+  bbox?: number[];
 }

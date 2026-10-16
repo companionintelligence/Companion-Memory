@@ -10,11 +10,13 @@ import { ErrorState } from '@/components/ErrorState';
 import { SavedSearchIcon } from '@/components/icons';
 import { InfiniteListFooter } from '@/components/InfiniteList';
 import { PageContent } from '@/components/layout';
+import { DropdownProvider } from '@/components/SearchBox/useDropdown';
 import { gql } from '@/graphql';
 import { type FragmentType, useFragment } from '@/graphql/fragment-masking';
 import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
 
 import { DeleteSavedSearchModal } from './DeleteSavedSearchModal';
+import { EditSavedSearchModal } from './EditSavedSearchModal';
 import { SavedSearchGridItemFragment, SavedSearch } from './SavedSearch';
 import { ShareSavedSearchModal } from './ShareSavedSearchModal';
 
@@ -73,6 +75,13 @@ export function SavedSearchesPage() {
 
   const [savedSearchToDelete, setSavedSearchToDelete] = useState<SavedSearchNode | null>(null);
   const [savedSearchToShare, setSavedSearchToShare] = useState<SavedSearchNode | null>(null);
+  const [savedSearchToEdit, setSavedSearchToEdit] = useState<SavedSearchNode | null>(null);
+
+  const openSavedSearchEditModal = (e: React.MouseEvent, savedSearch: SavedSearchNode) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSavedSearchToEdit(savedSearch);
+  };
 
   const openSavedSearchShareModal = (e: React.MouseEvent, savedSearch: SavedSearchNode) => {
     e.preventDefault();
@@ -242,6 +251,7 @@ export function SavedSearchesPage() {
           <SavedSearch
             key={savedSearch.id}
             savedSearch={savedSearch}
+            openSavedSearchEditModal={(e) => openSavedSearchEditModal(e, savedSearch)}
             openSavedSearchDeleteModal={(e) => openSavedSearchDeleteModal(e, savedSearch)}
             openSavedSearchShareModal={(e) => openSavedSearchShareModal(e, savedSearch)}
           />
@@ -277,6 +287,7 @@ export function SavedSearchesPage() {
             <SavedSearch
               key={savedSearch.id}
               savedSearch={savedSearch}
+              openSavedSearchEditModal={(e) => openSavedSearchEditModal(e, savedSearch)}
               openSavedSearchDeleteModal={(e) => openSavedSearchDeleteModal(e, savedSearch)}
               openSavedSearchShareModal={(e) => openSavedSearchShareModal(e, savedSearch)}
             />
@@ -341,6 +352,15 @@ export function SavedSearchesPage() {
 
       {savedSearchToShare && (
         <ShareSavedSearchModal savedSearch={savedSearchToShare} onClose={() => setSavedSearchToShare(null)} />
+      )}
+
+      {/* The editor's type picker runs on the same dropdown hook the explorer
+          uses; `changeSearchParams: false` keeps its selection out of THIS
+          page's URL, which has its own `q`. */}
+      {savedSearchToEdit && (
+        <DropdownProvider args={[{ changeSearchParams: false }]}>
+          <EditSavedSearchModal savedSearch={savedSearchToEdit} onClose={() => setSavedSearchToEdit(null)} />
+        </DropdownProvider>
       )}
     </>
   );

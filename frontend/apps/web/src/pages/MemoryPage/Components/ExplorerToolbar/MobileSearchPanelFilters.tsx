@@ -31,6 +31,7 @@ import { FileKindFilter } from '@/components/SearchBox/FileKindFilter';
 import { EntityNameFilter } from '@/components/SearchBox/NameFilter';
 import { SEARCH_PANEL_LAYER_PROPS } from '@/components/SearchBox/SearchBox';
 import { AVAILABLE_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
+import { mapAreasLabel, readAreasParam } from '@/pages/MemoryPage/bbox';
 
 import { DateControl, SaveSearchButton, SortControl, useFilterToggle } from './ExplorerToolbar';
 import { FILTER_PARAMS, eventsInPlay, peopleInPlay } from './filterParams';
@@ -100,6 +101,21 @@ function whoSummary(people: string[], direction: MessageDirection | null): Summa
   }
 
   return { ...named, summary: `${MESSAGE_DIRECTION_LABELS[direction]} ${named.summary}`, active: true };
+}
+
+/**
+ * "Anywhere", "1 selected", "Map Areas (2)", "1 selected + Map Areas (2)": the
+ * Where picker's names and the map's rectangles together, as the desktop
+ * trigger reads them. Names are counted, never spelled out: a street address
+ * does not fit a row.
+ */
+function whereSummary(places: string[], areaCount: number): Summary {
+  const named = places.length === 0 ? null : `${places.length} selected`;
+  const parts = [named, areaCount > 0 ? mapAreasLabel(areaCount) : null].filter(Boolean);
+
+  return parts.length === 0
+    ? { summary: 'Anywhere', active: false }
+    : { summary: parts.join(' + '), active: true };
 }
 
 // Focus the sheet itself on open, not its first field: Radix would otherwise
@@ -265,6 +281,7 @@ function FiltersSheet({ filterCount, onClearFilters }: { filterCount: number; on
   const showEventDimensions = eventsInPlay(searchParams, pathname);
   const showWho = peopleInPlay(searchParams, pathname);
   const direction = readMessageDirection(searchParams.get('direction'));
+  const areaCount = readAreasParam(searchParams)?.length ?? 0;
   // Sort isn't counted as a filter, but Clear all resets it with the rest.
   const anythingToClear = FILTER_PARAMS.some((param) => searchParams.has(param));
 
@@ -382,7 +399,7 @@ function FiltersSheet({ filterCount, onClearFilters }: { filterCount: number; on
                 kind="place"
                 modal
                 renderTrigger={(values) => (
-                  <FilterRow icon={MapPin} label="Where" {...listSummary(values, 'Anywhere')} />
+                  <FilterRow icon={MapPin} label="Where" {...whereSummary(values, areaCount)} />
                 )}
               />
             )}

@@ -17,6 +17,7 @@ import { useAuth } from '@/hooks';
 import { graphNodeChatContext } from '@/lib/agentChat';
 import { formatEnumLabel } from '@/lib/utils';
 import { Empty } from '@/pages/MemoryPage/Components';
+import { readListParam } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 import { useEntityService } from '@/pages/MemoryPage/useEntityService';
 
 import { ConnectionThreadDialog } from './ConnectionThreadDialog';
@@ -142,23 +143,28 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       .filter((type): type is string => Boolean(type));
   }, [includedEntityTypesParam, excludedEntityTypesParam]);
 
-  // Explorer's `tags` URL param (comma-separated labels). Present (even empty)
-  // means the tag filter is active; absent leaves the graph unfiltered.
-  const rawTags = searchParams?.get('tags');
-  const tagsParam = rawTags ?? undefined;
+  // Explorer's `tags` URL param (one label per occurrence). Present (even
+  // empty) means the tag filter is active; absent leaves the graph unfiltered.
+  const tagsKey = searchParams?.has('tags') ? JSON.stringify(readListParam(searchParams, 'tags')) : undefined;
+  const tagsParam = useMemo(
+    () => (tagsKey === undefined ? undefined : (JSON.parse(tagsKey) as string[])),
+    [tagsKey],
+  );
 
   // Event-scoped LifeScope dimensions, shared via URL with List/Gallery/Map.
+  // Who / Where carry one value per param occurrence (a place can be a full
+  // street address); the keys are JSON so a comma in a name cannot alias two lists.
   const connectorsParam = searchParams?.get('connectors') ?? '';
-  const peopleParamRaw = searchParams?.get('people') ?? '';
-  const placesParamRaw = searchParams?.get('places') ?? '';
+  const peopleKey = JSON.stringify(searchParams ? readListParam(searchParams, 'people') : []);
+  const placesKey = JSON.stringify(searchParams ? readListParam(searchParams, 'places') : []);
   const eventTypesParamRaw = searchParams?.get('eventTypes') ?? '';
   const hasLocationParam = searchParams?.get('hasLocation') === '1';
   const dateFromParam = searchParams?.get('from') || undefined;
   const dateToParam = searchParams?.get('to') || undefined;
 
   const explorerConnectors = useMemo(() => connectorsParam.split(',').filter(Boolean), [connectorsParam]);
-  const explorerPeople = useMemo(() => peopleParamRaw.split(',').filter(Boolean), [peopleParamRaw]);
-  const explorerPlaces = useMemo(() => placesParamRaw.split(',').filter(Boolean), [placesParamRaw]);
+  const explorerPeople = useMemo(() => JSON.parse(peopleKey) as string[], [peopleKey]);
+  const explorerPlaces = useMemo(() => JSON.parse(placesKey) as string[], [placesKey]);
   const explorerEventTypes = useMemo(
     () => eventTypesParamRaw.split(',').filter(Boolean),
     [eventTypesParamRaw],
@@ -399,19 +405,25 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
         }
 
         if (tagsParam !== undefined) {
-          params.set('tags', tagsParam);
+          if (tagsParam.length === 0) {
+            params.set('tags', '');
+          }
+
+          for (const tag of tagsParam) {
+            params.append('tags', tag);
+          }
         }
 
         if (explorerConnectors.length > 0) {
           params.set('connectors', explorerConnectors.join(','));
         }
 
-        if (explorerPeople.length > 0) {
-          params.set('people', explorerPeople.join(','));
+        for (const person of explorerPeople) {
+          params.append('people', person);
         }
 
-        if (explorerPlaces.length > 0) {
-          params.set('places', explorerPlaces.join(','));
+        for (const place of explorerPlaces) {
+          params.append('places', place);
         }
 
         if (explorerEventTypes.length > 0) {

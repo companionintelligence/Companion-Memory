@@ -4,6 +4,16 @@ import { EVENTS_EXPLORER_TYPES, isEventsExplorer } from '@/pages/MemoryPage/expl
 
 import { isRollingDatePreset } from './datePresets';
 
+/**
+ * The saved search the explorer's filters were loaded from (its raw id), set by
+ * `applySavedSearchToParams` and read by the Save dialog so it can offer
+ * "Update <name>" instead of only "save another one". Not a filter: it says
+ * where the filters came from. It is swept with them, because clearing every
+ * filter is starting over, and it rides along with them when the header
+ * search box carries the filter set into a new query.
+ */
+export const LOADED_SEARCH_PARAM = 'loaded_search';
+
 // Every URL param the explorer toolbar can set. The full-reset affordances —
 // the header search box's X and the drop area's `Clear all` — remove all of
 // them; `countActiveFilters` powers the "N filters" indicators. `search` is
@@ -24,8 +34,11 @@ export const FILTER_PARAMS = [
   'places',
   'hasLocation',
   'semantic',
+  'areas',
+  // The single-rectangle predecessor of `areas`; old links still carry it.
   'bbox',
   'direction',
+  LOADED_SEARCH_PARAM,
 ] as const;
 
 /**
@@ -273,6 +286,32 @@ export function writeCsvFilterParam(params: URLSearchParams, key: string, next: 
 }
 
 /**
+ * The free-text list dimensions — Who (`people`), Where (`places`) and `tags`
+ * — carry one value per occurrence of their param: `?places=a&places=b`.
+ * A value is a name the person typed or picked, and a place is often a full
+ * street address ("4000 Ontario Center, Ontario, CA, 91764"), so a comma
+ * inside it is ordinary and nothing splits on it. The CSV helpers above stay
+ * for the backend-vocabulary lists (`connectors` / `eventTypes` /
+ * `fileKinds`), whose values are the server's own names.
+ *
+ * A link from before this change, `?people=a,b`, now reads as the one name
+ * "a,b"; a single value reads the same either way.
+ */
+export const LIST_PARAMS = ['people', 'places', 'tags'] as const;
+
+export function readListParam(params: URLSearchParams, key: string): string[] {
+  return params.getAll(key).map(normalizeFilterValue).filter(Boolean);
+}
+
+export function writeListParam(params: URLSearchParams, key: string, next: string[]) {
+  params.delete(key);
+
+  for (const value of next.map(normalizeFilterValue).filter(Boolean)) {
+    params.append(key, value);
+  }
+}
+
+/**
  * Validation for the exact-match list dimensions (How / Activity): a value is
  * one of the backend's own names, so only the CSV framing can go wrong.
  */
@@ -297,10 +336,6 @@ function validatePersonFilterValue(value: string): string | null {
     return 'Enter a name first.';
   }
 
-  if (normalized.includes(',')) {
-    return 'Names cannot include commas.';
-  }
-
   if (normalized.length < 2) {
     return 'Use at least 2 characters.';
   }
@@ -319,10 +354,6 @@ function validateTagFilterValue(value: string): string | null {
     return 'Drop a tag first.';
   }
 
-  if (normalized.includes(',')) {
-    return 'Tags cannot include commas.';
-  }
-
   if (normalized.length > 80) {
     return 'Keep tags under 80 characters.';
   }
@@ -335,10 +366,6 @@ function validatePlaceFilterValue(value: string): string | null {
 
   if (!normalized) {
     return 'Search for a place first.';
-  }
-
-  if (normalized.includes(',')) {
-    return 'Place filters cannot include commas.';
   }
 
   if (normalized.length < 2) {
@@ -383,26 +410,26 @@ export function addEntityFilter(
   // Tag labels are canonically lowercase (the backend lowercases on create).
   const normalized =
     kind === 'tag' ? normalizeFilterValue(rawName).toLocaleLowerCase() : normalizeFilterValue(rawName);
-  const current = readCsvParam(params, param);
+  const current = readListParam(params, param);
 
   if (current.some((value) => filterValueKey(value) === filterValueKey(normalized))) {
     return `${normalized} is already selected.`;
   }
 
-  writeCsvFilterParam(params, param, [...current, normalized]);
+  writeListParam(params, param, [...current, normalized]);
 
   return null;
 }
 
-/** Remove one entity filter value from its CSV param (no-op when absent). */
+/** Remove one entity filter value from its list param (no-op when absent). */
 export function removeEntityFilter(params: URLSearchParams, kind: FilterDragKind, name: string) {
   const { param } = ENTITY_FILTER_KINDS[kind];
   const key = filterValueKey(name);
 
-  writeCsvFilterParam(
+  writeListParam(
     params,
     param,
-    readCsvParam(params, param).filter((value) => filterValueKey(value) !== key),
+    readListParam(params, param).filter((value) => filterValueKey(value) !== key),
   );
 }
 
@@ -414,8 +441,12 @@ export function countActiveFilters(params: URLSearchParams): number {
     count += 1;
   }
 
-  for (const key of ['connectors', 'eventTypes', 'people', 'places', 'tags']) {
-    count += params.get(key)?.split(',').filter(Boolean).length ?? 0;
+  for (const key of ['connectors', 'eventTypes']) {
+    count += readCsvParam(params, key).length;
+  }
+
+  for (const key of LIST_PARAMS) {
+    count += readListParam(params, key).length;
   }
 
   if (params.get('from') || params.get('to')) {
@@ -434,7 +465,8 @@ export function countActiveFilters(params: URLSearchParams): number {
     count += 1;
   }
 
-  if (params.get('bbox')) {
+  // One dimension however many rectangles it holds: they are one Where.
+  if (params.get('areas') || params.get('bbox')) {
     count += 1;
   }
 

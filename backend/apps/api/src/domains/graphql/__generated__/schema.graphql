@@ -3364,6 +3364,8 @@ type SavedSearchEdge implements Edge {
 }
 
 input SavedSearchFiltersInput {
+  areas: [[Float!]!]
+  bbox: [Float!]
   connectors: [String!]
   datePreset: String
   direction: String
@@ -3381,6 +3383,8 @@ input SavedSearchFiltersInput {
 }
 
 type SavedSearchFiltersType {
+  areas: [[Float!]!]
+  bbox: [Float!]
   connectors: [String!]
   datePreset: String
   direction: String
@@ -3455,6 +3459,7 @@ type ScheduleTaskPayload {
 
 input SearchInput {
   after: String
+  areas: [[Float!]!]
   bbox: [Float!]
   connectors: [String!]
   direction: String

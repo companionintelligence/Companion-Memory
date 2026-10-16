@@ -5,12 +5,17 @@ import { Activity, Database, MapPin, Users } from '@ci/shadcn/icons';
 
 import { DirectionToggle, readMessageDirection } from '@/components/SearchBox/DirectionToggle';
 import { FilterValuePicker } from '@/components/SearchBox/FilterValuePicker';
+import { MapAreaList } from '@/components/SearchBox/MapAreaList';
 import { noNameSuggestions, type NameSuggestionHook } from '@/components/SearchBox/useNameSuggestions';
 import { filterValueLabel, sourceFilterLabel } from '@/lib/sourceNames';
+import { mapAreasLabel } from '@/pages/MemoryPage/bbox';
 
 import {
   addListValue,
   applySortPreset,
+  clearWhere,
+  editableAreas,
+  removeArea,
   removeListValue,
   SAVED_SEARCH_SORT_PRESETS,
   sortPresetOf,
@@ -54,6 +59,7 @@ function NamePatternField({
   searchPlaceholder,
   emptyText,
   footer,
+  extraSummary,
   field,
 }: {
   label: string;
@@ -62,6 +68,7 @@ function NamePatternField({
   searchPlaceholder: string;
   emptyText: string;
   footer?: ReactNode;
+  extraSummary?: string;
   field: ListFieldHandlers;
 }) {
   const [open, setOpen] = useState(false);
@@ -72,6 +79,7 @@ function NamePatternField({
     <FilterValuePicker
       variant="field"
       label={label}
+      extraSummary={extraSummary}
       icon={icon}
       options={names}
       loading={loading}
@@ -156,6 +164,8 @@ function toDateInput(iso?: string | null): string {
  * passed `value` and reports changes — so it stories and unit-tests cleanly.
  */
 export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: Props) {
+  const areas = editableAreas(value);
+
   const listField = (field: ListField): ListFieldHandlers => ({
     values: value[field] ?? [],
     onAdd: (raw: string) => {
@@ -165,7 +175,10 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
         return 'Enter a value first.';
       }
 
-      if (trimmed.includes(',')) {
+      // How / sources travel in the explorer URL as CSV, so a comma would
+      // split them; Who / Where are free text (a place is often a street
+      // address) and travel one value per param, so a comma is ordinary.
+      if (trimmed.includes(',') && (field === 'eventTypes' || field === 'connectors')) {
         return 'Values cannot include commas.';
       }
 
@@ -211,7 +224,16 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
         useSuggestions={vocabulary.usePlaceSuggestions ?? noNameSuggestions}
         searchPlaceholder="Search places…"
         emptyText="No places match"
-        field={listField('places')}
+        // The rectangles the search was drawn with, ORed with the names. New
+        // ones can only be drawn on the map; here each can be read and
+        // removed, so an edit never strips them by accident. Clear takes both.
+        extraSummary={areas.length > 0 ? mapAreasLabel(areas.length) : undefined}
+        footer={
+          areas.length > 0 ? (
+            <MapAreaList areas={areas} onRemove={(index) => onChange(removeArea(value, index))} />
+          ) : undefined
+        }
+        field={{ ...listField('places'), onClear: () => onChange(clearWhere(value)) }}
       />
       <ExactValueField
         label="How"
@@ -234,11 +256,16 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
         field={listField('eventTypes')}
       />
 
-      <div className="grid grid-cols-2 gap-3">
+      {/* One date per row, each sized to its content: side by side, the
+          modal's width on a phone left each field too narrow for its calendar
+          button, which was cropped away; stretched to the full row, the
+          button sat at the far right with a blank stretch before it. */}
+      <div className="space-y-3">
         <div className="space-y-1.5">
           <Label htmlFor="filters-from">From</Label>
           <Input
             id="filters-from"
+            className="w-auto"
             type="date"
             value={toDateInput(value.startTime)}
             onChange={(event) => setDate('startTime', event.target.value)}
@@ -248,6 +275,7 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
           <Label htmlFor="filters-to">To</Label>
           <Input
             id="filters-to"
+            className="w-auto"
             type="date"
             value={toDateInput(value.endTime)}
             onChange={(event) => setDate('endTime', event.target.value)}
@@ -274,7 +302,7 @@ export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: P
         </Select>
       </div>
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <Label htmlFor="filters-located">Located only</Label>
         <Switch
           id="filters-located"

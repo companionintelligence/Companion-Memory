@@ -30,6 +30,7 @@
     "@ci/editor": "workspace:*",
     "@ci/shadcn": "workspace:*",
     "@companionintelligence/tokens": "^1.0.0",
+    "@geoman-io/leaflet-geoman-free": "2.20.2",
     "@journeyapps/wa-sqlite": "^1.5.0",
     "@knight-lab/timelinejs": "^3.9.13",
     "@powersync/capacitor": "^0.5.2",

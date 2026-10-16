@@ -24,6 +24,20 @@ import { filterValueKey } from '@/pages/MemoryPage/Components/ExplorerToolbar/fi
 export interface FilterValuePickerProps {
   /** Dimension name: the trigger reads "{label}: all" / "{label}: 2 selected". */
   label: string;
+  /**
+   * A selection the dimension carries besides `values`, in words — the Where
+   * picker's map rectangles, "Map Areas (2)". The toolbar trigger then reads
+   * "Where: Map Areas (2)", "Where: Paris + Map Areas (2)" or "Where: 2
+   * selected + Map Areas (2)", and Clear is offered (it is the caller's
+   * `onClear` that must take the extra selection with it).
+   */
+  extraSummary?: string;
+  /**
+   * The toolbar trigger counts the values ("1 selected") instead of naming a
+   * single one. Where sets it: a street address is too long for the trigger,
+   * most of all on a phone.
+   */
+  countValues?: boolean;
   icon?: ComponentType<{ className?: string }>;
   values: string[];
   /** Commit one value; return an error message to show, or null on success. */
@@ -86,6 +100,8 @@ function includesValue(values: string[], value: string): boolean {
 
 export function FilterValuePicker({
   label,
+  extraSummary,
+  countValues = false,
   icon: Icon,
   values,
   onAdd,
@@ -200,15 +216,18 @@ export function FilterValuePicker({
   const isUnknown = (value: string) => optionsKnown && !includesValue(options, value);
 
   const triggerText = () => {
-    if (values.length === 0) {
+    const named =
+      values.length === 0
+        ? null
+        : values.length === 1 && !countValues
+          ? display(values[0])
+          : `${values.length} selected`;
+
+    if (named == null && !extraSummary) {
       return `${label}: all`;
     }
 
-    if (values.length === 1) {
-      return `${label}: ${display(values[0])}`;
-    }
-
-    return `${label}: ${values.length} selected`;
+    return `${label}: ${[named, extraSummary].filter(Boolean).join(' + ')}`;
   };
 
   const panel = (
@@ -223,7 +242,7 @@ export function FilterValuePicker({
             onClear();
             setError(null);
           }}
-          disabled={values.length === 0}
+          disabled={values.length === 0 && !extraSummary}
           className="h-7 px-2 text-xs text-muted-foreground"
         >
           Clear

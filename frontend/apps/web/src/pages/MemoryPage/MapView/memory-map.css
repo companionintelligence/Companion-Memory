@@ -120,3 +120,24 @@
 .leaflet-control-container {
   z-index: 1 !important;
 }
+
+/* The remove handle on an editable searched area (AreaLayer): a small round
+   button at the rectangle's top-right corner, above geoman's corner handle. */
+.memory-map-area-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  background-color: var(--card);
+  color: var(--card-foreground);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 25%);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.memory-map-area-remove:hover {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}

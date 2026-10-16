@@ -10,15 +10,9 @@ import {
 
 import { useQuery } from '@apollo/client';
 import { Button, cn } from '@ci/shadcn';
-import { Calendar, Clock, Loader2, MapPin, Search as SearchIcon, X } from '@ci/shadcn/icons';
+import { Calendar, Clock, Loader2, MapPin, Pencil, Search as SearchIcon, Square, X } from '@ci/shadcn/icons';
 import L, { type LatLngExpression } from 'leaflet';
-import {
-  Marker as LeafletMarker,
-  Popup,
-  Rectangle,
-  useMap as useLeafletMap,
-  useMapEvents,
-} from 'react-leaflet';
+import { Marker as LeafletMarker, Popup, useMap as useLeafletMap, useMapEvents } from 'react-leaflet';
 import { useSearchParams } from 'react-router-dom';
 
 import { ChatAbout, ChatAboutSheet } from '@/components/ChatWithAgent';
@@ -32,7 +26,7 @@ import { type DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { entityToAgentChatContext } from '@/lib/entityToAgentChatContext';
 
 import { useEntityService, type EntityItem } from '../../MemoryPage/useEntityService';
-import { boundsToBbox, bboxCenter, formatBbox, parseBbox } from '../bbox';
+import { boundsToBbox, unionBbox, type Bbox } from '../bbox';
 import { Empty, ErrorState, formatEventTimeRange, INGEST_TIME_SOURCE } from '../Components';
 import { EVENT_FRAGMENT } from '../Components/EntityCard/EventCard';
 import { countActiveFilters } from '../Components/ExplorerToolbar/filterParams';
@@ -49,6 +43,7 @@ import {
 } from '../Playback';
 import { TimelineView } from '../TimelineView';
 
+import { AreaLayer, useSearchAreas, type AreaMode } from './AreaLayer';
 import { clusterDiameterPx, mergeCollidingClusters, type PixelCluster } from './clusterOverlap';
 import { LocationAlwaysBanner } from './LocationAlwaysBanner';
 import { readCoordinates, readGeoJsonPoint } from './mapCoordinates';
@@ -89,9 +84,9 @@ function markerVariant(entity: EntityItem): MarkerVariant {
  * fetched when the user opens it.
  */
 const MAP_PINS_QUERY = gql(`
-  query MapPins($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $connectors: [String!], $people: [String!], $places: [String!], $bbox: [Float!], $semantic: Boolean) {
+  query MapPins($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $connectors: [String!], $people: [String!], $places: [String!], $areas: [[Float!]!], $semantic: Boolean) {
     mapPins(
-      input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, connectors: $connectors, people: $people, places: $places, bbox: $bbox, semantic: $semantic }
+      input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, connectors: $connectors, people: $people, places: $places, areas: $areas, semantic: $semantic }
     ) {
       totalCount
       truncated
@@ -229,7 +224,7 @@ function useMapPins({ skip }: { skip: boolean }) {
     connectors,
     people,
     places,
-    bbox,
+    areas,
     semantic,
   } = searchVariables;
 
@@ -245,7 +240,7 @@ function useMapPins({ skip }: { skip: boolean }) {
       connectors,
       people,
       places,
-      bbox,
+      areas,
       semantic,
     },
     fetchPolicy: 'cache-and-network',
@@ -284,10 +279,10 @@ function useMapPins({ skip }: { skip: boolean }) {
 
   return {
     pins,
-    // The "Search events in this area" box this set was fetched with, or null.
-    // Read beside `data`, which Apollo only hands back for the CURRENT
-    // variables, so the two never disagree.
-    area: data != null && Array.isArray(bbox) ? bbox : null,
+    // The map areas this set was fetched with, or null. Read beside `data`,
+    // which Apollo only hands back for the CURRENT variables, so the two
+    // never disagree.
+    areas: data != null && Array.isArray(areas) ? areas : null,
     loading,
     error: error != null,
     refetch: refetchPins,
@@ -692,17 +687,29 @@ function ClusteredMarkers({
   );
 }
 
-// ── "Search events in this area" viewport filter ─────────────────────────────
-// Writes the current Leaflet viewport to the `?bbox` URL param, which flows
-// through MemoryPage into the Search query (server-side ST_Within filter). The
-// server applies bbox through its event filter, so — like the map's
-// hasLocation:true scope (useMapHasLocationScope) — it narrows to events within
-// the box; the control is labelled "Search events in this area" to make that
-// scope explicit rather than silently dropping non-event pins.
-// Panning fully away from the searched area drops the filter again.
-function SearchAreaControl({ compact = false }: { compact?: boolean } = {}) {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const activeBbox = parseBbox(searchParams.get('bbox'));
+// ── The searched areas: the top-bar buttons ─────────────────────────────────
+// Every button writes the `?areas` URL param (AreaLayer.useSearchAreas), which
+// flows through MemoryPage into the Search and MapPins queries as a server-side
+// ST_Within filter, ORed across rectangles. The server applies it through its
+// event filter, so — like the map's hasLocation:true scope — it narrows to
+// events inside the boxes; the quick button is labelled "Search events in this
+// area" to make that scope explicit rather than silently dropping other pins.
+//
+// Three ways in: the quick button takes the viewport as THE area (replacing
+// whatever was drawn — it is the one-shot path; the drawn boxes are the
+// deliberate one), "Draw area" turns on the rectangle tool, "Edit areas" turns
+// on move / resize / remove handles. The areas stay until "Clear areas" —
+// panning away never drops them, so a person can look around and come back.
+function SearchAreaControl({
+  compact = false,
+  mode,
+  onModeChange,
+}: {
+  compact?: boolean;
+  mode: AreaMode;
+  onModeChange: (mode: AreaMode) => void;
+}) {
+  const [areas, setAreas] = useSearchAreas();
   const [movedSinceSearch, setMovedSinceSearch] = useState(false);
   const map = useLeafletMap();
   // Read imperatively, never subscribed to: this control must know whether a
@@ -710,46 +717,46 @@ function SearchAreaControl({ compact = false }: { compact?: boolean } = {}) {
   // the playhead would re-render it on every frame.
   const playback = useOptionalPlayback();
 
-  const setBbox = useCallback(
-    (value: string | null) => {
-      setSearchParams(
-        (params) => {
-          if (value) {
-            params.set('bbox', value);
-          } else {
-            params.delete('bbox');
-          }
-
-          return params;
-        },
-        { replace: true },
-      );
-      setMovedSinceSearch(false);
-    },
-    [setSearchParams],
-  );
-
-  // react-leaflet rebinds these handlers every render, so the closure always sees
-  // the current activeBbox. On each pan/zoom: flag that the view moved, and if the
-  // searched area's centre has scrolled out of view, drop the filter.
+  // On each pan/zoom, flag that the view moved so the quick button comes back.
   useMapEvents({
     moveend: () => {
-      // A fly-through drives the camera across the whole world; letting it
-      // count as "the user panned away" would silently drop their area filter
-      // and re-run the search underneath them mid-playback.
+      // A fly-through drives the camera across the whole world; that is not
+      // the person looking for a new area to search.
       if (playback?.store.getState().status === 'playing') {
         return;
       }
 
       setMovedSinceSearch(true);
-
-      if (activeBbox && !map.getBounds().contains(L.latLng(bboxCenter(activeBbox)))) {
-        setBbox(null);
-      }
     },
   });
 
-  const showSearch = !activeBbox || movedSinceSearch;
+  // Escape leaves whichever tool is on, the way it closes a popover.
+  useEffect(() => {
+    if (mode == null) {
+      return;
+    }
+
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onModeChange(null);
+      }
+    };
+
+    document.addEventListener('keydown', handleKey);
+
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [mode, onModeChange]);
+
+  const hasAreas = areas.length > 0;
+  const showSearch = !hasAreas || movedSinceSearch;
+  const buttonClass = cn(
+    'border-border bg-card text-foreground shadow-md transition-colors duration-150 hover:bg-accent hover:text-accent-foreground dark:border-border dark:bg-card dark:hover:bg-accent',
+    compact && 'h-9 px-3 text-xs',
+  );
+  // A tool that is on wears the primary surface, the same green as Save, so
+  // the map says which mode it is in without a legend.
+  const activeClass = cn('shadow-md', compact && 'h-9 px-3 text-xs');
+  const toggle = (next: AreaMode) => onModeChange(mode === next ? null : next);
 
   return (
     <>
@@ -758,74 +765,66 @@ function SearchAreaControl({ compact = false }: { compact?: boolean } = {}) {
           variant="outline"
           size="sm"
           aria-label={compact ? 'Search events in this map area' : undefined}
-          onClick={() => setBbox(formatBbox(boundsToBbox(map.getBounds())))}
-          className={cn(
-            'border-border bg-card text-foreground shadow-md transition-colors duration-150 hover:bg-accent hover:text-accent-foreground dark:border-border dark:bg-card dark:hover:bg-accent',
-            compact && 'h-9 max-w-full px-3 text-xs',
-          )}
+          onClick={() => {
+            setAreas([boundsToBbox(map.getBounds())]);
+            setMovedSinceSearch(false);
+            onModeChange(null);
+          }}
+          className={cn(buttonClass, compact && 'max-w-full')}
         >
           <SearchIcon className="mr-1 h-4 w-4 shrink-0" />
           {compact ? 'Search this area' : 'Search events in this area'}
         </Button>
       )}
 
-      {activeBbox && (
+      <Button
+        variant={mode === 'draw' ? 'default' : 'outline'}
+        size="sm"
+        aria-pressed={mode === 'draw'}
+        onClick={() => toggle('draw')}
+        className={mode === 'draw' ? activeClass : buttonClass}
+      >
+        <Square className="mr-1 h-4 w-4 shrink-0" />
+        {compact ? 'Draw' : 'Draw area'}
+      </Button>
+
+      {hasAreas && (
+        <Button
+          variant={mode === 'edit' ? 'default' : 'outline'}
+          size="sm"
+          aria-pressed={mode === 'edit'}
+          onClick={() => toggle('edit')}
+          className={mode === 'edit' ? activeClass : buttonClass}
+        >
+          <Pencil className="mr-1 h-4 w-4 shrink-0" />
+          {compact ? 'Edit' : 'Edit areas'}
+        </Button>
+      )}
+
+      {hasAreas && (
         <Button
           size="sm"
           variant="outline"
-          onClick={() => setBbox(null)}
-          className={cn(
-            'border-border bg-card text-foreground shadow-md transition-colors duration-150 hover:bg-accent hover:text-accent-foreground dark:border-border dark:bg-card dark:hover:bg-accent',
-            compact && 'h-9 px-3 text-xs',
-          )}
+          onClick={() => {
+            setAreas([]);
+            setMovedSinceSearch(false);
+            onModeChange(null);
+          }}
+          className={buttonClass}
         >
           <X className="mr-1 h-4 w-4 shrink-0" />
-          {compact ? 'Clear' : 'Clear area'}
+          {compact ? 'Clear' : areas.length === 1 ? 'Clear area' : 'Clear areas'}
         </Button>
       )}
     </>
   );
 }
 
-/**
- * The searched area, drawn on the map while the `?bbox` filter is set.
- *
- * The box is the viewport at the moment of the click, so right then it hugs
- * the edges and is barely visible; it earns its keep once the person zooms out
- * or pans, which is when "where was the area I searched?" has no other answer.
- * Driven by the URL param alone, so it leaves the map exactly when the filter
- * does: Clear area, or the pan-away in SearchAreaControl.
- *
- * `interactive: false`: an outline that caught clicks would shadow the pins
- * and the map under it, and `bubblingMouseEvents` only matters for a shape
- * that listens in the first place.
- */
-function SearchAreaOutline() {
-  const [searchParams] = useSearchParams();
-  const bbox = parseBbox(searchParams.get('bbox'));
+/** The signed-in map's rectangles: read from and written to the URL, with the active tool applied. */
+function OwnedAreaLayer({ mode, onModeChange }: { mode: AreaMode; onModeChange: (mode: AreaMode) => void }) {
+  const [areas, setAreas] = useSearchAreas();
 
-  if (!bbox) {
-    return null;
-  }
-
-  const [minLon, minLat, maxLon, maxLat] = bbox;
-
-  return (
-    <Rectangle
-      bounds={[
-        [minLat, minLon],
-        [maxLat, maxLon],
-      ]}
-      pathOptions={{
-        color: 'rgb(21, 93, 252)',
-        weight: 2,
-        opacity: 0.8,
-        dashArray: '8, 6',
-        fill: false,
-        interactive: false,
-      }}
-    />
-  );
+  return <AreaLayer areas={areas} mode={mode} onChange={setAreas} onModeChange={onModeChange} />;
 }
 
 // ── The top bar: every control along the map's top edge ─────────────────────
@@ -1020,47 +1019,64 @@ function MapStatusOverlay({
  */
 function FitBoundsToPins({
   pins,
-  area,
+  areas,
   skip = false,
 }: {
   pins: Pin[];
-  /** The "Search events in this area" box `pins` were fetched with, or null — see `fitActionFor`. */
-  area: number[] | null;
+  /** The map areas `pins` were fetched with, or null — see `fitActionFor`. Framed as one: their union. */
+  areas: readonly Bbox[] | null;
   skip?: boolean;
 }) {
   const map = useLeafletMap();
   const fittedSignature = useRef<string | null>(null);
   const lastAreaBound = useRef(false);
+  const lastAreaKey = useRef<string | null>(null);
   const signature = fitSignature(pins);
-  const areaBound = area != null;
+  const areaBound = areas != null && areas.length > 0;
+  const areaKey = areaBound ? areas.map((area) => area.join(',')).join(';') : null;
 
   useEffect(() => {
-    if (skip || signature === '') {
+    if (skip) {
       return;
     }
+
+    const union = areaBound ? unionBbox(areas) : undefined;
+    const areaBounds = union != null ? L.latLngBounds([union[1], union[0]], [union[3], union[2]]) : null;
+    // "In view" is ANY rectangle touching the viewport, not the union inside
+    // it: a box just drawn or just resized is on screen by construction even
+    // while its siblings are off it, and framing the union then would zoom
+    // the person out of the box they were working on. A saved search that
+    // arrives from elsewhere has none of its boxes on screen, so it frames.
+    const viewport = map.getBounds().pad(0.05);
+    const areaInView =
+      areaBound &&
+      areas.some(([minLon, minLat, maxLon, maxLat]) =>
+        viewport.intersects(L.latLngBounds([minLat, minLon], [maxLat, maxLon])),
+      );
 
     const action = fitActionFor({
       signature,
       fitted: fittedSignature.current,
       areaBound,
       previousAreaBound: lastAreaBound.current,
+      areaChanged: areaKey !== lastAreaKey.current,
+      areaInView,
     });
 
     if (action === 'pins') {
       const points = pins.map((pin) => [pin.coords.lat, pin.coords.lng] as [number, number]);
 
       map.fitBounds(L.latLngBounds(points), { padding: [60, 60], maxZoom: 13 });
-    } else if (action === 'area' && area != null) {
-      const [minLon, minLat, maxLon, maxLat] = area;
-
-      map.fitBounds(L.latLngBounds([minLat, minLon], [maxLat, maxLon]));
+    } else if (action === 'area' && areaBounds != null) {
+      map.fitBounds(areaBounds);
     }
 
-    // Adopted even when nothing moved: this set is now the one the viewport
-    // answers for, so only a DIFFERENT set can move it later.
+    // Adopted even when nothing moved: this set (and this area) is now the one
+    // the viewport answers for, so only a DIFFERENT one can move it later.
     fittedSignature.current = signature;
     lastAreaBound.current = areaBound;
-  }, [skip, signature, pins, area, areaBound, map]);
+    lastAreaKey.current = areaKey;
+  }, [skip, signature, pins, areas, areaBound, areaKey, map]);
 
   return null;
 }
@@ -1187,7 +1203,7 @@ function MapTimelineConnector({
  * only `search` can resolve them, so it keeps the feed-derived pins (and their
  * paging control). The signed-in map reads `mapPins`.
  */
-function useMapView(readOnly: boolean) {
+function useMapView(readOnly: boolean, sharedAreas: readonly Bbox[] | null = null) {
   const [{ hasNextPage, loadingMore, loadMore }, { setActiveEntity }] = useEntityService();
   const feed = useFeedPins();
   const owned = useMapPins({ skip: readOnly });
@@ -1254,8 +1270,9 @@ function useMapView(readOnly: boolean) {
 
   return {
     pins,
-    // The feed path (shared viewer) cannot honour an area search, so it never has one.
-    searchArea: readOnly ? null : owned.area,
+    // The shared viewer's rectangles are the owner's, read from their saved
+    // search; the signed-in map's are the ones its pins were fetched with.
+    searchAreas: readOnly ? sharedAreas : (owned.areas as Bbox[] | null),
     routeLocations,
     selectPin,
     // First load only: a background refetch must not blank a map that is
@@ -1298,8 +1315,12 @@ function usePlaybackPins(pins: Pin[]): PlaybackPin[] {
   );
 }
 
-export function DesktopMapView({ readOnly = false }: { readOnly?: boolean } = {}) {
-  const view = useMapView(readOnly);
+/** `areas`: the owner's saved rectangles, for the read-only shared viewer to draw and frame. */
+export function DesktopMapView({
+  readOnly = false,
+  areas = null,
+}: { readOnly?: boolean; areas?: readonly Bbox[] | null } = {}) {
+  const view = useMapView(readOnly, areas);
   const playbackPins = usePlaybackPins(view.pins);
 
   return (
@@ -1326,7 +1347,7 @@ export function DesktopMapView({ readOnly = false }: { readOnly?: boolean } = {}
 function DesktopMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapView>; readOnly: boolean }) {
   const {
     pins,
-    searchArea,
+    searchAreas,
     routeLocations,
     selectPin,
     loading,
@@ -1345,6 +1366,7 @@ function DesktopMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapV
   // Event pins are the primary layer. The much denser position history stays
   // opt-in so opening the Events map is immediately readable.
   const [showTrace, setShowTrace] = useState(false);
+  const [areaMode, setAreaMode] = useState<AreaMode>(null);
   const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const activeEntityId = hoveredEntityId ?? selectedEntityId;
@@ -1409,18 +1431,24 @@ function DesktopMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapV
         <SoftBlur />
       </Map.Panel>
 
-      {/* "Search this area" writes ?bbox, which the shared viewer can't honour
+      {/* The area tools write ?areas, which the shared viewer can't honour
           (the server ignores viewer filters), and the trace answers
           `positionTrack`, which resolves for the SIGNED-IN caller — so neither
           has a place on the shared viewer, whose results belong to somebody
           else. The bar starts past the 300px timeline panel. */}
       {!readOnly && (
         <MapTopBar className="left-[312px]">
-          <SearchAreaControl />
+          <SearchAreaControl mode={areaMode} onModeChange={setAreaMode} />
           <TraceToggleControl enabled={showTrace} onToggle={() => setShowTrace((value) => !value)} />
         </MapTopBar>
       )}
-      {!readOnly && <SearchAreaOutline />}
+      {readOnly ? (
+        // The owner's rectangles, shown so the viewer can see what the
+        // results were confined to; nothing here can change them.
+        <AreaLayer areas={searchAreas ?? []} />
+      ) : (
+        <OwnedAreaLayer mode={areaMode} onModeChange={setAreaMode} />
+      )}
       {!readOnly && <PositionTraceLayer enabled={showTrace} fitToTrace={pins.length === 0} />}
       {readOnly && (
         <LoadMorePinsControl
@@ -1441,7 +1469,7 @@ function DesktopMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapV
       {/* Fitted to the WHOLE set, never the revealed subset — otherwise every
           pin the playhead crossed would re-fit the viewport and fight the
           playback camera for control of it. */}
-      <FitBoundsToPins pins={pins} area={searchArea} />
+      <FitBoundsToPins pins={pins} areas={searchAreas} />
       {/* Padded past the 300px timeline panel so the state reads over the map
           itself rather than half-hidden behind the panel. Padding, not `left`,
           so it cannot collide with the `inset-0` on the same element. */}
@@ -1459,8 +1487,11 @@ function DesktopMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapV
   );
 }
 
-export function MobileMapView({ readOnly = false }: { readOnly?: boolean } = {}) {
-  const view = useMapView(readOnly);
+export function MobileMapView({
+  readOnly = false,
+  areas = null,
+}: { readOnly?: boolean; areas?: readonly Bbox[] | null } = {}) {
+  const view = useMapView(readOnly, areas);
   const playbackPins = usePlaybackPins(view.pins);
 
   return (
@@ -1479,7 +1510,7 @@ export function MobileMapView({ readOnly = false }: { readOnly?: boolean } = {})
 function MobileMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapView>; readOnly: boolean }) {
   const {
     pins,
-    searchArea,
+    searchAreas,
     routeLocations,
     selectPin,
     loading,
@@ -1494,6 +1525,7 @@ function MobileMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapVi
     loadMore,
   } = view;
   const [showTrace, setShowTrace] = useState(false);
+  const [areaMode, setAreaMode] = useState<AreaMode>(null);
   const { status: playbackStatus } = usePlaybackControls();
   const revealedPins = useRevealedPins(pins);
   const playing = playbackStatus === 'playing';
@@ -1514,11 +1546,15 @@ function MobileMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapVi
       <Map.Controls position="top-right" />
       {!readOnly && (
         <MapTopBar className="left-3">
-          <SearchAreaControl compact />
+          <SearchAreaControl compact mode={areaMode} onModeChange={setAreaMode} />
           <TraceToggleControl enabled={showTrace} onToggle={() => setShowTrace((value) => !value)} compact />
         </MapTopBar>
       )}
-      {!readOnly && <SearchAreaOutline />}
+      {readOnly ? (
+        <AreaLayer areas={searchAreas ?? []} />
+      ) : (
+        <OwnedAreaLayer mode={areaMode} onModeChange={setAreaMode} />
+      )}
       {!readOnly && <PositionTraceLayer enabled={showTrace} fitToTrace={pins.length === 0} />}
       {readOnly && (
         <LoadMorePinsControl
@@ -1535,8 +1571,14 @@ function MobileMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapVi
       <ClusteredMarkers pins={revealedPins} onSelect={selectPin} />
       <FitBoundsToPins
         pins={pins}
-        area={searchArea}
-        skip={!homeResolved || recentPin != null || homeCenter != null}
+        areas={searchAreas}
+        // Home and the most recent pin aim the phone's camera; a searched
+        // area with nothing in it still has to be shown, so it wins over home.
+        skip={
+          searchAreas == null || searchAreas.length === 0
+            ? !homeResolved || recentPin != null || homeCenter != null
+            : recentPin != null
+        }
       />
       <RecentPinCamera pin={recentPin} />
       <HomeCamera center={recentPin ? null : homeCenter} />

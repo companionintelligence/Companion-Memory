@@ -12,6 +12,15 @@
  * needs an Android foreground service, and resumable large-media upload needs its own
  * slice. Both are deliberate follow-ups (see the plugin package README).
  *
+ * Foreground-only still has to mean "keeps trying while in the foreground". It did not,
+ * once: a drain that was cut short (the connection mode flickered, or an attempt failed)
+ * had no second chance until the mode changed again or the app was resumed — twenty-three
+ * minutes in the foreground with a working tunnel moved five fixes out of seventy-one
+ * (2026-10-16). Two rules now cover that: a trigger that lands while a drain is being
+ * ABORTED starts its own drain once the aborted one is out of the way instead of joining
+ * it and dying with it ({@link flushOutbox}), and while the mode is `"connected"` and rows
+ * are pending, the queue provider re-drains on a timer ({@link OUTBOX_REDRAIN_INTERVAL_MS}).
+ *
  * Three properties this file exists to guarantee:
  *
  * 1. **FIFO.** Items drain in ascending `seq`, the sidecar's monotonic counter — never by
@@ -364,24 +373,51 @@ const EMPTY_SUMMARY: FlushOutboxSummary = {
 };
 
 let inFlightFlush: Promise<FlushOutboxSummary> | null = null;
+/** The `signal` the drain in flight was started with, so a later call can tell whether it is being aborted. */
+let inFlightSignal: AbortSignal | undefined;
+/** The one drain queued to run after an aborted drain finishes; every call in that window shares it. */
+let followUpFlush: Promise<FlushOutboxSummary> | null = null;
 
 /**
  * Drain every `pending` item, oldest-first, one at a time.
  *
- * Calls that arrive while a drain is running join that drain rather than starting a second
- * one (property 2 above) — so the caller-supplied `signal` of a joining call is not honored
- * by the already-running drain, which is the intended trade: one queue, one drainer.
+ * Calls that arrive while a healthy drain is running join that drain rather than starting
+ * a second one (property 2 above) — so the caller-supplied `signal` of a joining call is
+ * not honored by the already-running drain, which is the intended trade: one queue, one
+ * drainer.
+ *
+ * Calls that arrive while the drain in flight is being ABORTED do not join it. That drain
+ * is finishing early and will not read the queue again, so joining it answered nothing: the
+ * trigger was swallowed, and with the mode steady afterwards nothing else restarted the
+ * loop. Such a call starts its own drain the moment the aborted one is out of the way;
+ * further calls in that window share the follow-up, so there is still one drainer.
  */
 export function flushOutbox(options: FlushOutboxOptions = {}): Promise<FlushOutboxSummary> {
   if (inFlightFlush) {
-    return inFlightFlush;
+    if (!inFlightSignal?.aborted) {
+      return inFlightFlush;
+    }
+
+    if (!followUpFlush) {
+      followUpFlush = inFlightFlush
+        .catch(() => EMPTY_SUMMARY)
+        .then(() => {
+          followUpFlush = null;
+
+          return flushOutbox(options);
+        });
+    }
+
+    return followUpFlush;
   }
 
   const run = drain(options).finally(() => {
     inFlightFlush = null;
+    inFlightSignal = undefined;
   });
 
   inFlightFlush = run;
+  inFlightSignal = options.signal;
 
   return run;
 }
@@ -645,14 +681,28 @@ const EMPTY_QUEUE = {
 } satisfies Omit<OutboxQueueState, 'refresh'>;
 
 /**
- * Tracks queue depth and drives the flush loop off two signals — no timer of its own.
+ * How often the queue provider re-drains while the mode is `"connected"`, the app is
+ * visible and rows are still pending. Matches the connection reprobe, which is the other
+ * thing keeping the chip honest on the same cadence.
+ */
+export const OUTBOX_REDRAIN_INTERVAL_MS = 30_000;
+
+/**
+ * Tracks queue depth and drives the flush loop off three signals.
  *
  * 1. **Entering `"connected"`.** Leaving it aborts the drain in progress, so a mode that
- *    flickers does not leave a doomed flush running against an unreachable server.
+ *    flickers does not leave a doomed flush running against an unreachable server. The
+ *    abort belongs to the MODE, not to this effect's lifetime: the provider is mounted once
+ *    for the app, so the only thing that runs the cleanup is the mode moving on.
  * 2. **Returning to the foreground.** A mode transition alone is not enough: the app is not
  *    probing while backgrounded, so it can leave and return on the same mode with a queue
  *    that grew in between (a background location fix, or a capture taken during an outage
  *    the app slept through). Resume therefore re-probes *and* drains on its own.
+ * 3. **A tick, while connected with rows pending.** The two above fire on TRANSITIONS, and
+ *    a drain that was aborted or whose sends failed left the queue sitting on a steady
+ *    mode with no transition due. The tick retries without spending the rows' attempt
+ *    budget (`recordTransientFailures: false`): a flapping tunnel must not park every row
+ *    in `needs_attention` within a few minutes.
  */
 function useOutboxQueueState(): OutboxQueueState {
   const { mode, refresh: refreshConnectionMode } = useConnectionMode();
@@ -706,12 +756,17 @@ function useOutboxQueueState(): OutboxQueueState {
     };
   }, [refresh]);
 
+  // Lives for as long as the mode stays "connected"; the tick below drains under it too,
+  // so a tick's drain is cut short by the same mode change that cuts the first one.
+  const connectedControllerRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     if (mode !== 'connected') {
       return;
     }
 
     const controller = new AbortController();
+    connectedControllerRef.current = controller;
 
     void flushOutbox({ signal: controller.signal }).then(() => {
       if (!controller.signal.aborted) {
@@ -719,8 +774,35 @@ function useOutboxQueueState(): OutboxQueueState {
       }
     });
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+
+      if (connectedControllerRef.current === controller) {
+        connectedControllerRef.current = null;
+      }
+    };
   }, [mode, refresh]);
+
+  useEffect(() => {
+    if (mode !== 'connected' || snapshot.pending === 0) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      // Not while hidden: the app is not probing then either, and a drain against a
+      // server the phone may have lost would only spend attempts.
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+
+      void flushOutbox({
+        signal: connectedControllerRef.current?.signal,
+        recordTransientFailures: false,
+      }).then(() => refresh());
+    }, OUTBOX_REDRAIN_INTERVAL_MS);
+
+    return () => clearInterval(timer);
+  }, [mode, snapshot.pending, refresh]);
 
   // Read through a ref so resuming does not need to re-subscribe on every mode change —
   // the listener is registered once and always sees the current mode.

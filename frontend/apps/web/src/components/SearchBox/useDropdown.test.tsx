@@ -8,6 +8,7 @@ import {
   AVAILABLE_ENTITY_TYPES,
   DropdownProvider,
   excludedEntityTypesFor,
+  savedEntityTypesFor,
   HIDDEN_ENTITY_TYPES,
   useDropdown,
 } from './useDropdown';
@@ -89,6 +90,12 @@ describe('useDropdown', () => {
   it('drops the param entirely when nothing is narrowed', () => {
     expect(excludedEntityTypesFor(AVAILABLE_ENTITY_TYPES)).toEqual([]);
     expect(excludedEntityTypesFor(['Person'])).toEqual(expect.arrayContaining(HIDDEN_ENTITY_TYPES));
+  });
+
+  it('stores no types for a saved search unless the selection is narrower than every type', () => {
+    expect(savedEntityTypesFor(AVAILABLE_ENTITY_TYPES)).toEqual([]);
+    expect(savedEntityTypesFor([...AVAILABLE_ENTITY_TYPES].reverse())).toEqual([]);
+    expect(savedEntityTypesFor(['Person', 'Event'])).toEqual(['person', 'event']);
   });
 
   it('clearEntityTypes resets to all selected', () => {

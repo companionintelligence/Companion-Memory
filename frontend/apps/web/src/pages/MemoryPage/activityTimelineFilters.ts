@@ -1,6 +1,9 @@
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 
-import { explorerSearchTypeFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
+import {
+  explorerSearchTypeFilters,
+  readListParam,
+} from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 
 export interface ActivityTimelineFilterVariables {
   includeTypes?: string[];
@@ -32,16 +35,11 @@ export function activityTimelineFiltersFromSearchParams(
 ): ActivityTimelineFilterVariables | undefined {
   const { includeTypes, excludeTypes } = explorerSearchTypeFilters(params, pathname);
   const search = params.get('search')?.trim();
-  const tags =
-    params
-      .get('tags')
-      ?.split(',')
-      .map((tag) => tag.trim())
-      .filter(Boolean) ?? [];
+  const tags = readListParam(params, 'tags');
   const eventTypes = params.get('eventTypes')?.split(',').filter(Boolean) ?? [];
   const connectors = params.get('connectors')?.split(',').filter(Boolean) ?? [];
-  const people = params.get('people')?.split(',').filter(Boolean) ?? [];
-  const places = params.get('places')?.split(',').filter(Boolean) ?? [];
+  const people = readListParam(params, 'people');
+  const places = readListParam(params, 'places');
 
   const filters: ActivityTimelineFilterVariables = {};
 

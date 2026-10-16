@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GetSavedSearchesDocument } from '@/graphql/graphql';
@@ -204,5 +204,21 @@ describe('SavedSearchesPage', () => {
 
     expect(box).toHaveClass('relative');
     expect(box).not.toContainElement(starter);
+  });
+
+  it('opens the editor from the pencil instead of sending the search to the explorer', async () => {
+    renderWithProviders(<SavedSearchesPage />, {
+      mocks: [
+        mockQuery(GetSavedSearchesDocument, BASE_VARIABLES, connectionOf([makeSavedSearch('a', 'My trip')])),
+      ],
+    });
+
+    await screen.findByText('My trip');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit saved search' }));
+
+    // The editor, not a navigation: the row's pencil used to fall through to
+    // /memory?saved_search=, where the only save made a second search.
+    const dialog = await screen.findByRole('dialog', { name: 'Update Saved Search' });
+    expect(within(dialog).getByLabelText('Name')).toHaveValue('My trip');
   });
 });

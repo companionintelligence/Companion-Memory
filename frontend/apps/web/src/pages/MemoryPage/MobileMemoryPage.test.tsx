@@ -113,7 +113,7 @@ describe('MemoryPage — ?saved_search on a mobile viewport', () => {
         data: {
           savedSearch: {
             __typename: 'SavedSearchType',
-            id: 'saved-search-1',
+            id: btoa('saved-search:saved-search-1'),
             name: 'Sunset trips',
             description: null,
             query: 'sunset',
@@ -132,6 +132,11 @@ describe('MemoryPage — ?saved_search on a mobile viewport', () => {
               places: null,
               hasLocation: true,
               semantic: null,
+              direction: null,
+              fileKinds: null,
+              view: null,
+              areas: null,
+              bbox: null,
             },
           },
         },

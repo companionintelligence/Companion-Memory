@@ -12,7 +12,14 @@ import { GetSavedSearchDocument, GetSavedSearchesForPickerDocument } from '@/gra
 import { mockQuery } from '@/test/gql';
 import { renderWithProviders, type RenderWithProvidersOptions } from '@/test/renderWithProviders';
 
-import { ExplorerToolbar, MemoryExplorerFilterControls, SearchPanelFilters } from './ExplorerToolbar';
+import { UPDATE_SAVED_SEARCH } from '../../../SavedSearchesPage/EditSavedSearchModal';
+
+import {
+  AdvancedFilters,
+  ExplorerToolbar,
+  MemoryExplorerFilterControls,
+  SearchPanelFilters,
+} from './ExplorerToolbar';
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
@@ -431,6 +438,54 @@ describe('ExplorerToolbar', () => {
       expect(screen.queryByRole('button', { name: /^Activity/ })).not.toBeInTheDocument();
     });
 
+    it('counts the map areas in the Where trigger beside the place names', () => {
+      const area = '165.500000,-47.500000,179.500000,-33.500000';
+      const { unmount } = renderToolbar(<MemoryExplorerFilterControls />, { route: `/memory?areas=${area}` });
+
+      expect(screen.getByRole('button', { name: /^Where: Map Areas \(1\)/ })).toBeInTheDocument();
+      unmount();
+
+      const two = renderToolbar(<MemoryExplorerFilterControls />, {
+        route: `/memory?areas=${area};1,2,3,4&places=100+Duranzo+Aisle`,
+      });
+
+      expect(
+        screen.getByRole('button', { name: /^Where: 1 selected \+ Map Areas \(2\)/ }),
+      ).toBeInTheDocument();
+      two.unmount();
+
+      renderToolbar(<MemoryExplorerFilterControls />, {
+        route: `/memory?areas=${area}&places=Paris&places=London`,
+      });
+      expect(
+        screen.getByRole('button', { name: /^Where: 2 selected \+ Map Areas \(1\)/ }),
+      ).toBeInTheDocument();
+    });
+
+    it('lists the map areas in the Where popover, removes one, and clears names and areas together', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, {
+        route: '/memory?areas=165.5,-47.5,179.5,-33.5;-161,18.5,-154.5,22.5&places=Paris',
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /^Where: 1 selected \+ Map Areas \(2\)/ }));
+      expect(screen.getByText('Map area: 47.5°S–33.5°S, 165.5°E–179.5°E')).toBeInTheDocument();
+      expect(screen.getByText('Map area: 18.5°N–22.5°N, 161.0°W–154.5°W')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove map area 1' }));
+      expect(screen.getByTestId('params').textContent).toContain(
+        'areas=-161.000000%2C18.500000%2C-154.500000%2C22.500000',
+      );
+      expect(screen.getByTestId('params').textContent).not.toContain('165.5');
+      expect(
+        screen.getByRole('button', { name: /^Where: 1 selected \+ Map Areas \(1\)/ }),
+      ).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+      expect(screen.getByTestId('params').textContent).not.toContain('areas=');
+      expect(screen.getByTestId('params').textContent).not.toContain('places=');
+      expect(screen.getByRole('button', { name: /^Where: all/ })).toBeInTheDocument();
+    });
+
     it('lists people suggestions once opened and writes the pick to the URL', async () => {
       renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory' });
 
@@ -727,7 +782,7 @@ describe('ExplorerToolbar', () => {
   describe('filters a view cannot apply', () => {
     it('marks the graph-incompatible chips and counts them, leaving the rest alone', () => {
       renderToolbar(<ExplorerToolbar open />, {
-        route: '/?view=graph&semantic=1&bbox=1,2,3,4&tags=space',
+        route: '/?view=graph&semantic=1&areas=1,2,3,4&tags=space',
       });
 
       expect(screen.getByLabelText(/^Semantic — not applied in this view\./)).toBeInTheDocument();
@@ -739,7 +794,7 @@ describe('ExplorerToolbar', () => {
 
     it('leaves every chip active in the search-backed views', () => {
       renderToolbar(<ExplorerToolbar open />, {
-        route: '/?view=list&semantic=1&bbox=1,2,3,4&tags=space',
+        route: '/?view=list&semantic=1&areas=1,2,3,4&tags=space',
       });
 
       expect(screen.queryByLabelText(/not applied in this view/)).not.toBeInTheDocument();
@@ -804,6 +859,114 @@ const TRIP = mockQuery(
     },
   },
 );
+
+describe('Save this search with a loaded saved search', () => {
+  // The explorer carries `?loaded_search=<raw id>` after a saved search is
+  // applied (see applySavedSearchToParams). Save then offers to write the
+  // current filters back over THAT search, next to saving a new one. Without
+  // the marker there is only the create path — the state every search used to
+  // be in, which is why editing a saved search always made another.
+  function updateMock(onSave: (variables: Record<string, unknown>) => void) {
+    return {
+      request: { query: UPDATE_SAVED_SEARCH },
+      variableMatcher: () => true,
+      result: (variables: Record<string, unknown>) => {
+        onSave(variables);
+
+        return {
+          data: {
+            updateSavedSearch: {
+              __typename: 'UpdateSavedSearchPayload',
+              success: true,
+              savedSearch: {
+                __typename: 'SavedSearchType',
+                id: TRIP_ID,
+                name: 'My trip',
+                description: null,
+                query: 'paris',
+                entityTypes: [],
+                tags: ['vacation'],
+                filters: null,
+              },
+            },
+          },
+        };
+      },
+    };
+  }
+
+  it('offers only a new save when nothing was loaded', async () => {
+    renderToolbar(<AdvancedFilters />, { route: '/memory?search=paris&people=Ada' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Save this search' });
+
+    expect(within(dialog).queryByRole('button', { name: /^Update/ })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeInTheDocument();
+  });
+
+  it('writes the current filters back over the loaded search, keeping its name', async () => {
+    const onSave = vi.fn();
+
+    renderToolbar(<AdvancedFilters />, {
+      route: '/memory?loaded_search=trip-1&search=paris&people=Ada&tags=vacation',
+      mocks: [TRIP, updateMock(onSave)],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Save this search' });
+
+    // Both ways out are offered: the loaded search by name, or a fresh one.
+    const update = await within(dialog).findByRole('button', { name: 'Update “My trip”' });
+    expect(within(dialog).getByRole('button', { name: 'Save as new' })).toBeDisabled();
+
+    fireEvent.click(update);
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0]).toEqual({
+      input: {
+        id: TRIP_ID,
+        name: 'My trip',
+        query: 'paris',
+        // No What narrowing stores no types, the same as a seed.
+        entityTypes: [],
+        tags: ['vacation'],
+        filters: { people: ['Ada'] },
+      },
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Save this search' })).not.toBeInTheDocument(),
+    );
+    // Still the search the explorer is showing.
+    expect(screen.getByTestId('params')).toHaveTextContent('loaded_search=trip-1');
+  });
+
+  it('sends null for a cleared query and filter set rather than leaving the old ones in place', async () => {
+    const onSave = vi.fn();
+
+    // Only a tag left: the query and every secondary filter were removed.
+    renderToolbar(<AdvancedFilters />, {
+      route: '/memory?loaded_search=trip-1&tags=vacation',
+      mocks: [TRIP, updateMock(onSave)],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Save this search' });
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Update “My trip”' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0]).toEqual({
+      input: {
+        id: TRIP_ID,
+        name: 'My trip',
+        query: null,
+        entityTypes: [],
+        tags: ['vacation'],
+        filters: null,
+      },
+    });
+  });
+});
 
 describe('SearchPanelFilters in the header search panel', () => {
   // The header box on a page outside Memory's lists, with its panel open.
@@ -886,7 +1049,7 @@ describe('on a phone', () => {
     document.body.style.pointerEvents = '';
   });
 
-  it('ends the scrolling chip row with Clear all and the save controls instead of wrapping them', () => {
+  it('leads the scrolling chip row with Save and ends it with Clear all instead of wrapping them', () => {
     setViewport(true);
     renderToolbar(<ExplorerToolbar open />, {
       route: '/?people=Ada%20Lovelace&tags=space',
@@ -900,12 +1063,12 @@ describe('on a phone', () => {
     expect(scroller).not.toBeNull();
     expect(scroller).toContainElement(clear);
     expect(scroller).toContainElement(save);
-    // Chips, then Clear all, then the save controls — Clear all follows the
-    // last chip and precedes Save in the line.
+    // Save first, so it is in view before anyone discovers the line scrolls;
+    // then the chips; Clear all follows the last chip.
     const chip = screen.getByRole('button', { name: 'Remove Ada Lovelace' });
 
+    expect(save.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(chip.compareDocumentPosition(clear) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(clear.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     fireEvent.click(clear);
 

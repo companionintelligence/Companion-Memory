@@ -22,6 +22,8 @@ function activeFilterDimensions(
     eventTypes?: string[] | null;
     semantic?: boolean | null;
     direction?: string | null;
+    areas?: ((number | null)[] | null)[] | null;
+    bbox?: (number | null)[] | null;
   } | null,
 ): string[] {
   if (!filters) {
@@ -32,7 +34,10 @@ function activeFilterDimensions(
   // fixer collapses to inline `{ … }` that the Prettier CI check then rejects.
   const dimensions: Array<[boolean, string]> = [
     [Boolean(filters.people?.length), 'Who'],
-    [Boolean(filters.places?.length || filters.hasLocation), 'Where'],
+    [
+      Boolean(filters.places?.length || filters.hasLocation || filters.areas?.length || filters.bbox?.length),
+      'Where',
+    ],
     [Boolean(filters.startTime || filters.endTime || filters.datePreset), 'When'],
     [Boolean(filters.eventTypes?.length), 'Activity'],
     [Boolean(filters.connectors?.length), 'How'],
@@ -72,6 +77,10 @@ export const SavedSearchGridItemFragment = gql(`
       hasLocation
       semantic
       direction
+      fileKinds
+      view
+      areas
+      bbox
     }
     isPublic
     shareToken

@@ -11,6 +11,7 @@ import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
 import { useBackClosesSheet } from '@/hooks/useBackClosesSheet';
 
+import { asAreas, type Bbox } from '../MemoryPage/bbox';
 import { EntityDetails } from '../MemoryPage/Components/EntityDetails';
 import { GalleryView } from '../MemoryPage/GalleryView';
 import { ListView } from '../MemoryPage/ListView';
@@ -32,6 +33,10 @@ const GET_SHARED_SAVED_SEARCH = gql(`
       id
       name
       description
+      filters {
+        areas
+        bbox
+      }
     }
   }
 `);
@@ -63,7 +68,16 @@ function ViewTabs({ activeTab, setActiveTab }: { activeTab: string; setActiveTab
 
 /** Read-only explorer body for a shared search; relies on the surrounding
  *  EntityServiceProvider (seeded with the share token) for its results. */
-function SharedSearchBody({ name, description }: { name: string; description: string | null }) {
+function SharedSearchBody({
+  name,
+  description,
+  areas,
+}: {
+  name: string;
+  description: string | null;
+  /** The owner's saved rectangles, drawn read-only on the map tab. */
+  areas: Bbox[] | null;
+}) {
   const { isMobile } = useDeviceLayout();
   const [activeTab, setActiveTab] = useState('list');
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -135,7 +149,12 @@ function SharedSearchBody({ name, description }: { name: string; description: st
             <>
               {activeTab === 'list' && <ListView />}
               {activeTab === 'gallery' && <GalleryView />}
-              {activeTab === 'map' && (isMobile ? <MobileMapView readOnly /> : <DesktopMapView readOnly />)}
+              {activeTab === 'map' &&
+                (isMobile ? (
+                  <MobileMapView readOnly areas={areas} />
+                ) : (
+                  <DesktopMapView readOnly areas={areas} />
+                ))}
             </>
           )}
         </div>
@@ -159,6 +178,12 @@ export function SharedSearchPage() {
   });
 
   const shared = data?.sharedSavedSearch;
+  // The owner's rectangles, for the map to draw and frame: the server already
+  // applies them to the results, so this is what the viewer SEES, not a filter.
+  const sharedAreas =
+    asAreas(shared?.filters?.areas) ??
+    asAreas(shared?.filters?.bbox != null ? [shared.filters.bbox] : null) ??
+    null;
 
   usePageTitle(
     shared?.name ? `${shared.name} (Shared) - Companion Memory` : 'Shared Search - Companion Memory',
@@ -193,6 +218,7 @@ export function SharedSearchPage() {
       <SharedSearchBody
         name={shared.name || 'Untitled Saved Search'}
         description={shared.description ?? null}
+        areas={sharedAreas}
       />
     </EntityServiceProvider>
   );

@@ -11,8 +11,8 @@ import { gql } from '@/graphql';
 const PAGE_SIZE = 30;
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $bbox: [Float!], $semantic: Boolean, $direction: String, $fileKinds: [String!], $shareToken: String, $first: Int, $after: String) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, bbox: $bbox, semantic: $semantic, direction: $direction, fileKinds: $fileKinds, shareToken: $shareToken, first: $first, after: $after }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $areas: [[Float!]!], $semantic: Boolean, $direction: String, $fileKinds: [String!], $shareToken: String, $first: Int, $after: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, areas: $areas, semantic: $semantic, direction: $direction, fileKinds: $fileKinds, shareToken: $shareToken, first: $first, after: $after }) {
       totalCount
       pageInfo {
         hasNextPage
@@ -335,7 +335,7 @@ function useEntityService({
   people,
   places,
   hasLocation,
-  bbox,
+  areas,
   semantic,
   direction,
   fileKinds,
@@ -355,7 +355,8 @@ function useEntityService({
   people?: string[];
   places?: string[];
   hasLocation?: boolean;
-  bbox?: number[];
+  /** Map areas, each [minLon, minLat, maxLon, maxLat], ORed by the server. */
+  areas?: number[][];
   semantic?: boolean;
   /** Sent / received message direction (`inbound` / `outbound`); pins the browse to communications. */
   direction?: string;
@@ -373,6 +374,8 @@ function useEntityService({
    */
   skip?: boolean;
 }): ReturnType {
+  // Only rectangles with all four edges travel; an empty list is no filter.
+  const validAreas = areas?.filter((area) => area.length === 4);
   const searchVariables: SearchFilterVariables = {
     query: searchQuery,
     // Map display names to the backend IndexableEntity values via the shared
@@ -396,7 +399,7 @@ function useEntityService({
     people: people && people.length > 0 ? people : undefined,
     places: places && places.length > 0 ? places : undefined,
     hasLocation: hasLocation || undefined,
-    bbox: bbox && bbox.length === 4 ? bbox : undefined,
+    areas: validAreas && validAreas.length > 0 ? validAreas : undefined,
     semantic: semantic || undefined,
     direction: direction || undefined,
     fileKinds: fileKinds && fileKinds.length > 0 ? fileKinds : undefined,

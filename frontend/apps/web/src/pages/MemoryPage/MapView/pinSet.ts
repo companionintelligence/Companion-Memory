@@ -119,20 +119,23 @@ export type FitAction = 'pins' | 'area' | 'none';
  * `fitted` is the signature the viewport was last fitted to (or adopted — see
  * below), null while nothing has been. `areaBound` says the set was fetched
  * with a "Search events in this area" box; `previousAreaBound` says the same of
- * the set before it.
+ * the set before it. `areaChanged` says the boxes differ from the ones the
+ * previous set was fetched with, and `areaInView` that at least one of them
+ * is on screen (so a box just drawn or resized never re-frames the map).
  *
- *  - An unchanged set, or an empty one, moves nothing.
  *  - A set fetched WITH an area never fits to its pins: the viewport IS the box
  *    the person chose, and fitting to the pins inside it zoomed and re-centred
- *    the map they had just framed. That move brought the search button straight
- *    back, and from far enough out it carried the box's centre off screen,
- *    which is the signal that drops the area filter — so one click searched,
- *    un-searched and flew back to the whole world. The one exception is a cold
- *    load with the box already in the URL (`fitted === null`): nothing has
- *    framed it yet, so frame the AREA, not the pins.
+ *    the map they had just framed, which brought the search button straight
+ *    back. It frames the AREA instead, and only when the area is new and not
+ *    already on screen — a box just drawn from the viewport is on screen by
+ *    definition, while a box that arrived from a saved search ("New Zealand
+ *    Trip", opened from San Francisco) is not. This holds for an EMPTY set
+ *    too: a search with no hits still has a rectangle to show, and the "no
+ *    hits" notice should sit over that rectangle, not over the default city.
+ *  - An unchanged set, or an empty one, moves nothing otherwise.
  *  - The first set after an area filter is dropped stays put too. It is the
- *    whole set again, and fitting to it is that same fly-back; the person is
- *    looking at where they panned to.
+ *    whole set again, and fitting to it is a fly-back; the person is looking
+ *    at where they panned to.
  *  - Anything else — a filter changed the set — fits to the pins, as before.
  */
 export function fitActionFor({
@@ -140,18 +143,22 @@ export function fitActionFor({
   fitted,
   areaBound,
   previousAreaBound,
+  areaChanged = false,
+  areaInView = false,
 }: {
   signature: string;
   fitted: string | null;
   areaBound: boolean;
   previousAreaBound: boolean;
+  areaChanged?: boolean;
+  areaInView?: boolean;
 }): FitAction {
-  if (signature === '' || signature === fitted) {
-    return 'none';
+  if (areaBound) {
+    return areaChanged && !areaInView ? 'area' : 'none';
   }
 
-  if (areaBound) {
-    return fitted === null ? 'area' : 'none';
+  if (signature === '' || signature === fitted) {
+    return 'none';
   }
 
   return previousAreaBound ? 'none' : 'pins';

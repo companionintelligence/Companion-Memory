@@ -5,7 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { parseDisclosureRung } from '@ci/domains/asks';
-import { SavedSearchService } from '@ci/domains/files';
+import { isValidAreas, isValidBbox, SavedSearchService } from '@ci/domains/files';
 import { UpdateSavedSearchPayload } from '@ci/domains/graphql/types/UpdateSavedSearchPayload';
 import type { IndexableEntity } from '@ci/domains/search-next';
 import { INDEXABLE_ENTITIES } from '@ci/domains/search-next';
@@ -23,6 +23,21 @@ import { SavedSearchType } from '../types/SavedSearchType';
 import { SetSavedSearchSharingInput } from '../types/SetSavedSearchSharingInput';
 import { UpdateSavedSearchInput } from '../types/UpdateSavedSearchInput';
 import { Paginator } from '../utils/Paginator';
+
+/**
+ * A stored filter set is replayed verbatim by the explorer and the shared
+ * viewer, so a map area that is not four finite numbers is refused here rather
+ * than saved and then silently ignored by every search that loads it.
+ */
+function assertValidFilters(filters: { bbox?: number[]; areas?: number[][] } | null | undefined): void {
+  if (filters?.bbox != null && !isValidBbox(filters.bbox)) {
+    throw new BadRequestException('bbox must be [minLon, minLat, maxLon, maxLat]');
+  }
+
+  if (filters?.areas != null && !isValidAreas(filters.areas)) {
+    throw new BadRequestException('every area must be [minLon, minLat, maxLon, maxLat]');
+  }
+}
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => SavedSearchType)
@@ -48,6 +63,8 @@ export class SavedSearchResolver {
         }
       });
     }
+
+    assertValidFilters(input.filters);
 
     const entity = await this.savedSearchService.create(serviceContext, {
       name: input.name,
@@ -82,6 +99,8 @@ export class SavedSearchResolver {
     const serviceContext = toServiceContext(context);
 
     const id = GlobalUID.parse('saved-search', input.id);
+
+    assertValidFilters(input.filters);
 
     const entity = await this.savedSearchService.update(serviceContext, id, {
       name: input.name,

@@ -95,7 +95,7 @@ describe('GraphController — explorer filters (graph parity)', () => {
     it('treats a present-but-empty param as active with an empty match set', async () => {
       const { controller, tagService } = setup();
 
-      const res = await controller.getGraphData(ctx, dataDto({ tags: '' }));
+      const res = await controller.getGraphData(ctx, dataDto({ tags: [] }));
 
       expect(res.tagMatch).toEqual({ active: true, entityIds: [] });
       expect(tagService.getEntitiesForTags).not.toHaveBeenCalled();
@@ -114,7 +114,7 @@ describe('GraphController — explorer filters (graph parity)', () => {
 
       const { controller } = setup({ getEntitiesForTags, getEntityIdsByTagSources });
 
-      const res = await controller.getGraphData(ctx, dataDto({ tags: 'work, urgent ' }));
+      const res = await controller.getGraphData(ctx, dataDto({ tags: ['work', 'urgent'] }));
 
       expect(getEntitiesForTags).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), [
         'work',
@@ -130,7 +130,7 @@ describe('GraphController — explorer filters (graph parity)', () => {
 
       const { controller } = setup({ getEntitiesForTags, getEntityIdsByTagSources });
 
-      const res = await controller.getGraphData(ctx, dataDto({ tags: 'phone' }));
+      const res = await controller.getGraphData(ctx, dataDto({ tags: ['phone'] }));
 
       expect(res.tagMatch).toEqual({ active: true, entityIds: [] });
       expect(getEntityIdsByTagSources).not.toHaveBeenCalled();
@@ -400,7 +400,7 @@ describe('GraphController — explorer filters (graph parity)', () => {
         getNodesByIds,
       });
 
-      const res = await controller.getGraphData(ctx, dataDto({ tags: 'work' }));
+      const res = await controller.getGraphData(ctx, dataDto({ tags: ['work'] }));
 
       expect(getNodesByIds).toHaveBeenCalledWith('user-1', ['node-b']);
       expect(res.data.nodes.map((node) => node.id).sort()).toEqual(['node-a', 'node-b']);
@@ -427,7 +427,7 @@ describe('GraphController — explorer filters (graph parity)', () => {
 
       // Selecting only `person` excludes Place from the graph; the tag-matched
       // place node must stay dropped even though it matches the tag filter.
-      const res = await controller.getGraphData(ctx, dataDto({ includeTypes: ['person'], tags: 'work' }));
+      const res = await controller.getGraphData(ctx, dataDto({ includeTypes: ['person'], tags: ['work'] }));
 
       expect(res.data.nodes.map((node) => node.id)).toEqual(['person-node']);
     });

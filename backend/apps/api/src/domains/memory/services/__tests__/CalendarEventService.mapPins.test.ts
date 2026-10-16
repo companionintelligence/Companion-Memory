@@ -142,7 +142,7 @@ describe('CalendarEventService.findMapPins', () => {
 
     await service.findMapPins(ctx, {
       limit: 100,
-      bbox: [-122.5, 37.7, -122.3, 37.8],
+      areas: [[-122.5, 37.7, -122.3, 37.8]],
       startTime: new Date('2026-01-01T00:00:00Z'),
       eventTypes: ['visited'],
     });

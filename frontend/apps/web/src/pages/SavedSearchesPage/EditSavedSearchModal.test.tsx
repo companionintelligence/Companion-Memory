@@ -53,6 +53,19 @@ function renderModal(onSave: (variables: Record<string, unknown>) => void) {
   );
 }
 
+describe('EditSavedSearchModal — opening', () => {
+  it('does not focus the name field on open, so a phone keyboard stays down', async () => {
+    renderModal(() => undefined);
+
+    await screen.findByText('travel');
+
+    const name = screen.getByLabelText('Name');
+    expect(name).not.toHaveFocus();
+    // Focus is parked on the dialog itself, so Escape still reaches it.
+    expect(screen.getByRole('dialog')).toHaveFocus();
+  });
+});
+
 describe('EditSavedSearchModal — tags', () => {
   it('shows the saved search’s existing tag', async () => {
     renderModal(() => undefined);

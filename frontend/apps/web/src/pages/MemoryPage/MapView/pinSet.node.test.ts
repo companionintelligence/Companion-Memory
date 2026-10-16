@@ -175,19 +175,70 @@ describe('fitActionFor', () => {
 
   // "Search events in this area": the viewport IS the box the person framed.
   // Fitting to the pins inside it re-centred and zoomed the map they had just
-  // set up, which brought the search button back at once and, from far enough
-  // out, carried the box's centre off screen — the signal that drops the
-  // filter — so one click searched, un-searched and flew back out.
+  // set up, which brought the search button back at once. A box drawn from
+  // the viewport is on screen by definition, so it is never re-framed.
   it('leaves a viewport the person framed alone when its area search lands', () => {
     expect(
-      fitActionFor({ signature: '2:a:b', fitted: '9:a:z', areaBound: true, previousAreaBound: false }),
+      fitActionFor({
+        signature: '2:a:b',
+        fitted: '9:a:z',
+        areaBound: true,
+        previousAreaBound: false,
+        areaChanged: true,
+        areaInView: true,
+      }),
     ).toBe('none');
   });
 
-  it('frames the area itself on a cold load with the box already in the URL', () => {
+  it('frames the area when a box the viewport does not show arrives, as from a saved search', () => {
+    // Cold load with the box already in the URL, from the default city.
     expect(
-      fitActionFor({ signature: '2:a:b', fitted: null, areaBound: true, previousAreaBound: false }),
+      fitActionFor({
+        signature: '2:a:b',
+        fitted: null,
+        areaBound: true,
+        previousAreaBound: false,
+        areaChanged: true,
+        areaInView: false,
+      }),
     ).toBe('area');
+    // Picking another saved search in-page, while looking at the last one.
+    expect(
+      fitActionFor({
+        signature: '4:c:f',
+        fitted: '2:a:b',
+        areaBound: true,
+        previousAreaBound: true,
+        areaChanged: true,
+        areaInView: false,
+      }),
+    ).toBe('area');
+  });
+
+  it('frames the area even when the search inside it found nothing', () => {
+    expect(
+      fitActionFor({
+        signature: '',
+        fitted: null,
+        areaBound: true,
+        previousAreaBound: false,
+        areaChanged: true,
+        areaInView: false,
+      }),
+    ).toBe('area');
+  });
+
+  it('stays put when the same area comes back with a different set', () => {
+    expect(
+      fitActionFor({
+        signature: '3:a:c',
+        fitted: '2:a:b',
+        areaBound: true,
+        previousAreaBound: true,
+        areaChanged: false,
+        areaInView: false,
+      }),
+    ).toBe('none');
   });
 
   it('stays put when the area filter is dropped and the whole set comes back', () => {

@@ -76,8 +76,10 @@ export type UpdateFileDto = Pick<CreateFileDto, 'title' | 'description' | 'exter
  * Secondary explorer dimensions a saved search persists alongside the primary
  * query / entityTypes / tags, so it round-trips the full search the user built
  * (and a shared search runs with all of them). Mirrors the LifeScope-parity
- * SearchInput filter fields; pagination/viewport (first/after/bbox) are
- * intentionally excluded as transient.
+ * SearchInput filter fields; pagination (first/after) is intentionally
+ * excluded as transient. The map area (`bbox`) is NOT transient: a search
+ * saved from the map keeps its rectangle, so "New Zealand Trip" is a place on
+ * the globe rather than a name match.
  */
 export interface SavedSearchFilters {
   eventTypes?: string[];
@@ -98,6 +100,48 @@ export interface SavedSearchFilters {
   fileKinds?: string[];
   /** The explorer view to open in (`list`, `gallery`, `map`, `graph`, `timeline`). Presentation, not a predicate. */
   view?: string;
+  /**
+   * The map areas the search is confined to, each `[minLon, minLat, maxLon, maxLat]`
+   * (WGS84), ORed: an event matches inside ANY of them. Geographic, unlike
+   * `places`, which matches a location's name: an event at "Queenstown" is
+   * inside New Zealand's rectangle but never matches the name "New Zealand".
+   * Every entry is exactly four finite numbers.
+   */
+  areas?: number[][];
+  /**
+   * The single-rectangle form `areas` replaced. Still READ (as a one-entry
+   * `areas`) so rows saved before the list existed keep working; nothing
+   * writes it any more. See {@link savedSearchAreas}.
+   */
+  bbox?: number[];
+}
+
+/** Whether `bbox` is a usable map area: exactly four finite numbers. */
+export function isValidBbox(bbox: unknown): bbox is [number, number, number, number] {
+  return Array.isArray(bbox) && bbox.length === 4 && bbox.every((value) => Number.isFinite(value));
+}
+
+/** Whether `areas` is a usable list of map areas: every entry a valid bbox. */
+export function isValidAreas(areas: unknown): areas is [number, number, number, number][] {
+  return Array.isArray(areas) && areas.every(isValidBbox);
+}
+
+/**
+ * The map areas a saved filter set confines the search to, or undefined for
+ * none. Prefers `areas`; falls back to the legacy single `bbox`.
+ */
+export function savedSearchAreas(
+  filters: Pick<SavedSearchFilters, 'areas' | 'bbox'> | null | undefined,
+): number[][] | undefined {
+  if (filters == null) {
+    return undefined;
+  }
+
+  if (isValidAreas(filters.areas) && filters.areas.length > 0) {
+    return filters.areas;
+  }
+
+  return isValidBbox(filters.bbox) ? [filters.bbox] : undefined;
 }
 
 export interface CreateSavedSearchDto {

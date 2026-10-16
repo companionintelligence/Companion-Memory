@@ -22,6 +22,7 @@ import {
   registerOutboxKind,
   resetIngestFinishState,
   settleIngestFinish,
+  type FlushOutboxSummary,
 } from '@ci/common/src/utils/outboxFlush';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -643,6 +644,66 @@ describe('flushOutbox — draining', () => {
     expect(calls.filter((call) => call.url === '/api/position')).toHaveLength(1);
     // The undrained item is untouched, not lost.
     expect(store.get('b')).toMatchObject({ status: 'pending', attempts: 0 });
+  });
+
+  it('runs a follow-up drain for a call that lands while the drain in flight is being aborted', async () => {
+    setNativeWindow();
+    const controller = new AbortController();
+    const { handler, store } = fakeSidecar([
+      item({ id: 'a', seq: 1 }),
+      item({ id: 'b', seq: 2 }),
+      item({ id: 'c', seq: 3 }),
+    ]);
+    let second: Promise<FlushOutboxSummary> | null = null;
+    let third: Promise<FlushOutboxSummary> | null = null;
+    const calls = installFetch(
+      route(handler, (call) => {
+        // The mode flickers after the first send: the running drain is aborted, and in
+        // the same breath two triggers arrive (the mode coming back, a resume). Joining
+        // the aborted drain used to swallow both — nothing drained b and c until the next
+        // transition, which could be half an hour away.
+        if (call.url === '/api/position' && second == null) {
+          controller.abort();
+          second = flushOutbox();
+          third = flushOutbox();
+        }
+
+        return applianceAccepts(call);
+      }),
+    );
+
+    const first = await flushOutbox({ signal: controller.signal });
+
+    expect(first).toMatchObject({ attempted: 1, succeeded: 1, aborted: true });
+    expect(second).not.toBeNull();
+    // One follow-up, shared by every call that landed in the window.
+    expect(third).toBe(second);
+
+    const followUp = await second!;
+
+    expect(followUp).toMatchObject({ attempted: 2, succeeded: 2, aborted: false });
+    expect(calls.filter((call) => call.url === '/api/position')).toHaveLength(3);
+    expect(store.size).toBe(0);
+  });
+
+  it('still joins a healthy drain: a follow-up is only for an aborted one', async () => {
+    setNativeWindow();
+    const { handler } = fakeSidecar([item({ id: 'a', seq: 1 }), item({ id: 'b', seq: 2 })]);
+    let joined: Promise<FlushOutboxSummary> | null = null;
+    const calls = installFetch(
+      route(handler, (call) => {
+        if (call.url === '/api/position' && joined == null) {
+          joined = flushOutbox({ signal: new AbortController().signal });
+        }
+
+        return applianceAccepts(call);
+      }),
+    );
+
+    const first = await flushOutbox();
+
+    expect(await joined!).toBe(first);
+    expect(calls.filter((call) => call.path === '/api/outbox?status=pending')).toHaveLength(1);
   });
 
   it('reports unavailable on web without attempting anything', async () => {

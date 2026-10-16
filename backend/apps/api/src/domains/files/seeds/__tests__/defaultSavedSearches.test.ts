@@ -62,13 +62,18 @@ describe('DEFAULT_SAVED_SEARCHES', () => {
 
   it('opens every Where search on the map, and nothing else there', () => {
     for (const seed of DEFAULT_SAVED_SEARCHES) {
-      const where = Boolean(seed.filters?.places?.length) || seed.filters?.hasLocation === true;
+      const where =
+        Boolean(seed.filters?.places?.length) ||
+        Boolean(seed.filters?.areas?.length) ||
+        seed.filters?.hasLocation === true;
 
       expect(seed.filters?.view === 'map').toBe(where);
     }
 
+    // A region is a rectangle, not a name match: "Queenstown" never contained
+    // the words "New Zealand", but it sits inside the box.
     expect(DEFAULT_SAVED_SEARCHES.find((row) => row.name === 'New Zealand Trip')?.filters).toEqual({
-      places: ['New Zealand'],
+      areas: [[165.5, -47.5, 179.5, -33.5]],
       view: 'map',
     });
   });

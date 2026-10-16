@@ -1,8 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 
-import { useMutation } from '@apollo/client';
-import { useDeviceLayout } from '@ci/common';
-import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
+import { useMutation, useQuery } from '@apollo/client';
+import { GlobalUID, useDeviceLayout } from '@ci/common';
 import { Badge, Button, Dialog, Input, Label, Popover, Select, Tooltip, cn, useToast } from '@ci/shadcn';
 import {
   Activity,
@@ -43,17 +42,20 @@ import {
 } from '@/components/SearchBox/filterDrag';
 import { EntityNameFilter } from '@/components/SearchBox/NameFilter';
 import { SEARCH_PANEL_LAYER_PROPS } from '@/components/SearchBox/SearchBox';
-import { AVAILABLE_ENTITY_TYPES, useDropdown } from '@/components/SearchBox/useDropdown';
+import { AVAILABLE_ENTITY_TYPES, savedEntityTypesFor, useDropdown } from '@/components/SearchBox/useDropdown';
 import { type FragmentType } from '@/graphql';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { filterValueLabel, sourceFilterLabel } from '@/lib/sourceNames';
 
 import { CREATE_SAVED_SEARCH } from '../../../SavedSearchesPage/CreateSavedSearchModal';
+import { UPDATE_SAVED_SEARCH } from '../../../SavedSearchesPage/EditSavedSearchModal';
 import type { SavedSearchGridItemFragment } from '../../../SavedSearchesPage/SavedSearch';
 import { ShareSavedSearchModal } from '../../../SavedSearchesPage/ShareSavedSearchModal';
+import { AREAS_PARAM, LEGACY_BBOX_PARAM, readAreasParam } from '../../bbox';
 import { fileKindLabel } from '../../fileKinds';
 import { buildSavedSearchFilters } from '../../savedSearchFilters';
+import { GET_SAVED_SEARCH } from '../../useSavedSearchResolution';
 
 import {
   WHEN_PRESET_GRID,
@@ -63,6 +65,7 @@ import {
 } from './datePresets';
 import {
   FILTER_PARAMS,
+  LOADED_SEARCH_PARAM,
   addEntityFilter,
   countActiveFilters,
   eventsInPlay,
@@ -70,6 +73,7 @@ import {
   narrowedEntityTypes,
   peopleInPlay,
   readCsvParam,
+  readListParam,
   removeEntityFilter,
   writeCsvFilterParam,
 } from './filterParams';
@@ -365,9 +369,9 @@ function FilterDropArea() {
   const phone = isMobile === true;
   const selections = useMemo(
     () => ({
-      person: readCsvParam(searchParams, 'people'),
-      place: readCsvParam(searchParams, 'places'),
-      tag: readCsvParam(searchParams, 'tags'),
+      person: readListParam(searchParams, 'people'),
+      place: readListParam(searchParams, 'places'),
+      tag: readListParam(searchParams, 'tags'),
     }),
     [searchParams],
   );
@@ -388,7 +392,7 @@ function FilterDropArea() {
   const hasDateRange = Boolean(dateFrom || dateTo || isRollingDatePreset(whenPreset));
   const hasLocation = searchParams.get('hasLocation') === '1';
   const semantic = searchParams.get('semantic') === '1';
-  const hasMapArea = Boolean(searchParams.get('bbox'));
+  const mapAreaCount = readAreasParam(searchParams)?.length ?? 0;
   const direction = readMessageDirection(searchParams.get('direction'));
   // Which view the chips are being read against: a filter this view cannot
   // apply is shown struck through rather than quietly ignored.
@@ -401,7 +405,7 @@ function FilterDropArea() {
     hasDateRange ||
     hasLocation ||
     semantic ||
-    hasMapArea ||
+    mapAreaCount > 0 ||
     direction != null ||
     Object.values(selections).some((values) => values.length > 0);
   const [error, setError] = useState<string | null>(null);
@@ -537,11 +541,14 @@ function FilterDropArea() {
     </Button>
   );
 
+  // Save leads: on a phone this group rides at the head of a line that
+  // scrolls sideways with nothing to say so, and "searches can be saved" is
+  // the one thing in it that must be seen without scrolling.
   const saveControls = (
     <div className="flex shrink-0 items-center gap-2">
-      <FilterCountLabel />
-      <SavedSearchPicker />
       <SaveSearchButton />
+      <SavedSearchPicker />
+      <FilterCountLabel />
     </div>
   );
 
@@ -582,9 +589,10 @@ function FilterDropArea() {
             }
           }}
           className={cn(
-            // w-full on a phone: this area IS the whole line there, and Clear
-            // all plus the save controls ride inside its scroller after the
-            // chips, so one filter costs one line, not two. On desktop they
+            // w-full on a phone: this area IS the whole line there, and the
+            // save controls (ahead of the chips, so Save is always in view)
+            // plus Clear all (after them) ride inside its scroller, so one
+            // filter costs one line, not two. On desktop they
             // sit beside it instead (`device:flex-1`); overflow-hidden here
             // used to clip Clear all once the save controls took the
             // remaining width, so the area never clips.
@@ -594,6 +602,7 @@ function FilterDropArea() {
         >
           {hasSelections ? (
             <div className="scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-x-contain">
+              {phone && saveControls}
               {selectedTypes !== null && (
                 <FilterChip
                   icon={Shapes}
@@ -736,15 +745,16 @@ function FilterDropArea() {
                   }
                 />
               )}
-              {hasMapArea && (
+              {mapAreaCount > 0 && (
                 <FilterChip
                   icon={MapIcon}
-                  label="Map area"
-                  removeLabel="Remove map area"
-                  inactiveReason={reasonFor('bbox')}
+                  label={mapAreaCount === 1 ? 'Map area' : `Map areas (${mapAreaCount})`}
+                  removeLabel={mapAreaCount === 1 ? 'Remove map area' : 'Remove map areas'}
+                  inactiveReason={reasonFor('areas')}
                   onRemove={() =>
                     setSearchParams((params) => {
-                      params.delete('bbox');
+                      params.delete(AREAS_PARAM);
+                      params.delete(LEGACY_BBOX_PARAM);
 
                       return params;
                     })
@@ -752,7 +762,6 @@ function FilterDropArea() {
                 />
               )}
               {phone && clearButton}
-              {phone && saveControls}
             </div>
           ) : (
             // pointer-events-none keeps the icon swap from firing its own
@@ -1427,9 +1436,9 @@ function FilterControlsRow({
 
       {showSave && (
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          <FilterCountLabel />
-          <SavedSearchPicker onOpen={onOpenSavedSearch} />
           <SaveSearchButton />
+          <SavedSearchPicker onOpen={onOpenSavedSearch} />
+          <FilterCountLabel />
         </div>
       )}
     </div>
@@ -1530,9 +1539,20 @@ function FilterCountLabel() {
  * it becomes the dialog trigger, so it must pass its props and ref on.
  */
 export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [{ selectedEntityTypes }] = useDropdown();
   const { toast } = useToast();
+
+  // The saved search these filters were loaded from, when there is one: Save
+  // then offers to update it in place as well as to save a new one. The
+  // resolver that loaded it put the same query in the cache, so this is a
+  // cache read, not a round trip.
+  const loadedId = searchParams.get(LOADED_SEARCH_PARAM);
+  const { data: loadedData } = useQuery(GET_SAVED_SEARCH, {
+    variables: { id: GlobalUID.encode('saved-search', loadedId ?? '') },
+    skip: !loadedId,
+  });
+  const loaded = loadedId ? (loadedData?.savedSearch ?? null) : null;
   // Sharing (the "make public" control) is gated while the access model is hardened.
   const { isFeatureEnabled } = useFeatures();
   const sharingEnabled = isFeatureEnabled('shared.search');
@@ -1544,7 +1564,7 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
     typeof SavedSearchGridItemFragment
   > | null>(null);
 
-  const [createSavedSearch, { loading }] = useMutation(CREATE_SAVED_SEARCH, {
+  const [createSavedSearch, { loading: creating }] = useMutation(CREATE_SAVED_SEARCH, {
     // Drop the cached list so the Saved Searches page refetches it with the new entry.
     update(cache, { data }) {
       if (data?.createSavedSearch?.success) {
@@ -1552,6 +1572,25 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
         cache.gc();
       }
     },
+  });
+  const [updateSavedSearch, { loading: updating }] = useMutation(UPDATE_SAVED_SEARCH, {
+    // The row itself updates by id; the list is dropped because it is ordered
+    // by last change and this search just moved to the top of it.
+    update(cache, { data }) {
+      if (data?.updateSavedSearch?.success) {
+        cache.evict({ id: 'ROOT_QUERY', fieldName: 'savedSearches' });
+        cache.gc();
+      }
+    },
+  });
+  const loading = creating || updating;
+
+  // What the explorer is showing right now, in the shape a saved search stores.
+  const currentDefinition = () => ({
+    query: searchParams.get('search')?.trim() || undefined,
+    tags: readListParam(searchParams, 'tags'),
+    entityTypes: savedEntityTypesFor(selectedEntityTypes),
+    filters: buildSavedSearchFilters(searchParams),
   });
 
   const handleSave = async (share: boolean) => {
@@ -1561,12 +1600,7 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
       return;
     }
 
-    const query = searchParams.get('search')?.trim() || undefined;
-    const tags = searchParams.get('tags')?.split(',').filter(Boolean) ?? [];
-    const entityTypes = selectedEntityTypes.map(
-      (type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP],
-    );
-    const filters = buildSavedSearchFilters(searchParams);
+    const { query, tags, entityTypes, filters } = currentDefinition();
 
     try {
       const result = await createSavedSearch({
@@ -1587,6 +1621,17 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
         toast.success(`Saved search “${trimmed}”`);
         setName('');
         setOpen(false);
+        // The explorer is now showing the search it just saved, so the next
+        // Save offers to update that one rather than the search it was
+        // loaded from before.
+        setSearchParams(
+          (params) => {
+            params.set(LOADED_SEARCH_PARAM, GlobalUID.parse('saved-search', created.id));
+
+            return params;
+          },
+          { replace: true },
+        );
         // Hand the new search to the share modal so the user can grab a link
         // without a trip to the Saved Searches page.
         if (share) {
@@ -1597,6 +1642,44 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
       }
     } catch {
       toast.error('Failed to save search');
+    }
+  };
+
+  // Write the current filters back over the loaded search, keeping its name
+  // and description. Every stored dimension is sent explicitly — `null` for an
+  // empty query or filter set, `[]` for no tags or types — because the update
+  // leaves out any field it is not given, and "I removed that filter" has to
+  // reach the row.
+  const handleUpdate = async () => {
+    if (!loaded) {
+      return;
+    }
+
+    const { query, tags, entityTypes, filters } = currentDefinition();
+
+    try {
+      const result = await updateSavedSearch({
+        variables: {
+          input: {
+            id: loaded.id,
+            name: loaded.name,
+            query: query ?? null,
+            entityTypes,
+            tags,
+            filters: filters ?? null,
+          },
+        },
+      });
+
+      if (result.data?.updateSavedSearch?.success) {
+        toast.success(`Updated “${loaded.name}”`);
+        setName('');
+        setOpen(false);
+      } else {
+        toast.error(`Failed to update “${loaded.name}”`);
+      }
+    } catch {
+      toast.error(`Failed to update “${loaded.name}”`);
     }
   };
 
@@ -1621,6 +1704,25 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
             sort) so you can reuse them later.
           </Dialog.Description>
         </Dialog.Header>
+
+        {loaded && (
+          <div className="space-y-2 rounded-md border border-border bg-muted/40 p-3 text-sm">
+            <p className="text-muted-foreground">
+              These filters were loaded from{' '}
+              <span className="font-medium text-foreground">“{loaded.name}”</span>.
+            </p>
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full"
+              onClick={handleUpdate}
+              disabled={loading}
+            >
+              {updating ? 'Updating…' : `Update “${loaded.name}”`}
+            </Button>
+            <p className="text-xs text-muted-foreground">Or give it a new name below to keep both.</p>
+          </div>
+        )}
 
         <div className="space-y-2 py-2">
           <Label htmlFor="saved-search-name">Name</Label>
@@ -1650,7 +1752,7 @@ export function SaveSearchButton({ trigger }: { trigger?: ReactElement } = {}) {
             </Button>
           )}
           <Button onClick={() => handleSave(false)} disabled={loading || !name.trim()}>
-            {loading ? 'Saving…' : 'Save'}
+            {creating ? 'Saving…' : loaded ? 'Save as new' : 'Save'}
           </Button>
         </Dialog.Footer>
       </Dialog.Content>

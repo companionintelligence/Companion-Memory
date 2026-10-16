@@ -227,6 +227,40 @@ describe('FilterValuePicker', () => {
     expect(screen.getByRole('option', { name: 'gmail' })).toHaveAttribute('aria-selected', 'false');
   });
 
+  it('reads an extra selection beside the names and offers Clear for it alone', () => {
+    const onClear = vi.fn();
+    const alone = render(<Host label="Where" extraSummary="Map Areas (2)" onClear={onClear} />);
+
+    expect(screen.getByRole('button', { name: /^Where: Map Areas \(2\)/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Where: Map Areas/ }));
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(onClear).toHaveBeenCalledTimes(1);
+    alone.unmount();
+
+    // `initial` is read once, at mount: each wording gets its own host.
+    const one = render(<Host label="Where" extraSummary="Map Areas (2)" initial={['100 Duranzo Aisle']} />);
+    expect(
+      screen.getByRole('button', { name: /^Where: 100 Duranzo Aisle \+ Map Areas \(2\)/ }),
+    ).toBeInTheDocument();
+    one.unmount();
+
+    // Where counts a single value too: a street address is too long for the trigger.
+    const counted = render(
+      <Host label="Where" extraSummary="Map Areas (2)" countValues initial={['100 Duranzo Aisle']} />,
+    );
+    expect(screen.getByRole('button', { name: /^Where: 1 selected \+ Map Areas \(2\)/ })).toBeInTheDocument();
+    counted.unmount();
+
+    const countedAlone = render(<Host label="Where" countValues initial={['100 Duranzo Aisle']} />);
+    expect(screen.getByRole('button', { name: /^Where: 1 selected$/ })).toBeInTheDocument();
+    countedAlone.unmount();
+
+    render(<Host label="Where" extraSummary="Map Areas (1)" initial={['Paris', 'London']} />);
+    expect(screen.getByRole('button', { name: /^Where: 2 selected \+ Map Areas \(1\)/ })).toBeInTheDocument();
+  });
+
   it('clears every value from the panel', () => {
     render(<Host initial={['Ada', 'Alan']} />);
 
