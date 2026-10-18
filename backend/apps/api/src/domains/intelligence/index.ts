@@ -66,6 +66,9 @@ export { excludeForkedOriginsSql } from './questionScope';
 // The one rotation order both inference selectors take ci.questions in
 export { QUESTION_ROTATION_ORDER_SQL, QUESTION_ROTATION_RANK_SQL } from './questionOrder';
 
+// The one per-owner backlog cap and cadence both inference selectors dispatch under
+export { inferenceDispatchOpenSql } from './inferenceDispatchGate';
+
 // Persisted retrieval provenance for an inferred answer (ci.answers.answer_evidence)
 export type { AnswerEvidence, AnswerEvidenceCitation } from './types';
 

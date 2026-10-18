@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { DataSource } from 'typeorm';
 
+import config from '@ci/configuration';
 import { Events } from '@ci/domains/events';
 import { QuestionService } from '@ci/domains/intelligence';
 import { LLM_BACKGROUND_QUEUE } from '@ci/domains/llm';
@@ -42,7 +43,11 @@ if (!availability.available) {
 
 jest.setTimeout(60_000);
 
-/** The listener with only the three collaborators `answer_infer` touches. */
+/**
+ * The listener with only the collaborators `answer_infer` touches — the event
+ * bus, the DataSource, and a real QuestionService over the same DataSource for
+ * the dispatch gate, so the gate's SQL runs against the real schema too.
+ */
 function buildListener(dataSource: DataSource, send: jest.Mock): SmartRotationListener {
   const logger = {
     setContext: () => undefined,
@@ -53,7 +58,7 @@ function buildListener(dataSource: DataSource, send: jest.Mock): SmartRotationLi
   } as never;
 
   return new SmartRotationListener(
-    {} as never,
+    new QuestionService(dataSource, {} as never, { send: jest.fn() } as never),
     {} as never,
     { send } as never,
     {} as never,
@@ -346,6 +351,9 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
           queue: LLM_BACKGROUND_QUEUE,
           eventName: Events.INFER_QUESTION_ANSWER,
           cooldownHours: INFERENCE_ATTEMPT_COOLDOWN_HOURS,
+          // `send` is a mock, so no job row is written between steps and the
+          // dispatch gate stays open throughout; it is exercised on its own below.
+          intervalMinutes: config.llm.answerInferenceIntervalMinutes,
         });
 
         // One definition of order, so one answer at every step.
@@ -376,5 +384,200 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
 
   it('asks in the same order when the ids sort the other way — as they do on another appliance', async () => {
     expect(await rotation('reversed')).toEqual(ROTATION);
+  });
+
+  // ═══ THE DISPATCH GATE ═══
+  //
+  // The per-owner backlog cap and cadence (domains/intelligence/
+  // inferenceDispatchGate.ts), run against real pgboss tables. The unit suites
+  // can only check that both selectors embed the same SQL; this checks the SQL
+  // means what it says — the enum comparisons, the lease arithmetic, the
+  // interval parameter's type, and that an owner's id is not silently compared
+  // with pgboss.job's own `id`.
+  //
+  // Each case gets its own owner and its own job rows, written in one
+  // transaction that is always rolled back. `create_queue` is pg-boss's own,
+  // idempotent function: a throwaway test database has no `llm-background`
+  // partition until something creates it, and on a database that already has
+  // one it does nothing.
+  describe('dispatch gate', () => {
+    const INTERVAL_MINUTES = 20;
+
+    type JobState = 'created' | 'retry' | 'active' | 'completed' | 'failed';
+
+    interface JobFixture {
+      state: JobState;
+      /** How long ago the job was created. */
+      createdMinutesAgo: number;
+      /** For `active`: how long ago it started, against a 10-minute lease. */
+      startedMinutesAgo?: number;
+    }
+
+    async function withGate(
+      run: (helpers: {
+        owner(jobs?: JobFixture[], archived?: number[]): Promise<string>;
+        isOpen(ownerId: string): Promise<boolean>;
+        selectorOffers(ownerId: string): Promise<boolean>;
+      }) => Promise<void>,
+    ): Promise<void> {
+      const runner = dataSource.createQueryRunner();
+
+      await runner.connect();
+      await runner.startTransaction();
+
+      try {
+        const forwarding = {
+          query: (sql: string, params?: unknown[]) => runner.query(sql, params),
+        } as unknown as DataSource;
+        const questionService = new QuestionService(forwarding, {} as never, { send: jest.fn() } as never);
+
+        await runner.query(`SELECT pgboss.create_queue($1, $2::json)`, [
+          LLM_BACKGROUND_QUEUE,
+          JSON.stringify({ policy: 'short' }),
+        ]);
+        // One shared question nobody has answered, so the cron selector has
+        // something to offer an ungated owner whatever the catalogue holds.
+        await runner.query(
+          `INSERT INTO ci.questions
+             (question_id, question_text, question_category, question_type, answer_tier, evidence_class,
+              seed_position, is_seed_question, created_by_llm, is_active, created_at)
+           VALUES (gen_random_uuid(), 'Dispatch gate fixture', 'Gate', 'open_ended', 'factual', 'traceable',
+                   NULL, false, false, true, NOW())`,
+        );
+
+        await run({
+          async owner(jobs = [], archived = []) {
+            const ownerId = randomUUID();
+
+            await runner.query(`INSERT INTO ci.users (id, email, name, onboarded) VALUES ($1, $2, $3, true)`, [
+              ownerId,
+              `dispatch-gate.${ownerId}@example.test`,
+              'dispatch gate',
+            ]);
+
+            for (const job of jobs) {
+              await runner.query(
+                `INSERT INTO pgboss.job (name, data, state, created_on, started_on, expire_in)
+                 VALUES (
+                   $1,
+                   jsonb_build_object('name', $2::text, 'ownerId', $3::text, 'questionId', gen_random_uuid()::text),
+                   $4::pgboss.job_state,
+                   NOW() - make_interval(mins => $5),
+                   CASE WHEN $6::int IS NULL THEN NULL ELSE NOW() - make_interval(mins => $6::int) END,
+                   interval '10 minutes'
+                 )`,
+                [
+                  LLM_BACKGROUND_QUEUE,
+                  Events.INFER_QUESTION_ANSWER,
+                  ownerId,
+                  job.state,
+                  job.createdMinutesAgo,
+                  job.startedMinutesAgo ?? null,
+                ],
+              );
+            }
+
+            for (const createdMinutesAgo of archived) {
+              // `archive` is `LIKE job` without the defaults, so every NOT NULL
+              // column is spelled out.
+              await runner.query(
+                `INSERT INTO pgboss.archive
+                   (id, name, priority, data, state, retry_limit, retry_count, retry_delay, retry_backoff,
+                    start_after, expire_in, created_on, keep_until)
+                 VALUES (
+                   gen_random_uuid(),
+                   $1,
+                   0,
+                   jsonb_build_object('name', $2::text, 'ownerId', $3::text, 'questionId', gen_random_uuid()::text),
+                   'completed',
+                   0, 0, 0, false,
+                   NOW() - make_interval(mins => $4),
+                   interval '10 minutes',
+                   NOW() - make_interval(mins => $4),
+                   NOW() + interval '1 day'
+                 )`,
+                [LLM_BACKGROUND_QUEUE, Events.INFER_QUESTION_ANSWER, ownerId, createdMinutesAgo],
+              );
+            }
+
+            return ownerId;
+          },
+
+          isOpen(ownerId) {
+            return questionService.isInferenceDispatchOpen(ownerId, {
+              queue: LLM_BACKGROUND_QUEUE,
+              eventName: Events.INFER_QUESTION_ANSWER,
+              intervalMinutes: INTERVAL_MINUTES,
+            });
+          },
+
+          async selectorOffers(ownerId) {
+            const byUser = await questionService.findUnansweredByUserId({
+              queue: LLM_BACKGROUND_QUEUE,
+              eventName: Events.INFER_QUESTION_ANSWER,
+              cooldownHours: INFERENCE_ATTEMPT_COOLDOWN_HOURS,
+              intervalMinutes: INTERVAL_MINUTES,
+            });
+
+            return (byUser.get(ownerId)?.length ?? 0) > 0;
+          },
+        });
+      } finally {
+        await runner.rollbackTransaction();
+        await runner.release();
+      }
+    }
+
+    it('is open for an owner with no inference history', async () => {
+      await withGate(async ({ owner, isOpen }) => {
+        expect(await isOpen(await owner())).toBe(true);
+      });
+    });
+
+    it('closes while a job is waiting, retrying, or running inside its lease', async () => {
+      await withGate(async ({ owner, isOpen }) => {
+        // Created long enough ago that the interval alone would not close it:
+        // what closes it here is that the job has not settled.
+        expect(await isOpen(await owner([{ state: 'created', createdMinutesAgo: 600 }]))).toBe(false);
+        expect(await isOpen(await owner([{ state: 'retry', createdMinutesAgo: 600 }]))).toBe(false);
+        expect(
+          await isOpen(await owner([{ state: 'active', createdMinutesAgo: 600, startedMinutesAgo: 5 }])),
+        ).toBe(false);
+      });
+    });
+
+    it('does not let an active row past its lease silence the owner', async () => {
+      // pg-boss should already have expired this row. Counting it would stop the
+      // owner's inference for good with nothing to say why; the waiting job the
+      // gate then lets through closes it again by itself.
+      await withGate(async ({ owner, isOpen }) => {
+        expect(
+          await isOpen(await owner([{ state: 'active', createdMinutesAgo: 240, startedMinutesAgo: 240 }])),
+        ).toBe(true);
+      });
+    });
+
+    it('closes for the interval after a dispatch, whether the job is still live or already archived', async () => {
+      await withGate(async ({ owner, isOpen }) => {
+        expect(await isOpen(await owner([{ state: 'completed', createdMinutesAgo: 5 }]))).toBe(false);
+        expect(await isOpen(await owner([{ state: 'failed', createdMinutesAgo: 5 }]))).toBe(false);
+        expect(await isOpen(await owner([], [5]))).toBe(false);
+
+        expect(await isOpen(await owner([{ state: 'completed', createdMinutesAgo: INTERVAL_MINUTES + 1 }]))).toBe(
+          true,
+        );
+        expect(await isOpen(await owner([], [INTERVAL_MINUTES + 1]))).toBe(true);
+      });
+    });
+
+    it('applies the same gate to the cron selector, owner by owner', async () => {
+      await withGate(async ({ owner, selectorOffers }) => {
+        const gated = await owner([{ state: 'created', createdMinutesAgo: 1 }]);
+        const free = await owner();
+
+        expect(await selectorOffers(gated)).toBe(false);
+        expect(await selectorOffers(free)).toBe(true);
+      });
+    });
   });
 });

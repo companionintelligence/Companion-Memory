@@ -13,6 +13,7 @@ import {
 } from '@ci/domains/intelligence/events';
 
 import { Question, QuestionEntity } from '../entities/QuestionEntity';
+import { inferenceDispatchOpenSql } from '../inferenceDispatchGate';
 import { QUESTION_ROTATION_ORDER_SQL, QUESTION_ROTATION_RANK_SQL, TIER_RANK_SQL } from '../questionOrder';
 import { excludeForkedOriginsSql } from '../questionScope';
 import type {
@@ -989,11 +990,18 @@ export class QuestionService {
    * catalogue's rotation order from questionOrder.ts — tier, batch age, then a
    * round-robin across categories in the order the seed files list them. The
    * listener takes the same definition, so the two selectors cannot drift.
+   *
+   * An owner who still has an inference waiting or running, or who was sent one
+   * within `intervalMinutes`, is left out entirely — see
+   * {@link inferenceDispatchOpenSql}. That gate is applied to the user set, before
+   * the per-question work, so a tick on which everyone is gated costs a scan of
+   * the queue's own rows and nothing else.
    */
   async findUnansweredByUserId(attemptHistory: {
     queue: string;
     eventName: string;
     cooldownHours: number;
+    intervalMinutes: number;
   }): Promise<Map<string | null, string[]>> {
     // TODO: We need to refine how we're selecting "unanswered questions".
     //
@@ -1054,7 +1062,19 @@ export class QuestionService {
             ORDER BY att.last_attempt_at ASC NULLS FIRST, ${QUESTION_ROTATION_ORDER_SQL}
           ) AS rn
         FROM ci.questions q
-        CROSS JOIN (SELECT DISTINCT id AS user_id FROM ci.users WHERE id IS NOT NULL) u
+        CROSS JOIN (
+          SELECT DISTINCT usr.id AS user_id
+          FROM ci.users usr
+          WHERE usr.id IS NOT NULL
+            -- The per-owner backlog cap and cadence. Aliased, because the gate's
+            -- subqueries read pgboss.job, which has an \`id\` of its own.
+            AND ${inferenceDispatchOpenSql({
+              ownerText: 'usr.id::text',
+              queue: '$1',
+              eventName: '$2',
+              intervalMinutes: '$4',
+            })}
+        ) u
         LEFT JOIN attempts att
           ON att.question_id = q.question_id::text
          AND att.user_id = COALESCE(q.is_private_to, u.user_id)::text
@@ -1087,7 +1107,12 @@ export class QuestionService {
       FROM unanswered
       WHERE rn <= 1;
     `,
-      [attemptHistory.queue, attemptHistory.eventName, attemptHistory.cooldownHours],
+      [
+        attemptHistory.queue,
+        attemptHistory.eventName,
+        attemptHistory.cooldownHours,
+        attemptHistory.intervalMinutes,
+      ],
     )) satisfies Array<Row>;
 
     const groupedByUserId = new Map<string | null, string[]>();
@@ -1103,6 +1128,30 @@ export class QuestionService {
     }
 
     return groupedByUserId;
+  }
+
+  /**
+   * May this owner be sent another inference right now? The same gate
+   * {@link findUnansweredByUserId} applies to every owner at once, asked for one
+   * — for `SmartRotationListener`, which selects per owner and wants to say WHY
+   * it skipped rather than fold "gated" into "nothing left to ask".
+   */
+  async isInferenceDispatchOpen(
+    userId: string,
+    dispatch: { queue: string; eventName: string; intervalMinutes: number },
+  ): Promise<boolean> {
+    type Row = { open: boolean };
+    const rows = (await this.dataSource.query(
+      `SELECT ${inferenceDispatchOpenSql({
+        ownerText: '$1',
+        queue: '$2',
+        eventName: '$3',
+        intervalMinutes: '$4',
+      })} AS open`,
+      [userId, dispatch.queue, dispatch.eventName, dispatch.intervalMinutes],
+    )) as Row[];
+
+    return rows[0]?.open === true;
   }
 
   /**

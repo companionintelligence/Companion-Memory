@@ -9,7 +9,7 @@ import type { LoggerService } from '@ci/common/logging';
 import { EventListenerRegistry } from '../../event-registration';
 import type { JobSlotPool } from '../../jobSlotPool';
 import type { Acknowledgement } from '../../types';
-import { YieldGateRegistry } from '../../yieldGates';
+import { YIELD_GATE_TIMEOUT_MS, YieldGateRegistry } from '../../yieldGates';
 import { PGBossEventService } from '../PGBossEventService';
 
 /**
@@ -59,6 +59,12 @@ const MIN_JOB_DEADLINE_MS = 60_000;
  * testing the floor instead.
  */
 const HARNESS_JOB_TIMEOUT_MS = 120_000;
+
+/**
+ * The bound on one complete()/fail() round trip, mirrored for the same reason
+ * as the backoffs: asserted, not read back.
+ */
+const BOOKKEEPING_TIMEOUT_MS = 30_000;
 
 interface StubLogger {
   setContext: jest.Mock;
@@ -958,6 +964,59 @@ describe('PGBossEventService work loop', () => {
 
       expect(harness.boss.stop).toHaveBeenCalledTimes(1);
     });
+
+    // ═══ ACKNOWLEDGEMENTS THAT NEVER COME BACK ═══
+    //
+    // complete() and fail() run inside the job's slots, AFTER the listener's own
+    // deadline. A round trip that neither resolves nor rejects — pg-boss sets no
+    // statement timeout and its pool waits for a connection without limit — held
+    // the slot exactly as a hung listener did: the row stayed `active` and
+    // nothing behind it on that queue (or its lane) was ever fetched.
+    it('releases the slot when complete() never returns, and works the next job', async () => {
+      const harness = makeHarness({ queues: ['llm-background'], perQueueConcurrency: 1 });
+
+      harness.listen('llm-background', 'infer.question.answer');
+      harness.enqueue('llm-background', 'infer.question.answer', [0, 0]);
+      harness.boss.complete.mockImplementationOnce(() => new Promise(() => undefined));
+      harness.start('llm-background');
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(harness.executed).toEqual(['llm-background-job-1']);
+
+      await jest.advanceTimersByTimeAsync(BOOKKEEPING_TIMEOUT_MS + BACKOFF_WHEN_FULL_MS);
+
+      expect(harness.executed).toEqual(['llm-background-job-1', 'llm-background-job-2']);
+      // Logged and left to pg-boss's lease expiry — never escalated to fail(),
+      // because the listener succeeded.
+      expect(harness.boss.fail).not.toHaveBeenCalled();
+      expect(
+        harness.logger.error.mock.calls.some(([line]) => String(line).includes('could not be marked complete')),
+      ).toBe(true);
+      expect(harness.reservedSlots()).toBe(0);
+    });
+
+    it('releases the slot when fail() never returns, and works the next job', async () => {
+      const harness = makeHarness({ queues: ['llm-background'], perQueueConcurrency: 1 });
+
+      harness.listen('llm-background', 'infer.question.answer', 'fail');
+      harness.enqueue('llm-background', 'infer.question.answer', [0, 0]);
+      harness.boss.fail.mockImplementationOnce(() => new Promise(() => undefined));
+      harness.start('llm-background');
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(harness.executed).toEqual(['llm-background-job-1']);
+
+      await jest.advanceTimersByTimeAsync(BOOKKEEPING_TIMEOUT_MS + BACKOFF_WHEN_FULL_MS);
+
+      expect(harness.executed).toEqual(['llm-background-job-1', 'llm-background-job-2']);
+      expect(harness.boss.fail).toHaveBeenCalledTimes(2);
+      expect(
+        harness.logger.error.mock.calls.some(([line]) => String(line).includes('Could not record the failure')),
+      ).toBe(true);
+      expect(harness.reservedSlots()).toBe(0);
+    });
   });
 
   /**
@@ -1404,6 +1463,33 @@ describe('PGBossEventService work loop', () => {
       harness.start('image-description');
 
       await jest.advanceTimersByTimeAsync(1);
+
+      expect(harness.executed).toEqual(['image-description-job-1']);
+    });
+
+    it('does not wait forever on a gate that never answers', async () => {
+      // A lookup that neither resolves nor rejects — a database that has stopped
+      // answering. Every yielding queue awaits the gate before it fetches, so
+      // unbounded this froze all four Ollama background queues at once, with
+      // nothing logged, while their senders kept enqueueing.
+      EventListenerRegistry.register('preview.generated', 'DescribeListener', 'handle', 'image-description', {
+        yieldsTo: 'interactive-chat',
+      });
+      YieldGateRegistry.register('interactive-chat', () => new Promise<boolean>(() => undefined));
+
+      const harness = makeHarness({ queues: ['image-description'] });
+
+      harness.listen('image-description', 'preview.generated');
+      harness.enqueue('image-description', 'preview.generated', [0]);
+      harness.start('image-description');
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(harness.boss.fetch).not.toHaveBeenCalled();
+
+      // Read as open once the bound passes — the rule already applied to a gate
+      // that throws or was never registered.
+      await jest.advanceTimersByTimeAsync(YIELD_GATE_TIMEOUT_MS);
 
       expect(harness.executed).toEqual(['image-description-job-1']);
     });

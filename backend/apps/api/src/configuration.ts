@@ -403,6 +403,18 @@ export const ConfigSchema = z.object({
        * longer per attempt, on a plain single-node appliance too, so it is a deliberate trade.
        */
       answerInferenceTimeoutMs: z.coerce.number().int().positive().default(270_000),
+      /**
+       * The least time between two answer-inference dispatches for ONE owner, in minutes.
+       *
+       * Both selectors (`AnswerInferenceCron`, the smart-rotation `answer_infer` work) skip an
+       * owner whose last `infer.question.answer` job was created more recently than this, and
+       * skip an owner who still has one waiting or running whatever this says — see
+       * `inferenceDispatchGate.ts`. 20 is the smart-rotation cadence: three inferences an hour
+       * per person. The legacy cron used to send one a MINUTE per person with no backlog check,
+       * which on a four-person appliance was 240 jobs an hour, around the clock, and a queue that
+       * never drained.
+       */
+      answerInferenceIntervalMinutes: z.coerce.number().int().positive().default(20),
       chat: z
         .object({
           groundedRecall: z

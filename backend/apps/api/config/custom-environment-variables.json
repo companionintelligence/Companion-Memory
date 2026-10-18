@@ -117,6 +117,10 @@
       "__name": "LLM_ANSWER_INFERENCE_TIMEOUT_MS",
       "__format": "json"
     },
+    "answerInferenceIntervalMinutes": {
+      "__name": "LLM_ANSWER_INFERENCE_INTERVAL_MINUTES",
+      "__format": "json"
+    },
     "chat": {
       "groundedRecall": {
         "enabled": {
