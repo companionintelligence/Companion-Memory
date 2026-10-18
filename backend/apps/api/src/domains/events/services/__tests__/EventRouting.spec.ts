@@ -187,7 +187,7 @@ describe('event routing', () => {
     it('hands a per-job retention to pg-boss, and only when the caller asked for one', async () => {
       // pg-boss turns `retentionMinutes` into the row's keep_until, after which
       // its archive sweep drops the job unrun. Answer inference relies on that
-      // so a stalled llm-background does not replay hours of stale guesses.
+      // so a backed-up llm-background does not replay hours of stale guesses.
       EventListenerRegistry.register('infer.question.answer', 'InferListener', 'infer', 'llm-background');
       const service = makePgBossService();
 

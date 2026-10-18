@@ -991,7 +991,7 @@ describe('QuestionService asks the functional questions first', () => {
   it('only offers owners the dispatch gate leaves open, by the same SQL the smart-rotation path asks', async () => {
     // The cron used to send one inference a minute per owner whatever
     // llm-background already held: 240 jobs an hour on a four-person box, and
-    // 935 waiting when the queue stalled on core-1. The gate is applied to the
+    // 941 waiting, ~4 h behind, on core-1. The gate is applied to the
     // owner set itself, so a gated owner costs none of the per-question work.
     const service = makeService();
     const [sql] = await capturedSql(service, () => service.findUnansweredByUserId(ATTEMPT_HISTORY));

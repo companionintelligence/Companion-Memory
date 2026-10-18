@@ -1600,10 +1600,9 @@ export class PGBossEventService
    * statement timeout and its pool waits for a connection without limit, so a
    * round trip that never came back held those slots exactly as a hung listener
    * did before {@link withDeadline} existed: the row stays `active`, the lane
-   * fetches nothing, and the senders keep enqueueing behind it. That is the
-   * shape `llm-background` wedged in on core-1 on 2026-10-17 — one job `active`
-   * for ~4 h, 935 `created` — although which await held it there is not
-   * established from here.
+   * fetches nothing, and the senders keep enqueueing behind it. Found while
+   * chasing core-1's `llm-background` backlog on 2026-10-17 — which turned out
+   * to be plain saturation, not this — but nothing bounded these two awaits.
    *
    * On timeout the callers' existing catches apply: logged, and the row left to
    * pg-boss's own lease expiry, which is the same outcome as a crash. The round

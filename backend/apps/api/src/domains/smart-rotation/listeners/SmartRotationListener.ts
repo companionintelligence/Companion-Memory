@@ -61,11 +61,11 @@ export const INFERENCE_ATTEMPT_COOLDOWN_HOURS = 6;
  *
  * The job is only ever a guess at an unanswered question, and the next tick
  * makes a fresh one, so replaying a stale backlog buys nothing and costs GPU
- * time. On core-1 (2026-10-17) the queue held 935 of them behind one wedged
- * job; released, they would have run back to back for hours. The per-owner
- * cap in `inferenceDispatchGate.ts` is what stops a backlog FORMING — this
- * clears whatever is left of one if the queue stalls with jobs already
- * waiting.
+ * time. On core-1 (2026-10-17) the queue fell ~4 h behind with 941 of them
+ * waiting, every one due to run, oldest first, long after it was current.
+ * The per-owner cap in `inferenceDispatchGate.ts` is what stops a backlog
+ * FORMING — this clears whatever is left of one if the queue falls behind
+ * with jobs already waiting.
  *
  * Per job and not on the queue: `llm-background` also carries thread titles,
  * which must survive a long wait. A dropped job lands in `pgboss.archive`,
@@ -126,7 +126,7 @@ export class SmartRotationListener {
         // Before the selection, and said separately: "this person's last
         // inference has not settled, or was only just sent" is a different
         // situation from "nothing left to ask", and folding the two together is
-        // how a stalled queue looked like a quiet one.
+        // how a backed-up queue looked like a quiet one.
         const open = await this.questionService.isInferenceDispatchOpen(userId, {
           queue: LLM_BACKGROUND_QUEUE,
           eventName: Events.INFER_QUESTION_ANSWER,

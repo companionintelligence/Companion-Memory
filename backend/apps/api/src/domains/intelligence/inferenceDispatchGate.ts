@@ -15,13 +15,13 @@
  *   1. Is a job for this owner still OUTSTANDING — `created`, `retry`, or
  *      `active` inside its lease? Then nothing more is sent until it settles.
  *      This is the cap that was missing. The cron used to send one job a minute
- *      per owner whatever the queue held, so when `llm-background` stopped
- *      draining (measured on core-1, 2026-10-17: one job `active` for ~4 h) it
- *      kept going, and 935 jobs were waiting by the time anyone looked — each
- *      a different question, because a waiting job counts as an attempt and
- *      pushes the selector onto the next one. With this, a wedged queue holds
- *      at most one waiting job per owner, and there is nothing to stampede
- *      through the GPU when it comes back.
+ *      per owner whatever the queue held. On core-1 (2026-10-17) that was
+ *      four owners, 240 jobs an hour, against one `ollama-background` slot that
+ *      could not keep up: the queue fell ~4 h behind with 941 waiting — each a
+ *      different question, because a waiting job counts as an attempt and
+ *      pushes the selector onto the next one. With this, a queue that is
+ *      saturated or stalled holds at most one waiting job per owner, so the
+ *      dispatch rate can never outrun what the GPU actually finishes.
  *
  *   2. Was one CREATED for this owner within the interval
  *      (`llm.answerInferenceIntervalMinutes`)? Then not yet. This is the
@@ -35,7 +35,7 @@
  * have expired. Counting it would let one stuck row silence that owner's
  * inference for good, with nothing in the log to say why. Not counting it lets
  * one fresh job through, which then waits `created` — and (1) holds from
- * there. So the worst case on a wedged queue is still one waiting job per
+ * there. So the worst case on a stuck queue is still one waiting job per
  * owner, and the owner resumes on their own once the queue does.
  *
  * Owner ids live in the job payload as text (`data->>'ownerId'`), so

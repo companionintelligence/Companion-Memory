@@ -24,8 +24,8 @@ import {
 // inferenceDispatchGate.ts). The tick only sets how soon after the interval
 // elapses an owner is picked up again. It used to be the cadence itself: one
 // job a minute per owner, whatever the queue already held — 240 an hour,
-// around the clock, on a four-person appliance, and 935 waiting on core-1 by
-// the time a stalled queue was noticed.
+// around the clock, on a four-person appliance. That is more than one GPU slot
+// can finish, so core-1's queue fell ~4 h behind with 941 waiting (2026-10-17).
 const ANSWER_INFERENCE_CRON = '55 * * * * *';
 
 @Injectable()
