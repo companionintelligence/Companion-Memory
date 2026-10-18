@@ -9,6 +9,7 @@ import type { PersonalizationService } from '@ci/domains/personalization';
 import type { SearchService } from '@ci/domains/search-next';
 
 import { AnswerInferenceListener } from '../AnswerInferenceListener';
+import { INFERENCE_QUEUE_RETENTION_MINUTES } from '../SmartRotationListener';
 
 type Payload = EventPayloads[Events.INFER_QUESTION_ANSWER];
 
@@ -239,6 +240,65 @@ function buildListener(overrides: {
     logger,
   };
 }
+
+describe('AnswerInferenceListener.handleInferQuestionAnswer — a job too old to be worth running', () => {
+  // The queue entry point. On core-1 (2026-10-17) llm-background fell ~4 h
+  // behind with 941 waiting; without this every one of them ran, oldest first,
+  // long after its guess was current.
+  const JOB: Payload = { ownerId: 'user-1', questionId: 'q-1' } as Payload;
+
+  function ackAt(enqueuedAt?: Date) {
+    return { jobId: 'job-1', enqueuedAt, done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
+  }
+
+  const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000);
+
+  it('completes a job older than its retention without retrieval or a model call', async () => {
+    const { listener, questionService, recallService, ollamaService } = buildListener({});
+    const ack = ackAt(minutesAgo(INFERENCE_QUEUE_RETENTION_MINUTES + 1));
+
+    await listener.handleInferQuestionAnswer(JOB, ack);
+
+    // Completed, not failed: a failure would retry it — and then dead-letter a
+    // job whose only fault was waiting.
+    expect(ack.done).toHaveBeenCalledTimes(1);
+    expect(ack.fail).not.toHaveBeenCalled();
+    expect(questionService.findById).not.toHaveBeenCalled();
+    expect(recallService.recall).not.toHaveBeenCalled();
+    expect(ollamaService.chat).not.toHaveBeenCalled();
+  });
+
+  it('runs a job inside its retention, and completes it', async () => {
+    const { listener, ollamaService } = buildListener({});
+    const ack = ackAt(minutesAgo(INFERENCE_QUEUE_RETENTION_MINUTES - 1));
+
+    await listener.handleInferQuestionAnswer(JOB, ack);
+
+    expect(ollamaService.chat).toHaveBeenCalledTimes(1);
+    expect(ack.done).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs a job with no enqueue time — nothing waited under the inline bus', async () => {
+    const { listener, ollamaService } = buildListener({});
+    const ack = ackAt(undefined);
+
+    await listener.handleInferQuestionAnswer(JOB, ack);
+
+    expect(ollamaService.chat).toHaveBeenCalledTimes(1);
+    expect(ack.done).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails the job when the work throws, so the queue retry policy applies', async () => {
+    const boom = new Error('pool unreachable');
+    const { listener } = buildListener({ ollamaService: { chat: jest.fn().mockRejectedValue(boom) } });
+    const ack = ackAt(minutesAgo(1));
+
+    await listener.handleInferQuestionAnswer(JOB, ack);
+
+    expect(ack.fail).toHaveBeenCalledWith(boom);
+    expect(ack.done).not.toHaveBeenCalled();
+  });
+});
 
 describe('AnswerInferenceListener.inferQuestionAnswer — early exits', () => {
   it('skips (no LLM call) when the payload has no owner', async () => {

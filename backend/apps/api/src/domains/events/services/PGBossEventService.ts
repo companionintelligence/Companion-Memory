@@ -1786,7 +1786,14 @@ export class PGBossEventService
         const queueSpecificEventName = `${name}:${queue}`;
 
         if (this.eventEmitter.hasListeners(queueSpecificEventName)) {
-          this.eventEmitter.emit(queueSpecificEventName, data, { jobId: job.id, done, fail, defer });
+          this.eventEmitter.emit(queueSpecificEventName, data, {
+            jobId: job.id,
+            // Fetched with includeMetadata, so the row's created_on rides along.
+            enqueuedAt: job.createdOn,
+            done,
+            fail,
+            defer,
+          });
         } else {
           skip();
         }

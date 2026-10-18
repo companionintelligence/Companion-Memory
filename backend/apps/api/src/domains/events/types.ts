@@ -23,6 +23,17 @@ export type Acknowledgement = {
    */
   jobId: string;
 
+  /**
+   * When this job was ENQUEUED (`pgboss.job.created_on`) — so a listener can
+   * tell how long the work waited before reaching it, and drop work that is no
+   * longer worth doing (AnswerInferenceListener). A retry keeps the original
+   * time; a dead-letter replay is a new job and gets a new one.
+   *
+   * Optional, unlike `jobId`: LocalEventService runs listeners inline, so
+   * nothing ever waited and there is no queue row to read it from.
+   */
+  enqueuedAt?: Date;
+
   done: () => void;
   fail: (reason: unknown) => void;
 

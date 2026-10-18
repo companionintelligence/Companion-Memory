@@ -455,6 +455,28 @@ describe('PGBossEventService work loop', () => {
       expect(acks[0]?.jobId).toBe('search-index-job-1');
     });
 
+    it("hands the listener the row's created_on as the ack's enqueuedAt", async () => {
+      // How a listener tells how long its job waited. AnswerInferenceListener
+      // drops inference older than its retention by it, which is what stops a
+      // backlog queued hours ago from replaying in full.
+      const harness = makeHarness({ queues: ['llm-background'] });
+      const createdOn = new Date('2026-10-17T23:01:00Z');
+      const acks: Acknowledgement[] = [];
+
+      harness.emitter.on('infer.question.answer:llm-background', (_payload: unknown, ack: Acknowledgement) => {
+        acks.push(ack);
+        ack.done();
+      });
+      harness.boss.fetch.mockResolvedValueOnce([
+        { id: 'llm-background-job-1', data: { name: 'infer.question.answer' }, createdOn },
+      ]);
+      harness.start('llm-background');
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(acks[0]?.enqueuedAt).toBe(createdOn);
+    });
+
     it('fails the job with the error message AND stack persisted in the job output', async () => {
       const harness = makeHarness({ queues: ['search-index'] });
 
