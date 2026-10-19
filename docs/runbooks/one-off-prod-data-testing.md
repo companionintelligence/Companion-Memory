@@ -111,16 +111,21 @@ PR_TAG=my-feature-test ROOT_FOLDER_HOST=~/.local/share/companion-hub ./scripts/d
 The deploy script:
 
 1. Tags `ci/{api,gateway,hbpe-service,summary-service}:latest` as `ghcr.io/companionintelligence/companion/*:pr-onboarding-test` (or `PR_TAG`)
-2. Writes the image override to `{ROOT_FOLDER_HOST}/user-config/ci-marketplace/ci-memory/docker-compose.yml`.
-   That is the Hub's user compose override: the Hub layers it over the installed compose
-   every time it starts Memory, so the swap survives a Hub restart or a reboot. An override
-   already there is moved to `docker-compose.yml.before-pr-test` until rollback puts it
-   back. The override pins only what runs after the swap, so `--frontend` pins the gateway
-   alone unless an earlier full swap is still running.
+2. Writes the image override to a temporary file beside the Hub's user compose override,
+   `{ROOT_FOLDER_HOST}/user-config/ci-marketplace/ci-memory/docker-compose.yml`. The
+   override pins only what runs after the swap, so `--frontend` pins the gateway alone
+   unless an earlier full swap is still running. It pins `migrate-database` only on a run
+   that applies migrations. The Hub runs `migrate-database` every time it starts Memory, so
+   a pin left by `--skip-migrate` or `--frontend` would apply the checkout's SQL on the
+   next Hub restart.
 3. Runs `migrate-database` via `docker exec <hub container> sh -c 'docker compose …'`, with
-   the same env files and compose files the Hub passes
+   the Hub's env files and installed compose plus that override
 4. Recreates **`api`**, **`gateway`**, **`hbpe-service`**, and **`summary-service`** (`--no-deps`)
-5. Points Traefik's `apps.yml` at the recreated gateway's address, since the Hub only
+5. Installs the override as the Hub's user compose override. The Hub layers it over the
+   installed compose every time it starts Memory, so the swap survives a Hub restart or a
+   reboot. An override already there is moved to `docker-compose.yml.before-pr-test` until
+   rollback puts it back. A run that fails before this step leaves the Hub's override as it was.
+6. Points Traefik's `apps.yml` at the recreated gateway's address, since the Hub only
    rewrites it when it starts or stops the app itself
 
 The Hub ignores the user compose override while custom configuration is turned off for
@@ -132,8 +137,9 @@ Memory. With it off, a Hub restart brings back the pinned images.
 ./scripts/dev/hub-pr-test-rollback.sh
 ```
 
-Removes the override (putting back any override it replaced) and recreates `api` + `gateway` + `hbpe-service`
-+ `summary-service` from the digest-pinned images in Hub's canonical `docker-compose.yml`.
+Removes the override (putting back any override it replaced) and recreates `api`,
+`gateway`, `hbpe-service` and `summary-service` from the digest-pinned images in Hub's
+canonical `docker-compose.yml`.
 
 ### Verify
 

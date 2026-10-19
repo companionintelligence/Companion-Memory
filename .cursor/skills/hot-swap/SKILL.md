@@ -20,7 +20,7 @@ Full constraints, backup, and the one-way migration rules are in [docs/runbooks/
 1. SSH to the appliance that is running Hub. The checkout, the Docker socket and the Hub container (`ci-hub`, or `ci-os-hub` on older Hubs) must be on that machine.
 2. Use the devel checkout (on core-3, `~/devel/ci/ci-server`). Ignore stale clones such as `~/CI-Server`.
 3. Confirm the branch to test, then check it out. Stash a dirty tree first.
-4. Confirm Hub's env file exists: `~/.local/share/companion-hub/app-data/ci-marketplace/ci-memory/app.env`. Stop if it is missing. Do not edit `app.env` to change images.
+4. Confirm Hub's env file exists: `app-data/ci-marketplace/ci-memory/app.env` under Hub's data root (`~/.local/share/companion-hub` on an installed Hub; the scripts read the root from the Hub container's mounts). Stop if it is missing. Do not edit `app.env` to change images.
 
 ## Swap
 
@@ -40,7 +40,7 @@ Run from that checkout:
 - `GPU=cpu` is the default. Hub does not pass GPU devices into `hbpe-service`.
 - `PR_TAG` defaults to `pr-onboarding-test`. Set it when this box already uses another local tag.
 
-The script tags local `ci/*:latest` images and writes the image override to Hub's user compose override for ci-memory (`user-config/ci-marketplace/ci-memory/docker-compose.yml`). Hub applies that file every time it starts Memory, so the swap survives a Hub restart or a reboot. The script then runs compose inside the Hub container, recreates `api`, `gateway`, `hbpe-service` and `summary-service` (`gateway` only for `--frontend`) and points Traefik at the new gateway IP. An override that was already there is moved aside and comes back on rollback.
+The script tags local `ci/*:latest` images, runs compose inside the Hub container with an image override and recreates `api`, `gateway`, `hbpe-service` and `summary-service` (`gateway` only for `--frontend`). Once that works it installs the override as Hub's user compose override for ci-memory (`user-config/ci-marketplace/ci-memory/docker-compose.yml`) and points Traefik at the new gateway IP. Hub applies that file every time it starts Memory, so the swap survives a Hub restart or a reboot. The override pins `migrate-database` only on a run that applies migrations, so a Hub restart after `--skip-migrate` or `--frontend` does not apply the checkout's SQL. An override that was already there is moved aside and comes back on rollback.
 
 The override changes image tags only. Hub's env files are passed through to the new containers: `app.env`, and `user-config/app.env` when that overlay exists. That is what keeps the appliance on its dedicated Hub subdomain. `APP_URL`, the public hostname, and the OIDC URLs come from those files, not from the image. Do not copy them into the build and do not rewrite them for the swap.
 

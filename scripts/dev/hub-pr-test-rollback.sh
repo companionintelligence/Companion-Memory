@@ -11,15 +11,21 @@ require_app_env
 if is_pr_test_override "$USER_COMPOSE_HOST"; then
   rm -f "$USER_COMPOSE_HOST"
   echo "==> Removed override: $USER_COMPOSE_HOST"
-
-  if [[ -f "$USER_COMPOSE_BACKUP_HOST" ]]; then
-    mv "$USER_COMPOSE_BACKUP_HOST" "$USER_COMPOSE_HOST"
-    echo "==> Put back the user compose override it replaced: $USER_COMPOSE_HOST"
-    echo "    The Hub applies it again from now on."
-  fi
 elif [[ -f "$USER_COMPOSE_HOST" ]]; then
   echo "==> Left $USER_COMPOSE_HOST in place: hub-pr-test-deploy.sh did not write it."
   echo "    The Hub keeps applying it. If it pins test images, delete it and rerun this script."
+fi
+
+# Also when the override is already gone, deleted by hand or never written by a
+# deploy that stopped part way.
+if [[ -f "$USER_COMPOSE_BACKUP_HOST" ]]; then
+  if [[ -e "$USER_COMPOSE_HOST" ]]; then
+    echo "==> Left $USER_COMPOSE_BACKUP_HOST aside: $USER_COMPOSE_HOST is in its place."
+  else
+    mv "$USER_COMPOSE_BACKUP_HOST" "$USER_COMPOSE_HOST"
+    echo "==> Put back the user compose override the swap replaced: $USER_COMPOSE_HOST"
+    echo "    The Hub applies it again from now on."
+  fi
 fi
 
 if [[ -f "$LEGACY_OVERRIDE_HOST" ]]; then

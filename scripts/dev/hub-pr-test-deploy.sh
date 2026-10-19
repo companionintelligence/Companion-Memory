@@ -57,6 +57,18 @@ done
 
 require_app_env
 
+# An operator's own user compose override is moved aside while a swap is in
+# place and there is room for one. Checked before the build (which takes
+# minutes) and again just before the move.
+check_backup_slot() {
+  if [[ -f "$USER_COMPOSE_HOST" ]] && ! is_pr_test_override "$USER_COMPOSE_HOST" && [[ -e "$USER_COMPOSE_BACKUP_HOST" ]]; then
+    echo "Both $USER_COMPOSE_HOST and $USER_COMPOSE_BACKUP_HOST exist and neither was written by this script." >&2
+    echo "Merge or remove one of them, then rerun." >&2
+    exit 1
+  fi
+}
+check_backup_slot
+
 RECREATE="api gateway hbpe-service summary-service"
 if [[ "$FRONTEND_ONLY" -eq 1 ]]; then
   RECREATE="gateway"
@@ -93,29 +105,33 @@ fi
 
 mkdir -p "$USER_CONFIG_DIR_HOST"
 
-if [[ -f "$USER_COMPOSE_HOST" ]] && ! is_pr_test_override "$USER_COMPOSE_HOST"; then
-  if [[ -e "$USER_COMPOSE_BACKUP_HOST" ]]; then
-    echo "Both $USER_COMPOSE_HOST and $USER_COMPOSE_BACKUP_HOST exist, and neither was written by this script." >&2
-    echo "Merge or remove one of them, then rerun." >&2
-    exit 1
+# The override is built in a temporary file beside the user compose override and
+# the migration and recreate below run against it. It replaces the user compose
+# override only once both have worked, so a failed run leaves the Hub starting
+# Memory the way it did before.
+OVERRIDE_TMP="$(mktemp "${USER_COMPOSE_HOST}.XXXXXX")"
+on_exit() {
+  local status=$?
+  if [[ -n "$OVERRIDE_TMP" ]]; then
+    rm -f "$OVERRIDE_TMP"
+    if [[ "$status" -ne 0 ]]; then
+      echo "Deploy failed. $USER_COMPOSE_HOST was left as it was." >&2
+      echo "Services recreated before the failure keep the test images until the Hub next starts Memory or you run hub-pr-test-rollback.sh." >&2
+    fi
   fi
-
-  mv "$USER_COMPOSE_HOST" "$USER_COMPOSE_BACKUP_HOST"
-  echo "==> Moved the existing user compose override aside: $USER_COMPOSE_BACKUP_HOST"
-  echo "    Its settings are not applied while the swap is in place. hub-pr-test-rollback.sh puts it back."
-fi
+}
+trap on_exit EXIT
 
 # The Hub applies this override every time it starts Memory, so it must pin
-# exactly what runs after this swap: all four services in a full swap; in
-# --frontend mode the gateway, plus whatever an earlier full swap left running.
-# A tag this run did not create exists only on the machine that built it, and
-# the Hub would try to pull it.
+# what runs after this swap: all four services in a full swap; in --frontend
+# mode the gateway, plus whatever an earlier full swap left running. A tag this
+# run did not create exists only on the machine that built it and the Hub
+# would try to pull it.
 keep_swapped() {
   [[ "$FRONTEND_ONLY" -eq 0 ]] ||
     [[ "$(docker inspect -f '{{.Config.Image}}' "${COMPOSE_PROJECT}-$1-1" 2>/dev/null || true)" == "$2" ]]
 }
 
-OVERRIDE_TMP="$(mktemp "${USER_COMPOSE_HOST}.XXXXXX")"
 PINNED="gateway"
 {
   echo "${PR_TEST_MARKER}. hub-pr-test-rollback.sh removes it and puts back any file it replaced."
@@ -131,9 +147,18 @@ PINNED="gateway"
     environment:
       CI_SKIP_SCHEMA_CHECK: "1"
 ${ENV_FILE_YAML}
+EOF
+    # The Hub runs migrate-database every time it starts Memory. Pinning it after
+    # --skip-migrate or --frontend would apply the checkout's SQL on the next Hub
+    # restart, so only a run that applies those migrations itself pins it. The
+    # pinned migrate-database finds nothing to do on a database that is ahead.
+    if [[ "$SKIP_MIGRATE" -eq 0 ]]; then
+      PINNED="${PINNED} migrate-database"
+      cat <<EOF
   migrate-database:
     image: ${API_IMAGE}
 EOF
+    fi
   fi
   cat <<EOF
   gateway:
@@ -164,22 +189,30 @@ EOF
 EOF
 } > "$OVERRIDE_TMP"
 chmod 644 "$OVERRIDE_TMP"
-mv "$OVERRIDE_TMP" "$USER_COMPOSE_HOST"
 
+if [[ "$SKIP_MIGRATE" -eq 0 ]]; then
+  echo "==> Running migrate-database (applies pending SQL migrations)..."
+  hub_compose "run --rm migrate-database" "$OVERRIDE_TMP"
+fi
+
+echo "==> Recreating ${RECREATE} with PR images..."
+hub_compose "up -d --force-recreate --no-deps ${RECREATE}" "$OVERRIDE_TMP"
+
+check_backup_slot
+if [[ -f "$USER_COMPOSE_HOST" ]] && ! is_pr_test_override "$USER_COMPOSE_HOST"; then
+  mv "$USER_COMPOSE_HOST" "$USER_COMPOSE_BACKUP_HOST"
+  echo "==> Moved the existing user compose override aside: $USER_COMPOSE_BACKUP_HOST"
+  echo "    Its settings are not applied while the swap is in place. hub-pr-test-rollback.sh puts it back."
+fi
+
+mv "$OVERRIDE_TMP" "$USER_COMPOSE_HOST"
+OVERRIDE_TMP=""
 echo "==> Wrote override: $USER_COMPOSE_HOST (pins ${PINNED} to ${PR_TAG})"
 
 if [[ -f "$LEGACY_OVERRIDE_HOST" ]]; then
   rm -f "$LEGACY_OVERRIDE_HOST"
   echo "==> Removed the old override the Hub never read: $LEGACY_OVERRIDE_HOST"
 fi
-
-if [[ "$SKIP_MIGRATE" -eq 0 ]]; then
-  echo "==> Running migrate-database (applies pending SQL migrations)..."
-  hub_compose "run --rm migrate-database"
-fi
-
-echo "==> Recreating ${RECREATE} with PR images..."
-hub_compose "up -d --force-recreate --no-deps ${RECREATE}"
 
 refresh_traefik_upstream
 
