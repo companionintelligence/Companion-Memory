@@ -449,11 +449,10 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
           async owner(jobs = [], archived = []) {
             const ownerId = randomUUID();
 
-            await runner.query(`INSERT INTO ci.users (id, email, name, onboarded) VALUES ($1, $2, $3, true)`, [
-              ownerId,
-              `dispatch-gate.${ownerId}@example.test`,
-              'dispatch gate',
-            ]);
+            await runner.query(
+              `INSERT INTO ci.users (id, email, name, onboarded) VALUES ($1, $2, $3, true)`,
+              [ownerId, `dispatch-gate.${ownerId}@example.test`, 'dispatch gate'],
+            );
 
             for (const job of jobs) {
               await runner.query(
@@ -563,9 +562,9 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
         expect(await isOpen(await owner([{ state: 'failed', createdMinutesAgo: 5 }]))).toBe(false);
         expect(await isOpen(await owner([], [5]))).toBe(false);
 
-        expect(await isOpen(await owner([{ state: 'completed', createdMinutesAgo: INTERVAL_MINUTES + 1 }]))).toBe(
-          true,
-        );
+        expect(
+          await isOpen(await owner([{ state: 'completed', createdMinutesAgo: INTERVAL_MINUTES + 1 }])),
+        ).toBe(true);
         expect(await isOpen(await owner([], [INTERVAL_MINUTES + 1]))).toBe(true);
       });
     });

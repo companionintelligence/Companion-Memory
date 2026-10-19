@@ -1612,7 +1612,12 @@ export class PGBossEventService
    * {@link withDeadline} already accepts, and a far smaller one than a lane held
    * for hours.
    */
-  private boundedBookkeeping<T>(roundTrip: Promise<T>, what: string, queue: string, jobId: string): Promise<T> {
+  private boundedBookkeeping<T>(
+    roundTrip: Promise<T>,
+    what: string,
+    queue: string,
+    jobId: string,
+  ): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const deadline = new Promise<never>((_resolve, reject) => {

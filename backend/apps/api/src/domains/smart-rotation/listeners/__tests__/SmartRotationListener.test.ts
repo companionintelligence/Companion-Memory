@@ -12,7 +12,10 @@ import type { ContextPromptGenerateService, CrossTableHydrationService } from '@
 import type { PythonFunctionService } from '@ci/domains/python-functions';
 import type { SuggestionSyncService } from '@ci/domains/schedule';
 
-import { INFERENCE_QUEUE_RETENTION_MINUTES, SmartRotationListener } from '../../listeners/SmartRotationListener';
+import {
+  INFERENCE_QUEUE_RETENTION_MINUTES,
+  SmartRotationListener,
+} from '../../listeners/SmartRotationListener';
 
 function buildListener(overrides: {
   questionService?: QuestionService;

@@ -463,10 +463,13 @@ describe('PGBossEventService work loop', () => {
       const createdOn = new Date('2026-10-17T23:01:00Z');
       const acks: Acknowledgement[] = [];
 
-      harness.emitter.on('infer.question.answer:llm-background', (_payload: unknown, ack: Acknowledgement) => {
-        acks.push(ack);
-        ack.done();
-      });
+      harness.emitter.on(
+        'infer.question.answer:llm-background',
+        (_payload: unknown, ack: Acknowledgement) => {
+          acks.push(ack);
+          ack.done();
+        },
+      );
       harness.boss.fetch.mockResolvedValueOnce([
         { id: 'llm-background-job-1', data: { name: 'infer.question.answer' }, createdOn },
       ]);
@@ -1013,7 +1016,9 @@ describe('PGBossEventService work loop', () => {
       // because the listener succeeded.
       expect(harness.boss.fail).not.toHaveBeenCalled();
       expect(
-        harness.logger.error.mock.calls.some(([line]) => String(line).includes('could not be marked complete')),
+        harness.logger.error.mock.calls.some(([line]) =>
+          String(line).includes('could not be marked complete'),
+        ),
       ).toBe(true);
       expect(harness.reservedSlots()).toBe(0);
     });
@@ -1035,7 +1040,9 @@ describe('PGBossEventService work loop', () => {
       expect(harness.executed).toEqual(['llm-background-job-1', 'llm-background-job-2']);
       expect(harness.boss.fail).toHaveBeenCalledTimes(2);
       expect(
-        harness.logger.error.mock.calls.some(([line]) => String(line).includes('Could not record the failure')),
+        harness.logger.error.mock.calls.some(([line]) =>
+          String(line).includes('Could not record the failure'),
+        ),
       ).toBe(true);
       expect(harness.reservedSlots()).toBe(0);
     });

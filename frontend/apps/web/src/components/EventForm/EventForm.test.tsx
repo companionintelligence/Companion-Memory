@@ -67,14 +67,12 @@ describe('EventForm — looking a place up', () => {
 
   it('fills both coordinates from the match and names it, once there is a name to look up', async () => {
     const onChange = vi.fn();
-    const lookupPlace = vi
-      .fn()
-      .mockResolvedValue({
-        status: 'ok',
-        latitude: 37.7955,
-        longitude: -122.3937,
-        address: '1 Ferry Building, San Francisco',
-      });
+    const lookupPlace = vi.fn().mockResolvedValue({
+      status: 'ok',
+      latitude: 37.7955,
+      longitude: -122.3937,
+      address: '1 Ferry Building, San Francisco',
+    });
     const { rerender } = render(
       <EventForm value={emptyEventDraft()} onChange={onChange} lookupPlace={lookupPlace} />,
     );

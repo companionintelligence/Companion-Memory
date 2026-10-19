@@ -84,7 +84,14 @@ export default [
     // @ci/cli's is the `ci-import` deprecation shim: it prints a notice to
     // stderr and requires the bundle, so it has to run from `bin/` in the
     // installed package before any resolution the bundle would do for itself.
-    files: ['frontend/apps/desktop/scripts/*.cjs', 'backend/apps/cli/bin/*.cjs'],
+    //
+    // frontend/apps/android/scripts/dev-android.cjs is what `yarn android` runs
+    // under Node, outside the Yarn workspaces (see that app's README).
+    files: [
+      'frontend/apps/desktop/scripts/*.cjs',
+      'frontend/apps/android/scripts/*.cjs',
+      'backend/apps/cli/bin/*.cjs',
+    ],
 
     languageOptions: {
       globals: globals.node,
