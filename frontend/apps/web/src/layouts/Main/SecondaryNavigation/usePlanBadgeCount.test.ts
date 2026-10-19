@@ -25,9 +25,10 @@ describe('usePlanBadgeCount', () => {
     expect(renderHook(() => usePlanBadgeCount()).result.current).toBe(0);
   });
 
-  // Counts only the same statuses openCount does (open/in_progress/proposed,
-  // plus anything with a pending automation change) — reusing that function
-  // rather than a second, drifting definition of "open".
+  // Counts only the same statuses openCount does (open/in_progress/proposed),
+  // reusing that function rather than a second, drifting definition of
+  // "open". A closed task stays closed even with a suggestion still pending
+  // against it (#3046).
   it('reuses openCount to count what still wants doing', () => {
     mockedUseQuery.mockReturnValue({
       data: {
@@ -44,7 +45,8 @@ describe('usePlanBadgeCount', () => {
       },
     } as never);
 
-    // t1/t2/t3 by status, t4 by its pending change despite being done — 4.
-    expect(renderHook(() => usePlanBadgeCount()).result.current).toBe(4);
+    // t1/t2/t3 by status. t4 is done, so its leftover pending change does not
+    // bring it back into the count.
+    expect(renderHook(() => usePlanBadgeCount()).result.current).toBe(3);
   });
 });

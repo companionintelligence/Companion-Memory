@@ -80,6 +80,13 @@ vi.mock('@/components/ChatWithAgent/AgentActionItems', async (importOriginal) =>
   AgentActionItems: () => null,
 }));
 
+// Same trap, second route: #3046 subscribed usePlanTasks to the live-changes
+// stream, and useLiveChanges reads useSessionAuth, so every test threw the
+// Provider error again. The board's refetch-on-change is covered in
+// usePlanTasks.test.ts, which mocks these two the same way.
+vi.mock('@/hooks/useLiveChanges', () => ({ useLiveChanges: vi.fn() }));
+vi.mock('@/hooks/useRefetchOnReturn', () => ({ useRefetchOnReturn: vi.fn() }));
+
 vi.mock('@/common/feature', () => ({
   useFeatures: () => ({
     isFeatureEnabled: (name: string) => (name === 'planning.emptyState' ? featureState.emptyState : false),

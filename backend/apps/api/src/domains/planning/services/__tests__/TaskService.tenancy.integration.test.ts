@@ -73,7 +73,9 @@ describeWithDb('TaskService — tenant isolation (integration)', () => {
     dataSource = new DataSource({
       type: 'postgres',
       ...dataSourceConnection(DATABASE_ENV),
-      entities: [TaskEntity],
+      // TaskPendingChangeEntity too: closing a task now declines its pending
+      // suggestions (#3046), so `update` to a closed status writes that table.
+      entities: [TaskEntity, TaskPendingChangeEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
     });
@@ -97,8 +99,8 @@ describeWithDb('TaskService — tenant isolation (integration)', () => {
       );
     }
 
-    // `ci.events` is stubbed out here: this DataSource maps TaskEntity alone,
-    // and the suite is about the `user_id` predicate. The block cleanup
+    // `ci.events` is stubbed out here: this DataSource maps only the task
+    // tables, and the suite is about the `user_id` predicate. The block cleanup
     // `remove` now does is proved against real rows in the second suite below.
     service = new TaskService(
       dataSource.getRepository(TaskEntity),
