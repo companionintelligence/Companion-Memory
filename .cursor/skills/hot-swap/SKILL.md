@@ -17,7 +17,7 @@ Full constraints, backup, and the one-way migration rules are in [docs/runbooks/
 
 ## Before building
 
-1. SSH to the appliance that is running Hub. The checkout, the Docker socket, and `ci-os-hub` must be on that machine.
+1. SSH to the appliance that is running Hub. The checkout, the Docker socket and the Hub container (`ci-hub`, or `ci-os-hub` on older Hubs) must be on that machine.
 2. Use the devel checkout (on core-3, `~/devel/ci/ci-server`). Ignore stale clones such as `~/CI-Server`.
 3. Confirm the branch to test, then check it out. Stash a dirty tree first.
 4. Confirm Hub's env file exists: `~/.local/share/companion-hub/app-data/ci-marketplace/ci-memory/app.env`. Stop if it is missing. Do not edit `app.env` to change images.
@@ -40,13 +40,15 @@ Run from that checkout:
 - `GPU=cpu` is the default. Hub does not pass GPU devices into `hbpe-service`.
 - `PR_TAG` defaults to `pr-onboarding-test`. Set it when this box already uses another local tag.
 
-The script tags local `ci/*:latest` images, writes `docker-compose.pr-test.yml` beside Hub's installed compose, runs compose inside `ci-os-hub`, recreates `api`, `gateway`, `hbpe-service`, and `summary-service` (`gateway` only for `--frontend`), and points Traefik at the new gateway IP.
+The script tags local `ci/*:latest` images and writes the image override to Hub's user compose override for ci-memory (`user-config/ci-marketplace/ci-memory/docker-compose.yml`). Hub applies that file every time it starts Memory, so the swap survives a Hub restart or a reboot. The script then runs compose inside the Hub container, recreates `api`, `gateway`, `hbpe-service` and `summary-service` (`gateway` only for `--frontend`) and points Traefik at the new gateway IP. An override that was already there is moved aside and comes back on rollback.
 
 The override changes image tags only. Hub's env files are passed through to the new containers: `app.env`, and `user-config/app.env` when that overlay exists. That is what keeps the appliance on its dedicated Hub subdomain. `APP_URL`, the public hostname, and the OIDC URLs come from those files, not from the image. Do not copy them into the build and do not rewrite them for the swap.
 
 Database and object-store images stay on the Hub pin. The Hub UI still shows the old catalog version. That is expected.
 
-If the script warns that it could not refresh Traefik, restart ci-memory from the Hub UI or restart `ci-os-hub`.
+If the script warns that it could not refresh Traefik, restart ci-memory from the Hub UI or restart the Hub container.
+
+Roll back before clicking Update in Hub. The update pulls every image in the override, but the test tags exist only on this machine.
 
 ## Check
 
@@ -63,4 +65,4 @@ docker logs ci-memory_ci-marketplace-api-1 --tail 40
 ./scripts/dev/hub-pr-test-rollback.sh
 ```
 
-This deletes the override and recreates those four services from Hub's pinned compose. It does not undo SQL. A migration that already applied stays applied.
+This deletes the override, puts back any override it replaced and recreates those four services from Hub's pinned compose. It does not undo SQL. A migration that already applied stays applied.
