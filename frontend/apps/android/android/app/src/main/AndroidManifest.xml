@@ -65,13 +65,16 @@
       FINE offers the user a "coarse only" choice; without COARSE declared, that
       choice yields no permission at all rather than a degraded one.
 
-      The "Always" mode (@capacitor-community/background-geolocation) keeps
-      sampling after the app leaves the screen through the plugin's foreground
-      service of type `location`, which shows the "Recording location"
-      notification. The person starts that service from inside the app, so
-      Android counts it as while-in-use access. FOREGROUND_SERVICE_LOCATION lets
-      it start on Android 14+, and Play needs a foreground-service `location`
-      declaration with its own video for it (DEVICE_DATA_COMPLIANCE.md §3.4).
+      The "Always" mode keeps sampling after the app leaves the screen, and
+      after it is swiped out of recents, through @ci/capacitor-local-hub's own
+      foreground service of type `location` (location/LocationService.kt), which
+      shows the "Recording location" notification. The person starts that service
+      from inside the app, so Android counts it as while-in-use access.
+      FOREGROUND_SERVICE_LOCATION lets it start on Android 14+, and Play needs a
+      foreground-service `location` declaration with its own video for it
+      (DEVICE_DATA_COMPLIANCE.md §3.4). A reboot or an update ends the service,
+      and while-in-use access means nothing but an app open may start it again:
+      the plugin's boot receiver posts a notification asking for that open.
 
       ACCESS_BACKGROUND_LOCATION is deliberately NOT declared. Nothing requests it
       at runtime, and declaring it alone makes Play review the app as accessing

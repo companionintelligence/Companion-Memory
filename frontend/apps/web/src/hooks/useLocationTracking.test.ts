@@ -409,24 +409,106 @@ describe('useLocationTracking — native watcher is the only writer', () => {
     expect(h.addBackgroundLocationWatcher.mock.calls[0][0]).toMatchObject({ background: false });
   });
 
-  it('starts a background watcher and requests notification permission for Always', async () => {
+  it('on Android hands Always to the LocalHub location service, the one recorder, after the notification prompt', async () => {
     localStorage.setItem(STORAGE_KEY, 'true');
     h.authenticated = true;
     h.isNativePlatform.mockReturnValue(true);
 
     const { result } = renderHook(() => useLocationTracking());
 
+    // when_in_use first: the community watcher, foreground-only.
+    await waitFor(() => expect(h.addBackgroundLocationWatcher).toHaveBeenCalledTimes(1));
+
     act(() => result.current.setMode('always'));
 
-    await waitFor(() =>
-      expect(h.addBackgroundLocationWatcher).toHaveBeenLastCalledWith(
-        expect.objectContaining({ background: true }),
-        expect.any(Function),
-        expect.any(Function),
-      ),
-    );
+    await waitFor(() => expect(h.startSignificantLocationUpdates).toHaveBeenCalled());
+
+    // The service is the only recorder in Always: the when_in_use watcher was removed and no
+    // second one was started, so a trip is not recorded twice.
+    expect(h.removeBackgroundLocationWatcher).toHaveBeenCalledWith('watcher-1');
+    expect(h.addBackgroundLocationWatcher).toHaveBeenCalledTimes(1);
+    // The notification is still needed: Android requires one for a location foreground service.
     expect(h.requestNotificationPermission).toHaveBeenCalled();
-    expect(h.startSignificantLocationUpdates).not.toHaveBeenCalled();
+    // Android builds the wire record natively from exactly what captureLocationFix would
+    // use here, so the two enqueues of one fix share a source_id.
+    expect(h.startSignificantLocationUpdates).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceKey: expect.any(String),
+        provider: 'companion-mobile',
+        owner: null,
+        minDistanceMeters: 150,
+        minIntervalMs: 5 * 60 * 1000,
+        maxAccuracyMeters: 200,
+        notificationTitle: expect.any(String),
+        notificationText: expect.any(String),
+      }),
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  it('on Android feeds a fix the service delivered into captureLocationFix and stops the service when Always turns off', async () => {
+    localStorage.setItem(STORAGE_KEY, 'true');
+    h.authenticated = true;
+    h.isNativePlatform.mockReturnValue(true);
+
+    const stop = vi.fn(async () => {});
+    let deliver: ((location: ReturnType<typeof fakeBackgroundLocation>) => void) | undefined;
+
+    h.startSignificantLocationUpdates.mockImplementation(async (_options, onLocation) => {
+      deliver = onLocation;
+
+      return stop;
+    });
+
+    const { result } = renderHook(() => useLocationTracking());
+
+    act(() => result.current.setMode('always'));
+
+    await waitFor(() => expect(h.startSignificantLocationUpdates).toHaveBeenCalled());
+
+    await act(async () => {
+      deliver?.(fakeBackgroundLocation());
+    });
+
+    expect(h.captureLocationFix).toHaveBeenCalledTimes(1);
+    const calls = h.captureLocationFix.mock.calls as unknown as Array<
+      [{ latitude: number; longitude: number }, Record<string, unknown>]
+    >;
+    const [fix, options] = calls[0];
+
+    expect(fix).toMatchObject({ latitude: 37.7749, longitude: -122.4194 });
+    expect(options).toMatchObject({ provider: 'companion-mobile' });
+
+    act(() => result.current.setMode('off'));
+
+    await waitFor(() => expect(stop).toHaveBeenCalled());
+  });
+
+  it('on Android sets needsSettingsUpgrade when the service reports NOT_AUTHORIZED', async () => {
+    localStorage.setItem(STORAGE_KEY, 'true');
+    h.authenticated = true;
+    h.isNativePlatform.mockReturnValue(true);
+
+    let deliverError: ((error: { code: string; message: string }) => void) | undefined;
+
+    h.startSignificantLocationUpdates.mockImplementation(async (_options, _onLocation, onError) => {
+      deliverError = onError;
+
+      return async () => {};
+    });
+
+    const { result } = renderHook(() => useLocationTracking());
+
+    act(() => result.current.setMode('always'));
+
+    await waitFor(() => expect(h.startSignificantLocationUpdates).toHaveBeenCalled());
+
+    await act(async () => {
+      deliverError?.({ code: 'NOT_AUTHORIZED', message: 'denied' });
+    });
+
+    expect(result.current.needsSettingsUpgrade).toBe(true);
   });
 
   it('on iOS asks When In Use then Always before starting the background watcher', async () => {
@@ -465,7 +547,7 @@ describe('useLocationTracking — native watcher is the only writer', () => {
     const stop = vi.fn(async () => {});
     let deliver: ((location: ReturnType<typeof fakeBackgroundLocation>) => void) | undefined;
 
-    h.startSignificantLocationUpdates.mockImplementation(async (onLocation) => {
+    h.startSignificantLocationUpdates.mockImplementation(async (_options, onLocation) => {
       deliver = onLocation;
 
       return stop;

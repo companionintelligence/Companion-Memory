@@ -370,6 +370,70 @@ describe('buildPositionRecord — the wire contract with createPositionSchemaRoo
   });
 });
 
+describe('buildPositionRecord — parity fixture shared with the Android native builder', () => {
+  // The SAME inputs and expected record live in
+  // frontend/packages/capacitor-local-hub/android/src/test/.../PositionRecordJsonTest.kt.
+  // Android's location service builds this record natively, from a process that may have
+  // no JavaScript, and the two must stay byte-for-byte equivalent: a drift here means a
+  // background fix and its web-side re-enqueue stop collapsing on `source_id`, or one of
+  // them starts failing the server's schema. Change both or neither.
+  const deviceKey = 'cd12ea3d-b4d5-4ba6-a1e1-b02d18653e93';
+
+  it('builds the fixture record', () => {
+    const record = buildPositionRecord(
+      {
+        latitude: 33.6767,
+        longitude: -117.7972,
+        accuracyMeters: 4,
+        altitudeMeters: 61.5,
+        headingDegrees: 275.25,
+        speedMetersPerSecond: 14.5,
+        capturedAtMs: 1791520516942,
+      },
+      { deviceKey, provider: 'companion-mobile' },
+    );
+
+    expect(record).toEqual({
+      time: '2026-10-09T04:35:16.942Z',
+      location: { x: -117.7972, y: 33.6767 },
+      accuracy_meters: 4,
+      altitude_meters: 61.5,
+      heading_degrees: 275.25,
+      speed_meters_per_second: 14.5,
+      source: 'gps',
+      provider: 'companion-mobile',
+      source_type: 'device',
+      source_system: 'companion-device',
+      source_id: `${deviceKey}:1791520516942`,
+    });
+  });
+
+  it('omits the optional fields the server would reject or discard', () => {
+    const record = buildPositionRecord(
+      {
+        latitude: 33.6767,
+        longitude: -117.7972,
+        accuracyMeters: 0,
+        altitudeMeters: null,
+        headingDegrees: 361,
+        speedMetersPerSecond: -1,
+        capturedAtMs: 1791520516000,
+      },
+      { deviceKey, provider: 'companion-mobile' },
+    );
+
+    expect(record).toEqual({
+      time: '2026-10-09T04:35:16.000Z',
+      location: { x: -117.7972, y: 33.6767 },
+      source: 'gps',
+      provider: 'companion-mobile',
+      source_type: 'device',
+      source_system: 'companion-device',
+      source_id: `${deviceKey}:1791520516000`,
+    });
+  });
+});
+
 describe('positionSourceId — determinism is what makes a replay free', () => {
   it('is a pure function of the device and the capture instant', () => {
     expect(positionSourceId(DEVICE_KEY, CAPTURED_AT)).toBe(positionSourceId(DEVICE_KEY, CAPTURED_AT));

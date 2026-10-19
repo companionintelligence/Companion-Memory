@@ -268,13 +268,26 @@ Background is a different animal:
 
 **Always mode (both platforms).** Foreground Off / While using stays available on this
 client; Always additionally requests `NSLocationAlwaysAndWhenInUseUsageDescription` (iOS), or
-starts the plugin's `location` foreground service (Android, no `ACCESS_BACKGROUND_LOCATION`),
-and runs a continuous watcher that
-keeps sampling once the app is backgrounded — filtered by `distanceFilter` rather than by
+starts a `location` foreground service (Android, no `ACCESS_BACKGROUND_LOCATION`),
+and keeps sampling once the app is backgrounded — filtered by distance rather than by
 significant-change. Android shows a persistent "Recording location" notification while this
 is on (the OS's price of admission for a background location session); iOS shows the blue
 status-bar indicator. Writes `ci.position` only — Places still come from existing server
 enrichment. There is no home geofence in this design.
+
+> 🟢 **[code] Update 2026-10-19: the Android service is `@ci/capacitor-local-hub`'s own
+> (`location/LocationService.kt`), not the community plugin's.** The plugin's service was
+> *bound* to the activity and stopped with it, so swiping the app out of recents ended
+> recording. The replacement is a *started* service that outlives the WebView and queues each
+> fix into the encrypted outbox natively. The permission posture is unchanged: still FINE/COARSE
+> plus the foreground-service `location` type, still no `ACCESS_BACKGROUND_LOCATION`. What
+> while-in-use access rules out is a restart from the background — a service started by a boot
+> broadcast or a sticky restart would show its notification and receive nothing — so after a
+> reboot, an app update or a process death the plugin posts one ordinary notification
+> ("Recording location paused … Open Companion to keep recording") and the app open restarts
+> sampling. `RECEIVE_BOOT_COMPLETED` (a normal permission, no prompt) is declared for that
+> receiver. The `background-location-tracking` branch swaps the nudge for a geofence restart
+> once the background grant is approved.
 
 Apple: `NSLocationWhenInUseUsageDescription` → `NSLocationAlwaysAndWhenInUseUsageDescription`
 + `UIBackgroundModes: location`. No declaration form, but 5.1.5 requires location be

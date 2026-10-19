@@ -17,6 +17,7 @@ import {
   secureStorageRemove,
   secureStorageSet,
   setStatusBarStyle,
+  startSignificantLocationUpdates,
   takeNativePhoto,
 } from '@ci/common/src/utils/nativeBridge';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -758,5 +759,91 @@ describe('nativeBridge — current device location', () => {
         value: previousNavigator,
       });
     }
+  });
+});
+
+describe('nativeBridge — startSignificantLocationUpdates (Always-mode background samples)', () => {
+  const options = {
+    deviceKey: 'cd12ea3d-b4d5-4ba6-a1e1-b02d18653e93',
+    provider: 'companion-mobile',
+    owner: null,
+    minDistanceMeters: 150,
+    minIntervalMs: 300_000,
+    maxAccuracyMeters: 200,
+    notificationTitle: 'Recording location',
+    notificationText: 'recording',
+  };
+
+  function installHub(platform: 'android' | 'ios') {
+    const removes: Array<ReturnType<typeof vi.fn>> = [];
+    const hub = {
+      addListener: vi.fn(async (_event: string, _listener: (event: { code?: string }) => void) => {
+        const remove = vi.fn(async () => {});
+        removes.push(remove);
+
+        return { remove };
+      }),
+      startSignificantLocationUpdates: vi.fn(async () => {}),
+      stopSignificantLocationUpdates: vi.fn(async () => {}),
+    };
+    setWindow({
+      Capacitor: {
+        isNativePlatform: () => true,
+        getPlatform: () => platform,
+        Plugins: { LocalHub: hub },
+      },
+    });
+
+    return { hub, removes };
+  }
+
+  it('is a no-op off native', async () => {
+    setWindow({ Capacitor: { isNativePlatform: () => false, getPlatform: () => 'web', Plugins: {} } });
+    await expect(startSignificantLocationUpdates(options, vi.fn(), vi.fn())).resolves.toBeNull();
+  });
+
+  it('starts on Android too, handing the plugin the record-building options', async () => {
+    const { hub } = installHub('android');
+
+    const stop = await startSignificantLocationUpdates(options, vi.fn(), vi.fn());
+
+    expect(stop).toBeTypeOf('function');
+    expect(hub.startSignificantLocationUpdates).toHaveBeenCalledWith(options);
+    expect(hub.addListener).toHaveBeenCalledWith('significantLocation', expect.any(Function));
+    expect(hub.addListener).toHaveBeenCalledWith('significantLocationError', expect.any(Function));
+  });
+
+  it('a stop superseded by a newer start drops its listeners but leaves the native service running', async () => {
+    // The sequence a React effect re-run produces: start, start, then the FIRST session's
+    // cleanup reaching the one-per-process plugin -- which must not stop the second session.
+    const { hub, removes } = installHub('android');
+
+    const first = await startSignificantLocationUpdates(options, vi.fn(), vi.fn());
+    const second = await startSignificantLocationUpdates(options, vi.fn(), vi.fn());
+
+    await first?.();
+    expect(hub.stopSignificantLocationUpdates).not.toHaveBeenCalled();
+    expect(removes[0]).toHaveBeenCalled();
+    expect(removes[1]).toHaveBeenCalled();
+    expect(removes[2]).not.toHaveBeenCalled();
+
+    await second?.();
+    expect(hub.stopSignificantLocationUpdates).toHaveBeenCalledTimes(1);
+    expect(removes[2]).toHaveBeenCalled();
+    expect(removes[3]).toHaveBeenCalled();
+  });
+
+  it('maps a NOT_AUTHORIZED event to the error callback', async () => {
+    const { hub } = installHub('ios');
+    const onError = vi.fn();
+
+    await startSignificantLocationUpdates(options, vi.fn(), onError);
+
+    const errorListener = hub.addListener.mock.calls.find(
+      (call) => call[0] === 'significantLocationError',
+    )?.[1];
+    errorListener?.({ code: 'NOT_AUTHORIZED' });
+
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'NOT_AUTHORIZED' }));
   });
 });

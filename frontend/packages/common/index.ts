@@ -243,6 +243,7 @@ export type {
   LocalNotification,
   NativeCurrentLocation,
   NativeLocationAuthorization,
+  SignificantLocationOptions,
 } from './src/utils/nativeBridge';
 export { AuthSessionCancelledError, BarcodeScanError, DeviceLocationError } from './src/utils/nativeBridge';
 export {

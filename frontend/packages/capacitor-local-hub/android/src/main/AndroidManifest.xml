@@ -6,4 +6,40 @@
          permission does not expose the device to the network, only to the app's own
          localhost port. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Always-mode location recording (location/): one location foreground service,
+         started from inside the app, that keeps sampling after the app is swiped out of
+         recents and queues each fix natively. The host app already declares the location
+         permissions; they are repeated here so the module is complete on its own and the
+         merger unions them. Deliberately NO ACCESS_BACKGROUND_LOCATION: the service is
+         started while the app is on screen, which Android counts as while-in-use access
+         (see LocationTracker for what that rules out, and the nudge that stands in). -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Normal permission, no prompt: lets TrackingRestoreReceiver post the "open the app to
+         resume" notification after a reboot, which ends the service and which nothing but an
+         app open may undo without the background-location grant. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application>
+        <service
+            android:name=".location.LocationService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+        <!-- Posts the resume nudge after the two events that end the location service: a
+             reboot and an update of this app. Exported because a manifest receiver with a
+             filter must say, and safely so: both actions are protected broadcasts only the
+             system can send. See TrackingRestoreReceiver. -->
+        <receiver
+            android:name=".location.TrackingRestoreReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>
 </manifest>

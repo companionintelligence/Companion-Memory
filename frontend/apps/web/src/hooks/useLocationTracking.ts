@@ -5,18 +5,22 @@ import {
   type LocationCaptureOutcome,
   type LocationSampler,
   type LocationTrackingMode,
+  BACKGROUND_MAX_ACCURACY_METERS,
   LOCATION_MODE_CHANGE_EVENT,
   LOCATION_NEEDS_SETTINGS_EVENT,
   MIN_DISTANCE_METERS,
+  MIN_INTERVAL_MS,
   addAppStateListener,
   addBackgroundLocationWatcher,
   captureLocationFix,
   createLocationSampler,
+  deviceSourceKey,
   fixFromBackgroundGeolocationLocation,
   fixFromGeolocationPosition,
   getNativeLocationAuthorization,
   isIosPlatform,
   isNativePlatform,
+  outboxOwnerStamp,
   publishLocationNeedsSettingsUpgrade,
   publishLocationTrackingMode,
   readLocationTrackingMode,
@@ -64,13 +68,16 @@ async function ensureIosAlwaysAuthorization(): Promise<boolean> {
 /**
  * Location tracking: records `ci.position` fixes from this device.
  *
- * Native (iOS + Android) uses `@capacitor-community/background-geolocation` as the one
- * writer, gated by `mode`: `when_in_use` starts a foreground-only watcher. `always` on
- * Android adds a `backgroundMessage` so the OS keeps sampling after the app leaves the
- * foreground (the persistent notification Android requires). `always` on iOS does not:
- * that flag turns on the solid blue indicator for the whole background session. iOS
- * instead starts significant-change monitoring, which records a real move and stays
- * quiet while the phone sits still. Plain web falls back to `navigator.geolocation`.
+ * Native (iOS + Android) `when_in_use` uses `@capacitor-community/background-geolocation`
+ * as a foreground-only watcher. `always` differs per platform. Android hands recording to
+ * the LocalHub plugin's own location foreground service: started from the screen, it keeps
+ * sampling after the app leaves the foreground AND after it is swiped out of recents (the
+ * community plugin's bound service stopped with the activity), queues each fix natively so
+ * nothing depends on this WebView, and delivers the fix here too -- the shared `source_id`
+ * makes the second enqueue a no-op. No community watcher runs in Android Always. iOS Always
+ * keeps the foreground watcher and adds significant-change monitoring, which records a real
+ * move and stays quiet while the phone sits still, without the solid blue indicator. Plain
+ * web falls back to `navigator.geolocation`.
  *
  * Consent is per-device (localStorage). Settings → Location owns the disclosure.
  */
@@ -239,21 +246,52 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
         publishLocationNeedsSettingsUpgrade(false);
       }
 
+      if (mode === 'always' && !isIosPlatform()) {
+        // Android Always: the LocalHub service is the one recorder (see the hook docs). It
+        // prompts for location itself. The options are exactly what captureLocationFix would
+        // use here, so a record built natively and this hook's re-enqueue share a source_id.
+        stopSignificant = await startSignificantLocationUpdates(
+          {
+            deviceKey: deviceSourceKey(),
+            provider: 'companion-mobile',
+            owner: outboxOwnerStamp(),
+            minDistanceMeters: MIN_DISTANCE_METERS,
+            minIntervalMs: MIN_INTERVAL_MS,
+            maxAccuracyMeters: BACKGROUND_MAX_ACCURACY_METERS,
+            notificationTitle: 'Recording location',
+            notificationText: 'Companion is recording your location so it can place memories on the map.',
+          },
+          onLocation,
+          onError,
+        );
+
+        if (cancelled) {
+          void stopSignificant?.();
+        }
+
+        return;
+      }
+
       const id = await addBackgroundLocationWatcher(
         {
-          // iOS Always stays foreground-only on this plugin. Background samples go
-          // through significant-change monitoring, which does not hold the blue pill.
-          background: mode === 'always' && !isIosPlatform(),
+          // Foreground-only on this plugin, in every mode that reaches it. iOS Always's
+          // background samples go through significant-change monitoring below, which does
+          // not hold the blue pill; Android Always never gets here.
+          background: false,
           distanceFilter: MIN_DISTANCE_METERS,
           // iOS Always is requested above so the plugin does not skip the second prompt.
-          requestPermissions: mode === 'always' ? !isIosPlatform() : true,
+          requestPermissions: !(mode === 'always' && isIosPlatform()),
         },
         onLocation,
         onError,
       );
 
       if (mode === 'always' && isIosPlatform()) {
-        stopSignificant = await startSignificantLocationUpdates(onLocation, onError);
+        stopSignificant = await startSignificantLocationUpdates(
+          { deviceKey: deviceSourceKey(), provider: 'companion-mobile', owner: outboxOwnerStamp() },
+          onLocation,
+          onError,
+        );
       }
 
       if (cancelled) {

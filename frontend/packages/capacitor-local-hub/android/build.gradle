@@ -5,6 +5,7 @@
 // This module has no dependency with local-llm's Kotlin-metadata-version constraint, so
 // it just tracks a current stable Kotlin release rather than pinning to match it.
 ext {
+    playServicesLocationVersion = project.hasProperty('playServicesLocationVersion') ? rootProject.ext.playServicesLocationVersion : '21.0.1'
     junitVersion = project.hasProperty('junitVersion') ? rootProject.ext.junitVersion : '4.13.2'
     androidxAppCompatVersion = project.hasProperty('androidxAppCompatVersion') ? rootProject.ext.androidxAppCompatVersion : '1.7.0'
     androidxJunitVersion = project.hasProperty('androidxJunitVersion') ? rootProject.ext.androidxJunitVersion : '1.2.1'
@@ -85,6 +86,12 @@ dependencies {
     implementation 'org.nanohttpd:nanohttpd:2.3.1'
 
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+
+    // Always-mode location recording (location/): the fused location request behind
+    // LocationService. `playServicesLocationVersion` is the app's if variables.gradle sets
+    // it, else this module's own default above -- the same default
+    // @capacitor-community/background-geolocation uses, so one version resolves.
+    implementation "com.google.android.gms:play-services-location:$playServicesLocationVersion"
 
     // Encryption at rest for the capture outbox (OutboxStore.kt). This is the CURRENT Zetetic
     // artifact (package net.zetetic.database.sqlcipher), NOT the legacy

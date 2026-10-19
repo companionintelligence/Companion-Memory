@@ -1,13 +1,19 @@
 package com.companionintelligence.localhub
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
 import android.util.Base64
+import com.companionintelligence.localhub.location.LocationTracking
+import com.companionintelligence.localhub.location.LocationTrackingConfig
 import com.getcapacitor.JSObject
+import com.getcapacitor.PermissionState
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
+import com.getcapacitor.annotation.Permission
+import com.getcapacitor.annotation.PermissionCallback
 import java.security.SecureRandom
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,7 +42,19 @@ import org.json.JSONObject
  * already safe to use concurrently -- and deliberately share no state with the server
  * lifecycle, so reading a credential does not require the sidecar to be running.
  */
-@CapacitorPlugin(name = "LocalHub")
+@CapacitorPlugin(
+    name = "LocalHub",
+    permissions = [
+        // The one grant Always-mode recording needs, as a Capacitor alias so
+        // startSignificantLocationUpdates can prompt for it. Deliberately no
+        // ACCESS_BACKGROUND_LOCATION: the location service is started from inside the app,
+        // which Android counts as while-in-use access (see location/LocationTracker).
+        Permission(
+            strings = [Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION],
+            alias = LocalHubPlugin.ALIAS_LOCATION,
+        ),
+    ],
+)
 class LocalHubPlugin : Plugin() {
     private val pluginScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val stateMutex = Mutex()
@@ -46,21 +64,48 @@ class LocalHubPlugin : Plugin() {
 
     /**
      * Outlives individual server instances on purpose: [stop] tears down the HTTP listener,
-     * but the queued captures behind it are durable user data, so the database handle is
-     * only released when the plugin itself goes away.
+     * but the queued captures behind it are durable user data. The handle is the process-wide
+     * one from [OutboxStores], shared with the location tracker, and is never closed here.
      */
     private var outbox: OutboxStore? = null
 
+    /** The pending `startSignificantLocationUpdates` options while its permission prompt runs. */
+    private var pendingTrackingConfig: LocationTrackingConfig? = null
+
+    /**
+     * Further `startSignificantLocationUpdates` calls that arrived while the prompt was
+     * already up. Android allows one permission request at a time, so a second request
+     * would lose outright and read as "denied"; these instead ride the prompt in flight and
+     * are resolved with its outcome, under the newest options.
+     */
+    private val waitingTrackingCalls = mutableListOf<PluginCall>()
+
+    override fun load() {
+        // A WebView exists: route the tracker's queued fixes to JS as `significantLocation`
+        // so the hook's lastOutcome follows background sampling. A process started by a
+        // broadcast never gets here, and the tracker queues without a listener just the same.
+        LocationTracking.get(context).listener = { body -> notifyListeners("significantLocation", JSObject.fromJSONObject(body)) }
+        super.load()
+    }
+
+    override fun handleOnResume() {
+        // The one moment the location service is sure to be allowed to start: puts it back
+        // after a reboot, an update or a process death when Always is on.
+        LocationTracking.get(context).onAppResumed()
+        super.handleOnResume()
+    }
+
     override fun handleOnDestroy() {
+        LocationTracking.get(context).listener = null
         // Synchronous best-effort cleanup: handleOnDestroy has no coroutine to await, but
         // NanoHTTPD#stop() already blocks until its listener thread has joined, so this is
         // a real stop, not a fire-and-forget one.
         server?.stop()
         server = null
         token = null
-        // Only closes the handle; every write was already committed to disk before its
-        // HTTP response was sent, so there is nothing here left to flush.
-        outbox?.close()
+        // The shared store stays open for the process (see OutboxStores): the location
+        // service may still be writing to it after this activity is gone, and every write was
+        // already committed to disk before its HTTP response was sent.
         outbox = null
         pluginScope.cancel()
         super.handleOnDestroy()
@@ -246,8 +291,8 @@ class LocalHubPlugin : Plugin() {
 
     /**
      * One-shot high-accuracy fix ("use my location") is iOS-only for now -- see
-     * `LocationTracker.swift`. Continuous background tracking on Android is owned
-     * entirely by `@capacitor-community/background-geolocation`, not this plugin.
+     * `LocationTracker.swift`. Always-mode recording on Android is this plugin's location
+     * service (location/); the While-using trail is still `@capacitor-community/background-geolocation`.
      */
     @PluginMethod
     fun getCurrentLocation(call: PluginCall) {
@@ -267,7 +312,7 @@ class LocalHubPlugin : Plugin() {
         }
     }
 
-    /** Always-authorization two-step is iOS-only. Android uses background-geolocation. */
+    /** Always-authorization two-step is iOS-only; Android's prompt runs in startSignificantLocationUpdates. */
     @PluginMethod
     fun getLocationAuthorization(call: PluginCall) {
         val ret = JSObject()
@@ -280,6 +325,71 @@ class LocalHubPlugin : Plugin() {
         val ret = JSObject()
         ret.put("status", "unsupported")
         call.resolve(ret)
+    }
+
+    /**
+     * Android's Always mode: the location foreground service in
+     * [com.companionintelligence.localhub.location.LocationTracker], started here, from the
+     * screen, and kept running until [stopSignificantLocationUpdates] -- across the app being
+     * swiped away. Prompts for fine location if it is not held yet. A refusal resolves the
+     * call and emits `significantLocationError` `NOT_AUTHORIZED`, the same shape iOS uses, so
+     * the web side's "Open Settings" path lights up.
+     *
+     * Options come from `@ci/common`'s `startSignificantLocationUpdates`; `deviceKey` is
+     * required because without it no record can share the web side's `source_id`.
+     */
+    @PluginMethod
+    fun startSignificantLocationUpdates(call: PluginCall) {
+        val config = LocationTrackingConfig.fromJson(call.data)
+        if (config == null) {
+            call.reject("startSignificantLocationUpdates needs a non-empty deviceKey")
+            return
+        }
+        val promptInFlight = pendingTrackingConfig != null
+        pendingTrackingConfig = config
+        if (promptInFlight) {
+            waitingTrackingCalls += call
+            return
+        }
+        if (getPermissionState(ALIAS_LOCATION) != PermissionState.GRANTED) {
+            requestPermissionForAlias(ALIAS_LOCATION, call, "trackingLocationPermission")
+            return
+        }
+        finishTrackingStart(call)
+    }
+
+    @PermissionCallback
+    private fun trackingLocationPermission(call: PluginCall) {
+        finishTrackingStart(call)
+    }
+
+    private fun finishTrackingStart(call: PluginCall) {
+        val config = pendingTrackingConfig
+        val calls = listOf(call) + waitingTrackingCalls
+        pendingTrackingConfig = null
+        waitingTrackingCalls.clear()
+        if (config == null || getPermissionState(ALIAS_LOCATION) != PermissionState.GRANTED) {
+            val error = JSObject()
+            error.put("code", "NOT_AUTHORIZED")
+            notifyListeners("significantLocationError", error)
+            calls.forEach { it.resolve() }
+            return
+        }
+        pluginScope.launch {
+            LocationTracking.get(context).arm(config)
+            calls.forEach { it.resolve() }
+        }
+    }
+
+    @PluginMethod
+    fun stopSignificantLocationUpdates(call: PluginCall) {
+        pendingTrackingConfig = null
+        waitingTrackingCalls.forEach { it.resolve() }
+        waitingTrackingCalls.clear()
+        pluginScope.launch {
+            LocationTracking.get(context).disarm()
+            call.resolve()
+        }
     }
 
     /**
@@ -312,7 +422,7 @@ class LocalHubPlugin : Plugin() {
         // application context from it, so holding this store can't leak an Activity. The
         // database itself lands in app-private internal storage
         // (/data/data/<pkg>/databases/), which is where the durability guarantee comes from.
-        val store = outbox ?: OutboxStore(context).also { outbox = it }
+        val store = outbox ?: OutboxStores.shared(context).also { outbox = it }
         val newServer = LocalHubServer(newToken, store)
 
         withContext(Dispatchers.IO) {
@@ -368,6 +478,8 @@ class LocalHubPlugin : Plugin() {
     }
 
     companion object {
+        const val ALIAS_LOCATION = "location"
+
         /**
          * The credentials the app itself stores: the device API key, its id and capability, and
          * the paired Memory origin mirrored for native consumers. Kept equal to

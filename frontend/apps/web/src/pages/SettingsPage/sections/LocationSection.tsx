@@ -235,7 +235,9 @@ export function LocationSection() {
                 </span>
                 <span className="mt-2 block">
                   While this is on, Android shows a notification that Companion is using your location.
-                  Android then asks for notification and location access if you haven&apos;t allowed them yet.
+                  Recording continues after you close the app. If your phone restarts or Companion is updated,
+                  a notification asks you to open the app so recording can resume. Android then asks for
+                  notification and location access if you haven&apos;t allowed them yet.
                 </span>
                 <span className="mt-2 block">
                   Locations go only to your Companion server and are never used for ads. You can stay on While

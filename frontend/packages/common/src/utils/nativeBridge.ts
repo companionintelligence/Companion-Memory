@@ -64,15 +64,33 @@ interface LocalHubPlugin {
     always: boolean;
   }): Promise<{ status: NativeLocationAuthorization }>;
   /**
-   * iOS only. Significant-change monitoring: fires when the phone moves, without the
-   * blue background indicator. `addListener` is the Capacitor bridge, not a custom method.
+   * Background samples for Always. iOS: significant-change monitoring, which fires when
+   * the phone moves, without the blue background indicator. Android: the plugin's own
+   * location foreground service, which outlives the WebView and queues fixes natively.
+   * `addListener` is the Capacitor bridge, not a custom method.
    */
   addListener?(
     eventName: 'significantLocation' | 'significantLocationError',
     listener: (event: BackgroundGeolocationLocation & { code?: string }) => void,
   ): Promise<{ remove: () => Promise<void> }>;
-  startSignificantLocationUpdates?(): Promise<void>;
+  startSignificantLocationUpdates?(options?: SignificantLocationOptions): Promise<void>;
   stopSignificantLocationUpdates?(): Promise<void>;
+}
+
+/**
+ * Mirror of `SignificantLocationOptions` in `@ci/capacitor-local-hub`'s definitions.ts,
+ * declared locally for the same reason every plugin interface here is. Android builds the
+ * wire record from these in a process that may have no JavaScript; iOS ignores them.
+ */
+export interface SignificantLocationOptions {
+  deviceKey: string;
+  provider?: string;
+  owner?: string | null;
+  minDistanceMeters?: number;
+  minIntervalMs?: number;
+  maxAccuracyMeters?: number;
+  notificationTitle?: string;
+  notificationText?: string;
 }
 
 export interface BackgroundGeolocationError {
@@ -677,22 +695,38 @@ export async function addBackgroundLocationWatcher(
 }
 
 /**
- * iOS Always background samples. Significant-change monitoring fires when the phone
- * moves a meaningful distance and does not turn on the blue location indicator.
- * Returns a stop function, or `null` off iOS.
+ * Always-mode background samples on both native platforms. Returns a stop function, or
+ * `null` off native.
  *
- * Android keeps {@link addBackgroundLocationWatcher} with `background: true`: the
- * system requires that persistent notification for a background location service.
+ * iOS: significant-change monitoring, which fires when the phone moves a meaningful
+ * distance and does not turn on the blue location indicator. Every event is a fix for the
+ * caller to queue; the foreground trail there stays on {@link addBackgroundLocationWatcher}.
+ *
+ * Android: the LocalHub plugin's own location foreground service. It is started here, from
+ * the screen, and keeps running after the app is swiped out of recents -- which is what the
+ * `@capacitor-community/background-geolocation` watcher could not do, its service being
+ * bound to the activity. Each fix that clears the gate is queued into the outbox natively
+ * and then also delivered here; the caller queues it again, and the shared `source_id` makes
+ * that a no-op. This is the only Android recorder in Always: no second watcher.
  */
 export async function startSignificantLocationUpdates(
+  options: SignificantLocationOptions,
   onLocation: (location: BackgroundGeolocationLocation) => void,
   onError: (error: BackgroundGeolocationError) => void,
 ): Promise<(() => Promise<void>) | null> {
   const hub = plugins()?.LocalHub;
 
-  if (!isIosPlatform() || !hub?.startSignificantLocationUpdates || !hub.addListener) {
+  if (!isNativePlatform() || !hub?.startSignificantLocationUpdates || !hub.addListener) {
     return null;
   }
+
+  // The native monitor is one per process, not one per caller. A React effect that re-runs
+  // (every dependency change, and twice per mount in development) starts a second session
+  // and then runs the first one's cleanup -- which, if it reached the plugin, would stop the
+  // session the newer effect just started. So each start takes a generation number and a
+  // stop only reaches the plugin while its generation is still the latest; a superseded stop
+  // just drops its own listeners.
+  const generation = ++significantLocationGeneration;
 
   const locationHandle = await hub.addListener('significantLocation', (event) => {
     onLocation(event);
@@ -702,7 +736,7 @@ export async function startSignificantLocationUpdates(
   });
 
   try {
-    await hub.startSignificantLocationUpdates();
+    await hub.startSignificantLocationUpdates(options);
   } catch (err) {
     await locationHandle.remove();
     await errorHandle.remove();
@@ -710,11 +744,16 @@ export async function startSignificantLocationUpdates(
   }
 
   return async () => {
-    await hub.stopSignificantLocationUpdates?.();
     await locationHandle.remove();
     await errorHandle.remove();
+
+    if (generation === significantLocationGeneration) {
+      await hub.stopSignificantLocationUpdates?.();
+    }
   };
 }
+
+let significantLocationGeneration = 0;
 
 /** Stops a watcher started by {@link addBackgroundLocationWatcher}. No-op on web. */
 export async function removeBackgroundLocationWatcher(id: string): Promise<void> {
