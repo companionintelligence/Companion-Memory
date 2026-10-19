@@ -109,6 +109,7 @@ describe('GraphQLBackendConnector.fetchCredentials', () => {
   });
 
   it('returns null and reports it when the server runs no PowerSync service', async () => {
+    setApiBaseUrl('https://memory-a.example');
     stubFetch(
       jsonResponse(
         {
@@ -126,6 +127,7 @@ describe('GraphQLBackendConnector.fetchCredentials', () => {
 
     await expect(connector.fetchCredentials()).resolves.toBeNull();
     expect(onSyncUnavailable).toHaveBeenCalledTimes(1);
+    expect(onSyncUnavailable).toHaveBeenCalledWith('https://memory-a.example');
   });
 
   it('recognises the same answer from servers released before it carried a code', async () => {
@@ -165,6 +167,28 @@ describe('GraphQLBackendConnector.fetchCredentials', () => {
 
     await expect(connector.fetchCredentials()).rejects.toThrow('503');
     expect(onSyncUnavailable).not.toHaveBeenCalled();
+  });
+
+  it('gives up on a token request that never finishes, so PowerSync can retry', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const fetchMock = vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+          }),
+      );
+
+      vi.stubGlobal('fetch', fetchMock);
+      const connector = new GraphQLBackendConnector(() => 'jwt-abc');
+      const pending = expect(connector.fetchCredentials()).rejects.toThrow('Aborted');
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

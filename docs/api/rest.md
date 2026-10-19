@@ -541,7 +541,7 @@ The whole facade is gated on the **`solid.protocol` feature flag, off by default
 
 ### `PowerSyncController` — `powersync` · `domains/powersync/controllers/PowerSyncController.ts:8`
 
-`GET /powersync/token` (`:22`), `JwtOrApiKeyAuthGuard`. Returns **503 `PowerSync is not configured`** until both `powersync.url` and `powersync.jwtSecret` are set (`services/PowerSyncTokenService.ts:47-50`) — the PowerSync container carries `profiles: ["staging", "production"]` (`docker-compose.yml:142`), so `make dev` never starts it and clients fall back to GraphQL.
+`GET /powersync/token` (`PowerSyncController.ts:33`), `JwtOrApiKeyAuthGuard`. Returns **503** until both `powersync.url` and `powersync.jwtSecret` are set (`PowerSyncController.ts:39`, `PowerSyncTokenService.isConfigured()`). The body is `{ statusCode: 503, error: "Service Unavailable", message: "PowerSync is not configured", code: "POWERSYNC_NOT_CONFIGURED" }`. The controller sets it rather than throwing, so it never reaches `GlobalExceptionsFilter`'s error log or Sentry. Once the web and mobile clients see that `code` (or, from servers released before it, that `message`) they stay on GraphQL and stop asking that server for a token until the next sign-in or app start. Any other 503 is treated as transient and retried. The PowerSync container carries `profiles: ["staging", "production"]` (`docker-compose.yml:298`), so `make dev` never starts it.
 
 ### Config endpoints
 

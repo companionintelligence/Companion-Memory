@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   },
   // One entry per connector the provider builds: the callback it passes for
   // "this server runs no PowerSync service".
-  syncOffCallbacks: [] as Array<() => void>,
+  syncOffCallbacks: [] as Array<(origin: string) => void>,
 }));
 
 vi.mock('@/hooks', () => ({
@@ -32,13 +32,13 @@ vi.mock('./connector', () => ({
   GraphQLBackendConnector: vi.fn(function (
     this: unknown,
     _getAuthToken: unknown,
-    onSyncUnavailable: () => void,
+    onSyncUnavailable: (origin: string) => void,
   ) {
     mocks.syncOffCallbacks.push(onSyncUnavailable);
   }),
 }));
 
-function latestSyncOffCallback(): () => void {
+function latestSyncOffCallback(): (origin: string) => void {
   const callback = mocks.syncOffCallbacks.at(-1);
 
   if (!callback) {
@@ -66,7 +66,7 @@ describe('PowerSyncProvider', () => {
 
     await waitFor(() => expect(mocks.database.connect).toHaveBeenCalledTimes(1));
 
-    act(() => latestSyncOffCallback()());
+    act(() => latestSyncOffCallback()('https://memory-a.example'));
 
     await waitFor(() => expect(mocks.database.disconnect).toHaveBeenCalled());
 
@@ -84,7 +84,7 @@ describe('PowerSyncProvider', () => {
     render(<PowerSyncProvider>child</PowerSyncProvider>);
 
     await waitFor(() => expect(mocks.database.connect).toHaveBeenCalledTimes(1));
-    act(() => latestSyncOffCallback()());
+    act(() => latestSyncOffCallback()('https://memory-a.example'));
     await waitFor(() => expect(mocks.database.disconnect).toHaveBeenCalled());
 
     act(() => setApiBaseUrl('https://memory-b.example'));
@@ -101,11 +101,27 @@ describe('PowerSyncProvider', () => {
     act(() => setApiBaseUrl('https://memory-b.example'));
     await waitFor(() => expect(mocks.database.connect).toHaveBeenCalledTimes(2));
 
-    act(() => previousServerCallback());
+    act(() => previousServerCallback('https://memory-a.example'));
     act(() => {
       window.dispatchEvent(new Event('ci-powersync-reconnect'));
     });
 
     await waitFor(() => expect(mocks.database.connect).toHaveBeenCalledTimes(3));
+  });
+
+  it('ignores an answer from another server that reached this connector mid-switch', async () => {
+    render(<PowerSyncProvider>child</PowerSyncProvider>);
+
+    await waitFor(() => expect(mocks.database.connect).toHaveBeenCalledTimes(1));
+
+    // The app went to memory-b and back while a request was in flight, so this
+    // connector's request reached memory-b. That says nothing about memory-a.
+    act(() => latestSyncOffCallback()('https://memory-b.example'));
+    act(() => {
+      window.dispatchEvent(new Event('ci-powersync-reconnect'));
+    });
+
+    await waitFor(() => expect(mocks.database.connect).toHaveBeenCalledTimes(2));
+    expect(mocks.database.disconnect).not.toHaveBeenCalled();
   });
 });

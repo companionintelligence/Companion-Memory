@@ -69,8 +69,10 @@ export class PowerSyncTokenService {
 
   issueToken(userId: string, cutoff?: string): PowerSyncCredentials {
     if (!this.isConfigured()) {
-      // The feature is scaffolded but not configured for this deployment.
-      throw new ServiceUnavailableException('PowerSync is not configured');
+      // The feature is scaffolded but not configured for this deployment. The
+      // controller answers this case before calling here; a caller that does
+      // not still gets the same body, `code` included.
+      throw new ServiceUnavailableException(POWERSYNC_NOT_CONFIGURED_BODY);
     }
 
     const token = this.jwtService.sign(

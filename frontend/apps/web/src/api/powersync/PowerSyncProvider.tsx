@@ -90,10 +90,11 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
 
     const connector = new GraphQLBackendConnector(
       () => tokenRef.current ?? null,
-      () => {
-        // A late answer from a server the app has since left must not touch the
-        // connection to the new one.
-        if (getApiBaseUrl() === apiBaseUrl) {
+      (answeredFor) => {
+        // Only an answer from this connector's server, while the app is still on
+        // it, counts. A late answer from a server the app has since left (or one
+        // a request reached mid-switch) must not touch the connection to another.
+        if (answeredFor === apiBaseUrl && getApiBaseUrl() === apiBaseUrl) {
           setSyncOffFor(apiBaseUrl);
         }
       },
