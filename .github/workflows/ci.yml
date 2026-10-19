@@ -582,6 +582,13 @@ jobs:
 
       - name: Lint ${{ matrix.name }}
         run: ${{ matrix.command }}
+        env:
+          # The backend lane's type-aware ESLint holds 1.75 to 2 GB of live
+          # heap, and Node's default limit on this runner is about 2 GB, so it
+          # died with "JavaScript heap out of memory" (exit 129) on some runs
+          # and passed on a rerun. Each lane has its own runner, so the others
+          # lose nothing by sharing the setting.
+          NODE_OPTIONS: --max-old-space-size=4096
 
   python:
     name: Check Python
