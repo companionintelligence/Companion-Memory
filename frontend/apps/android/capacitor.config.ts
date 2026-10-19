@@ -10,7 +10,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
  */
 const config: CapacitorConfig = {
   appId: 'com.ci.memory',
-  appName: 'Memory',
+  appName: 'Companion Memory',
   webDir: '../web/dist',
   server: {
     androidScheme: 'https',
