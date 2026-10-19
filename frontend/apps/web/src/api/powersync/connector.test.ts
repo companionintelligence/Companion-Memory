@@ -108,11 +108,63 @@ describe('GraphQLBackendConnector.fetchCredentials', () => {
     await expect(connector.fetchCredentials()).rejects.toThrow('500');
   });
 
-  it('returns null on 503 so the app stays GraphQL-only', async () => {
-    stubFetch(jsonResponse({}, false, 503));
-    const connector = new GraphQLBackendConnector(() => 'jwt-abc');
+  it('returns null and reports it when the server runs no PowerSync service', async () => {
+    stubFetch(
+      jsonResponse(
+        {
+          statusCode: 503,
+          error: 'Service Unavailable',
+          message: 'PowerSync is not configured',
+          code: 'POWERSYNC_NOT_CONFIGURED',
+        },
+        false,
+        503,
+      ),
+    );
+    const onSyncUnavailable = vi.fn();
+    const connector = new GraphQLBackendConnector(() => 'jwt-abc', onSyncUnavailable);
 
     await expect(connector.fetchCredentials()).resolves.toBeNull();
+    expect(onSyncUnavailable).toHaveBeenCalledTimes(1);
+  });
+
+  it('recognises the same answer from servers released before it carried a code', async () => {
+    stubFetch(
+      jsonResponse(
+        { statusCode: 503, error: 'Service Unavailable', message: 'PowerSync is not configured' },
+        false,
+        503,
+      ),
+    );
+    const onSyncUnavailable = vi.fn();
+    const connector = new GraphQLBackendConnector(() => 'jwt-abc', onSyncUnavailable);
+
+    await expect(connector.fetchCredentials()).resolves.toBeNull();
+    expect(onSyncUnavailable).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws on any other 503 so PowerSync retries, and does not report sync as off', async () => {
+    stubFetch(jsonResponse({ statusCode: 503, message: 'Service Unavailable' }, false, 503));
+    const onSyncUnavailable = vi.fn();
+    const connector = new GraphQLBackendConnector(() => 'jwt-abc', onSyncUnavailable);
+
+    await expect(connector.fetchCredentials()).rejects.toThrow('503');
+    expect(onSyncUnavailable).not.toHaveBeenCalled();
+  });
+
+  it('treats a 503 page that is not JSON (a proxy while the server restarts) as transient', async () => {
+    stubFetch({
+      ok: false,
+      status: 503,
+      json: async () => {
+        throw new SyntaxError('Unexpected token < in JSON');
+      },
+    } as unknown as Response);
+    const onSyncUnavailable = vi.fn();
+    const connector = new GraphQLBackendConnector(() => 'jwt-abc', onSyncUnavailable);
+
+    await expect(connector.fetchCredentials()).rejects.toThrow('503');
+    expect(onSyncUnavailable).not.toHaveBeenCalled();
   });
 });
 

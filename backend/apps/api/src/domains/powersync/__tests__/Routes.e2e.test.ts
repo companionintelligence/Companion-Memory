@@ -20,7 +20,15 @@ jest.mock('@ci/configuration', () => {
   };
 });
 
-import { Global, Module, UnauthorizedException, type INestApplication } from '@nestjs/common';
+import {
+  Catch,
+  Global,
+  Module,
+  UnauthorizedException,
+  type ArgumentsHost,
+  type INestApplication,
+} from '@nestjs/common';
+import { BaseExceptionFilter } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken } from '@nestjs/typeorm';
 import { type Request, type Response, type NextFunction } from 'express';
@@ -31,6 +39,21 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggingModule } from '@ci/common/logging';
 
 import { PowerSyncModule } from '..';
+import { POWERSYNC_NOT_CONFIGURED } from '../services/PowerSyncTokenService';
+
+/**
+ * Stands in for GlobalExceptionsFilter, which logs every 5xx at error level and
+ * reports it to Sentry. Anything that reaches it here would reach that in the app.
+ */
+const caughtExceptions: unknown[] = [];
+
+@Catch()
+class RecordingExceptionFilter extends BaseExceptionFilter {
+  catch(exception: unknown, host: ArgumentsHost) {
+    caughtExceptions.push(exception);
+    super.catch(exception, host);
+  }
+}
 
 /**
  * PowerSyncModule provides SyncWindowSweepCron, which injects the app
@@ -76,6 +99,7 @@ describe('PowerSync routes', () => {
       .compile();
 
     app = module.createNestApplication();
+    app.useGlobalFilters(new RecordingExceptionFilter(app.getHttpAdapter()));
 
     app.use((req: Request, res: Response, next: NextFunction) => {
       ContextService.run({ traceId: 'test-trace-id', userId: 'test-user-id' }, () => {
@@ -103,6 +127,48 @@ describe('PowerSync routes', () => {
           expect(typeof body.token).toBe('string');
           expect(body.powersync_url).toBe('https://ps.test');
         });
+    });
+  });
+
+  describe('when this deployment runs no PowerSync service', () => {
+    beforeEach(() => {
+      mockCanActivate.mockImplementation(() => true);
+      mockPowersync.url = '';
+      mockPowersync.jwtSecret = '';
+      caughtExceptions.length = 0;
+    });
+
+    afterEach(() => {
+      mockPowersync.url = 'https://ps.test';
+      mockPowersync.jwtSecret = 'shh-secret';
+    });
+
+    it('answers 503 with a stable code clients can stop on', () => {
+      return request(app.getHttpServer())
+        .get('/powersync/token')
+        .expect(503)
+        .expect(({ body }) => {
+          expect(body).toEqual({
+            statusCode: 503,
+            error: 'Service Unavailable',
+            message: 'PowerSync is not configured',
+            code: POWERSYNC_NOT_CONFIGURED,
+          });
+        });
+    });
+
+    it('does not raise an exception, so it never lands in the error log or Sentry', async () => {
+      await request(app.getHttpServer()).get('/powersync/token').expect(503);
+
+      expect(caughtExceptions).toEqual([]);
+    });
+
+    it('still requires auth before saying anything about the deployment', () => {
+      mockCanActivate.mockImplementation(() => {
+        throw new UnauthorizedException();
+      });
+
+      return request(app.getHttpServer()).get('/powersync/token').expect(401);
     });
   });
 

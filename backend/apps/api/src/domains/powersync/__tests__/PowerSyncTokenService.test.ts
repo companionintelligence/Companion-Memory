@@ -44,6 +44,20 @@ describe('PowerSyncTokenService', () => {
     });
   });
 
+  it('is configured only when both the URL and the JWT secret are set', () => {
+    expect(service.isConfigured()).toBe(false);
+
+    mockPowersync.url = 'https://ps.test';
+    expect(service.isConfigured()).toBe(false);
+
+    mockPowersync.url = '';
+    mockPowersync.jwtSecret = 'shh-secret';
+    expect(service.isConfigured()).toBe(false);
+
+    mockPowersync.url = 'https://ps.test';
+    expect(service.isConfigured()).toBe(true);
+  });
+
   it('throws 503 when PowerSync is not configured', () => {
     expect(() => service.issueToken('user-1')).toThrow(ServiceUnavailableException);
   });
