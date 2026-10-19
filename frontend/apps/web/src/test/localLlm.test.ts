@@ -424,15 +424,17 @@ describe('ensureLocalLlmLoaded', () => {
   });
 
   it('does not reload a model that is already resident on the requested backend', async () => {
+    // The CPU, which is what a default request asks for since 2026-10-13 (see above).
     const { plugin } = fakeLlm({
-      getLoadedModel: vi.fn(async () => ({ loaded: true, modelId: 'gemma-4-e2b-it', accelerator: 'gpu' })),
+      getLoadedModel: vi.fn(async () => ({ loaded: true, modelId: 'gemma-4-e2b-it', accelerator: 'cpu' })),
     });
 
     nativeWindow('android', plugin);
 
-    await expect(ensureLocalLlmLoaded('gemma-4-e2b-it')).resolves.toEqual({
+    // toMatchObject: `toolCount` is whatever an earlier load in this module reported, so this test leaves it out.
+    await expect(ensureLocalLlmLoaded('gemma-4-e2b-it')).resolves.toMatchObject({
       alreadyLoaded: true,
-      accelerator: 'gpu',
+      accelerator: 'cpu',
     });
     expect(plugin.loadModel).not.toHaveBeenCalled();
   });

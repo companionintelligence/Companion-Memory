@@ -68,7 +68,9 @@ describe('recognising an export nested inside a Takeout', () => {
     layOut(FACEBOOK.map((file) => `Drive/zz-facebook-export/${file}`));
 
     expect((await recognise()).get('facebook')).toBe('Drive/zz-facebook-export');
-  });
+    // Every recogniser looks at each of the 450 folders: 5.5 to 11 s on a
+    // 16-core workstation, so Jest's default 5 s fails it everywhere.
+  }, 60_000);
 
   it('stops at the default depth', async () => {
     const tooDeep = Array.from({ length: DEFAULT_RECOGNIZE_MAX_DEPTH }, (_, i) => `d${i}`).join('/');

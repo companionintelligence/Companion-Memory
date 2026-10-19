@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -134,6 +135,31 @@ const UNMEASURED = [
   'uber',
 ];
 
+/**
+ * These two read a PDF report's cover with pdftotext. Without the binary they
+ * fall back to a 0.5 claim on the file name, under LISTING_CONFIDENCE_FLOOR, so
+ * no fixture measures them. The appliance image ships poppler-utils and the
+ * lists above assume it; ci.yml's runner does not, so there they count as
+ * unmeasured, as disney_plus.test.ts and hulu.test.ts skip their PDF cases.
+ */
+const NEEDS_PDFTOTEXT = ['disney_plus', 'hulu'];
+
+function pdftotextAvailable(): boolean {
+  try {
+    execFileSync('pdftotext', ['-v'], { stdio: 'ignore' });
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const HAS_PDFTOTEXT = pdftotextAvailable();
+const EXPECTED_CONTENTS_ONLY = HAS_PDFTOTEXT
+  ? CONTENTS_ONLY
+  : CONTENTS_ONLY.filter((name) => !NEEDS_PDFTOTEXT.includes(name));
+const EXPECTED_UNMEASURED = HAS_PDFTOTEXT ? UNMEASURED : [...UNMEASURED, ...NEEDS_PDFTOTEXT];
+
 /** The catch-all claims any tree, so its match says nothing; the listing rule drops it too. */
 const GENERIC = 'generic';
 
@@ -226,7 +252,7 @@ describe('what a drive sync recognises from file names alone', () => {
       results.flatMap((result) => result.withContents).filter((name) => !fromNames.has(name)),
     );
 
-    expect([...contentsOnly].sort()).toEqual([...CONTENTS_ONLY].sort());
+    expect([...contentsOnly].sort()).toEqual([...EXPECTED_CONTENTS_ONLY].sort());
   });
 
   it('has a fixture for every other file importer, or lists it as unmeasured', () => {
@@ -237,6 +263,6 @@ describe('what a drive sync recognises from file names alone', () => {
       )
       .map((source) => source.name);
 
-    expect(unmeasured.sort()).toEqual([...UNMEASURED].sort());
+    expect(unmeasured.sort()).toEqual([...EXPECTED_UNMEASURED].sort());
   });
 });
