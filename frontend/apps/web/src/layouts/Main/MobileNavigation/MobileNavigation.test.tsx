@@ -1,5 +1,5 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createEvent, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -92,6 +92,59 @@ function renderMobileNav(route = '/calendar') {
     </PowerRailProvider>,
     { route },
   );
+}
+
+/** The drawer while it is shut: hidden from the a11y tree, so not reachable by role. */
+function drawerNav() {
+  const nav = document.getElementById('power-rail');
+
+  if (!nav) {
+    throw new Error('No #power-rail in the document');
+  }
+
+  return nav;
+}
+
+/** jsdom does no layout: give the drawer the 300px it has on a phone. */
+function mockDrawerWidth(nav: HTMLElement) {
+  vi.spyOn(nav, 'getBoundingClientRect').mockReturnValue({ width: 300, right: 300 } as DOMRect);
+}
+
+function touchAt(clientX: number, clientY = 240) {
+  return { touches: [{ identifier: 0, clientX, clientY }] };
+}
+
+/**
+ * One finger down at the first x, through the rest, then up. The clock stands
+ * still, so the release has no speed and where it lets go decides. Synthetic
+ * events land within a millisecond of each other, which would read as a flick.
+ */
+function drag(target: Element, xs: number[]) {
+  const [first, ...rest] = xs;
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+
+  fireEvent.touchStart(target, touchAt(first));
+
+  for (const x of rest) {
+    fireEvent.touchMove(target, touchAt(x));
+  }
+
+  fireEvent.touchEnd(target, { touches: [] });
+  now.mockRestore();
+}
+
+/** A sideways scroller (the Memory section strip, say), scrolled `scrollLeft` px from its start. */
+function sidewaysStrip(scrollLeft: number) {
+  const strip = document.createElement('div');
+
+  strip.dataset.testid = 'page-strip';
+  strip.style.overflowX = 'auto';
+  Object.defineProperty(strip, 'scrollWidth', { configurable: true, value: 800 });
+  Object.defineProperty(strip, 'clientWidth', { configurable: true, value: 400 });
+  Object.defineProperty(strip, 'scrollLeft', { configurable: true, value: scrollLeft });
+  document.body.appendChild(strip);
+
+  return strip;
 }
 
 describe('MobileNavigation', () => {
@@ -202,23 +255,52 @@ describe('MobileNavigation', () => {
     expect(footer).toHaveClass('border-t', 'shrink-0');
   });
 
-  // The swipe that closes the drawer may start anywhere on it — the drawer's
-  // own measured edge, not the 224px it used to be.
-  it('closes on a left swipe that starts anywhere on the drawer', async () => {
+  // The swipe that closes the drawer may start anywhere on it, and the drawer
+  // travels with the finger on the way.
+  it('closes on a left drag that starts anywhere on the drawer', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    const nav = await screen.findByRole('navigation');
+    const row = within(nav).getByRole('link', { name: 'Planning' });
+
+    mockDrawerWidth(nav);
+    drag(row, [280, 230, 120]);
+
+    // Let go short of halfway shut: on its way out.
+    expect(nav.style.translate).toBe('-100% 0');
+
+    await waitFor(() => {
+      expect(screen.queryByRole('link', { name: 'Planning' })).not.toBeInTheDocument();
+    });
+  });
+
+  it('closes on a left drag that starts on the scrim beside the drawer', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+    mockDrawerWidth(await screen.findByRole('navigation'));
+
+    drag(screen.getByRole('button', { name: 'Dismiss menu' }), [360, 300, 180]);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('link', { name: 'Planning' })).not.toBeInTheDocument();
+    });
+  });
+
+  it('stays open when the drag left is let go before halfway', async () => {
     renderMobileNav();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
 
     const nav = await screen.findByRole('navigation');
 
-    vi.spyOn(nav, 'getBoundingClientRect').mockReturnValue({ right: 300 } as DOMRect);
+    mockDrawerWidth(nav);
+    drag(within(nav).getByRole('link', { name: 'Planning' }), [280, 250, 200]);
 
-    fireEvent.touchStart(document, { touches: [{ clientX: 280, clientY: 240 }] });
-    fireEvent.touchEnd(document, { changedTouches: [{ clientX: 180, clientY: 240 }] });
-
-    await waitFor(() => {
-      expect(screen.queryByRole('link', { name: 'Planning' })).not.toBeInTheDocument();
-    });
+    await waitFor(() => expect(nav.style.translate).toBe(''));
+    expect(screen.getByRole('link', { name: 'Planning' })).toBeInTheDocument();
   });
 
   // The wordmark is a statement, not a second close button: the chevron beside
@@ -334,16 +416,186 @@ describe('MobileNavigation', () => {
     expect(screen.getByRole('link', { name: 'Docs' })).toBeInTheDocument();
   });
 
-  it('opens on a right swipe from the left edge', async () => {
-    // `/plan/calendar` so the Planning submenu auto-opens on the route,
-    // surfacing the Calendar child link without an explicit expand click.
-    renderMobileNav('/plan/calendar');
+  describe('pulling the drawer out from the left edge', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      document.body.querySelectorAll('[data-testid="page-strip"]').forEach((el) => el.remove());
+    });
 
-    fireEvent.touchStart(document, { touches: [{ clientX: 8, clientY: 240 }] });
-    fireEvent.touchEnd(document, { changedTouches: [{ clientX: 80, clientY: 240 }] });
+    it('moves the drawer with the finger, and opens it once let go past halfway', async () => {
+      // `/plan/calendar` so the Planning submenu auto-opens on the route,
+      // surfacing the Calendar child link without an explicit expand click.
+      renderMobileNav('/plan/calendar');
 
-    await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'Calendar' })).toBeInTheDocument();
+      const nav = drawerNav();
+      const page = screen.getByRole('banner');
+
+      mockDrawerWidth(nav);
+
+      vi.spyOn(Date, 'now').mockReturnValue(1_000);
+      fireEvent.touchStart(page, touchAt(8));
+      fireEvent.touchMove(page, touchAt(68));
+      // 60px of a 300px drawer: a fifth of the way out, under the finger.
+      expect(nav.style.translate).toBe('-240px 0');
+      // Open from the moment the drag claims the touch, so what slides out is
+      // the labelled drawer, not the icon-only rows it keeps while shut.
+      expect(nav).toHaveAttribute('data-state', 'expanded');
+      // The scrim mounts at the drag's shade, not at full for a frame.
+      expect(screen.getByRole('button', { name: 'Dismiss menu' }).style.opacity).toBe('0.2');
+
+      fireEvent.touchMove(page, touchAt(158));
+      expect(nav.style.translate).toBe('-150px 0');
+      // The scrim darkens with it: half out, half dark.
+      expect(screen.getByRole('button', { name: 'Dismiss menu' }).style.opacity).toBe('0.5');
+
+      fireEvent.touchMove(page, touchAt(208));
+      fireEvent.touchEnd(page, { touches: [] });
+
+      expect(await screen.findByRole('link', { name: 'Calendar' })).toBeInTheDocument();
+      // Settled: the inline position comes off, and the class holds it open.
+      await waitFor(() => expect(nav.style.translate).toBe(''));
+      expect(nav).toHaveClass('translate-x-0');
+    });
+
+    it('goes back when let go short of halfway, scrim and all', async () => {
+      renderMobileNav();
+
+      const nav = drawerNav();
+
+      mockDrawerWidth(nav);
+      drag(screen.getByRole('banner'), [8, 60, 110]);
+
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: 'Dismiss menu' })).not.toBeInTheDocument(),
+      );
+      expect(nav).toHaveAttribute('data-state', 'collapsed');
+      expect(nav.style.translate).toBe('');
+    });
+
+    it('opens on a quick flick, however short', async () => {
+      renderMobileNav('/plan/calendar');
+
+      const page = screen.getByRole('banner');
+      const now = vi.spyOn(Date, 'now');
+
+      mockDrawerWidth(drawerNav());
+
+      now.mockReturnValue(1_000);
+      fireEvent.touchStart(page, touchAt(8));
+      now.mockReturnValue(1_016);
+      fireEvent.touchMove(page, touchAt(30));
+      now.mockReturnValue(1_032);
+      // 60px in 16ms, and only a fifth of the way out.
+      fireEvent.touchMove(page, touchAt(90));
+      fireEvent.touchEnd(page, { touches: [] });
+
+      expect(await screen.findByRole('link', { name: 'Calendar' })).toBeInTheDocument();
+    });
+
+    it('leaves a drag that starts further in than the edge strip to the page', () => {
+      renderMobileNav();
+
+      const nav = drawerNav();
+
+      mockDrawerWidth(nav);
+      drag(screen.getByRole('banner'), [60, 160, 260]);
+
+      expect(nav.style.translate).toBe('');
+      expect(screen.queryByRole('button', { name: 'Dismiss menu' })).not.toBeInTheDocument();
+    });
+
+    it('leaves a mostly vertical drag to the page, so it scrolls', () => {
+      renderMobileNav();
+
+      const nav = drawerNav();
+      const page = screen.getByRole('banner');
+
+      mockDrawerWidth(nav);
+
+      fireEvent.touchStart(page, touchAt(8, 240));
+      const move = createEvent.touchMove(page, touchAt(30, 340));
+      fireEvent(page, move);
+      fireEvent.touchEnd(page, { touches: [] });
+
+      expect(move.defaultPrevented).toBe(false);
+      expect(nav.style.translate).toBe('');
+      expect(nav).toHaveAttribute('data-state', 'collapsed');
+    });
+
+    it("keeps the page from scrolling once the drag is the drawer's", () => {
+      renderMobileNav();
+
+      const page = screen.getByRole('banner');
+
+      mockDrawerWidth(drawerNav());
+
+      fireEvent.touchStart(page, touchAt(8));
+      const move = createEvent.touchMove(page, touchAt(80));
+      fireEvent(page, move);
+
+      expect(move.defaultPrevented).toBe(true);
+    });
+
+    it('lets a sideways strip that can still scroll back have the swipe', () => {
+      renderMobileNav();
+
+      const nav = drawerNav();
+      const strip = sidewaysStrip(40);
+
+      mockDrawerWidth(nav);
+      drag(strip, [8, 80, 200]);
+
+      expect(nav.style.translate).toBe('');
+      expect(nav).toHaveAttribute('data-state', 'collapsed');
+    });
+
+    it('takes the swipe from a sideways strip that is already back at its start', async () => {
+      renderMobileNav('/plan/calendar');
+
+      mockDrawerWidth(drawerNav());
+      drag(sidewaysStrip(0), [8, 80, 200]);
+
+      expect(await screen.findByRole('link', { name: 'Calendar' })).toBeInTheDocument();
+    });
+
+    // Leaflet and d3-zoom set `touch-action: none` and pan on their own.
+    it('leaves a surface that handles its own touches alone', () => {
+      renderMobileNav();
+
+      const nav = drawerNav();
+      const map = sidewaysStrip(0);
+      const realGetComputedStyle = window.getComputedStyle.bind(window);
+
+      vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) => {
+        const style = realGetComputedStyle(element, pseudo);
+
+        return element === map
+          ? ({ ...style, touchAction: 'none', overflowX: 'hidden' } as CSSStyleDeclaration)
+          : style;
+      });
+
+      mockDrawerWidth(nav);
+      drag(map, [8, 80, 200]);
+
+      expect(nav.style.translate).toBe('');
+    });
+
+    it('stays put under an open dialog', () => {
+      renderMobileNav();
+
+      const nav = drawerNav();
+
+      mockDrawerWidth(nav);
+      // What Radix does to the page while a modal sheet or dialog is open.
+      document.body.style.pointerEvents = 'none';
+
+      try {
+        drag(screen.getByRole('banner'), [8, 80, 200]);
+      } finally {
+        document.body.style.pointerEvents = '';
+      }
+
+      expect(nav.style.translate).toBe('');
     });
   });
 

@@ -109,6 +109,17 @@ export function PullToRefresh({
         return;
       }
 
+      // Another gesture claimed this touch before it reached here: the phone
+      // drawer, dragged sideways, cancels the move in the capture phase. A
+      // drag that wanders down a little on its way across is not a pull.
+      if (event.defaultPrevented) {
+        startY.current = null;
+        pullRef.current = 0;
+        setPull(0);
+
+        return;
+      }
+
       const scroller = scrollerFrom(event.target);
 
       if (!scroller) {
