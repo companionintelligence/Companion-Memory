@@ -15,6 +15,7 @@ import {
   Lock,
   Shield,
   Smartphone,
+  LockKeyhole,
 } from '@ci/shadcn/icons';
 
 export interface SettingsSection {
@@ -40,6 +41,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'autonomy', label: 'Autonomy', icon: Shield },
   { id: 'model', label: 'Model', icon: Cpu },
   { id: 'on-device', label: 'On-device model', icon: Smartphone, nativeOnly: true },
+  { id: 'app-lock', label: 'App lock', icon: LockKeyhole, nativeOnly: true },
   { id: 'location', label: 'Location', icon: MapPin },
   { id: 'safari', label: 'Safari', icon: Compass, iosOnly: true },
   { id: 'bluebubbles', label: 'BlueBubbles', icon: MessageCircle },

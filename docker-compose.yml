@@ -228,9 +228,14 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        set -a
-        . /run/secrets/.env.secrets
-        set +a
+        # staging/production: the generated projection. local: the volume is
+        # mounted but empty, and docker-compose.local.yml passes the same
+        # names through `environment` from the root .env instead.
+        if [ -f /run/secrets/.env.secrets ]; then
+          set -a
+          . /run/secrets/.env.secrets
+          set +a
+        fi
         export PS_REPLICATION_URI="${PS_REPLICATION_URI:-postgresql://$${POWERSYNC_DATABASE_USERNAME}:$${POWERSYNC_DATABASE_PASSWORD}@database:5432/$${DATABASE_NAME}}"
         export PS_STORAGE_URI="${PS_STORAGE_URI:-postgresql://$${DATABASE_USERNAME}:$${DATABASE_PASSWORD}@database:5432/$${DATABASE_NAME}}"
         # The service takes the shared HS256 secret base64url-encoded. Derived
@@ -277,25 +282,14 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    # Deliberately NOT in "local" — but no longer because the client is missing.
-    # That half has shipped: PowerSyncProvider mounts unconditionally in the web
-    # app, and the Android shell links @powersync/capacitor and drives a real
-    # native ci-powersyncSQLite.db. Driven end to end against this stack, a
-    # capture through POST /api/files/upload reaches ps_data__files on an
-    # emulator in seconds.
-    #
-    # What still stops a `local` client is server wiring, in two places:
-    #   - POWERSYNC_URL / POWERSYNC_JWT_SECRET reach the `api` service from NO
-    #     compose file, so /api/powersync/token is a permanent 503 and no client
-    #     can fetch credentials (PowerSyncTokenService throws unless both are
-    #     set). setup-secrets generates POWERSYNC_DATABASE_PASSWORD but never a
-    #     JWT secret, so there is nothing to point them at either.
-    #   - this service publishes no port and has no gateway route, so nothing
-    #     off the compose network can reach :8080 anyway.
-    # Running it in `local` before those land would still only crash-loop on a
-    # missing password and hold a replication slot for a reader that cannot
-    # authenticate. Add "local" once the two bullets above are fixed.
-    profiles: [ "staging", "production" ]
+    # Not in "local" unconditionally: a running replicator holds a replication
+    # slot, and a slot nobody reads keeps WAL forever (the database sets no
+    # max_slot_wal_keep_size). So the dev stack opts in: scripts/dev-stack adds
+    # `--profile powersync` only when the root .env sets POWERSYNC_URL — the
+    # same switch that makes /api/powersync/token answer instead of 503 — and
+    # docker-compose.local.yml supplies the env and the loopback port. See
+    # infrastructure/powersync/README.md § "Running it under make dev".
+    profiles: [ "powersync", "staging", "production" ]
 
   #############
   # EPHEMERAL #

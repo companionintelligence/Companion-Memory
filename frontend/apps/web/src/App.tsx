@@ -23,6 +23,7 @@ import {
 
 import { ApolloProvider } from '@/api/ApolloProvider';
 import { FeaturesProvider, useFeatures } from '@/common/feature';
+import { AppLockGate } from '@/components/AppLock/AppLockGate';
 import { MemoryHubLayout, MemoryHubRoute } from '@/components/MemoryHub';
 import NotFoundPage from '@/components/NotFound';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
@@ -199,7 +200,11 @@ function Providers({ children }: { children: ReactNode }) {
                           {/* Inside Apollo: it reads the signed-in person's time format and
                               timezone, and hands every page the formatters that apply them. */}
                           <DateTimeFormatProvider>
-                            <PowerSyncBoundary>{children}</PowerSyncBoundary>
+                            {/* Inside PowerSync and the outbox: the lock covers the page, never the
+                                sync behind it (SECURITY_ARCHITECTURE § 4.4). */}
+                            <PowerSyncBoundary>
+                              <AppLockGate>{children}</AppLockGate>
+                            </PowerSyncBoundary>
                           </DateTimeFormatProvider>
                         </ApolloProvider>
                       </CaptureModalProvider>

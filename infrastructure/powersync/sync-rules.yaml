@@ -53,6 +53,9 @@
 #                            created_at — no user_id of its own; scoped via a
 #                            parameter query against its tag's ci_search.tags.user_id,
 #                            see the `entity_tags` bucket below)
+#   - ci_search.documents   (id, entity_type, entity_id, user_id, title, body,
+#                            occurred_at, created_at, updated_at — the device
+#                            search index; see the `user_data` bucket)
 #
 # DELIBERATELY NOT synced (keep online): ci.events / ci.browser_activity /
 # ci.communications, ci.content (NULL user_id), ci.entities/relationships (graph),
@@ -240,6 +243,23 @@ bucket_definitions:
           AND sync_period IS NOT NULL
           AND entity_type = 'Event'
           AND is_active = true
+
+      # The search index a phone can carry: one plain-text row per indexed
+      # entity of a device-shown type (search-next DEVICE_INDEXED_ENTITIES),
+      # written beside the tsvector by the one shared statement in
+      # search-ingress VectorService (migration 20261019212935). The device
+      # builds its own FTS5 index over this table (frontend
+      # api/powersync/searchIndex.ts) and answers the header search from it
+      # when the appliance is unreachable.
+      #
+      # Deliberately no window: 600k rows of names and snippets are ~25 MB of
+      # text, and a search that silently stops at 30 days is worse than none.
+      # Deletes propagate through the vectors FK (ON DELETE CASCADE) — a row
+      # that leaves this table leaves every device.
+      - SELECT id, entity_type, entity_id, user_id, title, body, occurred_at,
+               created_at, updated_at
+        FROM ci_search.documents
+        WHERE user_id = bucket.user_id
 
   # entity_tag has no user_id of its own — it is owned transitively via the tag it
   # points at. Sync rules don't support JOINs (see header comment), so this follows

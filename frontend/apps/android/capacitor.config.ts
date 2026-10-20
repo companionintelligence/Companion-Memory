@@ -43,7 +43,11 @@ const config: CapacitorConfig = {
       overlaysWebView: false,
     },
     CapacitorSQLite: {
-      androidIsEncryption: false,
+      // The PowerSync replica (frontend/apps/web/src/api/powersync/nativeDatabase.ts)
+      // opens its file with SQLCipher through this plugin. Off, every encrypted
+      // call fails with "No Encryption set in capacitor.config". The key lives in
+      // the plugin's EncryptedSharedPreferences, wrapped by an AndroidKeyStore key.
+      androidIsEncryption: true,
     },
     PushNotifications: {
       presentationOptions: ['badge', 'sound', 'alert'],

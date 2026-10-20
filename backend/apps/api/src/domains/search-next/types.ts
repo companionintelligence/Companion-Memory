@@ -33,6 +33,32 @@ export const INDEXABLE_ENTITIES = [
 
 export type IndexableEntity = (typeof INDEXABLE_ENTITIES)[number];
 
+/**
+ * The indexed types a device carries a plain-text copy of (`ci_search.documents`,
+ * replicated by PowerSync and searched on the phone with FTS5). Everything a
+ * result row can open: the subset of {@link INDEXABLE_ENTITIES} minus
+ * `answer`, `browser-activity`, `position` (no text of their own worth a row),
+ * `file-chunk` (a slice of a file that is already here) and `message` (the chat
+ * recall channel, excluded from entity search everywhere else too).
+ */
+export const DEVICE_INDEXED_ENTITIES = [
+  'communication',
+  'concept',
+  'content',
+  'event',
+  'file',
+  'item',
+  'note',
+  'person',
+  'place',
+  'product',
+  'receipt',
+  'task',
+  'thread',
+] as const satisfies readonly IndexableEntity[];
+
+export type DeviceIndexedEntity = (typeof DEVICE_INDEXED_ENTITIES)[number];
+
 export const TAGGABLE_ENTITIES = [
   'action',
   'browser-activity',

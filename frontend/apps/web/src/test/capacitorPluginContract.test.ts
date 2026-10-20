@@ -122,6 +122,13 @@ const PLUGINS: PluginUnderTest[] = [
     iosPlugin: 'ios/Sources/SpeechPlugin/SpeechPlugin.swift',
     anchorMethod: 'startListening',
   },
+  {
+    pkg: 'capacitor-app-lock',
+    interfaceName: 'AppLockPlugin',
+    androidPlugin: 'android/src/main/java/com/companionintelligence/applock/AppLockPlugin.kt',
+    iosPlugin: 'ios/Sources/AppLockPlugin/AppLockPlugin.swift',
+    anchorMethod: 'unlock',
+  },
 ];
 
 /** The name passed to `registerPlugin<T>('<name>', …)` in a plugin's `src/index.ts`. */

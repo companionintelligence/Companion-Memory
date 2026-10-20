@@ -46,6 +46,8 @@
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Companion uses the camera to capture photos and videos for your memory, and to scan a QR code to connect to your Companion Memory server.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Companion uses Face ID to unlock the app when you have turned on the app lock, so only you can see your memory.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Companion connects to your Companion appliance on your local network, so your notes, photos and events stay on hardware you control.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>

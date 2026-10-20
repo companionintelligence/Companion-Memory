@@ -18,6 +18,7 @@ import {
 } from '@ci/domains/memory/events';
 import { PositionCreatedEvent } from '@ci/domains/position/events';
 import { ENTITY_SOURCE_MAP } from '@ci/domains/search-ingress';
+import { DEVICE_INDEXED_ENTITIES } from '@ci/domains/search-next';
 
 /**
  * The search-index pgboss queue the *SearchIndexListeners consume. Re-emitting a
@@ -457,6 +458,18 @@ export class SearchIndexBackfillService {
              ON ps.entity_type = $1 AND ps.entity_id = s."${source.idColumn}" AND ps.stage = '${pipelineStage}'`
       : '';
     const pipelineExcluded = pipelineStage ? 'AND ps.entity_id IS NULL' : '';
+    // A device-indexed type is also "missing" when its index row has no
+    // plain-text document (ci_search.documents, added 2026-10-19 beside an
+    // index that already existed). Re-emitting the row's event rewrites both
+    // halves through the one shared statement. Types the pipeline covers are
+    // still excluded above by their ledger row — the pipeline's own stage
+    // version bump re-runs those.
+    const deviceIndexed = (DEVICE_INDEXED_ENTITIES as readonly string[]).includes(entityType);
+    const documentJoin = deviceIndexed
+      ? `LEFT JOIN ci_search.documents d
+             ON d.entity_type = $1 AND d.entity_id = s."${source.idColumn}"`
+      : '';
+    const documentMissing = deviceIndexed ? 'OR d.entity_id IS NULL' : '';
     const timeColumn = TIME_PAGED_TYPES[entityType];
 
     if (timeColumn != null) {
@@ -467,8 +480,9 @@ export class SearchIndexBackfillService {
              ON e.entity_type = $1 AND e.entity_id = s."${source.idColumn}"
            LEFT JOIN ci_search.index_skips k
              ON k.entity_type = $1 AND k.entity_id = s."${source.idColumn}"
+           ${documentJoin}
            ${pipelineJoin}
-          WHERE e.entity_id IS NULL
+          WHERE (e.entity_id IS NULL ${documentMissing})
             AND k.entity_id IS NULL
             ${pipelineExcluded}
             ${discriminator}
@@ -488,8 +502,9 @@ export class SearchIndexBackfillService {
            ON e.entity_type = $1 AND e.entity_id = s."${source.idColumn}"
          LEFT JOIN ci_search.index_skips k
            ON k.entity_type = $1 AND k.entity_id = s."${source.idColumn}"
+         ${documentJoin}
          ${pipelineJoin}
-        WHERE e.entity_id IS NULL
+        WHERE (e.entity_id IS NULL ${documentMissing})
           AND k.entity_id IS NULL
           ${pipelineExcluded}
           ${discriminator}

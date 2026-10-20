@@ -10,6 +10,13 @@ const mocks = vi.hoisted(() => ({
     disconnect: vi.fn(),
     close: vi.fn(),
   },
+  nativeDatabase: {
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    close: vi.fn(),
+  },
+  /** What `isNativePlatform()` answers: a phone, or a browser. */
+  native: false,
   // One entry per connector the provider builds: the callback it passes for
   // "this server runs no PowerSync service".
   syncOffCallbacks: [] as Array<(origin: string) => void>,
@@ -19,8 +26,24 @@ vi.mock('@/hooks', () => ({
   useAuth: () => [{ authToken: 'jwt-abc', authenticated: true }],
 }));
 
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
+  isNativePlatform: () => mocks.native,
+}));
+
 vi.mock('./webDatabase', () => ({
   openWebPowerSyncDatabase: () => mocks.database,
+}));
+
+vi.mock('./nativeDatabase', () => ({
+  openNativePowerSyncDatabase: () => mocks.nativeDatabase,
+}));
+
+// Plain functions, not vi.fn(): the config restores mocks between tests, which
+// would leave a vi.fn() returning undefined and the provider's `.then` throwing.
+vi.mock('./searchIndex', () => ({
+  ensureSearchIndex: async () => false,
+  countDocuments: async () => 0,
 }));
 
 vi.mock('./session', () => ({
@@ -50,10 +73,14 @@ function latestSyncOffCallback(): (origin: string) => void {
 
 beforeEach(() => {
   setApiBaseUrl('https://memory-a.example');
+  mocks.native = false;
   mocks.syncOffCallbacks.length = 0;
-  mocks.database.connect.mockReset().mockResolvedValue(undefined);
-  mocks.database.disconnect.mockReset().mockResolvedValue(undefined);
-  mocks.database.close.mockReset().mockResolvedValue(undefined);
+
+  for (const database of [mocks.database, mocks.nativeDatabase]) {
+    database.connect.mockReset().mockResolvedValue(undefined);
+    database.disconnect.mockReset().mockResolvedValue(undefined);
+    database.close.mockReset().mockResolvedValue(undefined);
+  }
 });
 
 afterEach(() => {
@@ -123,5 +150,21 @@ describe('PowerSyncProvider', () => {
 
     await waitFor(() => expect(mocks.database.connect).toHaveBeenCalledTimes(2));
     expect(mocks.database.disconnect).not.toHaveBeenCalled();
+  });
+});
+
+describe('PowerSyncProvider on a phone', () => {
+  it('never connects the IndexedDB placeholder; the encrypted SQLite replica is the one that syncs', async () => {
+    mocks.native = true;
+
+    render(<PowerSyncProvider>child</PowerSyncProvider>);
+
+    await waitFor(() => expect(mocks.nativeDatabase.connect).toHaveBeenCalledTimes(1));
+
+    // Before the SQLite adapter resolved, the web database was the context's
+    // value and the session was authenticated — the old code connected it
+    // then, leaving a plaintext IndexedDB copy of whatever synced in that window.
+    expect(mocks.database.connect).not.toHaveBeenCalled();
+    expect(mocks.database.close).toHaveBeenCalled();
   });
 });

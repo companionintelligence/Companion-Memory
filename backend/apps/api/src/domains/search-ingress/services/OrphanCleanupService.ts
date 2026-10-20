@@ -19,6 +19,10 @@ import { ENTITY_SOURCE_MAP, type EntitySource } from '../entitySourceMap';
  */
 export const SEARCH_TABLES = [
   { schema: 'ci_search', table: 'embeddings', keyColumns: ['id'] },
+  // Before `vectors`: it references vectors(id) ON DELETE CASCADE, so the
+  // orphan sweep finds nothing here that the vectors pass would not also take,
+  // but TRUNCATE refuses a table another one still points at.
+  { schema: 'ci_search', table: 'documents', keyColumns: ['id'] },
   { schema: 'ci_search', table: 'vectors', keyColumns: ['id'] },
   { schema: 'ci_search', table: 'index_skips', keyColumns: ['entity_type', 'entity_id'] },
 ] as const;

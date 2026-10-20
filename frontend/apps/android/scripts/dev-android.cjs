@@ -19,7 +19,10 @@
  *    `adb reverse`. The rule lives in the adb server and is gone after every
  *    phone reboot (a blank app afterwards is the symptom), so it is re-applied
  *    on every run. A LAN / tailnet URL needs no tunnel, and a bundled build
- *    (no CAP_SERVER_URL) needs none either; both skip it.
+ *    (no CAP_SERVER_URL) needs none either; both skip it. The same goes for
+ *    the dev PowerSync service: the api hands the phone the POWERSYNC_URL from
+ *    the root .env verbatim, so when that is a loopback URL its port is
+ *    tunnelled too, or the phone's working set never syncs and nothing says why.
  *
  * Plain CommonJS with no dependencies: the Capacitor shells are outside the
  * Yarn workspaces (see the root package.json) and this must run before
@@ -33,6 +36,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const APP_DIR = path.resolve(__dirname, '..');
+const ROOT_ENV = path.resolve(APP_DIR, '..', '..', '..', '.env');
 const LOCAL_PROPERTIES = path.join(APP_DIR, 'android', 'local.properties');
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -91,8 +95,33 @@ function targetFromArgs(args) {
   return '';
 }
 
-/** The port to tunnel when CAP_SERVER_URL is the device's own loopback, else null. */
-function reversePort(serverUrl) {
+/**
+ * One `KEY=value` out of the root .env, unquoted, or '' — the three lines of
+ * dotenv this script needs, kept dependency-free like the rest of it. A
+ * value already in the environment wins, as it does for the api.
+ */
+function rootEnvValue(key, env) {
+  if (env[key]) {
+    return env[key];
+  }
+  let text;
+  try {
+    text = fs.readFileSync(ROOT_ENV, 'utf8');
+  } catch {
+    return '';
+  }
+  let value = '';
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (match && match[1] === key) {
+      value = match[2].trim().replace(/^(['"])(.*)\1$/, '$2');
+    }
+  }
+  return value;
+}
+
+/** The port to tunnel when `serverUrl` is the device's own loopback, else null. */
+function reversePort(serverUrl, name = 'CAP_SERVER_URL') {
   if (!serverUrl) {
     return null;
   }
@@ -100,7 +129,7 @@ function reversePort(serverUrl) {
   try {
     url = new URL(serverUrl);
   } catch {
-    fail(`CAP_SERVER_URL '${serverUrl}' is not a URL.`);
+    fail(`${name} '${serverUrl}' is not a URL.`);
   }
   if (!LOOPBACK_HOSTS.has(url.hostname === '::1' ? '[::1]' : url.hostname)) {
     return null;
@@ -135,9 +164,16 @@ function main() {
   const env = { ...process.env, ANDROID_HOME: sdk, ANDROID_SDK_ROOT: process.env.ANDROID_SDK_ROOT || sdk };
   process.stdout.write(`✓ Android SDK at ${sdk}\n`);
 
-  const port = args.includes('--list') ? null : reversePort(env.CAP_SERVER_URL);
-  if (port) {
-    adbReverse(sdk, port, targetFromArgs(args), env);
+  if (!args.includes('--list')) {
+    const ports = new Set(
+      [
+        reversePort(env.CAP_SERVER_URL),
+        reversePort(rootEnvValue('POWERSYNC_URL', env), 'POWERSYNC_URL'),
+      ].filter(Boolean),
+    );
+    for (const port of ports) {
+      adbReverse(sdk, port, targetFromArgs(args), env);
+    }
   }
 
   const cap = require.resolve('@capacitor/cli/bin/capacitor', { paths: [APP_DIR] });

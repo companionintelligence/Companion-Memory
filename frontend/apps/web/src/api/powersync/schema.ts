@@ -161,6 +161,24 @@ const entities = new Table({
   updated_at: column.text,
 });
 
+// Read-only. The search index a phone carries: one plain-text row per indexed
+// entity of a device-shown type, written server-side beside the tsvector
+// (ci_search.documents, migration 20261019212935). `title` is the row's name
+// (a subject, a filename, a message preview), `body` the rest of its search
+// document cut at 1 KB, `occurred_at` its own time or null. The FTS5 index
+// over it is built on the device (./searchIndex.ts); PowerSync itself only
+// carries the rows.
+const documents = new Table({
+  entity_type: column.text,
+  entity_id: column.text,
+  user_id: column.text,
+  title: column.text,
+  body: column.text,
+  occurred_at: column.text,
+  created_at: column.text,
+  updated_at: column.text,
+});
+
 export const AppSchema = new Schema({
   notes,
   tags,
@@ -169,6 +187,7 @@ export const AppSchema = new Schema({
   files,
   events,
   entities,
+  documents,
 });
 
 export type Database = (typeof AppSchema)['types'];

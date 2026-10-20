@@ -22,13 +22,35 @@ describe('AppSchema', () => {
   it('declares every table from sync-rules.yaml', () => {
     const names = AppSchema.tables.map((t) => t.name).sort();
 
-    expect(names).toEqual(['entities', 'events', 'files', 'messages', 'notes', 'tags', 'threads']);
+    expect(names).toEqual([
+      'documents',
+      'entities',
+      'events',
+      'files',
+      'messages',
+      'notes',
+      'tags',
+      'threads',
+    ]);
   });
 
   // Column sets mirror infrastructure/powersync/sync-rules.yaml's `data` selects
   // exactly (minus `id`, which every Table gets implicitly).
   it('notes matches the user_data bucket select', () => {
     expect(columnNames('notes').sort()).toEqual(['content', 'created_at', 'title', 'updated_at', 'user_id']);
+  });
+
+  it('documents matches the user_data bucket select', () => {
+    expect(columnNames('documents').sort()).toEqual([
+      'body',
+      'created_at',
+      'entity_id',
+      'entity_type',
+      'occurred_at',
+      'title',
+      'updated_at',
+      'user_id',
+    ]);
   });
 
   it('tags matches the user_data bucket select', () => {

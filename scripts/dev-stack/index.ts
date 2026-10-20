@@ -33,7 +33,7 @@ import dotenv from 'dotenv';
 import { CaddyClient, routeId } from './caddy';
 import { keyFromArgv } from './key';
 import { fail, link, note, ok, step, table } from './log';
-import { buildOvermindEnv } from './overmind-env';
+import { buildOvermindEnv, powersyncEnabled } from './overmind-env';
 import { allocStackPorts, dockerPublishedPorts } from './ports';
 import { ensureSidecarAuthSecret } from './sidecar-secret';
 import { removeStaleContainers } from './stale-containers';
@@ -111,6 +111,18 @@ const COMPOSE_FILES = [
 /** Set once at startup; merged into the env of every compose invocation. */
 const AMD_GROUP_ENV = amdGroupEnv();
 
+/**
+ * The compose profiles this stack runs. `powersync` is opt-in: the replicator
+ * holds a replication slot, and a slot with no reader keeps WAL forever, so it
+ * runs only when .env names a POWERSYNC_URL (the api's own switch for the
+ * feature). `stop` always names it too — stopping a service that was never
+ * started is a no-op, while leaving it out would strand a running replicator
+ * when the opt-in was removed between `up` and teardown.
+ */
+function composeProfiles(includePowersync: boolean): string[] {
+  return ['--profile', 'local', ...(includePowersync ? ['--profile', 'powersync'] : [])];
+}
+
 // --- caddy routing (the CaddyClient lives in ./caddy) -----------------------
 
 /** reverse_proxy handler; flush_interval -1 streams responses immediately
@@ -138,8 +150,17 @@ const PLAYER_FRAME_SRC = [
   'https://www.dailymotion.com',
 ].join(' ');
 
-function buildRoute(key: string, p: { apiPort: number; webPort: number; objPort: number }) {
+function buildRoute(
+  key: string,
+  p: { apiPort: number; webPort: number; objPort: number; powersyncPort?: number },
+) {
   const host = `${key}.localhost`;
+  // The PowerSync client in a desktop browser on this route talks to the dev
+  // service at its loopback URL (the api returns POWERSYNC_URL verbatim), which
+  // `connect-src 'self'` would refuse. The phone loads vite directly and never
+  // sees this policy. Only when the stack runs the service.
+  const powersyncConnectSrc =
+    p.powersyncPort == null ? '' : ` http://localhost:${p.powersyncPort} ws://localhost:${p.powersyncPort}`;
   // script-src 'wasm-unsafe-eval': PowerSync's SQLite engine (wa-sqlite) is
   // WebAssembly compiled inside the DB web worker, and CSP counts compiling wasm
   // as eval — without it the worker's init throws and anything awaiting the local
@@ -161,7 +182,7 @@ function buildRoute(key: string, p: { apiPort: number; webPort: number; objPort:
     "https://maps.gstatic.com; style-src 'self' 'unsafe-inline' " +
     "https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src * data: blob:; " +
     "media-src 'self' blob:; connect-src 'self' https://maps.googleapis.com " +
-    `ws://${host} wss://${host}; worker-src 'self'; ` +
+    `ws://${host} wss://${host}${powersyncConnectSrc}; worker-src 'self'; ` +
     "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; " +
     `frame-src ${PLAYER_FRAME_SRC};`;
 
@@ -213,7 +234,7 @@ function buildRoute(key: string, p: { apiPort: number; webPort: number; objPort:
 
 async function caddyUp(
   key: string,
-  p: { apiPort: number; webPort: number; objPort: number },
+  p: { apiPort: number; webPort: number; objPort: number; powersyncPort?: number },
 ): Promise<string> {
   await caddy.addRoute(buildRoute(key, p));
 
@@ -272,7 +293,15 @@ function composeUp(key: string, env: NodeJS.ProcessEnv): void {
 
   run(
     'docker',
-    ['compose', ...COMPOSE_FILES, '--profile', 'local', 'up', '-d', '--wait', '--remove-orphans'],
+    [
+      'compose',
+      ...COMPOSE_FILES,
+      ...composeProfiles(powersyncEnabled(env)),
+      'up',
+      '-d',
+      '--wait',
+      '--remove-orphans',
+    ],
     { ...env, ...AMD_GROUP_ENV },
   );
 
@@ -282,7 +311,7 @@ function composeUp(key: string, env: NodeJS.ProcessEnv): void {
 function composeStop(key: string): void {
   step('Stopping Docker services (volumes preserved)...\n');
 
-  spawnSync('docker', ['compose', ...COMPOSE_FILES, '--profile', 'local', 'stop'], {
+  spawnSync('docker', ['compose', ...COMPOSE_FILES, ...composeProfiles(true), 'stop'], {
     cwd: ROOT,
     // The group vars matter even on `stop`: compose interpolates every file it
     // is handed before it does anything, so an unset AMD_RENDER_GID would warn
@@ -396,7 +425,8 @@ async function up(key: string): Promise<void> {
   // One record feeds compose, the Caddy route and the Procfile env alike, so a
   // path proxied by both Caddy and vite (/api, /static) reaches the same port.
   const ports = await allocStackPorts(dockerPublishedPorts(key));
-  const { apiPort, webPort, dbPort, objPort, hbpePort, summaryPort, parserPort } = ports;
+  const { apiPort, webPort, dbPort, objPort, hbpePort, summaryPort, parserPort, powersyncPort } = ports;
+  const withPowersync = powersyncEnabled(process.env);
 
   const composeEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -407,6 +437,7 @@ async function up(key: string): Promise<void> {
     SUMMARY_HOST_PORT: String(summaryPort),
     PARSER_HOST_PORT: String(parserPort),
     API_HOST_PORT: String(apiPort), // hbpe container calls the host api at this port
+    POWERSYNC_HOST_PORT: String(powersyncPort),
   };
 
   let overmind: ReturnType<typeof spawn> | null = null;
@@ -460,7 +491,7 @@ async function up(key: string): Promise<void> {
 
     migrate(dbPort, composeEnv);
 
-    const host = await caddyUp(key, ports);
+    const host = await caddyUp(key, { ...ports, powersyncPort: withPowersync ? powersyncPort : undefined });
 
     const overmindEnv = buildOvermindEnv(process.env, ports, { host, socket: OVERMIND_SOCKET });
 
@@ -478,6 +509,7 @@ async function up(key: string): Promise<void> {
         ['hbpe', String(hbpePort)],
         ['summary', String(summaryPort)],
         ['parser', String(parserPort)],
+        ...(withPowersync ? [['powersync', String(powersyncPort)]] : []),
       ],
       ['left', 'right'],
     );

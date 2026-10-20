@@ -4,7 +4,9 @@ import { Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext } from '@ci/common/context';
+import { DEVICE_INDEXED_ENTITIES, entityTimeSql } from '@ci/domains/search-next';
 
+import { DOCUMENT_BODY_MAX_CHARS } from '../entities/DocumentEntity';
 import { type Vector, VectorEntity } from '../entities/VectorEntity';
 import { UpsertVectorDto, RemoveVectorDto, WeightedText } from '../types';
 
@@ -74,6 +76,105 @@ export function buildWeightedVectorSql(
   return { sql, params };
 }
 
+/** The title and body a device shows for a row: the search document split in two. */
+export interface SearchDocumentText {
+  title: string;
+  body: string;
+}
+
+/**
+ * The plain-text document a device carries for a row, derived from the same
+ * weighted texts the tsvector is built from.
+ *
+ * Every builder in `searchTexts.ts` pushes the row's name first and at weight
+ * A (>= 8): a person's name, an event's title, a file's title, a message's
+ * subject. That first A text is the title. A row with no A text at all (a
+ * message with no subject) takes its first text instead, so a result row is
+ * never blank. Everything else is the body, in builder order, cut at
+ * {@link DOCUMENT_BODY_MAX_CHARS}: enough for a snippet and for FTS to match
+ * on, not the whole of a long note.
+ */
+export function searchDocumentText(texts: WeightedText[]): SearchDocumentText {
+  const kept = texts
+    .map((t) => ({ text: t.text?.trim() ?? '', weight: t.weight }))
+    .filter((t) => t.text.length > 0);
+  const titleIndex = kept.findIndex((t) => t.weight >= 8);
+  const title = titleIndex === -1 ? (kept[0]?.text ?? '') : kept[titleIndex].text;
+  const body = kept
+    .filter((_, index) => index !== (titleIndex === -1 ? 0 : titleIndex))
+    .map((t) => t.text)
+    .join(' ')
+    .slice(0, DOCUMENT_BODY_MAX_CHARS);
+
+  return { title, body };
+}
+
+/**
+ * The one statement that writes a row's search index: its tsvector into
+ * `ci_search.vectors`, and — for a device-indexed type — its plain-text
+ * document into `ci_search.documents` in the same statement, keyed by the
+ * vectors row's id. Used by {@link VectorService.upsert} (the live listeners)
+ * and by the pipeline's vector stages, so the two paths can never write
+ * different text for the same row.
+ *
+ * The documents half is a data-modifying CTE reading the vectors CTE's
+ * RETURNING, so on a conflict it carries the EXISTING vectors row's id, which
+ * is what the documents PK references. Types outside
+ * {@link DEVICE_INDEXED_ENTITIES} fall out of the `WHERE` and write no
+ * document; a type that stops being device-indexed keeps its old document
+ * until the orphan sweep or a delete removes the vectors row (CASCADE).
+ *
+ * Positional params: $1 id, $2 entity_type, $3 entity_id, $4..$(3+k) the k
+ * tsvector weight groups, then user_id, title, body, and the device-type list.
+ */
+export function buildVectorUpsertStatement(
+  texts: WeightedText[],
+  row: { id: string; entityType: string; entityId: string; userId: string },
+): { sql: string; params: (string | string[])[] } {
+  const { sql: vectorSql, params: vectorParams } = buildWeightedVectorSql(texts, 4);
+  const userIdIndex = 4 + vectorParams.length;
+  const titleIndex = userIdIndex + 1;
+  const bodyIndex = userIdIndex + 2;
+  const typesIndex = userIdIndex + 3;
+  const { title, body } = searchDocumentText(texts);
+
+  const sql = `
+    WITH vector_row AS (
+      INSERT INTO ci_search.vectors (id, entity_type, entity_id, vector, user_id)
+      VALUES ($1, $2, $3, ${vectorSql}, $${userIdIndex})
+      ON CONFLICT (entity_type, entity_id)
+      DO UPDATE SET vector = EXCLUDED.vector, updated_at = now()
+      RETURNING id, entity_type, entity_id, user_id, created_at, updated_at
+    ),
+    document_row AS (
+      INSERT INTO ci_search.documents (id, entity_type, entity_id, user_id, title, body, occurred_at)
+      SELECT v.id, v.entity_type, v.entity_id, v.user_id, $${titleIndex}, $${bodyIndex},
+             ${entityTimeSql('v')}
+        FROM vector_row v
+       WHERE v.entity_type = ANY($${typesIndex}::text[])
+      ON CONFLICT (entity_type, entity_id)
+      DO UPDATE SET title = EXCLUDED.title,
+                    body = EXCLUDED.body,
+                    occurred_at = EXCLUDED.occurred_at,
+                    updated_at = now()
+    )
+    SELECT id, entity_type, entity_id, user_id, created_at, updated_at FROM vector_row`;
+
+  return {
+    sql,
+    params: [
+      row.id,
+      row.entityType,
+      row.entityId,
+      ...vectorParams,
+      row.userId,
+      title,
+      body,
+      [...DEVICE_INDEXED_ENTITIES],
+    ],
+  };
+}
+
 @Injectable()
 export class VectorService {
   constructor(
@@ -86,12 +187,14 @@ export class VectorService {
     // weighted tsvector is computed inline in the INSERT and copied via
     // EXCLUDED.vector on conflict. Replaces the previous SELECT-then-
     // INSERT/UPDATE-then-SELECT wrapped in an explicit transaction — the per-row
-    // cost that left the search-index queue >95% undrained.
-    //
-    // Positional params: $1 id, $2 entity_type, $3 entity_id, $4..$(3+k) the k
-    // tsvector weight groups, then user_id last.
-    const { sql: vectorSql, params: vectorParams } = buildWeightedVectorSql(data.searchableText, 4);
-    const userIdIndex = 4 + vectorParams.length;
+    // cost that left the search-index queue >95% undrained. The same statement
+    // writes the device document (see buildVectorUpsertStatement).
+    const { sql, params } = buildVectorUpsertStatement(data.searchableText, {
+      id: uuidv7(),
+      entityType: data.entityType,
+      entityId: data.entityId,
+      userId: context.userId,
+    });
 
     const rows: Array<{
       id: string;
@@ -100,14 +203,7 @@ export class VectorService {
       user_id: string;
       created_at: Date;
       updated_at: Date;
-    }> = await this.vectorRepo.query(
-      `INSERT INTO ci_search.vectors (id, entity_type, entity_id, vector, user_id)
-       VALUES ($1, $2, $3, ${vectorSql}, $${userIdIndex})
-       ON CONFLICT (entity_type, entity_id)
-       DO UPDATE SET vector = EXCLUDED.vector, updated_at = now()
-       RETURNING id, entity_type, entity_id, user_id, created_at, updated_at`,
-      [uuidv7(), data.entityType, data.entityId, ...vectorParams, context.userId],
-    );
+    }> = await this.vectorRepo.query(sql, params);
 
     const row = rows[0];
 
@@ -123,6 +219,7 @@ export class VectorService {
       : null;
   }
 
+  /** Removes the tsvector row; its `ci_search.documents` row goes with it (ON DELETE CASCADE). */
   async remove(context: ServiceContext, data: RemoveVectorDto): Promise<boolean> {
     const result = await this.vectorRepo.delete({
       entityType: data.entityType,

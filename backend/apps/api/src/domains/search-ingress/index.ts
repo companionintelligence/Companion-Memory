@@ -19,6 +19,7 @@ import { ParsingModule } from '@ci/domains/parsing';
 import { PlanningModule } from '@ci/domains/planning';
 import { PositionModule } from '@ci/domains/position';
 
+import { DocumentEntity } from './entities/DocumentEntity';
 import { EmbeddingEntity } from './entities/EmbeddingEntity';
 import { IndexSkipEntity } from './entities/IndexSkipEntity';
 import { VectorEntity } from './entities/VectorEntity';
@@ -51,7 +52,7 @@ import { VectorService } from './services/VectorService';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EmbeddingEntity, IndexSkipEntity, VectorEntity]),
+    TypeOrmModule.forFeature([DocumentEntity, EmbeddingEntity, IndexSkipEntity, VectorEntity]),
     BrowserActivityModule,
     ConversationModule,
     EmbeddingModule,
@@ -92,7 +93,8 @@ import { VectorService } from './services/VectorService';
 })
 export class SearchIngressModule {}
 
-export { EmbeddingEntity, IndexSkipEntity, VectorEntity };
+export { DocumentEntity, EmbeddingEntity, IndexSkipEntity, VectorEntity };
+export { DOCUMENT_BODY_MAX_CHARS } from './entities/DocumentEntity';
 export {
   OrphanCleanupService,
   REOPEN_INDEX_LEDGER_SQL,
@@ -106,6 +108,11 @@ export type {
 } from './services/OrphanCleanupService';
 export { ENTITY_SOURCE_MAP } from './entitySourceMap';
 export * from './searchTexts';
-export { buildWeightedVectorSql } from './services/VectorService';
+export {
+  buildVectorUpsertStatement,
+  buildWeightedVectorSql,
+  type SearchDocumentText,
+  searchDocumentText,
+} from './services/VectorService';
 export type { WeightedText } from './types';
 export type { EntitySource } from './entitySourceMap';

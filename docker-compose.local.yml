@@ -55,6 +55,23 @@ services:
       SUMMARY_OUTPUT_MODE: ${SUMMARY_OUTPUT_MODE:-native}
       SUMMARY_OUTPUT_RETRIES: ${SUMMARY_OUTPUT_RETRIES:-3}
 
+  # Opt-in (scripts/dev-stack passes `--profile powersync` when .env sets
+  # POWERSYNC_URL). There is no setup-secrets in local, so the names the
+  # wrapper command in docker-compose.yml sources from /run/secrets come from
+  # the root .env here instead. Loopback only, like everything above: the
+  # service's only auth is the JWT the api mints, and the phone reaches it over
+  # `adb reverse` of this same port (`yarn android` applies it).
+  powersync:
+    environment:
+      POWERSYNC_DATABASE_USERNAME: ${POWERSYNC_DATABASE_USERNAME:-powersync}
+      POWERSYNC_DATABASE_PASSWORD: ${POWERSYNC_DATABASE_PASSWORD}
+      DATABASE_USERNAME: ${DATABASE_USERNAME:-companion}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      DATABASE_NAME: ${DATABASE_NAME:-companion}
+      POWERSYNC_JWT_SECRET: ${POWERSYNC_JWT_SECRET}
+    ports:
+      - 127.0.0.1:${POWERSYNC_HOST_PORT:-18080}:8080
+
   #############
   # EPHEMERAL #
   #############

@@ -143,10 +143,13 @@ so nothing prompts for it. The symptom is silent: sidecar runs complete, the
 sudo ufw allow from 172.16.0.0/12 to any port 3030 proto tcp comment 'ci-server sidecar callbacks'
 ```
 
-PowerSync is **not** part of the local stack: the `powersync` Compose service
-declares `profiles: ["staging","production"]`, so `make dev` never starts it, and
-`GET /api/powersync/token` returns 503 until both `POWERSYNC_URL` and
-`POWERSYNC_JWT_SECRET` are configured.
+PowerSync is **opt-in** in the local stack. Set `POWERSYNC_URL=http://localhost:18080`
+in `.env` and `make dev` starts the `powersync` Compose service too (its own compose
+profile, published on loopback), hands the api that URL on the port this stack actually
+got, and the phone reaches it over the `adb reverse` that `yarn android` applies. Leave
+`POWERSYNC_URL` unset and nothing changes: the service does not run and
+`GET /api/powersync/token` answers 503. See
+[`infrastructure/powersync/README.md`](infrastructure/powersync/README.md#running-it-under-make-dev).
 
 ### Caddy request routing
 

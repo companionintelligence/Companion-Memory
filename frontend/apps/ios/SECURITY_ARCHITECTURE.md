@@ -245,6 +245,38 @@ Cheap interim mitigation, worth doing now: change the logout path to
 `PowerSyncProvider.tsx:43-51` **[V]**. It is a small change and it is also the wipe
 primitive §4 needs.
 
+### 2.3a Addendum, 2026-10-19 — the native file is now SQLCipher
+
+The replica on a phone is no longer the IndexedDB copy this section was written
+about. Since #2614 native builds keep it in Capacitor SQLite on disk, and as of
+2026-10-19 that file is opened **encrypted** — `EncryptedCapacitorSQLiteAdapter`
+in `frontend/apps/web/src/api/powersync/nativeDatabase.ts` opens both PowerSync
+connections through the SQLite plugin's SQLCipher `secret` mode (the
+`@powersync/capacitor` adapter itself still cannot; its two `createConnection`
+lines are the whole difference). The key is 32 random bytes minted once and
+stored by the plugin: EncryptedSharedPreferences behind an AndroidKeyStore key
+on Android, the Keychain on iOS. A replica from before the change is converted
+in place on its first open. The IndexedDB placeholder the provider opens on
+native is never connected any more (`storageDecided` in `PowerSyncProvider`),
+so no rows reach IndexedDB on a phone.
+
+What this does and does not close:
+
+- **Closed:** plaintext replica on the phone; the IndexedDB-first race.
+- **Still open:** key custody on iOS — the plugin writes its keychain item
+  without a `ThisDeviceOnly` accessibility class, so the key travels with an
+  encrypted backup (D1's shape, one item over). A key lost while the file stays
+  encrypted makes the replica unreadable; the app reports it and does not
+  delete anything (`ReplicaKeyLostError`); clearing app storage starts over.
+- **Unchanged:** the web app in a desktop browser still holds its replica in
+  plaintext IndexedDB, exactly as described above. The gate's reasoning about
+  the JS heap stands there.
+
+With the file encrypted, the sync-rules freeze above no longer applies to
+**server-derived** text: `ci_search.documents` (names, subjects, snippets, for
+on-device search) syncs as of the same date. Device-sourced tables — health,
+location, contacts, motion — stay out until the custody point above is settled.
+
 ### 2.4 Two defects in shipping code
 
 Found while verifying §1a. Neither is exotic; both are the kind of thing a dependency's
@@ -438,6 +470,32 @@ bare `catch (Exception e)` and silently turn into data loss. Write the test.
 `DELIVERY.md` §3 already lists this as a **Now**-phase item with the exact justification:
 "a private memory app holding a long-lived API key in the keystore should gate access."
 **[V]**
+
+### 4.0 Status, 2026-10-19 — implemented
+
+Built as `@ci/capacitor-app-lock` (`frontend/packages/capacitor-app-lock`), both
+platforms, with v1 and v2 together rather than in sequence:
+
+- **State is native.** Settings persist in SharedPreferences / UserDefaults; the plugin
+  decides every lock in `load()` and the pause/resume hooks (§ 4.2's table, including the
+  30 s default grace and the "immediately" lock-on-leave), and announces it to JS.
+- **v2 is the control.** `LockOverlayView` is added above the WebView (decor view on
+  Android, the bridge view controller's view on iOS). **v1 mirrors it:** `AppLockGate`
+  in the web app renders `LockScreen` instead of the page while locked, so nothing
+  sensitive stays mounted behind the overlay.
+- **Prompt:** `BiometricPrompt` with `BIOMETRIC_STRONG | DEVICE_CREDENTIAL` (API 30+;
+  `WEAK | CREDENTIAL` below) and `LAContext.deviceOwnerAuthentication` — both with the
+  passcode fallback this section insists on. Enabling runs the prompt once first.
+  `NSFaceIDUsageDescription` is in Info.plist now.
+- **Switcher:** `FLAG_SECURE` while the lock is on and `secureScreen` is set (default on,
+  a setting); a blur on `willResignActive` on iOS.
+- **§ 4.4 holds:** no key is biometric-gated; the gate sits inside the PowerSync and
+  outbox providers; the overlay shows the outbox depth ("3 captures waiting to sync").
+- **Default off.** Settings → App lock turns it on; one line in `AppLockSettings` flips
+  the default.
+
+Not done: a lockout counter (the OS's), and the plugin-choice question is moot — the
+native APIs are called directly, no third-party wrapper.
 
 ### 4.1 Plugin and native APIs
 

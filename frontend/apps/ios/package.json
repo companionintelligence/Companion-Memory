@@ -25,6 +25,7 @@
     "@capacitor/push-notifications": "^7.0.0",
     "@capacitor/splash-screen": "^7.0.0",
     "@capacitor/status-bar": "^7.0.0",
+    "@ci/capacitor-app-lock": "portal:../../packages/capacitor-app-lock",
     "@ci/capacitor-local-hub": "portal:../../packages/capacitor-local-hub",
     "@ci/capacitor-local-llm": "portal:../../packages/capacitor-local-llm",
     "@ci/capacitor-speech": "portal:../../packages/capacitor-speech",

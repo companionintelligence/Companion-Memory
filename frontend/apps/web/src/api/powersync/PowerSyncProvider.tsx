@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 
-import { getApiBaseUrl, isNativePlatform, subscribeApiBaseUrl } from '@ci/common';
+import { getApiBaseUrl, isNativePlatform, registerCachedDataProbe, subscribeApiBaseUrl } from '@ci/common';
 import { PowerSyncContext } from '@powersync/react';
 import type { AbstractPowerSyncDatabase } from '@powersync/web';
 
 import { useAuth } from '@/hooks';
 
 import { GraphQLBackendConnector } from './connector';
+import { countDocuments, ensureSearchIndex } from './searchIndex';
 import { bindPowerSyncDatabase, measurePowerSyncSizeBytes } from './session';
 import { openWebPowerSyncDatabase } from './webDatabase';
 import { POWER_SYNC_CACHE_BUDGET_BYTES, shrinkToBudget } from './workingSet';
@@ -31,6 +32,12 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
 
   const webDatabase = useMemo(() => openWebPowerSyncDatabase(), []);
   const [database, setDatabase] = useState<AbstractPowerSyncDatabase>(webDatabase);
+  // Whether `database` is the one this platform will keep. On web it is from the
+  // start. On native it is not until the SQLite adapter below has been chosen (or
+  // failed to load): the IndexedDB database is only a placeholder there, and
+  // connecting it would sync the user's rows into a plaintext IndexedDB file on
+  // the phone — exactly the copy the encrypted replica exists to avoid.
+  const [storageDecided, setStorageDecided] = useState(() => !isNativePlatform());
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const apiBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
   // The server that said it runs no PowerSync service, if any.
@@ -59,11 +66,13 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
         native = openNativePowerSyncDatabase() as AbstractPowerSyncDatabase;
         bindPowerSyncDatabase(native);
         setDatabase(native);
+        setStorageDecided(true);
         void webDatabase.close();
       })
       .catch((error: unknown) => {
         console.warn('[PowerSync] Native SQLite adapter unavailable; using IndexedDB VFS', error);
         bindPowerSyncDatabase(webDatabase);
+        setStorageDecided(true);
       });
 
     return () => {
@@ -72,6 +81,41 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
       void native?.close();
     };
   }, [webDatabase]);
+
+  // The device's search index over the synced documents, and the signal the
+  // connection chip reads to say "cached" rather than "fresh" when no server
+  // answers. Both follow whichever database this platform settled on.
+  useEffect(() => {
+    if (!storageDecided) {
+      return;
+    }
+
+    // Aborting releases a build still waiting for a first sync this handle
+    // will never see (the database was swapped, or the app signed out).
+    const controller = new AbortController();
+
+    void ensureSearchIndex(database, { signal: controller.signal })
+      .then((built) => {
+        if (built && !controller.signal.aborted) {
+          console.info('[PowerSync] Built the on-device search index');
+        }
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          console.warn(
+            '[PowerSync] Could not build the on-device search index; search stays online-only',
+            error,
+          );
+        }
+      });
+
+    const unregister = registerCachedDataProbe(async () => (await countDocuments(database)) > 0);
+
+    return () => {
+      controller.abort();
+      unregister();
+    };
+  }, [database, storageDecided]);
 
   useEffect(() => {
     const onReconnect = () => setReconnectNonce((n) => n + 1);
@@ -82,6 +126,12 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // Nothing is connected yet while the storage is undecided, so there is
+    // nothing to disconnect either.
+    if (!storageDecided) {
+      return;
+    }
+
     if (!authenticated || syncOffFor === apiBaseUrl) {
       void database.disconnect();
 
@@ -103,7 +153,7 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
     void database.connect(connector).catch((error: unknown) => {
       console.warn('[PowerSync] Connect skipped; GraphQL remains the source of truth', error);
     });
-  }, [database, authenticated, reconnectNonce, apiBaseUrl, syncOffFor]);
+  }, [database, storageDecided, authenticated, reconnectNonce, apiBaseUrl, syncOffFor]);
 
   useEffect(() => {
     if (!authenticated) {

@@ -1,0 +1,42 @@
+{
+  "name": "@ci/capacitor-app-lock",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Capacitor plugin for the biometric app lock: a native lock state (locked on cold start and after a grace period in the background), the OS unlock prompt with passcode fallback (BiometricPrompt with BIOMETRIC_STRONG|DEVICE_CREDENTIAL on Android, LAContext .deviceOwnerAuthentication on iOS), a native overlay drawn above the WebView while locked, and screen blanking in the task switcher (FLAG_SECURE on Android, a blur on iOS). The lock is a presentation gate: sync continues behind it and the database key is never biometric-gated. Ships both native implementations, like @ci/capacitor-local-hub.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "packageManager": "yarn@4.9.1",
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "ios/Sources",
+    "CiCapacitorAppLock.podspec",
+    "src/"
+  ],
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "android",
+    "ios",
+    "biometric",
+    "app-lock"
+  ],
+  "peerDependencies": {
+    "@capacitor/core": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/core": "^7.0.0",
+    "typescript": "^5.8.3"
+  },
+  "capacitor": {
+    "android": {
+      "src": "android"
+    },
+    "ios": {
+      "src": "ios"
+    }
+  }
+}

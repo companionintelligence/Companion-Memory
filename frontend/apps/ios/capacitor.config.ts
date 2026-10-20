@@ -39,6 +39,12 @@ const config: CapacitorConfig = {
     },
     CapacitorSQLite: {
       iosDatabaseLocation: 'Library/LocalDatabase',
+      // The PowerSync replica (frontend/apps/web/src/api/powersync/nativeDatabase.ts)
+      // opens its file with SQLCipher through this plugin; off, every encrypted
+      // call fails with "No Encryption set in capacitor.config". The plugin
+      // refuses an empty keychain prefix, and ships none.
+      iosIsEncryption: true,
+      iosKeychainPrefix: 'ci-memory',
     },
     PushNotifications: {
       presentationOptions: ['badge', 'sound', 'alert'],

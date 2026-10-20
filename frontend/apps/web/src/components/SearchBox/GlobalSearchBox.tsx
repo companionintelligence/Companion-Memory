@@ -118,7 +118,7 @@ export function GlobalSearchBox() {
   const excludeTypes =
     userExcludedTypes.length > 0 ? [...userExcludedTypes, 'answer', 'browser-activity'] : undefined;
 
-  const { data, tags, loading, error } = useSearchService({
+  const { data, tags, loading, error, source } = useSearchService({
     searchQuery: query ?? '',
     semantic,
     includeTypes,
@@ -271,57 +271,64 @@ export function GlobalSearchBox() {
     );
   }, [setSearchParams]);
 
-  const suggestions = useMemo<SearchResultItem[]>(
-    () =>
-      data.map((item) => {
-        switch (item.__typename) {
-          case 'CommunicationType':
-            return { id: item.id, content: <CommunicationResult communication={item} /> };
+  const suggestions = useMemo<SearchResultItem[]>(() => {
+    const rows = data.map((item): SearchResultItem => {
+      switch (item.__typename) {
+        case 'CommunicationType':
+          return { id: item.id, content: <CommunicationResult communication={item} /> };
 
-          case 'ConceptType':
-            return { id: item.id, content: <ConceptResult concept={item} /> };
+        case 'ConceptType':
+          return { id: item.id, content: <ConceptResult concept={item} /> };
 
-          case 'ContentType':
-            return { id: item.id, content: <ContentResult content={item} /> };
+        case 'ContentType':
+          return { id: item.id, content: <ContentResult content={item} /> };
 
-          case 'EventType':
-            return { id: item.id, content: <EventResult event={item} /> };
+        case 'EventType':
+          return { id: item.id, content: <EventResult event={item} /> };
 
-          case 'FileType':
-            return { id: item.id, content: <FileResult file={item} /> };
+        case 'FileType':
+          return { id: item.id, content: <FileResult file={item} /> };
 
-          case 'ItemType':
-            return { id: item.id, content: <ItemResult item={item} /> };
+        case 'ItemType':
+          return { id: item.id, content: <ItemResult item={item} /> };
 
-          case 'NoteType':
-            return { id: item.id, content: <NoteResult note={item} /> };
+        case 'NoteType':
+          return { id: item.id, content: <NoteResult note={item} /> };
 
-          // Person/place rows carry their drag payload (`filterName` is the
-          // query-level unmasked name) so the right arrow can add them as
-          // who/where filters without a drag.
-          case 'PersonType':
-            return {
-              id: item.id,
-              content: <PersonResult person={item} />,
-              filter: item.filterName ? { kind: 'person', name: item.filterName } : undefined,
-            };
+        // Person/place rows carry their drag payload (`filterName` is the
+        // query-level unmasked name) so the right arrow can add them as
+        // who/where filters without a drag.
+        case 'PersonType':
+          return {
+            id: item.id,
+            content: <PersonResult person={item} />,
+            filter: item.filterName ? { kind: 'person', name: item.filterName } : undefined,
+          };
 
-          case 'PlaceType':
-            return {
-              id: item.id,
-              content: <PlaceResult place={item} />,
-              filter: item.filterName ? { kind: 'place', name: item.filterName } : undefined,
-            };
+        case 'PlaceType':
+          return {
+            id: item.id,
+            content: <PlaceResult place={item} />,
+            filter: item.filterName ? { kind: 'place', name: item.filterName } : undefined,
+          };
 
-          case 'ThreadType':
-            return { id: item.id, content: <ThreadResult thread={item} /> };
+        case 'ThreadType':
+          return { id: item.id, content: <ThreadResult thread={item} /> };
 
-          default:
-            return { id: item.id, content: null };
-        }
-      }),
-    [data],
-  );
+        default:
+          return { id: item.id, content: null };
+      }
+    });
+
+    // Answered from this phone's synced index because the Memory server did
+    // not answer. Said once, over the first row: a stale local answer must
+    // never pass for the server's.
+    if (source === 'device' && rows.length > 0) {
+      rows[0] = { ...rows[0], heading: t('SEARCH_FROM_THIS_PHONE_HEADING') };
+    }
+
+    return rows;
+  }, [data, source, t]);
 
   const results = useMemo<SearchResultItem[]>(() => {
     const trimmed = (query ?? '').trim();

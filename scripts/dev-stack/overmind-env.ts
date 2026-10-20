@@ -28,6 +28,53 @@ export function apiListenHost(base: NodeJS.ProcessEnv, platform: NodeJS.Platform
   return platform === 'linux' ? '0.0.0.0' : '127.0.0.1';
 }
 
+/**
+ * Whether this stack runs the PowerSync service: the root .env names a
+ * POWERSYNC_URL. The same value is what makes the api's token endpoint answer
+ * instead of 503, so one switch turns on the server, the service and the client.
+ */
+export function powersyncEnabled(base: NodeJS.ProcessEnv): boolean {
+  return Boolean(base.POWERSYNC_URL?.trim());
+}
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * The POWERSYNC_URL the api hands to clients. A loopback URL in .env is the dev
+ * service, and its port is the one THIS stack published (./ports) — a sibling
+ * worktree may hold the conventional 18080, and the client would otherwise be
+ * sent to the sibling's replicator with a token it rejects. Anything else (a
+ * LAN or tailnet address, a tunnel) is the user's business and passes through.
+ */
+export function powersyncUrl(
+  base: NodeJS.ProcessEnv,
+  ports: Pick<StackPorts, 'powersyncPort'>,
+): string | undefined {
+  const raw = base.POWERSYNC_URL?.trim();
+
+  if (!raw) {
+    return undefined;
+  }
+
+  let url: URL;
+
+  try {
+    url = new URL(raw);
+  } catch {
+    return raw;
+  }
+
+  if (!LOOPBACK_HOSTS.has(url.hostname)) {
+    return raw;
+  }
+
+  url.port = String(ports.powersyncPort);
+
+  // `new URL` keeps a trailing slash the SDK would double up on; hand back the
+  // origin form the value was written in.
+  return url.toString().replace(/\/$/, '');
+}
+
 export function buildOvermindEnv(
   base: NodeJS.ProcessEnv,
   ports: StackPorts,
@@ -75,6 +122,8 @@ export function buildOvermindEnv(
     // port Caddy's `/static` route dials, so the two proxies cannot disagree.
     // 127.0.0.1 as above; compose publishes the object store on IPv4 loopback.
     STATIC_PROXY_TARGET: `http://127.0.0.1:${ports.objPort}`,
+    // Only when enabled: an unset value stays unset, so the api keeps its 503.
+    ...(powersyncEnabled(base) ? { POWERSYNC_URL: powersyncUrl(base, ports) } : {}),
     OVERMIND_SOCKET: socket,
     // Overmind reloads .env over the environment we hand it, which would
     // overwrite the dynamic per-worktree ports set above. `base` already

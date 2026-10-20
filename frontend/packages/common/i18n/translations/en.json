@@ -116,6 +116,7 @@
   "SEARCH_SUBMIT": "Search",
   "SEARCH_RECENT_REMOVE": "Remove “{{query}}” from recent searches",
   "SEARCH_RECENT_HEADING": "Recent",
+  "SEARCH_FROM_THIS_PHONE_HEADING": "From this phone",
   "CAPTURE_OPEN": "Capture",
   "CAPTURE_MODEL_SETTINGS": "Model settings",
   "CAPTURE_TITLE": "Save to Memory",

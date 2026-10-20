@@ -38,6 +38,7 @@ def capacitor_pods
   pod 'CapacitorPushNotifications', :path => '../../node_modules/@capacitor/push-notifications'
   pod 'CapacitorSplashScreen', :path => '../../node_modules/@capacitor/splash-screen'
   pod 'CapacitorStatusBar', :path => '../../node_modules/@capacitor/status-bar'
+  pod 'CiCapacitorAppLock', :path => '../../../../packages/capacitor-app-lock'
   pod 'CiCapacitorLocalHub', :path => '../../../../packages/capacitor-local-hub'
   pod 'CiCapacitorSpeech', :path => '../../../../packages/capacitor-speech'
   pod 'PowersyncCapacitor', :path => '../../node_modules/@powersync/capacitor'

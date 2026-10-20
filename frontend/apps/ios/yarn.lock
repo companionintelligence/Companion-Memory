@@ -143,6 +143,14 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@ci/capacitor-app-lock@portal:../../packages/capacitor-app-lock::locator=%40ci%2Ffe-ios%40workspace%3A.":
+  version: 0.0.0-use.local
+  resolution: "@ci/capacitor-app-lock@portal:../../packages/capacitor-app-lock::locator=%40ci%2Ffe-ios%40workspace%3A."
+  peerDependencies:
+    "@capacitor/core": ^7.0.0
+  languageName: node
+  linkType: soft
+
 "@ci/capacitor-local-hub@portal:../../packages/capacitor-local-hub::locator=%40ci%2Ffe-ios%40workspace%3A.":
   version: 0.0.0-use.local
   resolution: "@ci/capacitor-local-hub@portal:../../packages/capacitor-local-hub::locator=%40ci%2Ffe-ios%40workspace%3A."
@@ -184,6 +192,7 @@ __metadata:
     "@capacitor/push-notifications": "npm:^7.0.0"
     "@capacitor/splash-screen": "npm:^7.0.0"
     "@capacitor/status-bar": "npm:^7.0.0"
+    "@ci/capacitor-app-lock": "portal:../../packages/capacitor-app-lock"
     "@ci/capacitor-local-hub": "portal:../../packages/capacitor-local-hub"
     "@ci/capacitor-local-llm": "portal:../../packages/capacitor-local-llm"
     "@ci/capacitor-speech": "portal:../../packages/capacitor-speech"

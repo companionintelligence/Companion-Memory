@@ -51,10 +51,11 @@ export function WorkingSetSection() {
         <div className="space-y-1">
           <h3 className="text-sm font-medium">On-device working set</h3>
           <p className="text-sm text-muted-foreground">
-            This phone keeps a rolling window of notes, messages, and threads
-            {isNativePlatform() ? ' in native SQLite' : ''} — currently the last {lookbackDays} days, capped
-            at {budgetLabel}. It is not a copy of the whole Memory Server. Graph, events, and embeddings stay
-            online.
+            This phone keeps a rolling window of notes, messages, threads and recent events
+            {isNativePlatform() ? ' in encrypted SQLite' : ''} — currently the last {lookbackDays} days,
+            capped at {budgetLabel} — plus a searchable index of everything (names, subjects and snippets), so
+            search keeps working when your Memory Server is unreachable. It is not a copy of the whole server:
+            media, the graph and embeddings stay online.
           </p>
           <p className="text-sm text-muted-foreground">
             Used: {usedLabel} / {budgetLabel}

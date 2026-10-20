@@ -50,8 +50,8 @@ describe('OrphanCleanupService.cleanOrphans', () => {
 
     const calls = sweepCalls(query);
 
-    // Three statements: embeddings, vectors, index_skips.
-    expect(calls).toHaveLength(3);
+    // Four statements: embeddings, documents, vectors, index_skips.
+    expect(calls).toHaveLength(4);
 
     const [embSql, embParams] = calls[0];
     expect(flat(embSql)).toContain('DELETE FROM "ci_search"."embeddings"');
@@ -66,13 +66,19 @@ describe('OrphanCleanupService.cleanOrphans', () => {
     expect(flat(embSql)).toContain('SELECT s."id"');
     expect(flat(embSql)).toContain('WHERE t."id" = victims."id"');
 
-    const [vecSql] = calls[1];
+    // documents sits between: it references vectors(id) ON DELETE CASCADE and
+    // must be truncated first, so SEARCH_TABLES orders it before vectors.
+    const [docSql] = calls[1];
+    expect(flat(docSql)).toContain('DELETE FROM "ci_search"."documents"');
+    expect(flat(docSql)).toContain('FROM "ci"."events" src');
+
+    const [vecSql] = calls[2];
     expect(flat(vecSql)).toContain('DELETE FROM "ci_search"."vectors"');
     expect(flat(vecSql)).toContain('FROM "ci"."events" src');
 
     // index_skips has no surrogate id — victims are addressed by the composite
     // (entity_type, entity_id) PK.
-    const [skipSql] = calls[2];
+    const [skipSql] = calls[3];
     expect(flat(skipSql)).toContain('DELETE FROM "ci_search"."index_skips"');
     expect(flat(skipSql)).toContain('SELECT s."entity_type", s."entity_id"');
     expect(flat(skipSql)).toContain(
@@ -123,9 +129,12 @@ describe('OrphanCleanupService.cleanOrphans', () => {
 
     await service.cleanOrphans({ entityTypes: ['place', 'person', 'concept'], batchSize: 500 });
 
-    // 3 types x 3 tables = 9 statements; collect the discriminator (last) param.
+    // 3 types x 4 tables = 12 statements; collect the discriminator (last) param.
     const discriminators = sweepCalls(query).map((c) => c[1][1]);
     expect(discriminators).toEqual([
+      'Location',
+      'Person',
+      'Concept',
       'Location',
       'Person',
       'Concept',
@@ -161,8 +170,8 @@ describe('OrphanCleanupService.cleanOrphans', () => {
   });
 
   it('loops in batches until a statement deletes fewer than batchSize rows', async () => {
-    // For the FIRST (embeddings) statement: 5, 5, 2 (stops). Then vectors and
-    // index_skips: 0 each.
+    // For the FIRST (embeddings) statement: 5, 5, 2 (stops). Then documents,
+    // vectors and index_skips: 0 each.
     const query = jest
       .fn()
       .mockResolvedValueOnce(undefined) // SET statement_timeout
@@ -174,8 +183,8 @@ describe('OrphanCleanupService.cleanOrphans', () => {
 
     const result = await service.cleanOrphans({ entityTypes: ['note'], batchSize: 5 });
 
-    // 3 calls for embeddings (5+5+2), 1 each for vectors and index_skips (0).
-    expect(sweepCalls(query)).toHaveLength(5);
+    // 3 calls for embeddings (5+5+2), 1 each for documents, vectors and index_skips (0).
+    expect(sweepCalls(query)).toHaveLength(6);
 
     const noteEmbeddings = result.results.find(
       (r) => r.searchTable === 'ci_search.embeddings' && r.entityType === 'note',
@@ -192,7 +201,7 @@ describe('OrphanCleanupService.cleanOrphans', () => {
     const result = await service.cleanOrphans({ entityTypes: ['event'], dryRun: true });
 
     expect(result.dryRun).toBe(true);
-    expect(result.totalDeleted).toBe(21); // 7 embeddings + 7 vectors + 7 index_skips
+    expect(result.totalDeleted).toBe(28); // 7 embeddings + 7 documents + 7 vectors + 7 index_skips
     for (const [sql] of sweepCalls(query)) {
       expect(flat(sql)).toContain('SELECT COUNT(*)::int AS count');
       expect(flat(sql)).not.toContain('DELETE');
@@ -290,9 +299,16 @@ describe('OrphanCleanupService.truncateSearchIndex', () => {
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(outsideQuery).not.toHaveBeenCalled();
     expect(flat(managerQuery.mock.calls[0][0])).toBe('TRUNCATE TABLE "ci_search"."embeddings"');
-    expect(flat(managerQuery.mock.calls[1][0])).toBe('TRUNCATE TABLE "ci_search"."vectors"');
-    expect(flat(managerQuery.mock.calls[2][0])).toBe('TRUNCATE TABLE "ci_search"."index_skips"');
-    expect(result.truncated).toEqual(['ci_search.embeddings', 'ci_search.vectors', 'ci_search.index_skips']);
+    // documents before vectors: TRUNCATE refuses a table another one references.
+    expect(flat(managerQuery.mock.calls[1][0])).toBe('TRUNCATE TABLE "ci_search"."documents"');
+    expect(flat(managerQuery.mock.calls[2][0])).toBe('TRUNCATE TABLE "ci_search"."vectors"');
+    expect(flat(managerQuery.mock.calls[3][0])).toBe('TRUNCATE TABLE "ci_search"."index_skips"');
+    expect(result.truncated).toEqual([
+      'ci_search.embeddings',
+      'ci_search.documents',
+      'ci_search.vectors',
+      'ci_search.index_skips',
+    ]);
   });
 
   it("re-opens every account's index ledger rows in the same transaction, so the pipeline re-embeds", async () => {

@@ -43,6 +43,7 @@ import {
 } from '@ci/domains/search-ingress';
 import { INDEXABLE_ENTITIES, type IndexableEntity } from '@ci/domains/search-next';
 
+import { SEARCH_INDEX_BACKFILL_QUEUE, SearchIndexBackfillRequestEvent } from '../events';
 import { ESTIMATE_LOCATION_QUEUE } from '../listeners/EstimateLocationBatchListener';
 import {
   type CommunicationLinkBackfillProgress,
@@ -101,6 +102,7 @@ import {
   BACKFILLABLE_ENTITIES,
   type SearchIndexBackfillResult,
   SearchIndexBackfillService,
+  PIPELINE_COVERED_STAGES,
 } from '../services/SearchIndexBackfillService';
 import {
   type SummaryBackfillProgressEvent,
@@ -166,6 +168,19 @@ const truncateSearchIndexSchema = z.object({
 });
 
 // Body for POST /api/maintenance/search-index/backfill. All optional: defaults
+/**
+ * The entity types the pipeline's index stages own (the keys of
+ * PIPELINE_COVERED_STAGES): what a sweep request may name. The listener
+ * refuses unknown names asynchronously, where a caller never sees it, so the
+ * check happens here as a 400.
+ */
+const PIPELINE_INDEXED_ENTITIES = Object.keys(PIPELINE_COVERED_STAGES) as [string, ...string[]];
+
+const searchIndexSweepSchema = z.object({
+  /** Restrict the sweep to these types (default: every type the pipeline indexes). */
+  entityTypes: z.array(z.enum(PIPELINE_INDEXED_ENTITIES)).min(1).optional(),
+});
+
 // sweep every backfillable ingest type with no per-type cap. Re-emits each
 // un-indexed row's create event onto the search-index queue only.
 const searchIndexBackfillSchema = z.object({
@@ -1375,6 +1390,37 @@ export class MaintenanceController {
       batchSize: body.batchSize,
       limitPerType: body.limitPerType,
     });
+  }
+
+  /**
+   * Request the pipeline's search-index sweep for the caller's own rows: the
+   * SAME event an import's push stage emits when it finishes
+   * (`SearchIndexBackfillRequestEvent`, consumed by the pipeline domain's
+   * `SearchIndexSweepRequestListener`), for every type the pipeline indexes
+   * unless `entityTypes` narrows it. The sweep re-runs each index stage whose
+   * recorded version is behind the current one, which is how a corpus picks up
+   * a bumped stage without waiting for the next import — the way
+   * `ci_search.documents` (20261019212935) reaches an existing install.
+   *
+   * Per-user by design, like every pipeline sweep, so no admin guard: a user
+   * re-indexing their own rows is local Postgres work. `search-index/backfill`
+   * above is the other lane — rows the pipeline has never seen.
+   */
+  @Post('search-index/sweep')
+  async requestSearchIndexSweep(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(searchIndexSweepSchema)) body: { entityTypes?: string[] },
+  ): Promise<{ jobId: string | null; userId: string; entityTypes: string[] }> {
+    const { userId } = toServiceContext(context);
+    const entityTypes = body.entityTypes ?? PIPELINE_INDEXED_ENTITIES;
+
+    const jobIds = await this.signallingEventService.send(
+      SearchIndexBackfillRequestEvent,
+      { userId, entityTypes, requestedBy: 'maintenance:search-index/sweep' },
+      { queue: SEARCH_INDEX_BACKFILL_QUEUE },
+    );
+
+    return { jobId: jobIds[0] ?? null, userId, entityTypes };
   }
 
   /**

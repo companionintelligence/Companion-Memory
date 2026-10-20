@@ -7,7 +7,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import {
   browserActivityWeightedTexts,
-  buildWeightedVectorSql,
+  buildVectorUpsertStatement,
   communicationWeightedTexts,
   contentWeightedTexts,
   eventWeightedTexts,
@@ -135,23 +135,20 @@ export abstract class VectorStageBase implements Stage {
   }
 
   /**
-   * Same statement as `SearchIngress.VectorService.upsert` — same table, same
-   * conflict target, same weighted `setweight` expression from the same
-   * `buildWeightedVectorSql` — minus the RETURNING a listener needs and a stage
-   * does not. Sharing the SQL builder is what keeps the two paths' tsvectors
-   * identical for identical texts.
+   * The SAME statement as `SearchIngress.VectorService.upsert`, from the same
+   * builder: the tsvector, and the device document beside it. Sharing the
+   * builder is what keeps the two paths' index rows identical for identical
+   * texts; the RETURNING a listener reads is simply ignored here.
    */
   private async writeVector(userId: string, row: VectorTextRow): Promise<void> {
-    const { sql: vectorSql, params: vectorParams } = buildWeightedVectorSql(row.texts, 4);
-    const userIdIndex = 4 + vectorParams.length;
+    const { sql, params } = buildVectorUpsertStatement(row.texts, {
+      id: uuidv7(),
+      entityType: this.entityType,
+      entityId: row.id,
+      userId,
+    });
 
-    await this.dataSource.query(
-      `INSERT INTO ci_search.vectors (id, entity_type, entity_id, vector, user_id)
-       VALUES ($1, $2, $3, ${vectorSql}, $${userIdIndex})
-       ON CONFLICT (entity_type, entity_id)
-       DO UPDATE SET vector = EXCLUDED.vector, updated_at = now()`,
-      [uuidv7(), this.entityType, row.id, ...vectorParams, userId],
-    );
+    await this.dataSource.query(sql, params);
   }
 }
 

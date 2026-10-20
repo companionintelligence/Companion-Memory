@@ -284,7 +284,7 @@ Phased **Now** (next release train) / **Next** (following quarter) / **Later**. 
 | **Unified version/release strategy** | M | Single source of truth → iOS build, Android `versionCode`, web build id, and the Sentry release tag. Prerequisite for symbolication + non-duplicate uploads. |
 | **In-app deep-link router** (`companion://` + `https` → app routes) | M | Today only `companion://oidc` is handled. A generic router (`/memory/:id`, `/thread/:id`, `/search?q=`) is the shared foundation for universal links, Spotlight, widgets, share-in. |
 | **QR server-pairing deep link** | S | Replace hand-typing the appliance URL on first run with a `companion://pair?origin=…(+one-time token)` QR the server/Hub renders. Builds on the router. |
-| **Biometric app-lock** (Face ID / Touch ID / fingerprint) | M | A private memory app holding a long-lived API key in the keystore should gate access. New Capacitor biometric plugin + native permission strings. |
+| **Biometric app-lock** (Face ID / Touch ID / fingerprint) | M | **Done 2026-10-19** as `@ci/capacitor-app-lock` (native state + overlay, OS prompt with passcode fallback, `FLAG_SECURE` / iOS blur, Settings → App lock; default off). See `SECURITY_ARCHITECTURE.md` § 4.0. |
 | **Reviewer demo mode** | M | See §2 — one-tap "Try the demo" against the hosted sample server; unblocks review *and* new-user onboarding. |
 
 > **Not the same thing as the in-app camera scan already shipped.** The "Scan QR Code"
