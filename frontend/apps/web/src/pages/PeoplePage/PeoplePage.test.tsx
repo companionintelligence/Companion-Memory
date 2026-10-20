@@ -338,6 +338,21 @@ function mocks({ candidates = [] as unknown[] } = {}) {
 describe('PeoplePage', () => {
   afterEach(() => setViewport(false));
 
+  // The first page used to load behind a full-screen spinner that covered
+  // the Memory section strip too.
+  it('shows person-shaped placeholder rows while the first page loads', async () => {
+    renderWithProviders(<PeoplePage />, { mocks: mocks() });
+
+    const status = screen.getByRole('status');
+
+    expect(status).toHaveTextContent('Loading people');
+    expect(status.querySelectorAll('[data-slot="skeleton"].rounded-full')).toHaveLength(8);
+    expect(document.querySelector('.animate-spin')).toBeNull();
+
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
   it('routes to the decoded uuid, not the global id, when a person row is opened', async () => {
     navigate.mockClear();
     renderWithProviders(<PeoplePage />, { mocks: mocks() });

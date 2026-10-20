@@ -31,7 +31,9 @@ describe('ChatSidebar', () => {
 
   it('shows a loading state', () => {
     setup({ threads: [], loading: true });
-    expect(screen.getByText('Loading threads...')).toBeInTheDocument();
+    // Placeholder rows, named for a screen reader, not a spinner.
+    expect(screen.getByRole('status')).toHaveTextContent('Loading threads');
+    expect(screen.queryByText('No threads found')).not.toBeInTheDocument();
   });
 
   it('lists thread names and selects one on click', () => {

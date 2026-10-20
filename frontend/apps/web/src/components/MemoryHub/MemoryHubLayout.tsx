@@ -1,11 +1,11 @@
 import { Suspense } from 'react';
 
-import { LoadingPage } from '@ci/common';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
 
 import { MemoryHubNav } from './MemoryHubNav';
+import { MemoryHubSectionSkeleton } from './MemoryHubSkeletons';
 
 /**
  * The Memory hub's frame: the section strip (Events, People, Places, …) and,
@@ -21,11 +21,13 @@ import { MemoryHubNav } from './MemoryHubNav';
  * that is still loading or has crashed leaves the strip on screen and usable.
  */
 export function MemoryHubLayout() {
+  const { pathname } = useLocation();
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <MemoryHubNav />
       <div className="relative min-h-0 flex-1">
-        <Suspense fallback={<LoadingPage />}>
+        <Suspense fallback={<MemoryHubSectionSkeleton pathname={pathname} />}>
           <AppErrorBoundary>
             <Outlet />
           </AppErrorBoundary>

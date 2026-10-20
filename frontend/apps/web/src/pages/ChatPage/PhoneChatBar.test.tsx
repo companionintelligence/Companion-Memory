@@ -130,7 +130,9 @@ describe('PhoneChatBar', () => {
     );
 
     openList();
-    expect(screen.getByText('Loading chats…')).toBeInTheDocument();
+    // Placeholder rows, named for a screen reader, in place of a line of text.
+    expect(screen.getByRole('status')).toHaveTextContent('Loading chats');
+    expect(screen.queryByText('No chats yet.')).not.toBeInTheDocument();
   });
 
   describe('deleting a chat', () => {

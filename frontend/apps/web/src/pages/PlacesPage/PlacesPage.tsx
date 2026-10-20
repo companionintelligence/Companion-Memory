@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useMutation, useQuery } from '@apollo/client';
-import { EmptyState, GlobalUID, LoadingPage, useDeviceLayout, usePageTitle } from '@ci/common';
+import { EmptyState, GlobalUID, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Badge, Button, Card, Input } from '@ci/shadcn';
 import { ChevronDown, LocateFixed, MapPin, Plus } from '@ci/shadcn/icons';
 import { Tooltip, useMap as useLeafletMap } from 'react-leaflet';
@@ -13,6 +13,7 @@ import { InfiniteListFooter } from '@/components/InfiniteList';
 import { PageContent } from '@/components/layout';
 import { MAP_IMAGERY_ATTRIBUTION, Map } from '@/components/Map';
 import { MemoryHubShell } from '@/components/MemoryHub';
+import { MemoryHubPageSkeleton, RowsSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
 import { AddPlaceModal } from '@/components/modals/AddItemModal';
 import { PLACE_KIND_LABELS } from '@/components/PlaceForm';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -928,10 +929,22 @@ export function PlacesPage() {
     [candidatePins, mappedPlaceIds],
   );
 
+  // Also on the loading frame, so the strip's "New place" is there from the start.
+  const pageActions = isMobile ? undefined : (
+    <Button size="sm" onClick={openAddPlace}>
+      <Plus className="h-4 w-4" />
+      New place
+    </Button>
+  );
+
   let content: ReactNode | null = null;
 
   if (loading && view == null) {
-    content = <LoadingPage />;
+    content = (
+      <MemoryHubPageSkeleton label="Loading places" actions={pageActions}>
+        <RowsSkeleton />
+      </MemoryHubPageSkeleton>
+    );
   } else if (error && view == null) {
     // Was the same confident EmptyState the genuine "No places found" branch
     // below uses — a fetch failure read identically to "you have none", with
@@ -947,16 +960,7 @@ export function PlacesPage() {
     content = (
       <PullToRefresh onRefresh={refetch}>
         <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
-          <MemoryHubShell
-            actions={
-              isMobile ? undefined : (
-                <Button size="sm" onClick={openAddPlace}>
-                  <Plus className="h-4 w-4" />
-                  New place
-                </Button>
-              )
-            }
-          >
+          <MemoryHubShell actions={pageActions}>
             <div className="flex flex-col gap-3 px-2 pb-3 sm:gap-4 sm:px-4 sm:pb-4">
               <div className="flex items-center gap-2">
                 <div className="text-sm text-muted-foreground">{pagination.totalCount} places</div>

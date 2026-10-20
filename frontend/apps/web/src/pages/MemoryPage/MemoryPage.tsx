@@ -9,6 +9,7 @@ import { EntityServiceProvider } from '../MemoryPage/useEntityService';
 
 import { readAreasParam } from './bbox';
 import { readListParam, resolveExplorerTypes } from './Components/ExplorerToolbar/filterParams';
+import { ExplorerSkeleton } from './Components/MemorySkeletons';
 import { useExplorerWhenReset } from './useExplorerWhenReset';
 import { useSavedSearchResolution } from './useSavedSearchResolution';
 
@@ -115,7 +116,7 @@ export function MemoryPage() {
         },
       ]}
     >
-      <ResponsiveLoader desktop={DesktopPage} mobile={MobilePage} />
+      <ResponsiveLoader desktop={DesktopPage} mobile={MobilePage} fallback={<ExplorerSkeleton />} />
     </EntityServiceProvider>
   );
 }

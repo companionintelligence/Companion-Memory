@@ -9,6 +9,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { ErrorState } from '@/components/ErrorState';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
+import { LoadingRegion, TagRowsSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { Tag } from '@/components/Tag';
 import { gql } from '@/graphql';
@@ -68,7 +69,9 @@ export function TagsPage() {
           <MemoryHubShell>
             <div className="flex flex-col gap-2 px-2 pb-3 device:gap-4 device:px-4 device:pb-4">
               {loading ? (
-                <p className="text-sm text-muted-foreground">Loading tags…</p>
+                <LoadingRegion label="Loading tags">
+                  <TagRowsSkeleton />
+                </LoadingRegion>
               ) : error ? (
                 <ErrorState
                   title="Could not load tags"

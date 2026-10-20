@@ -10,6 +10,7 @@ import { ErrorState } from '@/components/ErrorState';
 import { InfiniteListFooter } from '@/components/InfiniteList';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
+import { LoadingRegion, TilesSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { ConnectorFilter } from '@/components/SearchBox/ConnectorFilter';
 import { gql } from '@/graphql';
@@ -304,7 +305,9 @@ export function ContentLibraryPage() {
             )}
 
             {loading && contents.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Loading content…</p>
+              <LoadingRegion label="Loading content">
+                <TilesSkeleton />
+              </LoadingRegion>
             ) : error && contents.length === 0 ? (
               // `error` was not destructured, so a failed query rendered the
               // branch below with an empty array: a blank tile area under an

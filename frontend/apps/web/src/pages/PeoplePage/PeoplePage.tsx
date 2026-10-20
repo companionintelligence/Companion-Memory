@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
 
 import { useApolloClient, useQuery } from '@apollo/client';
-import { EmptyState, GlobalUID, LoadingPage, useDeviceLayout, usePageTitle } from '@ci/common';
+import { EmptyState, GlobalUID, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Badge, Button, Card } from '@ci/shadcn';
 import { Merge } from '@ci/shadcn/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -11,6 +11,7 @@ import { ErrorState } from '@/components/ErrorState';
 import { InfiniteListFooter } from '@/components/InfiniteList';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
+import { MemoryHubPageSkeleton, RowsSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
 import { PersonAvatar } from '@/components/PersonAvatar';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { gql } from '@/graphql';
@@ -406,7 +407,11 @@ export function PeoplePage() {
   let content: ReactNode | null = null;
 
   if (loading && view == null) {
-    content = <LoadingPage />;
+    content = (
+      <MemoryHubPageSkeleton label="Loading people">
+        <RowsSkeleton avatar="circle" />
+      </MemoryHubPageSkeleton>
+    );
   } else if (error && view == null) {
     content = (
       <ErrorState

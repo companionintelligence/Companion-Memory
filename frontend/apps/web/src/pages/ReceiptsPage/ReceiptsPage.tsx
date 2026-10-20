@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
-import { EmptyState, GlobalUID, LoadingPage, usePageTitle } from '@ci/common';
+import { EmptyState, GlobalUID, usePageTitle } from '@ci/common';
 import { Badge, Input, Select } from '@ci/shadcn';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
@@ -11,6 +11,7 @@ import { ReceiptIcon } from '@/components/icons';
 import { InfiniteListFooter } from '@/components/InfiniteList';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
+import { MemoryHubPageSkeleton, RowsSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { gql } from '@/graphql';
 import type { GetReceiptsQuery, ReceiptExtractionState } from '@/graphql/graphql';
@@ -209,7 +210,11 @@ export function ReceiptsPage() {
   let content: ReactNode | null = null;
 
   if (loading && view == null) {
-    content = <LoadingPage />;
+    content = (
+      <MemoryHubPageSkeleton label="Loading receipts">
+        <RowsSkeleton />
+      </MemoryHubPageSkeleton>
+    );
   } else if (error && view == null) {
     content = (
       <ErrorState

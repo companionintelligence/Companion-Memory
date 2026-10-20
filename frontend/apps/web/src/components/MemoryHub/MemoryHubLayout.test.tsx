@@ -77,12 +77,14 @@ describe('MemoryHubLayout', () => {
     expect(screen.getByRole('link', { name: 'Places' })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('keeps the strip while a section is still loading', async () => {
+  it("keeps the strip while a section's code is still loading, over that section's placeholder", async () => {
     stubViewport(true);
     renderHub('/memory/things');
 
     expect(await screen.findByRole('navigation', { name: 'Memory sections' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Things' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('status')).toHaveTextContent('Loading things');
+    expect(document.querySelector('.animate-spin')).toBeNull();
   });
 
   it('keeps the strip, and a way out, when a section crashes', async () => {

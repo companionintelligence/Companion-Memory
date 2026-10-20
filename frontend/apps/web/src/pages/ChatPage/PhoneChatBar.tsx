@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { AlertDialog, Button, Sheet, cn } from '@ci/shadcn';
 import { MessageSquare, MessagesSquare, Plus, Trash2 } from '@ci/shadcn/icons';
 
+import { LoadingRegion, ThreadRowsSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import type { Thread } from './types';
@@ -82,10 +83,12 @@ export function PhoneChatBar({
           </Sheet.Header>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-2">
-            {threads.length === 0 ? (
-              <p className="px-2 py-6 text-center text-sm text-muted-foreground">
-                {loading ? 'Loading chats…' : 'No chats yet.'}
-              </p>
+            {threads.length === 0 && loading ? (
+              <LoadingRegion label="Loading chats">
+                <ThreadRowsSkeleton count={4} />
+              </LoadingRegion>
+            ) : threads.length === 0 ? (
+              <p className="px-2 py-6 text-center text-sm text-muted-foreground">No chats yet.</p>
             ) : (
               <ul className="flex flex-col gap-1">
                 {threads.map((thread) => {

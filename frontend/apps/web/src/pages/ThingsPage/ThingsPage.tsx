@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
 
 import { useMutation, useQuery } from '@apollo/client';
-import { EmptyState, GlobalUID, LoadingPage, useDeviceLayout, usePageTitle } from '@ci/common';
+import { EmptyState, GlobalUID, useDeviceLayout, usePageTitle } from '@ci/common';
 import { AlertDialog, Badge, Button, Card, Input, Select, Sheet, Tabs } from '@ci/shadcn';
 import { Filter, Merge, X } from '@ci/shadcn/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -12,6 +12,7 @@ import { ErrorState } from '@/components/ErrorState';
 import { InfiniteListFooter } from '@/components/InfiniteList';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
+import { CardGridSkeleton, MemoryHubPageSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
 import { ThingModal } from '@/components/modals/ThingModal';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { gql } from '@/graphql';
@@ -746,10 +747,21 @@ export function ThingsPage() {
     await Promise.all([refetch(), refetchDuplicates({ limit: DUPLICATE_PAGE_SIZE, offset: 0 })]);
   }, [refetch, refetchDuplicates]);
 
+  // Also on the loading frame, so the strip's "New thing" is there from the start.
+  const pageActions = isMobile ? undefined : (
+    <Button type="button" onClick={() => setCreateOpen(true)}>
+      New thing
+    </Button>
+  );
+
   let content: ReactNode | null = null;
 
   if (loading && view == null) {
-    content = <LoadingPage />;
+    content = (
+      <MemoryHubPageSkeleton label="Loading things" actions={pageActions}>
+        <CardGridSkeleton />
+      </MemoryHubPageSkeleton>
+    );
   } else if (error && view == null) {
     // Was the same confident EmptyState the genuine "No things found" branch
     // below uses — a fetch failure read identically to "you have none", with
@@ -765,15 +777,7 @@ export function ThingsPage() {
     content = (
       <PullToRefresh onRefresh={refetch}>
         <PageContent ref={pagination.scrollRef} className="gap-2 p-0 device:gap-4">
-          <MemoryHubShell
-            actions={
-              isMobile ? undefined : (
-                <Button type="button" onClick={() => setCreateOpen(true)}>
-                  New thing
-                </Button>
-              )
-            }
-          >
+          <MemoryHubShell actions={pageActions}>
             <Tabs
               defaultValue="things"
               className="flex flex-col gap-2 px-2 pb-3 device:gap-4 device:px-4 device:pb-4"

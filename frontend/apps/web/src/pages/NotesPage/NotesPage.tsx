@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
-import { EmptyState, LoadingPage, useDeviceLayout, usePageTitle } from '@ci/common';
+import { EmptyState, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Button } from '@ci/shadcn';
 import { Plus } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
@@ -11,6 +11,7 @@ import { NoteIcon } from '@/components/icons';
 import { InfiniteListFooter } from '@/components/InfiniteList';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
+import { LoadingRegion, NoteCardsSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { gql } from '@/graphql';
 import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
@@ -95,7 +96,11 @@ export function NotesPage() {
   let content: ReactNode;
 
   if (loading) {
-    content = <LoadingPage />;
+    content = (
+      <LoadingRegion label="Loading notes">
+        <NoteCardsSkeleton />
+      </LoadingRegion>
+    );
   } else if (error && notes.length === 0) {
     // `error` was never destructured, so a failed query fell through to the
     // empty state below — telling the owner they have zero notes over a

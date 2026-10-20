@@ -4,6 +4,7 @@ import { Sidebar, Tooltip, cn } from '@ci/shadcn';
 import { Plus, RefreshCw, Trash2, MessageSquare, ChevronLeft } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { LoadingRegion, ThreadRowsSkeleton } from '@/components/MemoryHub/MemoryHubSkeletons';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import type { Thread } from './types';
@@ -134,24 +135,17 @@ export const ChatSidebar = memo(function ChatSidebar({
       <Sidebar.Content className={cn('transition-all duration-300 ease-in-out', isExpanded ? 'p-3' : 'p-2')}>
         {isExpanded ? (
           <>
-            {threads.length === 0 ? (
+            {threads.length === 0 && loading ? (
+              <LoadingRegion label="Loading threads" className="p-2">
+                <ThreadRowsSkeleton />
+              </LoadingRegion>
+            ) : threads.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
-                {loading ? (
-                  <>
-                    <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
-                      <RefreshCw className="h-8 w-8 animate-spin text-primary/50" />
-                    </div>
-                    <p className="font-medium">Loading threads...</p>
-                  </>
-                ) : (
-                  <>
-                    <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center mx-auto mb-4">
-                      <MessageSquare className="h-8 w-8 opacity-30" />
-                    </div>
-                    <p className="font-medium mb-2">No threads found</p>
-                    <p className="text-sm">Create a new thread to get started</p>
-                  </>
-                )}
+                <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center mx-auto mb-4">
+                  <MessageSquare className="h-8 w-8 opacity-30" />
+                </div>
+                <p className="font-medium mb-2">No threads found</p>
+                <p className="text-sm">Create a new thread to get started</p>
               </div>
             ) : (
               <div className="space-y-3">
