@@ -1,5 +1,6 @@
 import AuthenticationServices
 import Capacitor
+import CoreLocation
 import Foundation
 import UIKit
 
@@ -67,6 +68,21 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     /// see `LocalHubServer.warmUpOnMainThread`.
     override public func load() {
         LocalHubServer.warmUpOnMainThread()
+        // Always tracking outlives the WebView; give it its event sink back, and put the
+        // monitor back if a relaunch without Always (see `LocationTracking`) left it stopped.
+        attachTrackingListener()
+        LocationTracking.shared.resumeIfArmed()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        LocationTracking.shared.listener = nil
     }
 
     /// Starts the embedded loopback HTTP server if it isn't already running and
@@ -287,31 +303,57 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    /// iOS Always. Samples when the phone moves a meaningful distance. Does not start
-    /// the standard location service, so the blue background indicator stays off while idle.
+    /// iOS Always. Arms `LocationTracking`: significant-change monitoring plus a resume
+    /// geofence, kept armed across the app being swiped away and across reboots, with every
+    /// accepted fix queued into the encrypted outbox natively. `options` is required, as on
+    /// Android -- the record is built from it in a process that may have no JavaScript.
     @objc func startSignificantLocationUpdates(_ call: CAPPluginCall) {
-        DispatchQueue.main.async {
-            let monitor = SignificantLocationMonitor.shared
-            monitor.onUpdate = { [weak self] payload in
-                DispatchQueue.main.async {
-                    self?.notifyListeners("significantLocation", data: payload)
-                }
+        guard let config = LocationTrackingConfig.fromJSON(Self.locationOptions(from: call)) else {
+            call.reject("startSignificantLocationUpdates needs a non-empty deviceKey")
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.attachTrackingListener()
+            LocationTracking.shared.arm(config)
+            if CLLocationManager().authorizationStatus != .authorizedAlways {
+                self?.notifyListeners("significantLocationError", data: ["code": "NOT_AUTHORIZED"])
             }
-            monitor.onDenied = { [weak self] in
-                DispatchQueue.main.async {
-                    self?.notifyListeners("significantLocationError", data: ["code": "NOT_AUTHORIZED"])
-                }
-            }
-            monitor.start()
             call.resolve()
         }
     }
 
     @objc func stopSignificantLocationUpdates(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
-            SignificantLocationMonitor.shared.stop()
+            LocationTracking.shared.disarm()
             call.resolve()
         }
+    }
+
+    /// The tracker outlives this plugin instance (it is what records while the WebView is
+    /// gone); it only needs a sink while one exists.
+    private func attachTrackingListener() {
+        LocationTracking.shared.listener = { [weak self] body in
+            DispatchQueue.main.async {
+                self?.notifyListeners("significantLocation", data: body)
+            }
+        }
+    }
+
+    /// The call's options as the plain dictionary the config parser and the persisted copy
+    /// share. Capacitor hands numbers over as `NSNumber`, which is what the parser expects.
+    private static func locationOptions(from call: CAPPluginCall) -> [String: Any] {
+        var options: [String: Any] = [:]
+        for (key, value) in call.options where key is String {
+            options[key as! String] = value
+        }
+        return options
+    }
+
+    /// The app is on screen again. Puts the monitor back when Always is on and a relaunch
+    /// could not (the grant had lapsed and has since been restored), before the web side's
+    /// re-arm. A running monitor is never touched.
+    @objc private func applicationDidBecomeActive() {
+        LocationTracking.shared.resumeIfArmed()
     }
 }
 

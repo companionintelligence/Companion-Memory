@@ -153,6 +153,25 @@ final class OutboxStore {
         return directory.appendingPathComponent(databaseFileName, isDirectory: false)
     }
 
+    private static let sharedLock = NSLock()
+    private static var sharedInstance: OutboxStore?
+
+    /// The one store this process opens on the default file. The HTTP server and the
+    /// background location tracker both write the same queue, from different threads and
+    /// with no WebView in common; one connection, serialised by `queue`, is the only safe
+    /// arrangement, and it is also what lets a relaunched process enqueue before the server
+    /// (or anything else) has started.
+    static func shared() throws -> OutboxStore {
+        sharedLock.lock()
+        defer { sharedLock.unlock() }
+        if let existing = sharedInstance {
+            return existing
+        }
+        let store = try OutboxStore(databaseURL: defaultDatabaseURL())
+        sharedInstance = store
+        return store
+    }
+
     init(databaseURL: URL, maxItems: Int = OutboxStore.defaultMaxItems) throws {
         self.maxItems = maxItems
 

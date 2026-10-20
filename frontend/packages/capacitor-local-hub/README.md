@@ -569,6 +569,43 @@ the most important one.
   it carries the same "should be correct, unverified" caveat as the rest of the file
   rather than any GCDWebServer-specific uncertainty.
 
+### iOS Always location tracking -- relaunch handling (2026-10-20, uncompiled)
+
+Until this change iOS Always was `SignificantLocationMonitor` started by JavaScript and
+emitting to JavaScript: swiping the app away ended it, nothing restarted it on the
+background relaunches iOS performs for a location event or after a reboot, and a fix with
+no WebView to receive it was lost. It now mirrors the Android design one file at a time:
+
+- `LocationTrackingConfig.swift`, `LocationSamplingGate.swift`, `PositionRecordJson.swift`
+  are the Kotlin files of the same names, by hand. `PositionRecordJsonTest.kt` and the web
+  side's `deviceSourceLocation.test.ts` pin the record shape; the Swift builder has no test
+  of its own yet (no Mac in the environment this was written in) and must be checked against
+  that fixture at the first Xcode build.
+- `LocationTracking.swift` is the tracker: armed state in `UserDefaults`
+  (`TrackingStateStore`), `arm` / `disarm` from the plugin, `onFix` running the gate and
+  enqueueing into the encrypted outbox through `OutboxStore.shared()` -- one connection for
+  the whole process, which `LocalHubServer` now uses too -- and `handleAppLaunch`, which
+  `AppDelegate.application(_:didFinishLaunchingWithOptions:)` calls on every launch. With
+  Always armed it restarts the monitor before the method returns, which is what makes iOS
+  deliver the fix that caused a background relaunch.
+- `SignificantLocationMonitor` additionally keeps one `CLCircularRegion` of
+  `minDistanceMeters` around the last queued fix, exit-only, re-centred on each accepted
+  fix. A region exit is the relaunch trigger iOS is most reliable about after a reboot; the
+  fix Core Location already holds is used when at most two minutes old.
+- A lapsed Always grant (the periodic reminder, or Settings) means a relaunch can start
+  nothing: the tracker posts one local notification, "Location recording paused", and the
+  next app open re-arms through the web side's two-step prompt. The plugin's `load()` and
+  `didBecomeActive` also call `resumeIfArmed()`, so an open repairs it even without the tap.
+
+Not covered, by design of the platform: an app the person force-quit from the switcher is
+not relaunched by iOS for location events until it is next opened.
+
+**Verify on the Mac before trusting any of it:** build; turn Always on; swipe the app
+away; drive ~1 km; open the app and check `GET /api/outbox` lists `positions` rows captured
+while it was gone. Then reboot with Always on and repeat. Expect the geofence to need the
+`location` background mode that `Info.plist` already declares, and expect the record
+fixture test to be the first thing to add once `swiftc` is at hand.
+
 ### Outbox on iOS -- additional unverified surface
 
 `ios/Sources/LocalHubPlugin/OutboxStore.swift` and the outbox routes in

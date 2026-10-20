@@ -79,8 +79,9 @@ interface LocalHubPlugin {
 
 /**
  * Mirror of `SignificantLocationOptions` in `@ci/capacitor-local-hub`'s definitions.ts,
- * declared locally for the same reason every plugin interface here is. Android builds the
- * wire record from these in a process that may have no JavaScript; iOS ignores them.
+ * declared locally for the same reason every plugin interface here is. Both platforms build
+ * the wire record from these in a process that may have no JavaScript; the notification
+ * text is Android's foreground service's and iOS ignores it.
  */
 export interface SignificantLocationOptions {
   deviceKey: string;

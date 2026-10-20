@@ -113,7 +113,7 @@ final class LocalHubServer {
             if let existing = outbox {
                 return existing
             }
-            let store = try OutboxStore(databaseURL: OutboxStore.defaultDatabaseURL())
+            let store = try OutboxStore.shared()
             outbox = store
             return store
         }
@@ -154,7 +154,7 @@ final class LocalHubServer {
             if let existing = outbox {
                 store = existing
             } else {
-                store = try OutboxStore(databaseURL: OutboxStore.defaultDatabaseURL())
+                store = try OutboxStore.shared()
                 outbox = store
             }
 

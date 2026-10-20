@@ -246,24 +246,27 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
         publishLocationNeedsSettingsUpgrade(false);
       }
 
+      // Always, both platforms: the LocalHub tracker is the background recorder and builds
+      // the wire record natively from exactly what captureLocationFix would use here, so a
+      // record it queues with no WebView alive and this hook's re-enqueue of the same fix
+      // share a source_id. Android's is a foreground location service that prompts for
+      // location itself; iOS's is significant-change monitoring plus a resume geofence,
+      // restarted by the app delegate on every launch, which is what keeps it recording
+      // after the app is swiped away or the phone reboots. The notification text is for
+      // Android's service; iOS accepts and ignores it.
+      const significantOptions = {
+        deviceKey: deviceSourceKey(),
+        provider: 'companion-mobile',
+        owner: outboxOwnerStamp(),
+        minDistanceMeters: MIN_DISTANCE_METERS,
+        minIntervalMs: MIN_INTERVAL_MS,
+        maxAccuracyMeters: BACKGROUND_MAX_ACCURACY_METERS,
+        notificationTitle: 'Recording location',
+        notificationText: 'Companion is recording your location so it can place memories on the map.',
+      };
+
       if (mode === 'always' && !isIosPlatform()) {
-        // Android Always: the LocalHub service is the one recorder (see the hook docs). It
-        // prompts for location itself. The options are exactly what captureLocationFix would
-        // use here, so a record built natively and this hook's re-enqueue share a source_id.
-        stopSignificant = await startSignificantLocationUpdates(
-          {
-            deviceKey: deviceSourceKey(),
-            provider: 'companion-mobile',
-            owner: outboxOwnerStamp(),
-            minDistanceMeters: MIN_DISTANCE_METERS,
-            minIntervalMs: MIN_INTERVAL_MS,
-            maxAccuracyMeters: BACKGROUND_MAX_ACCURACY_METERS,
-            notificationTitle: 'Recording location',
-            notificationText: 'Companion is recording your location so it can place memories on the map.',
-          },
-          onLocation,
-          onError,
-        );
+        stopSignificant = await startSignificantLocationUpdates(significantOptions, onLocation, onError);
 
         if (cancelled) {
           void stopSignificant?.();
@@ -287,11 +290,7 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
       );
 
       if (mode === 'always' && isIosPlatform()) {
-        stopSignificant = await startSignificantLocationUpdates(
-          { deviceKey: deviceSourceKey(), provider: 'companion-mobile', owner: outboxOwnerStamp() },
-          onLocation,
-          onError,
-        );
+        stopSignificant = await startSignificantLocationUpdates(significantOptions, onLocation, onError);
       }
 
       if (cancelled) {

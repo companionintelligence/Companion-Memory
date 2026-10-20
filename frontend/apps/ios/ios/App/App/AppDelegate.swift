@@ -1,5 +1,6 @@
 import UIKit
 import Capacitor
+import CiCapacitorLocalHub
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -12,6 +13,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // different hardware, before the JS layer migrates it and deletes the legacy copy.
         // A no-op once that has happened — see KeychainHardening.
         KeychainHardening.migrateLegacyCredentials()
+        // Always location tracking outlives the WebView. iOS relaunches the app in the
+        // background for a significant change or a geofence exit -- including after a reboot
+        // -- and hands the event to this method with no scene and no JavaScript; the tracker
+        // must be running again before this returns for the fix to be delivered. A plain tap
+        // launch goes through here too and gets the same restart. See `LocationTracking`.
+        LocationTracking.handleAppLaunch(launchOptions: launchOptions)
         return true
     }
 

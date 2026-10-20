@@ -129,9 +129,16 @@ export interface LocalHubPlugin {
    * `significantLocation` events (`significantLocationError` with `code: 'NOT_AUTHORIZED'`
    * when the OS refuses).
    *
-   * iOS: significant-change monitoring -- a callback when the phone moves a meaningful
-   * distance, including after the app leaves the foreground, without the solid blue
-   * background indicator. `options` is ignored there; the web side queues each event itself.
+   * iOS: significant-change monitoring plus one resume geofence around the last queued fix
+   * -- a callback when the phone moves a meaningful distance, including after the app leaves
+   * the foreground, without the solid blue background indicator. Armed state is persisted
+   * natively and the app delegate restarts the monitor on every launch, including the
+   * background relaunches iOS performs for a location or region event and after a reboot,
+   * so recording continues with the app swiped away. Every fix that clears the
+   * distance/interval gate is queued into the encrypted outbox from native code, and also
+   * emitted as an event when a WebView is alive. `options` is required, as on Android. If
+   * the Always grant lapses, a relaunch posts a notification asking for an app open, where
+   * the web side's re-arm runs the two-step prompt again.
    *
    * Android: a location foreground service of this plugin's own, started from the screen
    * and kept running until `stopSignificantLocationUpdates` -- across the app being swiped
