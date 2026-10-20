@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
-import { MemoryHubNav, nearestHorizontalScroll } from './MemoryHubNav';
+import { MEMORY_HUB_ACTIONS_SLOT, MemoryHubNav, nearestHorizontalScroll } from './MemoryHubNav';
 
 vi.mock('@/common/feature', () => ({
   useFeatures: () => ({ isFeatureEnabled: () => true, loading: false, refresh: vi.fn() }),
@@ -150,16 +150,28 @@ describe('MemoryHubNav', () => {
     expect(await screen.findByRole('link', { name: 'Content' })).toHaveAttribute('href', '/memory/content');
   });
 
-  it('keeps the section menu but hides page actions on mobile', async () => {
+  it('keeps the section menu but has no slot for page actions on mobile', async () => {
     stubViewport(true);
 
-    renderWithProviders(<MemoryHubNav actions={<button type="button">New thing</button>} />, {
-      route: '/memory/things',
-    });
+    renderWithProviders(<MemoryHubNav />, { route: '/memory/things' });
 
     expect(await screen.findByRole('navigation', { name: 'Memory sections' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Things' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'New thing' })).not.toBeInTheDocument();
+    expect(document.getElementById(MEMORY_HUB_ACTIONS_SLOT)).toBeNull();
+  });
+
+  it('ends the strip with a slot for page actions on desktop', async () => {
+    stubViewport(false);
+
+    renderWithProviders(<MemoryHubNav />, { route: '/memory/things' });
+
+    const nav = await screen.findByRole('navigation', { name: 'Memory sections' });
+    const slot = document.getElementById(MEMORY_HUB_ACTIONS_SLOT);
+
+    expect(slot).not.toBeNull();
+    expect(nav.lastElementChild).toBe(slot);
+    // Empty, it takes no room: a page without actions leaves no gap.
+    expect(slot).toHaveClass('empty:hidden');
   });
 
   it('bounds the nearest horizontal position without moving an already-visible tab', () => {

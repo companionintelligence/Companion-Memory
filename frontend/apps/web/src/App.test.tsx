@@ -1,7 +1,9 @@
 import { type ReactNode } from 'react';
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { MEMORY_HUB_SECTIONS } from '@/components/MemoryHub';
 
 import App from './App';
 
@@ -138,6 +140,35 @@ describe('signing out with captures that have not uploaded', () => {
 
     expect(await screen.findByRole('alertdialog')).toHaveTextContent("2 captures haven't uploaded yet");
   });
+});
+
+describe('the Memory hub', () => {
+  // Every section the strip links to is a child of one layout route. A section
+  // left outside it would tear the strip down on the way in. The pages never
+  // get data here (the Apollo link never answers), which is also the case that
+  // used to swap the whole page, strip included, for a spinner.
+  it.each(
+    MEMORY_HUB_SECTIONS.map((section) => [
+      section.label,
+      section.to === '/memory/events' ? '/memory/people' : '/memory/events?view=list',
+    ]),
+  )(
+    'keeps the same section strip when %s opens from another section (%s)',
+    async (label, from) => {
+      h.features = { loading: false, enabled: true };
+
+      renderAt(from);
+
+      const strip = await screen.findByRole('navigation', { name: 'Memory sections' });
+
+      fireEvent.click(within(strip).getByRole('link', { name: label }));
+
+      await waitFor(() =>
+        expect(within(strip).getByRole('link', { name: label })).toHaveAttribute('aria-current', 'page'),
+      );
+      expect(screen.getByRole('navigation', { name: 'Memory sections' })).toBe(strip);
+    },
+  );
 });
 
 describe('App routing', () => {

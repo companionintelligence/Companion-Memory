@@ -1,6 +1,6 @@
-import { type ReactNode, useLayoutEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 
-import { useDeviceLayout } from '@ci/common';
+import { Portal, useDeviceLayout } from '@ci/common';
 import { cn } from '@ci/shadcn';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 
@@ -22,6 +22,14 @@ export function sectionHref(to: string, params: URLSearchParams): string {
 }
 
 const ACTIVE_TAB_GUTTER = 8;
+
+/**
+ * Where a section page's own actions ("New place", "New thing") land, at the
+ * strip's right end. The strip belongs to MemoryHubLayout and outlives every
+ * page, so a page reaches it through this slot (see MemoryHubShell) rather
+ * than as a prop.
+ */
+export const MEMORY_HUB_ACTIONS_SLOT = 'memory-hub-actions';
 
 interface HorizontalScrollBounds {
   scrollLeft: number;
@@ -53,7 +61,7 @@ export function nearestHorizontalScroll({
   return Math.min(maxScroll, Math.max(0, next));
 }
 
-export function MemoryHubNav({ actions }: { actions?: ReactNode }) {
+export function MemoryHubNav() {
   const { pathname } = useLocation();
   const [searchParams] = useSearchParams();
   const { isMobile } = useDeviceLayout();
@@ -132,8 +140,11 @@ export function MemoryHubNav({ actions }: { actions?: ReactNode }) {
           them here would duplicate it. The scrolling section strip above
           stays: the phone's only nav surface is the left drawer, and its own
           Memory row doesn't expose People/Places/Things individually unless
-          its chevron is opened, so this strip is the fast path to them. */}
-      {actions && !isMobile && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+          its chevron is opened, so this strip is the fast path to them.
+          `empty:hidden` so a page without actions leaves no gap. */}
+      {!isMobile && (
+        <Portal id={MEMORY_HUB_ACTIONS_SLOT} className="flex shrink-0 items-center gap-2 empty:hidden" />
+      )}
     </nav>
   );
 }
