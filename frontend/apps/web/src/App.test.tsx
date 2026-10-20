@@ -79,6 +79,12 @@ vi.mock('@/components/ThemePicker', async (importOriginal) => {
   };
 });
 
+// The app-wide spinner, made findable. Everything else in the module stays real.
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
+  LoadingPage: () => <div data-testid="loading-page" />,
+}));
+
 // A client whose link never emits: the pages under test are asserted on their
 // route matching, not their data, and a pending query is the quietest stand-in.
 vi.mock('@/api/ApolloProvider', async () => {
@@ -152,23 +158,24 @@ describe('the Memory hub', () => {
       section.label,
       section.to === '/memory/events' ? '/memory/people' : '/memory/events?view=list',
     ]),
-  )(
-    'keeps the same section strip when %s opens from another section (%s)',
-    async (label, from) => {
-      h.features = { loading: false, enabled: true };
+  )('keeps the same section strip when %s opens from another section (%s)', async (label, from) => {
+    h.features = { loading: false, enabled: true };
 
-      renderAt(from);
+    renderAt(from);
 
-      const strip = await screen.findByRole('navigation', { name: 'Memory sections' });
+    const strip = await screen.findByRole('navigation', { name: 'Memory sections' });
 
-      fireEvent.click(within(strip).getByRole('link', { name: label }));
+    fireEvent.click(within(strip).getByRole('link', { name: label }));
 
-      await waitFor(() =>
-        expect(within(strip).getByRole('link', { name: label })).toHaveAttribute('aria-current', 'page'),
-      );
-      expect(screen.getByRole('navigation', { name: 'Memory sections' })).toBe(strip);
-    },
-  );
+    // A first visit shows its fallback at once (no transitions). That is
+    // the section's skeleton, never the app-wide spinner.
+    expect(screen.queryByTestId('loading-page')).not.toBeInTheDocument();
+
+    await waitFor(() =>
+      expect(within(strip).getByRole('link', { name: label })).toHaveAttribute('aria-current', 'page'),
+    );
+    expect(screen.getByRole('navigation', { name: 'Memory sections' })).toBe(strip);
+  });
 });
 
 describe('App routing', () => {

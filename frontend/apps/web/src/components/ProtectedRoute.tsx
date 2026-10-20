@@ -1,11 +1,23 @@
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { isNativePlatform, LoadingPage } from '@ci/common';
 import { Navigate, useLocation } from 'react-router-dom';
 
 import { useAuth, useCurrentUser } from '@/hooks';
 
-export function ProtectedRoute({ children }: { children: React.ReactNode }) {
+export function ProtectedRoute({
+  children,
+  fallback = <LoadingPage />,
+}: {
+  children: ReactNode;
+  /**
+   * What shows while the page's own code downloads. Routes are lazy and the
+   * router runs without transitions (see App.tsx), so a first visit always
+   * shows this. The Memory hub passes the section's skeleton, so a tab does
+   * not flash a spinner under its strip first (MemoryHubRoute).
+   */
+  fallback?: ReactNode;
+}) {
   const location = useLocation();
   const [{ expired, loading: authLoading, authToken }, { refresh }] = useAuth();
   const { user, loading: userLoading } = useCurrentUser();
@@ -70,5 +82,5 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return <Suspense fallback={<LoadingPage />}>{children}</Suspense>;
+  return <Suspense fallback={fallback}>{children}</Suspense>;
 }

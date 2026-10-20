@@ -19,6 +19,8 @@ import { MemoryHubSectionSkeleton } from './MemoryHubSkeletons';
  *
  * The boundaries sit under the strip, around the section alone, so a section
  * that is still loading or has crashed leaves the strip on screen and usable.
+ * Each section's route also wraps it in MemoryHubRoute, whose boundary is the
+ * nearer one while its code downloads and shows the same skeleton.
  */
 export function MemoryHubLayout() {
   const { pathname } = useLocation();

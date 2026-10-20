@@ -7,10 +7,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { MemoryHubLayout } from './MemoryHubLayout';
+import { MemoryHubRoute } from './MemoryHubRoute';
 import { MemoryHubShell } from './MemoryHubShell';
 
 vi.mock('@/common/feature', () => ({
   useFeatures: () => ({ isFeatureEnabled: () => true, loading: false, refresh: vi.fn() }),
+}));
+
+// MemoryHubRoute is ProtectedRoute underneath: signed in, with a profile.
+vi.mock('@/hooks', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks')>()),
+  useAuth: () => [{ authToken: 'token', expired: false, loading: false, error: null }, {}],
+  useCurrentUser: () => ({ user: { id: 'u1' }, loading: false }),
+}));
+
+// The app-wide spinner, made findable.
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
+  LoadingPage: () => <div data-testid="loading-page" />,
 }));
 
 const originalMatchMedia = window.matchMedia;
@@ -51,6 +65,14 @@ function renderHub(route: string) {
         <Route path="/memory/places" element={<Section name="Places" />} />
         <Route path="/memory/things" element={<NeverLoads />} />
         <Route path="/memory/receipts" element={<Crashes />} />
+        <Route
+          path="/memory/notes"
+          element={
+            <MemoryHubRoute>
+              <NeverLoads />
+            </MemoryHubRoute>
+          }
+        />
       </Route>
     </Routes>,
     { route },
@@ -85,6 +107,18 @@ describe('MemoryHubLayout', () => {
     expect(screen.getByRole('link', { name: 'Things' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('status')).toHaveTextContent('Loading things');
     expect(document.querySelector('.animate-spin')).toBeNull();
+  });
+
+  // Each section's route boundary (MemoryHubRoute) is nearer than the layout's,
+  // and the router runs without transitions, so it decides what a first visit
+  // shows. With ProtectedRoute's default that was a spinner under the strip.
+  it("shows the section's skeleton, not a spinner, while its route's code downloads", async () => {
+    stubViewport(true);
+    renderHub('/memory/notes');
+
+    expect(await screen.findByRole('navigation', { name: 'Memory sections' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading notes');
+    expect(screen.queryByTestId('loading-page')).not.toBeInTheDocument();
   });
 
   it('keeps the strip, and a way out, when a section crashes', async () => {

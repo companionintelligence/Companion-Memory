@@ -1,3 +1,5 @@
+import { lazy } from 'react';
+
 import { FetchJsonError } from '@ci/common';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -101,6 +103,31 @@ describe('ProtectedRoute', () => {
     renderProtected();
 
     expect(screen.getByText('secret content')).toBeInTheDocument();
+  });
+
+  // Routes are lazy and the router runs without transitions, so this shows on
+  // every first visit. The Memory hub passes its skeleton (MemoryHubRoute).
+  it("shows the given fallback while the page's code downloads", () => {
+    h.auth = { authToken: 'token', expired: false, loading: false, error: null };
+    h.user = { user: { id: 'u1' }, loading: false };
+    const NeverLoads = lazy(() => new Promise<never>(() => {}));
+
+    render(
+      <MemoryRouter initialEntries={['/secret']}>
+        <Routes>
+          <Route
+            path="/secret"
+            element={
+              <ProtectedRoute fallback={<div>section placeholder</div>}>
+                <NeverLoads />
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('section placeholder')).toBeInTheDocument();
   });
 
   it('tries a silent refresh before sending an expired session to login', async () => {

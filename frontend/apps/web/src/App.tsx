@@ -23,7 +23,7 @@ import {
 
 import { ApolloProvider } from '@/api/ApolloProvider';
 import { FeaturesProvider, useFeatures } from '@/common/feature';
-import { MemoryHubLayout } from '@/components/MemoryHub';
+import { MemoryHubLayout, MemoryHubRoute } from '@/components/MemoryHub';
 import NotFoundPage from '@/components/NotFound';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { RedirectKnownUser } from '@/components/RedirectKnownUser';
@@ -452,25 +452,25 @@ function AppRoutes() {
             <Route
               path="/memory"
               element={
-                <ProtectedRoute>
+                <MemoryHubRoute>
                   <MemoryPage />
-                </ProtectedRoute>
+                </MemoryHubRoute>
               }
             />
             <Route
               path="/memory/events"
               element={
-                <ProtectedRoute>
+                <MemoryHubRoute>
                   <MemoryPage />
-                </ProtectedRoute>
+                </MemoryHubRoute>
               }
             />
             <Route
               path="/memory/people"
               element={
-                <ProtectedRoute>
+                <MemoryHubRoute>
                   <PeoplePage />
-                </ProtectedRoute>
+                </MemoryHubRoute>
               }
             />
             {/* The optional :placeId gives a place row a shareable URL and makes
@@ -478,9 +478,9 @@ function AppRoutes() {
             <Route
               path="/memory/places/:placeId?"
               element={
-                <ProtectedRoute>
+                <MemoryHubRoute>
                   <PlacesPage />
-                </ProtectedRoute>
+                </MemoryHubRoute>
               }
             />
             {/* Ungated, like /memory/people and /memory/places. The old
@@ -496,17 +496,17 @@ function AppRoutes() {
             <Route
               path="/memory/things"
               element={
-                <ProtectedRoute>
+                <MemoryHubRoute>
                   <ThingsPage />
-                </ProtectedRoute>
+                </MemoryHubRoute>
               }
             />
             <Route
               path="/memory/receipts"
               element={
-                <ProtectedRoute>
+                <MemoryHubRoute>
                   <ReceiptsPage />
-                </ProtectedRoute>
+                </MemoryHubRoute>
               }
             />
             {isFeatureEnabled('files.page') && (
@@ -520,9 +520,9 @@ function AppRoutes() {
                 <Route
                   path="/memory/content/:contentId?"
                   element={
-                    <ProtectedRoute>
+                    <MemoryHubRoute>
                       <ContentLibraryPage />
-                    </ProtectedRoute>
+                    </MemoryHubRoute>
                   }
                 />
               </>
@@ -531,27 +531,27 @@ function AppRoutes() {
               <Route
                 path="/memory/tags"
                 element={
-                  <ProtectedRoute>
+                  <MemoryHubRoute>
                     <TagsPage />
-                  </ProtectedRoute>
+                  </MemoryHubRoute>
                 }
               />
             )}
             <Route
               path="/memory/notes"
               element={
-                <ProtectedRoute>
+                <MemoryHubRoute>
                   <NotesPage />
-                </ProtectedRoute>
+                </MemoryHubRoute>
               }
             />
             {isFeatureEnabled('chat.page') && (
               <Route
                 path="/memory/chat/:id?"
                 element={
-                  <ProtectedRoute>
+                  <MemoryHubRoute>
                     <ChatPage />
-                  </ProtectedRoute>
+                  </MemoryHubRoute>
                 }
               />
             )}
