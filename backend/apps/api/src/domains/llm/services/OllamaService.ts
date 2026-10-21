@@ -40,6 +40,7 @@ import { boundToolResultForPrompt, toolResultByteBudget } from '../toolResultBud
 import type { OllamaModel } from '../types';
 
 import { LlmEndpointService } from './LlmEndpointService';
+import { OllamaPriorityQueue, type OllamaPriority, type OllamaQueueSnapshot } from './OllamaPriorityQueue';
 import type { OpenAiCompatChatDriver } from './OpenAiCompatChatDriver';
 import { ResidencyPlannerService } from './ResidencyPlannerService';
 import {
@@ -255,6 +256,12 @@ interface BasePromptOptions {
   enableTools?: boolean;
   enableThinking?: boolean;
   /**
+   * Explicit priority tier for the local LLM scheduler (`interactive` > `user_job` > `background`).
+   * Defaults to `'background'` when `tier === 'utility'` or `model === UTILITY_MODEL`,
+   * and `'interactive'` otherwise.
+   */
+  priority?: OllamaPriority;
+  /**
    * Context window to ask the backend for, in tokens (Ollama `options.num_ctx`).
    * Absent leaves the backend's own default alone, which is what every caller
    * did before {@link ContextBudget} existed.
@@ -442,6 +449,12 @@ export class OllamaService implements OnModuleInit {
   private readonly staleChatModelOverridesWarned = new Set<string>();
 
   private lastPreflight: ChatModelPreflight | null = null;
+
+  private readonly priorityQueue = new OllamaPriorityQueue();
+
+  getQueueSnapshot(): OllamaQueueSnapshot {
+    return this.priorityQueue.getSnapshot();
+  }
 
   constructor(
     private readonly llmEndpointService: LlmEndpointService,
@@ -829,31 +842,36 @@ export class OllamaService implements OnModuleInit {
   async generate(
     context: RequestContext,
     prompt: string,
-    { model }: Omit<NamedModelPromptOptions, 'signal'>,
+    { model, priority }: Omit<NamedModelPromptOptions, 'signal'>,
   ): Promise<GenerateResponse> {
     await this.validateModel(context, model);
 
-    const openAiDriver = this.llmEndpointService.getOpenAiDriver();
+    const effectivePriority: OllamaPriority =
+      priority ?? (model === UTILITY_MODEL ? 'background' : 'interactive');
 
-    if (openAiDriver) {
-      const response = await openAiDriver.chat({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-      });
+    return this.priorityQueue.run(effectivePriority, async () => {
+      const openAiDriver = this.llmEndpointService.getOpenAiDriver();
 
-      return chatChunkToGenerateResponse(response);
-    }
+      if (openAiDriver) {
+        const response = await openAiDriver.chat({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+        });
 
-    const { client, deadline } = this.boundedClient(model);
+        return chatChunkToGenerateResponse(response);
+      }
 
-    try {
-      return await client.generate({
-        model,
-        prompt,
-      });
-    } catch (err: unknown) {
-      throw OllamaService.surfaceDeadline(deadline, err);
-    }
+      const { client, deadline } = this.boundedClient(model);
+
+      try {
+        return await client.generate({
+          model,
+          prompt,
+        });
+      } catch (err: unknown) {
+        throw OllamaService.surfaceDeadline(deadline, err);
+      }
+    });
   }
 
   async chatStream(
@@ -1217,33 +1235,41 @@ export class OllamaService implements OnModuleInit {
     const openAiDriver = this.llmEndpointService.getOpenAiDriver();
 
     const accumulatedMessages: OllamaMessage[] = [];
+    const effectivePriority: OllamaPriority =
+      options.priority ??
+      (options.tier === 'utility' || model === UTILITY_MODEL ? 'background' : 'interactive');
 
     let response: ChatResponse;
 
     try {
-      response = openAiDriver
-        ? await openAiDriver.chat({
-            model,
-            messages: inputMessages,
-            tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
-            format,
-            enableThinking,
-            signal,
-            maxTokens: maxOutputTokens,
-            timeoutMs: firstResponseTimeoutMs,
-          })
-        : await this.runNativeChat({
-            model,
-            messages: inputMessages,
-            format,
-            tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
-            signal,
-            numCtx,
-            maxOutputTokens,
-            keepAlive,
-            firstResponseTimeoutMs,
-            enableThinking,
-          });
+      response = await this.priorityQueue.run(
+        effectivePriority,
+        () =>
+          openAiDriver
+            ? openAiDriver.chat({
+                model,
+                messages: inputMessages,
+                tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
+                format,
+                enableThinking,
+                signal,
+                maxTokens: maxOutputTokens,
+                timeoutMs: firstResponseTimeoutMs,
+              })
+            : this.runNativeChat({
+                model,
+                messages: inputMessages,
+                format,
+                tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
+                signal,
+                numCtx,
+                maxOutputTokens,
+                keepAlive,
+                firstResponseTimeoutMs,
+                enableThinking,
+              }),
+        signal,
+      );
     } catch (err: unknown) {
       // The planner's watchdog wants to know when the call that was supposed
       // to bring the utility model in never got an answer — see

@@ -85,6 +85,12 @@ export class LLMModule {}
 export { LlmCoreModule } from './core.module';
 export { OllamaService } from './services/OllamaService';
 export { PROMPT_MODEL, UTILITY_MODEL, type ChatRequestContext } from './services/OllamaService';
+export {
+  OllamaPriorityQueue,
+  type OllamaPriority,
+  type OllamaQueueSnapshot,
+  type PriorityBucketTelemetry,
+} from './services/OllamaPriorityQueue';
 export { ResidencyPlannerService, type ResidencyReport } from './services/ResidencyPlannerService';
 export { type UtilityModelChoice, type UtilityPlan } from './residency/footprint';
 export {

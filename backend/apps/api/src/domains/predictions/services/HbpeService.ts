@@ -8,6 +8,7 @@ import {
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { sidecarAuthHeaders } from '@ci/common/sidecar/sidecarAuth';
+import { SidecarCircuitBreaker, type SidecarCircuitSnapshot } from '@ci/common/sidecar/SidecarCircuitBreaker';
 import config from '@ci/configuration';
 
 import type { DueResponse, ForecastResponse, ForageTrialResponse, WeekForecastResponse } from '../types';
@@ -60,8 +61,22 @@ function sidecarPath(
 export class HbpeService {
   private readonly baseUrl = config.services.hbpe.host;
 
-  constructor(private readonly logger: LoggerService) {
+  private readonly circuitBreaker: SidecarCircuitBreaker;
+
+  constructor(
+    private readonly logger: LoggerService,
+    circuitBreaker?: SidecarCircuitBreaker,
+  ) {
     this.logger.setContext('HbpeService');
+    this.circuitBreaker = circuitBreaker ?? new SidecarCircuitBreaker({ name: 'hbpe' });
+  }
+
+  getCircuitSnapshot(): SidecarCircuitSnapshot {
+    return this.circuitBreaker.getSnapshot();
+  }
+
+  resetCircuitBreaker(): void {
+    this.circuitBreaker.reset();
   }
 
   /**
@@ -161,32 +176,34 @@ export class HbpeService {
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
 
-    let response: Response;
+    return this.circuitBreaker.execute(async () => {
+      let response: Response;
 
-    try {
-      response = await fetch(url, {
-        ...init,
-        headers: { ...sidecarAuthHeaders(), ...(init.headers as Record<string, string> | undefined) },
-        signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
-      });
-    } catch (err) {
-      this.logger.warn('HBPE service unreachable', { url, err });
-      throw new ServiceUnavailableException('Forecast service unavailable');
-    }
+      try {
+        response = await fetch(url, {
+          ...init,
+          headers: { ...sidecarAuthHeaders(), ...(init.headers as Record<string, string> | undefined) },
+          signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
+        });
+      } catch (err) {
+        this.logger.warn('HBPE service unreachable', { url, err });
+        throw new ServiceUnavailableException('Forecast service unavailable');
+      }
 
-    if (response.status === 401) {
-      throw new UnauthorizedException('Missing or invalid user context');
-    }
+      if (response.status === 401) {
+        throw new UnauthorizedException('Missing or invalid user context');
+      }
 
-    if (options.allowNotFound && response.status === 404) {
-      return null as T;
-    }
+      if (options.allowNotFound && response.status === 404) {
+        return null as T;
+      }
 
-    if (!response.ok) {
-      this.logger.warn('HBPE service returned error', { url, status: response.status });
-      throw new ServiceUnavailableException('Forecast service error');
-    }
+      if (!response.ok) {
+        this.logger.warn('HBPE service returned error', { url, status: response.status });
+        throw new ServiceUnavailableException('Forecast service error');
+      }
 
-    return response.json() as Promise<T>;
+      return response.json() as Promise<T>;
+    });
   }
 }

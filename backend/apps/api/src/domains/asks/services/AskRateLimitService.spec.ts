@@ -77,3 +77,41 @@ describe('AskRateLimitService.consume', () => {
     await expect(service.consume('asker-1', 61_000)).resolves.toBeUndefined();
   });
 });
+
+describe('AskRateLimitService.consumeDisclosureBudget', () => {
+  it('enforces a rolling 24h cumulative disclosure ceiling per (owner, asker) pair', async () => {
+    const service = makeService();
+
+    for (let i = 0; i < 3; i++) {
+      await expect(
+        service.consumeDisclosureBudget('owner-1', 'asker-1', {
+          now: 10_000 + i * 1_000,
+          maxPerDay: 3,
+        }),
+      ).resolves.toBeUndefined();
+    }
+
+    await expect(
+      service.consumeDisclosureBudget('owner-1', 'asker-1', {
+        now: 15_000,
+        maxPerDay: 3,
+      }),
+    ).rejects.toThrow(HttpException);
+
+    // Different asker against the same owner has an independent budget
+    await expect(
+      service.consumeDisclosureBudget('owner-1', 'asker-2', {
+        now: 15_000,
+        maxPerDay: 3,
+      }),
+    ).resolves.toBeUndefined();
+
+    // Same asker after 24h + 1s can disclose again
+    await expect(
+      service.consumeDisclosureBudget('owner-1', 'asker-1', {
+        now: 10_000 + 24 * 60 * 60 * 1_000 + 1,
+        maxPerDay: 3,
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
