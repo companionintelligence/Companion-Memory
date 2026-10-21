@@ -13,7 +13,7 @@
     "e2e:ui": "playwright test --config playwright.e2e.config.ts --ui",
     "e2e:headed": "playwright test --config playwright.e2e.config.ts --headed",
     "e2e:report": "playwright show-report",
-    "test": "tsx --test \"scripts/*.test.ts\" \"scripts/xtask/**/*.test.ts\" \"scripts/dev-stack/**/*.test.ts\"",
+    "test": "node --require ./scripts/pnp-tsx-compat.cjs --import tsx --test \"scripts/*.test.ts\" \"scripts/xtask/**/*.test.ts\" \"scripts/dev-stack/**/*.test.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepare": "husky && sh scripts/merge-uv-lock.sh --register",
     "lint:canon": "ci-lint-canon . && yarn workspace @ci/fe-web brand:check"

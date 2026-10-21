@@ -696,8 +696,25 @@ lint: ## Check the source for lint and formatting errors, both stacks
 
 	@sh scripts/check-ci-namespace.sh
 	@node scripts/check-capacitor-native-sync.mjs
+	@node scripts/check-depcheck-ratchet.mjs
+	@node scripts/docs-check.mjs
 
 	@printf "\nNo lint errors found.\n\n"
+
+.PHONY: docs-check
+docs-check: ## Verify normative markdown links and CI workflow references
+	@printf "$(call task_icon,docs-check,📚) Checking documentation integrity...\n\n"
+	@node scripts/docs-check.mjs
+	@printf "$(GREEN)✓$(RESET) Documentation integrity verified.\n\n"
+
+.PHONY: pr-gate
+pr-gate: ## Run the fast local PR gate (docs-check, depcheck ratchet, typecheck, changed unit tests)
+	@printf "$(call task_icon,pr-gate,🚦) Running fast PR gate...\n\n"
+	@node scripts/docs-check.mjs
+	@yarn workspace @ci/be-api depcheck:ratchet
+	@yarn workspaces foreach --all run typecheck
+	@yarn workspace @ci/be-api test:unit --changedSince=origin/main --passWithNoTests
+	@printf "\n$(GREEN)✓$(RESET) Fast PR gate passed.\n\n"
 
 .PHONY: typecheck
 typecheck: ## Typecheck every JS/TS workspace that declares a typecheck script
