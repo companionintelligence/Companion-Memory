@@ -3,13 +3,14 @@ import { join } from 'node:path';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { EventListenerRegistry } from '@ci/domains/events';
-// FilePreviewService through the files PUBLIC barrel — `no-cross-domain-internals`
-// allows only index.ts/events.ts across a domain boundary. (The listener import
-// below predates the rule and sits in the known-violations baseline.)
-import { FilePreviewService, FileUploadedEvent, PreviewGeneratedEvent } from '@ci/domains/files';
+import {
+  FilePreviewGenerationListener,
+  FilePreviewService,
+  FileService,
+  FileUploadedEvent,
+  PreviewGeneratedEvent,
+} from '@ci/domains/files';
 
-import { FilePreviewGenerationListener } from '../../../files/listeners/FilePreviewGenerationListener';
-import { FileService } from '../../../files/services/FileService';
 import {
   BROWSER_ACTIVITY_INSIGHT_QUEUE,
   BROWSER_ACTIVITY_INSIGHT_QUEUE_OPTIONS,

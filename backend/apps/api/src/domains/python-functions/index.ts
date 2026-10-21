@@ -42,5 +42,5 @@ export class PythonFunctionsModule {}
 
 export { PythonFunctionService };
 export { PythonFunctionRunEvent } from './events';
-export { PYTHON_FUNCTION_QUEUES, PYTHON_FUNCTIONS } from './types';
+export { PYTHON_FUNCTION_QUEUE_OPTIONS, PYTHON_FUNCTION_QUEUES, PYTHON_FUNCTIONS } from './types';
 export type { PythonFunctionTarget } from './types';

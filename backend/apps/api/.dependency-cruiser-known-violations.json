@@ -26,89 +26,8 @@
   },
   {
     "type": "dependency",
-    "from": "src/domains/etl/services/__tests__/ConnectionSyncJobService.bounds.integration.spec.ts",
-    "to": "src/domains/connections/entities/ConnectionEntity.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/domains/etl/services/__tests__/ConnectionSyncJobService.bounds.integration.spec.ts",
-    "to": "src/domains/connections/entities/ProviderEntity.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/domains/etl/services/__tests__/ConnectionSyncJobService.bounds.integration.spec.ts",
-    "to": "src/domains/user/entities/UserEntity.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/domains/etl/services/__tests__/ConnectionSyncJobService.indexes.integration.spec.ts",
-    "to": "src/domains/connections/entities/ConnectionEntity.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/domains/etl/services/__tests__/ConnectionSyncJobService.indexes.integration.spec.ts",
-    "to": "src/domains/connections/entities/ProviderEntity.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/domains/etl/services/__tests__/ConnectionSyncJobService.indexes.integration.spec.ts",
-    "to": "src/domains/user/entities/UserEntity.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/domains/graphql/resolvers/__tests__/ForecastResolver.triggerHbpe.test.ts",
-    "to": "src/domains/python-functions/types.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
     "from": "src/domains/llm/listeners/__tests__/llmQueuePolicy.test.ts",
     "to": "src/domains/smart-rotation/listeners/AnswerInferenceListener.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/domains/llm/listeners/__tests__/visionQueuePolicy.test.ts",
-    "to": "src/domains/files/listeners/FilePreviewGenerationListener.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/domains/llm/listeners/__tests__/visionQueuePolicy.test.ts",
-    "to": "src/domains/files/services/FileService.ts",
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -136,15 +55,6 @@
     "type": "dependency",
     "from": "src/domains/memory/index.ts",
     "to": "src/domains/graph/services/ObjectIdentifierService.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/domains/memory/services/KnownPlacesService.ts",
-    "to": "src/domains/daily-metrics/places/transitionMath.ts",
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -559,24 +469,6 @@
     "type": "dependency",
     "from": "src/domains/tools/tools/PlanningUpdateTaskTool.ts",
     "to": "src/domains/planning/task.module.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/domains/personalization/controllers/__tests__/PersonalizationController.test.ts",
-    "to": "src/domains/llm/browser-activity-insight-preference.module.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "src/domains/personalization/controllers/__tests__/PersonalizationController.test.ts",
-    "to": "src/domains/llm/image-description-preference.module.ts",
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"

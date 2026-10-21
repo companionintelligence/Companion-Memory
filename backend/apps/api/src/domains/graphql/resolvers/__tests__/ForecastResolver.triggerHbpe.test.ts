@@ -2,8 +2,7 @@ import type { RequestContext } from '@ci/common/context';
 import type { FeatureService } from '@ci/common/feature';
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
-import { PythonFunctionService } from '@ci/domains/python-functions';
-import { PYTHON_FUNCTION_QUEUE_OPTIONS } from '@ci/domains/python-functions/types';
+import { PYTHON_FUNCTION_QUEUE_OPTIONS, PythonFunctionService } from '@ci/domains/python-functions';
 
 import { ForecastResolver } from '../ForecastResolver';
 

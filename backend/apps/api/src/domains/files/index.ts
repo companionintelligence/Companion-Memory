@@ -66,7 +66,7 @@ import { VipsService } from './services/VipsService';
 })
 export class FilesModule {}
 
-export { FileEntity, FileService, SavedSearchEntity, SavedSearchService };
+export { FileEntity, FilePreviewGenerationListener, FileService, SavedSearchEntity, SavedSearchService };
 export { FilePreviewService } from './services/FilePreviewService';
 export type { PreviewOutcome, PreviewSkipReason } from './services/FilePreviewService';
 export { FilePreviewSweepRequestEvent, FILE_PREVIEW_SWEEP_QUEUE } from './events';
