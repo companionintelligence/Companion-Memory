@@ -34,7 +34,7 @@ export const INDEXABLE_ENTITIES = [
 export type IndexableEntity = (typeof INDEXABLE_ENTITIES)[number];
 
 /**
- * The indexed types a device carries a plain-text copy of (`ci_search.documents`,
+ * The indexed types a device carries a plain-text copy of (`ci_search.mobile_search_documents`,
  * replicated by PowerSync and searched on the phone with FTS5). Everything a
  * result row can open: the subset of {@link INDEXABLE_ENTITIES} minus
  * `answer`, `browser-activity`, `position` (no text of their own worth a row),

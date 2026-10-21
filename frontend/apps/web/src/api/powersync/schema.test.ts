@@ -22,16 +22,7 @@ describe('AppSchema', () => {
   it('declares every table from sync-rules.yaml', () => {
     const names = AppSchema.tables.map((t) => t.name).sort();
 
-    expect(names).toEqual([
-      'documents',
-      'entities',
-      'events',
-      'files',
-      'messages',
-      'notes',
-      'tags',
-      'threads',
-    ]);
+    expect(names).toEqual(['entities', 'events', 'files', 'messages', 'notes', 'tags', 'threads']);
   });
 
   // Column sets mirror infrastructure/powersync/sync-rules.yaml's `data` selects
@@ -40,17 +31,24 @@ describe('AppSchema', () => {
     expect(columnNames('notes').sort()).toEqual(['content', 'created_at', 'title', 'updated_at', 'user_id']);
   });
 
-  it('documents matches the user_data bucket select', () => {
-    expect(columnNames('documents').sort()).toEqual([
-      'body',
-      'created_at',
-      'entity_id',
-      'entity_type',
-      'occurred_at',
-      'title',
-      'updated_at',
-      'user_id',
+  it('mobile_search_documents is a raw table whose put binds every column the device keeps', () => {
+    // The sync rule sends id, entity_type, entity_id, user_id, title, body,
+    // occurred_at, created_at, updated_at; the device stores the six it reads.
+    expect(AppSchema.rawTables.map((t) => t.name)).toEqual(['mobile_search_documents']);
+
+    const raw = AppSchema.rawTables[0];
+
+    expect(raw.put?.params).toEqual([
+      'Id',
+      { Column: 'entity_type' },
+      { Column: 'entity_id' },
+      { Column: 'title' },
+      { Column: 'body' },
+      { Column: 'occurred_at' },
     ]);
+    expect(raw.put?.sql).toContain('ON CONFLICT(id) DO UPDATE');
+    expect(raw.delete?.params).toEqual(['Id']);
+    expect(raw.clear).toBe('DELETE FROM mobile_search_documents');
   });
 
   it('tags matches the user_data bucket select', () => {

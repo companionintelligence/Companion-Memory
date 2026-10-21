@@ -58,7 +58,7 @@ Only small, `user_id`-scoped, read-mostly tables. `sync-rules.yaml` and
 `POWERSYNC_TABLES` in `infrastructure/setup-database/entrypoint.sh` must agree; today
 both list `ci.notes`, `ci.files` (metadata only — the binary stays in Minio),
 `ci_search.tags`, `ci.threads`, `ci.messages`, `ci_search.entity_tag`, `ci.events` and
-its `ci.entities` name rows (a 30-day window), and `ci_search.documents` — the
+its `ci.entities` name rows (a 30-day window), and `ci_search.mobile_search_documents` — the
 plain-text search index (one row per indexed entity of a device-shown type: title,
 snippet, own time), over which the device builds an FTS5 index and answers the header
 search when the appliance is unreachable. See

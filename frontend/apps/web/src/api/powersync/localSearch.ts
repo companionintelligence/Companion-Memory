@@ -1,5 +1,5 @@
 /**
- * Search answered from this device: the synced `documents` rows through the
+ * Search answered from this device: the synced `mobile_search_documents` rows through the
  * FTS5 index `searchIndex.ts` builds over them.
  *
  * The result is shaped like the GraphQL `search` connection's nodes — the same
@@ -19,7 +19,7 @@ import type { AbstractPowerSyncDatabase } from '@powersync/web';
 
 import { DOCUMENTS_FTS_TABLE, DOCUMENTS_TABLE } from './searchIndex';
 
-/** A synced row as the device holds it (`documents` view; see schema.ts). */
+/** A synced row as the device holds it (the `mobile_search_documents` raw table; see searchIndex.ts). */
 export interface DocumentRow {
   id: string;
   entity_type: string;
@@ -181,13 +181,14 @@ export function localSearchStatement(options: LocalSearchOptions): { sql: string
   const limit = options.limit ?? LOCAL_SEARCH_DEFAULT_LIMIT;
 
   return {
-    // bm25 weights follow DOCUMENTS_FTS_COLUMNS: id (unindexed), title, body.
+    // bm25 weights follow DOCUMENTS_FTS_COLUMNS: title, body. The index is
+    // external-content, keyed by the documents table's rowid.
     sql: `SELECT d.id, d.entity_type, d.entity_id, d.title, d.body, d.occurred_at
             FROM ${DOCUMENTS_FTS_TABLE}
-            JOIN ${DOCUMENTS_TABLE} d ON d.id = ${DOCUMENTS_FTS_TABLE}.id
+            JOIN ${DOCUMENTS_TABLE} d ON d.rowid = ${DOCUMENTS_FTS_TABLE}.rowid
            WHERE ${DOCUMENTS_FTS_TABLE} MATCH ?
              AND d.entity_type IN (${placeholders})
-           ORDER BY bm25(${DOCUMENTS_FTS_TABLE}, 0.0, 10.0, 1.0)
+           ORDER BY bm25(${DOCUMENTS_FTS_TABLE}, 10.0, 1.0)
            LIMIT ?`,
     params: [match, ...types, limit],
   };

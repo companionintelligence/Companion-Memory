@@ -53,7 +53,7 @@
 #                            created_at — no user_id of its own; scoped via a
 #                            parameter query against its tag's ci_search.tags.user_id,
 #                            see the `entity_tags` bucket below)
-#   - ci_search.documents   (id, entity_type, entity_id, user_id, title, body,
+#   - ci_search.mobile_search_documents   (id, entity_type, entity_id, user_id, title, body,
 #                            occurred_at, created_at, updated_at — the device
 #                            search index; see the `user_data` bucket)
 #
@@ -258,7 +258,7 @@ bucket_definitions:
       # that leaves this table leaves every device.
       - SELECT id, entity_type, entity_id, user_id, title, body, occurred_at,
                created_at, updated_at
-        FROM ci_search.documents
+        FROM ci_search.mobile_search_documents
         WHERE user_id = bucket.user_id
 
   # entity_tag has no user_id of its own — it is owned transitively via the tag it

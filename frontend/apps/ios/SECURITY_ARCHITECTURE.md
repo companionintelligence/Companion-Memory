@@ -268,12 +268,18 @@ What this does and does not close:
   encrypted backup (D1's shape, one item over). A key lost while the file stays
   encrypted makes the replica unreadable; the app reports it and does not
   delete anything (`ReplicaKeyLostError`); clearing app storage starts over.
-- **Unchanged:** the web app in a desktop browser still holds its replica in
-  plaintext IndexedDB, exactly as described above. The gate's reasoning about
-  the JS heap stands there.
+- **Closed on 2026-10-20 — the browser no longer syncs at all.** Until then
+  the web app in a desktop browser held its replica in plaintext IndexedDB,
+  exactly as described above, and `ci_search.mobile_search_documents` had
+  joined it. `PowerSyncProvider` now connects only the SQLCipher file: a
+  database that is not the encrypted one (a desktop browser, or a phone whose
+  native adapter failed to load) is wiped with `disconnectAndClear()` on load
+  and never connected, so a browser profile holds no copy and the appliance's
+  GraphQL API is its only source. The gate's reasoning about the JS heap is
+  why this is a removal, not an encryption.
 
 With the file encrypted, the sync-rules freeze above no longer applies to
-**server-derived** text: `ci_search.documents` (names, subjects, snippets, for
+**server-derived** text: `ci_search.mobile_search_documents` (names, subjects, snippets, for
 on-device search) syncs as of the same date. Device-sourced tables — health,
 location, contacts, motion — stay out until the custody point above is settled.
 

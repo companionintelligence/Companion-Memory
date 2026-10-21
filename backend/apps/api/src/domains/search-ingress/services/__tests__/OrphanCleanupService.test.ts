@@ -69,7 +69,7 @@ describe('OrphanCleanupService.cleanOrphans', () => {
     // documents sits between: it references vectors(id) ON DELETE CASCADE and
     // must be truncated first, so SEARCH_TABLES orders it before vectors.
     const [docSql] = calls[1];
-    expect(flat(docSql)).toContain('DELETE FROM "ci_search"."documents"');
+    expect(flat(docSql)).toContain('DELETE FROM "ci_search"."mobile_search_documents"');
     expect(flat(docSql)).toContain('FROM "ci"."events" src');
 
     const [vecSql] = calls[2];
@@ -300,12 +300,12 @@ describe('OrphanCleanupService.truncateSearchIndex', () => {
     expect(outsideQuery).not.toHaveBeenCalled();
     expect(flat(managerQuery.mock.calls[0][0])).toBe('TRUNCATE TABLE "ci_search"."embeddings"');
     // documents before vectors: TRUNCATE refuses a table another one references.
-    expect(flat(managerQuery.mock.calls[1][0])).toBe('TRUNCATE TABLE "ci_search"."documents"');
+    expect(flat(managerQuery.mock.calls[1][0])).toBe('TRUNCATE TABLE "ci_search"."mobile_search_documents"');
     expect(flat(managerQuery.mock.calls[2][0])).toBe('TRUNCATE TABLE "ci_search"."vectors"');
     expect(flat(managerQuery.mock.calls[3][0])).toBe('TRUNCATE TABLE "ci_search"."index_skips"');
     expect(result.truncated).toEqual([
       'ci_search.embeddings',
-      'ci_search.documents',
+      'ci_search.mobile_search_documents',
       'ci_search.vectors',
       'ci_search.index_skips',
     ]);

@@ -42,7 +42,7 @@
 -- they get a document the next time their row is written (every one of them
 -- is indexed by a listener on change) — a handful of rows.
 
-CREATE TABLE ci_search.documents (
+CREATE TABLE ci_search.mobile_search_documents (
   id          uuid PRIMARY KEY REFERENCES ci_search.vectors(id) ON DELETE CASCADE,
   entity_type text NOT NULL,
   entity_id   uuid NOT NULL,
@@ -55,13 +55,13 @@ CREATE TABLE ci_search.documents (
   UNIQUE (entity_type, entity_id)
 );
 
-COMMENT ON TABLE ci_search.documents IS
+COMMENT ON TABLE ci_search.mobile_search_documents IS
   'Plain-text projection of ci_search.vectors for on-device search (PowerSync). '
   'Written only beside the tsvector; never edited by hand.';
 
 -- The sync rule selects by user; the logical-replication snapshot and every
 -- bucket re-evaluation read this.
-CREATE INDEX documents_user_id_idx ON ci_search.documents (user_id);
+CREATE INDEX mobile_search_documents_user_id_idx ON ci_search.mobile_search_documents (user_id);
 
 -- migrate:down
-DROP TABLE IF EXISTS ci_search.documents;
+DROP TABLE IF EXISTS ci_search.mobile_search_documents;

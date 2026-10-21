@@ -217,7 +217,7 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    */
   /**
    * v2 (every device-indexed type, 2026-10-19) — the statement now also writes
-   * the row's plain-text document to `ci_search.documents`
+   * the row's plain-text document to `ci_search.mobile_search_documents`
    * (migration 20261019212935). Re-running the stage is how an existing
    * install's corpus gets its documents; nothing else backfills them.
    */

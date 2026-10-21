@@ -18,18 +18,24 @@ implemented on the branch (uncommitted); 2, 3 and 4 are not started.
   IndexedDB placeholder is never connected on a phone any more. A drift test
   pins the vendored adapter the copy was taken from. Security docs § 2.3a.
 - **P1 — the projection, the sync, the index, the fallback.**
-  `ci_search.documents` (migration 20261019212935) written by the one shared
+  `ci_search.mobile_search_documents` (migration 20261019212935) written by the one shared
   statement in `VectorService` and the pipeline's vector stages; vector stage
   versions bumped so existing corpora re-run; the backfill route also counts a
-  missing document; synced with no window; `documents_fts` built on the
-  device by triggers (`api/powersync/searchIndex.ts`); `useSearchService`
+  missing document; synced with no window into a PowerSync raw table (since
+  2026-10-20; design § 2) with an external-content `mobile_search_documents_fts`
+  built on the device (`api/powersync/searchIndex.ts`); `useSearchService`
   answers from `localSearch.ts` when the connection chip says the appliance is
   unreachable or a request fails on the network, with a "From this phone"
   caption; the connection chip now resolves `cached`; Settings copy updated.
 
 **Decisions taken:** names of people and places are on the device (the file is
 encrypted, see P0.5); all history for documents; automatic fallback with a
-caption.
+caption. **2026-10-20: the desktop browser syncs nothing.** Its PowerSync
+database is plaintext IndexedDB, and with the search documents in the sync set
+that was a full offline copy of names, subjects, snippets and people's contact
+details in every browser profile that had opened the app. `PowerSyncProvider`
+now connects only the SQLCipher replica and wipes any browser copy on load;
+offline search is a phone feature, and a browser falls back to nothing.
 
 **Known gaps:** on an existing install the bulk of the documents arrive only
 when the next import ends — that is the one thing that requests the pipeline
@@ -108,7 +114,7 @@ here.
 
 ### 1. Server: one search-document projection, synced as-is
 
-Add `ci_search.documents`, maintained next to `ci_search.vectors` by the same
+Add `ci_search.mobile_search_documents`, maintained next to `ci_search.vectors` by the same
 write path, so "what text represents this row" stays defined once
 (`search-ingress/searchTexts.ts`):
 
@@ -128,28 +134,44 @@ deletes both. Types the global box already hides (`answer`, `browser-activity`,
 index vector stage's `stage_version` (the existing reindex trick in
 `OrphanCleanupService`), not a data migration.
 
-Sync: one bucket query `SELECT … FROM ci_search.documents WHERE user_id =
+Sync: one bucket query `SELECT … FROM ci_search.mobile_search_documents WHERE user_id =
 bucket.user_id`, the table added to `POWERSYNC_TABLES` in
 `infrastructure/setup-database/entrypoint.sh` and a client `Table` in
 `api/powersync/schema.ts`. No window: 25 MB of text is cheap and search is the
 one place "the last 30 days" is wrong by design. The existing `events` window is
 untouched.
 
-### 2. Device: an FTS5 index over the synced rows, shared by two readers
+### 2. Device: a raw table and an external-content FTS5 index, shared by two readers
 
-After the database opens, run once (idempotent):
+`mobile_search_documents` is a PowerSync **raw table** (2026-10-20): the app
+creates the SQLite table itself (`api/powersync/searchIndex.ts`) and the sync
+client writes it with an explicit upsert / delete / clear, declared on the
+schema with `withRawTables`. PowerSync's managed tables keep every row as a
+JSON blob in `ps_data__<table>` behind a view — a second copy of the text and a
+`json_extract` per read. The raw table stores columns as columns, drops the
+three synced columns nothing on the device reads (`user_id`, `created_at`,
+`updated_at`), and the index over it is *external-content* FTS5, which stores
+only the inverted index and reads the text back by rowid:
 
 ```sql
-CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
-  USING fts5(id UNINDEXED, title, body, tokenize = 'unicode61 remove_diacritics 2');
--- triggers on the PowerSync-managed ps_data__documents table keep it current
+CREATE TABLE IF NOT EXISTS mobile_search_documents (id TEXT PRIMARY KEY NOT NULL, entity_type, entity_id, title, body, occurred_at);
+CREATE VIRTUAL TABLE IF NOT EXISTS mobile_search_documents_fts
+  USING fts5(title, body, content='mobile_search_documents', tokenize = 'unicode61 remove_diacritics 2');
+INSERT INTO mobile_search_documents_fts(mobile_search_documents_fts) VALUES ('rebuild');
+-- the three FTS5 external-content triggers on mobile_search_documents keep it current
 ```
 
-This is PowerSync's documented full-text pattern (triggers on `ps_data__<table>`
-extracting JSON fields). The triggers live in the database, so the web app, the
-Kotlin tool and the Swift tool all read one index. Ranking is `bm25()`, with
-prefix terms (`word*`) standing in for Postgres' English stemming. Filters mirror
-the lean `knowledge.search` form exactly: `entityTypes`, `since`, `until`,
+The `put` is `INSERT … ON CONFLICT(id) DO UPDATE`, not `INSERT OR REPLACE`:
+REPLACE re-inserts the row under a new rowid and skips the delete trigger, which
+would leave the index pointing at rowids that no longer exist. The table must
+exist before `connect()` (the first `put` fails otherwise), so the provider
+gates connecting on `ensureDocumentsTable`, which also adopts rows PowerSync
+parked in `ps_untyped` for a replica built while the table was still managed —
+no re-download on the switch. The triggers live in the database, so the web
+app, the Kotlin tool and the Swift tool all read one index; a native reader
+needs FTS5 and nothing else. Ranking is `bm25()`, with prefix terms (`word*`)
+standing in for Postgres' English stemming. Filters mirror the lean
+`knowledge.search` form exactly: `entityTypes`, `since`, `until`,
 `sort: recent`, `countOnly`.
 
 ### 3. Web app: fall back, and say so
@@ -167,7 +189,7 @@ the lean `knowledge.search` form exactly: `entityTypes`, `since`, `until`,
   tags that do not exist offline, so the offline explorer is a plain list view
   (`LocalListView`: icon, title, kind, time, infinite scroll) chosen by the same
   condition, not the full grid with holes in it.
-- `connectionMode.ts`: `cached` when `documents` has rows.
+- `connectionMode.ts`: `cached` when `mobile_search_documents` has rows.
 - Settings copy on the working-set card: "…and a searchable index of everything".
 
 ### 4. Native: the model searches the phone
@@ -197,7 +219,7 @@ the lean `knowledge.search` form exactly: `entityTypes`, `since`, `until`,
 | # | Deliverable | Touches |
 |---|---|---|
 | P0 | PowerSync in `make dev`; sweep cron verified on the worker | compose, `scripts/dev-stack`, `yarn android` |
-| P1 | `ci_search.documents` + sync + FTS5 + header box fallback (+ count, recent) | migration, `VectorService`, sync rules, `schema.ts`, `localSearch.ts`, `useSearchService` |
+| P1 | `ci_search.mobile_search_documents` + sync + FTS5 + header box fallback (+ count, recent) | migration, `VectorService`, sync rules, `schema.ts`, `localSearch.ts`, `useSearchService` |
 | P2 | Android + iOS local `knowledge_search`, bound when offline | `capacitor-local-llm`, iOS `LocalLLM/` |
 | P3 | Offline explorer list, `cached` mode, Settings copy | `MemoryPage`, `connectionMode.ts` |
 | P4 | Offline detail pages for synced types (note, event, thread, file metadata) | later |

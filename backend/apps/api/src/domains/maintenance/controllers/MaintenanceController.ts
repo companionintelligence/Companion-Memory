@@ -1400,7 +1400,7 @@ export class MaintenanceController {
    * unless `entityTypes` narrows it. The sweep re-runs each index stage whose
    * recorded version is behind the current one, which is how a corpus picks up
    * a bumped stage without waiting for the next import — the way
-   * `ci_search.documents` (20261019212935) reaches an existing install.
+   * `ci_search.mobile_search_documents` (20261019212935) reaches an existing install.
    *
    * Per-user by design, like every pipeline sweep, so no admin guard: a user
    * re-indexing their own rows is local Postgres work. `search-index/backfill`

@@ -1,14 +1,14 @@
 import { Entity, Column, CreateDateColumn, UpdateDateColumn, PrimaryColumn } from 'typeorm';
 
 /**
- * `ci_search.documents` — the plain-text projection of a `ci_search.vectors`
+ * `ci_search.mobile_search_documents` — the plain-text projection of a `ci_search.vectors`
  * row, replicated to devices by PowerSync and searched there with FTS5
  * (migration 20261019212935). Written only beside the tsvector, by the shared
  * statement in `VectorService`; `id` is the vectors row's id with ON DELETE
  * CASCADE, so there is no remove path of its own.
  */
-@Entity({ schema: 'ci_search', name: 'documents' })
-export class DocumentEntity {
+@Entity({ schema: 'ci_search', name: 'mobile_search_documents' })
+export class MobileSearchDocumentEntity {
   @PrimaryColumn({ type: 'uuid' })
   id!: string;
 

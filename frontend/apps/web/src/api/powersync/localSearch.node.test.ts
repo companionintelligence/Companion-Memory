@@ -118,11 +118,14 @@ describe('localSearchStatement', () => {
     const statement = localSearchStatement({ query: 'harbour grill', includeTypes: ['event', 'place'] });
 
     expect(statement).not.toBeNull();
-    expect(statement!.sql).toContain('documents_fts MATCH ?');
+    expect(statement!.sql).toContain('mobile_search_documents_fts MATCH ?');
     expect(statement!.sql).toContain('d.entity_type IN (?, ?)');
-    // One weight per FTS column, in column order: id (unindexed) 0, title 10, body 1.
-    expect(DOCUMENTS_FTS_COLUMNS).toEqual(['id UNINDEXED', 'title', 'body']);
-    expect(statement!.sql).toContain('ORDER BY bm25(documents_fts, 0.0, 10.0, 1.0)');
+    // One weight per FTS column, in column order: title 10, body 1.
+    expect(DOCUMENTS_FTS_COLUMNS).toEqual(['title', 'body']);
+    expect(statement!.sql).toContain('ORDER BY bm25(mobile_search_documents_fts, 10.0, 1.0)');
+    expect(statement!.sql).toContain(
+      'JOIN mobile_search_documents d ON d.rowid = mobile_search_documents_fts.rowid',
+    );
     expect(statement!.params).toEqual(['"harbour"* OR "grill"*', 'event', 'place', 25]);
   });
 
@@ -139,20 +142,22 @@ describe('likePrefix', () => {
 });
 
 describe('searchIndexStatements', () => {
-  it("builds the FTS5 table over PowerSync's storage table and keeps it current with three triggers", () => {
+  it('builds an external-content FTS5 index over the documents table and keeps it current with three triggers', () => {
     const statements = searchIndexStatements();
 
     expect(statements[0]).toMatch(
-      /CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5\(id UNINDEXED, title, body/,
+      /CREATE VIRTUAL TABLE IF NOT EXISTS mobile_search_documents_fts USING fts5\(title, body, content='mobile_search_documents'/,
     );
     expect(statements[0]).toContain("tokenize = 'unicode61 remove_diacritics 2'");
     // The backfill of rows that synced before the index existed.
-    expect(statements[1]).toMatch(
-      /INSERT INTO documents_fts\(rowid, id, title, body\)\s+SELECT rowid, id, json_extract\(data, '\$.title'\), json_extract\(data, '\$.body'\) FROM ps_data__documents/,
+    expect(statements[1]).toBe(
+      "INSERT INTO mobile_search_documents_fts(mobile_search_documents_fts) VALUES ('rebuild')",
     );
     expect(statements.filter((s) => s.startsWith('CREATE TRIGGER'))).toHaveLength(3);
-    expect(statements.join('\n')).toContain('AFTER INSERT ON ps_data__documents');
-    expect(statements.join('\n')).toContain('AFTER UPDATE ON ps_data__documents');
-    expect(statements.join('\n')).toContain('AFTER DELETE ON ps_data__documents');
+    expect(statements.join('\n')).toContain('AFTER INSERT ON mobile_search_documents');
+    expect(statements.join('\n')).toContain('AFTER UPDATE ON mobile_search_documents');
+    expect(statements.join('\n')).toContain('AFTER DELETE ON mobile_search_documents');
+    // External content: a change is a 'delete' of the old text, never a DELETE on the index.
+    expect(statements.join('\n')).not.toMatch(/DELETE FROM mobile_search_documents_fts/);
   });
 });

@@ -6,7 +6,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { DEVICE_INDEXED_ENTITIES, entityTimeSql } from '@ci/domains/search-next';
 
-import { DOCUMENT_BODY_MAX_CHARS } from '../entities/DocumentEntity';
+import { DOCUMENT_BODY_MAX_CHARS } from '../entities/MobileSearchDocumentEntity';
 import { type Vector, VectorEntity } from '../entities/VectorEntity';
 import { UpsertVectorDto, RemoveVectorDto, WeightedText } from '../types';
 
@@ -112,7 +112,7 @@ export function searchDocumentText(texts: WeightedText[]): SearchDocumentText {
 /**
  * The one statement that writes a row's search index: its tsvector into
  * `ci_search.vectors`, and — for a device-indexed type — its plain-text
- * document into `ci_search.documents` in the same statement, keyed by the
+ * document into `ci_search.mobile_search_documents` in the same statement, keyed by the
  * vectors row's id. Used by {@link VectorService.upsert} (the live listeners)
  * and by the pipeline's vector stages, so the two paths can never write
  * different text for the same row.
@@ -147,7 +147,7 @@ export function buildVectorUpsertStatement(
       RETURNING id, entity_type, entity_id, user_id, created_at, updated_at
     ),
     document_row AS (
-      INSERT INTO ci_search.documents (id, entity_type, entity_id, user_id, title, body, occurred_at)
+      INSERT INTO ci_search.mobile_search_documents (id, entity_type, entity_id, user_id, title, body, occurred_at)
       SELECT v.id, v.entity_type, v.entity_id, v.user_id, $${titleIndex}, $${bodyIndex},
              ${entityTimeSql('v')}
         FROM vector_row v
@@ -219,7 +219,7 @@ export class VectorService {
       : null;
   }
 
-  /** Removes the tsvector row; its `ci_search.documents` row goes with it (ON DELETE CASCADE). */
+  /** Removes the tsvector row; its `ci_search.mobile_search_documents` row goes with it (ON DELETE CASCADE). */
   async remove(context: ServiceContext, data: RemoveVectorDto): Promise<boolean> {
     const result = await this.vectorRepo.delete({
       entityType: data.entityType,

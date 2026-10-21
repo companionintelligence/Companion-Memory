@@ -19,9 +19,9 @@ import { ParsingModule } from '@ci/domains/parsing';
 import { PlanningModule } from '@ci/domains/planning';
 import { PositionModule } from '@ci/domains/position';
 
-import { DocumentEntity } from './entities/DocumentEntity';
 import { EmbeddingEntity } from './entities/EmbeddingEntity';
 import { IndexSkipEntity } from './entities/IndexSkipEntity';
+import { MobileSearchDocumentEntity } from './entities/MobileSearchDocumentEntity';
 import { VectorEntity } from './entities/VectorEntity';
 import { AnswerSearchIndexListener } from './listeners/AnswerSearchIndexListener';
 import { BrowserActivitySearchIndexListener } from './listeners/BrowserActivitySearchIndexListener';
@@ -52,7 +52,7 @@ import { VectorService } from './services/VectorService';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([DocumentEntity, EmbeddingEntity, IndexSkipEntity, VectorEntity]),
+    TypeOrmModule.forFeature([MobileSearchDocumentEntity, EmbeddingEntity, IndexSkipEntity, VectorEntity]),
     BrowserActivityModule,
     ConversationModule,
     EmbeddingModule,
@@ -93,8 +93,8 @@ import { VectorService } from './services/VectorService';
 })
 export class SearchIngressModule {}
 
-export { DocumentEntity, EmbeddingEntity, IndexSkipEntity, VectorEntity };
-export { DOCUMENT_BODY_MAX_CHARS } from './entities/DocumentEntity';
+export { MobileSearchDocumentEntity, EmbeddingEntity, IndexSkipEntity, VectorEntity };
+export { DOCUMENT_BODY_MAX_CHARS } from './entities/MobileSearchDocumentEntity';
 export {
   OrphanCleanupService,
   REOPEN_INDEX_LEDGER_SQL,

@@ -7,7 +7,7 @@ import type { AbstractPowerSyncDatabase } from '@powersync/web';
 import { useAuth } from '@/hooks';
 
 import { GraphQLBackendConnector } from './connector';
-import { countDocuments, ensureSearchIndex } from './searchIndex';
+import { countDocuments, ensureDocumentsTable, ensureSearchIndex, watchBulkDownloads } from './searchIndex';
 import { bindPowerSyncDatabase, measurePowerSyncSizeBytes } from './session';
 import { openWebPowerSyncDatabase } from './webDatabase';
 import { POWER_SYNC_CACHE_BUDGET_BYTES, shrinkToBudget } from './workingSet';
@@ -15,9 +15,16 @@ import { POWER_SYNC_CACHE_BUDGET_BYTES, shrinkToBudget } from './workingSet';
 /**
  * Mounts the local-first PowerSync database and exposes it via `PowerSyncContext`.
  *
- * On native this is Capacitor SQLite (one 8 GB rolling working set). On web it is
- * WASQLite IndexedDB. GraphQL remains the source of truth when PowerSync is down
- * (token endpoint 503) or a row is outside the subscribed window.
+ * Only the ENCRYPTED replica ever syncs: Capacitor SQLite opened through
+ * SQLCipher on a phone (one 8 GB rolling working set). In a desktop browser,
+ * and on a phone whose native adapter failed to load, the database is
+ * WASQLite over IndexedDB — a plaintext file in the browser profile, which
+ * `SECURITY_ARCHITECTURE.md` § 2.3 explains cannot be encrypted in any way
+ * that matters. Since 2026-10-20 that database is never connected: the
+ * provider wipes whatever an earlier build synced into it and leaves it
+ * empty, and GraphQL is the browser's only source. GraphQL also remains the
+ * source of truth on a phone when PowerSync is down (token endpoint 503) or
+ * a row is outside the subscribed window.
  *
  * A server that answers "PowerSync is not configured" is not asked again until
  * this provider remounts (sign-in, app start) or the app points at another
@@ -38,6 +45,15 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
   // connecting it would sync the user's rows into a plaintext IndexedDB file on
   // the phone — exactly the copy the encrypted replica exists to avoid.
   const [storageDecided, setStorageDecided] = useState(() => !isNativePlatform());
+  // Whether `database` is the SQLCipher file — the only replica allowed to hold
+  // the user's rows. False in a browser, and on a phone whose native adapter
+  // did not load, where `database` is plaintext IndexedDB.
+  const [replicaEncrypted, setReplicaEncrypted] = useState(false);
+  // The database whose raw tables exist. The sync client writes the search
+  // documents straight into a table this app owns (searchIndex.ts), and its
+  // first write fails if that table is missing, so nothing connects before
+  // `ensureDocumentsTable` has run on the handle that will be connected.
+  const [preparedDatabase, setPreparedDatabase] = useState<AbstractPowerSyncDatabase | null>(null);
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const apiBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
   // The server that said it runs no PowerSync service, if any.
@@ -66,6 +82,7 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
         native = openNativePowerSyncDatabase() as AbstractPowerSyncDatabase;
         bindPowerSyncDatabase(native);
         setDatabase(native);
+        setReplicaEncrypted(true);
         setStorageDecided(true);
         void webDatabase.close();
       })
@@ -82,11 +99,26 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
     };
   }, [webDatabase]);
 
-  // The device's search index over the synced documents, and the signal the
-  // connection chip reads to say "cached" rather than "fresh" when no server
-  // answers. Both follow whichever database this platform settled on.
+  // A plaintext database holds nothing. Whatever a build from before
+  // 2026-10-20 synced into a browser's IndexedDB is dropped on the next load,
+  // and nothing below connects it. The native placeholder never gets here:
+  // `storageDecided` stays false until the encrypted file has replaced it.
   useEffect(() => {
-    if (!storageDecided) {
+    if (!storageDecided || replicaEncrypted) {
+      return;
+    }
+
+    void database.disconnectAndClear().catch((error: unknown) => {
+      console.warn('[PowerSync] Could not clear the plaintext browser replica', error);
+    });
+  }, [database, storageDecided, replicaEncrypted]);
+
+  // The device's documents table, its search index, and the signal the
+  // connection chip reads to say "cached" rather than "fresh" when no server
+  // answers. All follow whichever database this platform settled on, and
+  // exist only where that database syncs.
+  useEffect(() => {
+    if (!storageDecided || !replicaEncrypted) {
       return;
     }
 
@@ -94,7 +126,21 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
     // will never see (the database was swapped, or the app signed out).
     const controller = new AbortController();
 
-    void ensureSearchIndex(database, { signal: controller.signal })
+    const prepared = ensureDocumentsTable(database)
+      .catch((error: unknown) => {
+        // Connecting anyway is the lesser evil: without the table the sync
+        // client's first write fails and PowerSync retries, which is loud
+        // and visible, where never connecting would be a silent stall.
+        console.warn('[PowerSync] Could not create the on-device documents table', error);
+      })
+      .then(() => {
+        if (!controller.signal.aborted) {
+          setPreparedDatabase(database);
+        }
+      });
+
+    void prepared
+      .then(() => ensureSearchIndex(database, { signal: controller.signal }))
       .then((built) => {
         if (built && !controller.signal.aborted) {
           console.info('[PowerSync] Built the on-device search index');
@@ -110,12 +156,22 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
       });
 
     const unregister = registerCachedDataProbe(async () => (await countDocuments(database)) > 0);
+    const unwatch = watchBulkDownloads(database, {
+      onChange: (event, operations) => {
+        console.info(
+          event === 'suspended'
+            ? `[PowerSync] Paused the on-device search index for a bulk download of ${operations} operations`
+            : `[PowerSync] Rebuilt the on-device search index after a bulk download of ${operations} operations`,
+        );
+      },
+    });
 
     return () => {
       controller.abort();
       unregister();
+      unwatch();
     };
-  }, [database, storageDecided]);
+  }, [database, storageDecided, replicaEncrypted]);
 
   useEffect(() => {
     const onReconnect = () => setReconnectNonce((n) => n + 1);
@@ -127,14 +183,19 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // Nothing is connected yet while the storage is undecided, so there is
-    // nothing to disconnect either.
-    if (!storageDecided) {
+    // nothing to disconnect either; and a plaintext database is never
+    // connected at all (see the wipe above).
+    if (!storageDecided || !replicaEncrypted) {
       return;
     }
 
     if (!authenticated || syncOffFor === apiBaseUrl) {
       void database.disconnect();
 
+      return;
+    }
+
+    if (preparedDatabase !== database) {
       return;
     }
 
@@ -153,10 +214,19 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
     void database.connect(connector).catch((error: unknown) => {
       console.warn('[PowerSync] Connect skipped; GraphQL remains the source of truth', error);
     });
-  }, [database, storageDecided, authenticated, reconnectNonce, apiBaseUrl, syncOffFor]);
+  }, [
+    database,
+    storageDecided,
+    replicaEncrypted,
+    preparedDatabase,
+    authenticated,
+    reconnectNonce,
+    apiBaseUrl,
+    syncOffFor,
+  ]);
 
   useEffect(() => {
-    if (!authenticated) {
+    if (!authenticated || !replicaEncrypted) {
       return;
     }
 
@@ -181,7 +251,7 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [database, authenticated, reconnectNonce]);
+  }, [database, authenticated, replicaEncrypted, reconnectNonce]);
 
   return <PowerSyncContext.Provider value={database as never}>{children}</PowerSyncContext.Provider>;
 }

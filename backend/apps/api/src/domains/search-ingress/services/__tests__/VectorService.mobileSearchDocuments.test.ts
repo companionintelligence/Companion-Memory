@@ -1,6 +1,6 @@
 import { DEVICE_INDEXED_ENTITIES } from '@ci/domains/search-next';
 
-import { DOCUMENT_BODY_MAX_CHARS } from '../../entities/DocumentEntity';
+import { DOCUMENT_BODY_MAX_CHARS } from '../../entities/MobileSearchDocumentEntity';
 import { buildVectorUpsertStatement, searchDocumentText } from '../VectorService';
 
 describe('searchDocumentText', () => {
@@ -58,7 +58,7 @@ describe('buildVectorUpsertStatement', () => {
 
     expect(sql).toContain('INSERT INTO ci_search.vectors (id, entity_type, entity_id, vector, user_id)');
     expect(sql).toContain(
-      'INSERT INTO ci_search.documents (id, entity_type, entity_id, user_id, title, body, occurred_at)',
+      'INSERT INTO ci_search.mobile_search_documents (id, entity_type, entity_id, user_id, title, body, occurred_at)',
     );
     expect(sql).toContain('FROM vector_row v');
     // The vectors upsert keeps the existing row's id on conflict and the

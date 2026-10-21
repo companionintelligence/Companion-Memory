@@ -19,6 +19,8 @@
  */
 import { column, Schema, Table } from '@powersync/web';
 
+import { DOCUMENTS_RAW_TABLE, DOCUMENTS_TABLE } from './searchIndex';
+
 const notes = new Table({
   title: column.text,
   content: column.text,
@@ -161,24 +163,6 @@ const entities = new Table({
   updated_at: column.text,
 });
 
-// Read-only. The search index a phone carries: one plain-text row per indexed
-// entity of a device-shown type, written server-side beside the tsvector
-// (ci_search.documents, migration 20261019212935). `title` is the row's name
-// (a subject, a filename, a message preview), `body` the rest of its search
-// document cut at 1 KB, `occurred_at` its own time or null. The FTS5 index
-// over it is built on the device (./searchIndex.ts); PowerSync itself only
-// carries the rows.
-const documents = new Table({
-  entity_type: column.text,
-  entity_id: column.text,
-  user_id: column.text,
-  title: column.text,
-  body: column.text,
-  occurred_at: column.text,
-  created_at: column.text,
-  updated_at: column.text,
-});
-
 export const AppSchema = new Schema({
   notes,
   tags,
@@ -187,7 +171,15 @@ export const AppSchema = new Schema({
   files,
   events,
   entities,
-  documents,
 });
+
+// The search index a phone carries, `mobile_search_documents`
+// (ci_search.mobile_search_documents, migration 20261019212935), is a RAW
+// table: the app creates and owns the SQLite table (searchIndex.ts) and the
+// sync client writes it with these statements instead of through a
+// `ps_data__*` JSON table and a view. Its columns are therefore declared there,
+// next to the DDL, not here. `withRawTables` is keyed by the name the sync
+// service sends, which is the sync rule's table name.
+AppSchema.withRawTables({ [DOCUMENTS_TABLE]: DOCUMENTS_RAW_TABLE });
 
 export type Database = (typeof AppSchema)['types'];

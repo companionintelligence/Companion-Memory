@@ -54,7 +54,7 @@ export PGPASSWORD="$ADMIN_PASSWORD"
 # infrastructure/powersync/sync-rules.yaml: the role is granted SELECT on exactly
 # these, and the `powersync` publication carries exactly these. A table added to
 # the sync rules but not here fails at replication time with "permission denied".
-: "${POWERSYNC_TABLES:=ci.notes ci.files ci_search.tags ci.threads ci.messages ci_search.entity_tag ci.events ci.entities ci_search.documents}"
+: "${POWERSYNC_TABLES:=ci.notes ci.files ci_search.tags ci.threads ci.messages ci_search.entity_tag ci.events ci.entities ci_search.mobile_search_documents}"
 : "${POWERSYNC_PUBLICATION:=powersync}"
 
 # ── Validation ───────────────────────────────────
