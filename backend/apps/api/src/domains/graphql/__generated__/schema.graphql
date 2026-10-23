@@ -857,6 +857,7 @@ type CreateItemPayload {
 
 input CreateNoteInput {
   content: String
+  id: String
   title: String
 }
 

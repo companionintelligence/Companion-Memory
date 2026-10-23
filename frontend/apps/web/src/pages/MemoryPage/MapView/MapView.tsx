@@ -12,13 +12,18 @@ import { useQuery } from '@apollo/client';
 import { Button, cn } from '@ci/shadcn';
 import { Calendar, Clock, Loader2, MapPin, Pencil, Search as SearchIcon, Square, X } from '@ci/shadcn/icons';
 import L, { type LatLngExpression } from 'leaflet';
+import { useTranslation } from 'react-i18next';
 import { Marker as LeafletMarker, Popup, useMap as useLeafletMap, useMapEvents } from 'react-leaflet';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
+import { listLocalPins } from '@/api/powersync/localList';
+import { getReplicaDatabase } from '@/api/powersync/session';
 import { ChatAbout, ChatAboutSheet } from '@/components/ChatWithAgent';
 import { Map, MapAttribution } from '@/components/Map';
 import { useMapIsolation } from '@/components/Map/mapIsolation';
 import { type MarkerVariant } from '@/components/Map/Marker';
+import { savedRecordRoute } from '@/components/SearchBox/entityRoute';
 import { gql, useFragment } from '@/graphql';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { namedChatContext, type AgentChatContext } from '@/lib/agentChat';
@@ -30,6 +35,7 @@ import { boundsToBbox, unionBbox, type Bbox } from '../bbox';
 import { Empty, ErrorState, formatEventTimeRange, INGEST_TIME_SOURCE } from '../Components';
 import { EVENT_FRAGMENT } from '../Components/EntityCard/EventCard';
 import { countActiveFilters } from '../Components/ExplorerToolbar/filterParams';
+import { localListOptionsFromParams } from '../LocalListView/localListParams';
 import {
   EMPTY_TRACK_SOURCE,
   PlaybackBar,
@@ -141,6 +147,11 @@ type Pin = {
   sortTime: number;
   variant: MarkerVariant;
   entity: EntityItem | null;
+  /**
+   * The offline record page, for a pin read from this phone's replica: there
+   * is no hydrated entity to open and no appliance to fetch one from.
+   */
+  route?: string;
 };
 
 function pinChatContext(pin: Pin, fmt: DateTimeFormatter): AgentChatContext {
@@ -320,6 +331,95 @@ function useFeedPins() {
   }, [data, fmt]);
 
   return { pins, loading, error: error != null };
+}
+
+/**
+ * Pins from this phone's replica — the map's source while the appliance is not
+ * answering (api/powersync/deviceFallback.ts). The same URL filters as the
+ * offline list, `hasLocation` forced as `mapPins` forces it, newest first,
+ * capped at the appliance's default. A tap opens the saved record page.
+ */
+function useLocalPins({ skip }: { skip: boolean }) {
+  const [searchParams] = useSearchParams();
+  const { pathname } = useLocation();
+  const fmt = useDateTimeFormat();
+  const options = useMemo(() => localListOptionsFromParams(searchParams, pathname), [searchParams, pathname]);
+  const key = JSON.stringify(options.query);
+  const [attempt, setAttempt] = useState(0);
+  const [state, setState] = useState<{
+    key: string;
+    pins: Pin[];
+    totalCount: number;
+    truncated: boolean;
+    loading: boolean;
+    error: boolean;
+  }>({ key: '', pins: [], totalCount: 0, truncated: false, loading: true, error: false });
+
+  useEffect(() => {
+    const database = getReplicaDatabase();
+
+    if (skip || database == null) {
+      return;
+    }
+
+    let cancelled = false;
+
+    setState((previous) => ({ ...previous, key, loading: true, error: false }));
+
+    listLocalPins(database, options.query)
+      .then(({ pins, totalCount, truncated }) => {
+        if (cancelled) {
+          return;
+        }
+
+        setState({
+          key,
+          pins: pins
+            .map((pin) => {
+              const occurredAt = pin.occurredAt ? pin.occurredAt.replace(' ', 'T') : null;
+
+              return {
+                id: pin.id,
+                coords: { lat: pin.lat, lng: pin.lng },
+                title: pin.title || 'Untitled event',
+                timeLabel: occurredAt ? formatEventTimeRange(occurredAt, null, fmt) : null,
+                sortTime: occurredAt ? new Date(occurredAt).getTime() : 0,
+                variant: 'event' as MarkerVariant,
+                entity: null,
+                route: savedRecordRoute(pin.entityType, pin.entityId),
+              };
+            })
+            .sort((a, b) => a.sortTime - b.sortTime),
+          totalCount,
+          truncated,
+          loading: false,
+          error: false,
+        });
+      })
+      .catch((error: unknown) => {
+        console.warn('[memory] On-device pins failed', error);
+
+        if (!cancelled) {
+          setState((previous) => ({ ...previous, key, loading: false, error: true }));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt, fmt, key, options.query, skip]);
+
+  const refetch = useCallback(() => setAttempt((n) => n + 1), []);
+
+  return {
+    pins: state.pins,
+    areas: Array.isArray(options.query.areas) ? (options.query.areas as Bbox[]) : null,
+    loading: state.loading,
+    error: state.error,
+    refetch,
+    totalCount: state.totalCount,
+    truncated: state.truncated,
+  };
 }
 
 // ── Marker clustering ───────────────────────────────────────────────────────
@@ -902,6 +1002,24 @@ function LoadMorePinsControl({
  * Says how much of the located set is on screen when the pin cap cut it short,
  * so a partial world is never presented as the whole one.
  */
+/** The map's "Saved on this phone" caption, where the list has its own. */
+function LocalPinsNotice() {
+  const { t } = useTranslation();
+
+  return (
+    <div className="pointer-events-none absolute bottom-14 left-1/2 z-400 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2">
+      <div
+        className="rounded-md border border-border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-md"
+        data-testid="local-map-caption"
+      >
+        <span className="font-medium text-foreground">{t('MEMORY_LOCAL_LIST_HEADING')}</span>
+        {' · '}
+        {t('MEMORY_LOCAL_MAP_DESCRIPTION')}
+      </div>
+    </div>
+  );
+}
+
 function PinCountNotice({ shown, totalCount }: { shown: number; totalCount: number }) {
   return (
     <div className="pointer-events-none absolute bottom-4 left-1/2 z-400 -translate-x-1/2">
@@ -1205,8 +1323,13 @@ function MapTimelineConnector({
  */
 function useMapView(readOnly: boolean, sharedAreas: readonly Bbox[] | null = null) {
   const [{ hasNextPage, loadingMore, loadMore }, { setActiveEntity }] = useEntityService();
+  const navigate = useNavigate();
+  // The phone's replica answers while the appliance does not; the shared
+  // viewer's results are the owner's and have no copy on this phone.
+  const offline = useAnswersFromDevice() && !readOnly;
   const feed = useFeedPins();
-  const owned = useMapPins({ skip: readOnly });
+  const owned = useMapPins({ skip: readOnly || offline });
+  const local = useLocalPins({ skip: !offline });
   const [searchParams] = useSearchParams();
 
   // Opening a pin from `mapPins` needs the hydrated event the detail sheet
@@ -1243,6 +1366,12 @@ function useMapView(readOnly: boolean, sharedAreas: readonly Bbox[] | null = nul
 
   const selectPin = useCallback(
     (pin: Pin) => {
+      if (pin.route != null) {
+        navigate(pin.route);
+
+        return;
+      }
+
       if (pin.entity != null) {
         setActiveEntity(pin.entity);
 
@@ -1251,10 +1380,10 @@ function useMapView(readOnly: boolean, sharedAreas: readonly Bbox[] | null = nul
 
       setOpeningPinId(pin.id);
     },
-    [setActiveEntity],
+    [navigate, setActiveEntity],
   );
 
-  const source = readOnly ? feed : owned;
+  const source = readOnly ? feed : offline ? local : owned;
   const pins = source.pins;
 
   // Route polyline input: the most recent pins' own coordinates, in visit-time
@@ -1270,9 +1399,10 @@ function useMapView(readOnly: boolean, sharedAreas: readonly Bbox[] | null = nul
 
   return {
     pins,
+    offline,
     // The shared viewer's rectangles are the owner's, read from their saved
     // search; the signed-in map's are the ones its pins were fetched with.
-    searchAreas: readOnly ? sharedAreas : (owned.areas as Bbox[] | null),
+    searchAreas: readOnly ? sharedAreas : offline ? local.areas : (owned.areas as Bbox[] | null),
     routeLocations,
     selectPin,
     // First load only: a background refetch must not blank a map that is
@@ -1288,10 +1418,10 @@ function useMapView(readOnly: boolean, sharedAreas: readonly Bbox[] | null = nul
     filtered:
       countActiveFilters(searchParams) - (searchParams.get('hasLocation') === '1' ? 1 : 0) > 0 ||
       Boolean(searchParams.get('search')?.trim()),
-    refetch: readOnly ? undefined : owned.refetch,
+    refetch: readOnly ? undefined : offline ? local.refetch : owned.refetch,
     setActiveEntity,
-    truncated: !readOnly && owned.truncated,
-    totalCount: readOnly ? pins.length : owned.totalCount,
+    truncated: !readOnly && (offline ? local.truncated : owned.truncated),
+    totalCount: readOnly ? pins.length : offline ? local.totalCount : owned.totalCount,
     hasNextPage,
     loadingMore,
     loadMore,
@@ -1347,6 +1477,7 @@ export function DesktopMapView({
 function DesktopMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapView>; readOnly: boolean }) {
   const {
     pins,
+    offline,
     searchAreas,
     routeLocations,
     selectPin,
@@ -1458,6 +1589,7 @@ function DesktopMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapV
           onLoadMore={loadMore}
         />
       )}
+      {offline && <LocalPinsNotice />}
       {truncated && !playing && <PinCountNotice shown={pins.length} totalCount={totalCount} />}
       {/* The connector is a hover affordance for a still map. During a
           fly-through it would whip a dashed line across the viewport on every
@@ -1510,6 +1642,7 @@ export function MobileMapView({
 function MobileMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapView>; readOnly: boolean }) {
   const {
     pins,
+    offline,
     searchAreas,
     routeLocations,
     selectPin,
@@ -1565,6 +1698,7 @@ function MobileMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapVi
         />
       )}
       {/* Both live at the bottom centre; the transport wins while it is out. */}
+      {offline && <LocalPinsNotice />}
       {truncated && !playing && <PinCountNotice shown={pins.length} totalCount={totalCount} />}
       <Map.RouteLayer locations={routeLocations} />
       <PlaybackTrackLayer />

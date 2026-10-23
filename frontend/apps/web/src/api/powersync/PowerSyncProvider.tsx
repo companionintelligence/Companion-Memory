@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 
-import { getApiBaseUrl, isNativePlatform, registerCachedDataProbe, subscribeApiBaseUrl } from '@ci/common';
+import {
+  getApiBaseUrl,
+  isNativePlatform,
+  registerCachedDataProbe,
+  setLocalSearchReplicaFile,
+  subscribeApiBaseUrl,
+} from '@ci/common';
 import { PowerSyncContext } from '@powersync/react';
 import type { AbstractPowerSyncDatabase } from '@powersync/web';
 
 import { useAuth } from '@/hooks';
 
 import { GraphQLBackendConnector } from './connector';
+import { NATIVE_DB_ON_DISK_FILENAME } from './nativeDatabase';
+import { isPreviewSyncEnabled, startPreviewSync, stopPreviewSync, subscribePreviewSync } from './previews';
 import { countDocuments, ensureDocumentsTable, ensureSearchIndex, watchBulkDownloads } from './searchIndex';
 import { bindPowerSyncDatabase, measurePowerSyncSizeBytes } from './session';
 import { openWebPowerSyncDatabase } from './webDatabase';
@@ -72,6 +80,7 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
 
     let cancelled = false;
     let native: AbstractPowerSyncDatabase | undefined;
+    let unsubscribePreviews: (() => void) | undefined;
 
     void import('./nativeDatabase')
       .then(({ openNativePowerSyncDatabase }) => {
@@ -80,11 +89,27 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
         }
 
         native = openNativePowerSyncDatabase() as AbstractPowerSyncDatabase;
-        bindPowerSyncDatabase(native);
+        bindPowerSyncDatabase(native, { replica: true });
+        // The on-device model may search this file itself (its knowledge_search tool).
+        setLocalSearchReplicaFile(NATIVE_DB_ON_DISK_FILENAME);
         setDatabase(native);
         setReplicaEncrypted(true);
         setStorageDecided(true);
         void webDatabase.close();
+
+        // The preview store follows its setting: on, it fetches what the
+        // replica names; off, it stops (previews.ts).
+        const replica = native;
+        const followSetting = () => {
+          if (isPreviewSyncEnabled()) {
+            void startPreviewSync(replica);
+          } else {
+            stopPreviewSync();
+          }
+        };
+
+        followSetting();
+        unsubscribePreviews = subscribePreviewSync(followSetting);
       })
       .catch((error: unknown) => {
         console.warn('[PowerSync] Native SQLite adapter unavailable; using IndexedDB VFS', error);
@@ -94,7 +119,10 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true;
+      unsubscribePreviews?.();
+      stopPreviewSync();
       bindPowerSyncDatabase(null);
+      setLocalSearchReplicaFile(null);
       void native?.close();
     };
   }, [webDatabase]);

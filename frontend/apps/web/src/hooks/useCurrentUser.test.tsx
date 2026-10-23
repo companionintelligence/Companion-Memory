@@ -3,6 +3,7 @@ import { setApiBaseUrl } from '@ci/common';
 import { renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { forgetUser, rememberUser } from './rememberedUser';
 import { useCurrentUser } from './useCurrentUser';
 
 const h = vi.hoisted(() => ({ authToken: 'tok' as string | null }));
@@ -76,6 +77,72 @@ describe('useCurrentUser', () => {
 
     // loading || (authenticated && !skip && !data && !error) → true even though query loading is false.
     expect(result.current.loading).toBe(true);
+  });
+
+  describe('on a phone while the appliance cannot be reached', () => {
+    const native = () => {
+      (window as unknown as { Capacitor?: unknown }).Capacitor = { isNativePlatform: () => true };
+      setApiBaseUrl('https://box.local');
+    };
+
+    afterEach(() => {
+      delete (window as unknown as { Capacitor?: unknown }).Capacitor;
+      setApiBaseUrl('');
+      forgetUser();
+    });
+
+    it('keeps the profile the appliance gave, and answers with it when a later query is an outage', () => {
+      native();
+      const me = { id: 'u1', name: 'John', email: 'j@example.com', onboarded: true };
+      mockedUseQuery.mockReturnValue({
+        data: { me },
+        loading: false,
+        error: undefined,
+      } as unknown as ReturnType<typeof useQuery>);
+      const first = renderHook(() => useCurrentUser());
+      expect(first.result.current.remembered).toBe(false);
+      first.unmount();
+
+      mockedUseQuery.mockReturnValue({
+        data: undefined,
+        loading: false,
+        error: { networkError: Object.assign(new Error('500'), { statusCode: 500 }), graphQLErrors: [] },
+      } as unknown as ReturnType<typeof useQuery>);
+      const { result } = renderHook(() => useCurrentUser());
+
+      expect(result.current.user).toEqual(me);
+      expect(result.current.remembered).toBe(true);
+      expect(result.current.loading).toBe(false);
+    });
+
+    it('signs out when the appliance answers that the key is no good', () => {
+      native();
+      rememberUser('https://box.local', { id: 'u1' });
+      mockedUseQuery.mockReturnValue({
+        data: undefined,
+        loading: false,
+        error: { networkError: Object.assign(new Error('401'), { statusCode: 401 }), graphQLErrors: [] },
+      } as unknown as ReturnType<typeof useQuery>);
+
+      const { result } = renderHook(() => useCurrentUser());
+
+      expect(result.current.user).toBeNull();
+      expect(result.current.remembered).toBe(false);
+    });
+
+    it('never answers a browser with a kept profile', () => {
+      setApiBaseUrl('https://box.local');
+      rememberUser('https://box.local', { id: 'u1' });
+      mockedUseQuery.mockReturnValue({
+        data: undefined,
+        loading: false,
+        error: { networkError: Object.assign(new Error('500'), { statusCode: 500 }), graphQLErrors: [] },
+      } as unknown as ReturnType<typeof useQuery>);
+
+      const { result } = renderHook(() => useCurrentUser());
+
+      expect(result.current.user).toBeNull();
+    });
   });
 
   it('skips GraphQL on native until a Memory origin is set', () => {

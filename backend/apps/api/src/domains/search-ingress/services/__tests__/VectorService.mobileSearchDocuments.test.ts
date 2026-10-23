@@ -1,4 +1,4 @@
-import { DEVICE_INDEXED_ENTITIES } from '@ci/domains/search-next';
+import { DEVICE_INDEXED_ENTITIES, DEVICE_RECORD_VERSION } from '@ci/domains/search-next';
 
 import { DOCUMENT_BODY_MAX_CHARS } from '../../entities/MobileSearchDocumentEntity';
 import { buildVectorUpsertStatement, searchDocumentText } from '../VectorService';
@@ -57,8 +57,8 @@ describe('buildVectorUpsertStatement', () => {
     );
 
     expect(sql).toContain('INSERT INTO ci_search.vectors (id, entity_type, entity_id, vector, user_id)');
-    expect(sql).toContain(
-      'INSERT INTO ci_search.mobile_search_documents (id, entity_type, entity_id, user_id, title, body, occurred_at)',
+    expect(sql).toMatch(
+      /INSERT INTO ci_search\.mobile_search_documents\s+\(id, entity_type, entity_id, user_id, title, body, occurred_at, related_id, detail, detail_version\)/,
     );
     expect(sql).toContain('FROM vector_row v');
     // The vectors upsert keeps the existing row's id on conflict and the
@@ -87,6 +87,23 @@ describe('buildVectorUpsertStatement', () => {
       'are you free at noon',
       [...DEVICE_INDEXED_ENTITIES],
     ]);
+  });
+
+  it('derives the device record from the source row and stamps the current recipe version', () => {
+    const { sql, params } = buildVectorUpsertStatement([{ text: 'Lunch?', weight: 10 }], row);
+
+    expect(sql).toContain('LEFT JOIN LATERAL (');
+    expect(sql).toContain(') rec ON true');
+    expect(sql).toContain(`rec.related_id, rec.detail, ${DEVICE_RECORD_VERSION}`);
+    // Every derived column is refreshed on conflict, or a re-index would leave a stale record.
+    for (const column of ['related_id', 'detail', 'detail_version']) {
+      expect(sql).toContain(`${column} = EXCLUDED.${column}`);
+    }
+
+    // Derived in SQL: no new positional parameters for the listeners to supply —
+    // still id, type, entity id, the one A group, user, title, body, types.
+    expect(params).toHaveLength(8);
+    expect(params[3]).toBe('Lunch?');
   });
 
   it('a type outside the device list still gets its tsvector; the document half simply matches no row', () => {

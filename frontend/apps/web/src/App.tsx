@@ -55,6 +55,7 @@ const LazyPowerSyncProvider = lazy(() =>
 
 const ChatPage = lazy(() => import('@/pages/ChatPage'));
 const CommunicationPage = lazy(() => import('@/pages/CommunicationPage'));
+const LocalRecordPage = lazy(() => import('@/pages/LocalRecordPage'));
 const ConceptPage = lazy(() => import('@/pages/ConceptPage'));
 const ConnectionPage = lazy(() => import('@/pages/ConnectionPage'));
 const ContentPage = lazy(() => import('@/pages/ContentPage'));
@@ -853,6 +854,18 @@ function AppRoutes() {
             element={
               <ProtectedRoute>
                 <CommunicationPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* The record this phone holds for any entity, from its synced
+              search documents: where an offline search result or list row
+              opens, since the per-type pages above need the appliance. */}
+          <Route
+            path="/memory/saved/:type/:id"
+            element={
+              <ProtectedRoute>
+                <LocalRecordPage />
               </ProtectedRoute>
             }
           />

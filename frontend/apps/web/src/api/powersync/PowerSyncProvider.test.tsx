@@ -37,8 +37,18 @@ vi.mock('./webDatabase', () => ({
   openWebPowerSyncDatabase: () => mocks.database,
 }));
 
+// The preview store needs a real database (`watch`) and the filesystem; the
+// provider only starts and stops it, which is all these tests need to see.
+vi.mock('./previews', () => ({
+  isPreviewSyncEnabled: () => true,
+  startPreviewSync: async () => undefined,
+  stopPreviewSync: () => undefined,
+  subscribePreviewSync: () => () => undefined,
+}));
+
 vi.mock('./nativeDatabase', () => ({
   openNativePowerSyncDatabase: () => mocks.nativeDatabase,
+  NATIVE_DB_ON_DISK_FILENAME: 'ci-powersyncSQLite.db',
 }));
 
 // Plain functions, not vi.fn(): the config restores mocks between tests, which

@@ -48,6 +48,13 @@ import { AppSchema } from './schema';
 
 export const NATIVE_DB_FILENAME = 'ci-powersync.db';
 
+/**
+ * The same replica as the SQLite plugin names it on disk: the name without its extension plus
+ * `SQLite.db` (`databases/ci-powersyncSQLite.db`, checked on the S23U). What the on-device model's
+ * search is handed to open the file itself (`@ci/capacitor-local-llm`, `localSearch.databaseFile`).
+ */
+export const NATIVE_DB_ON_DISK_FILENAME = `${NATIVE_DB_FILENAME.replace(/\.db$/, '')}SQLite.db`;
+
 /** The adapter's own defaults, which it does not export. Same values, same meaning. */
 const DEFAULT_SQLITE_OPTIONS = {
   journalSizeLimit: 6 * 1024 * 1024,
@@ -155,7 +162,7 @@ interface PoolInternals {
 
 /**
  * `CapacitorConnectionPool.init()` from `@powersync/capacitor` 0.5.3, verbatim
- * except for the block marked ENCRYPTION. Keep it that way: the drift test
+ * except for the blocks marked ENCRYPTION and SOFT HEAP LIMIT. Keep it that way: the drift test
  * compares the vendored original, and a change there is a change to review here.
  */
 async function encryptedInit(this: EncryptedCapacitorSQLiteAdapter): Promise<void> {
@@ -204,6 +211,16 @@ async function encryptedInit(this: EncryptedCapacitorSQLiteAdapter): Promise<voi
   await self._writeConnection.query(`PRAGMA temp_store = memory`);
   await self._writeConnection.query(`PRAGMA synchronous = ${synchronous}`);
   await self._writeConnection.query(`PRAGMA cache_size = -${cacheSizeKb}`);
+  // SOFT HEAP LIMIT — not in the adapter.
+  // SQLCipher for Android calls sqlite3_soft_heap_limit(8 MB) when its native
+  // library loads. The limit is process-wide and caps SQLite's page cache no
+  // matter what cache_size says, so the PowerSync checkpoint apply decrypted
+  // nearly every oplog page from disk: 97% of CPU in SQLCipher, ~16 min for a
+  // 1.08M-op apply on a Galaxy S23 Ultra, ~2 min with the limit lifted.
+  // 0 is SQLite's own default (no limit); memory stays bounded by cache_size
+  // per connection. Set on every platform so iOS and Android behave alike.
+  await self._writeConnection.query('PRAGMA soft_heap_limit = 0');
+  // END SOFT HEAP LIMIT
   await self._readConnection.open();
 
   const platform = Capacitor.getPlatform();

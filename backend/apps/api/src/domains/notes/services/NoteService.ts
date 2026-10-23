@@ -147,11 +147,11 @@ export class NoteService {
    *
    * Emits per row (`NoteCreatedEvent` / `NoteUpdatedEvent`), unlike the other
    * `/v1` bulk kinds. These are interactive captures replayed a few at a time,
-   * not an import, so live indexing costs nothing here — and it is the only way
-   * they get indexed at all: `note` is in INDEXABLE_ENTITIES but NOT in
-   * BACKFILLABLE_ENTITIES, so the deferred `search_index` sweep cannot reach
-   * them. A drained note therefore ends up in exactly the state it would have
-   * been in had the user been online.
+   * not an import, so live indexing costs nothing here — and it is the primary
+   * way they get indexed: `note` joined BACKFILLABLE_ENTITIES only on
+   * 2026-10-21, as a safety net for rows that have no device document, and the
+   * pipeline has no note stage. A drained note therefore ends up in exactly the
+   * state it would have been in had the user been online.
    */
   async captureMany(context: UserServiceContext, data: CaptureNoteDto[]): Promise<CaptureNoteResult> {
     const result: CaptureNoteResult = { created: [], updated: [], stale: [], conflicted: [] };

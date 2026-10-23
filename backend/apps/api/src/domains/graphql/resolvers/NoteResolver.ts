@@ -40,6 +40,8 @@ export class NoteResolver {
     const serviceContext = toServiceContext(context);
 
     const entity = await this.noteService.create(serviceContext, {
+      // A client-minted id (an offline replica's), or none: the service mints one.
+      id: input.id ? GlobalUID.parse('note', input.id) : undefined,
       title: input.title,
       content: input.content,
     });

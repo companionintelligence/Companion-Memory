@@ -158,6 +158,21 @@ export interface ConfigureIntentToolsOptions {
   baseUrl?: string;
   /** The device's API key — sent as `x-api-key`, exactly as the iOS App Intents already do. */
   apiKey?: string;
+  /**
+   * The connection chip's answer at the time of the call (`@ci/common`'s `ConnectionMode`). Anything
+   * but `connected` makes the phone's own search (below) answer `knowledge_search` ahead of the
+   * appliance's, whose call would fail anyway. The native side has no probe of its own.
+   */
+  connectionMode?: 'connected' | 'local' | 'cached' | 'fresh';
+  /**
+   * The phone's synced replica (PowerSync, SQLCipher-encrypted by `@capacitor-community/sqlite`),
+   * which the native side reads directly to answer `knowledge_search` when the appliance's catalog
+   * cannot be fetched or the app is not connected. Omit when there is no replica.
+   */
+  localSearch?: {
+    /** The file under the app's databases directory, as the SQLite plugin names it: `<dbName>SQLite.db`. */
+    databaseFile: string;
+  };
 }
 
 /** Emitted by `generateStream()`; one or more partials followed by a final `done: true`. */

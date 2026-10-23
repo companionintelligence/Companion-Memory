@@ -14,7 +14,7 @@ interface Props {
   onDelete: (e: React.MouseEvent) => void;
 }
 
-const NoteGridItemFragment = gql(`
+export const NoteGridItemFragment = gql(`
   fragment NoteGridItemFragment on NoteType {
     id
     title

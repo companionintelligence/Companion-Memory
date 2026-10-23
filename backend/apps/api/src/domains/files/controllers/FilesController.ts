@@ -5,22 +5,27 @@ import {
   Body,
   BadRequestException,
   Controller,
+  Get,
   Logger,
   NotFoundException,
   Param,
   Patch,
   Post,
+  Res,
+  StreamableFile,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { CAPTURE_SCOPE, RequireCapability, RequireScopes, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 
 import { FileService } from '../services/FileService';
+import { FileVariant } from '../types';
 
 /** How far back a device's "I just made this" moment may plausibly sit (an outbox replay after a weekend offline). */
 const CAPTURED_AT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -175,6 +180,45 @@ export class FilesController {
    */
   // Capture agents set title/description on files they just uploaded, so this
   // travels with the upload grant rather than needing full authority.
+  /**
+   * The PREVIEW rendition of a file, streamed. What a phone's preview store
+   * downloads for every photo and video in its synced search documents
+   * (`preview_id` on the device record), one request per file, keyed by the
+   * ORIGINAL's id so the key survives a re-rendered preview. A plain
+   * authenticated GET rather than the signed object-store URL the GraphQL
+   * `previewUrl` field returns: the phone reaches the appliance, not its
+   * object store, and the bytes are small (16 kB on average).
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Get(':id/preview')
+  async preview(
+    @Context() context: RequestContext,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile> {
+    const serviceContext = toServiceContext(context);
+    const [preview] = await this.fileService.findVariantsByParentIds(
+      serviceContext,
+      [id],
+      FileVariant.PREVIEW,
+    );
+
+    if (preview == null || preview.key == null) {
+      throw new NotFoundException('No preview for this file');
+    }
+
+    const stream = await this.fileService.getFileStream(serviceContext, preview.key);
+
+    // A preview is immutable under its key: a re-render is a new row. Private,
+    // since the response is the caller's own data.
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+
+    return new StreamableFile(stream, {
+      type: preview.contentType ?? 'image/jpeg',
+      length: preview.size ?? undefined,
+    });
+  }
+
   @UseGuards(JwtOrApiKeyAuthGuard)
   @RequireScopes(CAPTURE_SCOPE)
   @RequireCapability(WRITE_CAPABILITY)

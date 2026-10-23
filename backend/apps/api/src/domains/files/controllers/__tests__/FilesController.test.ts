@@ -1,3 +1,7 @@
+import { Readable } from 'node:stream';
+
+import { NotFoundException, StreamableFile } from '@nestjs/common';
+
 import { type RequestContext } from '@ci/common/context';
 
 import { FilesController } from '../FilesController';
@@ -34,10 +38,42 @@ function makeController() {
   const fileService = {
     getFileHash: jest.fn(),
     upload: jest.fn(),
+    findVariantsByParentIds: jest.fn(),
+    getFileStream: jest.fn(),
   };
 
   return { controller: new FilesController(fileService as never), fileService };
 }
+
+describe('FilesController.preview — the PREVIEW rendition, streamed for the phone', () => {
+  const res = () => ({ setHeader: jest.fn() }) as unknown as import('express').Response;
+
+  it('streams the preview keyed by the ORIGINAL id, with its type and length, privately cacheable', async () => {
+    const { controller, fileService } = makeController();
+    const stream = Readable.from([Buffer.from('jpeg')]);
+    fileService.findVariantsByParentIds.mockResolvedValue([
+      { id: 'v1', parentId: 'f1', key: 'u/f1/preview.jpg', contentType: 'image/jpeg', size: 16_000 },
+    ]);
+    fileService.getFileStream.mockResolvedValue(stream);
+    const response = res();
+
+    const result = await controller.preview(ctx, 'f1', response);
+
+    expect(fileService.findVariantsByParentIds).toHaveBeenCalledWith(expect.anything(), ['f1'], 'PREVIEW');
+    expect(fileService.getFileStream).toHaveBeenCalledWith(expect.anything(), 'u/f1/preview.jpg');
+    expect(result).toBeInstanceOf(StreamableFile);
+    expect(result.getHeaders()).toMatchObject({ type: 'image/jpeg', length: 16_000 });
+    expect(response.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, max-age=86400');
+  });
+
+  it('is a 404 for a file with no preview, without touching the object store', async () => {
+    const { controller, fileService } = makeController();
+    fileService.findVariantsByParentIds.mockResolvedValue([null]);
+
+    await expect(controller.preview(ctx, 'f1', res())).rejects.toThrow(NotFoundException);
+    expect(fileService.getFileStream).not.toHaveBeenCalled();
+  });
+});
 
 describe('FilesController.upload — in-batch dedup grouping', () => {
   it('uploads each file with a distinct hash exactly once, one response entry per unique hash', async () => {

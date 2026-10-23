@@ -21,6 +21,13 @@ const h = vi.hoisted(() => ({
     tags: [] as { id: string; label: string }[],
     loading: false,
     error: undefined as unknown,
+  } as {
+    data: unknown[];
+    tags: { id: string; label: string }[];
+    loading: boolean;
+    error: unknown;
+    /** Where the results came from; the box opens device answers at the saved record page. */
+    source?: string;
   },
 }));
 
@@ -415,6 +422,58 @@ describe('GlobalSearchBox suggestions', () => {
     fireEvent.click(await screen.findByText('Alice'));
 
     expect(path()).toBe('/people/42');
+  });
+
+  it('a suggestion answered from this phone opens the record this phone holds, whatever its type', async () => {
+    h.search = {
+      data: [
+        {
+          __typename: 'FileType',
+          id: GlobalUID.encode('file', 'f1'),
+          filename: 'scan.pdf',
+          previewUrl: null,
+        },
+      ],
+      tags: [],
+      loading: false,
+      error: undefined,
+      source: 'device',
+    };
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'scan' } });
+
+    fireEvent.click(await screen.findByText('scan.pdf'));
+
+    expect(path()).toBe('/memory/saved/file/f1');
+  });
+
+  // Files have no detail page; this tap used to do nothing at all, online or off.
+  it('selecting a file suggestion opens the gallery searched for its name', async () => {
+    h.search = {
+      data: [
+        {
+          __typename: 'FileType',
+          id: GlobalUID.encode('file', 'f1'),
+          filename: 'scan 2026.pdf',
+          previewUrl: null,
+        },
+      ],
+      tags: [],
+      loading: false,
+      error: undefined,
+    };
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'scan' } });
+
+    fireEvent.click(await screen.findByText('scan 2026.pdf'));
+
+    expect(`${path()}?${params().toString()}`).toBe('/memory?view=gallery&search=scan+2026.pdf');
   });
 });
 

@@ -91,7 +91,7 @@ describe('ConnectionModeIndicator', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Connected' })).toBeInTheDocument());
   });
 
-  it('explains what the dot means, which is the only on-screen account of it in the connected state', async () => {
+  it('explains what the icon means on a tap, which is the only on-screen account of it', async () => {
     // This file's `unstubAllGlobals` also clears the ResizeObserver stub that
     // setup.ts installs once at import, and Radix's positioning needs it — so
     // the tooltip's own case puts it back.
@@ -113,13 +113,14 @@ describe('ConnectionModeIndicator', () => {
 
     const chip = await screen.findByRole('button', { name: 'Connected' });
 
-    // Focus rather than hover: Radix opens on focus without waiting out the
-    // hover delay, and it is the path a keyboard user takes anyway.
-    fireEvent.focus(chip);
+    // A tap, not a hover: on a phone the hover tooltip this used to be opened
+    // on the tap's focus and closed on its click, a flash.
+    fireEvent.click(chip);
 
-    const tooltip = await screen.findByRole('tooltip');
+    const popover = await screen.findByTestId('connection-mode-popover');
 
-    expect(tooltip).toHaveTextContent('Your Companion server is answering');
+    expect(popover).toHaveTextContent('Your Companion server is answering');
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
   });
 
   it('reports "Not synced yet" once a genuinely unreachable server has been probed', async () => {

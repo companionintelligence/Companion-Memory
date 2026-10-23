@@ -49,19 +49,23 @@ The token's `sub` = the CI-Server user id; sync rules scope each bucket with
 (so auth + validation + business logic are preserved) — do **not** let the sync
 engine write Postgres directly. `connector.ts`'s `uploadData()` implements exactly
 that, and today only **notes** replay as full CRUD (`createNote`/`updateNote`/
-`deleteNote`); tags, threads, messages and files are **read-only on device** because
-no GraphQL mutation of the right shape exists to replay their local writes through.
+`deleteNote`); tags and the entity_tag join are **read-only on device** because no
+GraphQL mutation of the right shape exists to replay their local writes through, and
+the search documents are a raw table the sync client writes directly.
 
 ## What syncs
 
 Only small, `user_id`-scoped, read-mostly tables. `sync-rules.yaml` and
 `POWERSYNC_TABLES` in `infrastructure/setup-database/entrypoint.sh` must agree; today
-both list `ci.notes`, `ci.files` (metadata only — the binary stays in Minio),
-`ci_search.tags`, `ci.threads`, `ci.messages`, `ci_search.entity_tag`, `ci.events` and
-its `ci.entities` name rows (a 30-day window), and `ci_search.mobile_search_documents` — the
-plain-text search index (one row per indexed entity of a device-shown type: title,
-snippet, own time), over which the device builds an FTS5 index and answers the header
-search when the appliance is unreachable. See
+both list `ci.notes`, `ci_search.tags`, `ci_search.entity_tag` and
+`ci_search.mobile_search_documents` — the device record (one row per indexed entity of
+a device-shown type: title, snippet, own time, plus `related_id` and a small `detail`
+JSON of display fields), over which the device builds an FTS5 index and answers the
+header search when the appliance is unreachable. Until 2026-10-21 the list also carried
+`ci.files`, `ci.threads`, `ci.messages`, `ci.events` and its `ci.entities` name rows;
+they were replicated and never read, so they were dropped in favour of the one record
+(sync-rules.yaml explains; the setup container now removes a table that leaves the
+list from the publication). See
 [`docs/architecture/mobile-local-search-plan.md`](../../docs/architecture/mobile-local-search-plan.md).
 Large/server-computed/PII data (events, communications, browser_activity, pgvector
 embeddings, the knowledge graph) stays online via GraphQL. See `sync-rules.yaml` for

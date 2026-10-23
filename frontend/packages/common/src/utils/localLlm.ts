@@ -22,6 +22,7 @@
 
 import { getApiKey } from './apiAuth';
 import { getApiBaseUrl, isIosPlatform, isNativePlatform } from './apiBase';
+import { type ConnectionMode, getLatestConnectionMode } from './connectionMode';
 import {
   evaluateModelFit,
   findLocalLlmModel,
@@ -106,7 +107,13 @@ export interface LocalLlmPluginApi {
     enableSpeculativeDecoding?: boolean;
   }): Promise<LocalLlmLoadResult>;
   getLoadedModel(): Promise<{ loaded: boolean; modelId?: string; accelerator?: LocalLlmAccelerator }>;
-  configureIntentTools(options: { enabled?: boolean; baseUrl?: string; apiKey?: string }): Promise<void>;
+  configureIntentTools(options: {
+    enabled?: boolean;
+    baseUrl?: string;
+    apiKey?: string;
+    connectionMode?: ConnectionMode;
+    localSearch?: { databaseFile: string };
+  }): Promise<void>;
   resetConversation(): Promise<void>;
   unloadModel(): Promise<void>;
   generateStream(options: {
@@ -341,6 +348,17 @@ export interface LoadLocalLlmOptions {
  * created. They need the appliance origin and API key; with either missing the model loads toolless
  * rather than failing.
  */
+/**
+ * The replica file the on-device model may search (`<dbName>SQLite.db` under the app's databases
+ * directory), or null when this phone has none. The web app's PowerSync provider sets it when the
+ * encrypted replica is bound and clears it when that database closes.
+ */
+let localSearchReplicaFile: string | null = null;
+
+export function setLocalSearchReplicaFile(file: string | null): void {
+  localSearchReplicaFile = file;
+}
+
 export async function ensureLocalLlmLoaded(
   modelId: string,
   options: LoadLocalLlmOptions = {},
@@ -378,8 +396,17 @@ export async function ensureLocalLlmLoaded(
     options.useIntentTools && baseUrl && apiKey && spec.capabilities.includes('tools'),
   );
 
+  // The phone's own search joins the tools when a replica is on this phone (set by the web app's
+  // PowerSync provider), and answers ahead of the appliance's while the chip says not connected.
+  const localSearch = localSearchReplicaFile ? { databaseFile: localSearchReplicaFile } : undefined;
+  const connectionMode = getLatestConnectionMode();
+
   await plugin.configureIntentTools(
-    canBindTools ? { enabled: true, baseUrl, apiKey: apiKey ?? undefined } : { enabled: false },
+    canBindTools
+      ? { enabled: true, baseUrl, apiKey: apiKey ?? undefined, connectionMode, localSearch }
+      : options.useIntentTools && localSearch && spec.capabilities.includes('tools')
+        ? { enabled: true, connectionMode, localSearch }
+        : { enabled: false },
   );
 
   const result = await plugin.loadModel({

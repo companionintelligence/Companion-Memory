@@ -12,6 +12,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.companionintelligence.localllm.intents.CompanionIntentClient
 import com.companionintelligence.localllm.intents.IntentToolProvider
+import com.companionintelligence.localllm.intents.LocalSearchStore
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -74,6 +75,20 @@ class LocalLlmPlugin : Plugin() {
     /** The `(baseUrl, apiKey)` [intentClient] was built from, to tell a real reconfiguration from a repeat. */
     @Volatile
     private var intentConfig: Pair<String, String>? = null
+
+    /**
+     * The phone's own search over its synced replica, when the web layer says one is there (`localSearch.databaseFile`
+     * on `configureIntentTools`), and whether it should answer ahead of the appliance (`connectionMode` is anything but
+     * `connected`). Both are part of the tool-set key: a change rebinds the tools on the next load.
+     */
+    @Volatile
+    private var localSearch: LocalSearchStore? = null
+
+    @Volatile
+    private var preferLocalSearch: Boolean = false
+
+    @Volatile
+    private var localSearchConfig: Pair<String?, Boolean>? = null
 
     /**
      * Bumped each time the intent-tool configuration actually changes. Part of the engine's reuse
@@ -390,7 +405,7 @@ class LocalLlmPlugin : Plugin() {
                         // budget is derived from `spec.maxTokens` — the effective value, not the model's default
                         // (see `providersForLoad`). `maxTokens` is part of the reuse key (`LoadSpec`), so a load
                         // with another window gets tools with its own budget rather than being short-circuited above.
-                        engine.load(spec, IntentToolProvider.providersForLoad(spec, intentClient))
+                        engine.load(spec, IntentToolProvider.providersForLoad(spec, intentClient, localSearch, preferLocalSearch))
                     }
 
                 val result = JSObject()
@@ -425,19 +440,37 @@ class LocalLlmPlugin : Plugin() {
         val enabled = call.getBoolean("enabled", true) ?: true
 
         if (!enabled) {
-            if (intentConfig != null) toolsGeneration.incrementAndGet()
+            if (intentConfig != null || localSearchConfig != null) toolsGeneration.incrementAndGet()
             intentClient = null
             intentConfig = null
+            localSearch = null
+            preferLocalSearch = false
+            localSearchConfig = null
             call.resolve()
 
             return
+        }
+
+        // The phone's replica, when the web layer has one, and whether it should answer ahead of the appliance.
+        val databaseFile = call.getObject("localSearch")?.getString("databaseFile")?.takeIf { it.isNotBlank() }
+        val preferLocal = (call.getString("connectionMode") ?: "connected") != "connected"
+        val replicaConfig = databaseFile to preferLocal
+        if (replicaConfig != localSearchConfig) {
+            toolsGeneration.incrementAndGet()
+            localSearch = databaseFile?.let { LocalSearchStore(context, it) }
+            preferLocalSearch = preferLocal
+            localSearchConfig = replicaConfig
         }
 
         val baseUrl = call.getString("baseUrl")
         val apiKey = call.getString("apiKey")
 
         if (baseUrl.isNullOrBlank() || apiKey.isNullOrBlank()) {
-            call.reject("baseUrl and apiKey are required to enable intent tools")
+            // No appliance, but the phone's own search may still be bound (above).
+            if (intentConfig != null) toolsGeneration.incrementAndGet()
+            intentClient = null
+            intentConfig = null
+            call.resolve()
 
             return
         }

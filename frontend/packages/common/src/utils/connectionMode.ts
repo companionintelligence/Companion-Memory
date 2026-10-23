@@ -50,6 +50,16 @@ export const REMOTE_PROBE_TIMEOUT_MS = 3_000;
 export const CONNECTION_REPROBE_INTERVAL_MS = 30_000;
 
 /**
+ * The last mode the probe settled on, readable outside React — for code that hands the mode to a
+ * native plugin at a moment of its own (loading the on-device model). `fresh` until a probe answers.
+ */
+let latestConnectionMode: ConnectionMode = 'fresh';
+
+export function getLatestConnectionMode(): ConnectionMode {
+  return latestConnectionMode;
+}
+
+/**
  * Runs a health request under a bound that covers the whole exchange, and
  * reports only whether it succeeded.
  *
@@ -263,6 +273,7 @@ function useConnectionModeState(): ConnectionModeState {
           return;
         }
 
+        latestConnectionMode = resolved.mode;
         setMode(resolved.mode);
         setContractNotice(resolved.contractNotice);
         setIsResolved(true);
@@ -346,6 +357,14 @@ function useConnectionModeState(): ConnectionModeState {
   return { mode, contractNotice, isResolved, refresh };
 }
 
-const { Provider, useHookContext } = createHookContext(useConnectionModeState, 'useConnectionMode');
+const { Provider, useHookContext, useOptionalHookContext } = createHookContext(
+  useConnectionModeState,
+  'useConnectionMode',
+);
 
-export { Provider as ConnectionModeProvider, useHookContext as useConnectionMode };
+export {
+  Provider as ConnectionModeProvider,
+  useHookContext as useConnectionMode,
+  /** The mode when a provider is mounted, null otherwise — for UI that is also rendered outside one. */
+  useOptionalHookContext as useOptionalConnectionMode,
+};

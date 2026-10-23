@@ -10,54 +10,38 @@
  * mutations rather than writing Postgres directly — this is a hard requirement, see
  * `infrastructure/powersync/README.md`. It supports **notes only**:
  *
- *   - notes:    full create/update/delete via `createNote`/`updateNote`/`deleteNote`
- *               (`NoteResolver`). Simple per-row CRUD, so it fits the replay model.
- *   - tags:     READ-ONLY. `TagResolver` has no `createTag`/`updateTag`/`deleteTag`
- *               mutation — only `tagEntities`/`untagEntities`, which mutate the
- *               entity_tag join table (labels attached to OTHER entities) and only
- *               create/touch a tag row as a side effect. There is no mutation shaped
- *               like "create/update/delete a tag by id", which is what a `tags` CRUD
- *               replay needs. Guessing at one would violate the "don't guess, read
- *               the real resolvers" rule this connector was built under, so `tags`
- *               stays read-only alongside threads/messages below until a real
- *               tag-by-id mutation exists.
- *   - threads:  READ-ONLY. REST-only CRUD server-side; no GraphQL mutation exists.
- *   - messages: READ-ONLY. A message is only ever created as a side effect of
- *               `POST /llm/generate`, which also triggers live LLM inference — there
- *               is no standalone "create message" mutation to replay a local insert
- *               through.
- *   - files:    READ-ONLY. Metadata mirror only; the binary lives in Minio.
- *   - events:   READ-ONLY. Written server-side by CI-Capture's lanes through
- *               POST /v1/events, which materializes ci.capture_events into
- *               ci.events; there is no mutation to replay a local insert
- *               through, and a device only ever sees the window the server
- *               admitted.
- *   - entities: READ-ONLY. The CTI name rows for those events. Writing one
- *               locally would mean editing the entity graph, which is server
- *               territory.
+ *   - notes:      full create/update/delete via `createNote`/`updateNote`/`deleteNote`
+ *                 (`NoteResolver`). Simple per-row CRUD, so it fits the replay model.
+ *   - tags:       READ-ONLY. `TagResolver` has no `createTag`/`updateTag`/`deleteTag`
+ *                 mutation — only `tagEntities`/`untagEntities`, which mutate the
+ *                 entity_tag join table (labels attached to OTHER entities) and only
+ *                 create/touch a tag row as a side effect. There is no mutation shaped
+ *                 like "create/update/delete a tag by id", which is what a `tags` CRUD
+ *                 replay needs. Guessing at one would violate the "don't guess, read
+ *                 the real resolvers" rule this connector was built under, so `tags`
+ *                 stays read-only until a real tag-by-id mutation exists.
+ *   - entity_tag: READ-ONLY. The tag-to-entity join, synced so a tag filter can
+ *                 apply offline. `tagEntities`/`untagEntities` could replay it one
+ *                 day; nothing on the device writes it yet.
+ *
+ * `mobile_search_documents` is a raw table the sync client writes directly
+ * (searchIndex.ts); it never enters the CRUD queue. Until 2026-10-21 `threads`,
+ * `messages`, `files`, `events` and `entities` synced too, read-only; they left the
+ * sync rules and the schema together (one device record per entity — see
+ * schema.ts), and a stale CRUD entry for one of them, if any, lands in the
+ * "unrecognized table" branch of `replay()` and is dropped the same way.
  *
  * A local write against a read-only table would sit in the CRUD queue and get
  * dropped (logged, not retried — see `replay()`) rather than silently retried
  * forever, but the real fix is: don't build UI that writes to those tables yet.
  *
- * KNOWN LIMITATION — note id reconciliation: `notes.id` here is the raw Postgres
- * uuid (per sync-rules.yaml), but `createNote`/`updateNote`/`deleteNote` take the
- * base64 `"note:<uuid>"` global id GraphQL uses everywhere else (`GlobalUID`, mirrored
- * client-side in `@ci/common`'s `GlobalUID` from the backend's
- * `graphql/types/GlobalUID.ts`) — `GlobalUID.encode('note', op.id)` below bridges
- * that. For UPDATE/DELETE this is exact: the row's id has already round-tripped
- * through a prior create. For CREATE it is NOT: `CreateNoteInput` has no `id` field
- * (even though `NoteService.create`/`CreateNoteDto` already accept one — the GraphQL
- * input just doesn't expose it), so the server always mints its own id, different
- * from the id this device generated locally for the new row. This pass does not
- * reconcile the two: the locally-created row keeps its client-generated id until the
- * server's row syncs back down under its real id, which will appear as a short-lived
- * duplicate, and any local edit to the not-yet-reconciled row made in that window
- * will fail closed (see `assertMutationSucceeded`) rather than corrupt another row.
- * The clean fix is additive and small — add an optional `id` to `CreateNoteInput`
- * and thread it into `NoteResolver.createNote` — but it's a backend schema change
- * outside this client-integration pass's scope, so it's called out here instead of
- * silently patched in.
+ * Note ids: `notes.id` here is the raw Postgres uuid (per sync-rules.yaml), but
+ * `createNote`/`updateNote`/`deleteNote` take the base64 `"note:<uuid>"` global id
+ * GraphQL uses everywhere else (`GlobalUID`, mirrored client-side in `@ci/common`
+ * from the backend's `graphql/types/GlobalUID.ts`) — `GlobalUID.encode('note',
+ * op.id)` below bridges that for all three. A CREATE sends the row's own id too
+ * (`CreateNoteInput.id`, since 2026-10-22): the server keeps it, so the note that
+ * syncs back down is this row and not a duplicate under a server-minted id.
  */
 import { apiKeyHeaders, buildApiUrl, getApiBaseUrl, getApiKey, GlobalUID } from '@ci/common';
 import type {
@@ -98,7 +82,7 @@ const DELETE_NOTE_MUTATION = `
 `;
 
 /** Tables whose local writes are intentionally not replayed — see the module comment. */
-const READ_ONLY_TABLES = new Set(['tags', 'threads', 'messages', 'files', 'events', 'entities']);
+const READ_ONLY_TABLES = new Set(['tags', 'entity_tag']);
 
 /**
  * The 503 a Memory server sends when it runs no PowerSync service (every
@@ -260,8 +244,11 @@ export class GraphQLBackendConnector implements PowerSyncBackendConnector {
   private async replayNote(op: CrudEntry): Promise<void> {
     switch (op.op) {
       case UpdateType.PUT: {
+        // The row's own id goes with the create, so the server keeps it and the
+        // note that syncs back down is this row, not a duplicate under a new id.
         const result = await this.request(CREATE_NOTE_MUTATION, {
           input: {
+            id: GlobalUID.encode('note', op.id),
             title: op.opData?.title ?? null,
             content: op.opData?.content ?? null,
           },

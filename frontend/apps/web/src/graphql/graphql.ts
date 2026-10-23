@@ -892,6 +892,7 @@ export type CreateItemPayload = {
 
 export type CreateNoteInput = {
   content?: InputMaybe<Scalars['String']['input']>;
+  id?: InputMaybe<Scalars['String']['input']>;
   title?: InputMaybe<Scalars['String']['input']>;
 };
 

@@ -65,3 +65,5 @@ CREATE EXTENSION IF NOT EXISTS "postgis";
 CREATE EXTENSION IF NOT EXISTS "vector";
 CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
 CREATE EXTENSION IF NOT EXISTS "btree_gist";
+-- uuid_generate_v5: the device record's conversation key (search-next entityDeviceRecord.ts).
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

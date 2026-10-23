@@ -116,6 +116,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@capacitor/filesystem@npm:7.1.9":
+  version: 7.1.9
+  resolution: "@capacitor/filesystem@npm:7.1.9"
+  dependencies:
+    "@capacitor/synapse": "npm:^1.0.3"
+  peerDependencies:
+    "@capacitor/core": ">=7.0.0"
+  checksum: 10c0/96fa2480b6b3b2d875bb8155fbdf3ffb2587a1b3475f7c4660029268692f8b9ff23457351638ca8d44295df62c252cb227d2cbd05979fc708598ef8e2d5cb1d9
+  languageName: node
+  linkType: hard
+
 "@capacitor/local-notifications@npm:^7.0.0":
   version: 7.0.6
   resolution: "@capacitor/local-notifications@npm:7.0.6"
@@ -149,6 +160,13 @@ __metadata:
   peerDependencies:
     "@capacitor/core": ">=7.0.0"
   checksum: 10c0/d2de1dd7b32681fab24974f09c05a4c17a71a6d77efff39f8bc47ed9d20dc50be4d770946993ede91e51f71b4b278096743f89d0818efe83ffaf52d161aaaa03
+  languageName: node
+  linkType: hard
+
+"@capacitor/synapse@npm:^1.0.3":
+  version: 1.0.4
+  resolution: "@capacitor/synapse@npm:1.0.4"
+  checksum: 10c0/83f37d06ebdb4234596f123417043aae8b0fd3b5905d399fe8bb7f1d7c3352c8449bef093793b01a0b3c4a59208ac27aec5b1ed7cf5e399c5c3004cc0ca74646
   languageName: node
   linkType: hard
 
@@ -197,6 +215,7 @@ __metadata:
     "@capacitor/camera": "npm:^7.0.0"
     "@capacitor/cli": "npm:^7.0.0"
     "@capacitor/core": "npm:^7.0.0"
+    "@capacitor/filesystem": "npm:7.1.9"
     "@capacitor/local-notifications": "npm:^7.0.0"
     "@capacitor/push-notifications": "npm:^7.0.0"
     "@capacitor/splash-screen": "npm:^7.0.0"

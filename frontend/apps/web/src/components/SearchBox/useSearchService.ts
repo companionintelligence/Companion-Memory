@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
-import { useConnectionMode } from '@ci/common';
+import { useOptionalConnectionMode } from '@ci/common';
 
 import { type LocalSearchNode, searchLocal } from '@/api/powersync/localSearch';
-import { getBoundPowerSyncDatabase } from '@/api/powersync/session';
+import { getReplicaDatabase } from '@/api/powersync/session';
 import { gql } from '@/graphql';
 import type { SearchBoxQueryQuery } from '@/graphql/graphql';
 
@@ -84,7 +84,10 @@ export function useSearchService({
   semantic?: boolean;
 }) {
   const trimmedQuery = searchQuery.trim();
-  const { mode } = useConnectionMode();
+  // Optional: the box also renders inside modals mounted in trees without a
+  // connection probe (AddRelationshipModal on an entity page, tests), where
+  // the appliance is the only source.
+  const mode = useOptionalConnectionMode()?.mode ?? 'connected';
   const applianceUnreachable = mode !== 'connected';
 
   // An includeTypes allowlist takes precedence (the backend ignores excludeTypes
@@ -128,7 +131,7 @@ export function useSearchService({
       return;
     }
 
-    const database = getBoundPowerSyncDatabase();
+    const database = getReplicaDatabase();
 
     if (!database) {
       setDevice({ query: trimmedQuery, nodes: [], tags: [], loading: false });

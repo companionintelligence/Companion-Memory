@@ -6,6 +6,7 @@ import { Badge, Button, Card } from '@ci/shadcn';
 import { Merge } from '@ci/shadcn/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { ChatAbout } from '@/components/ChatWithAgent';
 import { ErrorState } from '@/components/ErrorState';
 import { InfiniteListFooter } from '@/components/InfiniteList';
@@ -19,6 +20,7 @@ import type { GetPeopleQuery } from '@/graphql/graphql';
 import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
 import { namedChatContext } from '@/lib/agentChat';
 
+import { LocalPeopleList } from './LocalPeopleList';
 import {
   groupMergeCandidates,
   MergeCandidateCard,
@@ -218,7 +220,18 @@ function PersonRow({ person, onOpen }: { person: PersonNode; onOpen: () => void 
   );
 }
 
+/**
+ * The people page. While the Memory server does not answer and this phone holds
+ * a synced replica, the list comes from the phone (LocalPeopleList); otherwise
+ * from the appliance, with its merge queue. See api/powersync/deviceFallback.ts.
+ */
 export function PeoplePage() {
+  const offline = useAnswersFromDevice();
+
+  return offline ? <LocalPeopleList /> : <RemotePeoplePage />;
+}
+
+function RemotePeoplePage() {
   usePageTitle('People & communications - Companion Memory');
 
   const navigate = useNavigate();

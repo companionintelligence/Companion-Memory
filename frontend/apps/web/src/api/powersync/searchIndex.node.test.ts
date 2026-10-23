@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  DOCUMENTS_ADDED_COLUMNS,
+  DOCUMENTS_COLUMNS,
+  DOCUMENTS_GENERATED_COLUMNS,
+  DOCUMENTS_INDEX_DDL,
+  DOCUMENTS_RETIRED_INDEXES,
+  DOCUMENTS_INDEX_NAMES,
   DOCUMENTS_TABLE_DDL,
   ensureDocumentsTable,
   ensureSearchIndex,
@@ -11,20 +17,26 @@ import {
 } from './searchIndex';
 
 const CURRENT_FTS_SQL =
-  "CREATE VIRTUAL TABLE mobile_search_documents_fts USING fts5(title, body, content='mobile_search_documents', tokenize = 'unicode61 remove_diacritics 2')";
+  "CREATE VIRTUAL TABLE mobile_search_documents_fts USING fts5(title, body, from_id, to_ids, people, content='mobile_search_documents', tokenize = 'unicode61 remove_diacritics 2')";
 const LEGACY_FTS_SQL =
   "CREATE VIRTUAL TABLE mobile_search_documents_fts USING fts5(id UNINDEXED, title, body, tokenize = 'unicode61 remove_diacritics 2')";
+/** The raw-table shape from before the person-id columns (2026-10-21 → 22). */
+const TEXT_ONLY_FTS_SQL =
+  "CREATE VIRTUAL TABLE mobile_search_documents_fts USING fts5(title, body, content='mobile_search_documents', tokenize = 'unicode61 remove_diacritics 2')";
 
 /** The slice of AbstractPowerSyncDatabase the builder touches. */
 function fakeDatabase({
   hasSynced,
   indexSql,
   triggers = indexSql == null ? 0 : 3,
+  tableColumns = [...DOCUMENTS_COLUMNS, ...DOCUMENTS_GENERATED_COLUMNS.map((column) => column.name)],
 }: {
   hasSynced: boolean;
   indexSql: string | null;
   /** How many of the three triggers exist; defaults to all of them when the index does. */
   triggers?: number;
+  /** What `pragma_table_info` reports for the documents table; defaults to the current shape. */
+  tableColumns?: string[];
 }) {
   const executed: Array<{ sql: string; params?: unknown[] }> = [];
   const listeners: Array<{ statusChanged?: (status: unknown) => void }> = [];
@@ -61,11 +73,18 @@ function fakeDatabase({
       return firstSync;
     }),
     writeTransaction: vi.fn(
-      async (fn: (tx: { execute: (sql: string, params?: unknown[]) => Promise<void> }) => Promise<void>) => {
+      async (
+        fn: (tx: {
+          execute: (sql: string, params?: unknown[]) => Promise<void>;
+          getAll: (sql: string, params?: unknown[]) => Promise<unknown[]>;
+        }) => Promise<void>,
+      ) => {
         await fn({
           execute: async (sql: string, params?: unknown[]) => {
             executed.push(params ? { sql, params } : { sql });
           },
+          getAll: async (sql: string) =>
+            sql.includes('pragma_table_xinfo') ? ['id', ...tableColumns].map((name) => ({ name })) : [],
         });
       },
     ),
@@ -86,23 +105,96 @@ function fakeDatabase({
 const sqlOf = (executed: Array<{ sql: string }>) => executed.map((e) => e.sql);
 
 describe('ensureDocumentsTable', () => {
-  it('creates the raw table, adopts rows PowerSync parked in ps_untyped for it, then drops them there', async () => {
+  it('creates the raw table and its index, adopts rows PowerSync parked in ps_untyped for it, then drops them there', async () => {
     const { db, executed } = fakeDatabase({ hasSynced: false, indexSql: null });
 
     await ensureDocumentsTable(db);
 
     expect(executed[0]).toEqual({ sql: DOCUMENTS_TABLE_DDL });
-    expect(executed[1].sql).toMatch(
-      /^INSERT INTO mobile_search_documents \(id, entity_type, entity_id, title, body, occurred_at\)/,
+    const indexes = DOCUMENTS_INDEX_DDL.length;
+    // Indexes an earlier build defined differently go first, then every current one.
+    const retired = DOCUMENTS_RETIRED_INDEXES.length;
+
+    expect(sqlOf(executed).slice(1, 1 + retired)).toEqual(
+      DOCUMENTS_RETIRED_INDEXES.map((name) => `DROP INDEX IF EXISTS ${name}`),
     );
-    expect(executed[1].sql).toContain('FROM ps_untyped');
-    expect(executed[1].sql).toContain('ON CONFLICT(id) DO NOTHING');
-    expect(executed[1].params).toEqual(['mobile_search_documents']);
-    expect(executed[2]).toEqual({
+    expect(sqlOf(executed).slice(1 + retired, 1 + retired + indexes)).toEqual([...DOCUMENTS_INDEX_DDL]);
+    expect(executed[1 + retired + indexes].sql).toMatch(
+      /^INSERT INTO mobile_search_documents \(id, entity_type, entity_id, title, body, occurred_at, related_id, detail\)/,
+    );
+    expect(executed[1 + retired + indexes].sql).toContain("json_extract(data, '$.related_id')");
+    expect(executed[1 + retired + indexes].sql).toContain("json_extract(data, '$.detail')");
+    expect(executed[1 + retired + indexes].sql).toContain('FROM ps_untyped');
+    expect(executed[1 + retired + indexes].sql).toContain('ON CONFLICT(id) DO NOTHING');
+    expect(executed[1 + retired + indexes].params).toEqual(['mobile_search_documents']);
+    expect(executed[2 + retired + indexes]).toEqual({
       sql: 'DELETE FROM ps_untyped WHERE type = ?',
       params: ['mobile_search_documents'],
     });
-    expect(executed).toHaveLength(3);
+    expect(executed).toHaveLength(3 + retired + indexes);
+  });
+
+  it('adds the record columns to a table from before they existed, in place', async () => {
+    // A replica from the first raw-table shape: the five search columns only.
+    const { db, executed } = fakeDatabase({
+      hasSynced: true,
+      indexSql: CURRENT_FTS_SQL,
+      tableColumns: ['entity_type', 'entity_id', 'title', 'body', 'occurred_at'],
+    });
+
+    await ensureDocumentsTable(db);
+
+    const added = DOCUMENTS_ADDED_COLUMNS.length;
+
+    expect(sqlOf(executed).slice(1, 3)).toEqual([
+      'ALTER TABLE mobile_search_documents ADD COLUMN related_id TEXT',
+      'ALTER TABLE mobile_search_documents ADD COLUMN detail TEXT',
+    ]);
+    // The generated columns follow, reading the detail column just added.
+    expect(sqlOf(executed)[3]).toBe(
+      "ALTER TABLE mobile_search_documents ADD COLUMN source_system TEXT GENERATED ALWAYS AS (json_extract(detail, '$.source_system')) VIRTUAL",
+    );
+    const retired = DOCUMENTS_RETIRED_INDEXES.length;
+
+    expect(
+      sqlOf(executed).slice(1 + added + retired, 1 + added + retired + DOCUMENTS_INDEX_DDL.length),
+    ).toEqual([...DOCUMENTS_INDEX_DDL]);
+    expect(executed).toHaveLength(3 + added + retired + DOCUMENTS_INDEX_DDL.length);
+  });
+
+  it('adds only the columns a replica is missing (one from before the generated columns)', async () => {
+    const { db, executed } = fakeDatabase({
+      hasSynced: true,
+      indexSql: CURRENT_FTS_SQL,
+      tableColumns: ['entity_type', 'entity_id', 'title', 'body', 'occurred_at', 'related_id', 'detail'],
+    });
+
+    await ensureDocumentsTable(db);
+
+    const alters = sqlOf(executed).filter((sql) => sql.startsWith('ALTER TABLE'));
+
+    expect(alters).toHaveLength(DOCUMENTS_GENERATED_COLUMNS.length);
+    expect(alters.every((sql) => sql.includes('GENERATED ALWAYS AS'))).toBe(true);
+  });
+
+  it('every added column is also in the CREATE TABLE, so a fresh replica needs no ALTER', () => {
+    for (const column of DOCUMENTS_ADDED_COLUMNS) {
+      expect(DOCUMENTS_TABLE_DDL).toContain(column.ddl);
+    }
+
+    // The sync client binds the stored columns only; a generated one is computed.
+    for (const column of DOCUMENTS_GENERATED_COLUMNS) {
+      expect(DOCUMENTS_COLUMNS).not.toContain(column.name);
+    }
+
+    expect(DOCUMENTS_COLUMNS).toContain('related_id');
+    expect(DOCUMENTS_COLUMNS).toContain('detail');
+  });
+
+  it('names every index it creates, so a bulk download can drop and rebuild them', () => {
+    expect(DOCUMENTS_INDEX_NAMES).toHaveLength(DOCUMENTS_INDEX_DDL.length);
+    expect(new Set(DOCUMENTS_INDEX_NAMES).size).toBe(DOCUMENTS_INDEX_NAMES.length);
+    expect(DOCUMENTS_INDEX_NAMES.every((name) => name.startsWith('mobile_search_documents_'))).toBe(true);
   });
 });
 
@@ -120,7 +212,9 @@ describe('ensureSearchIndex', () => {
     expect(executed[2].sql).toMatch(
       /^INSERT INTO mobile_search_documents_fts\(mobile_search_documents_fts\) VALUES \('rebuild'\)/,
     );
-    expect(executed.slice(3).every((e) => e.sql.startsWith('CREATE TRIGGER'))).toBe(true);
+    // Then the table's indexes (back after a suspended download) and the triggers.
+    expect(executed.slice(3).every((e) => /^CREATE (INDEX|TRIGGER)/.test(e.sql))).toBe(true);
+    expect(executed.slice(-3).every((e) => e.sql.startsWith('CREATE TRIGGER'))).toBe(true);
   });
 
   it('on a device that has never synced, waits for the first sync so the download is not paid for row by row', async () => {
@@ -162,6 +256,13 @@ describe('ensureSearchIndex', () => {
     expect(executed).toEqual([]);
   });
 
+  it('replaces an index without the person-id columns (the raw-table shape of 2026-10-21)', async () => {
+    const { db, executed } = fakeDatabase({ hasSynced: true, indexSql: TEXT_ONLY_FTS_SQL });
+
+    await expect(ensureSearchIndex(db)).resolves.toBe(true);
+    expect(executed[0].sql).toBe('DROP TABLE IF EXISTS mobile_search_documents_fts');
+  });
+
   it('replaces an index of the earlier shape (contentful, over the JSON storage table)', async () => {
     const { db, executed } = fakeDatabase({ hasSynced: true, indexSql: LEGACY_FTS_SQL });
 
@@ -194,15 +295,22 @@ describe('watchBulkDownloads', () => {
     expect(executed.map((e) => e.sql)).toEqual(searchIndexSuspendStatements());
     expect(events).toEqual([['suspended', 1_085_673]]);
 
+    const suspended = searchIndexSuspendStatements().length;
+
     // Progress reports while downloading change nothing.
     emitStatus(true, 900_000, 1_085_673);
     await flush();
-    expect(executed).toHaveLength(3);
+    expect(executed).toHaveLength(suspended);
 
     emitStatus(false, 0, 0);
     await flush();
-    expect(executed.slice(3).map((e) => e.sql)).toEqual(searchIndexResumeStatements());
-    expect(executed[3].sql).toContain("VALUES ('rebuild')");
+    expect(executed.slice(suspended).map((e) => e.sql)).toEqual(searchIndexResumeStatements());
+    expect(executed[suspended].sql).toContain("VALUES ('rebuild')");
+    // The table's own indexes go with the triggers and come back with the rebuild.
+    expect(searchIndexSuspendStatements().filter((sql) => sql.startsWith('DROP INDEX'))).toHaveLength(
+      DOCUMENTS_INDEX_DDL.length,
+    );
+    expect(searchIndexResumeStatements()).toEqual(expect.arrayContaining([...DOCUMENTS_INDEX_DDL]));
     expect(events).toEqual([
       ['suspended', 1_085_673],
       ['resumed', 1_085_673],
@@ -244,7 +352,7 @@ describe('watchBulkDownloads', () => {
 
     emitStatus(false, 0, 0);
     await flush();
-    expect(executed).toHaveLength(3);
+    expect(executed).toHaveLength(searchIndexSuspendStatements().length);
 
     stop();
   });

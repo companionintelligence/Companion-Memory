@@ -111,6 +111,14 @@ dependencies {
     // the removed `Capabilities` probe, now `ModelInfo.from(path)` / `LlmCapability`.
     implementation 'com.google.ai.edge.litertlm:litertlm-android:0.18.0'
 
+    // The phone's own search over its PowerSync replica (intents/LocalSearchStore): the replica is
+    // SQLCipher-encrypted by @capacitor-community/sqlite, whose key sits in an AndroidX
+    // EncryptedSharedPreferences file. Both pins match that plugin's android/build.gradle exactly,
+    // so the two modules share one copy of each library in the app.
+    implementation 'net.zetetic:sqlcipher-android:4.10.0@aar'
+    implementation 'androidx.sqlite:sqlite:2.4.0'
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+
     // Resumable foreground download of the (~530 MiB) model file.
     implementation 'androidx.work:work-runtime-ktx:2.10.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'

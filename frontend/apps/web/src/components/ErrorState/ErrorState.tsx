@@ -2,6 +2,9 @@ import type { ReactNode } from 'react';
 
 import { Button, cn } from '@ci/shadcn';
 import { TriangleAlert, RotateCw } from '@ci/shadcn/icons';
+import { useTranslation } from 'react-i18next';
+
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 
 export interface ErrorStateProps {
   title?: string;
@@ -39,14 +42,22 @@ export interface ErrorStateProps {
  *
  * The Memory views keep their own memory-worded default by wrapping this — see
  * `pages/MemoryPage/Components/ErrorState.tsx`.
+ *
+ * On a phone whose appliance is not answering, the default copy says so and
+ * names what the phone's own copy still serves, instead of "check your
+ * connection" to someone who may be offline on purpose. A caller's own title
+ * and description win, since they describe their request, not the connection.
  */
-export function ErrorState({
-  title = 'Something went wrong',
-  description = 'This could not be loaded. Check your connection and try again.',
-  onRetry,
-  children,
-  className,
-}: ErrorStateProps) {
+export function ErrorState({ title, description, onRetry, children, className }: ErrorStateProps) {
+  const { t } = useTranslation();
+  const offline = useAnswersFromDevice();
+  const heading = title ?? (offline ? t('ERROR_STATE_OFFLINE_TITLE') : 'Something went wrong');
+  const body =
+    description ??
+    (offline
+      ? t('ERROR_STATE_OFFLINE_DESCRIPTION')
+      : 'This could not be loaded. Check your connection and try again.');
+
   return (
     <div
       role="alert"
@@ -56,8 +67,8 @@ export function ErrorState({
         <TriangleAlert className="h-8 w-8 text-destructive" />
       </div>
 
-      <h3 className="mb-1 text-lg font-medium text-foreground">{title}</h3>
-      <p className="mb-4 max-w-sm text-sm text-muted-foreground">{description}</p>
+      <h3 className="mb-1 text-lg font-medium text-foreground">{heading}</h3>
+      <p className="mb-4 max-w-sm text-sm text-muted-foreground">{body}</p>
 
       <div className="flex flex-wrap items-center justify-center gap-2">
         {onRetry && (

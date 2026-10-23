@@ -4,8 +4,10 @@ import { apiKeyHeaders, buildApiUrl } from '@ci/common';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import { Button, cn } from '@ci/shadcn';
 import { AlertCircle, ArrowLeft, Loader2, Sparkles } from '@ci/shadcn/icons';
+import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { useGraphDots } from '@/api/useGraphDots';
 import { useGraphOverview, type GraphNode, type GraphLink } from '@/api/useGraphOverview';
 import { useNodeGraphService } from '@/api/useNodeGraphService';
@@ -791,6 +793,10 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   const dataLoading = mode === 'search' ? searchLoading : mode === 'focus' ? focusLoading : overviewLoading;
   const dataError =
     mode === 'search' ? searchError : mode === 'focus' ? (focusError?.message ?? null) : overviewError;
+  // The graph has no copy on the phone. While the appliance is not answering,
+  // say so in the words the other views use, not the transport's "Fetch failed: 500".
+  const { t } = useTranslation();
+  const offline = useAnswersFromDevice();
 
   const centerNodeId = mode === 'focus' ? focusEntityId : (overviewUserEntityId ?? undefined);
 
@@ -807,7 +813,11 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       <div className="absolute inset-0 z-10 flex items-center justify-center">
         <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           <AlertCircle className="h-5 w-5" />
-          <span>{dataError}</span>
+          <span>
+            {offline
+              ? `${t('ERROR_STATE_OFFLINE_TITLE')}. ${t('ERROR_STATE_OFFLINE_DESCRIPTION')}`
+              : dataError}
+          </span>
         </div>
       </div>
     );

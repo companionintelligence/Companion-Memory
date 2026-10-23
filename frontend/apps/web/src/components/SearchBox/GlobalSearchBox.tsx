@@ -14,7 +14,6 @@ import {
 import { DropdownProvider } from '@/components/SearchBox/useDropdown';
 import { useRecentSearches } from '@/hooks';
 import { useKeyboardShortcut } from '@/hooks/useKeyboardShortcut';
-import { chatThreadPath } from '@/pages/ChatPage/chatPaths';
 import { SearchPanelFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/ExplorerToolbar';
 import {
   FILTER_PARAMS,
@@ -23,6 +22,7 @@ import {
 } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 import { MobileSearchPanelFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/MobileSearchPanelFilters';
 
+import { routeForEntity, savedRecordRoute } from './entityRoute';
 import type { FilterDragPayload } from './filterDrag';
 import { CommunicationResult } from './results/CommunicationResult';
 import { ConceptResult } from './results/ConceptResult';
@@ -573,48 +573,36 @@ export function GlobalSearchBox() {
 
       const { type, id: decodedId } = GlobalUID.decode(id);
 
-      switch (type) {
-        case 'communication':
-          navigate(`/communications/${decodedId}`);
-          break;
+      // An answer from this phone opens the record this phone holds: the
+      // per-type pages need the appliance, which did not answer.
+      if (source === 'device') {
+        navigate(savedRecordRoute(type, decodedId));
 
-        case 'concept':
-          navigate(`/concepts/${decodedId}`);
-          break;
+        return;
+      }
 
-        case 'content':
-          navigate(`/content/${decodedId}`);
-          break;
+      // A file has no page of its own; its route is the gallery searched for
+      // its name (see routeForEntity). The name is on the node when the
+      // fragment is not masked, and the typed query is the next best search.
+      const node = data.find((item) => item.id === id) as { filename?: string | null } | undefined;
+      const route = routeForEntity(type, decodedId, { title: node?.filename ?? query ?? undefined });
 
-        case 'event':
-          navigate(`/events/${decodedId}`);
-          break;
-
-        case 'item':
-          navigate(`/items/${decodedId}`);
-          break;
-
-        case 'note':
-          navigate(`/notes/${decodedId}`);
-          break;
-
-        case 'person':
-          navigate(`/people/${decodedId}`);
-          break;
-
-        case 'place':
-          navigate(`/places/${decodedId}`);
-          break;
-
-        case 'thread':
-          navigate(chatThreadPath(decodedId));
-          break;
-
-        default:
-          break;
+      if (route) {
+        navigate(route);
       }
     },
-    [addRecentSearch, clearFilters, clearInput, clearQuery, commitSearch, navigate, onLiveSearchPage, query],
+    [
+      addRecentSearch,
+      clearFilters,
+      clearInput,
+      clearQuery,
+      commitSearch,
+      data,
+      navigate,
+      onLiveSearchPage,
+      query,
+      source,
+    ],
   );
 
   // Expand + focus. The focus call only lands when already expanded (a hidden

@@ -19,11 +19,13 @@ import { Check, CloudOff, TriangleAlert } from '@ci/shadcn/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import TimeAgo from 'react-timeago';
 
+import { getReplicaDatabase } from '@/api/powersync/session';
 import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
 import { namedChatContext } from '@/lib/agentChat';
 
+import { LocalNotePage } from './LocalNotePage';
 import {
   claimMintedNote,
   createNoteEditorSession,
@@ -31,6 +33,7 @@ import {
   syncNoteEditorSession,
   type NoteEditorSession,
 } from './noteEditorSession';
+import { extractTitle, hasContent, shortFormatter } from './noteText';
 import { useEntityReference } from './useEntityReference';
 
 const AUTOSAVE_THROTTLE_MS = 1000;
@@ -81,7 +84,17 @@ const CREATE_NOTE = gql(`
   }
 `);
 
+/**
+ * A note. On a phone with a synced replica it is the phone's local copy,
+ * read and written in the `notes` table and synced both ways by PowerSync
+ * ({@link LocalNotePage}); everywhere else it is the appliance's, through
+ * GraphQL, with the capture outbox as the offline fallback ({@link RemoteNotePage}).
+ */
 export function NotePage() {
+  return getReplicaDatabase() ? <LocalNotePage /> : <RemoteNotePage />;
+}
+
+export function RemoteNotePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { reference, onReferenceClick } = useEntityReference();
@@ -486,60 +499,4 @@ export function NotePage() {
       </Editor>
     </>
   );
-}
-
-function shortFormatter(value: string, unit: string) {
-  switch (unit) {
-    case 'second':
-      return `${value}s ago`;
-    case 'minute':
-      return `${value}m ago`;
-    case 'hour':
-      return `${value}h ago`;
-    case 'day':
-      return `${value}d ago`;
-    case 'week':
-      return `${value}w ago`;
-    case 'month':
-      return `${value}mo ago`;
-    case 'year':
-      return `${value}y ago`;
-    default:
-      return '';
-  }
-}
-
-function hasContent(content: string) {
-  return content.replace(/<[^>]*>/g, '').trim().length > 0;
-}
-
-function extractTitle(content: string) {
-  const doc = new DOMParser().parseFromString(content, 'text/html');
-  const div = doc.body;
-
-  const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
-  let node = walker.nextNode();
-
-  while (node) {
-    if (node.textContent?.trim()) {
-      let element = node.parentElement;
-      while (element && element !== div) {
-        if (
-          ['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'PRE', 'DIV'].includes(
-            element.tagName,
-          )
-        ) {
-          return element.textContent?.trim().substring(0, 100) || 'Untitled note';
-        }
-
-        element = element.parentElement;
-      }
-
-      return node.textContent?.trim().substring(0, 100) || 'Untitled note';
-    }
-
-    node = walker.nextNode();
-  }
-
-  return 'Untitled note';
 }

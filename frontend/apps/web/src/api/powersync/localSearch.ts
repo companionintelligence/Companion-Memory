@@ -17,7 +17,12 @@
 import { GlobalUID } from '@ci/common';
 import type { AbstractPowerSyncDatabase } from '@powersync/web';
 
-import { DOCUMENTS_FTS_TABLE, DOCUMENTS_TABLE } from './searchIndex';
+import {
+  DOCUMENTS_FTS_COLUMNS,
+  DOCUMENTS_FTS_TABLE,
+  DOCUMENTS_FTS_TEXT_COLUMNS,
+  DOCUMENTS_TABLE,
+} from './searchIndex';
 
 /** A synced row as the device holds it (the `mobile_search_documents` raw table; see searchIndex.ts). */
 export interface DocumentRow {
@@ -27,6 +32,62 @@ export interface DocumentRow {
   title: string | null;
   body: string | null;
   occurred_at: string | null;
+  /** The row this one belongs with (a message's conversation, a sub-event's parent ...), or null. */
+  related_id: string | null;
+  /** The per-type display fields, as the JSON text the sync sent, or null when the type has none. */
+  detail: string | null;
+}
+
+/**
+ * The per-type display fields of a device record, parsed. Which keys appear
+ * depends on the type — `direction` and `participants` on a communication,
+ * `end_time` and `location_name` on an event, `size` and `content_type` on a
+ * file — see the server's `entityDeviceRecordSql` for the full list. Nothing
+ * filters or sorts on these, which is why they travel as one JSON value.
+ */
+export type DocumentDetail = Record<string, unknown>;
+
+/** A device record: the synced row with its `detail` parsed. What the offline pages render. */
+export interface LocalDocument {
+  id: string;
+  entityType: string;
+  entityId: string;
+  title: string | null;
+  body: string | null;
+  occurredAt: string | null;
+  relatedId: string | null;
+  detail: DocumentDetail | null;
+}
+
+/** `detail` as an object, or null for no detail or text that is not a JSON object. */
+export function parseDetail(text: string | null | undefined): DocumentDetail | null {
+  if (text == null || text.length === 0) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(text);
+
+    return parsed != null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as DocumentDetail)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A synced row as a device record. */
+export function toLocalDocument(row: DocumentRow): LocalDocument {
+  return {
+    id: row.id,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    title: row.title && row.title.length > 0 ? row.title : null,
+    body: row.body && row.body.length > 0 ? row.body : null,
+    occurredAt: row.occurred_at,
+    relatedId: row.related_id,
+    detail: parseDetail(row.detail),
+  };
 }
 
 /**
@@ -79,6 +140,11 @@ export interface LocalSearchOptions {
 
 export interface LocalSearchResult {
   nodes: LocalSearchNode[];
+  /**
+   * The same hits as device records, in the same order, including types the
+   * header box has no row for. The offline Memory list renders from these.
+   */
+  documents: LocalDocument[];
   /** Synced tags whose label starts with the query, as the appliance's `matchingTags`. */
   tags: Array<{ id: string; label: string }>;
 }
@@ -90,8 +156,9 @@ export const LOCAL_SEARCH_DEFAULT_LIMIT = 25;
  * prefix term, OR-joined so a row matching more words ranks higher without a
  * row matching fewer being dropped — the appliance's `websearch_to_tsquery`
  * rewrite does the same. Quoting keeps FTS syntax (`AND`, `NEAR`, `-`, `:`) in
- * the user's text from being read as operators. `null` when nothing is left
- * to search for.
+ * the user's text from being read as operators, and the column filter keeps
+ * the search to the text: the index also holds person ids, which a query of
+ * hex-looking words must not hit. `null` when nothing is left to search for.
  */
 export function ftsMatchExpression(query: string): string | null {
   const terms = query
@@ -103,8 +170,17 @@ export function ftsMatchExpression(query: string): string | null {
     return null;
   }
 
-  return terms.map((term) => `"${term}"*`).join(' OR ');
+  return `{${DOCUMENTS_FTS_TEXT_COLUMNS.join(' ')}}: (${terms.map((term) => `"${term}"*`).join(' OR ')})`;
 }
+
+/**
+ * `bm25()` weights for the FTS columns, in their order: the title over the
+ * body, which is what the appliance's `ts_rank` weights (A over B–D) do for
+ * the same text, and nothing for the id columns.
+ */
+export const FTS_RANK_WEIGHTS = DOCUMENTS_FTS_COLUMNS.map((column) =>
+  column === 'title' ? '10.0' : column === 'body' ? '1.0' : '0.0',
+).join(', ');
 
 /** The entity types a search is scoped to, after include/exclude, in the box's lower-case convention. */
 export function resolveLocalTypes(includeTypes?: string[], excludeTypes?: string[]): LocalResultEntityType[] {
@@ -182,13 +258,17 @@ export function localSearchStatement(options: LocalSearchOptions): { sql: string
 
   return {
     // bm25 weights follow DOCUMENTS_FTS_COLUMNS: title, body. The index is
-    // external-content, keyed by the documents table's rowid.
-    sql: `SELECT d.id, d.entity_type, d.entity_id, d.title, d.body, d.occurred_at
+    // external-content, keyed by the documents table's rowid. The unary plus
+    // keeps the type term off the (entity_type, occurred_at) index: offered
+    // it, SQLite's planner scans every row of those types and probes the FTS
+    // index per row — 15 s per keystroke for "lunch" on the S23U, ~0 with
+    // the FTS scan driving (see localList.ts, typeTerm).
+    sql: `SELECT d.id, d.entity_type, d.entity_id, d.title, d.body, d.occurred_at, d.related_id, d.detail
             FROM ${DOCUMENTS_FTS_TABLE}
             JOIN ${DOCUMENTS_TABLE} d ON d.rowid = ${DOCUMENTS_FTS_TABLE}.rowid
            WHERE ${DOCUMENTS_FTS_TABLE} MATCH ?
-             AND d.entity_type IN (${placeholders})
-           ORDER BY bm25(${DOCUMENTS_FTS_TABLE}, 10.0, 1.0)
+             AND +d.entity_type IN (${placeholders})
+           ORDER BY bm25(${DOCUMENTS_FTS_TABLE}, ${FTS_RANK_WEIGHTS})
            LIMIT ?`,
     params: [match, ...types, limit],
   };
@@ -201,7 +281,7 @@ export async function searchLocal(
   const statement = localSearchStatement(options);
 
   if (!statement) {
-    return { nodes: [], tags: [] };
+    return { nodes: [], documents: [], tags: [] };
   }
 
   const [rows, tags] = await Promise.all([
@@ -214,6 +294,7 @@ export async function searchLocal(
 
   return {
     nodes: rows.map(documentToNode).filter((node): node is LocalSearchNode => node != null),
+    documents: rows.map(toLocalDocument),
     tags,
   };
 }

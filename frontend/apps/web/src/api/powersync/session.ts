@@ -4,12 +4,30 @@ import { POWER_SYNC_DEFAULT_LOOKBACK_DAYS, setLookbackDays } from './workingSet'
 
 let database: AbstractPowerSyncDatabase | null = null;
 
-export function bindPowerSyncDatabase(db: AbstractPowerSyncDatabase | null): void {
+/**
+ * Whether the bound database is the phone's synced, encrypted replica. The
+ * browser binds its placeholder too (plaintext, never connected, wiped on
+ * load — see PowerSyncProvider), and nothing offline must read from that:
+ * it holds nothing, and a "Saved on this phone" answer from it would be a
+ * lie. Set by the provider when the native replica takes over.
+ */
+let boundIsReplica = false;
+
+export function bindPowerSyncDatabase(
+  db: AbstractPowerSyncDatabase | null,
+  options: { replica?: boolean } = {},
+): void {
   database = db;
+  boundIsReplica = db != null && options.replica === true;
 }
 
 export function getBoundPowerSyncDatabase(): AbstractPowerSyncDatabase | null {
   return database;
+}
+
+/** The phone's synced replica, or null anywhere else (a browser, a phone whose native adapter failed). */
+export function getReplicaDatabase(): AbstractPowerSyncDatabase | null {
+  return boundIsReplica ? getBoundPowerSyncDatabase() : null;
 }
 
 export function requestPowerSyncReconnect(): void {

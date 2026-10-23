@@ -4,7 +4,12 @@ import { Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext } from '@ci/common/context';
-import { DEVICE_INDEXED_ENTITIES, entityTimeSql } from '@ci/domains/search-next';
+import {
+  DEVICE_INDEXED_ENTITIES,
+  DEVICE_RECORD_VERSION,
+  entityDeviceRecordSql,
+  entityTimeSql,
+} from '@ci/domains/search-next';
 
 import { DOCUMENT_BODY_MAX_CHARS } from '../entities/MobileSearchDocumentEntity';
 import { type Vector, VectorEntity } from '../entities/VectorEntity';
@@ -124,6 +129,12 @@ export function searchDocumentText(texts: WeightedText[]): SearchDocumentText {
  * document; a type that stops being device-indexed keeps its old document
  * until the orphan sweep or a delete removes the vectors row (CASCADE).
  *
+ * The document also carries the device record's `related_id` and `detail`,
+ * derived here from the source row by {@link entityDeviceRecordSql} (one
+ * primary-key lookup), and stamped with {@link DEVICE_RECORD_VERSION} so
+ * `MobileSearchDocumentDetailCron` knows it is current. Derived in SQL rather
+ * than passed in, so none of the listeners or pipeline stages had to change.
+ *
  * Positional params: $1 id, $2 entity_type, $3 entity_id, $4..$(3+k) the k
  * tsvector weight groups, then user_id, title, body, and the device-type list.
  */
@@ -147,15 +158,21 @@ export function buildVectorUpsertStatement(
       RETURNING id, entity_type, entity_id, user_id, created_at, updated_at
     ),
     document_row AS (
-      INSERT INTO ci_search.mobile_search_documents (id, entity_type, entity_id, user_id, title, body, occurred_at)
+      INSERT INTO ci_search.mobile_search_documents
+             (id, entity_type, entity_id, user_id, title, body, occurred_at, related_id, detail, detail_version)
       SELECT v.id, v.entity_type, v.entity_id, v.user_id, $${titleIndex}, $${bodyIndex},
-             ${entityTimeSql('v')}
+             ${entityTimeSql('v')},
+             rec.related_id, rec.detail, ${DEVICE_RECORD_VERSION}
         FROM vector_row v
+        LEFT JOIN LATERAL (${entityDeviceRecordSql('v')}) rec ON true
        WHERE v.entity_type = ANY($${typesIndex}::text[])
       ON CONFLICT (entity_type, entity_id)
       DO UPDATE SET title = EXCLUDED.title,
                     body = EXCLUDED.body,
                     occurred_at = EXCLUDED.occurred_at,
+                    related_id = EXCLUDED.related_id,
+                    detail = EXCLUDED.detail,
+                    detail_version = EXCLUDED.detail_version,
                     updated_at = now()
     )
     SELECT id, entity_type, entity_id, user_id, created_at, updated_at FROM vector_row`;

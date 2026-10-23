@@ -22,10 +22,16 @@ vi.mock('@apollo/client', async (orig) => ({
 vi.mock('@ci/common', async (orig) => ({
   ...(await orig<typeof import('@ci/common')>()),
   useConnectionMode: () => ({ mode: mocks.mode, isResolved: true, contractNotice: null, refresh: vi.fn() }),
+  useOptionalConnectionMode: () => ({
+    mode: mocks.mode,
+    isResolved: true,
+    contractNotice: null,
+    refresh: vi.fn(),
+  }),
 }));
 
 vi.mock('@/api/powersync/session', () => ({
-  getBoundPowerSyncDatabase: () => mocks.database,
+  getReplicaDatabase: () => mocks.database,
 }));
 
 vi.mock('@/api/powersync/localSearch', () => ({

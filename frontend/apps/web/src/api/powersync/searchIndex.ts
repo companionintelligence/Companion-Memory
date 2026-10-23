@@ -44,15 +44,189 @@ export const DOCUMENTS_TABLE = 'mobile_search_documents';
 export const DOCUMENTS_FTS_TABLE = 'mobile_search_documents_fts';
 
 /**
- * The columns the device keeps, in the order the `put` statement binds them.
- * The sync rule also sends `user_id`, `created_at` and `updated_at`; nothing on
- * the device reads them (the replica is one user's, wiped on sign-out), so
- * they are not stored.
+ * The columns the device keeps, in the order the `put` statement binds them —
+ * and, since 2026-10-22, exactly the columns the sync rule sends. `user_id`,
+ * `created_at` and `updated_at` used to arrive and be dropped here; they left
+ * the sync rule because PowerSync keeps every synced column a second time in
+ * its oplog, where the three cost ~50 MB over 589k rows.
+ *
+ * `related_id` and `detail` (server migration 20261021203300) are what makes
+ * a row a *device record* rather than a search entry: the row it belongs with
+ * (a message's conversation, a sub-event's parent, a file's parent) and a
+ * small JSON of per-type display fields, which arrives as text. The offline
+ * record page reads them; search does not.
  */
-export const DOCUMENTS_COLUMNS = ['entity_type', 'entity_id', 'title', 'body', 'occurred_at'] as const;
+export const DOCUMENTS_COLUMNS = [
+  'entity_type',
+  'entity_id',
+  'title',
+  'body',
+  'occurred_at',
+  'related_id',
+  'detail',
+] as const;
 
-/** The FTS5 columns, in order — `bm25()` weights in localSearch.ts follow this order. */
-export const DOCUMENTS_FTS_COLUMNS = ['title', 'body'] as const;
+/**
+ * The `detail` fields the explorer's filters read, as virtual generated
+ * columns: computed from the JSON on read, stored nowhere, but indexable —
+ * which is the point. A filter over a JSON field is otherwise a
+ * `json_extract` per row of whatever the scan admits: a place name over all
+ * 224k events took 20 s on the S23U, the same filter through the partial
+ * index below ~0. See localList.ts for which index each filter leans on.
+ *
+ * `content_type` gets no index: file kinds apply to the 23k files only.
+ * `direction` halves a scope already pinned to messages, but its count was a
+ * 17 s walk of 200k rows that held up the plugin's one thread, so it has one
+ * — carrying the type too, so the count never leaves the index (1.9 s when
+ * it had to fetch each row for the type).
+ */
+export const DOCUMENTS_GENERATED_COLUMNS: ReadonlyArray<{ name: string; ddl: string }> = [
+  'source_system',
+  'direction',
+  'event_type',
+  'content_type',
+  'location_id',
+  'location_name',
+  'from_id',
+  'to_ids',
+  'people',
+  'lat',
+  'lng',
+  'preview_id',
+].map((name) => ({
+  name,
+  ddl: `${name} ${name === 'lat' || name === 'lng' ? 'REAL' : 'TEXT'} GENERATED ALWAYS AS (json_extract(detail, '$.${name}')) VIRTUAL`,
+}));
+
+/**
+ * The columns added after the table first shipped, which an existing replica
+ * gains through `ALTER TABLE` in {@link ensureDocumentsTable}. New columns go
+ * here as well as in {@link DOCUMENTS_TABLE_DDL}: SQLite has no
+ * `ADD COLUMN IF NOT EXISTS`, so the function checks `pragma_table_xinfo`
+ * (the `x` form: plain `table_info` hides generated columns). In order: the
+ * generated columns read `detail`, which must exist first.
+ */
+export const DOCUMENTS_ADDED_COLUMNS: ReadonlyArray<{ name: string; ddl: string }> = [
+  { name: 'related_id', ddl: 'related_id TEXT' },
+  { name: 'detail', ddl: 'detail TEXT' },
+  ...DOCUMENTS_GENERATED_COLUMNS,
+];
+
+/**
+ * Siblings by `related_id` (a conversation's messages, a parent's sub-events)
+ * are what the record page lists, in time order either side of the record
+ * (localRecord.ts, `siblingsStatement`). The index carries that order — the
+ * same `coalesce(occurred_at, '~')` the statement sorts and seeks by, so the
+ * keyset is an index seek and a page is 20 rows read. On `related_id` alone
+ * each page sorted the whole conversation first: 5 s per side for a 103,803-
+ * message thread on the S23U, 10 s from tap to conversation. Partial, since
+ * most rows have no related row and would only pad the index.
+ */
+export const DOCUMENTS_RELATED_INDEX = 'mobile_search_documents_related_time_idx';
+export const DOCUMENTS_RELATED_INDEX_DDL = `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_RELATED_INDEX}
+  ON ${DOCUMENTS_TABLE} (related_id, coalesce(occurred_at, '~'), id) WHERE related_id IS NOT NULL`;
+
+/** Indexes an earlier build created under another definition; dropped on startup so they stop costing writes. */
+export const DOCUMENTS_RETIRED_INDEXES: readonly string[] = ['mobile_search_documents_related_idx'];
+
+/**
+ * The offline browse (localList.ts) orders by time when there is no query to
+ * rank by, and the explorer's Newest / Oldest sorts do so always. Two indexes
+ * carry that, because one type scope is not like another on a 589k-row table
+ * (measured on the S23U, 2026-10-22):
+ *
+ * - `occurred_at` alone, walked backwards, answers a broad scope (the bare
+ *   browse, or any scope that keeps messages, events or content — 95% of the
+ *   rows) in milliseconds: nearly every row it meets qualifies.
+ * - `(entity_type, occurred_at)` answers a narrow scope (Receipts, Tasks)
+ *   from its own range instead of a 5 s walk past every other row, and lets
+ *   a count over a type scope and a date range come from the index alone.
+ *
+ * localList.ts picks which by scope; see its `typeTerm`.
+ */
+export const DOCUMENTS_OCCURRED_INDEX = 'mobile_search_documents_occurred_idx';
+export const DOCUMENTS_OCCURRED_INDEX_DDL = `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_OCCURRED_INDEX}
+  ON ${DOCUMENTS_TABLE} (occurred_at)`;
+export const DOCUMENTS_TYPE_TIME_INDEX = 'mobile_search_documents_type_time_idx';
+/** The located rows, `(lat, lng)` where `lat IS NOT NULL`: the map's set, and what `listLocalPins` names outright. */
+export const DOCUMENTS_GEO_INDEX = 'mobile_search_documents_geo_idx';
+export const DOCUMENTS_TYPE_TIME_INDEX_DDL = `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_TYPE_TIME_INDEX}
+  ON ${DOCUMENTS_TABLE} (entity_type, occurred_at)`;
+
+/**
+ * A record by the entity it describes: the offline tag filter joins the
+ * tagged (entity_type, entity_id) pairs into this table, and the record page
+ * opens a record the same way. The id alone is as good as unique, so the
+ * type is checked on the row rather than carried in the index.
+ */
+export const DOCUMENTS_ENTITY_INDEX = 'mobile_search_documents_entity_idx';
+export const DOCUMENTS_ENTITY_INDEX_DDL = `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_ENTITY_INDEX}
+  ON ${DOCUMENTS_TABLE} (entity_id)`;
+
+/**
+ * The filter indexes over the generated columns, each partial where the
+ * field is sparse so it holds only the rows that can match: coordinates
+ * (2.7k events), places (a few hundred), an event's people (a few hundred).
+ * A message's sender and recipients cover most messages, so those carry
+ * time order too, which is what the Who filter sorts by.
+ */
+export const DOCUMENTS_FILTER_INDEX_DDL: readonly string[] = [
+  `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_TABLE}_source_idx ON ${DOCUMENTS_TABLE} (source_system, occurred_at)`,
+  `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_TABLE}_direction_idx ON ${DOCUMENTS_TABLE} (direction, occurred_at, entity_type) WHERE direction IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_TABLE}_event_type_idx ON ${DOCUMENTS_TABLE} (event_type, occurred_at) WHERE event_type IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_TABLE}_location_idx ON ${DOCUMENTS_TABLE} (location_id) WHERE location_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_TABLE}_location_name_idx ON ${DOCUMENTS_TABLE} (location_name) WHERE location_name IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_TABLE}_from_idx ON ${DOCUMENTS_TABLE} (from_id, occurred_at) WHERE from_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_TABLE}_to_idx ON ${DOCUMENTS_TABLE} (occurred_at) WHERE to_ids IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_TABLE}_people_idx ON ${DOCUMENTS_TABLE} (occurred_at) WHERE people IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_GEO_INDEX} ON ${DOCUMENTS_TABLE} (lat, lng) WHERE lat IS NOT NULL`,
+  // The photos and videos with a preview on the appliance: what the preview
+  // store downloads (previews.ts) and what the offline gallery lists.
+  `CREATE INDEX IF NOT EXISTS ${DOCUMENTS_TABLE}_preview_idx ON ${DOCUMENTS_TABLE} (preview_id, occurred_at) WHERE preview_id IS NOT NULL`,
+];
+
+/**
+ * Every index the app keeps on the table, created after the columns are
+ * current. None is needed by the sync client's `put` (its upsert keys on the
+ * primary key), so {@link watchBulkDownloads} drops them all for a bulk
+ * download and rebuilds them with the FTS index after: thirteen b-trees
+ * maintained row by row would slow a 600k-row apply far more than the ~45 s
+ * their rebuild takes on the S23U.
+ */
+export const DOCUMENTS_INDEX_DDL: readonly string[] = [
+  DOCUMENTS_RELATED_INDEX_DDL,
+  DOCUMENTS_OCCURRED_INDEX_DDL,
+  DOCUMENTS_TYPE_TIME_INDEX_DDL,
+  DOCUMENTS_ENTITY_INDEX_DDL,
+  ...DOCUMENTS_FILTER_INDEX_DDL,
+];
+
+/** The names of the indexes above, for dropping. */
+export const DOCUMENTS_INDEX_NAMES: readonly string[] = DOCUMENTS_INDEX_DDL.map((ddl) => {
+  const match = /CREATE INDEX IF NOT EXISTS (\S+)/.exec(ddl);
+
+  if (!match) {
+    throw new Error(`Index DDL without a name: ${ddl}`);
+  }
+
+  return match[1];
+});
+
+/**
+ * The FTS5 columns, in order — `bm25()` weights in localSearch.ts follow this
+ * order. `title` and `body` are the text; the other three are the person ids
+ * a record names (generated columns, see {@link DOCUMENTS_GENERATED_COLUMNS}),
+ * indexed as text so the Who filter is a column-scoped MATCH: a uuid
+ * tokenizes into its five hex groups, and the filter asks for them as a
+ * phrase. Postings are the cheapest inverted index SQLite offers — 26 MB for
+ * 1.56M recipient entries, against 218 MB for a side table of the same —
+ * and the match count is nearly free, which the filter uses to pick its
+ * plan (localList.ts, `planPeople`).
+ */
+export const DOCUMENTS_FTS_COLUMNS = ['title', 'body', 'from_id', 'to_ids', 'people'] as const;
+
+/** The FTS columns that hold the record's text, for a column-scoped text query. */
+export const DOCUMENTS_FTS_TEXT_COLUMNS = ['title', 'body'] as const;
 
 /**
  * A download of at least this many operations is applied without the index
@@ -77,7 +251,10 @@ export const DOCUMENTS_TABLE_DDL = `CREATE TABLE IF NOT EXISTS ${DOCUMENTS_TABLE
   entity_id TEXT NOT NULL,
   title TEXT NOT NULL DEFAULT '',
   body TEXT NOT NULL DEFAULT '',
-  occurred_at TEXT
+  occurred_at TEXT,
+  related_id TEXT,
+  detail TEXT,
+  ${DOCUMENTS_GENERATED_COLUMNS.map((column) => column.ddl).join(',\n  ')}
 )`;
 
 /**
@@ -92,13 +269,15 @@ export const DOCUMENTS_TABLE_DDL = `CREATE TABLE IF NOT EXISTS ${DOCUMENTS_TABLE
 export const DOCUMENTS_RAW_TABLE: RawTableType = {
   put: {
     sql: `INSERT INTO ${DOCUMENTS_TABLE} (id, ${DOCUMENTS_COLUMNS.join(', ')})
-          VALUES (?, ?, ?, coalesce(?, ''), coalesce(?, ''), ?)
+          VALUES (?, ?, ?, coalesce(?, ''), coalesce(?, ''), ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             entity_type = excluded.entity_type,
             entity_id = excluded.entity_id,
             title = excluded.title,
             body = excluded.body,
-            occurred_at = excluded.occurred_at`,
+            occurred_at = excluded.occurred_at,
+            related_id = excluded.related_id,
+            detail = excluded.detail`,
     params: ['Id', ...DOCUMENTS_COLUMNS.map((column) => ({ Column: column }))],
   },
   delete: { sql: `DELETE FROM ${DOCUMENTS_TABLE} WHERE id = ?`, params: ['Id'] },
@@ -127,15 +306,22 @@ export function searchIndexTriggerStatements(): string[] {
   ];
 }
 
-/** The statements that drop the triggers, leaving the table and the index. */
+/**
+ * The statements that drop the triggers and the table's own indexes, leaving
+ * the table and the FTS index, so a bulk download writes the table alone.
+ */
 export function searchIndexSuspendStatements(): string[] {
-  return FTS_TRIGGER_SUFFIXES.map((suffix) => `DROP TRIGGER IF EXISTS ${DOCUMENTS_FTS_TABLE}_${suffix}`);
+  return [
+    ...FTS_TRIGGER_SUFFIXES.map((suffix) => `DROP TRIGGER IF EXISTS ${DOCUMENTS_FTS_TABLE}_${suffix}`),
+    ...DOCUMENTS_INDEX_NAMES.map((name) => `DROP INDEX IF EXISTS ${name}`),
+  ];
 }
 
-/** Re-index everything from the table (FTS5's `rebuild`), then put the triggers back. */
+/** Re-index everything from the table (FTS5's `rebuild`), rebuild the indexes, then put the triggers back. */
 export function searchIndexResumeStatements(): string[] {
   return [
     `INSERT INTO ${DOCUMENTS_FTS_TABLE}(${DOCUMENTS_FTS_TABLE}) VALUES ('rebuild')`,
+    ...DOCUMENTS_INDEX_DDL,
     ...searchIndexTriggerStatements(),
   ];
 }
@@ -161,9 +347,16 @@ export function searchIndexStatements(): string[] {
 }
 
 /**
- * Create the documents table if this file does not have it yet, and adopt
- * any rows PowerSync parked in `ps_untyped` for it. Must complete before
- * `connect()`.
+ * Create the documents table if this file does not have it yet, bring an
+ * older one up to the current columns, and adopt any rows PowerSync parked in
+ * `ps_untyped` for it. Must complete before `connect()`.
+ *
+ * A replica built before `related_id` and `detail` existed has the table
+ * without them, and `CREATE TABLE IF NOT EXISTS` leaves it that way; the
+ * sync client's `put` would then fail on every row. Each missing column is
+ * added with `ALTER TABLE`, and the sync-rules change that introduced the
+ * columns re-sends every row, so they fill in without any device-side
+ * backfill.
  *
  * `ps_untyped` is where PowerSync moves a table's rows when the table leaves
  * the managed schema — which is what happened to every replica built while
@@ -177,6 +370,27 @@ export async function ensureDocumentsTable(db: AbstractPowerSyncDatabase): Promi
 
   await db.writeTransaction(async (tx) => {
     await tx.execute(DOCUMENTS_TABLE_DDL);
+
+    const present = new Set(
+      (await tx.getAll<{ name: string }>(`SELECT name FROM pragma_table_xinfo(?)`, [DOCUMENTS_TABLE])).map(
+        (row) => row.name,
+      ),
+    );
+
+    for (const column of DOCUMENTS_ADDED_COLUMNS) {
+      if (!present.has(column.name)) {
+        await tx.execute(`ALTER TABLE ${DOCUMENTS_TABLE} ADD COLUMN ${column.ddl}`);
+      }
+    }
+
+    for (const name of DOCUMENTS_RETIRED_INDEXES) {
+      await tx.execute(`DROP INDEX IF EXISTS ${name}`);
+    }
+
+    for (const statement of DOCUMENTS_INDEX_DDL) {
+      await tx.execute(statement);
+    }
+
     await tx.execute(
       `INSERT INTO ${DOCUMENTS_TABLE} (id, ${DOCUMENTS_COLUMNS.join(', ')})
          SELECT id,
@@ -184,7 +398,9 @@ export async function ensureDocumentsTable(db: AbstractPowerSyncDatabase): Promi
                 json_extract(data, '$.entity_id'),
                 coalesce(json_extract(data, '$.title'), ''),
                 coalesce(json_extract(data, '$.body'), ''),
-                json_extract(data, '$.occurred_at')
+                json_extract(data, '$.occurred_at'),
+                json_extract(data, '$.related_id'),
+                json_extract(data, '$.detail')
            FROM ps_untyped
           WHERE type = ? AND json_extract(data, '$.entity_type') IS NOT NULL
              ON CONFLICT(id) DO NOTHING`,
@@ -196,9 +412,9 @@ export async function ensureDocumentsTable(db: AbstractPowerSyncDatabase): Promi
 
 /**
  * Whether the index exists in this file in its current shape, with its
- * triggers. A table of the earlier shape (a contentful index over PowerSync's
- * JSON storage, from before this was a raw table) does not count, and nor
- * does an index whose triggers are missing — the app was killed during a
+ * triggers. A table of an earlier shape (a contentful index over PowerSync's
+ * JSON storage, from before this was a raw table; or one without the person
+ * columns) does not count, and nor does an index whose triggers are missing — the app was killed during a
  * bulk download, after {@link watchBulkDownloads} dropped them — since rows
  * have reached the table unindexed. {@link ensureSearchIndex} rebuilds either.
  */
@@ -209,10 +425,11 @@ export async function hasSearchIndex(db: AbstractPowerSyncDatabase): Promise<boo
     [DOCUMENTS_FTS_TABLE, ...FTS_TRIGGER_SUFFIXES.map((suffix) => `${DOCUMENTS_FTS_TABLE}_${suffix}`)],
   );
 
-  return (
-    (row?.table_sql?.includes(`content='${DOCUMENTS_TABLE}'`) ?? false) &&
-    row?.triggers === FTS_TRIGGER_SUFFIXES.length
-  );
+  // The current shape names every column: an index from before the person-id
+  // columns is rebuilt (the FTS rebuild took 11 s for 589k rows on the S23U).
+  const currentShape = `fts5(${DOCUMENTS_FTS_COLUMNS.join(', ')}, content='${DOCUMENTS_TABLE}'`;
+
+  return (row?.table_sql?.includes(currentShape) ?? false) && row?.triggers === FTS_TRIGGER_SUFFIXES.length;
 }
 
 /**

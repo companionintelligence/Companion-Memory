@@ -68,6 +68,12 @@ export type {
   TaggableEntity,
 } from './types';
 export { entityTimeSql } from './entityTime';
+export {
+  CONVERSATION_NAMESPACE,
+  DEVICE_PARTICIPANTS_MAX_CHARS,
+  DEVICE_RECORD_VERSION,
+  entityDeviceRecordSql,
+} from './entityDeviceRecord';
 export { buildPromptQuery, hasNameSubjectFrame } from './promptQuery';
 export { resolveAutoMode } from './services/SearchService';
 export {

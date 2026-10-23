@@ -1,4 +1,4 @@
-import { setApiBaseUrl, setApiKey } from '@ci/common';
+import { GlobalUID, setApiBaseUrl, setApiKey } from '@ci/common';
 import { UpdateType, type AbstractPowerSyncDatabase, type CrudEntry } from '@powersync/web';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -222,7 +222,10 @@ describe('GraphQLBackendConnector.uploadData', () => {
     const body = JSON.parse(init.body as string);
 
     expect(body.query).toContain('createNote');
-    expect(body.variables).toEqual({ input: { title: 'Hi', content: '<p>Hi</p>' } });
+    // The row's own id travels with the create, so the server keeps it.
+    expect(body.variables).toEqual({
+      input: { id: GlobalUID.encode('note', 'local-1'), title: 'Hi', content: '<p>Hi</p>' },
+    });
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
@@ -276,11 +279,13 @@ describe('GraphQLBackendConnector.uploadData', () => {
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
-  // events and entities are server-written mirrors of the capture lanes. A local
-  // write against either must be dropped, not sent: there is no mutation behind
-  // them, so anything that escaped here would 404 against the GraphQL endpoint
-  // on every sync and wedge the upload queue.
-  it.each(['events', 'entities'])('ignores writes against the %s mirror', async (table) => {
+  // events and entities synced read-only until 2026-10-21 and then left the
+  // schema. A CRUD entry for either — one a stale replica queued before the
+  // table went — must be dropped, not sent: there is no mutation behind them,
+  // so anything that escaped here would 404 against the GraphQL endpoint on
+  // every sync and wedge the upload queue. entity_tag is the read-only join
+  // that still syncs.
+  it.each(['events', 'entities', 'entity_tag'])('ignores writes against the %s table', async (table) => {
     const fetchMock = stubFetch();
     const op = fakeCrudEntry({ op: UpdateType.PUT, table, id: 'row-1', opData: { name: 'x' } });
     const { database, complete } = fakeDatabase([op]);

@@ -56,6 +56,8 @@ export {
   ConnectionModeProvider,
   resolveConnectionMode,
   useConnectionMode,
+  useOptionalConnectionMode,
+  getLatestConnectionMode,
   registerCachedDataProbe,
 } from './src/utils/connectionMode';
 export type { CachedDataProbe, ConnectionMode } from './src/utils/connectionMode';
@@ -135,6 +137,7 @@ export {
   onLocalLlmDownloadProgress,
   probeLocalLlm,
   resetLocalLlmConversation,
+  setLocalSearchReplicaFile,
   streamLocalLlm,
   unloadLocalLlm,
 } from './src/utils/localLlm';

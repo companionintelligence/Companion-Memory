@@ -45,23 +45,53 @@ object IntentToolProvider {
     /**
      * The tools a load of the model is given: everything `loadModel` decides about them, in one place so that a unit test
      * can reach it without a `PluginCall`. None for a model whose chat template has no tool slot, none when no appliance
-     * is configured, otherwise every intent the device may run — each holding its answer to the budget of the window THIS
-     * load was configured with: [spec]'s `maxTokens`, the effective value and not the model's default.
+     * is configured and no replica is on the phone, otherwise every intent the device may run — each holding its answer
+     * to the budget of the window THIS load was configured with: [spec]'s `maxTokens`, the effective value and not the
+     * model's default.
+     *
+     * The phone's own search ([LocalSearchTool]) joins the set when [local] has a replica to read, in one of two ways:
+     * in place of the appliance's `knowledge_search` when the app is not connected ([preferLocal]) — the appliance's
+     * would fail anyway — and as the whole set when the appliance's catalog could not be fetched, which until 2026-10-22
+     * left the model with no tools at all.
      */
-    fun providersForLoad(spec: LocalLlmEngine.LoadSpec, client: CompanionIntentClient?): List<ToolProvider> =
-        toolsForLoad(spec, client).map { tool(it) }
+    fun providersForLoad(
+        spec: LocalLlmEngine.LoadSpec,
+        client: CompanionIntentClient?,
+        local: LocalSearchSource? = null,
+        preferLocal: Boolean = false,
+    ): List<ToolProvider> = toolsForLoad(spec, client, local, preferLocal).map { tool(it) }
 
     /** [providersForLoad] before LiteRT-LM wraps each tool: the seam the unit tests call a tool through. */
-    internal fun toolsForLoad(spec: LocalLlmEngine.LoadSpec, client: CompanionIntentClient?): List<IntentTool> =
-        if (client == null || !spec.info.supportsTools) {
-            emptyList()
+    internal fun toolsForLoad(
+        spec: LocalLlmEngine.LoadSpec,
+        client: CompanionIntentClient?,
+        local: LocalSearchSource? = null,
+        preferLocal: Boolean = false,
+    ): List<OpenApiTool> {
+        if (!spec.info.supportsTools) return emptyList()
+
+        val resultBudget = LocalLlmPolicy.toolResultByteBudget(spec.maxTokens)
+        val appliance: List<OpenApiTool> =
+            if (client == null) {
+                emptyList()
+            } else {
+                buildTools(client, resultBudget, LocalLlmPolicy.toolDeclarationTokenBudget(spec.maxTokens))
+            }
+
+        if (local == null || !local.isAvailable()) return appliance
+
+        val applianceSearch = appliance.filterIsInstance<IntentTool>().any { it.name == LocalSearchTool.NAME }
+
+        if (applianceSearch && !preferLocal) return appliance
+
+        if (preferLocal) {
+            Log.i(TAG, "Not connected: ${LocalSearchTool.NAME} answers from this phone's replica")
         } else {
-            buildTools(
-                client,
-                LocalLlmPolicy.toolResultByteBudget(spec.maxTokens),
-                LocalLlmPolicy.toolDeclarationTokenBudget(spec.maxTokens),
-            )
+            Log.i(TAG, "The appliance offered no ${LocalSearchTool.NAME}; this phone's replica answers it")
         }
+
+        return appliance.filter { !(it is IntentTool && it.name == LocalSearchTool.NAME) } + LocalSearchTool(local, resultBudget)
+    }
 
     /**
      * [buildProviders] before LiteRT-LM wraps each tool: the seam the unit tests call a tool through.
@@ -192,6 +222,9 @@ internal class IntentTool(
     private val client: CompanionIntentClient,
     private val resultBudgetBytes: Int,
 ) : OpenApiTool {
+    /** The MCP name the model calls this by. */
+    val name: String
+        get() = intent.tool
 
     override fun getToolDescriptionJsonString(): String = declaration(intent)
 

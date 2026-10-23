@@ -1,10 +1,11 @@
-import { useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 
 import { useQuery } from '@apollo/client';
 import { getApiBaseUrl, isNativePlatform, subscribeApiBaseUrl } from '@ci/common';
 
 import { gql } from '@/graphql';
 
+import { isApplianceOutage, recallUser, rememberUser } from './rememberedUser';
 import { useAuth } from './useAuth';
 
 const USER_DATA_QUERY = gql(`
@@ -42,8 +43,25 @@ export function useCurrentUser() {
     errorPolicy: 'all',
   });
 
+  // A phone keeps the profile the appliance last gave it, and answers with it while the
+  // appliance cannot be reached: its key does not expire, and the phone's own copy of the
+  // user's memory is there to be used. See rememberedUser.ts.
+  const native = isNativePlatform();
+  const me = data?.me ?? null;
+
+  useEffect(() => {
+    if (native && me && origin) {
+      rememberUser(origin, me);
+    }
+  }, [native, me, origin]);
+
+  const remembered =
+    native && !skip && !me && isApplianceOutage(error) ? recallUser<typeof me>(origin) : null;
+
   return {
-    user: data?.me || null,
+    user: me ?? remembered,
+    /** True when `user` is the profile kept from an earlier session because the appliance did not answer. */
+    remembered: remembered != null,
     loading: loading || (authenticated && !skip && data == null && !error),
     error,
     refetch,

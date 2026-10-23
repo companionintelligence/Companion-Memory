@@ -6,6 +6,7 @@ import { Button } from '@ci/shadcn';
 import { Plus } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
+import { getReplicaDatabase } from '@/api/powersync/session';
 import { ErrorState } from '@/components/ErrorState';
 import { NoteIcon } from '@/components/icons';
 import { InfiniteListFooter } from '@/components/InfiniteList';
@@ -17,6 +18,7 @@ import { gql } from '@/graphql';
 import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
 
 import { DeleteNoteModal } from './DeleteNoteModal';
+import { LocalNotesList } from './LocalNotesList';
 import { Note } from './Note';
 
 /** The rest now arrives by scrolling instead of being silently withheld past this many. */
@@ -41,7 +43,16 @@ export const GET_NOTES = gql(`
   }
 `);
 
+/**
+ * The notes list. On a phone with a synced replica it is the phone's local
+ * `notes` table ({@link LocalNotesList}); everywhere else the appliance's,
+ * through GraphQL ({@link RemoteNotesPage}).
+ */
 export function NotesPage() {
+  return getReplicaDatabase() ? <LocalNotesList /> : <RemoteNotesPage />;
+}
+
+export function RemoteNotesPage() {
   usePageTitle('Notes - Companion Memory');
 
   const { isMobile } = useDeviceLayout();

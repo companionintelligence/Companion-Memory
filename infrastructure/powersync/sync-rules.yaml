@@ -39,27 +39,42 @@
 # and it is left in place because the period-bucketing above would use it. Do not
 # reintroduce it into a WHERE clause expecting it to bite.
 #
-# Verified user-scoped tables (each has a uuid `id`-aliasable PK + `user_id`):
-#   - ci.notes             (id, title, content, user_id, created_at, updated_at)
-#   - ci.files              (metadata only — the binary lives in Minio via bucket/key)
+# ONE DEVICE RECORD PER ENTITY (2026-10-21). The phone keeps one row per
+# searchable entity in ci_search.mobile_search_documents — search text plus a
+# `related_id` and a small `detail` JSON of display fields — and reads nothing
+# else for search, the offline Memory list, the offline record page or the
+# on-device model's tool. Notes are the one exception: something the user writes
+# in this app and may edit offline, so they keep their own writable table. See
+# docs/architecture/mobile-local-search-plan.md, "Revision 2026-10-21".
+#
+# Synced (each has a uuid `id`-aliasable PK + `user_id`):
+#   - ci_search.mobile_search_documents   (id, entity_type, entity_id, title,
+#                            body, occurred_at, related_id, detail — the device
+#                            record; NOT detail_version, user_id, created_at or
+#                            updated_at, see the bucket below)
+#   - ci.notes             (id, title, content, user_id, created_at, updated_at;
+#                            written offline and uploaded by the client connector)
 #   - ci_search.tags        (id, label, description, user_id, ...)
-#   - ci.threads            (thread_id AS id, user_id, title/summary/status/..., no
-#                            model_config/sharing_permissions/embeddings)
-#   - ci.messages           (message_id AS id, thread_id, user_id, role/content/
-#                            content_type/sequence_number only — no token/cost
-#                            accounting, tool_calls, embeddings, or sentiment/intent
-#                            analysis columns)
 #   - ci_search.entity_tag  (id::text AS id, entity_type, entity_id, tag_id,
 #                            created_at — no user_id of its own; scoped via a
 #                            parameter query against its tag's ci_search.tags.user_id,
-#                            see the `entity_tags` bucket below)
-#   - ci_search.mobile_search_documents   (id, entity_type, entity_id, user_id, title, body,
-#                            occurred_at, created_at, updated_at — the device
-#                            search index; see the `user_data` bucket)
+#                            see the `entity_tags` bucket below; offline tag filters)
 #
-# DELIBERATELY NOT synced (keep online): ci.events / ci.browser_activity /
-# ci.communications, ci.content (NULL user_id), ci.entities/relationships (graph),
-# ci_search.embeddings (pgvector — huge, server-computed), HBPE tables.
+# NO LONGER synced (2026-10-21): ci.events, ci.entities, ci.files, ci.threads,
+# ci.messages. All five were replicated and never read by any client code: the
+# app read only the search documents and tags. Their content reaches the device
+# as search documents now (an event's end time and place, a file's size and type
+# ... in `detail`). Chat threads keep their search document and summary; the
+# message history of in-app LLM chats is not needed offline.
+#
+# DELIBERATELY NOT synced (keep online): ci.browser_activity, ci.communications,
+# ci.content, ci.entities/relationships (graph), ci_search.embeddings (pgvector —
+# huge, server-computed), HBPE tables. Communications and content reach the
+# device as search documents; their full rows do not.
+#
+# The notes below on events/capture lanes and ci.objects describe why those
+# tables could not sync as full rows. They are kept because the reasons still
+# hold for anyone tempted to add them back.
 #
 # An earlier revision of this list justified the first three as "TimescaleDB
 # hypertables ... embeddings". Both halves are false and were checked: only
@@ -129,135 +144,37 @@ bucket_definitions:
         FROM ci.notes
         WHERE user_id = bucket.user_id
 
-      # Files: metadata only. No binary/extracted-text/embedding columns exist on
-      # this table (the object is fetched from Minio via a fresh signed URL), so the
-      # full row is safe to sync.
-      #
-      # capture_tick_id and event_id are the capture provenance of a screenshot:
-      # the tick it was taken in, and the ci.events row that tick materialized
-      # into. Both are plain columns already on this already-syncing table, so
-      # carrying them costs nothing and is what lets a device group a tick's
-      # screenshots and point at its activity — the only part of the capture
-      # story that can reach a device today (see the note below on why the event
-      # lanes themselves cannot).
-      - SELECT id, filename, content_type, size, width, height, variant, title,
-               description, bucket, key, hash, external_id, parent_id, user_id,
-               capture_tick_id, event_id,
-               external_created_at, external_updated_at, created_at, updated_at, deleted_at
-        FROM ci.files
-        WHERE user_id = bucket.user_id
-
       - SELECT id, label, description, user_id, created_at, updated_at, deleted_at
         FROM ci_search.tags
         WHERE user_id = bucket.user_id
 
-      # Threads: chat thread shells. PK is thread_id, not id — aliased below.
-      # Excludes main_topics/mentioned_entities/context_embedding (AI-derived,
-      # heavy), model_config/temperature/max_tokens/system_prompt (server-side model
-      # config), message_count/total_tokens_used/avg_response_time_ms (server-
-      # computed stats), parent_thread_id/fork_point_message_id (branching, not
-      # needed client-side yet), is_private/sharing_permissions (server-enforced).
-      - SELECT thread_id AS id, user_id, title, summary, status, is_archived,
-               created_at, updated_at, last_message_at
-        FROM ci.threads
-        WHERE user_id = bucket.user_id
-
-      # Messages: text-only subset. PK is message_id, not id — aliased below.
-      # Excludes input_tokens/output_tokens/total_tokens/estimated_cost (cost
-      # accounting), tool_calls/tool_call_results (JSON, arbitrary payloads),
-      # message_embedding/extracted_entities/sentiment_score/intent_categories
-      # (server-computed analysis, heavy), and edit/moderation metadata
-      # (parent_message_id, depth, is_edited, is_deleted, edit_history, user_rating,
-      # user_feedback, flagged_for_review, flag_reason).
-      - SELECT message_id AS id, thread_id, user_id, role, content, content_type,
-               sequence_number, created_at, updated_at
-        FROM ci.messages
-        WHERE user_id = bucket.user_id
-
-      # Events — CI-Capture's vizier and file-edit lanes land here, materialized
-      # from ci.capture_events by /v1/events. Three predicates, each load-bearing:
-      #
-      #   sync_period IS NOT NULL   the device window. PowerSync cannot express a
-      #     rolling cutoff (bucket params are equality-only, and a client
-      #     parameter may not filter a table-based parameter query), so the
-      #     window is decided server-side by SyncWindowSweepCron and tested here
-      #     as a plain predicate. Clearing the marker evicts the row from every
-      #     device, because PowerSync drops a row that stops matching.
-      #   is_deleted = false        tombstone propagation, free, same mechanism.
-      #   event_type <> 'vizier_patch'   patches are index-based JSON Patches
-      #     against a session's base snapshot, and PowerSync gives a client no
-      #     ordering or fold primitive — a synced patch is inert at best and
-      #     misleading at worst. Snapshots sync; patches stay server-side until
-      #     the lane sends whole snapshots.
-      #
-      # metadata is deliberately NOT selected. It is the raw capture payload
-      # spread verbatim — every on-screen window title, the terminal cwd, and
-      # every established TCP connection with remote address. That is a machine
-      # fingerprint rather than the user's own authored content, a different
-      # class of data from the notes and messages above, and it duplicates
-      # ci.capture_events.payload. The renderable text lives on ci.entities below.
-      #
-      # duration_minutes is also absent, and cannot be added: it is GENERATED,
-      # and this publication reports pubgencols='n', so PostgreSQL never
-      # replicates it. Compute it on device from start_time/end_time.
-      - SELECT event_id AS id, user_id, event_type, category, status,
-               start_time, end_time, observed_at, sync_period,
-               source_type, source_system, source_id, capture_tick_id,
-               is_all_day, is_private, sharing_level, priority,
-               is_predicted, is_inferred, parent_event_id, task_id,
-               created_at, updated_at
-        FROM ci.events
-        WHERE user_id = bucket.user_id
-          AND sync_period IS NOT NULL
-          AND is_deleted = false
-          AND event_type <> 'vizier_patch'
-
-      # The names for those events. Migration 20260811061409_convert_events_to_cti
-      # moved title/description off ci.events onto the matching ci.entities row
-      # (entities.entity_id = events.event_id), so without this an event syncs as
-      # a type and some timestamps. Sync rules cannot JOIN — but they do not need
-      # to here, because ci.entities carries its own owner_user_id. The device
-      # joins the two locally on id, which SQLite is perfectly happy to do.
-      #
-      # sync_period is NULL for every entity_type except 'Event' (set that way by
-      # the insert trigger), so this one predicate does double duty: it is the
-      # same device window as above, AND it is what keeps people, places and
-      # things — names, birth dates, geography, dossiers — off devices entirely.
-      # The explicit entity_type check is redundant today and kept anyway, so a
-      # future change to the trigger cannot silently widen what syncs.
-      #
-      # is_active = true is the other half of the tombstone. The events query
-      # above drops a deleted event through is_deleted, but THIS row is the one
-      # that holds its title and description, and nothing about it said the event
-      # was gone: a deleted or forgotten event left its name on every device,
-      # with no event row left to hang it on. CalendarEventService.remove sets
-      # is_active = false in the same transaction that sets is_deleted, and
-      # restore sets both back, so the two queries evict an event and bring it
-      # back together. Same mechanism as is_deleted above: a row that stops
-      # matching leaves the bucket.
-      - SELECT entity_id AS id, owner_user_id AS user_id, entity_type,
-               name, description, linked_table, linked_id,
-               is_active, is_archived, sync_period, created_at, updated_at
-        FROM ci.entities
-        WHERE owner_user_id = bucket.user_id
-          AND sync_period IS NOT NULL
-          AND entity_type = 'Event'
-          AND is_active = true
-
-      # The search index a phone can carry: one plain-text row per indexed
-      # entity of a device-shown type (search-next DEVICE_INDEXED_ENTITIES),
-      # written beside the tsvector by the one shared statement in
-      # search-ingress VectorService (migration 20261019212935). The device
-      # builds its own FTS5 index over this table (frontend
-      # api/powersync/searchIndex.ts) and answers the header search from it
-      # when the appliance is unreachable.
+      # The device record: one row per searchable entity of a device-shown type
+      # (search-next DEVICE_INDEXED_ENTITIES), written beside the tsvector by the
+      # one shared statement in search-ingress VectorService (migrations
+      # 20261019212935, 20261021203300). The device builds its own FTS5 index
+      # over title/body (frontend api/powersync/searchIndex.ts), answers search
+      # from it when the appliance is unreachable, and renders the offline record
+      # page from the rest:
+      #   related_id  the row it belongs with (a message's conversation as a
+      #               uuid v5 — the raw thread id never leaves the server; a
+      #               sub-event's parent; a file's parent ...)
+      #   detail      jsonb of per-type display fields; arrives as JSON text
+      #               (PowerSync sends json/jsonb as their text form; there is
+      #               no nested-object type on the wire).
+      # NOT selected: detail_version (the server's refresh bookkeeping), and
+      # user_id / created_at / updated_at. The device never stored those three
+      # (the replica is one user's, wiped on sign-out), but every synced column
+      # is kept twice on the phone — in the row and in PowerSync's oplog copy —
+      # and the three cost ~50 MB of oplog JSON over 589k rows (measured
+      # 2026-10-22). The WHERE below still filters on user_id; a filter column
+      # need not be selected.
       #
       # Deliberately no window: 600k rows of names and snippets are ~25 MB of
       # text, and a search that silently stops at 30 days is worse than none.
       # Deletes propagate through the vectors FK (ON DELETE CASCADE) — a row
       # that leaves this table leaves every device.
-      - SELECT id, entity_type, entity_id, user_id, title, body, occurred_at,
-               created_at, updated_at
+      - SELECT id, entity_type, entity_id, title, body, occurred_at,
+               related_id, detail
         FROM ci_search.mobile_search_documents
         WHERE user_id = bucket.user_id
 

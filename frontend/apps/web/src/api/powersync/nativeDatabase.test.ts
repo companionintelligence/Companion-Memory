@@ -170,6 +170,7 @@ describe('EncryptedCapacitorSQLiteAdapter', () => {
       'PRAGMA temp_store = memory',
       'PRAGMA synchronous = NORMAL',
       `PRAGMA cache_size = -${50 * 1024}`,
+      'PRAGMA soft_heap_limit = 0',
       "SELECT load_extension('libpowersync.so', 'sqlite3_powersync_init')",
       "SELECT powersync_update_hooks('install')",
     ]);
@@ -201,6 +202,8 @@ describe('EncryptedCapacitorSQLiteAdapter', () => {
 
     expect(allSql.some((sql: string) => sql.includes('load_extension'))).toBe(false);
     expect(allSql).toContain("SELECT powersync_update_hooks('install')");
+    // Same on both platforms: the Android SQLCipher build's 8 MB cap must not be iOS-only knowledge.
+    expect(allSql).toContain('PRAGMA soft_heap_limit = 0');
   });
 
   it('a lost key surfaces as the init failure, with no connection opened', async () => {

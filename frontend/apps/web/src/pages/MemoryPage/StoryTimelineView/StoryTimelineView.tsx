@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { TimelineJsHost } from '@/components/TimelineJs';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
@@ -17,6 +18,7 @@ import {
 } from '../Components';
 import { countActiveFilters } from '../Components/ExplorerToolbar/filterParams';
 import { isDimensionActive } from '../Components/ExplorerToolbar/viewFilterSupport';
+import { LocalListView } from '../LocalListView';
 import { useEntityService } from '../useEntityService';
 
 import {
@@ -31,7 +33,25 @@ import {
 
 const TITLE_SLIDE_ID = 'memory-title';
 
+/**
+ * The timeline tab. When the Memory server does not answer and this phone has a
+ * synced replica, it renders the device's records in time order as a list
+ * (LocalListView) rather than the TimelineJS deck: the deck is built from the
+ * appliance's hydrated entities and their media, none of which the phone holds.
+ * See api/powersync/deviceFallback.ts.
+ */
 export function StoryTimelineView() {
+  const [searchParams] = useSearchParams();
+  const offline = useAnswersFromDevice();
+
+  if (offline) {
+    return <LocalListView sort={searchParams.get('sortOrder') === 'asc' ? 'oldest' : 'newest'} />;
+  }
+
+  return <OnlineStoryTimelineView />;
+}
+
+function OnlineStoryTimelineView() {
   const [searchParams] = useSearchParams();
   const filteredBrowse = countActiveFilters(searchParams) > 0 || Boolean(searchParams.get('search')?.trim());
   const dateFiltered = isDimensionActive(searchParams, 'date');

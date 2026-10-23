@@ -33,6 +33,22 @@ export class MobileSearchDocumentEntity {
   @Column({ type: 'timestamptz', name: 'occurred_at', nullable: true })
   occurredAt!: Date | null;
 
+  /**
+   * The row this one belongs with: a message's conversation (a uuid v5 of user,
+   * source and thread id), a sub-event's parent, a file's parent... See
+   * search-next `entityDeviceRecordSql` (migration 20261021203300).
+   */
+  @Column({ type: 'uuid', name: 'related_id', nullable: true })
+  relatedId!: string | null;
+
+  /** Per-type display fields for the offline record page; NULL when a type has none. */
+  @Column({ type: 'jsonb', nullable: true })
+  detail!: Record<string, unknown> | null;
+
+  /** Which `DEVICE_RECORD_VERSION` derived `relatedId` / `detail`. Server only; not synced. */
+  @Column({ type: 'smallint', name: 'detail_version', default: 0 })
+  detailVersion!: number;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
 

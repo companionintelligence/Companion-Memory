@@ -503,9 +503,20 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
 
     guard enabled else {
       CompanionToolContext.disable()
+      CompanionToolContext.localSearchPreferred = false
+      LocalSearchStore.shared = nil
       call.resolve(["toolCount": 0])
 
       return
+    }
+
+    // The phone's replica, when the web layer has one, and whether it answers ahead of the appliance.
+    // UNCOMPILED — see LocalSearch.swift. The keychain prefix is the SQLite plugin's `iosKeychainPrefix`.
+    CompanionToolContext.localSearchPreferred = (call.getString("connectionMode") ?? "connected") != "connected"
+    if let databaseFile = call.getObject("localSearch")?["databaseFile"] as? String, !databaseFile.isEmpty {
+      LocalSearchStore.shared = LocalSearchStore(databaseFile: databaseFile, keychainPrefix: "")
+    } else {
+      LocalSearchStore.shared = nil
     }
 
     guard
@@ -514,7 +525,9 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
       let apiKey = call.getString("apiKey"),
       !apiKey.isEmpty
     else {
-      call.reject("baseUrl and apiKey are required to enable intent tools")
+      // No appliance; the phone's own search may still be the whole tool set.
+      CompanionToolContext.disable()
+      call.resolve(["toolCount": CompanionToolContext.withLocalSearch([]).count])
 
       return
     }

@@ -2540,6 +2540,24 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@capacitor/filesystem@npm:7.1.9":
+  version: 7.1.9
+  resolution: "@capacitor/filesystem@npm:7.1.9"
+  dependencies:
+    "@capacitor/synapse": "npm:^1.0.3"
+  peerDependencies:
+    "@capacitor/core": ">=7.0.0"
+  checksum: 10c0/96fa2480b6b3b2d875bb8155fbdf3ffb2587a1b3475f7c4660029268692f8b9ff23457351638ca8d44295df62c252cb227d2cbd05979fc708598ef8e2d5cb1d9
+  languageName: node
+  linkType: hard
+
+"@capacitor/synapse@npm:^1.0.3":
+  version: 1.0.4
+  resolution: "@capacitor/synapse@npm:1.0.4"
+  checksum: 10c0/83f37d06ebdb4234596f123417043aae8b0fd3b5905d399fe8bb7f1d7c3352c8449bef093793b01a0b3c4a59208ac27aec5b1ed7cf5e399c5c3004cc0ca74646
+  languageName: node
+  linkType: hard
+
 "@ci/be-api@workspace:backend/apps/api":
   version: 0.0.0-use.local
   resolution: "@ci/be-api@workspace:backend/apps/api"
@@ -2822,6 +2840,7 @@ __metadata:
     "@apollo/client": "npm:^3.11.0"
     "@capacitor-community/sqlite": "npm:^7.0.1"
     "@capacitor/core": "npm:^7.0.0"
+    "@capacitor/filesystem": "npm:7.1.9"
     "@ci/capture": "workspace:*"
     "@ci/common": "workspace:*"
     "@ci/editor": "workspace:*"
@@ -2835,6 +2854,7 @@ __metadata:
     "@graphql-typed-document-node/core": "npm:^3.2.0"
     "@journeyapps/wa-sqlite": "npm:^1.5.0"
     "@knight-lab/timelinejs": "npm:^3.9.13"
+    "@powersync/attachments": "npm:2.4.3"
     "@powersync/capacitor": "npm:^0.5.2"
     "@powersync/common": "npm:^1.57.3"
     "@powersync/react": "npm:^1.5.3"
@@ -7478,6 +7498,15 @@ __metadata:
   version: 1.0.0-next.29
   resolution: "@polka/url@npm:1.0.0-next.29"
   checksum: 10c0/0d58e081844095cb029d3c19a659bfefd09d5d51a2f791bc61eba7ea826f13d6ee204a8a448c2f5a855c17df07b37517373ff916dd05801063c0568ae9937684
+  languageName: node
+  linkType: hard
+
+"@powersync/attachments@npm:2.4.3":
+  version: 2.4.3
+  resolution: "@powersync/attachments@npm:2.4.3"
+  peerDependencies:
+    "@powersync/common": ^1.47.0
+  checksum: 10c0/7dd898dbb38a963e0fc31407478a0ff0a3f33e430cc2dcaaeab9043e7320a144886d732c34f0d2d62a5ad511c292b61fc57a726f5d8d3853255ea7155a6b0b5a
   languageName: node
   linkType: hard
 
