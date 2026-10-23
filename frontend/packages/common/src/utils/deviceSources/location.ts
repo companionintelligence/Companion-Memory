@@ -410,6 +410,9 @@ async function postDirect(
   try {
     await fetchJson(path, {
       method: 'POST',
+      // A position fix is captured, not authored: a failure is a sample lost, not a
+      // change refused, so it must not raise the write dialog (`offlineWrites.ts`).
+      allowOffline: true,
       timeout: DIRECT_POST_TIMEOUT_MS,
       headers: {
         'Content-Type': 'application/json',

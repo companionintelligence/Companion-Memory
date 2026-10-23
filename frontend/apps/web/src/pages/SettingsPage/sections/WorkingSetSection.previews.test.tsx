@@ -67,6 +67,19 @@ describe('the photo preview store switch', () => {
     expect(h.deleteAll).not.toHaveBeenCalled();
   });
 
+  it('with the switch off, says the remaining previews are not being fetched rather than looking finished', async () => {
+    h.enabled = false;
+    renderWithProviders(<WorkingSetSection />);
+
+    await screen.findByTestId('preview-store-summary');
+    await waitFor(() =>
+      expect(screen.getByTestId('preview-store-summary')).toHaveTextContent(
+        '30 not fetched while this is off',
+      ),
+    );
+    expect(screen.getByTestId('preview-store-summary')).not.toHaveTextContent('still to fetch');
+  });
+
   it('deleting turns fetching off and removes the previews', async () => {
     renderWithProviders(<WorkingSetSection />);
     fireEvent.click(await screen.findByRole('switch', { name: /Keep photo previews/ }));

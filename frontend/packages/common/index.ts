@@ -58,6 +58,8 @@ export {
   useConnectionMode,
   useOptionalConnectionMode,
   getLatestConnectionMode,
+  isConnectionModeResolved,
+  requestConnectionRefresh,
   registerCachedDataProbe,
 } from './src/utils/connectionMode';
 export type { CachedDataProbe, ConnectionMode } from './src/utils/connectionMode';
@@ -112,8 +114,19 @@ export {
   apiFetch,
   fetchJson,
   streamingFetch,
+  type ApiFetchInit,
   type FetchJsonIssue,
 } from './src/utils/fetchJson';
+export {
+  OFFLINE_ALLOWED_PATH_PREFIXES,
+  OFFLINE_WRITE_MESSAGE,
+  OfflineWriteError,
+  applianceWritesBlocked,
+  assertApplianceWritable,
+  isOfflineWriteError,
+  subscribeOfflineWriteBlocked,
+} from './src/utils/offlineWrites';
+export type { OfflineWriteBlockedEvent } from './src/utils/offlineWrites';
 export {
   discoverLanAppliances,
   localHubPlugin,

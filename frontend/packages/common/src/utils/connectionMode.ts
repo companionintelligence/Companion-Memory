@@ -54,9 +54,45 @@ export const CONNECTION_REPROBE_INTERVAL_MS = 30_000;
  * native plugin at a moment of its own (loading the on-device model). `fresh` until a probe answers.
  */
 let latestConnectionMode: ConnectionMode = 'fresh';
+let latestConnectionModeResolved = false;
+let latestRefresh: (() => void) | null = null;
 
 export function getLatestConnectionMode(): ConnectionMode {
   return latestConnectionMode;
+}
+
+/**
+ * Whether any probe has answered yet. `getLatestConnectionMode()` says "fresh" both before the
+ * first probe and when nothing is reachable; code that must not act on the former (the write
+ * guard in `offlineWrites.ts`, which would otherwise refuse the first click of every load) asks
+ * this first.
+ */
+export function isConnectionModeResolved(): boolean {
+  return latestConnectionModeResolved;
+}
+
+/**
+ * Store a probe's answer where non-React code can read it. The provider hook below calls this
+ * for every settled probe; tests that exercise the readers above call it directly.
+ */
+export function recordResolvedConnectionMode(mode: ConnectionMode): void {
+  latestConnectionMode = mode;
+  latestConnectionModeResolved = true;
+}
+
+/** Back to the pre-probe state. For tests that share a module instance. */
+export function resetRecordedConnectionMode(): void {
+  latestConnectionMode = 'fresh';
+  latestConnectionModeResolved = false;
+}
+
+/**
+ * Re-run the health check from outside React, if a provider is mounted. The write guard calls
+ * this when it refuses a write: the mode it refused on may be up to one re-probe interval old,
+ * and the person who just tried is the one who most wants it current.
+ */
+export function requestConnectionRefresh(): void {
+  latestRefresh?.();
 }
 
 /**
@@ -273,7 +309,7 @@ function useConnectionModeState(): ConnectionModeState {
           return;
         }
 
-        latestConnectionMode = resolved.mode;
+        recordResolvedConnectionMode(resolved.mode);
         setMode(resolved.mode);
         setContractNotice(resolved.contractNotice);
         setIsResolved(true);
@@ -295,11 +331,16 @@ function useConnectionModeState(): ConnectionModeState {
 
   useEffect(() => {
     mountedRef.current = true;
+    latestRefresh = refresh;
 
     return () => {
       mountedRef.current = false;
+
+      if (latestRefresh === refresh) {
+        latestRefresh = null;
+      }
     };
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     refresh();

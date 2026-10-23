@@ -13,20 +13,26 @@ import {
 import { DOCUMENTS_FTS_COLUMNS, searchIndexStatements } from './searchIndex';
 
 describe('ftsMatchExpression', () => {
-  it('quotes each word as a prefix term and ORs them, like the appliance tsquery rewrite, over the text columns only', () => {
+  it('quotes each word as a prefix term and ORs them, like the appliance tsquery rewrite', () => {
     // The column filter keeps a hex-looking word from matching the person-id columns.
-    expect(ftsMatchExpression('dinner Ana')).toBe('{title body}: ("dinner"* OR "ana"*)');
+    expect(ftsMatchExpression('dinner Ana')).toBe('"dinner"* OR "ana"*');
   });
 
   it('keeps FTS operators in the text from being read as syntax', () => {
-    // AND / NEAR / - / : / " are all plain text once quoted or split away.
+    // NEAR / - / : / " are all plain text once quoted or split away ("and" is a stopword and goes).
     expect(ftsMatchExpression('cats AND dogs NEAR "home" -work col:x')).toBe(
-      '{title body}: ("cats"* OR "and"* OR "dogs"* OR "near"* OR "home"* OR "work"* OR "col"* OR "x"*)',
+      '"cats"* OR "dogs"* OR "near"* OR "home"* OR "work"* OR "col"* OR "x"*',
     );
   });
 
   it('folds case and keeps letters from any script', () => {
-    expect(ftsMatchExpression('Zoë 東京')).toBe('{title body}: ("zoë"* OR "東京"*)');
+    expect(ftsMatchExpression('Zoë 東京')).toBe('"zoë"* OR "東京"*');
+  });
+
+  it("drops the stopwords Postgres' english configuration drops, unless that would leave nothing", () => {
+    expect(ftsMatchExpression('dinner with Ana at the harbour')).toBe('"dinner"* OR "ana"* OR "harbour"*');
+    // A query that is only stopwords still searches as typed.
+    expect(ftsMatchExpression('The Who')).toBe('"the"* OR "who"*');
   });
 
   it('is null when nothing is left to search for', () => {
@@ -165,13 +171,13 @@ describe('localSearchStatement', () => {
     expect(statement!.sql).toContain('mobile_search_documents_fts MATCH ?');
     // The plus keeps the planner on the FTS scan (15 s per keystroke without it on a 589k-row replica).
     expect(statement!.sql).toContain('+d.entity_type IN (?, ?)');
-    // One weight per FTS column, in column order: title 10, body 1, nothing for the id columns.
-    expect(DOCUMENTS_FTS_COLUMNS).toEqual(['title', 'body', 'from_id', 'to_ids', 'people']);
-    expect(statement!.sql).toContain('ORDER BY bm25(mobile_search_documents_fts, 10.0, 1.0, 0.0, 0.0, 0.0)');
+    // One weight per text-index column, in column order: title 10, body 1.
+    expect(DOCUMENTS_FTS_COLUMNS).toEqual(['title', 'body']);
+    expect(statement!.sql).toContain('ORDER BY bm25(mobile_search_documents_fts, 10.0, 1.0)');
     expect(statement!.sql).toContain(
       'JOIN mobile_search_documents d ON d.rowid = mobile_search_documents_fts.rowid',
     );
-    expect(statement!.params).toEqual(['{title body}: ("harbour"* OR "grill"*)', 'event', 'place', 25]);
+    expect(statement!.params).toEqual(['"harbour"* OR "grill"*', 'event', 'place', 25]);
   });
 
   it('is null for an empty query or an empty type scope', () => {
@@ -187,18 +193,26 @@ describe('likePrefix', () => {
 });
 
 describe('searchIndexStatements', () => {
-  it('builds an external-content FTS5 index over the documents table and keeps it current with three triggers', () => {
+  it('builds two external-content FTS5 indexes over the documents table — stemmed text, unstemmed ids — and keeps each current with three triggers', () => {
     const statements = searchIndexStatements();
 
     expect(statements[0]).toMatch(
-      /CREATE VIRTUAL TABLE IF NOT EXISTS mobile_search_documents_fts USING fts5\(title, body, from_id, to_ids, people, content='mobile_search_documents'/,
+      /CREATE VIRTUAL TABLE IF NOT EXISTS mobile_search_documents_fts USING fts5\(title, body, content='mobile_search_documents'/,
     );
-    expect(statements[0]).toContain("tokenize = 'unicode61 remove_diacritics 2'");
-    // The backfill of rows that synced before the index existed.
-    expect(statements[1]).toBe(
+    expect(statements[0]).toContain("tokenize = 'porter unicode61 remove_diacritics 2'");
+    expect(statements[1]).toMatch(
+      /CREATE VIRTUAL TABLE IF NOT EXISTS mobile_search_people_fts USING fts5\(from_id, to_ids, people, content='mobile_search_documents'/,
+    );
+    // No stemmer over the ids: Porter would rewrite a hex group ending in "ed", and two ids could collide.
+    expect(statements[1]).toContain("tokenize = 'unicode61')");
+    // The backfill of rows that synced before the index existed, one per index.
+    expect(statements[2]).toBe(
       "INSERT INTO mobile_search_documents_fts(mobile_search_documents_fts) VALUES ('rebuild')",
     );
-    expect(statements.filter((s) => s.startsWith('CREATE TRIGGER'))).toHaveLength(3);
+    expect(statements[3]).toBe(
+      "INSERT INTO mobile_search_people_fts(mobile_search_people_fts) VALUES ('rebuild')",
+    );
+    expect(statements.filter((s) => s.startsWith('CREATE TRIGGER'))).toHaveLength(6);
     expect(statements.join('\n')).toContain('AFTER INSERT ON mobile_search_documents');
     expect(statements.join('\n')).toContain('AFTER UPDATE ON mobile_search_documents');
     expect(statements.join('\n')).toContain('AFTER DELETE ON mobile_search_documents');

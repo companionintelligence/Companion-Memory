@@ -201,7 +201,11 @@ export function LocalGalleryView() {
     return (
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
         {caption}
-        <ErrorState onRetry={() => setAttempt((n) => n + 1)} />
+        <ErrorState
+          title={t('MEMORY_LOCAL_READ_FAILED_TITLE')}
+          description={t('MEMORY_LOCAL_READ_FAILED_DESCRIPTION')}
+          onRetry={() => setAttempt((n) => n + 1)}
+        />
       </div>
     );
   }

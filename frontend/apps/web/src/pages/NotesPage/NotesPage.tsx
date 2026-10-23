@@ -6,7 +6,7 @@ import { Button } from '@ci/shadcn';
 import { Plus } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
-import { getReplicaDatabase } from '@/api/powersync/session';
+import { useReplicaDatabase } from '@/api/powersync/deviceFallback';
 import { ErrorState } from '@/components/ErrorState';
 import { NoteIcon } from '@/components/icons';
 import { InfiniteListFooter } from '@/components/InfiniteList';
@@ -49,7 +49,7 @@ export const GET_NOTES = gql(`
  * through GraphQL ({@link RemoteNotesPage}).
  */
 export function NotesPage() {
-  return getReplicaDatabase() ? <LocalNotesList /> : <RemoteNotesPage />;
+  return useReplicaDatabase() ? <LocalNotesList /> : <RemoteNotesPage />;
 }
 
 export function RemoteNotesPage() {

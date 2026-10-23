@@ -149,7 +149,13 @@ export function LocalPeopleList() {
   if (state.loading && state.people.length === 0) {
     body = <ListSkeleton />;
   } else if (state.error && state.people.length === 0) {
-    body = <ErrorState onRetry={() => setAttempt((n) => n + 1)} />;
+    body = (
+      <ErrorState
+        title={t('MEMORY_LOCAL_READ_FAILED_TITLE')}
+        description={t('MEMORY_LOCAL_READ_FAILED_DESCRIPTION')}
+        onRetry={() => setAttempt((n) => n + 1)}
+      />
+    );
   } else if (state.people.length === 0) {
     body = (
       <Empty

@@ -35,18 +35,26 @@ export type IndexableEntity = (typeof INDEXABLE_ENTITIES)[number];
 
 /**
  * The indexed types a device carries a plain-text copy of (`ci_search.mobile_search_documents`,
- * replicated by PowerSync and searched on the phone with FTS5). Everything a
- * result row can open: the subset of {@link INDEXABLE_ENTITIES} minus
- * `answer`, `browser-activity`, `position` (no text of their own worth a row),
- * `file-chunk` (a slice of a file that is already here) and `message` (the chat
- * recall channel, excluded from entity search everywhere else too).
+ * replicated by PowerSync and searched on the phone with FTS5). The subset of
+ * {@link INDEXABLE_ENTITIES} minus `answer` and `position` (no text of their own
+ * worth a row) and `message` (the chat recall channel, excluded from entity
+ * search everywhere else too).
+ *
+ * `browser-activity` and `file-chunk` joined on 2026-10-23. Both were left out
+ * at first because the header box hides them from its suggestions, but the
+ * Memory list and the explorer's filters show them on the appliance, and a
+ * phrase from inside a parsed PDF only finds the file through its chunks:
+ * the file's own record carries title, description and filename, nothing of
+ * the body. A chunk's record points at its file through `related_id`.
  */
 export const DEVICE_INDEXED_ENTITIES = [
+  'browser-activity',
   'communication',
   'concept',
   'content',
   'event',
   'file',
+  'file-chunk',
   'item',
   'note',
   'person',

@@ -1,5 +1,6 @@
 import { apiKeyHeaders } from './apiAuth';
 import { buildApiUrl, isNativePlatform } from './apiBase';
+import { guardApplianceRequest } from './offlineWrites';
 
 interface Opts extends RequestInit {
   timeout?: number;
@@ -12,7 +13,18 @@ interface Opts extends RequestInit {
    * unexpected `x-api-key` fails the WebView's preflight and the request never goes out.
    */
   skipApiKey?: boolean;
+  /**
+   * Let a write go out while the connection probe says the appliance is unreachable
+   * (`offlineWrites.ts`). Only for writers that queue and retry on their own and so do
+   * not need the person told anything — the Local Hub outbox drain, position uploads,
+   * capture uploads. A user-initiated write leaves it unset and is refused with an
+   * `OfflineWriteError` plus the shared dialog instead of failing on the network.
+   */
+  allowOffline?: boolean;
 }
+
+/** `apiFetch`'s init: a `RequestInit` plus the same opt-out `fetchJson` takes. */
+export type ApiFetchInit = RequestInit & { allowOffline?: boolean };
 
 /**
  * Field-level validation issue reported by the API. Mirrors the zod issue
@@ -356,16 +368,26 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
  * paths against the current Memory origin. Apollo and other callers that need
  * a Response — not parsed JSON — should use this instead of `window.fetch`.
  */
-export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export async function apiFetch(input: RequestInfo | URL, init?: ApiFetchInit): Promise<Response> {
+  const { allowOffline, ...rest } = init ?? {};
+
   if (typeof input === 'string') {
-    return nativeAwareFetch(buildApiUrl(input), init ?? {});
+    const url = buildApiUrl(input);
+    guardApplianceRequest(url, rest.method, allowOffline);
+
+    return nativeAwareFetch(url, rest);
   }
 
   if (input instanceof URL) {
-    return nativeAwareFetch(input.toString(), init ?? {});
+    const url = input.toString();
+    guardApplianceRequest(url, rest.method, allowOffline);
+
+    return nativeAwareFetch(url, rest);
   }
 
-  return nativeAwareFetch(input, init ?? {});
+  guardApplianceRequest(input.url, rest.method ?? input.method, allowOffline);
+
+  return nativeAwareFetch(input, rest);
 }
 
 /**
@@ -482,7 +504,7 @@ async function nativeBinaryFetch(url: string, init: RequestInit): Promise<Respon
 }
 
 export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T | undefined> {
-  const { timeout, skipApiKey, ...rest } = init ?? {};
+  const { timeout, skipApiKey, allowOffline, ...rest } = init ?? {};
 
   // On native, attach the API key (`x-api-key`). No-op on web (returns `{}`), so the
   // request is unchanged. Callers pass plain-object headers, so a shallow merge is
@@ -493,16 +515,23 @@ export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T |
     rest.headers = { ...keyHeaders, ...(rest.headers as Record<string, string> | undefined) };
   }
 
+  // String paths (e.g. `/api/...`) are resolved against the configured API origin.
+  // On web this is a no-op (origin is ''); on native it targets the user's server.
+  const resolved = typeof input === 'string' ? buildApiUrl(input) : input;
+
+  // Refused before the timer below is armed and before anything leaves: see `offlineWrites.ts`.
+  guardApplianceRequest(
+    typeof resolved === 'string' ? resolved : resolved.url,
+    rest.method ?? (typeof resolved === 'string' ? undefined : resolved.method),
+    allowOffline,
+  );
+
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   if (timeout != null && rest.signal == null) {
     const controller = new AbortController();
     timeoutId = setTimeout(() => controller.abort(), timeout);
     rest.signal = controller.signal;
   }
-
-  // String paths (e.g. `/api/...`) are resolved against the configured API origin.
-  // On web this is a no-op (origin is ''); on native it targets the user's server.
-  const resolved = typeof input === 'string' ? buildApiUrl(input) : input;
 
   // clear in `finally`: if fetch() rejects (network error, DNS failure) before
   // the timeout fires, skipping the clear would leave the timer pending — it

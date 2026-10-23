@@ -24,6 +24,21 @@
  *   location_id     an event's place as a place id (the Where filter, with
  *                   `location_name` already there)
  *   lat, lng        an event's coordinates, a place's point
+ *
+ * 2026-10-23: `browser-activity` and `file-chunk` became device-indexed. Both
+ * get their fields here without a version bump — no existing type's recipe
+ * changed, so the 600k records already on phones need not be re-sent; the two
+ * new types have no records yet and are written by the vector stage / listener
+ * re-runs that backfill them (see `pipeline/versions.ts` and the file-chunk
+ * lane in `SearchIndexBackfillService`).
+ *   browser-activity  url, domain, action_type, duration_seconds, source_system
+ *                     (not page_summary: free text the body does not carry, and
+ *                     not is_incognito / contains_sensitive: rows flagged so
+ *                     are still indexed on the appliance, and the phone shows
+ *                     what the appliance shows)
+ *   file-chunk        related_id = the file; filename, section_title, and the
+ *                     page / sheet from source_locator, flattened so the page
+ *                     prints "Page 4" without knowing the locator's shape
  */
 
 /**
@@ -186,5 +201,26 @@ export function entityDeviceRecordSql(alias: string): string {
                ${obj(`'category', o.category, 'brand', o.brand, 'model', o.model, 'source_system', o.source_system`)}
           FROM ci.objects o
          WHERE ${type} = 'item' AND o.object_id = ${id}
+
+        UNION ALL
+        SELECT NULL::uuid,
+               ${obj(`
+                 'url', b.url,
+                 'domain', b.domain,
+                 'action_type', b.action_type,
+                 'duration_seconds', b.duration_seconds,
+                 'source_system', b.source_system`)}
+          FROM ci.browser_activity b
+         WHERE ${type} = 'browser-activity' AND b.id = ${id}
+
+        UNION ALL
+        SELECT fc.file_id,
+               ${obj(`
+                 'filename', (SELECT f.filename FROM ci.files f WHERE f.id = fc.file_id),
+                 'section_title', fc.section_title,
+                 'page', coalesce(fc.source_locator ->> 'page', fc.source_locator ->> 'pageStart'),
+                 'sheet', fc.source_locator ->> 'sheet'`)}
+          FROM ci.file_chunks fc
+         WHERE ${type} = 'file-chunk' AND fc.id = ${id}
       ) r`;
 }

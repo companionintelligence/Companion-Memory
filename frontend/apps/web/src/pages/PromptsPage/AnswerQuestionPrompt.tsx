@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, type FormEvent } from 'react';
 
-import { apiKeyHeaders, buildApiUrl } from '@ci/common';
+import { apiFetch, apiKeyHeaders, buildApiUrl } from '@ci/common';
 import { Button, Card, Textarea, Spinner } from '@ci/shadcn';
 import { Send } from '@ci/shadcn/icons';
 
@@ -104,7 +104,7 @@ export function AnswerQuestionPrompt({ onAnswerSubmitted }: Props) {
       setError(null);
 
       try {
-        const response = await fetch(buildApiUrl('/api/answers'), {
+        const response = await apiFetch('/api/answers', {
           method: 'POST',
           headers: {
             ...apiKeyHeaders(),
@@ -157,7 +157,7 @@ export function AnswerQuestionPrompt({ onAnswerSubmitted }: Props) {
       return;
     }
 
-    void fetch(buildApiUrl('/api/questions/unanswered/skip'), {
+    void apiFetch('/api/questions/unanswered/skip', {
       method: 'POST',
       headers: {
         ...apiKeyHeaders(),

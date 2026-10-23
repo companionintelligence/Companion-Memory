@@ -44,6 +44,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection, type SQLiteDBConnection } from '@capacitor-community/sqlite';
 import { CapacitorSQLiteAdapter, CapacitorSQLiteOpenFactory, PowerSyncDatabase } from '@powersync/capacitor';
 
+import { ReplicaLockedError, isDatabaseLockedError } from './replicaErrors';
 import { AppSchema } from './schema';
 
 export const NATIVE_DB_FILENAME = 'ci-powersync.db';
@@ -177,6 +178,22 @@ async function encryptedInit(this: EncryptedCapacitorSQLiteAdapter): Promise<voi
 
   const sqlite = new SQLiteConnection(CapacitorSQLite);
 
+  // STALE CONNECTIONS — not in the adapter. The two closes below go through the
+  // wrapper's own JS-side map, which a fresh `SQLiteConnection` starts empty, so after
+  // a page reload in a process that stays alive they never reach the plugin, and the
+  // previous page's connections stay open natively — in whatever write transaction
+  // they were in, which is the lock `openReplicaWithRetry` then has to wait out. The
+  // plugin keys its connections by name and readonly flag, so ask it directly; a name
+  // it does not hold rejects, which is the common case and fine.
+  for (const readonly of [false, true]) {
+    if (typeof CapacitorSQLite.closeConnection === 'function') {
+      await Promise.resolve()
+        .then(() => CapacitorSQLite.closeConnection({ database: self.options.dbFilename, readonly }))
+        .catch(() => {});
+    }
+  }
+  // END STALE CONNECTIONS
+
   // It seems like the isConnection and retrieveConnection methods
   // only check a JS side map of connections.
   // On hot reload this JS cache can be cleared, while the connection
@@ -264,4 +281,124 @@ export function openNativePowerSyncDatabase(): PowerSyncDatabase {
       dbFilename: NATIVE_DB_FILENAME,
     }),
   });
+}
+
+// ── Opening into a stale lock ─────────────────────────────────────────────────
+
+/**
+ * How long to keep trying when the replica opens into another connection's write lock,
+ * as pauses between attempts: about 30 s in all. The lock this recovers from is held by
+ * an earlier page instance's connection that the plugin no longer lists — a WebView
+ * page reload while a write transaction was open (a dev-server reload mid index build is
+ * the usual way). That connection ends when its statement finishes or when Android
+ * finalizes the orphaned object, both of which take seconds, not minutes. A lock that
+ * outlives this is reported as {@link ReplicaLockedError} rather than retried forever.
+ */
+export const REPLICA_LOCK_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 15_000];
+
+export { ReplicaLockedError, isDatabaseLockedError, isReplicaLockedError } from './replicaErrors';
+
+/** The slice of a PowerSync database the retry needs: what fails, and how to let go of a failed one. */
+export interface OpenableReplica {
+  waitForReady(): Promise<void>;
+  close(): Promise<void>;
+}
+
+export interface OpenReplicaOptions<T extends OpenableReplica> {
+  open?: () => T;
+  delays?: readonly number[];
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Stops between attempts (the provider unmounted); the rejection is then an `AbortError`. */
+  signal?: AbortSignal;
+  /** Called before each pause, for the log. */
+  onRetry?: (attempt: number, delayMs: number, error: unknown) => void;
+  /**
+   * Called with each database the moment it is constructed, and with null when that
+   * attempt fails. The provider binds the replica here rather than after startup: the
+   * offline views ask "is there a replica?" at render time, a view that renders during
+   * the seconds startup takes must see one, and the SDK's own methods wait for startup
+   * on their behalf.
+   */
+  onAttempt?: (database: T | null) => void;
+  dbFilename?: string;
+}
+
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
+function abortError(): Error {
+  const error = new Error('Opening the replica was aborted');
+  error.name = 'AbortError';
+
+  return error;
+}
+
+/**
+ * Open the replica and wait for PowerSync's own startup (its first write transaction) to
+ * succeed, retrying when that startup hits SQLITE_BUSY.
+ *
+ * Why here and not inside the adapter: the lock bites in PowerSync's `initialize()`, after
+ * the adapter has opened its connections, and a database whose startup failed rethrows
+ * that failure from every later call — a plain `SELECT` included, although readers are
+ * never blocked in WAL mode. So a failed attempt is closed (which also lets the next
+ * attempt's `init` close its two connections by name) and a fresh database is built.
+ *
+ * Any error other than the lock is rethrown at once: a missing key, a corrupt file and a
+ * plugin that did not load are not things waiting fixes.
+ */
+export async function openReplicaWithRetry<T extends OpenableReplica = PowerSyncDatabase>(
+  options: OpenReplicaOptions<T> = {},
+): Promise<T> {
+  const {
+    open = openNativePowerSyncDatabase as unknown as () => T,
+    delays = REPLICA_LOCK_RETRY_DELAYS_MS,
+    sleep = defaultSleep,
+    signal,
+    onRetry,
+    onAttempt,
+    dbFilename = NATIVE_DB_FILENAME,
+  } = options;
+
+  for (let attempt = 0; ; attempt += 1) {
+    if (signal?.aborted) {
+      throw abortError();
+    }
+
+    const database = open();
+    onAttempt?.(database);
+
+    try {
+      await database.waitForReady();
+
+      return database;
+    } catch (error) {
+      // A database whose startup failed keeps its connections; let go before trying again.
+      onAttempt?.(null);
+      await database.close().catch(() => undefined);
+
+      if (!isDatabaseLockedError(error)) {
+        throw error;
+      }
+
+      const delay = delays[attempt];
+
+      if (delay == null) {
+        throw new ReplicaLockedError(dbFilename, error);
+      }
+
+      onRetry?.(attempt + 1, delay, error);
+      await sleep(delay, signal);
+    }
+  }
 }

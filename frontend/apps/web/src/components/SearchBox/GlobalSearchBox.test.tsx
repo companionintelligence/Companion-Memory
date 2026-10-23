@@ -213,6 +213,28 @@ describe('GlobalSearchBox on /memory/events', () => {
 
     await waitFor(() => expect(params().get('search')).toBe('latte'));
   });
+
+  it('tapping "Search Memory for …" on a list page lets go of the box, so the panel closes and the query stays', async () => {
+    renderAt('/memory/events');
+
+    // jsdom reports the document as never focused, which the box reads as the
+    // window losing focus (and so keeps its panel); a real focused tab says yes.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+
+    const input = screen.getByRole('textbox');
+    input.focus();
+    engage(input);
+    fireEvent.change(input, { target: { value: 'latte' } });
+
+    // Typing already ran the search; the tap must still visibly do something.
+    const row = await screen.findByText('Search Memory for');
+    fireEvent.click(row);
+
+    await waitFor(() => expect(params().get('search')).toBe('latte'));
+    expect(document.activeElement).not.toBe(input);
+    await waitFor(() => expect(screen.queryByText('Search Memory for')).not.toBeInTheDocument());
+    expect(input).toHaveValue('latte');
+  });
 });
 
 describe('GlobalSearchBox on a hub list page (people / places / things / tags / content)', () => {

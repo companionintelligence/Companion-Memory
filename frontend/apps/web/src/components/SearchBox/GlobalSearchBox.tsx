@@ -538,6 +538,16 @@ export function GlobalSearchBox() {
       if (id === SEARCH_ACTION_ID) {
         commitSearch(query ?? '');
 
+        // On a list page the query was already mirrored into the page as it was
+        // typed, so the commit itself changes nothing on screen; tapping the row
+        // has to be seen to do something. Let go of the input: the panel closes
+        // (and a phone's keyboard with it), the way Enter dismisses the panel,
+        // and the input keeps showing the query it committed. Off a list page
+        // the commit navigates and remounts the box, which closes it anyway.
+        if (onLiveSearchPage) {
+          inputRef.current?.blur();
+        }
+
         return;
       }
 

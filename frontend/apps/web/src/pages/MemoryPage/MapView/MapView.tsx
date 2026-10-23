@@ -1057,6 +1057,10 @@ function MapStatusOverlay({
 }) {
   const isolate = useMapIsolation();
   const [searchParams] = useSearchParams();
+  // When the pins come from this phone's replica, an error is the phone's copy
+  // failing to read, not the connection; the copy must say which.
+  const offline = useAnswersFromDevice();
+  const { t } = useTranslation();
   // The card covers most of a phone's map, so a person who only wants to pan
   // can put it away. Dismissal is per result: a change of filters or query
   // (the URL) brings the card back for the new answer, and so does a reload.
@@ -1103,8 +1107,12 @@ function MapStatusOverlay({
           </div>
         ) : error ? (
           <ErrorState
-            title="Couldn't load the map"
-            description="We couldn't load your located memories. Check your connection and try again."
+            title={offline ? t('MEMORY_LOCAL_READ_FAILED_TITLE') : "Couldn't load the map"}
+            description={
+              offline
+                ? t('MEMORY_LOCAL_READ_FAILED_DESCRIPTION')
+                : "We couldn't load your located memories. Check your connection and try again."
+            }
             onRetry={onRetry}
             className="px-4 py-6"
           />

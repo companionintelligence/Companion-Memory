@@ -228,8 +228,14 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   [STAGE_IDS.INDEX_VECTOR_ITEM]: 3,
   [STAGE_IDS.INDEX_VECTOR_PERSON]: 2,
   [STAGE_IDS.INDEX_VECTOR_FILE]: 2,
-  /** Not a device-indexed type; nothing to re-run for. */
-  [STAGE_IDS.INDEX_VECTOR_BROWSER_ACTIVITY]: 1,
+  /**
+   * v2 (2026-10-23) — browser activity became a device-indexed type. The
+   * statement already wrote documents for the listed types; the bump re-runs
+   * the stage so every existing visit gets its record (title, url, a
+   * description) without touching its embedding. This is the only backfill
+   * for the type: the maintenance sweep skips rows the pipeline ledger covers.
+   */
+  [STAGE_IDS.INDEX_VECTOR_BROWSER_ACTIVITY]: 2,
 
   /**
    * v1 — initial writer for `ci.position`'s seven address columns.

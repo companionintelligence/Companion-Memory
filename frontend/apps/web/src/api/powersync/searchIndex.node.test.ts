@@ -13,28 +13,42 @@ import {
   searchIndexResumeStatements,
   searchIndexStatements,
   searchIndexSuspendStatements,
+  searchIndexTriggerStatements,
   watchBulkDownloads,
 } from './searchIndex';
 
 const CURRENT_FTS_SQL =
-  "CREATE VIRTUAL TABLE mobile_search_documents_fts USING fts5(title, body, from_id, to_ids, people, content='mobile_search_documents', tokenize = 'unicode61 remove_diacritics 2')";
+  "CREATE VIRTUAL TABLE mobile_search_documents_fts USING fts5(title, body, content='mobile_search_documents', tokenize = 'porter unicode61 remove_diacritics 2')";
+const CURRENT_PEOPLE_FTS_SQL =
+  "CREATE VIRTUAL TABLE mobile_search_people_fts USING fts5(from_id, to_ids, people, content='mobile_search_documents', tokenize = 'unicode61')";
 const LEGACY_FTS_SQL =
   "CREATE VIRTUAL TABLE mobile_search_documents_fts USING fts5(id UNINDEXED, title, body, tokenize = 'unicode61 remove_diacritics 2')";
 /** The raw-table shape from before the person-id columns (2026-10-21 → 22). */
 const TEXT_ONLY_FTS_SQL =
   "CREATE VIRTUAL TABLE mobile_search_documents_fts USING fts5(title, body, content='mobile_search_documents', tokenize = 'unicode61 remove_diacritics 2')";
+/** The one-table shape of 2026-10-22 → 23: the person ids beside the text, nothing stemmed. */
+const FIVE_COLUMN_FTS_SQL =
+  "CREATE VIRTUAL TABLE mobile_search_documents_fts USING fts5(title, body, from_id, to_ids, people, content='mobile_search_documents', tokenize = 'unicode61 remove_diacritics 2')";
+/** What a rebuild drops before creating: the six triggers, then both indexes. */
+const DROPS = 8;
 
 /** The slice of AbstractPowerSyncDatabase the builder touches. */
 function fakeDatabase({
   hasSynced,
   indexSql,
-  triggers = indexSql == null ? 0 : 3,
+  peopleSql = indexSql == null ? null : CURRENT_PEOPLE_FTS_SQL,
+  triggers = indexSql == null ? 0 : 6,
+  triggerSql = searchIndexTriggerStatements().slice(0, triggers),
   tableColumns = [...DOCUMENTS_COLUMNS, ...DOCUMENTS_GENERATED_COLUMNS.map((column) => column.name)],
 }: {
   hasSynced: boolean;
   indexSql: string | null;
-  /** How many of the three triggers exist; defaults to all of them when the index does. */
+  /** The person-id index's CREATE statement; defaults to the current one whenever the text index exists. */
+  peopleSql?: string | null;
+  /** How many of the six triggers exist; defaults to all of them when the index does. */
   triggers?: number;
+  /** The stored CREATE TRIGGER text of each, as `sqlite_master` holds it; defaults to the current statements. */
+  triggerSql?: string[];
   /** What `pragma_table_info` reports for the documents table; defaults to the current shape. */
   tableColumns?: string[];
 }) {
@@ -48,11 +62,20 @@ function fakeDatabase({
   const db = {
     waitForReady: vi.fn(async () => undefined),
     getOptional: vi.fn(async (sql: string) =>
-      sql.includes('AS triggers')
-        ? { table_sql: indexSql, triggers }
+      sql.includes('AS text_sql')
+        ? { text_sql: indexSql, people_sql: peopleSql }
         : indexSql == null
           ? null
           : { name: 'mobile_search_documents_fts' },
+    ),
+    getAll: vi.fn(async (sql: string) =>
+      sql.includes("type = 'trigger'")
+        ? triggerSql.map((statement) => ({
+            name: /CREATE TRIGGER (?:IF NOT EXISTS )?(\S+)/.exec(statement)![1],
+            // As SQLite records it: the IF NOT EXISTS clause is dropped from the stored text.
+            sql: statement.replace('IF NOT EXISTS ', ''),
+          }))
+        : [],
     ),
     registerListener: vi.fn((listener: { statusChanged?: (status: unknown) => void }) => {
       listeners.push(listener);
@@ -199,22 +222,39 @@ describe('ensureDocumentsTable', () => {
 });
 
 describe('ensureSearchIndex', () => {
-  it('on a device that already synced, builds at once: the index, the rebuild, then the triggers', async () => {
+  it('on a device that already synced, builds at once: both indexes, their rebuilds, then the triggers', async () => {
     const { db, executed } = fakeDatabase({ hasSynced: true, indexSql: null });
 
     await expect(ensureSearchIndex(db)).resolves.toBe(true);
 
-    expect(sqlOf(executed)).toEqual([
+    // The triggers go first: they sit on the documents table and would survive the index.
+    expect(
+      sqlOf(executed)
+        .slice(0, 6)
+        .every((sql) => sql.startsWith('DROP TRIGGER IF EXISTS mobile_search_')),
+    ).toBe(true);
+    expect(sqlOf(executed).slice(6)).toEqual([
       'DROP TABLE IF EXISTS mobile_search_documents_fts',
+      'DROP TABLE IF EXISTS mobile_search_people_fts',
       ...searchIndexStatements(),
     ]);
-    expect(executed[1].sql).toMatch(/^CREATE VIRTUAL TABLE/);
-    expect(executed[2].sql).toMatch(
+    // The text index stems; the id index must not (a stemmed hex group is another id's token).
+    expect(executed[DROPS].sql).toBe(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS ${CURRENT_FTS_SQL.slice('CREATE VIRTUAL TABLE '.length)}`,
+    );
+    expect(executed[DROPS + 1].sql).toBe(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS ${CURRENT_PEOPLE_FTS_SQL.slice('CREATE VIRTUAL TABLE '.length)}`,
+    );
+    expect(executed[DROPS + 2].sql).toMatch(
       /^INSERT INTO mobile_search_documents_fts\(mobile_search_documents_fts\) VALUES \('rebuild'\)/,
     );
-    // Then the table's indexes (back after a suspended download) and the triggers.
-    expect(executed.slice(3).every((e) => /^CREATE (INDEX|TRIGGER)/.test(e.sql))).toBe(true);
-    expect(executed.slice(-3).every((e) => e.sql.startsWith('CREATE TRIGGER'))).toBe(true);
+    expect(executed[DROPS + 3].sql).toMatch(
+      /^INSERT INTO mobile_search_people_fts\(mobile_search_people_fts\) VALUES \('rebuild'\)/,
+    );
+    // Then the table's indexes (back after a suspended download) and the triggers, three per index.
+    expect(executed.slice(DROPS + 4).every((e) => /^CREATE (INDEX|TRIGGER)/.test(e.sql))).toBe(true);
+    expect(executed.slice(-6).every((e) => e.sql.startsWith('CREATE TRIGGER'))).toBe(true);
+    expect(executed.slice(-3).every((e) => e.sql.includes('INTO mobile_search_people_fts('))).toBe(true);
   });
 
   it('on a device that has never synced, waits for the first sync so the download is not paid for row by row', async () => {
@@ -234,7 +274,7 @@ describe('ensureSearchIndex', () => {
     finishFirstSync();
 
     await expect(building).resolves.toBe(true);
-    expect(executed).toHaveLength(searchIndexStatements().length + 1);
+    expect(executed).toHaveLength(searchIndexStatements().length + DROPS);
   });
 
   it('an abort while waiting builds nothing', async () => {
@@ -256,26 +296,76 @@ describe('ensureSearchIndex', () => {
     expect(executed).toEqual([]);
   });
 
-  it('replaces an index without the person-id columns (the raw-table shape of 2026-10-21)', async () => {
+  it('replaces an unstemmed text index (the raw-table shape of 2026-10-21): the tokenizer is part of the shape', async () => {
     const { db, executed } = fakeDatabase({ hasSynced: true, indexSql: TEXT_ONLY_FTS_SQL });
 
     await expect(ensureSearchIndex(db)).resolves.toBe(true);
-    expect(executed[0].sql).toBe('DROP TABLE IF EXISTS mobile_search_documents_fts');
+    expect(executed[6].sql).toBe('DROP TABLE IF EXISTS mobile_search_documents_fts');
+  });
+
+  it('replaces the one-table index that carried the person ids beside the text (2026-10-22)', async () => {
+    const { db, executed } = fakeDatabase({
+      hasSynced: true,
+      indexSql: FIVE_COLUMN_FTS_SQL,
+      peopleSql: null,
+    });
+
+    await expect(ensureSearchIndex(db)).resolves.toBe(true);
+    expect(executed).toHaveLength(searchIndexStatements().length + DROPS);
+  });
+
+  it('rebuilds when the text index is current but the person-id index is missing', async () => {
+    const { db, executed } = fakeDatabase({ hasSynced: true, indexSql: CURRENT_FTS_SQL, peopleSql: null });
+
+    await expect(ensureSearchIndex(db)).resolves.toBe(true);
+    expect(executed).toHaveLength(searchIndexStatements().length + DROPS);
   });
 
   it('replaces an index of the earlier shape (contentful, over the JSON storage table)', async () => {
     const { db, executed } = fakeDatabase({ hasSynced: true, indexSql: LEGACY_FTS_SQL });
 
     await expect(ensureSearchIndex(db)).resolves.toBe(true);
-    expect(executed[0].sql).toBe('DROP TABLE IF EXISTS mobile_search_documents_fts');
-    expect(executed).toHaveLength(searchIndexStatements().length + 1);
+    expect(executed[6].sql).toBe('DROP TABLE IF EXISTS mobile_search_documents_fts');
+    expect(executed).toHaveLength(searchIndexStatements().length + DROPS);
   });
 
   it('rebuilds an index whose triggers are missing (the app died during a bulk download)', async () => {
-    const { db, executed } = fakeDatabase({ hasSynced: true, indexSql: CURRENT_FTS_SQL, triggers: 0 });
+    const { db, executed } = fakeDatabase({ hasSynced: true, indexSql: CURRENT_FTS_SQL, triggers: 3 });
 
     await expect(ensureSearchIndex(db)).resolves.toBe(true);
-    expect(executed).toHaveLength(searchIndexStatements().length + 1);
+    expect(executed).toHaveLength(searchIndexStatements().length + DROPS);
+  });
+
+  it('accepts the triggers as SQLite records them, without the IF NOT EXISTS the CREATE statements carry', async () => {
+    const { db, executed } = fakeDatabase({ hasSynced: true, indexSql: CURRENT_FTS_SQL });
+    const { getAll } = db as unknown as { getAll: ReturnType<typeof vi.fn> };
+
+    await expect(ensureSearchIndex(db)).resolves.toBe(false);
+    expect(executed).toEqual([]);
+    // The fake answered with the clause stripped, as `sqlite_master` does; the comparison must still hold.
+    const stored = (await getAll("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'")) as Array<{
+      sql: string;
+    }>;
+
+    expect(stored.every((row) => !row.sql.includes('IF NOT EXISTS'))).toBe(true);
+  });
+
+  it('rebuilds when a trigger of an earlier shape survived on the documents table (it names columns the index no longer has)', async () => {
+    const current = searchIndexTriggerStatements();
+    const stale = [
+      current[0].replace(
+        'INSERT INTO mobile_search_documents_fts(rowid, title, body) VALUES (NEW.rowid, NEW.title, NEW.body)',
+        'INSERT INTO mobile_search_documents_fts(rowid, title, body, from_id, to_ids, people) VALUES (NEW.rowid, NEW.title, NEW.body, NEW.from_id, NEW.to_ids, NEW.people)',
+      ),
+      ...current.slice(1),
+    ];
+
+    expect(stale[0]).not.toBe(current[0]);
+
+    const { db, executed } = fakeDatabase({ hasSynced: true, indexSql: CURRENT_FTS_SQL, triggerSql: stale });
+
+    await expect(ensureSearchIndex(db)).resolves.toBe(true);
+    expect(executed[0].sql).toBe('DROP TRIGGER IF EXISTS mobile_search_documents_fts_insert');
   });
 });
 

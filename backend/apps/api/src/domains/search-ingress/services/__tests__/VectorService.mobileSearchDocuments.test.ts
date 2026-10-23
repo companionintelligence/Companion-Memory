@@ -107,12 +107,24 @@ describe('buildVectorUpsertStatement', () => {
   });
 
   it('a type outside the device list still gets its tsvector; the document half simply matches no row', () => {
-    const { params } = buildVectorUpsertStatement([{ text: 'docs.example.com', weight: 10 }], {
+    const { params } = buildVectorUpsertStatement([{ text: '37.7749,-122.4194', weight: 10 }], {
       ...row,
-      entityType: 'browser-activity',
+      entityType: 'position',
     });
 
-    expect(params.at(-1)).not.toContain('browser-activity');
-    expect(DEVICE_INDEXED_ENTITIES).not.toContain('browser-activity');
+    expect(params.at(-1)).not.toContain('position');
+    expect(DEVICE_INDEXED_ENTITIES).not.toContain('position');
+  });
+
+  it('browser visits and document excerpts are device-indexed (2026-10-23)', () => {
+    expect(DEVICE_INDEXED_ENTITIES).toContain('browser-activity');
+    expect(DEVICE_INDEXED_ENTITIES).toContain('file-chunk');
+
+    const { sql } = buildVectorUpsertStatement([{ text: 'Quarterly report', weight: 10 }], row);
+
+    // The device record for each: a visit's url, a chunk's file (its related_id).
+    expect(sql).toContain("WHERE v.entity_type = 'browser-activity' AND b.id = v.entity_id");
+    expect(sql).toContain("WHERE v.entity_type = 'file-chunk' AND fc.id = v.entity_id");
+    expect(sql).toContain('SELECT fc.file_id,');
   });
 });

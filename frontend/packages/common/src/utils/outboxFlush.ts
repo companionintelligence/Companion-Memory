@@ -281,6 +281,9 @@ export async function settleIngestFinish(options: { force?: boolean } = {}): Pro
   try {
     await fetchJson(INGEST_FINISH_PATH, {
       method: 'POST',
+      // The drain already runs only while "connected"; opting out keeps a probe that
+      // flipped mid-drain from raising the write dialog over a background upload.
+      allowOffline: true,
       timeout: FLUSH_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ stages }),
@@ -535,6 +538,8 @@ async function flushOne(
   try {
     await fetchJson(path, {
       method: 'POST',
+      // A queued capture replays on its own; it is not a change the person is making now.
+      allowOffline: true,
       timeout: FLUSH_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(full.value.payload ?? {}),

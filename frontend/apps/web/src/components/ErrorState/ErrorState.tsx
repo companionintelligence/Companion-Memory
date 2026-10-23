@@ -4,7 +4,7 @@ import { Button, cn } from '@ci/shadcn';
 import { TriangleAlert, RotateCw } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
-import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
+import { useAnswersFromDevice, useReplicaOpenState } from '@/api/powersync/deviceFallback';
 
 export interface ErrorStateProps {
   title?: string;
@@ -47,16 +47,36 @@ export interface ErrorStateProps {
  * names what the phone's own copy still serves, instead of "check your
  * connection" to someone who may be offline on purpose. A caller's own title
  * and description win, since they describe their request, not the connection.
+ *
+ * Two more cases, and they have to be told apart from that one (`useReplicaOpenState`):
+ * the appliance is not answering and the phone's own copy is still being opened —
+ * startup on a large file takes seconds, longer when it is waiting out a stale lock —
+ * or could not be opened at all. Saying "needs the Memory server" in either sends the
+ * person after the wrong thing; the copy is what to wait for, or what failed, and a
+ * full restart of the app is what frees a stuck one.
  */
 export function ErrorState({ title, description, onRetry, children, className }: ErrorStateProps) {
   const { t } = useTranslation();
   const offline = useAnswersFromDevice();
-  const heading = title ?? (offline ? t('ERROR_STATE_OFFLINE_TITLE') : 'Something went wrong');
+  const replica = useReplicaOpenState();
+  const heading =
+    title ??
+    (offline
+      ? t('ERROR_STATE_OFFLINE_TITLE')
+      : replica.opening
+        ? t('MEMORY_REPLICA_OPENING_TITLE')
+        : replica.failed
+          ? t('MEMORY_REPLICA_UNAVAILABLE_TITLE')
+          : 'Something went wrong');
   const body =
     description ??
     (offline
       ? t('ERROR_STATE_OFFLINE_DESCRIPTION')
-      : 'This could not be loaded. Check your connection and try again.');
+      : replica.opening
+        ? t('MEMORY_REPLICA_OPENING_DESCRIPTION')
+        : replica.failed
+          ? t(replica.locked ? 'MEMORY_REPLICA_LOCKED_DESCRIPTION' : 'MEMORY_REPLICA_UNAVAILABLE_DESCRIPTION')
+          : 'This could not be loaded. Check your connection and try again.');
 
   return (
     <div

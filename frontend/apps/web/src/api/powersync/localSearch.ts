@@ -9,20 +9,17 @@
  * returned; a device document of another type is simply not a suggestion.
  *
  * Ranking is `bm25` with the title weighted over the body, which is what the
- * appliance's `ts_rank` weights (A over B–D) do for the same text. Postgres
- * stems and SQLite does not, so every term is matched as a prefix: "running"
- * still finds "run", "runs" and "runner", at the cost of also finding
- * "runway".
+ * appliance's `ts_rank` weights (A over B–D) do for the same text. The index
+ * stems (FTS5 `porter`, see searchIndex.ts) as Postgres' `english`
+ * configuration does, and every term is still matched as a prefix of its stem,
+ * so "running" finds "run", "runs" and "runner" — and "runway", the cost of the
+ * prefix. Postgres also drops its stopwords before ranking; so does
+ * {@link ftsMatchExpression}, from the same list.
  */
 import { GlobalUID } from '@ci/common';
 import type { AbstractPowerSyncDatabase } from '@powersync/web';
 
-import {
-  DOCUMENTS_FTS_COLUMNS,
-  DOCUMENTS_FTS_TABLE,
-  DOCUMENTS_FTS_TEXT_COLUMNS,
-  DOCUMENTS_TABLE,
-} from './searchIndex';
+import { DOCUMENTS_FTS_COLUMNS, DOCUMENTS_FTS_TABLE, DOCUMENTS_TABLE } from './searchIndex';
 
 /** A synced row as the device holds it (the `mobile_search_documents` raw table; see searchIndex.ts). */
 export interface DocumentRow {
@@ -92,9 +89,12 @@ export function toLocalDocument(row: DocumentRow): LocalDocument {
 
 /**
  * Document types the header box has a result row for, and the GraphQL type
- * each renders as. `product`, `receipt` and `task` sync too, but the box has no
- * row component for them (the appliance's results for those render blank
- * today as well), so they are left out here rather than shown as empty rows.
+ * each renders as. `product`, `receipt`, `task`, `browser-activity` and
+ * `file-chunk` sync too, but the box has no row component for them (the
+ * appliance's results for those render blank today as well; browser activity
+ * the box also hides by default, see `useSearchService`), so they are left out
+ * here rather than shown as empty rows. The Memory list (`localList.ts`)
+ * renders every synced type.
  */
 export const LOCAL_RESULT_TYPENAMES = {
   communication: 'CommunicationType',
@@ -152,13 +152,14 @@ export interface LocalSearchResult {
 export const LOCAL_SEARCH_DEFAULT_LIMIT = 25;
 
 /**
- * The FTS5 MATCH expression for a free-text query: each word as a quoted
- * prefix term, OR-joined so a row matching more words ranks higher without a
- * row matching fewer being dropped — the appliance's `websearch_to_tsquery`
- * rewrite does the same. Quoting keeps FTS syntax (`AND`, `NEAR`, `-`, `:`) in
- * the user's text from being read as operators, and the column filter keeps
- * the search to the text: the index also holds person ids, which a query of
- * hex-looking words must not hit. `null` when nothing is left to search for.
+ * The FTS5 MATCH for a free-text query: each word a quoted prefix term, OR-joined
+ * — the appliance rewrites its tsquery's AND to OR for the same reason, so a
+ * two-word query matches a record carrying one of them, and the rank rewards
+ * both. Quoting keeps FTS5 operators in the text (AND, NEAR, a colon) from being
+ * read as syntax. Stopwords go the way Postgres' `english` configuration drops
+ * them — a stemmed index matches "the" in nearly every row and the rank drowns —
+ * unless the query is nothing but stopwords, which then searches as typed.
+ * `null` when nothing is left to search for.
  */
 export function ftsMatchExpression(query: string): string | null {
   const terms = query
@@ -170,16 +171,154 @@ export function ftsMatchExpression(query: string): string | null {
     return null;
   }
 
-  return `{${DOCUMENTS_FTS_TEXT_COLUMNS.join(' ')}}: (${terms.map((term) => `"${term}"*`).join(' OR ')})`;
+  const meaningful = terms.filter((term) => !ENGLISH_STOPWORDS.has(term));
+  const searched = meaningful.length > 0 ? meaningful : terms;
+
+  return searched.map((term) => `"${term}"*`).join(' OR ');
 }
 
 /**
- * `bm25()` weights for the FTS columns, in their order: the title over the
- * body, which is what the appliance's `ts_rank` weights (A over B–D) do for
- * the same text, and nothing for the id columns.
+ * Postgres' `english` text search configuration's stopword list (the Snowball
+ * English list, `english.stop`), which the appliance drops from every query and
+ * every indexed text before ranking.
+ */
+export const ENGLISH_STOPWORDS: ReadonlySet<string> = new Set([
+  'i',
+  'me',
+  'my',
+  'myself',
+  'we',
+  'our',
+  'ours',
+  'ourselves',
+  'you',
+  'your',
+  'yours',
+  'yourself',
+  'yourselves',
+  'he',
+  'him',
+  'his',
+  'himself',
+  'she',
+  'her',
+  'hers',
+  'herself',
+  'it',
+  'its',
+  'itself',
+  'they',
+  'them',
+  'their',
+  'theirs',
+  'themselves',
+  'what',
+  'which',
+  'who',
+  'whom',
+  'this',
+  'that',
+  'these',
+  'those',
+  'am',
+  'is',
+  'are',
+  'was',
+  'were',
+  'be',
+  'been',
+  'being',
+  'have',
+  'has',
+  'had',
+  'having',
+  'do',
+  'does',
+  'did',
+  'doing',
+  'a',
+  'an',
+  'the',
+  'and',
+  'but',
+  'if',
+  'or',
+  'because',
+  'as',
+  'until',
+  'while',
+  'of',
+  'at',
+  'by',
+  'for',
+  'with',
+  'about',
+  'against',
+  'between',
+  'into',
+  'through',
+  'during',
+  'before',
+  'after',
+  'above',
+  'below',
+  'to',
+  'from',
+  'up',
+  'down',
+  'in',
+  'out',
+  'on',
+  'off',
+  'over',
+  'under',
+  'again',
+  'further',
+  'then',
+  'once',
+  'here',
+  'there',
+  'when',
+  'where',
+  'why',
+  'how',
+  'all',
+  'any',
+  'both',
+  'each',
+  'few',
+  'more',
+  'most',
+  'other',
+  'some',
+  'such',
+  'no',
+  'nor',
+  'not',
+  'only',
+  'own',
+  'same',
+  'so',
+  'than',
+  'too',
+  'very',
+  's',
+  't',
+  'can',
+  'will',
+  'just',
+  'don',
+  'should',
+  'now',
+]);
+
+/**
+ * `bm25()` weights for the text index's columns, in their order: the title
+ * over the body, which is what the appliance's `ts_rank` weights (A over B–D)
+ * do for the same text.
  */
 export const FTS_RANK_WEIGHTS = DOCUMENTS_FTS_COLUMNS.map((column) =>
-  column === 'title' ? '10.0' : column === 'body' ? '1.0' : '0.0',
+  column === 'title' ? '10.0' : '1.0',
 ).join(', ');
 
 /** The entity types a search is scoped to, after include/exclude, in the box's lower-case convention. */

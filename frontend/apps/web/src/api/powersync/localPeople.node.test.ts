@@ -17,10 +17,8 @@ describe('localPeopleStatement', () => {
 
     expect(statement.sql).toContain('mobile_search_documents_fts MATCH ?');
     expect(statement.sql).toContain("+d.entity_type = 'person'");
-    expect(statement.sql).toContain(
-      'ORDER BY bm25(mobile_search_documents_fts, 10.0, 1.0, 0.0, 0.0, 0.0), d.id',
-    );
-    expect(statement.params).toEqual(['{title body}: ("bri"* OR "paul"*)', 30, 0]);
+    expect(statement.sql).toContain('ORDER BY bm25(mobile_search_documents_fts, 10.0, 1.0), d.id');
+    expect(statement.params).toEqual(['"bri"* OR "paul"*', 30, 0]);
   });
 
   it('matches nothing for a query of punctuation', () => {
@@ -30,6 +28,6 @@ describe('localPeopleStatement', () => {
 
   it('counts with the same filter', () => {
     expect(localPeopleCountStatement('')!.sql).toContain("WHERE d.entity_type = 'person'");
-    expect(localPeopleCountStatement('ana')!.params).toEqual(['{title body}: ("ana"*)']);
+    expect(localPeopleCountStatement('ana')!.params).toEqual(['"ana"*']);
   });
 });

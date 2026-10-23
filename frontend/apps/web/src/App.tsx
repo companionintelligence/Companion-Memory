@@ -26,6 +26,7 @@ import { FeaturesProvider, useFeatures } from '@/common/feature';
 import { AppLockGate } from '@/components/AppLock/AppLockGate';
 import { MemoryHubLayout, MemoryHubRoute } from '@/components/MemoryHub';
 import NotFoundPage from '@/components/NotFound';
+import { OfflineWriteDialog } from '@/components/OfflineWriteDialog';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { RedirectKnownUser } from '@/components/RedirectKnownUser';
 import { RequireOnboarded } from '@/components/RequireOnboarded';
@@ -189,6 +190,9 @@ function Providers({ children }: { children: ReactNode }) {
             <ConnectionModeProvider args={[]}>
               {/* Inside ConnectionModeProvider: the outbox flush loop is driven by the
                   resolved connection mode rather than a timer of its own. */}
+              {/* Inside ConnectionModeProvider: every write refused while the appliance is
+                  unreachable (fetchJson/apiFetch and the Apollo link) opens this one dialog. */}
+              <OfflineWriteDialog />
               <OutboxQueueProvider args={[]}>
                 <AuthProvider args={[]}>
                   {/* The phone's sign-out asks here when captures have not uploaded, whichever

@@ -12,6 +12,8 @@ import { apiFetch, apiKeyHeaders, buildApiUrl } from '@ci/common';
 import introspectionResult from '@/graphql/possibleTypes';
 import { useAuth } from '@/hooks';
 
+import { createOfflineWriteLink } from './offlineWriteLink';
+
 export function ApolloProvider({ children }: { children: ReactNode }) {
   const [{ authToken, authenticated }] = useAuth();
 
@@ -46,8 +48,12 @@ export function ApolloProvider({ children }: { children: ReactNode }) {
       };
     });
 
+    // The write guard sits in front of auth and transport: a mutation refused while the
+    // appliance is unreachable never gets headers, never goes out (`offlineWriteLink.ts`).
+    const offlineWriteLink = createOfflineWriteLink();
+
     return new ApolloClient({
-      link: authLink.concat(httpLink),
+      link: offlineWriteLink.concat(authLink).concat(httpLink),
       cache: new InMemoryCache({
         possibleTypes: introspectionResult.possibleTypes,
       }),

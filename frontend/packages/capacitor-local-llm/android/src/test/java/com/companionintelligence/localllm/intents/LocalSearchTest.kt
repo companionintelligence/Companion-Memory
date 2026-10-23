@@ -20,9 +20,9 @@ class LocalSearchTest {
         assertTrue(statement.sql.contains("FROM mobile_search_documents_fts JOIN mobile_search_documents d ON d.rowid = mobile_search_documents_fts.rowid"))
         assertTrue(statement.sql.contains("mobile_search_documents_fts MATCH ?"))
         assertTrue(statement.sql.contains("+d.entity_type IN (?, ?, ?, ?, ?, ?, ?, ?, ?)"))
-        assertTrue(statement.sql.contains("ORDER BY bm25(mobile_search_documents_fts, 10.0, 1.0, 0.0, 0.0, 0.0), d.id"))
+        assertTrue(statement.sql.contains("ORDER BY bm25(mobile_search_documents_fts, 10.0, 1.0), d.id"))
         assertTrue(statement.sql.endsWith("LIMIT ?"))
-        assertEquals("{title body}: (\"harbour\"* OR \"grill\"*)", statement.params[0])
+        assertEquals("\"harbour\"* OR \"grill\"*", statement.params[0])
         assertEquals(LocalSearch.LEAN_ENTITY_TYPES, statement.params.subList(1, 10))
         assertEquals("25", statement.params.last())
     }

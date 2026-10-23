@@ -15,9 +15,17 @@
  * timeline tab, the map's pins, the people list, and the error state's copy — so they
  * all flip together.
  */
+import { useSyncExternalStore } from 'react';
+
 import { useOptionalConnectionMode, type ConnectionMode } from '@ci/common';
 
-import { getReplicaDatabase } from './session';
+import { isReplicaLockedError } from './replicaErrors';
+import {
+  getReplicaDatabase,
+  getReplicaOpenState,
+  subscribeBoundDatabase,
+  subscribeReplicaOpenState,
+} from './session';
 
 export function answersFromDevice({
   mode,
@@ -54,6 +62,7 @@ export function answersFromDevice({
  */
 export function useAnswersFromDevice(error?: unknown): boolean {
   const connection = useOptionalConnectionMode();
+  const database = useReplicaDatabase();
 
   if (connection == null) {
     return false;
@@ -63,6 +72,52 @@ export function useAnswersFromDevice(error?: unknown): boolean {
     mode: connection.mode,
     isResolved: connection.isResolved,
     error,
-    hasDatabase: getReplicaDatabase() != null,
+    hasDatabase: database != null,
   });
+}
+
+/**
+ * The phone's replica as a render-time value that follows the binding: null until the
+ * provider has opened it, the database after, null again if it is torn down. Reading
+ * `getReplicaDatabase()` in render instead froze whatever answer the first render got.
+ */
+export function useReplicaDatabase() {
+  return useSyncExternalStore(subscribeBoundDatabase, getReplicaDatabase, getReplicaDatabase);
+}
+
+export interface ReplicaOpenStatus {
+  /** The appliance is unreachable and this phone's copy is still being opened (or retried): wait. */
+  opening: boolean;
+  /** The appliance is unreachable AND this phone's own copy could not be opened: nothing can answer. */
+  failed: boolean;
+  /** The copy failed because another connection still held its write lock (`ReplicaLockedError`). */
+  locked: boolean;
+}
+
+const NOTHING_TO_SAY: ReplicaOpenStatus = { opening: false, failed: false, locked: false };
+
+/**
+ * The cases {@link useAnswersFromDevice} cannot express: the phone should have a replica,
+ * the appliance is not answering, and the replica is either still opening or could not be
+ * opened. Without this a phone whose own copy is stuck reads "Needs the Memory server",
+ * which points at the wrong thing — the server being away is not why there is nothing to
+ * show. Says nothing while the appliance answers or before the first probe.
+ */
+export function useReplicaOpenState(): ReplicaOpenStatus {
+  const connection = useOptionalConnectionMode();
+  const state = useSyncExternalStore(subscribeReplicaOpenState, getReplicaOpenState, getReplicaOpenState);
+
+  if (connection == null || !connection.isResolved || connection.mode === 'connected') {
+    return NOTHING_TO_SAY;
+  }
+
+  if (state.phase === 'opening') {
+    return { opening: true, failed: false, locked: false };
+  }
+
+  if (state.phase === 'failed') {
+    return { opening: false, failed: true, locked: isReplicaLockedError(state.error) };
+  }
+
+  return NOTHING_TO_SAY;
 }

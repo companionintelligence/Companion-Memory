@@ -54,8 +54,12 @@ import type { EncryptedCapacitorSQLiteAdapter } from './nativeDatabase';
 import {
   EncryptedCapacitorSQLiteOpenFactory,
   NATIVE_DB_FILENAME,
+  REPLICA_LOCK_RETRY_DELAYS_MS,
   ReplicaKeyLostError,
+  ReplicaLockedError,
   generatePassphrase,
+  isDatabaseLockedError,
+  openReplicaWithRetry,
   planEncryption,
 } from './nativeDatabase';
 
@@ -215,5 +219,95 @@ describe('EncryptedCapacitorSQLiteAdapter', () => {
 
     await expect(adapter.readLock(async () => undefined)).rejects.toBeInstanceOf(ReplicaKeyLostError);
     expect(mocks.store.createConnection).not.toHaveBeenCalled();
+  });
+});
+
+describe('openReplicaWithRetry', () => {
+  const LOCKED = new Error('ExecuteSet: database is locked (code 5)');
+
+  /** A database whose startup answers from a script, one entry per attempt. */
+  function scripted(outcomes: Array<Error | null>) {
+    const opened: Array<{ waitForReady: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }> = [];
+    const open = vi.fn(() => {
+      const outcome = outcomes[opened.length];
+      const database = {
+        waitForReady: vi.fn(() => (outcome ? Promise.reject(outcome) : Promise.resolve())),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+
+      opened.push(database);
+
+      return database;
+    });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    return { open, sleep, opened };
+  }
+
+  it('recognises SQLITE_BUSY however the plugin spells it, and nothing else', () => {
+    expect(isDatabaseLockedError(LOCKED)).toBe(true);
+    expect(isDatabaseLockedError(new Error('SQLITE_BUSY: database is locked'))).toBe(true);
+    expect(isDatabaseLockedError(new ReplicaKeyLostError('x'))).toBe(false);
+    expect(isDatabaseLockedError(new Error('file is not a database'))).toBe(false);
+  });
+
+  it('returns the first database whose startup succeeds, without sleeping', async () => {
+    const { open, sleep, opened } = scripted([null]);
+
+    const database = await openReplicaWithRetry({ open, sleep });
+
+    expect(database).toBe(opened[0]);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(opened[0].close).not.toHaveBeenCalled();
+  });
+
+  it('closes a database that opened into the lock, waits, and tries again with a fresh one', async () => {
+    const { open, sleep, opened } = scripted([LOCKED, LOCKED, null]);
+    const onRetry = vi.fn();
+    const onAttempt = vi.fn();
+
+    const database = await openReplicaWithRetry({ open, sleep, onRetry, onAttempt });
+
+    expect(database).toBe(opened[2]);
+    // Each attempt is announced as it is built, and taken back when it fails.
+    expect(onAttempt.mock.calls.map(([db]) => db)).toEqual([opened[0], null, opened[1], null, opened[2]]);
+    expect(open).toHaveBeenCalledTimes(3);
+    expect(opened[0].close).toHaveBeenCalledTimes(1);
+    expect(opened[1].close).toHaveBeenCalledTimes(1);
+    expect(opened[2].close).not.toHaveBeenCalled();
+    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual(REPLICA_LOCK_RETRY_DELAYS_MS.slice(0, 2));
+    expect(onRetry).toHaveBeenNthCalledWith(1, 1, REPLICA_LOCK_RETRY_DELAYS_MS[0], LOCKED);
+  });
+
+  it('gives up with ReplicaLockedError once the delays are spent', async () => {
+    const { open, sleep } = scripted(Array(REPLICA_LOCK_RETRY_DELAYS_MS.length + 1).fill(LOCKED));
+
+    await expect(openReplicaWithRetry({ open, sleep })).rejects.toBeInstanceOf(ReplicaLockedError);
+    expect(open).toHaveBeenCalledTimes(REPLICA_LOCK_RETRY_DELAYS_MS.length + 1);
+    expect(sleep).toHaveBeenCalledTimes(REPLICA_LOCK_RETRY_DELAYS_MS.length);
+  });
+
+  it('rethrows any other startup failure at once, after closing', async () => {
+    const lost = new ReplicaKeyLostError(NATIVE_DB_FILENAME);
+    const { open, sleep, opened } = scripted([lost, null]);
+
+    await expect(openReplicaWithRetry({ open, sleep })).rejects.toBe(lost);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(opened[0].close).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('stops between attempts when aborted', async () => {
+    const controller = new AbortController();
+    const { open, opened } = scripted([LOCKED, null]);
+    const sleep = vi.fn(async () => {
+      controller.abort();
+    });
+
+    await expect(openReplicaWithRetry({ open, sleep, signal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(opened[0].close).toHaveBeenCalledTimes(1);
   });
 });

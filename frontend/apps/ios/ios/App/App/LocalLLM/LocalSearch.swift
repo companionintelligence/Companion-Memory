@@ -153,7 +153,7 @@ final class LocalSearchStore {
   static func matchExpression(_ query: String) -> String? {
     let terms = query.lowercased().split(whereSeparator: { !($0.isLetter || $0.isNumber) }).map(String.init)
     if terms.isEmpty { return nil }
-    return "{title body}: (" + terms.map { "\"\($0)\"*" }.joined(separator: " OR ") + ")"
+    return terms.map { "\"\($0)\"*" }.joined(separator: " OR ")
   }
 
   static func occurredAtBound(_ text: String, upper: Bool) -> String? {
@@ -204,7 +204,7 @@ final class LocalSearchStore {
   static func pageStatement(_ args: LocalSearchArgs, limit: Int) -> Statement? {
     guard let c = clauses(args, ordered: true) else { return nil }
     let order = (c.hasQuery && args.sort != "recent")
-      ? "ORDER BY bm25(mobile_search_documents_fts, 10.0, 1.0, 0.0, 0.0, 0.0), d.id"
+      ? "ORDER BY bm25(mobile_search_documents_fts, 10.0, 1.0), d.id"
       : "ORDER BY d.occurred_at DESC NULLS LAST, d.id"
     return Statement(
       sql: "SELECT d.entity_type, d.entity_id, d.title, d.body, d.occurred_at, d.detail \(c.from) WHERE \(c.whereSql) \(order) LIMIT ?",

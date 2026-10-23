@@ -5,11 +5,13 @@ import { formatBytes } from '@/pages/MemoryPage/Components';
 
 /** What the record page calls each type. */
 export const RECORD_TYPE_LABELS: Record<string, string> = {
+  'browser-activity': 'Browser activity',
   communication: 'Message',
   concept: 'Concept',
   content: 'Content',
   event: 'Event',
   file: 'File',
+  'file-chunk': 'Document excerpt',
   item: 'Thing',
   note: 'Note',
   person: 'Person',
@@ -46,6 +48,14 @@ const DETAIL_LABELS: Array<[key: string, label: string]> = [
   ['size', 'Size'],
   ['width', 'Dimensions'],
   ['source_url', 'Link'],
+  ['url', 'Link'],
+  ['domain', 'Site'],
+  ['action_type', 'Action'],
+  ['duration_seconds', 'Time on page'],
+  ['filename', 'File'],
+  ['section_title', 'Section'],
+  ['page', 'Page'],
+  ['sheet', 'Sheet'],
   ['first_name', 'First name'],
   ['last_name', 'Last name'],
   ['is_self', 'This is you'],
@@ -80,6 +90,29 @@ export interface DetailRow {
   key: string;
   label: string;
   value: string;
+}
+
+/** A browser visit's time on page, as "45 s", "3 min" or "1 h 20 min". */
+function formatSeconds(value: unknown): string | null {
+  const seconds = typeof value === 'number' ? value : Number(value);
+
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return null;
+  }
+
+  if (seconds < 60) {
+    return `${Math.round(seconds)} s`;
+  }
+
+  const minutes = Math.round(seconds / 60);
+
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+
+  const rest = minutes % 60;
+
+  return rest === 0 ? `${Math.floor(minutes / 60)} h` : `${Math.floor(minutes / 60)} h ${rest} min`;
 }
 
 function names(value: unknown): string {
@@ -120,6 +153,19 @@ export function detailRows(detail: DocumentDetail | null, fmt: DateTimeFormatter
     const value = detail[key];
 
     switch (key) {
+      // 'confirmed' is `ci.events.status`'s column DEFAULT, written for every event
+      // whose source said nothing (most calendar files, every Timeline visit), so it
+      // is the absence of information, not a verdict that the event happened. Only
+      // a status someone or something stated (tentative, cancelled, no_show, the
+      // task states) is worth a row.
+      case 'status': {
+        if (value !== 'confirmed') {
+          push(key, label, names(value));
+        }
+
+        break;
+      }
+
       case 'participants': {
         const participants = value as { from?: unknown; to?: unknown };
         const parts = [
@@ -166,7 +212,17 @@ export function detailRows(detail: DocumentDetail | null, fmt: DateTimeFormatter
         break;
 
       case 'source_url':
+      case 'url':
+      case 'filename':
+      case 'section_title':
+      case 'page':
+      case 'sheet':
+        // Verbatim: a URL, a filename or a heading is not a label to re-case.
         push(key, label, String(value));
+        break;
+
+      case 'duration_seconds':
+        push(key, label, formatSeconds(value));
         break;
 
       default:

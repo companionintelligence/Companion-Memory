@@ -13,12 +13,31 @@ let database: AbstractPowerSyncDatabase | null = null;
  */
 let boundIsReplica = false;
 
+const bindingListeners = new Set<() => void>();
+
 export function bindPowerSyncDatabase(
   db: AbstractPowerSyncDatabase | null,
   options: { replica?: boolean } = {},
 ): void {
   database = db;
   boundIsReplica = db != null && options.replica === true;
+
+  for (const listener of bindingListeners) {
+    listener();
+  }
+}
+
+/**
+ * Hear the binding change. The offline views decide "answer from this phone?" at render
+ * time, and the replica is bound seconds after the page mounts (it is opened lazily and
+ * waits out a stale lock), so a view that rendered before must be told to look again.
+ */
+export function subscribeBoundDatabase(listener: () => void): () => void {
+  bindingListeners.add(listener);
+
+  return () => {
+    bindingListeners.delete(listener);
+  };
 }
 
 export function getBoundPowerSyncDatabase(): AbstractPowerSyncDatabase | null {
@@ -28,6 +47,39 @@ export function getBoundPowerSyncDatabase(): AbstractPowerSyncDatabase | null {
 /** The phone's synced replica, or null anywhere else (a browser, a phone whose native adapter failed). */
 export function getReplicaDatabase(): AbstractPowerSyncDatabase | null {
   return boundIsReplica ? getBoundPowerSyncDatabase() : null;
+}
+
+/**
+ * Where the provider is with the phone's replica. `opening` from the moment it starts
+ * until PowerSync's startup succeeds (including every retry against a stale lock, see
+ * `openReplicaWithRetry`); `failed` carries the error that ended the attempt. `idle` on
+ * platforms that never open one. The error states read it, so a phone whose own copy is
+ * still opening, or could not be opened, says that instead of blaming the server.
+ */
+export type ReplicaOpenState =
+  { phase: 'idle' } | { phase: 'opening' } | { phase: 'open' } | { phase: 'failed'; error: Error };
+
+let replicaOpenState: ReplicaOpenState = { phase: 'idle' };
+const replicaOpenStateListeners = new Set<() => void>();
+
+export function setReplicaOpenState(state: ReplicaOpenState): void {
+  replicaOpenState = state;
+
+  for (const listener of replicaOpenStateListeners) {
+    listener();
+  }
+}
+
+export function getReplicaOpenState(): ReplicaOpenState {
+  return replicaOpenState;
+}
+
+export function subscribeReplicaOpenState(listener: () => void): () => void {
+  replicaOpenStateListeners.add(listener);
+
+  return () => {
+    replicaOpenStateListeners.delete(listener);
+  };
 }
 
 export function requestPowerSyncReconnect(): void {

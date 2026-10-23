@@ -67,6 +67,9 @@ export async function uploadFilesToMemory(
 
   const data = await fetchJson<FileData[]>('/api/files/upload', {
     method: 'POST',
+    // A capture is queued and replayed (`memoryUploadQueue.ts`), not refused: it must not
+    // raise the offline-write dialog the way an edit or an import would.
+    allowOffline: true,
     headers,
     body: formData,
   });

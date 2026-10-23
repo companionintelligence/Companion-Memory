@@ -6,16 +6,18 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { ErrorState } from './ErrorState';
 
-const h = vi.hoisted(() => ({ offline: false }));
+const h = vi.hoisted(() => ({ offline: false, replica: { opening: false, failed: false, locked: false } }));
 
 // Hoisted by vitest above the imports, so the mock is in place before either component loads.
 vi.mock('@/api/powersync/deviceFallback', () => ({
   useAnswersFromDevice: () => h.offline,
+  useReplicaOpenState: () => h.replica,
 }));
 
 describe('ErrorState', () => {
   it('says to check the connection by default', () => {
     h.offline = false;
+    h.replica = { opening: false, failed: false, locked: false };
     renderWithProviders(<ErrorState />);
 
     expect(screen.getByText('Something went wrong')).toBeInTheDocument();
@@ -28,6 +30,33 @@ describe('ErrorState', () => {
 
     expect(screen.getByText('Needs the Memory server')).toBeInTheDocument();
     expect(screen.getByText(/What this phone has synced is still here/)).toBeInTheDocument();
+  });
+
+  it("blames the phone's own copy, not the server, when that copy could not be opened", () => {
+    h.offline = false;
+    h.replica = { opening: false, failed: true, locked: false };
+    const { unmount } = renderWithProviders(<ErrorState />);
+
+    expect(screen.getByText("Couldn't open this phone's copy")).toBeInTheDocument();
+    expect(screen.getByText(/could not be opened, so there is nothing to show offline/)).toBeInTheDocument();
+    expect(screen.queryByText('Needs the Memory server')).not.toBeInTheDocument();
+    unmount();
+
+    h.replica = { opening: false, failed: true, locked: true };
+    renderWithProviders(<ErrorState />);
+    expect(screen.getByText(/still held by an earlier session of this app/)).toBeInTheDocument();
+    h.replica = { opening: false, failed: false, locked: false };
+  });
+
+  it("says the phone's copy is still opening while it is, instead of 'check your connection'", () => {
+    h.offline = false;
+    h.replica = { opening: true, failed: false, locked: false };
+    renderWithProviders(<ErrorState />);
+
+    expect(screen.getByText("Opening this phone's copy")).toBeInTheDocument();
+    expect(screen.getByText(/will load once it is open/)).toBeInTheDocument();
+    expect(screen.queryByText(/Check your connection/)).not.toBeInTheDocument();
+    h.replica = { opening: false, failed: false, locked: false };
   });
 
   it("the Memory views' wrapper defers to that copy too, but a caller's own words win", () => {

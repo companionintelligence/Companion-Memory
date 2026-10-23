@@ -15,11 +15,13 @@ import {
 describe('resolveListTypes', () => {
   it('covers every type the device holds, including the ones the header box has no row for', () => {
     expect(resolveListTypes()).toEqual([
+      'browser-activity',
       'communication',
       'concept',
       'content',
       'event',
       'file',
+      'file-chunk',
       'item',
       'note',
       'person',
@@ -46,14 +48,12 @@ describe('localListStatement', () => {
       'JOIN mobile_search_documents d ON d.rowid = mobile_search_documents_fts.rowid',
     );
     expect(statement!.sql).toContain('mobile_search_documents_fts MATCH ?');
-    expect(statement!.sql).toContain(
-      'ORDER BY bm25(mobile_search_documents_fts, 10.0, 1.0, 0.0, 0.0, 0.0), d.id',
-    );
+    expect(statement!.sql).toContain('ORDER BY bm25(mobile_search_documents_fts, 10.0, 1.0), d.id');
     // The FTS scan drives; the type term must not tempt the planner onto the type index (15 s).
     expect(statement!.sql).toContain('+d.entity_type IN (');
     expect(statement!.sql).toContain('d.related_id, d.detail');
     expect(statement!.sql).toMatch(/LIMIT \? OFFSET \?$/);
-    expect(statement!.params[0]).toBe('({title body}: ("harbour"* OR "grill"*))');
+    expect(statement!.params[0]).toBe('"harbour"* OR "grill"*');
     expect(statement!.params.slice(-2)).toEqual([30, 0]);
   });
 
@@ -112,7 +112,7 @@ describe('localListStatement', () => {
     expect(statement!.sql).toContain('AND (SELECT count(DISTINCT t.label)');
     expect(statement!.sql).toContain('WHERE et.entity_type = d.entity_type');
     expect(statement!.sql).not.toContain('CROSS JOIN');
-    expect(statement!.params.slice(0, 3)).toEqual(['({title body}: ("beach"*))', 'vacation', 1]);
+    expect(statement!.params.slice(0, 3)).toEqual(['"beach"*', 'vacation', 1]);
   });
 
   it('a date range bounds occurred_at in the stored text form: from the second, to before the next', () => {
@@ -246,19 +246,31 @@ describe('structured filters', () => {
     );
   });
 
-  it('on the FTS plan (a person in few records) the ids ride in the MATCH, with the text when there is one', () => {
+  it('on the FTS plan (a person in few records) the id index drives a browse, and probes behind a text query', () => {
     const plan = { ids: [ana], columns: peopleColumns(undefined), via: 'fts' as const, matches: 1 };
     const browse = localListStatement({ query: '', sort: 'newest', people: ['Ana'] }, page, plan)!;
 
-    expect(browse.sql).toContain('mobile_search_documents_fts MATCH ?');
-    expect(browse.params[0]).toBe(`({from_id to_ids people}: (${ftsIdPhrase(ana)}))`);
+    // No text: the (unstemmed) id index drives the scan.
+    expect(browse.sql).toMatch(
+      /FROM mobile_search_people_fts\s+JOIN mobile_search_documents d ON d.rowid = mobile_search_people_fts.rowid/,
+    );
+    expect(browse.sql).toContain('mobile_search_people_fts MATCH ?');
+    expect(browse.sql).not.toContain('mobile_search_documents_fts');
+    expect(browse.params[0]).toBe(`{from_id to_ids people}: (${ftsIdPhrase(ana)})`);
     expect(browse.sql).not.toContain('instr(');
 
+    // With text: the stemmed text index drives, ranked, and the ids are a rowid probe into theirs.
     const searched = localListStatement({ query: 'lunch', sort: 'relevance', people: ['Ana'] }, page, plan)!;
 
-    expect(searched.params[0]).toBe(
-      `({title body}: ("lunch"*)) AND ({from_id to_ids people}: (${ftsIdPhrase(ana)}))`,
+    expect(searched.sql).toContain('FROM mobile_search_documents_fts');
+    expect(searched.sql).toContain(
+      'd.rowid IN (SELECT rowid FROM mobile_search_people_fts WHERE mobile_search_people_fts MATCH ?)',
     );
+    expect(searched.sql).toContain('ORDER BY bm25(mobile_search_documents_fts, 10.0, 1.0), d.id');
+    expect(searched.params.slice(0, 2)).toEqual([
+      '"lunch"*',
+      `{from_id to_ids people}: (${ftsIdPhrase(ana)})`,
+    ]);
   });
 
   it('on the walk plan (a person in many records) each row is tested with literal ids, in the role columns only', () => {

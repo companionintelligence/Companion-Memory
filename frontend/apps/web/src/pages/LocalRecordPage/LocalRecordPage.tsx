@@ -225,7 +225,13 @@ export function LocalRecordPage() {
   }
 
   if (loaded.state === 'error') {
-    return <ErrorState onRetry={() => setAttempt((n) => n + 1)} />;
+    return (
+      <ErrorState
+        title={t('MEMORY_LOCAL_READ_FAILED_TITLE')}
+        description={t('MEMORY_LOCAL_READ_FAILED_DESCRIPTION')}
+        onRetry={() => setAttempt((n) => n + 1)}
+      />
+    );
   }
 
   if (loaded.state === 'missing' || !document || !lines) {

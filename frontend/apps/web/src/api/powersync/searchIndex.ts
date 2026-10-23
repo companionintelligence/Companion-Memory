@@ -34,14 +34,31 @@
  * S23U with the triggers left in place through a 1.08M-operation re-download:
  * the apply was still writing after three hours.
  *
- * Tokenizer: `unicode61` with diacritics folded, so "Zoë" is found by "zoe".
- * SQLite does not stem the way Postgres' `english` configuration does;
- * `localSearch.ts` narrows that gap with prefix matching.
+ * ## Two FTS tables, one per tokenizer
+ *
+ * The text (`title`, `body`) is indexed with FTS5's `porter` stemmer over
+ * `unicode61` with diacritics folded, so "meetings" finds "meeting" and "Zoë"
+ * is found by "zoe" — the stemming the appliance's Postgres `english`
+ * configuration does (Snowball English, Porter's later revision; the two agree
+ * on nearly every word). `localSearch.ts` keeps prefix matching on top, which
+ * now runs over stems.
+ *
+ * The person ids a record names (`from_id`, `to_ids`, `people`: uuids, which
+ * `unicode61` splits into five hex groups) are indexed too, as the cheapest
+ * inverted index for the Who filter (`localList.ts`, `planPeople`). FTS5 has one
+ * tokenizer per table, and Porter would stem hex groups as if they were words
+ * — a group ending in "ed" loses it — so two different ids could collide in
+ * the index and the filter would return a wrong record. The ids therefore live
+ * in a second table with the plain tokenizer. The two share the content table,
+ * the triggers, the rebuild and the shape check.
  */
 import type { AbstractPowerSyncDatabase, RawTableType } from '@powersync/web';
 
 export const DOCUMENTS_TABLE = 'mobile_search_documents';
+/** The text index: `title` and `body`, stemmed. */
 export const DOCUMENTS_FTS_TABLE = 'mobile_search_documents_fts';
+/** The person-id index: the three id columns, not stemmed. See the module comment. */
+export const PEOPLE_FTS_TABLE = 'mobile_search_people_fts';
 
 /**
  * The columns the device keeps, in the order the `put` statement binds them —
@@ -213,20 +230,47 @@ export const DOCUMENTS_INDEX_NAMES: readonly string[] = DOCUMENTS_INDEX_DDL.map(
 });
 
 /**
- * The FTS5 columns, in order — `bm25()` weights in localSearch.ts follow this
- * order. `title` and `body` are the text; the other three are the person ids
- * a record names (generated columns, see {@link DOCUMENTS_GENERATED_COLUMNS}),
- * indexed as text so the Who filter is a column-scoped MATCH: a uuid
- * tokenizes into its five hex groups, and the filter asks for them as a
- * phrase. Postings are the cheapest inverted index SQLite offers — 26 MB for
- * 1.56M recipient entries, against 218 MB for a side table of the same —
- * and the match count is nearly free, which the filter uses to pick its
- * plan (localList.ts, `planPeople`).
+ * The text index's columns, in order — `bm25()` weights in localSearch.ts
+ * follow this order.
  */
-export const DOCUMENTS_FTS_COLUMNS = ['title', 'body', 'from_id', 'to_ids', 'people'] as const;
+export const DOCUMENTS_FTS_COLUMNS = ['title', 'body'] as const;
 
-/** The FTS columns that hold the record's text, for a column-scoped text query. */
-export const DOCUMENTS_FTS_TEXT_COLUMNS = ['title', 'body'] as const;
+/** The same, under the name the search modules read it by. */
+export const DOCUMENTS_FTS_TEXT_COLUMNS = DOCUMENTS_FTS_COLUMNS;
+
+/**
+ * The person-id index's columns: the ids a record names (generated columns,
+ * see {@link DOCUMENTS_GENERATED_COLUMNS}), indexed as text so the Who filter
+ * is a column-scoped MATCH: a uuid tokenizes into its five hex groups, and the
+ * filter asks for them as a phrase. Postings are the cheapest inverted index
+ * SQLite offers — 26 MB for 1.56M recipient entries, against 218 MB for a side
+ * table of the same — and the match count is nearly free, which the filter
+ * uses to pick its plan (localList.ts, `planPeople`).
+ */
+export const PEOPLE_FTS_COLUMNS = ['from_id', 'to_ids', 'people'] as const;
+
+/** Stemmed text, diacritics folded. A change here changes the shape, and every device rebuilds. */
+export const DOCUMENTS_FTS_TOKENIZER = 'porter unicode61 remove_diacritics 2';
+
+/** Ids as they are: a stemmer would rewrite hex groups (see the module comment). */
+export const PEOPLE_FTS_TOKENIZER = 'unicode61';
+
+interface FtsTable {
+  table: string;
+  columns: readonly string[];
+  tokenizer: string;
+}
+
+/** Both indexes, in creation order. */
+const FTS_TABLES: readonly FtsTable[] = [
+  { table: DOCUMENTS_FTS_TABLE, columns: DOCUMENTS_FTS_COLUMNS, tokenizer: DOCUMENTS_FTS_TOKENIZER },
+  { table: PEOPLE_FTS_TABLE, columns: PEOPLE_FTS_COLUMNS, tokenizer: PEOPLE_FTS_TOKENIZER },
+];
+
+/** The `fts5(...)` clause an index's CREATE statement carries: the shape {@link hasSearchIndex} checks. */
+function ftsShape({ columns, tokenizer }: FtsTable): string {
+  return `fts5(${columns.join(', ')}, content='${DOCUMENTS_TABLE}', tokenize = '${tokenizer}')`;
+}
 
 /**
  * A download of at least this many operations is applied without the index
@@ -239,6 +283,24 @@ export const DOCUMENTS_FTS_TEXT_COLUMNS = ['title', 'body'] as const;
 export const BULK_DOWNLOAD_OPERATIONS = 5_000;
 
 const FTS_TRIGGER_SUFFIXES = ['insert', 'update', 'delete'] as const;
+
+/** Every trigger both indexes need, named `<fts table>_<suffix>`. */
+const FTS_TRIGGER_NAMES: readonly string[] = FTS_TABLES.flatMap(({ table }) =>
+  FTS_TRIGGER_SUFFIXES.map((suffix) => `${table}_${suffix}`),
+);
+
+/**
+ * SQL as `sqlite_master` records it, for comparing a stored trigger with the one expected.
+ * SQLite keeps the CREATE statement's text but drops its `IF NOT EXISTS` clause and does not
+ * preserve whitespace exactly; a comparison that forgot the first of those matched nothing,
+ * and every launch rebuilt both indexes (2026-10-23).
+ */
+function normalizeSql(sql: string): string {
+  return sql
+    .replace(/\bIF NOT EXISTS\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 /**
  * The table itself. `id` is the server's `ci_search.vectors` row id. Not
@@ -284,13 +346,12 @@ export const DOCUMENTS_RAW_TABLE: RawTableType = {
   clear: `DELETE FROM ${DOCUMENTS_TABLE}`,
 };
 
-/** The statements that install the three triggers, in order. */
-export function searchIndexTriggerStatements(): string[] {
+/** The three external-content triggers for one index. */
+function triggerStatements({ table: fts, columns: ftsColumns }: FtsTable): string[] {
   const table = DOCUMENTS_TABLE;
-  const fts = DOCUMENTS_FTS_TABLE;
-  const columns = DOCUMENTS_FTS_COLUMNS.join(', ');
-  const newValues = DOCUMENTS_FTS_COLUMNS.map((column) => `NEW.${column}`).join(', ');
-  const oldValues = DOCUMENTS_FTS_COLUMNS.map((column) => `OLD.${column}`).join(', ');
+  const columns = ftsColumns.join(', ');
+  const newValues = ftsColumns.map((column) => `NEW.${column}`).join(', ');
+  const oldValues = ftsColumns.map((column) => `OLD.${column}`).join(', ');
 
   return [
     `CREATE TRIGGER IF NOT EXISTS ${fts}_insert AFTER INSERT ON ${table} BEGIN
@@ -306,41 +367,44 @@ export function searchIndexTriggerStatements(): string[] {
   ];
 }
 
+/** The statements that install both indexes' triggers, in order: the text index's three, then the ids'. */
+export function searchIndexTriggerStatements(): string[] {
+  return FTS_TABLES.flatMap(triggerStatements);
+}
+
 /**
  * The statements that drop the triggers and the table's own indexes, leaving
  * the table and the FTS index, so a bulk download writes the table alone.
  */
 export function searchIndexSuspendStatements(): string[] {
   return [
-    ...FTS_TRIGGER_SUFFIXES.map((suffix) => `DROP TRIGGER IF EXISTS ${DOCUMENTS_FTS_TABLE}_${suffix}`),
+    ...FTS_TRIGGER_NAMES.map((name) => `DROP TRIGGER IF EXISTS ${name}`),
     ...DOCUMENTS_INDEX_NAMES.map((name) => `DROP INDEX IF EXISTS ${name}`),
   ];
 }
 
-/** Re-index everything from the table (FTS5's `rebuild`), rebuild the indexes, then put the triggers back. */
+/** Re-index everything from the table (FTS5's `rebuild`, both indexes), rebuild the indexes, then put the triggers back. */
 export function searchIndexResumeStatements(): string[] {
   return [
-    `INSERT INTO ${DOCUMENTS_FTS_TABLE}(${DOCUMENTS_FTS_TABLE}) VALUES ('rebuild')`,
+    ...FTS_TABLES.map(({ table }) => `INSERT INTO ${table}(${table}) VALUES ('rebuild')`),
     ...DOCUMENTS_INDEX_DDL,
     ...searchIndexTriggerStatements(),
   ];
 }
 
 /**
- * The statements that create the index and its triggers, in order. Exported
- * for the test.
+ * The statements that create both indexes and their triggers, in order.
+ * Exported for the test.
  *
- * The index is an external-content FTS5 table: it stores only the inverted
+ * Each index is an external-content FTS5 table: it stores only the inverted
  * index and reads the text back from the documents table by rowid, which is
- * also what the `rebuild` command below indexes from. The three triggers are
- * the ones the FTS5 documentation prescribes for external content; the
- * update one is a delete of the old text plus an insert of the new.
+ * also what the `rebuild` command below indexes from. The three triggers per
+ * index are the ones the FTS5 documentation prescribes for external content;
+ * the update one is a delete of the old text plus an insert of the new.
  */
 export function searchIndexStatements(): string[] {
-  const columns = DOCUMENTS_FTS_COLUMNS.join(', ');
-
   return [
-    `CREATE VIRTUAL TABLE IF NOT EXISTS ${DOCUMENTS_FTS_TABLE} USING fts5(${columns}, content='${DOCUMENTS_TABLE}', tokenize = 'unicode61 remove_diacritics 2')`,
+    ...FTS_TABLES.map((fts) => `CREATE VIRTUAL TABLE IF NOT EXISTS ${fts.table} USING ${ftsShape(fts)}`),
     // Rows that synced before the index existed, then the triggers.
     ...searchIndexResumeStatements(),
   ];
@@ -411,25 +475,48 @@ export async function ensureDocumentsTable(db: AbstractPowerSyncDatabase): Promi
 }
 
 /**
- * Whether the index exists in this file in its current shape, with its
- * triggers. A table of an earlier shape (a contentful index over PowerSync's
- * JSON storage, from before this was a raw table; or one without the person
- * columns) does not count, and nor does an index whose triggers are missing — the app was killed during a
- * bulk download, after {@link watchBulkDownloads} dropped them — since rows
- * have reached the table unindexed. {@link ensureSearchIndex} rebuilds either.
+ * Whether both indexes exist in this file in their current shape — columns,
+ * content table AND tokenizer — with every trigger, each as currently written.
+ * A table of an earlier shape (a contentful index over PowerSync's JSON
+ * storage, from before this was a raw table; one carrying the person-id columns
+ * beside the text; one tokenized without the stemmer) does not count, and nor
+ * does an index whose triggers are missing — the app was killed during a bulk
+ * download, after {@link watchBulkDownloads} dropped them — since rows have
+ * reached the table unindexed. Nor does one whose triggers are of an earlier
+ * shape: they sit on the documents table, not on the index, so dropping the
+ * index leaves them, and `CREATE TRIGGER IF NOT EXISTS` would keep them — on
+ * 2026-10-23 a surviving trigger still named the id columns the text index had
+ * just lost, and every write to the documents table failed until it was
+ * replaced. {@link ensureSearchIndex} rebuilds in every case (11 s for 589k
+ * rows on the S23U when the shape last changed).
  */
 export async function hasSearchIndex(db: AbstractPowerSyncDatabase): Promise<boolean> {
-  const row = await db.getOptional<{ table_sql: string | null; triggers: number }>(
-    `SELECT (SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?) AS table_sql,
-            (SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name IN (?, ?, ?)) AS triggers`,
-    [DOCUMENTS_FTS_TABLE, ...FTS_TRIGGER_SUFFIXES.map((suffix) => `${DOCUMENTS_FTS_TABLE}_${suffix}`)],
+  const row = await db.getOptional<{ text_sql: string | null; people_sql: string | null }>(
+    `SELECT (SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?) AS text_sql,
+            (SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?) AS people_sql`,
+    [DOCUMENTS_FTS_TABLE, PEOPLE_FTS_TABLE],
   );
 
-  // The current shape names every column: an index from before the person-id
-  // columns is rebuilt (the FTS rebuild took 11 s for 589k rows on the S23U).
-  const currentShape = `fts5(${DOCUMENTS_FTS_COLUMNS.join(', ')}, content='${DOCUMENTS_TABLE}'`;
+  const [text, people] = FTS_TABLES;
 
-  return (row?.table_sql?.includes(currentShape) ?? false) && row?.triggers === FTS_TRIGGER_SUFFIXES.length;
+  if (
+    !(row?.text_sql?.includes(ftsShape(text)) ?? false) ||
+    !(row?.people_sql?.includes(ftsShape(people)) ?? false)
+  ) {
+    return false;
+  }
+
+  const triggers = await db.getAll<{ name: string; sql: string | null }>(
+    `SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name IN (${FTS_TRIGGER_NAMES.map(() => '?').join(', ')})`,
+    [...FTS_TRIGGER_NAMES],
+  );
+  const stored = new Map(triggers.map((trigger) => [trigger.name, normalizeSql(trigger.sql ?? '')]));
+
+  return searchIndexTriggerStatements().every((statement) => {
+    const name = /CREATE TRIGGER IF NOT EXISTS (\S+)/.exec(statement)?.[1];
+
+    return name != null && stored.get(name) === normalizeSql(statement);
+  });
 }
 
 /**
@@ -470,9 +557,15 @@ export async function ensureSearchIndex(
   }
 
   await db.writeTransaction(async (tx) => {
-    // An index of the earlier shape, if any; its triggers went with the
-    // managed table they were attached to.
-    await tx.execute(`DROP TABLE IF EXISTS ${DOCUMENTS_FTS_TABLE}`);
+    // The triggers first: they belong to the documents table, so they outlive
+    // the index they feed, and the CREATE below would keep an old one.
+    for (const name of FTS_TRIGGER_NAMES) {
+      await tx.execute(`DROP TRIGGER IF EXISTS ${name}`);
+    }
+
+    for (const { table } of FTS_TABLES) {
+      await tx.execute(`DROP TABLE IF EXISTS ${table}`);
+    }
 
     for (const statement of searchIndexStatements()) {
       await tx.execute(statement);

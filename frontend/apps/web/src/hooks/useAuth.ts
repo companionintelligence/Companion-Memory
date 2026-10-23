@@ -33,6 +33,7 @@ import { jwtDecode } from 'jwt-decode';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 import { disconnectAndClearPowerSyncForLogout } from '@/api/powersync/session';
+import { forgetFeatures } from '@/common/feature/rememberedFeatures';
 import { registerNativePushToken } from '@/lib/registerNativePushToken';
 
 import { forgetUser } from './rememberedUser';
@@ -50,12 +51,13 @@ const API_KEY_CAPABILITY_STORAGE = 'ci.apiKeyCapability';
 // The paired Memory origin, mirrored into the keystore for native consumers.
 const API_BASE_URL_STORAGE = 'ci.apiBaseUrl';
 
-/** Forget this device's stored key, its id and its capability — and the profile kept for an outage. */
+/** Forget this device's stored key, its id and its capability — and the profile and feature flags kept for an outage. */
 async function removeStoredDeviceKey(): Promise<void> {
   await secureStorageRemove(API_KEY_STORAGE);
   await secureStorageRemove(API_KEY_ID_STORAGE);
   await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
   forgetUser();
+  forgetFeatures();
 }
 
 /**

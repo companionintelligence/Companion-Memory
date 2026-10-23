@@ -48,6 +48,7 @@ vi.mock('./previews', () => ({
 
 vi.mock('./nativeDatabase', () => ({
   openNativePowerSyncDatabase: () => mocks.nativeDatabase,
+  openReplicaWithRetry: async () => mocks.nativeDatabase,
   NATIVE_DB_ON_DISK_FILENAME: 'ci-powersyncSQLite.db',
 }));
 
@@ -63,6 +64,7 @@ vi.mock('./searchIndex', () => ({
 vi.mock('./session', () => ({
   bindPowerSyncDatabase: vi.fn(),
   measurePowerSyncSizeBytes: vi.fn().mockResolvedValue(null),
+  setReplicaOpenState: vi.fn(),
 }));
 
 vi.mock('./connector', () => ({

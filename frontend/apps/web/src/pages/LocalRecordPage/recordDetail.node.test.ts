@@ -15,7 +15,10 @@ describe('recordTypeLabel', () => {
     expect(recordTypeLabel('communication')).toBe('Message');
     expect(recordTypeLabel('item')).toBe('Thing');
     expect(recordTypeLabel('thread')).toBe('Chat');
-    expect(recordTypeLabel('browser-activity')).toBe('Browser Activity');
+    expect(recordTypeLabel('browser-activity')).toBe('Browser activity');
+    expect(recordTypeLabel('file-chunk')).toBe('Document excerpt');
+    // A type the table does not know is still readable.
+    expect(recordTypeLabel('some-new-type')).toBe('Some New Type');
   });
 });
 
@@ -69,6 +72,17 @@ describe('detailRows', () => {
       ['All day', 'No'],
       ['Coordinates', '33.6881, -117.7715'],
     ]);
+  });
+
+  it("an event's status shows only when a source stated one: the column default is not information", () => {
+    const confirmed = detailRows({ status: 'confirmed', is_all_day: true }, fmt);
+    expect(confirmed.map((row) => row.label)).toEqual(['All day']);
+
+    const tentative = detailRows({ status: 'tentative' }, fmt);
+    expect(tentative.map((row) => [row.label, row.value])).toEqual([['Status', 'tentative']]);
+
+    const cancelled = detailRows({ status: 'cancelled' }, fmt);
+    expect(cancelled.map((row) => [row.label, row.value])).toEqual([['Status', 'cancelled']]);
   });
 
   it('a receipt total with its currency, and a field this list has never heard of', () => {

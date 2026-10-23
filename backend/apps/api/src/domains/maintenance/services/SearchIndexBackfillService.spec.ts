@@ -18,6 +18,7 @@ import {
   BACKFILLABLE_ENTITIES,
   PIPELINE_COVERED_STAGES,
   SearchIndexBackfillService,
+  backfillEventPayload,
   normalizeBackfillEntityTypes,
 } from './SearchIndexBackfillService';
 
@@ -136,8 +137,19 @@ describe('PIPELINE_COVERED_STAGES', () => {
     // map is a regression: the pipeline is the indexing path.
     // `note`, `thread`, `task` and `place` are indexed live by their listeners
     // and have no pipeline stage; their lanes exist only to give rows written
-    // before ci_search.mobile_search_documents a device document.
-    const uncovered = ['position', 'product', 'receipt', 'concept', 'note', 'thread', 'task', 'place'];
+    // before ci_search.mobile_search_documents a device document. `file-chunk`
+    // (2026-10-23) is the same: indexed live on DocumentParsedEvent, no stage.
+    const uncovered = [
+      'position',
+      'product',
+      'receipt',
+      'concept',
+      'note',
+      'thread',
+      'task',
+      'place',
+      'file-chunk',
+    ];
 
     expect(Object.keys(PIPELINE_COVERED_STAGES).sort()).toEqual(
       BACKFILLABLE_ENTITIES.filter((type) => !uncovered.includes(type)).sort(),
@@ -178,6 +190,7 @@ describe('SearchIndexBackfillService', () => {
         thread: 0,
         task: 0,
         place: 0,
+        'file-chunk': 0,
       },
       // No embeddings configured for this DS → drain count is 0 for every type.
       embedded: 0,
@@ -197,6 +210,7 @@ describe('SearchIndexBackfillService', () => {
         thread: 0,
         task: 0,
         place: 0,
+        'file-chunk': 0,
       },
     });
 
@@ -577,5 +591,35 @@ describe('SearchIndexBackfillService', () => {
 
     expect(result.perType.communication).toBe(0);
     expect(result.errors).toEqual({ communication: 'boom' });
+  });
+});
+
+describe('backfillEventPayload', () => {
+  it("sends the id under the listener's field name, plus the owner when the spec names one", () => {
+    expect(backfillEventPayload({ event: 'x', idField: 'noteId' }, { id: 'n1' })).toEqual({ noteId: 'n1' });
+    expect(
+      backfillEventPayload(
+        { event: 'x', idField: 'taskId', owner: { field: 'userId', column: 'user_id' } },
+        { id: 't1', owner: 'u1' },
+      ),
+    ).toEqual({ taskId: 't1', userId: 'u1' });
+  });
+
+  it('a file chunk re-drives DocumentParsedEvent for one chunk of its file, as its owner', () => {
+    // The lane exists so chunks parsed before 2026-10-23 get a device document;
+    // the listener reads chunkIds (a list), userId and fileId.
+    expect(
+      backfillEventPayload(
+        {
+          event: 'document.parsed',
+          idField: 'chunkIds',
+          idAsList: true,
+          owner: { field: 'userId', column: 'user_id' },
+          extra: { fileId: 'file_id' },
+        },
+        { id: 'c1', owner: 'u1', extra: { fileId: 'f1' } },
+      ),
+    ).toEqual({ chunkIds: ['c1'], userId: 'u1', fileId: 'f1' });
+    expect(BACKFILLABLE_ENTITIES).toContain('file-chunk');
   });
 });

@@ -42,7 +42,7 @@ import {
   likePrefix,
   toLocalDocument,
 } from './localSearch';
-import { DOCUMENTS_GEO_INDEX, DOCUMENTS_FTS_TABLE, DOCUMENTS_TABLE } from './searchIndex';
+import { DOCUMENTS_GEO_INDEX, DOCUMENTS_FTS_TABLE, DOCUMENTS_TABLE, PEOPLE_FTS_TABLE } from './searchIndex';
 
 /**
  * Every type the device holds a record for (search-next DEVICE_INDEXED_ENTITIES).
@@ -50,11 +50,13 @@ import { DOCUMENTS_GEO_INDEX, DOCUMENTS_FTS_TABLE, DOCUMENTS_TABLE } from './sea
  * all of them, each with its own row.
  */
 export const LOCAL_LIST_TYPES = [
+  'browser-activity',
   'communication',
   'concept',
   'content',
   'event',
   'file',
+  'file-chunk',
   'item',
   'note',
   'person',
@@ -193,7 +195,7 @@ export async function planPeople(
   }
 
   const counted = await db.getOptional<{ n: number }>(
-    `SELECT count(*) AS n FROM ${DOCUMENTS_FTS_TABLE} WHERE ${DOCUMENTS_FTS_TABLE} MATCH ?`,
+    `SELECT count(*) AS n FROM ${PEOPLE_FTS_TABLE} WHERE ${PEOPLE_FTS_TABLE} MATCH ?`,
     [peopleMatchExpression({ ids, columns })],
   );
   const matches = counted?.n ?? 0;
@@ -409,13 +411,13 @@ function listClauses(options: LocalListQuery, ordered: boolean, people: PeoplePl
     return null;
   }
 
-  // One MATCH carries the text and, on the FTS plan, the people: both are
-  // index lookups and their AND is cheap. On the walk plan the people are a
-  // row test below.
-  const matchParts = [textMatch, people?.via === 'fts' ? peopleMatchExpression(people) : null].filter(
-    (part): part is string => part != null,
-  );
-  const match = matchParts.length > 0 ? matchParts.map((part) => `(${part})`).join(' AND ') : null;
+  // The text and, on the FTS plan, the people are each an index lookup, in
+  // their own FTS tables (searchIndex.ts: the text is stemmed, the ids are
+  // not). Whichever exists drives the scan; both together is the text scan
+  // with the people as a rowid probe into the id index. On the walk plan the
+  // people are a row test below.
+  const peopleMatch = people?.via === 'fts' ? peopleMatchExpression(people) : null;
+  const match = textMatch ?? peopleMatch;
   const { field, present } = fieldRefs(match != null);
 
   const where: string[] = [];
@@ -436,10 +438,17 @@ function listClauses(options: LocalListQuery, ordered: boolean, people: PeoplePl
   let from: string;
 
   if (match != null) {
-    from = `FROM ${DOCUMENTS_FTS_TABLE}
-            JOIN ${DOCUMENTS_TABLE} d ON d.rowid = ${DOCUMENTS_FTS_TABLE}.rowid`;
-    where.push(`${DOCUMENTS_FTS_TABLE} MATCH ?`);
+    const driver = textMatch != null ? DOCUMENTS_FTS_TABLE : PEOPLE_FTS_TABLE;
+
+    from = `FROM ${driver}
+            JOIN ${DOCUMENTS_TABLE} d ON d.rowid = ${driver}.rowid`;
+    where.push(`${driver} MATCH ?`);
     params.push(match);
+
+    if (textMatch != null && peopleMatch != null) {
+      where.push(`d.rowid IN (SELECT rowid FROM ${PEOPLE_FTS_TABLE} WHERE ${PEOPLE_FTS_TABLE} MATCH ?)`);
+      params.push(peopleMatch);
+    }
 
     if (labels.length > 0) {
       where.push(

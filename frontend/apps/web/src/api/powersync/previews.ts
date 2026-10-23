@@ -98,6 +98,16 @@ export async function previewSrc(localUri: string): Promise<string> {
 
 // ── Storage adapter ─────────────────────────────────────────────────────────
 
+/**
+ * The bound on one preview download, headers and body. A preview is ~16 kB, so a
+ * healthy appliance answers in well under a second even over a tunnel; what this
+ * guards against is a request that never settles. `downloadRecord` runs inside the
+ * base class's loop under a `downloading` flag that only clears when the loop
+ * ends, so one hung request would stop every later download until the app
+ * restarts — a failure, by contrast, pauses the queue for a minute and recovers.
+ */
+export const PREVIEW_DOWNLOAD_TIMEOUT_MS = 15_000;
+
 /** Every URI the queue hands this is a path under the app's data directory. */
 export class CapacitorPreviewStorage implements StorageAdapter {
   uploadFile(): Promise<void> {
@@ -110,13 +120,25 @@ export class CapacitorPreviewStorage implements StorageAdapter {
         .split('/')
         .pop()
         ?.replace(/\.jpg$/, '') ?? filePath;
-    const response = await fetch(buildApiUrl(previewApiPath(fileId)), { headers: apiKeyHeaders() });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PREVIEW_DOWNLOAD_TIMEOUT_MS);
 
-    if (!response.ok) {
-      throw new PreviewDownloadError(response.status);
+    try {
+      const response = await fetch(buildApiUrl(previewApiPath(fileId)), {
+        headers: apiKeyHeaders(),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new PreviewDownloadError(response.status);
+      }
+
+      // Inside the bound: the signal covers the body read too, and a server that
+      // answers its headers and then stalls is the hang this exists for.
+      return await response.blob();
+    } finally {
+      clearTimeout(timer);
     }
-
-    return response.blob();
   }
 
   async writeFile(fileUri: string, data: string, options?: { encoding?: EncodingType }): Promise<void> {

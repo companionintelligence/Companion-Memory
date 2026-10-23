@@ -804,6 +804,52 @@ as the existing PATCH; and the replica's indexes are absent while a bulk
 download is in flight (they are dropped and rebuilt around it), which is
 why `sqlite_master` showed no preview index right after the version bump.
 
+### Browser visits and document excerpts on the device (2026-10-23)
+
+Kyle noticed browser activity never reached the phone. Two things stopped it:
+the raw table is excluded from the sync rules (still is), and the type was not
+in `DEVICE_INDEXED_ENTITIES`, so the shared index statement wrote no document
+for it. The exclusion had been inherited from the header box, which hides
+`browser-activity` and `answer` from its suggestions; it was a search-noise
+choice for one dropdown, not a size or privacy one. `file-chunk` was out for
+the stated reason "a slice of a file that is already here", which is true of
+the row and not of its text: a file's record carries title, description and
+filename, so a phrase from inside a PDF found the file on the appliance and
+not on the phone.
+
+Both are device-indexed now. Dev corpus on the day: 96,808 visits (≈20 MB of
+title + url against 52 MB of document text already synced) and 522 chunks.
+
+- Server: the two types in `DEVICE_INDEXED_ENTITIES`; their device records in
+  `entityDeviceRecord.ts` (a visit: url, domain, action_type,
+  duration_seconds, source_system; a chunk: `related_id` = its file, plus
+  filename, section_title and the page / sheet flattened out of
+  `source_locator`). No `DEVICE_RECORD_VERSION` bump: no existing type's
+  recipe changed, so the records already on phones are not re-sent.
+- Backfill, browser activity: `INDEX_VECTOR_BROWSER_ACTIVITY` 1 → 2 in
+  `pipeline/versions.ts`. The vector stage re-runs over every visit on every
+  install, local Postgres work only, and the shared statement writes the
+  document. The maintenance sweep cannot do this one: it skips rows the
+  pipeline ledger covers.
+- Backfill, chunks: a `file-chunk` lane in `SearchIndexBackfillService`
+  (`BACKFILLABLE_ENTITIES`), re-driving `DocumentParsedEvent` with one chunk
+  id per event for chunks that have an index row but no document.
+  `FileChunkSearchIndexListener` now skips the embedding call for a chunk
+  whose embedding exists, so the re-drive is one index statement per chunk.
+  The sweep runs from the maintenance orchestrator (`search_index` leg) and
+  after an ingest, not on a schedule; an existing install gets its chunk
+  documents the next time either runs.
+- Phone: both types in `LOCAL_LIST_TYPES`, so the offline Memory list and the
+  What filter show them; a glyph and an untitled fallback in
+  `LocalDocumentRow`; labels and the new detail fields on the record page
+  (`recordDetail.ts`; a chunk's record page shows its file as the parent
+  through `related_id`). Not in `LOCAL_RESULT_TYPENAMES`: the header box has
+  no row for either type online, and hides browser activity by default
+  (`useSearchService`), so the phone's box matches.
+- `routeForEntity` has no destination for either type, as on the appliance
+  (both open in the explorer's details drawer online), so the record page
+  shows no "open online" link for them.
+
 ### Record page: 10 s tap-to-conversation (fixed 2026-10-22)
 
 Kyle saw ~10 s from tapping an offline list row to the saved record
@@ -885,8 +931,17 @@ data already on the device:
 3. The on-device model's `knowledge_search` tool, so an offline chat can still
    answer "when did I last message X" from the phone's own copy.
 
-Writes are out of scope: notes already replay through the PowerSync connector,
-captures already queue in the Local Hub outbox.
+Writes are out of scope, with one rule added 2026-10-23: while the connection
+probe says the appliance is unreachable, a write that would change its database
+is refused before it leaves — `fetchJson` / `apiFetch` refuse `POST`/`PUT`/
+`PATCH`/`DELETE` aimed at the appliance (`@ci/common` `offlineWrites.ts`), an
+Apollo link refuses GraphQL mutations (`apps/web/src/api/offlineWriteLink.ts`),
+and the import page's XHR upload asks the same guard first. Every refusal opens
+one dialog (`OfflineWriteDialog`) that says to wait for the server. Exempt:
+notes (they write the synced `notes` table and replay through the PowerSync
+connector), captures (queued in `memoryUploadQueue.ts` / the Local Hub outbox),
+position uploads, and the sign-in / session paths that have to work to get
+connected at all.
 
 ## What is already there (verified 2026-10-19)
 
@@ -953,10 +1008,13 @@ write path, so "what text represents this row" stays defined once
 | `created_at`, `updated_at` | |
 
 `VectorService.upsert` writes both rows in one statement (CTE); `remove`
-deletes both. Types the global box already hides (`answer`, `browser-activity`,
-`position`, `file-chunk`, `message`) are never projected. Backfill = reset the
-index vector stage's `stage_version` (the existing reindex trick in
-`OrphanCleanupService`), not a data migration.
+deletes both. `answer`, `position` and `message` are never projected (the first
+two have no text worth a row, the third is the chat recall channel).
+`browser-activity` and `file-chunk` were in that list until 2026-10-23 — see
+"Browser visits and document excerpts" above. Backfill = bump the type's index
+vector stage version in `pipeline/versions.ts` (the existing reindex trick),
+or for a type without a stage, the maintenance sweep's lane, not a data
+migration.
 
 Sync: one bucket query `SELECT … FROM ci_search.mobile_search_documents WHERE user_id =
 bucket.user_id`, the table added to `POWERSYNC_TABLES` in
@@ -1081,13 +1139,46 @@ once P1 lands.
   downloaded in ~4 min, checkpoint applied in ~12 min, index built, 589,395
   documents and 589,395 FTS rows, a real `MATCH` answering in the box — about
   17 min end to end versus an apply that was still running after 50.
+- **A page reload mid-write leaves the replica locked (2026-10-23).** The app
+  process outlives a WebView page reload (a Vite full reload in dev; rare in
+  production). The old page's write connection, if a transaction was open on
+  it, stays open natively with that transaction and so with SQLite's WAL
+  writer lock; the plugin's JS-side `closeConnection` never reached it because
+  the new page's wrapper starts with an empty map. PowerSync's startup then hit
+  SQLITE_BUSY, and a database whose startup failed rethrows that from every
+  later call, so every offline view showed the error state — with the offline
+  wording "Needs the Memory server", which pointed at the wrong thing. Fixes:
+  `encryptedInit` now asks the plugin directly to close both connections by
+  name before creating its own; `openReplicaWithRetry` (nativeDatabase.ts)
+  waits for startup and retries SQLITE_BUSY over ~30 s, then throws
+  `ReplicaLockedError`; each attempt is bound as soon as it is constructed and
+  unbound when it fails, the binding is a store (`useReplicaDatabase`) so the
+  views re-render when it changes, and the error states read a
+  `ReplicaOpenState` to say "Opening this phone's copy" / "Couldn't open this
+  phone's copy" instead of blaming the server. A leaked handle from before
+  these fixes is freed only by a process restart.
 - **Write amplification during an import.** Every index write now also replicates
   one document row; the index queue already runs at thousands of rows a minute
   during a big import. PowerSync batches, but watch the replication slot lag.
 - **`@powersync/capacitor` `execute()` on Android** treats anything not starting
   with `select` as a statement, which is right for `CREATE VIRTUAL TABLE` and
   triggers; `RETURNING` does not work there, and nothing here needs it.
-- **Tokenization parity.** Postgres stems ("running" → "run"); FTS5 unicode61
+- **Tokenization parity — closed 2026-10-23.** The text index now uses FTS5's
+  `porter` stemmer over `unicode61` (`DOCUMENTS_FTS_TOKENIZER`), so "meetings"
+  and "meeting" match the same rows (2,234 each on the S23U), as Postgres'
+  `english` configuration (Snowball English) does; prefix matching stays, over
+  stems. `ftsMatchExpression` also drops Postgres' English stopword list unless
+  the query is nothing else. Because FTS5 allows one tokenizer per table and
+  Porter would rewrite the hex groups of a person id (two ids could then
+  collide in the Who filter), the id columns moved to a second index,
+  `mobile_search_people_fts`, unstemmed; `localList.ts` drives a browse from it
+  and probes it by rowid behind a text query. The tokenizer and the trigger text
+  are part of the shape `hasSearchIndex` checks, and a rebuild drops the
+  triggers before the tables: triggers sit on the documents table, so dropping
+  the index left old ones that still named the id columns, and every write
+  failed until they were replaced. Porter and Snowball English still differ on
+  a few endings.
+- **Tokenization parity (original note).** Postgres stems ("running" → "run"); FTS5 unicode61
   does not. Prefix matching narrows the gap; a query that finds something on the
   appliance and nothing on the phone is the acceptance test to write.
 - **Two processes, one file.** The web view's PowerSync connection holds the

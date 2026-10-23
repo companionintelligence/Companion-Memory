@@ -67,8 +67,9 @@ they were replicated and never read, so they were dropped in favour of the one r
 (sync-rules.yaml explains; the setup container now removes a table that leaves the
 list from the publication). See
 [`docs/architecture/mobile-local-search-plan.md`](../../docs/architecture/mobile-local-search-plan.md).
-Large/server-computed/PII data (events, communications, browser_activity, pgvector
-embeddings, the knowledge graph) stays online via GraphQL. See `sync-rules.yaml` for
+Full rows of large/server-computed data (events, communications, browser_activity,
+file_chunks, pgvector embeddings, the knowledge graph) stay online via GraphQL; what
+the phone has of each is its search document. See `sync-rules.yaml` for
 the rationale and the TODO list for tables that still need their exact names verified
 before being added.
 

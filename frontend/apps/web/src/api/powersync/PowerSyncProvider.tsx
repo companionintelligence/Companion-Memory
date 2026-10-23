@@ -16,7 +16,7 @@ import { GraphQLBackendConnector } from './connector';
 import { NATIVE_DB_ON_DISK_FILENAME } from './nativeDatabase';
 import { isPreviewSyncEnabled, startPreviewSync, stopPreviewSync, subscribePreviewSync } from './previews';
 import { countDocuments, ensureDocumentsTable, ensureSearchIndex, watchBulkDownloads } from './searchIndex';
-import { bindPowerSyncDatabase, measurePowerSyncSizeBytes } from './session';
+import { bindPowerSyncDatabase, measurePowerSyncSizeBytes, setReplicaOpenState } from './session';
 import { openWebPowerSyncDatabase } from './webDatabase';
 import { POWER_SYNC_CACHE_BUDGET_BYTES, shrinkToBudget } from './workingSet';
 
@@ -81,14 +81,48 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     let native: AbstractPowerSyncDatabase | undefined;
     let unsubscribePreviews: (() => void) | undefined;
+    // Stops a retry that is still waiting out a stale lock when this effect is torn down.
+    const opening = new AbortController();
+
+    setReplicaOpenState({ phase: 'opening' });
 
     void import('./nativeDatabase')
-      .then(({ openNativePowerSyncDatabase }) => {
+      .then(async ({ openReplicaWithRetry }) => {
+        // Waits for PowerSync's own startup, and retries it when the file is held by an
+        // earlier page instance's connection (see `openReplicaWithRetry`). Each attempt is
+        // bound the moment it is constructed, as the handle always was: the offline views
+        // decide at render time whether this phone can answer, and the SDK's methods wait
+        // for startup on their behalf. A failed attempt is unbound, so a view that asked it
+        // mounts afresh against the next one.
+        const opened = (await openReplicaWithRetry({
+          signal: opening.signal,
+          onAttempt: (attempt) => {
+            if (cancelled) {
+              return;
+            }
+
+            if (attempt) {
+              bindPowerSyncDatabase(attempt as AbstractPowerSyncDatabase, { replica: true });
+            } else {
+              bindPowerSyncDatabase(webDatabase);
+            }
+          },
+          onRetry: (attempt, delayMs, error) => {
+            console.warn(
+              `[PowerSync] The replica is locked by another connection; retrying in ${delayMs}ms (attempt ${attempt})`,
+              error,
+            );
+          },
+        })) as AbstractPowerSyncDatabase;
+
         if (cancelled) {
+          void opened.close().catch(() => undefined);
+
           return;
         }
 
-        native = openNativePowerSyncDatabase() as AbstractPowerSyncDatabase;
+        native = opened;
+        setReplicaOpenState({ phase: 'open' });
         bindPowerSyncDatabase(native, { replica: true });
         // The on-device model may search this file itself (its knowledge_search tool).
         setLocalSearchReplicaFile(NATIVE_DB_ON_DISK_FILENAME);
@@ -112,13 +146,24 @@ export function PowerSyncProvider({ children }: { children: ReactNode }) {
         unsubscribePreviews = subscribePreviewSync(followSetting);
       })
       .catch((error: unknown) => {
+        if (cancelled && error instanceof Error && error.name === 'AbortError') {
+          return;
+        }
+
         console.warn('[PowerSync] Native SQLite adapter unavailable; using IndexedDB VFS', error);
+        // The error states read this: a phone that should have a copy but could not open
+        // it says so, rather than blaming a server that may also be away.
+        setReplicaOpenState({
+          phase: 'failed',
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
         bindPowerSyncDatabase(webDatabase);
         setStorageDecided(true);
       });
 
     return () => {
       cancelled = true;
+      opening.abort();
       unsubscribePreviews?.();
       stopPreviewSync();
       bindPowerSyncDatabase(null);

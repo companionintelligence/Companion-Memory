@@ -67,10 +67,14 @@
 # ... in `detail`). Chat threads keep their search document and summary; the
 # message history of in-app LLM chats is not needed offline.
 #
-# DELIBERATELY NOT synced (keep online): ci.browser_activity, ci.communications,
-# ci.content, ci.entities/relationships (graph), ci_search.embeddings (pgvector —
-# huge, server-computed), HBPE tables. Communications and content reach the
-# device as search documents; their full rows do not.
+# DELIBERATELY NOT synced as full rows (keep online): ci.browser_activity,
+# ci.communications, ci.content, ci.file_chunks, ci.entities/relationships
+# (graph), ci_search.embeddings (pgvector — huge, server-computed), HBPE tables.
+# Communications, content, browser visits (since 2026-10-23: title, url, a
+# description) and parsed-document chunks (since 2026-10-23: section title and
+# the chunk text, cut at 1 KB, pointing at their file) reach the device as
+# search documents; their full rows do not. The list of types that get a
+# document is DEVICE_INDEXED_ENTITIES in search-next/types.ts.
 #
 # The notes below on events/capture lanes and ci.objects describe why those
 # tables could not sync as full rows. They are kept because the reasons still

@@ -20,9 +20,20 @@ vi.mock('@powersync/react', () => ({
   useQuery: () => ({ data: h.note ? [h.note] : [], isLoading: false, error: undefined }),
 }));
 
-vi.mock('@/api/powersync/session', () => ({
-  getReplicaDatabase: () => ({ execute: h.execute }),
-}));
+vi.mock('@/api/powersync/session', () => {
+  // One object for the life of the test: the page reads the binding through a store
+  // (`useReplicaDatabase`), and a store whose snapshot is new on every read never settles.
+  const replica = {
+    get execute() {
+      return h.execute;
+    },
+  };
+
+  return {
+    getReplicaDatabase: () => replica,
+    subscribeBoundDatabase: () => () => undefined,
+  };
+});
 
 vi.mock('@/components/ChatWithAgent', () => ({
   ChatWithAgentMenu: () => <div data-testid="chat-menu" />,

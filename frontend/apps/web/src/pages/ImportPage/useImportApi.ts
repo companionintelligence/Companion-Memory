@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { apiFetch, apiKeyHeaders, buildApiUrl, fetchJson } from '@ci/common';
+import {
+  apiFetch,
+  apiKeyHeaders,
+  assertApplianceWritable,
+  buildApiUrl,
+  fetchJson,
+  isOfflineWriteError,
+} from '@ci/common';
 
 import { useAuth } from '@/hooks';
 
@@ -488,6 +495,16 @@ export function useImportApi() {
   const uploadFile = useCallback(
     (file: File, onProgress?: (loadedBytes: number, totalBytes: number) => void): Promise<StagedDrop> =>
       new Promise<StagedDrop>((resolve, reject) => {
+        // The write guard runs inside `apiFetch`; an XHR never passes through it, so it is
+        // asked here, before any bytes are read — a refused upload costs nothing.
+        try {
+          assertApplianceWritable({ url: '/api/import/uploads' });
+        } catch (err) {
+          reject(err);
+
+          return;
+        }
+
         const form = new FormData();
 
         form.append('files', file);
@@ -1053,7 +1070,12 @@ async function postUpload(form: FormData, headers: Record<string, string>): Prom
       headers,
       body: form,
     });
-  } catch {
+  } catch (err) {
+    // The guard's refusal already says what to do; only a real network failure gets the hint.
+    if (isOfflineWriteError(err)) {
+      throw err;
+    }
+
     throw new Error(
       'Could not reach the appliance. If you dropped a folder, use Choose folder — or upload the .zip.',
     );

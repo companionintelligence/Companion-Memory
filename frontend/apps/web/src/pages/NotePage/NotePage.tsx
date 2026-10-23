@@ -19,7 +19,7 @@ import { Check, CloudOff, TriangleAlert } from '@ci/shadcn/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import TimeAgo from 'react-timeago';
 
-import { getReplicaDatabase } from '@/api/powersync/session';
+import { useReplicaDatabase } from '@/api/powersync/deviceFallback';
 import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
@@ -91,7 +91,7 @@ const CREATE_NOTE = gql(`
  * GraphQL, with the capture outbox as the offline fallback ({@link RemoteNotePage}).
  */
 export function NotePage() {
-  return getReplicaDatabase() ? <LocalNotePage /> : <RemoteNotePage />;
+  return useReplicaDatabase() ? <LocalNotePage /> : <RemoteNotePage />;
 }
 
 export function RemoteNotePage() {

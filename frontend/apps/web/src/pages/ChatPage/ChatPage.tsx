@@ -10,11 +10,12 @@ import {
   type LocalLlmGenerationStats,
 } from '@ci/common';
 import { Button, Card } from '@ci/shadcn';
-import { RefreshCw, Send, Smartphone, Sparkles, X } from '@ci/shadcn/icons';
+import { Send, Smartphone, Sparkles } from '@ci/shadcn/icons';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { v7 as uuid7 } from 'uuid';
 
 import { useThreadService } from '@/api';
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { steerDispatchJob, useDispatchJob } from '@/api/useDispatchJob';
 import { useFeatures } from '@/common/feature';
 import { Chat, type FormData } from '@/components/Chat';
@@ -103,6 +104,8 @@ function ChatPageContent() {
     { threads, loading: threadsLoading, error: threadsError },
     { refetch: refetchThreads, delete: deleteThread },
   ] = useThreadListService();
+  // Whether the phone is answering for itself (the Memory server away, a replica on hand).
+  const answersFromDevice = useAnswersFromDevice();
 
   const [{ authToken, authenticated }] = useAuth();
   const [{ thread, loading: threadLoading, error: threadError }, { refetch: refetchThread }] =
@@ -409,29 +412,22 @@ function ChatPageContent() {
       />
     );
   } else if (threadsError) {
-    emptyState = (
-      <Card className="border-destructive/20 bg-destructive/5">
-        <Card.Content className="p-6">
-          <div className="flex items-start gap-4">
-            <div className="w-10 h-10 rounded-full bg-destructive/20 flex items-center justify-center flex-shrink-0">
-              <X className="h-5 w-5 text-destructive" />
-            </div>
-            <div className="flex-1">
-              <h3 className="font-semibold text-destructive mb-2">Error loading threads</h3>
-              <p className="text-sm text-destructive/80 mb-4">{String(threadsError)}</p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={refetchThreads}
-                className="border-destructive/20 text-destructive hover:bg-destructive/10"
-              >
-                <RefreshCw className="h-4 w-4 mr-2" />
-                Try Again
-              </Button>
-            </div>
-          </div>
-        </Card.Content>
-      </Card>
+    // The shared error state, not the raw error: on a phone whose Memory server is away
+    // this used to print "Fetch failed: 500 Internal Server Error" (the dev proxy's answer
+    // for a server that is down) under "Error loading threads", which reads as a bug in
+    // the app. ErrorState knows the connection mode and says, offline, that this view
+    // needs the Memory server; online, the caller's words below apply.
+    emptyState = answersFromDevice ? (
+      <ErrorState
+        description="The Memory server is not answering, so your past chats cannot be shown. A new chat can still run on this phone's own model."
+        onRetry={refetchThreads}
+      />
+    ) : (
+      <ErrorState
+        title="Could not load your chats"
+        description="Your chats are still on your Companion — this device could not reach them just now."
+        onRetry={refetchThreads}
+      />
     );
   } else if (resolvedThreadId.current == null && hasNoModel) {
     emptyState = <ChatNoModelState unreachable={modelsError != null} onRetry={refetchModels} />;

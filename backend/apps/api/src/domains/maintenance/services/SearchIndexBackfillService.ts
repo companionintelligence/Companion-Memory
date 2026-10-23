@@ -19,6 +19,7 @@ import {
   ReceiptCreatedEvent,
 } from '@ci/domains/memory/events';
 import { NoteCreatedEvent } from '@ci/domains/notes/events';
+import { DocumentParsedEvent } from '@ci/domains/parsing/events';
 import { TaskCreatedEvent } from '@ci/domains/planning/events';
 import { PositionCreatedEvent } from '@ci/domains/position/events';
 import { ENTITY_SOURCE_MAP } from '@ci/domains/search-ingress';
@@ -68,6 +69,14 @@ export const BACKFILLABLE_ENTITIES = [
   'thread',
   'task',
   'place',
+  // Indexed live by `FileChunkSearchIndexListener` on `DocumentParsedEvent`,
+  // one event per parsed file. Device-indexed since 2026-10-23, and every
+  // chunk parsed before that has an embedding and a tsvector but no device
+  // document; this lane re-drives the listener for exactly those rows, one
+  // event per chunk (`chunkIds: [id]`). The listener re-embeds only a chunk
+  // with no embedding, so a re-drive costs one index statement per row, not
+  // an Ollama call.
+  'file-chunk',
 ] as const;
 
 export type BackfillableEntity = (typeof BACKFILLABLE_ENTITIES)[number];
@@ -140,20 +149,26 @@ export function normalizeBackfillEntityTypes(types: readonly BackfillableEntity[
  * payload field its listener reads the id from. Drives the bulk enqueue so a
  * page of ids becomes one `sendMany` call instead of N awaited `send`s.
  */
-const EVENT_BY_TYPE: Record<
-  BackfillableEntity,
-  {
-    event: string;
-    idField: string;
-    /**
-     * Set when the listener reads the row's owner from the payload too
-     * (`TaskSearchIndexListener` scopes its read by `payload.userId`; a
-     * SYSTEM_USER read returns nothing). The source column the sweep selects it
-     * from.
-     */
-    owner?: { field: string; column: string };
-  }
-> = {
+interface BackfillEventSpec {
+  event: string;
+  idField: string;
+  /** The listener takes a list of ids (`chunkIds`); the sweep sends a list of one. */
+  idAsList?: boolean;
+  /**
+   * Set when the listener reads the row's owner from the payload too
+   * (`TaskSearchIndexListener` scopes its read by `payload.userId`; a
+   * SYSTEM_USER read returns nothing). The source column the sweep selects it
+   * from.
+   */
+  owner?: { field: string; column: string };
+  /**
+   * Further payload fields copied from the source row, by field name → column
+   * (`fileId` from `file_id`). Selected with the id, cast to text.
+   */
+  extra?: Record<string, string>;
+}
+
+const EVENT_BY_TYPE: Record<BackfillableEntity, BackfillEventSpec> = {
   communication: { event: CommunicationCreatedEvent, idField: 'communicationId' },
   event: { event: EventCreatedEvent, idField: 'eventId' },
   content: { event: ContentCreatedEvent, idField: 'contentId' },
@@ -169,7 +184,26 @@ const EVENT_BY_TYPE: Record<
   thread: { event: ThreadCreatedEvent, idField: 'threadId' },
   task: { event: TaskCreatedEvent, idField: 'taskId', owner: { field: 'userId', column: 'user_id' } },
   place: { event: PlaceCreatedEvent, idField: 'placeId' },
+  'file-chunk': {
+    event: DocumentParsedEvent,
+    idField: 'chunkIds',
+    idAsList: true,
+    owner: { field: 'userId', column: 'user_id' },
+    extra: { fileId: 'file_id' },
+  },
 };
+
+/** One row of the sweep as the event payload its listener expects. */
+export function backfillEventPayload(
+  spec: BackfillEventSpec,
+  row: { id: string; owner?: string; extra?: Record<string, string> },
+): Record<string, unknown> {
+  return {
+    [spec.idField]: spec.idAsList ? [row.id] : row.id,
+    ...(spec.owner ? { [spec.owner.field]: row.owner } : {}),
+    ...Object.fromEntries(Object.keys(spec.extra ?? {}).map((field) => [field, row.extra?.[field]])),
+  };
+}
 
 /**
  * Types whose source table is a TimescaleDB hypertable partitioned on a time
@@ -405,7 +439,7 @@ export class SearchIndexBackfillService {
     batchSize: number,
     limitPerType: number | undefined,
   ): Promise<{ count: number; error?: string }> {
-    const { event, idField, owner } = EVENT_BY_TYPE[entityType];
+    const spec = EVENT_BY_TYPE[entityType];
     let after: PageCursor | null = null;
     let enqueued = 0;
 
@@ -428,8 +462,8 @@ export class SearchIndexBackfillService {
           await this.events.sendMany(
             SEARCH_INDEX_QUEUE,
             page.map((row) => ({
-              name: event,
-              data: owner ? { [idField]: row.id, [owner.field]: row.owner } : { [idField]: row.id },
+              name: spec.event,
+              data: backfillEventPayload(spec, row),
             })),
           );
           enqueued += page.length;
@@ -476,11 +510,19 @@ export class SearchIndexBackfillService {
     entityType: BackfillableEntity,
     batchSize: number,
     after: PageCursor | null,
-  ): Promise<Array<{ id: string; ts?: string | null; owner?: string }>> {
+  ): Promise<Array<{ id: string; ts?: string | null; owner?: string; extra?: Record<string, string> }>> {
     const source = ENTITY_SOURCE_MAP[entityType];
     // The owner column, for listeners that read it from the payload (see EVENT_BY_TYPE).
-    const ownerColumn = EVENT_BY_TYPE[entityType].owner?.column;
-    const ownerSelect = ownerColumn ? `, s."${ownerColumn}"::text AS owner` : '';
+    const spec = EVENT_BY_TYPE[entityType];
+    const ownerColumn = spec.owner?.column;
+    const extraColumns = Object.entries(spec.extra ?? {});
+    const ownerSelect =
+      (ownerColumn ? `, s."${ownerColumn}"::text AS owner` : '') +
+      (extraColumns.length > 0
+        ? `, jsonb_build_object(${extraColumns
+            .map(([field, column]) => `'${field}', s."${column}"::text`)
+            .join(', ')}) AS extra`
+        : '');
     const discriminator = source.discriminator
       ? `AND s."${source.discriminator.column}" = '${source.discriminator.value}'`
       : '';

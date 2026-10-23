@@ -92,8 +92,11 @@ object LocalSearch {
     /** The types that are nearly all the rows; see `localList.ts` for the measurements behind the hint. */
     private val BULK_TYPES = setOf("communication", "event", "content")
 
-    /** `bm25()` weights in FTS column order: title, body, then the three id columns the Who filter indexes. */
-    private const val RANK_WEIGHTS = "10.0, 1.0, 0.0, 0.0, 0.0"
+    /**
+     * `bm25()` weights in the text index's column order: title, body. The person ids the Who filter
+     * indexes live in their own FTS table (`mobile_search_people_fts`, see `searchIndex.ts`), unstemmed.
+     */
+    private const val RANK_WEIGHTS = "10.0, 1.0"
 
     data class Statement(val sql: String, val params: List<String>)
 
@@ -105,15 +108,17 @@ object LocalSearch {
     }
 
     /**
-     * The FTS5 MATCH for a free-text query: each word a quoted prefix term, OR-joined, scoped to the text
-     * columns — the same expression as `localSearch.ts`'s `ftsMatchExpression`. Null when nothing is left.
+     * The FTS5 MATCH for a free-text query: each word a quoted prefix term, OR-joined — the same shape as
+     * `localSearch.ts`'s `ftsMatchExpression`, over an index that holds the text alone and stems it (so a
+     * prefix is a prefix of the stem). The web box also drops English stopwords; this keeps them, since the
+     * model's queries are short and a stopword-only query must still search. Null when nothing is left.
      */
     fun matchExpression(query: String): String? {
         val terms = query.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
 
         if (terms.isEmpty()) return null
 
-        return "{title body}: (" + terms.joinToString(" OR ") { "\"$it\"*" } + ")"
+        return terms.joinToString(" OR ") { "\"$it\"*" }
     }
 
     /**

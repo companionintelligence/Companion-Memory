@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
 
-import { ListTodo } from '@ci/shadcn/icons';
+import { FileText, ListTodo } from '@ci/shadcn/icons';
 
 import type { LocalDocument } from '@/api/powersync/localSearch';
 import {
+  BrowserActivityIcon,
   CommunicationIcon,
   ConceptIcon,
   ContentIcon,
@@ -23,6 +24,9 @@ import { EntityRow } from '../ListView/rows/EntityRow';
 /** The glyph each device-record type shows, matching the online rows'. */
 export function localDocumentIcon(entityType: string): ReactNode {
   switch (entityType) {
+    case 'browser-activity':
+      return <BrowserActivityIcon />;
+
     case 'communication':
       return <CommunicationIcon />;
 
@@ -37,6 +41,10 @@ export function localDocumentIcon(entityType: string): ReactNode {
 
     case 'file':
       return <FileIcon />;
+
+    // An excerpt of a parsed document: the online FileChunkRow's glyph.
+    case 'file-chunk':
+      return <FileText className="text-muted-foreground" size={24} strokeWidth={1.5} />;
 
     case 'item':
       return <ItemIcon />;
@@ -68,11 +76,13 @@ export function localDocumentIcon(entityType: string): ReactNode {
 }
 
 const UNTITLED: Record<string, string> = {
+  'browser-activity': 'Untitled page',
   communication: 'Message',
   concept: 'Untitled concept',
   content: 'Untitled content',
   event: 'Untitled event',
   file: 'Untitled file',
+  'file-chunk': 'Document excerpt',
   item: 'Untitled thing',
   note: 'Untitled note',
   person: 'Unnamed person',

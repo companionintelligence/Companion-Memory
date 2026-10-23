@@ -180,7 +180,13 @@ function PreviewStoreSettings() {
         ? 'Could not measure just now — the phone’s database is busy; trying again.'
         : 'Measuring…'
       : `${status.synced.toLocaleString()} previews, ${formatBytes(status.bytes)}` +
-        (enabled && status.pending > 0 ? ` · ${status.pending.toLocaleString()} still to fetch` : '');
+        // Say what the switch is doing to the number. Off with work left, this read as
+        // a finished store that had quietly stopped growing (Kyle, 2026-10-23).
+        (status.pending > 0
+          ? enabled
+            ? ` · ${status.pending.toLocaleString()} still to fetch`
+            : ` · ${status.pending.toLocaleString()} not fetched while this is off`
+          : '');
 
   return (
     <div className="space-y-2 border-t pt-4" data-testid="preview-store">
@@ -222,10 +228,24 @@ function PreviewStoreSettings() {
               </Dialog.Description>
             </Dialog.Header>
             <Dialog.Footer className="flex-col gap-2 sm:flex-row">
-              <Button variant="outline" onClick={() => setConfirming(false)} disabled={deleting}>
+              {/* Three choices of rising consequence, coloured as a traffic light so a glance
+                  tells them apart: green keeps everything as it is, amber stops fetching but
+                  keeps the files, red deletes. The system has no green or amber variant, so
+                  these are class overrides on the plain secondary surface (Kyle, 2026-10-23). */}
+              <Button
+                variant="secondary"
+                className="bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-700 dark:hover:bg-emerald-600"
+                onClick={() => setConfirming(false)}
+                disabled={deleting}
+              >
                 Cancel
               </Button>
-              <Button variant="secondary" onClick={keepSynced} disabled={deleting}>
+              <Button
+                variant="secondary"
+                className="bg-amber-400 text-black hover:bg-amber-500 dark:bg-amber-500 dark:hover:bg-amber-400"
+                onClick={keepSynced}
+                disabled={deleting}
+              >
                 Keep what's here, stop fetching
               </Button>
               <Button variant="destructive" onClick={() => void deleteSynced()} disabled={deleting}>
