@@ -1,7 +1,7 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 
 import { fetchJson, FetchJsonError } from '@ci/common';
-import { Button, Card, Dialog, Input, Label, PasswordInput } from '@ci/shadcn';
+import { Button, Card, Dialog, EmailInput, Input, Label, PasswordInput } from '@ci/shadcn';
 import { TriangleAlert } from '@ci/shadcn/icons';
 
 import { useNeedsWebSignIn, WebSignInRequired } from '@/components/WebSignInRequired';
@@ -337,9 +337,8 @@ export function AccountSection() {
 
                   <div className="grid gap-2">
                     <Label htmlFor="newEmail">New email</Label>
-                    <Input
+                    <EmailInput
                       id="newEmail"
-                      type="email"
                       autoComplete="email"
                       value={newEmail}
                       onChange={(e) => setNewEmail(e.target.value)}
@@ -527,9 +526,8 @@ export function AccountSection() {
             {needsSuccessor && (
               <div className="grid gap-2">
                 <Label htmlFor="successorEmail">Email of the person who takes over</Label>
-                <Input
+                <EmailInput
                   id="successorEmail"
-                  type="email"
                   autoComplete="off"
                   value={successorEmail}
                   onChange={(e) => setSuccessorEmail(e.target.value)}

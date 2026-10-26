@@ -23,6 +23,20 @@ describe('LoginForm', () => {
     expect(screen.getByRole('button', { name: 'Log in' })).toBeInTheDocument();
   });
 
+  it('configures the email field for an address on a touch keyboard', () => {
+    // iOS autocorrected the typed "qa-admin@example.com" into "Xanax-admin@example.com".
+    render(<LoginForm />);
+
+    const email = screen.getByLabelText('Email');
+
+    expect(email).toHaveAttribute('type', 'email');
+    expect(email).toHaveAttribute('inputmode', 'email');
+    expect(email).toHaveAttribute('autocapitalize', 'none');
+    expect(email).toHaveAttribute('autocorrect', 'off');
+    expect(email).toHaveAttribute('spellcheck', 'false');
+    expect(email).toHaveAttribute('autocomplete', 'username');
+  });
+
   it('submits the entered credentials', async () => {
     const onSubmit = vi.fn();
     render(<LoginForm onSubmit={onSubmit} />);

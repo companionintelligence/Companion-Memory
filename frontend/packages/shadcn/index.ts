@@ -49,6 +49,7 @@ export * from './src/components/coalescers/tooltip';
 
 export * from './src/components/ui/kbd';
 
+export * from './src/components/adapters/email-input';
 export * from './src/components/adapters/icon-button';
 export * from './src/components/adapters/loading-button';
 export * from './src/components/adapters/password-input';
