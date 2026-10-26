@@ -218,6 +218,14 @@ export function toGraphEntity(staged: StagedEntity): GraphEntityInputDto | null 
   delete properties.phones;
   delete properties[CONTACT_NAMES_KEY];
 
+  // A parser's `description` is the row's description column, not a property:
+  // the vCard parser files a card's NOTE here. Nothing else sends the key.
+  const description =
+    typeof properties.description === 'string' && properties.description.trim() !== ''
+      ? properties.description.trim()
+      : undefined;
+  delete properties.description;
+
   // The first of each list is the entity's primary: its handle when that is
   // one of them (the handle is the identity, so it is worth having as a
   // first-class property and not only inside the derived linked id).
@@ -281,6 +289,7 @@ export function toGraphEntity(staged: StagedEntity): GraphEntityInputDto | null 
     // withholds the very string the identifier index would need to find it
     // again. The staged row keeps the parser's honest record either way.
     name: usableName ?? handle ?? null,
+    ...(description ? { description } : {}),
     sourceSystem: staged.dataSource ?? 'unknown',
     properties,
     // The parser's own statement of which keys are sets. A re-import unions

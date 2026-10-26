@@ -13,6 +13,7 @@ import {
 import type { Entity, EntityAttribute, ImportParams } from '../timeline';
 import {
   VCardFileImporter,
+  birthDateFromBday,
   buildContact,
   decodeQuotedPrintable,
   faxNumbersOf,
@@ -244,6 +245,86 @@ describe('parseContentLine (grouped [group.]NAME[;params]:value tokenizer)', () 
 
   it('returns null for a line with no unquoted colon', () => {
     expect(parseContentLine('not a content line at all')).toBeNull();
+  });
+});
+
+describe('the person fields a card fills', () => {
+  const johnDoe = [
+    'VERSION:3.0',
+    'FN:John Doe',
+    'N:Doe;John;Quincy;;',
+    'TEL;TYPE=HOME:+1-555-123-4567',
+    'EMAIL;TYPE=INTERNET:john.doe@example.com',
+    'BDAY:19850315',
+    'NICKNAME:Johnny',
+    'URL:https://johndoe.example.com',
+    'URL:https://blog.johndoe.example.com',
+    'TITLE:Engineer',
+    'ORG:Acme;Research',
+    'NOTE:Test contact for vCard importer',
+  ].join('\r\n');
+
+  it('writes them under the keys the person record reads', () => {
+    const built = buildContact(contentLines(johnDoe), 'contacts.vcf');
+
+    expect(built!.entity.metadata).toMatchObject({
+      first_name: 'John',
+      middle_name: 'Quincy',
+      last_name: 'Doe',
+      nickname: 'Johnny',
+      birth_date: '1985-03-15',
+      website: 'https://johndoe.example.com',
+      job_title: 'Engineer',
+      organization: 'Acme — Research',
+      description: 'Test contact for vCard importer',
+    });
+  });
+
+  it('keeps the plural lists a re-import adds to', () => {
+    const built = buildContact(contentLines(johnDoe), 'contacts.vcf');
+
+    expect(built!.entity.metadata).toMatchObject({
+      Nicknames: ['Johnny'],
+      URLs: ['https://johndoe.example.com', 'https://blog.johndoe.example.com'],
+      Notes: ['Test contact for vCard importer'],
+    });
+  });
+
+  it('leaves out what the card does not give', () => {
+    const built = buildContact(contentLines('FN:Jane Smith\r\nEMAIL:jane.smith@example.com'), 'contacts.vcf');
+    const metadata = built!.entity.metadata ?? {};
+
+    for (const key of ['first_name', 'last_name', 'nickname', 'birth_date', 'website', 'description']) {
+      expect(metadata).not.toHaveProperty(key);
+    }
+  });
+
+  it('leaves out a birthday with no year', () => {
+    const apple = buildContact(
+      contentLines('FN:Ann Lee\r\nBDAY;X-APPLE-OMIT-YEAR=1604;VALUE=date:1604-07-04'),
+      'contacts.vcf',
+    );
+
+    expect(apple!.entity.metadata).not.toHaveProperty('birth_date');
+  });
+});
+
+describe('birthDateFromBday', () => {
+  it.each([
+    ['19850315', '1985-03-15'],
+    ['1985-03-15', '1985-03-15'],
+    ['1985-03-15T00:00:00Z', '1985-03-15'],
+  ])('reads %s as %s', (bday, expected) => {
+    expect(birthDateFromBday(bday)).toBe(expected);
+  });
+
+  it.each(['--0315', '1985-02-30', 'March 15', ''])('refuses %s', (bday) => {
+    expect(birthDateFromBday(bday)).toBe('');
+  });
+
+  it('refuses the year Apple writes for a birthday without one', () => {
+    expect(birthDateFromBday('1604-07-04', '1604')).toBe('');
+    expect(birthDateFromBday('1985-07-04', '1604')).toBe('1985-07-04');
   });
 });
 
