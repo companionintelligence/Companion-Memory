@@ -206,6 +206,8 @@ interface Options {
   selfEntityId?: string | null;
   /** graph.ensureSelfEntityForOwner; default provisions nothing (no ci.users row). */
   ensureSelf?: () => Promise<{ id: string; type: string } | null>;
+  /** The staged from/to/cc edges every row carries, as `participantsFor` joins them. */
+  participants?: Array<{ relation: string; server_entity_id: string }>;
 }
 
 function makeStage(rows: StagedItem[], options: Options = {}) {
@@ -253,7 +255,11 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
       }
 
       if (sql.includes('staged_relationships')) {
-        return [];
+        const ids = (params[0] as string[] | undefined) ?? [];
+
+        return ids.flatMap((itemId) =>
+          (options.participants ?? []).map((edge) => ({ ...edge, item_id: itemId })),
+        );
       }
 
       if (sql.includes('SELECT entity_id FROM ci.users')) {
@@ -387,6 +393,7 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
     stage,
     db,
     graph,
+    communications,
     receipts,
     callSizes,
     updates,
@@ -1249,6 +1256,38 @@ describe('the owner’s self Person', () => {
     expect(directionAfterSender('outbound', record, participants, 'stranger-person', selfId)).toBe('inbound');
     // And without it, as before the fix, it stays outbound.
     expect(directionAfterSender('outbound', record, participants, 'stranger-person', null)).toBe('outbound');
+  });
+
+  it('turns a header-less mail from a stranger to the owner inbound through run(), with no Person before the import', async () => {
+    const mail = {
+      ...messageRow('Are we still on for lunch?'),
+      dataSource: 'gmail',
+      classification: 'email',
+      metadata: {
+        Subject: 'Lunch',
+        From: '"He Tester" <stranger@example.net>',
+        To: 'qa-admin@example.com',
+        Direction: 'outbound',
+        DirectionBasis: 'no_delivery_trace',
+      },
+    } as unknown as StagedItem;
+    const { stage, communications } = makeStage([mail], {
+      owner: () => OWNER_ROWS,
+      // The account has no self Person: the push provisions it, and the mail's
+      // To edge resolves to it through the owner's address.
+      ensureSelf: async () => ({ id: SELF, type: 'Person' }),
+      participants: [
+        { relation: 'from', server_entity_id: 'stranger-person' },
+        { relation: 'to', server_entity_id: SELF },
+      ],
+    });
+
+    await stage.run(context);
+
+    const sent = communications.createManyDetailed.mock.calls.flatMap(([, input]) => input);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ direction: 'inbound', from_entity_id: 'stranger-person' });
   });
 
   it('runs on with no owner when there is no account row to provision from', async () => {

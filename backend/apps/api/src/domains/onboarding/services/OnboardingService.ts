@@ -265,24 +265,14 @@ export class OnboardingService {
     // Prefer the existing users.entity_id pointer (e.g. from ensureSelfEntity)
     // over inserting a second is_self Person.
     if (user.entityId) {
-      const existing = await this.personService.findById(context, user.entityId);
+      const existing = await this.adoptSelfPerson(
+        context,
+        user.entityId,
+        displayName,
+        properties,
+        user.email,
+      );
       if (existing) {
-        await this.personService.patch(context, existing.id, {
-          name: displayName,
-          propertiesPatch: {
-            ...(existing.properties ?? {}),
-            ...properties,
-          },
-        });
-        await this.claimSelfIdentifiers(context.userId!, existing.id, displayName, user.email);
-        await this.entityIdentifierService.repointToEntity(
-          context.userId!,
-          existing.id,
-          'email',
-          user.email ?? '',
-          'self',
-        );
-
         return existing;
       }
     }
@@ -295,9 +285,30 @@ export class OnboardingService {
       description: 'This is you!',
     });
 
-    await this.userService.update(context, user.id, {
-      entityId: person.id,
-    });
+    // The pointer only moves if nobody else set it since it was read above. An
+    // import that provisions the owner's self Person (PushStage) can land in that
+    // window, and an unconditional write would leave two is_self Persons.
+    const pointer = await this.userService.setEntityIdIfUnchanged(
+      context,
+      user.id,
+      person.id,
+      user.entityId ?? null,
+    );
+
+    if (pointer != null && pointer !== person.id) {
+      // Lost the race: the winner's Person is the owner's. Ours is empty (nothing
+      // has been claimed for it yet), so drop it rather than leave an orphan.
+      const winner = await this.adoptSelfPerson(context, pointer, displayName, properties, user.email);
+      if (winner) {
+        await this.personService.remove(context, person.id);
+
+        return winner;
+      }
+
+      // The pointer names a Person that does not exist: the same dangling case
+      // as above, so ours takes over.
+      await this.userService.update(context, user.id, { entityId: person.id });
+    }
 
     await this.claimSelfIdentifiers(context.userId!, person.id, displayName, user.email);
     if (user.email) {
@@ -311,6 +322,41 @@ export class OnboardingService {
     }
 
     return person;
+  }
+
+  /**
+   * Fold the onboarding details into the Person a `users.entity_id` pointer
+   * names. Null when the pointer is dangling.
+   */
+  private async adoptSelfPerson(
+    context: UserServiceContext,
+    personId: string,
+    displayName: string,
+    properties: Record<string, unknown>,
+    email: string | null | undefined,
+  ) {
+    const existing = await this.personService.findById(context, personId);
+    if (!existing) {
+      return null;
+    }
+
+    await this.personService.patch(context, existing.id, {
+      name: displayName,
+      propertiesPatch: {
+        ...(existing.properties ?? {}),
+        ...properties,
+      },
+    });
+    await this.claimSelfIdentifiers(context.userId!, existing.id, displayName, email);
+    await this.entityIdentifierService.repointToEntity(
+      context.userId!,
+      existing.id,
+      'email',
+      email ?? '',
+      'self',
+    );
+
+    return existing;
   }
 
   private async claimSelfIdentifiers(

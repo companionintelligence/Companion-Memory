@@ -3,7 +3,7 @@ import { randomBytes } from 'crypto';
 import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import bcrypt from 'bcrypt';
-import { EntityManager, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
+import { EntityManager, IsNull, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { ServiceContext, SYSTEM_USER } from '@ci/common/context';
@@ -406,6 +406,41 @@ export class UserService {
     });
 
     return this.findById(context, id);
+  }
+
+  /**
+   * Point the account at its self Person, but only while the pointer still
+   * holds `expected` (the value the caller read, `null` for none). Two writers
+   * can each decide the account has no self Person yet (onboarding and an import
+   * that provisions one); a plain {@link update} lets the later one overwrite the
+   * earlier and leaves two `is_self` Persons. Returns the pointer the account
+   * ends up with: `entityId` when this call set it, otherwise the other
+   * writer's, for the caller to adopt.
+   */
+  async setEntityIdIfUnchanged(
+    context: ServiceContext,
+    id: string,
+    entityId: string,
+    expected: string | null,
+  ): Promise<string | null> {
+    if (context.userId !== SYSTEM_USER && context.userId !== id) {
+      throw new UnauthorizedException();
+    }
+
+    const result = await this.userRepository.update(
+      { id, entityId: expected == null ? IsNull() : expected },
+      { entityId },
+    );
+
+    if ((result.affected ?? 0) > 0) {
+      await this.eventService.send(UserUpdatedEvent, {
+        userId: id,
+      });
+
+      return entityId;
+    }
+
+    return (await this.findById(context, id))?.entityId ?? null;
   }
 
   /**

@@ -12,8 +12,11 @@ describe('OnboardingService onboard', () => {
   const context = { userId: 'user-1' };
 
   let service: OnboardingService;
-  let userService: jest.Mocked<Pick<UserService, 'findById' | 'update' | 'onboard'>>;
-  let personService: jest.Mocked<Pick<PersonService, 'create' | 'findById' | 'update'>>;
+  let userService: jest.Mocked<
+    Pick<UserService, 'findById' | 'update' | 'onboard' | 'setEntityIdIfUnchanged'>
+  >;
+  let personService: jest.Mocked<Pick<PersonService, 'create' | 'findById' | 'update' | 'patch' | 'remove'>>;
+  let entityIdentifierService: { claimForSelf: jest.Mock; repointToEntity: jest.Mock };
   let actionService: jest.Mocked<Pick<ActionService, 'create' | 'findAll'>>;
   let featureService: jest.Mocked<Pick<FeatureService, 'isFeatureEnabled'>>;
 
@@ -22,13 +25,18 @@ describe('OnboardingService onboard', () => {
       findById: jest.fn(),
       update: jest.fn(),
       onboard: jest.fn(),
+      setEntityIdIfUnchanged: jest.fn(),
     };
 
     personService = {
       create: jest.fn(),
       findById: jest.fn(),
       update: jest.fn(),
+      patch: jest.fn(),
+      remove: jest.fn(),
     };
+
+    entityIdentifierService = { claimForSelf: jest.fn(), repointToEntity: jest.fn() };
 
     actionService = {
       create: jest.fn(),
@@ -54,7 +62,7 @@ describe('OnboardingService onboard', () => {
       { create: jest.fn() } as unknown as ConceptService,
       personService as unknown as PersonService,
       { create: jest.fn() } as unknown as RelationshipService,
-      { claimForSelf: jest.fn(), repointToEntity: jest.fn() } as never,
+      entityIdentifierService as never,
       featureService as unknown as FeatureService,
       logger,
     );
@@ -77,6 +85,7 @@ describe('OnboardingService onboard', () => {
     userService.update.mockResolvedValue(null);
     userService.onboard.mockResolvedValue(undefined);
     personService.create.mockResolvedValue({ id: 'person-1', name: 'Ada Lovelace', properties: {} } as never);
+    userService.setEntityIdIfUnchanged.mockResolvedValue('person-1');
 
     await service.onboard(context, {
       name: 'Ada Lovelace',
@@ -116,10 +125,76 @@ describe('OnboardingService onboard', () => {
         }),
       }),
     );
+    expect(userService.setEntityIdIfUnchanged).toHaveBeenCalledWith(context, 'user-1', 'person-1', null);
     expect(userService.update).toHaveBeenCalledWith(context, 'user-1', { onboardingProgress: null });
     expect(userService.onboard).toHaveBeenCalledWith('user-1');
     // Seed actions are deferred ~24h after setup (InitialActionsCron), not created here.
     expect(actionService.create).not.toHaveBeenCalled();
+  });
+
+  describe('createPersonForUser racing an import that provisions the self Person', () => {
+    const user = {
+      id: 'user-1',
+      name: 'Ada Lovelace',
+      email: 'ada@example.com',
+      onboarded: false,
+      entityId: null,
+    };
+
+    it('adopts the Person the import made and drops its own, when the pointer was set between its read and its write', async () => {
+      userService.findById.mockResolvedValue(user as never);
+      personService.create.mockResolvedValue({ id: 'mine', name: 'Ada Lovelace', properties: {} } as never);
+      // The import won: the pointer was already set when onboarding tried to write it.
+      userService.setEntityIdIfUnchanged.mockResolvedValue('winner');
+      personService.findById.mockResolvedValue({
+        id: 'winner',
+        name: 'ada@example.com',
+        properties: {},
+      } as never);
+
+      const person = await service.createPersonForUser(context);
+
+      expect(person.id).toBe('winner');
+      expect(userService.setEntityIdIfUnchanged).toHaveBeenCalledWith(context, 'user-1', 'mine', null);
+      expect(personService.remove).toHaveBeenCalledWith(context, 'mine');
+      expect(personService.patch).toHaveBeenCalledWith(
+        context,
+        'winner',
+        expect.objectContaining({ name: 'Ada Lovelace' }),
+      );
+      expect(entityIdentifierService.claimForSelf).toHaveBeenCalledTimes(1);
+      expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith(
+        'user-1',
+        'winner',
+        expect.anything(),
+      );
+      expect(userService.update).not.toHaveBeenCalled();
+    });
+
+    it('keeps its own Person when it wins the pointer', async () => {
+      userService.findById.mockResolvedValue(user as never);
+      personService.create.mockResolvedValue({ id: 'mine', name: 'Ada Lovelace', properties: {} } as never);
+      userService.setEntityIdIfUnchanged.mockResolvedValue('mine');
+
+      const person = await service.createPersonForUser(context);
+
+      expect(person.id).toBe('mine');
+      expect(personService.remove).not.toHaveBeenCalled();
+      expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith('user-1', 'mine', expect.anything());
+    });
+
+    it('takes the pointer over when the one that beat it names a Person that does not exist', async () => {
+      userService.findById.mockResolvedValue(user as never);
+      personService.create.mockResolvedValue({ id: 'mine', name: 'Ada Lovelace', properties: {} } as never);
+      userService.setEntityIdIfUnchanged.mockResolvedValue('gone');
+      personService.findById.mockResolvedValue(null);
+
+      const person = await service.createPersonForUser(context);
+
+      expect(person.id).toBe('mine');
+      expect(personService.remove).not.toHaveBeenCalled();
+      expect(userService.update).toHaveBeenCalledWith(context, 'user-1', { entityId: 'mine' });
+    });
   });
 
   describe('initializeActionsForUser', () => {
