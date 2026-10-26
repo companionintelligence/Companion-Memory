@@ -1,7 +1,7 @@
 import type { FeatureService } from '@ci/common/feature';
 import type { LoggerService } from '@ci/common/logging';
 import type { MessageService, ThreadService } from '@ci/domains/conversations';
-import type { RelationshipService } from '@ci/domains/graph';
+import { GraphIngestService, type RelationshipService } from '@ci/domains/graph';
 import type { ActionService, AnswerService, QuestionService } from '@ci/domains/intelligence';
 import type { ConceptService, PersonService } from '@ci/domains/memory';
 import type { UserService } from '@ci/domains/user';
@@ -19,6 +19,7 @@ describe('OnboardingService onboard', () => {
   let entityIdentifierService: { claimForSelf: jest.Mock; repointToEntity: jest.Mock };
   let actionService: jest.Mocked<Pick<ActionService, 'create' | 'findAll'>>;
   let featureService: jest.Mocked<Pick<FeatureService, 'isFeatureEnabled'>>;
+  let logger: { setContext: jest.Mock; warn: jest.Mock };
 
   beforeEach(() => {
     userService = {
@@ -35,6 +36,11 @@ describe('OnboardingService onboard', () => {
       patch: jest.fn(),
       remove: jest.fn(),
     };
+    // What PersonService.create does on an unused key: insert under the id it
+    // was given and return that row.
+    personService.create.mockImplementation(
+      async (_context, data) => ({ id: data.id, name: data.name, properties: data.properties }) as never,
+    );
 
     entityIdentifierService = { claimForSelf: jest.fn(), repointToEntity: jest.fn() };
 
@@ -47,7 +53,7 @@ describe('OnboardingService onboard', () => {
       isFeatureEnabled: jest.fn().mockResolvedValue(false),
     };
 
-    const logger = { setContext: jest.fn() } as unknown as LoggerService;
+    logger = { setContext: jest.fn(), warn: jest.fn() };
 
     service = new OnboardingService(
       userService as unknown as UserService,
@@ -64,7 +70,7 @@ describe('OnboardingService onboard', () => {
       { create: jest.fn() } as unknown as RelationshipService,
       entityIdentifierService as never,
       featureService as unknown as FeatureService,
-      logger,
+      logger as unknown as LoggerService,
     );
   });
 
@@ -84,8 +90,8 @@ describe('OnboardingService onboard', () => {
     });
     userService.update.mockResolvedValue(null);
     userService.onboard.mockResolvedValue(undefined);
-    personService.create.mockResolvedValue({ id: 'person-1', name: 'Ada Lovelace', properties: {} } as never);
-    userService.setEntityIdIfUnchanged.mockResolvedValue('person-1');
+    // Nobody else points the account anywhere: the compare-and-set lands.
+    userService.setEntityIdIfUnchanged.mockImplementation(async (_context, _id, entityId) => entityId);
 
     await service.onboard(context, {
       name: 'Ada Lovelace',
@@ -112,6 +118,7 @@ describe('OnboardingService onboard', () => {
       context,
       expect.objectContaining({
         name: 'Ada Lovelace',
+        description: 'This is you!',
         properties: expect.objectContaining({
           is_self: true,
           schedule: expect.objectContaining({
@@ -125,7 +132,22 @@ describe('OnboardingService onboard', () => {
         }),
       }),
     );
-    expect(userService.setEntityIdIfUnchanged).toHaveBeenCalledWith(context, 'user-1', 'person-1', null);
+    const created = (await personService.create.mock.results[0].value) as { id: string };
+    expect(userService.setEntityIdIfUnchanged).toHaveBeenCalledTimes(1);
+    expect(userService.setEntityIdIfUnchanged).toHaveBeenCalledWith(context, 'user-1', created.id, null);
+    // The Person it made is the owner's as it stands: claimed, not patched.
+    expect(personService.patch).not.toHaveBeenCalled();
+    expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith('user-1', created.id, {
+      emails: ['user@example.com'],
+      names: ['Ada Lovelace'],
+    });
+    expect(entityIdentifierService.repointToEntity).toHaveBeenCalledWith(
+      'user-1',
+      created.id,
+      'email',
+      'user@example.com',
+      'self',
+    );
     expect(userService.update).toHaveBeenCalledWith(context, 'user-1', { onboardingProgress: null });
     expect(userService.onboard).toHaveBeenCalledWith('user-1');
     // Seed actions are deferred ~24h after setup (InitialActionsCron), not created here.
@@ -141,59 +163,191 @@ describe('OnboardingService onboard', () => {
       entityId: null,
     };
 
-    it('adopts the Person the import made and drops its own, when the pointer was set between its read and its write', async () => {
+    /** The self Person PushStage's ensureSelfEntityForOwner made under the shared key. */
+    const importsPerson = { id: 'imports', name: 'ada@example.com', properties: { is_self: true } };
+
+    beforeEach(() => {
       userService.findById.mockResolvedValue(user as never);
-      personService.create.mockResolvedValue({ id: 'mine', name: 'Ada Lovelace', properties: {} } as never);
-      // The import won: the pointer was already set when onboarding tried to write it.
-      userService.setEntityIdIfUnchanged.mockResolvedValue('winner');
-      personService.findById.mockResolvedValue({
-        id: 'winner',
-        name: 'ada@example.com',
-        properties: {},
-      } as never);
+      userService.setEntityIdIfUnchanged.mockImplementation(async (_context, _id, entityId) => entityId);
+    });
+
+    it('creates its self Person under the key the import provisions one on', async () => {
+      await service.createPersonForUser(context);
+
+      expect(personService.create).toHaveBeenCalledWith(
+        context,
+        expect.objectContaining({
+          linkedTable: 'import:self',
+          linkedId: GraphIngestService.selfEntityLink('user-1').linkedId,
+        }),
+      );
+    });
+
+    it('keeps its own Person when it wins the pointer', async () => {
+      const person = await service.createPersonForUser(context);
+
+      const created = (await personService.create.mock.results[0].value) as { id: string };
+      expect(person.id).toBe(created.id);
+      expect(personService.remove).not.toHaveBeenCalled();
+      expect(personService.patch).not.toHaveBeenCalled();
+      expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith(
+        'user-1',
+        created.id,
+        expect.anything(),
+      );
+    });
+
+    it('adopts the Person the import already made and pointed the account at, making no second one', async () => {
+      // The import finished first: the key resolves to its row, and the pointer
+      // already names it when onboarding tries to write it.
+      personService.create.mockResolvedValue(importsPerson as never);
+      userService.setEntityIdIfUnchanged.mockResolvedValue('imports');
+      personService.findById.mockResolvedValue(importsPerson as never);
 
       const person = await service.createPersonForUser(context);
 
-      expect(person.id).toBe('winner');
-      expect(userService.setEntityIdIfUnchanged).toHaveBeenCalledWith(context, 'user-1', 'mine', null);
-      expect(personService.remove).toHaveBeenCalledWith(context, 'mine');
+      expect(person.id).toBe('imports');
+      expect(userService.setEntityIdIfUnchanged).toHaveBeenCalledWith(context, 'user-1', 'imports', null);
       expect(personService.patch).toHaveBeenCalledWith(
         context,
-        'winner',
+        'imports',
+        expect.objectContaining({
+          name: 'Ada Lovelace',
+          propertiesPatch: expect.objectContaining({
+            is_self: true,
+            first_name: 'Ada',
+            last_name: 'Lovelace',
+          }),
+        }),
+      );
+      expect(entityIdentifierService.claimForSelf).toHaveBeenCalledTimes(1);
+      expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith(
+        'user-1',
+        'imports',
+        expect.anything(),
+      );
+      expect(entityIdentifierService.repointToEntity).toHaveBeenCalledWith(
+        'user-1',
+        'imports',
+        'email',
+        'ada@example.com',
+        'self',
+      );
+      expect(personService.remove).not.toHaveBeenCalled();
+      expect(userService.update).not.toHaveBeenCalled();
+    });
+
+    it('points the account at the Person the import made when the import has not pointed it yet', async () => {
+      // The import's row exists, but its own pointer write is still to come.
+      personService.create.mockResolvedValue(importsPerson as never);
+      personService.findById.mockResolvedValue(importsPerson as never);
+
+      const person = await service.createPersonForUser(context);
+
+      expect(person.id).toBe('imports');
+      expect(userService.setEntityIdIfUnchanged).toHaveBeenCalledWith(context, 'user-1', 'imports', null);
+      expect(personService.patch).toHaveBeenCalledWith(
+        context,
+        'imports',
         expect.objectContaining({ name: 'Ada Lovelace' }),
       );
       expect(entityIdentifierService.claimForSelf).toHaveBeenCalledTimes(1);
       expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith(
         'user-1',
-        'winner',
+        'imports',
+        expect.anything(),
+      );
+      expect(personService.remove).not.toHaveBeenCalled();
+    });
+
+    it('adopts a Person the account was pointed at some other way, and deletes nothing', async () => {
+      userService.setEntityIdIfUnchanged.mockResolvedValue('elsewhere');
+      personService.findById.mockResolvedValue({ id: 'elsewhere', name: 'Ada', properties: {} } as never);
+
+      const person = await service.createPersonForUser(context);
+
+      expect(person.id).toBe('elsewhere');
+      expect(personService.patch).toHaveBeenCalledWith(
+        context,
+        'elsewhere',
+        expect.objectContaining({ name: 'Ada Lovelace' }),
+      );
+      expect(entityIdentifierService.claimForSelf).toHaveBeenCalledTimes(1);
+      expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith(
+        'user-1',
+        'elsewhere',
+        expect.anything(),
+      );
+      expect(personService.remove).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('tries the pointer again when it was cleared after being read, instead of taking the null as a win', async () => {
+      // The account's pointer named no Person when onboarding read it, and was
+      // cleared before onboarding's write: a compare-and-set against the old
+      // value lands on nothing and reports the null now there.
+      userService.findById.mockResolvedValue({ ...user, entityId: 'dangling' } as never);
+      personService.findById.mockResolvedValue(null);
+      userService.setEntityIdIfUnchanged
+        .mockResolvedValueOnce(null)
+        .mockImplementationOnce(async (_context, _id, entityId) => entityId);
+
+      const person = await service.createPersonForUser(context);
+
+      const created = (await personService.create.mock.results[0].value) as { id: string };
+      expect(person.id).toBe(created.id);
+      expect(userService.setEntityIdIfUnchanged).toHaveBeenNthCalledWith(
+        1,
+        context,
+        'user-1',
+        created.id,
+        'dangling',
+      );
+      expect(userService.setEntityIdIfUnchanged).toHaveBeenNthCalledWith(
+        2,
+        context,
+        'user-1',
+        created.id,
+        null,
+      );
+      expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith(
+        'user-1',
+        created.id,
         expect.anything(),
       );
       expect(userService.update).not.toHaveBeenCalled();
     });
 
-    it('keeps its own Person when it wins the pointer', async () => {
-      userService.findById.mockResolvedValue(user as never);
-      personService.create.mockResolvedValue({ id: 'mine', name: 'Ada Lovelace', properties: {} } as never);
-      userService.setEntityIdIfUnchanged.mockResolvedValue('mine');
-
-      const person = await service.createPersonForUser(context);
-
-      expect(person.id).toBe('mine');
-      expect(personService.remove).not.toHaveBeenCalled();
-      expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith('user-1', 'mine', expect.anything());
-    });
-
-    it('takes the pointer over when the one that beat it names a Person that does not exist', async () => {
-      userService.findById.mockResolvedValue(user as never);
-      personService.create.mockResolvedValue({ id: 'mine', name: 'Ada Lovelace', properties: {} } as never);
-      userService.setEntityIdIfUnchanged.mockResolvedValue('gone');
+    it('takes over a pointer that names no Person with the compare-and-set, never an unconditional write', async () => {
+      userService.setEntityIdIfUnchanged
+        .mockResolvedValueOnce('gone')
+        .mockImplementationOnce(async (_context, _id, entityId) => entityId);
       personService.findById.mockResolvedValue(null);
 
       const person = await service.createPersonForUser(context);
 
-      expect(person.id).toBe('mine');
+      const created = (await personService.create.mock.results[0].value) as { id: string };
+      expect(person.id).toBe(created.id);
+      expect(userService.setEntityIdIfUnchanged).toHaveBeenNthCalledWith(
+        2,
+        context,
+        'user-1',
+        created.id,
+        'gone',
+      );
       expect(personService.remove).not.toHaveBeenCalled();
-      expect(userService.update).toHaveBeenCalledWith(context, 'user-1', { entityId: 'mine' });
+      expect(userService.update).not.toHaveBeenCalled();
+    });
+
+    it('fails rather than report a Person the account never pointed at', async () => {
+      // The account row is gone: every compare-and-set lands on nothing.
+      userService.setEntityIdIfUnchanged.mockResolvedValue(null);
+
+      await expect(service.createPersonForUser(context)).rejects.toThrow(
+        'Could not point the account at its self Person',
+      );
+      expect(entityIdentifierService.claimForSelf).not.toHaveBeenCalled();
+      expect(userService.update).not.toHaveBeenCalled();
     });
   });
 

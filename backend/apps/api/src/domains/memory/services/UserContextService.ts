@@ -394,9 +394,11 @@ export class UserContextService {
 
     // Safe to cache: an is_self row is an identity claim, not a guess. Still
     // only written when the pointer is empty, so a deliberate reassignment is
-    // never overwritten.
+    // never overwritten — checked again in the UPDATE itself, because onboarding
+    // or an import can point the account at its self Person between the read
+    // above and this write.
     if (userResult.length > 0 && !userResult[0].entity_id) {
-      await this.dataSource.query(`UPDATE ci.users SET entity_id = $2 WHERE id = $1`, [
+      await this.dataSource.query(`UPDATE ci.users SET entity_id = $2 WHERE id = $1 AND entity_id IS NULL`, [
         userId,
         selfRow.entity_id,
       ]);

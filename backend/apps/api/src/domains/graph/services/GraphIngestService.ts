@@ -33,9 +33,16 @@ const USER_ENTITY_TYPE = 'User';
 // A provisioned self entity is a `Person` (the owner's display name), NOT an
 // entity_type='User' row — see resolveSelfEntity. linked_table `import:self` +
 // linked_id uuidv5(`self:user:<id>`) make it stable and idempotent so re-runs
-// and concurrent ingests resolve to the same row.
+// and concurrent ingests resolve to the same row — and onboarding creates its
+// self Person under the same key (GraphIngestService.selfEntityLink), so the
+// two resolve to the same row as well.
 const SELF_ENTITY_TYPE = 'Person';
 const SELF_SOURCE_SYSTEM = 'self';
+
+/** The natural key of an account's self Person: one per account. */
+function selfKeyFor(ownerId: string): string {
+  return `self:user:${ownerId}`;
+}
 
 export interface GraphEntityInputDto {
   /** Importer-stable natural key, e.g. `apple_contacts:contact:John Doe`. */
@@ -306,6 +313,20 @@ export class GraphIngestService {
 
   static linkedIdFor(key: string): string {
     return uuidv5(key, IMPORT_NAMESPACE);
+  }
+
+  /**
+   * Where an account's self Person sits in the linked-key index: the
+   * coordinates {@link ensureSelfEntityForOwner} upserts it on. Onboarding
+   * creates its self Person under these too (`PersonService.create` resolves an
+   * existing row on them instead of inserting another), so whichever of the two
+   * gets there first makes the row and the other one is handed that row.
+   */
+  static selfEntityLink(ownerId: string): { linkedTable: string; linkedId: string } {
+    return {
+      linkedTable: `import:${SELF_SOURCE_SYSTEM}`,
+      linkedId: GraphIngestService.linkedIdFor(selfKeyFor(ownerId)),
+    };
   }
 
   /**
@@ -1132,10 +1153,12 @@ export class GraphIngestService {
    * ci.users.entity_id to it, so a fresh import yields a complete graph with
    * preferences actually attached to the user.
    *
-   * Idempotent and concurrency-safe: the Person upserts on its linked key, the
-   * pointer is only set while still NULL, and we re-resolve afterwards so a
-   * pointer a concurrent writer won is honoured over the row we created. Returns
-   * null only when there is no ci.users row to anchor (a non-user context).
+   * Idempotent and concurrency-safe: the Person upserts on its linked key (the
+   * one onboarding creates its self Person under too), the pointer is only set
+   * while still NULL, and we re-resolve before claiming the owner's identifiers
+   * so a pointer a concurrent writer won is honoured — and claimed for — over
+   * the row we created. Returns null only when there is no ci.users row to
+   * anchor (a non-user context).
    */
   private async ensureSelfEntity(ownerId: string): Promise<{ id: string; type: string } | null> {
     const existing = await this.resolveSelfEntity(ownerId);
@@ -1170,7 +1193,7 @@ export class GraphIngestService {
     // Provision the self Person through the same set-based upsert (a batch of
     // one), so its idempotency/race handling matches every other ingested entity.
     const selfDto: GraphEntityInputDto = {
-      key: `self:user:${ownerId}`,
+      key: selfKeyFor(ownerId),
       entityType: SELF_ENTITY_TYPE,
       name: displayName,
       sourceSystem: SELF_SOURCE_SYSTEM,
@@ -1195,18 +1218,33 @@ export class GraphIngestService {
       [ownerId, selfEntityId],
     );
 
-    await this.entityIdentifierService.claimForSelf(ownerId, selfEntityId, {
+    // Honour whatever pointer actually won; fall back to the row we created.
+    // The owner's identifiers go to that Person, read BEFORE claiming: a writer
+    // that pointed the account between our read and our write may have named
+    // another Person, and claiming the owner's address for a row the account
+    // does not point at would strand it there. Onboarding creates its self
+    // Person under this same key, so racing it ends on this very row.
+    const self = (await this.resolveSelfEntity(ownerId)) ?? { id: selfEntityId, type: SELF_ENTITY_TYPE };
+    if (self.id !== selfEntityId) {
+      await this.markSelfEntity(ownerId, self.id);
+      this.logger.warn('Provisioned a self entity, but the account was pointed at another one', {
+        ownerId,
+        selfEntityId,
+        pointer: self.id,
+      });
+    }
+
+    await this.entityIdentifierService.claimForSelf(ownerId, self.id, {
       emails: email ? [email] : [],
       names: [displayName],
     });
     if (email) {
-      await this.entityIdentifierService.repointToEntity(ownerId, selfEntityId, 'email', email, 'self');
+      await this.entityIdentifierService.repointToEntity(ownerId, self.id, 'email', email, 'self');
     }
 
     this.logger.log('Provisioned self entity for owner', { ownerId, selfEntityId, displayName });
 
-    // Honour whatever pointer actually won; fall back to the row we created.
-    return (await this.resolveSelfEntity(ownerId)) ?? { id: selfEntityId, type: SELF_ENTITY_TYPE };
+    return self;
   }
 
   private async markSelfEntity(ownerId: string, entityId: string): Promise<void> {

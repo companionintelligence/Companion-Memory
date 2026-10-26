@@ -414,8 +414,13 @@ export class UserService {
    * can each decide the account has no self Person yet (onboarding and an import
    * that provisions one); a plain {@link update} lets the later one overwrite the
    * earlier and leaves two `is_self` Persons. Returns the pointer the account
-   * ends up with: `entityId` when this call set it, otherwise the other
-   * writer's, for the caller to adopt.
+   * ends up with: `entityId` when this call set it, otherwise whatever the
+   * account holds now, for the caller to adopt.
+   *
+   * `null` is a possible return and does NOT mean this call set anything: the
+   * pointer was cleared after the caller read it, or the account row is gone.
+   * A caller that needs the pointer set tries again with the value returned as
+   * its new `expected`.
    */
   async setEntityIdIfUnchanged(
     context: ServiceContext,

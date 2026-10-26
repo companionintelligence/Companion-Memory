@@ -6,6 +6,7 @@ import { GraphIngestService } from './GraphIngestService';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
 const EXISTING_SELF = '00000000-0000-0000-0000-0000000000c1';
+const ELSEWHERE = '00000000-0000-0000-0000-0000000000c2';
 
 const CONCEPT_KEY = 'graph_llm:concept:cuisine:italian';
 
@@ -17,7 +18,7 @@ const CONCEPT_KEY = 'graph_llm:concept:cuisine:italian';
  * ingest provisions a `Person` for the owner and links ci.users.entity_id to it
  * before wiring the edge. Exercises the set-based upsert path.
  */
-function makeService(opts: { selfExists: boolean }) {
+function makeService(opts: { selfExists: boolean; pointerSetElsewhere?: string }) {
   // The owner's self entity, as resolveSelfEntity's JOIN would return it. Starts
   // empty on a fresh graph; the provisioned Person fills it in.
   let selfRows: Array<{ entity_id: string; entity_type: string }> = opts.selfExists
@@ -43,8 +44,10 @@ function makeService(opts: { selfExists: boolean }) {
 
     if (sql.includes('UPDATE ci.users')) {
       usersUpdate(params);
-      // params = [ownerId, selfEntityId]; reflect the link into the JOIN result.
-      selfRows = [{ entity_id: params[1] as string, entity_type: 'Person' }];
+      // params = [ownerId, selfEntityId]; reflect the link into the JOIN result —
+      // or, when another writer pointed the account first, the guarded UPDATE
+      // matched nothing and the JOIN finds that writer's Person.
+      selfRows = [{ entity_id: opts.pointerSetElsewhere ?? (params[1] as string), entity_type: 'Person' }];
 
       return Promise.resolve([]);
     }
@@ -136,6 +139,51 @@ describe('GraphIngestService self-entity provisioning', () => {
     const edge = rel.inserted[0];
     expect(edge.fromNodeId).toBe(selfRow!.entityId);
     expect(edge.type).toBe('PREFERS');
+  });
+
+  it('provisions the self Person on the key onboarding creates its own under', async () => {
+    const { service, node } = makeService({ selfExists: false });
+
+    await service.ingest({ userId: USER }, PREFERENCE_BATCH);
+
+    const selfRow = node.inserted.find((row) => (row.properties as Record<string, unknown>)?.is_self);
+    expect({ linkedTable: selfRow!.linkedTable, linkedId: selfRow!.linkedId }).toEqual(
+      GraphIngestService.selfEntityLink(USER),
+    );
+  });
+
+  it('claims the owner for the Person the account points at when its own pointer write lost', async () => {
+    // Between the provisioner's read (no pointer) and its guarded write, another
+    // writer pointed the account at a different Person. The owner's address and
+    // name must go to that Person, not to the row the account does not point at.
+    const { service, node, rel, usersUpdate, entityIdentifierService } = makeService({
+      selfExists: false,
+      pointerSetElsewhere: ELSEWHERE,
+    });
+
+    const result = await service.ingest({ userId: USER }, PREFERENCE_BATCH);
+
+    expect(result.errors).toEqual([]);
+    const selfRow = node.inserted.find((row) => (row.properties as Record<string, unknown>)?.is_self);
+    expect(usersUpdate).toHaveBeenCalledWith([USER, selfRow!.entityId]);
+
+    expect(entityIdentifierService.claimForSelf).toHaveBeenCalledTimes(1);
+    expect(entityIdentifierService.claimForSelf).toHaveBeenCalledWith(USER, ELSEWHERE, expect.anything());
+    expect(entityIdentifierService.repointToEntity).toHaveBeenCalledTimes(1);
+    expect(entityIdentifierService.repointToEntity).toHaveBeenCalledWith(
+      USER,
+      ELSEWHERE,
+      'email',
+      'liam@ci.computer',
+      'self',
+    );
+    const marks = node.repo.manager.query.mock.calls
+      .filter(([sql]) => String(sql).includes('SET is_self = TRUE'))
+      .map(([, params]) => params);
+    expect(marks).toContainEqual([ELSEWHERE, USER]);
+
+    // The edge anchors on the Person the account points at.
+    expect(rel.inserted[0].fromNodeId).toBe(ELSEWHERE);
   });
 
   it('reuses an existing self entity without provisioning or relinking', async () => {

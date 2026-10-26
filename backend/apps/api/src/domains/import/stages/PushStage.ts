@@ -2143,7 +2143,9 @@ export class PushStage implements ImportStageRunner {
    * set while still NULL, and a re-read so a concurrent winner is honoured, so
    * the several workers of one import end on ONE Person, and onboarding
    * finishing afterwards finds the pointer and reuses that Person
-   * (`OnboardingService.createPersonForUser`). An account that already has a
+   * (`OnboardingService.createPersonForUser`). Onboarding running at the same
+   * time creates its self Person under the same key, so it is handed that same
+   * row rather than making a second. An account that already has a
    * pointer is returned as it is, untouched: nothing is provisioned, claimed or
    * re-marked for it.
    *

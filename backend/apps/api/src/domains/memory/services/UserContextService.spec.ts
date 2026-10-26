@@ -158,3 +158,40 @@ describe('UserContextService family members', () => {
     ]);
   });
 });
+
+/**
+ * The owner has no pointer yet, and the only identity claim is an `is_self`
+ * row: resolveUserEntity caches it in `ci.users.entity_id`. Onboarding and an
+ * import can point the account at its self Person between this read and that
+ * write, so the write itself must still require the pointer to be empty.
+ */
+describe('UserContextService self fallback', () => {
+  it('caches the is_self row only while the pointer is still empty, checked in the UPDATE', async () => {
+    const query = jest.fn(async (sql: string, _params?: unknown[]): Promise<unknown[]> => {
+      if (sql.includes('FROM ci.users')) {
+        return [{ entity_id: null }];
+      }
+
+      if (sql.includes('FROM ci.entities')) {
+        return [{ entity_id: 'self-1' }];
+      }
+
+      return [];
+    });
+    const graphQuery = { getNode: jest.fn().mockResolvedValue({ entity_id: 'self-1', name: 'Alex Rivera' }) };
+    const service = new UserContextService(
+      graphQuery as never,
+      { query } as never,
+      { setContext: () => {}, warn: () => {}, error: () => {} } as never,
+    );
+
+    const entity = await (
+      service as unknown as { resolveUserEntity(userId: string): Promise<{ entity_id: string } | null> }
+    ).resolveUserEntity('user-1');
+
+    expect(entity?.entity_id).toBe('self-1');
+    const write = query.mock.calls.find(([sql]) => sql.includes('UPDATE ci.users'));
+    expect(write?.[0]).toMatch(/WHERE id = \$1 AND entity_id IS NULL/);
+    expect(write?.[1]).toEqual(['user-1', 'self-1']);
+  });
+});
