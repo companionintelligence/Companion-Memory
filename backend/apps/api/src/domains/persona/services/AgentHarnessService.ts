@@ -128,8 +128,8 @@ export class AgentHarnessService {
     const openUrl =
       (portalApp ? resolvePortalOpenUrl(portalApp) : null) ?? fallbackHubAppUrl(definition.appNames[0]);
 
-    // Portal 401s look like "not installed". A connect key means Hub already
-    // wired the app — treat that as installed so Dispatch does not vanish.
+    // Portal lists the apps this Hub publishes. When it cannot be read, a connect
+    // key still says Hub wired the app, so Dispatch does not vanish.
     const installed = portalApp != null || connectedToMemory;
     const readiness = resolveReadiness(definition.id, {
       installed,

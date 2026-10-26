@@ -37,6 +37,9 @@ export interface PushOptions {
  * {@link retryFailedPush}.
  */
 export async function pushCommand(ctx: CliContext, options: PushOptions = {}): Promise<void> {
+  // Before anything is pushed, for the reason `importCommand` gives.
+  const timeoutMs = parseTimeout(options.timeout);
+
   if (options.retryFailed) {
     await retryFailedPush(ctx, options);
 
@@ -101,7 +104,7 @@ export async function pushCommand(ctx: CliContext, options: PushOptions = {}): P
       ctx.client,
       ctx.term,
       runs.map((run) => run.id),
-      { timeoutMs: parseTimeout(options.timeout), quiet: options.json },
+      { timeoutMs, quiet: options.json },
     );
   }
 }

@@ -2358,8 +2358,10 @@ export class CalendarEventService {
       basePatch.name = data.title;
     }
 
-    if (data.description) {
-      basePatch.description = data.description;
+    // An empty string is how the event page clears the description, so it is
+    // stored as no description. A missing or null field still leaves it alone.
+    if (data.description != null) {
+      basePatch.description = data.description || null;
     }
 
     if (data.event_type) {

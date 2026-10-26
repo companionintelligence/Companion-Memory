@@ -241,4 +241,13 @@ describe('CommunicationService update: falsy-but-legitimate values', () => {
   it('still sets a non-zero value', async () => {
     await expect(patchFor({ duration_seconds: 42 })).resolves.toMatchObject({ durationSeconds: 42 });
   });
+
+  it('clears the subject when the page saves it empty', async () => {
+    await expect(patchFor({ subject: '' })).resolves.toMatchObject({ subject: null });
+  });
+
+  it('leaves the subject alone when a re-sync sends none', async () => {
+    await expect(patchFor({ subject: null })).resolves.not.toHaveProperty('subject');
+    await expect(patchFor({ content: 'body' })).resolves.not.toHaveProperty('subject');
+  });
 });

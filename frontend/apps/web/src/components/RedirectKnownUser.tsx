@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { fetchJson, isNativePlatform, LoadingPage } from '@ci/common';
+import { fetchJson, GlobalUID, isNativePlatform, LoadingPage } from '@ci/common';
 import { Navigate } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
@@ -9,6 +9,18 @@ import { appHomePath } from '@/lib/appHome';
 
 function emailsEqual(a: string | null | undefined, b: string | null | undefined): boolean {
   return Boolean(a && b && a.trim().toLowerCase() === b.trim().toLowerCase());
+}
+
+/**
+ * The account's own id from `user.id`, which GraphQL hands out as a global id (base64 of
+ * `user:<uuid>`), while the Hub identity names the account by the bare uuid.
+ */
+function accountIdOf(userId: string): string {
+  try {
+    return GlobalUID.decode(userId).id;
+  } catch {
+    return userId;
+  }
 }
 
 /** What `GET /api/authenticate/hub-identity` says about the Hub person behind this request. */
@@ -31,7 +43,7 @@ export function hubNamesSomeoneElse(user: { id: string; email: string }, hub: Hu
   }
 
   if (hub.accountId) {
-    return hub.accountId !== user.id;
+    return hub.accountId !== accountIdOf(user.id);
   }
 
   return !emailsEqual(user.email, hub.username);

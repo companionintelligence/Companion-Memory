@@ -200,6 +200,7 @@ describe('PersonResolver.updatePerson — contacts the form was seeded with', ()
       expect.anything(),
       PERSON,
       expect.objectContaining({ name: 'Priya Castellano-Reyes' }),
+      { handEdit: true },
     );
   });
 

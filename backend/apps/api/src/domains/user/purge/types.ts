@@ -80,6 +80,15 @@ export interface TableRef {
   table: string;
 }
 
+/** A table the statements run against: an ordinary table, or one hypertable chunk. */
+export interface PhysicalTable extends TableRef {
+  /**
+   * A compressed TimescaleDB chunk. It has no `ctid` to batch on, so it gets one
+   * unbatched statement instead (see `renderUnbatchedDelete`).
+   */
+  compressed: boolean;
+}
+
 export type PurgeStep =
   /**
    * `UPDATE <table> SET "<column>" = NULL WHERE <scope>` — break a reference

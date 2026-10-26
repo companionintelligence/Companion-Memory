@@ -239,6 +239,10 @@ export class DataDeletionService {
     // 2) Purge every user-owned table, children before parents.
     const deletedCounts: Record<string, number> = {};
 
+    // The user row points at the account's own "You" person, which ci.entities
+    // below deletes; clear the pointer first or that delete is refused.
+    await this.dataSource.query(`UPDATE "ci"."users" SET "entity_id" = NULL WHERE "id" = $1`, [userId]);
+
     // Special-case: ci_search.entity_tag has no user_id; delete its rows that
     // reference this user's tags BEFORE we delete ci_search.tags.
     const entityTagDeleted = await this.deleteEntityTagsForUser(userId);
@@ -581,6 +585,10 @@ export class DataDeletionService {
 
   private async deleteUserOwned(table: UserOwnedTable, userId: string): Promise<number> {
     try {
+      if (table.through) {
+        return await this.deleteThroughParent(table, table.through, userId);
+      }
+
       return await this.deleteWhere(table.schema, table.table, table.userColumn, userId);
     } catch (error) {
       // A table in the plan may not exist in every deployment (e.g. the hbpe
@@ -611,6 +619,25 @@ export class DataDeletionService {
         WHERE "${ownerColumn}" = $1
           AND properties->>'connection_id' = $2`,
       [userId, connectionId],
+    );
+
+    return affectedRows(result);
+  }
+
+  /** Delete the rows of a table with no user column, through the parent rows the user owns. */
+  private async deleteThroughParent(
+    table: UserOwnedTable,
+    through: NonNullable<UserOwnedTable['through']>,
+    userId: string,
+  ): Promise<number> {
+    // Every identifier comes from the trusted internal deletion plan (never
+    // request input); the user id is a bound parameter.
+    const result = await this.dataSource.query(
+      `DELETE FROM "${table.schema}"."${table.table}" t
+        USING "${through.parentSchema}"."${through.parentTable}" p
+        WHERE t."${through.column}" = p."${through.parentKey}"
+          AND p."${table.userColumn}" = $1`,
+      [userId],
     );
 
     return affectedRows(result);

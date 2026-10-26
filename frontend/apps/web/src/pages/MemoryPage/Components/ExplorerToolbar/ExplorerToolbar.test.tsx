@@ -442,7 +442,7 @@ describe('ExplorerToolbar', () => {
       const stale = screen.getByRole('option', { name: 'Myspace' });
 
       expect(stale).toHaveAttribute('aria-selected', 'true');
-      expect(stale.querySelector('svg.text-warning-foreground')).not.toBeNull();
+      expect(stale.querySelector('svg.text-warning')).not.toBeNull();
 
       fireEvent.click(stale);
       expect(screen.getByTestId('params').textContent).not.toContain('connectors=');

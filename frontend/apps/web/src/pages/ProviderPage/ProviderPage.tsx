@@ -14,6 +14,7 @@ import {
   Input,
   Label,
   Popover,
+  Toaster,
   Tooltip,
 } from '@ci/shadcn';
 import { ChevronLeft, Info } from '@ci/shadcn/icons';
@@ -23,7 +24,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import logo from '@/assets/logo.png';
 import { ErrorState } from '@/components/ErrorState';
 import { InlineModal } from '@/components/InlineModal';
-import { ThemeToggle } from '@/components/ThemePicker';
+import { ThemeToggle, useTheme } from '@/components/ThemePicker';
 import { gql } from '@/graphql';
 
 import { Endpoints } from './Endpoints';
@@ -63,6 +64,7 @@ export function ProviderPage() {
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { themeState } = useTheme();
   const { t } = useTranslation();
 
   const {
@@ -193,6 +195,12 @@ export function ProviderPage() {
 
   return (
     <>
+      {/* This page is routed outside MainLayout (App.tsx), which holds the
+          app's only other Toaster, so without its own every toast here went
+          nowhere: a refused or failed Connect looked like a button that did
+          nothing. */}
+      <Toaster theme={themeState.mode} />
+
       <InlineModal open={connectLoading || !!authorizationUrl}>
         <LoadingPage />
       </InlineModal>

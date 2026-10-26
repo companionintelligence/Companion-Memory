@@ -190,6 +190,18 @@ describe('PositionTraceLayer', () => {
     expect(secondBbox).toEqual(currentBbox());
     expect(secondBbox).not.toEqual(firstBbox);
   });
+
+  it('keeps its status line above the playback bar on desktop rather than in the corner the bar covers', () => {
+    setResult({ loading: true });
+    render(<PositionTraceLayer enabled fitToTrace={false} />);
+
+    // jsdom has no layout, so this pins the placement: the bar spans the map's
+    // bottom edge at the same z-index, and a status at bottom-4 sat under it.
+    const wrapper = screen.getByText('Loading your location history…').parentElement;
+
+    expect(wrapper).toHaveClass('device:bottom-20');
+    expect(wrapper).not.toHaveClass('device:bottom-4');
+  });
 });
 
 describe('TraceToggleControl', () => {

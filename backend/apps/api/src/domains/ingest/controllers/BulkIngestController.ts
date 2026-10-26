@@ -1,4 +1,4 @@
-import { Body, ConflictException, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, ConflictException, Controller, Logger, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { DataSource } from 'typeorm';
 
@@ -140,6 +140,50 @@ class BulkMaterializeError extends Error {
     super(message);
     this.name = 'BulkMaterializeError';
   }
+}
+
+/**
+ * What a client hears about a database constraint it can fix, by constraint
+ * name. Anything not listed gets the generic answer in {@link rejectionReason}.
+ */
+const CONSTRAINT_REASONS: Readonly<Record<string, string>> = {
+  valid_positioning:
+    'A position needs a location, or a reference_entity_id with relative_coordinates that include x.',
+};
+
+/**
+ * The reason a batch is reported as rejected, from what its write threw.
+ *
+ * A database error is not passed through. The driver's text names internal
+ * relations: a position with no location came back as `new row for relation
+ * "_hyper_13_2_chunk" violates check constraint "valid_positioning"`, a
+ * TimescaleDB chunk name that means nothing to the caller and describes the
+ * schema to whoever sent the record. The client gets what it can act on (the
+ * constraint's own explanation, or the SQLSTATE), and the driver's message goes
+ * to the log. Anything else, such as a service's own validation message, is
+ * passed through as it always was.
+ */
+function rejectionReason(err: unknown): string {
+  const { code, constraint, driverError } = (err ?? {}) as {
+    code?: unknown;
+    constraint?: unknown;
+    driverError?: { code?: unknown; constraint?: unknown };
+  };
+  const sqlState = [code, driverError?.code].find(
+    (candidate): candidate is string => typeof candidate === 'string' && /^[0-9A-Z]{5}$/.test(candidate),
+  );
+  const message = err instanceof Error ? err.message : String(err);
+
+  if (sqlState == null) {
+    return message;
+  }
+
+  Logger.warn(`A bulk ingest batch was refused by the database: ${message}`, 'BulkIngestController');
+
+  const name = [constraint, driverError?.constraint].find((candidate) => typeof candidate === 'string');
+  const known = typeof name === 'string' ? CONSTRAINT_REASONS[name] : undefined;
+
+  return known ?? `The database refused this batch (SQLSTATE ${sqlState}).`;
 }
 
 /**
@@ -430,7 +474,7 @@ export class BulkIngestController {
       // A failed chunk captured nothing, but earlier chunks may have; undo them
       // so every record is safely re-sendable.
       await this.compensateCaptures(captureIdByKey);
-      throw new BulkMaterializeError((err as Error).message, duplicate, allIndexes);
+      throw new BulkMaterializeError(rejectionReason(err), duplicate, allIndexes);
     }
 
     const fresh = candidates.filter(({ triple }) => captureIdByKey.has(tripleKey(triple)));
@@ -447,7 +491,7 @@ export class BulkIngestController {
     } catch (err) {
       await this.compensateCaptures(captureIdByKey);
       throw new BulkMaterializeError(
-        (err as Error).message,
+        rejectionReason(err),
         duplicate,
         toMaterialize.map(({ index }) => index).sort((a, b) => a - b),
       );

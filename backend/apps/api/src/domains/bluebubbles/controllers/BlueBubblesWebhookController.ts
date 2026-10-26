@@ -70,6 +70,16 @@ export class BlueBubblesWebhookController {
       throw new NotFoundException();
     }
 
+    // Switched off means off: answered like a wrong secret, and nothing is
+    // recorded. The delivery used to be accepted and stamped
+    // `last_webhook_received_at`, which every account's Services card reads as
+    // activity, so one stray delivery turned BlueBubbles "In use · synced
+    // today" on an appliance where it was turned off. Messages were already
+    // dropped on this path (`ingestWebhookMessage` checks the same flag).
+    if (!config.enabled) {
+      throw new NotFoundException();
+    }
+
     await this.configService.recordWebhookReceived(config.id);
 
     if (INGESTABLE_TYPES.has(body.type) && body.data) {

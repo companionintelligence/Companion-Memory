@@ -1,5 +1,6 @@
 import { UseGuards } from '@nestjs/common';
 import { Args, ID, Mutation, Query, Resolver } from '@nestjs/graphql';
+import { validate as isUuid } from 'uuid';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -12,6 +13,20 @@ import { SummaryConnection } from '../types/SummaryConnection';
 import { SummaryEdge } from '../types/SummaryEdge';
 import { SummaryType } from '../types/SummaryType';
 import { Paginator } from '../utils/Paginator';
+
+/**
+ * The summary id inside a summary GlobalUID, or null when it is not a uuid.
+ *
+ * `summary_id` is a uuid column, so any other string (the web app builds the
+ * GlobalUID straight from the address, as in `/brief/summaries/abc`) made
+ * Postgres raise 22P02, which reached the page as "Internal server error". No
+ * row can have such an id, so it is answered the way an unknown uuid is.
+ */
+function summaryIdFrom(gid: string): string | null {
+  const id = GlobalUID.parse('summary', gid);
+
+  return isUuid(id) ? id : null;
+}
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => SummaryType)
@@ -53,7 +68,11 @@ export class SummaryResolver {
     @Args('id', { type: () => ID }) gid: string,
   ): Promise<SummaryType | null> {
     const serviceContext = toServiceContext(context);
-    const id = GlobalUID.parse('summary', gid);
+    const id = summaryIdFrom(gid);
+    if (id == null) {
+      return null;
+    }
+
     const entity = await this.summaryService.findById(serviceContext, id);
 
     return entity ? SummaryType.toType(entity) : null;
@@ -66,7 +85,11 @@ export class SummaryResolver {
     @Args('id', { type: () => ID }) gid: string,
   ): Promise<SummaryType | null> {
     const serviceContext = toServiceContext(context);
-    const id = GlobalUID.parse('summary', gid);
+    const id = summaryIdFrom(gid);
+    if (id == null) {
+      return null;
+    }
+
     const updated = await this.summaryService.update(serviceContext, id, { seen: true });
 
     return updated ? SummaryType.toType(updated) : null;
@@ -79,7 +102,11 @@ export class SummaryResolver {
     @Args('id', { type: () => ID }) gid: string,
   ): Promise<SummaryType | null> {
     const serviceContext = toServiceContext(context);
-    const id = GlobalUID.parse('summary', gid);
+    const id = summaryIdFrom(gid);
+    if (id == null) {
+      return null;
+    }
+
     const updated = await this.summaryService.update(serviceContext, id, { dismissed: true });
 
     return updated ? SummaryType.toType(updated) : null;

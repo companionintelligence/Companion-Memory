@@ -183,6 +183,11 @@ export function Chat({
 
   const handleFrameChunk = useCallback(
     (chunk: Decoded) => {
+      // The server's "still going" frame: nothing to show, and not a channel change.
+      if (chunk.channel === Channel.KEEPALIVE) {
+        return true;
+      }
+
       if (!supportedChannels.has(chunk.channel)) {
         console.warn('Ignored unsupported chunk channel:', chunk.channel);
 
@@ -430,6 +435,34 @@ export function Chat({
       });
     }
   }, [autoFocus, messages]);
+
+  // ChatInput disables its textarea while a turn loads and streams, and a
+  // disabled element drops focus to <body>. The focus calls above run while it
+  // can still be disabled (the stream finishes before `streaming` clears, and a
+  // thread refetch disables it again a few seconds later), so they did nothing
+  // and the box never got focus back after a reply. Give it back when the box
+  // is enabled again, unless the person has moved focus somewhere else.
+  const inputLocked = Boolean(loading || streaming || chatInputProps.disabled);
+  const wasInputLockedRef = useRef(inputLocked);
+
+  useEffect(() => {
+    const wasLocked = wasInputLockedRef.current;
+    wasInputLockedRef.current = inputLocked;
+
+    const input = autoFocusRef.current;
+
+    if (!autoFocus || !wasLocked || inputLocked || !input) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+
+      if (active == null || active === document.body) {
+        input.focus();
+      }
+    });
+  }, [autoFocus, inputLocked]);
 
   const renderedMessages = useMemo(
     () => messages?.map((message, i) => <ChatMessage key={i} {...message} />),

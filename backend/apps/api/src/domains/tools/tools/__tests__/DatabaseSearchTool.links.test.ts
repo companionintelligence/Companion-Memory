@@ -3,7 +3,7 @@ import type { RequestContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { SearchService } from '@ci/domains/search-next';
 
-import { DatabaseSearchTool, itemLink, stripStorageAddress } from '../DatabaseSearchTool';
+import { DatabaseSearchTool, itemLink, stripOwnerRecord, stripStorageAddress } from '../DatabaseSearchTool';
 
 const CONTEXT = { userId: '00000000-0000-0000-0000-0000000000aa' } as RequestContext;
 
@@ -38,11 +38,13 @@ function makeTool(options: {
   files?: { findByIds: jest.Mock };
   content?: { findByIds: jest.Mock; findIdsByFileIds: jest.Mock };
   people?: { findByIds: jest.Mock };
+  answers?: { findByIds: jest.Mock };
+  threads?: { findByIds: jest.Mock };
 }) {
   const noop = emptyResolver();
 
   return new DatabaseSearchTool(
-    noop as any, // answerService
+    (options.answers ?? noop) as any, // answerService
     noop as any, // browserActivityService
     noop as any, // communicationService
     noop as any, // conceptService
@@ -57,7 +59,7 @@ function makeTool(options: {
     noop as any, // productModelService
     noop as any, // receiptService
     noop as any, // taskService
-    noop as any, // threadService
+    (options.threads ?? noop) as any, // threadService
     options.search,
     logger(),
   );
@@ -186,5 +188,59 @@ describe('DatabaseSearchTool — item links', () => {
 
     expect(result.data?.items).toEqual([]);
     expect(content.findIdsByFileIds).not.toHaveBeenCalled();
+  });
+});
+
+describe('DatabaseSearchTool — the account record', () => {
+  // ThreadService and AnswerService load the `user` relation, so a thread hit
+  // handed the model the whole account row. Seen in a stored tool message
+  // after "Show me photos from Blue Bottle Coffee" matched an earlier thread.
+  const owner = {
+    id: CONTEXT.userId,
+    name: 'Hb Tester',
+    email: 'tester@example.com',
+    entityId: 'e1',
+    onboarded: true,
+    role: 'admin',
+    passwordSetAt: new Date('2026-10-01T00:00:00Z'),
+    emailProvenAt: new Date('2026-10-01T00:00:00Z'),
+  };
+
+  it('keeps it out of thread and answer hits, and keeps every other field', async () => {
+    const thread = {
+      id: 't1',
+      name: 'Blue Bottle Coffee',
+      description: null,
+      isArchived: false,
+      generationStatus: 'idle',
+      kind: 'chat',
+      user: owner,
+    };
+    const answer = { id: 'a1', answer: 'Oat milk flat white', user: owner };
+    const tool = makeTool({
+      search: searchOf([
+        { type: 'thread', id: 't1' },
+        { type: 'answer', id: 'a1' },
+      ]),
+      threads: { findByIds: jest.fn().mockResolvedValue([thread]) },
+      answers: { findByIds: jest.fn().mockResolvedValue([answer]) },
+    });
+
+    const result = await tool.execute(CONTEXT, { query: 'blue bottle' });
+    const { user: _threadUser, ...threadFields } = thread;
+    const { user: _answerUser, ...answerFields } = answer;
+
+    expect(result.data?.items).toEqual([
+      { ...threadFields, type: 'thread' },
+      { ...answerFields, type: 'answer' },
+    ]);
+    const sent = JSON.stringify(result.data);
+    expect(sent).not.toContain('tester@example.com');
+    expect(sent).not.toContain('passwordSetAt');
+    expect(sent).not.toContain('emailProvenAt');
+  });
+
+  it('stripOwnerRecord leaves an entity with no user untouched', () => {
+    expect(stripOwnerRecord({ id: 'p1', name: 'Ada' })).toEqual({ id: 'p1', name: 'Ada' });
   });
 });

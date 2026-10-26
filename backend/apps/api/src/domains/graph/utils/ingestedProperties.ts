@@ -24,7 +24,10 @@
  *  - a SET key (below) is unioned — what is stored, then what arrives that is
  *    new, blanks dropped, first-seen order kept;
  *  - any other key it sends takes the new value: the source's latest word on a
- *    fact it owns.
+ *    fact it owns;
+ *  - except a key a person set by hand ({@link USER_EDITED_KEYS}): their word
+ *    outranks any source's, so the arriving value is dropped. The set keys are
+ *    not affected; they only ever grow.
  *
  * The cost is deliberate: an import can no longer REMOVE a set member. A number
  * dropped from a card stays on the Person, as it already did in
@@ -56,6 +59,33 @@
  * lines, filed apart so the phone adjudicator can refuse them.
  */
 export const IDENTITY_LIST_KEYS: readonly string[] = ['emails', 'phones', 'names', 'Phones', 'Faxes'];
+
+/**
+ * The property holding the keys a person set by hand: a list of key names,
+ * written by the Edit Person form (`PersonService.patch` with `handEdit`) when
+ * it changes or clears a value. A re-ingest skips an arriving value for any of
+ * them, and `GraphIngestService` keeps a hand-set `name` or `description` the
+ * same way. The list itself is never taken from a source.
+ */
+export const USER_EDITED_KEYS = 'user_edited_keys';
+
+/** The keys a stored bag records as set by hand: the string members of {@link USER_EDITED_KEYS}. */
+export function userEditedKeys(properties: Record<string, unknown> | null | undefined): string[] {
+  const listed = isObject(properties) ? properties[USER_EDITED_KEYS] : undefined;
+
+  return Array.isArray(listed) ? listed.filter((key): key is string => typeof key === 'string') : [];
+}
+
+/**
+ * {@link USER_EDITED_KEYS} as SQL: true when the bag `properties` lists `key`.
+ * A missing or non-array list holds nothing.
+ */
+export function userEditedSql(properties: string, key: string): string {
+  return (
+    `((CASE WHEN jsonb_typeof(${properties} -> '${USER_EDITED_KEYS}') = 'array' ` +
+    `THEN ${properties} -> '${USER_EDITED_KEYS}' ELSE '[]'::jsonb END) @> jsonb_build_array(${key}))`
+  );
+}
 
 /**
  * Every key a re-ingest of this entity unions: the identity lists, then the
@@ -154,13 +184,18 @@ export function mergeIngestedProperties(
   }
 
   const sets = new Set(unionKeys);
+  const handSet = new Set(userEditedKeys(held));
 
   for (const [key, value] of Object.entries(incoming)) {
-    if (value === null || value === undefined) {
+    if (value === null || value === undefined || key === USER_EDITED_KEYS) {
       continue;
     }
 
-    out[key] = sets.has(key) ? unionList(held[key], value) : value;
+    if (sets.has(key)) {
+      out[key] = unionList(held[key], value);
+    } else if (!handSet.has(key)) {
+      out[key] = value;
+    }
   }
 
   return out;
@@ -180,8 +215,9 @@ export function mergeIngestedProperties(
  * value is JSON null are skipped; a set key's two sides are each read as a list
  * (a lone scalar is a list of one), members are de-duplicated by jsonb equality
  * keeping the earliest — stored before arriving, then by position — and nulls
- * and empty strings dropped; any other key takes the incoming value. Pure and
- * exported so the emitted SQL can be read without a driver.
+ * and empty strings dropped; any other key takes the incoming value unless the
+ * stored bag lists it in {@link USER_EDITED_KEYS}, and that list itself is never
+ * taken. Pure and exported so the emitted SQL can be read without a driver.
  */
 export function mergedPropertiesSql(existing: string, excluded: string, unionKeys: string): string {
   const held = `(CASE WHEN jsonb_typeof(${existing}) = 'object' THEN ${existing} ELSE '{}'::jsonb END)`;
@@ -205,7 +241,9 @@ export function mergedPropertiesSql(existing: string, excluded: string, unionKey
     `${held} || COALESCE((` +
     `SELECT jsonb_object_agg(said.key, CASE WHEN said.key = ANY(${unionKeys}) THEN ${union} ELSE said.value END) ` +
     `FROM jsonb_each(${arriving}) AS said(key, value) ` +
-    `WHERE jsonb_typeof(said.value) <> 'null'` +
+    `WHERE jsonb_typeof(said.value) <> 'null' ` +
+    `AND said.key <> '${USER_EDITED_KEYS}' ` +
+    `AND (said.key = ANY(${unionKeys}) OR NOT ${userEditedSql(held, 'said.key')})` +
     `), '{}'::jsonb)`
   );
 }

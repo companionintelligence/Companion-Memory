@@ -2052,6 +2052,13 @@ export class ImportRunService {
    * `create_missing` builds the path on a stage whose detail is still `{}`,
    * which is every stage that failed before producing anything.
    *
+   * The failure's `phase` also becomes the stage's own, so the row says where
+   * the stage stopped. Progress writes are throttled, so a phase change right
+   * after another one is dropped: an unpack that failed while extracting still
+   * read "acquiring", the phase written a moment before, next to an error that
+   * says `phase=extracting`. Without a failure, or one with no phase, the
+   * column is left as it was.
+   *
    * Fenced by `claimToken` when one is given (see {@link claimStage}). False
    * means the claim was taken back first: the failure belongs to an attempt
    * that no longer owns the stage, so neither the stage nor the run is failed
@@ -2070,6 +2077,7 @@ export class ImportRunService {
          UPDATE ci_import.import_stages
             SET status = 'failed', error = $2, finished_at = now(), updated_at = now(),
                 claim_token = NULL,
+                phase = COALESCE($3::jsonb->>'phase', phase),
                 detail = CASE
                   WHEN $3::jsonb IS NULL THEN detail
                   ELSE jsonb_set(

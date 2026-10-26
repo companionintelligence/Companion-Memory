@@ -916,7 +916,17 @@ export class PlaceService {
           },
         });
 
-        const placeResult = await this.placeRepository.save(place);
+        let placeResult: PlaceEntity;
+
+        try {
+          placeResult = await this.placeRepository.save(place);
+        } catch (err) {
+          if (isUniqueViolation(err) && place.locationPoint) {
+            throw await this.nearbyPlaceConflict(context, place.locationPoint.coordinates);
+          }
+
+          throw err;
+        }
 
         if (emitCreated) {
           await this.eventService.send(PlaceCreatedEvent, {
@@ -942,6 +952,39 @@ export class PlaceService {
 
         return PlaceEntity.toEgressType(placeResult);
       }),
+    );
+  }
+
+  /**
+   * The error for a new place whose point lands in the same 0.001-degree cell
+   * as one the owner already has. `entities_location_snap_dedup_uniq` allows one
+   * Location per cell (about 110 m), so the INSERT fails with 23505, which the
+   * GraphQL layer would otherwise mask as "Internal server error". Name the place
+   * that holds the cell so the person knows which one to edit instead.
+   */
+  private async nearbyPlaceConflict(
+    context: UserServiceContext,
+    coordinates: number[],
+  ): Promise<ConflictException> {
+    const [lng, lat] = coordinates;
+    const rows: Array<{ name: string | null }> = await this.placeRepository.manager.query(
+      `SELECT name
+         FROM ci.entities
+        WHERE entity_type = 'Location'
+          AND owner_user_id = $1
+          AND merged_into_entity_id IS NULL
+          AND location_point IS NOT NULL
+          AND ST_SnapToGrid(location_point::geometry, 0.001) =
+              ST_SnapToGrid(ST_SetSRID(ST_MakePoint($2, $3), 4326), 0.001)
+        LIMIT 1`,
+      [context.userId, lng, lat],
+    );
+    const name = rows[0]?.name?.trim();
+
+    return new ConflictException(
+      name
+        ? `"${name}" is already saved at this spot. Memory keeps one place per spot about 100 m across, so edit that place instead, or move this one farther away.`
+        : 'Another place is already saved at this spot. Memory keeps one place per spot about 100 m across, so move this one farther away.',
     );
   }
 
@@ -1010,7 +1053,11 @@ export class PlaceService {
       .createQueryBuilder('place')
       .leftJoinAndSelect('place.user', 'user')
       .where('place.entity_type = :entityType', { entityType: 'Location' })
-      .andWhere('place.owner_user_id = :userId', { userId: context.userId });
+      .andWhere('place.owner_user_id = :userId', { userId: context.userId })
+      // A place merged into another stays as a tombstone row pointing at the
+      // kept one; it is not a place of its own any more.
+      .andWhere('place.merged_into_entity_id IS NULL')
+      .andWhere('place.is_active IS DISTINCT FROM FALSE');
 
     const query = options.query?.trim();
     if (query) {

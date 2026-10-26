@@ -148,6 +148,19 @@ describe('AccountSection — delete', () => {
     await waitFor(() => expect(confirmButton()).toBeEnabled());
   });
 
+  it('clears the typed address when Cancel is clicked, so reopening starts disabled', async () => {
+    render(<AccountSection />);
+    openDialog();
+    fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: 'jsmith@example.com' } });
+    await waitFor(() => expect(confirmButton()).toBeEnabled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    openDialog();
+
+    expect(screen.getByLabelText(/to confirm/i)).toHaveValue('');
+    expect(confirmButton()).toBeDisabled();
+  });
+
   it('deletes the account and signs out when the confirmation matches', async () => {
     render(<AccountSection />);
     openDialog();

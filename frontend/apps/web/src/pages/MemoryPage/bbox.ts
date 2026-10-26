@@ -109,13 +109,31 @@ export function boundsToBbox(bounds: LatLngBounds): Bbox {
 }
 
 /**
- * A map area as a person would read it, e.g. `47.5°S–33.5°N, 165.5°E–179.5°E`.
- * The Where popovers cannot redraw a rectangle (that is the map's job), only
- * show the ones the search carries and let each be removed.
+ * Decimals that show an axis's span to about two significant figures: one for
+ * a country-sized area, four for a few streets, never more than the six the URL
+ * keeps. A fixed one decimal read a street-sized area as `37.8°N–37.8°N`.
+ */
+function spanDecimals(min: number, max: number): number {
+  const span = Math.abs(max - min);
+
+  if (!(span > 0)) {
+    return 6;
+  }
+
+  return Math.min(6, Math.max(1, Math.ceil(-Math.log10(span)) + 1));
+}
+
+/**
+ * A map area as a person would read it, e.g. `47.5°S–33.5°N, 165.5°E–179.5°E`,
+ * or `37.7937°N–37.7965°N, 122.3989°W–122.3915°W` for a small one. The Where
+ * popovers cannot redraw a rectangle (that is the map's job), only show the
+ * ones the search carries and let each be removed.
  */
 export function describeBbox([minLon, minLat, maxLon, maxLat]: Bbox): string {
-  const lat = (value: number) => `${Math.abs(value).toFixed(1)}°${value < 0 ? 'S' : 'N'}`;
-  const lon = (value: number) => `${Math.abs(value).toFixed(1)}°${value < 0 ? 'W' : 'E'}`;
+  const latDigits = spanDecimals(minLat, maxLat);
+  const lonDigits = spanDecimals(minLon, maxLon);
+  const lat = (value: number) => `${Math.abs(value).toFixed(latDigits)}°${value < 0 ? 'S' : 'N'}`;
+  const lon = (value: number) => `${Math.abs(value).toFixed(lonDigits)}°${value < 0 ? 'W' : 'E'}`;
 
   return `${lat(minLat)}–${lat(maxLat)}, ${lon(minLon)}–${lon(maxLon)}`;
 }

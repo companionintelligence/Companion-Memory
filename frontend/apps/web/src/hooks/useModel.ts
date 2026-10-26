@@ -159,9 +159,10 @@ function useModel(): Value {
       // long-standing default rather than failing the whole model list.
       const [payload, chatModelPref, toolsPref, thinkingPref] = await Promise.all([
         fetchJson<Model[]>('/api/llm/models', { method: 'GET', headers: requestHeaders }),
-        fetchJson<{ chatModel: string | null }>('/api/personalization/chat-model', {
-          headers: requestHeaders,
-        }).catch(() => ({ chatModel: null })),
+        fetchJson<{ chatModel: string | null; defaultChatModel?: string | null }>(
+          '/api/personalization/chat-model',
+          { headers: requestHeaders },
+        ).catch(() => ({ chatModel: null, defaultChatModel: null })),
         fetchJson<{ enabled: boolean }>('/api/personalization/tools', { headers: requestHeaders }).catch(
           () => ({ enabled: true }),
         ),
@@ -184,7 +185,18 @@ function useModel(): Value {
 
       const persistedModel = chatModelPref?.chatModel ?? null;
       const persistedIsServed = persistedModel != null && data.some((m) => m.model === persistedModel);
-      const model = persistedIsServed ? persistedModel : (data[0]?.model ?? null);
+      // With no usable personal choice, the appliance default (the model the
+      // Hub configured) is what a turn should run on. Taking the first entry of
+      // the list instead sent whatever `ollama list` put first, which is often
+      // the most recently pulled model (gemma3:270m on a Hub defaulting to
+      // qwen3.5:9b), and the page sends its selection with every turn.
+      const defaultModel = chatModelPref?.defaultChatModel ?? null;
+      const defaultIsServed = defaultModel != null && data.some((m) => m.model === defaultModel);
+      const model = persistedIsServed
+        ? persistedModel
+        : defaultIsServed
+          ? defaultModel
+          : (data[0]?.model ?? null);
 
       setSelectedModel(model);
 

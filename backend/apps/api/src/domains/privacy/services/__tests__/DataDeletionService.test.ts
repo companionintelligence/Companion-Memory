@@ -22,6 +22,8 @@ interface Row {
   /** Ledger rows only: which record this arrival evidences. */
   recordTable?: string;
   recordId?: string;
+  /** Rows of a table with no user column: the `id` of the parent row they belong to. */
+  parentId?: string;
 }
 
 function makeDataSource(initial: Record<string, Row[]>) {
@@ -96,6 +98,20 @@ function makeDataSource(initial: Record<string, Row[]>) {
       const key = `ci.${match?.[1]}`;
       const before = store[key]?.length ?? 0;
       store[key] = (store[key] ?? []).filter((r) => !(r.user === owner && r.graphConnection === conn));
+
+      return [[], before - (store[key]?.length ?? 0)];
+    }
+
+    // Join-scoped delete for a table with no user column:
+    // DELETE FROM "s"."child" t USING "s"."parent" p WHERE t."x" = p."y" AND p."user_id" = $1
+    const through = /DELETE FROM "(\w+)"\."(\w+)" t\s+USING "(\w+)"\."(\w+)" p/.exec(sql);
+    if (through) {
+      const key = `${through[1]}.${through[2]}`;
+      const owned = new Set(
+        (store[`${through[3]}.${through[4]}`] ?? []).filter((r) => r.user === value).map((r) => r.id),
+      );
+      const before = store[key]?.length ?? 0;
+      store[key] = (store[key] ?? []).filter((r) => !owned.has(r.parentId));
 
       return [[], before - (store[key]?.length ?? 0)];
     }
@@ -440,6 +456,67 @@ describe('DataDeletionService.deleteAccount', () => {
     expect(result.totalDeleted).toBeGreaterThan(0);
     expect(cleanOrphans).toHaveBeenCalledTimes(1);
     expect(savedAudits[0]).toMatchObject({ scope: 'account', subjectUserId: 'user-1' });
+  });
+
+  it('purges hbpe labels and cluster links, which have no user column, through the rows they belong to', async () => {
+    const { service, store, query } = makeService({
+      connections: [],
+      store: {
+          'ci.users': [{ user: 'user-1' }, { user: 'user-2' }],
+          'ci.summaries': [
+            { id: 's1', user: 'user-1' },
+            { id: 's2', user: 'user-2' },
+          ],
+          'ci.events': [
+            { id: 'e1', user: 'user-1' },
+            { id: 'e2', user: 'user-2' },
+          ],
+          'ci.content': [
+            { id: 'c1', user: 'user-1' },
+            { id: 'c2', user: 'user-2' },
+          ],
+          'hbpe.summary_l1_label': [{ parentId: 's1' }, { parentId: 's2' }],
+          'hbpe.l1_event_cluster': [{ parentId: 'e1' }, { parentId: 'e2' }],
+          'hbpe.l2_content_cluster': [{ parentId: 'c1' }, { parentId: 'c2' }],
+      },
+    });
+
+    const result = await service.deleteAccount({ userId: 'user-1' });
+
+    expect(store['hbpe.summary_l1_label']).toEqual([{ parentId: 's2' }]);
+    expect(store['hbpe.l1_event_cluster']).toEqual([{ parentId: 'e2' }]);
+    expect(store['hbpe.l2_content_cluster']).toEqual([{ parentId: 'c2' }]);
+    expect(result.deletedCounts).toMatchObject({
+      'hbpe.summary_l1_label': 1,
+      'hbpe.l1_event_cluster': 1,
+      'hbpe.l2_content_cluster': 1,
+    });
+    expect(result.userDeleted).toBe(true);
+
+    // None of the three is asked for a user_id column it does not have.
+    const statements = query.mock.calls.map(([sql]) => sql as string);
+    for (const table of ['summary_l1_label', 'l1_event_cluster', 'l2_content_cluster']) {
+      expect(statements.filter((sql) => sql.includes(`"hbpe"."${table}"`))).toEqual([
+        expect.stringContaining('USING'),
+      ]);
+    }
+  });
+
+  it('clears the user row pointer to its own person before purging ci.entities', async () => {
+    const { service, query } = makeService({
+      connections: [],
+      store: { 'ci.users': [{ user: 'user-1' }], 'ci.entities': [{ user: 'user-1' }] },
+    });
+
+    await service.deleteAccount({ userId: 'user-1' });
+
+    const statements = query.mock.calls.map(([sql]) => sql as string);
+    const cleared = statements.findIndex((sql) => /UPDATE "ci"\."users" SET "entity_id" = NULL/.test(sql));
+    const entities = statements.findIndex((sql) => sql.includes('DELETE FROM "ci"."entities"'));
+
+    expect(cleared).toBeGreaterThanOrEqual(0);
+    expect(cleared).toBeLessThan(entities);
+    expect(query.mock.calls[cleared][1]).toEqual(['user-1']);
   });
 
   it('is idempotent: re-deleting an already-deleted account purges nothing and audits zero', async () => {

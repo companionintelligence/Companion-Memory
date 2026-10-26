@@ -489,27 +489,33 @@ export class UserService {
    * them, and that account becomes administrator now. Otherwise this throws
    * {@link LastAdminDeletionRefused} and writes nothing.
    *
-   * The hard delete that follows runs outside this lock, so an administrator leaving this way at
-   * the same moment as the only other one leaves can still empty the role. The cost is the
-   * admin-less appliance {@link ApplianceAdminGuard} keeps closed until an operator names an
-   * administrator, never a promotion.
+   * `andThen` is the deletion itself. It runs after the handover, still inside its transaction
+   * and under its lock, and the handover commits only if it resolves: a delete that fails leaves
+   * the successor's role as it was, instead of leaving two administrators. It runs on its own
+   * connections, so it must not wait on what this transaction holds (the appliance-claim lock and
+   * the successor's row); the account purge touches neither.
    */
-  async handOverAdministration(
+  async handOverAdministration<T = void>(
     context: ServiceContext,
     id: string,
     options: DeletionOptions = {},
-  ): Promise<void> {
+    andThen: () => Promise<T> = () => Promise.resolve(undefined as T),
+  ): Promise<T> {
     if (context.userId !== SYSTEM_USER && context.userId !== id) {
       throw new UnauthorizedException();
     }
 
-    const handedOver = await this.userRepository.manager.transaction((manager) =>
-      this.lockAndHandOver(manager, id, options),
-    );
+    const { handedOver, result } = await this.userRepository.manager.transaction(async (manager) => {
+      const handedOver = await this.lockAndHandOver(manager, id, options);
+
+      return { handedOver, result: await andThen() };
+    });
 
     if (handedOver?.successorId) {
       await this.eventService.send(UserUpdatedEvent, { userId: handedOver.successorId });
     }
+
+    return result;
   }
 
   /**

@@ -236,7 +236,11 @@ export class MemoryController {
           id,
           time: new Date(Date.now() + created),
           communication_type: CommunicationType.CHAT,
-          direction: message.role === 'user' ? 'inbound' : 'outbound',
+          // Direction is from the owner's side, as for every other message:
+          // what the owner typed to the agent was sent by them (outbound) and
+          // the agent's reply was written to them (inbound). Recall reads it
+          // as "I wrote" / "someone else wrote to me" (SerializerService).
+          direction: message.role === 'user' ? 'outbound' : 'inbound',
           thread_id: sessionId,
           participants_metadata: {
             platform,

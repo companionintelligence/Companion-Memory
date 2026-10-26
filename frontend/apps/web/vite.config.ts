@@ -69,6 +69,12 @@ function brandTokens(): Plugin {
 // on native is provided by the on-device SQLite/local-first layer instead.
 const disablePwa = process.env.VITE_DISABLE_PWA === 'true';
 
+// Navigations the service worker must leave to the network instead of answering
+// with the app shell. `/static/` is the object store behind the same origin: a
+// file's Open button navigates a new tab to its presigned `/static/<bucket>/<key>`
+// URL, and served from the shell that tab showed the app's own 404 page.
+export const NAVIGATE_FALLBACK_DENYLIST = [/^\/api\//, /^\/static\//];
+
 export default defineConfig({
   plugins: [
     react(),
@@ -118,7 +124,7 @@ export default defineConfig({
           globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
           maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
 
-          navigateFallbackDenylist: [/^\/api\//],
+          navigateFallbackDenylist: NAVIGATE_FALLBACK_DENYLIST,
           runtimeCaching: [
             {
               // Match any request that ends with .png, .jpg, .jpeg or .svg.

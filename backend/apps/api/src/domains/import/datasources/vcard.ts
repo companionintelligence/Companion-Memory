@@ -858,6 +858,41 @@ export function nameFromN(value: string): string {
   return [prefix, given, additional, family, suffix].filter(Boolean).join(' ').trim();
 }
 
+/** N's given, additional and family names, for the person's own name fields. */
+export function namePartsFromN(value: string): { given: string; additional: string; family: string } {
+  const [family = '', given = '', additional = ''] = splitStructured(value, ';');
+
+  return { given, additional, family };
+}
+
+/**
+ * BDAY as the `YYYY-MM-DD` a person's birth date holds, or '' when the card does
+ * not give a whole date. vCard 3.0 writes `1985-03-15` or `19850315`, sometimes
+ * with a time after it; vCard 4.0 allows a date with no year (`--0315`), and
+ * Apple writes a yearless birthday as year 1604 with `X-APPLE-OMIT-YEAR=1604`.
+ * Neither of the last two is a birth date, so they are left out rather than
+ * stored as one.
+ */
+export function birthDateFromBday(value: string, omitYear?: string): string {
+  const match = /^(\d{4})-?(\d{2})-?(\d{2})(?:[T\s].*)?$/.exec(value.trim());
+
+  if (!match) {
+    return '';
+  }
+
+  const [, year, month, day] = match;
+
+  if (omitYear && omitYear.trim() === year) {
+    return '';
+  }
+
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+
+  return date.getUTCMonth() === Number(month) - 1 && date.getUTCDate() === Number(day)
+    ? `${year}-${month}-${day}`
+    : '';
+}
+
 /** ADR components → one human line (po;ext;street;locality;region;postal;country). */
 function formatAddress(value: string): string {
   const [po = '', ext = '', street = '', locality = '', region = '', postal = '', country = ''] =
@@ -1141,7 +1176,9 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
   const pendingSocials: { line: ContentLine; service?: string }[] = [];
   let fn = '';
   let structuredName = '';
+  let nameParts: { given: string; additional: string; family: string } | null = null;
   let birthday = '';
+  let birthdayOmitYear: string | undefined;
   let uid = '';
   let avatarUrl = '';
 
@@ -1165,6 +1202,7 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
       case 'N':
         if (!structuredName) {
           structuredName = nameFromN(line.value);
+          nameParts = namePartsFromN(line.value);
         }
 
         break;
@@ -1291,6 +1329,7 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
         // BDAY is a DATE(-TIME) value, not TEXT — no backslash escaping applies.
         if (!birthday) {
           birthday = line.value.trim();
+          birthdayOmitYear = line.params['X-APPLE-OMIT-YEAR']?.[0];
         }
 
         break;
@@ -1336,6 +1375,8 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
   if (birthday) {
     attributes.push({ name: 'birth_date', value: birthday });
   }
+
+  const birthDate = birthday ? birthDateFromBday(birthday, birthdayOmitYear) : '';
 
   // The card's own note, read as the record it is. See handlesFromNote: an
   // export that merged another address book writes that address book's emails
@@ -1437,6 +1478,22 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
       ...(nicknames.length ? { Nicknames: uniq(nicknames) } : {}),
       ...(categories.length ? { Categories: uniq(categories) } : {}),
       ...(socials.length ? { SocialProfiles: uniq(socials) } : {}),
+      // The person's own fields, under the singular snake_case keys the person
+      // record reads (PersonEntity.loadPropertiesFromJsonb, the Edit Person
+      // form). The plural lists above are the card's sets, kept so a re-import
+      // can add to them; nothing on the person page reads them, which is how a
+      // card's nickname, birthday, website and name parts never showed up.
+      ...(nameParts?.given ? { first_name: nameParts.given } : {}),
+      ...(nameParts?.additional ? { middle_name: nameParts.additional } : {}),
+      ...(nameParts?.family ? { last_name: nameParts.family } : {}),
+      ...(nicknames.length ? { nickname: nicknames[0] } : {}),
+      ...(birthDate ? { birth_date: birthDate } : {}),
+      ...(urls.length ? { website: urls[0] } : {}),
+      ...(titles.length ? { job_title: titles[0] } : {}),
+      ...(orgs.length ? { organization: orgs[0] } : {}),
+      // The card's NOTE becomes the person's description: toGraphEntity moves
+      // this key out of the bag onto the row's own column.
+      ...(notes.length ? { description: notes.join('\n\n') } : {}),
       // Lowercase, unlike every other key here: this exact key is the contract
       // `push/entities.ts` spreads straight into `ci.entities.properties`, and
       // `PersonType.avatarUrl` (backend/.../types/PersonType.ts) reads it back

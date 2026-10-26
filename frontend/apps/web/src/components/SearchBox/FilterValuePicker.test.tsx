@@ -217,6 +217,11 @@ describe('FilterValuePicker', () => {
     // The stale chip carries the warning, the live one does not.
     expect(screen.getByText('hasdflasdjf').closest('[class*="border-warning"]')).not.toBeNull();
     expect(screen.getByText('reddit').closest('[class*="border-warning"]')).toBeNull();
+    // Drawn in the warning colour itself. `text-warning-foreground` is the text
+    // colour for a warning FILL (white in the light theme), and the chip has none.
+    const staleChip = screen.getByText('hasdflasdjf').closest('[class*="border-warning"]');
+    expect(staleChip).toHaveClass('text-warning');
+    expect(staleChip).not.toHaveClass('text-warning-foreground');
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove hasdflasdjf' }));
     expect(screen.getByTestId('values')).toHaveTextContent('reddit');

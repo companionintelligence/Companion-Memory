@@ -66,6 +66,19 @@ describe('doctor check registry', () => {
     expect(sql).toContain('mimetype IS NOT NULL');
   });
 
+  it('comms-missing-participants leaves out agent chat turns', () => {
+    // `POST /memory/turn` stores what OpenClaw and Hermes saw in a chat turn
+    // with category 'agent-turn' and no from/to: the other party is an agent,
+    // not a Person. Counting them made `ci doctor` exit 1 on every Hub with a
+    // connected agent, with a remedy (`ci backfill extract_people
+    // link_communications`) that can never fill them.
+    const sql = findCheck('comms-missing-participants')?.sql ?? '';
+
+    expect(sql).toContain("category IS DISTINCT FROM 'agent-turn'");
+    // A NULL category is an ordinary imported message and must still count.
+    expect(sql).not.toContain("category <> 'agent-turn'");
+  });
+
   it('names the guard or migration each mirrored predicate came from', () => {
     // Every check that copies a predicate from elsewhere must say where from,
     // so the two are maintained together. A null is allowed — the pipeline and

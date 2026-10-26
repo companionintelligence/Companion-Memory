@@ -136,6 +136,21 @@ describe('toGraphEntity', () => {
     expect(input?.key).toContain('alice@example.com');
   });
 
+  it("moves a parser's description onto the row instead of leaving it in the bag", () => {
+    const input = toGraphEntity(
+      staged({ metadata: { description: 'Met at the climbing gym', nickname: 'Al' } }),
+    );
+
+    expect(input?.description).toBe('Met at the climbing gym');
+    expect(input?.properties).not.toHaveProperty('description');
+    expect(input?.properties).toMatchObject({ nickname: 'Al' });
+  });
+
+  it('sends no description when the parser stated none', () => {
+    expect(toGraphEntity(staged())).not.toHaveProperty('description');
+    expect(toGraphEntity(staged({ metadata: { description: '   ' } }))).not.toHaveProperty('description');
+  });
+
   it('carries the email where GraphIngestService looks for identifiers', () => {
     // `emails`/`phones` are what populate ci.entity_identifiers — the index that
     // later matches this person to the same person in another export.

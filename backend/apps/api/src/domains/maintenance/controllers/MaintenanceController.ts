@@ -45,6 +45,7 @@ import { INDEXABLE_ENTITIES, type IndexableEntity } from '@ci/domains/search-nex
 
 import { SEARCH_INDEX_BACKFILL_QUEUE, SearchIndexBackfillRequestEvent } from '../events';
 import { ESTIMATE_LOCATION_QUEUE } from '../listeners/EstimateLocationBatchListener';
+import { MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL, MEDIA_DIMENSIONS_STAGE_ID } from '../mediaDimensionsCandidates';
 import {
   type CommunicationLinkBackfillProgress,
   type CommunicationLinkBackfillResult,
@@ -811,17 +812,12 @@ export class MaintenanceController {
 
     const limit = body.limit ?? MEDIA_DIMENSIONS_DEFAULT_LIMIT;
 
-    // Mirror the listener's candidate filter so the estimate matches the work.
-    const rows = await this.dataSource.query<Array<{ count: string }>>(
-      `SELECT COUNT(*)::bigint AS count
-         FROM ci.files
-        WHERE user_id = $1
-          AND variant = $2
-          AND key IS NOT NULL
-          AND width IS NULL
-          AND (content_type LIKE 'image/%' OR content_type LIKE 'video/%')`,
-      [userId, 'ORIGINAL'],
-    );
+    // What the stage would still do, so the estimate matches the work and a
+    // file it could not decode does not keep this at `enqueued` forever.
+    const rows = await this.dataSource.query<Array<{ count: string }>>(MEDIA_DIMENSIONS_CANDIDATE_COUNT_SQL, [
+      userId,
+      MEDIA_DIMENSIONS_STAGE_ID,
+    ]);
 
     const candidateCount = Number(rows[0]?.count ?? 0);
     const estimatedFileCount = Math.min(candidateCount, limit);

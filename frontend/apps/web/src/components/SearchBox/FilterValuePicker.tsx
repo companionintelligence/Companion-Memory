@@ -295,7 +295,7 @@ export function FilterValuePicker({
                 <Check className={cn('h-4 w-4 shrink-0', selected ? 'opacity-100' : 'opacity-0')} />
                 <span className="truncate">{display(value)}</span>
                 {isUnknown(value) && unknownValueHint && (
-                  <AlertTriangle className="ml-auto h-3.5 w-3.5 shrink-0 text-warning-foreground" />
+                  <AlertTriangle className="ml-auto h-3.5 w-3.5 shrink-0 text-warning" />
                 )}
               </button>
             </li>
@@ -374,7 +374,10 @@ export function FilterValuePicker({
               <Badge
                 key={value}
                 variant={unknown ? 'outline' : 'secondary'}
-                className={cn('max-w-[220px] gap-1', unknown && 'border-warning text-warning-foreground')}
+                // `text-warning`, not `text-warning-foreground`: the foreground token is
+                // for text ON a warning fill (white in the light theme), and this chip
+                // has no fill, so it would draw white on the dialog's near-white.
+                className={cn('max-w-[220px] gap-1', unknown && 'border-warning text-warning')}
               >
                 {unknown && <AlertTriangle className="h-3 w-3 shrink-0" />}
                 <span className="truncate">{display(value)}</span>

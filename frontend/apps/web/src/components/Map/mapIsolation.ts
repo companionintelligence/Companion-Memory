@@ -23,9 +23,14 @@ import L from 'leaflet';
  *   opt-out, so dragging is switched off for the length of a press that
  *   starts here. Removing that listener while the event is still on its way
  *   up keeps it from running for this very press.
- * - double-click zoom, the context menu and wheel zoom: propagation stopped,
- *   as before. The dismissable layer does not watch dblclick, contextmenu or
- *   wheel.
+ * - double-click zoom and wheel zoom: propagation stopped, as before. The
+ *   dismissable layer does not watch dblclick or wheel.
+ * - the context menu: left to bubble. React handles every event at the root,
+ *   above the map, so stopping it here left the right-click menu on the side
+ *   panel's cards dead. Letting it through costs nothing on the map: Leaflet
+ *   only reacts to a contextmenu when the map or a layer under the pointer
+ *   listens for one, and no map here listens on the map itself (a marker's
+ *   listener is on its own icon, which these controls never contain).
  * A pinch that starts on the control still zooms (touchZoom wants two
  * fingers on the container), as it did before.
  */
@@ -45,10 +50,10 @@ function mapUnder(el: HTMLElement): L.Map | undefined {
 
 const RELEASE_EVENTS = ['mouseup', 'touchend', 'touchcancel'] as const;
 
-/** Keep a press, click, double-click, right-click or wheel on `el` from reaching the map's own handlers. */
+/** Keep a press, click, double-click or wheel on `el` from reaching the map's own handlers. */
 export function isolateFromMap(el: HTMLElement): void {
   (el as HTMLElement & { _leaflet_disable_click?: boolean })._leaflet_disable_click = true;
-  L.DomEvent.on(el, 'dblclick contextmenu', L.DomEvent.stopPropagation);
+  L.DomEvent.on(el, 'dblclick', L.DomEvent.stopPropagation);
   L.DomEvent.disableScrollPropagation(el);
 
   const press = () => {

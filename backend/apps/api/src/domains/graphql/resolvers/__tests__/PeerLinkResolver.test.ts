@@ -154,6 +154,32 @@ describe('PeerLinkResolver', () => {
       expect(service.upsert.mock.calls[0][1]).toMatchObject({ trustTier: 'family' });
     });
 
+    it('re-activates the link it adds, so re-adding a revoked handle brings the link back', async () => {
+      // `upsert` keeps a stored `revoked` status unless told otherwise, so
+      // re-adding a revoked peer used to answer success with the link still dead.
+      const { resolver, service, context } = build();
+
+      await resolver.createPeerLink(context, {
+        peerHandle: 'ada',
+        memoryEndpoint: 'https://ada.example/agent',
+      });
+
+      expect(service.upsert.mock.calls[0][1]).toMatchObject({ status: 'active', trustTier: 'stranger' });
+    });
+
+    it('never re-activates on update: editing a revoked link leaves it revoked', async () => {
+      const { resolver, service, context } = build({
+        findById: jest.fn().mockResolvedValue(makeLink({ status: 'revoked', revokedAt: new Date() })),
+      });
+
+      await resolver.updatePeerLink(context, {
+        id: GlobalUID.encode('peer-link', '01a0-link'),
+        displayName: 'Ada L.',
+      });
+
+      expect(service.upsert.mock.calls[0][1].status).toBeUndefined();
+    });
+
     it('preserves the existing tier when an update does not mention it', async () => {
       const { resolver, service, context } = build({
         findById: jest.fn().mockResolvedValue(makeLink({ trustTier: 'trusted' })),

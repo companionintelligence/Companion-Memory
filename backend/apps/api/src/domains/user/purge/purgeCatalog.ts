@@ -1,4 +1,4 @@
-import type { FkDeleteAction, FkEdge, TableRef, UserRefColumn } from './types';
+import type { FkDeleteAction, FkEdge, PhysicalTable, TableRef, UserRefColumn } from './types';
 
 /**
  * Reads the shape of the schema the purge has to work through, straight from
@@ -189,25 +189,32 @@ export async function readFkEdges(executor: SqlExecutor): Promise<FkEdge[]> {
  * of another. Chunks are plain tables, so per-chunk batching is both correct and
  * cheaper to plan.
  *
+ * Each chunk says whether it is compressed: a compressed chunk refuses `ctid`
+ * ("transparent decompression only supports tableoid system column"), so the
+ * caller cannot batch it the same way.
+ *
  * Returns `[target]` unchanged when TimescaleDB is not installed, which is what
  * makes the same code path work against a test database without the extension.
  */
-export async function expandToPhysicalTables(executor: SqlExecutor, target: TableRef): Promise<TableRef[]> {
+export async function expandToPhysicalTables(executor: SqlExecutor, target: TableRef): Promise<PhysicalTable[]> {
+  const table = { schema: target.schema, table: target.table, compressed: false };
   const installed = (await executor.query(
     `SELECT 1 AS present FROM pg_extension WHERE extname = 'timescaledb'`,
   )) as unknown[];
 
   if (installed.length === 0) {
-    return [target];
+    return [table];
   }
 
   const chunks = (await executor.query(
-    `SELECT chunk_schema AS schema, chunk_name AS "table"
+    `SELECT chunk_schema AS schema, chunk_name AS "table", is_compressed AS compressed
        FROM timescaledb_information.chunks
       WHERE hypertable_schema = $1 AND hypertable_name = $2
       ORDER BY 1, 2`,
     [target.schema, target.table],
-  )) as Array<{ schema: string; table: string }>;
+  )) as Array<{ schema: string; table: string; compressed: boolean }>;
 
-  return chunks.length > 0 ? chunks : [target];
+  return chunks.length > 0
+    ? chunks.map((chunk) => ({ schema: chunk.schema, table: chunk.table, compressed: chunk.compressed === true }))
+    : [table];
 }

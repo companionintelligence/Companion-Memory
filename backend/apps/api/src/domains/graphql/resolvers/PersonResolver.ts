@@ -533,14 +533,21 @@ export class PersonResolver {
       }
     }
 
-    const entity = await this.personService.patch(serviceContext, id, {
-      ...(input.name !== undefined ? { name: input.name } : {}),
-      ...(input.description !== undefined ? { description: input.description } : {}),
-      propertiesPatch: {
-        ...structuredPropertiesPatch(input),
-        ...(input.addresses ? addressPropertiesPatch(input.addresses) : {}),
+    // `handEdit`: what this form changes is the person's own word on it, and a
+    // later import of the same contact leaves it alone (PersonService.patch).
+    const entity = await this.personService.patch(
+      serviceContext,
+      id,
+      {
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        propertiesPatch: {
+          ...structuredPropertiesPatch(input),
+          ...(input.addresses ? addressPropertiesPatch(input.addresses) : {}),
+        },
       },
-    });
+      { handEdit: true },
+    );
 
     if (entity == null) {
       return {

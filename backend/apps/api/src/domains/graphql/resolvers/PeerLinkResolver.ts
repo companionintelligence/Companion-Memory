@@ -143,6 +143,13 @@ export class PeerLinkResolver {
       // keeps re-adding an already-federated peer from silently unbinding it.
       peerIssuer: input.peerIssuer,
       peerSubject: input.peerSubject,
+      // Adding a peer means "this link is live". Re-adding a handle the owner
+      // revoked used to answer success while `upsert` kept the stored
+      // `revoked` status, so the link stayed dead. Saying `active` here is the
+      // explicit re-activation `upsert` honours (it also clears `revokedAt`);
+      // the tier above starts from the narrow default again, as for any new
+      // link. `updatePeerLink` still never re-activates.
+      status: 'active',
     });
 
     return { success: true, peerLink: PeerLinkType.toType(link) };

@@ -75,6 +75,17 @@ export function AccountSection() {
   const [needsSuccessor, setNeedsSuccessor] = useState(false);
   const [successorEmail, setSuccessorEmail] = useState('');
 
+  // Every way out of the dialog (Cancel, Escape, the close button, a click outside) clears what was
+  // typed. Cancel used to only hide it, so reopening showed the email still filled in and the
+  // destructive button already live.
+  const closeDeleteDialog = () => {
+    setOpen(false);
+    setConfirmEmail('');
+    setError(null);
+    setNeedsSuccessor(false);
+    setSuccessorEmail('');
+  };
+
   const email = user?.email ?? '';
   // Mirrors the server's comparison so the button is only live when the request would
   // actually be accepted — the user should never meet the 400.
@@ -482,13 +493,10 @@ export function AccountSection() {
       <Dialog
         open={open}
         onOpenChange={(next: boolean) => {
-          setOpen(next);
-
-          if (!next) {
-            setConfirmEmail('');
-            setError(null);
-            setNeedsSuccessor(false);
-            setSuccessorEmail('');
+          if (next) {
+            setOpen(true);
+          } else {
+            closeDeleteDialog();
           }
         }}
       >
@@ -534,7 +542,7 @@ export function AccountSection() {
           </div>
 
           <Dialog.Footer>
-            <Button variant="outline" onClick={() => setOpen(false)} disabled={loading}>
+            <Button variant="outline" onClick={closeDeleteDialog} disabled={loading}>
               Cancel
             </Button>
             <Button variant="destructive" onClick={handleDelete} disabled={!matches || loading}>

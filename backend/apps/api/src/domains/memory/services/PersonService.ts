@@ -7,6 +7,7 @@ import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/c
 import { LoggerService } from '@ci/common/logging';
 import { chunkedConflictInsert, keysetSeek } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
+import { USER_EDITED_KEYS, userEditedKeys } from '@ci/domains/graph/utils/ingestedProperties';
 import { PersonCreatedEvent, PersonUpdatedEvent, PersonRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
@@ -102,6 +103,35 @@ const PERSON_NAME_LOOKS_IMPLAUSIBLE_SQL = `CASE
   WHEN person.name ~* '^\\s*(missed|placed|received|recorded|voicemail)\\y' THEN 1
   ELSE 0
 END`;
+
+/**
+ * `jsonb_build_object('user_edited_keys', …)` for a hand edit in
+ * {@link PersonService.patch}: the keys already listed, plus each patched key
+ * whose stored value differs from the one arriving (a missing key reads as
+ * null, so clearing a value that was there counts and "clearing" an absent one
+ * does not), plus `name` / `description` when this edit changes the column.
+ * Evaluated inside the UPDATE, so `properties`, `name` and `description` are
+ * the row as it was before this statement.
+ */
+function handEditedKeysSql(data: { name?: string; description?: string }): string {
+  const sources = [
+    `SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(properties -> '${USER_EDITED_KEYS}') = 'array' ` +
+      `THEN properties -> '${USER_EDITED_KEYS}' ELSE '[]'::jsonb END) AS key`,
+    `SELECT patched.key FROM jsonb_each(:propertiesPatch::jsonb) AS patched(key, value) ` +
+      `WHERE COALESCE(properties -> patched.key, 'null'::jsonb) IS DISTINCT FROM patched.value`,
+    ...(data.name !== undefined
+      ? [`SELECT 'name' WHERE name IS DISTINCT FROM CAST(:editedName AS text)`]
+      : []),
+    ...(data.description !== undefined
+      ? [`SELECT 'description' WHERE description IS DISTINCT FROM CAST(:editedDescription AS text)`]
+      : []),
+  ];
+
+  return (
+    `jsonb_build_object('${USER_EDITED_KEYS}', (SELECT COALESCE(jsonb_agg(DISTINCT edited.key ORDER BY edited.key), '[]'::jsonb) ` +
+    `FROM (${sources.join(' UNION ')}) AS edited))`
+  );
+}
 
 @Injectable()
 export class PersonService extends EntityService<PersonEntity, Person> {
@@ -569,9 +599,24 @@ export class PersonService extends EntityService<PersonEntity, Person> {
 
     const after = await this.applyUpdate(context, id, (before) => {
       beforeRow = before;
+      const stored = (before.properties ?? {}) as Record<string, unknown>;
+      // What a person set in Edit Person (`patch` with `handEdit`) outranks the
+      // syncs and background writers that come through here (Google and
+      // Facebook contacts, memory compaction): their value for a hand-set key,
+      // or a hand-set name or description, is dropped, as an import's is.
+      const handSet = new Set(userEditedKeys(stored));
+      // Written back as stored rather than left out, so a name-only update of a
+      // hand-named person is still a (no-op) write and not an empty one.
+      const columns = {
+        ...rest,
+        ...(handSet.has('name') && rest.name !== undefined ? { name: before.name } : {}),
+        ...(handSet.has('description') && rest.description !== undefined
+          ? { description: before.description }
+          : {}),
+      };
 
       if (!properties) {
-        return rest;
+        return columns;
       }
 
       // Callers routinely round-trip an egress bag, and toEgressType strips
@@ -579,12 +624,23 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       // An absent normalized key therefore means "unchanged", not "cleared":
       // carry the stored value over, and only sync a typed column when its
       // storage key is explicitly present in the incoming bag.
-      const stored = (before.properties ?? {}) as Record<string, unknown>;
       const merged: Record<string, unknown> = { ...properties };
       for (const [storageKey] of NORMALIZED_PERSON_FIELDS) {
         if (!(storageKey in properties) && storageKey in stored) {
           merged[storageKey] = stored[storageKey];
         }
+      }
+
+      for (const key of handSet) {
+        if (key in stored) {
+          merged[key] = stored[key];
+        } else {
+          delete merged[key];
+        }
+      }
+
+      if (USER_EDITED_KEYS in stored) {
+        merged[USER_EDITED_KEYS] = stored[USER_EDITED_KEYS];
       }
 
       const typedAll = typedColumnsFromProperties(properties);
@@ -596,19 +652,19 @@ export class PersonService extends EntityService<PersonEntity, Person> {
         isSelf?: boolean;
       } = {};
 
-      if ('first_name' in properties) {
+      if ('first_name' in properties && !handSet.has('first_name')) {
         typed.firstName = typedAll.firstName;
       }
 
-      if ('middle_name' in properties) {
+      if ('middle_name' in properties && !handSet.has('middle_name')) {
         typed.middleName = typedAll.middleName;
       }
 
-      if ('last_name' in properties) {
+      if ('last_name' in properties && !handSet.has('last_name')) {
         typed.lastName = typedAll.lastName;
       }
 
-      if ('birth_date' in properties) {
+      if ('birth_date' in properties && !handSet.has('birth_date')) {
         typed.birthDate = typedAll.birthDate;
       }
 
@@ -617,7 +673,7 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       }
 
       return {
-        ...rest,
+        ...columns,
         ...typed,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         properties: merged as any, // TypeORM will handle JSON serialization
@@ -682,11 +738,20 @@ export class PersonService extends EntityService<PersonEntity, Person> {
    * so concurrent patches to different keys don't clobber each other) and
    * updates name/description only when provided. A patch key set to null
    * clears that property.
+   *
+   * `handEdit` is the Edit Person form saving: every key whose value this
+   * statement changes or clears (and `name` / `description`, when they change)
+   * is added to `properties.user_edited_keys`, and a later import or sync leaves
+   * those alone (`USER_EDITED_KEYS` in graph/utils/ingestedProperties.ts, and
+   * {@link update}). The form sends every field back on each save, so the
+   * comparison is with the stored value, in the same statement: an unchanged
+   * field is not claimed.
    */
   async patch(
     context: ServiceContext,
     id: string,
     data: { name?: string; description?: string; propertiesPatch?: Record<string, unknown> },
+    options: { handEdit?: boolean } = {},
   ): Promise<Person | null> {
     const set: Record<string, unknown> = {};
     if (data.name !== undefined) {
@@ -697,8 +762,17 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       set.description = data.description;
     }
 
-    if (data.propertiesPatch && Object.keys(data.propertiesPatch).length > 0) {
-      set.properties = () => `properties || :propertiesPatch::jsonb`;
+    const hasPatch = data.propertiesPatch != null && Object.keys(data.propertiesPatch).length > 0;
+    const claimsColumn =
+      options.handEdit === true && (data.name !== undefined || data.description !== undefined);
+
+    if (hasPatch || claimsColumn) {
+      set.properties = options.handEdit
+        ? () => `(COALESCE(properties, '{}'::jsonb) || :propertiesPatch::jsonb) || ${handEditedKeysSql(data)}`
+        : () => `properties || :propertiesPatch::jsonb`;
+    }
+
+    if (hasPatch && data.propertiesPatch) {
       // Keep typed columns in sync with the structured-person editor patch.
       const typed = typedColumnsFromProperties(data.propertiesPatch);
       if ('first_name' in data.propertiesPatch) {
@@ -744,7 +818,15 @@ export class PersonService extends EntityService<PersonEntity, Person> {
     }
 
     if (set.properties) {
-      qb = qb.setParameter('propertiesPatch', JSON.stringify(data.propertiesPatch));
+      qb = qb.setParameter('propertiesPatch', JSON.stringify(data.propertiesPatch ?? {}));
+    }
+
+    if (options.handEdit && data.name !== undefined) {
+      qb = qb.setParameter('editedName', data.name);
+    }
+
+    if (options.handEdit && data.description !== undefined) {
+      qb = qb.setParameter('editedDescription', data.description);
     }
 
     const result = await qb.execute();

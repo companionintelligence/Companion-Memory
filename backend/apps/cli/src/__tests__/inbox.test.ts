@@ -63,6 +63,21 @@ describe('ci inbox', () => {
     expect(ctx.term.text()).toContain('2 of 2 unit(s) started');
   });
 
+  it('refuses a bad --timeout before starting any unit', async () => {
+    const requested: unknown[] = [];
+    const ctx = harness({
+      scanInbox: async () => scan([unit()]),
+      startInboxRuns: async (units: string[]) => {
+        requested.push(units);
+
+        return { results: units.map((u) => ({ unit: u, runId: 'run-1' })) };
+      },
+    });
+
+    await expect(inboxCommand(ctx, { start: true, wait: true, timeout: 'abc' })).rejects.toBeInstanceOf(CliError);
+    expect(requested).toEqual([]);
+  });
+
   it('never offers a unit another run already claimed', async () => {
     const requested: string[][] = [];
     const ctx = harness({

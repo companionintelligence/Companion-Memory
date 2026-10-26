@@ -1,7 +1,13 @@
 import { DataSource, type QueryRunner } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
-import { BaseEntity, GraphDeltaWriter, PersonEntity, PersonMergeService } from '@ci/domains/memory';
+import {
+  BaseEntity,
+  GraphDeltaWriter,
+  PersonEntity,
+  PersonMergeService,
+  PersonService,
+} from '@ci/domains/memory';
 
 import { createSyntheticTestUser } from '../../__tests__/support/applianceUser';
 import { databaseAvailability, resolveConnection } from '../../__tests__/support/databaseConnection';
@@ -400,6 +406,74 @@ describeWithDb(`re-importing an entity merges into what is stored (${availabilit
     });
   });
 
+  describe('what a person set by hand in Edit Person', () => {
+    const card = (extra: Record<string, unknown> = {}) =>
+      vcard('2125550177', 'Ola Brandt', {
+        Phones: ['(212) 555-0177'],
+        nickname: 'Oli',
+        website: 'https://ola.example',
+        ...extra,
+      });
+    let ola: string;
+    let people: PersonService;
+
+    beforeAll(async () => {
+      ola = (await ingest(card())).get(card().key)!;
+      people = new PersonService(runner.manager.getRepository(PersonEntity), logger(), {
+        send: jest.fn(),
+      } as never);
+
+      // The form sends every field back: job_title is unchanged (absent, sent
+      // empty), so it is not claimed; the nickname is changed and the website
+      // cleared, and both are.
+      await people.patch(
+        ctx,
+        ola,
+        {
+          name: 'Ola B. Brandt',
+          propertiesPatch: { nickname: 'Olly', website: null, job_title: null },
+        },
+        { handEdit: true },
+      );
+    });
+
+    it('lists the keys the edit changed or cleared, not the ones it sent back unchanged', async () => {
+      expect((await row(ola)).properties.user_edited_keys).toEqual(['name', 'nickname', 'website']);
+    });
+
+    it('keeps them, and the hand-set name, through a re-import of the same card', async () => {
+      await ingest(card({ job_title: 'Pilot', Phones: ['(212) 555-0178'] }));
+
+      const now = await row(ola);
+
+      expect(now.name).toBe('Ola B. Brandt');
+      expect(now.properties).toMatchObject({
+        nickname: 'Olly',
+        website: null,
+        // Not set by hand, so still the card's latest word.
+        job_title: 'Pilot',
+        // A set key only grows, hand edit or not.
+        Phones: ['(212) 555-0177', '(212) 555-0178'],
+        user_edited_keys: ['name', 'nickname', 'website'],
+      });
+    });
+
+    it('keeps them through a sync that writes the whole bag back (PersonService.update)', async () => {
+      const current = (await row(ola)).properties;
+
+      await people.update(ctx, ola, {
+        name: 'Ola Brandt',
+        properties: { ...current, nickname: 'From a sync', job_title: 'Navigator' },
+      });
+
+      const now = await row(ola);
+
+      expect(now.name).toBe('Ola B. Brandt');
+      expect(now.properties).toMatchObject({ nickname: 'Olly', job_title: 'Navigator' });
+      expect(now.properties.user_edited_keys).toEqual(['name', 'nickname', 'website']);
+    });
+  });
+
   describe('a null name says nothing', () => {
     it('keeps the name a merge supplied to a row its source could not name', async () => {
       // A contact list row with an unusable name and no handle reaches the
@@ -511,6 +585,35 @@ describeWithDb(`re-importing an entity merges into what is stored (${availabilit
       ['treats SQL NULL as empty', null, { a: 1 }, undefined],
       ['treats JSON null as empty', 'json-null', { a: 1 }, undefined],
       ['keeps unicode as it is', { names: ['Zoë Ångström'] }, { names: ['Zoë Ångström', '李雷'] }, undefined],
+      [
+        'keeps a hand-set value and a hand clear, still unions a set key',
+        {
+          nickname: 'Olly',
+          website: null,
+          phones: ['1'],
+          user_edited_keys: ['nickname', 'website', 'phones'],
+        },
+        { nickname: 'Oli', website: 'https://ola.example', job_title: 'Pilot', phones: ['2'] },
+        undefined,
+      ],
+      [
+        'never takes the hand-set list from a source',
+        { user_edited_keys: ['nickname'] },
+        { user_edited_keys: [], nickname: 'Oli' },
+        undefined,
+      ],
+      [
+        'ignores a hand-set list that is not a list',
+        { user_edited_keys: 'nickname' },
+        { nickname: 'Oli' },
+        undefined,
+      ],
+      [
+        'ignores non-string members of the hand-set list',
+        { user_edited_keys: [1, null] },
+        { a: 1 },
+        undefined,
+      ],
     ];
 
     it.each(cases)('agree: %s', async (_label, stored, incoming, accumulate) => {

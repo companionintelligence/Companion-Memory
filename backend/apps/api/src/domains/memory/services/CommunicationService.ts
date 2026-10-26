@@ -596,8 +596,11 @@ export class CommunicationService {
       updateData.metadata = data.metadata;
     }
 
-    if (data.subject) {
-      updateData.subject = data.subject;
+    // An empty string is how the message page clears the subject; the label
+    // then falls back to the preview or content (labelFor). A missing or null
+    // subject still leaves it alone, which connector re-syncs rely on.
+    if (data.subject != null) {
+      updateData.subject = data.subject || null;
     }
 
     if (data.content) {

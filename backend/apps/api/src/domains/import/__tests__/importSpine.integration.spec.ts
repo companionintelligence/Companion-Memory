@@ -300,6 +300,33 @@ describeWithDatabase(`the import spine (${importDatabase.target})`, () => {
       expect(await service.isFinished(run.id)).toBe(true);
     });
 
+    it('records the phase a stage failed in, not the last one a progress write kept', async () => {
+      const { stages } = await startRun(await stageDrop());
+
+      await service.beginStage(stages[0].id);
+      await service.recordProgress(stages[0].id, { processed: 0, total: 1, phase: 'acquiring' });
+      // The runner moved on to `extracting`, but that write fell inside the
+      // progress throttle. The failure's context is what knows where it was.
+      await service.failStage(stages[0].id, 'unpack [phase=extracting file=export.zip] cannot unpack export.zip', {
+        stage: 'unpack',
+        phase: 'extracting',
+        file: 'export.zip',
+        message: 'cannot unpack export.zip',
+      });
+
+      expect((await service.getStage(stages[0].id))?.phase).toBe('extracting');
+    });
+
+    it('keeps the recorded phase when the failure names none', async () => {
+      const { stages } = await startRun(await stageDrop());
+
+      await service.beginStage(stages[0].id);
+      await service.recordProgress(stages[0].id, { processed: 0, total: 1, phase: 'acquiring' });
+      await service.failStage(stages[0].id, 'unreadable');
+
+      expect((await service.getStage(stages[0].id))?.phase).toBe('acquiring');
+    });
+
     it('cancels queued stages but leaves a running one to its worker', async () => {
       const { run, stages } = await startRun(await stageDrop());
 

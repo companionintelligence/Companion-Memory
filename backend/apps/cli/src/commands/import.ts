@@ -48,6 +48,9 @@ export async function importCommand(
   }
 
   const stages = parseStages(options.stages);
+  // Before anything is uploaded: a bad --timeout used to surface only once the
+  // runs had started, failing a command whose imports were already under way.
+  const timeoutMs = parseTimeout(options.timeout);
 
   if (stages != null && !stages.includes('media') && stages.includes('parse')) {
     // Worth a warning rather than a refusal: `--stages unpack,parse` is a
@@ -132,7 +135,7 @@ export async function importCommand(
       ctx.client,
       ctx.term,
       started.map((result) => result.runId as string),
-      { timeoutMs: parseTimeout(options.timeout), quiet: options.json },
+      { timeoutMs, quiet: options.json },
     );
   }
 

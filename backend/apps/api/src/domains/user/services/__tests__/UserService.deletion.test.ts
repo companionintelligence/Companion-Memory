@@ -376,6 +376,48 @@ describe('UserService — account deletion', () => {
       expect(eventService.send).not.toHaveBeenCalledWith(UserRemovedEvent, expect.anything());
     });
 
+    it('runs the deletion it is given inside the transaction, after the promotion, and returns its result', async () => {
+      const { service, journal } = makeService({
+        target: ADMIN,
+        otherAccounts: true,
+        successors: [{ id: 'user-2' }],
+      });
+
+      const result = await service.handOverAdministration(
+        OWN,
+        'user-1',
+        { successorEmail: 'member@example.com' },
+        async () => {
+          journal.push('delete-account');
+
+          return 'deleted';
+        },
+      );
+
+      expect(result).toBe('deleted');
+      expect(journal.slice(-3)).toEqual(['promote-successor', 'delete-account', 'commit']);
+    });
+
+    it('does not commit the promotion when the deletion fails, and announces nothing', async () => {
+      const { service, journal, eventService } = makeService({
+        target: ADMIN,
+        otherAccounts: true,
+        successors: [{ id: 'user-2' }],
+      });
+      const purgeFailure = new Error('column "user_id" does not exist');
+
+      await expect(
+        service.handOverAdministration(OWN, 'user-1', { successorEmail: 'member@example.com' }, () =>
+          Promise.reject(purgeFailure),
+        ),
+      ).rejects.toBe(purgeFailure);
+
+      // The promotion was written inside the transaction, which then rolled back with the failure.
+      expect(journal).toContain('promote-successor');
+      expect(journal).not.toContain('commit');
+      expect(eventService.send).not.toHaveBeenCalled();
+    });
+
     it('lets a member through without asking', async () => {
       const { service, journal } = makeService({
         target: { id: 'user-1', role: 'user' },

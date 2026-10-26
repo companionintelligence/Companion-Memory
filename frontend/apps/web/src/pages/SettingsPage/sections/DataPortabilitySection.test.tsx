@@ -221,22 +221,21 @@ describe('DataPortabilitySection', () => {
     expect(screen.queryByText(/Could not import that archive/i)).not.toBeInTheDocument();
   });
 
-  it('leaves stale file/email/error in place when Cancel is clicked, since only re-opening resets them', async () => {
-    // Real current behavior: the footer's Cancel button only flips `importOpen`
-    // to false directly — it does not run the `onOpenChange` reset. Reopening
-    // via the "Import from file" trigger goes through the same controlled
-    // `open` prop, so the stale draft is still there. Documented here so a
-    // future change to either path has to touch this test on purpose.
+  it('clears the file and confirmation when Cancel is clicked, so reopening starts over', async () => {
     render(<DataPortabilitySection />);
     openImportDialog();
     chooseFile('export.ndjson');
     fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: h.email } });
+    expect(replaceButton()).toBeEnabled();
 
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
     openImportDialog();
 
-    expect(screen.getByRole('button', { name: 'export.ndjson' })).toBeInTheDocument();
-    expect(screen.getByLabelText(/to confirm/i)).toHaveValue(h.email);
+    expect(screen.getByRole('button', { name: /choose export file/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/to confirm/i)).toHaveValue('');
+    expect(replaceButton()).toBeDisabled();
+    // Emptied too, or picking the same file again would not register as a change.
+    expect(fileInput().value).toBe('');
   });
 });
 

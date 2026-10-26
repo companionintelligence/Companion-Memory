@@ -46,3 +46,39 @@ export function groupImportFiles(files: readonly File[]): ImportBatch[] {
 
   return batches;
 }
+
+/**
+ * A loose file that is an import on its own: one part of a multi-part export,
+ * or a single export archive.
+ */
+const ARCHIVE_NAME = /\.(zip|tar|tgz|gz|7z|rar)$/i;
+
+/**
+ * The most loose files may add up to and still be packed into one archive.
+ *
+ * Packing reads every byte once in the tab before the upload starts, and the
+ * loose files of a Takeout are the ones too big for any part, so a drop of
+ * those could add up past the appliance's 50 GiB upload limit. Above this they
+ * go up one at a time, each with its own progress, as they always did.
+ */
+export const PACK_LOOSE_FILES_MAX_BYTES = 4 * 1024 ** 3;
+
+/**
+ * Split a drop's loose files into the ones to pack into one archive and the
+ * ones that stay a unit each.
+ *
+ * Archives stay on their own: every part of a multi-part export is a complete
+ * archive and gets its own run. Everything else (photos, a contacts file, a
+ * JSON export) is a piece of one export, so two or more of them travel as ONE
+ * archive and make one run, instead of one run per photo.
+ */
+export function splitLooseFiles(files: readonly File[]): { pack: File[]; single: File[] } {
+  const rest = files.filter((file) => !ARCHIVE_NAME.test(file.name));
+  const restBytes = rest.reduce((sum, file) => sum + file.size, 0);
+
+  if (rest.length < 2 || restBytes > PACK_LOOSE_FILES_MAX_BYTES) {
+    return { pack: [], single: [...files] };
+  }
+
+  return { pack: rest, single: files.filter((file) => ARCHIVE_NAME.test(file.name)) };
+}

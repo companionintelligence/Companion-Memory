@@ -50,6 +50,8 @@ const MODELS = [
 /** Preference server state this mock serves and records writes into. */
 interface ServerState {
   chatModel: string | null;
+  /** The appliance default the server reports beside the override; absent on older servers. */
+  defaultChatModel?: string | null;
   toolsEnabled: boolean;
   thinkingEnabled: boolean;
 }
@@ -86,7 +88,11 @@ function setFetch(opts: { models?: unknown; modelsOk?: boolean; state?: ServerSt
         state.chatModel = (JSON.parse(String(init?.body)) as { chatModel: string | null }).chatModel;
       }
 
-      return respond({ chatModel: state.chatModel });
+      return respond(
+        'defaultChatModel' in state
+          ? { chatModel: state.chatModel, defaultChatModel: state.defaultChatModel }
+          : { chatModel: state.chatModel },
+      );
     }
 
     if (url.includes('/api/personalization/tools')) {
@@ -134,6 +140,48 @@ describe('useModel', () => {
     await waitFor(() => expect(result.current[0].loading).toBe(false));
     expect(result.current[0].activeModels).toHaveLength(2);
     expect(result.current[0].selectedModel).toBe('llama3');
+  });
+
+  // The page sends its selection with every turn, so picking the first listed
+  // model (gemma3:270m, the most recently pulled) overrode the Hub's default
+  // (qwen3.5:9b) for every user who had never chosen one.
+  it('selects the appliance default, not the first listed model, when the user has no preference', async () => {
+    setFetch({ state: { ...defaultServerState(), defaultChatModel: 'qwen-vl' } });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].selectedModel).toBe('qwen-vl');
+  });
+
+  it('falls back to the first listed model when the appliance default is not served', async () => {
+    setFetch({ state: { ...defaultServerState(), defaultChatModel: 'gemma4:e4b' } });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].selectedModel).toBe('llama3');
+  });
+
+  it("keeps the user's own choice over the appliance default", async () => {
+    setFetch({ state: { ...defaultServerState(), chatModel: 'llama3', defaultChatModel: 'qwen-vl' } });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].selectedModel).toBe('llama3');
+  });
+
+  it('moves to the appliance default when the stored choice is no longer served', async () => {
+    const { state } = setFetch({
+      state: { ...defaultServerState(), chatModel: 'removed:27b', defaultChatModel: 'qwen-vl' },
+    });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].selectedModel).toBe('qwen-vl');
+    await waitFor(() => expect(state.chatModel).toBeNull());
   });
 
   it('restores the server-side chat-model preference when still available', async () => {

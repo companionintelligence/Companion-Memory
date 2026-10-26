@@ -9,7 +9,13 @@ import config from '@ci/configuration';
 import { PURGE_OBJECT_STORE, type PurgeObjectStore } from '../purge/objectStore';
 import { expandToPhysicalTables, readFkEdges, readUserRefColumns } from '../purge/purgeCatalog';
 import { buildPurgePlan } from '../purge/purgePlan';
-import { renderBatchedDelete, renderBatchedNull, renderDeleteUser } from '../purge/purgeSql';
+import {
+  renderBatchedDelete,
+  renderBatchedNull,
+  renderDeleteUser,
+  renderUnbatchedDelete,
+  renderUnbatchedNull,
+} from '../purge/purgeSql';
 import type { PurgePlan, PurgeStep, TableRef } from '../purge/types';
 
 const USERS_TABLE: TableRef = { schema: 'ci', table: 'users' };
@@ -328,6 +334,18 @@ export class AccountPurgeService {
     let total = 0;
 
     for (const table of physical) {
+      if (table.compressed) {
+        // No ctid to batch on: one statement for the whole chunk.
+        const sql =
+          step.kind === 'delete'
+            ? renderUnbatchedDelete(table, step.scope)
+            : renderUnbatchedNull(table, step.column, step.scope);
+
+        total += await this.runCounting(runner, sql, [userId]);
+
+        continue;
+      }
+
       const sql =
         step.kind === 'delete'
           ? renderBatchedDelete(table, step.scope, batchSize)
