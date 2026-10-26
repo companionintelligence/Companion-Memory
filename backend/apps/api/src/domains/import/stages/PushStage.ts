@@ -597,10 +597,18 @@ export class PushStage implements ImportStageRunner {
     // (see push/self), and a run is hundreds of thousands of records — this
     // cannot be a per-record, or even a per-batch, lookup. Also drives owner
     // contact → self Person redirect during entity push.
-    const isSelf = await this.resolveIsSelf(context);
+    //
+    // The owner's self Person comes FIRST, and is made here when the account has
+    // none: onboarding is what creates it, and an import can run before then.
+    // Without it `selfEntityId` is null for the whole run, so mail the owner
+    // sent from their account address is filed under a Person of its own and a
+    // header-less mail to the owner keeps the parser's `outbound` (see
+    // {@link directionAfterSender}). It also has to precede `resolveIsSelf`,
+    // which reads the names and addresses the Person holds.
     const selfEntityId = await this.retrying(context, 'reading the owner', () =>
-      this.resolveSelfEntityId(context.userId),
+      this.resolveSelfEntityId(context),
     );
+    const isSelf = await this.resolveIsSelf(context);
     const trustMode = await this.retrying(context, 'reading the owner’s trust mode', () =>
       this.resolveTrustMode(context.userId),
     );
@@ -2124,13 +2132,54 @@ export class PushStage implements ImportStageRunner {
     }
   }
 
-  private async resolveSelfEntityId(userId: string): Promise<string | null> {
+  /**
+   * The owner's self Person, made first when the account has none yet.
+   *
+   * `ci.users.entity_id` stays NULL until onboarding finishes (or something
+   * self-anchored is ingested), and an import can start before that. Left
+   * NULL, the whole run treats the owner as nobody — see the call in `run`.
+   * {@link GraphIngestService.ensureSelfEntityForOwner} is the one place the
+   * server makes that Person: a set-based upsert on a stable key, a pointer only
+   * set while still NULL, and a re-read so a concurrent winner is honoured, so
+   * the several workers of one import end on ONE Person, and onboarding
+   * finishing afterwards finds the pointer and reuses that Person
+   * (`OnboardingService.createPersonForUser`). An account that already has a
+   * pointer is returned as it is, untouched: nothing is provisioned, claimed or
+   * re-marked for it.
+   *
+   * Fail-soft on anything but the database being away: a provisioning error
+   * leaves the run on the null-owner behaviour it always had, logged, rather
+   * than stranding an import that is otherwise fine. The outage case is
+   * rethrown for {@link retrying} to wait out.
+   */
+  private async resolveSelfEntityId(context: StageRunContext): Promise<string | null> {
     const rows: Array<{ entity_id: string | null }> = await this.dataSource.query(
       `SELECT entity_id FROM ci.users WHERE id = $1::uuid`,
-      [userId],
+      [context.userId],
     );
+    const existing = rows[0]?.entity_id ?? null;
 
-    return rows[0]?.entity_id ?? null;
+    if (existing != null) {
+      return existing;
+    }
+
+    try {
+      const provisioned = await this.graph.ensureSelfEntityForOwner({ userId: context.userId });
+
+      return provisioned?.id ?? null;
+    } catch (err) {
+      if (isTransientDatabaseError(err)) {
+        throw err;
+      }
+
+      this.logger.warn('Could not provision the owner; mail from their own address stays unattributed', {
+        runId: context.runId,
+        userId: context.userId,
+        error: (err as Error).message,
+      });
+
+      return null;
+    }
   }
 
   /**

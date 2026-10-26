@@ -265,7 +265,10 @@ function makeStage(
     { upsertForSubjects: jest.fn(async () => 0) } as never,
     { create: jest.fn(async () => undefined) } as never,
     noop as never,
-    { ingest: jest.fn(async () => ({ entities: [], errors: [] })) } as never,
+    {
+      ensureSelfEntityForOwner: jest.fn(async () => null),
+      ingest: jest.fn(async () => ({ entities: [], errors: [] })),
+    } as never,
     { send: jest.fn(async () => undefined) } as never,
     logger as never,
   );
