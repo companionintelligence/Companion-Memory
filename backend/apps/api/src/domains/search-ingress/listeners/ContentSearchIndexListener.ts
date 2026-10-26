@@ -131,6 +131,7 @@ export class ContentSearchIndexListener {
         reason: skipReason,
       });
     } else if (options.keepExistingEmbedding && (await this.hasEmbedding(ownerId, content.id))) {
+      // No clearSkip here: the backfill excludes a row that has an embedding or a skip marker.
       this.logger.log('Content already embedded, keeping its embedding', {
         contentId: content.id,
       });

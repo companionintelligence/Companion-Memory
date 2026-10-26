@@ -340,7 +340,7 @@ describe('EventSearchIndexListener.indexEvent / updateEvent', () => {
 
   // The maintenance sweep re-drives `event.created` for rows that had no
   // embedding when it ran, while the pipeline's index.embed_event stage embeds
-  // the same rows. On a 123k-event import 99.8% of the completed jobs found the
+  // the same rows. On a 126k-event import 99.8% of the completed jobs found the
   // vector already there and paid an Ollama call to overwrite it.
   it('keeps an existing embedding on a created event, but still refreshes the tsvector', async () => {
     const { listener, embeddingGenerationService, embeddingService, vectorService } = makeFullListener(
