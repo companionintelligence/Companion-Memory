@@ -135,7 +135,6 @@ export class McpServerService {
         }
       };
 
-      // @ts-expect-error -- dynamic Zod shapes cause excessive type depth in registerTool generics
       server.registerTool(
         tool.name,
         {
