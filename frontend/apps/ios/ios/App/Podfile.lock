@@ -1,5 +1,5 @@
 PODS:
-  - Capacitor (7.6.7):
+  - Capacitor (7.6.9):
     - CapacitorCordova
   - CapacitorApp (7.1.2):
     - Capacitor
@@ -13,7 +13,7 @@ PODS:
     - Capacitor
     - SQLCipher
     - ZIPFoundation
-  - CapacitorCordova (7.6.7)
+  - CapacitorCordova (7.6.9)
   - CapacitorLocalNotifications (7.0.6):
     - Capacitor
   - CapacitorMlkitBarcodeScanning (7.5.0):
@@ -168,13 +168,13 @@ EXTERNAL SOURCES:
     :path: "../../node_modules/@powersync/capacitor"
 
 SPEC CHECKSUMS:
-  Capacitor: 8ef25ba872436d2c5ac2a4791f7255529bdcd93b
+  Capacitor: 46067d1c8df89760dbed78780d436327d588c726
   CapacitorApp: f01a913211780e0718dae9750442c3e23f96e106
   CapacitorBrowser: 6d09f59655e89aede71654ef08b98de55cf032b6
   CapacitorCamera: 9e952270be355797f769aa835bb7643a96c871fe
   CapacitorCommunityBackgroundGeolocation: 750523ec6dd1cc94cf4e2bf7787605106753f73c
   CapacitorCommunitySqlite: 4813d82ad33001e612a39d313cb5d28066cbafda
-  CapacitorCordova: 139e2ed3d91c54b5aeae7941135c9f9aefc6da1d
+  CapacitorCordova: 2080fc0d6bfbc9dcc0e6d88e77fa624190d343ca
   CapacitorLocalNotifications: 2e3f5b717ec9cd2bd64d93c99a9470941e1c80be
   CapacitorMlkitBarcodeScanning: afd6fc431b550026a2c052e11ab2b71c7ae30011
   CapacitorPushNotifications: 0527809a9619ed775439d5ab2c2d996122b48319
